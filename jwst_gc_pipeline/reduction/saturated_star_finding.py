@@ -5,7 +5,7 @@ if not os.getenv('STPSF_PATH'):
 
 import glob
 from astropy.io import fits
-from scipy.ndimage import label, find_objects, center_of_mass, sum_labels
+from scipy.ndimage import label, find_objects, center_of_mass, sum_labels, binary_dilation
 from astropy.modeling.fitting import LevMarLSQFitter
 from jwst.datamodels import dqflags
 import matplotlib.pyplot as plt
@@ -200,7 +200,116 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000):
     return saturated, sources, coms
 
 
-def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=1, plot=True, rindsz=3, use_merged_psf_for_merged=False):
+def _nearest_window_bounds(center, full_size, window_size):
+    """Return [start, stop) bounds of the nearest window to a given center."""
+    window_size = int(min(max(1, window_size), full_size))
+    if window_size >= full_size:
+        return 0, full_size
+    start = int(round(center - window_size / 2))
+    start = max(0, min(start, full_size - window_size))
+    stop = start + window_size
+    return start, stop
+
+
+def compute_adaptive_mask_buffer(sat_area, mask_buffer_min=2, cap=6):
+    """
+    Return a brightness-dependent dilation radius for the saturation mask.
+
+    Deeper saturation produces a larger saturated pixel area and a wider
+    non-linear transition zone at the core boundary.  We scale the buffer
+    sub-linearly with the square root of the saturated area (proxy for
+    perimeter length) so that more of the non-linear fringe is excluded
+    without over-masking mildly saturated sources.
+
+    Parameters
+    ----------
+    sat_area : int
+        Number of pixels flagged SATURATED for this source.
+    mask_buffer_min : int
+        Minimum buffer size (applied even for small saturated areas).
+        The production default is 2 (validated against synthetic recovery
+        tests; old default was 1).
+    cap : int
+        Maximum buffer to avoid masking all useful pixels for very bright
+        stars.
+
+    Returns
+    -------
+    int
+        Effective dilation iterations to pass to ``binary_dilation``.
+
+    Notes
+    -----
+    Calibrated against NIRCam SW synthetic recovery tests (see
+    synthetic_source_recovery/run_recovery_tests.py).  Typical values:
+
+    =========  ===========  ==============
+    sat_area   sat_radius   buffer
+    =========  ===========  ==============
+    5          1.3          2  (= minimum)
+    20         2.5          2
+    80         5.0          2
+    200        8.0          4
+    500        12.6         5
+    =========  ===========  ==============
+    """
+    sat_radius = np.sqrt(sat_area / np.pi)
+    adaptive = int(np.ceil(sat_radius * 0.4))
+    return int(min(cap, max(mask_buffer_min, adaptive)))
+
+
+def compute_adaptive_bkg_annulus(sat_area, bkg_inner_min=15, bkg_inner_max=50):
+    """
+    Brightness-dependent background annulus radii for saturated-source fitting.
+
+    Deeply saturated (bright) sources have extended PSF wings that contaminate
+    the background annulus at close radii; this function scales the inner radius
+    outward with the saturation extent so that the background estimate is not
+    biased by unmasked PSF flux.  For marginally saturated sources the standard
+    narrow annulus (15, 30) is returned.
+
+    Parameters
+    ----------
+    sat_area : int
+        Number of pixels flagged SATURATED for this source.
+    bkg_inner_min : float
+        Inner radius (pixels) used for marginally saturated sources.  Default 15.
+    bkg_inner_max : float
+        Upper cap on the inner radius (pixels).  Default 50.
+
+    Returns
+    -------
+    bkg_inner, bkg_outer : int, int
+        Inner and outer radii of the background annulus.  The outer radius is
+        always 2 × inner.
+
+    Notes
+    -----
+    Calibrated against NIRCam SW synthetic recovery tests: ``sat_area=37``
+    (F200W mag ≈ 10.5, Δmag ≈ +4) maps to ``bkg_inner=25``, matching the
+    optimal parameters found in the sweep.  The power-law exponent 0.75
+    (≈ 3/4) approximates the expected scaling from a PSF wing profile that
+    falls as r^{−2.8}: to maintain constant contamination,
+    bkg_inner ∝ flux^{1/2.8} ∝ sat_radius^{2/2.8 × 2} = sat_radius^{1.4/2} ≈ sat_radius^{0.75}.
+
+    Typical values for NIRCam SW at ~2 µm:
+
+    =========  ===========  ============  ============
+    sat_area   sat_radius   bkg_inner     bkg_outer
+    =========  ===========  ============  ============
+    1–5        0.6–1.3      15            30
+    20         2.5          21            42
+    37         3.4          25            50
+    100        5.6          37            74
+    =========  ===========  ============  ============
+    """
+    sat_radius = np.sqrt(sat_area / np.pi)
+    bkg_inner = int(np.clip(np.round(10 * sat_radius ** 0.75), bkg_inner_min, bkg_inner_max))
+    bkg_outer = 2 * bkg_inner
+    return bkg_inner, bkg_outer
+
+
+def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512):
     """
     Detect and PSF-fit saturated sources in a JWST image.
 
@@ -229,7 +338,21 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         Minimum saturated-pixel area used to classify a region as an edge
         source to be excluded.
     mask_buffer : int, optional
-        Number of dilation iterations applied to saturated masks before fitting.
+        Minimum dilation iterations applied to saturated masks before fitting.
+        Default changed from 1 → 2; synthetic recovery tests show this reduces
+        flux bias from ~6 % to ~3 % by excluding more of the non-linear
+        transition zone at the saturation boundary.
+    adaptive_mask_buffer_scale : bool, optional
+        If ``True`` (default), scale the mask buffer with the size of the
+        saturated region so that deeply saturated (bright) sources receive a
+        larger buffer.  ``mask_buffer`` acts as the minimum.  See
+        ``compute_adaptive_mask_buffer`` for the scaling formula.
+    adaptive_bkg_annulus : bool, optional
+        If ``True`` (default), scale the background annulus radii with the
+        saturation area so that deeply saturated sources use a wider annulus
+        (avoiding PSF wing contamination) while marginally saturated sources
+        use the standard narrow annulus (15, 30).  See
+        ``compute_adaptive_bkg_annulus`` for the calibration.
     plot : bool, optional
         If ``True``, display per-source diagnostic plots (cutout, model,
         residual, mask, thresholded model).
@@ -262,9 +385,23 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # nan_to_num data to avoid fitting NaNs
     data[np.isnan(fitsdata['VAR_POISSON'].data)] = 0
     dq = fitsdata['DQ'].data
+    full_model_image = np.zeros_like(data, dtype=float)
 
     saturated, sources, coms = find_saturated_stars(fitsdata, min_sep_from_edge=min_sep_from_edge, edge_npix=edge_npix)
-    nsource = len(coms)
+
+    source_records = [{'com': com, 'label': ii + 1, 'forced': False}
+                      for ii, com in enumerate(coms)]
+    if outside_star_pixels is not None:
+        for xy in outside_star_pixels:
+            if xy is None:
+                continue
+            if len(xy) != 2:
+                continue
+            x_extra, y_extra = float(xy[0]), float(xy[1])
+            if np.isfinite(x_extra) and np.isfinite(y_extra):
+                source_records.append({'com': (y_extra, x_extra), 'label': None, 'forced': True})
+
+    nsource = len(source_records)
 
     big_grid = get_psf(header, path_prefix=path_prefix, use_merged_psf_for_merged=use_merged_psf_for_merged)
     ww = wcs.WCS(header)
@@ -303,10 +440,13 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
 
     index = 0
     print(f"Found {nsource} saturated sources to process", flush=True)
-    for ii in range(nsource):
+    for ii, src in enumerate(source_records):
         # get the center of pixels with this label
 
-        com = coms[ii] #center_of_mass(saturated, labels=sources, index=ii+1)
+        com = src['com']
+        src_label = src['label']
+        forced_source = src['forced']
+        #center_of_mass(saturated, labels=sources, index=ii+1)
         # center_of_mass can return (nan, nan) for degenerate labels; guard against that
         if com is None:
             print(f"Source {ii+1}: center_of_mass returned None; skipping", flush=True)
@@ -317,17 +457,36 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             continue
         ycen = int(round(yf))
         xcen = int(round(xf))
-        print(f"Source {ii+1}: center at (x, y) = ({xcen}, {ycen})")
-        y0 = int(max(0, ycen - pad))
-        y1 = int(min(data.shape[0], ycen + pad))
-        x0 = int(max(0, xcen - pad))
-        x1 = int(min(data.shape[1], xcen + pad))
-        size_saturated = int(np.sqrt(sum_labels(saturated, labels=sources, index=ii+1))/2)
+        print(f"Source {ii+1}: center at (x, y) = ({xcen}, {ycen}), forced={forced_source}")
+
+        if forced_source:
+            y0, y1 = _nearest_window_bounds(ycen, data.shape[0], outside_star_fit_box)
+            x0, x1 = _nearest_window_bounds(xcen, data.shape[1], outside_star_fit_box)
+            size_saturated = max(5, int(3 * fwhm_pix))
+        else:
+            y0 = int(max(0, ycen - pad))
+            y1 = int(min(data.shape[0], ycen + pad))
+            x0 = int(max(0, xcen - pad))
+            x1 = int(min(data.shape[1], xcen + pad))
+            size_saturated = int(np.sqrt(sum_labels(saturated, labels=sources, index=src_label))/2)
+
         # area_saturated = sum_labels(saturated, labels=sources, index=ii+1)
         cutout = data[y0:y1, x0:x1]
         init_params = QTable()
-        init_params['x'] = [xcen - x0]
-        init_params['y'] = [ycen - y0]
+        # For outside-FOV forced sources the star center may be outside the
+        # cutout bounds (xcen < x0 or xcen > x1).  DO NOT clip to [0, width-1]:
+        # clipping forces both seeds to (0,0), they fit the same corner bright
+        # source, and produce duplicate catalog rows with the wrong position.
+        # Allow the unclipped offset so the PSF is correctly initialised at its
+        # true (possibly negative) position in cutout coordinates.
+        if forced_source:
+            x_init = float(xcen - x0)
+            y_init = float(ycen - y0)
+        else:
+            x_init = float(np.clip(xcen - x0, 0, max(0, cutout.shape[1] - 1)))
+            y_init = float(np.clip(ycen - y0, 0, max(0, cutout.shape[0] - 1)))
+        init_params['x'] = [x_init]
+        init_params['y'] = [y_init]
         cutout[np.isnan(cutout)] = 0.0
         # if isinstance(grid, list):
         #     print(f"Grid is a list: {grid}")
@@ -337,16 +496,62 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
 
         #psf_model = WrappedPSFModel(grid, stampsz=(size,size))
 
+        # Compute sat_area once; used by both adaptive mask buffer and adaptive bkg annulus.
+        if not forced_source:
+            src_sat_area = int(sum_labels(saturated, labels=sources, index=src_label))
+        else:
+            src_sat_area = None
+
+        # Brightness-dependent mask dilation: scale buffer with saturated area
+        # so deeply saturated sources exclude more of the non-linear fringe.
+        if adaptive_mask_buffer_scale and src_sat_area is not None:
+            effective_buffer = compute_adaptive_mask_buffer(
+                src_sat_area, mask_buffer_min=mask_buffer
+            )
+        else:
+            effective_buffer = mask_buffer
+
+        # Brightness-dependent background annulus: wider for brighter sources to
+        # avoid PSF-wing contamination of the background estimate.
+        if adaptive_bkg_annulus and src_sat_area is not None:
+            bkg_inner, bkg_outer = compute_adaptive_bkg_annulus(src_sat_area)
+        else:
+            bkg_inner, bkg_outer = 25, 50   # fixed wide annulus as fallback
+
+        # For forced outside-FOV sources the star center may be hundreds of
+        # pixels outside the image.  A LocalBackground annulus of 25–50 px
+        # centred there contains zero image pixels, causing the estimator to
+        # fail silently.  Skip local background for those sources; the frames
+        # are already bgsub'd so a zero-background assumption is appropriate.
+        if forced_source:
+            localbkg_estimator = None
+            print(f"  forced source: no local-bkg (source is off-edge)  "
+                  f"(sat_area=forced)", flush=True)
+        else:
+            print(f"  mask_buffer={effective_buffer}  bkg=({bkg_inner},{bkg_outer})"
+                  f"  (sat_area={src_sat_area})", flush=True)
+            localbkg_estimator = LocalBackground(bkg_inner, bkg_outer)
+
         psfphot = PSFPhotometry(
-                                localbkg_estimator=LocalBackground(15, 30),
+                                localbkg_estimator=localbkg_estimator,
                                 fitter=lmfitter,
                                 psf_model=big_grid,
                                 fit_shape=size,
                                 aperture_radius=15*fwhm_pix)
-        low_x  = xcen - x0 - size_saturated
-        high_x = xcen - x0 + size_saturated
-        low_y  = ycen - y0 - size_saturated
-        high_y = ycen - y0 + size_saturated
+        if forced_source:
+            # Keep the fitted centroid within ±size_saturated of the seed
+            # position.  Using [0, cutout-1] previously let both seeds drift
+            # to the same corner source, producing duplicate catalog rows.
+            # x_init / y_init may be negative for outside-FOV seeds.
+            low_x  = x_init - size_saturated
+            high_x = x_init + size_saturated
+            low_y  = y_init - size_saturated
+            high_y = y_init + size_saturated
+        else:
+            low_x  = xcen - x0 - size_saturated
+            high_x = xcen - x0 + size_saturated
+            low_y  = ycen - y0 - size_saturated
+            high_y = ycen - y0 + size_saturated
 
         # get the underlying model and set bounds there
         model = getattr(psfphot, "psf_model", None)
@@ -369,14 +574,9 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                         print(f"Could not set bounds for {pname}; parameter object: {param}")
             else:
                 print(f"Model does not have parameter '{pname}'; param_names={getattr(model,'param_names',None)}")
-        # let x_0 be bounds at saturated pixels
-        #psfphot.x_0.bounds = (xcen - x0 - size_saturated , xcen - x0 + size_saturated)
-        #psfphot.y_0.bounds = (ycen - y0 - size_saturated, ycen - y0 + size_saturated)
         saturated_mask = saturated[y0:y1, x0:x1]
 
-
-        # expand a few pixels of saturated area to be masked
-        saturated_mask_expanded = ndimage.binary_dilation(saturated_mask, iterations=mask_buffer)
+        saturated_mask_expanded = binary_dilation(saturated_mask, iterations=effective_buffer)
         mask = np.logical_or(cutout==0, np.isnan(cutout), saturated_mask_expanded)
         try:
             result = psfphot(cutout, init_params=init_params, mask=mask)
@@ -400,6 +600,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         if len(result) == 0:
             print(f"All fit rows were invalid for source {ii+1}; skipping", flush=True)
             continue
+
+        result['outside_fov_seed'] = np.full(len(result), forced_source, dtype=bool)
 
         result['xcentroid'] = result['x_fit'] + x0
         result['ycentroid'] = result['y_fit'] + y0
@@ -429,6 +631,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             psf_eval = big_grid(x-x_fit, y-y_fit) * flux  # works for GriddedPSFModel
             # cut psf_eval to the image size
             model_image += psf_eval[0:ny, 0:nx]
+
+        full_model_image[y0:y1, x0:x1] += model_image
 
         threshold_image = np.zeros_like(cutout)
 
@@ -478,12 +682,13 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # modified 2026-04-18 to only check if _all_ pixels are flagged as HOT or DEAD, since some pixels may be flagged as both SATURATED and HOT/DEAD because a saturated star happened to land on top of a hot/dead pixel
         idx_saturated_in_cutout = (dq[y0:y1, x0:x1] & dqflags.pixel['SATURATED']) > 0
         saturated_dqflags = dq[y0:y1, x0:x1][idx_saturated_in_cutout]
-        if np.all((saturated_dqflags & dqflags.pixel['HOT'])!=0):
-            print(f"Warning: Some saturated pixels are flagged as HOT; skipping source", flush=True)
-            continue
-        if np.all((saturated_dqflags & dqflags.pixel['DEAD'])!=0):
-            print(f"Warning: Some saturated pixels are flagged as DEAD; skipping source", flush=True)
-            continue
+        if saturated_dqflags.size > 0:
+            if np.all((saturated_dqflags & dqflags.pixel['HOT'])!=0):
+                print(f"Warning: Some saturated pixels are flagged as HOT; skipping source", flush=True)
+                continue
+            if np.all((saturated_dqflags & dqflags.pixel['DEAD'])!=0):
+                print(f"Warning: Some saturated pixels are flagged as DEAD; skipping source", flush=True)
+                continue
         #if np.any((saturated_dqflags & dqflags.pixel['RC'])!=0):
         #    print(f"Warning: Some saturated pixels are flagged as RC; skipping source", flush=True)
         #    continue
@@ -496,8 +701,17 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         #    continue
 
         # process the result
-        if result is not None and np.isfinite(fluxerr) and snr > 1 and flux > 0:
-            print(f"Accepting source {ii+1} with flux={flux}, fluxerr={fluxerr}, snr={snr}", flush=True)
+        accept_source = result is not None and np.isfinite(fluxerr) and snr > 1 and flux > 0
+        if forced_source and result is not None:
+            xcent = np.asarray(result['xcentroid'], dtype=float)
+            ycent = np.asarray(result['ycentroid'], dtype=float)
+            accept_source = np.all(np.isfinite(xcent)) and np.all(np.isfinite(ycent))
+
+        if accept_source:
+            if forced_source:
+                print(f"Accepting forced outside-FOV source {ii+1} with flux={flux}, fluxerr={fluxerr}, snr={snr}", flush=True)
+            else:
+                print(f"Accepting source {ii+1} with flux={flux}, fluxerr={fluxerr}, snr={snr}", flush=True)
             if index == 0:
                 base_tab = result
             else:
@@ -519,10 +733,20 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         if 'y_0' not in base_tab.colnames and 'ycentroid' in base_tab.colnames:
             base_tab['y_0'] = base_tab['ycentroid']
         builtins.satstar_table = base_tab
-        builtins.satstar_resid = data.copy()
+        builtins.satstar_model = full_model_image
+        builtins.satstar_resid = data - full_model_image
         return base_tab
 
-def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True, **kwargs):
+def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
+                           file_suffix='', **kwargs):
+    """
+    ``file_suffix`` is inserted into the output filenames *before* the
+    ``_satstar_{catalog,model,residual}`` suffix so that concurrent runs
+    that differ only by post-processing options (e.g. ``--bgsub``,
+    ``--iteration-label=iter2``) write to distinct files and do not race
+    on ``os.remove`` during ``overwrite=True``.  Pass an empty string
+    (default) to preserve the pre-existing filename scheme.
+    """
     print(f"Removing saturated stars from {filename}", flush=True)
     fh = fits.open(filename)
     data = fh['SCI'].data
@@ -536,13 +760,29 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True, *
     if 'CRPIX1' not in header:
         header.update(wcs.WCS(fh['SCI'].header).to_header())
     print("Running get_saturated_stars", flush=True)
-    satstar_table = get_saturated_stars(fh,)
+    satstar_table = get_saturated_stars(fh, **kwargs)
     if satstar_table is not None:
         satstar_table.meta.update(header)
         print("Finished get_saturated_stars", flush=True)
 
-        satstar_table.write(filename.replace(".fits", '_satstar_catalog.fits'), overwrite=overwrite)
-        print(f"Saved saturated star catalog to {filename.replace('.fits', '_satstar_catalog.fits')}", flush=True)
+        satstar_catalog_filename = filename.replace(".fits", f'{file_suffix}_satstar_catalog.fits')
+        satstar_model_filename = filename.replace(".fits", f'{file_suffix}_satstar_model.fits')
+        satstar_residual_filename = filename.replace(".fits", f'{file_suffix}_satstar_residual.fits')
+
+        satstar_table.write(satstar_catalog_filename, overwrite=overwrite)
+        print(f"Saved saturated star catalog to {satstar_catalog_filename}", flush=True)
+
+        if hasattr(builtins, 'satstar_model'):
+            fits.PrimaryHDU(data=builtins.satstar_model, header=header).writeto(
+                satstar_model_filename, overwrite=overwrite
+            )
+            print(f"Saved saturated star model image to {satstar_model_filename}", flush=True)
+
+        if hasattr(builtins, 'satstar_resid'):
+            fits.PrimaryHDU(data=builtins.satstar_resid, header=header).writeto(
+                satstar_residual_filename, overwrite=overwrite
+            )
+            print(f"Saved saturated star residual image to {satstar_residual_filename}", flush=True)
     else:
         print("No saturated stars found", flush=True)
         return

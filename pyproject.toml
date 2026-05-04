@@ -52,7 +52,7 @@ include-package-data = true
 [tool.setuptools.packages.find]
 
 [tool.setuptools.package-data]
-"jwst_gc_pipeline.data" = ["*.ecsv"]
+"jwst_gc_pipeline.reduction" = ["*.ecsv"]
 
 [tool.setuptools_scm]
 write_to = "jwst_gc_pipeline/version.py"

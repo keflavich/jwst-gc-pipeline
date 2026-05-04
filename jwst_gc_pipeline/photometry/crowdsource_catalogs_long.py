@@ -1,16 +1,19 @@
 print("Starting crowdsource_catalogs_long", flush=True)
 import sys
+import tracemalloc
+import resource
 import glob
 import time
 import json
 import re
+import inspect
 import numpy
 import regions
 import numpy as np
 from pathlib import Path
 from functools import cache
 from astropy.convolution import convolve, convolve_fft, Gaussian2DKernel, interpolate_replace_nans
-from astropy.table import Table
+from astropy.table import Table, vstack
 from astropy.coordinates import SkyCoord
 from astropy.visualization import simple_norm
 from astropy.modeling.fitting import LevMarLSQFitter
@@ -21,6 +24,7 @@ from astropy import units as u
 from astropy.nddata import NDData
 from astropy.io import fits
 from scipy import ndimage
+from scipy.spatial import cKDTree
 import requests
 import requests.exceptions
 import urllib3
@@ -32,11 +36,6 @@ from jwst.associations.lib.rules_level3_base import DMS_Level3_Base
 from jwst.resample import ResampleStep
 from photutils.detection import DAOStarFinder, IRAFStarFinder
 from photutils.psf import extract_stars, EPSFStars, EPSFBuilder
-# IntegratedGaussianPRF was renamed to CircularGaussianPRF in photutils 2.0
-try:
-    from photutils.psf import CircularGaussianPRF as IntegratedGaussianPRF
-except ImportError:
-    from photutils.psf import IntegratedGaussianPRF
 # EPSFModel was deprecated in photutils 2.0 in favour of ImagePSF
 try:
     from photutils.psf import ImagePSF as EPSFModel
@@ -50,11 +49,243 @@ from photutils.background import MMMBackground, MADStdBackgroundRMS, MedianBackg
 import warnings
 from astropy.utils.exceptions import AstropyWarning, AstropyDeprecationWarning
 warnings.simplefilter('ignore', category=AstropyWarning)
+
+
+# ---------------------------------------------------------------------------
+# Monkey-patch around astropy.nddata.utils.overlap_slices bug (hit via
+# photutils.make_model_image when photutils passes small_array_shape as an
+# ndarray and an out-of-frame source yields e_max == 0).
+#
+# At line ~138 of astropy/nddata/utils.py:
+#   if e_max < 0 or (e_max == 0 and small_array_shape != (0, 0)):
+# When small_array_shape is an ndarray, `ndarray != (0, 0)` returns an array
+# and the `or` branch raises:
+#   ValueError: The truth value of an array with more than one element
+#   is ambiguous. Use a.any() or a.all()
+#
+# This is triggered by IterativePSFPhotometry when a fit converges to a
+# source centered at e.g. y = -7.63 with sub_shape=(15, 15): then
+# e_max = int(-15.13) + 15 = 0 and the comparison explodes.
+#
+# We wrap the function so that small_array_shape is coerced to a tuple of
+# ints before the comparison, matching the function's own semantics.
+# ---------------------------------------------------------------------------
+import astropy.nddata.utils as _astropy_nddata_utils
+_original_overlap_slices = _astropy_nddata_utils.overlap_slices
+
+
+def _overlap_slices_tuple_shape(large_array_shape, small_array_shape, position,
+                                mode='partial', **kwargs):
+    small_array_shape = tuple(int(x) for x in small_array_shape)
+    return _original_overlap_slices(large_array_shape, small_array_shape,
+                                    position, mode=mode, **kwargs)
+
+
+_astropy_nddata_utils.overlap_slices = _overlap_slices_tuple_shape
+# photutils imports overlap_slices at module import time in several places;
+# update those module-level bindings too so the patched version is used.
+import photutils.utils.cutouts as _photutils_cutouts
+_photutils_cutouts.overlap_slices = _overlap_slices_tuple_shape
+import photutils.datasets.images as _photutils_datasets_images
+_photutils_datasets_images.overlap_slices = _overlap_slices_tuple_shape
 warnings.simplefilter('ignore', category=AstropyDeprecationWarning)
+
+
+# ---------------------------------------------------------------------------
+# Photutils 2.x <-> 3.x compatibility shims.
+#
+# In photutils 3.0 several keyword arguments were renamed:
+#   * PSFPhotometry / IterativePSFPhotometry: ``localbkg_estimator`` ->
+#     ``local_bkg_estimator``
+#   * make_model_image / make_residual_image: ``include_localbkg`` ->
+#     ``include_local_bkg``
+# Both old names are retained as deprecation-warning aliases until 4.0,
+# but the deprecation warnings flood the per-frame logs.  These small
+# wrappers detect the installed version once and dispatch to the right
+# kwarg, so the same source works on 2.3.0 and 3.0+.
+# ---------------------------------------------------------------------------
+import photutils as _photutils
+from packaging.version import Version as _PUVersion
+_PHOTUTILS_GE_3 = _PUVersion(_photutils.__version__.split('+')[0]) >= _PUVersion('3.0.0.dev')
+_LOCAL_BKG_KW = 'local_bkg_estimator' if _PHOTUTILS_GE_3 else 'localbkg_estimator'
+_INCLUDE_LOCAL_BKG_KW = 'include_local_bkg' if _PHOTUTILS_GE_3 else 'include_localbkg'
+
+
+def _make_psfphotometry(*, localbkg_estimator, **kwargs):
+    """Construct a PSFPhotometry using whichever local-bkg kwarg the
+    installed photutils accepts."""
+    return PSFPhotometry(**{_LOCAL_BKG_KW: localbkg_estimator}, **kwargs)
+
+
+def _make_iterative_psfphotometry(*, localbkg_estimator, **kwargs):
+    """Construct an IterativePSFPhotometry using whichever local-bkg
+    kwarg the installed photutils accepts."""
+    return IterativePSFPhotometry(**{_LOCAL_BKG_KW: localbkg_estimator},
+                                  **kwargs)
+
+
+class CappedSourceGrouper:
+    """SourceGrouper wrapper that caps the maximum group size.
+
+    photutils SourceGrouper has only a min_separation knob: any cluster of
+    sources mutually within that distance becomes one group, however large.
+    In dense fields with cross-band union seeds, those clusters routinely
+    reach 50-100+ sources, and the joint LevMar fit cost grows roughly
+    cubically with group size; brick LW iter3 saw the per-source rate
+    collapse from ~5 it/s to <1 it/s in dense regions, hitting the 96 h
+    walltime at ~14% completion.
+
+    This wrapper post-processes the inner grouper's output: any group
+    larger than ``max_size`` is split into ``ceil(N/max_size)`` spatially
+    coherent sub-groups by sorting along the group's principal axis.
+    Sparse-region groups (already <= max_size) are returned untouched.
+    """
+
+    def __init__(self, min_separation, max_size=0):
+        self._inner = SourceGrouper(min_separation)
+        self.min_separation = min_separation
+        self.max_size = int(max_size) if max_size else 0
+
+    def __call__(self, x, y):
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+        group_ids = np.asarray(self._inner(x, y)).astype(np.int64, copy=True)
+        if self.max_size <= 0 or group_ids.size == 0:
+            return group_ids
+        next_id = int(group_ids.max()) + 1
+        unique_ids, counts = np.unique(group_ids, return_counts=True)
+        oversized = unique_ids[counts > self.max_size]
+        if oversized.size == 0:
+            return group_ids
+        n_split = 0
+        for gid in oversized:
+            mask = group_ids == gid
+            n = int(mask.sum())
+            n_sub = int(np.ceil(n / self.max_size))
+            xy = np.column_stack([x[mask], y[mask]])
+            centered = xy - xy.mean(axis=0)
+            cov = centered.T @ centered
+            try:
+                eigvals, eigvecs = np.linalg.eigh(cov)
+                principal = eigvecs[:, int(np.argmax(eigvals))]
+                if not np.all(np.isfinite(principal)) or np.linalg.norm(principal) == 0:
+                    raise ValueError('degenerate principal axis')
+                proj = centered @ principal
+            except (ValueError, np.linalg.LinAlgError):
+                proj = xy[:, 0]
+            order = np.argsort(proj, kind='stable')
+            sub_size = int(np.ceil(n / n_sub))
+            sub_label = np.empty(n, dtype=np.int64)
+            for k in range(n_sub):
+                sub_label[order[k * sub_size:(k + 1) * sub_size]] = k
+            new_ids = np.empty(n, dtype=group_ids.dtype)
+            new_ids[sub_label == 0] = gid
+            for k in range(1, n_sub):
+                new_ids[sub_label == k] = next_id
+                next_id += 1
+            group_ids[mask] = new_ids
+            n_split += 1
+        print(f"CappedSourceGrouper: split {n_split} oversized "
+              f"group{'s' if n_split != 1 else ''} (cap={self.max_size}); "
+              f"total groups: {len(unique_ids)} -> {next_id - int(unique_ids[0])}",
+              flush=True)
+        return group_ids
+
+
+def _chunk_token(chunk_index, n_seed_chunks):
+    """Filename token for spatial seed chunking.
+
+    Returns '' when n_seed_chunks <= 1; otherwise '_chunk{i:02d}of{n:02d}'.
+    Two-digit fields keep the token sortable and unambiguous.
+    """
+    n = int(n_seed_chunks) if n_seed_chunks else 1
+    if n <= 1:
+        return ''
+    i = int(chunk_index)
+    if i < 0 or i >= n:
+        raise ValueError(
+            f'seed_chunk_index={i} out of range for n_seed_chunks={n}')
+    return f'_chunk{i:02d}of{n:02d}'
+
+
+# Match _chunkXXofYY (any width) when stripping the chunk suffix from an
+# iteration_label or filename component.
+_CHUNK_TOKEN_RE = re.compile(r'_chunk\d+of\d+')
+
+
+def _strip_chunk(label):
+    """Remove a trailing/embedded ``_chunkXXofYY`` token from a string.
+
+    Used to recover the *base* iteration label (e.g. ``'iter3'``) from
+    a chunk-suffixed compound label (e.g. ``'iter3_chunk03of08'``) so
+    semantic checks like ``is_iter3`` continue to fire when chunking is on.
+    """
+    if label is None:
+        return None
+    return _CHUNK_TOKEN_RE.sub('', str(label))
+
+
+def _seed_table_chunk_subset(seed_table, ww, image_shape,
+                             chunk_index, n_seed_chunks):
+    """Subset a seed table to one tile of an N-way image-pixel chunking.
+
+    The image is split into a ``Gx x Gy`` grid where
+    ``Gx = ceil(sqrt(N))`` and ``Gy = ceil(N / Gx)`` (so Gx * Gy >= N;
+    chunks beyond N never receive sources).  Each chunk owns a half-open
+    pixel rectangle; a seed is assigned to the chunk that contains its
+    pixel position.  Seeds with non-finite pixel coordinates (e.g. far
+    outside the FOV) are dropped.
+
+    Returns a NEW Table; the input is not modified.
+    """
+    n = int(n_seed_chunks)
+    if n <= 1:
+        return seed_table
+    ny, nx = int(image_shape[0]), int(image_shape[1])
+    gx = int(np.ceil(np.sqrt(n)))
+    gy = int(np.ceil(n / gx))
+    cx = chunk_index % gx
+    cy = chunk_index // gx
+    x_lo = (nx * cx) / gx
+    x_hi = (nx * (cx + 1)) / gx
+    y_lo = (ny * cy) / gy
+    y_hi = (ny * (cy + 1)) / gy
+
+    seed_table = _as_table(seed_table)
+    if 'skycoord' in seed_table.colnames:
+        sc = seed_table['skycoord']
+    else:
+        sc = SkyCoord(ra=seed_table['ra'], dec=seed_table['dec'], unit='deg')
+    xpix, ypix = ww.world_to_pixel(sc)
+    xpix = np.asarray(xpix, dtype=float)
+    ypix = np.asarray(ypix, dtype=float)
+    in_tile = (
+        np.isfinite(xpix) & np.isfinite(ypix)
+        & (xpix >= x_lo) & (xpix < x_hi)
+        & (ypix >= y_lo) & (ypix < y_hi)
+    )
+    n_kept = int(in_tile.sum())
+    print(
+        f"Seed chunking: chunk {chunk_index + 1}/{n} (grid {gx}x{gy}, "
+        f"x=[{x_lo:.1f},{x_hi:.1f}) y=[{y_lo:.1f},{y_hi:.1f})): "
+        f"{len(seed_table)} -> {n_kept} seeds",
+        flush=True,
+    )
+    return seed_table[in_tile]
+
+
+def _make_model_image(phot_obj, shape, *, psf_shape=None, include_local_bkg=False):
+    """Call ``phot_obj.make_model_image`` with the version-appropriate
+    include-local-bkg kwarg."""
+    return phot_obj.make_model_image(
+        shape, psf_shape=psf_shape,
+        **{_INCLUDE_LOCAL_BKG_KW: include_local_bkg})
 
 import crowdsource
 from crowdsource import crowdsource_base
 from crowdsource.crowdsource_base import fit_im, psfmod
+
+from jwst_gc_pipeline.reduction.saturated_star_finding import remove_saturated_stars
 
 from astroquery.svo_fps import SvoFps
 
@@ -71,7 +302,35 @@ from stpsf.utils import to_griddedpsfmodel
 import datetime
 print("Done with imports", flush=True)
 
-FWHM_TABLE = Path(__file__).resolve().parents[1] / 'data' / 'fwhm_table.ecsv'
+FWHM_TABLE = Path(__file__).resolve().parents[1] / 'reduction' / 'fwhm_table.ecsv'
+REGIONS_DIR = Path(__file__).resolve().parents[2] / 'regions_'
+
+MIRI_FILTERS = frozenset(['f560w', 'f770w', 'f1000w', 'f1130w', 'f1280w',
+                          'f1500w', 'f1800w', 'f2100w', 'f2550w'])
+
+def _instrument_from_filter(filtername):
+    """Return 'MIRI' or 'NIRCam' based on filter name (no header read needed)."""
+    return 'MIRI' if str(filtername).lower() in MIRI_FILTERS else 'NIRCam'
+
+def _inst_token(filtername):
+    """Lowercased instrument token used in JWST i2d filename conventions."""
+    return _instrument_from_filter(filtername).lower()
+
+# DQ flags to drop from photometry.  DO_NOT_USE is the umbrella set
+# the JWST pipeline already curates; SATURATED is added explicitly so
+# the saturated-star branch can split it out for special handling.
+# MIRI gets NON_SCIENCE (imager region masks) and PERSISTENCE (latent
+# images from prior bright sources, common in MIRI long-wavelength).
+_BAD_DQ_FLAGS_NIRCAM = ('DO_NOT_USE', 'SATURATED')
+_BAD_DQ_FLAGS_MIRI = ('DO_NOT_USE', 'SATURATED', 'NON_SCIENCE', 'PERSISTENCE')
+
+def _bad_dq_bitmask(instrument):
+    from jwst.datamodels import dqflags as _dq
+    flags = _BAD_DQ_FLAGS_MIRI if str(instrument).upper() == 'MIRI' else _BAD_DQ_FLAGS_NIRCAM
+    bm = 0
+    for f in flags:
+        bm |= int(_dq.pixel[f])
+    return bm
 
 
 def normalize_vgroup_id(vgroup_id):
@@ -280,11 +539,131 @@ def _get_source_xy(tbl):
         return np.asarray(tbl['x_fit']), np.asarray(tbl['y_fit'])
     if 'xcentroid' in tbl.colnames and 'ycentroid' in tbl.colnames:
         return np.asarray(tbl['xcentroid']), np.asarray(tbl['ycentroid'])
+    # photutils >=3.0 emits ``x_centroid``/``y_centroid``
+    if 'x_centroid' in tbl.colnames and 'y_centroid' in tbl.colnames:
+        return np.asarray(tbl['x_centroid']), np.asarray(tbl['y_centroid'])
     if 'x_init' in tbl.colnames and 'y_init' in tbl.colnames:
         return np.asarray(tbl['x_init']), np.asarray(tbl['y_init'])
     if 'x' in tbl.colnames and 'y' in tbl.colnames:
         return np.asarray(tbl['x']), np.asarray(tbl['y'])
     raise KeyError(f"No recognized x/y coordinate columns in {tbl.colnames}")
+
+
+def _column_to_float_array(tbl, colname):
+    col = tbl[colname]
+    if hasattr(col, 'filled'):
+        return np.asarray(col.filled(np.nan), dtype=float)
+    return np.asarray(col, dtype=float)
+
+
+def _best_available_xy(tbl):
+    # photutils >=3.0 emits ``x_centroid``/``y_centroid`` from DAOStarFinder;
+    # 2.x emits ``xcentroid``/``ycentroid``.  Accept both.
+    candidates = [
+        ('xcentroid', 'ycentroid'),
+        ('x_centroid', 'y_centroid'),
+        ('x_fit', 'y_fit'),
+        ('x_init', 'y_init'),
+        ('x', 'y'),
+    ]
+    best_pair = None
+    best_score = -1
+    best_x = None
+    best_y = None
+    for xname, yname in candidates:
+        if xname in tbl.colnames and yname in tbl.colnames:
+            xvals = _column_to_float_array(tbl, xname)
+            yvals = _column_to_float_array(tbl, yname)
+            score = np.isfinite(xvals).sum() + np.isfinite(yvals).sum()
+            if score > best_score:
+                best_score = score
+                best_pair = (xname, yname)
+                best_x = xvals
+                best_y = yvals
+    if best_pair is None:
+        raise KeyError(f"No recognized x/y coordinate columns in {tbl.colnames}")
+    return best_x, best_y
+
+
+def _has_any_xy_columns(tbl):
+    return any(
+        xname in tbl.colnames and yname in tbl.colnames
+        for xname, yname in (('xcentroid', 'ycentroid'),
+                             ('x_centroid', 'y_centroid'),
+                             ('x_fit', 'y_fit'),
+                             ('x_init', 'y_init'), ('x', 'y'))
+    )
+
+
+def _skycoord_entries(tbl, colname):
+    if colname not in tbl.colnames:
+        return [None] * len(tbl)
+
+    col = tbl[colname]
+    mask = np.zeros(len(tbl), dtype=bool)
+    if hasattr(col, 'mask'):
+        mask = np.asarray(col.mask, dtype=bool)
+
+    entries = [None] * len(tbl)
+    for ii in range(len(tbl)):
+        if mask[ii]:
+            continue
+        val = col[ii]
+        if isinstance(val, SkyCoord):
+            entries[ii] = val
+    return entries
+
+
+def _skycoord_radec_arrays(tbl, colname):
+    ra = np.full(len(tbl), np.nan, dtype=float)
+    dec = np.full(len(tbl), np.nan, dtype=float)
+    entries = _skycoord_entries(tbl, colname)
+    for ii, coord in enumerate(entries):
+        if coord is None:
+            continue
+        ra[ii] = float(coord.ra.deg)
+        dec[ii] = float(coord.dec.deg)
+    return ra, dec
+
+
+def _resolve_seed_skycoords(seed_table, ww=None, preferred_skycoord_col=None):
+    seed_table = _as_table(seed_table)
+    nsrc = len(seed_table)
+    if nsrc == 0:
+        return seed_table
+
+    sky_entries = [None] * nsrc
+    sky_columns = []
+    if preferred_skycoord_col is not None:
+        sky_columns.append(preferred_skycoord_col)
+    sky_columns.extend(['skycoord', 'skycoord_fit', 'skycoord_centroid', 'skycoord_ref'])
+    for colname in sky_columns:
+        if colname not in seed_table.colnames:
+            continue
+        entries = _skycoord_entries(seed_table, colname)
+        for ii, entry in enumerate(entries):
+            if sky_entries[ii] is None and entry is not None:
+                sky_entries[ii] = entry
+
+    if ww is not None and _has_any_xy_columns(seed_table):
+        xvals, yvals = _best_available_xy(seed_table)
+        missing = np.array([entry is None for entry in sky_entries], dtype=bool)
+        finite = np.isfinite(xvals) & np.isfinite(yvals)
+        convert = missing & finite
+        if np.any(convert):
+            converted = ww.pixel_to_world(xvals[convert], yvals[convert])
+            for idx, coord in zip(np.where(convert)[0], converted):
+                sky_entries[idx] = coord
+
+    if all(entry is None for entry in sky_entries):
+        raise ValueError('Could not determine sky coordinates for any seed sources')
+
+    if 'skycoord' not in seed_table.colnames:
+        seed_table['skycoord'] = np.empty(nsrc, dtype=object)
+    for ii, coord in enumerate(sky_entries):
+        seed_table['skycoord'][ii] = coord
+
+    return seed_table
 
 
 def _sample_background_map(background_map, xvals, yvals):
@@ -302,6 +681,637 @@ def _sample_background_map(background_map, xvals, yvals):
     return sampled
 
 
+def _iteration_token(iteration_label):
+    if iteration_label in (None, ''):
+        return ''
+
+    token = str(iteration_label)
+    if token.startswith('_'):
+        return token
+    return f'_{token}'
+
+
+def _predict_output_tokens(options, visit_id=None, vgroup_id=None,
+                           exposure_id=None, iteration_label=None):
+    """Reproduce the per-exposure tokens used when writing catalog outputs.
+
+    Kept in sync with save_photutils_results / save_crowdsource_results /
+    do_photometry_step so --skip-if-done and --list-missing-tasks can check
+    whether the expected output already exists without running photometry.
+    """
+    visitid_ = f'_visit{int(visit_id):03d}' if visit_id not in (None, '') else ''
+    vgroupid_, _ = normalize_vgroup_id(vgroup_id)
+    if exposure_id in (None, ''):
+        exposure_ = ''
+    else:
+        exposure_ = f'_exp{int(exposure_id):05d}'
+    desat = '_unsatstar' if options.desaturated else ''
+    bgsub = '_bgsub' if options.bgsub else ''
+    epsf_ = '_epsf' if options.epsf else ''
+    blur_ = '_blur' if options.blur else ''
+    group_ = '_group' if options.group else ''
+    if iteration_label is None:
+        iter_label = options.iteration_label or None
+    else:
+        iter_label = iteration_label if iteration_label != '' else None
+    iter_ = _iteration_token(iter_label)
+    return visitid_, vgroupid_, exposure_, desat, bgsub, epsf_, blur_, group_, iter_
+
+
+def _predict_tblfilename(basepath, filtername, module, options,
+                         visit_id, vgroup_id, exposure_id,
+                         iteration_label=None, method='daophot',
+                         basic_or_iterative='iterative'):
+    (visitid_, vgroupid_, exposure_, desat, bgsub,
+     epsf_, blur_, group_, iter_) = _predict_output_tokens(
+        options, visit_id, vgroup_id, exposure_id, iteration_label)
+    if method == 'daophot':
+        return (f'{basepath}/{filtername}/'
+                f'{filtername.lower()}_{module}{visitid_}{vgroupid_}{exposure_}'
+                f'{desat}{bgsub}{epsf_}{blur_}{group_}{iter_}'
+                f'_daophot_{basic_or_iterative}.fits')
+    return (f'{basepath}/{filtername}/'
+            f'{filtername.lower()}_{module}{visitid_}{vgroupid_}{exposure_}'
+            f'{desat}{bgsub}{blur_}{iter_}'
+            f'_crowdsource_unweighted.fits')
+
+
+def _expected_output_exists(basepath, filtername, module, options,
+                            visit_id, vgroup_id, exposure_id,
+                            iteration_label=None):
+    """Main output sentinel for --skip-if-done / --list-missing-tasks.
+
+    daophot-iterative is the final step when --daophot is set (or basic when
+    --basic-only); crowdsource_unweighted is the final step otherwise.
+    """
+    if options.daophot:
+        method = 'daophot'
+        basic_or_iterative = 'basic' if options.basic_only else 'iterative'
+    else:
+        method = 'crowdsource'
+        basic_or_iterative = 'unweighted'
+    path = _predict_tblfilename(basepath, filtername, module, options,
+                                visit_id, vgroup_id, exposure_id,
+                                iteration_label=iteration_label,
+                                method=method,
+                                basic_or_iterative=basic_or_iterative)
+    return os.path.exists(path)
+
+
+def _as_table(data):
+    if isinstance(data, Table):
+        return Table(data, copy=True)
+    if isinstance(data, str):
+        return Table.read(data)
+    return Table(data)
+
+
+def _combine_seed_and_satstars(seed_catalog, satstar_table):
+    seed_table = _as_table(seed_catalog)
+    if 'is_saturated' not in seed_table.colnames:
+        seed_table['is_saturated'] = np.zeros(len(seed_table), dtype=bool)
+
+    if satstar_table is None:
+        return seed_table
+
+    satstar_table = _as_table(satstar_table)
+    if len(satstar_table) == 0:
+        return seed_table
+
+    if 'is_saturated' not in satstar_table.colnames:
+        satstar_table['is_saturated'] = np.ones(len(satstar_table), dtype=bool)
+
+    return vstack([seed_table, satstar_table], metadata_conflicts='silent')
+
+
+def _augment_seed_catalog_with_detections(seed_catalog, detection_catalog, match_radius_pix=1.0):
+    raise RuntimeError('Use _augment_seed_catalog_with_detections_sky for seeded augmentation')
+
+
+def _augment_seed_catalog_with_detections_sky(seed_catalog, detection_catalog, ww,
+                                              match_radius_pix=1.0,
+                                              preferred_seed_skycoord_col=None,
+                                              return_stats=False):
+    seed_table = _resolve_seed_skycoords(_as_table(seed_catalog), ww=ww,
+                                         preferred_skycoord_col=preferred_seed_skycoord_col)
+    detection_table = _as_table(detection_catalog)
+    stats = {
+        'seed_input': len(seed_table),
+        'detection_input': len(detection_table),
+        'detection_finite_xy': 0,
+        'detection_added': 0,
+        'detection_rejected_match': 0,
+    }
+
+    if len(seed_table) == 0:
+        stats['detection_added'] = len(detection_table)
+        if return_stats:
+            return detection_table, stats
+        return detection_table
+    if len(detection_table) == 0:
+        if return_stats:
+            return seed_table, stats
+        return seed_table
+
+    det_x, det_y = _best_available_xy(detection_table)
+    det_finite = np.isfinite(det_x) & np.isfinite(det_y)
+    if not np.any(det_finite):
+        if return_stats:
+            return seed_table, stats
+        return seed_table
+
+    stats['detection_finite_xy'] = int(np.sum(det_finite))
+
+    det_sky = ww.pixel_to_world(det_x[det_finite], det_y[det_finite])
+    det_ra = np.asarray(det_sky.ra.deg, dtype=float)
+    det_dec = np.asarray(det_sky.dec.deg, dtype=float)
+    detection_table = detection_table[det_finite]
+    if 'skycoord' not in detection_table.colnames:
+        detection_table['skycoord'] = np.empty(len(detection_table), dtype=object)
+    for ii, coord in enumerate(det_sky):
+        detection_table['skycoord'][ii] = coord
+    if 'is_saturated' not in detection_table.colnames:
+        detection_table['is_saturated'] = np.zeros(len(detection_table), dtype=bool)
+
+    seed_ra, seed_dec = _skycoord_radec_arrays(seed_table, 'skycoord')
+    valid_seed_idx = np.isfinite(seed_ra) & np.isfinite(seed_dec)
+    if not np.any(valid_seed_idx):
+        combined = vstack([seed_table, detection_table], metadata_conflicts='silent')
+        if 'is_saturated' not in combined.colnames:
+            combined['is_saturated'] = np.zeros(len(combined), dtype=bool)
+        stats['detection_added'] = len(detection_table)
+        stats['detection_rejected_match'] = 0
+        if return_stats:
+            return combined, stats
+        return combined
+
+    seed_sky = SkyCoord(ra=seed_ra[valid_seed_idx] * u.deg,
+                        dec=seed_dec[valid_seed_idx] * u.deg,
+                        frame='icrs')
+    det_sky_all = SkyCoord(ra=det_ra * u.deg,
+                           dec=det_dec * u.deg,
+                           frame='icrs')
+    _, sep2d, _ = det_sky_all.match_to_catalog_sky(seed_sky)
+    pixscale = ww.proj_plane_pixel_area()**0.5
+    match_radius = (match_radius_pix * pixscale).to(u.arcsec)
+    keep = sep2d > match_radius
+
+    stats['detection_added'] = int(np.sum(keep))
+    stats['detection_rejected_match'] = int(len(keep) - np.sum(keep))
+
+    combined = vstack([seed_table, detection_table[keep]], metadata_conflicts='silent')
+    if 'is_saturated' not in combined.colnames:
+        combined['is_saturated'] = np.zeros(len(combined), dtype=bool)
+    if return_stats:
+        return combined, stats
+    return combined
+
+
+def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
+                            label, max_log_rows=50):
+    """Drop fits from ``phot_obj.results`` whose center is within
+    ``max_sat_dist_pix`` pixels of any SATURATED-DQ pixel and keep the
+    PSFPhotometry object's state consistent.
+
+    Rationale: regular ``phot_basic``/``phot_iter`` fits placed on a
+    saturated pixel are unreliable -- the central data value is "stuck"
+    while the unsaturated wings drive the fit toward enormous fluxes,
+    producing model-image holes of order -10 000 counts.  The dedicated
+    ``satstar`` catalog handles those stars separately and lives in a
+    different table, so this filter does not touch it.
+
+    A no-op when ``dq`` is None or has no SATURATED pixels.
+    """
+    if dq is None:
+        return 0
+    sat_mask = (dq & dqflags.pixel['SATURATED']).astype(bool)
+    n_sat = int(sat_mask.sum())
+    if n_sat == 0:
+        return 0
+    # distance_transform_edt: distance to nearest True in the input mask.
+    # We want distance to nearest saturated pixel, so feed ~sat_mask.
+    sat_dist_map = ndimage.distance_transform_edt(~sat_mask)
+
+    res = phot_obj.results
+    if res is None or len(res) == 0:
+        return 0
+
+    x = np.asarray(res['x_fit'], dtype=float)
+    y = np.asarray(res['y_fit'], dtype=float)
+    flux_arr = np.asarray(res['flux_fit'], dtype=float)
+    ny, nx = sat_mask.shape
+    ix = np.rint(x).astype(int)
+    iy = np.rint(y).astype(int)
+    in_frame = (np.isfinite(x) & np.isfinite(y)
+                & (ix >= 0) & (ix < nx)
+                & (iy >= 0) & (iy < ny))
+
+    sat_dist = np.full(len(res), np.inf, dtype=float)
+    if np.any(in_frame):
+        sat_dist[in_frame] = sat_dist_map[iy[in_frame], ix[in_frame]]
+
+    drop = sat_dist <= float(max_sat_dist_pix)
+    n_drop = int(np.sum(drop))
+    if n_drop == 0:
+        return 0
+
+    print(f"Saturation-proximity filter ({label}): dropping {n_drop} fits "
+          f"within {max_sat_dist_pix:.1f} pix of a SATURATED-DQ pixel "
+          f"({len(res)} -> {len(res) - n_drop}); "
+          f"sat_pixels_in_frame={n_sat}", flush=True)
+
+    # Log a sample of dropped rows for forensics.
+    drop_idx = np.where(drop)[0]
+    log_idx = drop_idx[np.argsort(sat_dist[drop_idx])][:max_log_rows]
+    if len(log_idx) > 0:
+        id_col = res['id'] if 'id' in res.colnames else np.arange(len(res))
+        print(f"  dropped fits ({label}, up to {max_log_rows} closest to sat):", flush=True)
+        print(f"    {'id':>6} {'x_fit':>9} {'y_fit':>9} {'flux_fit':>12} {'sat_dist':>9}",
+              flush=True)
+        for i in log_idx:
+            sid = id_col[i]
+            print(f"    {int(sid):>6d} {x[i]:>9.2f} {y[i]:>9.2f} "
+                  f"{flux_arr[i]:>12.2f} {sat_dist[i]:>9.2f}", flush=True)
+        if len(drop_idx) > len(log_idx):
+            print(f"    ... ({len(drop_idx) - len(log_idx)} more not shown)",
+                  flush=True)
+
+    keep = ~drop
+    phot_obj.results = phot_obj.results[keep]
+    inner_phot = getattr(phot_obj, '_psfphot', None)
+    if (inner_phot is not None
+            and inner_phot.init_params is not None
+            and len(inner_phot.init_params) == len(keep)):
+        inner_phot.init_params = inner_phot.init_params[keep]
+    if (hasattr(phot_obj, 'init_params')
+            and phot_obj.init_params is not None
+            and len(phot_obj.init_params) == len(keep)):
+        phot_obj.init_params = phot_obj.init_params[keep]
+
+    # IterativePSFPhotometry rebuilds its _model_image_params from the
+    # per-iteration deepcopied snapshots in ``fit_results``, not from
+    # ``self.results`` -- so updating ``self.results`` alone leaves the
+    # rendered model image unchanged.  Filter each per-iteration snapshot
+    # by the same sat-distance rule so make_model_image() agrees with
+    # the saved catalog.
+    fit_results = getattr(phot_obj, 'fit_results', None)
+    if fit_results:
+        for fr in fit_results:
+            sub = getattr(fr, 'results', None)
+            if sub is None or len(sub) == 0:
+                continue
+            sx = np.asarray(sub['x_fit'], dtype=float)
+            sy = np.asarray(sub['y_fit'], dtype=float)
+            s_ix = np.rint(sx).astype(int)
+            s_iy = np.rint(sy).astype(int)
+            s_in = (np.isfinite(sx) & np.isfinite(sy)
+                    & (s_ix >= 0) & (s_ix < nx)
+                    & (s_iy >= 0) & (s_iy < ny))
+            s_dist = np.full(len(sub), np.inf, dtype=float)
+            if np.any(s_in):
+                s_dist[s_in] = sat_dist_map[s_iy[s_in], s_ix[s_in]]
+            sub_keep = s_dist > float(max_sat_dist_pix)
+            if sub_keep.sum() < len(sub):
+                fr.results = sub[sub_keep]
+                if (fr.init_params is not None
+                        and len(fr.init_params) == len(sub_keep)):
+                    fr.init_params = fr.init_params[sub_keep]
+                fr.__dict__.pop('_model_image_params', None)
+
+    phot_obj.__dict__.pop('_model_image_params', None)
+    return n_drop
+
+
+def _dedup_close_sources(xy, flux, min_sep_pix, quality=None,
+                         flux_agreement_frac=0.10):
+    """
+    Greedy spatial deduplication of sources closer than ``min_sep_pix``.
+
+    For each cluster of entries within ``min_sep_pix`` of each other, keep one
+    representative:
+      * If the fluxes of the cluster agree within ``flux_agreement_frac``
+        (i.e. (fmax - fmin) / fmax <= flux_agreement_frac), the entries are
+        treated as the same source and the brightest is kept.
+      * Otherwise the fluxes disagree, which usually means the fits converged
+        to genuinely different solutions (contamination, split binary, bad
+        init). In that case:
+            - if ``quality`` is provided (smaller = better, e.g. qfit), keep
+              the entry with the best (smallest) quality;
+            - if no quality is provided, fall back to the brightest.
+
+    Parameters
+    ----------
+    xy : array, shape (N, 2)
+        Positions (in pixels) to cluster on.
+    flux : array, shape (N,)
+        Flux estimate for each entry.  Must be finite for any entry to be
+        considered; non-finite entries are kept as-is (not clustered).
+    min_sep_pix : float
+        Minimum allowed separation between kept entries, in pixels.
+    quality : array, shape (N,), optional
+        Per-entry quality score where smaller is better (e.g. photutils qfit).
+        Used only for breaking ties when cluster fluxes disagree.
+    flux_agreement_frac : float, optional
+        Relative flux tolerance below which cluster members are treated as
+        duplicates of the same source.
+
+    Returns
+    -------
+    keep : ndarray of bool, shape (N,)
+        True for entries to retain.
+    n_disagree : int
+        Number of clusters where fluxes disagreed beyond ``flux_agreement_frac``
+        (i.e. cases where duplicate removal may have dropped a distinct
+        neighbour rather than a pure duplicate).
+    """
+    n = xy.shape[0]
+    keep = np.ones(n, dtype=bool)
+    if n < 2:
+        return keep, 0
+
+    # Only cluster entries with finite positions AND finite flux; leave
+    # anything else untouched (they will neither be removed nor remove
+    # others).  cKDTree requires finite inputs.
+    finite_xy   = np.all(np.isfinite(xy), axis=1)
+    finite_flux = np.isfinite(flux)
+    eligible    = finite_xy & finite_flux
+    if np.sum(eligible) < 2:
+        return keep, 0
+    elig_idx = np.where(eligible)[0]
+    xy_e     = xy[elig_idx]
+    flux_e   = flux[elig_idx]
+
+    # Sort eligible entries by descending flux so the brightest seeds clusters.
+    local_sort_order = np.argsort(flux_e)[::-1]
+
+    kd = cKDTree(xy_e)
+    n_disagree = 0
+    for li in local_sort_order:
+        i = elig_idx[li]
+        if not keep[i]:
+            continue
+        local_neighbours = kd.query_ball_point(xy_e[li], min_sep_pix)
+        neighbours = [elig_idx[lj] for lj in local_neighbours
+                      if lj != li and keep[elig_idx[lj]]]
+        if not neighbours:
+            continue
+
+        # Collect the full cluster (seed + neighbours).
+        cluster = [i] + neighbours
+        cluster_flux = np.asarray([flux[k] for k in cluster], dtype=float)
+        fmin = float(cluster_flux.min())
+        fmax = float(cluster_flux.max())
+        if fmax <= 0 or (fmax - fmin) / fmax <= flux_agreement_frac:
+            # Fluxes agree: treat as same source, keep brightest (= seed i).
+            winner = i
+        else:
+            # Fluxes disagree: fits converged together but to different
+            # solutions.  Prefer best-quality entry if we have quality info.
+            n_disagree += 1
+            if quality is not None:
+                cluster_q = np.asarray([quality[k] for k in cluster], dtype=float)
+                # Smaller quality is better; non-finite treated as worst.
+                cluster_q = np.where(np.isfinite(cluster_q), cluster_q, np.inf)
+                winner = cluster[int(np.argmin(cluster_q))]
+            else:
+                winner = i  # brightest
+
+        for k in cluster:
+            if k != winner:
+                keep[k] = False
+
+    return keep, n_disagree
+
+
+class SeededFinder:
+    def __init__(self, seed_table, ww=None, preferred_skycoord_col=None):
+        self.seed_table = _as_table(seed_table)
+        self.ww = ww
+        self.preferred_skycoord_col = preferred_skycoord_col
+
+    def __call__(self, data, mask=None):
+        seeds = _resolve_seed_skycoords(
+            Table(self.seed_table, copy=True),
+            ww=self.ww,
+            preferred_skycoord_col=self.preferred_skycoord_col,
+        )
+        if self.ww is None:
+            xvals, yvals = _best_available_xy(seeds)
+        else:
+            sky_ra, sky_dec = _skycoord_radec_arrays(seeds, 'skycoord')
+            valid_idx = np.isfinite(sky_ra) & np.isfinite(sky_dec)
+            xvals = np.full(len(seeds), np.nan, dtype=float)
+            yvals = np.full(len(seeds), np.nan, dtype=float)
+            if np.any(valid_idx):
+                skycoords = SkyCoord(ra=sky_ra[valid_idx] * u.deg,
+                                     dec=sky_dec[valid_idx] * u.deg,
+                                     frame='icrs')
+                xx, yy = self.ww.world_to_pixel(skycoords)
+                xvals[valid_idx] = np.asarray(xx, dtype=float)
+                yvals[valid_idx] = np.asarray(yy, dtype=float)
+
+        finite = np.isfinite(xvals) & np.isfinite(yvals)
+        seeds = seeds[finite]
+        xvals = xvals[finite]
+        yvals = yvals[finite]
+
+        ny, nx = data.shape
+        in_field = (xvals >= 0) & (yvals >= 0) & (xvals < nx) & (yvals < ny)
+        if np.any(~in_field):
+            print(f"SeededFinder dropping {np.sum(~in_field)} out-of-field sources (nx={nx}, ny={ny})", flush=True)
+        seeds = seeds[in_field]
+        xvals = xvals[in_field]
+        yvals = yvals[in_field]
+
+        if 'flux' not in seeds.colnames:
+            if 'flux_fit' in seeds.colnames:
+                seeds['flux'] = np.asarray(seeds['flux_fit'], dtype=float)
+            else:
+                seeds['flux'] = np.ones(len(seeds), dtype=float)
+        seeds['xcentroid'] = np.asarray(xvals, dtype=float)
+        seeds['ycentroid'] = np.asarray(yvals, dtype=float)
+        seeds['x_init'] = np.asarray(xvals, dtype=float)
+        seeds['y_init'] = np.asarray(yvals, dtype=float)
+        seeds['flux_init'] = np.asarray(seeds['flux'], dtype=float)
+        return seeds
+
+
+def build_hybrid_saturated_artifact_mask(shape, satstar_table, core_radius_pix=12, halo_radius_pix=28,
+                                         flux_scale_pix=1.0):
+    mask = np.zeros(shape, dtype=bool)
+    if satstar_table is None:
+        return mask
+
+    satstar_table = _as_table(satstar_table)
+    if len(satstar_table) == 0:
+        return mask
+
+    xvals, yvals = _get_source_xy(satstar_table)
+    if 'flux_fit' in satstar_table.colnames:
+        fluxvals = np.asarray(satstar_table['flux_fit'], dtype=float)
+    else:
+        fluxvals = np.ones(len(satstar_table), dtype=float)
+
+    yy, xx = np.indices(shape)
+    for xval, yval, fluxval in zip(xvals, yvals, fluxvals):
+        if not (np.isfinite(xval) and np.isfinite(yval)):
+            continue
+        flux_term = flux_scale_pix * np.log10(max(float(fluxval), 1.0))
+        core_radius = max(float(core_radius_pix), core_radius_pix + flux_term)
+        halo_radius = max(core_radius + 2.0, halo_radius_pix + flux_term)
+        distance2 = (xx - xval) ** 2 + (yy - yval) ** 2
+        mask |= distance2 <= halo_radius ** 2
+        mask |= distance2 <= core_radius ** 2
+
+    return mask
+
+
+def postprocess_residual_image(data, fwhm_pix, negative_threshold=0.0, satstar_table=None,
+                               core_radius_pix=12, halo_radius_pix=28, flux_scale_pix=1.0):
+    processed = np.array(data, dtype=float, copy=True)
+    kernel = Gaussian2DKernel(x_stddev=fwhm_pix / 2.355)
+
+    if negative_threshold is not None:
+        negative_mask = processed < negative_threshold
+        if np.any(negative_mask):
+            processed[negative_mask] = np.nan
+
+    if satstar_table is not None:
+        saturated_mask = build_hybrid_saturated_artifact_mask(
+            processed.shape,
+            satstar_table,
+            core_radius_pix=core_radius_pix,
+            halo_radius_pix=halo_radius_pix,
+            flux_scale_pix=flux_scale_pix,
+        )
+        if np.any(saturated_mask):
+            processed[saturated_mask] = np.nan
+
+    if np.any(np.isnan(processed)):
+        processed = interpolate_replace_nans(processed, kernel, convolve=convolve_fft)
+
+    return processed
+
+
+def compute_local_noise_map(data, smooth_sigma_pix=3.0):
+    """
+    Build a local noise map from an image using the sequence:
+    1) Gaussian smooth
+    2) high-pass residual = original - smooth
+    3) local variance from smoothed residual**2
+    4) local noise = sqrt(local variance)
+    """
+    image = np.asarray(np.nan_to_num(data), dtype=float)
+    smoothed = ndimage.gaussian_filter(image, sigma=float(smooth_sigma_pix))
+    residual = image - smoothed
+    local_var = ndimage.gaussian_filter(residual ** 2, sigma=float(smooth_sigma_pix))
+    local_var = np.where(local_var < 0, 0, local_var)
+    noise_map = np.sqrt(local_var)
+    return noise_map
+
+
+def _sample_map_at_positions(image_map, xvals, yvals):
+    xpix = np.rint(np.asarray(xvals, dtype=float)).astype(int)
+    ypix = np.rint(np.asarray(yvals, dtype=float)).astype(int)
+
+    sampled = np.full(len(xpix), np.nan, dtype=float)
+    valid = ((xpix >= 0) & (ypix >= 0) &
+             (ypix < image_map.shape[0]) & (xpix < image_map.shape[1]))
+    sampled[valid] = image_map[ypix[valid], xpix[valid]]
+    return sampled
+
+
+def annotate_and_filter_by_local_snr(detection_table, noise_map, snr_threshold=5.0):
+    tbl = _as_table(detection_table)
+    if len(tbl) == 0:
+        if 'local_noise' not in tbl.colnames:
+            tbl['local_noise'] = np.array([], dtype=float)
+        if 'local_snr' not in tbl.colnames:
+            tbl['local_snr'] = np.array([], dtype=float)
+        return tbl, {'input_count': 0, 'kept_count': 0, 'dropped_count': 0}
+
+    xvals, yvals = _best_available_xy(tbl)
+    local_noise = _sample_map_at_positions(noise_map, xvals, yvals)
+
+    if 'peak' in tbl.colnames:
+        signal = np.asarray(tbl['peak'], dtype=float)
+    elif 'flux' in tbl.colnames:
+        signal = np.asarray(tbl['flux'], dtype=float)
+    elif 'flux_fit' in tbl.colnames:
+        signal = np.asarray(tbl['flux_fit'], dtype=float)
+    elif 'flux_init' in tbl.colnames:
+        signal = np.asarray(tbl['flux_init'], dtype=float)
+    else:
+        signal = np.full(len(tbl), np.nan, dtype=float)
+
+    with np.errstate(divide='ignore', invalid='ignore'):
+        local_snr = np.abs(signal) / local_noise
+
+    tbl['local_noise'] = np.asarray(local_noise, dtype=float)
+    tbl['local_snr'] = np.asarray(local_snr, dtype=float)
+
+    keep = (np.isfinite(local_snr) & np.isfinite(local_noise) &
+            (local_noise > 0) & (local_snr >= float(snr_threshold)))
+    filtered = tbl[keep]
+    stats = {
+        'input_count': int(len(tbl)),
+        'kept_count': int(np.sum(keep)),
+        'dropped_count': int(len(tbl) - np.sum(keep)),
+    }
+    return filtered, stats
+
+
+def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merged=False, overwrite=False,
+                                 outside_star_pixels=None, outside_star_fit_box=512,
+                                 file_suffix=''):
+    """
+    ``file_suffix`` is inserted into the satstar output filenames before
+    the ``_satstar_catalog`` / ``_satstar_model`` / ``_satstar_residual``
+    tag, so that concurrent runs which differ by post-processing options
+    (e.g. ``--bgsub`` and ``--iteration-label=iter2`` vs their non-bgsub
+    counterparts) write to distinct files and do not race on the shared
+    name when astropy's ``writeto(overwrite=True)`` tries to remove an
+    existing file.
+    """
+    satstar_filename = filename.replace('.fits', f'{file_suffix}_satstar_catalog.fits')
+    if os.path.exists(satstar_filename) and not overwrite:
+        return Table.read(satstar_filename)
+
+    remove_saturated_stars(filename, overwrite=overwrite, path_prefix=path_prefix,
+                           use_merged_psf_for_merged=use_merged_psf_for_merged,
+                           outside_star_pixels=outside_star_pixels,
+                           outside_star_fit_box=outside_star_fit_box,
+                           file_suffix=file_suffix)
+    if os.path.exists(satstar_filename):
+        return Table.read(satstar_filename)
+    return None
+
+
+def load_outside_fov_satstar_pixels(basepath, ww):
+    regfn = f'{basepath}/regions_/saturated_stars_outside_fov.reg'
+    if not os.path.exists(regfn):
+        return []
+
+    reglist = regions.Regions.read(regfn)
+    outside_pixels = []
+    for reg in reglist:
+        preg = reg
+        if hasattr(reg, 'to_pixel'):
+            preg = reg.to_pixel(ww)
+
+        center = getattr(preg, 'center', None)
+        if center is None:
+            continue
+
+        xval = float(center.x)
+        yval = float(center.y)
+        if np.isfinite(xval) and np.isfinite(yval):
+            outside_pixels.append((xval, yval))
+
+    print(f"Loaded {len(outside_pixels)} outside-FOV saturated-star seeds from {regfn}", flush=True)
+    return outside_pixels
+
+
 def save_photutils_results(result, ww, filename,
                            im1, detector,
                            basepath, filtername, module, desat, bgsub, exposure_, visitid_, vgroupid_,
@@ -312,7 +1322,8 @@ def save_photutils_results(result, ww, filename,
                            epsf_="",
                            group="",
                            fpsf="",
-                           background_map=None):
+                           background_map=None,
+                           iteration_label=None):
     print("Saving photutils results.")
     blur_ = "_blur" if blur else ""
 
@@ -328,6 +1339,9 @@ def save_photutils_results(result, ww, filename,
         result['skycoord_centroid'] = coords
     elif 'xcentroid' in result.colnames:
         coords = ww.pixel_to_world(result['xcentroid'], result['ycentroid'])
+    elif 'x_centroid' in result.colnames:
+        # photutils >=3.0 emits x_centroid / y_centroid (with underscore)
+        coords = ww.pixel_to_world(result['x_centroid'], result['y_centroid'])
         result['skycoord_centroid'] = coords
     elif 'x_init' in result.colnames:
         coords = ww.pixel_to_world(result['x_init'], result['y_init'])
@@ -335,14 +1349,13 @@ def save_photutils_results(result, ww, filename,
     else:
         raise KeyError(f"No x value found in {result.colnames}")
     print(f'len(result) = {len(result)}, len(coords) = {len(coords)}, type(result)={type(result)}', flush=True)
-    detector = "" # no detector #'s for long
     if options.each_exposure:
         result.meta['exposure'] = exposure_
     if visitid_ is not None and visitid_ != '':
         result.meta['visit'] = int(visitid_[-3:])
     if vgroupid_ is not None and vgroupid_ != '':
         result.meta['vgroup'] = vgroupid_.removeprefix('_vgroup')
-        
+
     result.meta['filename'] = filename
     result.meta['filter'] = filtername
     result.meta['module'] = module
@@ -362,6 +1375,9 @@ def save_photutils_results(result, ww, filename,
         result['dra'] = result['x_err'] * pixscale
         result['ddec'] = result['y_err'] * pixscale
 
+    if iteration_label not in (None, ''):
+        result.meta['iteration'] = str(iteration_label)
+
     if 'local_bkg' in result.colnames:
         result.meta['BKGCOL'] = 'local_bkg'
         result.meta['BKGMETH'] = 'photutils_local'
@@ -371,11 +1387,17 @@ def save_photutils_results(result, ww, filename,
         result.meta['BKGCOL'] = 'local_bkg'
         result.meta['BKGMETH'] = 'bkg2d_sampled' if background_map is not None else 'none'
 
-    tblfilename = f"{basepath}/{filtername}/{filtername.lower()}_{module}{detector}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}_daophot_{basic_or_iterative}.fits"
+    iter_ = _iteration_token(iteration_label)
+    # Historical bug: this used to be `{module}{detector}` with no
+    # separator, which produced doubled tokens like ``nrcbnrcb`` /
+    # ``nrcanrca`` whenever ``module == detector`` (which is always
+    # the case for the eachexp call paths) and broke the
+    # ``merge_catalogs.py`` glob that expects just ``{module}``.
+    # The original iter1 convention used only ``{module}`` and that's
+    # what every other filename slot in this file (and the seed-catalog
+    # inference at line ~1931) still uses.  Restored.
+    tblfilename = f"{basepath}/{filtername}/{filtername.lower()}_{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}{iter_}_daophot_{basic_or_iterative}.fits"
 
-    # FITS header keywords are limited to 8 characters. photutils 2.x stores
-    # configuration objects (localbkg_estimator, psf_model, fitter, etc.) in
-    # result.meta with long key names that cause a ValueError on write.
     long_keys = [k for k in result.meta if len(k) > 8]
     for k in long_keys:
         result.meta[k[:8]] = result.meta[k]
@@ -395,14 +1417,13 @@ def save_crowdsource_results(results, ww, filename, suffix,
                              psf=None,
                              blur=False,
                              options=None,
-                             fpsf=""):
+                             fpsf="",
+                             iteration_label=None):
     print("Saving crowdsource results.")
     blur_ = "_blur" if blur else ""
 
     stars, modsky, skymsky, psf_ = results
     stars = Table(stars)
-    # crowdsource explicitly inverts x & y from the numpy convention:
-    # https://github.com/schlafly/crowdsource/issues/11
     coords = ww.pixel_to_world(stars['y'], stars['x'])
     stars['skycoord'] = coords
     stars['x'], stars['y'] = stars['y'], stars['x']
@@ -424,6 +1445,8 @@ def save_crowdsource_results(results, ww, filename, suffix,
     stars.meta['proposal_id'] = options.proposal_id
     if exposure_:
         stars.meta['exposure'] = exposure_
+    if iteration_label not in (None, ''):
+        stars.meta['iteration'] = str(iteration_label)
     if visitid_:
         stars.meta['visit'] = int(visitid_[-3:])
     if vgroupid_:
@@ -436,28 +1459,26 @@ def save_crowdsource_results(results, ww, filename, suffix,
         stars.meta['RAOFFSET'] = im1[1].header['RAOFFSET']
         stars.meta['DEOFFSET'] = im1[1].header['DEOFFSET']
 
+    iter_ = _iteration_token(iteration_label)
     tblfilename = (f"{basepath}/{filtername}/"
-                   f"{filtername.lower()}_{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{fpsf}{blur_}"
+                   f"{filtername.lower()}_{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{fpsf}{blur_}{iter_}"
                    f"_crowdsource_{suffix}.fits")
 
-    print("tblfilename={tblfilename}, filename={filename}, suffix={suffix}, filtername={filtername}, module={module}, desat={desat}, bgsub={bgsub}, fpsf={fpsf} blur={blur}")
+    print(f"tblfilename={tblfilename}, filename={filename}, suffix={suffix}, filtername={filtername}, module={module}, desat={desat}, bgsub={bgsub}, fpsf={fpsf} blur={blur}")
 
     stars.write(tblfilename, overwrite=True)
-    # add WCS-containing header
     with fits.open(tblfilename, mode='update', output_verify='fix') as fh:
         fh[0].header.update(im1[1].header)
     skymskyhdu = fits.PrimaryHDU(data=skymsky, header=im1[1].header)
     modskyhdu = fits.ImageHDU(data=modsky, header=im1[1].header)
-    # PSF doesn't need saving / can't be saved, it's a function
-    # psfhdu = fits.ImageHDU(data=psf)
     hdul = fits.HDUList([skymskyhdu, modskyhdu])
-    hdul.writeto(f"{basepath}/{filtername}/{filtername.lower()}_{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{fpsf}{blur_}_crowdsource_skymodel_{suffix}.fits", overwrite=True)
+    hdul.writeto(f"{basepath}/{filtername}/{filtername.lower()}_{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{fpsf}{blur_}{iter_}_crowdsource_skymodel_{suffix}.fits", overwrite=True)
 
     if psf is not None:
         if hasattr(psf, 'stamp'):
             psfhdu = fits.PrimaryHDU(data=psf.stamp)
             psf_fn = (f"{basepath}/{filtername}/"
-                      f"{filtername.lower()}_{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{fpsf}{blur_}"
+                      f"{filtername.lower()}_{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{fpsf}{blur_}{iter_}"
                       f"_crowdsource_{suffix}_psf.fits")
             psfhdu.writeto(psf_fn, overwrite=True)
         else:
@@ -490,73 +1511,131 @@ def get_psf_model(filtername, proposal_id, field,
                   target='brick',
                   stampsz=19,
                   oversample=1,
-                  basepath='/blue/adamginsburg/adamginsburg/jwst/'):
+                  basepath='/blue/adamginsburg/adamginsburg/jwst/',
+                  psf_cache_dir=None,
+                  instrument=None):
     """
     Return two types of PSF model, the first for DAOPhot and the second for Crowdsource
+
+    instrument: 'NIRCam' or 'MIRI'.  If None, derived from filtername.
     """
 
     basepath = f'{basepath}/{target}'
 
     blur_ = "_blur" if blur else ""
 
-    # psf_fn = f'{basepath}/{instrument.lower()}_{filtername}_samp{oversample}_nspsf{npsf}_npix{fov_pixels}.fits'
-    # if os.path.exists(str(psf_fn)):
-    #     # As a file
-    #     print(f"Loading grid from psf_fn={psf_fn}", flush=True)
-    #     grid = to_griddedpsfmodel(psf_fn)  # file created 2 cells above
-    #     if isinstance(big_grid, list):
-    #         print(f"PSF IS A LIST OF GRIDS!!! this is incompatible with the return from nrc.psf_grid")
-    #         grid = grid[0]
+    if instrument is None:
+        instrument = _instrument_from_filter(filtername)
+    inst_token = instrument.lower()
 
-    # TODO: factor this out into its own downloading function and make it work with NIRCAM and MIRI both
     if use_webbpsf:
-        with open(os.path.expanduser('~/.mast_api_token'), 'r') as fh:
-            api_token = fh.read().strip()
-        from astroquery.mast import Mast
+        # PSF cache check: if a pre-built fovp101 samp2 file exists, load it directly
+        # and skip the expensive MAST download + Poppy PSF generation (~17-20 min, ~300 GB peak).
+        # Naming convention mirrors WebbPSF: {instrument}_{detector}_{filter}_fovp101_samp2_npsf16.fits
+        _psf_oversample = 2
+        _psf_outdir = psf_cache_dir or '.'
+        if instrument == 'MIRI':
+            # MIRI imaging: single detector (MIRIM); no module split.
+            _cache_detector = 'MIRIM'
+        elif module in ('nrca', 'nrcb'):
+            if 'F4' in filtername.upper() or 'F3' in filtername.upper():
+                _cache_detector = f'{module.upper()}5'
+            else:
+                _cache_detector = f'{module.upper()}1'
+        elif 'nrc' in module:
+            _cache_detector = module.upper()
+        else:
+            _cache_detector = None  # all_detectors path — handled below
 
-        for ii in range(10):
-            try:
-                Mast.login(api_token.strip())
-                break
-            except (requests.exceptions.ReadTimeout, urllib3.exceptions.ReadTimeoutError, TimeoutError) as ex:
-                print(f"Attempt {ii} to log in to MAST: {ex}")
-                time.sleep(5)
-        os.environ['MAST_API_TOKEN'] = api_token.strip()
-
-        has_downloaded = False
-        ntries = 0
-        while not has_downloaded:
-            ntries += 1
-            try:
-                print("Attempting to download WebbPSF data", flush=True)
-                nrc = webbpsf.NIRCam()
-                nrc.load_wss_opd_by_date(f'{obsdate}T00:00:00')
-                nrc.filter = filtername
-                if module in ('nrca', 'nrcb'):
-                    if 'F4' in filtername.upper() or 'F3' in filtername.upper():
-                        nrc.detector = f'{module.upper()}5' # I think NRCA5 must be the "long" detector?
-                    else:
-                        nrc.detector = f'{module.upper()}1' #TODO: figure out a way to use all 4?
-                    # default oversampling is 4
-                    grid = nrc.psf_grid(num_psfs=16, all_detectors=False, verbose=True, save=True)
-                elif 'nrc' in module:
-                    # Allow nrca1, nrca2, ...
-                    nrc.detector = module.upper()
-                    grid = nrc.psf_grid(num_psfs=16, all_detectors=False, verbose=True, save=True)
-                else:
-                    grid = nrc.psf_grid(num_psfs=16, all_detectors=True, verbose=True, save=True)
-                has_downloaded = True
-            except (urllib3.exceptions.ReadTimeoutError, requests.exceptions.ReadTimeout, requests.HTTPError) as ex:
-                print(f"Failed to build PSF: {ex}", flush=True)
-            except Exception as ex:
-                print(ex, flush=True)
-                if ntries > 10:
-                    # avoid infinite loops
-                    raise ValueError("Failed to download PSF, probably because of an error listed above")
-                else:
+        grid = None
+        if _cache_detector is not None:
+            # Try the requested oversample first, then accept whatever is on disk
+            # (samp4 has higher fidelity than samp2; either is fine for fitting).
+            _samp_candidates = [_psf_oversample, 4, 2, 1]
+            seen = set()
+            for _samp in _samp_candidates:
+                if _samp in seen:
                     continue
+                seen.add(_samp)
+                _psf_fn = os.path.join(_psf_outdir,
+                    f'{inst_token}_{_cache_detector.lower()}_{filtername.lower()}'
+                    f'_fovp101_samp{_samp}_npsf16.fits')
+                if os.path.exists(_psf_fn):
+                    print(f"Loading cached PSF grid (skipping MAST/Poppy): {_psf_fn}", flush=True)
+                    grid = to_griddedpsfmodel(_psf_fn)
+                    if isinstance(grid, list):
+                        grid = grid[0]
+                    break
+
+        if grid is None:
+            with open(os.path.expanduser('~/.mast_api_token'), 'r') as fh:
+                api_token = fh.read().strip()
+            from astroquery.mast import Mast
+
+            for ii in range(10):
+                try:
+                    Mast.login(api_token.strip())
+                    break
+                except (requests.exceptions.ReadTimeout, urllib3.exceptions.ReadTimeoutError, TimeoutError) as ex:
+                    print(f"Attempt {ii} to log in to MAST: {ex}")
+                    time.sleep(5)
+            os.environ['MAST_API_TOKEN'] = api_token.strip()
+
+            has_downloaded = False
+            ntries = 0
+            while not has_downloaded:
+                ntries += 1
+                try:
+                    print(f"Attempting to download WebbPSF data ({instrument})", flush=True)
+                    if instrument == 'MIRI':
+                        nrc = webbpsf.MIRI()
+                    else:
+                        nrc = webbpsf.NIRCam()
+                    nrc.load_wss_opd_by_date(f'{obsdate}T00:00:00')
+                    nrc.filter = filtername
+                    if instrument == 'MIRI':
+                        # MIRI imaging only has the MIRIM detector for imaging filters.
+                        nrc.detector = 'MIRIM'
+                        grid = nrc.psf_grid(num_psfs=16, all_detectors=False, verbose=True, save=True,
+                                           fov_pixels=101, oversample=_psf_oversample, outdir=_psf_outdir)
+                    elif module in ('nrca', 'nrcb'):
+                        if 'F4' in filtername.upper() or 'F3' in filtername.upper():
+                            nrc.detector = f'{module.upper()}5'
+                        else:
+                            nrc.detector = f'{module.upper()}1'
+                        grid = nrc.psf_grid(num_psfs=16, all_detectors=False, verbose=True, save=True,
+                                           fov_pixels=101, oversample=_psf_oversample, outdir=_psf_outdir)
+                    elif 'nrc' in module:
+                        nrc.detector = module.upper()
+                        grid = nrc.psf_grid(num_psfs=16, all_detectors=False, verbose=True, save=True,
+                                           fov_pixels=101, oversample=_psf_oversample, outdir=_psf_outdir)
+                    else:
+                        grid = nrc.psf_grid(num_psfs=16, all_detectors=True, verbose=True, save=True,
+                                           fov_pixels=101, oversample=_psf_oversample, outdir=_psf_outdir)
+                    has_downloaded = True
+                except (urllib3.exceptions.ReadTimeoutError, requests.exceptions.ReadTimeout, requests.HTTPError) as ex:
+                    print(f"Failed to build PSF: {ex}", flush=True)
+                except Exception as ex:
+                    print(ex, flush=True)
+                    if ntries > 10:
+                        # avoid infinite loops
+                        raise ValueError("Failed to download PSF, probably because of an error listed above")
+                    else:
+                        continue
 
         if use_grid:
+            # 2026-04-24: stpsf's to_griddedpsfmodel sometimes returns
+            # a list of grids when module='merged' is used for the LW
+            # detectors (one grid per detector), not a single
+            # GriddedPSFModel.  The downstream code (e.g.
+            # ``dao_psf_model.flux.min = 0``) treats the return as a
+            # single grid and crashes with
+            # ``AttributeError: 'list' object has no attribute 'flux'``.
+            # The use_grid=False branch already handles this; mirror it
+            # here so both LW (cloudc + brick + sgrb2 etc) iter3 runs
+            # don't fail on PSF setup.
+            if isinstance(grid, list):
+                grid = grid[0]
             return grid, WrappedPSFModel(grid, stampsz=stampsz)
         else:
             # there's no way to use a grid across all detectors.
@@ -628,7 +1707,8 @@ def get_uncertainty(err, data, dq=None, wht=None):
 
 def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, module,
                                    residual_kind='iterative', desat=False, bgsub=False,
-                                   epsf=False, blur=False, group=False, pupil='clear'):
+                                   epsf=False, blur=False, group=False, pupil='clear',
+                                   iteration_label=None):
     """
     Resample per-exposure residual images into one JWST-style *_residual_i2d.fits product.
     """
@@ -641,19 +1721,66 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
     epsf_ = '_epsf' if epsf else ''
     blur_ = '_blur' if blur else ''
     group_ = '_group' if group else ''
+    iter_ = _iteration_token(iteration_label)
+    inst_token = _inst_token(filtername)
 
-    residual_glob = (
-        f'{pipeline_dir}/jw0{proposal_id}-o{field}_t001_nircam_{pupil}-{filtername.lower()}-'
-        f'{module}_visit*_vgroup*_exp*{desat_}{bgsub_}{epsf_}{blur_}{group_}'
-        f'_daophot_{residual_kind}_residual.fits'
-    )
-    residual_files = sorted(glob.glob(residual_glob))
+    if proposal_id == '3958' and field == '007' and filtername in ('F187N', 'F210M') and module == 'nrcb':
+        module_patterns = [f'nrcb{number}' for number in range(1, 5)]
+    elif proposal_id == '5365' and field == '001' and module in ('nrca', 'nrcb'):
+        module_patterns = [f'{module}{number}' for number in range(1, 5)]
+    else:
+        module_patterns = [module]
+
+    residual_files = []
+    iter_regex = re.compile(r'_iter[^_]*_daophot_')
+    iter_marker = f'{iter_}_daophot_' if iter_ else None
+    flag_tokens = {
+        '_unsatstar': desat,
+        '_bgsub': bgsub,
+        '_epsf': epsf,
+        '_blur': blur,
+        '_group': group,
+    }
+
+    def _matches_expected_tokens(residual_path):
+        name = os.path.basename(residual_path)
+
+        # Enforce exact flag matching: no accidental mixing of bgsub/non-bgsub,
+        # desaturated/non-desaturated, etc.
+        for token, enabled in flag_tokens.items():
+            has_token = token in name
+            if enabled and not has_token:
+                return False
+            if (not enabled) and has_token:
+                return False
+
+        # Enforce exact iteration matching: unlabeled mosaics must exclude iter* files.
+        if iter_marker is None:
+            if iter_regex.search(name):
+                return False
+        else:
+            if iter_marker not in name:
+                return False
+
+        return True
+
+    for module_pattern in module_patterns:
+        residual_glob = (
+            f'{pipeline_dir}/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-'
+            f'{module_pattern}_visit*_vgroup*_exp*{desat_}{bgsub_}{epsf_}{blur_}{group_}'
+            f'{iter_}_daophot_{residual_kind}_residual.fits'
+        )
+        residual_files.extend(glob.glob(residual_glob))
+    residual_files = sorted(set(fn for fn in residual_files if _matches_expected_tokens(fn)))
     if len(residual_files) == 0:
-        raise ValueError(f'No per-exposure residuals found matching {residual_glob}')
+        raise ValueError(
+            f'No per-exposure residuals found for module={module} '
+            f'patterns={module_patterns} filter={filtername} residual_kind={residual_kind}'
+        )
 
     product_name = (
-        f'jw0{proposal_id}-o{field}_t001_nircam_{pupil}-{filtername.lower()}-{module}'
-        f'{desat_}{bgsub_}{epsf_}{blur_}{group_}_daophot_{residual_kind}_residual'
+        f'jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}'
+        f'{desat_}{bgsub_}{epsf_}{blur_}{group_}{iter_}_daophot_{residual_kind}_residual'
     )
     asn = asn_from_list.asn_from_list(
         residual_files,
@@ -676,23 +1803,97 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
     if not os.path.exists(output_filename):
         raise FileNotFoundError(f'Expected output was not created: {output_filename}')
     print(f'Wrote residual mosaic {output_filename}')
-    return output_filename
+
+    fwhm_tbl = Table.read(FWHM_TABLE)
+    row = fwhm_tbl[fwhm_tbl['Filter'] == filtername]
+    fwhm_pix = float(row['PSF FWHM (pixel)'][0])
+    with ImageModel(output_filename) as model:
+        infilled_data = postprocess_residual_image(
+            model.data,
+            fwhm_pix,
+            negative_threshold=0.0,
+            satstar_table=None,
+        )
+        model.data = infilled_data
+        infilled_filename = output_filename.replace('_residual_i2d.fits', '_residual_infilled_i2d.fits')
+        model.save(infilled_filename, overwrite=True)
+    print(f'Wrote residual infilled mosaic {infilled_filename}')
+
+    # Always run make_starless after producing the infilled mosaic.
+    from jwst_gc_pipeline.photometry.make_starless_image import TARGETS, make_starless_filter
+
+    # Reverse-lookup the target config by basepath.
+    cfg = None
+    for tgt_cfg in TARGETS.values():
+        if os.path.abspath(tgt_cfg['basepath']) == os.path.abspath(basepath):
+            cfg = tgt_cfg
+            break
+
+    if cfg is None:
+        raise ValueError(f'no TARGETS entry in make_starless_image for basepath={basepath!r}')
+
+    cat_path = os.path.join(basepath, cfg['catalog_rel'])
+    out_dir  = os.path.join(basepath, 'catalogs', 'starless')
+    os.makedirs(out_dir, exist_ok=True)
+    cfg_regs = [os.path.join(basepath, p) for p in cfg.get('force_mask_regs', [])]
+    make_starless_filter(
+        filtername, basepath, cat_path, out_dir,
+        method=residual_kind,
+        bgsub=bgsub,
+        force_mask_regs=cfg_regs or None,
+    )
+
+    return infilled_filename
 
 
 def save_residual_datamodel(input_filename, output_filename, data):
+    import astropy.io.fits as fits_io
+
+    # Read S_REGION before opening with ImageModel; ImageModel.save() drops CONTINUE cards,
+    # truncating polygons longer than one FITS card (~68 chars).
+    s_region = None
+    s_region_ext = None
+    with fits_io.open(input_filename) as hdul:
+        for i, hdu in enumerate(hdul):
+            sr = hdu.header.get('S_REGION', None)
+            if sr:
+                s_region = sr
+                s_region_ext = i
+                break
+
     with ImageModel(input_filename) as model:
+        wcs = model.meta.wcs
         model.data = data
+        model.meta.wcs = wcs  # explicit re-assignment ensures GWCS is serialized to ASDF extension
         model.save(output_filename, overwrite=True)
+
+    # Restore full S_REGION (with CONTINUE support) that ImageModel.save() may have truncated.
+    if s_region is not None:
+        with fits_io.open(output_filename, mode='update') as hdul:
+            for hdu in hdul:
+                if 'S_REGION' in hdu.header:
+                    hdu.header['S_REGION'] = s_region
+                    break
+            hdul.flush()
 
 
 def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                            'f410m': 0.55, 'f405n':0.55, 'f466n':0.55,
-                           'f335m': 0.55, 'f470n': 0.55, 'f480m': 0.55},
+                           'f335m': 0.55, 'f470n': 0.55, 'f480m': 0.55,
+                           # MIRI starting values; revisit once tuned
+                           'f560w': 0.55, 'f770w': 0.55, 'f1000w': 0.55,
+                           'f1130w': 0.55, 'f1280w': 0.55, 'f1500w': 0.55,
+                           'f1800w': 0.55, 'f2100w': 0.55, 'f2550w': 0.55},
         bg_boxsizes={'f182m': 19, 'f187n':11, 'f212n':11,
-                     'f210m': 11,
+                     'f210m': 11, 'f150w': 19,
                      'f410m': 11, 'f405n':11, 'f466n':11,
                      'f444w': 11, 'f356w':11, 'f335m': 11, 'f470n': 11, 'f480m': 11,
+                     'f300m': 11, 'f360m': 11,
                      'f200w':19, 'f115w':19,
+                     # MIRI: ~5-6x FWHM (pix), odd; Sgr B2 backgrounds may want larger
+                     'f560w': 11, 'f770w': 15, 'f1000w': 19,
+                     'f1130w': 21, 'f1280w': 23, 'f1500w': 27,
+                     'f1800w': 33, 'f2100w': 37, 'f2550w': 45,
                     },
         crowdsource_default_kwargs={'maxstars': 500000, },
         ):
@@ -720,6 +1921,14 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     default=False,
                     action='store_true',
                     help="perform global background-subtraction first?", metavar="bgsub")
+    parser.add_option("--use-iter3-residual-bg", dest="use_iter3_residual_bg",
+                    default=False,
+                    action='store_true',
+                    help=("Subtract the iter3 residual smoothed-background image "
+                          "(<frame>_iter3_daophot_iterative_residual_smoothed_bg.fits) "
+                          "from the data before fitting.  Use with --iteration-label=iter2residbg "
+                          "or =iter3residbg.  Built by make_iter3_residual_bgmaps.py."),
+                    metavar="use_iter3_residual_bg")
     parser.add_option("--epsf", dest="epsf",
                     default=False,
                     action='store_true',
@@ -743,12 +1952,101 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option('--each-suffix', dest='each_suffix',
                       default='destreak_o001_crf',
                       help='Suffix for the level-2 products', metavar='each_suffix')
+    parser.add_option('--seed-catalog', dest='seed_catalog',
+                      default='',
+                      help='Optional seed catalog for a seeded photometry rerun', metavar='seed_catalog')
+    parser.add_option('--iteration-label', dest='iteration_label',
+                      default='',
+                      help='Optional iteration label to embed in output filenames', metavar='iteration_label')
+    parser.add_option('--postprocess-residuals', dest='postprocess_residuals',
+                      default=False,
+                      action='store_true',
+                      help='Apply negative-pixel masking and saturated-star infill before detection')
+    parser.add_option('--basic-only', dest='basic_only',
+                      default=False,
+                      action='store_true',
+                      help='Run only BASIC daophot photometry and residual generation')
+    parser.add_option('--residual-negative-threshold', dest='residual_negative_threshold',
+                      default=0.0,
+                      type='float',
+                      help='Pixels below this threshold are replaced with Gaussian infill before detection')
+    parser.add_option('--local-snr-threshold', dest='local_snr_threshold',
+                      default=5.0,
+                      type='float',
+                      help='Per-source local S/N threshold for retaining DAO detections')
+    parser.add_option('--daofind-roundlo', dest='daofind_roundlo',
+                      default=-1.0,
+                      type='float',
+                      help='DAOStarFinder roundness lower bound')
+    parser.add_option('--daofind-roundhi', dest='daofind_roundhi',
+                      default=1.0,
+                      type='float',
+                      help='DAOStarFinder roundness upper bound')
     parser.add_option('--skip-mosaic-each-exposure-residuals',
                       dest='skip_mosaic_each_exposure_residuals',
                       default=False,
                       action='store_true',
                       help='After --each-exposure, resample all per-exposure residuals into a residual_i2d product by default; this parameter skips that step. Residual kinds are auto-determined based on enabled photometry types.')
+    parser.add_option('--bundle-size', dest='bundle_size',
+                      default=1, type='int',
+                      help='Number of consecutive per-exposure iterations each SLURM array task handles (default 1 = one exposure per task).')
+    parser.add_option('--skip-if-done', dest='skip_if_done',
+                      default=False, action='store_true',
+                      help='In --each-exposure mode, skip any exposure whose main output catalog already exists.')
+    parser.add_option('--finalize-only', dest='finalize_only',
+                      default=False, action='store_true',
+                      help='Skip photometry and only run mosaic_each_exposure_residuals for the filter/module/iteration labels requested.')
+    parser.add_option('--iteration-labels', dest='iteration_labels',
+                      default='',
+                      help='Comma-separated iteration labels for --finalize-only (empty entry = None). Example: ",iter2" runs both None and iter2.')
+    parser.add_option('--list-missing-tasks', dest='list_missing_tasks',
+                      default=False, action='store_true',
+                      help='Enumerate --each-exposure work and print a comma-separated SLURM --array spec of only the bundled task indices that still need to run. Writes only the spec to stdout; logs go to stderr.')
+    parser.add_option('--max-group-size', dest='max_group_size',
+                      default=0, type='int',
+                      help=('Cap on photutils SourceGrouper group size '
+                            '(0 = no cap, the default).  Groups larger than '
+                            'this are split into spatially coherent sub-groups '
+                            'via principal-axis sorting before the joint fit.  '
+                            'Set to 15 for iter3-class runs to keep dense-region '
+                            'fits tractable within the 96 h walltime.'))
+    parser.add_option('--n-seed-chunks', dest='n_seed_chunks',
+                      default=1, type='int',
+                      help=('Split the seed catalog into N image-pixel tiles '
+                            'and fit only the seeds in this chunk\'s tile.  '
+                            'Combine with --seed-chunk-index.  Output filenames '
+                            'gain a _chunkXXofYY token between the iter token '
+                            'and _daophot_*; merge_catalogs.py vstacks chunks '
+                            'back into one per-frame catalog.'))
+    parser.add_option('--seed-chunk-index', dest='seed_chunk_index',
+                      default=0, type='int',
+                      help='Zero-based chunk index in [0, --n-seed-chunks).')
     (options, args) = parser.parse_args()
+
+    # Validate chunking args and fold the chunk token into iteration_label so
+    # every downstream filename composition (catalog, residual, satstar,
+    # diagnostic plots) automatically picks it up without further plumbing.
+    if options.n_seed_chunks and int(options.n_seed_chunks) > 1:
+        n_chunks = int(options.n_seed_chunks)
+        chunk_index = int(options.seed_chunk_index)
+        if chunk_index < 0 or chunk_index >= n_chunks:
+            raise SystemExit(
+                f'--seed-chunk-index={chunk_index} out of range '
+                f'for --n-seed-chunks={n_chunks}')
+        chunk_tok = _chunk_token(chunk_index, n_chunks)
+        if options.iteration_label:
+            options.iteration_label = f'{options.iteration_label}{chunk_tok}'
+        else:
+            # Bare-chunk (no base iter label) is meaningful for ad-hoc runs
+            # but unusual; tag the label so output files don't collide.
+            options.iteration_label = chunk_tok.lstrip('_')
+        # Also fold into the comma-separated --iteration-labels (used by
+        # --finalize-only) when set, so chunked finalize calls find the
+        # correct per-chunk filenames.
+        if options.iteration_labels:
+            options.iteration_labels = ','.join(
+                (f'{tok}{chunk_tok}' if tok else chunk_tok.lstrip('_'))
+                for tok in options.iteration_labels.split(','))
 
     filternames = options.filternames.split(",")
     modules = options.modules.split(",")
@@ -757,11 +2055,21 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
 
     nvisits = {'2221': {'brick': 1, 'cloudc': 2},
                '1182': {'brick': 2},
-               '3958': {'sickle': 1}
+               '3958': {'sickle': 1},
+               '2092': {'cloudef': 1},
+               '4147': {'sgrc': 1},
+               '5365': {'sgrb2': 1},
+               '2045': {'arches': 1, 'quintuplet': 1},
+               '1939': {'sgra': 1},
                }
     field_to_reg_mapping = {'2221': {'001': 'brick', '002': 'cloudc'},
                             '1182': {'004': 'brick'},
-                            '3958': {'007': 'sickle'}}[proposal_id]
+                            '3958': {'007': 'sickle'},
+                            '2092': {'005': 'cloudef'},
+                            '4147': {'012': 'sgrc'},
+                            '5365': {'001': 'sgrb2'},
+                            '2045': {'001': 'arches', '003': 'quintuplet'},
+                            '1939': {'001': 'sgra'}}[proposal_id]
     reg_to_field_mapping = {v:k for k,v in field_to_reg_mapping.items()}
     field = reg_to_field_mapping[target]
 
@@ -792,12 +2100,19 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     break
     
     if allowed_modules is not None:
-        filtered_modules = [module for module in modules if module in allowed_modules]
+        expanded_modules = []
+        for module in modules:
+            if proposal_id == '3958' and field == '007' and module in ('nrca', 'nrcb'):
+                if any(filt in ('F187N', 'F210M') for filt in filternames):
+                    expanded_modules.extend([f'{module}{number}' for number in range(1, 5)])
+                    continue
+            expanded_modules.append(module)
+
+        filtered_modules = [module for module in expanded_modules if module in allowed_modules]
         if len(filtered_modules) == 0:
             raise ValueError(
                 f"No requested modules are allowed for proposal_id={proposal_id} field={field} "
-                f"filters={filternames}. "
-                f"Requested modules={modules}, allowed modules={allowed_modules}"
+                f"Requested modules={modules}, expanded_modules={expanded_modules}, allowed modules={allowed_modules}"
             )
         if tuple(filtered_modules) != tuple(modules):
             print(
@@ -806,20 +2121,97 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
             )
         modules = filtered_modules
 
-    if field_to_reg_mapping[field] == 'sickle':
+    if field_to_reg_mapping[field] in ('sickle', 'cloudef', 'sgrc', 'sgrb2', 'arches', 'quintuplet', 'sgra'):
         basepath = f'/orange/adamginsburg/jwst/{field_to_reg_mapping[field]}/'
     else:
         basepath = f'/blue/adamginsburg/adamginsburg/jwst/{field_to_reg_mapping[field]}/'
 
     pl.close('all')
 
+    if options.finalize_only:
+        if options.iteration_labels != '':
+            iteration_labels = [tok if tok != '' else None
+                                for tok in options.iteration_labels.split(',')]
+        else:
+            iteration_labels = [options.iteration_label or None]
+        mosaic_residual_kinds = []
+        if options.daophot:
+            mosaic_residual_kinds = ['basic'] if options.basic_only else ['basic', 'iterative']
+        print(f"--finalize-only: running mosaics for labels={iteration_labels} kinds={mosaic_residual_kinds}",
+              file=sys.stderr)
+        for module in modules:
+            for filtername in filternames:
+                for lbl in iteration_labels:
+                    for kind in mosaic_residual_kinds:
+                        mosaic_each_exposure_residuals(basepath=basepath,
+                                                      filtername=filtername,
+                                                      proposal_id=proposal_id,
+                                                      field=field,
+                                                      module=module,
+                                                      residual_kind=kind,
+                                                      desat=options.desaturated,
+                                                      bgsub=options.bgsub,
+                                                      epsf=options.epsf,
+                                                      blur=options.blur,
+                                                      group=options.group,
+                                                      pupil='clear',
+                                                      iteration_label=lbl)
+        return
+
+    if options.list_missing_tasks:
+        bundle = max(1, options.bundle_size)
+        # Silence log chatter so only the final array spec reaches stdout.
+        _real_stdout = sys.stdout
+        sys.stdout = sys.stderr
+        try:
+            index = -1
+            missing_tasks = set()
+            max_task = -1
+            for module in modules:
+                for filtername in filternames:
+                    if not options.each_exposure:
+                        continue
+                    for visitid in range(1, nvisits[proposal_id][target] + 1):
+                        visitid = f'{visitid:03d}'
+                        try:
+                            filenames = get_filenames(basepath, filtername, proposal_id,
+                                                      field, visitid=visitid,
+                                                      each_suffix=options.each_suffix,
+                                                      module=module, pupil='clear')
+                        except Exception as ex:
+                            print(f"list-missing-tasks: no files for {filtername} {module} visit {visitid}: {ex}")
+                            continue
+                        for filename in sorted(filenames):
+                            index += 1
+                            task_idx = index // bundle
+                            if task_idx > max_task:
+                                max_task = task_idx
+                            exposure_id = filename.split("_")[2]
+                            visit_id = filename.split("_")[0][-3:]
+                            vgroup_id = filename.split("_")[1]
+                            if not _expected_output_exists(
+                                    basepath, filtername, module, options,
+                                    visit_id, vgroup_id, exposure_id,
+                                    iteration_label=options.iteration_label or None):
+                                missing_tasks.add(task_idx)
+        finally:
+            sys.stdout = _real_stdout
+        # Emit a sentinel-prefixed line so callers can grep it out of stdout
+        # regardless of any module-import chatter that landed in stdout before
+        # main() rerouted it.
+        spec = ','.join(str(i) for i in sorted(missing_tasks))
+        sys.stdout.write(f'__MISSING_TASKS__:{spec}\n')
+        sys.stdout.flush()
+        return
+
     print(f"options: {options}")
 
+    bundle_size = max(1, options.bundle_size)
     # need to have incrementing _before_ test
     index = -1
 
     for module in modules:
-        detector = module # no sub-detectors for long-NIRCAM
+        detector = module # no sub-detectors for long-NIRCAM or for MIRI
         for filtername in filternames:
             if options.each_exposure:
                 for visitid in range(1, nvisits[proposal_id][target] + 1):
@@ -831,30 +2223,51 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     if len(filenames) > 0:
                         print(f"Looping over filenames {filenames} for filter={filtername} proposal={proposal_id} field={field} visitid={visitid}")
                         # jw02221001001_07101_00024_nrcblong_destreak_o001_crf.fits
-                        for filename in filenames:
+                        for filename in sorted(filenames):
 
                             index += 1
-                            # enable array jobs
-                            if os.getenv('SLURM_ARRAY_TASK_ID') is not None and int(os.getenv('SLURM_ARRAY_TASK_ID')) != index:
-                                print(f'Task={os.getenv("SLURM_ARRAY_TASK_ID")} does not match index {index}')
-                                continue
+                            # enable array jobs with bundle-size K: task j
+                            # handles indices [j*K, j*K + K)
+                            task_env = os.getenv('SLURM_ARRAY_TASK_ID')
+                            if task_env is not None:
+                                task_idx = int(task_env)
+                                lo = task_idx * bundle_size
+                                hi = lo + bundle_size
+                                if index < lo or index >= hi:
+                                    print(f'Task={task_env} (bundle {bundle_size}, range [{lo},{hi})) skipping index {index}')
+                                    continue
 
                             exposure_id = filename.split("_")[2]
                             visit_id = filename.split("_")[0][-3:]
                             vgroup_id = filename.split("_")[1]
+                            if options.skip_if_done and _expected_output_exists(
+                                    basepath, filtername, module, options,
+                                    visit_id, vgroup_id, exposure_id,
+                                    iteration_label=options.iteration_label or None):
+                                print(f'skip-if-done: expected output exists for '
+                                      f'{filtername} {module} visit={visit_id} '
+                                      f'vgroup={vgroup_id} exp={exposure_id}; skipping.')
+                                continue
                             do_photometry_step(options, filtername, module, detector,
                                                field, basepath, filename, proposal_id,
                                                crowdsource_default_kwargs, exposurenumber=int(exposure_id),
                                                visit_id=visit_id, vgroup_id=vgroup_id,
                                                use_webbpsf=True,
-                                               bg_boxsizes=bg_boxsizes)
+                                               bg_boxsizes=bg_boxsizes,
+                                               seed_catalog=options.seed_catalog or None,
+                                               iteration_label=options.iteration_label or None,
+                                               postprocess_residuals=options.postprocess_residuals or bool(options.seed_catalog),
+                                               residual_negative_threshold=options.residual_negative_threshold,
+                                               local_snr_threshold=options.local_snr_threshold,
+                                               daofind_roundlo=options.daofind_roundlo,
+                                               daofind_roundhi=options.daofind_roundhi)
 
                 if not options.skip_mosaic_each_exposure_residuals:
                     if os.getenv('SLURM_ARRAY_TASK_ID') is None:
                         # Determine which residual kinds to mosaic based on enabled photometry types
                         mosaic_residual_kinds = []
                         if options.daophot:
-                            mosaic_residual_kinds = ['basic', 'iterative']
+                            mosaic_residual_kinds = ['basic'] if options.basic_only else ['basic', 'iterative']
                         
                         for residual_kind in mosaic_residual_kinds:
                             mosaic_each_exposure_residuals(basepath=basepath,
@@ -868,14 +2281,22 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                                                           epsf=options.epsf,
                                                           blur=options.blur,
                                                           group=options.group,
-                                                          pupil='clear')
+                                                          pupil='clear',
+                                                          iteration_label=options.iteration_label or None)
                     else:
                         print('Skipping residual mosaicking in SLURM array-task mode.')
             else:
                 filename = get_filename(basepath, filtername, proposal_id, field, module, options=options, pupil='clear')
                 do_photometry_step(options, filtername, module, detector, field,
                                    basepath, filename, proposal_id, crowdsource_default_kwargs,
-                                   bg_boxsizes=bg_boxsizes
+                                   bg_boxsizes=bg_boxsizes,
+                                   seed_catalog=options.seed_catalog or None,
+                                   iteration_label=options.iteration_label or None,
+                                   postprocess_residuals=options.postprocess_residuals or bool(options.seed_catalog),
+                                   residual_negative_threshold=options.residual_negative_threshold,
+                                   local_snr_threshold=options.local_snr_threshold,
+                                   daofind_roundlo=options.daofind_roundlo,
+                                   daofind_roundhi=options.daofind_roundhi
                                    )
 
 
@@ -884,12 +2305,33 @@ def get_filenames(basepath, filtername, proposal_id, field, each_suffix, module,
     # jw01182004002_02101_00012_nrcalong_destreak_o004_crf.fits
     # jw02221001001_07101_00012_nrcalong_destreak_o001_crf.fits
     # jw02221001001_05101_00022_nrcb3_destreak_o001_crf.fits
-    glstr = f'{basepath}/{filtername}/pipeline/jw0{proposal_id}{field}{visitid}*{module}*{each_suffix}.fits'
-    fglob = glob.glob(glstr)
-    if len(fglob) == 0:
-        raise ValueError(f"No matches found to {glstr}")
+    # 2026-04-24: when module='merged' (used by the LW per-frame
+    # photometry runs to indicate "both NIRCam long-wavelength
+    # detectors"), the per-frame data files actually carry the
+    # detector-specific tokens 'nrcalong' / 'nrcblong' in their names.
+    # The earlier ``*{module}*`` glob with module='merged' returned 0
+    # files for any LW filter because those files don't have the
+    # literal substring 'merged'.  Expand the search so module='merged'
+    # matches both detector tokens.
+    # MIRI imaging has a single detector ('mirimage'); 'merged' there
+    # collapses to that single token.
+    if module == 'merged':
+        if _instrument_from_filter(filtername) == 'MIRI':
+            glob_modules = ['mirimage']
+        else:
+            glob_modules = ['nrcalong', 'nrcblong']
     else:
-        return fglob
+        glob_modules = [module]
+    fglob = []
+    glstr_list = []
+    for gm in glob_modules:
+        glstr = f'{basepath}/{filtername}/pipeline/jw0{proposal_id}{field}{visitid}*{gm}*{each_suffix}.fits'
+        glstr_list.append(glstr)
+        fglob.extend(glob.glob(glstr))
+    if len(fglob) == 0:
+        raise ValueError(f"No matches found to any of {glstr_list}")
+    else:
+        return sorted(set(fglob))
 
 
 def get_filename(basepath, filtername, proposal_id, field, module, options, pupil='clear'):
@@ -897,19 +2339,20 @@ def get_filename(basepath, filtername, proposal_id, field, module, options, pupi
     bgsub = '_bgsub' if options.bgsub else ''
     #epsf_ = "_epsf" if options.epsf else ""
     #blur_ = "_blur" if options.blur else ""
+    inst_token = _inst_token(filtername)
 
-    filename = f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_{pupil}-{filtername.lower()}-{module}_i2d.fits'
+    filename = f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}_i2d.fits'
     if os.path.exists(filename):
         return filename
 
     candidate_patterns = [
-        f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_{pupil}-{filtername.lower()}-{module}_realigned-to-refcat.fits',
-        f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_{pupil}-{filtername.lower()}-{module}_i2d{desat}.fits',
-        f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_F444W-{filtername.lower()}-{module}_nodestreak_realigned-to-refcat.fits',
-        f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t*_nircam_*{filtername.lower()}*{module}*i2d*.fits',
-        f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t*_nircam_*{filtername.lower()}*i2d*.fits',
-        f'{basepath}/mastDownload/JWST/**/jw0{proposal_id}-o{field}_t*_nircam_*{filtername.lower()}*{module}*i2d*.fits',
-        f'{basepath}/mastDownload/JWST/**/jw0{proposal_id}-o{field}_t*_nircam_*{filtername.lower()}*i2d*.fits',
+        f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}_realigned-to-refcat.fits',
+        f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}_i2d{desat}.fits',
+        f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_F444W-{filtername.lower()}-{module}_nodestreak_realigned-to-refcat.fits',
+        f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t*_{inst_token}_*{filtername.lower()}*{module}*i2d*.fits',
+        f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t*_{inst_token}_*{filtername.lower()}*i2d*.fits',
+        f'{basepath}/mastDownload/JWST/**/jw0{proposal_id}-o{field}_t*_{inst_token}_*{filtername.lower()}*{module}*i2d*.fits',
+        f'{basepath}/mastDownload/JWST/**/jw0{proposal_id}-o{field}_t*_{inst_token}_*{filtername.lower()}*i2d*.fits',
     ]
 
     for glstr in candidate_patterns:
@@ -928,11 +2371,37 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
                        bg_boxsizes=None,
                        use_webbpsf=False,
                        nsigma=5,
-                       pupil='clear'):
+                       local_snr_threshold=5.0,
+                       daofind_roundlo=-1.0,
+                       daofind_roundhi=1.0,
+                       pupil='clear',
+                       seed_catalog=None,
+                       iteration_label=None,
+                       postprocess_residuals=False,
+                       residual_negative_threshold=0.0):
     """
     nsigma is the threshold to multiply the error estimate by to get the detection threshold
     """
     print(f"Starting {field} filter {filtername} module {module} detector {detector} {exposurenumber}", flush=True)
+
+    if not tracemalloc.is_tracing():
+        tracemalloc.start(25)
+
+    def _mem_report(label, deep=False):
+        snap = tracemalloc.take_snapshot()
+        top = snap.statistics('lineno')
+        peak_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        try:
+            curr_kb = int(open('/proc/self/status').read().split('VmRSS:')[1].split()[0])
+        except Exception:
+            curr_kb = 0
+        print(f"=MEM= {label}: curr={curr_kb/1e6:.2f}GB peak={peak_kb/1e6:.2f}GB", flush=True)
+        for s in top[:12]:
+            print(f"  {s.size/1e9:.3f}GB {s.traceback[0]}", flush=True)
+        if deep and top:
+            print(f"  --- traceback for #1 allocator ({top[0].size/1e9:.3f}GB) ---", flush=True)
+            for frame in top[0].traceback.format():
+                print(f"  {frame}", flush=True)
     fwhm_tbl = Table.read(FWHM_TABLE)
     row = fwhm_tbl[fwhm_tbl['Filter'] == filtername]
     fwhm = fwhm_arcsec = float(row['PSF FWHM (arcsec)'][0])
@@ -940,6 +2409,15 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
 
     # redundant, saves me renaming variables....
     filt = filtername
+
+    # LocalBackground annulus, filter-scaled.  Inner must exceed the
+    # photometric aperture (2*fwhm_pix) and sit beyond the first PSF
+    # sidelobe (~1.6 FWHM peak; ~2.2 FWHM outer edge).  Floor at the
+    # historical NIRCam-LW value (6,10) so existing NIRCam configs
+    # are unchanged.
+    aperture_radius_pix = 2.0 * fwhm_pix
+    localbkg_inner = max(6, int(round(aperture_radius_pix + 0.5 * fwhm_pix)))
+    localbkg_outer = localbkg_inner + max(4, int(round(fwhm_pix)))
 
     # file naming suffixes
     desat = '_unsatstar' if options.desaturated else ''
@@ -950,10 +2428,12 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
     vgroupid_, vgroup_numeric = normalize_vgroup_id(vgroup_id)
     blur_ = "_blur" if options.blur else ""
     group = "_group" if options.group else ""
+    iter_ = _iteration_token(iteration_label)
 
     print(f"Starting cataloging on {filename}", flush=True)
     fh, im1, data, wht, err, instrument, telescope, obsdate = load_data(filename)
     background_map = None
+    inst_token = instrument.lower()
 
     # set up coordinate system
     ww = wcs.WCS(im1[1].header)
@@ -977,10 +2457,45 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
 
         fits.PrimaryHDU(data=data, header=im1['SCI'].header).writeto(filename.replace(".fits", "_bgsub.fits"), overwrite=True)
 
+    if getattr(options, 'use_iter3_residual_bg', False):
+        # 2026-04-25: alternative background subtraction that uses the
+        # iter3 photometry residual (3x3-median-smoothed) as the
+        # background estimate.  Built by make_iter3_residual_bgmaps.py
+        # and consumed by the iter2-residbg / iter3-residbg cascade.
+        # Filename pattern matches the sibling per-frame iter3 residual
+        # with ``_smoothed_bg`` appended (see SMOOTHED_BG_SUFFIX in
+        # make_iter3_residual_bgmaps.py).
+        residbg_path = filename.replace(
+            '.fits', '_iter3_daophot_iterative_residual_smoothed_bg.fits')
+        if not os.path.exists(residbg_path):
+            raise ValueError(
+                f"--use-iter3-residual-bg requires {residbg_path} to exist; "
+                f"run `python make_iter3_residual_bgmaps.py --target=<target>` "
+                f"after iter3 photometry+residuals are complete."
+            )
+        with fits.open(residbg_path) as bgh:
+            if 'SCI' in [h.name for h in bgh]:
+                bg_data = bgh['SCI'].data.astype(float)
+            else:
+                bg_data = bgh[0].data.astype(float)
+        if bg_data.shape != data.shape:
+            raise ValueError(
+                f"residual-bg shape {bg_data.shape} != data shape {data.shape} "
+                f"(file: {residbg_path})"
+            )
+        bg_finite = np.where(np.isfinite(bg_data), bg_data, 0.0)
+        zeros = data == 0
+        data = data - bg_finite
+        data[zeros] = 0
+        background_map = bg_finite
+        print(f"Subtracted iter3-residual-smoothed bg ({residbg_path}) from data: "
+              f"sum={float(np.nansum(bg_finite)):.3e} counts", flush=True)
+
     # try to limit memory use before we start photometry
     data = data.astype('float32')
 
     # Load PSF model
+    _mem_report("before PSF load")
     grid, psf_model = get_psf_model(filtername, proposal_id, field,
                                     module=module,
                                     use_webbpsf=use_webbpsf,
@@ -989,37 +2504,39 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
                                     blur=options.blur,
                                     target=options.target,
                                     obsdate=obsdate,
-                                    basepath='/blue/adamginsburg/adamginsburg/jwst/')
+                                    basepath='/blue/adamginsburg/adamginsburg/jwst/',
+                                    psf_cache_dir=os.path.join(basepath, 'psfs'),
+                                    instrument=instrument)
     dao_psf_model = grid
+    _mem_report("after PSF load")
 
     # bound the flux to be >= 0 (no negative peak fitting)
     dao_psf_model.flux.min = 0
 
     dq, weight, bad = get_uncertainty(err, data, wht=wht, dq=im1['DQ'].data if 'DQ' in im1 else None)
 
-    filter_table = SvoFps.get_filter_list(facility=telescope, instrument=instrument)
+    # SVO FPS uses mixed-case instrument names (e.g. NIRCam) while FITS headers
+    # use all-caps (NIRCAM). Map to SVO conventions before lookup.
+    _svo_inst_map = {'NIRCAM': 'NIRCam', 'NIRISS': 'NIRISS', 'NIRSPEC': 'NIRSpec', 'MIRI': 'MIRI'}
+    _svo_instrument = _svo_inst_map.get(instrument.upper(), instrument)
+    filter_table = SvoFps.get_filter_list(facility=telescope, instrument=_svo_instrument)
     filter_table.add_index('filterID')
-    instrument = 'NIRCam'
-    eff_wavelength = filter_table.loc[f'{telescope}/{instrument}.{filt}']['WavelengthEff'] * u.AA
+    eff_wavelength = filter_table.loc[f'{telescope}/{_svo_instrument}.{filt}']['WavelengthEff'] * u.AA
 
-    # DAO Photometry setup
-    grouper = SourceGrouper(2 * fwhm_pix)
+    # DAO Photometry setup.  Use a CappedSourceGrouper when the caller
+    # asks for a group-size cap (--max-group-size); the inner SourceGrouper
+    # uses the same 2*FWHM linking distance as before.
+    _max_group_size = int(getattr(options, 'max_group_size', 0) or 0)
+    if _max_group_size > 0:
+        grouper = CappedSourceGrouper(2 * fwhm_pix, max_size=_max_group_size)
+    else:
+        grouper = SourceGrouper(2 * fwhm_pix)
     mmm_bkg = MMMBackground()
-
-    filtered_errest = stats.sigma_clipped_stats(data, stdfunc='mad_std')
-    print(f'Error estimate for DAO from stats.: {filtered_errest}', flush=True)
-    filtered_errest = np.nanmedian(err)
-    print(f'Error estimate for DAO from median(err): {filtered_errest}', flush=True)
-
-    daofind_tuned = DAOStarFinder(threshold=nsigma * filtered_errest,
-                                  fwhm=fwhm_pix, roundhi=1.0, roundlo=-1.0,
-                                  sharplo=0.30, sharphi=1.40)
-    print("Finding stars with daofind_tuned", flush=True)
 
     # empirically determined in debugging session with Taehwa on 2025-12-09:
     # with just nan_to_num, setting pixels to zero, some stars got "erased"
     kernel = Gaussian2DKernel(x_stddev=fwhm_pix/2.355)
-    mask = np.isnan(data)
+    mask = np.isnan(data) | bad
     if 'DQ' in im1:
         dqarr = im1['DQ'].data
         is_saturated = (dqarr & dqflags.pixel['SATURATED']) != 0
@@ -1027,18 +2544,352 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
         data_ = data.copy()
         data_[is_saturated] = np.nan
         mask |= is_saturated
+        # Honor the broader bad-DQ bitmask for the instrument.  For MIRI
+        # this also drops NON_SCIENCE imager regions and PERSISTENCE
+        # latents; for NIRCam it adds DO_NOT_USE coverage that wasn't
+        # previously enforced here.
+        bad_bitmask = _bad_dq_bitmask(instrument)
+        is_baddq = (dqarr & bad_bitmask) != 0
+        mask |= is_baddq
     else:
         data_ = data
 
     nan_replaced_data = interpolate_replace_nans(data_, kernel, convolve=convolve_fft)
 
-    finstars = daofind_tuned(nan_replaced_data,
-                             mask=mask)
+    # Infer a per-exposure ``_daophot_basic.fits`` seed for iter2, but *not*
+    # for iter3 -- iter3 must use the cross-band union seed catalog that
+    # the caller passes in explicitly.  Silently falling back to the basic
+    # per-frame catalog would defeat the purpose of iter3 entirely.
+    # Use the *base* iteration label so a chunk-suffixed compound label
+    # (e.g. 'iter3_chunk03of08' from --n-seed-chunks > 1) still triggers
+    # the iter3-specific code path (explicit-seed requirement, xy_bounds,
+    # tighter local-SNR threshold).
+    _base_label = _strip_chunk(iteration_label)
+    is_iter3 = (_base_label is not None
+                and str(_base_label).lower() == 'iter3')
+    if (seed_catalog is None and iteration_label not in (None, '')
+            and not is_iter3):
+        inferred_seed_catalog = (
+            f'{basepath}/{filtername}/'
+            f'{filtername.lower()}_{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}_daophot_basic.fits'
+        )
+        if os.path.exists(inferred_seed_catalog):
+            seed_catalog = inferred_seed_catalog
+    if is_iter3 and seed_catalog is None:
+        raise ValueError(
+            "iteration_label='iter3' requires an explicit seed_catalog "
+            "pointing at the cross-band union seed file "
+            "(build_union_seed_catalog.py output); no fallback is allowed."
+        )
+
+    is_second_iteration = seed_catalog is not None
+    # iter3 position bound: ±1 SW NIRCam pixel (0.031"), expressed in the
+    # current frame's pixel units.  On LW this is ~0.5 pix, on SW it is
+    # 1 pix.  Kept None for iter1/iter2 so their behavior is unchanged.
+    iter3_xy_bounds_pix = None
+    if is_iter3:
+        pixscale_arcsec = float(pixscale.to(u.arcsec).value)
+        sw_pix_arcsec = 0.031
+        iter3_xy_bounds_pix = float(sw_pix_arcsec / pixscale_arcsec)
+        print(f"iter3: pixscale={pixscale_arcsec:.4f}\"/pix -> "
+              f"xy_bounds=±{iter3_xy_bounds_pix:.3f} pix per source",
+              flush=True)
+    if is_second_iteration:
+        # iter2 / iter3 tuned finder settings: lower local-SNR cut plus tighter
+        # roundness/sharpness to suppress diffuse-background false detections.
+        # iter3 is seed-dominated (the union catalog already knows where the
+        # sources are), so its post-seed DAOStarFinder augmentation threshold
+        # is raised to reduce the flood of low-SNR "discoveries" that add
+        # little beyond what the union catalog provides.
+        iter2_local_snr_threshold = 6.0 if is_iter3 else 3.0
+        iter2_roundlo = -0.3
+        iter2_roundhi = 0.3
+        iter2_sharplo = 0.50
+        iter2_sharphi = 1.00
+
+        # Local-noise-map DAO thresholding for second-iteration residual search.
+        local_noise_map = compute_local_noise_map(nan_replaced_data, smooth_sigma_pix=3.0)
+        finite_noise = np.isfinite(local_noise_map) & (local_noise_map > 0)
+        if not np.any(finite_noise):
+            raise ValueError('Local noise map has no positive finite values')
+        daofind_threshold = float(np.nanmin(local_noise_map[finite_noise]))
+        daofind_tuned = DAOStarFinder(threshold=daofind_threshold,
+                                      fwhm=fwhm_pix, roundhi=iter2_roundhi, roundlo=iter2_roundlo,
+                                      sharplo=iter2_sharplo, sharphi=iter2_sharphi)
+        print(
+            f'DAO iter2 local-noise threshold={daofind_threshold}; '
+            f'local_snr_threshold={iter2_local_snr_threshold}; '
+            f'roundlo={iter2_roundlo}; roundhi={iter2_roundhi}; '
+            f'sharplo={iter2_sharplo}; sharphi={iter2_sharphi}',
+            flush=True,
+        )
+    else:
+        # Keep original first-pass starfinding behavior unchanged.
+        filtered_errest = np.nanmedian(err)
+        print(f'Error estimate for DAO from median(err): {filtered_errest}', flush=True)
+        # sigma_clipped stats get _much_ lower uncertainty for frames dominated by extended emission (maybe?).  At least, Sickle F470N had 3x too high error
+        mean, med, std = stats.sigma_clipped_stats(data, stdfunc='mad_std')
+        print(f'Error estimate for DAO from stats.: std={std}', flush=True)
+        filtered_errest = min([filtered_errest, std])
+
+        daofind_threshold = nsigma * filtered_errest
+        daofind_tuned = DAOStarFinder(threshold=daofind_threshold,
+                                      fwhm=fwhm_pix, roundhi=daofind_roundhi, roundlo=daofind_roundlo,
+                                      sharplo=0.30, sharphi=1.40)
+        print(
+            f'DAO first-pass threshold={daofind_threshold}; '
+            f'roundlo={daofind_roundlo}; roundhi={daofind_roundhi}',
+            flush=True,
+        )
+
+    print("Finding stars with daofind_tuned", flush=True)
+
+    satstar_table = None
+    # Holds the (NaN-replaced) satstar model image after it has been
+    # subtracted from ``nan_replaced_data``.  Re-applied to the residual
+    # written to disk so the saved per-frame residual matches what the
+    # fitter actually saw (i.e. data minus satstar wings minus phot model).
+    satstar_model_subtracted = None
+    # Run the satstar finder + model-subtract for *every* each-exposure
+    # pass, including iter1 (no seed_catalog).  The previous gate
+    # ``and seed_catalog is not None`` left iter1 mosaics with bright
+    # un-subtracted saturated stars because the satstar block was the
+    # only path that produced and subtracted the satstar model.  iter1
+    # is the most traceable iteration and the natural place to assess
+    # satstar finder quality, so it should also benefit from this
+    # plumbing.  The downstream seeded-photometry block at line ~2080
+    # is gated separately on ``seed_catalog is not None`` and is
+    # unaffected by this change.
+    if options.each_exposure:
+        outside_star_pixels = load_outside_fov_satstar_pixels(basepath, ww)
+        # Namespace the satstar outputs by bgsub/iteration_label so that
+        # the non-bgsub and bgsub iter2 array jobs (which can run concurrently
+        # on the same frame) don't race each other on a shared filename.
+        # The prior shared name (`<frame>_satstar_residual.fits`) caused
+        # FileNotFoundError from astropy's writeto(overwrite=True) when a
+        # sibling job deleted the file between the existence check and
+        # the os.remove call.
+        iter_tag = _iteration_token(iteration_label)
+        satstar_file_suffix = f'{bgsub}{iter_tag}'
+        satstar_table = load_or_make_satstar_catalog(
+            filename,
+            path_prefix=f'{basepath}/psfs',
+            use_merged_psf_for_merged=(module == 'merged'),
+            overwrite=bool(outside_star_pixels),
+            outside_star_pixels=outside_star_pixels,
+            outside_star_fit_box=512,
+            file_suffix=satstar_file_suffix,
+        )
+
+        # Pipeline-plumbing fix (2026-04-21):
+        # The satstar finder fits the bright/saturated stars and writes a
+        # satstar_model.fits, but historically `phot_basic`/`phot_iter` ran on
+        # ``nan_replaced_data`` (i.e. bgsub-only -- the satstar model was NOT
+        # subtracted).  That left the wings of saturated stars fully visible
+        # to the regular fitter, which then placed inflated fits at the
+        # "stuck-low" central pixel and produced ~-15000-count holes in the
+        # final residual image.  Subtract the satstar model here so the
+        # downstream photometry sees the satstar-cleaned data.
+        #
+        # Filenames mirror those produced by remove_saturated_stars()
+        # (saturated_star_finding.py) and load_or_make_satstar_catalog().
+        satstar_model_path = filename.replace(
+            '.fits', f'{satstar_file_suffix}_satstar_model.fits')
+        if os.path.exists(satstar_model_path):
+            try:
+                satstar_model_image = fits.getdata(satstar_model_path).astype(float)
+            except (OSError, ValueError) as exc:
+                print(f"Could not read satstar_model {satstar_model_path}: {exc}; "
+                      f"skipping satstar subtraction", flush=True)
+            else:
+                if satstar_model_image.shape != nan_replaced_data.shape:
+                    print(f"satstar_model shape {satstar_model_image.shape} does not "
+                          f"match data shape {nan_replaced_data.shape}; skipping "
+                          f"satstar subtraction", flush=True)
+                else:
+                    finite_model = np.where(np.isfinite(satstar_model_image),
+                                            satstar_model_image, 0.0)
+                    n_pos = int(np.sum(finite_model > 0))
+                    total = float(np.nansum(finite_model))
+                    nan_replaced_data = nan_replaced_data - finite_model
+                    satstar_model_subtracted = finite_model
+                    print(f"Subtracted satstar_model ({satstar_model_path}) from "
+                          f"nan_replaced_data: {n_pos} positive pixels, "
+                          f"sum={total:.3e} counts", flush=True)
+        else:
+            print(f"No satstar_model file at {satstar_model_path}; "
+                  f"phot_basic/phot_iter will see the satstar wings unmodified",
+                  flush=True)
+
+    seeded_init_params = None
+    if seed_catalog is not None:
+        preferred_seed_skycoord_col = f'skycoord_{filtername.lower()}'
+        merged_seed_table = _as_table(seed_catalog)
+
+        # Optional spatial chunking: split the seed catalog into N image-pixel
+        # tiles and fit only the regular seeds whose pixel position lies in
+        # this chunk's tile.  Each chunk runs as its own SLURM array job and
+        # writes a _chunkXXofYY-tagged per-frame catalog; merge_catalogs.py
+        # vstacks them back into one per-frame table.  Used to stay under
+        # the 96 h walltime for brick LW iter3 (433 k seeds per frame).
+        # satstar_table is NOT subset here -- it stays full-frame so the
+        # postprocess-residual masking continues to see every satstar; the
+        # merge-time dedup catches the resulting cross-chunk satstar
+        # duplicates.
+        _n_seed_chunks = int(getattr(options, 'n_seed_chunks', 1) or 1)
+        _seed_chunk_index = int(getattr(options, 'seed_chunk_index', 0) or 0)
+        if _n_seed_chunks > 1:
+            merged_seed_table = _seed_table_chunk_subset(
+                merged_seed_table, ww=ww, image_shape=data.shape,
+                chunk_index=_seed_chunk_index,
+                n_seed_chunks=_n_seed_chunks,
+            )
+            seed_catalog = merged_seed_table
+
+        # Remove is_saturated=True entries from the union seed catalog before
+        # combining with the current-frame satstar table.  Union-catalog satstar
+        # rows carry per-filter flux columns (e.g. flux_f335m) but NOT flux_fit;
+        # after vstack with satstar_table they get flux_fit=NaN, which makes
+        # them ineligible for deduplication (_dedup_close_sources only clusters
+        # entries with finite flux).  The current-frame satstar entries (finite
+        # flux_fit) therefore cannot dedup against them, so both copies survive
+        # and the fitter double-subtracts every saturated star.  Stripping them
+        # here lets _combine_seed_and_satstars add only the fresh current-frame
+        # positions (which have finite flux and dedup correctly).
+        if satstar_table is not None:
+            st = _as_table(seed_catalog)
+            if 'is_saturated' in st.colnames:
+                is_sat_mask = np.asarray(st['is_saturated'], dtype=bool)
+                n_sat_in_union = int(np.sum(is_sat_mask))
+                if n_sat_in_union > 0:
+                    seed_catalog = st[~is_sat_mask]
+                    merged_seed_table = _as_table(seed_catalog)
+                    print(f"Stripped {n_sat_in_union} is_saturated=True rows from union seed catalog "
+                          f"(current-frame satstar positions used instead)", flush=True)
+
+        seed_catalog = _combine_seed_and_satstars(seed_catalog, satstar_table)
+        seed_after_sat_table = _as_table(seed_catalog)
+        sat_seed_count = int(np.sum(np.asarray(seed_after_sat_table['is_saturated'], dtype=bool)))
+        nonsat_seed_count = int(len(seed_after_sat_table) - sat_seed_count)
+        detection_image = nan_replaced_data
+        if postprocess_residuals:
+            detection_image = postprocess_residual_image(
+                nan_replaced_data,
+                fwhm_pix,
+                negative_threshold=residual_negative_threshold,
+                satstar_table=satstar_table,
+            )
+        if postprocess_residuals:
+            extra_noise_map = compute_local_noise_map(detection_image, smooth_sigma_pix=3.0)
+            finite_extra_noise = np.isfinite(extra_noise_map) & (extra_noise_map > 0)
+            if not np.any(finite_extra_noise):
+                raise ValueError('Postprocessed local noise map has no positive finite values')
+            extra_noise_floor = float(np.nanmin(extra_noise_map[finite_extra_noise]))
+            extra_finder = DAOStarFinder(threshold=extra_noise_floor,
+                                         fwhm=fwhm_pix, roundhi=iter2_roundhi, roundlo=iter2_roundlo,
+                                         sharplo=iter2_sharplo, sharphi=iter2_sharphi)
+            extra_detections = extra_finder(detection_image, mask=mask)
+            extra_noise_for_snr = extra_noise_map
+            print(f'Postprocessed DAO local-noise threshold: {extra_noise_floor}', flush=True)
+        else:
+            extra_detections = daofind_tuned(detection_image, mask=mask)
+            extra_noise_for_snr = local_noise_map
+
+        if extra_detections is None:
+            extra_detections = Table()
+        extra_detections, extra_snr_stats = annotate_and_filter_by_local_snr(
+            extra_detections,
+            extra_noise_for_snr,
+            snr_threshold=iter2_local_snr_threshold,
+        )
+        print(
+            'Extra DAO detections local-SNR filter: '
+            f'in={extra_snr_stats["input_count"]} '
+            f'kept={extra_snr_stats["kept_count"]} '
+            f'dropped={extra_snr_stats["dropped_count"]}',
+            flush=True,
+        )
+        seed_catalog, seed_aug_stats = _augment_seed_catalog_with_detections_sky(
+            seed_catalog,
+            extra_detections,
+            ww=ww,
+            match_radius_pix=max(1.0, 0.5 * fwhm_pix),
+            preferred_seed_skycoord_col=preferred_seed_skycoord_col,
+            return_stats=True,
+        )
+        print(
+            'Seed composition: '
+            f'merged_seed_rows={len(merged_seed_table)} '
+            f'sat_seed_rows={sat_seed_count} '
+            f'nonsat_seed_rows={nonsat_seed_count} '
+            f'dao_detect_total={seed_aug_stats["detection_input"]} '
+            f'dao_detect_finite_xy={seed_aug_stats["detection_finite_xy"]} '
+            f'dao_added={seed_aug_stats["detection_added"]} '
+            f'dao_rejected_duplicates={seed_aug_stats["detection_rejected_match"]} '
+            f'seed_rows_final={len(_as_table(seed_catalog))}'
+        )
+        _mem_report("before SeededFinder")
+        finstars = SeededFinder(seed_catalog, ww=ww,
+                                preferred_skycoord_col=preferred_seed_skycoord_col)(nan_replaced_data, mask=mask)
+        _mem_report("after SeededFinder call", deep=True)
+        seeded_init_params = Table()
+        seeded_init_params['x_init'] = np.asarray(finstars['x_init'], dtype=float)
+        seeded_init_params['y_init'] = np.asarray(finstars['y_init'], dtype=float)
+        seeded_init_params['flux_init'] = np.asarray(finstars['flux_init'], dtype=float)
+
+        # Deduplicate seeds: remove entries within 0.5 FWHM of a brighter seed.
+        # Merged catalogs can contain sub-pixel duplicate entries from multiple
+        # per-exposure fits landing at slightly different positions for the same
+        # star.  Two seeds at the same position each receive the full star flux,
+        # doubling the model and producing large negative residuals.  No
+        # quality metric exists at the seed stage, so the brightest init flux
+        # wins any flux-disagreement tie.
+        #
+        # For iter3 the union seed catalog contains sources from all filters,
+        # including SW-only detections that are unresolved at LW wavelengths.
+        # Fitting many seeds within one PSF FWHM of each other produces an
+        # ill-conditioned LSQ system with wildly oscillating positive/negative
+        # fluxes that contaminate the residual image.  Tighten the dedup to
+        # 1.0×FWHM for iter3 to collapse seeds within one resolution element
+        # to a single fit position before entering the solver.
+        min_sep_pix = 1.0 * fwhm_pix if is_iter3 else 0.5 * fwhm_pix
+        n_before = len(seeded_init_params)
+        if n_before > 1:
+            keep, n_disagree = _dedup_close_sources(
+                xy=np.column_stack([
+                    np.asarray(seeded_init_params['x_init'], dtype=float),
+                    np.asarray(seeded_init_params['y_init'], dtype=float),
+                ]),
+                flux=np.asarray(seeded_init_params['flux_init'], dtype=float),
+                min_sep_pix=min_sep_pix,
+                quality=None,
+            )
+            n_removed = int(n_before - np.sum(keep))
+            if n_removed > 0:
+                seeded_init_params = seeded_init_params[keep]
+                print(f"Pre-fit deduplication removed {n_removed} seeds within "
+                      f"{min_sep_pix:.2f} pix ({n_before} -> {len(seeded_init_params)}); "
+                      f"{n_disagree} clusters had disagreeing init fluxes",
+                      flush=True)
+        _mem_report("after seed dedup")
+
+        finding_label = 'seeded'
+    else:
+        finstars = daofind_tuned(nan_replaced_data,
+                                 mask=mask)
+        if finstars is None:
+            finstars = Table()
+        finding_label = 'daofind'
 
     print(f"Found {len(finstars)} with daofind_tuned", flush=True)
     # for diagnostic plotting convenience
-    finstars['x'] = finstars['xcentroid']
-    finstars['y'] = finstars['ycentroid']
+    # photutils >=3.0 emits x_centroid/y_centroid; 2.x emits xcentroid/ycentroid.
+    if 'xcentroid' in finstars.colnames:
+        finstars['x'] = finstars['xcentroid']
+        finstars['y'] = finstars['ycentroid']
+    elif 'x_centroid' in finstars.colnames:
+        finstars['x'] = finstars['x_centroid']
+        finstars['y'] = finstars['y_centroid']
     finstars['skycoord'] = ww.pixel_to_world(finstars['x'], finstars['y'])
 
     result = save_photutils_results(finstars, ww, filename,
@@ -1049,13 +2900,14 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
                                     blur="",
                                     exposure_=exposure_,
                                     visitid_=visitid_, vgroupid_=vgroupid_,
-                                    basic_or_iterative='daofind',
+                                    basic_or_iterative=finding_label,
                                     options=options,
                                     epsf_="",
                                     fpsf="",
                                     group=group,
                                     psf=None,
-                                    background_map=background_map)
+                                    background_map=background_map,
+                                    iteration_label=iteration_label)
 
     stars = finstars # because I'm copy-pasting code...
 
@@ -1065,37 +2917,71 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
     #mask = preg.to_mask()
     #cutout = mask.cutout(im1[1].data)
     #err = mask.cutout(im1[2].data)
-    region_list = [y for x in glob.glob('regions_/*zoom*.reg') for y in
+    # Zoom regions live in a shared regions_/ directory across fields (brick,
+    # sgrb2, cloudc, sickle).  Two guards keep cross-field regions out:
+    # (1) sky-separation gate — if the region center sits more than
+    #     max_field_sep from this detector's pointing, it belongs to a
+    #     different field and projects to extreme pixel coords.
+    # (2) bbox sanity check — `to_mask()` allocates a (ny,nx) float64 array
+    #     sized to the bounding box (regions/shapes/rectangle.py:165).  A
+    #     half-degree-misplaced rectangle yields a TB-scale allocation that
+    #     drove sgrb2 nrca1 photometry to 564 GB peak.  Refuse anything
+    #     larger than 4× the detector.
+    region_list = [y for x in glob.glob(str(REGIONS_DIR / '*zoom*.reg')) for y in
                    regions.Regions.read(x)]
-    zoomcut_list = {reg.meta['text']: reg.to_pixel(ww).to_mask().get_overlap_slices(data.shape)[0]
-                    for reg in region_list}
-    zoomcut_list = {nm:slc for nm,slc in zoomcut_list.items()
-                    if slc is not None and
-                    slc[0].start > 0 and slc[1].start > 0
-                    and slc[0].stop < data.shape[0] and slc[1].stop < data.shape[1]}
+    ny, nx = data.shape
+    data_center_sky = ww.pixel_to_world(nx / 2.0, ny / 2.0)
+    max_field_sep = 6 * u.arcmin
+    zoomcut_list = {}
+    for _reg in region_list:
+        reg_center = getattr(_reg, 'center', None)
+        if isinstance(reg_center, SkyCoord):
+            if reg_center.separation(data_center_sky) > max_field_sep:
+                continue
+        _pix = _reg.to_pixel(ww)
+        bb = _pix.bounding_box
+        if bb.ixmax < 0 or bb.iymax < 0 or bb.ixmin >= nx or bb.iymin >= ny:
+            continue
+        bb_w = bb.ixmax - bb.ixmin
+        bb_h = bb.iymax - bb.iymin
+        if bb_w * bb_h > 4 * nx * ny:
+            print(f"Skipping oversized zoom region '{_reg.meta.get('text', '?')}': "
+                  f"bbox {bb_w}x{bb_h} exceeds 4x detector ({nx}x{ny})",
+                  flush=True)
+            continue
+        _slc_tuple = _pix.to_mask().get_overlap_slices(data.shape)
+        if _slc_tuple is None or _slc_tuple[0] is None:
+            continue
+        _slc = _slc_tuple[0]
+        if (_slc[0].start > 0 and _slc[1].start > 0
+                and _slc[0].stop < data.shape[0] and _slc[1].stop < data.shape[1]):
+            zoomcut_list[_reg.meta['text']] = _slc
 
+    _mem_report("after region zoomcut loop", deep=True)
     zoomcut = slice(128, 256), slice(128, 256)
     modsky = data*0 # no model for daofind
     nullslice = (slice(None), slice(None))
 
+    _mem_report("before daofind catalog_zoom_diagnostic block")
     try:
         catalog_zoom_diagnostic(data, modsky, nullslice, stars)
         pl.suptitle(f"daofind Catalog Diagnostics zoomed {filtername} {module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}")
-        pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}_catalog_diagnostics_daofind.png',
+        pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}_catalog_diagnostics_daofind.png',
                 bbox_inches='tight')
 
         catalog_zoom_diagnostic(data, modsky, zoomcut, stars)
         pl.suptitle(f"daofind Catalog Diagnostics {filtername} {module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}")
-        pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}_catalog_diagnostics_zoom_daofind.png',
+        pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}_catalog_diagnostics_zoom_daofind.png',
                 bbox_inches='tight')
 
         for name, zoomcut in zoomcut_list.items():
             catalog_zoom_diagnostic(data, modsky, zoomcut, stars)
             pl.suptitle(f"daofind Catalog Diagnostics {filtername} {module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub} zoom {name}")
-            pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}_catalog_diagnostics_zoom{name.replace(" ","_")}_daofind.png',
+            pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}_catalog_diagnostics_zoom{name.replace(" ","_")}_daofind.png',
                     bbox_inches='tight')
     except Exception as ex:
         print(f'FAILURE to produce catalog zoom diagnostics for module {module} and filter {filtername} for basic daofinder: {ex}')
+    _mem_report("after daofind catalog_zoom_diagnostic block", deep=True)
 
     if not options.nocrowdsource:
 
@@ -1123,24 +3009,25 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
                                              visitid_=visitid_,
                                              vgroupid_=vgroupid_,
                                              options=options,
-                                             suffix="unweighted", psf=None)
+                                             suffix="unweighted", psf=None,
+                                             iteration_label=iteration_label)
 
             zoomcut = slice(128, 256), slice(128, 256)
 
             try:
                 catalog_zoom_diagnostic(data, modsky, nullslice, stars)
                 pl.suptitle(f"Crowdsource nsky=0 unweighted Catalog Diagnostics zoomed {filtername} {module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{blur_}")
-                pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{blur_}_catalog_diagnostics_unweighted.png',
+                pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{blur_}_catalog_diagnostics_unweighted.png',
                         bbox_inches='tight')
 
                 catalog_zoom_diagnostic(data, modsky, zoomcut, stars)
                 pl.suptitle(f"Crowdsource nsky=0 unweighted Catalog Diagnostics {filtername} {module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{blur_}")
-                pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{blur_}_catalog_diagnostics_zoom_unweighted.png',
+                pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{blur_}_catalog_diagnostics_zoom_unweighted.png',
                         bbox_inches='tight')
                 for name, zoomcut in zoomcut_list.items():
                     catalog_zoom_diagnostic(data, modsky, zoomcut, stars)
                     pl.suptitle(f"Crowdsource nsky=0 Catalog Diagnostics {filtername} {module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{blur_} zoom {name}")
-                    pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{blur_}_catalog_diagnostics_zoom{name.replace(" ","_")}_unweighted.png',
+                    pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{blur_}_catalog_diagnostics_zoom{name.replace(" ","_")}_unweighted.png',
                             bbox_inches='tight')
             except Exception as ex:
                 print(f'FAILURE to produce catalog zoom diagnostics for module {module} and filter {filtername} for unweighted crowdsource: {ex}')
@@ -1153,7 +3040,7 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
             ax = fig.gca()
             im = ax.imshow(weight, norm=simple_norm(weight, stretch='log'))
             pl.colorbar(mappable=im)
-            pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}_weights.png',
+            pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}_weights.png',
                     bbox_inches='tight')
 
         #for refit_psf, fpsf in zip((False, True), ('', '_fitpsf',)):
@@ -1163,11 +3050,13 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
                 print()
                 print(f"Running crowdsource fit_im with weights & nskyx=nskyy={nsky} & fpsf={fpsf} & blur={blur_}")
                 print(f"data.shape={data.shape} weight_shape={weight.shape}", flush=True)
+                _mem_report("before crowdsource fit_im")
                 results = fit_im(nan_replaced_data, psf_model, weight=weight * (~mask),
                                  nskyx=nsky, nskyy=nsky, refit_psf=refit_psf, verbose=True,
                                  dq=dq,
                                  **crowdsource_default_kwargs
                                  )
+                _mem_report("after crowdsource fit_im", deep=True)
                 print(f"Done with weighted, refit={fpsf}, nsky={nsky} crowdsource. dt={time.time() - t0}")
                 stars, modsky, skymsky, psf = results
                 stars = save_crowdsource_results(results, ww, filename,
@@ -1182,103 +3071,131 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
                                                  vgroupid_=vgroupid_,
                                                  psf=psf if refit_psf else None,
                                                  options=options,
-                                                 suffix=f"nsky{nsky}")
+                                                 suffix=f"nsky{nsky}",
+                                                 iteration_label=iteration_label)
+                _mem_report("after save_crowdsource_results")
 
                 zoomcut = slice(128, 256), slice(128, 256)
 
                 try:
                     catalog_zoom_diagnostic(data, modsky, nullslice, stars)
                     pl.suptitle(f"Catalog Diagnostics {filtername} {module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{fpsf}{blur_} nsky={nsky} weighted")
-                    pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{fpsf}{blur_}_nsky{nsky}_weighted_catalog_diagnostics.png',
+                    pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{fpsf}{blur_}_nsky{nsky}_weighted_catalog_diagnostics.png',
                             bbox_inches='tight')
 
                     catalog_zoom_diagnostic(data, modsky, zoomcut, stars)
                     pl.suptitle(f"Catalog Diagnostics zoomed {filtername} {module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{fpsf}{blur_} nsky={nsky} weighted")
-                    pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{fpsf}{blur_}_nsky{nsky}_weighted_catalog_diagnostics_zoom.png',
+                    pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{fpsf}{blur_}_nsky{nsky}_weighted_catalog_diagnostics_zoom.png',
                             bbox_inches='tight')
 
                     for name, zoomcut in zoomcut_list.items():
                         catalog_zoom_diagnostic(data, modsky, zoomcut, stars)
                         pl.suptitle(f"Crowdsource nsky={nsky} weighted Catalog Diagnostics {filtername} {module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{fpsf}{blur_} zoom {name}")
-                        pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{fpsf}{blur_}_nsky{nsky}_weighted_catalog_diagnostics_zoom{name.replace(" ","_")}.png',
+                        pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{fpsf}{blur_}_nsky{nsky}_weighted_catalog_diagnostics_zoom{name.replace(" ","_")}.png',
                                 bbox_inches='tight')
                 except Exception as ex:
                     print(f'FAILURE to produce catalog zoom diagnostics for module {module} and filter {filtername} for crowdsource nsky={nsky} refitpsf={refit_psf} blur={options.blur}: {ex}')
                     exc_tb = sys.exc_info()[2]
                     fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
                     print(f"Exception {ex} was in {fname} line {exc_tb.tb_lineno}")
+                _mem_report("after crowdsource diag plotting", deep=True)
 
     if options.daophot:
         t0 = time.time()
         print("Starting basic PSF photometry", flush=True)
+        _mem_report("before phot_basic setup")
 
-        if options.epsf:
-            print("Building EPSF")
-            epsf_builder = EPSFBuilder(oversampling=3, maxiters=10,
-                                       smoothing_kernel='quadratic',
-                                       progress_bar=True)
-
-            epsfsel = ((finstars['peak'] > 200) &
-                       (finstars['roundness1'] > -0.25) &
-                       (finstars['roundness1'] < 0.25) &
-                       (finstars['roundness2'] > -0.25) &
-                       (finstars['roundness2'] < 0.25) &
-                       (finstars['sharpness'] > 0.4) &
-                       (finstars['sharpness'] < 0.8))
-
-            print(f"Extracting {epsfsel.sum()} stars")
-            # TODO: we might need to figure out how to tell extract_stars what's masked
-            stars = extract_stars(NDData(data=nan_replaced_data), finstars[epsfsel], size=25)
-
-            # reject stars with negative pixels
-            #stars = EPSFStars([x for x in stars if x.data.min() >= 0])
-            # apparently this failed - too restrictive?
-
-            for star in stars:
-                # background subtraction
-                star.data[:] -= np.nanpercentile(star.data, 5)
-
-            epsf, fitted_stars = epsf_builder(stars)
-
-            # trim edges
-            epsf._data = epsf.data[2:-2, 2:-2]
-
-            norm = simple_norm(epsf.data, 'log', percent=99.0)
-            pl.figure(1).clf()
-            pl.imshow(epsf.data, norm=norm, origin='lower', cmap='viridis')
-            pl.colorbar()
-            pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}_daophot_epsf.png',
-                       bbox_inches='tight')
-            dao_psf_model = epsf
-
-            save_epsf(epsf,
-                      f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}_daophot_epsf.fits')
-
-
-        phot_basic = PSFPhotometry(finder=daofind_tuned,#finder_maker(),
-                             #grouper=grouper, # the grouper is needed to jointly fit stars and avoid faint stars jumping onto bright ones
-                             grouper=grouper if options.group else None,
-                             # localbkg_estimator=None, # must be none or it un-saturates pixels
-                             localbkg_estimator=LocalBackground(5, 15),
-                             psf_model=dao_psf_model,
-                             fitter=LevMarLSQFitter(),
-                             fit_shape=(5, 5),
-                             aperture_radius=2*fwhm_pix,
-                             progress_bar=True,
-                            )
+        basic_finder = None if seeded_init_params is not None else daofind_tuned
+        _phot_basic_extra = {}
+        if iter3_xy_bounds_pix is not None:
+            _phot_basic_extra['xy_bounds'] = (iter3_xy_bounds_pix,
+                                              iter3_xy_bounds_pix)
+        phot_basic = _make_psfphotometry(
+                                   finder=basic_finder,
+                                   # filter-scaled: inner clears aperture
+                                   # (2*FWHM) plus first Airy sidelobe;
+                                   # see header comment near aperture_radius_pix.
+                                   localbkg_estimator=LocalBackground(localbkg_inner, localbkg_outer),
+                                   grouper=grouper if options.group else None,
+                                   psf_model=dao_psf_model,
+                                   fitter=LevMarLSQFitter(),
+                                   fit_shape=(5, 5),
+                                   aperture_radius=aperture_radius_pix,
+                                   progress_bar=True,
+                                   **_phot_basic_extra,
+                                  )
 
         print("About to do BASIC photometry....")
-        result = phot_basic(nan_replaced_data, mask=mask)
-        # I want to use daofind params in the future
-        result['roundness1'] = finstars['roundness1']
-        result['roundness2'] = finstars['roundness2']
-        result['sharpness'] = finstars['sharpness']
-        print(f"Done with BASIC photometry.  len(result)={len(result)} dt={time.time() - t0}")
+        _mem_report("before phot_basic call")
+        if seeded_init_params is not None:
+            result = phot_basic(nan_replaced_data, mask=mask, init_params=seeded_init_params, error=np.where(bad, 1e10, err))
+        else:
+            result = phot_basic(nan_replaced_data, mask=mask, error=np.where(bad, 1e10, err))
+        print(f"Done with BASIC photometry. len(result)={len(result)}  dt={time.time() - t0}")
+        _mem_report("after phot_basic")
 
-        # remove negative-peak and zero-peak sources (they affect the residuals badly)
-        # we don't want to remove them now; we need to flag out objects that are too close to negative stars
-        #bad = result['flux_fit'] <= 0
-        #result = result[~bad]
+        # Post-fit deduplication: the unseeded DAO finder can detect multiple
+        # local maxima near a single bright star; each is fit independently
+        # without a grouper, and they can converge to the same (x_fit, y_fit).
+        # Summing those PSFs in make_model_image() produces 2x-4x overfits.
+        # When a cluster of fits converges to the same position, the same
+        # physical source should yield matching fluxes; if fluxes disagree
+        # the fits reached different minima and we keep the one with the
+        # best qfit (smallest chi-squared/pixel).  Filter the phot_basic
+        # object's own state so the saved catalog and the rendered model
+        # image are both built from the deduplicated set.
+        # 2026-04-24: threshold loosened from 0.5 * fwhm_pix to
+        # 1.5 * fwhm_pix.  The tighter threshold left seeded-duplicate
+        # fits at 2.5-3.2 LW pix apart uncaught, which drove
+        # progressively deeper negative residuals in iter2 (p0.1=-96)
+        # and iter3 (p0.1=-172).  1.5*FWHM catches drift-together /
+        # duplicate-seed pairs out to ~7 LW pix (~0.44"); anything real
+        # that this over-merges should reappear in the iterative pass's
+        # DAOStarFinder residual step.
+        min_sep_pix = 1.5 * fwhm_pix
+        xfit_arr = np.asarray(result['x_fit'], dtype=float)
+        yfit_arr = np.asarray(result['y_fit'], dtype=float)
+        flux_arr = np.asarray(result['flux_fit'], dtype=float)
+        qfit_arr = (np.asarray(result['qfit'], dtype=float)
+                    if 'qfit' in result.colnames else None)
+        keep_full, n_disagree = _dedup_close_sources(
+            xy=np.column_stack([xfit_arr, yfit_arr]),
+            flux=flux_arr,
+            min_sep_pix=min_sep_pix,
+            quality=qfit_arr,
+        )
+        n_removed = int(len(keep_full) - np.sum(keep_full))
+        if n_removed > 0:
+            tiebreak = "qfit" if qfit_arr is not None else "brightest"
+            print(f"Post-fit deduplication: dropping {n_removed} drift-together "
+                  f"fits within {min_sep_pix:.2f} pix "
+                  f"({len(result)} -> {int(np.sum(keep_full))}); "
+                  f"{n_disagree} clusters had disagreeing fitted fluxes "
+                  f"(resolved by {tiebreak})", flush=True)
+            # Filter the PSFPhotometry object's own state so the saved catalog
+            # AND the model image (via make_model_image) are both built from
+            # the deduplicated set.
+            phot_basic.results = phot_basic.results[keep_full]
+            if (phot_basic.init_params is not None
+                    and len(phot_basic.init_params) == len(keep_full)):
+                phot_basic.init_params = phot_basic.init_params[keep_full]
+            # Invalidate the @lazyproperty cache so _model_image_params
+            # regenerates from the filtered results on next access.
+            phot_basic.__dict__.pop('_model_image_params', None)
+            # Keep the local `result` name in sync with the filtered table.
+            result = phot_basic.results
+
+        # Saturation-proximity filter: regular phot_basic fits placed on
+        # or right next to a saturated DQ pixel are unreliable (the central
+        # data value is "stuck" while the wings drive the flux up), so drop
+        # them before the catalog and the model image are written.  The
+        # dedicated satstar catalog lives in a separate file and is not
+        # touched.
+        _dqarr_for_satfilter = im1['DQ'].data if 'DQ' in im1 else None
+        _filter_near_saturation(phot_basic, _dqarr_for_satfilter,
+                                max_sat_dist_pix=5.0,
+                                label='basic')
+        result = phot_basic.results
 
         result = save_photutils_results(result, ww, filename,
                                         im1=im1, detector=detector,
@@ -1294,172 +3211,241 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
                                         epsf_=epsf_,
                                         group=group,
                                         psf=None,
-                                        background_map=background_map)
+                                        background_map=background_map,
+                                        iteration_label=iteration_label)
 
         stars = result
         stars['x'] = stars['x_fit']
         stars['y'] = stars['y_fit']
         print("Creating BASIC residual image, using 21x21 patches")
-        modsky = phot_basic.make_model_image(data.shape, psf_shape=(21, 21), include_localbkg=False)
-        residual = data - modsky
+        _mem_report("before basic model image")
+        modsky = _make_model_image(phot_basic, data.shape, psf_shape=(21, 21), include_local_bkg=False)
+        _mem_report("after basic model image")
+        # The fitter saw ``data - satstar_model`` (when a satstar model
+        # exists), so the saved residual must subtract the satstar model
+        # too -- otherwise the bright-star wings reappear and dominate
+        # the residual mosaic.  See pipeline-plumbing block above.
+        data_for_residual = (data if satstar_model_subtracted is None
+                             else data - satstar_model_subtracted)
+        residual = data_for_residual - modsky
         print("Done creating BASIC residual image, using 21x21 patches")
         save_residual_datamodel(
             filename,
-            f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}_daophot_basic_residual.fits',
+            f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}{iter_}_daophot_basic_residual.fits',
             residual,
         )
         save_residual_datamodel(
             filename,
-            f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}_daophot_basic_model.fits',
+            f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}{iter_}_daophot_basic_model.fits',
             modsky,
         )
         print("Saved BASIC residual image, now making diagnostics.")
-        try:
-            catalog_zoom_diagnostic(data, modsky, nullslice, stars)
-            pl.suptitle(f"daophot basic Catalog Diagnostics zoomed {filtername} {module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}")
-            pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}_catalog_diagnostics_daophot_basic.png',
-                    bbox_inches='tight')
+        catalog_zoom_diagnostic(data_for_residual, modsky, nullslice, stars)
+        pl.suptitle(f"daophot basic Catalog Diagnostics zoomed {filtername} {module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}")
+        pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}_catalog_diagnostics_daophot_basic.png',
+                bbox_inches='tight')
 
-            catalog_zoom_diagnostic(data, modsky, zoomcut, stars)
-            pl.suptitle(f"daophot basic Catalog Diagnostics {filtername} {module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}")
-            pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}_catalog_diagnostics_zoom_daophot_basic.png',
-                    bbox_inches='tight')
+        catalog_zoom_diagnostic(data_for_residual, modsky, zoomcut, stars)
+        pl.suptitle(f"daophot basic Catalog Diagnostics {filtername} {module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}")
+        pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}_catalog_diagnostics_zoom_daophot_basic.png',
+                bbox_inches='tight')
 
-            for name, zoomcut in zoomcut_list.items():
-                catalog_zoom_diagnostic(data, modsky, zoomcut, stars)
-                pl.suptitle(f"daophot basic Catalog Diagnostics {filtername} {module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group} zoom {name}")
-                pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}__catalog_diagnostics_zoom_daophot_basic{name.replace(" ","_")}.png',
-                        bbox_inches='tight')
-        except Exception as ex:
-            print(f'FAILURE to produce catalog zoom diagnostics for module {module} and filter {filtername} BASIC photometry: {ex}')
-            exc_tb = sys.exc_info()[2]
-            fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
-            print(f"Exception {ex} was in {fname} line {exc_tb.tb_lineno}")
+        for name, zoomcut in zoomcut_list.items():
+            catalog_zoom_diagnostic(data_for_residual, modsky, zoomcut, stars)
+            pl.suptitle(f"daophot basic Catalog Diagnostics {filtername} {module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group} zoom {name}")
+            pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}__catalog_diagnostics_zoom_daophot_basic{name.replace(" ","_")}.png',
+                    bbox_inches='tight')
 
         print(f"Done with diagnostics for BASIC photometry.  dt={time.time() - t0}")
         pl.close('all')
 
-    if options.daophot:
-        t0 = time.time()
+        if not options.basic_only:
+            t0 = time.time()
+            print("Iterative PSF photometry")
+            if options.epsf:
+                print("Building EPSF")
+                epsf_builder = EPSFBuilder(oversampling=3, maxiters=10,
+                                           smoothing_kernel='quadratic',
+                                           progress_bar=True)
 
-        print("Iterative PSF photometry")
-        if options.epsf:
-            print("Building EPSF")
-            epsf_builder = EPSFBuilder(oversampling=3, maxiters=10,
-                                       smoothing_kernel='quadratic',
-                                       progress_bar=True)
+                epsfsel = ((finstars['peak'] > 200) &
+                           (finstars['roundness1'] > -0.25) &
+                           (finstars['roundness1'] < 0.25) &
+                           (finstars['roundness2'] > -0.25) &
+                           (finstars['roundness2'] < 0.25) &
+                           (finstars['sharpness'] > 0.4) &
+                           (finstars['sharpness'] < 0.8))
 
-            epsfsel = ((finstars['peak'] > 200) &
-                       (finstars['roundness1'] > -0.25) &
-                       (finstars['roundness1'] < 0.25) &
-                       (finstars['roundness2'] > -0.25) &
-                       (finstars['roundness2'] < 0.25) &
-                       (finstars['sharpness'] > 0.4) &
-                       (finstars['sharpness'] < 0.8))
+                print(f"Extracting {epsfsel.sum()} stars")
+                stars = extract_stars(NDData(data=nan_replaced_data), finstars[epsfsel], size=35)
 
-            print(f"Extracting {epsfsel.sum()} stars")
-            stars = extract_stars(NDData(data=nan_replaced_data), finstars[epsfsel], size=35)
+                for star in stars:
+                    background = np.nanpercentile(star.data, 5)
+                    star.data[:] -= background
 
-            # reject stars with negative pixels
-            #stars = EPSFStars([x for x in stars if x.data.min() >= 0])
-            # apparently this failed - too restrictive?
+                epsf, fitted_stars = epsf_builder(stars)
+                epsf._data = epsf.data[2:-2, 2:-2]
 
-            for star in stars:
-                # background subtraction
-                background = np.nanpercentile(star.data, 5)
-                star.data[:] -= background
+                norm = simple_norm(epsf.data, 'log', percent=99.0)
+                pl.figure(1).clf()
+                pl.imshow(epsf.data, norm=norm, origin='lower', cmap='viridis')
+                pl.colorbar()
+                pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}_daophot_epsf.png',
+                           bbox_inches='tight')
+                dao_psf_model = epsf
 
+            _phot_iter_extra = {}
+            if iter3_xy_bounds_pix is not None:
+                _phot_iter_extra['xy_bounds'] = (iter3_xy_bounds_pix,
+                                                 iter3_xy_bounds_pix)
+            phot_iter = _make_iterative_psfphotometry(
+                                               finder=daofind_tuned,
+                                               localbkg_estimator=LocalBackground(localbkg_inner, localbkg_outer),
+                                               grouper=grouper if options.group else None,
+                                               psf_model=dao_psf_model,
+                                               fitter=LevMarLSQFitter(),
+                                               maxiters=5,
+                                               fit_shape=(5, 5),
+                                               sub_shape=(15, 15),
+                                               aperture_radius=aperture_radius_pix,
+                                               progress_bar=True,
+                                               **_phot_iter_extra,
+                                              )
 
-            epsf, fitted_stars = epsf_builder(stars)
+            print("About to do ITERATIVE photometry....")
+            _mem_report("before phot_iter call")
+            if seeded_init_params is not None:
+                result2 = phot_iter(nan_replaced_data, mask=mask, init_params=seeded_init_params, error=np.where(bad, 1e10, err))
+            else:
+                result2 = phot_iter(nan_replaced_data, mask=mask, error=np.where(bad, 1e10, err))
+            print(f"Done with ITERATIVE photometry. len(result2)={len(result2)}  dt={time.time() - t0}")
+            _mem_report("after phot_iter")
 
-            # trim edges
-            epsf._data = epsf.data[2:-2, 2:-2]
+            # Apply the same post-fit deduplication to the iterative results.
+            # IterativePSFPhotometry can produce drift-together duplicates across
+            # iterations (a source detected in the residual of iter N matches the
+            # same star fit in iter N-1).  Left in place, these duplicates
+            # (i) double the flux in the rendered model image, and
+            # (ii) trigger a photutils bug in make_model_image where the
+            #      composite model parameters become array-valued and overlap_slices
+            #      raises ValueError("The truth value of an array ... is ambiguous").
+            # 2026-04-24: threshold loosened to 1.5 * fwhm_pix, same
+            # rationale as in phot_basic above.
+            min_sep_pix = 1.5 * fwhm_pix
+            xfit_arr = np.asarray(result2['x_fit'], dtype=float)
+            yfit_arr = np.asarray(result2['y_fit'], dtype=float)
+            flux_arr = np.asarray(result2['flux_fit'], dtype=float)
+            qfit_arr = (np.asarray(result2['qfit'], dtype=float)
+                        if 'qfit' in result2.colnames else None)
+            iter_keep, iter_n_disagree = _dedup_close_sources(
+                xy=np.column_stack([xfit_arr, yfit_arr]),
+                flux=flux_arr,
+                min_sep_pix=min_sep_pix,
+                quality=qfit_arr,
+            )
+            iter_n_removed = int(len(iter_keep) - np.sum(iter_keep))
+            if iter_n_removed > 0:
+                iter_tiebreak = "qfit" if qfit_arr is not None else "brightest"
+                print(f"Post-fit deduplication (iterative): dropping {iter_n_removed} "
+                      f"drift-together fits within {min_sep_pix:.2f} pix "
+                      f"({len(result2)} -> {int(np.sum(iter_keep))}); "
+                      f"{iter_n_disagree} clusters had disagreeing fitted fluxes "
+                      f"(resolved by {iter_tiebreak})", flush=True)
+                phot_iter.results = phot_iter.results[iter_keep]
+                # IterativePSFPhotometry has no init_params attribute of its
+                # own, but its internal PSFPhotometry (self._psfphot) does.
+                inner_phot = getattr(phot_iter, '_psfphot', None)
+                if (inner_phot is not None
+                        and inner_phot.init_params is not None
+                        and len(inner_phot.init_params) == len(iter_keep)):
+                    inner_phot.init_params = inner_phot.init_params[iter_keep]
+                phot_iter.__dict__.pop('_model_image_params', None)
+                result2 = phot_iter.results
 
-            norm = simple_norm(epsf.data, 'log', percent=99.0)
-            pl.figure(1).clf()
-            pl.imshow(epsf.data, norm=norm, origin='lower', cmap='viridis')
-            pl.colorbar()
-            pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}_daophot_epsf.png',
-                       bbox_inches='tight')
-            dao_psf_model = epsf
+            # photutils.datasets.images.make_model_image uses a per-row
+            # 'model_shape' column in the params table when present; if that
+            # column has been populated with array-valued entries during the
+            # iterative fit it triggers the ndarray-vs-tuple comparison inside
+            # astropy.nddata.utils.overlap_slices.  Drop that column so the
+            # caller's psf_shape=(21, 21) argument governs stamp size for all
+            # sources uniformly.
+            if 'model_shape' in phot_iter.results.colnames:
+                phot_iter.results.remove_column('model_shape')
+                phot_iter.__dict__.pop('_model_image_params', None)
 
-        # iterative takes for-ev-er
-        phot_iter = IterativePSFPhotometry(finder=daofind_tuned,
-                                           localbkg_estimator=LocalBackground(5, 15),
-                                           grouper=grouper if options.group else None,
-                                           psf_model=dao_psf_model,
-                                           fitter=LevMarLSQFitter(),
-                                           maxiters=5,
-                                           fit_shape=(5, 5),
-                                           sub_shape=(15, 15),
-                                           aperture_radius=2*fwhm_pix,
-                                           progress_bar=True,
-                                          )
+            # Saturation-proximity filter for the iterative path -- same
+            # rationale as the basic path: drop fits placed within
+            # max_sat_dist_pix of any saturated DQ pixel.  Iterative
+            # photometry is more aggressive and produces more of these
+            # spurious near-saturation fits than basic, so the filter has
+            # bigger impact here.
+            _dqarr_for_satfilter_iter = im1['DQ'].data if 'DQ' in im1 else None
+            _filter_near_saturation(phot_iter, _dqarr_for_satfilter_iter,
+                                    max_sat_dist_pix=5.0,
+                                    label='iterative')
+            result2 = phot_iter.results
 
-        print("About to do ITERATIVE photometry....")
-        result2 = phot_iter(nan_replaced_data, mask=mask)
-        print(f"Done with ITERATIVE photometry. len(result2)={len(result2)}  dt={time.time() - t0}")
+            result2 = save_photutils_results(result2, ww, filename,
+                                             im1=im1, detector=detector,
+                                             basepath=basepath,
+                                             filtername=filtername, module=module,
+                                             desat=desat, bgsub=bgsub,
+                                             blur=options.blur,
+                                             exposure_=exposure_,
+                                             visitid_=visitid_,
+                                             vgroupid_=vgroupid_,
+                                             basic_or_iterative='iterative',
+                                             options=options,
+                                             epsf_=epsf_,
+                                             group=group,
+                                             psf=None,
+                                             background_map=background_map,
+                                             iteration_label=iteration_label)
 
-        # need to flag stars near negative stars, so we don't want to exclude them _yet_
-        #bad = result2['flux_fit'] <= 0
-        #result2 = result2[~bad]
+            stars = result2
+            stars['x'] = stars['x_fit']
+            stars['y'] = stars['y_fit']
 
-        result2 = save_photutils_results(result2, ww, filename,
-                                         im1=im1, detector=detector,
-                                         basepath=basepath,
-                                         filtername=filtername, module=module,
-                                         desat=desat, bgsub=bgsub,
-                                         blur=options.blur,
-                                         exposure_=exposure_,
-                                         visitid_=visitid_,
-                                         vgroupid_=vgroupid_,
-                                         basic_or_iterative='iterative',
-                                         options=options,
-                                         epsf_=epsf_,
-                                         group=group,
-                                         psf=None,
-                                         background_map=background_map)
-
-        stars = result2
-        stars['x'] = stars['x_fit']
-        stars['y'] = stars['y_fit']
-
-        print("Creating iterative residual")
-        modsky = phot_iter.make_model_image(data.shape, psf_shape=(21, 21), include_localbkg=False)
-        residual = data - modsky
-        print("finished iterative residual")
-        save_residual_datamodel(
-            filename,
-            f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}_daophot_iterative_residual.fits',
-            residual,
-        )
-        save_residual_datamodel(
-            filename,
-            f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}_daophot_iterative_model.fits',
-            modsky,
-        )
-        print("Saved iterative residual")
-        try:
-            catalog_zoom_diagnostic(data, modsky, nullslice, stars)
+            print("Creating iterative residual")
+            _mem_report("before iter model image")
+            modsky = _make_model_image(phot_iter, data.shape, psf_shape=(21, 21), include_local_bkg=False)
+            _mem_report("after iter model image")
+            data_for_residual = (data if satstar_model_subtracted is None
+                                 else data - satstar_model_subtracted)
+            residual = data_for_residual - modsky
+            print("finished iterative residual")
+            save_residual_datamodel(
+                filename,
+                f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}{iter_}_daophot_iterative_residual.fits',
+                residual,
+            )
+            save_residual_datamodel(
+                filename,
+                f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}{iter_}_daophot_iterative_model.fits',
+                modsky,
+            )
+            print("Saved iterative residual")
+            catalog_zoom_diagnostic(data_for_residual, modsky, nullslice, stars)
             pl.suptitle(f"daophot iterative Catalog Diagnostics zoomed {filtername} {module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}")
-            pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}_catalog_diagnostics_daophot_iterative.png',
+            pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}_catalog_diagnostics_daophot_iterative.png',
                     bbox_inches='tight')
 
-            catalog_zoom_diagnostic(data, modsky, zoomcut, stars)
+            catalog_zoom_diagnostic(data_for_residual, modsky, zoomcut, stars)
             pl.suptitle(f"daophot iterative Catalog Diagnostics {filtername} {module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}")
-            pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}_catalog_diagnostics_zoom_daophot_iterative.png',
+            pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}_catalog_diagnostics_zoom_daophot_iterative.png',
                     bbox_inches='tight')
 
             for name, zoomcut in zoomcut_list.items():
-                catalog_zoom_diagnostic(data, modsky, zoomcut, stars)
+                catalog_zoom_diagnostic(data_for_residual, modsky, zoomcut, stars)
                 pl.suptitle(f"daophot iterative Catalog Diagnostics {filtername} {module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group} zoom {name}")
-                pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}__catalog_diagnostics_zoom_daophot_iterative{name.replace(" ","_")}.png',
+                pl.savefig(f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}__catalog_diagnostics_zoom_daophot_iterative{name.replace(" ","_")}.png',
                         bbox_inches='tight')
-        except Exception as ex:
-            print(f'FAILURE to produce catalog zoom diagnostics for module {module} and filter {filtername} for ITERATIVE daophot: {ex}')
-            exc_tb = sys.exc_info()[2]
-            fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
-            print(f"Exception {ex} was in {fname} line {exc_tb.tb_lineno}")
+
+            print(f"Done with diagnostics for ITERATIVE photometry.  dt={time.time() - t0}")
+            pl.close('all')
+        else:
+            print("Skipping ITERATIVE photometry because --basic-only was requested")
+
 
 if __name__ == "__main__":
     main()

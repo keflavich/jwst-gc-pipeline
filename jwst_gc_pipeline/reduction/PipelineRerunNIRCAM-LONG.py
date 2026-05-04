@@ -80,6 +80,11 @@ fov_regname = {'brick': 'regions_/nircam_brick_fov.reg',
                'sickle': 'regions_/nircam_sickle_fov.reg',
                'sgrb2': 'regions_/nircam_sgrb2_fov.reg',
                'w51': 'regions_/nircam_w51_fov.reg',
+               'cloudef': 'regions_/nircam_cloudef_fov.reg',
+               'sgrc': 'regions_/nircam_sgrc_fov.reg',
+               'arches': 'regions_/nircam_arches_fov.reg',
+               'quintuplet': 'regions_/nircam_quintuplet_fov.reg',
+               'sgra': 'regions_/nircam_sgra_fov.reg',
                }
 
 refnames = {'2221': 'F405ref',
@@ -87,6 +92,10 @@ refnames = {'2221': 'F405ref',
             '3958': 'VVV',
             '5365': 'VVV',
             '6151': 'UKIDSS', # gaia?
+            '2092': 'VVV',
+            '4147': 'VVV',
+            '2045': 'VVV',
+            '1939': 'VVV',
             }
 
 # Reference catalog configuration by proposal and field.
@@ -100,13 +109,26 @@ REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD = {
         '004': 'catalogs/crowdsource_based_nircam-f405n_reference_astrometric_catalog.ecsv',
     },
     '3958': {
-        '007': 'catalogs/pipeline_based_nircam-f210m_reference_astrometric_catalog.ecsv',
+        '007': 'catalogs/nircam_bootstrapped_to_gns_refcat.fits',
     },
     '5365': {
         '001': 'catalogs/crowdsource_based_nircam-f405n_reference_astrometric_catalog.ecsv',
     },
     '6151': {
         '001': 'catalogs/crowdsource_based_nircam-f405n_reference_astrometric_catalog.ecsv',
+    },
+    '2092': {
+        '005': 'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
+    },
+    '4147': {
+        '012': 'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
+    },
+    '2045': {
+        '001': 'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
+        '003': 'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
+    },
+    '1939': {
+        '001': 'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
     },
 }
 
@@ -136,6 +158,27 @@ def get_reference_astrometric_catalog_path(basepath, proposal_id, field):
     return f'{basepath}/{relpath}'
 
 
+def get_existing_reference_astrometric_catalog_path(basepath, proposal_id, field):
+    if proposal_id not in REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD:
+        return None
+    if field not in REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD[proposal_id]:
+        return None
+    path = f"{basepath}/{REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD[proposal_id][field]}"
+    if os.path.exists(path):
+        return path
+    return None
+
+
+def _module_group(module):
+    if module == 'merged':
+        return 'merged'
+    if module.startswith('nrca'):
+        return 'nrca'
+    if module.startswith('nrcb'):
+        return 'nrcb'
+    return module
+
+
 def get_allowed_modules(proposal_id, field, requested_modules, filtername=None):
     allowed_modules = None
     
@@ -149,7 +192,8 @@ def get_allowed_modules(proposal_id, field, requested_modules, filtername=None):
     if allowed_modules is None:
         return requested_modules
 
-    filtered_modules = [module for module in requested_modules if module in allowed_modules]
+    requested_groups = {_module_group(module) for module in requested_modules}
+    filtered_modules = [module for module in allowed_modules if _module_group(module) in requested_groups]
     if len(filtered_modules) == 0:
         raise ValueError(
             f"No requested modules are allowed for proposal_id={proposal_id} field={field} "
@@ -192,6 +236,12 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
     basepath = f'/orange/adamginsburg/jwst/{regionname}/'
     fwhm_tbl = Table.read(f'{basepath}/reduction/fwhm_table.ecsv')
     row = fwhm_tbl[fwhm_tbl['Filter'] == filtername]
+    if module == 'merged':
+        expected_modules = ('merged',)
+        do_merge = False
+    else:
+        expected_modules = get_allowed_modules(proposal_id, field, ('nrca', 'nrcb'), filtername=filtername)
+        do_merge = 'nrca' in expected_modules and 'nrcb' in expected_modules
     fwhm = fwhm_arcsec = float(row['PSF FWHM (arcsec)'][0])
     fwhm_pix = float(row['PSF FWHM (pixel)'][0])
 
@@ -214,11 +264,18 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
     elif regionname == 'sickle':
         if proposal_id == '3958':
             assert field == '007'
+    elif regionname == 'arches':
+        if proposal_id == '2045':
+            assert field == '001'
+    elif regionname == 'quintuplet':
+        if proposal_id == '2045':
+            assert field == '003'
+    elif regionname == 'sgra':
+        if proposal_id == '1939':
+            assert field == '001'
 
-    expected_modules = get_allowed_modules(proposal_id, field, ('nrca', 'nrcb'), filtername=filtername)
-    do_merge = 'nrca' in expected_modules and 'nrcb' in expected_modules
-
-    os.environ["CRDS_PATH"] = f"{basepath}/crds/"
+    if "CRDS_PATH" not in os.environ:
+        os.environ["CRDS_PATH"] = f"{basepath}/crds/"
     os.environ["CRDS_SERVER_URL"] = "https://jwst-crds.stsci.edu"
     mpl.rcParams['savefig.dpi'] = 80
     mpl.rcParams['figure.dpi'] = 80
@@ -271,7 +328,12 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
 
     products_fits = Observations.filter_products(data_products_by_obs, extension="fits")
     print("products_fits length:", len(products_fits))
-    uncal_mask = np.array([uri.endswith('_uncal.fits') and f'jw0{proposal_id}{field}' in uri for uri in products_fits['dataURI']])
+    uncal_mask = np.array([
+        uri.endswith('_uncal.fits')
+        and f'jw0{proposal_id}{field}' in uri
+        and ('_nrc' in uri)
+        for uri in products_fits['dataURI']
+    ])
     uncal_mask &= products_fits['productType'] == 'SCIENCE'
     print("uncal length:", (uncal_mask.sum()))
 
@@ -346,6 +408,9 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         if not skip_step1and2:
             # re-calibrate all uncal files -> cal files *without* suppressing first group
             for member in asn_data['products'][0]['members']:
+                if '_nrc' not in member['expname']:
+                    print(f"Skipping non-NIRCam member {member['expname']}")
+                    continue
                 # example filename: jw02221002001_02201_00002_nrcalong_cal.fits
                 assert f'jw0{proposal_id}{field}' in member['expname']
                 print(f"DETECTOR PIPELINE on {member['expname']}")
@@ -446,7 +511,8 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
             reftbl = Table.read(abs_refcat)
             # For non-F410M, try aligning to F410M instead of VVV?
             reftblversion = reftbl.meta['VERSION']
-            reftbl.meta['name'] = 'F405N Reference Astrometric Catalog'
+            reftbl.meta['name'] = 'Reference Astrometric Catalog'
+            reftbl.meta['filename'] = abs_refcat
 
             # truncate to top 10,000 sources
             # more recent versions are already truncated to only very high quality matches
@@ -477,7 +543,8 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
             reftbl = Table.read(abs_refcat)
             # For non-F410M, try aligning to F410M instead of VVV?
             reftblversion = reftbl.meta['VERSION']
-            reftbl.meta['name'] = 'F405N Reference Astrometric Catalog'
+            reftbl.meta['name'] = 'Reference Astrometric Catalog'
+            reftbl.meta['filename'] = abs_refcat
 
             # truncate to top 10,000 sources
             # more recent versions are already truncated to only very high quality matches
@@ -512,7 +579,7 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         check_wcs(asn_data['products'][0]['name'] + "_i2d.fits")
 
         did_vvv_realign = False
-        if regionname in ('brick', 'cloudc'):
+        if regionname in ('brick', 'cloudc', ):
             print(f"Realigning to VVV (module={module}, filter={filtername})")
             realigned_vvv_filename = f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}{destreak_suffix}_realigned-to-vvv.fits'
             shutil.copy(f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}_i2d.fits',
@@ -622,21 +689,27 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
             reftbl = Table.read(abs_refcat)
             assert 'skycoord' in reftbl.colnames
         else:
-            abs_refcat = get_reference_astrometric_catalog_path(basepath, proposal_id, field)
-            reftbl = Table.read(abs_refcat)
-            assert 'skycoord' in reftbl.colnames
-            reftblversion = reftbl.meta['VERSION']
+            abs_refcat = get_existing_reference_astrometric_catalog_path(basepath, proposal_id, field)
+            reftbl = None
+            if abs_refcat is not None:
+                reftbl = Table.read(abs_refcat)
+                assert 'skycoord' in reftbl.colnames
+                reftblversion = reftbl.meta.get('VERSION', 'unknown')
 
-            # truncate to top 10,000 sources
-            abs_refcat_truncated = abs_refcat.replace('.ecsv', '_truncated10000.ecsv')
-            reftbl[:10000].write(abs_refcat_truncated, overwrite=True)
-            abs_refcat = abs_refcat_truncated
+                # truncate to top 10,000 sources for speed when this is ECSV
+                if abs_refcat.endswith('.ecsv'):
+                    abs_refcat_truncated = abs_refcat.replace('.ecsv', '_truncated10000.ecsv')
+                    reftbl[:10000].write(abs_refcat_truncated, overwrite=True)
+                    abs_refcat = abs_refcat_truncated
 
-            tweakreg_parameters['abs_searchrad'] = 0.4
-            tweakreg_parameters['searchrad'] = 0.05
-            print(f"Reference catalog is {abs_refcat} with version {reftblversion}")
+                tweakreg_parameters['abs_searchrad'] = 0.4
+                tweakreg_parameters['searchrad'] = 0.05
+                print(f"Reference catalog is {abs_refcat} with version {reftblversion}")
+            else:
+                print(f"No configured reference catalog found for proposal_id={proposal_id} field={field} in {basepath}. Running first-pass without abs_refcat realignment.")
 
-        tweakreg_parameters.update({'abs_refcat': abs_refcat,})
+        if abs_refcat is not None:
+            tweakreg_parameters.update({'abs_refcat': abs_refcat,})
 
         print("Running Image3Pipeline with tweakreg (merged)")
         calwebb_image3.Image3Pipeline.call(
@@ -652,36 +725,41 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
             check_wcs(member['expname'])
         check_wcs(asn_data['products'][0]['name'] + "_i2d.fits")
 
-        print(f"Realigning to VVV (module={module})")# with raoffset={raoffset}, decoffset={decoffset}")
-        realigned_vvv_filename = f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}{destreak_suffix}_realigned-to-vvv.fits'
-        print(f"Realigned to VVV filename: {realigned_vvv_filename}")
-        shutil.copy(f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}_i2d.fits',
-                    realigned_vvv_filename)
-        realigned = realign_to_vvv(filtername=filtername.lower(),
-                                   fov_regname=fov_regname[regionname], basepath=basepath, module=module,
-                                   fieldnumber=field, proposal_id=proposal_id,
-                                   imfile=realigned_vvv_filename,
-                                   max_offset=(0.4 if wavelength > 250 else 0.2)*u.arcsec,
-                                   ksmag_limit=15 if filtername.lower() == 'f410m' else 11,
-                                   mag_limit=18 if filtername.lower() == 'f115w' else 15,
-                                   #raoffset=raoffset, decoffset=decoffset
-                                   )
+        vvv_region_file = f"{basepath}/{fov_regname[regionname]}" if regionname in fov_regname else None
+        if vvv_region_file is not None and os.path.exists(vvv_region_file):
+            print(f"Realigning to VVV (module={module})")
+            realigned_vvv_filename = f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}{destreak_suffix}_realigned-to-vvv.fits'
+            print(f"Realigned to VVV filename: {realigned_vvv_filename}")
+            shutil.copy(f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}_i2d.fits',
+                        realigned_vvv_filename)
+            realign_to_vvv(filtername=filtername.lower(),
+                           fov_regname=fov_regname[regionname], basepath=basepath, module=module,
+                           fieldnumber=field, proposal_id=proposal_id,
+                           imfile=realigned_vvv_filename,
+                           max_offset=(0.4 if wavelength > 250 else 0.2)*u.arcsec,
+                           ksmag_limit=15 if filtername.lower() == 'f410m' else 11,
+                           mag_limit=18 if filtername.lower() == 'f115w' else 15,
+                           )
+        else:
+            print(f"Skipping VVV realignment for region {regionname}: no valid FOV region file")
 
-        print(f"Realigning to refcat (module={module})")# with raoffset={raoffset}, decoffset={decoffset}")
-        realigned_refcat_filename = f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}{destreak_suffix}_realigned-to-refcat.fits'
-        print(f"Realigned refcat filename: {realigned_refcat_filename}")
-        shutil.copy(f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}_i2d.fits',
-                    realigned_refcat_filename)
-        realigned = realign_to_catalog(reftbl['skycoord'],
-                                       filtername=filtername.lower(),
-                                       basepath=basepath, module=module,
-                                       fieldnumber=field,
-                                       max_offset=(0.4 if wavelength > 250 else 0.2)*u.arcsec,
-                                       mag_limit=20,
-                                       proposal_id=proposal_id,
-                                       imfile=realigned_refcat_filename,
-                                       #raoffset=raoffset, decoffset=decoffset
-                                       )
+        if reftbl is not None:
+            print(f"Realigning to refcat (module={module})")
+            realigned_refcat_filename = f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}{destreak_suffix}_realigned-to-refcat.fits'
+            print(f"Realigned refcat filename: {realigned_refcat_filename}")
+            shutil.copy(f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}_i2d.fits',
+                        realigned_refcat_filename)
+            realign_to_catalog(reftbl['skycoord'],
+                               filtername=filtername.lower(),
+                               basepath=basepath, module=module,
+                               fieldnumber=field,
+                               max_offset=(0.4 if wavelength > 250 else 0.2)*u.arcsec,
+                               mag_limit=20,
+                               proposal_id=proposal_id,
+                               imfile=realigned_refcat_filename,
+                               )
+        else:
+            print(f"Skipping refcat realignment for proposal_id={proposal_id} field={field} because no reference catalog is available yet")
 
         # removing saturated stars should only be done in cataloging stage
         # print(f"Removing saturated stars.  cwd={os.getcwd()}")
@@ -878,14 +956,19 @@ if __name__ == "__main__":
                             '5365': {'001': 'sgrb2'},
                             '6151': {'001': 'w51'},
                             '3958': {'007': 'sickle', '001': 'sickle', '002': 'sickle'},
+                            '2092': {'005': 'cloudef'},
+                            '4147': {'012': 'sgrc'},
+                            '2045': {'001': 'arches', '003': 'quintuplet'},
+                            '1939': {'001': 'sgra'},
                             }[proposal_id]
 
     for field in fields:
         for filtername in filternames:
             modules_for_field = get_allowed_modules(proposal_id, field, modules, filtername=filtername)
             for module in modules_for_field:
-                print(f"Main Loop: {proposal_id} + {filtername} + {module} + {field}={field_to_reg_mapping[field]}")
-                results = main(filtername=filtername, module=module, Observations=Observations, field=field,
+                module_family = _module_group(module)
+                print(f"Main Loop: {proposal_id} + {filtername} + {module} (family={module_family}) + {field}={field_to_reg_mapping[field]}")
+                results = main(filtername=filtername, module=module_family, Observations=Observations, field=field,
                                regionname=field_to_reg_mapping[field],
                                proposal_id=proposal_id,
                                skip_step1and2=skip_step1and2,

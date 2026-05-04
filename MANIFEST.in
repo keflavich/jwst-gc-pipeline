@@ -1,7 +1,7 @@
 prune build
 prune docs/_build
 prune docs/api
-recursive-include jwst_gc_pipeline/data *.ecsv
+recursive-include jwst_gc_pipeline/reduction *.ecsv
 include licenses/LICENSE.rst
 include README.md
 global-exclude *.pyc *.o
