@@ -20,7 +20,7 @@ dependencies = [
   "scipy",
   "astropy",
   "matplotlib",
-  "photutils>=2.0",
+  "photutils>=2.0.dev0",
   "astroquery",
   "tqdm",
   "regions",
