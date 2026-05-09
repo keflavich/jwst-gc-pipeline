@@ -18,12 +18,12 @@ from stpsf.utils import to_griddedpsfmodel
 try:
     # version >=1.7.0, doesn't work: the PSF is broken (https://github.com/astropy/photutils/issues/1580?)
     from photutils.psf import PSFPhotometry, IterativePSFPhotometry, SourceGrouper
-except:
+except ImportError:
     # version 1.6.0, which works
     from photutils.psf import BasicPSFPhotometry as PSFPhotometry, IterativelySubtractedPSFPhotometry as IterativePSFPhotometry, DAOGroup as SourceGrouper
 try:
     from photutils.background import MMMBackground, MADStdBackgroundRMS, MedianBackground, Background2D, LocalBackground
-except:
+except ImportError:
     from photutils.background import MMMBackground, MADStdBackgroundRMS, MedianBackground, Background2D
     from photutils.background import MMMBackground as LocalBackground
 
@@ -559,21 +559,19 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             raise RuntimeError("psfphot.psf_model is None — can't set parameter bounds")
 
         for pname, bounds in (("x_0", (low_x, high_x)), ("y_0", (low_y, high_y))):
-            if hasattr(model, pname):
-                param = getattr(model, pname)
-                # try the supported API first
-                try:
-                    param.bounds = bounds
-                    print(f"Set {pname}.bounds = {bounds}")
-                except Exception:
-                    # fallback (private attribute) if necessary
-                    try:
-                        param._bounds = bounds
-                        print(f"Set {pname}._bounds = {bounds} (fallback)")
-                    except Exception:
-                        print(f"Could not set bounds for {pname}; parameter object: {param}")
-            else:
-                print(f"Model does not have parameter '{pname}'; param_names={getattr(model,'param_names',None)}")
+            if not hasattr(model, pname):
+                raise AttributeError(
+                    f"PSF model has no parameter '{pname}'; "
+                    f"param_names={getattr(model, 'param_names', None)}"
+                )
+            param = getattr(model, pname)
+            # Set bounds via the supported astropy.modeling API.  If this
+            # ever raises, the photutils/astropy contract has changed and
+            # we want to know — silently falling back to ``_bounds`` could
+            # leave a fitter completely unbounded and corrupt every
+            # subsequent forced photometry result.
+            param.bounds = bounds
+            print(f"Set {pname}.bounds = {bounds}")
         saturated_mask = saturated[y0:y1, x0:x1]
 
         saturated_mask_expanded = binary_dilation(saturated_mask, iterations=effective_buffer)

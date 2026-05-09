@@ -9,7 +9,7 @@ from photutils.psf import extract_stars
 try:
     # version >=1.7.0, doesn't work: the PSF is broken (https://github.com/astropy/photutils/issues/1580?)
     from photutils.psf import PSFPhotometry, SourceGrouper
-except:
+except ImportError:
     # version 1.6.0, which works
     from photutils.psf import (BasicPSFPhotometry as PSFPhotometry,
                                DAOGroup as SourceGrouper)

@@ -15,12 +15,15 @@ from bs4 import BeautifulSoup
 from astropy.table import Table
 
 def trynum(x):
+    # Narrow except: int(x)/float(x) can only raise ValueError/TypeError on
+    # non-numeric input; bare ``except`` would swallow KeyboardInterrupt and
+    # mask real bugs.
     try:
         return int(x)
-    except:
+    except (ValueError, TypeError):
         try:
             return float(x)
-        except:
+        except (ValueError, TypeError):
             return x
 
 def data_to_json(x):

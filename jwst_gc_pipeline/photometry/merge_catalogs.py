@@ -89,9 +89,10 @@ def getmtime(x):
 
 
 def tryint(x):
+    # int(x) can only raise ValueError/TypeError on non-numeric input.
     try:
         return int(x)
-    except:
+    except (ValueError, TypeError):
         return -1
 
 
@@ -512,9 +513,13 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
 
     matching_ref_tables = [tb for tb in tbls if tb.meta['filter'] == ref_filter]
     if len(matching_ref_tables) == 0:
-        ref_filter = tbls[0].meta['filter']
-        print(f"Requested ref_filter not found; using fallback ref_filter={ref_filter}")
-        matching_ref_tables = [tb for tb in tbls if tb.meta['filter'] == ref_filter]
+        # Silently switching ref filters changes the astrometric reference
+        # of the merge.  Caller should fix the configuration explicitly.
+        available = sorted({tb.meta['filter'] for tb in tbls})
+        raise ValueError(
+            f"Requested ref_filter={ref_filter!r} not present in input "
+            f"tables; available filters = {available}"
+        )
     basetable = matching_ref_tables[0].copy()
     basetable.meta['astrometric_reference_wavelength'] = ref_filter
 

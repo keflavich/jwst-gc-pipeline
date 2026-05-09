@@ -390,6 +390,19 @@ class WrappedPSFModel(crowdsource.psf.SimplePSF):
 
         # andrew saydjari's version here:
         # it returns something in (nstamps, row, col) shape
+        #
+        # NOTE: this loop CANNOT be batched into a single
+        # ``self.psfgridmodel.evaluate(...)`` call with vector
+        # ``x_0``/``y_0``.  ``photutils.psf.GriddedPSFModel.evaluate``
+        # explicitly forces those args to scalars (``if not
+        # np.isscalar(x_0): x_0 = x_0[0]``) because the bilinear
+        # interpolation between adjacent grid ePSFs is computed for a
+        # single subpixel offset per call.  Vectorising would require a
+        # custom interpolator that reproduces ``_calc_model_values`` for
+        # an array of (x_0, y_0) at once and bypasses photutils.  Not
+        # worth the maintenance cost in this code path -- WrappedPSFModel
+        # is only used by the crowdsource fit_im branch, which the main
+        # iter3 pipeline no longer runs (daophot path is preferred).
         stamps = []
         for i in range(len(col)):
             # the +0.5 is required to actually center the PSF (empirically)
@@ -2424,7 +2437,9 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
         peak_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         try:
             curr_kb = int(open('/proc/self/status').read().split('VmRSS:')[1].split()[0])
-        except Exception:
+        except (OSError, IndexError, ValueError):
+            # /proc/self/status may not exist (non-Linux), or VmRSS may be
+            # absent / unparseable; mem report is diagnostic so 0 is fine.
             curr_kb = 0
         print(f"=MEM= {label}: curr={curr_kb/1e6:.2f}GB peak={peak_kb/1e6:.2f}GB", flush=True)
         for s in top[:12]:
