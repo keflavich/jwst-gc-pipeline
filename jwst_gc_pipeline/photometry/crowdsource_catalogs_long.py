@@ -2363,7 +2363,13 @@ def get_filenames(basepath, filtername, proposal_id, field, each_suffix, module,
         if _instrument_from_filter(filtername) == 'MIRI':
             glob_modules = ['mirimage']
         else:
-            glob_modules = ['nrcalong', 'nrcblong']
+            # Include both LW (nrcalong/nrcblong) and SW (nrca1-4/nrcb1-4)
+            # detector tokens.  glob.glob only matches tokens that actually
+            # appear in filenames for this filter, so LW filters pick up only
+            # nrcalong/nrcblong and SW filters pick up only nrca1..nrcb4.
+            glob_modules = ['nrcalong', 'nrcblong',
+                            'nrca1', 'nrca2', 'nrca3', 'nrca4',
+                            'nrcb1', 'nrcb2', 'nrcb3', 'nrcb4']
     else:
         glob_modules = [module]
     fglob = []
