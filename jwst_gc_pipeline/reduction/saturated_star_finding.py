@@ -571,7 +571,17 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # leave a fitter completely unbounded and corrupt every
             # subsequent forced photometry result.
             param.bounds = bounds
-            print(f"Set {pname}.bounds = {bounds}")
+            # Freeze position for forced (outside-FOV) sources.  LevMarLSQ
+            # cannot converge when the PSF model is evaluated only at far
+            # wings (200+ px off-image), so x_fit/y_fit come back masked
+            # and the row gets dropped — leaving the off-edge star with
+            # zero model subtraction.  Fitting only flux (position fixed
+            # at seed) gives a usable amplitude estimate from the
+            # diffraction spikes visible in the cutout.
+            if forced_source:
+                param.fixed = True
+            print(f"Set {pname}.bounds = {bounds}"
+                  + ("  (fixed for forced)" if forced_source else ""))
         saturated_mask = saturated[y0:y1, x0:x1]
 
         saturated_mask_expanded = binary_dilation(saturated_mask, iterations=effective_buffer)
@@ -590,6 +600,19 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             bad_fit_rows = result['x_fit'].mask | result['y_fit'].mask
         else:
             bad_fit_rows = (~np.isfinite(result['x_fit'])) | (~np.isfinite(result['y_fit']))
+
+        # For forced (outside-FOV) sources, masked x_fit/y_fit can happen if
+        # the fitter couldn't converge.  Don't drop the row — fall back to
+        # the seed position so we still get a non-zero satstar model from
+        # the fitted flux.  Position is frozen for forced fits anyway.
+        if forced_source and np.any(bad_fit_rows):
+            print(f"Forced source {ii+1}: masked x_fit/y_fit; "
+                  f"falling back to seed pos ({x_init:.1f}, {y_init:.1f})",
+                  flush=True)
+            for j in np.where(bad_fit_rows)[0]:
+                result['x_fit'][j] = x_init
+                result['y_fit'][j] = y_init
+            bad_fit_rows = np.zeros_like(bad_fit_rows, dtype=bool)
 
         if np.any(bad_fit_rows):
             print(f"Removing {bad_fit_rows.sum()} invalid fit rows for source {ii+1}", flush=True)
