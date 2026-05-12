@@ -1331,13 +1331,30 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
     return None
 
 
-def load_outside_fov_satstar_pixels(basepath, ww):
+def load_outside_fov_satstar_pixels(basepath, ww, data_shape=None,
+                                    max_offset_arcsec=40.0):
+    """Return outside-FOV satstar seed pixel positions, filtered by proximity.
+
+    Diffraction spikes extend ~40" along the linear image axes and ~30"
+    diagonally.  Stars whose nearest image pixel is more than
+    ``max_offset_arcsec`` away contribute no measurable signal — drop them
+    so the satstar fitter doesn't waste time on unfittable forced sources
+    (which return NaN flux and stall the pipeline).
+
+    Parameters
+    ----------
+    data_shape : tuple (ny, nx), optional
+        Image shape used to compute the proximity cut.  If omitted we try
+        ``ww.array_shape``; if that's also None, no proximity filter is
+        applied.
+    """
     regfn = f'{basepath}/regions_/saturated_stars_outside_fov.reg'
     if not os.path.exists(regfn):
         return []
 
     reglist = regions.Regions.read(regfn)
     outside_pixels = []
+    raw_pixels = []
     for reg in reglist:
         preg = reg
         if hasattr(reg, 'to_pixel'):
@@ -1350,9 +1367,38 @@ def load_outside_fov_satstar_pixels(basepath, ww):
         xval = float(center.x)
         yval = float(center.y)
         if np.isfinite(xval) and np.isfinite(yval):
-            outside_pixels.append((xval, yval))
+            raw_pixels.append((xval, yval))
 
-    print(f"Loaded {len(outside_pixels)} outside-FOV saturated-star seeds from {regfn}", flush=True)
+    # Determine image shape for the proximity cut
+    if data_shape is None:
+        data_shape = getattr(ww, 'array_shape', None)
+    if data_shape is None or max_offset_arcsec is None:
+        outside_pixels = raw_pixels
+    else:
+        ny, nx = int(data_shape[0]), int(data_shape[1])
+        # Pixel scale in arcsec/pixel.  Use ww.proj_plane_pixel_scales as the
+        # one-true source; if it isn't available, fail loudly — silently
+        # picking a hard-coded number would produce wrong proximity cuts.
+        scales = ww.proj_plane_pixel_scales()
+        pix_arcsec = float(scales[0].to('arcsec').value)
+        max_offset_pix = max_offset_arcsec / pix_arcsec
+        for xv, yv in raw_pixels:
+            dx = max(0.0, xv - (nx - 1)) if xv > nx - 1 else (0.0 if xv >= 0 else -xv)
+            dy = max(0.0, yv - (ny - 1)) if yv > ny - 1 else (0.0 if yv >= 0 else -yv)
+            dist_pix = (dx * dx + dy * dy) ** 0.5
+            dist_arcsec = dist_pix * pix_arcsec
+            if dist_arcsec <= max_offset_arcsec:
+                outside_pixels.append((xv, yv))
+                print(f"  outside-FOV seed at ({xv:.0f},{yv:.0f}) kept "
+                      f"(dist={dist_arcsec:.1f}\" <= {max_offset_arcsec}\")",
+                      flush=True)
+            else:
+                print(f"  outside-FOV seed at ({xv:.0f},{yv:.0f}) DROPPED "
+                      f"(dist={dist_arcsec:.1f}\" > {max_offset_arcsec}\")",
+                      flush=True)
+
+    print(f"Loaded {len(outside_pixels)} outside-FOV saturated-star seeds "
+          f"from {regfn} (of {len(raw_pixels)} in file)", flush=True)
     return outside_pixels
 
 
@@ -2713,7 +2759,8 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
     # is gated separately on ``seed_catalog is not None`` and is
     # unaffected by this change.
     if options.each_exposure:
-        outside_star_pixels = load_outside_fov_satstar_pixels(basepath, ww)
+        outside_star_pixels = load_outside_fov_satstar_pixels(
+            basepath, ww, data_shape=nan_replaced_data.shape, max_offset_arcsec=40.0)
         # Namespace the satstar outputs by bgsub/iteration_label so that
         # the non-bgsub and bgsub iter2 array jobs (which can run concurrently
         # on the same frame) don't race each other on a shared filename.

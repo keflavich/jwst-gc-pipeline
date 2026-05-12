@@ -404,6 +404,40 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     nsource = len(source_records)
 
     big_grid = get_psf(header, path_prefix=path_prefix, use_merged_psf_for_merged=use_merged_psf_for_merged)
+
+    # Large PSF grid for forced (outside-FOV) sources: their diffraction spikes
+    # extend ~40" into the FOV — that's 635 px (LW) to 1290 px (SW), much
+    # larger than the default fov_pixels=512 grid (256 px radius).  Required
+    # whenever any forced source is present; if missing, abort — the small
+    # grid silently fails to model off-edge spikes and produces wrong outputs.
+    big_grid_large = None
+    forced_sources_present = any(s.get('forced') for s in source_records)
+    if forced_sources_present:
+        from .filtering import get_filtername
+        _det = header['DETECTOR']
+        if _det == 'NRCALONG':
+            _det = 'NRCA5'
+        elif _det == 'NRCBLONG':
+            _det = 'NRCB5'
+        _filt = get_filtername(header)
+        # SW detectors: NRCA1-4, NRCB1-4 → fov_pixels=2048
+        # LW (NRCA5/NRCB5):                 fov_pixels=1024
+        _is_lw = _det.upper().endswith('5')
+        _fovp = 1024 if _is_lw else 2048
+        _lg_fn = (f"{path_prefix}/nircam_{_det.lower()}_{_filt.lower()}"
+                  f"_fovp{_fovp}_samp2_npsf16.fits")
+        if not os.path.exists(_lg_fn):
+            raise FileNotFoundError(
+                f"Forced source(s) present but large PSF grid is missing: {_lg_fn}. "
+                f"Build it with /orange/adamginsburg/jwst/sickle/build_large_psf_grids.py "
+                f"before running with outside-FOV seeds.  Falling back to the small "
+                f"grid silently produces wrong outputs."
+            )
+        print(f"Loading large PSF grid for forced sources: {_lg_fn}", flush=True)
+        big_grid_large = to_griddedpsfmodel(_lg_fn)
+        if isinstance(big_grid_large, list):
+            big_grid_large = big_grid_large[0]
+
     ww = wcs.WCS(header)
 
     # We force the centroid to be fixed b/c the fitter doesn't do a great job with this...
@@ -487,6 +521,14 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             y_init = float(np.clip(ycen - y0, 0, max(0, cutout.shape[0] - 1)))
         init_params['x'] = [x_init]
         init_params['y'] = [y_init]
+        # PSFPhotometry derives flux_init from aperture photometry by default.
+        # For outside-FOV forced sources the aperture circle is mostly off-image
+        # → 0 pixels → flux_init = NaN → LevMarLSQ starts from NaN → flux_fit = NaN.
+        # Provide an explicit large positive flux_init so the fitter has a real
+        # starting point and can scale down to the right amplitude.  Saturated
+        # JWST stars are typically 1e6-1e9 counts; 1e7 is a reasonable seed.
+        if forced_source:
+            init_params['flux'] = [1.0e7]
         cutout[np.isnan(cutout)] = 0.0
         # if isinstance(grid, list):
         #     print(f"Grid is a list: {grid}")
@@ -532,11 +574,35 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                   f"  (sat_area={src_sat_area})", flush=True)
             localbkg_estimator = LocalBackground(bkg_inner, bkg_outer)
 
+        # Use the large-FOV PSF grid for forced (outside-FOV) sources so the
+        # diffraction spike pattern (extending ~40" into the FOV) is actually
+        # represented in the model.  Default 512-px grid (256 px radius) is
+        # far too small for stars 200-600 px off-edge.
+        if forced_source:
+            if big_grid_large is None:
+                raise RuntimeError(
+                    "forced_source=True but big_grid_large was not loaded — "
+                    "this should be unreachable because earlier code requires "
+                    "the large PSF grid when any forced source is present."
+                )
+            _psf_for_fit = big_grid_large
+        else:
+            _psf_for_fit = big_grid
+        # For forced (outside-FOV) sources, fit_shape=size (~81 px) centered at
+        # the off-image seed contains zero image pixels — fitter has no data to
+        # fit → NaN.  Use a much larger fit window so the visible diffraction
+        # spike pixels in the cutout contribute.  Must be odd.
+        if forced_source:
+            cy_, cx_ = cutout.shape
+            _fit_shape = (min(cy_, cx_) // 2) * 2 - 1   # largest odd ≤ min(cutout)
+            _fit_shape = max(_fit_shape, 81)
+        else:
+            _fit_shape = size
         psfphot = PSFPhotometry(
                                 localbkg_estimator=localbkg_estimator,
                                 fitter=lmfitter,
-                                psf_model=big_grid,
-                                fit_shape=size,
+                                psf_model=_psf_for_fit,
+                                fit_shape=_fit_shape,
                                 aperture_radius=15*fwhm_pix)
         if forced_source:
             # Keep the fitted centroid within ±size_saturated of the seed
@@ -601,18 +667,20 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         else:
             bad_fit_rows = (~np.isfinite(result['x_fit'])) | (~np.isfinite(result['y_fit']))
 
-        # For forced (outside-FOV) sources, masked x_fit/y_fit can happen if
-        # the fitter couldn't converge.  Don't drop the row — fall back to
-        # the seed position so we still get a non-zero satstar model from
-        # the fitted flux.  Position is frozen for forced fits anyway.
+        # For forced (outside-FOV) sources the x_0,y_0 PSF parameters are
+        # marked fixed=True before fitting, so photutils returns them masked
+        # in the result table — its convention for "parameter was held fixed,
+        # not fit".  That is NOT a fit failure: the seed value IS the
+        # parameter value.  Materialise the seed back into the cell so the
+        # downstream model build evaluates the PSF at the correct location.
         if forced_source and np.any(bad_fit_rows):
-            print(f"Forced source {ii+1}: masked x_fit/y_fit; "
-                  f"falling back to seed pos ({x_init:.1f}, {y_init:.1f})",
-                  flush=True)
             for j in np.where(bad_fit_rows)[0]:
                 result['x_fit'][j] = x_init
                 result['y_fit'][j] = y_init
             bad_fit_rows = np.zeros_like(bad_fit_rows, dtype=bool)
+            print(f"Forced source {ii+1}: x_fit/y_fit were masked (fixed=True), "
+                  f"materialised to seed pos ({x_init:.1f}, {y_init:.1f})",
+                  flush=True)
 
         if np.any(bad_fit_rows):
             print(f"Removing {bad_fit_rows.sum()} invalid fit rows for source {ii+1}", flush=True)
@@ -646,10 +714,35 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         for x_fit, y_fit, flux in zip(result['x_fit'], result['y_fit'], result['flux_fit']):
             # Make a local grid around the source
             if np.isnan(flux):
-                raise ValueError("Flux is NaN; cannot build PSF model image")
+                # NaN flux from photutils means the LSQ fit did not converge.
+                # That is a real bug — silently skipping the row would produce
+                # an iter3 residual image that still has the unsubtracted
+                # source (the original problem we're trying to fix).  Raise
+                # so the failure is loud and gets investigated.
+                raise ValueError(
+                    f"Fit returned NaN flux for source {ii+1} at "
+                    f"(x={x_fit}, y={y_fit}), forced={forced_source}, "
+                    f"flux_init={init_params['flux'][0] if 'flux' in init_params.colnames else 'auto'}. "
+                    f"Investigate the fit configuration (fit_shape, PSF model "
+                    f"size, position bounds) — do not silently skip."
+                )
             y, x = np.mgrid[0:ny, 0:nx]
             #psf_eval = big_grid(x, y, flux=flux, x_0=x0, y_0=y0)  # works for analytic PSF
-            psf_eval = big_grid(x-x_fit, y-y_fit) * flux  # works for GriddedPSFModel
+            # Use large PSF grid for forced sources so the spike pattern at
+            # off-edge offsets is represented in the model image.  Required
+            # to exist for forced sources; raise if it isn't (no silent
+            # fallback to small grid).
+            if forced_source:
+                if big_grid_large is None:
+                    raise RuntimeError(
+                        "forced_source=True but big_grid_large is None at model "
+                        "build time — earlier require-large-PSF check should have "
+                        "raised already."
+                    )
+                _psf_for_model = big_grid_large
+            else:
+                _psf_for_model = big_grid
+            psf_eval = _psf_for_model(x-x_fit, y-y_fit) * flux  # works for GriddedPSFModel
             # cut psf_eval to the image size
             model_image += psf_eval[0:ny, 0:nx]
 
