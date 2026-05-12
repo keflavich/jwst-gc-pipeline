@@ -115,9 +115,6 @@ def get_psf(header, path_prefix='.', use_merged_psf_for_merged=False):
             psfgen.load_wss_opd_by_date(f'{obsdate}T00:00:00')
         except (urllib3.exceptions.ReadTimeoutError, requests.exceptions.ReadTimeout, requests.HTTPError) as ex:
             print(f"Failed to build PSF: {ex}")
-        except Exception as ex:
-            print("psfgen load_wss_opd_by_date failed")
-            print(ex)
 
         log.info(f"starfinding: Calculating grid for psf_fn={psf_fn}")
         # https://github.com/spacetelescope/webbpsf/blob/cc16c909b55b2a26e80b074b9ab79ed9a312f14c/webbpsf/webbpsf_core.py#L640
@@ -578,109 +575,147 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # diffraction spike pattern (extending ~40" into the FOV) is actually
         # represented in the model.  Default 512-px grid (256 px radius) is
         # far too small for stars 200-600 px off-edge.
+        saturated_mask = saturated[y0:y1, x0:x1]
+        saturated_mask_expanded = binary_dilation(saturated_mask, iterations=effective_buffer)
+        mask = np.logical_or(cutout==0, np.isnan(cutout), saturated_mask_expanded)
+
         if forced_source:
+            # Custom 1-parameter (flux-only) fit for off-edge sources.
+            # photutils PSFPhotometry's fit_shape is centered at source
+            # position and clipped to image bounds, which gives 0 fit
+            # pixels for stars whose seed is far off-edge — so it always
+            # returns NaN.  Instead, evaluate the (large) PSF at every
+            # cutout pixel offset from the fixed seed position and do a
+            # linear LSQ for the amplitude: flux = sum(D*P) / sum(P*P)
+            # over pixels where P > psf_thresh, the cutout is finite,
+            # and the mask is False.
             if big_grid_large is None:
                 raise RuntimeError(
-                    "forced_source=True but big_grid_large was not loaded — "
-                    "this should be unreachable because earlier code requires "
-                    "the large PSF grid when any forced source is present."
+                    "forced_source=True but big_grid_large is None — "
+                    "earlier require-large-PSF check should have raised."
                 )
-            _psf_for_fit = big_grid_large
+            cy_, cx_ = cutout.shape
+            yy, xx = np.mgrid[0:cy_, 0:cx_]
+            psf_eval = big_grid_large(xx - x_init, yy - y_init)
+            if psf_eval.shape != cutout.shape:
+                raise RuntimeError(
+                    f"PSF eval shape {psf_eval.shape} != cutout shape "
+                    f"{cutout.shape}; PSF model is misconfigured."
+                )
+            # Pixels usable for the fit: finite cutout, mask=False, and
+            # PSF model has nonzero amplitude (otherwise contributes 0
+            # to both numerator and denominator).
+            psf_thresh = max(1e-10, float(np.nanmax(psf_eval)) * 1e-6)
+            usable = (~mask) & np.isfinite(cutout) & (psf_eval > psf_thresh)
+            n_usable = int(usable.sum())
+            if n_usable < 10:
+                raise ValueError(
+                    f"Forced source {ii+1} at (x={x_init:.1f},y={y_init:.1f}): "
+                    f"only {n_usable} usable cutout pixels have nonzero PSF "
+                    f"amplitude — cutout doesn't overlap PSF support.  "
+                    f"Likely the proximity filter (max_offset_arcsec) is set "
+                    f"larger than the actual PSF radius."
+                )
+            d_vec = cutout[usable].astype(float)
+            p_vec = psf_eval[usable].astype(float)
+            denom = float(np.sum(p_vec * p_vec))
+            if denom <= 0:
+                raise ValueError(
+                    f"Forced source {ii+1}: PSF amplitude sum-of-squares is "
+                    f"zero — would divide by zero.  Fit cannot proceed."
+                )
+            flux_fit_val = float(np.sum(d_vec * p_vec) / denom)
+            # Standard linear-LSQ flux uncertainty: sqrt(sigma^2 / sum(P^2))
+            # Use robust noise estimate from MAD of residual data outside
+            # PSF support (background) as sigma proxy.
+            bg_mask = (~mask) & np.isfinite(cutout) & (psf_eval <= psf_thresh)
+            if int(bg_mask.sum()) >= 100:
+                bg_pix = cutout[bg_mask].astype(float)
+                sigma = float(1.4826 * np.median(np.abs(bg_pix - np.median(bg_pix))))
+            else:
+                sigma = float(np.std(d_vec - flux_fit_val * p_vec, ddof=1))
+            flux_err_val = sigma / np.sqrt(denom)
+            model_at_data = flux_fit_val * p_vec
+            resid = d_vec - model_at_data
+            qfit_val = float(np.sum(np.abs(resid)) / max(abs(flux_fit_val), 1e-30))
+            chi2_val = float(np.sum((resid / max(sigma, 1e-30)) ** 2)
+                             / max(n_usable - 1, 1))
+            print(f"  Custom forced-source fit: flux={flux_fit_val:.3e}  "
+                  f"flux_err={flux_err_val:.3e}  n_pix={n_usable}  "
+                  f"sigma_bg={sigma:.3e}  qfit={qfit_val:.3f}  "
+                  f"reduced_chi2={chi2_val:.3f}", flush=True)
+            result = QTable()
+            result['id'] = [1]
+            result['group_id'] = [1]
+            result['group_size'] = [1]
+            result['local_bkg'] = [0.0]
+            result['x_init'] = [x_init]
+            result['y_init'] = [y_init]
+            result['flux_init'] = [float(init_params['flux'][0])]
+            result['x_fit'] = [x_init]
+            result['y_fit'] = [y_init]
+            result['flux_fit'] = [flux_fit_val]
+            result['x_err'] = [0.0]
+            result['y_err'] = [0.0]
+            result['flux_err'] = [flux_err_val]
+            result['n_pixels_fit'] = [n_usable]
+            result['qfit'] = [qfit_val]
+            result['cfit'] = [float(resid[0]) if n_usable else float('nan')]
+            result['reduced_chi2'] = [chi2_val]
+            result['flags'] = [0]
+            bad_fit_rows = np.zeros(1, dtype=bool)
         else:
             _psf_for_fit = big_grid
-        # For forced (outside-FOV) sources, fit_shape=size (~81 px) centered at
-        # the off-image seed contains zero image pixels — fitter has no data to
-        # fit → NaN.  Use a much larger fit window so the visible diffraction
-        # spike pixels in the cutout contribute.  Must be odd.
-        if forced_source:
-            cy_, cx_ = cutout.shape
-            _fit_shape = (min(cy_, cx_) // 2) * 2 - 1   # largest odd ≤ min(cutout)
-            _fit_shape = max(_fit_shape, 81)
-        else:
-            _fit_shape = size
-        psfphot = PSFPhotometry(
-                                localbkg_estimator=localbkg_estimator,
-                                fitter=lmfitter,
-                                psf_model=_psf_for_fit,
-                                fit_shape=_fit_shape,
-                                aperture_radius=15*fwhm_pix)
-        if forced_source:
-            # Keep the fitted centroid within ±size_saturated of the seed
-            # position.  Using [0, cutout-1] previously let both seeds drift
-            # to the same corner source, producing duplicate catalog rows.
-            # x_init / y_init may be negative for outside-FOV seeds.
-            low_x  = x_init - size_saturated
-            high_x = x_init + size_saturated
-            low_y  = y_init - size_saturated
-            high_y = y_init + size_saturated
-        else:
+            psfphot = PSFPhotometry(
+                                    localbkg_estimator=localbkg_estimator,
+                                    fitter=lmfitter,
+                                    psf_model=_psf_for_fit,
+                                    fit_shape=size,
+                                    aperture_radius=15*fwhm_pix)
             low_x  = xcen - x0 - size_saturated
             high_x = xcen - x0 + size_saturated
             low_y  = ycen - y0 - size_saturated
             high_y = ycen - y0 + size_saturated
 
-        # get the underlying model and set bounds there
-        model = getattr(psfphot, "psf_model", None)
-        if model is None:
-            raise RuntimeError("psfphot.psf_model is None — can't set parameter bounds")
+            # get the underlying model and set bounds there
+            model = getattr(psfphot, "psf_model", None)
+            if model is None:
+                raise RuntimeError("psfphot.psf_model is None — can't set parameter bounds")
 
-        for pname, bounds in (("x_0", (low_x, high_x)), ("y_0", (low_y, high_y))):
-            if not hasattr(model, pname):
-                raise AttributeError(
-                    f"PSF model has no parameter '{pname}'; "
-                    f"param_names={getattr(model, 'param_names', None)}"
-                )
-            param = getattr(model, pname)
-            # Set bounds via the supported astropy.modeling API.  If this
-            # ever raises, the photutils/astropy contract has changed and
-            # we want to know — silently falling back to ``_bounds`` could
-            # leave a fitter completely unbounded and corrupt every
-            # subsequent forced photometry result.
-            param.bounds = bounds
-            # Freeze position for forced (outside-FOV) sources.  LevMarLSQ
-            # cannot converge when the PSF model is evaluated only at far
-            # wings (200+ px off-image), so x_fit/y_fit come back masked
-            # and the row gets dropped — leaving the off-edge star with
-            # zero model subtraction.  Fitting only flux (position fixed
-            # at seed) gives a usable amplitude estimate from the
-            # diffraction spikes visible in the cutout.
-            if forced_source:
-                param.fixed = True
-            print(f"Set {pname}.bounds = {bounds}"
-                  + ("  (fixed for forced)" if forced_source else ""))
-        saturated_mask = saturated[y0:y1, x0:x1]
+            for pname, bounds in (("x_0", (low_x, high_x)), ("y_0", (low_y, high_y))):
+                if not hasattr(model, pname):
+                    raise AttributeError(
+                        f"PSF model has no parameter '{pname}'; "
+                        f"param_names={getattr(model, 'param_names', None)}"
+                    )
+                param = getattr(model, pname)
+                # Set bounds via the supported astropy.modeling API.  If
+                # this ever raises, the photutils/astropy contract has
+                # changed and we want to know — silently falling back to
+                # ``_bounds`` could leave a fitter completely unbounded
+                # and corrupt every subsequent forced photometry result.
+                param.bounds = bounds
+                print(f"Set {pname}.bounds = {bounds}")
 
-        saturated_mask_expanded = binary_dilation(saturated_mask, iterations=effective_buffer)
-        mask = np.logical_or(cutout==0, np.isnan(cutout), saturated_mask_expanded)
-        try:
             result = psfphot(cutout, init_params=init_params, mask=mask)
-        except Exception as ex:
-            print(f"PSF photometry failed for source {ii+1} at (x,y)=({xcen},{ycen}): {ex}", flush=True)
-            continue
 
-        if len(result) == 0:
-            print(f"PSF photometry returned no rows for source {ii+1}; skipping", flush=True)
-            continue
+            if len(result) == 0:
+                # Empty result is a real fit failure for an existing
+                # in-FOV saturated source — do not silently skip; raise
+                # so the cause gets investigated.
+                raise ValueError(
+                    f"PSF photometry returned 0 rows for source {ii+1} at "
+                    f"(x={xcen},y={ycen}).  Empty result means LSQ did not "
+                    f"converge for an in-FOV source."
+                )
 
-        if hasattr(result['x_fit'], 'mask'):
-            bad_fit_rows = result['x_fit'].mask | result['y_fit'].mask
-        else:
-            bad_fit_rows = (~np.isfinite(result['x_fit'])) | (~np.isfinite(result['y_fit']))
+            if hasattr(result['x_fit'], 'mask'):
+                bad_fit_rows = result['x_fit'].mask | result['y_fit'].mask
+            else:
+                bad_fit_rows = (~np.isfinite(result['x_fit'])) | (~np.isfinite(result['y_fit']))
 
-        # For forced (outside-FOV) sources the x_0,y_0 PSF parameters are
-        # marked fixed=True before fitting, so photutils returns them masked
-        # in the result table — its convention for "parameter was held fixed,
-        # not fit".  That is NOT a fit failure: the seed value IS the
-        # parameter value.  Materialise the seed back into the cell so the
-        # downstream model build evaluates the PSF at the correct location.
-        if forced_source and np.any(bad_fit_rows):
-            for j in np.where(bad_fit_rows)[0]:
-                result['x_fit'][j] = x_init
-                result['y_fit'][j] = y_init
-            bad_fit_rows = np.zeros_like(bad_fit_rows, dtype=bool)
-            print(f"Forced source {ii+1}: x_fit/y_fit were masked (fixed=True), "
-                  f"materialised to seed pos ({x_init:.1f}, {y_init:.1f})",
-                  flush=True)
+        # (Forced sources construct ``result`` + ``bad_fit_rows`` directly
+        #  in the custom-fit branch above; no masked-x_fit recovery needed.)
 
         if np.any(bad_fit_rows):
             print(f"Removing {bad_fit_rows.sum()} invalid fit rows for source {ii+1}", flush=True)

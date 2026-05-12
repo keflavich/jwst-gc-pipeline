@@ -2759,8 +2759,12 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
     # is gated separately on ``seed_catalog is not None`` and is
     # unaffected by this change.
     if options.each_exposure:
+        # Cut at 32" — matches the radius of the large PSF grid used for forced
+        # fits (fovp2048 SW × 0.031"/pix = 31.7"; fovp1024 LW × 0.063"/pix
+        # = 32.3").  Anything farther falls outside PSF support so the
+        # cutout would contain zero usable pixels and the fit would raise.
         outside_star_pixels = load_outside_fov_satstar_pixels(
-            basepath, ww, data_shape=nan_replaced_data.shape, max_offset_arcsec=40.0)
+            basepath, ww, data_shape=nan_replaced_data.shape, max_offset_arcsec=32.0)
         # Namespace the satstar outputs by bgsub/iteration_label so that
         # the non-bgsub and bgsub iter2 array jobs (which can run concurrently
         # on the same frame) don't race each other on a shared filename.
