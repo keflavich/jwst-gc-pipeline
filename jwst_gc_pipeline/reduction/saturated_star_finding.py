@@ -580,70 +580,119 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         mask = np.logical_or(cutout==0, np.isnan(cutout), saturated_mask_expanded)
 
         if forced_source:
-            # Custom 1-parameter (flux-only) fit for off-edge sources.
+            # Custom 3-parameter (x, y, flux) fit for off-edge sources.
             # photutils PSFPhotometry's fit_shape is centered at source
             # position and clipped to image bounds, which gives 0 fit
             # pixels for stars whose seed is far off-edge — so it always
-            # returns NaN.  Instead, evaluate the (large) PSF at every
-            # cutout pixel offset from the fixed seed position and do a
-            # linear LSQ for the amplitude: flux = sum(D*P) / sum(P*P)
-            # over pixels where P > psf_thresh, the cutout is finite,
-            # and the mask is False.
+            # returns NaN.  Instead we evaluate the (large) PSF at every
+            # cutout pixel for each candidate (dx, dy) sub-pixel offset
+            # in [-FORCED_SHIFT_RADIUS, +FORCED_SHIFT_RADIUS] (integer
+            # 1-pixel grid), do a linear-LSQ amplitude fit at each, and
+            # pick the (dx, dy, flux) triple that minimises chi^2.
+            # Iterative 3-sigma clipping then refines the amplitude to
+            # suppress contributions from bright neighbour stars and
+            # other unmodeled structure (otherwise the over-subtraction
+            # observed empirically pulls the fitted flux too high).
             if big_grid_large is None:
                 raise RuntimeError(
                     "forced_source=True but big_grid_large is None — "
                     "earlier require-large-PSF check should have raised."
                 )
+            FORCED_SHIFT_RADIUS = 5      # pixels, per-axis
+            FORCED_SIGMA_CLIP = 3.0
+            FORCED_CLIP_ITERS = 3
             cy_, cx_ = cutout.shape
             yy, xx = np.mgrid[0:cy_, 0:cx_]
-            psf_eval = big_grid_large(xx - x_init, yy - y_init)
-            if psf_eval.shape != cutout.shape:
+
+            # Background sigma from cutout edges — used for chi^2 metric
+            # and for sigma-clipping.  Evaluate PSF at seed once just to
+            # define the "background" region (where PSF is negligible).
+            psf_center = big_grid_large(xx - x_init, yy - y_init)
+            if psf_center.shape != cutout.shape:
                 raise RuntimeError(
-                    f"PSF eval shape {psf_eval.shape} != cutout shape "
+                    f"PSF eval shape {psf_center.shape} != cutout shape "
                     f"{cutout.shape}; PSF model is misconfigured."
                 )
-            # Pixels usable for the fit: finite cutout, mask=False, and
-            # PSF model has nonzero amplitude (otherwise contributes 0
-            # to both numerator and denominator).
-            psf_thresh = max(1e-10, float(np.nanmax(psf_eval)) * 1e-6)
-            usable = (~mask) & np.isfinite(cutout) & (psf_eval > psf_thresh)
-            n_usable = int(usable.sum())
-            if n_usable < 10:
-                raise ValueError(
-                    f"Forced source {ii+1} at (x={x_init:.1f},y={y_init:.1f}): "
-                    f"only {n_usable} usable cutout pixels have nonzero PSF "
-                    f"amplitude — cutout doesn't overlap PSF support.  "
-                    f"Likely the proximity filter (max_offset_arcsec) is set "
-                    f"larger than the actual PSF radius."
-                )
-            d_vec = cutout[usable].astype(float)
-            p_vec = psf_eval[usable].astype(float)
-            denom = float(np.sum(p_vec * p_vec))
-            if denom <= 0:
-                raise ValueError(
-                    f"Forced source {ii+1}: PSF amplitude sum-of-squares is "
-                    f"zero — would divide by zero.  Fit cannot proceed."
-                )
-            flux_fit_val = float(np.sum(d_vec * p_vec) / denom)
-            # Standard linear-LSQ flux uncertainty: sqrt(sigma^2 / sum(P^2))
-            # Use robust noise estimate from MAD of residual data outside
-            # PSF support (background) as sigma proxy.
-            bg_mask = (~mask) & np.isfinite(cutout) & (psf_eval <= psf_thresh)
+            psf_thresh = max(1e-10, float(np.nanmax(psf_center)) * 1e-6)
+            bg_mask = (~mask) & np.isfinite(cutout) & (psf_center <= psf_thresh)
             if int(bg_mask.sum()) >= 100:
                 bg_pix = cutout[bg_mask].astype(float)
                 sigma = float(1.4826 * np.median(np.abs(bg_pix - np.median(bg_pix))))
             else:
-                sigma = float(np.std(d_vec - flux_fit_val * p_vec, ddof=1))
-            flux_err_val = sigma / np.sqrt(denom)
-            model_at_data = flux_fit_val * p_vec
-            resid = d_vec - model_at_data
-            qfit_val = float(np.sum(np.abs(resid)) / max(abs(flux_fit_val), 1e-30))
-            chi2_val = float(np.sum((resid / max(sigma, 1e-30)) ** 2)
-                             / max(n_usable - 1, 1))
+                # No room for a background sample — pixels mostly in PSF
+                # support.  Fall back to MAD of all unmasked cutout
+                # pixels (less robust but defined).
+                all_pix = cutout[~mask & np.isfinite(cutout)].astype(float)
+                if all_pix.size < 10:
+                    raise ValueError(
+                        f"Forced source {ii+1}: <10 unmasked finite cutout "
+                        f"pixels; cannot estimate background sigma."
+                    )
+                sigma = float(1.4826 * np.median(np.abs(all_pix - np.median(all_pix))))
+            sigma = max(sigma, 1e-30)
+
+            best = None   # (chi2, dx, dy, flux, flux_err, n_pix, qfit, red_chi2, resid_at_d, p_vec_at_d)
+            for dy in range(-FORCED_SHIFT_RADIUS, FORCED_SHIFT_RADIUS + 1):
+                for dx in range(-FORCED_SHIFT_RADIUS, FORCED_SHIFT_RADIUS + 1):
+                    psf_try = big_grid_large(xx - (x_init + dx),
+                                             yy - (y_init + dy))
+                    usable = ((~mask) & np.isfinite(cutout)
+                              & (psf_try > psf_thresh))
+                    n_use = int(usable.sum())
+                    if n_use < 10:
+                        continue
+                    d_vec = cutout[usable].astype(float)
+                    p_vec = psf_try[usable].astype(float)
+                    denom = float(np.sum(p_vec * p_vec))
+                    if denom <= 0:
+                        continue
+                    flux_try = float(np.sum(d_vec * p_vec) / denom)
+                    # Iterative 3-sigma clip to suppress bright neighbours
+                    # and unmodeled flux from biasing the amplitude high.
+                    keep = np.ones_like(d_vec, dtype=bool)
+                    for _ in range(FORCED_CLIP_ITERS):
+                        resid_try = d_vec - flux_try * p_vec
+                        new_keep = np.abs(resid_try) < FORCED_SIGMA_CLIP * sigma
+                        new_keep &= keep
+                        if int(new_keep.sum()) < 100 or np.array_equal(new_keep, keep):
+                            keep = new_keep
+                            break
+                        keep = new_keep
+                        d_k = d_vec[keep]; p_k = p_vec[keep]
+                        denom_k = float(np.sum(p_k * p_k))
+                        if denom_k <= 0:
+                            break
+                        flux_try = float(np.sum(d_k * p_k) / denom_k)
+                    # Final residual + chi^2 on the unclipped pixel set
+                    resid_try = d_vec - flux_try * p_vec
+                    chi2_try = float(np.sum((resid_try / sigma) ** 2))
+                    red_chi2 = chi2_try / max(n_use - 1, 1)
+                    qfit_try = (float(np.sum(np.abs(resid_try)))
+                                / max(abs(flux_try), 1e-30))
+                    flux_err_try = sigma / np.sqrt(denom)
+                    if best is None or chi2_try < best[0]:
+                        best = (chi2_try, dx, dy, flux_try, flux_err_try,
+                                n_use, qfit_try, red_chi2,
+                                float(resid_try[0]))
+
+            if best is None:
+                raise ValueError(
+                    f"Forced source {ii+1} at (x={x_init:.1f},y={y_init:.1f}): "
+                    f"no candidate (dx,dy) in ±{FORCED_SHIFT_RADIUS} px gave "
+                    f">= 10 usable cutout pixels with nonzero PSF amplitude.  "
+                    f"Likely the proximity filter is set larger than the "
+                    f"actual PSF radius."
+                )
+
+            (chi2_val, best_dx, best_dy, flux_fit_val, flux_err_val,
+             n_usable, qfit_val, red_chi2_val, resid0_val) = best
+            x_fit_val = x_init + best_dx
+            y_fit_val = y_init + best_dy
             print(f"  Custom forced-source fit: flux={flux_fit_val:.3e}  "
                   f"flux_err={flux_err_val:.3e}  n_pix={n_usable}  "
-                  f"sigma_bg={sigma:.3e}  qfit={qfit_val:.3f}  "
-                  f"reduced_chi2={chi2_val:.3f}", flush=True)
+                  f"sigma_bg={sigma:.3e}  "
+                  f"(dx,dy)=({best_dx},{best_dy})  qfit={qfit_val:.3f}  "
+                  f"reduced_chi2={red_chi2_val:.3f}", flush=True)
             result = QTable()
             result['id'] = [1]
             result['group_id'] = [1]
@@ -652,10 +701,10 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             result['x_init'] = [x_init]
             result['y_init'] = [y_init]
             result['flux_init'] = [float(init_params['flux'][0])]
-            result['x_fit'] = [x_init]
-            result['y_fit'] = [y_init]
+            result['x_fit'] = [x_fit_val]
+            result['y_fit'] = [y_fit_val]
             result['flux_fit'] = [flux_fit_val]
-            result['x_err'] = [0.0]
+            result['x_err'] = [0.0]   # grid search; no formal positional error
             result['y_err'] = [0.0]
             result['flux_err'] = [flux_err_val]
             result['n_pixels_fit'] = [n_usable]
