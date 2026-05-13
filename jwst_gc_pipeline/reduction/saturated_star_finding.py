@@ -306,7 +306,7 @@ def compute_adaptive_bkg_annulus(sat_area, bkg_inner_min=15, bkg_inner_max=50):
     return bkg_inner, bkg_outer
 
 
-def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512):
+def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5):
     """
     Detect and PSF-fit saturated sources in a JWST image.
 
@@ -598,7 +598,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                     "forced_source=True but big_grid_large is None — "
                     "earlier require-large-PSF check should have raised."
                 )
-            FORCED_SHIFT_RADIUS = 5      # pixels, per-axis
+            FORCED_SHIFT_RADIUS = int(forced_grid_search_radius)  # pixels, per-axis (0 = single-point flux-only fit at seed)
             FORCED_SIGMA_CLIP = 3.0
             FORCED_CLIP_ITERS = 3
             cy_, cx_ = cutout.shape
@@ -709,8 +709,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             result['flux_err'] = [flux_err_val]
             result['n_pixels_fit'] = [n_usable]
             result['qfit'] = [qfit_val]
-            result['cfit'] = [float(resid[0]) if n_usable else float('nan')]
-            result['reduced_chi2'] = [chi2_val]
+            result['cfit'] = [resid0_val]
+            result['reduced_chi2'] = [red_chi2_val]
             result['flags'] = [0]
             bad_fit_rows = np.zeros(1, dtype=bool)
         else:

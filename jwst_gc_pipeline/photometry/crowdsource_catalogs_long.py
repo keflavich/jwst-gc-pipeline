@@ -1307,6 +1307,7 @@ def annotate_and_filter_by_local_snr(detection_table, noise_map, snr_threshold=5
 
 def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merged=False, overwrite=False,
                                  outside_star_pixels=None, outside_star_fit_box=512,
+                                 forced_grid_search_radius=5,
                                  file_suffix=''):
     """
     ``file_suffix`` is inserted into the satstar output filenames before
@@ -1325,6 +1326,7 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
                            use_merged_psf_for_merged=use_merged_psf_for_merged,
                            outside_star_pixels=outside_star_pixels,
                            outside_star_fit_box=outside_star_fit_box,
+                           forced_grid_search_radius=forced_grid_search_radius,
                            file_suffix=file_suffix)
     if os.path.exists(satstar_filename):
         return Table.read(satstar_filename)
@@ -1341,6 +1343,20 @@ def load_outside_fov_satstar_pixels(basepath, ww, data_shape=None,
     so the satstar fitter doesn't waste time on unfittable forced sources
     (which return NaN flux and stall the pipeline).
 
+    A second region file ``saturated_stars_outside_fov_locked.reg`` (same
+    point-region format) takes precedence when present — it contains
+    REFINED celestial positions verified in one or two reference filters
+    and is used as-is, with no position grid search.  Returned tuple's
+    ``locked`` flag is True when the locked file was used; callers should
+    set ``forced_grid_search_radius=0`` in that case.
+
+    Returns
+    -------
+    pixels : list[tuple[float,float]]
+    locked : bool
+        True when positions come from ``_locked.reg``; False when from
+        the original ``_outside_fov.reg``.
+
     Parameters
     ----------
     data_shape : tuple (ny, nx), optional
@@ -1348,9 +1364,16 @@ def load_outside_fov_satstar_pixels(basepath, ww, data_shape=None,
         ``ww.array_shape``; if that's also None, no proximity filter is
         applied.
     """
-    regfn = f'{basepath}/regions_/saturated_stars_outside_fov.reg'
+    locked_fn = f'{basepath}/regions_/saturated_stars_outside_fov_locked.reg'
+    if os.path.exists(locked_fn):
+        regfn = locked_fn
+        locked = True
+        print(f"Using LOCKED outside-FOV seeds: {regfn}", flush=True)
+    else:
+        regfn = f'{basepath}/regions_/saturated_stars_outside_fov.reg'
+        locked = False
     if not os.path.exists(regfn):
-        return []
+        return [], False
 
     reglist = regions.Regions.read(regfn)
     outside_pixels = []
@@ -1399,7 +1422,7 @@ def load_outside_fov_satstar_pixels(basepath, ww, data_shape=None,
 
     print(f"Loaded {len(outside_pixels)} outside-FOV saturated-star seeds "
           f"from {regfn} (of {len(raw_pixels)} in file)", flush=True)
-    return outside_pixels
+    return outside_pixels, locked
 
 
 def save_photutils_results(result, ww, filename,
@@ -1819,13 +1842,16 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
     elif proposal_id == '5365' and field == '001' and module in ('nrca', 'nrcb'):
         module_patterns = [f'{module}{number}' for number in range(1, 5)]
     elif module == 'merged':
-        # Combined nrca+nrcb mosaic.  LW per-exposures use nrcalong/nrcblong
-        # tokens; SW per-exposures use nrca1-4 + nrcb1-4.  glob.glob only
-        # matches tokens that actually appear in filenames for this filter.
+        # Combined nrca+nrcb mosaic.  Some pipelines save residuals with the
+        # literal 'merged' token (brick/cloudc/sgrc — chunked iter3 path);
+        # others save with per-detector tokens.  Include both so glob.glob
+        # finds whichever variant exists.  LW per-exposures use
+        # nrcalong/nrcblong tokens; SW per-exposures use nrca1-4 + nrcb1-4.
         if _instrument_from_filter(filtername) == 'MIRI':
-            module_patterns = ['mirimage']
+            module_patterns = ['merged', 'mirimage']
         else:
-            module_patterns = ['nrcalong', 'nrcblong',
+            module_patterns = ['merged',
+                               'nrcalong', 'nrcblong',
                                'nrca1', 'nrca2', 'nrca3', 'nrca4',
                                'nrcb1', 'nrcb2', 'nrcb3', 'nrcb4']
     else:
@@ -2773,8 +2799,12 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
         # fits (fovp2048 SW × 0.031"/pix = 31.7"; fovp1024 LW × 0.063"/pix
         # = 32.3").  Anything farther falls outside PSF support so the
         # cutout would contain zero usable pixels and the fit would raise.
-        outside_star_pixels = load_outside_fov_satstar_pixels(
+        outside_star_pixels, outside_locked = load_outside_fov_satstar_pixels(
             basepath, ww, data_shape=nan_replaced_data.shape, max_offset_arcsec=32.0)
+        # When seeds came from the verified ``_locked.reg`` file, skip the
+        # ±5 px grid search (radius=0 → single-point flux-only fit at the
+        # locked position).  Default radius=5 otherwise.
+        forced_grid_search_radius = 0 if outside_locked else 5
         # Namespace the satstar outputs by bgsub/iteration_label so that
         # the non-bgsub and bgsub iter2 array jobs (which can run concurrently
         # on the same frame) don't race each other on a shared filename.
@@ -2791,6 +2821,7 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
             overwrite=bool(outside_star_pixels),
             outside_star_pixels=outside_star_pixels,
             outside_star_fit_box=512,
+            forced_grid_search_radius=forced_grid_search_radius,
             file_suffix=satstar_file_suffix,
         )
 

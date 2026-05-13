@@ -920,10 +920,11 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
         else:
             sub_tables = [Table.read(fn) for fn in sorted(chunks)]
             tb = table.vstack(sub_tables, metadata_conflicts='silent')
-            # Use the chunk-stripped path's basename as the canonical
-            # FILENAME so downstream code (which keys on it) collapses
-            # all chunks of one frame to a single source identity.
-            tb.meta['FILENAME'] = os.path.basename(key)
+            # Preserve the first chunk's FILENAME (absolute path to the
+            # CRF input) so combine_singleframe can fits.open it to read
+            # the SCI header (RAOFFSET/DEOFFSET).
+            if 'FILENAME' in sub_tables[0].meta:
+                tb.meta['FILENAME'] = sub_tables[0].meta['FILENAME']
         tables.append(tb)
     for tb, fn in zip(tables, tblfns):
         if 'exposure' not in tb.meta:

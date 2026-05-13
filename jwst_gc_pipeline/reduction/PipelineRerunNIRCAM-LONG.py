@@ -358,13 +358,29 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         print(f"Working on module {module}: running initial pipeline setup steps (skip_step1and2={skip_step1and2})")
         print(f"Searching for {os.path.join(output_dir, f'jw0{proposal_id}-o{field}*_image3_*0[0-9][0-9]_asn.json')}")
         asn_file_search = glob(os.path.join(output_dir, f'jw0{proposal_id}-o{field}*_image3_*0[0-9][0-9]_asn.json'))
+        # Filter out non-NIRCam asn files (e.g. NIRISS asns from same proposal/obs).
+        # Members of NIRCam asns have 'nrc' in expname (nrca/nrcb/nrcalong/nrcblong); NIRISS members are '_nis_'.
+        nircam_asn_files = []
+        for candidate in asn_file_search:
+            try:
+                with open(candidate) as fh:
+                    cand_data = json.load(fh)
+                members = cand_data.get('products', [{}])[0].get('members', [])
+                if members and any('nrc' in m.get('expname', '') for m in members):
+                    nircam_asn_files.append(candidate)
+            except (json.JSONDecodeError, KeyError, IndexError) as exc:
+                raise ValueError(f"Could not parse asn candidate {candidate}: {exc}")
+        if len(asn_file_search) > 0 and len(nircam_asn_files) != len(asn_file_search):
+            skipped = set(asn_file_search) - set(nircam_asn_files)
+            print(f"Filtered out non-NIRCam asn files: {sorted(skipped)}")
+        asn_file_search = nircam_asn_files
         if len(asn_file_search) == 1:
             asn_file = asn_file_search[0]
         elif len(asn_file_search) > 1:
             asn_file = sorted(asn_file_search)[-1]
             print(f"Found multiple asn files: {asn_file_search}.  Using the more recent one, {asn_file}.")
         else:
-            raise ValueError(f"Mismatch: Did not find any asn files for module {module} for field {field} in {output_dir}")
+            raise ValueError(f"Mismatch: Did not find any NIRCam asn files for module {module} for field {field} in {output_dir}")
 
         crds_dir = os.getenv("CRDS_PATH") or f'/orange/adamginsburg/jwst/{regionname}/crds'
         mapping = crds.rmap.load_mapping(f'{crds_dir}/mappings/jwst/jwst_nircam_pars-tweakregstep_0003.rmap')
