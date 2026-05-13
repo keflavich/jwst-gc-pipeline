@@ -1818,6 +1818,16 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
         module_patterns = [f'nrcb{number}' for number in range(1, 5)]
     elif proposal_id == '5365' and field == '001' and module in ('nrca', 'nrcb'):
         module_patterns = [f'{module}{number}' for number in range(1, 5)]
+    elif module == 'merged':
+        # Combined nrca+nrcb mosaic.  LW per-exposures use nrcalong/nrcblong
+        # tokens; SW per-exposures use nrca1-4 + nrcb1-4.  glob.glob only
+        # matches tokens that actually appear in filenames for this filter.
+        if _instrument_from_filter(filtername) == 'MIRI':
+            module_patterns = ['mirimage']
+        else:
+            module_patterns = ['nrcalong', 'nrcblong',
+                               'nrca1', 'nrca2', 'nrca3', 'nrca4',
+                               'nrcb1', 'nrcb2', 'nrcb3', 'nrcb4']
     else:
         module_patterns = [module]
 
