@@ -843,6 +843,16 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             else:
                 _psf_for_model = big_grid
             psf_eval = _psf_for_model(x-x_fit, y-y_fit) * flux  # works for GriddedPSFModel
+            # Stars are physically nonnegative.  GriddedPSFModel bicubic
+            # interpolation produces small negative pixel values at large
+            # offsets (interpolation overshoot between tabulated grid
+            # points); multiplied by a bright neighbour's flux these
+            # produce *negative* model holes — e.g. star at flux=8.9e4
+            # gave PSF wing values of -3e-4 → −27 in the model image,
+            # leaving negative residuals at locations where no star
+            # exists in the catalog.  Clip to zero so the model is
+            # physically valid.
+            psf_eval = np.maximum(psf_eval, 0)
             # cut psf_eval to the image size
             model_image += psf_eval[0:ny, 0:nx]
 
@@ -915,7 +925,21 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         #    continue
 
         # process the result
-        accept_source = result is not None and np.isfinite(fluxerr) and snr > 1 and flux > 0
+        # Reject blatantly bad fits before they corrupt the satstar model:
+        #  - flux <= 0 : negative star
+        #  - snr <= 3  : barely above noise; LSQ unconstrained
+        #  - qfit > 5  : photutils' quality-of-fit metric well above the
+        #                ~1 typical "OK" value (qfit=27 catastrophic case
+        #                in 0310g_00002 had snr~2)
+        # The fovp512→fovp1024 study showed a fraction of in-FOV fits
+        # still come out 30-70% too high amplitude even with good qfit;
+        # those leave a faint over-subtracted halo but downstream
+        # processing tolerates a few % of those.  Drop only the worst.
+        accept_source = (result is not None
+                         and np.isfinite(fluxerr)
+                         and snr > 3
+                         and flux > 0
+                         and (not np.isfinite(qfit) or qfit < 5.0))
         if forced_source and result is not None:
             xcent = np.asarray(result['xcentroid'], dtype=float)
             ycent = np.asarray(result['ycentroid'], dtype=float)
