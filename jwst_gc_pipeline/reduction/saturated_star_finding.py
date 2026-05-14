@@ -628,8 +628,27 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # represented in the model.  Default 512-px grid (256 px radius) is
         # far too small for stars 200-600 px off-edge.
         saturated_mask = saturated[y0:y1, x0:x1]
-        saturated_mask_expanded = binary_dilation(saturated_mask, iterations=effective_buffer)
-        mask = np.logical_or(cutout==0, np.isnan(cutout), saturated_mask_expanded)
+        # Only dilate the CURRENT source's saturated component.  Other
+        # saturated stars in the same cutout were fit earlier (sorted by
+        # sat_area desc) and their PSF models were subtracted from
+        # ``data_working`` — so their wing flux has been removed.  If we
+        # kept dilating those neighbours' saturated pixels by
+        # ``effective_buffer`` we'd shield the fit from the cleaned wing
+        # region, defeating iterative subtraction.  Their raw saturated
+        # cores still need to be masked (subtracted data there is wrong:
+        # the data was the saturated-clipped value, not the true peak).
+        if not forced_source and src_label is not None:
+            this_source_sat = (sources[y0:y1, x0:x1] == src_label) & saturated_mask
+            this_source_sat_expanded = binary_dilation(
+                this_source_sat, iterations=effective_buffer)
+            other_sources_sat = saturated_mask & (~this_source_sat)
+            satmask_combined = this_source_sat_expanded | other_sources_sat
+        else:
+            # Forced sources or no src_label: fall back to dilating the
+            # whole saturated mask (legacy behaviour).
+            satmask_combined = binary_dilation(saturated_mask,
+                                               iterations=effective_buffer)
+        mask = np.logical_or(cutout==0, np.isnan(cutout), satmask_combined)
 
         if forced_source:
             # Custom 3-parameter (x, y, flux) fit for off-edge sources.
@@ -925,7 +944,14 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         else:
             _bg_sigma_local = float('nan')
         _bg_sigma_local = max(_bg_sigma_local, 1e-30)
-        _ann = ((_r2_c > 8 ** 2) & (_r2_c < 25 ** 2)
+        # First-sidelobe annulus: r=2-10 px from fit centre.  NIRCam LW
+        # F480M PSF FWHM ≈ 2.5 px (λ/D=0.156"/0.063"·px-1), first Airy
+        # ring at r≈3 px, sidelobe peak r≈4-7 px.  Sickle 0310g_00002
+        # over-subtracted cyan-marker stars had min resid -2085 / -950 /
+        # -231 etc. at r=2-10 (worst pixel at distance 2.8 px from the
+        # source centroid).  An r=8-25 annulus completely misses this
+        # zone and fires on background noise instead.
+        _ann = ((_r2_c >= 2 ** 2) & (_r2_c < 10 ** 2)
                 & (~mask) & np.isfinite(resid_cutout))
         if _ann.any():
             sidelobe_resid_sigma = float(np.median(resid_cutout[_ann]) / _bg_sigma_local)
@@ -1071,6 +1097,18 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                   f"snr={snr}, fluxerr={fluxerr}, qfit={qfit}, "
                   f"sidelobe_resid_sigma={sidelobe_resid_sigma:.2f}, "
                   f"ssr_ratio={ssr_ratio:.3f}", flush=True)
+
+    # NOTE: a pass-2 leave-one-out refit was attempted on 2026-05-14 but
+    # produced catastrophically low fluxes for the brightest sources
+    # (e.g. 1.37e6 -> 6.7e3 on the 0310g_00002 demo) — total model flux
+    # dropped 60%.  Root cause not fully diagnosed; suspect that adding
+    # back a single source's pass-1 PSF model to a working image whose
+    # other sources had wing-contaminated (over-fit) fluxes does NOT
+    # reconstruct the leave-one-out data correctly.  Reverted; single-
+    # pass iter-subtract + r=2-10 gate handles 5/7 of the user's cyan
+    # markers cleanly.  Remaining close-pair members ((560,280) and
+    # (503,142)) still need attention; future work = proper joint fit
+    # via PSFPhotometry multi-row init_params + SourceGrouper.
 
     # if base_tab is not defined, return None
     # this happens if no saturated stars are found
