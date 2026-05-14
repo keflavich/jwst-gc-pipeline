@@ -44,7 +44,7 @@ import requests
 import urllib3
 import builtins
 
-def get_psf(header, path_prefix='.', use_merged_psf_for_merged=False):
+def get_psf(header, path_prefix='.', use_merged_psf_for_merged=False, fov_pixels=None):
     if header['INSTRUME'].lower() == 'nircam':
         psfgen = stpsf.NIRCam()
         fwhm, fwhm_pix = get_fwhm(header, instrument_replacement='NIRCam')
@@ -74,7 +74,12 @@ def get_psf(header, path_prefix='.', use_merged_psf_for_merged=False):
 
     npsf = 16
     oversample = 2
-    fov_pixels = 512
+    # Default fov_pixels: 512 if not overridden by caller.  In-FOV satstar
+    # subtraction passes fov_pixels=1024 for LW (NRC?5) detectors per the
+    # PSF-size-vs-flux study (fovp512 underestimates bright LW star flux
+    # by 50-70%).
+    if fov_pixels is None:
+        fov_pixels = 512
     if detector == 'NRCALONG':
         detector = 'nrca5'
     elif detector == 'NRCBLONG':
@@ -400,7 +405,18 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
 
     nsource = len(source_records)
 
-    big_grid = get_psf(header, path_prefix=path_prefix, use_merged_psf_for_merged=use_merged_psf_for_merged)
+    # LW detectors (NRCALONG/NRCBLONG, internally NRCA5/NRCB5) get a larger
+    # 1024-px PSF grid for in-FOV satstar fits.  PSF-size-vs-flux study
+    # showed fovp512 underestimates bright LW star flux by 50-70%; fovp1024
+    # plateaus and matches catalog flux.  SW detectors keep 512 (Sickle
+    # subarray data cannot diagnose larger sizes; full-frame fields may
+    # need re-evaluation).
+    _det_for_fov = header.get('DETECTOR', '').upper()
+    _is_lw_for_satstar = _det_for_fov in ('NRCALONG', 'NRCBLONG', 'NRCA5', 'NRCB5')
+    _satstar_fov_pixels = 1024 if _is_lw_for_satstar else 512
+    big_grid = get_psf(header, path_prefix=path_prefix,
+                       use_merged_psf_for_merged=use_merged_psf_for_merged,
+                       fov_pixels=_satstar_fov_pixels)
 
     # Large PSF grid for forced (outside-FOV) sources: their diffraction spikes
     # extend ~40" into the FOV — that's 635 px (LW) to 1290 px (SW), much
