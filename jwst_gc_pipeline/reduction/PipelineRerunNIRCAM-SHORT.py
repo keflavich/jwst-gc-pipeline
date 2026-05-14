@@ -423,7 +423,17 @@ if __name__ == "__main__":
     Observations.login(api_token)
 
     field_to_reg_mapping = {'2221': {'001': 'brick', '002': 'cloudc'},
-                            '1182': {'004': 'brick'}}[proposal_id]
+                            '1182': {'004': 'brick'},
+                            '5365': {'001': 'sgrb2'},
+                            '3958': {'007': 'sickle', '001': 'sickle', '002': 'sickle'},
+                            '2092': {'005': 'cloudef'},
+                            '4147': {'012': 'sgrc'},
+                            '2045': {'001': 'arches', '003': 'quintuplet'},
+                            '1939': {'001': 'sgra'},
+                            '2211': {'023': 'gc2211', '028': 'gc2211',
+                                     '046': 'gc2211', '049': 'gc2211',
+                                     '050': 'gc2211'},
+                            }[proposal_id]
 
     for field in fields:
         for filtername in filternames:

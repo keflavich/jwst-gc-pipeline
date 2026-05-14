@@ -96,6 +96,7 @@ refnames = {'2221': 'F405ref',
             '4147': 'VVV',
             '2045': 'VVV',
             '1939': 'VVV',
+            '2211': 'VVV',
             }
 
 # Reference catalog configuration by proposal and field.
@@ -129,6 +130,13 @@ REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD = {
     },
     '1939': {
         '001': 'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
+    },
+    '2211': {
+        '023': 'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
+        '028': 'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
+        '046': 'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
+        '049': 'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
+        '050': 'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
     },
 }
 
@@ -976,6 +984,9 @@ if __name__ == "__main__":
                             '4147': {'012': 'sgrc'},
                             '2045': {'001': 'arches', '003': 'quintuplet'},
                             '1939': {'001': 'sgra'},
+                            '2211': {'023': 'gc2211', '028': 'gc2211',
+                                     '046': 'gc2211', '049': 'gc2211',
+                                     '050': 'gc2211'},
                             }[proposal_id]
 
     for field in fields:
