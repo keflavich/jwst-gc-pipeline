@@ -391,8 +391,32 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
 
     saturated, sources, coms = find_saturated_stars(fitsdata, min_sep_from_edge=min_sep_from_edge, edge_npix=edge_npix)
 
-    source_records = [{'com': com, 'label': ii + 1, 'forced': False}
-                      for ii, com in enumerate(coms)]
+    # Precompute sat_area per labeled component so we can order in-FOV
+    # source_records brightest-first for iterative-subtraction fitting
+    # (see ``data_working`` setup + post-accept subtraction below).
+    if sources.max() > 0:
+        _sizes_by_label = sum_labels(saturated, sources,
+                                     np.arange(int(sources.max())) + 1)
+    else:
+        _sizes_by_label = np.array([], dtype=float)
+
+    source_records = []
+    for ii, com in enumerate(coms):
+        sat_area_ii = int(_sizes_by_label[ii]) if ii < len(_sizes_by_label) else 0
+        source_records.append({'com': com, 'label': ii + 1,
+                               'forced': False, 'sat_area': sat_area_ii})
+
+    # Sort in-FOV sources by sat_area descending (brightest saturated cores
+    # first) so iterative subtraction handles them in brightness order.
+    # Without this, two adjacent saturated stars (e.g. Sickle 0310g_00002
+    # pair at (555,272)+(560,280), sep=0.61") fit independently against the
+    # full data and each absorbs the other's PSF wings → both fluxes ~50-
+    # 100% inflated → 2× over-subtraction when models are accumulated.
+    # Subtracting the brighter star's PSF before fitting the fainter one
+    # removes wing contamination at the cost of one PSF-model evaluation
+    # per source.
+    source_records.sort(key=lambda s: -int(s.get('sat_area') or 0))
+
     if outside_star_pixels is not None:
         for xy in outside_star_pixels:
             if xy is None:
@@ -401,9 +425,17 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 continue
             x_extra, y_extra = float(xy[0]), float(xy[1])
             if np.isfinite(x_extra) and np.isfinite(y_extra):
-                source_records.append({'com': (y_extra, x_extra), 'label': None, 'forced': True})
+                source_records.append({'com': (y_extra, x_extra),
+                                       'label': None, 'forced': True,
+                                       'sat_area': None})
 
     nsource = len(source_records)
+
+    # Working copy of the data that gets per-source PSF models subtracted
+    # after each accepted fit, so subsequent fits see a cleaner field.
+    # ``data`` itself is preserved for the final ``data - full_model_image``
+    # residual and for downstream callers that read it.
+    data_working = data.astype(float, copy=True)
 
     # LW detectors (NRCALONG/NRCBLONG, internally NRCA5/NRCB5) get a larger
     # 1024-px PSF grid for in-FOV satstar fits.  PSF-size-vs-flux study
@@ -518,7 +550,11 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             size_saturated = int(np.sqrt(sum_labels(saturated, labels=sources, index=src_label))/2)
 
         # area_saturated = sum_labels(saturated, labels=sources, index=ii+1)
-        cutout = data[y0:y1, x0:x1]
+        # Fit each source against ``data_working`` rather than the raw
+        # ``data`` — earlier accepted fits' PSF models have been
+        # subtracted from ``data_working`` already, so this fit sees a
+        # field with brighter neighbour satstars removed.
+        cutout = data_working[y0:y1, x0:x1]
         init_params = QTable()
         # For outside-FOV forced sources the star center may be outside the
         # cutout bounds (xcen < x0 or xcen > x1).  DO NOT clip to [0, width-1]:
@@ -856,7 +892,57 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # cut psf_eval to the image size
             model_image += psf_eval[0:ny, 0:nx]
 
-        full_model_image[y0:y1, x0:x1] += model_image
+        # Residual-quality gates (computed BEFORE accumulating into
+        # full_model_image so rejected fits cannot corrupt downstream data):
+        #   * sidelobe_resid_sigma — median residual in the first-sidelobe
+        #     annulus (r=8-25 px from fit centre), normalised by the
+        #     local background sigma.  A strongly-negative value means
+        #     the PSF model amplitude is too high (model > data by many
+        #     sigma); diagnosed cases on Sickle 0310g_00002 show model ≈
+        #     2× data in this annulus when the fit is bad.
+        #   * ssr_ratio — sum-of-squares of residual / sum-of-squares of
+        #     (data - median).  > 1 means the fit makes the cutout worse
+        #     than just subtracting a constant (the "white-point / no
+        #     real star" failure mode the user diagnosed).
+        # ``sidelobe_resid_sigma`` is computed from the per-source cutout
+        # and uses MAD on the non-source, non-saturated pixels as the
+        # local-bkg sigma estimate.
+        resid_cutout = cutout - model_image
+        cy_cut, cx_cut = cutout.shape
+        _yy_c, _xx_c = np.mgrid[0:cy_cut, 0:cx_cut]
+        # Use first accepted fit position as centre (typically only one
+        # row per source); fall back to the initial COM if empty.
+        if len(result) > 0:
+            _xf_cut = float(result['x_fit'][0])
+            _yf_cut = float(result['y_fit'][0])
+        else:
+            _xf_cut = float(x_init)
+            _yf_cut = float(y_init)
+        _r2_c = (_xx_c - _xf_cut) ** 2 + (_yy_c - _yf_cut) ** 2
+        _bg_pix = resid_cutout[(~mask) & (_r2_c > 50 ** 2) & np.isfinite(resid_cutout)]
+        if _bg_pix.size > 100:
+            _bg_sigma_local = float(1.4826 * np.median(np.abs(_bg_pix - np.median(_bg_pix))))
+        else:
+            _bg_sigma_local = float('nan')
+        _bg_sigma_local = max(_bg_sigma_local, 1e-30)
+        _ann = ((_r2_c > 8 ** 2) & (_r2_c < 25 ** 2)
+                & (~mask) & np.isfinite(resid_cutout))
+        if _ann.any():
+            sidelobe_resid_sigma = float(np.median(resid_cutout[_ann]) / _bg_sigma_local)
+        else:
+            sidelobe_resid_sigma = float('nan')
+        # SSR ratio: fit-vs-no-fit sum-of-squared-residual.
+        _fit_pix = (~mask) & np.isfinite(resid_cutout) & np.isfinite(cutout)
+        if _fit_pix.any():
+            _ssr_after = float(np.sum(resid_cutout[_fit_pix] ** 2))
+            _med_cut = float(np.median(cutout[_fit_pix]))
+            _ssr_before = float(np.sum((cutout[_fit_pix] - _med_cut) ** 2))
+            ssr_ratio = _ssr_after / max(_ssr_before, 1e-30)
+        else:
+            ssr_ratio = float('nan')
+
+        result['sidelobe_resid_sigma'] = [sidelobe_resid_sigma] * len(result)
+        result['ssr_ratio'] = [ssr_ratio] * len(result)
 
         threshold_image = np.zeros_like(cutout)
 
@@ -931,25 +1017,49 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         #  - qfit > 5  : photutils' quality-of-fit metric well above the
         #                ~1 typical "OK" value (qfit=27 catastrophic case
         #                in 0310g_00002 had snr~2)
-        # The fovp512→fovp1024 study showed a fraction of in-FOV fits
-        # still come out 30-70% too high amplitude even with good qfit;
-        # those leave a faint over-subtracted halo but downstream
-        # processing tolerates a few % of those.  Drop only the worst.
+        #  - sidelobe_resid_sigma < -10 : in the first-sidelobe annulus
+        #                (r=8-25 px), the median residual is more than
+        #                10σ below zero — i.e. the model amplitude is
+        #                badly over-fit (Sickle 0310g_00002 cyan stars
+        #                show ~2× over-subtraction with values < -30).
+        #                STPSF first-sidelobe is brighter than the real
+        #                NIRCam PSF for saturated stars (BFE / IPC); a
+        #                fit that matches the wing amplitude leaves a
+        #                strong negative residual at this radius.
+        #  - ssr_ratio > 1 : the fit makes the cutout WORSE than just
+        #                subtracting a constant (white-point / "no
+        #                star" failure mode in 0310g_00002).  Indicates
+        #                no real source at the proposed position.
         accept_source = (result is not None
                          and np.isfinite(fluxerr)
                          and snr > 3
                          and flux > 0
-                         and (not np.isfinite(qfit) or qfit < 5.0))
+                         and (not np.isfinite(qfit) or qfit < 5.0)
+                         and (not np.isfinite(sidelobe_resid_sigma)
+                              or sidelobe_resid_sigma > -10.0)
+                         and (not np.isfinite(ssr_ratio) or ssr_ratio < 1.0))
         if forced_source and result is not None:
             xcent = np.asarray(result['xcentroid'], dtype=float)
             ycent = np.asarray(result['ycentroid'], dtype=float)
             accept_source = np.all(np.isfinite(xcent)) and np.all(np.isfinite(ycent))
 
         if accept_source:
+            # Only accumulate the per-source model into the global
+            # full_model_image AFTER passing all gates.  Previously this
+            # accumulation happened before the accept check, so a rejected
+            # bad fit still corrupted the cumulative satstar model.
+            full_model_image[y0:y1, x0:x1] += model_image
+            # Also subtract from the working copy so subsequent fits in
+            # this loop don't see this source's PSF wings (iterative
+            # subtraction; pairs ordered by ``sat_area`` desc so the
+            # brightest fits first and gets clean data).
+            data_working[y0:y1, x0:x1] -= model_image
             if forced_source:
-                print(f"Accepting forced outside-FOV source {ii+1} with flux={flux}, fluxerr={fluxerr}, snr={snr}", flush=True)
+                print(f"Accepting forced outside-FOV source {ii+1} with flux={flux}, fluxerr={fluxerr}, snr={snr}, "
+                      f"sidelobe_resid_sigma={sidelobe_resid_sigma:.2f}, ssr_ratio={ssr_ratio:.3f}", flush=True)
             else:
-                print(f"Accepting source {ii+1} with flux={flux}, fluxerr={fluxerr}, snr={snr}", flush=True)
+                print(f"Accepting source {ii+1} with flux={flux}, fluxerr={fluxerr}, snr={snr}, "
+                      f"sidelobe_resid_sigma={sidelobe_resid_sigma:.2f}, ssr_ratio={ssr_ratio:.3f}", flush=True)
             if index == 0:
                 base_tab = result
             else:
@@ -957,8 +1067,10 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
 
             index += 1
         else:
-            print(f"Skipping source {ii+1} due to non-finite flux error or low SNR", flush=True)
-            print(f"  fluxerr={fluxerr}, snr={snr}", flush=True)
+            print(f"Skipping source {ii+1}: "
+                  f"snr={snr}, fluxerr={fluxerr}, qfit={qfit}, "
+                  f"sidelobe_resid_sigma={sidelobe_resid_sigma:.2f}, "
+                  f"ssr_ratio={ssr_ratio:.3f}", flush=True)
 
     # if base_tab is not defined, return None
     # this happens if no saturated stars are found
