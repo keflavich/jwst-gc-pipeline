@@ -52,6 +52,7 @@ obs_filters = {'brick': {'2221': filternames,
                'arches': {'2045': ['f212n', 'f323n']},
                'quintuplet': {'2045': ['f212n', 'f323n']},
                'sgra': {'1939': ['f115w', 'f212n', 'f405n']},
+               'gc2211': {'2211': ['f150w', 'f200w', 'f277w']},
                }
 
 # Using the 'brick' keyword here makes it work for now, need to figure out how to

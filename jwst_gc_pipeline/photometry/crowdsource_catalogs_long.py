@@ -124,6 +124,268 @@ def _make_iterative_psfphotometry(*, localbkg_estimator, **kwargs):
                                   **kwargs)
 
 
+# ---------------------------------------------------------------------------
+# Parallel-chunked PSFPhotometry (experimental; off unless --parallel-workers>1)
+#
+# The serial PSFPhotometry call ends up spending most wall-time in
+# per-source LevMar + LocalBackground (annulus sigma-clip).  Sources whose
+# PSFs do not overlap can be fit independently, so we can split the
+# init_params table into chunks of mutually-non-touching groups and run
+# one PSFPhotometry per chunk in a forked worker.  Forked workers inherit
+# the SCI image, error array, mask, and PSF model read-only via
+# copy-on-write (Linux); only the small init_params chunk is pickled.
+#
+# Bit-exact agreement with the serial path was verified in
+# brick2221/analysis/bench_psf_parallel.py for the non-LocalBackground
+# case; LocalBackground is per-source and deterministic, so agreement
+# should carry over.  We still keep the serial path as the default and
+# only activate parallel when the caller passes --parallel-workers > 1.
+# ---------------------------------------------------------------------------
+import multiprocessing as _mp_par  # noqa: E402 -- kept near user
+
+# Module-level state populated by _par_worker_init; only read in workers.
+_PAR_IMAGE = None
+_PAR_ERR = None
+_PAR_MASK = None
+_PAR_PHOT_KWARGS = None
+_PAR_NEED_MODEL = False
+_PAR_MODEL_PSF_SHAPE = None
+
+
+def _par_worker_init(image, err, mask, phot_kwargs, need_model, model_psf_shape):
+    global _PAR_IMAGE, _PAR_ERR, _PAR_MASK, _PAR_PHOT_KWARGS
+    global _PAR_NEED_MODEL, _PAR_MODEL_PSF_SHAPE
+    _PAR_IMAGE = image
+    _PAR_ERR = err
+    _PAR_MASK = mask
+    _PAR_PHOT_KWARGS = phot_kwargs
+    _PAR_NEED_MODEL = bool(need_model)
+    _PAR_MODEL_PSF_SHAPE = model_psf_shape
+
+
+def _par_worker_fit(args):
+    """Worker entrypoint: fit one chunk; optionally also render its
+    contribution to the model image and return it cropped to a tight
+    bounding box so we don't pickle 16 MB per chunk."""
+    chunk_idx, chunk_init = args
+    photom = _make_psfphotometry(**_PAR_PHOT_KWARGS)
+    tbl = photom(_PAR_IMAGE, error=_PAR_ERR, mask=_PAR_MASK,
+                 init_params=chunk_init)
+    if not _PAR_NEED_MODEL:
+        return chunk_idx, tbl, None
+
+    # Render this chunk's model contribution and crop to bbox.
+    full_model = photom.make_model_image(
+        _PAR_IMAGE.shape,
+        psf_shape=_PAR_MODEL_PSF_SHAPE,
+        include_local_bkg=False,
+    )
+    # Compute bbox from fit positions; pad by psf_shape//2 + 1.
+    psf_h, psf_w = _PAR_MODEL_PSF_SHAPE
+    pad_y, pad_x = psf_h // 2 + 1, psf_w // 2 + 1
+    xfit = np.asarray(tbl['x_fit'], dtype=float)
+    yfit = np.asarray(tbl['y_fit'], dtype=float)
+    if len(xfit) == 0:
+        return chunk_idx, tbl, None
+    ymin = max(0, int(np.floor(yfit.min())) - pad_y)
+    ymax = min(_PAR_IMAGE.shape[0], int(np.ceil(yfit.max())) + pad_y + 1)
+    xmin = max(0, int(np.floor(xfit.min())) - pad_x)
+    xmax = min(_PAR_IMAGE.shape[1], int(np.ceil(xfit.max())) + pad_x + 1)
+    sub = full_model[ymin:ymax, xmin:xmax].copy()
+    return chunk_idx, tbl, (ymin, ymax, xmin, xmax, sub)
+
+
+def _chunk_init_by_group(init_params, group_id, target_size):
+    """Partition init_params row-indices into chunks, never splitting a
+    group across chunks.  Returns list[np.ndarray[int]]."""
+    by_group = {}
+    for i, gid in enumerate(group_id):
+        by_group.setdefault(int(gid), []).append(int(i))
+    # Order from largest group to smallest, then pack greedily.
+    groups = sorted(by_group.values(), key=lambda g: -len(g))
+    chunks = []
+    current = []
+    for grp in groups:
+        if current and len(current) + len(grp) > target_size:
+            chunks.append(current)
+            current = []
+        current.extend(grp)
+    if current:
+        chunks.append(current)
+    return [np.asarray(c, dtype=np.int64) for c in chunks]
+
+
+def _parallel_psfphotometry(image, *, photometry_kwargs, init_params,
+                             error, mask, n_workers, chunk_size,
+                             group_min_separation,
+                             return_model=False, model_psf_shape=(15, 15)):
+    """Run PSFPhotometry on init_params in parallel, returning the
+    vstacked result table (and optionally a model image)."""
+    grouper = SourceGrouper(min_separation=group_min_separation)
+    group_id = grouper(np.asarray(init_params['x_init']),
+                       np.asarray(init_params['y_init']))
+    chunk_idx_lists = _chunk_init_by_group(init_params, group_id, chunk_size)
+    print(f"_parallel_psfphotometry: {len(init_params)} sources, "
+          f"{len(np.unique(group_id))} groups, {len(chunk_idx_lists)} chunks, "
+          f"{n_workers} workers", flush=True)
+    if len(chunk_idx_lists) == 0:
+        return init_params[:0], (np.zeros_like(image) if return_model else None)
+
+    payload = [(i, init_params[idx]) for i, idx in enumerate(chunk_idx_lists)]
+    ctx = _mp_par.get_context("fork")
+    with ctx.Pool(processes=n_workers,
+                  initializer=_par_worker_init,
+                  initargs=(image, error, mask, photometry_kwargs,
+                            return_model, model_psf_shape)) as pool:
+        results = pool.map(_par_worker_fit, payload)
+    results.sort(key=lambda r: r[0])
+    tables = [r[1] for r in results]
+    result_tbl = vstack(tables)
+
+    model_image = None
+    if return_model:
+        model_image = np.zeros(image.shape, dtype=np.float32)
+        for _, _, payload_model in results:
+            if payload_model is None:
+                continue
+            ymin, ymax, xmin, xmax, sub = payload_model
+            model_image[ymin:ymax, xmin:xmax] += sub
+    return result_tbl, model_image
+
+
+def _render_model_from_table(table, psf_model, shape, psf_shape):
+    """Render a model image by evaluating ``psf_model`` at each
+    (x_fit, y_fit, flux_fit) row of ``table``.  Used by the parallel
+    path's stand-in photometry object so downstream make_model_image
+    calls re-render from the (possibly filtered) results table without
+    needing the underlying photutils _fit_models state.
+
+    Stamp size is ``psf_shape`` (psf_h, psf_w); the stamp is placed
+    centered on the source rounded to integer pixel coords, but the
+    PSF is evaluated at exact (x_fit, y_fit) so sub-pixel registration
+    is preserved.
+    """
+    img = np.zeros(shape, dtype=np.float32)
+    if len(table) == 0:
+        return img
+    psf_h, psf_w = int(psf_shape[0]), int(psf_shape[1])
+    half_h, half_w = psf_h // 2, psf_w // 2
+    ny, nx = shape
+
+    xfit = np.asarray(table['x_fit'], dtype=float)
+    yfit = np.asarray(table['y_fit'], dtype=float)
+    flux = np.asarray(table['flux_fit'], dtype=float)
+
+    for i in range(len(table)):
+        x0, y0, f0 = xfit[i], yfit[i], flux[i]
+        if not (np.isfinite(x0) and np.isfinite(y0) and np.isfinite(f0)):
+            continue
+        ix = int(round(x0))
+        iy = int(round(y0))
+        y_lo = max(0, iy - half_h)
+        y_hi = min(ny, iy - half_h + psf_h)
+        x_lo = max(0, ix - half_w)
+        x_hi = min(nx, ix - half_w + psf_w)
+        if y_hi <= y_lo or x_hi <= x_lo:
+            continue
+        yy, xx = np.mgrid[y_lo:y_hi, x_lo:x_hi]
+        stamp = psf_model.evaluate(xx.astype(float), yy.astype(float),
+                                   f0, x0, y0)
+        img[y_lo:y_hi, x_lo:x_hi] += np.asarray(stamp, dtype=np.float32)
+    return img
+
+
+class _FakePhot:
+    """Stand-in for an IterativePSFPhotometry/PSFPhotometry instance,
+    exposing only the attributes downstream code reads/writes after the
+    fit:
+
+      - ``.results``                         : Table (mutable)
+      - ``.init_params``                     : Table or None
+      - ``._psfphot.init_params``            : same Table (compat with
+                                               dedup that updates inner)
+      - ``.fit_results``                     : empty list (no per-iter
+                                               snapshots; make_model_image
+                                               re-renders from results)
+      - ``.make_model_image(shape, psf_shape=, include_local_bkg=)``
+
+    Used only when ``--parallel-workers > 1``; the serial path keeps
+    real photutils objects so make_model_image's optimized _fit_models
+    path is unaffected.
+    """
+
+    def __init__(self, results, psf_model, init_params=None):
+        self.results = results
+        self.init_params = init_params
+        self.fit_results = []  # _filter_near_saturation tolerates empty
+        self._psf_model = psf_model
+        class _Inner:
+            pass
+        self._psfphot = _Inner()
+        self._psfphot.init_params = init_params
+
+    def make_model_image(self, shape, *, psf_shape=None, include_local_bkg=False):
+        # include_local_bkg ignored: serial path also passes False for
+        # all known production call sites.
+        if psf_shape is None:
+            psf_shape = (15, 15)
+        return _render_model_from_table(self.results, self._psf_model,
+                                        shape, psf_shape)
+
+
+def _parallel_iterative_psfphotometry(image, *, photometry_kwargs, finder,
+                                       init_params, error, mask,
+                                       maxiters, sub_shape, psf_model,
+                                       n_workers, chunk_size,
+                                       group_min_separation):
+    """Reimplement IterativePSFPhotometry mode='new' with chunked fits.
+
+    On each iteration, run the (serial, cheap) finder on the current
+    residual to discover new sources, parallel-fit them, subtract their
+    rendered model, and continue.  When init_params is provided, the
+    first iteration uses those instead of running the finder, mirroring
+    IterativePSFPhotometry(init_params=...).
+    """
+    residual = image.copy()
+    accumulated_tables = []
+    for it in range(maxiters):
+        if it == 0 and init_params is not None and len(init_params) > 0:
+            iter_init = init_params
+        else:
+            sources = finder(residual, mask=mask)
+            if sources is None or len(sources) == 0:
+                print(f"  iter {it}: no new sources from finder; stopping",
+                      flush=True)
+                break
+            iter_init = Table()
+            # photutils finders return x_centroid/y_centroid in 3.x and
+            # xcentroid/ycentroid in 2.x; handle both.
+            xcol = 'x_centroid' if 'x_centroid' in sources.colnames else 'xcentroid'
+            ycol = 'y_centroid' if 'y_centroid' in sources.colnames else 'ycentroid'
+            iter_init['x_init'] = sources[xcol]
+            iter_init['y_init'] = sources[ycol]
+            iter_init['flux_init'] = sources['flux']
+
+        print(f"  parallel iter {it}: fitting {len(iter_init)} sources",
+              flush=True)
+        tbl, model_img = _parallel_psfphotometry(
+            residual,
+            photometry_kwargs=photometry_kwargs,
+            init_params=iter_init,
+            error=error, mask=mask,
+            n_workers=n_workers, chunk_size=chunk_size,
+            group_min_separation=group_min_separation,
+            return_model=True, model_psf_shape=sub_shape,
+        )
+        tbl['iter_detected'] = np.full(len(tbl), it + 1, dtype=np.int32)
+        accumulated_tables.append(tbl)
+        residual = residual - model_img
+
+    if not accumulated_tables:
+        return image[:0]  # bogus placeholder, but callers should handle len()==0
+    return vstack(accumulated_tables)
+
+
 class CappedSourceGrouper:
     """SourceGrouper wrapper that caps the maximum group size.
 
@@ -2147,6 +2409,22 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option('--seed-chunk-index', dest='seed_chunk_index',
                       default=0, type='int',
                       help='Zero-based chunk index in [0, --n-seed-chunks).')
+    parser.add_option('--parallel-workers', dest='parallel_workers',
+                      default=1, type='int',
+                      help=('EXPERIMENTAL: parallelize per-source PSF fitting '
+                            'across N forked worker processes (default 1 = '
+                            'serial, original behavior).  Sources are chunked '
+                            'by SourceGrouper output so spatially overlapping '
+                            'sources stay in the same chunk and never get '
+                            'double-fit.  Off by default; only takes effect '
+                            'when >1.  Validate against the serial path before '
+                            'switching production jobs.'))
+    parser.add_option('--parallel-chunk-size', dest='parallel_chunk_size',
+                      default=100, type='int',
+                      help=('Target sources per chunk when --parallel-workers '
+                            '> 1.  Larger = fewer fork events but coarser '
+                            'load-balance; ~100 is reasonable for nrca1-class '
+                            'frames.'))
     (options, args) = parser.parse_args()
 
     # Validate chunking args and fold the chunk token into iteration_label so
@@ -2187,7 +2465,10 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                '5365': {'sgrb2': 1},
                '2045': {'arches': 1, 'quintuplet': 1},
                '1939': {'sgra': 1},
+               '2211': {'gc2211': 1},
                }
+    # 2211 is an asteroid-survey program with 5 separate GC pointings; all
+    # map to the same 'gc2211' target/basepath, distinguished only by field.
     field_to_reg_mapping = {'2221': {'001': 'brick', '002': 'cloudc'},
                             '1182': {'004': 'brick'},
                             '3958': {'007': 'sickle'},
@@ -2195,9 +2476,18 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             '4147': {'012': 'sgrc'},
                             '5365': {'001': 'sgrb2'},
                             '2045': {'001': 'arches', '003': 'quintuplet'},
-                            '1939': {'001': 'sgra'}}[proposal_id]
+                            '1939': {'001': 'sgra'},
+                            '2211': {'023': 'gc2211', '028': 'gc2211',
+                                     '046': 'gc2211', '049': 'gc2211',
+                                     '050': 'gc2211'}}[proposal_id]
     reg_to_field_mapping = {v:k for k,v in field_to_reg_mapping.items()}
-    field = reg_to_field_mapping[target]
+    # When multiple fields share a target (e.g. proposal 2211 / gc2211 has
+    # 5 GC pointings 023/028/046/049/050), the inverted mapping collapses to
+    # one entry, so prefer the explicit --field value when it's available.
+    if getattr(options, 'field', None):
+        field = str(options.field)
+    else:
+        field = reg_to_field_mapping[target]
 
     # Module restrictions per proposal/field/filter for single-module datasets
     # Sickle is NRCB-only (SUB640 subarray) but detectors differ by wavelength:
@@ -2247,7 +2537,7 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
             )
         modules = filtered_modules
 
-    if field_to_reg_mapping[field] in ('sickle', 'cloudef', 'sgrc', 'sgrb2', 'arches', 'quintuplet', 'sgra'):
+    if field_to_reg_mapping[field] in ('sickle', 'cloudef', 'sgrc', 'sgrb2', 'arches', 'quintuplet', 'sgra', 'gc2211'):
         basepath = f'/orange/adamginsburg/jwst/{field_to_reg_mapping[field]}/'
     else:
         basepath = f'/blue/adamginsburg/adamginsburg/jwst/{field_to_reg_mapping[field]}/'
@@ -3254,27 +3544,87 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
         if iter3_xy_bounds_pix is not None:
             _phot_basic_extra['xy_bounds'] = (iter3_xy_bounds_pix,
                                               iter3_xy_bounds_pix)
-        phot_basic = _make_psfphotometry(
-                                   finder=basic_finder,
-                                   # filter-scaled: inner clears aperture
-                                   # (2*FWHM) plus first Airy sidelobe;
-                                   # see header comment near aperture_radius_pix.
-                                   localbkg_estimator=LocalBackground(localbkg_inner, localbkg_outer),
-                                   grouper=grouper if options.group else None,
-                                   psf_model=dao_psf_model,
-                                   fitter=LevMarLSQFitter(),
-                                   fit_shape=(5, 5),
-                                   aperture_radius=aperture_radius_pix,
-                                   progress_bar=True,
-                                   **_phot_basic_extra,
-                                  )
 
-        print("About to do BASIC photometry....")
-        _mem_report("before phot_basic call")
-        if seeded_init_params is not None:
-            result = phot_basic(nan_replaced_data, mask=mask, init_params=seeded_init_params, error=np.where(bad, 1e10, err))
+        _parallel_workers = int(getattr(options, 'parallel_workers', 1) or 1)
+        if _parallel_workers > 1:
+            # EXPERIMENTAL parallel path.  Run the finder serially (cheap
+            # relative to fitting), then chunk-parallel the fit.  See
+            # _parallel_psfphotometry / _FakePhot for details.  Off
+            # unless --parallel-workers > 1.
+            if seeded_init_params is not None:
+                _basic_init = seeded_init_params
+            else:
+                print("Running basic finder (serial, pre-chunking)", flush=True)
+                _basic_sources = daofind_tuned(nan_replaced_data, mask=mask)
+                _basic_init = Table()
+                _xcol = ('x_centroid' if _basic_sources is not None
+                         and 'x_centroid' in _basic_sources.colnames
+                         else 'xcentroid')
+                _ycol = ('y_centroid' if _basic_sources is not None
+                         and 'y_centroid' in _basic_sources.colnames
+                         else 'ycentroid')
+                if _basic_sources is None or len(_basic_sources) == 0:
+                    _basic_init['x_init'] = np.zeros(0)
+                    _basic_init['y_init'] = np.zeros(0)
+                    _basic_init['flux_init'] = np.zeros(0)
+                else:
+                    _basic_init['x_init'] = _basic_sources[_xcol]
+                    _basic_init['y_init'] = _basic_sources[_ycol]
+                    _basic_init['flux_init'] = _basic_sources['flux']
+
+            _phot_basic_kwargs = dict(
+                psf_model=dao_psf_model,
+                fitter=LevMarLSQFitter(),
+                fit_shape=(5, 5),
+                aperture_radius=aperture_radius_pix,
+                progress_bar=False,
+                grouper=grouper if options.group else None,
+                finder=None,
+            )
+            _phot_basic_kwargs['localbkg_estimator'] = LocalBackground(
+                localbkg_inner, localbkg_outer)
+            _phot_basic_kwargs.update(_phot_basic_extra)
+            _chunk_size = int(getattr(options, 'parallel_chunk_size', 100))
+            print(f"About to do BASIC photometry (PARALLEL, "
+                  f"n_workers={_parallel_workers}, chunk={_chunk_size}, "
+                  f"n_sources={len(_basic_init)})....", flush=True)
+            _mem_report("before phot_basic call")
+            result, _ = _parallel_psfphotometry(
+                nan_replaced_data,
+                photometry_kwargs=_phot_basic_kwargs,
+                init_params=_basic_init,
+                error=np.where(bad, 1e10, err),
+                mask=mask,
+                n_workers=_parallel_workers,
+                chunk_size=_chunk_size,
+                group_min_separation=2 * fwhm_pix,
+                return_model=False,
+            )
+            phot_basic = _FakePhot(results=result,
+                                   psf_model=dao_psf_model,
+                                   init_params=_basic_init)
         else:
-            result = phot_basic(nan_replaced_data, mask=mask, error=np.where(bad, 1e10, err))
+            phot_basic = _make_psfphotometry(
+                                       finder=basic_finder,
+                                       # filter-scaled: inner clears aperture
+                                       # (2*FWHM) plus first Airy sidelobe;
+                                       # see header comment near aperture_radius_pix.
+                                       localbkg_estimator=LocalBackground(localbkg_inner, localbkg_outer),
+                                       grouper=grouper if options.group else None,
+                                       psf_model=dao_psf_model,
+                                       fitter=LevMarLSQFitter(),
+                                       fit_shape=(5, 5),
+                                       aperture_radius=aperture_radius_pix,
+                                       progress_bar=True,
+                                       **_phot_basic_extra,
+                                      )
+
+            print("About to do BASIC photometry....")
+            _mem_report("before phot_basic call")
+            if seeded_init_params is not None:
+                result = phot_basic(nan_replaced_data, mask=mask, init_params=seeded_init_params, error=np.where(bad, 1e10, err))
+            else:
+                result = phot_basic(nan_replaced_data, mask=mask, error=np.where(bad, 1e10, err))
         print(f"Done with BASIC photometry. len(result)={len(result)}  dt={time.time() - t0}")
         _mem_report("after phot_basic")
 
@@ -3442,26 +3792,71 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
             if iter3_xy_bounds_pix is not None:
                 _phot_iter_extra['xy_bounds'] = (iter3_xy_bounds_pix,
                                                  iter3_xy_bounds_pix)
-            phot_iter = _make_iterative_psfphotometry(
-                                               finder=daofind_tuned,
-                                               localbkg_estimator=LocalBackground(localbkg_inner, localbkg_outer),
-                                               grouper=grouper if options.group else None,
-                                               psf_model=dao_psf_model,
-                                               fitter=LevMarLSQFitter(),
-                                               maxiters=5,
-                                               fit_shape=(5, 5),
-                                               sub_shape=(15, 15),
-                                               aperture_radius=aperture_radius_pix,
-                                               progress_bar=True,
-                                               **_phot_iter_extra,
-                                              )
 
-            print("About to do ITERATIVE photometry....")
-            _mem_report("before phot_iter call")
-            if seeded_init_params is not None:
-                result2 = phot_iter(nan_replaced_data, mask=mask, init_params=seeded_init_params, error=np.where(bad, 1e10, err))
+            _parallel_workers = int(getattr(options, 'parallel_workers', 1) or 1)
+            if _parallel_workers > 1:
+                # EXPERIMENTAL parallel path.  Reimplements
+                # IterativePSFPhotometry mode='new' with chunked
+                # PSFPhotometry calls.  Returns a `_FakePhot` stand-in
+                # whose `.results`, `.make_model_image()` etc. satisfy
+                # the downstream dedup / sat-filter / model-rendering
+                # code paths without depending on photutils internal
+                # _fit_models state (which is per-worker and not
+                # reconstructable).  Off unless --parallel-workers > 1.
+                _phot_iter_kwargs = dict(
+                    psf_model=dao_psf_model,
+                    fitter=LevMarLSQFitter(),
+                    fit_shape=(5, 5),
+                    aperture_radius=aperture_radius_pix,
+                    progress_bar=False,
+                    grouper=grouper if options.group else None,
+                )
+                _phot_iter_kwargs['localbkg_estimator'] = LocalBackground(
+                    localbkg_inner, localbkg_outer)
+                _phot_iter_kwargs.update(_phot_iter_extra)
+                _chunk_size = int(getattr(options, 'parallel_chunk_size', 100))
+                print(f"About to do ITERATIVE photometry (PARALLEL, "
+                      f"n_workers={_parallel_workers}, chunk={_chunk_size})....",
+                      flush=True)
+                _mem_report("before phot_iter call")
+                result2 = _parallel_iterative_psfphotometry(
+                    nan_replaced_data,
+                    photometry_kwargs=_phot_iter_kwargs,
+                    finder=daofind_tuned,
+                    init_params=seeded_init_params,
+                    error=np.where(bad, 1e10, err),
+                    mask=mask,
+                    maxiters=5,
+                    sub_shape=(15, 15),
+                    psf_model=dao_psf_model,
+                    n_workers=_parallel_workers,
+                    chunk_size=_chunk_size,
+                    group_min_separation=2 * fwhm_pix,
+                )
+                phot_iter = _FakePhot(results=result2,
+                                      psf_model=dao_psf_model,
+                                      init_params=seeded_init_params)
             else:
-                result2 = phot_iter(nan_replaced_data, mask=mask, error=np.where(bad, 1e10, err))
+                phot_iter = _make_iterative_psfphotometry(
+                                                   finder=daofind_tuned,
+                                                   localbkg_estimator=LocalBackground(localbkg_inner, localbkg_outer),
+                                                   grouper=grouper if options.group else None,
+                                                   psf_model=dao_psf_model,
+                                                   fitter=LevMarLSQFitter(),
+                                                   maxiters=5,
+                                                   fit_shape=(5, 5),
+                                                   sub_shape=(15, 15),
+                                                   aperture_radius=aperture_radius_pix,
+                                                   progress_bar=True,
+                                                   **_phot_iter_extra,
+                                                  )
+
+                print("About to do ITERATIVE photometry....")
+                _mem_report("before phot_iter call")
+                if seeded_init_params is not None:
+                    result2 = phot_iter(nan_replaced_data, mask=mask, init_params=seeded_init_params, error=np.where(bad, 1e10, err))
+                else:
+                    result2 = phot_iter(nan_replaced_data, mask=mask, error=np.where(bad, 1e10, err))
             print(f"Done with ITERATIVE photometry. len(result2)={len(result2)}  dt={time.time() - t0}")
             _mem_report("after phot_iter")
 
