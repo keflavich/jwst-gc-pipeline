@@ -137,10 +137,13 @@ REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD = {
         # (Nogueras-Lara 2021, Ks<17) which goes ~5 mag deeper and covers
         # the GC at high stellar density.
         '023': 'catalogs/nircam_bootstrapped_to_gns_refcat.fits',
-        '028': 'catalogs/nircam_bootstrapped_to_gns_refcat.fits',
         '046': 'catalogs/nircam_bootstrapped_to_gns_refcat.fits',
         '049': 'catalogs/nircam_bootstrapped_to_gns_refcat.fits',
         '050': 'catalogs/nircam_bootstrapped_to_gns_refcat.fits',
+        # obs 028 (the F150W obs) does not overlap the F200W footprint that
+        # the standard bootstrap uses, so use a raw GNS refcat tailored to
+        # obs 028's FOV instead.
+        '028': 'catalogs/gns_refcat_obs028.fits',
     },
 }
 
