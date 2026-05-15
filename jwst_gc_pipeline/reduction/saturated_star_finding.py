@@ -183,7 +183,34 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000):
     dq = fitsdata['DQ'].data
     saturated = (dq & dqflags.pixel['SATURATED']) > 0
     cosmic_rays = (dq & dqflags.pixel['JUMP_DET']) > 0
-    saturated = saturated & (~cosmic_rays)
+    # JUMP_DET vs SATURATED disambiguation: the JWST ramp fitter sets
+    # JUMP_DET on saturated ramps because non-linear ramp curvature looks
+    # like a jump.  So saturated cores of bright stars come back with
+    # *every* pixel also flagged JUMP_DET.  Naively masking out (sat &
+    # ~cr) erases entire saturated stars from the satstar fitter — that
+    # was the cause of unsubtracted stars in 6/12 sickle F480M frames
+    # for source (17:46:16.090,-28:47:49.47) on 2026-05-15.
+    # Real cosmic rays are typically 1-2 pixels; saturated star cores
+    # are 5+ pixel clusters.  Keep saturated pixels that belong to a
+    # cluster of size >= 3 even when JUMP_DET is set (assume the JUMP_DET
+    # is the ramp nonlinearity from saturation, not a CR).  Isolated
+    # 1-2 px saturated+JUMP_DET pixels are removed as before.
+    if np.any(saturated):
+        _sat_labels_for_cr, _n = label(saturated)
+        if _n > 0:
+            _sat_sizes_for_cr = sum_labels(
+                saturated, _sat_labels_for_cr, np.arange(_n) + 1)
+            _cluster_size_at_pix = np.where(
+                _sat_labels_for_cr > 0,
+                _sat_sizes_for_cr[_sat_labels_for_cr - 1],
+                0,
+            )
+            remove_as_cr = cosmic_rays & (_cluster_size_at_pix < 3)
+        else:
+            remove_as_cr = cosmic_rays
+    else:
+        remove_as_cr = cosmic_rays
+    saturated = saturated & (~remove_as_cr)
 
     sources, nsource = label(saturated)
     print('Saturated starfinding: nsources=', nsource, flush=True)
