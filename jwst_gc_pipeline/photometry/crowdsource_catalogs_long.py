@@ -2196,10 +2196,15 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
     row = fwhm_tbl[fwhm_tbl['Filter'] == filtername]
     fwhm_pix = float(row['PSF FWHM (pixel)'][0])
     with ImageModel(output_filename) as model:
+        # Only infill genuine NaNs (sat-pixel holes / DQ gaps).  Previously
+        # ``negative_threshold=0.0`` NaN'd every slightly-negative-noise pixel
+        # and then interpolated them away, which flattened the background
+        # and reduced contrast without improving real features.  User policy
+        # (2026-05-15): infill only NaNs or stars, not background noise.
         infilled_data = postprocess_residual_image(
             model.data,
             fwhm_pix,
-            negative_threshold=0.0,
+            negative_threshold=None,
             satstar_table=None,
         )
         model.data = infilled_data
