@@ -1505,7 +1505,8 @@ def postprocess_residual_image(data, fwhm_pix, negative_threshold=0.0, satstar_t
             processed[saturated_mask] = np.nan
 
     if np.any(np.isnan(processed)):
-        processed = interpolate_replace_nans(processed, kernel, convolve=convolve_fft)
+        processed = interpolate_replace_nans(processed, kernel, convolve=convolve_fft,
+                                             allow_huge=True)
 
     return processed
 
@@ -3001,7 +3002,8 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
     else:
         data_ = data
 
-    nan_replaced_data = interpolate_replace_nans(data_, kernel, convolve=convolve_fft)
+    nan_replaced_data = interpolate_replace_nans(data_, kernel, convolve=convolve_fft,
+                                                  allow_huge=True)
 
     # Infer a per-exposure ``_daophot_basic.fits`` seed for iter2, but *not*
     # for iter3 -- iter3 must use the cross-band union seed catalog that
