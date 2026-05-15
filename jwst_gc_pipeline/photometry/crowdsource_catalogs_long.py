@@ -187,6 +187,12 @@ def _par_worker_fit(args):
     yfit = np.asarray(tbl['y_fit'], dtype=float)
     if len(xfit) == 0:
         return chunk_idx, tbl, None
+    # Non-converged fits return NaN x_fit/y_fit; exclude from bbox.
+    finite = np.isfinite(xfit) & np.isfinite(yfit)
+    if not finite.any():
+        return chunk_idx, tbl, None
+    xfit = xfit[finite]
+    yfit = yfit[finite]
     ymin = max(0, int(np.floor(yfit.min())) - pad_y)
     ymax = min(_PAR_IMAGE.shape[0], int(np.ceil(yfit.max())) + pad_y + 1)
     xmin = max(0, int(np.floor(xfit.min())) - pad_x)
@@ -953,9 +959,14 @@ def _resolve_seed_skycoords(seed_table, ww=None, preferred_skycoord_col=None):
             continue
         col = seed_table[colname]
         if isinstance(col, SkyCoord):
-            seed_table['skycoord'] = SkyCoord(ra=col.ra,
-                                              dec=col.dec,
-                                              frame='icrs')
+            # Preserve the input frame; do not force ICRS here.  vstack
+            # of tables with mismatched columns can leave the mixin
+            # column's underlying ra/dec as ``MaskedLongitude`` /
+            # ``MaskedLatitude``, which ``WCS.world_to_pixel`` then
+            # rejects (TypeError out of high_level_objects_to_values).
+            # ``.unmasked`` returns a plain SkyCoord in the same frame;
+            # it is a no-op when the input has no mask.
+            seed_table['skycoord'] = col.unmasked
             return seed_table
 
     # 4. Only (x, y) present -> bulk pixel_to_world.  NaN entries pass
