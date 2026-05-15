@@ -96,7 +96,7 @@ refnames = {'2221': 'F405ref',
             '4147': 'VVV',
             '2045': 'VVV',
             '1939': 'VVV',
-            '2211': 'VVV',
+            '2211': 'GNS',
             }
 
 # Reference catalog configuration by proposal and field.
@@ -132,11 +132,15 @@ REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD = {
         '001': 'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
     },
     '2211': {
-        '023': 'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
-        '028': 'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
-        '046': 'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
-        '049': 'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
-        '050': 'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
+        # gc2211 wide-band frames saturate every bright star, so VVV/Gaia
+        # have no usable matches.  Use the GALACTICNUCLEUS catalog
+        # (Nogueras-Lara 2021, Ks<17) which goes ~5 mag deeper and covers
+        # the GC at high stellar density.
+        '023': 'catalogs/nircam_bootstrapped_to_gns_refcat.fits',
+        '028': 'catalogs/nircam_bootstrapped_to_gns_refcat.fits',
+        '046': 'catalogs/nircam_bootstrapped_to_gns_refcat.fits',
+        '049': 'catalogs/nircam_bootstrapped_to_gns_refcat.fits',
+        '050': 'catalogs/nircam_bootstrapped_to_gns_refcat.fits',
     },
 }
 
