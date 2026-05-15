@@ -2331,6 +2331,13 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--target", dest="target",
                     default='brick',
                     help="target", metavar="target")
+    parser.add_option("--field", dest="field",
+                    default=None,
+                    help="Explicit field (e.g. '023' for proposal 2211 obs 023). "
+                    "Required when a target maps to multiple fields under one "
+                    "proposal (e.g. gc2211 has fields 023/028/046/049/050); "
+                    "otherwise the field is derived from --target via "
+                    "reg_to_field_mapping.", metavar="field")
     parser.add_option("--group", dest="group",
                       default=False,
                       action='store_true')
