@@ -3205,26 +3205,48 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
             )
             seed_catalog = merged_seed_table
 
-        # Remove is_saturated=True entries from the union seed catalog before
-        # combining with the current-frame satstar table.  Union-catalog satstar
-        # rows carry per-filter flux columns (e.g. flux_f335m) but NOT flux_fit;
-        # after vstack with satstar_table they get flux_fit=NaN, which makes
-        # them ineligible for deduplication (_dedup_close_sources only clusters
-        # entries with finite flux).  The current-frame satstar entries (finite
-        # flux_fit) therefore cannot dedup against them, so both copies survive
-        # and the fitter double-subtracts every saturated star.  Stripping them
-        # here lets _combine_seed_and_satstars add only the fresh current-frame
-        # positions (which have finite flux and dedup correctly).
+        # Populate flux_fit on is_saturated union-catalog rows from the
+        # per-filter flux column so dedup can compare them against current-
+        # frame satstar entries.  Previously these rows were stripped en
+        # bloc, which removed bright stars that are saturated in some
+        # filters but not in THIS one (e.g. seed flagged saturated from
+        # F187N but well within linear range in F480M).  Such stars then
+        # had no satstar fit (no DQ-saturated pixels in this filter) AND
+        # no daophot fit (stripped) — they remained fully un-subtracted
+        # in the residual mosaic.  Diagnosed 2026-05-16 on Sickle F480M:
+        # user reg position (266.56408,-28.80118) corresponded to
+        # seed[11992] is_saturated=True flux_f480m=4.03e5; nearby NaN-
+        # flux duplicate seeds (sep~0.3") were used instead, fits hit
+        # xy_bounds=±0.5px and gave flag=48 with flux~1500.  Filling
+        # flux_fit from per-filter flux lets _dedup_close_sources keep
+        # the correct (brightest, on-target) seed.
         if satstar_table is not None:
             st = _as_table(seed_catalog)
             if 'is_saturated' in st.colnames:
                 is_sat_mask = np.asarray(st['is_saturated'], dtype=bool)
                 n_sat_in_union = int(np.sum(is_sat_mask))
                 if n_sat_in_union > 0:
-                    seed_catalog = st[~is_sat_mask]
+                    # Find the per-filter flux column for the current filter.
+                    _flux_col = f'flux_{filtername.lower()}'
+                    if _flux_col in st.colnames:
+                        if 'flux_fit' not in st.colnames:
+                            st['flux_fit'] = np.full(len(st), np.nan, dtype=float)
+                        _f = np.asarray(st[_flux_col], dtype=float)
+                        # Only fill where flux_fit is currently NaN AND
+                        # per-filter flux is finite.
+                        _need = is_sat_mask & np.isnan(np.asarray(st['flux_fit'], dtype=float)) & np.isfinite(_f)
+                        if np.any(_need):
+                            st['flux_fit'] = np.where(_need, _f, st['flux_fit'])
+                            print(f"Filled flux_fit from {_flux_col} on "
+                                  f"{int(np.sum(_need))} is_saturated union-catalog "
+                                  f"seeds (so dedup can compare them against "
+                                  f"current-frame satstar entries)",
+                                  flush=True)
+                    seed_catalog = st
                     merged_seed_table = _as_table(seed_catalog)
-                    print(f"Stripped {n_sat_in_union} is_saturated=True rows from union seed catalog "
-                          f"(current-frame satstar positions used instead)", flush=True)
+                    print(f"Kept {n_sat_in_union} is_saturated=True rows in union seed catalog "
+                          f"(flux_fit populated; dedup handles overlap with current-frame satstar)",
+                          flush=True)
 
         seed_catalog = _combine_seed_and_satstars(seed_catalog, satstar_table)
         seed_after_sat_table = _as_table(seed_catalog)
