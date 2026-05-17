@@ -2629,8 +2629,12 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             exposure_id = filename.split("_")[2]
                             visit_id = filename.split("_")[0][-3:]
                             vgroup_id = filename.split("_")[1]
+                            # Match the per-file detector token convention
+                            # used by the main each-exposure loop above.
+                            file_detector = filename.split("_")[3]
+                            file_module = file_detector if module == 'merged' else module
                             if not _expected_output_exists(
-                                    basepath, filtername, module, options,
+                                    basepath, filtername, file_module, options,
                                     visit_id, vgroup_id, exposure_id,
                                     iteration_label=options.iteration_label or None):
                                 missing_tasks.add(task_idx)
@@ -2680,15 +2684,30 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             exposure_id = filename.split("_")[2]
                             visit_id = filename.split("_")[0][-3:]
                             vgroup_id = filename.split("_")[1]
+                            # Extract the actual detector token from the
+                            # filename (e.g. nrca1, nrcb3, nrcalong).  When
+                            # ``module='merged'`` is passed, get_filenames()
+                            # returned files across all detectors; saving
+                            # all of them under the literal 'merged' token
+                            # caused the 8 detector outputs per exposure to
+                            # overwrite each other, dropping nmatch_good
+                            # from the expected 6 (dithers) to 1.  Pass the
+                            # per-file detector through so save_photutils_results
+                            # writes a unique filename per (exposure, detector).
+                            file_detector = filename.split("_")[3]
+                            if module == 'merged':
+                                file_module = file_detector
+                            else:
+                                file_module = module
                             if options.skip_if_done and _expected_output_exists(
-                                    basepath, filtername, module, options,
+                                    basepath, filtername, file_module, options,
                                     visit_id, vgroup_id, exposure_id,
                                     iteration_label=options.iteration_label or None):
                                 print(f'skip-if-done: expected output exists for '
-                                      f'{filtername} {module} visit={visit_id} '
+                                      f'{filtername} {file_module} visit={visit_id} '
                                       f'vgroup={vgroup_id} exp={exposure_id}; skipping.')
                                 continue
-                            do_photometry_step(options, filtername, module, detector,
+                            do_photometry_step(options, filtername, file_module, file_detector,
                                                field, basepath, filename, proposal_id,
                                                crowdsource_default_kwargs, exposurenumber=int(exposure_id),
                                                visit_id=visit_id, vgroup_id=vgroup_id,
