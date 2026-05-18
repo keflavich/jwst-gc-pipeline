@@ -1299,7 +1299,7 @@ def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
 
 
 def _dedup_close_sources(xy, flux, min_sep_pix, quality=None,
-                         flux_agreement_frac=0.10):
+                         flux_agreement_frac=0.10, is_saturated=None):
     """
     Greedy spatial deduplication of sources closer than ``min_sep_pix``.
 
@@ -1345,52 +1345,98 @@ def _dedup_close_sources(xy, flux, min_sep_pix, quality=None,
     if n < 2:
         return keep, 0
 
-    # Only cluster entries with finite positions AND finite flux; leave
-    # anything else untouched (they will neither be removed nor remove
-    # others).  cKDTree requires finite inputs.
+    # Build KD-tree over all entries with finite positions.  Eligibility
+    # for SEEDING a cluster (i.e. potentially claiming nearby duplicates)
+    # is finite position AND (finite flux OR is_saturated=True).  But any
+    # entry with finite position can be REMOVED by a seed — so NaN-flux
+    # non-saturated duplicates near a saturated seed get removed.
     finite_xy   = np.all(np.isfinite(xy), axis=1)
     finite_flux = np.isfinite(flux)
-    eligible    = finite_xy & finite_flux
-    if np.sum(eligible) < 2:
+    if is_saturated is None:
+        is_sat_arr = np.zeros(n, dtype=bool)
+    else:
+        is_sat_arr = np.asarray(is_saturated, dtype=bool)
+
+    finite_idx = np.where(finite_xy)[0]
+    if finite_idx.size < 2:
+        return keep, 0
+    xy_f = xy[finite_idx]
+    kd_full = cKDTree(xy_f)
+    # Map global index -> position in finite_idx (or -1 if not finite_xy)
+    pos_in_finite = np.full(n, -1, dtype=np.int64)
+    pos_in_finite[finite_idx] = np.arange(finite_idx.size)
+
+    # Only seed clusters from entries that are finite-flux OR is_saturated.
+    eligible    = finite_xy & (finite_flux | is_sat_arr)
+    if np.sum(eligible) < 1:
         return keep, 0
     elig_idx = np.where(eligible)[0]
     xy_e     = xy[elig_idx]
     flux_e   = flux[elig_idx]
+    sat_e    = is_sat_arr[elig_idx]
 
-    # Sort eligible entries by descending flux so the brightest seeds clusters.
-    local_sort_order = np.argsort(flux_e)[::-1]
+    # Sort eligible entries so the cluster-seeding priority is:
+    #   1) is_saturated=True (these win the dedup tiebreak regardless of
+    #      flux — they're the real bright stars)
+    #   2) finite-flux (brightest first)
+    #   3) NaN-flux non-saturated (last; only kept if no neighbour exists)
+    # Build a composite priority key: is_sat first, then flux desc.
+    _flux_for_sort = np.where(np.isfinite(flux_e), flux_e, -np.inf)
+    local_sort_order = np.lexsort((-_flux_for_sort, ~sat_e))
 
-    kd = cKDTree(xy_e)
     n_disagree = 0
     for li in local_sort_order:
         i = elig_idx[li]
         if not keep[i]:
             continue
-        local_neighbours = kd.query_ball_point(xy_e[li], min_sep_pix)
-        neighbours = [elig_idx[lj] for lj in local_neighbours
-                      if lj != li and keep[elig_idx[lj]]]
+        # Query the FULL KD-tree so the seed can claim any nearby
+        # entry (including NaN-flux non-saturated duplicates).
+        local_neighbours = kd_full.query_ball_point(xy_e[li], min_sep_pix)
+        neighbours = [int(finite_idx[lj]) for lj in local_neighbours
+                      if int(finite_idx[lj]) != i and keep[int(finite_idx[lj])]]
         if not neighbours:
             continue
 
         # Collect the full cluster (seed + neighbours).
         cluster = [i] + neighbours
-        cluster_flux = np.asarray([flux[k] for k in cluster], dtype=float)
-        fmin = float(cluster_flux.min())
-        fmax = float(cluster_flux.max())
-        if fmax <= 0 or (fmax - fmin) / fmax <= flux_agreement_frac:
-            # Fluxes agree: treat as same source, keep brightest (= seed i).
-            winner = i
-        else:
-            # Fluxes disagree: fits converged together but to different
-            # solutions.  Prefer best-quality entry if we have quality info.
-            n_disagree += 1
-            if quality is not None:
-                cluster_q = np.asarray([quality[k] for k in cluster], dtype=float)
-                # Smaller quality is better; non-finite treated as worst.
-                cluster_q = np.where(np.isfinite(cluster_q), cluster_q, np.inf)
-                winner = cluster[int(np.argmin(cluster_q))]
+        cluster_sat = np.asarray([is_sat_arr[k] for k in cluster], dtype=bool)
+        # is_saturated entries win the cluster regardless of flux —
+        # they encode known positions of bright stars and we must not
+        # let nearby duplicate non-saturated NaN-flux seeds outvote them.
+        if np.any(cluster_sat):
+            sat_members = [k for k, s in zip(cluster, cluster_sat) if s]
+            # Among saturated entries, prefer the one with finite flux
+            # (brightest), or just the first if none are finite.
+            sat_flux = np.asarray([flux[k] for k in sat_members], dtype=float)
+            if np.any(np.isfinite(sat_flux)):
+                winner = sat_members[int(np.nanargmax(sat_flux))]
             else:
-                winner = i  # brightest
+                winner = sat_members[0]
+        else:
+            cluster_flux = np.asarray([flux[k] for k in cluster], dtype=float)
+            # Restrict flux-agreement computation to finite entries.
+            finite_clu = np.isfinite(cluster_flux)
+            if not np.any(finite_clu):
+                # No finite flux in cluster — fall back to keeping seed.
+                winner = i
+            else:
+                fvals = cluster_flux[finite_clu]
+                fmin = float(fvals.min())
+                fmax = float(fvals.max())
+                if fmax <= 0 or (fmax - fmin) / fmax <= flux_agreement_frac:
+                    # Fluxes agree: treat as same source, keep brightest (= seed i).
+                    winner = i
+                else:
+                    # Fluxes disagree: fits converged together but to different
+                    # solutions.  Prefer best-quality entry if we have quality info.
+                    n_disagree += 1
+                    if quality is not None:
+                        cluster_q = np.asarray([quality[k] for k in cluster], dtype=float)
+                        # Smaller quality is better; non-finite treated as worst.
+                        cluster_q = np.where(np.isfinite(cluster_q), cluster_q, np.inf)
+                        winner = cluster[int(np.argmin(cluster_q))]
+                    else:
+                        winner = i  # brightest
 
         for k in cluster:
             if k != winner:
@@ -1592,6 +1638,16 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
     name when astropy's ``writeto(overwrite=True)`` tries to remove an
     existing file.
     """
+    # Prefer the *_extended_satstar_catalog.fits produced by
+    # ``force_union_satstar.py`` when present: it contains the original
+    # per-frame DQ-based satstar fits PLUS forced fits at positions that
+    # are saturated in OTHER frames of the same filter (so the same set
+    # of saturated stars is consistently fit across the whole filter).
+    # See project_force_union_satstar.md for the design rationale.
+    extended_filename = filename.replace(
+        '.fits', f'{file_suffix}_extended_satstar_catalog.fits')
+    if os.path.exists(extended_filename) and not overwrite:
+        return Table.read(extended_filename)
     satstar_filename = filename.replace('.fits', f'{file_suffix}_satstar_catalog.fits')
     if os.path.exists(satstar_filename) and not overwrite:
         return Table.read(satstar_filename)
@@ -3171,8 +3227,14 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
         #
         # Filenames mirror those produced by remove_saturated_stars()
         # (saturated_star_finding.py) and load_or_make_satstar_catalog().
+        # Prefer the extended model image (force-fit union of per-frame
+        # satstar positions across the filter) when present.
+        extended_model_path = filename.replace(
+            '.fits', f'{satstar_file_suffix}_extended_satstar_model.fits')
         satstar_model_path = filename.replace(
             '.fits', f'{satstar_file_suffix}_satstar_model.fits')
+        if os.path.exists(extended_model_path):
+            satstar_model_path = extended_model_path
         if os.path.exists(satstar_model_path):
             try:
                 satstar_model_image = fits.getdata(satstar_model_path).astype(float)
@@ -3336,6 +3398,11 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
         seeded_init_params['x_init'] = np.asarray(finstars['x_init'], dtype=float)
         seeded_init_params['y_init'] = np.asarray(finstars['y_init'], dtype=float)
         seeded_init_params['flux_init'] = np.asarray(finstars['flux_init'], dtype=float)
+        # Carry is_saturated through so dedup can preferentially keep
+        # known bright/saturated seeds over nearby NaN-flux duplicates.
+        if 'is_saturated' in finstars.colnames:
+            seeded_init_params['is_saturated'] = np.asarray(
+                finstars['is_saturated'], dtype=bool)
 
         # Deduplicate seeds: remove entries within 0.5 FWHM of a brighter seed.
         # Merged catalogs can contain sub-pixel duplicate entries from multiple
@@ -3363,6 +3430,9 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
                 flux=np.asarray(seeded_init_params['flux_init'], dtype=float),
                 min_sep_pix=min_sep_pix,
                 quality=None,
+                is_saturated=(np.asarray(seeded_init_params['is_saturated'], dtype=bool)
+                              if 'is_saturated' in seeded_init_params.colnames
+                              else None),
             )
             n_removed = int(n_before - np.sum(keep))
             if n_removed > 0:
