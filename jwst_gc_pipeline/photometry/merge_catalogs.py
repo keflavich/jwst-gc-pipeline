@@ -1109,6 +1109,7 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
 
 def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False, bgsub=False, epsf=False, blur=False, target='brick',
                   indivexp=False,
+                  ref_filter=None,
                   basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
 
     desat = "_unsatstar" if desat else ""
@@ -1239,9 +1240,12 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
             print(tbl.meta)
             raise ex
 
-    merge_catalogs(tbls, catalog_type=daophot_type, module=module, bgsub=bgsub, desat=desat, epsf=epsf, target=target,
-                   blur=blur, indivexp=indivexp,
-                   basepath=basepath)
+    _merge_kwargs = dict(catalog_type=daophot_type, module=module, bgsub=bgsub, desat=desat,
+                         epsf=epsf, target=target, blur=blur, indivexp=indivexp,
+                         basepath=basepath)
+    if ref_filter is not None:
+        _merge_kwargs['ref_filter'] = ref_filter
+    merge_catalogs(tbls, **_merge_kwargs)
 
 
 def _project_for_target_filter(target, filtername):
@@ -1587,6 +1591,11 @@ def main():
     parser.add_option('--iteration-label', dest='iteration_label', default=None,
                       help='Filter per-frame inputs to those tagged with this iteration label '
                            '(e.g. "iter2" or "iter3").  Default merges the iter1 catalogs.')
+    parser.add_option('--ref-filter', dest='ref_filter', default=None,
+                      help='Astrometric reference filter for the cross-filter merge '
+                           '(default: f405n, which is correct for brick/cloudc/sgrb2/etc. '
+                           'Targets that do not include F405N must override -- e.g. '
+                           'sickle uses f470n.)')
     (options, args) = parser.parse_args()
 
     modules = options.modules.split(",")
@@ -1717,7 +1726,8 @@ def main():
                                 try:
                                     merge_daophot(daophot_type='basic', module=module, desat=desat,
                                                   bgsub=bgsub, epsf=epsf,
-                                                  target=target, basepath=basepath, blur=blur, indivexp=options.merge_singlefields)
+                                                  target=target, basepath=basepath, blur=blur, indivexp=options.merge_singlefields,
+                                                  ref_filter=options.ref_filter)
                                 except Exception as ex:
                                     print(f'daophot basic {module} desat={desat} bgsub={bgsub} epsf={epsf} blur={blur} fitpsf={fitpsf} target={target}', flush=True)
                                     if blur and not options.strict_require_blur:
@@ -1735,7 +1745,8 @@ def main():
                                     print(f'daophot iterative {module} desat={desat} bgsub={bgsub} epsf={epsf} blur={blur} fitpsf={fitpsf} target={target}', flush=True)
                                     merge_daophot(daophot_type='iterative', module=module, desat=desat,
                                                   bgsub=bgsub, epsf=epsf,
-                                                  target=target, basepath=basepath, blur=blur, indivexp=options.merge_singlefields)
+                                                  target=target, basepath=basepath, blur=blur, indivexp=options.merge_singlefields,
+                                                  ref_filter=options.ref_filter)
                                 except Exception as ex:
                                     if blur and not options.strict_require_blur:
                                         print("Skipping missing blur files")
