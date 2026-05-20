@@ -82,6 +82,13 @@ project_obsnum = {'brick': {'2221': '001',
                                  },
                   'sgra': {'1939': '001',
                            },
+                  # gc2211 (asteroid proposal 2211) has 5 GC pointings
+                  # (obs IDs 023, 028, 046, 049, 050) all sharing the
+                  # python target name 'gc2211'.  Use a glob wildcard
+                  # for the obs ID so per-filter merge picks up i2d
+                  # files from any of the 5 pointings.
+                  'gc2211': {'2211': '*',
+                             },
                   }
 
 
@@ -1271,12 +1278,17 @@ def _project_for_target_filter(target, filtername):
 def load_satstar_catalog(filtername, target='brick',
                          basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
     proj = _project_for_target_filter(target, filtername)
-    primary = (f'{basepath}/{filtername.upper()}/pipeline/'
-               f'jw0{proj}-o{project_obsnum[target][proj]}'
-               f'_t001_nircam_clear-{filtername}-merged_i2d_satstar_catalog.fits')
-    if os.path.exists(primary):
-        print(f"Using saturated star catalog {primary}")
-        return Table.read(primary)
+    # Targets that span multiple observations within one proposal (e.g.
+    # gc2211 has obs 023/028/046/049/050) don't have a single primary
+    # i2d satstar; fall back to globbing the per-exposure satstar
+    # catalogs in the pipeline directory.
+    if target in project_obsnum and proj in project_obsnum[target]:
+        primary = (f'{basepath}/{filtername.upper()}/pipeline/'
+                   f'jw0{proj}-o{project_obsnum[target][proj]}'
+                   f'_t001_nircam_clear-{filtername}-merged_i2d_satstar_catalog.fits')
+        if os.path.exists(primary):
+            print(f"Using saturated star catalog {primary}")
+            return Table.read(primary)
 
     fallback = sorted(glob.glob(f'{basepath}/{filtername.upper()}/pipeline/*satstar_catalog.fits'))
     if len(fallback) == 0:
@@ -1313,6 +1325,7 @@ def flag_near_saturated(cat, filtername, radius=None, target='brick',
                   'f200w': 0.55*u.arcsec,
                   'f210m': 0.55*u.arcsec,
                   'f212n': 0.55*u.arcsec,
+                  'f277w': 0.55*u.arcsec,
                   # long-wave (> ~2.5 um)
                   'f300m': 0.55*u.arcsec,
                   'f323n': 0.55*u.arcsec,
@@ -1376,6 +1389,7 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
                   'f200w': 0.05*u.arcsec,
                   'f210m': 0.05*u.arcsec,
                   'f212n': 0.05*u.arcsec,
+                  'f277w': 0.1*u.arcsec,
                   # long-wave (> ~2.5 um)
                   'f300m': 0.1*u.arcsec,
                   'f323n': 0.1*u.arcsec,
@@ -1603,7 +1617,7 @@ def main():
     indiv_merge_methods = options.indiv_merge_methods.split(",")
     print("Options:", options)
 
-    if target in ('sickle', 'cloudef', 'sgrc', 'sgrb2', 'arches', 'quintuplet', 'sgra'):
+    if target in ('sickle', 'cloudef', 'sgrc', 'sgrb2', 'arches', 'quintuplet', 'sgra', 'gc2211'):
         basepath = f'/orange/adamginsburg/jwst/{target}/'
     else:
         basepath = f'/blue/adamginsburg/adamginsburg/jwst/{target}/'
@@ -1616,6 +1630,7 @@ def main():
                       '5365': None,
                       '2045': None,
                       '1939': None,
+                      '2211': None,
     }
 
     # need to have incrementing _before_ test
