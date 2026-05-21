@@ -221,15 +221,57 @@ def _chunk_init_by_group(init_params, group_id, target_size):
     return [np.asarray(c, dtype=np.int64) for c in chunks]
 
 
+def _kdtree_group_ids(x, y, min_separation):
+    """O(N log N) replacement for ``SourceGrouper`` used only for the
+    chunk-partition step.  ``photutils.psf.SourceGrouper`` builds the
+    full pairwise distance matrix via ``scipy.cluster.hierarchy.fclusterdata``
+    -- O(N**2) memory, which OOMs (>100 GB) at N ~ 1.5e5 dense-field
+    iter3 seed counts.  Here we only need a connectivity grouping
+    (any two sources within ``min_separation`` are in the same chunk),
+    so KDTree.query_pairs + a union-find over those edges suffices.
+
+    Returns an integer group label array of shape (N,), labels >= 1.
+    """
+    from scipy.spatial import cKDTree
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    n = len(x)
+    parent = np.arange(n, dtype=np.int64)
+
+    def find(i):
+        # iterative path-compression
+        root = i
+        while parent[root] != root:
+            root = parent[root]
+        while parent[i] != root:
+            parent[i], i = root, parent[i]
+        return root
+
+    def union(i, j):
+        ri, rj = find(i), find(j)
+        if ri != rj:
+            parent[ri] = rj
+
+    if n > 1:
+        tree = cKDTree(np.column_stack([x, y]))
+        for i, j in tree.query_pairs(r=float(min_separation), output_type='ndarray'):
+            union(int(i), int(j))
+
+    # Compact root labels to 1..n_groups
+    roots = np.array([find(i) for i in range(n)], dtype=np.int64)
+    _, inverse = np.unique(roots, return_inverse=True)
+    return (inverse + 1).astype(np.int64)
+
+
 def _parallel_psfphotometry(image, *, photometry_kwargs, init_params,
                              error, mask, n_workers, chunk_size,
                              group_min_separation,
                              return_model=False, model_psf_shape=(15, 15)):
     """Run PSFPhotometry on init_params in parallel, returning the
     vstacked result table (and optionally a model image)."""
-    grouper = SourceGrouper(min_separation=group_min_separation)
-    group_id = grouper(np.asarray(init_params['x_init']),
-                       np.asarray(init_params['y_init']))
+    group_id = _kdtree_group_ids(init_params['x_init'],
+                                 init_params['y_init'],
+                                 group_min_separation)
     chunk_idx_lists = _chunk_init_by_group(init_params, group_id, chunk_size)
     print(f"_parallel_psfphotometry: {len(init_params)} sources, "
           f"{len(np.unique(group_id))} groups, {len(chunk_idx_lists)} chunks, "
