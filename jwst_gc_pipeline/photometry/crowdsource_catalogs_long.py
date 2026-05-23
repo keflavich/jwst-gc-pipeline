@@ -42,7 +42,7 @@ try:
 except ImportError:
     from photutils.psf import EPSFModel
 # PSFPhotometry, IterativePSFPhotometry, SourceGrouper present since photutils 1.9
-from photutils.psf import PSFPhotometry, IterativePSFPhotometry, SourceGrouper
+from photutils.psf import PSFPhotometry, IterativePSFPhotometry, SourceGrouper, GriddedPSFModel
 # LocalBackground present since photutils 1.9
 from photutils.background import MMMBackground, MADStdBackgroundRMS, MedianBackground, Background2D, LocalBackground
 
@@ -122,6 +122,178 @@ def _make_iterative_psfphotometry(*, localbkg_estimator, **kwargs):
     kwarg the installed photutils accepts."""
     return IterativePSFPhotometry(**{_LOCAL_BKG_KW: localbkg_estimator},
                                   **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Forced photometry & caching PSF model (experimental low-level fits)
+#
+# Two related accelerators for the per-source fit step:
+#
+# 1.  ``CachingGriddedPSFModel`` -- subclass of ``GriddedPSFModel`` that
+#     memoizes the rendered PSF stamp on (x_0, y_0, stamp pixel grid).
+#     Drop-in replacement for ``GriddedPSFModel`` in any photutils call;
+#     accelerates LM fits where the inner finite-difference Jacobian
+#     perturbs ONLY the flux parameter (a frequent late-iteration case)
+#     or where (x_0, y_0) are pinned via ``xy_bounds``.
+#
+# 2.  ``forced_psf_photometry()`` -- standalone closed-form linear flux
+#     solve at fixed (x_0, y_0).  Bypasses photutils' LM entirely:
+#         f = sum(d*p*w) / sum(p^2*w),   sigma_f = 1 / sqrt(sum(p^2*w))
+#     ~80x faster than the full LM path on iter2/iter3 chains where
+#     positions come from a union seed catalog.
+# ---------------------------------------------------------------------------
+class CachingGriddedPSFModel(GriddedPSFModel):
+    """``GriddedPSFModel`` that memoizes the rendered stamp on
+    (x_0, y_0, x-grid, y-grid).
+
+    Cache hits when LM finite-differences ONLY flux; misses on x_0/y_0
+    perturbation.  For a 3-param FD Jacobian this saves the 1 of 4 evals
+    that re-renders the PSF with unchanged position but perturbed flux,
+    plus all subsequent rendering of the same stamp during flux-only
+    sub-iterations.  For position-pinned fits (xy_bounds=(0,0) or
+    forced phot), every evaluate after the first is a cache hit.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._psf_cache_key = None
+        self._psf_cache_unit_stamp = None
+        # diagnostic counters; reset via ``reset_cache_stats``
+        self._psf_cache_hits = 0
+        self._psf_cache_misses = 0
+
+    def reset_cache_stats(self):
+        self._psf_cache_hits = 0
+        self._psf_cache_misses = 0
+
+    @property
+    def cache_stats(self):
+        return {'hits': self._psf_cache_hits,
+                'misses': self._psf_cache_misses}
+
+    def evaluate(self, x, y, flux, x_0, y_0):
+        # x/y are the eval pixel grids; use shape + first/last corner +
+        # source position as the cache key.  Cheap to compute, robust
+        # against int<->float drift because we cast to float.
+        try:
+            x_first = float(x.flat[0])
+            x_last = float(x.flat[-1])
+            y_first = float(y.flat[0])
+            y_last = float(y.flat[-1])
+        except (TypeError, AttributeError):
+            # Scalar inputs (unusual) bypass the cache.
+            return super().evaluate(x, y, flux, x_0, y_0)
+        key = (float(x_0), float(y_0), x.shape,
+               x_first, x_last, y_first, y_last)
+        if self._psf_cache_key == key:
+            self._psf_cache_hits += 1
+            unit_stamp = self._psf_cache_unit_stamp
+        else:
+            self._psf_cache_misses += 1
+            unit_stamp = super().evaluate(x, y, 1.0, x_0, y_0)
+            self._psf_cache_key = key
+            self._psf_cache_unit_stamp = unit_stamp
+        return float(flux) * unit_stamp
+
+
+def forced_psf_photometry(image, psf_model, init_params, *,
+                          error=None, mask=None,
+                          fit_shape=(5, 5),
+                          aperture_radius=4):
+    """Closed-form linear flux solve at the (fixed) positions in
+    ``init_params``.  Bypasses photutils LM entirely.
+
+    Parameters
+    ----------
+    image : 2D ndarray
+    psf_model : GriddedPSFModel (or compatible) supporting
+        ``evaluate(x_grid, y_grid, flux=1.0, x_0, y_0)``.
+    init_params : Table with columns ``x_init``, ``y_init``
+        (``flux_init`` optional and ignored).
+    error : 2D ndarray of 1-sigma uncertainties (same shape as image).
+        ``None`` falls back to unit weights.
+    mask : bool 2D ndarray; ``True`` = bad pixel, excluded.
+    fit_shape : (ny, nx) stamp around each source (must be odd-ish; 5x5
+        matches production).
+    aperture_radius : kept for signature compatibility; not used here.
+
+    Returns
+    -------
+    Table with columns ``x_init``, ``y_init``, ``x_fit``, ``y_fit``
+    (== x_init/y_init), ``flux_fit``, ``flux_err``, ``n_pixels_fit``.
+    """
+    ny_fit, nx_fit = int(fit_shape[0]), int(fit_shape[1])
+    half_y, half_x = ny_fit // 2, nx_fit // 2
+    img_ny, img_nx = image.shape
+
+    x_init = np.asarray(init_params['x_init'], dtype=float)
+    y_init = np.asarray(init_params['y_init'], dtype=float)
+    n = len(x_init)
+    flux_fit = np.full(n, np.nan, dtype=np.float64)
+    flux_err = np.full(n, np.nan, dtype=np.float64)
+    npix_fit = np.zeros(n, dtype=np.int32)
+
+    # Build the (ny_fit x nx_fit) pixel grid offsets once.
+    dy, dx = np.mgrid[-half_y:half_y + 1, -half_x:half_x + 1].astype(float)
+
+    use_err = error is not None
+    if mask is None:
+        mask_arr = np.zeros(image.shape, dtype=bool)
+    else:
+        mask_arr = np.asarray(mask, dtype=bool)
+
+    for i in range(n):
+        x0 = x_init[i]
+        y0 = y_init[i]
+        ix = int(round(x0))
+        iy = int(round(y0))
+        y_lo, y_hi = iy - half_y, iy + half_y + 1
+        x_lo, x_hi = ix - half_x, ix + half_x + 1
+        if (y_lo < 0 or x_lo < 0 or y_hi > img_ny or x_hi > img_nx):
+            continue
+
+        data = image[y_lo:y_hi, x_lo:x_hi]
+        mstamp = mask_arr[y_lo:y_hi, x_lo:x_hi]
+        if mstamp.all():
+            continue
+
+        # Evaluate PSF on the absolute-coord grid centred on the source.
+        xx = ix + dx
+        yy = iy + dy
+        psf_stamp = np.asarray(
+            psf_model.evaluate(xx, yy, 1.0, x0, y0),
+            dtype=np.float64,
+        )
+
+        if use_err:
+            estamp = error[y_lo:y_hi, x_lo:x_hi]
+            w = np.where((estamp > 0) & np.isfinite(estamp),
+                         1.0 / estamp**2, 0.0)
+        else:
+            w = np.ones_like(data, dtype=np.float64)
+        w = np.where(mstamp, 0.0, w)
+
+        # Linear LS solution: data ~ flux * psf
+        sxx = float((psf_stamp * psf_stamp * w).sum())
+        if sxx <= 0:
+            continue
+        sxy = float((data * psf_stamp * w).sum())
+        flux_fit[i] = sxy / sxx
+        flux_err[i] = 1.0 / np.sqrt(sxx)
+        npix_fit[i] = int((w > 0).sum())
+
+    out = Table()
+    out['x_init'] = x_init
+    out['y_init'] = y_init
+    out['flux_init'] = (np.asarray(init_params['flux_init'], dtype=float)
+                        if 'flux_init' in init_params.colnames
+                        else np.full(n, np.nan))
+    out['x_fit'] = x_init
+    out['y_fit'] = y_init
+    out['flux_fit'] = flux_fit
+    out['flux_err'] = flux_err
+    out['n_pixels_fit'] = npix_fit
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1340,6 +1512,130 @@ def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
     return n_drop
 
 
+def _filter_satstar_artifacts(phot_obj, satstar_model, err, *,
+                              sig_K, ratio_cut, label, max_log_rows=50):
+    """Drop fits sitting inside significant satstar PSF wings whose own
+    model contribution is < ``ratio_cut`` x ``satstar_model`` at that pixel.
+
+    Gate: only fits where ``satstar_model[y,x] > sig_K * median(err)`` are
+    candidates.  Within the gate, fits with ``dao_model[y,x] / satstar_model[y,x]
+    < ratio_cut`` are dropped as PSF-wing artifacts.  The dao_model is
+    rendered from ``phot_obj`` itself; we then re-render after filtering
+    via the standard ``_model_image_params`` cache invalidation.
+
+    Rationale: bright-star PSF wings carry enough flux that DAOStarFinder
+    triggers along them and PSFPhotometry then fits "stars" whose total
+    contribution at the detection pixel is smaller than the satstar wing
+    already modeled there.  Those fits double-count satstar flux.
+    """
+    if satstar_model is None or ratio_cut <= 0:
+        return 0
+    res = phot_obj.results
+    if res is None or len(res) == 0:
+        return 0
+    err_finite = err[np.isfinite(err) & (err > 0)]
+    if err_finite.size == 0:
+        return 0
+    err_med = float(np.median(err_finite))
+    thresh = sig_K * err_med
+
+    modsky = _make_model_image(phot_obj, satstar_model.shape,
+                               psf_shape=(21, 21), include_local_bkg=False)
+
+    x = np.asarray(res['x_fit'], dtype=float)
+    y = np.asarray(res['y_fit'], dtype=float)
+    flux_arr = np.asarray(res['flux_fit'], dtype=float)
+    ny, nx = satstar_model.shape
+    ix = np.rint(x).astype(int)
+    iy = np.rint(y).astype(int)
+    in_frame = (np.isfinite(x) & np.isfinite(y)
+                & (ix >= 0) & (ix < nx)
+                & (iy >= 0) & (iy < ny))
+    sat_val = np.zeros(len(res), dtype=float)
+    dao_val = np.zeros(len(res), dtype=float)
+    if np.any(in_frame):
+        sat_val[in_frame] = satstar_model[iy[in_frame], ix[in_frame]]
+        dao_val[in_frame] = modsky[iy[in_frame], ix[in_frame]]
+    in_gate = np.isfinite(sat_val) & (sat_val > thresh)
+    safe_sat = np.where(sat_val > 0, sat_val, np.nan)
+    ratio = np.where(in_gate, dao_val / safe_sat, np.inf)
+    drop = in_gate & np.isfinite(ratio) & (ratio < ratio_cut)
+    n_drop = int(np.sum(drop))
+    if n_drop == 0:
+        print(f"Satstar-artifact filter ({label}): no drops "
+              f"(sig_K={sig_K}, ratio_cut={ratio_cut}, "
+              f"in_gate={int(in_gate.sum())}, err_med={err_med:.3g})",
+              flush=True)
+        return 0
+
+    print(f"Satstar-artifact filter ({label}): dropping {n_drop} fits "
+          f"with dao_model < {ratio_cut:.2f}*sat_model on sat>{sig_K:.1f}*err_med "
+          f"(err_med={err_med:.3g}); {len(res)} -> {len(res) - n_drop}",
+          flush=True)
+
+    drop_idx = np.where(drop)[0]
+    log_idx = drop_idx[np.argsort(ratio[drop_idx])][:max_log_rows]
+    if len(log_idx) > 0:
+        id_col = res['id'] if 'id' in res.colnames else np.arange(len(res))
+        print(f"  dropped fits ({label}, up to {max_log_rows} smallest ratio):",
+              flush=True)
+        print(f"    {'id':>6} {'x_fit':>9} {'y_fit':>9} {'flux_fit':>12} "
+              f"{'sat_val':>9} {'dao_val':>9} {'ratio':>7}", flush=True)
+        for i in log_idx:
+            sid = id_col[i]
+            print(f"    {int(sid):>6d} {x[i]:>9.2f} {y[i]:>9.2f} "
+                  f"{flux_arr[i]:>12.2f} {sat_val[i]:>9.2f} {dao_val[i]:>9.2f} "
+                  f"{ratio[i]:>7.3f}", flush=True)
+        if len(drop_idx) > len(log_idx):
+            print(f"    ... ({len(drop_idx) - len(log_idx)} more not shown)",
+                  flush=True)
+
+    keep = ~drop
+    phot_obj.results = phot_obj.results[keep]
+    inner_phot = getattr(phot_obj, '_psfphot', None)
+    if (inner_phot is not None
+            and inner_phot.init_params is not None
+            and len(inner_phot.init_params) == len(keep)):
+        inner_phot.init_params = inner_phot.init_params[keep]
+    if (hasattr(phot_obj, 'init_params')
+            and phot_obj.init_params is not None
+            and len(phot_obj.init_params) == len(keep)):
+        phot_obj.init_params = phot_obj.init_params[keep]
+
+    fit_results = getattr(phot_obj, 'fit_results', None)
+    if fit_results:
+        for fr in fit_results:
+            sub = getattr(fr, 'results', None)
+            if sub is None or len(sub) == 0:
+                continue
+            sx = np.asarray(sub['x_fit'], dtype=float)
+            sy = np.asarray(sub['y_fit'], dtype=float)
+            s_ix = np.rint(sx).astype(int)
+            s_iy = np.rint(sy).astype(int)
+            s_in = (np.isfinite(sx) & np.isfinite(sy)
+                    & (s_ix >= 0) & (s_ix < nx)
+                    & (s_iy >= 0) & (s_iy < ny))
+            s_sat = np.zeros(len(sub), dtype=float)
+            s_dao = np.zeros(len(sub), dtype=float)
+            if np.any(s_in):
+                s_sat[s_in] = satstar_model[s_iy[s_in], s_ix[s_in]]
+                s_dao[s_in] = modsky[s_iy[s_in], s_ix[s_in]]
+            s_in_gate = s_sat > thresh
+            s_safe = np.where(s_sat > 0, s_sat, np.nan)
+            s_ratio = np.where(s_in_gate, s_dao / s_safe, np.inf)
+            sub_drop = s_in_gate & np.isfinite(s_ratio) & (s_ratio < ratio_cut)
+            if sub_drop.any():
+                sub_keep = ~sub_drop
+                fr.results = sub[sub_keep]
+                if (fr.init_params is not None
+                        and len(fr.init_params) == len(sub_keep)):
+                    fr.init_params = fr.init_params[sub_keep]
+                fr.__dict__.pop('_model_image_params', None)
+
+    phot_obj.__dict__.pop('_model_image_params', None)
+    return n_drop
+
+
 def _dedup_close_sources(xy, flux, min_sep_pix, quality=None,
                          flux_agreement_frac=0.10, is_saturated=None):
     """
@@ -2335,7 +2631,15 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
     if cfg is None:
         raise ValueError(f'no TARGETS entry in make_starless_image for basepath={basepath!r}')
 
-    cat_path = os.path.join(basepath, cfg['catalog_rel'])
+    # Some targets have per-obs seed catalogs (e.g. gc2211 has one per
+    # pointing) and provide a ``catalog_rel_template`` that we format
+    # with the current ``field`` (obs id).  Fall back to the static
+    # ``catalog_rel`` for the common one-catalog-per-target case.
+    if 'catalog_rel_template' in cfg:
+        cat_rel = cfg['catalog_rel_template'].format(field=field)
+    else:
+        cat_rel = cfg['catalog_rel']
+    cat_path = os.path.join(basepath, cat_rel)
     out_dir  = os.path.join(basepath, 'catalogs', 'starless')
     os.makedirs(out_dir, exist_ok=True)
     cfg_regs = [os.path.join(basepath, p) for p in cfg.get('force_mask_regs', [])]
@@ -2492,6 +2796,18 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       default=1.0,
                       type='float',
                       help='DAOStarFinder roundness upper bound')
+    parser.add_option('--satstar-artifact-ratio', dest='satstar_artifact_ratio',
+                      default=1.0, type='float',
+                      help='Reject post-fit sources where dao_model[y,x] '
+                           '< RATIO * satstar_model[y,x] inside the gate. '
+                           'Default 1.0 rejects fits dimmer than the artifact. '
+                           'Set to 0 to disable.')
+    parser.add_option('--satstar-artifact-sigK', dest='satstar_artifact_sigK',
+                      default=3.0, type='float',
+                      help='Sigma multiplier on median ERR for the gate. '
+                           'Filter only applies where '
+                           'satstar_model[y,x] > SIGK * median(err). '
+                           'Default 3.')
     parser.add_option('--skip-mosaic-each-exposure-residuals',
                       dest='skip_mosaic_each_exposure_residuals',
                       default=False,
@@ -3867,6 +4183,10 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
         _filter_near_saturation(phot_basic, _dqarr_for_satfilter,
                                 max_sat_dist_pix=5.0,
                                 label='basic')
+        _filter_satstar_artifacts(phot_basic, satstar_model_subtracted, err,
+                                  sig_K=float(options.satstar_artifact_sigK),
+                                  ratio_cut=float(options.satstar_artifact_ratio),
+                                  label='basic')
         result = phot_basic.results
 
         result = save_photutils_results(result, ww, filename,
@@ -4100,6 +4420,10 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
             _filter_near_saturation(phot_iter, _dqarr_for_satfilter_iter,
                                     max_sat_dist_pix=5.0,
                                     label='iterative')
+            _filter_satstar_artifacts(phot_iter, satstar_model_subtracted, err,
+                                      sig_K=float(options.satstar_artifact_sigK),
+                                      ratio_cut=float(options.satstar_artifact_ratio),
+                                      label='iterative')
             result2 = phot_iter.results
 
             result2 = save_photutils_results(result2, ww, filename,
