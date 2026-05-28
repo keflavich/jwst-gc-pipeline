@@ -3712,6 +3712,7 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
         sat_seed_count = int(np.sum(np.asarray(seed_after_sat_table['is_saturated'], dtype=bool)))
         nonsat_seed_count = int(len(seed_after_sat_table) - sat_seed_count)
         detection_image = nan_replaced_data
+        assert not np.any(np.isnan(nan_replaced_data))
         if postprocess_residuals:
             detection_image = postprocess_residual_image(
                 nan_replaced_data,
