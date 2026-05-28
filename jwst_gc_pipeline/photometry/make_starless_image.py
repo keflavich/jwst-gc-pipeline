@@ -81,6 +81,11 @@ TARGETS = {
         filters=['F115W', 'F162M', 'F182M', 'F212N', 'F360M', 'F405N', 'F470N', 'F480M'],
         catalog_rel='catalogs/seed_union_iter3_sgrc.fits',
     ),
+    'arches': dict(
+        basepath='/orange/adamginsburg/jwst/arches',
+        filters=['F212N', 'F323N'],
+        catalog_rel='catalogs/seed_union_iter3_arches.fits',
+    ),
     # gc2211 has 5 obs IDs (023/028/046/049/050) under a shared basepath;
     # each obs has its own seed catalog.  ``catalog_rel_template`` is
     # resolved by the caller with the current obs field id.

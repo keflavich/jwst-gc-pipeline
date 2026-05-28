@@ -2762,7 +2762,11 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       action='store_true')
     parser.add_option('--each-exposure', dest='each_exposure',
                       default=False, action='store_true',
-                      help='Photometer _each_ exposure?', metavar='each_exposure')
+                      help='Photometer each exposure (REQUIRED for new runs; '
+                           'mosaic-mode photometry is deprecated as of '
+                           '2026-05-25 -- it skips satstar fitting and '
+                           'bypasses iter3 plumbing).',
+                      metavar='each_exposure')
     parser.add_option('--each-suffix', dest='each_suffix',
                       default='destreak_o001_crf',
                       help='Suffix for the level-2 products', metavar='each_suffix')
@@ -2864,6 +2868,30 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'load-balance; ~100 is reasonable for nrca1-class '
                             'frames.'))
     (options, args) = parser.parse_args()
+
+    # Deprecate mosaic-mode photometry (2026-05-25).  Reasons:
+    # * mosaic-mode skips satstar fitting (the per-frame DQ_SATURATED gate is
+    #   only meaningful in the original cal files, not in the drizzled
+    #   mosaic), so saturated stars stay un-subtracted -- contradicts the
+    #   "satstar first, before any daofind/daophot" requirement.
+    # * Iter3 chains, --postprocess-residuals, force-union satstar, the
+    #   satstar-artifact filter, seed_union, and all the recent fixes assume
+    #   per-frame inputs.  Mosaic mode misses those benefits silently.
+    # * No live launcher in /orange/.../shellscripts uses non-each-exposure
+    #   mode for new runs; the remaining call sites are legacy.  Refuse
+    #   here to force callers to use --each-exposure.
+    # --finalize-only is allowed without --each-exposure because it only runs
+    # mosaic_each_exposure_residuals on already-produced per-frame residuals.
+    if (not options.each_exposure
+            and not options.finalize_only
+            and not options.list_missing_tasks):
+        raise SystemExit(
+            'mosaic-mode photometry (no --each-exposure) is deprecated. '
+            'It cannot run satstar fitting (no per-frame DQ) and bypasses '
+            'iter3/postprocess/force-union plumbing.  Re-invoke with '
+            '--each-exposure.  See project_satstar_artifact_filter and '
+            'project_seed_union_stale_data memories for rationale.'
+        )
 
     # Validate chunking args and fold the chunk token into iteration_label so
     # every downstream filename composition (catalog, residual, satstar,
@@ -3159,18 +3187,13 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     else:
                         print('Skipping residual mosaicking in SLURM array-task mode.')
             else:
-                filename = get_filename(basepath, filtername, proposal_id, field, module, options=options, pupil='clear')
-                do_photometry_step(options, filtername, module, detector, field,
-                                   basepath, filename, proposal_id, crowdsource_default_kwargs,
-                                   bg_boxsizes=bg_boxsizes,
-                                   seed_catalog=options.seed_catalog or None,
-                                   iteration_label=options.iteration_label or None,
-                                   postprocess_residuals=options.postprocess_residuals or bool(options.seed_catalog),
-                                   residual_negative_threshold=options.residual_negative_threshold,
-                                   local_snr_threshold=options.local_snr_threshold,
-                                   daofind_roundlo=options.daofind_roundlo,
-                                   daofind_roundhi=options.daofind_roundhi
-                                   )
+                # Mosaic-mode photometry deprecated 2026-05-25 (see main()
+                # deprecation guard).  Unreachable in normal CLI use, but
+                # raise here too as a defensive backstop for any caller that
+                # imports the module and bypasses the guard.
+                raise RuntimeError(
+                    'mosaic-mode photometry is deprecated; pass '
+                    '--each-exposure')
 
 
 def get_filenames(basepath, filtername, proposal_id, field, each_suffix, module, pupil='clear', visitid='001'):
@@ -3532,17 +3555,14 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
     # written to disk so the saved per-frame residual matches what the
     # fitter actually saw (i.e. data minus satstar wings minus phot model).
     satstar_model_subtracted = None
-    # Run the satstar finder + model-subtract for *every* each-exposure
-    # pass, including iter1 (no seed_catalog).  The previous gate
-    # ``and seed_catalog is not None`` left iter1 mosaics with bright
-    # un-subtracted saturated stars because the satstar block was the
-    # only path that produced and subtracted the satstar model.  iter1
-    # is the most traceable iteration and the natural place to assess
-    # satstar finder quality, so it should also benefit from this
-    # plumbing.  The downstream seeded-photometry block at line ~2080
-    # is gated separately on ``seed_catalog is not None`` and is
-    # unaffected by this change.
-    if options.each_exposure:
+    # Satstar fitting + subtraction runs for EVERY photometry pass --
+    # iter1, iter2, iter3 -- before any daofind/daophot.  The previous
+    # gate ``and seed_catalog is not None`` left iter1 with bright
+    # un-subtracted saturated stars.  Mosaic-mode photometry was
+    # deprecated 2026-05-25 (see main() guard), so reaching this point
+    # implies each-exposure mode and the per-frame DQ_SATURATED gate the
+    # satstar fitter relies on is available.
+    if True:
         # Cut at 32" — matches the radius of the large PSF grid used for forced
         # fits (fovp2048 SW × 0.031"/pix = 31.7"; fovp1024 LW × 0.063"/pix
         # = 32.3").  Anything farther falls outside PSF support so the
