@@ -513,8 +513,16 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
                    indivexp=False,
                    qfcut=None, fracfluxcut=None,
                    min_nmatch_narrow=4,
+                   iteration_label=None,
                    basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
     print(f'Starting merge catalogs: catalog_type: {catalog_type} module: {module} target: {target}', flush=True)
+
+    if iteration_label in (None, ''):
+        iter_token = ''
+    elif str(iteration_label).startswith('_'):
+        iter_token = str(iteration_label)
+    else:
+        iter_token = f'_{iteration_label}'
 
     epsf_ = "_epsf" if epsf else ""
     blur_ = "_blur" if blur else ""
@@ -734,7 +742,7 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
             print("WARNING: 212PXDG not present in metadata for this target")
 
         indivexp = '_indivexp' if indivexp else ''
-        tablename = f"{basepath}/catalogs/{catalog_type}_{module}{indivexp}_photometry_tables_merged{desat}{bgsub}{epsf_}{blur_}"
+        tablename = f"{basepath}/catalogs/{catalog_type}_{module}{indivexp}_photometry_tables_merged{desat}{bgsub}{epsf_}{blur_}{iter_token}"
         t0 = time.time()
         print(f"Writing table {tablename} with len={len(basetable)} and ncols={len(basetable.colnames)}", flush=True)
         # use caps b/c FITS will force it to caps anyway
@@ -953,7 +961,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     # defaults.
     merged_exposure_table = combine_singleframe(tables, offsets_table=offsets_table)
 
-    outfn = f"{basepath}/catalogs/{filtername.lower()}_{module}_indivexp_merged{desat}{bgsub}{fitpsf}{blur_}_{method}{suffix}_allcols.fits"
+    outfn = f"{basepath}/catalogs/{filtername.lower()}_{module}_indivexp_merged{desat}{bgsub}{fitpsf}{blur_}{iter_token}_{method}{suffix}_allcols.fits"
     print(f"Writing {outfn} with length {len(merged_exposure_table)}")
     merged_exposure_table.write(outfn, overwrite=True)
 
@@ -977,7 +985,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
         print(f"Rejected {reject.sum()} sources that had nan coordinates.")
         minimal_table = minimal_table[~reject]
 
-    outfn = f"{basepath}/catalogs/{filtername.lower()}_{module}_indivexp_merged{desat}{bgsub}{fitpsf}{blur_}_{method}{suffix}.fits"
+    outfn = f"{basepath}/catalogs/{filtername.lower()}_{module}_indivexp_merged{desat}{bgsub}{fitpsf}{blur_}{iter_token}_{method}{suffix}.fits"
     print(f"Final table length is {len(minimal_table)}.  Writing {outfn}")
     minimal_table.write(outfn, overwrite=True)
 
@@ -991,11 +999,12 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
                       epsf=False, fitpsf=False, blur=False, target='brick',
                       min_qf=0.75,
                       indivexp=False,
+                      iteration_label=None,
                       basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
     if epsf:
         raise NotImplementedError
     print()
-    print(f'Starting merge crowdsource module: {module} suffix: {suffix} target: {target}', flush=True)
+    print(f'Starting merge crowdsource module: {module} suffix: {suffix} target: {target} iter: {iteration_label}', flush=True)
     imgfns = [x
               for obsid in obs_filters[target]
               for filn in obs_filters[target][obsid]
@@ -1008,6 +1017,12 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
     bgsub = '_bgsub' if bgsub else ''
     fitpsf = '_fitpsf' if fitpsf else ''
     blur_ = "_blur" if blur else ""
+    if iteration_label in (None, ''):
+        iter_token = ''
+    elif str(iteration_label).startswith('_'):
+        iter_token = str(iteration_label)
+    else:
+        iter_token = f'_{iteration_label}'
 
     jfilts = SvoFps.get_filter_list('JWST')
     jfilts.add_index('filterID')
@@ -1017,17 +1032,17 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
     if indivexp:
         catfns = [x
                   for filn in filternames
-                  for x in glob.glob(f"{basepath}/catalogs/{filn.lower()}*{module}*indivexp_merged{desat}{bgsub}{fitpsf}{blur_}_crowdsource{suffix}.fits")
+                  for x in glob.glob(f"{basepath}/catalogs/{filn.lower()}*{module}*indivexp_merged{desat}{bgsub}{fitpsf}{blur_}{iter_token}_crowdsource{suffix}.fits")
                   ]
         if len(catfns) == 0:
             filn = 'f405n'
-            raise ValueError(f"{basepath}/catalogs/{filn.lower()}*{module}*indivexp_merged{desat}{bgsub}{fitpsf}{blur_}_crowdsource{suffix}.fits had no matches")
+            raise ValueError(f"{basepath}/catalogs/{filn.lower()}*{module}*indivexp_merged{desat}{bgsub}{fitpsf}{blur_}{iter_token}_crowdsource{suffix}.fits had no matches")
         if len(catfns) != len(imgfns):
             print("WARNING: Different length of imgfns & catfns!")
             print("imgfns:", imgfns)
             print("catfns:", catfns)
             print(dict(zip(imgfns, catfns)))
-            raise ValueError(f"{basepath}/catalogs/FILTER*{module}*obs*indivexp_merged{desat}{bgsub}{fitpsf}{blur_}_crowdsource{suffix}.fits had different n(imgs) than n(cats)")
+            raise ValueError(f"{basepath}/catalogs/FILTER*{module}*obs*indivexp_merged{desat}{bgsub}{fitpsf}{blur_}{iter_token}_crowdsource{suffix}.fits had different n(imgs) than n(cats)")
     else:
         catfns = [x
                   for filn in filternames
@@ -1109,6 +1124,7 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
                    module=module, bgsub=bgsub, desat=desat, epsf=epsf, target=target,
                    blur=blur,
                    indivexp=indivexp,
+                   iteration_label=iteration_label,
                    qfcut=0.9,
                    fracfluxcut=0.75,
                    basepath=basepath)
@@ -1117,12 +1133,19 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
 def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False, bgsub=False, epsf=False, blur=False, target='brick',
                   indivexp=False,
                   ref_filter=None,
+                  iteration_label=None,
                   basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
 
     desat = "_unsatstar" if desat else ""
     bgsub = '_bgsub' if bgsub else ''
     epsf_ = "_epsf" if epsf else ""
     blur_ = "_blur" if blur else ""
+    if iteration_label in (None, ''):
+        iter_token = ''
+    elif str(iteration_label).startswith('_'):
+        iter_token = str(iteration_label)
+    else:
+        iter_token = f'_{iteration_label}'
 
     jfilts = SvoFps.get_filter_list('JWST')
     jfilts.add_index('filterID')
@@ -1151,10 +1174,10 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
         method_name = 'dao' if daophot_type == 'basic' else 'daoiterative'
         catfns = [x
                   for filn in filternames
-                  for x in glob.glob(f"{basepath}/catalogs/{filn.lower()}*{module}*indivexp_merged{desat}{bgsub}{blur_}_{method_name}_{daophot_type}.fits")
+                  for x in glob.glob(f"{basepath}/catalogs/{filn.lower()}*{module}*indivexp_merged{desat}{bgsub}{blur_}{iter_token}_{method_name}_{daophot_type}.fits")
                   ]
         if len(catfns) == 0:
-            raise ValueError(f"{basepath}/catalogs/<filt>*{module}*indivexp_merged{desat}{bgsub}{blur_}_{method_name}_{daophot_type}.fits had no matches across filters {filternames}")
+            raise ValueError(f"{basepath}/catalogs/<filt>*{module}*indivexp_merged{desat}{bgsub}{blur_}{iter_token}_{method_name}_{daophot_type}.fits had no matches across filters {filternames}")
         if len(catfns) != len(imgfns):
             print("WARNING: Different length of imgfns & catfns!")
             print("imgfns:", imgfns)
@@ -1249,6 +1272,7 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
 
     _merge_kwargs = dict(catalog_type=daophot_type, module=module, bgsub=bgsub, desat=desat,
                          epsf=epsf, target=target, blur=blur, indivexp=indivexp,
+                         iteration_label=iteration_label,
                          basepath=basepath)
     if ref_filter is not None:
         _merge_kwargs['ref_filter'] = ref_filter
@@ -1708,14 +1732,16 @@ def main():
                                 print(f'crowdsource {module} desat={desat} bgsub={bgsub} epsf={epsf} blur={blur} fitpsf={fitpsf} target={target}. ', flush=True)
                                 try:
                                     merge_crowdsource(module=module, desat=desat, bgsub=bgsub, epsf=epsf,
-                                                      fitpsf=fitpsf, target=target, basepath=basepath, blur=blur, indivexp=options.merge_singlefields)
+                                                      fitpsf=fitpsf, target=target, basepath=basepath, blur=blur, indivexp=options.merge_singlefields,
+                                                      iteration_label=options.iteration_label)
                                 except Exception as ex:
                                     print(f"Living with this error: {ex}, {type(ex)}, {str(ex)}")
                                 try:
                                     for suffix in ("_nsky0", ):#"_nsky15"): "_nsky1",
                                         print(f'crowdsource {suffix} {module}')
                                         merge_crowdsource(module=module, suffix=suffix, desat=desat, bgsub=bgsub, epsf=epsf,
-                                                          fitpsf=fitpsf, target=target, basepath=basepath, blur=blur, indivexp=options.merge_singlefields)
+                                                          fitpsf=fitpsf, target=target, basepath=basepath, blur=blur, indivexp=options.merge_singlefields,
+                                                          iteration_label=options.iteration_label)
                                 except Exception as ex:
                                     print(f"Exception: {ex}, {type(ex)}, {str(ex)}")
                                     exc_type, exc_obj, exc_tb = sys.exc_info()
@@ -1725,7 +1751,8 @@ def main():
                                 try:
                                     print(f'crowdsource unweighted {module}', flush=True)
                                     merge_crowdsource(module=module, suffix='_unweighted', desat=desat, bgsub=bgsub, epsf=epsf,
-                                                      fitpsf=fitpsf, target=target, basepath=basepath, blur=blur, indivexp=options.merge_singlefields)
+                                                      fitpsf=fitpsf, target=target, basepath=basepath, blur=blur, indivexp=options.merge_singlefields,
+                                                      iteration_label=options.iteration_label)
                                 except NotImplementedError:
                                     continue
                                 except Exception as ex:
@@ -1742,7 +1769,8 @@ def main():
                                     merge_daophot(daophot_type='basic', module=module, desat=desat,
                                                   bgsub=bgsub, epsf=epsf,
                                                   target=target, basepath=basepath, blur=blur, indivexp=options.merge_singlefields,
-                                                  ref_filter=options.ref_filter)
+                                                  ref_filter=options.ref_filter,
+                                                  iteration_label=options.iteration_label)
                                 except Exception as ex:
                                     print(f'daophot basic {module} desat={desat} bgsub={bgsub} epsf={epsf} blur={blur} fitpsf={fitpsf} target={target}', flush=True)
                                     if blur and not options.strict_require_blur:
@@ -1761,7 +1789,8 @@ def main():
                                     merge_daophot(daophot_type='iterative', module=module, desat=desat,
                                                   bgsub=bgsub, epsf=epsf,
                                                   target=target, basepath=basepath, blur=blur, indivexp=options.merge_singlefields,
-                                                  ref_filter=options.ref_filter)
+                                                  ref_filter=options.ref_filter,
+                                                  iteration_label=options.iteration_label)
                                 except Exception as ex:
                                     if blur and not options.strict_require_blur:
                                         print("Skipping missing blur files")
