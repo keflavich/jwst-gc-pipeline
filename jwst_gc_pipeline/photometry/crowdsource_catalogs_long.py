@@ -4235,7 +4235,18 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
         # touched.
         _dqarr_for_satfilter = im1['DQ'].data if 'DQ' in im1 else None
         _filter_near_saturation(phot_basic, _dqarr_for_satfilter,
-                                max_sat_dist_pix=5.0,
+                                max_sat_dist_pix=1.0,  # changed from 5.0 -> 1.0 (2026-05-28): the
+                                # original intent is to drop fits whose CENTER
+                                # is on a saturated pixel ("stuck-low"
+                                # central data drives wing-only fit to bogus
+                                # flux).  5.0 also killed legitimate stars
+                                # within 5 px of a saturated neighbour --
+                                # detected on Star B (17:46:14.175, 3500
+                                # MJy/sr) sitting 2.24 px from the donut
+                                # neighbour's nearest saturated edge pixel.
+                                # 1.0 keeps the strict "center on or
+                                # immediately adjacent to a sat pixel" guard
+                                # while letting nearby real stars survive.
                                 label='basic')
         _filter_satstar_artifacts(phot_basic, satstar_model_subtracted, err,
                                   sig_K=float(options.satstar_artifact_sigK),
@@ -4472,7 +4483,18 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
             # bigger impact here.
             _dqarr_for_satfilter_iter = im1['DQ'].data if 'DQ' in im1 else None
             _filter_near_saturation(phot_iter, _dqarr_for_satfilter_iter,
-                                    max_sat_dist_pix=5.0,
+                                    max_sat_dist_pix=1.0,  # changed from 5.0 -> 1.0 (2026-05-28): the
+                                # original intent is to drop fits whose CENTER
+                                # is on a saturated pixel ("stuck-low"
+                                # central data drives wing-only fit to bogus
+                                # flux).  5.0 also killed legitimate stars
+                                # within 5 px of a saturated neighbour --
+                                # detected on Star B (17:46:14.175, 3500
+                                # MJy/sr) sitting 2.24 px from the donut
+                                # neighbour's nearest saturated edge pixel.
+                                # 1.0 keeps the strict "center on or
+                                # immediately adjacent to a sat pixel" guard
+                                # while letting nearby real stars survive.
                                     label='iterative')
             _filter_satstar_artifacts(phot_iter, satstar_model_subtracted, err,
                                       sig_K=float(options.satstar_artifact_sigK),

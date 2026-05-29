@@ -86,6 +86,21 @@ TARGETS = {
         filters=['F212N', 'F323N'],
         catalog_rel='catalogs/seed_union_iter3_arches.fits',
     ),
+    'sgra': dict(
+        basepath='/orange/adamginsburg/jwst/sgra',
+        filters=['F115W', 'F212N', 'F405N'],
+        catalog_rel='catalogs/seed_union_iter3_sgra.fits',
+    ),
+    'cloudef': dict(
+        basepath='/orange/adamginsburg/jwst/cloudef',
+        filters=['F162M', 'F210M', 'F360M', 'F480M'],
+        catalog_rel='catalogs/seed_union_iter3_cloudef.fits',
+    ),
+    'quintuplet': dict(
+        basepath='/orange/adamginsburg/jwst/quintuplet',
+        filters=['F212N', 'F323N'],
+        catalog_rel='catalogs/seed_union_iter3_quintuplet.fits',
+    ),
     # gc2211 has 5 obs IDs (023/028/046/049/050) under a shared basepath;
     # each obs has its own seed catalog.  ``catalog_rel_template`` is
     # resolved by the caller with the current obs field id.

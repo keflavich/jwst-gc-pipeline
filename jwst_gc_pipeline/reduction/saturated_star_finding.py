@@ -229,6 +229,72 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000):
     return saturated, sources, coms
 
 
+def _refine_coms_by_data(coms, data, sources, shift_warn_thresh_pix=3.0):
+    """Refine DQ_SATURATED-mask centroids using the cluster bounding-box
+    center as a regularizer.
+
+    The mask centre-of-mass can be biased away from the true star centre
+    when the saturated cluster shape is irregular -- JUMP_DET-contaminated
+    extra pixels along the spike direction, asymmetric clipping at the
+    detector edge, or partial merging with a neighbouring star.  In those
+    cases the COM moves toward the longer "tail" of the irregular shape,
+    away from the actual star centre.
+
+    The cluster's bounding-box center is much more robust: real saturated
+    stars produce roughly circular sat-clusters around the data peak, so
+    the bounding-box center is close to the star centre.  Asymmetric
+    distortion biases the bbox center much less than COM (a few extra
+    saturated pixels on one side shift bbox by 0.5 px, but can shift COM
+    by several px when the cluster is large).
+
+    Centroid-from-data was tried first but pulls toward bright neighbour
+    sources within ~10 px (e.g. on sickle F480M frame 0310g_00001 the
+    donut centroid moved 2.8 px toward Star B's flux when computed with
+    a windowed flux-weighted centroid).  Bounding-box center is immune.
+
+    Parameters
+    ----------
+    coms : list of (cy, cx)
+        Mask centroids from ``center_of_mass`` on the saturated mask.
+    data : ndarray
+        SCI image (unused now but kept in the signature for future
+        data-driven refinements).
+    sources : ndarray
+        Labelled saturated-cluster image (output of ``scipy.ndimage.label``).
+    shift_warn_thresh_pix : float
+        Threshold above which a refined centroid is logged.
+
+    Returns
+    -------
+    list of (cy, cx)
+        Refined centroids.
+    """
+    refined = []
+    for ii, (cy, cx) in enumerate(coms):
+        if not (np.isfinite(cy) and np.isfinite(cx)):
+            refined.append((cy, cx))
+            continue
+        cluster_id = ii + 1
+        ys, xs = np.where(sources == cluster_id)
+        if len(ys) == 0:
+            refined.append((cy, cx))
+            continue
+        # Bounding-box centre of the labelled cluster.  (ys.min() +
+        # ys.max()) / 2 gives the pixel centre of the bbox, which is the
+        # centre of mass of a symmetric rectangle covering all sat
+        # pixels.  Robust to asymmetric "tails" that pull a COM off-centre.
+        new_cy = (float(ys.min()) + float(ys.max())) / 2.0
+        new_cx = (float(xs.min()) + float(xs.max())) / 2.0
+        shift = float(np.hypot(new_cy - cy, new_cx - cx))
+        if shift > shift_warn_thresh_pix:
+            print(f"  [satstar centroid refine] cluster {cluster_id}: "
+                  f"mask_COM=({cx:.2f},{cy:.2f}) -> "
+                  f"bbox_center=({new_cx:.2f},{new_cy:.2f}) "
+                  f"shift={shift:.2f} px", flush=True)
+        refined.append((new_cy, new_cx))
+    return refined
+
+
 def _nearest_window_bounds(center, full_size, window_size):
     """Return [start, stop) bounds of the nearest window to a given center."""
     window_size = int(min(max(1, window_size), full_size))
@@ -417,6 +483,13 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     full_model_image = np.zeros_like(data, dtype=float)
 
     saturated, sources, coms = find_saturated_stars(fitsdata, min_sep_from_edge=min_sep_from_edge, edge_npix=edge_npix)
+    # Refine centroids: the mask centre-of-mass can be biased by
+    # JUMP_DET-contamination, asymmetric edge clipping, or merged
+    # neighbour saturation.  Re-centre to the flux-weighted centroid of
+    # the unsaturated wings -- much more reliable as a star-centre
+    # estimate (the saturated mask should be centred on the star
+    # centroid).  Added 2026-05-28.
+    coms = _refine_coms_by_data(coms, data, sources)
 
     # Precompute sat_area per labeled component so we can order in-FOV
     # source_records brightest-first for iterative-subtraction fitting
