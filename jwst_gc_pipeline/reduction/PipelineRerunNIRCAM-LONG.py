@@ -94,8 +94,12 @@ refnames = {'2221': 'F405ref',
             '6151': 'UKIDSS', # gaia?
             '2092': 'VVV',
             '4147': 'VVV',
-            '2045': 'VVV',
-            '1939': 'VVV',
+            # 2045 = arches (field 001) + quintuplet (field 003); both <0.25 deg
+            # from Sgr A* so use GNS (GALACTICNUCLEUS). Gaia is untenable in
+            # crowded/extincted inner GC, but VVV is fine; GNS dense + tight at this radius.
+            '2045': 'GNS',
+            # 1939 = sgra, the inner GC field: GNS
+            '1939': 'GNS',
             '2211': 'GNS',
             }
 
@@ -125,15 +129,18 @@ REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD = {
         '012': 'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
     },
     '2045': {
-        '001': 'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
-        '003': 'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
+        # field 001 = arches, field 003 = quintuplet. Both within 0.25 deg
+        # of Sgr A*; use GNS bootstrap (Gaia is unusable here; VVV is also fine).
+        '001': 'catalogs/nircam_bootstrapped_to_gns_refcat.fits',
+        '003': 'catalogs/nircam_bootstrapped_to_gns_refcat.fits',
     },
     '1939': {
-        '001': 'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
+        # sgra: inner GC, use GNS bootstrap.
+        '001': 'catalogs/nircam_bootstrapped_to_gns_refcat.fits',
     },
     '2211': {
-        # gc2211 wide-band frames saturate every bright star, so VVV/Gaia
-        # have no usable matches.  Use the GALACTICNUCLEUS catalog
+        # gc2211 wide-band frames saturate every bright star, so Gaia
+        # has no usable matches.   VVV may also have trouble.  Use the GALACTICNUCLEUS catalog
         # (Nogueras-Lara 2021, Ks<17) which goes ~5 mag deeper and covers
         # the GC at high stellar density.
         '023': 'catalogs/nircam_bootstrapped_to_gns_refcat.fits',

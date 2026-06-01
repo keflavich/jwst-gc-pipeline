@@ -3629,43 +3629,35 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
                                             satstar_model_image, 0.0)
                     n_pos = int(np.sum(finite_model > 0))
                     total = float(np.nansum(finite_model))
-                    # Don't subtract the satstar model where the original
-                    # data was saturated (NaN-filled by interpolate_replace_nans
-                    # at line ~3461).  At saturated pixels the data was
-                    # interpolated to BG level (~few MJy/sr), while the
-                    # satstar model predicts the TRUE star flux (~tens of
-                    # thousands of MJy/sr).  Subtracting model from
-                    # bg-interpolated data creates a -3e4 negative pit at
-                    # the saturated-star core that biases DAOStarFinder's
-                    # kernel correlation in a wide neighbourhood --
-                    # detected 2026-05-28 on sickle F480M star
-                    # 17:46:14.175, -28:47:50.05 (target not found by
-                    # daofind despite being a 3500 MJy/sr peak 9 px from
-                    # a saturated neighbour with -44e3 over-subtracted pit).
-                    # Where the data was saturated we KEEP the
-                    # bg-interpolated value so daofind sees clean sky
-                    # there; the satstar's wing flux outside the saturated
-                    # core is still subtracted normally.
+                    # At SATURATED-DQ pixels we replace the data with the
+                    # satstar model BEFORE subtracting, forcing residual=0
+                    # at those pixels.  Rationale: JWST ramp-fitter retains
+                    # numeric values at saturated pixels (from group-1
+                    # fits), often >> 1e3 MJy/sr.  interpolate_replace_nans
+                    # only touches actual NaN, so retained values pass
+                    # through.  Earlier "skip subtraction" attempt left
+                    # those large positive data values in the residual
+                    # (sickle F480M: 7078 MJy/sr at a worst-subtracted
+                    # star, baseline 682; see 2026-06-01).  Substituting
+                    # model-for-data at sat pixels is the user-directed
+                    # behaviour: "saturated pixels should be replaced with
+                    # model values from the fitted saturated stars".
                     if 'DQ' in im1:
                         was_saturated = (im1['DQ'].data
                                          & dqflags.pixel['SATURATED']) != 0
-                        subtraction_mask = ~was_saturated
-                        n_skipped = int(was_saturated.sum())
+                        n_sat = int(was_saturated.sum())
+                        nan_replaced_data = np.where(was_saturated,
+                                                     finite_model,
+                                                     nan_replaced_data)
                     else:
-                        subtraction_mask = np.ones_like(finite_model,
-                                                        dtype=bool)
-                        n_skipped = 0
-                    nan_replaced_data = (nan_replaced_data
-                                         - finite_model * subtraction_mask)
-                    # ``satstar_model_subtracted`` records the model that was
-                    # ACTUALLY subtracted (zero at the skipped pixels) so the
-                    # downstream residual_i2d reconstruction matches.
-                    satstar_model_subtracted = finite_model * subtraction_mask
+                        n_sat = 0
+                    nan_replaced_data = nan_replaced_data - finite_model
+                    satstar_model_subtracted = finite_model
                     print(f"Subtracted satstar_model ({satstar_model_path}) "
                           f"from nan_replaced_data: {n_pos} positive pixels, "
                           f"sum={total:.3e} counts; "
-                          f"skipped {n_skipped} originally-saturated pixels "
-                          f"(kept BG-interpolated value there)",
+                          f"replaced {n_sat} SATURATED-DQ pixels with model "
+                          f"before subtract (residual=0 there)",
                           flush=True)
         else:
             print(f"No satstar_model file at {satstar_model_path}; "
