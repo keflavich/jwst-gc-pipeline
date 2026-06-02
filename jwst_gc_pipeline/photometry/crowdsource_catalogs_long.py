@@ -1132,12 +1132,20 @@ def _resolve_seed_skycoords(seed_table, ww=None, preferred_skycoord_col=None):
     bulk ``.ra.deg`` / ``.dec.deg`` access.
 
     Resolution order (each is one vector SkyCoord construction):
-      1. Already a SkyCoord-mixin ``skycoord`` column -> nothing to do.
+      1. Already a SkyCoord-mixin ``skycoord`` column -> verify no masked
+         rows; if any are masked, fall through to step 3 to backfill.
       2. Plain ``ra``/``dec`` columns -> build mixin from those.
          (Common for union seed catalogues built by build_union_seed_catalog.py.)
-      3. An existing SkyCoord-mixin column under another name (e.g.
-         ``skycoord_ref`` from FITS) -> rebuild as ``skycoord``.
-      4. Only ``(x, y)`` available + a WCS -> bulk ``ww.pixel_to_world``.
+      3. Merge across SkyCoord-mixin candidate columns, taking the first
+         UNMASKED value per row (preferred col first).  Critical when
+         vstacking heterogeneous tables (e.g. iter1 daophot rows carry
+         ``skycoord_centroid``, satstar rows carry ``skycoord_fit``;
+         each column is masked on the rows belonging to the other table).
+         The previous implementation picked the first existing column by
+         name and called ``.unmasked``, which exposed the (0,0) fill
+         sentinel for masked rows.  Star B regression 2026-06-02.
+      4. Only ``(x, y)`` available + a WCS -> bulk ``ww.pixel_to_world``
+         backfill for any rows still missing sky.
 
     Object-dtype columns of SkyCoord scalars are NOT supported: producing
     one is a bug at the call site (it forces a per-row Python loop in
@@ -1148,13 +1156,30 @@ def _resolve_seed_skycoords(seed_table, ww=None, preferred_skycoord_col=None):
     if nsrc == 0:
         return seed_table
 
-    # 1. Already done.
+    def _column_mask(col):
+        """Return per-row mask (True=masked) for a SkyCoord mixin column."""
+        m = np.zeros(len(col), dtype=bool)
+        for axis in ('ra', 'dec'):
+            sub = getattr(col, axis, None)
+            sub_mask = getattr(sub, 'mask', None)
+            if sub_mask is None:
+                continue
+            sub_mask = np.asarray(sub_mask)
+            if sub_mask.shape == m.shape:
+                m |= sub_mask
+        return m
+
+    # 1. Already a SkyCoord column.  Accept ONLY if no rows are masked
+    # (otherwise (0,0) sentinel rows would silently pass through to
+    # world_to_pixel).
     if ('skycoord' in seed_table.colnames
             and isinstance(seed_table['skycoord'], SkyCoord)):
-        return seed_table
+        if not np.any(_column_mask(seed_table['skycoord'])):
+            return seed_table
 
     # 2. Plain ra/dec columns -> single vector SkyCoord construction.
-    if 'ra' in seed_table.colnames and 'dec' in seed_table.colnames:
+    if ('skycoord' not in seed_table.colnames
+            and 'ra' in seed_table.colnames and 'dec' in seed_table.colnames):
         ra_arr = np.asarray(seed_table['ra'], dtype=float)
         dec_arr = np.asarray(seed_table['dec'], dtype=float)
         seed_table['skycoord'] = SkyCoord(ra=ra_arr * u.deg,
@@ -1162,38 +1187,60 @@ def _resolve_seed_skycoords(seed_table, ww=None, preferred_skycoord_col=None):
                                           frame='icrs')
         return seed_table
 
-    # 3. Copy an existing SkyCoord-mixin column.
+    # 3. Merge across candidate SkyCoord-mixin columns.  For each row,
+    # take the first UNMASKED ra/dec across the candidate list.  Rows
+    # with no valid candidate are left as NaN so downstream callers
+    # filter them explicitly (not silently via a (0,0) fill).
     sky_columns = []
     if preferred_skycoord_col is not None:
         sky_columns.append(preferred_skycoord_col)
     sky_columns.extend(['skycoord', 'skycoord_fit',
                         'skycoord_centroid', 'skycoord_ref'])
+    ra_master = np.full(nsrc, np.nan, dtype=float)
+    dec_master = np.full(nsrc, np.nan, dtype=float)
     for colname in sky_columns:
         if colname not in seed_table.colnames:
             continue
         col = seed_table[colname]
-        if isinstance(col, SkyCoord):
-            # Preserve the input frame; do not force ICRS here.  vstack
-            # of tables with mismatched columns can leave the mixin
-            # column's underlying ra/dec as ``MaskedLongitude`` /
-            # ``MaskedLatitude``, which ``WCS.world_to_pixel`` then
-            # rejects (TypeError out of high_level_objects_to_values).
-            # ``.unmasked`` returns a plain SkyCoord in the same frame;
-            # it is a no-op when the input has no mask.
-            seed_table['skycoord'] = col.unmasked
-            return seed_table
+        if not isinstance(col, SkyCoord):
+            continue
+        mask = _column_mask(col)
+        unmasked_col = col.unmasked if hasattr(col, 'unmasked') else col
+        col_ra = np.asarray(unmasked_col.ra.deg, dtype=float)
+        col_dec = np.asarray(unmasked_col.dec.deg, dtype=float)
+        need = np.isnan(ra_master) & ~mask
+        if np.any(need):
+            ra_master[need] = col_ra[need]
+            dec_master[need] = col_dec[need]
+        if not np.any(np.isnan(ra_master)):
+            break
 
-    # 4. Only (x, y) present -> bulk pixel_to_world.  NaN entries pass
-    # through gwcs as NaN sky coords, which downstream callers filter out.
-    if ww is not None and _has_any_xy_columns(seed_table):
+    # 4. Backfill any still-NaN rows from (x, y) + ww when available.
+    if ww is not None and np.any(np.isnan(ra_master)) and _has_any_xy_columns(seed_table):
         xvals, yvals = _best_available_xy(seed_table)
-        seed_table['skycoord'] = ww.pixel_to_world(xvals, yvals)
-        return seed_table
+        need = (np.isnan(ra_master)
+                & np.isfinite(np.asarray(xvals, dtype=float))
+                & np.isfinite(np.asarray(yvals, dtype=float)))
+        if np.any(need):
+            derived = ww.pixel_to_world(np.asarray(xvals)[need],
+                                        np.asarray(yvals)[need])
+            ra_master[need] = np.asarray(derived.ra.deg, dtype=float)
+            dec_master[need] = np.asarray(derived.dec.deg, dtype=float)
 
-    raise ValueError(
-        'Could not determine sky coordinates: seed table has no '
-        f'skycoord/ra/dec/(x,y)+ww input. Columns: {seed_table.colnames}'
-    )
+    if (not np.any(np.isfinite(ra_master))
+            and not any(c in seed_table.colnames
+                        for c in (['ra', 'dec', 'skycoord']
+                                  + sky_columns
+                                  + (['x', 'y'] if ww is not None else [])))):
+        raise ValueError(
+            'Could not determine sky coordinates: seed table has no '
+            f'skycoord/ra/dec/(x,y)+ww input. Columns: {seed_table.colnames}'
+        )
+
+    seed_table['skycoord'] = SkyCoord(ra=ra_master * u.deg,
+                                      dec=dec_master * u.deg,
+                                      frame='icrs')
+    return seed_table
 
 
 def _sample_background_map(background_map, xvals, yvals):
@@ -1811,7 +1858,18 @@ class SeededFinder:
             xvals = np.asarray(xx, dtype=float)
             yvals = np.asarray(yy, dtype=float)
 
+        # Drop seeds whose sky->pixel projection produced NaN (typically
+        # rows whose sky column was masked and got resolved to the
+        # (0,0) fill before _resolve_seed_skycoords was fixed
+        # 2026-06-02).  Log explicitly so silent losses surface in the
+        # task log instead of being invisible.
         finite = np.isfinite(xvals) & np.isfinite(yvals)
+        n_finite_drop = int(np.sum(~finite))
+        if n_finite_drop > 0:
+            print(f"SeededFinder dropping {n_finite_drop} sources with "
+                  f"non-finite sky->pixel position (input={len(seeds)}); "
+                  f"check seed catalog for masked / (0,0) sky entries",
+                  flush=True)
         seeds = seeds[finite]
         xvals = xvals[finite]
         yvals = yvals[finite]
