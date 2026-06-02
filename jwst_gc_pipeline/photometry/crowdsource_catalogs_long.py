@@ -2558,19 +2558,102 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
 
         return True
 
+    # Chunked iter3 LW runs (brick 2221 / cloudc) split each frame's sources
+    # across N seed chunks; each chunk writes its own
+    # ``..._iter3_chunkXXofYY_daophot_{kind}_residual.fits`` where
+    # ``residual_K = data_for_residual - model_K`` (data_for_residual is shared
+    # across chunks).  Mosaicing chunk residuals directly would double-count
+    # source flux not fit in that chunk.  Glob both un-chunked and chunked
+    # variants; chunked variants are combined into a single frame-level
+    # residual below before mosaicing.
+    # Chunked variants embed ``_chunkXXofYY_`` between the iter token and
+    # ``_daophot_``: e.g. ``..._iter3_chunk00of08_daophot_basic_residual.fits``.
+    chunked_iter_regex = (re.compile(re.escape(iter_) + r'_chunk\d+of\d+_daophot_')
+                          if iter_ else re.compile(r'_chunk\d+of\d+_daophot_'))
     for module_pattern in module_patterns:
-        residual_glob = (
-            f'{pipeline_dir}/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-'
-            f'{module_pattern}_visit*_vgroup*_exp*{desat_}{bgsub_}{epsf_}{blur_}{group_}'
-            f'{iter_}_daophot_{residual_kind}_residual.fits'
-        )
-        residual_files.extend(glob.glob(residual_glob))
-    residual_files = sorted(set(fn for fn in residual_files if _matches_expected_tokens(fn)))
+        for chunk_pat in ('', '_chunk*of*'):
+            residual_glob = (
+                f'{pipeline_dir}/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-'
+                f'{module_pattern}_visit*_vgroup*_exp*{desat_}{bgsub_}{epsf_}{blur_}{group_}'
+                f'{iter_}{chunk_pat}_daophot_{residual_kind}_residual.fits'
+            )
+            residual_files.extend(glob.glob(residual_glob))
+
+    def _accept(fn):
+        if not _matches_expected_tokens(fn):
+            # Chunked variants have ``_iter3_chunkXXofYY_daophot_`` rather than
+            # ``_iter3_daophot_``; accept those explicitly when iter_marker is set.
+            if iter_marker and chunked_iter_regex and chunked_iter_regex.search(os.path.basename(fn)):
+                # still enforce flag tokens
+                name = os.path.basename(fn)
+                for token, enabled in flag_tokens.items():
+                    has_token = token in name
+                    if enabled and not has_token:
+                        return False
+                    if (not enabled) and has_token:
+                        return False
+                return True
+            return False
+        return True
+
+    residual_files = sorted(set(fn for fn in residual_files if _accept(fn)))
     if len(residual_files) == 0:
         raise ValueError(
             f'No per-exposure residuals found for module={module} '
             f'patterns={module_patterns} filter={filtername} residual_kind={residual_kind}'
         )
+
+    # Combine chunked per-frame residuals into a single frame-level residual.
+    # For chunks of the same frame:
+    #   chunk_K_residual + chunk_K_model == data_for_residual  (shared)
+    # Therefore:
+    #   combined_residual = data_for_residual - sum_K(model_K)
+    #                     = chunk_0_residual - sum_{K>0}(model_K)
+    # The combined file is written to the chunk-stripped path so the existing
+    # mosaicing logic (which expects one residual per frame) works unchanged.
+    _chunk_strip_re = re.compile(r'_chunk\d+of\d+')
+    frame_groups = {}
+    for fn in residual_files:
+        key = _chunk_strip_re.sub('', fn)
+        frame_groups.setdefault(key, []).append(fn)
+
+    combined_residuals = []
+    for frame_key, chunks in frame_groups.items():
+        if len(chunks) == 1 and '_chunk' not in os.path.basename(chunks[0]):
+            combined_residuals.append(chunks[0])
+            continue
+        chunks_sorted = sorted(chunks)
+        base_path = chunks_sorted[0]
+        with fits.open(base_path) as hdul:
+            sci_ext = None
+            for i, hdu in enumerate(hdul):
+                if hdu.name == 'SCI' or (i == 1 and hdu.data is not None):
+                    sci_ext = i
+                    break
+            if sci_ext is None:
+                sci_ext = 1
+            combined_data = hdul[sci_ext].data.astype(np.float64, copy=True)
+        for ch in chunks_sorted[1:]:
+            model_path = ch.replace('_residual.fits', '_model.fits')
+            if not os.path.exists(model_path):
+                raise FileNotFoundError(
+                    f'Chunk combination needs model file {model_path} '
+                    f'(missing companion to {ch})'
+                )
+            with fits.open(model_path) as mhdul:
+                msci = None
+                for i, hdu in enumerate(mhdul):
+                    if hdu.name == 'SCI' or (i == 1 and hdu.data is not None):
+                        msci = i
+                        break
+                if msci is None:
+                    msci = 1
+                combined_data -= mhdul[msci].data.astype(np.float64)
+        print(f'  combining {len(chunks_sorted)} chunks -> {os.path.basename(frame_key)}')
+        save_residual_datamodel(base_path, frame_key, combined_data.astype(np.float32))
+        combined_residuals.append(frame_key)
+
+    residual_files = sorted(set(combined_residuals))
 
     product_name = (
         f'jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}'
