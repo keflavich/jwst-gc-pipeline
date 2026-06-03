@@ -847,12 +847,41 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                                 float(resid_try[0]))
 
             if best is None:
+                # Force-fit at this seed position produced no candidate (dx,dy)
+                # with enough usable pixels.  Two cases:
+                #   1. Source center is far enough outside the frame that the
+                #      PSF wings genuinely do not reach into the data.
+                #      Nothing to fit, nothing to subtract -- skip cleanly.
+                #   2. Source center is inside the frame (or within PSF reach)
+                #      but the fit still failed.  This is a real problem
+                #      (corrupt data, bad mask, etc.); raise.
+                # Use the large-PSF half-width in detector pixels as the
+                # "PSF radius".  If the seed center is outside the frame by
+                # more than that distance, the PSF cannot meaningfully
+                # overlap the data -- silent skip.
+                _psf_ny, _psf_nx = big_grid_large.data.shape[-2:]
+                _osamp = float(np.atleast_1d(big_grid_large.oversampling)[0])
+                _psf_radius_pix = 0.5 * max(_psf_ny, _psf_nx) / _osamp
+                _ny_frame, _nx_frame = data.shape
+                # Signed distance from each axis range; >0 if outside the frame.
+                _dx_out = max(0.0, -x_init, x_init - (_nx_frame - 1))
+                _dy_out = max(0.0, -y_init, y_init - (_ny_frame - 1))
+                _dist_outside = float(np.hypot(_dx_out, _dy_out))
+                if _dist_outside > _psf_radius_pix:
+                    print(f"  Forced source {ii+1} at (x={x_init:.1f},y={y_init:.1f}): "
+                          f"no candidate (dx,dy) in +/-{FORCED_SHIFT_RADIUS} px gave "
+                          f">=10 usable PSF pixels; seed is {_dist_outside:.0f} px "
+                          f"outside frame (PSF radius {_psf_radius_pix:.0f} px), "
+                          f"so wings cannot reach the data; skipping.",
+                          flush=True)
+                    continue
                 raise ValueError(
                     f"Forced source {ii+1} at (x={x_init:.1f},y={y_init:.1f}): "
-                    f"no candidate (dx,dy) in ±{FORCED_SHIFT_RADIUS} px gave "
+                    f"no candidate (dx,dy) in +/-{FORCED_SHIFT_RADIUS} px gave "
                     f">= 10 usable cutout pixels with nonzero PSF amplitude.  "
-                    f"Likely the proximity filter is set larger than the "
-                    f"actual PSF radius."
+                    f"Seed is {_dist_outside:.0f} px outside frame ({_nx_frame}x{_ny_frame}); "
+                    f"PSF radius is {_psf_radius_pix:.0f} px so PSF wings DO overlap "
+                    f"-- this is a real fit failure, not an off-FOV non-overlap."
                 )
 
             (chi2_val, best_dx, best_dy, flux_fit_val, flux_err_val,
