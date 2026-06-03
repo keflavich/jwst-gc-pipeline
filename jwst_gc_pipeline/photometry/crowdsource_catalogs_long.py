@@ -3810,6 +3810,92 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
         preferred_seed_skycoord_col = f'skycoord_{filtername.lower()}'
         merged_seed_table = _as_table(seed_catalog)
 
+        # Snap seed positions to this filter's own iter2 astrometry where
+        # available.  build_union_seed_catalog.py records only a single
+        # ``skycoord_ref`` column taken from the SHORTEST-WAVELENGTH
+        # filter that detected each cluster.  When fitting a long-
+        # wavelength filter like F480M, the SW position can be offset
+        # several pixels from the LW position (filter-dependent
+        # astrometry + saturated-core centroid bias on SW, or simply there is no short-wavelength detection of this exact star).  With
+        # iter3's tight xy_bounds (=1 SW pix, ~0.5 LW pix), fits cannot
+        # move far enough to reach the true LW star: they end up at the
+        # boundary (flags=48 = near_bound + no_covariance) with low
+        # flux, and the unmodelled star reappears as a large positive
+        # residual.  Diagnosed 2026-06-03 on sickle F480M union seed
+        # source_id_union=7288 (flux_f480m=52333, skycoord_ref taken
+        # from F187N detection ~5 LW pix away from the true F480M
+        # position).
+        #
+        # Solution: load THIS filter's cross-exposure-merged iter2
+        # daoiterative catalog (produced by merge_catalogs.py at
+        # {basepath}/catalogs/{filt}_merged_indivexp_merged_iter2_
+        # daoiterative_iterative.fits) and add a
+        # ``skycoord_<filter>`` mixin column on the seed table whose
+        # value is the iter2 skycoord of the nearest in-filter match
+        # within ``match_radius`` of each seed.  ``SeededFinder``'s
+        # ``preferred_skycoord_col`` already prefers
+        # ``skycoord_{filter}`` (line above), so the snapped position
+        # gets used automatically when it exists.  Seeds with no
+        # nearby per-filter detection fall back to ``skycoord_ref``
+        # (existing behaviour).
+        try:
+            _iter2_cat_path = os.path.join(
+                basepath, 'catalogs',
+                f'{filtername.lower()}_merged_indivexp_merged_iter2_'
+                f'daoiterative_iterative.fits',
+            )
+            if os.path.exists(_iter2_cat_path):
+                _it2 = Table.read(_iter2_cat_path)
+                if 'skycoord' in _it2.colnames and len(_it2) > 0:
+                    _it2_sk = _it2['skycoord']
+                    if not isinstance(_it2_sk, SkyCoord):
+                        _it2_sk = SkyCoord(_it2_sk)
+                    _seed_table_resolved = _resolve_seed_skycoords(
+                        Table(merged_seed_table, copy=True), ww=ww,
+                        preferred_skycoord_col=preferred_seed_skycoord_col,
+                    )
+                    _seed_sk = _seed_table_resolved['skycoord']
+                    if not isinstance(_seed_sk, SkyCoord):
+                        _seed_sk = SkyCoord(_seed_sk)
+                    _seed_sk = _seed_sk.unmasked if hasattr(_seed_sk, 'unmasked') else _seed_sk
+                    _it2_sk = _it2_sk.unmasked if hasattr(_it2_sk, 'unmasked') else _it2_sk
+                    # Bulk nearest-neighbor match.  Use 3 LW pix ~ 0.2"
+                    # for LW filters; SW filters get 1.5 SW pix ~ 0.05".
+                    _pixscale_arcsec = (ww.proj_plane_pixel_area()**0.5).to(u.arcsec).value if hasattr(ww, 'proj_plane_pixel_area') else 0.063
+                    _match_radius_arcsec = max(0.15, 3.0 * _pixscale_arcsec)
+                    _idx, _sep2d, _ = _seed_sk.match_to_catalog_sky(_it2_sk)
+                    _good = (_sep2d.arcsec < _match_radius_arcsec)
+                    if np.any(_good):
+                        _new_ra = np.asarray(_seed_sk.ra.deg, dtype=float).copy()
+                        _new_dec = np.asarray(_seed_sk.dec.deg, dtype=float).copy()
+                        _new_ra[_good] = np.asarray(_it2_sk.ra.deg)[_idx[_good]]
+                        _new_dec[_good] = np.asarray(_it2_sk.dec.deg)[_idx[_good]]
+                        merged_seed_table[preferred_seed_skycoord_col] = SkyCoord(
+                            ra=_new_ra * u.deg, dec=_new_dec * u.deg, frame='icrs')
+                        seed_catalog = merged_seed_table
+                        print(f"Snapped {int(np.sum(_good))} of {len(merged_seed_table)} "
+                              f"seed positions to per-filter iter2 catalog "
+                              f"({_iter2_cat_path.split('/')[-1]}) within "
+                              f"{_match_radius_arcsec:.2f}\"; "
+                              f"populated {preferred_seed_skycoord_col} column.",
+                              flush=True)
+                    else:
+                        print(f"No seeds within {_match_radius_arcsec:.2f}\" of any "
+                              f"per-filter iter2 source; leaving seed positions as-is",
+                              flush=True)
+                else:
+                    print(f"Per-filter iter2 catalog {_iter2_cat_path} has no "
+                          f"'skycoord' column or is empty; skipping snap",
+                          flush=True)
+            else:
+                print(f"No per-filter iter2 cat at {_iter2_cat_path}; "
+                      f"using cross-band union positions unchanged",
+                      flush=True)
+        except Exception as _snap_exc:
+            print(f"Per-filter iter2 snap failed ({_snap_exc!r}); "
+                  f"continuing with cross-band union positions",
+                  flush=True)
+
         # Optional spatial chunking: split the seed catalog into N image-pixel
         # tiles and fit only the regular seeds whose pixel position lies in
         # this chunk's tile.  Each chunk runs as its own SLURM array job and
