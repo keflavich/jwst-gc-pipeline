@@ -437,21 +437,51 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     # weights: inverse-variance flux weighting, zeroed where masked
     weights = (1.0 / (arr_fluxerr**2)) * keepmask
 
+    # 2026-06-04: position averages MUST NOT depend on flux_err.
+    # Per-frame fits with NaN flux_err (flag=48/49 near_bound +
+    # no_covariance: singular covariance matrix but flux_fit / x_fit /
+    # y_fit are valid) would otherwise contribute zero weight to
+    # position averaging.  A source whose every matched frame has NaN
+    # flux_err, or whose few valid-err matches all get sigma-clipped
+    # by clip_ra/dec on tiny position spread, ends up with all-zero
+    # weights -> nanaverage returns NaN -> avg_ra/dec NaN -> the
+    # source is then dropped by the minimal-step NaN-sky reject in
+    # ``combine_singleframe``'s caller.  Diagnosed on sickle F480M
+    # iter3 star 2 faint target (basecrds[25338]): 8 valid finite
+    # positions across 8 frames, 6 of 8 had NaN flux_err, the 2
+    # valid-err entries were clipped by clip_ra -> all-zero weights ->
+    # NaN avg -> source dropped.  ~31k of 45k merged-exposure rows
+    # were silently lost this way before the fix.  Use uniform
+    # (keepmask) weights for position averaging.
+    pos_weights = keepmask.astype('float32')
+
+    # For flux / flux_err averages we keep inverse-variance weighting
+    # where it is available, but fall back to uniform (keepmask)
+    # weights per row when the inverse-variance weights are all NaN /
+    # zero -- otherwise the same sources have NaN flux_avg.
+    finite_iv_per_row = np.any(np.isfinite(weights) & (weights > 0),
+                               axis=1)
+    weights_with_fallback = np.where(finite_iv_per_row[:, None],
+                                     weights, pos_weights)
+
     # position averages
-    avg_ra = nanaverage(arr_ra, axis=1, weights=weights)
-    avg_dec = nanaverage(arr_dec, axis=1, weights=weights)
-    std_ra = nanaverage((arr_ra - avg_ra[:, None])**2, weights=weights, axis=1)**0.5
-    std_dec = nanaverage((arr_dec - avg_dec[:, None])**2, weights=weights, axis=1)**0.5
+    avg_ra = nanaverage(arr_ra, axis=1, weights=pos_weights)
+    avg_dec = nanaverage(arr_dec, axis=1, weights=pos_weights)
+    std_ra = nanaverage((arr_ra - avg_ra[:, None])**2, weights=pos_weights, axis=1)**0.5
+    std_dec = nanaverage((arr_dec - avg_dec[:, None])**2, weights=pos_weights, axis=1)**0.5
     avgpos = SkyCoord(avg_ra, avg_dec, unit=(u.deg, u.deg), frame='icrs')
 
     # free ra/dec arrays -- no longer needed
     del arr_ra, arr_dec
 
     # flux and flux_err reductions
-    flux_avg = nanaverage(arr_flux, weights=weights, axis=1)
-    std_flux_avg = nanaverage((arr_flux - flux_avg[:, None])**2, weights=weights, axis=1)**0.5
-    flux_err_avg = nanaverage(arr_fluxerr, weights=weights, axis=1)
-    std_flux_err_avg = nanaverage((arr_fluxerr - flux_err_avg[:, None])**2, weights=weights, axis=1)**0.5
+    flux_avg = nanaverage(arr_flux, weights=weights_with_fallback, axis=1)
+    std_flux_avg = nanaverage((arr_flux - flux_avg[:, None])**2, weights=weights_with_fallback, axis=1)**0.5
+    flux_err_avg = nanaverage(arr_fluxerr, weights=weights_with_fallback, axis=1)
+    std_flux_err_avg = nanaverage((arr_fluxerr - flux_err_avg[:, None])**2, weights=weights_with_fallback, axis=1)**0.5
+    # flux_err_prop uses original inverse-variance weights only, since it
+    # is the formal propagated uncertainty 1/sqrt(sum(1/sigma^2)); rows
+    # with no inverse-variance contribution legitimately have NaN here.
     flux_err_prop = (np.nansum(arr_fluxerr**2 * weights, axis=1)
                      / np.nansum(weights, axis=1))**0.5
 
@@ -495,8 +525,12 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
             keep = saved_keep[ii]
             mi = saved_match_inds[ii]
             arr[mi[keep], ii] = tbl[key][keep]
-        key_avg = nanaverage(arr, weights=weights, axis=1)
-        std_key = nanaverage((arr - key_avg[:, None])**2, weights=weights, axis=1)**0.5
+        # Use weights_with_fallback (same rationale as flux averages
+        # in Phase 1): a basecrds source whose every matched frame has
+        # NaN flux_err must still produce a non-NaN average of qfit,
+        # cfit, flags, etc. or it gets dropped at the minimal step.
+        key_avg = nanaverage(arr, weights=weights_with_fallback, axis=1)
+        std_key = nanaverage((arr - key_avg[:, None])**2, weights=weights_with_fallback, axis=1)**0.5
         newtbl[f'{key}_avg'] = key_avg
         newtbl[f'std_{key}_avg'] = std_key
         del arr
