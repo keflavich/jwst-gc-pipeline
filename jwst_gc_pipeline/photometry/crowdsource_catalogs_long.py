@@ -4605,11 +4605,15 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
         # 1.5 * fwhm_pix.  The tighter threshold left seeded-duplicate
         # fits at 2.5-3.2 LW pix apart uncaught, which drove
         # progressively deeper negative residuals in iter2 (p0.1=-96)
-        # and iter3 (p0.1=-172).  1.5*FWHM catches drift-together /
-        # duplicate-seed pairs out to ~7 LW pix (~0.44"); anything real
-        # that this over-merges should reappear in the iterative pass's
-        # DAOStarFinder residual step.
-        min_sep_pix = 1.5 * fwhm_pix
+        # and iter3 (p0.1=-172).
+        # 2026-06-04 (V13): tighten to 1.0 px to preserve real
+        # adjacent stars from V12 iter2 inject (e.g. sickle F480M
+        # star 1 faint target 3.32 px from bright neighbor was being
+        # qfit-merged into bright at 1.5*FWHM=3.86 px).  Risk: may
+        # re-introduce 2026-04-24 deep negative residuals if drift-
+        # together duplicates beyond 1.0 px exist; will be measured
+        # on V13 mosaic.
+        min_sep_pix = 1.0
         xfit_arr = np.asarray(result['x_fit'], dtype=float)
         yfit_arr = np.asarray(result['y_fit'], dtype=float)
         flux_arr = np.asarray(result['flux_fit'], dtype=float)
@@ -4848,7 +4852,9 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
             #      raises ValueError("The truth value of an array ... is ambiguous").
             # 2026-04-24: threshold loosened to 1.5 * fwhm_pix, same
             # rationale as in phot_basic above.
-            min_sep_pix = 1.5 * fwhm_pix
+            # 2026-06-04 (V13): tighten to 1.0 px to preserve real
+            # adjacent stars (see phot_basic note above).
+            min_sep_pix = 1.0
             xfit_arr = np.asarray(result2['x_fit'], dtype=float)
             yfit_arr = np.asarray(result2['y_fit'], dtype=float)
             flux_arr = np.asarray(result2['flux_fit'], dtype=float)
