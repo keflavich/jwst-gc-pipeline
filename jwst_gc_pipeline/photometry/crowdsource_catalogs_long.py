@@ -1178,8 +1178,17 @@ def _resolve_seed_skycoords(seed_table, ww=None, preferred_skycoord_col=None):
             return seed_table
 
     # 2. Plain ra/dec columns -> single vector SkyCoord construction.
+    # IMPORTANT: only short-circuit on ra/dec when no preferred SkyCoord-mixin
+    # column is requested.  Otherwise the iter3 per-filter seed snap (which
+    # adds ``skycoord_{filter}`` to override the union's SW-only ra/dec
+    # astrometry) would be ignored.  Detected 2026-06-03 on sickle F480M
+    # iter3 source 55 init at unsnapped pix (310.26,126.62) despite union
+    # row 13911 having been correctly snapped to (311.80,127.07): consumer's
+    # _resolve_seed_skycoords hit ra/dec fallback before checking
+    # skycoord_f480m.
     if ('skycoord' not in seed_table.colnames
-            and 'ra' in seed_table.colnames and 'dec' in seed_table.colnames):
+            and 'ra' in seed_table.colnames and 'dec' in seed_table.colnames
+            and preferred_skycoord_col is None):
         ra_arr = np.asarray(seed_table['ra'], dtype=float)
         dec_arr = np.asarray(seed_table['dec'], dtype=float)
         seed_table['skycoord'] = SkyCoord(ra=ra_arr * u.deg,
@@ -3894,6 +3903,193 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
         except Exception as _snap_exc:
             print(f"Per-filter iter2 snap failed ({_snap_exc!r}); "
                   f"continuing with cross-band union positions",
+                  flush=True)
+
+        # V12: inject per-filter iter2 sources as NEW seed rows.
+        #
+        # V11 snaps existing union rows to nearby iter2 positions but does
+        # not fix two failure modes diagnosed 2026-06-04 on the
+        # f480_toinvestgiate_june4 reg list:
+        #
+        # Mode A (stars 1, 2, 12, 13): iter2 detects a faint target ~0.21"
+        # from a bright neighbor.  Union has 2+ SW fragments in the area;
+        # V11 snaps each to its closest iter2 source, so faint AND bright
+        # iter2 positions each get a snapped union row.  But the snapped
+        # union rows inherit flux_init=1 (det_f480m=False, flux_f480m
+        # masked).  The pre-fit deduplication (line ~4129, 1.0 * FWHM ~
+        # 2.5 LW pix for iter3) keeps the BRIGHTER seed in each cluster;
+        # in this case the bright iter2 source has nearby union rows with
+        # detected_f480m=True / flux_f480m=5787 carried in -- they win,
+        # the faint target's seed (flux_init=1) is dropped along with all
+        # other "flux=1" near-coincident union fragments.  Empirically
+        # verified: for star 1, V11 snapped u[14153] to iter2[5304] at
+        # pix (344.21, 121.83) but basic iter3 has zero inits within 2
+        # px of that position.
+        #
+        # Mode B (stars 7, 11, 15): the nearest union seed is 0.197-
+        # 0.253" from its iter2 source - just outside V11's 0.19" snap
+        # radius (3.0 * 0.063"/pix).  No snap fires, faint iter2 target
+        # has no representative in iter3 seeds.
+        #
+        # Solution: append every per-filter iter2 source as a fresh seed
+        # row, carrying its iter2 flux as flux_init.  Then dedup picks
+        # the iter2 row (high flux) over nearby low-flux_init union
+        # fragments.  Union rows with detected_f480m=True still have
+        # their own flux populated and survive on their own merit.
+        try:
+            _iter2_cat_path = os.path.join(
+                basepath, 'catalogs',
+                f'{filtername.lower()}_merged_indivexp_merged_iter2_'
+                f'daoiterative_iterative.fits',
+            )
+            if os.path.exists(_iter2_cat_path):
+                _it2 = Table.read(_iter2_cat_path)
+                if 'skycoord' in _it2.colnames and len(_it2) > 0:
+                    _it2_sk = _it2['skycoord']
+                    if not isinstance(_it2_sk, SkyCoord):
+                        _it2_sk = SkyCoord(_it2_sk)
+                    _it2_sk = _it2_sk.unmasked if hasattr(_it2_sk, 'unmasked') else _it2_sk
+
+                    _n_iter2 = len(_it2)
+                    _flux_col_lower = f'flux_{filtername.lower()}'
+                    _it2_flux = (np.asarray(_it2['flux'], dtype=float)
+                                 if 'flux' in _it2.colnames
+                                 else np.ones(_n_iter2, dtype=float))
+
+                    _injected = Table()
+                    # Ensure injected rows carry iter2 flux as 'flux'
+                    # (SeededFinder reads this as flux_init).  This is
+                    # the load-bearing column for dedup brightest-wins.
+                    _injected['flux'] = _it2_flux
+                    _injected['flux_fit'] = _it2_flux
+                    for _col in merged_seed_table.colnames:
+                        if _col in ('flux', 'flux_fit'):
+                            continue
+                        _src = merged_seed_table[_col]
+                        if isinstance(_src, SkyCoord):
+                            _injected[_col] = SkyCoord(
+                                ra=_it2_sk.ra, dec=_it2_sk.dec, frame='icrs')
+                        elif _col == 'ra':
+                            _injected[_col] = np.asarray(_it2_sk.ra.deg, dtype=float)
+                        elif _col == 'dec':
+                            _injected[_col] = np.asarray(_it2_sk.dec.deg, dtype=float)
+                        elif _col == 'source_id_union':
+                            _injected[_col] = np.ma.masked_array(
+                                np.full(_n_iter2, -1, dtype=np.int64),
+                                mask=np.ones(_n_iter2, dtype=bool))
+                        elif _col == 'seed_filter_origin':
+                            _injected[_col] = np.array(
+                                [f'{filtername.upper()}_ITER2'] * _n_iter2)
+                        elif _col == 'is_saturated':
+                            _injected[_col] = np.zeros(_n_iter2, dtype=bool)
+                        elif _col == 'n_filters':
+                            _injected[_col] = np.ones(_n_iter2, dtype=np.int32)
+                        elif _col == _flux_col_lower:
+                            _injected[_col] = _it2_flux
+                        elif _col == f'detected_{filtername.lower()}':
+                            _injected[_col] = np.ones(_n_iter2, dtype=bool)
+                        elif _col == 'flux_fit':
+                            _injected[_col] = _it2_flux
+                        elif _col.startswith('detected_'):
+                            _injected[_col] = np.zeros(_n_iter2, dtype=bool)
+                        else:
+                            # Fill numeric columns with NaN, others with
+                            # the column's default; use a masked array to
+                            # preserve dtype across vstack.
+                            _dt = _src.dtype if hasattr(_src, 'dtype') else None
+                            if _dt is not None and np.issubdtype(_dt, np.floating):
+                                _injected[_col] = np.full(_n_iter2, np.nan, dtype=_dt)
+                            elif _dt is not None and np.issubdtype(_dt, np.integer):
+                                _injected[_col] = np.ma.masked_array(
+                                    np.zeros(_n_iter2, dtype=_dt),
+                                    mask=np.ones(_n_iter2, dtype=bool))
+                            elif _dt is not None and np.issubdtype(_dt, np.bool_):
+                                _injected[_col] = np.zeros(_n_iter2, dtype=bool)
+                            else:
+                                _injected[_col] = np.ma.masked_array(
+                                    np.zeros(_n_iter2, dtype=object),
+                                    mask=np.ones(_n_iter2, dtype=bool))
+
+                    from astropy.table import vstack as _vstack
+                    merged_seed_table = _vstack(
+                        [merged_seed_table, _injected],
+                        join_type='outer', metadata_conflicts='silent')
+                    seed_catalog = merged_seed_table
+                    print(f"Injected {_n_iter2} per-filter iter2 sources as "
+                          f"new seed rows (flux_init carried from iter2 "
+                          f"'flux' column); dedup will collapse against "
+                          f"nearby union fragments. Seed table now "
+                          f"{len(merged_seed_table)} rows.", flush=True)
+        except Exception as _inject_exc:
+            print(f"Per-filter iter2 seed injection failed ({_inject_exc!r}); "
+                  f"continuing with snap-only union catalog",
+                  flush=True)
+
+        # Also snap satstar_table positions to per-filter iter2 where matched.
+        # The force-union satstar table (project_force_union_satstar 2026-05-18)
+        # adds entries at cross-frame union (skycoord_ref) positions for stars
+        # saturated in OTHER filters' frames -- these land on this frame at
+        # the SW astrometric position, which is several LW pixels off from
+        # the true F480M position.  Pre-fit dedup then merges the snapped
+        # union seed with the unsnapped satstar entry; the satstar entry
+        # (which carries is_saturated=True and a valid flux) wins and the
+        # snapped position is lost.  Detected 2026-06-03 on sickle F480M
+        # region (266.57045,-28.80021): union row 13911 was correctly snapped
+        # to pix (311.80,127.07), but iter3 source 55 init landed at
+        # (310.26,126.62) -- the unsnapped union/satstar position.  Snapping
+        # satstar_table's (x_fit,y_fit) to per-filter iter2 positions
+        # closes this gap.
+        try:
+            if (satstar_table is not None and len(satstar_table) > 0
+                    and 'x_fit' in satstar_table.colnames
+                    and 'y_fit' in satstar_table.colnames):
+                _iter2_cat_path = os.path.join(
+                    basepath, 'catalogs',
+                    f'{filtername.lower()}_merged_indivexp_merged_iter2_'
+                    f'daoiterative_iterative.fits',
+                )
+                if os.path.exists(_iter2_cat_path):
+                    _it2 = Table.read(_iter2_cat_path)
+                    if 'skycoord' in _it2.colnames and len(_it2) > 0:
+                        _it2_sk = _it2['skycoord']
+                        if not isinstance(_it2_sk, SkyCoord):
+                            _it2_sk = SkyCoord(_it2_sk)
+                        _it2_sk = _it2_sk.unmasked if hasattr(_it2_sk, 'unmasked') else _it2_sk
+                        _sat_x = np.asarray(satstar_table['x_fit'], dtype=float)
+                        _sat_y = np.asarray(satstar_table['y_fit'], dtype=float)
+                        _sat_finite = np.isfinite(_sat_x) & np.isfinite(_sat_y)
+                        if np.any(_sat_finite):
+                            _sat_sk = ww.pixel_to_world(_sat_x[_sat_finite],
+                                                        _sat_y[_sat_finite])
+                            _pixscale_arcsec = (ww.proj_plane_pixel_area()**0.5).to(u.arcsec).value if hasattr(ww, 'proj_plane_pixel_area') else 0.063
+                            _match_radius_arcsec = max(0.15, 3.0 * _pixscale_arcsec)
+                            _idx, _sep2d, _ = _sat_sk.match_to_catalog_sky(_it2_sk)
+                            _good = _sep2d.arcsec < _match_radius_arcsec
+                            if np.any(_good):
+                                _it2_xy = ww.world_to_pixel(_it2_sk[_idx[_good]])
+                                _new_x = _sat_x.copy()
+                                _new_y = _sat_y.copy()
+                                _finite_idx = np.where(_sat_finite)[0]
+                                _move_idx = _finite_idx[_good]
+                                _new_x[_move_idx] = np.asarray(_it2_xy[0], dtype=float)
+                                _new_y[_move_idx] = np.asarray(_it2_xy[1], dtype=float)
+                                satstar_table['x_fit'] = _new_x
+                                satstar_table['y_fit'] = _new_y
+                                if 'x_init' in satstar_table.colnames:
+                                    _init_x = np.asarray(satstar_table['x_init'], dtype=float).copy()
+                                    _init_y = np.asarray(satstar_table['y_init'], dtype=float).copy()
+                                    _init_x[_move_idx] = np.asarray(_it2_xy[0], dtype=float)
+                                    _init_y[_move_idx] = np.asarray(_it2_xy[1], dtype=float)
+                                    satstar_table['x_init'] = _init_x
+                                    satstar_table['y_init'] = _init_y
+                                print(f"Snapped {int(np.sum(_good))} of "
+                                      f"{len(satstar_table)} satstar_table "
+                                      f"entries to per-filter iter2 positions "
+                                      f"within {_match_radius_arcsec:.2f}\".",
+                                      flush=True)
+        except Exception as _snap_sat_exc:
+            print(f"Per-filter iter2 satstar snap failed ({_snap_sat_exc!r}); "
+                  f"continuing with original satstar positions",
                   flush=True)
 
         # Optional spatial chunking: split the seed catalog into N image-pixel
