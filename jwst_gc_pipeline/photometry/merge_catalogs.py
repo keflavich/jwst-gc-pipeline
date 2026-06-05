@@ -70,7 +70,12 @@ project_obsnum = {'brick': {'2221': '001',
                              },
                   'sickle': {'3958': '007',
                              },
-                  'cloudef': {'2092': '005',
+                  # cloudef (proposal 2092) covers Cloud E (obs 002, t001)
+                  # and Cloud F (obs 005, t002) as two adjacent pointings.
+                  # The pipeline output retains t001 in both names (the
+                  # asn rename hardcodes t001), so the per-filter i2d glob
+                  # only needs an obs-id wildcard.
+                  'cloudef': {'2092': '*',
                               },
                   'sgrc': {'4147': '012',
                            },

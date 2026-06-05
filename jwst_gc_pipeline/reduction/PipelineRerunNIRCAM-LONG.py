@@ -123,6 +123,9 @@ REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD = {
         '001': 'catalogs/crowdsource_based_nircam-f405n_reference_astrometric_catalog.ecsv',
     },
     '2092': {
+        # cloudef pointings: 002 (Cloud E) + 005 (Cloud F). Both outside
+        # the GNS 0.25-deg cutoff so VVV is the right reference.
+        '002': 'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
         '005': 'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
     },
     '4147': {
@@ -994,7 +997,7 @@ if __name__ == "__main__":
                             '5365': {'001': 'sgrb2'},
                             '6151': {'001': 'w51'},
                             '3958': {'007': 'sickle', '001': 'sickle', '002': 'sickle'},
-                            '2092': {'005': 'cloudef'},
+                            '2092': {'002': 'cloudef', '005': 'cloudef'},
                             '4147': {'012': 'sgrc'},
                             '2045': {'001': 'arches', '003': 'quintuplet'},
                             '1939': {'001': 'sgra'},
