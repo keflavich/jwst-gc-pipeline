@@ -1802,6 +1802,7 @@ def main():
                                 try:
                                     merge_crowdsource(module=module, desat=desat, bgsub=bgsub, epsf=epsf,
                                                       fitpsf=fitpsf, target=target, basepath=basepath, blur=blur, indivexp=options.merge_singlefields,
+                                                      resbgsub=options.resbgsub,
                                                       iteration_label=options.iteration_label)
                                 except Exception as ex:
                                     print(f"Living with this error: {ex}, {type(ex)}, {str(ex)}")
@@ -1810,6 +1811,7 @@ def main():
                                         print(f'crowdsource {suffix} {module}')
                                         merge_crowdsource(module=module, suffix=suffix, desat=desat, bgsub=bgsub, epsf=epsf,
                                                           fitpsf=fitpsf, target=target, basepath=basepath, blur=blur, indivexp=options.merge_singlefields,
+                                                          resbgsub=options.resbgsub,
                                                           iteration_label=options.iteration_label)
                                 except Exception as ex:
                                     print(f"Exception: {ex}, {type(ex)}, {str(ex)}")
@@ -1821,6 +1823,7 @@ def main():
                                     print(f'crowdsource unweighted {module}', flush=True)
                                     merge_crowdsource(module=module, suffix='_unweighted', desat=desat, bgsub=bgsub, epsf=epsf,
                                                       fitpsf=fitpsf, target=target, basepath=basepath, blur=blur, indivexp=options.merge_singlefields,
+                                                      resbgsub=options.resbgsub,
                                                       iteration_label=options.iteration_label)
                                 except NotImplementedError:
                                     continue
@@ -1839,6 +1842,7 @@ def main():
                                                   bgsub=bgsub, epsf=epsf,
                                                   target=target, basepath=basepath, blur=blur, indivexp=options.merge_singlefields,
                                                   ref_filter=options.ref_filter,
+                                                  resbgsub=options.resbgsub,
                                                   iteration_label=options.iteration_label)
                                 except Exception as ex:
                                     print(f'daophot basic {module} desat={desat} bgsub={bgsub} epsf={epsf} blur={blur} fitpsf={fitpsf} target={target}', flush=True)
@@ -1859,6 +1863,7 @@ def main():
                                                   bgsub=bgsub, epsf=epsf,
                                                   target=target, basepath=basepath, blur=blur, indivexp=options.merge_singlefields,
                                                   ref_filter=options.ref_filter,
+                                                  resbgsub=options.resbgsub,
                                                   iteration_label=options.iteration_label)
                                 except Exception as ex:
                                     if blur and not options.strict_require_blur:

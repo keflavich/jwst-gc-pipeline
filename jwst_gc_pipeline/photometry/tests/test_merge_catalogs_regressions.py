@@ -175,6 +175,20 @@ def test_combine_singleframe_keeps_sources_with_nan_fluxerr(_sci_fits):
 # ---------------------------------------------------------------------------
 # merge_catalogs: missing ref_filter must raise (no silent reference switch).
 # ---------------------------------------------------------------------------
+@pytest.mark.parametrize("bgsub, resbgsub, expected", [
+    (False, False, ''),
+    (True, False, '_bgsub'),
+    (False, True, '_resbgsub'),
+    (True, True, '_bgsub_resbgsub'),
+])
+def test_bgsub_token(bgsub, resbgsub, expected):
+    """merge_catalogs filename token must match the producer's convention
+    (crowdsource_catalogs_long._bgsub_token) so the merge globs find the
+    _resbgsub catalogs; _bgsub must not be a substring of _resbgsub."""
+    assert MC._bgsub_token(bgsub, resbgsub) == expected
+    assert '_bgsub' not in '_resbgsub'
+
+
 def test_merge_catalogs_missing_ref_filter_raises():
     """merge_catalogs.py:564-572 -- requesting a ref_filter that is not in
     the input tables must raise ValueError, not silently pick another."""
