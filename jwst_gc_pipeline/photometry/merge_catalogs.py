@@ -899,6 +899,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
                                         offsets_table=None,
                                         iteration_label=None,
                                         resbgsub=False,
+                                        do_replace_saturated=True,
                                         basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
 
     desat = "_unsatstar" if desat else ""
@@ -1036,7 +1037,11 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
         minimal_table.meta[f'fn{ii}'] = os.path.basename(fn)
 
     # Ensure saturated stars are represented in indivexp merged products too.
-    replace_saturated(minimal_table, filtername=filtername, target=target, basepath=basepath)
+    # Skippable (do_replace_saturated=False) for cutout runs, whose basepath
+    # lacks the target-level resources replace_saturated needs (reduction/
+    # fwhm_table.ecsv, full satstar catalogs).
+    if do_replace_saturated:
+        replace_saturated(minimal_table, filtername=filtername, target=target, basepath=basepath)
 
     reject = np.isnan(minimal_table['skycoord'].ra) | np.isnan(minimal_table['skycoord'].dec)
     if np.any(reject):

@@ -3626,6 +3626,36 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                                                           make_starless=_mosaic_starless)
                     else:
                         print('Skipping residual mosaicking in SLURM array-task mode.')
+
+                # For a cutout run, also merge the per-exposure catalogs into a
+                # single across-exposure catalog under the cutout tree
+                # (combine_singleframe).  replace_saturated is skipped: its
+                # target-level resources (reduction/fwhm_table.ecsv, full
+                # satstar catalogs) don't live under the cutout basepath.
+                if (_cutout_run and os.getenv('SLURM_ARRAY_TASK_ID') is None
+                        and options.daophot):
+                    from jwst_gc_pipeline.photometry import merge_catalogs as _merge_catalogs
+                    _cut_bp = _cutout_out_basepath(basepath, options)
+                    os.makedirs(os.path.join(_cut_bp, 'catalogs'), exist_ok=True)
+                    _merge_methods = [('dao', '_basic')]
+                    if not options.basic_only:
+                        _merge_methods.append(('daoiterative', '_iterative'))
+                    for _mname, _msuffix in _merge_methods:
+                        try:
+                            _merge_catalogs.merge_individual_frames(
+                                module=module, filtername=filtername.lower(),
+                                progid=proposal_id, method=_mname, suffix=_msuffix,
+                                target=target, basepath=_cut_bp,
+                                iteration_label=options.iteration_label or None,
+                                bgsub=options.bgsub, desat=options.desaturated,
+                                epsf=options.epsf, blur=options.blur,
+                                resbgsub=getattr(options, 'use_iter3_residual_bg', False),
+                                do_replace_saturated=False)
+                            print(f"cutout: wrote merged {_mname} catalog under "
+                                  f"{_cut_bp}/catalogs/", flush=True)
+                        except Exception as ex:
+                            print(f"cutout: merge_individual_frames({_mname}) "
+                                  f"failed: {ex}", flush=True)
             else:
                 # Mosaic-mode photometry deprecated 2026-05-25 (see main()
                 # deprecation guard).  Unreachable in normal CLI use, but
