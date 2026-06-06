@@ -761,6 +761,26 @@ def _sanitize_cutout_label(s):
     return re.sub(r'[^A-Za-z0-9._+-]', '', str(s)) or 'cutout'
 
 
+def _cutout_label_for(options):
+    """Final cutout output label (filesystem-safe).  ``--cutout-label``
+    overrides; else derived from the .reg basename or the ra,dec of the spec.
+    Single source of truth shared by _prepare_cutout_input and the driver's
+    cutout residual-mosaic so both resolve the same <basepath>/cutouts/<label>.
+    """
+    if getattr(options, 'cutout_label', ''):
+        return _sanitize_cutout_label(options.cutout_label)
+    spec = str(getattr(options, 'cutout_region', '')).strip()
+    if spec.lower().endswith('.reg') or (os.path.exists(spec) and ',' not in spec):
+        return _sanitize_cutout_label(os.path.splitext(os.path.basename(spec))[0])
+    parts = spec.split(',')
+    return _sanitize_cutout_label(f"{float(parts[0]):.5f}{float(parts[1]):+.5f}")
+
+
+def _cutout_out_basepath(basepath, options):
+    """``<basepath>/cutouts/<label>`` for a --cutout-region run."""
+    return os.path.join(basepath, 'cutouts', _cutout_label_for(options))
+
+
 def _parse_cutout_region(spec, ww, default_size_arcsec=5.0):
     """Parse a ``--cutout-region`` spec into ``(center, size, label)``.
 
@@ -838,11 +858,10 @@ def _prepare_cutout_input(filename, basepath, filtername, options):
     from astropy.wcs import NoConvergence
     with fits.open(filename) as hdul:
         sci_ww = wcs.WCS(hdul['SCI'].header)
-        center, size, label = _parse_cutout_region(
+        center, size, _ = _parse_cutout_region(
             options.cutout_region, sci_ww,
             default_size_arcsec=float(getattr(options, 'cutout_size_arcsec', 5.0)))
-        if getattr(options, 'cutout_label', ''):
-            label = _sanitize_cutout_label(options.cutout_label)
+        label = _cutout_label_for(options)
         try:
             cut = Cutout2D(np.asarray(hdul['SCI'].data), position=center, size=size,
                            wcs=sci_ww, mode='trim', copy=True)
@@ -2742,7 +2761,8 @@ def get_uncertainty(err, data, dq=None, wht=None):
 def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, module,
                                    residual_kind='iterative', desat=False, bgsub=False,
                                    epsf=False, blur=False, group=False, pupil='clear',
-                                   iteration_label=None, resbgsub=False):
+                                   iteration_label=None, resbgsub=False,
+                                   make_starless=True):
     """
     Resample per-exposure residual images into one JWST-style *_residual_i2d.fits product.
     """
@@ -2957,7 +2977,13 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
         model.save(infilled_filename, overwrite=True)
     print(f'Wrote residual infilled mosaic {infilled_filename}')
 
-    # Always run make_starless after producing the infilled mosaic.
+    # Always run make_starless after producing the infilled mosaic -- unless
+    # disabled (cutout runs: the target-catalog config keyed on basepath does
+    # not exist for the cutout tree, and a starless map isn't needed there).
+    if not make_starless:
+        print("Skipping make_starless (make_starless=False).", flush=True)
+        return infilled_filename
+
     from jwst_gc_pipeline.photometry.make_starless_image import TARGETS, make_starless_filter
 
     # Reverse-lookup the target config by basepath.
@@ -2993,6 +3019,9 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
 
 
 def save_residual_datamodel(input_filename, output_filename, data):
+    """
+    TODO: profile this code, it seems to take a minute or more even for cutouts
+    """
     import astropy.io.fits as fits_io
 
     # Read S_REGION before opening with ImageModel; ImageModel.save() drops CONTINUE cards,
@@ -3104,6 +3133,19 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     help="Square cutout size (arcsec) for DS9 point regions / "
                          "fallback.  Default 5.0.",
                     metavar="cutout_size_arcsec")
+    # Fit saturated stars whose centres lie OUTSIDE this frame's FOV (from
+    # regions_/saturated_stars_outside_fov[_locked].reg) so their wings are
+    # subtracted.  Tri-state: default (None) -> ON for normal runs, OFF for
+    # --cutout-region runs.  The two flags force it on/off regardless.
+    parser.add_option("--fit-satstar-outside-fov", dest="fit_satstar_outside_fov",
+                    default=None, action='store_true',
+                    help=("Force-enable fitting of saturated stars outside the "
+                          "frame FOV (default: on for full-frame runs, off for "
+                          "--cutout-region runs)."),
+                    metavar="fit_satstar_outside_fov")
+    parser.add_option("--no-fit-satstar-outside-fov", dest="fit_satstar_outside_fov",
+                    action='store_false',
+                    help="Force-disable fitting of saturated stars outside the FOV.")
     parser.add_option("--epsf", dest="epsf",
                     default=False,
                     action='store_true',
@@ -3551,23 +3593,23 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             if _cutout_run:
                                 _cutout_overlap_count += 1
 
-                if _cutout_run:
-                    # Cutout residuals live under <basepath>/cutouts/<label>/;
-                    # the auto-mosaic globs <basepath> and would miss them (or
-                    # mosaic full-frame residuals).  Skip it -- mosaic the
-                    # cutout tree separately if needed.
-                    print("cutout: skipping auto residual-mosaic (run "
-                          "mosaic_each_exposure_residuals on the cutout dir if "
-                          "you need a rectified cutout mosaic)", flush=True)
-                elif not options.skip_mosaic_each_exposure_residuals:
+                if not options.skip_mosaic_each_exposure_residuals:
                     if os.getenv('SLURM_ARRAY_TASK_ID') is None:
+                        # For a cutout run, mosaic the cutout residuals (under
+                        # <basepath>/cutouts/<label>/) and skip make_starless
+                        # (its target config is keyed on the full-frame
+                        # basepath).  ResampleStep rectifies just the cutout
+                        # region via the shifted GWCS on each cutout residual.
+                        _mosaic_basepath = (_cutout_out_basepath(basepath, options)
+                                            if _cutout_run else basepath)
+                        _mosaic_starless = not _cutout_run
                         # Determine which residual kinds to mosaic based on enabled photometry types
                         mosaic_residual_kinds = []
                         if options.daophot:
                             mosaic_residual_kinds = ['basic'] if options.basic_only else ['basic', 'iterative']
-                        
+
                         for residual_kind in mosaic_residual_kinds:
-                            mosaic_each_exposure_residuals(basepath=basepath,
+                            mosaic_each_exposure_residuals(basepath=_mosaic_basepath,
                                                           filtername=filtername,
                                                           proposal_id=proposal_id,
                                                           field=field,
@@ -3580,7 +3622,8 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                                                           group=options.group,
                                                           pupil='clear',
                                                           iteration_label=options.iteration_label or None,
-                                                          resbgsub=getattr(options, 'use_iter3_residual_bg', False))
+                                                          resbgsub=getattr(options, 'use_iter3_residual_bg', False),
+                                                          make_starless=_mosaic_starless)
                     else:
                         print('Skipping residual mosaicking in SLURM array-task mode.')
             else:
@@ -4064,12 +4107,24 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
     # implies each-exposure mode and the per-frame DQ_SATURATED gate the
     # satstar fitter relies on is available.
     if True:
-        # Cut at 32" — matches the radius of the large PSF grid used for forced
-        # fits (fovp2048 SW × 0.031"/pix = 31.7"; fovp1024 LW × 0.063"/pix
-        # = 32.3").  Anything farther falls outside PSF support so the
-        # cutout would contain zero usable pixels and the fit would raise.
-        outside_star_pixels, outside_locked = load_outside_fov_satstar_pixels(
-            basepath, ww, data_shape=nan_replaced_data.shape, max_offset_arcsec=32.0)
+        # Optionally fit saturated stars whose centres lie OUTSIDE this frame's
+        # FOV (their wings still bleed into the field).  Default: ON for
+        # full-frame runs, OFF for cutout runs (a small cutout rarely benefits
+        # and the off-FOV forced fits are wasteful there).  --fit-satstar-
+        # outside-fov / --no-fit-satstar-outside-fov force it.  In-FOV satstar
+        # fitting below is unaffected either way.
+        _fit_outside = getattr(options, 'fit_satstar_outside_fov', None)
+        if _fit_outside is None:
+            _fit_outside = not _cutout_active
+        if _fit_outside:
+            # Cut at 32" — matches the radius of the large PSF grid used for forced
+            # fits (fovp2048 SW × 0.031"/pix = 31.7"; fovp1024 LW × 0.063"/pix
+            # = 32.3").  Anything farther falls outside PSF support so the
+            # cutout would contain zero usable pixels and the fit would raise.
+            outside_star_pixels, outside_locked = load_outside_fov_satstar_pixels(
+                basepath, ww, data_shape=nan_replaced_data.shape, max_offset_arcsec=32.0)
+        else:
+            outside_star_pixels, outside_locked = [], False
         # When seeds came from the verified ``_locked.reg`` file, skip the
         # ±5 px grid search (radius=0 → single-point flux-only fit at the
         # locked position).  Default radius=5 otherwise.
