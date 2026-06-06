@@ -545,6 +545,23 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     return newtbl
 
 
+def _bgsub_token(bgsub, resbgsub=False):
+    """Filename token for the background-subtraction mode(s) in effect.
+
+    * ``--bgsub`` (global Background2D subtraction)        -> ``_bgsub``
+    * ``--use-iter3-residual-bg`` (merged iter3 residual-
+      smoothed background subtraction)                    -> ``_resbgsub``
+
+    Mirrors ``crowdsource_catalogs_long._bgsub_token`` so the merge globs
+    match the per-frame catalog names that producer wrote.  ``_bgsub`` is
+    never a substring of ``_resbgsub`` so token matching does not collide.
+    """
+    token = '_bgsub' if bgsub else ''
+    if resbgsub:
+        token += '_resbgsub'
+    return token
+
+
 def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
                    ref_filter='f405n',
                    epsf=False, bgsub=False, desat=False, blur=False,
@@ -553,6 +570,7 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
                    qfcut=None, fracfluxcut=None,
                    min_nmatch_narrow=4,
                    iteration_label=None,
+                   resbgsub=False,
                    basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
     print(f'Starting merge catalogs: catalog_type: {catalog_type} module: {module} target: {target}', flush=True)
 
@@ -582,7 +600,7 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
     jfilts.add_index('filterID')
 
     desat = "_unsatstar" if desat else ""
-    bgsub = '_bgsub' if bgsub else ''
+    bgsub = _bgsub_token(bgsub, resbgsub)
 
     reffiltercol = [ref_filter] * len(basetable)
     print(f"Started with {len(basetable)} in filter {ref_filter}", flush=True)
@@ -880,10 +898,11 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
                                         method='crowdsource',
                                         offsets_table=None,
                                         iteration_label=None,
+                                        resbgsub=False,
                                         basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
 
     desat = "_unsatstar" if desat else ""
-    bgsub = '_bgsub' if bgsub else ''
+    bgsub = _bgsub_token(bgsub, resbgsub)
     fitpsf = '_fitpsf' if fitpsf else ''
     blur_ = "_blur" if blur else ""
     # iter_token is inserted *between* the {blur_} block and the
@@ -1039,6 +1058,7 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
                       min_qf=0.75,
                       indivexp=False,
                       iteration_label=None,
+                      resbgsub=False,
                       basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
     if epsf:
         raise NotImplementedError
@@ -1053,7 +1073,8 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
              ]
 
     desat = "_unsatstar" if desat else ""
-    bgsub = '_bgsub' if bgsub else ''
+    bgsub_flag = bool(bgsub)
+    bgsub = _bgsub_token(bgsub, resbgsub)
     fitpsf = '_fitpsf' if fitpsf else ''
     blur_ = "_blur" if blur else ""
     if iteration_label in (None, ''):
@@ -1159,8 +1180,8 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
             raise ex
 
     merge_catalogs(tbls,
-                   catalog_type=f'crowdsource{suffix}{"_desat" if desat else ""}{"_bgsub" if bgsub else ""}',
-                   module=module, bgsub=bgsub, desat=desat, epsf=epsf, target=target,
+                   catalog_type=f'crowdsource{suffix}{"_desat" if desat else ""}{bgsub}',
+                   module=module, bgsub=bgsub_flag, resbgsub=resbgsub, desat=desat, epsf=epsf, target=target,
                    blur=blur,
                    indivexp=indivexp,
                    iteration_label=iteration_label,
@@ -1173,10 +1194,12 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
                   indivexp=False,
                   ref_filter=None,
                   iteration_label=None,
+                  resbgsub=False,
                   basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
 
     desat = "_unsatstar" if desat else ""
-    bgsub = '_bgsub' if bgsub else ''
+    bgsub_flag = bool(bgsub)
+    bgsub = _bgsub_token(bgsub, resbgsub)
     epsf_ = "_epsf" if epsf else ""
     blur_ = "_blur" if blur else ""
     if iteration_label in (None, ''):
@@ -1309,7 +1332,8 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
             print(tbl.meta)
             raise ex
 
-    _merge_kwargs = dict(catalog_type=daophot_type, module=module, bgsub=bgsub, desat=desat,
+    _merge_kwargs = dict(catalog_type=daophot_type, module=module, bgsub=bgsub_flag,
+                         resbgsub=resbgsub, desat=desat,
                          epsf=epsf, target=target, blur=blur, indivexp=indivexp,
                          iteration_label=iteration_label,
                          basepath=basepath)
@@ -1673,6 +1697,11 @@ def main():
                            '(default: f405n, which is correct for brick/cloudc/sgrb2/etc. '
                            'Targets that do not include F405N must override -- e.g. '
                            'sickle uses f470n.)')
+    parser.add_option('--use-iter3-residual-bg', dest='resbgsub',
+                      default=False, action='store_true',
+                      help='Merge the catalogs produced with the merged iter3 '
+                           'residual-bg subtraction (filenames carry a "_resbgsub" '
+                           'token).  Must match the photometry run\'s flag.')
     (options, args) = parser.parse_args()
 
     modules = options.modules.split(",")
@@ -1743,6 +1772,7 @@ def main():
                                                                         offsets_table=offsets_tables[progid],
                                                                         method=method,
                                                                         iteration_label=options.iteration_label,
+                                                                        resbgsub=options.resbgsub,
                                                                         basepath=basepath)
                                             except ValueError as ex:
                                                 if blur and not options.strict_require_blur:
