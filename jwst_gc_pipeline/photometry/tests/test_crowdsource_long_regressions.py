@@ -130,6 +130,10 @@ class TestStripChunk:
         ('iter3_chunk10of12', 'iter3'),
         ('iter2', 'iter2'),               # no token -> unchanged
         ('', ''),
+        # iter4resbgrefit (final residual-bg refit) must survive chunk
+        # stripping so its iter3-like xy_bounds / seed path still fire.
+        ('iter4resbgrefit', 'iter4resbgrefit'),
+        ('iter4resbgrefit_chunk01of04', 'iter4resbgrefit'),
     ])
     def test_strip(self, label, expected):
         assert L._strip_chunk(label) == expected

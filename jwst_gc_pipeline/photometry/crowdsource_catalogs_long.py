@@ -2911,6 +2911,14 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                           "get a '_resbgsub' filename token.  Built by "
                           "make_iter3_residual_bgmaps.py."),
                     metavar="use_iter3_residual_bg")
+    parser.add_option("--resbg-mosaic-module", dest="resbg_mosaic_module",
+                    default='',
+                    help=("Module token of the iter3 residual mosaic to use as "
+                          "the --use-iter3-residual-bg background (default: "
+                          "'merged').  Targets whose whole-field co-add is a "
+                          "single detector pass that detector (e.g. sickle LW "
+                          "= 'nrcb')."),
+                    metavar="resbg_mosaic_module")
     parser.add_option("--epsf", dest="epsf",
                     default=False,
                     action='store_true',
@@ -3516,6 +3524,13 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
     print(f"Starting cataloging on {filename}", flush=True)
     fh, im1, data, wht, err, instrument, telescope, obsdate = load_data(filename)
     background_map = None
+    # iter4resbgrefit builds its residual against the pristine image, so keep a
+    # copy of the original data *before* any background subtraction below.
+    # (The authoritative is_resbg_refit flag is recomputed in the iteration
+    # block further down; this inline check mirrors it.)
+    _is_resbg_refit_early = (
+        (_strip_chunk(iteration_label) or '').lower() == 'iter4resbgrefit')
+    original_data = data.copy() if _is_resbg_refit_early else None
     inst_token = instrument.lower()
 
     # set up coordinate system
@@ -3546,28 +3561,31 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
         # background estimate.  Built by make_iter3_residual_bgmaps.py
         # and consumed by the iter2-residbg / iter3-residbg cascade.
         #
-        # 2026-06-06: use the *merged* (whole-field module='merged') iter3
-        # residual mosaic, smoothed, instead of the per-exposure residual.
-        # The merged residual co-adds every exposure so its background has
-        # much higher S/N.  It lives on the mosaic pixel grid, so reproject
-        # it onto this exposure's WCS before subtracting.  Built by
-        # make_iter3_residual_bgmaps.py (merged path); the filename mirrors
-        # the merged residual mosaic from mosaic_each_exposure_residuals
-        # with ``_smoothed_bg`` inserted before ``_i2d`` (see
-        # MERGED_SMOOTHED_BG building in make_iter3_residual_bgmaps.py).
+        # 2026-06-06: use the whole-field iter3 residual *mosaic*, smoothed,
+        # instead of the per-exposure residual.  The mosaic co-adds every
+        # exposure so its background has much higher S/N.  It lives on the
+        # mosaic pixel grid, so reproject it onto this exposure's WCS before
+        # subtracting.  Built by make_iter3_residual_bgmaps.py.
+        #
+        # The mosaic's module token is configurable via
+        # ``--resbg-mosaic-module`` (default 'merged').  Targets whose
+        # whole-field co-add is a single detector (e.g. sickle LW = 'nrcb')
+        # pass that token; SW four-detector co-adds use 'merged'.
         from reproject import reproject_interp
         _inst = _inst_token(filtername)
+        _bg_module = getattr(options, 'resbg_mosaic_module', '') or 'merged'
         residbg_path = (
             f'{basepath}/{filtername}/pipeline/'
             f'jw0{proposal_id}-o{field}_t001_{_inst}_{pupil}-{filtername.lower()}-'
-            f'merged_iter3_daophot_iterative_residual_smoothed_bg_i2d.fits'
+            f'{_bg_module}_iter3_daophot_iterative_residual_smoothed_bg_i2d.fits'
         )
         if not os.path.exists(residbg_path):
             raise ValueError(
-                f"--use-iter3-residual-bg requires the merged smoothed-bg "
-                f"mosaic {residbg_path} to exist; run "
+                f"--use-iter3-residual-bg requires the smoothed-bg mosaic "
+                f"{residbg_path} to exist; run "
                 f"`python make_iter3_residual_bgmaps.py --target=<target>` "
-                f"after the merged iter3 residual mosaic is complete."
+                f"after the iter3 residual mosaic (module={_bg_module!r}) is "
+                f"complete."
             )
         with fits.open(residbg_path) as bgh:
             if 'SCI' in [h.name for h in bgh]:
@@ -3668,14 +3686,37 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
     _base_label = _strip_chunk(iteration_label)
     is_iter3 = (_base_label is not None
                 and str(_base_label).lower() == 'iter3')
+    # iter4resbgrefit: final residual-bg refit step appended after iter3.
+    # Re-fits the EXACT per-frame iter3 catalog as seeds with the iter3 tight
+    # xy_bounds, on the residual-bg-subtracted data, and writes its residual
+    # against the ORIGINAL (non-bg-subtracted) data.  Purely additive -- the
+    # iter1/iter2/iter3 code paths are unchanged.
+    is_resbg_refit = (_base_label is not None
+                      and str(_base_label).lower() == 'iter4resbgrefit')
     if (seed_catalog is None and iteration_label not in (None, '')
-            and not is_iter3):
+            and not is_iter3 and not is_resbg_refit):
         inferred_seed_catalog = (
             f'{basepath}/{filtername}/'
             f'{filtername.lower()}_{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}_daophot_basic.fits'
         )
         if os.path.exists(inferred_seed_catalog):
             seed_catalog = inferred_seed_catalog
+    if is_resbg_refit and seed_catalog is None:
+        # Seed from this frame's own iter3 iterative catalog (the "exact
+        # iter3 catalog").  That file carries NO bgsub token and the
+        # ``_iter3`` iter token -- even though this run's bgsub token is
+        # ``_resbgsub`` and its iter token is ``_iter4resbgrefit``.
+        inferred_iter3_catalog = (
+            f'{basepath}/{filtername}/'
+            f'{filtername.lower()}_{module}{visitid_}{vgroupid_}{exposure_}{desat}{epsf_}{blur_}{group}_iter3_daophot_iterative.fits'
+        )
+        if not os.path.exists(inferred_iter3_catalog):
+            raise ValueError(
+                f"iteration_label='iter4resbgrefit' requires the per-frame "
+                f"iter3 catalog {inferred_iter3_catalog} to exist; run iter3 "
+                f"photometry first."
+            )
+        seed_catalog = inferred_iter3_catalog
     if is_iter3 and seed_catalog is None:
         raise ValueError(
             "iteration_label='iter3' requires an explicit seed_catalog "
@@ -3688,11 +3729,12 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
     # current frame's pixel units.  On LW this is ~0.5 pix, on SW it is
     # 1 pix.  Kept None for iter1/iter2 so their behavior is unchanged.
     iter3_xy_bounds_pix = None
-    if is_iter3:
+    if is_iter3 or is_resbg_refit:
         pixscale_arcsec = float(pixscale.to(u.arcsec).value)
         sw_pix_arcsec = 0.031
         iter3_xy_bounds_pix = float(sw_pix_arcsec / pixscale_arcsec)
-        print(f"iter3: pixscale={pixscale_arcsec:.4f}\"/pix -> "
+        _xyb_label = 'iter4resbgrefit' if is_resbg_refit else 'iter3'
+        print(f"{_xyb_label}: pixscale={pixscale_arcsec:.4f}\"/pix -> "
               f"xy_bounds=±{iter3_xy_bounds_pix:.3f} pix per source",
               flush=True)
     if is_second_iteration:
@@ -4747,8 +4789,13 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
         # exists), so the saved residual must subtract the satstar model
         # too -- otherwise the bright-star wings reappear and dominate
         # the residual mosaic.  See pipeline-plumbing block above.
-        data_for_residual = (data if satstar_model_subtracted is None
-                             else data - satstar_model_subtracted)
+        # iter4resbgrefit: build the residual against the ORIGINAL (pre-bg-
+        # subtraction) data so the saved residual = original - star models
+        # (background retained).  All other iterations use ``data`` as before.
+        _resid_base = (original_data if (is_resbg_refit and original_data is not None)
+                       else data)
+        data_for_residual = (_resid_base if satstar_model_subtracted is None
+                             else _resid_base - satstar_model_subtracted)
         residual = data_for_residual - modsky
         print("Done creating BASIC residual image, using 21x21 patches")
         save_residual_datamodel(
@@ -4994,8 +5041,12 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
             _mem_report("before iter model image")
             modsky = _make_model_image(phot_iter, data.shape, psf_shape=(21, 21), include_local_bkg=False)
             _mem_report("after iter model image")
-            data_for_residual = (data if satstar_model_subtracted is None
-                                 else data - satstar_model_subtracted)
+            # iter4resbgrefit: residual against the ORIGINAL (pre-bg-subtraction)
+            # data; all other iterations use ``data`` (see basic block above).
+            _resid_base = (original_data if (is_resbg_refit and original_data is not None)
+                           else data)
+            data_for_residual = (_resid_base if satstar_model_subtracted is None
+                                 else _resid_base - satstar_model_subtracted)
             residual = data_for_residual - modsky
             print("finished iterative residual")
             save_residual_datamodel(
