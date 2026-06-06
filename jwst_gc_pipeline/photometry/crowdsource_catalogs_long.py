@@ -797,17 +797,34 @@ def _parse_cutout_region(spec, ww, default_size_arcsec=5.0):
     return center, size, _sanitize_cutout_label(label)
 
 
-def _prepare_cutout_input(filename, basepath, filtername, options):
-    """Write a cropped copy of ``filename`` for a ``--cutout-region`` run.
+def _shift_gwcs(gwcs_obj, x0, y0):
+    """GWCS for a cutout whose origin is full-frame pixel ``(x0, y0)``:
+    cutout ``(x, y)`` -> full ``(x + x0, y + y0)`` -> world.
 
-    Returns ``(label, cutout_filename, out_basepath)``.  Every image
-    extension matching the SCI shape is cropped to the region and its FITS
-    WCS updated; the stale full-frame GWCS (``ASDF`` extension) is dropped so
-    downstream code falls back to the (correct) FITS WCS.  The cutout file is
-    placed under ``<basepath>/cutouts/<label>/<filtername>/pipeline/`` so that
-    every *filename-derived* output (satstar models, background dumps,
-    residual templates) lands in the cutout tree and never overwrites
-    full-frame products.
+    Prepends a pixel ``Shift`` to the forward transform so the cutout keeps
+    the exact (rectified) astrometry of the parent i2d.
+    """
+    import gwcs as _gwcs
+    from astropy.modeling.models import Shift
+    shifted = (Shift(float(x0)) & Shift(float(y0))) | gwcs_obj.forward_transform
+    return _gwcs.WCS(forward_transform=shifted,
+                     input_frame=gwcs_obj.input_frame,
+                     output_frame=gwcs_obj.output_frame)
+
+
+def _prepare_cutout_input(filename, basepath, filtername, options):
+    """Write a cropped *datamodel* copy of ``filename`` for a
+    ``--cutout-region`` run.  Returns ``(label, cutout_filename, out_basepath)``.
+
+    The cutout keeps a VALID GWCS -- the parent i2d's GWCS shifted by the
+    cutout origin -- in the ASDF extension, plus a matching FITS WCS in the
+    SCI header.  So (a) catalog RA/Dec are exact, (b) the per-frame residual
+    / model datamodels stay resample-able, and (c) the residual-mosaic
+    ResampleStep spans only the cutout region (the shifted GWCS carries a
+    cutout-sized bounding box).  The cutout file lives under
+    ``<basepath>/cutouts/<label>/<filtername>/pipeline/`` so every
+    filename-derived output (satstar models, bg dumps, residuals) is
+    namespaced and never overwrites full-frame products.
     """
     from astropy.nddata import Cutout2D
     with fits.open(filename) as hdul:
@@ -817,32 +834,54 @@ def _prepare_cutout_input(filename, basepath, filtername, options):
             default_size_arcsec=float(getattr(options, 'cutout_size_arcsec', 5.0)))
         if getattr(options, 'cutout_label', ''):
             label = _sanitize_cutout_label(options.cutout_label)
-        sci_shape = hdul['SCI'].data.shape
-        cut0 = Cutout2D(hdul['SCI'].data, position=center, size=size,
-                        wcs=sci_ww, mode='trim', copy=True)
-        yslc, xslc = cut0.slices_original
-        wcs_hdr = cut0.wcs.to_header()
-        new = fits.HDUList()
-        for hdu in hdul:
-            if hdu.name == 'ASDF':
-                continue  # drop full-frame GWCS; downstream uses FITS WCS
-            nh = hdu.copy()
-            if (getattr(hdu, 'data', None) is not None
-                    and hdu.data.ndim == 2 and hdu.data.shape == sci_shape):
-                nh.data = hdu.data[yslc, xslc]
-                for _k, _v in wcs_hdr.items():
-                    nh.header[_k] = _v
-            new.append(nh)
+        cut = Cutout2D(np.asarray(hdul['SCI'].data), position=center, size=size,
+                       wcs=sci_ww, mode='trim', copy=True)
+    yslc, xslc = cut.slices_original
+    x0, y0 = int(xslc.start), int(yslc.start)
+    ny_c, nx_c = cut.data.shape
 
     out_basepath = os.path.join(basepath, 'cutouts', label)
     out_dir = os.path.join(out_basepath, filtername, 'pipeline')
     os.makedirs(out_dir, exist_ok=True)
     cutout_filename = os.path.join(
         out_dir, os.path.basename(filename).replace('.fits', f'_cutout_{label}.fits'))
-    new.writeto(cutout_filename, overwrite=True)
-    print(f"CUTOUT '{label}': wrote {cut0.data.shape} cutout centered "
-          f"{center.to_string('hmsdms')} -> {cutout_filename}", flush=True)
-    return label, cutout_filename, out_basepath
+
+    with ImageModel(filename) as m:
+        ny, nx = m.data.shape
+
+        def _crop(a):
+            if a is None or np.size(a) == 0:
+                return a
+            if a.ndim == 2 and a.shape == (ny, nx):
+                return a[yslc, xslc]
+            if a.ndim == 3 and a.shape[-2:] == (ny, nx):
+                return a[:, yslc, xslc]
+            return a
+
+        new = m.copy()
+        for attr in ('data', 'err', 'dq', 'wht', 'con', 'var_poisson',
+                     'var_rnoise', 'var_flat', 'area'):
+            if hasattr(m, attr):
+                setattr(new, attr, _crop(getattr(m, attr)))
+        shifted = _shift_gwcs(m.meta.wcs, x0, y0)
+        shifted.bounding_box = ((-0.5, nx_c - 0.5), (-0.5, ny_c - 0.5))
+        new.meta.wcs = shifted
+        new.save(cutout_filename)
+
+    # Write the matching cutout FITS WCS into the SCI header so the pipeline's
+    # ``wcs.WCS(im1['SCI'].header)`` reads the correct (cutout) WCS; the
+    # shifted GWCS stays in the ASDF extension for datamodels / resample.
+    with fits.open(cutout_filename, mode='update') as h:
+        h['SCI'].header.update(cut.wcs.to_header())
+        h.flush()
+
+    print(f"CUTOUT '{label}': wrote {cut.data.shape} cutout centered "
+          f"{center.to_string('hmsdms')} (origin x0={x0},y0={y0}) -> "
+          f"{cutout_filename}", flush=True)
+    # x0,y0 = cutout origin in the PARENT frame's pixel coords; the caller
+    # uses it to re-origin the spatially-varying PSF grid so the cutout's PSF
+    # matches what the full-frame fit would use at the same source positions.
+    return label, cutout_filename, out_basepath, x0, y0
 
 
 def _make_model_image(phot_obj, shape, *, psf_shape=None, include_local_bkg=False):
@@ -3639,8 +3678,9 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
     # (after all basepath INPUT reads are done).
     cutout_label = ''
     out_basepath = basepath
+    _cutout_x0, _cutout_y0 = 0, 0
     if getattr(options, 'cutout_region', ''):
-        cutout_label, filename, out_basepath = _prepare_cutout_input(
+        cutout_label, filename, out_basepath, _cutout_x0, _cutout_y0 = _prepare_cutout_input(
             filename, basepath, filtername, options)
     _cutout_active = bool(cutout_label)
 
@@ -3659,20 +3699,6 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
     _is_resbg_refit_early = (
         (_strip_chunk(iteration_label) or '').lower() == 'iter4resbgrefit')
     original_data = data.copy() if _is_resbg_refit_early else None
-
-    # Cutout-aware residual/model writer: the cutout FITS carries only a FITS
-    # WCS (the full-frame GWCS is dropped), so bypass the jwst ImageModel
-    # template and write a plain FITS with the cutout WCS.
-    def _save_resid(output_filename, arr):
-        if _cutout_active:
-            hdr = ww.to_header()
-            fits.HDUList([
-                fits.PrimaryHDU(),
-                fits.ImageHDU(data=np.asarray(arr, dtype='float32'),
-                              header=hdr, name='SCI'),
-            ]).writeto(output_filename, overwrite=True)
-        else:
-            save_residual_datamodel(filename, output_filename, arr)
 
     if options.bgsub:
         # background subtraction
@@ -3763,6 +3789,25 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
                                     instrument=instrument)
     dao_psf_model = grid
     _mem_report("after PSF load")
+
+    if _cutout_active and (_cutout_x0 or _cutout_y0):
+        # The spatially-varying PSF grid is indexed in the PARENT frame's
+        # pixel coords, but the cutout data is 0-origin.  Re-origin the grid
+        # by the cutout offset so a source at cutout pixel (cx, cy) is fit
+        # with the SAME PSF the full-frame run would use at parent pixel
+        # (cx + x0, cy + y0).  Without this the cutout silently uses a
+        # mis-positioned (wrong) PSF.  Exact (verified maxdiff 0).
+        from astropy.nddata import NDData as _NDData
+        _shifted_xy = [(gx - _cutout_x0, gy - _cutout_y0)
+                       for (gx, gy) in dao_psf_model.grid_xypos]
+        dao_psf_model = type(dao_psf_model)(_NDData(
+            np.asarray(dao_psf_model.data),
+            meta={'grid_xypos': _shifted_xy,
+                  'oversampling': dao_psf_model.oversampling}))
+        grid = dao_psf_model
+        print(f"CUTOUT: re-origined PSF grid by (-{_cutout_x0}, -{_cutout_y0}) "
+              f"so the spatially-varying PSF matches the parent-frame fit",
+              flush=True)
 
     # bound the flux to be >= 0 (no negative peak fitting)
     dao_psf_model.flux.min = 0
@@ -4941,11 +4986,13 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
                              else _resid_base - satstar_model_subtracted)
         residual = data_for_residual - modsky
         print("Done creating BASIC residual image, using 21x21 patches")
-        _save_resid(
+        save_residual_datamodel(
+            filename,
             f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}{iter_}_daophot_basic_residual.fits',
             residual,
         )
-        _save_resid(
+        save_residual_datamodel(
+            filename,
             f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}{iter_}_daophot_basic_model.fits',
             modsky,
         )
@@ -5190,11 +5237,13 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
                                  else _resid_base - satstar_model_subtracted)
             residual = data_for_residual - modsky
             print("finished iterative residual")
-            _save_resid(
+            save_residual_datamodel(
+                filename,
                 f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}{iter_}_daophot_iterative_residual.fits',
                 residual,
             )
-            _save_resid(
+            save_residual_datamodel(
+                filename,
                 f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}{iter_}_daophot_iterative_model.fits',
                 modsky,
             )
