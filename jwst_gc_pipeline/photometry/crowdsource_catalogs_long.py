@@ -756,6 +756,95 @@ def _seed_table_chunk_subset(seed_table, ww, image_shape,
     return seed_table[in_tile]
 
 
+def _sanitize_cutout_label(s):
+    """Make a cutout label safe to embed in a directory name."""
+    return re.sub(r'[^A-Za-z0-9._+-]', '', str(s)) or 'cutout'
+
+
+def _parse_cutout_region(spec, ww, default_size_arcsec=5.0):
+    """Parse a ``--cutout-region`` spec into ``(center, size, label)``.
+
+    ``spec`` is either a DS9 ``.reg`` file (first region; circle / box /
+    point) or a comma string ``'ra,dec,size'`` or ``'ra,dec,w,h'`` (deg,
+    deg, arcsec).  ``size`` is returned as an astropy Quantity suitable for
+    ``Cutout2D`` (scalar -> square; ``(h, w)`` tuple otherwise).  ``label``
+    is a filesystem-safe string used to namespace the cutout outputs.
+    """
+    spec = str(spec).strip()
+    if spec.lower().endswith('.reg') or (os.path.exists(spec) and ',' not in spec):
+        reg = regions.Regions.read(spec)[0]
+        center = reg.center
+        if not isinstance(center, SkyCoord):  # pixel region
+            center = ww.pixel_to_world(center.x, center.y)
+        if hasattr(reg, 'radius'):
+            size = 2.0 * u.Quantity(reg.radius)
+        elif hasattr(reg, 'width') and hasattr(reg, 'height'):
+            size = (u.Quantity(reg.height), u.Quantity(reg.width))  # (ny, nx)
+        else:  # point region: no extent -> use the default square size
+            size = default_size_arcsec * u.arcsec
+        label = os.path.splitext(os.path.basename(spec))[0]
+    else:
+        parts = [float(x) for x in spec.split(',')]
+        center = SkyCoord(parts[0] * u.deg, parts[1] * u.deg)
+        if len(parts) == 3:
+            size = parts[2] * u.arcsec
+        elif len(parts) >= 4:
+            size = (parts[3] * u.arcsec, parts[2] * u.arcsec)  # (ny, nx)
+        else:
+            raise ValueError("--cutout-region string must be 'ra,dec,size' "
+                             f"or 'ra,dec,w,h' (deg,deg,arcsec); got {spec!r}")
+        label = f"{parts[0]:.5f}{parts[1]:+.5f}"
+    return center, size, _sanitize_cutout_label(label)
+
+
+def _prepare_cutout_input(filename, basepath, filtername, options):
+    """Write a cropped copy of ``filename`` for a ``--cutout-region`` run.
+
+    Returns ``(label, cutout_filename, out_basepath)``.  Every image
+    extension matching the SCI shape is cropped to the region and its FITS
+    WCS updated; the stale full-frame GWCS (``ASDF`` extension) is dropped so
+    downstream code falls back to the (correct) FITS WCS.  The cutout file is
+    placed under ``<basepath>/cutouts/<label>/<filtername>/pipeline/`` so that
+    every *filename-derived* output (satstar models, background dumps,
+    residual templates) lands in the cutout tree and never overwrites
+    full-frame products.
+    """
+    from astropy.nddata import Cutout2D
+    with fits.open(filename) as hdul:
+        sci_ww = wcs.WCS(hdul['SCI'].header)
+        center, size, label = _parse_cutout_region(
+            options.cutout_region, sci_ww,
+            default_size_arcsec=float(getattr(options, 'cutout_size_arcsec', 5.0)))
+        if getattr(options, 'cutout_label', ''):
+            label = _sanitize_cutout_label(options.cutout_label)
+        sci_shape = hdul['SCI'].data.shape
+        cut0 = Cutout2D(hdul['SCI'].data, position=center, size=size,
+                        wcs=sci_ww, mode='trim', copy=True)
+        yslc, xslc = cut0.slices_original
+        wcs_hdr = cut0.wcs.to_header()
+        new = fits.HDUList()
+        for hdu in hdul:
+            if hdu.name == 'ASDF':
+                continue  # drop full-frame GWCS; downstream uses FITS WCS
+            nh = hdu.copy()
+            if (getattr(hdu, 'data', None) is not None
+                    and hdu.data.ndim == 2 and hdu.data.shape == sci_shape):
+                nh.data = hdu.data[yslc, xslc]
+                for _k, _v in wcs_hdr.items():
+                    nh.header[_k] = _v
+            new.append(nh)
+
+    out_basepath = os.path.join(basepath, 'cutouts', label)
+    out_dir = os.path.join(out_basepath, filtername, 'pipeline')
+    os.makedirs(out_dir, exist_ok=True)
+    cutout_filename = os.path.join(
+        out_dir, os.path.basename(filename).replace('.fits', f'_cutout_{label}.fits'))
+    new.writeto(cutout_filename, overwrite=True)
+    print(f"CUTOUT '{label}': wrote {cut0.data.shape} cutout centered "
+          f"{center.to_string('hmsdms')} -> {cutout_filename}", flush=True)
+    return label, cutout_filename, out_basepath
+
+
 def _make_model_image(phot_obj, shape, *, psf_shape=None, include_local_bkg=False):
     """Call ``phot_obj.make_model_image`` with the version-appropriate
     include-local-bkg kwarg."""
@@ -2919,6 +3008,24 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                           "single detector pass that detector (e.g. sickle LW "
                           "= 'nrcb')."),
                     metavar="resbg_mosaic_module")
+    parser.add_option("--cutout-region", dest="cutout_region",
+                    default='',
+                    help=("Run the full per-exposure pipeline on only a small "
+                          "cutout.  Either a DS9 .reg file (first region) or "
+                          "'ra,dec,size' / 'ra,dec,w,h' (deg,deg,arcsec).  All "
+                          "outputs are written under "
+                          "<basepath>/cutouts/<label>/ so they never overwrite "
+                          "full-frame photometry."),
+                    metavar="cutout_region")
+    parser.add_option("--cutout-label", dest="cutout_label",
+                    default='',
+                    help="Override the auto-derived cutout output-dir label.",
+                    metavar="cutout_label")
+    parser.add_option("--cutout-size-arcsec", dest="cutout_size_arcsec",
+                    default=5.0, type='float',
+                    help="Square cutout size (arcsec) for DS9 point regions / "
+                         "fallback.  Default 5.0.",
+                    metavar="cutout_size_arcsec")
     parser.add_option("--epsf", dest="epsf",
                     default=False,
                     action='store_true',
@@ -3522,21 +3629,50 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
     iter_ = _iteration_token(iteration_label)
 
     print(f"Starting cataloging on {filename}", flush=True)
+    # ---- Optional small-region cutout ----------------------------------
+    # Run the whole per-exposure pipeline on just a hand-specified region.
+    # We write a cropped copy of the input into <basepath>/cutouts/<label>/
+    # and run on THAT, so every output -- both basepath-derived (catalog,
+    # residual, diagnostics) and filename-derived (satstar models, background
+    # dumps) -- lands in the cutout tree and never overwrites full-frame
+    # products.  basepath itself is redirected to out_basepath further below
+    # (after all basepath INPUT reads are done).
+    cutout_label = ''
+    out_basepath = basepath
+    if getattr(options, 'cutout_region', ''):
+        cutout_label, filename, out_basepath = _prepare_cutout_input(
+            filename, basepath, filtername, options)
+    _cutout_active = bool(cutout_label)
+
     fh, im1, data, wht, err, instrument, telescope, obsdate = load_data(filename)
     background_map = None
-    # iter4resbgrefit builds its residual against the pristine image, so keep a
-    # copy of the original data *before* any background subtraction below.
-    # (The authoritative is_resbg_refit flag is recomputed in the iteration
-    # block further down; this inline check mirrors it.)
-    _is_resbg_refit_early = (
-        (_strip_chunk(iteration_label) or '').lower() == 'iter4resbgrefit')
-    original_data = data.copy() if _is_resbg_refit_early else None
     inst_token = instrument.lower()
 
     # set up coordinate system
     ww = wcs.WCS(im1[1].header)
     pixscale = ww.proj_plane_pixel_area()**0.5
     cen = ww.pixel_to_world(im1[1].shape[1]/2, im1[1].shape[0]/2)
+
+    # iter4resbgrefit builds its residual against the pristine image, so keep a
+    # copy of the data *before* any background subtraction.  (The authoritative
+    # is_resbg_refit flag is recomputed in the iteration block below.)
+    _is_resbg_refit_early = (
+        (_strip_chunk(iteration_label) or '').lower() == 'iter4resbgrefit')
+    original_data = data.copy() if _is_resbg_refit_early else None
+
+    # Cutout-aware residual/model writer: the cutout FITS carries only a FITS
+    # WCS (the full-frame GWCS is dropped), so bypass the jwst ImageModel
+    # template and write a plain FITS with the cutout WCS.
+    def _save_resid(output_filename, arr):
+        if _cutout_active:
+            hdr = ww.to_header()
+            fits.HDUList([
+                fits.PrimaryHDU(),
+                fits.ImageHDU(data=np.asarray(arr, dtype='float32'),
+                              header=hdr, name='SCI'),
+            ]).writeto(output_filename, overwrite=True)
+        else:
+            save_residual_datamodel(filename, output_filename, arr)
 
     if options.bgsub:
         # background subtraction
@@ -4377,6 +4513,13 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
         finstars['y'] = finstars['y_centroid']
     finstars['skycoord'] = ww.pixel_to_world(finstars['x'], finstars['y'])
 
+    # All basepath-based INPUT reads (resbg, seed, satstar, union catalogs)
+    # are done by this point; redirect every subsequent OUTPUT to the cutout
+    # directory so cutout products never overwrite full-frame photometry.
+    if _cutout_active:
+        os.makedirs(f'{out_basepath}/{filtername}/pipeline', exist_ok=True)
+        basepath = out_basepath
+
     result = save_photutils_results(finstars, ww, filename,
                                     im1=im1, detector=detector,
                                     basepath=basepath,
@@ -4798,13 +4941,11 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
                              else _resid_base - satstar_model_subtracted)
         residual = data_for_residual - modsky
         print("Done creating BASIC residual image, using 21x21 patches")
-        save_residual_datamodel(
-            filename,
+        _save_resid(
             f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}{iter_}_daophot_basic_residual.fits',
             residual,
         )
-        save_residual_datamodel(
-            filename,
+        _save_resid(
             f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}{iter_}_daophot_basic_model.fits',
             modsky,
         )
@@ -5049,13 +5190,11 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
                                  else _resid_base - satstar_model_subtracted)
             residual = data_for_residual - modsky
             print("finished iterative residual")
-            save_residual_datamodel(
-                filename,
+            _save_resid(
                 f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}{iter_}_daophot_iterative_residual.fits',
                 residual,
             )
-            save_residual_datamodel(
-                filename,
+            _save_resid(
                 f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}{iter_}_daophot_iterative_model.fits',
                 modsky,
             )
