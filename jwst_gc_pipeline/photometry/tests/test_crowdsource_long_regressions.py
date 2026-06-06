@@ -97,6 +97,32 @@ class TestOverlapSlicesPatch:
 # ---------------------------------------------------------------------------
 # _strip_chunk
 # ---------------------------------------------------------------------------
+class TestBgsubToken:
+    """`--use-iter3-residual-bg` must add a `_resbgsub` filename token so its
+    catalogs/residuals are namespaced apart from plain runs, and `_bgsub`
+    must never be a substring of `_resbgsub` (exact-token glob matching in
+    mosaic_each_exposure_residuals relies on this)."""
+
+    def _opts(self, bgsub, residbg):
+        return types.SimpleNamespace(bgsub=bgsub, use_iter3_residual_bg=residbg)
+
+    @pytest.mark.parametrize("bgsub, residbg, expected", [
+        (False, False, ''),
+        (True, False, '_bgsub'),
+        (False, True, '_resbgsub'),
+        (True, True, '_bgsub_resbgsub'),
+    ])
+    def test_token(self, bgsub, residbg, expected):
+        assert L._bgsub_token(self._opts(bgsub, residbg)) == expected
+
+    def test_missing_attr_defaults_off(self):
+        # options object without the attr at all -> treated as not set.
+        assert L._bgsub_token(types.SimpleNamespace(bgsub=False)) == ''
+
+    def test_bgsub_not_substring_of_resbgsub(self):
+        assert '_bgsub' not in '_resbgsub'
+
+
 class TestStripChunk:
     @pytest.mark.parametrize("label, expected", [
         ('iter3_chunk03of08', 'iter3'),
