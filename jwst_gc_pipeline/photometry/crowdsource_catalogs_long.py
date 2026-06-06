@@ -1082,7 +1082,30 @@ def read_epsf(filename):
     return EPSFModel(data=hdu.data, oversampling=hdu.header['OVERSAMP'])
 
 
+# Set True for --cutout-region runs: diagnostic PNGs are disabled (the fixed
+# zoom regions rarely intersect a small cutout and the plots aren't useful at
+# that scale).  Only affects cutout runs; full-frame diagnostics are unchanged.
+_SUPPRESS_DIAGNOSTICS = False
+
+
+def _noop_savefig(*args, **kwargs):
+    return None
+
+
 def catalog_zoom_diagnostic(data, modsky, zoomcut, stars):
+
+    # Disabled entirely for cutout runs (see _SUPPRESS_DIAGNOSTICS).
+    if _SUPPRESS_DIAGNOSTICS:
+        return
+
+    # A fixed zoom region (e.g. slice(128,256)) may not intersect the image
+    # -- notably for a small --cutout-region run -- leaving an empty array
+    # that crashes simple_norm's percentile.  These diagnostics are
+    # non-essential, so skip cleanly when the zoom is empty.
+    if np.asarray(data[zoomcut]).size == 0:
+        print(f"catalog_zoom_diagnostic: zoom region {zoomcut} is empty for "
+              f"data shape {np.asarray(data).shape}; skipping plot", flush=True)
+        return
 
     # make sure stars is a table
     try:
@@ -3735,6 +3758,13 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
         cutout_label, filename, out_basepath, _cutout_x0, _cutout_y0 = _prepare_cutout_input(
             filename, basepath, filtername, options)
     _cutout_active = bool(cutout_label)
+    if _cutout_active:
+        # Disable diagnostic PNGs for cutout runs (whole invocation is a
+        # cutout run, so this never affects full-frame output): make the
+        # zoom-diagnostic a no-op and suppress all savefig writes.
+        global _SUPPRESS_DIAGNOSTICS
+        _SUPPRESS_DIAGNOSTICS = True
+        pl.savefig = _noop_savefig
 
     fh, im1, data, wht, err, instrument, telescope, obsdate = load_data(filename)
     background_map = None
