@@ -1277,6 +1277,25 @@ def _iteration_token(iteration_label):
     return f'_{token}'
 
 
+def _bgsub_token(options):
+    """Filename token for the background-subtraction mode(s) in effect.
+
+    * ``--bgsub`` (global Background2D subtraction)        -> ``_bgsub``
+    * ``--use-iter3-residual-bg`` (iter3 residual-smoothed
+      background subtraction)                             -> ``_resbgsub``
+
+    Both can be set; the tokens concatenate in a fixed order so output
+    catalog/residual/model/diagnostic filenames are unambiguous and the
+    skip-if-done prediction (_predict_output_tokens) stays in sync with the
+    names actually written by do_photometry_step.  ``_bgsub`` is never a
+    substring of ``_resbgsub`` so exact-token matching does not collide.
+    """
+    token = '_bgsub' if options.bgsub else ''
+    if getattr(options, 'use_iter3_residual_bg', False):
+        token += '_resbgsub'
+    return token
+
+
 def _predict_output_tokens(options, visit_id=None, vgroup_id=None,
                            exposure_id=None, iteration_label=None):
     """Reproduce the per-exposure tokens used when writing catalog outputs.
@@ -1292,7 +1311,7 @@ def _predict_output_tokens(options, visit_id=None, vgroup_id=None,
     else:
         exposure_ = f'_exp{int(exposure_id):05d}'
     desat = '_unsatstar' if options.desaturated else ''
-    bgsub = '_bgsub' if options.bgsub else ''
+    bgsub = _bgsub_token(options)
     epsf_ = '_epsf' if options.epsf else ''
     blur_ = '_blur' if options.blur else ''
     group_ = '_group' if options.group else ''
@@ -2556,7 +2575,7 @@ def get_uncertainty(err, data, dq=None, wht=None):
 def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, module,
                                    residual_kind='iterative', desat=False, bgsub=False,
                                    epsf=False, blur=False, group=False, pupil='clear',
-                                   iteration_label=None):
+                                   iteration_label=None, resbgsub=False):
     """
     Resample per-exposure residual images into one JWST-style *_residual_i2d.fits product.
     """
@@ -2565,7 +2584,9 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
 
     pipeline_dir = f'{basepath}/{filtername}/pipeline'
     desat_ = '_unsatstar' if desat else ''
-    bgsub_ = '_bgsub' if bgsub else ''
+    # Mirror _bgsub_token: the iter3-residual-bg run appends _resbgsub after
+    # _bgsub so this glob finds the residuals do_photometry_step wrote.
+    bgsub_ = ('_bgsub' if bgsub else '') + ('_resbgsub' if resbgsub else '')
     epsf_ = '_epsf' if epsf else ''
     blur_ = '_blur' if blur else ''
     group_ = '_group' if group else ''
@@ -2598,6 +2619,7 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
     flag_tokens = {
         '_unsatstar': desat,
         '_bgsub': bgsub,
+        '_resbgsub': resbgsub,
         '_epsf': epsf,
         '_blur': blur,
         '_group': group,
@@ -2881,10 +2903,13 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--use-iter3-residual-bg", dest="use_iter3_residual_bg",
                     default=False,
                     action='store_true',
-                    help=("Subtract the iter3 residual smoothed-background image "
-                          "(<frame>_iter3_daophot_iterative_residual_smoothed_bg.fits) "
-                          "from the data before fitting.  Use with --iteration-label=iter2residbg "
-                          "or =iter3residbg.  Built by make_iter3_residual_bgmaps.py."),
+                    help=("Subtract the MERGED iter3 residual smoothed-background "
+                          "mosaic (..-merged_iter3_daophot_iterative_residual_"
+                          "smoothed_bg_i2d.fits), reprojected onto each exposure's "
+                          "grid, before fitting.  Uses the whole-field merged "
+                          "residual (max background S/N).  Output catalogs/residuals "
+                          "get a '_resbgsub' filename token.  Built by "
+                          "make_iter3_residual_bgmaps.py."),
                     metavar="use_iter3_residual_bg")
     parser.add_option("--epsf", dest="epsf",
                     default=False,
@@ -3189,7 +3214,8 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                                                       blur=options.blur,
                                                       group=options.group,
                                                       pupil='clear',
-                                                      iteration_label=lbl)
+                                                      iteration_label=lbl,
+                                                      resbgsub=getattr(options, 'use_iter3_residual_bg', False))
         return
 
     if options.list_missing_tasks:
@@ -3335,7 +3361,8 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                                                           blur=options.blur,
                                                           group=options.group,
                                                           pupil='clear',
-                                                          iteration_label=options.iteration_label or None)
+                                                          iteration_label=options.iteration_label or None,
+                                                          resbgsub=getattr(options, 'use_iter3_residual_bg', False))
                     else:
                         print('Skipping residual mosaicking in SLURM array-task mode.')
             else:
@@ -3477,7 +3504,7 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
 
     # file naming suffixes
     desat = '_unsatstar' if options.desaturated else ''
-    bgsub = '_bgsub' if options.bgsub else ''
+    bgsub = _bgsub_token(options)
     epsf_ = "_epsf" if options.epsf else ""
     exposure_ = f'_exp{exposurenumber:05d}' if exposurenumber is not None else ''
     visitid_ = f'_visit{int(visit_id):03d}' if visit_id is not None else ''
@@ -3518,34 +3545,51 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
         # iter3 photometry residual (3x3-median-smoothed) as the
         # background estimate.  Built by make_iter3_residual_bgmaps.py
         # and consumed by the iter2-residbg / iter3-residbg cascade.
-        # Filename pattern matches the sibling per-frame iter3 residual
-        # with ``_smoothed_bg`` appended (see SMOOTHED_BG_SUFFIX in
-        # make_iter3_residual_bgmaps.py).
-        residbg_path = filename.replace(
-            '.fits', '_iter3_daophot_iterative_residual_smoothed_bg.fits')
+        #
+        # 2026-06-06: use the *merged* (whole-field module='merged') iter3
+        # residual mosaic, smoothed, instead of the per-exposure residual.
+        # The merged residual co-adds every exposure so its background has
+        # much higher S/N.  It lives on the mosaic pixel grid, so reproject
+        # it onto this exposure's WCS before subtracting.  Built by
+        # make_iter3_residual_bgmaps.py (merged path); the filename mirrors
+        # the merged residual mosaic from mosaic_each_exposure_residuals
+        # with ``_smoothed_bg`` inserted before ``_i2d`` (see
+        # MERGED_SMOOTHED_BG building in make_iter3_residual_bgmaps.py).
+        from reproject import reproject_interp
+        _inst = _inst_token(filtername)
+        residbg_path = (
+            f'{basepath}/{filtername}/pipeline/'
+            f'jw0{proposal_id}-o{field}_t001_{_inst}_{pupil}-{filtername.lower()}-'
+            f'merged_iter3_daophot_iterative_residual_smoothed_bg_i2d.fits'
+        )
         if not os.path.exists(residbg_path):
             raise ValueError(
-                f"--use-iter3-residual-bg requires {residbg_path} to exist; "
-                f"run `python make_iter3_residual_bgmaps.py --target=<target>` "
-                f"after iter3 photometry+residuals are complete."
+                f"--use-iter3-residual-bg requires the merged smoothed-bg "
+                f"mosaic {residbg_path} to exist; run "
+                f"`python make_iter3_residual_bgmaps.py --target=<target>` "
+                f"after the merged iter3 residual mosaic is complete."
             )
         with fits.open(residbg_path) as bgh:
             if 'SCI' in [h.name for h in bgh]:
-                bg_data = bgh['SCI'].data.astype(float)
+                bg_hdu = bgh['SCI']
             else:
-                bg_data = bgh[0].data.astype(float)
-        if bg_data.shape != data.shape:
-            raise ValueError(
-                f"residual-bg shape {bg_data.shape} != data shape {data.shape} "
-                f"(file: {residbg_path})"
-            )
-        bg_finite = np.where(np.isfinite(bg_data), bg_data, 0.0)
+                bg_hdu = bgh[0]
+            bg_wcs = wcs.WCS(bg_hdu.header)
+            bg_data = bg_hdu.data.astype(float)
+        # Reproject the merged-grid background onto this exposure's grid.
+        # Surface-brightness units (MJy/sr) are resolution-independent, so
+        # interpolation across the grid change is valid without rescaling.
+        bg_reproj, _ = reproject_interp((bg_data, bg_wcs), ww,
+                                        shape_out=data.shape)
+        n_nan = int(np.sum(~np.isfinite(bg_reproj)))
+        bg_finite = np.where(np.isfinite(bg_reproj), bg_reproj, 0.0)
         zeros = data == 0
         data = data - bg_finite
         data[zeros] = 0
         background_map = bg_finite
-        print(f"Subtracted iter3-residual-smoothed bg ({residbg_path}) from data: "
-              f"sum={float(np.nansum(bg_finite)):.3e} counts", flush=True)
+        print(f"Subtracted merged iter3-residual-smoothed bg ({residbg_path}) "
+              f"reprojected onto exposure grid: sum={float(np.nansum(bg_finite)):.3e} "
+              f"MJy/sr-equiv, {n_nan} pix outside merged FOV (set to 0)", flush=True)
 
     # try to limit memory use before we start photometry
     data = data.astype('float32')
