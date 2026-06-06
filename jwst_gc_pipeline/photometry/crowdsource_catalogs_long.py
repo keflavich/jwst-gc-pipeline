@@ -797,6 +797,14 @@ def _parse_cutout_region(spec, ww, default_size_arcsec=5.0):
     return center, size, _sanitize_cutout_label(label)
 
 
+class CutoutNoOverlap(ValueError):
+    """Raised when a ``--cutout-region`` does not overlap a given exposure.
+
+    The per-exposure driver catches this to skip the frame; it errors only if
+    NO frame in the run overlaps the region.
+    """
+
+
 def _shift_gwcs(gwcs_obj, x0, y0):
     """GWCS for a cutout whose origin is full-frame pixel ``(x0, y0)``:
     cutout ``(x, y)`` -> full ``(x + x0, y + y0)`` -> world.
@@ -826,7 +834,8 @@ def _prepare_cutout_input(filename, basepath, filtername, options):
     filename-derived output (satstar models, bg dumps, residuals) is
     namespaced and never overwrites full-frame products.
     """
-    from astropy.nddata import Cutout2D
+    from astropy.nddata import Cutout2D, NoOverlapError
+    from astropy.wcs import NoConvergence
     with fits.open(filename) as hdul:
         sci_ww = wcs.WCS(hdul['SCI'].header)
         center, size, label = _parse_cutout_region(
@@ -834,8 +843,15 @@ def _prepare_cutout_input(filename, basepath, filtername, options):
             default_size_arcsec=float(getattr(options, 'cutout_size_arcsec', 5.0)))
         if getattr(options, 'cutout_label', ''):
             label = _sanitize_cutout_label(options.cutout_label)
-        cut = Cutout2D(np.asarray(hdul['SCI'].data), position=center, size=size,
-                       wcs=sci_ww, mode='trim', copy=True)
+        try:
+            cut = Cutout2D(np.asarray(hdul['SCI'].data), position=center, size=size,
+                           wcs=sci_ww, mode='trim', copy=True)
+        except (NoOverlapError, NoConvergence) as ex:
+            # NoOverlapError: region projects just off the array.
+            # NoConvergence: region is far off-field, so the SIP world->pixel
+            # inverse diverges.  Either way the frame doesn't cover the region.
+            raise CutoutNoOverlap(
+                f"cutout region does not overlap {os.path.basename(filename)}") from ex
     yslc, xslc = cut.slices_original
     x0, y0 = int(xslc.start), int(yslc.start)
     ny_c, nx_c = cut.data.shape
@@ -3256,8 +3272,12 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                '1182': {'brick': 2},
                '3958': {'sickle': 1},
                # cloudef = Cloud E (obs 002) + Cloud F (obs 005), two
-               # NIRCam pointings reduced together as one target.
-               '2092': {'cloudef': 2},
+               # NIRCam pointings reduced together as one target.  Each
+               # obs has only 1 visit; the catalog script's visit loop
+               # is scoped to a single --field=<obs>, so nvisits is
+               # per-obs (=1), not per-target (=2).  The per-obs cat
+               # arrays in the wrapper iterate fields externally.
+               '2092': {'cloudef': 1},
                '4147': {'sgrc': 1},
                '5365': {'sgrb2': 1},
                '2045': {'arches': 1, 'quintuplet': 1},
@@ -3428,6 +3448,11 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     # need to have incrementing _before_ test
     index = -1
 
+    # --cutout-region bookkeeping: frames that don't overlap the region are
+    # skipped; if NO frame in the run overlaps, that's an error (below).
+    _cutout_run = bool(getattr(options, 'cutout_region', ''))
+    _cutout_overlap_count = 0
+
     for module in modules:
         detector = module # no sub-detectors for long-NIRCAM or for MIRI
         for filtername in filternames:
@@ -3481,21 +3506,37 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                                       f'{filtername} {file_module} visit={visit_id} '
                                       f'vgroup={vgroup_id} exp={exposure_id}; skipping.')
                                 continue
-                            do_photometry_step(options, filtername, file_module, file_detector,
-                                               field, basepath, filename, proposal_id,
-                                               crowdsource_default_kwargs, exposurenumber=int(exposure_id),
-                                               visit_id=visit_id, vgroup_id=vgroup_id,
-                                               use_webbpsf=True,
-                                               bg_boxsizes=bg_boxsizes,
-                                               seed_catalog=options.seed_catalog or None,
-                                               iteration_label=options.iteration_label or None,
-                                               postprocess_residuals=options.postprocess_residuals or bool(options.seed_catalog),
-                                               residual_negative_threshold=options.residual_negative_threshold,
-                                               local_snr_threshold=options.local_snr_threshold,
-                                               daofind_roundlo=options.daofind_roundlo,
-                                               daofind_roundhi=options.daofind_roundhi)
+                            try:
+                                do_photometry_step(options, filtername, file_module, file_detector,
+                                                   field, basepath, filename, proposal_id,
+                                                   crowdsource_default_kwargs, exposurenumber=int(exposure_id),
+                                                   visit_id=visit_id, vgroup_id=vgroup_id,
+                                                   use_webbpsf=True,
+                                                   bg_boxsizes=bg_boxsizes,
+                                                   seed_catalog=options.seed_catalog or None,
+                                                   iteration_label=options.iteration_label or None,
+                                                   postprocess_residuals=options.postprocess_residuals or bool(options.seed_catalog),
+                                                   residual_negative_threshold=options.residual_negative_threshold,
+                                                   local_snr_threshold=options.local_snr_threshold,
+                                                   daofind_roundlo=options.daofind_roundlo,
+                                                   daofind_roundhi=options.daofind_roundhi)
+                            except CutoutNoOverlap as ex:
+                                # Frame doesn't cover the cutout region -- skip it.
+                                print(f"cutout: skipping non-overlapping frame {filename} ({ex})",
+                                      flush=True)
+                                continue
+                            if _cutout_run:
+                                _cutout_overlap_count += 1
 
-                if not options.skip_mosaic_each_exposure_residuals:
+                if _cutout_run:
+                    # Cutout residuals live under <basepath>/cutouts/<label>/;
+                    # the auto-mosaic globs <basepath> and would miss them (or
+                    # mosaic full-frame residuals).  Skip it -- mosaic the
+                    # cutout tree separately if needed.
+                    print("cutout: skipping auto residual-mosaic (run "
+                          "mosaic_each_exposure_residuals on the cutout dir if "
+                          "you need a rectified cutout mosaic)", flush=True)
+                elif not options.skip_mosaic_each_exposure_residuals:
                     if os.getenv('SLURM_ARRAY_TASK_ID') is None:
                         # Determine which residual kinds to mosaic based on enabled photometry types
                         mosaic_residual_kinds = []
@@ -3527,6 +3568,17 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                 raise RuntimeError(
                     'mosaic-mode photometry is deprecated; pass '
                     '--each-exposure')
+
+    # If a cutout region was requested but overlapped NO frame at all, that's
+    # almost certainly a wrong region / target -- fail loudly rather than
+    # exit having silently done nothing.  (In SLURM array mode a given task
+    # legitimately handles only a subset of frames, so don't raise there.)
+    if (_cutout_run and os.getenv('SLURM_ARRAY_TASK_ID') is None
+            and _cutout_overlap_count == 0):
+        raise ValueError(
+            f"--cutout-region={options.cutout_region!r} overlapped none of the "
+            f"processed frames (filters={filternames}, modules={modules}).  "
+            f"Check the region coordinates/target.")
 
 
 def get_filenames(basepath, filtername, proposal_id, field, each_suffix, module, pupil='clear', visitid='001'):
