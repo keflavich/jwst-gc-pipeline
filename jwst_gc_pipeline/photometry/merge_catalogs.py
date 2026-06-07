@@ -1465,8 +1465,14 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
         print(f"No saturated star catalog found for {filtername}; skipping replacement")
         if 'replaced_saturated' not in cat.colnames:
             cat.add_column(np.zeros(len(cat), dtype='bool'), name='replaced_saturated')
+        else:
+            print(f"Found existing 'replaced_saturated' column in cat; leaving it unchanged.  "
+                  f"max={np.nanmax(satstar_cat['replaced_saturated'])}, sum={np.nansum(satstar_cat['replaced_saturated'])}")
         if 'is_saturated' not in cat.colnames:
             cat.add_column(np.zeros(len(cat), dtype='bool'), name='is_saturated')
+        else:
+            print(f"Found existing 'is_saturated' column in cat; leaving it unchanged.  "
+                  f"max={np.nanmax(satstar_cat['is_saturated'])}, sum={np.nansum(satstar_cat['is_saturated'])}")
         if 'flux_fit' in cat.colnames:
             cat.rename_column('flux_fit', 'flux')
         return
