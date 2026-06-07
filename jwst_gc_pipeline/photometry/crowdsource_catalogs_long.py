@@ -919,6 +919,59 @@ def _prepare_cutout_input(filename, basepath, filtername, options):
     return label, cutout_filename, out_basepath, x0, y0
 
 
+def _crop_datamodel_to_finite(filename, pad=4):
+    """Crop an i2d datamodel in place to the bounding box of its finite,
+    nonzero SCI data (plus ``pad`` px), shifting the GWCS by the crop origin.
+
+    ResampleStep auto-allocates a near-full-frame output canvas even for a
+    small cutout (the cutout data ends up filling <1% of it).  This trims the
+    mosaic back to the cutout region.  i2d products are plain RA--TAN (no
+    SIP), so the FITS WCS crop is an exact ``CRPIX -= origin``.
+    """
+    with ImageModel(filename) as m:
+        d = np.asarray(m.data)
+        finite = np.isfinite(d) & (d != 0)
+        if not finite.any():
+            return
+        ys, xs = np.where(finite)
+        ny, nx = d.shape
+        y0 = max(0, int(ys.min()) - pad); y1 = min(ny, int(ys.max()) + 1 + pad)
+        x0 = max(0, int(xs.min()) - pad); x1 = min(nx, int(xs.max()) + 1 + pad)
+        if (y0, x0, y1, x1) == (0, 0, ny, nx):
+            return  # already tight
+        yslc, xslc = slice(y0, y1), slice(x0, x1)
+
+        def _crop(a):
+            if a is None or np.size(a) == 0:
+                return a
+            if a.ndim == 2 and a.shape == (ny, nx):
+                return a[yslc, xslc]
+            if a.ndim == 3 and a.shape[-2:] == (ny, nx):
+                return a[:, yslc, xslc]
+            return a
+
+        for attr in ('data', 'err', 'dq', 'wht', 'con', 'var_poisson',
+                     'var_rnoise', 'var_flat', 'area'):
+            if hasattr(m, attr):
+                setattr(m, attr, _crop(getattr(m, attr)))
+        ny_c, nx_c = (y1 - y0), (x1 - x0)
+        shifted = _shift_gwcs(m.meta.wcs, x0, y0)
+        shifted.bounding_box = ((-0.5, nx_c - 0.5), (-0.5, ny_c - 0.5))
+        m.meta.wcs = shifted
+        m.save(filename)
+
+    # Keep the SCI FITS WCS consistent for astropy consumers (i2d is TAN).
+    with fits.open(filename, mode='update') as h:
+        for ext in ('SCI', 'ERR', 'CON', 'WHT', 'VAR_POISSON', 'VAR_RNOISE',
+                    'VAR_FLAT', 'AREA'):
+            if ext in h and 'CRPIX1' in h[ext].header:
+                h[ext].header['CRPIX1'] -= x0
+                h[ext].header['CRPIX2'] -= y0
+        h.flush()
+    print(f"cutout: cropped {os.path.basename(filename)} to finite region "
+          f"[{x0}:{x1},{y0}:{y1}] ({nx_c}x{ny_c})", flush=True)
+
+
 def _make_model_image(phot_obj, shape, *, psf_shape=None, include_local_bkg=False):
     """Call ``phot_obj.make_model_image`` with the version-appropriate
     include-local-bkg kwarg."""
@@ -2762,7 +2815,7 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
                                    residual_kind='iterative', desat=False, bgsub=False,
                                    epsf=False, blur=False, group=False, pupil='clear',
                                    iteration_label=None, resbgsub=False,
-                                   make_starless=True):
+                                   make_starless=True, crop_to_data=False):
     """
     Resample per-exposure residual images into one JWST-style *_residual_i2d.fits product.
     """
@@ -2956,6 +3009,12 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
     if not os.path.exists(output_filename):
         raise FileNotFoundError(f'Expected output was not created: {output_filename}')
     print(f'Wrote residual mosaic {output_filename}')
+
+    if crop_to_data:
+        # ResampleStep allocates a ~full-frame canvas even for a small cutout;
+        # trim the mosaic back to the cutout region.  Done before the infilled
+        # step so the infilled mosaic is cropped too.
+        _crop_datamodel_to_finite(output_filename)
 
     fwhm_tbl = Table.read(FWHM_TABLE)
     row = fwhm_tbl[fwhm_tbl['Filter'] == filtername]
@@ -3623,15 +3682,18 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                                                           pupil='clear',
                                                           iteration_label=options.iteration_label or None,
                                                           resbgsub=getattr(options, 'use_iter3_residual_bg', False),
-                                                          make_starless=_mosaic_starless)
+                                                          make_starless=_mosaic_starless,
+                                                          crop_to_data=_cutout_run)
                     else:
                         print('Skipping residual mosaicking in SLURM array-task mode.')
 
                 # For a cutout run, also merge the per-exposure catalogs into a
                 # single across-exposure catalog under the cutout tree
-                # (combine_singleframe).  replace_saturated is skipped: its
-                # target-level resources (reduction/fwhm_table.ecsv, full
-                # satstar catalogs) don't live under the cutout basepath.
+                # (combine_singleframe).  Saturated-star replacement runs too,
+                # using the cutout's own satstar catalogs (basepath=_cut_bp);
+                # only the per-filter reduction/fwhm_table.ecsv is read from
+                # the real target basepath (fwhm_basepath) since the cutout
+                # tree doesn't contain it.
                 if (_cutout_run and os.getenv('SLURM_ARRAY_TASK_ID') is None
                         and options.daophot):
                     from jwst_gc_pipeline.photometry import merge_catalogs as _merge_catalogs
@@ -3650,7 +3712,7 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                                 bgsub=options.bgsub, desat=options.desaturated,
                                 epsf=options.epsf, blur=options.blur,
                                 resbgsub=getattr(options, 'use_iter3_residual_bg', False),
-                                do_replace_saturated=False)
+                                fwhm_basepath=basepath)
                             print(f"cutout: wrote merged {_mname} catalog under "
                                   f"{_cut_bp}/catalogs/", flush=True)
                         except Exception as ex:

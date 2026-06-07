@@ -900,6 +900,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
                                         iteration_label=None,
                                         resbgsub=False,
                                         do_replace_saturated=True,
+                                        fwhm_basepath=None,
                                         basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
 
     desat = "_unsatstar" if desat else ""
@@ -1041,7 +1042,8 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     # lacks the target-level resources replace_saturated needs (reduction/
     # fwhm_table.ecsv, full satstar catalogs).
     if do_replace_saturated:
-        replace_saturated(minimal_table, filtername=filtername, target=target, basepath=basepath)
+        replace_saturated(minimal_table, filtername=filtername, target=target,
+                          fwhm_basepath=fwhm_basepath, basepath=basepath)
 
     reject = np.isnan(minimal_table['skycoord'].ra) | np.isnan(minimal_table['skycoord'].dec)
     if np.any(reject):
@@ -1453,7 +1455,11 @@ def flag_near_saturated(cat, filtername, radius=None, target='brick',
 
 
 def replace_saturated(cat, filtername, radius=None, target='brick',
+                      fwhm_basepath=None,
                       basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
+    # ``basepath`` locates the satstar catalogs (the cutout's own, for cutout
+    # runs); ``fwhm_basepath`` (default = basepath) locates the target-level
+    # reduction/fwhm_table.ecsv, which the cutout tree doesn't contain.
     satstar_cat = load_satstar_catalog(filtername, target=target, basepath=basepath)
     if satstar_cat is None:
         print(f"No saturated star catalog found for {filtername}; skipping replacement")
@@ -1496,7 +1502,7 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
                   'f480m': 0.1*u.arcsec,
                   }[filtername]
 
-    fwhm_tbl = Table.read(f'{basepath}/reduction/fwhm_table.ecsv')
+    fwhm_tbl = Table.read(f'{fwhm_basepath or basepath}/reduction/fwhm_table.ecsv')
     fwhm = u.Quantity(fwhm_tbl[fwhm_tbl['Filter'] == filtername.upper()]['PSF FWHM (arcsec)'], u.arcsec)
 
     filtername_meta = cat.meta.get('filter', filtername)
