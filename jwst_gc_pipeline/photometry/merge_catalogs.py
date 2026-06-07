@@ -1463,8 +1463,10 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
     satstar_cat = load_satstar_catalog(filtername, target=target, basepath=basepath)
     if satstar_cat is None:
         print(f"No saturated star catalog found for {filtername}; skipping replacement")
-        cat.add_column(np.zeros(len(cat), dtype='bool'), name='replaced_saturated')
-        cat.add_column(np.zeros(len(cat), dtype='bool'), name='is_saturated')
+        if 'replaced_saturated' not in cat.colnames:
+            cat.add_column(np.zeros(len(cat), dtype='bool'), name='replaced_saturated')
+        if 'is_saturated' not in cat.colnames:
+            cat.add_column(np.zeros(len(cat), dtype='bool'), name='is_saturated')
         if 'flux_fit' in cat.colnames:
             cat.rename_column('flux_fit', 'flux')
         return
