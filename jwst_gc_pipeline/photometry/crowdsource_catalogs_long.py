@@ -3111,6 +3111,261 @@ def save_residual_datamodel(input_filename, output_filename, data):
             hdul.flush()
 
 
+def _cutout_smooth_residual_bg(residual_i2d_path, median_size=3, overwrite=False):
+    """Median-smooth a cutout residual mosaic into its ``_smoothed_bg`` sibling.
+
+    Mirrors make_iter3_residual_bgmaps.smooth_one (kept in-package so the
+    in-process cutout pipeline has no dependency on the brick analysis dir).
+    Returns the smoothed-bg path.  ``..._residual_i2d.fits`` ->
+    ``..._residual_smoothed_bg_i2d.fits``.
+    """
+    out_path = residual_i2d_path.replace('_residual_i2d.fits',
+                                         '_residual_smoothed_bg_i2d.fits')
+    if os.path.exists(out_path) and not overwrite:
+        return out_path
+    with fits.open(residual_i2d_path) as hdul:
+        names = [h.name for h in hdul]
+        if 'SCI' in names:
+            sci_idx = names.index('SCI')
+            data = hdul[sci_idx].data.astype(np.float32)
+            header = hdul[sci_idx].header
+            primary_header = hdul[0].header
+        else:
+            data = hdul[0].data.astype(np.float32)
+            header = hdul[0].header
+            primary_header = None
+    finite = np.isfinite(data)
+    work = np.where(finite, data, 0.0)
+    smoothed = ndimage.median_filter(work, size=median_size, mode='nearest')
+    smoothed = np.where(finite, smoothed, np.nan).astype(np.float32)
+    out = fits.HDUList()
+    if primary_header is not None:
+        out.append(fits.PrimaryHDU(header=primary_header))
+        out.append(fits.ImageHDU(data=smoothed, header=header, name='SCI'))
+    else:
+        out.append(fits.PrimaryHDU(data=smoothed, header=header))
+    out[0].header['HISTORY'] = (
+        f'cutout pipeline: {median_size}x{median_size} median filter of '
+        f'{os.path.basename(residual_i2d_path)}')
+    out.writeto(out_path, overwrite=True)
+    return out_path
+
+
+def _run_cutout_pipeline(options, modules, filternames, nvisits, proposal_id,
+                         target, field, basepath, crowdsource_default_kwargs,
+                         bg_boxsizes):
+    """In-process multi-phase pipeline for a ``--cutout-region`` run.
+
+    A cutout is small enough to run every phase sequentially in one process
+    (no SLURM array), so the subsequent-step orchestration that the full-frame
+    pipeline does via dependent SLURM jobs is done here as plain calls.
+
+    Phases (single filter):  iter1 -> iter2 -> iter4
+      * iter1  : unseeded per-frame photometry; merge per-frame catalogs;
+                 build the iter1 residual i2d mosaic.
+      * iter2  : re-fit each frame seeded by the MERGED iter1 catalog (the
+                 merged catalog fed back in); merge; build iter2 residual i2d.
+      * iter4  : median-smooth the iter2 residual mosaic, subtract it from the
+                 input image, and re-fit seeded by the MERGED iter2 catalog
+                 (residual built against the ORIGINAL data); merge.
+
+    Multi-filter adds an ``iter3`` phase between iter2 and iter4 that seeds
+    every filter from the cross-filter union of the iter2 merged catalogs.
+
+    All outputs land under ``<basepath>/cutouts/<label>/`` (disjoint from
+    full-frame products).  Frames not overlapping the region are skipped; if
+    NO frame overlaps, raises (wrong region/target).
+    """
+    import copy
+    from jwst_gc_pipeline.photometry import merge_catalogs as _merge_catalogs
+
+    cut_bp = _cutout_out_basepath(basepath, options)
+    os.makedirs(os.path.join(cut_bp, 'catalogs'), exist_ok=True)
+    pupil = 'clear'
+    multifilter = len(filternames) > 1
+
+    phases = ['iter1', 'iter2']
+    if multifilter:
+        phases.append('iter3')
+    phases.append('iter4')
+    print(f"CUTOUT PIPELINE: label={_cutout_label_for(options)} "
+          f"phases={phases} filters={filternames} modules={modules}", flush=True)
+
+    def _merged_iter_path(phase, module, filt):
+        """Reconstruct the merged minimal iterative-catalog path that
+        merge_individual_frames writes for ``phase`` (matches its token logic)."""
+        desat = '_unsatstar' if options.desaturated else ''
+        bgsub = ('_bgsub' if options.bgsub else '') + ('_resbgsub' if phase == 'iter4' else '')
+        blur_ = '_blur' if options.blur else ''
+        iter_token = '' if phase == 'iter1' else f'_{phase}'
+        return (f'{cut_bp}/catalogs/{filt.lower()}_{module}_indivexp_merged'
+                f'{desat}{bgsub}{blur_}{iter_token}_daoiterative_iterative.fits')
+
+    overlap_total = 0
+    # mosaic infilled-paths recorded per (phase, module, filt) for iter4 bg build
+    mosaic_paths = {}
+
+    for phase in phases:
+        is_iter1 = (phase == 'iter1')
+        iteration_label = None if is_iter1 else phase
+        resbgsub = (phase == 'iter4')
+
+        opts_phase = copy.copy(options)
+        opts_phase.iteration_label = iteration_label or ''
+        opts_phase.seed_catalog = ''
+        # iter4 carries the _resbgsub filename token (it subtracts a residual
+        # bg); drives _bgsub_token so per-frame/mosaic/merge names agree.
+        opts_phase.use_iter3_residual_bg = resbgsub
+
+        for module in modules:
+            for filt in filternames:
+                # --- determine seed + resbg for this (phase, module, filt) ---
+                seed_catalog = None
+                resbg_path = None
+                if phase == 'iter2':
+                    seed_catalog = _merged_iter_path('iter1', module, filt)
+                elif phase == 'iter3':
+                    seed_catalog = _build_cutout_union_seed(
+                        cut_bp, modules, filternames, options)
+                elif phase == 'iter4':
+                    seed_src = 'iter3' if multifilter else 'iter2'
+                    seed_catalog = _merged_iter_path(seed_src, module, filt)
+                    # smoothed-bg from the seed-source residual mosaic
+                    src_infilled = mosaic_paths.get((seed_src, module, filt))
+                    if src_infilled is None:
+                        raise ValueError(
+                            f"iter4 needs the {seed_src} residual mosaic for "
+                            f"module={module} filt={filt}; none was produced.")
+                    src_residual = src_infilled.replace(
+                        '_residual_infilled_i2d.fits', '_residual_i2d.fits')
+                    resbg_path = _cutout_smooth_residual_bg(src_residual)
+                    print(f"iter4: built smoothed bg {resbg_path}", flush=True)
+
+                if seed_catalog is not None and not os.path.exists(seed_catalog):
+                    raise ValueError(
+                        f"{phase}: seed catalog {seed_catalog} missing "
+                        f"(prior phase merge did not produce it).")
+
+                postprocess = options.postprocess_residuals or (seed_catalog is not None)
+
+                # --- per-frame photometry over all overlapping frames ---
+                n_overlap_phase = 0
+                for visitid in range(1, nvisits[proposal_id][target] + 1):
+                    visitid = f'{visitid:03d}'
+                    filenames = get_filenames(basepath, filt, proposal_id, field,
+                                              visitid=visitid,
+                                              each_suffix=options.each_suffix,
+                                              module=module, pupil='clear')
+                    for filename in sorted(filenames):
+                        exposure_id = filename.split("_")[2]
+                        visit_id = filename.split("_")[0][-3:]
+                        vgroup_id = filename.split("_")[1]
+                        file_detector = filename.split("_")[3]
+                        file_module = file_detector if module == 'merged' else module
+                        if options.skip_if_done and _expected_output_exists(
+                                cut_bp, filt, file_module, opts_phase,
+                                visit_id, vgroup_id, exposure_id,
+                                iteration_label=iteration_label):
+                            print(f'skip-if-done [{phase}]: {filt} {file_module} '
+                                  f'visit={visit_id} exp={exposure_id}', flush=True)
+                            n_overlap_phase += 1
+                            continue
+                        try:
+                            do_photometry_step(
+                                opts_phase, filt, file_module, file_detector,
+                                field, basepath, filename, proposal_id,
+                                crowdsource_default_kwargs,
+                                exposurenumber=int(exposure_id),
+                                visit_id=visit_id, vgroup_id=vgroup_id,
+                                use_webbpsf=True, bg_boxsizes=bg_boxsizes,
+                                seed_catalog=seed_catalog,
+                                iteration_label=iteration_label,
+                                postprocess_residuals=postprocess,
+                                residual_negative_threshold=options.residual_negative_threshold,
+                                local_snr_threshold=options.local_snr_threshold,
+                                daofind_roundlo=options.daofind_roundlo,
+                                daofind_roundhi=options.daofind_roundhi,
+                                resbg_path=resbg_path)
+                        except CutoutNoOverlap as ex:
+                            print(f"cutout [{phase}]: skipping non-overlapping "
+                                  f"frame {filename} ({ex})", flush=True)
+                            continue
+                        n_overlap_phase += 1
+
+                if n_overlap_phase == 0:
+                    raise ValueError(
+                        f"--cutout-region={options.cutout_region!r} overlapped "
+                        f"none of the {filt}/{module} frames in phase {phase}.")
+                if phase == phases[0]:
+                    overlap_total += n_overlap_phase
+
+                # --- mosaic residual i2d (basic+iterative) for this phase ---
+                if not options.skip_mosaic_each_exposure_residuals and options.daophot:
+                    kinds = ['basic'] if options.basic_only else ['basic', 'iterative']
+                    for residual_kind in kinds:
+                        infilled = mosaic_each_exposure_residuals(
+                            basepath=cut_bp, filtername=filt,
+                            proposal_id=proposal_id, field=field, module=module,
+                            residual_kind=residual_kind,
+                            desat=options.desaturated, bgsub=options.bgsub,
+                            epsf=options.epsf, blur=options.blur,
+                            group=options.group, pupil=pupil,
+                            iteration_label=iteration_label, resbgsub=resbgsub,
+                            make_starless=False, crop_to_data=True)
+                        if residual_kind == 'iterative':
+                            mosaic_paths[(phase, module, filt)] = infilled
+
+                # --- merge per-frame catalogs for this phase ---
+                if options.daophot:
+                    _merge_methods = [('dao', '_basic')]
+                    if not options.basic_only:
+                        _merge_methods.append(('daoiterative', '_iterative'))
+                    for _mname, _msuffix in _merge_methods:
+                        _merge_catalogs.merge_individual_frames(
+                            module=module, filtername=filt.lower(),
+                            progid=proposal_id, method=_mname, suffix=_msuffix,
+                            target=target, basepath=cut_bp,
+                            iteration_label=iteration_label,
+                            bgsub=options.bgsub, desat=options.desaturated,
+                            epsf=options.epsf, blur=options.blur,
+                            resbgsub=resbgsub, fwhm_basepath=basepath)
+                        print(f"cutout [{phase}]: merged {_mname} catalog under "
+                              f"{cut_bp}/catalogs/", flush=True)
+
+    print(f"CUTOUT PIPELINE DONE: {overlap_total} overlapping frames, "
+          f"phases={phases}", flush=True)
+
+
+def _build_cutout_union_seed(cut_bp, modules, filternames, options):
+    """Build the cross-filter union seed for a multi-filter cutout iter3.
+
+    Stacks the iter2 merged catalogs across all filters (and modules) into one
+    skycoord seed table, writes it under the cutout catalogs/ dir, and returns
+    its path.  Single-filter cutouts skip iter3 and never call this.
+    """
+    from astropy.table import vstack as _vstack
+    desat = '_unsatstar' if options.desaturated else ''
+    bgsub = '_bgsub' if options.bgsub else ''
+    blur_ = '_blur' if options.blur else ''
+    tbls = []
+    for module in modules:
+        for filt in filternames:
+            p = (f'{cut_bp}/catalogs/{filt.lower()}_{module}_indivexp_merged'
+                 f'{desat}{bgsub}{blur_}_iter2_daoiterative_iterative.fits')
+            if os.path.exists(p):
+                t = Table.read(p)
+                if 'skycoord' in t.colnames:
+                    tbls.append(Table({'skycoord': t['skycoord']}))
+    if not tbls:
+        raise ValueError("iter3 union seed: no iter2 merged catalogs found "
+                         f"under {cut_bp}/catalogs/")
+    union = _vstack(tbls, metadata_conflicts='silent')
+    out = f'{cut_bp}/catalogs/union_seed_iter2_cutout.fits'
+    union.write(out, overwrite=True)
+    print(f"iter3: wrote cross-filter union seed {out} (n={len(union)})", flush=True)
+    return out
+
+
 def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                            'f410m': 0.55, 'f405n':0.55, 'f466n':0.55,
                            'f335m': 0.55, 'f470n': 0.55, 'f480m': 0.55,
@@ -3577,6 +3832,16 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     _cutout_run = bool(getattr(options, 'cutout_region', ''))
     _cutout_overlap_count = 0
 
+    # A --cutout-region run (outside SLURM array mode) is small enough to run
+    # the whole multi-phase pipeline in-process: iter1 -> iter2 -> (iter3 if
+    # multi-filter) -> iter4, merging and building residual mosaics between
+    # phases.  The full-frame each-exposure path below is left byte-identical.
+    if _cutout_run and os.getenv('SLURM_ARRAY_TASK_ID') is None and options.each_exposure:
+        _run_cutout_pipeline(options, modules, filternames, nvisits, proposal_id,
+                             target, field, basepath, crowdsource_default_kwargs,
+                             bg_boxsizes)
+        return
+
     for module in modules:
         detector = module # no sub-detectors for long-NIRCAM or for MIRI
         for filtername in filternames:
@@ -3823,7 +4088,8 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
                        seed_catalog=None,
                        iteration_label=None,
                        postprocess_residuals=False,
-                       residual_negative_threshold=0.0):
+                       residual_negative_threshold=0.0,
+                       resbg_path=None):
     """
     nsigma is the threshold to multiply the error estimate by to get the detection threshold
     """
@@ -3914,7 +4180,7 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
     # copy of the data *before* any background subtraction.  (The authoritative
     # is_resbg_refit flag is recomputed in the iteration block below.)
     _is_resbg_refit_early = (
-        (_strip_chunk(iteration_label) or '').lower() == 'iter4resbgrefit')
+        (_strip_chunk(iteration_label) or '').lower() in ('iter4resbgrefit', 'iter4'))
     original_data = data.copy() if _is_resbg_refit_early else None
 
     if options.bgsub:
@@ -3934,7 +4200,7 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
 
         fits.PrimaryHDU(data=data, header=im1['SCI'].header).writeto(filename.replace(".fits", "_bgsub.fits"), overwrite=True)
 
-    if getattr(options, 'use_iter3_residual_bg', False):
+    if resbg_path or getattr(options, 'use_iter3_residual_bg', False):
         # 2026-04-25: alternative background subtraction that uses the
         # iter3 photometry residual (3x3-median-smoothed) as the
         # background estimate.  Built by make_iter3_residual_bgmaps.py
@@ -3950,21 +4216,28 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
         # ``--resbg-mosaic-module`` (default 'merged').  Targets whose
         # whole-field co-add is a single detector (e.g. sickle LW = 'nrcb')
         # pass that token; SW four-detector co-adds use 'merged'.
+        #
+        # 2026-06-07: ``resbg_path`` (in-process cutout pipeline) overrides
+        # the iter3-filename construction -- the cutout wrapper passes the
+        # smoothed iter2 (or iter3) residual mosaic it just built.
         from reproject import reproject_interp
-        _inst = _inst_token(filtername)
-        _bg_module = getattr(options, 'resbg_mosaic_module', '') or 'merged'
-        residbg_path = (
-            f'{basepath}/{filtername}/pipeline/'
-            f'jw0{proposal_id}-o{field}_t001_{_inst}_{pupil}-{filtername.lower()}-'
-            f'{_bg_module}_iter3_daophot_iterative_residual_smoothed_bg_i2d.fits'
-        )
+        if resbg_path:
+            residbg_path = resbg_path
+        else:
+            _inst = _inst_token(filtername)
+            _bg_module = getattr(options, 'resbg_mosaic_module', '') or 'merged'
+            residbg_path = (
+                f'{basepath}/{filtername}/pipeline/'
+                f'jw0{proposal_id}-o{field}_t001_{_inst}_{pupil}-{filtername.lower()}-'
+                f'{_bg_module}_iter3_daophot_iterative_residual_smoothed_bg_i2d.fits'
+            )
         if not os.path.exists(residbg_path):
             raise ValueError(
-                f"--use-iter3-residual-bg requires the smoothed-bg mosaic "
+                f"residual-bg subtraction requires the smoothed-bg mosaic "
                 f"{residbg_path} to exist; run "
                 f"`python make_iter3_residual_bgmaps.py --target=<target>` "
-                f"after the iter3 residual mosaic (module={_bg_module!r}) is "
-                f"complete."
+                f"after the iter3 residual mosaic is complete (or, for cutout "
+                f"runs, the wrapper builds it from the iter2 residual mosaic)."
             )
         with fits.open(residbg_path) as bgh:
             if 'SCI' in [h.name for h in bgh]:
@@ -4089,8 +4362,12 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
     # xy_bounds, on the residual-bg-subtracted data, and writes its residual
     # against the ORIGINAL (non-bg-subtracted) data.  Purely additive -- the
     # iter1/iter2/iter3 code paths are unchanged.
+    # 'iter4' is the cutout-pipeline final refit (in-process wrapper): same
+    # residual-from-original + tight-bounds behavior as iter4resbgrefit, but it
+    # is seeded by an EXPLICIT merged catalog (passed by the wrapper), so the
+    # per-frame iter3-seed inference below is gated on 'iter4resbgrefit' only.
     is_resbg_refit = (_base_label is not None
-                      and str(_base_label).lower() == 'iter4resbgrefit')
+                      and str(_base_label).lower() in ('iter4resbgrefit', 'iter4'))
     if (seed_catalog is None and iteration_label not in (None, '')
             and not is_iter3 and not is_resbg_refit):
         inferred_seed_catalog = (
@@ -4099,7 +4376,8 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
         )
         if os.path.exists(inferred_seed_catalog):
             seed_catalog = inferred_seed_catalog
-    if is_resbg_refit and seed_catalog is None:
+    if (is_resbg_refit and seed_catalog is None
+            and str(_base_label).lower() == 'iter4resbgrefit'):
         # Seed from this frame's own iter3 iterative catalog (the "exact
         # iter3 catalog").  That file carries NO bgsub token and the
         # ``_iter3`` iter token -- even though this run's bgsub token is
