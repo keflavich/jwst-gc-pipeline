@@ -28,18 +28,7 @@ import matplotlib.pyplot as plt
 from astroquery.vizier import Vizier
 
 
-try:
-    from measure_offsets import measure_offsets
-except ImportError:
-    # measure_offsets lives in the brick-jwst-2221 repo's offsets/ directory.
-    for candidate in (
-        Path("/orange/adamginsburg/repos/brick-jwst-2221/offsets"),
-        Path(__file__).resolve().parents[2] / "offsets",
-    ):
-        if (candidate / "measure_offsets.py").exists():
-            sys.path.append(str(candidate))
-            break
-    from measure_offsets import measure_offsets
+from jwst_gc_pipeline.photometry.measure_offsets import measure_offsets
 
 
 DEFAULT_GNS_CATALOG_PATH = Path("/orange/adamginsburg/jwst/brick/catalogs/GALACTICNUCLEUS_2021_merged.fits")
@@ -440,6 +429,9 @@ def fetch_gaia_catalog(
 
 
 def _normalize_reference_ks_magnitude(reference: Table, candidates: tuple[str, ...]) -> tuple[Table, str]:
+    """
+    "normalize" here just means 'convert to a common string name', no numeric conversion.
+    """
     available = [name for name in candidates if name in reference.colnames]
     if not available:
         raise ValueError(
