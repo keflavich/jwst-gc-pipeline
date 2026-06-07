@@ -73,7 +73,12 @@ print(jwst.__version__)
 
 # see 'destreak410.ipynb' for tests of this
 medfilt_size = {'F410M': 15, 'F405N': 256, 'F466N': 55,
-                'F182M': 55, 'F187N': 512, 'F212N': 512}
+                'F182M': 55, 'F187N': 512, 'F212N': 512,
+                # added purely from guessing on 2026-06-07
+                'F200W': 55, 'F335M': 55, 'F470N': 256, 'F480M': 256,
+                'F356W': 55, 'F444W': 55,
+                'F277W': 55, 'F300M': 55, 'F360M': 55,
+                }
 
 fov_regname = {'brick': 'regions_/nircam_brick_fov.reg',
                'cloudc': 'regions_/nircam_cloudc_fov.reg',
@@ -88,7 +93,7 @@ fov_regname = {'brick': 'regions_/nircam_brick_fov.reg',
                }
 
 refnames = {'2221': 'F405ref',
-            '1182': 'VVV',
+            '1182': 'VVV', # MAYBE need a different refcat for F115W?
             '3958': 'VVV',
             '5365': 'VVV',
             '6151': 'UKIDSS', # gaia?
