@@ -906,8 +906,17 @@ def _prepare_cutout_input(filename, basepath, filtername, options):
     # Write the matching cutout FITS WCS into the SCI header so the pipeline's
     # ``wcs.WCS(im1['SCI'].header)`` reads the correct (cutout) WCS; the
     # shifted GWCS stays in the ASDF extension for datamodels / resample.
+    #
+    # relax=True is REQUIRED: the detector-frame parent WCS is RA---TAN-SIP, and
+    # plain to_header() drops the '-SIP' CTYPE suffix while leaving the A_*/B_*
+    # SIP coefficients in the header.  astropy still applies SIP (with a warning),
+    # so catalog RA/Dec stay correct, but viewers that honor CTYPE strictly (CARTA)
+    # then IGNORE the distortion -> every per-frame cutout image (residual, model,
+    # _resbg_reproj, _srcfind_input) displays ~0.3-0.5 px offset from the catalog
+    # and from the rectified i2d.  relax=True writes CTYPE='RA---TAN-SIP' so the
+    # SIP is declared and applied consistently everywhere.
     with fits.open(cutout_filename, mode='update') as h:
-        h['SCI'].header.update(cut.wcs.to_header())
+        h['SCI'].header.update(cut.wcs.to_header(relax=True))
         h.flush()
 
     print(f"CUTOUT '{label}': wrote {cut.data.shape} cutout centered "
@@ -3151,6 +3160,340 @@ def _cutout_smooth_residual_bg(residual_i2d_path, median_size=3, overwrite=False
     return out_path
 
 
+def _resample_to_i2d(files, pipeline_dir, product_name, crop_to_data=True):
+    """Resample an explicit list of per-frame datamodels into one i2d mosaic.
+
+    Generic ResampleStep coadd shared by the cutout data-i2d and merged-catalog
+    residual mosaics.  ``crop_to_data`` trims the (over-allocated) canvas back
+    to the finite-data bbox.
+    """
+    files = sorted(set(files))
+    if not files:
+        return None
+    asn = asn_from_list.asn_from_list(files, rule=DMS_Level3_Base,
+                                      product_name=product_name)
+    asn_filename = f'{pipeline_dir}/{product_name}_asn.json'
+    with open(asn_filename, 'w') as fh:
+        _, serialized = asn.dump()
+        fh.write(serialized)
+    output_filename = f'{pipeline_dir}/{product_name}_i2d.fits'
+    print(f'Resampling {len(files)} frames into {product_name}_i2d.fits', flush=True)
+    resampled = ResampleStep.call(asn_filename, output_dir=pipeline_dir,
+                                  save_results=False)
+    resampled.save(output_filename, overwrite=True)
+    if hasattr(resampled, 'close'):
+        resampled.close()
+    if crop_to_data:
+        _crop_datamodel_to_finite(output_filename)
+    return output_filename
+
+
+def mosaic_cutout_input_data(cut_bp, filtername, proposal_id, field, module,
+                             label, pupil='clear'):
+    """Resample the per-frame cutout INPUT data into a ``_data_i2d`` mosaic.
+
+    This is the ORIGINAL (non-residual) image on the same i2d grid as the
+    residual mosaics, so catalog sky positions can be overplotted on real data
+    (the residuals subtract the sources, leaving nothing to register against).
+    Cutout path only.
+    """
+    pipeline_dir = f'{cut_bp}/{filtername}/pipeline'
+    inst_token = _inst_token(filtername)
+    files = sorted(glob.glob(f'{pipeline_dir}/*_cutout_{label}.fits'))
+    if not files:
+        print(f"mosaic_cutout_input_data: no cutout inputs "
+              f"*_cutout_{label}.fits in {pipeline_dir}", flush=True)
+        return None
+    product_name = (f'jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-'
+                    f'{filtername.lower()}-{module}_data')
+    out = _resample_to_i2d(files, pipeline_dir, product_name, crop_to_data=True)
+    print(f'Wrote cutout data i2d {out}', flush=True)
+    return out
+
+
+def _cutout_origin(orig_filename, options):
+    """Return the (x0, y0) parent-frame origin of the cutout in ``orig_filename``
+    (same math as _prepare_cutout_input) WITHOUT writing anything.  Returns None
+    if the region doesn't overlap the frame.  Used to re-origin the PSF grid in
+    the merged-catalog residual render pass."""
+    from astropy.nddata import Cutout2D, NoOverlapError
+    from astropy.wcs import NoConvergence
+    with fits.open(orig_filename) as hdul:
+        sci_ww = wcs.WCS(hdul['SCI'].header)
+        center, size, _ = _parse_cutout_region(
+            options.cutout_region, sci_ww,
+            default_size_arcsec=float(getattr(options, 'cutout_size_arcsec', 5.0)))
+        try:
+            cut = Cutout2D(np.asarray(hdul['SCI'].data), position=center, size=size,
+                           wcs=sci_ww, mode='trim', copy=False)
+        except (NoOverlapError, NoConvergence):
+            return None
+    yslc, xslc = cut.slices_original
+    return int(xslc.start), int(yslc.start)
+
+
+def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
+                              proposal_id, field, module, options,
+                              overlapping_frames, iteration_label, kinds,
+                              pupil='clear', psf_shape=(21, 21)):
+    """Build residual i2d mosaics from the VETTED MERGED catalog (cutout path).
+
+    The per-frame RAW residuals subtract every fitted source, including spurious
+    detections that eat into extended emission.  The merged catalog drops those
+    (quality cuts + cross-frame vetting), so a residual rendered from it shows
+    the extended emission the raw residual over-subtracts.
+
+    Construction is exact and cheap: the saved per-frame raw residual + raw model
+    recover ``data_for_residual`` (= original data minus satstar, exactly as the
+    fitter saw it); we re-render the model from the merged catalog (projected onto
+    each frame, with the same cutout-re-origined PSF) and subtract.  No data /
+    satstar reload, no re-fit.
+    """
+    from astropy.nddata import NDData as _NDData
+    merged = Table.read(merged_cat_path)
+    if 'skycoord' in merged.colnames:
+        msc = merged['skycoord']
+    else:
+        msc = SkyCoord(merged['ra'], merged['dec'], unit='deg')
+    fcol = 'flux_fit' if 'flux_fit' in merged.colnames else 'flux'
+    mflux = np.asarray(merged[fcol], dtype=float)
+
+    pipeline_dir = f'{cut_bp}/{filtername}/pipeline'
+    inst_token = _inst_token(filtername)
+
+    # Load the PSF grid once (obsdate/instrument from the first cutout input).
+    first_cut = os.path.join(
+        pipeline_dir,
+        os.path.basename(overlapping_frames[0]).replace(
+            '.fits', f"_cutout_{_cutout_label_for(options)}.fits"))
+    fh, im1, _d, _w, _e, instrument, telescope, obsdate = load_data(first_cut)
+    fh.close()
+    grid, _psf = get_psf_model(filtername, proposal_id, field, module=module,
+                               use_webbpsf=True, use_grid=options.each_exposure,
+                               blur=options.blur, target=options.target,
+                               obsdate=obsdate,
+                               basepath='/blue/adamginsburg/adamginsburg/jwst/',
+                               psf_cache_dir=os.path.join(basepath, 'psfs'),
+                               instrument=instrument)
+    half_h, half_w = int(psf_shape[0]) // 2, int(psf_shape[1]) // 2
+
+    written = {k: [] for k in kinds}
+    for orig in overlapping_frames:
+        origin = _cutout_origin(orig, options)
+        if origin is None:
+            continue
+        x0, y0 = origin
+        # re-origin the spatially-varying PSF grid to cutout pixel coords
+        shifted_xy = [(gx - x0, gy - y0) for (gx, gy) in grid.grid_xypos]
+        rg = type(grid)(_NDData(np.asarray(grid.data),
+                                meta={'grid_xypos': shifted_xy,
+                                      'oversampling': grid.oversampling}))
+        bn = os.path.basename(orig)
+        visit_id = bn.split('_')[0][-3:]
+        vgroup_id = bn.split('_')[1]
+        exposure_id = bn.split('_')[2]
+        (visitid_, vgroupid_, exposure_, desat, bgsub,
+         epsf_, blur_, group_, iter_) = _predict_output_tokens(
+            options, visit_id, vgroup_id, exposure_id, iteration_label)
+        for kind in kinds:
+            stem = (f'{pipeline_dir}/jw0{proposal_id}-o{field}_t001_{inst_token}_'
+                    f'{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}'
+                    f'{exposure_}{desat}{bgsub}{epsf_}{blur_}{group_}{iter_}'
+                    f'_daophot_{kind}')
+            raw_resid = f'{stem}_residual.fits'
+            raw_model = f'{stem}_model.fits'
+            if not (os.path.exists(raw_resid) and os.path.exists(raw_model)):
+                print(f"mergedcat: missing raw {kind} products for {bn}; skip",
+                      flush=True)
+                continue
+            with fits.open(raw_resid) as h:
+                ww = wcs.WCS(h['SCI'].header)
+                base = h['SCI'].data.astype(float)
+            with fits.open(raw_model) as h:
+                base = base + h['SCI'].data.astype(float)  # = data_for_residual
+            xx, yy = ww.world_to_pixel(msc)
+            ny, nx = base.shape
+            keep = (np.isfinite(xx) & np.isfinite(yy) & np.isfinite(mflux)
+                    & (xx > -half_w) & (xx < nx + half_w)
+                    & (yy > -half_h) & (yy < ny + half_h))
+            tbl = Table({'x_fit': np.asarray(xx)[keep],
+                         'y_fit': np.asarray(yy)[keep],
+                         'flux_fit': mflux[keep]})
+            mc_model = _render_model_from_table(tbl, rg, base.shape, psf_shape)
+            mc_resid = (base - mc_model).astype('float32')
+            out_resid = f'{stem}_mergedcat_residual.fits'
+            out_model = f'{stem}_mergedcat_model.fits'
+            save_residual_datamodel(raw_resid, out_resid, mc_resid)
+            save_residual_datamodel(raw_model, out_model,
+                                    mc_model.astype('float32'))
+            written[kind].append(out_resid)
+    # mosaic each kind's merged-catalog residuals
+    outpaths = {}
+    bgsub_tok = _bgsub_token(options)
+    iter_tok = _iteration_token(iteration_label)
+    desat_tok = '_unsatstar' if options.desaturated else ''
+    epsf_tok = '_epsf' if options.epsf else ''
+    blur_tok = '_blur' if options.blur else ''
+    group_tok = '_group' if options.group else ''
+    for kind in kinds:
+        if not written[kind]:
+            continue
+        product_name = (f'jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-'
+                        f'{filtername.lower()}-{module}{desat_tok}{bgsub_tok}'
+                        f'{epsf_tok}{blur_tok}{group_tok}{iter_tok}'
+                        f'_daophot_{kind}_mergedcat_residual')
+        outpaths[kind] = _resample_to_i2d(written[kind], pipeline_dir,
+                                          product_name, crop_to_data=True)
+        print(f"mergedcat: wrote {kind} residual i2d {outpaths[kind]}", flush=True)
+    return outpaths
+
+
+def _flag_likely_extended_iter4(merged4_path, merged2_path, pixscale_arcsec):
+    """Add a ``likely_extended`` column to the iter4 merged catalog.
+
+    Heuristic (pillar_head F480M, 2026-06-08): a source with ``qfit > 0.1`` whose
+    centroid moved > 0.5 px between iter2 and iter4 is probably a bump in extended
+    emission, not a confident star (real point sources have tight centroids and
+    good fits; emission bumps fit poorly and wander as the background model
+    changes).  Also records ``centroid_move_iter2to4_pix``.  See
+    NOTES_star_vs_extended_emission.md.
+    """
+    if not (os.path.exists(merged4_path) and os.path.exists(merged2_path)):
+        return
+    t4 = Table.read(merged4_path)
+    t2 = Table.read(merged2_path)
+    if len(t4) == 0:
+        return
+    def _sc(t):
+        return (t['skycoord'] if 'skycoord' in t.colnames
+                else SkyCoord(t['ra'], t['dec'], unit='deg'))
+    sc4, sc2 = _sc(t4), _sc(t2)
+    qcol = 'qfit' if 'qfit' in t4.colnames else ('qfit_avg' if 'qfit_avg' in t4.colnames else None)
+    move_px = np.full(len(t4), np.nan)
+    flag = np.zeros(len(t4), dtype=bool)
+    if len(t2) > 0:
+        idx, sep, _ = sc4.match_to_catalog_sky(sc2)
+        mp = (sep.arcsec / pixscale_arcsec)
+        # only treat as the SAME source (so the move is meaningful) within 5 px
+        same = mp < 5.0
+        move_px[same] = mp[same]
+        if qcol is not None:
+            qf = np.asarray(t4[qcol], dtype=float)
+            flag = same & (qf > 0.1) & (mp > 0.5)
+    t4['centroid_move_iter2to4_pix'] = move_px
+    t4['likely_extended'] = flag
+    t4.write(merged4_path, overwrite=True)
+    print(f"iter4: flagged {int(flag.sum())}/{len(t4)} sources likely_extended "
+          f"(qfit>0.1 & iter2->iter4 move>0.5px) in {os.path.basename(merged4_path)}",
+          flush=True)
+
+
+def build_filtered_iter2_residual_bg(cut_bp, basepath, filtername, proposal_id,
+                                     field, module, options, overlapping_frames,
+                                     pupil='clear', qfit_max=0.2,
+                                     peak_over_bkg=20.0, psf_shape=(21, 21)):
+    """EXPERIMENTAL iter4 background: smoothed iter2 residual where only confident
+    STARS are subtracted, so extended-emission false detections stay in the
+    background (and iter4 no longer inflates fluxes to absorb them).
+
+    A source is subtracted (kept in the model) iff it is a confident star:
+      qfit <= qfit_max  OR  flags == 1 (central-saturation real star)  OR
+      peak surface brightness > peak_over_bkg * local_bkg  (bright real star;
+      peak SB = the peak PIXEL value at the source, NOT the integrated flux).
+    Everything else is left in the residual (treated as extended emission).
+    Returns the smoothed-bg i2d path.  See NOTES_star_vs_extended_emission.md.
+    """
+    from astropy.nddata import NDData as _NDData
+    pipeline_dir = f'{cut_bp}/{filtername}/pipeline'
+    inst_token = _inst_token(filtername)
+    first_cut = os.path.join(
+        pipeline_dir,
+        os.path.basename(overlapping_frames[0]).replace(
+            '.fits', f"_cutout_{_cutout_label_for(options)}.fits"))
+    fh, im1, _d, _w, _e, instrument, telescope, obsdate = load_data(first_cut)
+    fh.close()
+    grid, _psf = get_psf_model(filtername, proposal_id, field, module=module,
+                               use_webbpsf=True, use_grid=options.each_exposure,
+                               blur=options.blur, target=options.target,
+                               obsdate=obsdate,
+                               basepath='/blue/adamginsburg/adamginsburg/jwst/',
+                               psf_cache_dir=os.path.join(basepath, 'psfs'),
+                               instrument=instrument)
+    written = []
+    n_kept = n_drop = 0
+    for orig in overlapping_frames:
+        origin = _cutout_origin(orig, options)
+        if origin is None:
+            continue
+        x0, y0 = origin
+        shifted_xy = [(gx - x0, gy - y0) for (gx, gy) in grid.grid_xypos]
+        rg = type(grid)(_NDData(np.asarray(grid.data),
+                                meta={'grid_xypos': shifted_xy,
+                                      'oversampling': grid.oversampling}))
+        bn = os.path.basename(orig)
+        visit_id, vgroup_id, exposure_id = bn.split('_')[0][-3:], bn.split('_')[1], bn.split('_')[2]
+        catfn = _predict_tblfilename(cut_bp, filtername, module, options,
+                                     visit_id, vgroup_id, exposure_id,
+                                     iteration_label='iter2', method='daophot',
+                                     basic_or_iterative='iterative')
+        (visitid_, vgroupid_, exposure_, desat, bgsub,
+         epsf_, blur_, group_, iter_) = _predict_output_tokens(
+            options, visit_id, vgroup_id, exposure_id, 'iter2')
+        stem = (f'{pipeline_dir}/jw0{proposal_id}-o{field}_t001_{inst_token}_'
+                f'{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}'
+                f'{exposure_}{desat}{bgsub}{epsf_}{blur_}{group_}{iter_}'
+                f'_daophot_iterative')
+        raw_resid, raw_model = f'{stem}_residual.fits', f'{stem}_model.fits'
+        if not (os.path.exists(catfn) and os.path.exists(raw_resid)
+                and os.path.exists(raw_model)):
+            print(f"qfilt-bg: missing iter2 products for {bn}; skip", flush=True)
+            continue
+        cat = Table.read(catfn)
+        with fits.open(raw_resid) as h:
+            base = h['SCI'].data.astype(float)
+        with fits.open(raw_model) as h:
+            base = base + h['SCI'].data.astype(float)  # data_for_residual
+        ny, nx = base.shape
+        xf = np.asarray(cat['x_fit'], float); yf = np.asarray(cat['y_fit'], float)
+        qf = np.asarray(cat['qfit'], float)
+        flg = np.asarray(cat['flags'], float) if 'flags' in cat.colnames else np.zeros(len(cat))
+        lbk = np.asarray(cat['local_bkg'], float) if 'local_bkg' in cat.colnames else np.zeros(len(cat))
+        # peak surface brightness = peak PIXEL value in a 3x3 box at the source
+        peaksb = np.full(len(cat), np.nan)
+        for i in range(len(cat)):
+            ix, iy = int(round(xf[i])), int(round(yf[i]))
+            if 0 <= iy < ny and 0 <= ix < nx:
+                box = base[max(0, iy-1):iy+2, max(0, ix-1):ix+2]
+                box = box[np.isfinite(box)]
+                if box.size:
+                    peaksb[i] = float(box.max())
+        keep = ((qf <= qfit_max) | (flg == 1)
+                | (np.isfinite(peaksb) & (lbk > 0) & (peaksb > peak_over_bkg * lbk)))
+        n_kept += int(keep.sum()); n_drop += int((~keep).sum())
+        tbl = Table({'x_fit': xf[keep], 'y_fit': yf[keep],
+                     'flux_fit': np.asarray(cat['flux_fit'], float)[keep]})
+        model = _render_model_from_table(tbl, rg, base.shape, psf_shape)
+        resid = (base - model).astype('float32')
+        out_resid = f'{stem}_qfilt_residual.fits'
+        save_residual_datamodel(raw_resid, out_resid, resid)
+        written.append(out_resid)
+    if not written:
+        return None
+    desat_tok = '_unsatstar' if options.desaturated else ''
+    bgsub_tok = _bgsub_token(options)
+    blur_tok = '_blur' if options.blur else ''
+    epsf_tok = '_epsf' if options.epsf else ''
+    group_tok = '_group' if options.group else ''
+    product_name = (f'jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-'
+                    f'{filtername.lower()}-{module}{desat_tok}{bgsub_tok}'
+                    f'{epsf_tok}{blur_tok}{group_tok}_iter2_daophot_iterative_qfilt_residual')
+    i2d = _resample_to_i2d(written, pipeline_dir, product_name, crop_to_data=True)
+    bg = _cutout_smooth_residual_bg(i2d, overwrite=True)
+    print(f"qfilt-bg: kept {n_kept} subtracted / left {n_drop} in residual; "
+          f"smoothed bg {bg}", flush=True)
+    return bg
+
+
 def _run_cutout_pipeline(options, modules, filternames, nvisits, proposal_id,
                          target, field, basepath, crowdsource_default_kwargs,
                          bg_boxsizes):
@@ -3191,15 +3534,17 @@ def _run_cutout_pipeline(options, modules, filternames, nvisits, proposal_id,
     print(f"CUTOUT PIPELINE: label={_cutout_label_for(options)} "
           f"phases={phases} filters={filternames} modules={modules}", flush=True)
 
-    def _merged_iter_path(phase, module, filt):
-        """Reconstruct the merged minimal iterative-catalog path that
-        merge_individual_frames writes for ``phase`` (matches its token logic)."""
+    def _merged_iter_path(phase, module, filt, kind='iterative'):
+        """Reconstruct the merged minimal catalog path that
+        merge_individual_frames writes for ``phase`` (matches its token logic).
+        ``kind`` selects the iterative (daoiterative) or basic (dao) catalog."""
         desat = '_unsatstar' if options.desaturated else ''
         bgsub = ('_bgsub' if options.bgsub else '') + ('_resbgsub' if phase == 'iter4' else '')
         blur_ = '_blur' if options.blur else ''
         iter_token = '' if phase == 'iter1' else f'_{phase}'
+        method_suffix = 'daoiterative_iterative' if kind == 'iterative' else 'dao_basic'
         return (f'{cut_bp}/catalogs/{filt.lower()}_{module}_indivexp_merged'
-                f'{desat}{bgsub}{blur_}{iter_token}_daoiterative_iterative.fits')
+                f'{desat}{bgsub}{blur_}{iter_token}_{method_suffix}.fits')
 
     overlap_total = 0
     # mosaic infilled-paths recorded per (phase, module, filt) for iter4 bg build
@@ -3232,16 +3577,28 @@ def _run_cutout_pipeline(options, modules, filternames, nvisits, proposal_id,
                 elif phase == 'iter4':
                     seed_src = 'iter3' if multifilter else 'iter2'
                     seed_catalog = _merged_iter_path(seed_src, module, filt)
-                    # smoothed-bg from the seed-source residual mosaic
-                    src_infilled = mosaic_paths.get((seed_src, module, filt))
-                    if src_infilled is None:
-                        raise ValueError(
-                            f"iter4 needs the {seed_src} residual mosaic for "
-                            f"module={module} filt={filt}; none was produced.")
-                    src_residual = src_infilled.replace(
-                        '_residual_infilled_i2d.fits', '_residual_i2d.fits')
-                    resbg_path = _cutout_smooth_residual_bg(src_residual)
-                    print(f"iter4: built smoothed bg {resbg_path}", flush=True)
+                    if getattr(options, 'iter4_bg_exclude_badfit', False):
+                        # EXPERIMENTAL: smoothed iter2 residual that subtracts
+                        # only confident stars, leaving extended-emission false
+                        # detections in the background so iter4 doesn't inflate
+                        # fluxes to absorb them.  See NOTES_star_vs_extended_emission.md
+                        resbg_path = build_filtered_iter2_residual_bg(
+                            cut_bp, basepath, filt, proposal_id, field, module,
+                            options, frame_cache.get((module, filt), []),
+                            pupil=pupil)
+                        print(f"iter4: built qfit-filtered smoothed bg "
+                              f"{resbg_path}", flush=True)
+                    if not resbg_path:
+                        # standard smoothed-bg from the seed-source residual mosaic
+                        src_infilled = mosaic_paths.get((seed_src, module, filt))
+                        if src_infilled is None:
+                            raise ValueError(
+                                f"iter4 needs the {seed_src} residual mosaic for "
+                                f"module={module} filt={filt}; none was produced.")
+                        src_residual = src_infilled.replace(
+                            '_residual_infilled_i2d.fits', '_residual_i2d.fits')
+                        resbg_path = _cutout_smooth_residual_bg(src_residual)
+                        print(f"iter4: built smoothed bg {resbg_path}", flush=True)
 
                 if seed_catalog is not None and not os.path.exists(seed_catalog):
                     raise ValueError(
@@ -3316,23 +3673,8 @@ def _run_cutout_pipeline(options, modules, filternames, nvisits, proposal_id,
                 if phase == phases[0]:
                     overlap_total += n_overlap_phase
 
-                # --- mosaic residual i2d (basic+iterative) for this phase ---
-                if not options.skip_mosaic_each_exposure_residuals and options.daophot:
-                    kinds = ['basic'] if options.basic_only else ['basic', 'iterative']
-                    for residual_kind in kinds:
-                        infilled = mosaic_each_exposure_residuals(
-                            basepath=cut_bp, filtername=filt,
-                            proposal_id=proposal_id, field=field, module=module,
-                            residual_kind=residual_kind,
-                            desat=options.desaturated, bgsub=options.bgsub,
-                            epsf=options.epsf, blur=options.blur,
-                            group=options.group, pupil=pupil,
-                            iteration_label=iteration_label, resbgsub=resbgsub,
-                            make_starless=False, crop_to_data=True)
-                        if residual_kind == 'iterative':
-                            mosaic_paths[(phase, module, filt)] = infilled
-
-                # --- merge per-frame catalogs for this phase ---
+                # --- merge per-frame catalogs FIRST (the merged-catalog
+                # residual needs the vetted merged catalog) ---
                 if options.daophot:
                     _merge_methods = [('dao', '_basic')]
                     if not options.basic_only:
@@ -3348,6 +3690,81 @@ def _run_cutout_pipeline(options, modules, filternames, nvisits, proposal_id,
                             resbgsub=resbgsub, fwhm_basepath=basepath)
                         print(f"cutout [{phase}]: merged {_mname} catalog under "
                               f"{cut_bp}/catalogs/", flush=True)
+                    # iter4: flag likely-extended (non-star) detections by
+                    # comparing iter2->iter4 centroid motion (diagnostic column).
+                    if phase == 'iter4' and not options.basic_only:
+                        try:
+                            _pixscale = float(np.sqrt(np.abs(np.linalg.det(
+                                wcs.WCS(fits.getheader(
+                                    f'{cut_bp}/{filt}/pipeline/jw0{proposal_id}-o'
+                                    f'{field}_t001_{_inst_token(filt)}_clear-'
+                                    f'{filt.lower()}-{module}_data_i2d.fits',
+                                    extname='SCI')).pixel_scale_matrix))) * 3600.0)
+                            _flag_likely_extended_iter4(
+                                _merged_iter_path('iter4', module, filt, 'iterative'),
+                                _merged_iter_path('iter2', module, filt, 'iterative'),
+                                _pixscale)
+                        except Exception as ex:
+                            print(f"cutout [iter4]: likely_extended flag failed: "
+                                  f"{ex}", flush=True)
+
+                # --- residual i2d(s) for this phase ---
+                # --residual-source: 'mergedcat' (default), 'rawcat', or 'both'.
+                # The merged-catalog residual drops spurious sources (which eat
+                # extended emission in the raw residual).  The raw iterative
+                # mosaic is also built when it is the iter4 background source
+                # (seed_src), regardless of --residual-source.
+                if not options.skip_mosaic_each_exposure_residuals and options.daophot:
+                    residual_source = getattr(options, 'residual_source', 'mergedcat')
+                    kinds = ['basic'] if options.basic_only else ['basic', 'iterative']
+                    seed_src = 'iter3' if multifilter else 'iter2'
+                    need_raw_iter_for_bg = (phase == seed_src)
+                    build_raw = residual_source in ('rawcat', 'both')
+                    for residual_kind in kinds:
+                        do_raw = build_raw or (residual_kind == 'iterative'
+                                               and need_raw_iter_for_bg)
+                        if not do_raw:
+                            continue
+                        infilled = mosaic_each_exposure_residuals(
+                            basepath=cut_bp, filtername=filt,
+                            proposal_id=proposal_id, field=field, module=module,
+                            residual_kind=residual_kind,
+                            desat=options.desaturated, bgsub=options.bgsub,
+                            epsf=options.epsf, blur=options.blur,
+                            group=options.group, pupil=pupil,
+                            iteration_label=iteration_label, resbgsub=resbgsub,
+                            make_starless=False, crop_to_data=True)
+                        if residual_kind == 'iterative':
+                            mosaic_paths[(phase, module, filt)] = infilled
+
+                    # merged-catalog residual i2d (default deliverable).  Built
+                    # for the science kind (iterative, or basic if --basic-only),
+                    # from the matching vetted merged catalog.
+                    if residual_source in ('mergedcat', 'both'):
+                        mc_kind = 'basic' if options.basic_only else 'iterative'
+                        try:
+                            # opts_phase (not options) carries the phase's bgsub
+                            # token (iter4 -> _resbgsub) so the per-frame raw
+                            # product names are reconstructed correctly.
+                            build_mergedcat_residuals(
+                                cut_bp, basepath,
+                                _merged_iter_path(phase, module, filt, mc_kind),
+                                filt, proposal_id, field, module, opts_phase,
+                                frame_cache.get((module, filt), []),
+                                iteration_label, [mc_kind], pupil=pupil)
+                        except Exception as ex:
+                            print(f"cutout [{phase}]: mergedcat residual failed: "
+                                  f"{ex}", flush=True)
+
+                    # original-data i2d (once, during iter1) so catalog sky
+                    # positions can be overplotted on real data
+                    if phase == phases[0]:
+                        try:
+                            mosaic_cutout_input_data(
+                                cut_bp, filt, proposal_id, field, module,
+                                _cutout_label_for(options), pupil=pupil)
+                        except Exception as ex:
+                            print(f"cutout: data i2d build failed: {ex}", flush=True)
 
     print(f"CUTOUT PIPELINE DONE: {overlap_total} overlapping frames, "
           f"phases={phases}", flush=True)
@@ -3438,6 +3855,25 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                           "get a '_resbgsub' filename token.  Built by "
                           "make_iter3_residual_bgmaps.py."),
                     metavar="use_iter3_residual_bg")
+    parser.add_option("--residual-source", dest="residual_source",
+                    type="choice", choices=["mergedcat", "rawcat", "both"],
+                    default="mergedcat",
+                    help=("Which residual i2d(s) to build (cutout pipeline): "
+                          "'mergedcat' (default) renders the model from the VETTED "
+                          "MERGED catalog (spurious sources removed -- recovers "
+                          "extended emission the raw residual over-subtracts); "
+                          "'rawcat' uses each frame's own fit; 'both' builds both. "
+                          "Rendering is extra work, so default to mergedcat only."),
+                    metavar="residual_source")
+    parser.add_option("--iter4-bg-exclude-badfit", dest="iter4_bg_exclude_badfit",
+                    default=False, action='store_true',
+                    help=("EXPERIMENTAL (cutout iter4): build the iter4 background "
+                          "from an iter2 residual that subtracts only confident "
+                          "stars (qfit<=0.2, OR flags==1, OR peak-SB>20x local_bkg), "
+                          "leaving extended-emission false detections in the "
+                          "background so iter4 stops inflating fluxes on extended "
+                          "emission.  See NOTES_star_vs_extended_emission.md."),
+                    metavar="iter4_bg_exclude_badfit")
     parser.add_option("--profile-memory", dest="profile_memory",
                     default=False,
                     action='store_true',
@@ -4295,6 +4731,23 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
         print(f"Subtracted merged iter3-residual-smoothed bg ({residbg_path}) "
               f"reprojected onto exposure grid: sum={float(np.nansum(bg_finite)):.3e} "
               f"MJy/sr-equiv, {n_nan} pix outside merged FOV (set to 0)", flush=True)
+        # Diagnostics (both cutout and full-frame paths): save the reprojected
+        # smoothed residual that was subtracted and the resulting source-finding
+        # input (data - smoothed_residual), with the frame's SCI WCS so they
+        # overplot against the catalog.  Tokens distinguish iter/bgsub variants.
+        _diag_suffix = f"{_bgsub_token(options)}{_iteration_token(iteration_label)}"
+        _sci_hdr = im1['SCI'].header
+        try:
+            fits.PrimaryHDU(data=bg_finite.astype('float32'), header=_sci_hdr).writeto(
+                filename.replace('.fits', f'{_diag_suffix}_resbg_reproj.fits'),
+                overwrite=True)
+            fits.PrimaryHDU(data=data.astype('float32'), header=_sci_hdr).writeto(
+                filename.replace('.fits', f'{_diag_suffix}_srcfind_input.fits'),
+                overwrite=True)
+            print(f"  wrote resbg diagnostics: *{_diag_suffix}_resbg_reproj.fits "
+                  f"and *_srcfind_input.fits", flush=True)
+        except (OSError, ValueError) as _ex:
+            print(f"  WARNING: failed to write resbg diagnostics: {_ex}", flush=True)
 
     # try to limit memory use before we start photometry
     data = data.astype('float32')
