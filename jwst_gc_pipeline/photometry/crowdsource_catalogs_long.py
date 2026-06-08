@@ -3204,6 +3204,8 @@ def _run_cutout_pipeline(options, modules, filternames, nvisits, proposal_id,
     overlap_total = 0
     # mosaic infilled-paths recorded per (phase, module, filt) for iter4 bg build
     mosaic_paths = {}
+    # overlapping-frame list recorded in iter1, reused by later phases
+    frame_cache = {}
 
     for phase in phases:
         is_iter1 = (phase == 'iter1')
@@ -3248,49 +3250,64 @@ def _run_cutout_pipeline(options, modules, filternames, nvisits, proposal_id,
 
                 postprocess = options.postprocess_residuals or (seed_catalog is not None)
 
-                # --- per-frame photometry over all overlapping frames ---
+                # --- candidate frames ---
+                # iter1 (first phase) scans every exposure of every visit and
+                # records which ones overlap the cutout region (the overlap test
+                # inside do_photometry_step costs ~10 s/frame); later phases reuse
+                # that cached overlapping-frame list instead of re-scanning the
+                # non-overlapping frames every phase.
+                if phase == phases[0]:
+                    candidate_frames = []
+                    for visitid in range(1, nvisits[proposal_id][target] + 1):
+                        candidate_frames.extend(sorted(get_filenames(
+                            basepath, filt, proposal_id, field,
+                            visitid=f'{visitid:03d}', each_suffix=options.each_suffix,
+                            module=module, pupil='clear')))
+                else:
+                    candidate_frames = frame_cache.get((module, filt), [])
+
                 n_overlap_phase = 0
-                for visitid in range(1, nvisits[proposal_id][target] + 1):
-                    visitid = f'{visitid:03d}'
-                    filenames = get_filenames(basepath, filt, proposal_id, field,
-                                              visitid=visitid,
-                                              each_suffix=options.each_suffix,
-                                              module=module, pupil='clear')
-                    for filename in sorted(filenames):
-                        exposure_id = filename.split("_")[2]
-                        visit_id = filename.split("_")[0][-3:]
-                        vgroup_id = filename.split("_")[1]
-                        file_detector = filename.split("_")[3]
-                        file_module = file_detector if module == 'merged' else module
-                        if options.skip_if_done and _expected_output_exists(
-                                cut_bp, filt, file_module, opts_phase,
-                                visit_id, vgroup_id, exposure_id,
-                                iteration_label=iteration_label):
-                            print(f'skip-if-done [{phase}]: {filt} {file_module} '
-                                  f'visit={visit_id} exp={exposure_id}', flush=True)
-                            n_overlap_phase += 1
-                            continue
-                        try:
-                            do_photometry_step(
-                                opts_phase, filt, file_module, file_detector,
-                                field, basepath, filename, proposal_id,
-                                crowdsource_default_kwargs,
-                                exposurenumber=int(exposure_id),
-                                visit_id=visit_id, vgroup_id=vgroup_id,
-                                use_webbpsf=True, bg_boxsizes=bg_boxsizes,
-                                seed_catalog=seed_catalog,
-                                iteration_label=iteration_label,
-                                postprocess_residuals=postprocess,
-                                residual_negative_threshold=options.residual_negative_threshold,
-                                local_snr_threshold=options.local_snr_threshold,
-                                daofind_roundlo=options.daofind_roundlo,
-                                daofind_roundhi=options.daofind_roundhi,
-                                resbg_path=resbg_path)
-                        except CutoutNoOverlap as ex:
-                            print(f"cutout [{phase}]: skipping non-overlapping "
-                                  f"frame {filename} ({ex})", flush=True)
-                            continue
+                overlapping_now = []
+                for filename in candidate_frames:
+                    exposure_id = filename.split("_")[2]
+                    visit_id = filename.split("_")[0][-3:]
+                    vgroup_id = filename.split("_")[1]
+                    file_detector = filename.split("_")[3]
+                    file_module = file_detector if module == 'merged' else module
+                    if options.skip_if_done and _expected_output_exists(
+                            cut_bp, filt, file_module, opts_phase,
+                            visit_id, vgroup_id, exposure_id,
+                            iteration_label=iteration_label):
+                        print(f'skip-if-done [{phase}]: {filt} {file_module} '
+                              f'visit={visit_id} exp={exposure_id}', flush=True)
+                        overlapping_now.append(filename)
                         n_overlap_phase += 1
+                        continue
+                    try:
+                        do_photometry_step(
+                            opts_phase, filt, file_module, file_detector,
+                            field, basepath, filename, proposal_id,
+                            crowdsource_default_kwargs,
+                            exposurenumber=int(exposure_id),
+                            visit_id=visit_id, vgroup_id=vgroup_id,
+                            use_webbpsf=True, bg_boxsizes=bg_boxsizes,
+                            seed_catalog=seed_catalog,
+                            iteration_label=iteration_label,
+                            postprocess_residuals=postprocess,
+                            residual_negative_threshold=options.residual_negative_threshold,
+                            local_snr_threshold=options.local_snr_threshold,
+                            daofind_roundlo=options.daofind_roundlo,
+                            daofind_roundhi=options.daofind_roundhi,
+                            resbg_path=resbg_path)
+                    except CutoutNoOverlap as ex:
+                        print(f"cutout [{phase}]: skipping non-overlapping "
+                              f"frame {filename} ({ex})", flush=True)
+                        continue
+                    overlapping_now.append(filename)
+                    n_overlap_phase += 1
+
+                if phase == phases[0]:
+                    frame_cache[(module, filt)] = overlapping_now
 
                 if n_overlap_phase == 0:
                     raise ValueError(
@@ -3421,6 +3438,15 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                           "get a '_resbgsub' filename token.  Built by "
                           "make_iter3_residual_bgmaps.py."),
                     metavar="use_iter3_residual_bg")
+    parser.add_option("--profile-memory", dest="profile_memory",
+                    default=False,
+                    action='store_true',
+                    help=("DEBUG ONLY: enable per-frame tracemalloc memory "
+                          "profiling in do_photometry_step.  OFF by default -- it "
+                          "instruments every process-wide allocation and costs "
+                          "tens of seconds per snapshot, dominating run time.  "
+                          "Use only when chasing a memory leak."),
+                    metavar="profile_memory")
     parser.add_option("--resbg-mosaic-module", dest="resbg_mosaic_module",
                     default='',
                     help=("Module token of the iter3 residual mosaic to use as "
@@ -4095,10 +4121,19 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
     """
     print(f"Starting {field} filter {filtername} module {module} detector {detector} {exposurenumber}", flush=True)
 
-    if not tracemalloc.is_tracing():
+    # Memory profiling is OFF by default everywhere -- it is debugging-only.
+    # tracemalloc.start(25) instruments EVERY process-wide allocation and the
+    # ~16 _mem_report() snapshots per frame (take_snapshot + statistics, some
+    # deep=True) cost tens of seconds each on a multi-GB process, dwarfing the
+    # actual photometry (it made each frame ~9 min).  Enable only with the
+    # explicit --profile-memory flag when chasing a leak.
+    _profile_mem = bool(getattr(options, 'profile_memory', False))
+    if _profile_mem and not tracemalloc.is_tracing():
         tracemalloc.start(25)
 
     def _mem_report(label, deep=False):
+        if not _profile_mem:
+            return
         snap = tracemalloc.take_snapshot()
         top = snap.statistics('lineno')
         peak_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
