@@ -3251,6 +3251,21 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     """
     from astropy.nddata import NDData as _NDData
     merged = Table.read(merged_cat_path)
+    # Drop saturated-star rows: ``base`` (= data_for_residual) already has the
+    # per-frame satstar MODEL subtracted, and merge_individual_frames'
+    # replace_saturated() re-inserts those stars (replaced_saturated=True) with
+    # the satstar flux.  Rendering them here would subtract them a SECOND time
+    # (and with the wrong, non-saturated PSF).  Exclude them so the merged-cat
+    # residual treats satstars exactly like the raw residual does (once, via the
+    # satstar model in base).
+    if 'replaced_saturated' in merged.colnames:
+        _sat = np.asarray(merged['replaced_saturated'], dtype=bool)
+        n_sat = int(_sat.sum())
+        if n_sat:
+            merged = merged[~_sat]
+            print(f"mergedcat: excluded {n_sat} replaced_saturated rows "
+                  f"(already removed via per-frame satstar model in base)",
+                  flush=True)
     if 'skycoord' in merged.colnames:
         msc = merged['skycoord']
     else:

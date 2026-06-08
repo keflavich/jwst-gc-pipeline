@@ -748,7 +748,14 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # whole saturated mask (legacy behaviour).
             satmask_combined = binary_dilation(saturated_mask,
                                                iterations=effective_buffer)
-        mask = np.logical_or(cutout==0, np.isnan(cutout), satmask_combined)
+        # NB: np.logical_or takes only TWO array operands; a 3rd positional arg
+        # is interpreted as ``out``.  The previous
+        # ``np.logical_or(cutout==0, np.isnan(cutout), satmask_combined)`` therefore
+        # silently DISCARDED satmask_combined (used it as the output buffer), so
+        # the saturated core pixels were never masked -- the fit matched their
+        # clipped-low values and badly UNDER-fit the amplitude of saturated stars
+        # (half-subtracted residuals).  OR all three explicitly.
+        mask = (cutout == 0) | np.isnan(cutout) | satmask_combined
 
         if forced_source:
             # Custom 3-parameter (x, y, flux) fit for off-edge sources.
