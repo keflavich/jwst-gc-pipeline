@@ -3664,6 +3664,13 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--manual-ext-local-snr-min", dest="manual_ext_local_snr_min",
                     type='float', default=5.0,
                     help="Extended-emission vetting: require local S/N >= this (default 5).")
+    parser.add_option("--manual-group-min-sep-fwhm", dest="manual_group_min_sep_fwhm",
+                    type='float', default=2.0,
+                    help=("SourceGrouper grouping radius in FWHM (manual path; "
+                          "requires --group).  Sources closer than this are fit "
+                          "jointly.  Raise above 2.0 to jointly fit wider close "
+                          "pairs that otherwise over-subtract in the valley "
+                          "between them (default 2.0)."))
     parser.add_option("--resbg-mosaic-module", dest="resbg_mosaic_module",
                     default='',
                     help=("Module token of the iter3 residual mosaic to use as "

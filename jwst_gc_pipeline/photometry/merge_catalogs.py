@@ -900,6 +900,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
                                         iteration_label=None,
                                         resbgsub=False,
                                         do_replace_saturated=True,
+                                        group=False,
                                         fwhm_basepath=None,
                                         basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
 
@@ -907,6 +908,9 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     bgsub = _bgsub_token(bgsub, resbgsub)
     fitpsf = '_fitpsf' if fitpsf else ''
     blur_ = "_blur" if blur else ""
+    # the per-frame writer inserts a ``_group`` token (between {blur_} and the
+    # iteration token) when sources were fit with a SourceGrouper
+    group_ = "_group" if group else ""
     # iter_token is inserted *between* the {blur_} block and the
     # {method_suffix} so the per-frame filename
     # ``..._{blur_}{iter_token}_{method_suffix}{suffix}.fits``
@@ -957,7 +961,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
                     base_pat = (
                         f"{basepath}/{filtername.upper()}/"
                         f"{filtername.lower()}_{module_}_visit{visitid:03d}_vgroup*_exp{exposure:05d}"
-                        f"{desat}{bgsub}{fitpsf}{blur_}{iter_token}"
+                        f"{desat}{bgsub}{fitpsf}{blur_}{group_}{iter_token}"
                     )
                     raw_fns.extend(glob.glob(
                         f"{base_pat}_{method_suffix}{suffix}.fits"))
