@@ -47,6 +47,7 @@ from jwst_gc_pipeline.photometry.psf_fitting import (
 # canonical implementation).  Importing the legacy module at load time is fine:
 # it does NOT import this module at top level (only lazily in its dispatch
 # branch), so there is no import cycle.
+from jwst_gc_pipeline.photometry import crowdsource_catalogs_long as _L
 from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
     SeededFinder,
     _combine_seed_and_satstars,
@@ -56,6 +57,16 @@ from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
     _filter_near_saturation,
     _filter_satstar_artifacts,
 )
+
+import os
+import types
+from astropy.io import fits
+from astropy import wcs
+from astropy import units as u
+from astropy.convolution import Gaussian2DKernel, interpolate_replace_nans, convolve_fft
+from astropy.nddata import NDData
+from photutils.background import Background2D, MedianBackground, MMMBackground
+from photutils.psf import SourceGrouper
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +256,7 @@ def _build_manual_seed(*, detection_image, nan_replaced_data, mask, ww, fwhm_pix
                        satstar_table, prev_catalog,
                        local_snr_threshold, roundlo, roundhi, sharplo, sharphi,
                        preferred_seed_skycoord_col=None,
-                       dedup_min_sep_pix=None, label=''):
+                       dedup_min_sep_pix=None, label='', apply_snr_filter=True):
     """Build ``seeded_init_params`` for one manual pass.
 
     daofind(detection_image) [local-noise-map threshold] -> local-S/N filter ->
@@ -271,11 +282,23 @@ def _build_manual_seed(*, detection_image, nan_replaced_data, mask, ww, fwhm_pix
     detections = daofind(detection_image, mask=mask)
     if detections is None:
         detections = Table()
-    detections, snr_stats = annotate_and_filter_by_local_snr(
-        detections, noise_map, snr_threshold=local_snr_threshold)
-    print(f"[{label}] daofind: {snr_stats['input_count']} -> "
-          f"{snr_stats['kept_count']} after local-S/N>={local_snr_threshold}",
-          flush=True)
+    if apply_snr_filter:
+        detections, snr_stats = annotate_and_filter_by_local_snr(
+            detections, noise_map, snr_threshold=local_snr_threshold)
+        print(f"[{label}] daofind: {snr_stats['input_count']} -> "
+              f"{snr_stats['kept_count']} after local-S/N>={local_snr_threshold}",
+              flush=True)
+    else:
+        # First (unseeded) pass: do not apply the local-S/N cut.  On raw data the
+        # local-noise map is high everywhere (source variance dominates), so the
+        # cut would drop every real star (legacy iter1 uses daofind's own
+        # threshold and does not post-filter on local S/N).  The fit + dedup +
+        # overshoot QC handle any spurious detections; iter2 refines on the
+        # residual where the local-S/N cut is meaningful.
+        detections, _ = annotate_and_filter_by_local_snr(
+            detections, noise_map, snr_threshold=0.0)
+        print(f"[{label}] daofind: {len(detections)} detections "
+              f"(no local-S/N cut on first pass)", flush=True)
 
     # seed base = previous catalog (if any) + satstars
     seed = _combine_seed_and_satstars(prev_catalog, satstar_table)
@@ -396,3 +419,486 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
           f"(qfit<={qfit_max}, flags in {keep_flags}, peakSB>{peak_over_bkg}x bkg, "
           f"snr>={local_snr_min})", flush=True)
     return t[keep]
+
+
+# ---------------------------------------------------------------------------
+# Per-frame frame setup (shared load / bg / PSF / mask / satstar)
+# ---------------------------------------------------------------------------
+def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
+                                  filename, proposal_id, *, exposurenumber,
+                                  visit_id, vgroup_id, bg_boxsizes, use_webbpsf,
+                                  pupil, resbg_path, satstar_label):
+    """Load a frame and produce everything a manual pass needs: scaled
+    aperture/annulus, filename tokens, data + error + mask, the (cutout-
+    re-origined) PSF grid, the SourceGrouper, and the satstar-subtracted
+    ``nan_replaced_data`` + ``satstar_model_subtracted``.
+
+    Reuses the legacy primitives (``_L.*``).  Input reads use the ORIGINAL
+    ``basepath`` (PSF cache, satstar psfs); outputs go to ``out_basepath``
+    (the cutout tree when ``--cutout-region`` is set), returned in the context.
+
+    Mirrors the setup half of ``do_photometry_step`` but omits the legacy
+    iteration-label seed inference and diagnostics; the manual path builds its
+    own seeds and (for cutouts) PNG diagnostics are suppressed anyway.
+    """
+    fwhm_tbl = Table.read(_L.FWHM_TABLE)
+    row = fwhm_tbl[fwhm_tbl['Filter'] == filtername]
+    fwhm_pix = float(row['PSF FWHM (pixel)'][0])
+    aperture_radius_pix = 2.0 * fwhm_pix
+    localbkg_inner = max(6, int(round(aperture_radius_pix + 0.5 * fwhm_pix)))
+    localbkg_outer = localbkg_inner + max(4, int(round(fwhm_pix)))
+
+    desat = '_unsatstar' if options.desaturated else ''
+    bgsub = _bgsub_token(options)
+    epsf_ = "_epsf" if options.epsf else ""
+    exposure_ = f'_exp{exposurenumber:05d}' if exposurenumber is not None else ''
+    visitid_ = f'_visit{int(visit_id):03d}' if visit_id is not None else ''
+    vgroupid_, _vgnum = _L.normalize_vgroup_id(vgroup_id)
+    blur_ = "_blur" if options.blur else ""
+    group = "_group" if options.group else ""
+
+    # cutout prep (rewrites filename to the cropped copy; redirects outputs)
+    cutout_label = ''
+    out_basepath = basepath
+    cx0, cy0 = 0, 0
+    if getattr(options, 'cutout_region', ''):
+        cutout_label, filename, out_basepath, cx0, cy0 = _L._prepare_cutout_input(
+            filename, basepath, filtername, options)
+    cutout_active = bool(cutout_label)
+
+    fh, im1, data, wht, err, instrument, telescope, obsdate = _L.load_data(filename)
+    inst_token = instrument.lower()
+    ww = wcs.WCS(im1[1].header)
+
+    background_map = None
+    original_data = data.copy()  # manual residuals are built vs the pristine data
+
+    if options.bgsub:
+        bkg = Background2D(data, box_size=bg_boxsizes[filtername.lower()],
+                           bkg_estimator=MedianBackground())
+        background_map = bkg.background
+        zeros = data == 0
+        data = data - bkg.background
+        data[zeros] = 0
+
+    if resbg_path:
+        # Subtract a reprojected smoothed-residual background mosaic (m3/m4/m5).
+        from reproject import reproject_interp
+        if not os.path.exists(resbg_path):
+            raise ValueError(f"manual resbg subtraction needs {resbg_path} to exist")
+        with fits.open(resbg_path) as bgh:
+            bg_hdu = bgh['SCI'] if 'SCI' in [h.name for h in bgh] else bgh[0]
+            bg_wcs = wcs.WCS(bg_hdu.header)
+            bg_data = bg_hdu.data.astype(float)
+        bg_reproj, _ = reproject_interp((bg_data, bg_wcs), ww, shape_out=data.shape)
+        bg_finite = np.where(np.isfinite(bg_reproj), bg_reproj, 0.0)
+        zeros = data == 0
+        data = data - bg_finite
+        data[zeros] = 0
+        background_map = bg_finite
+        print(f"[manual] subtracted reprojected smoothed-bg {os.path.basename(resbg_path)} "
+              f"(sum={float(np.nansum(bg_finite)):.3e})", flush=True)
+
+    data = data.astype('float32')
+
+    grid, _psf_model = _L.get_psf_model(
+        filtername, proposal_id, field, module=module, use_webbpsf=use_webbpsf,
+        use_grid=options.each_exposure, blur=options.blur, target=options.target,
+        obsdate=obsdate, basepath='/blue/adamginsburg/adamginsburg/jwst/',
+        psf_cache_dir=os.path.join(basepath, 'psfs'), instrument=instrument)
+    dao_psf_model = grid
+    if cutout_active and (cx0 or cy0):
+        shifted_xy = [(gx - cx0, gy - cy0) for (gx, gy) in dao_psf_model.grid_xypos]
+        dao_psf_model = type(dao_psf_model)(NDData(
+            np.asarray(dao_psf_model.data),
+            meta={'grid_xypos': shifted_xy,
+                  'oversampling': dao_psf_model.oversampling}))
+        print(f"[manual] CUTOUT: re-origined PSF grid by (-{cx0}, -{cy0})", flush=True)
+    dao_psf_model.flux.min = 0
+
+    dq, weight, bad = _L.get_uncertainty(
+        err, data, wht=wht, dq=im1['DQ'].data if 'DQ' in im1 else None)
+
+    _max_group_size = int(getattr(options, 'max_group_size', 0) or 0)
+    if _max_group_size > 0:
+        grouper = _L.CappedSourceGrouper(2 * fwhm_pix, max_size=_max_group_size)
+    else:
+        grouper = SourceGrouper(2 * fwhm_pix)
+
+    kernel = Gaussian2DKernel(x_stddev=fwhm_pix / 2.355)
+    mask = np.isnan(data) | bad
+    dqarr = im1['DQ'].data if 'DQ' in im1 else None
+    if dqarr is not None:
+        is_saturated = (dqarr & _L.dqflags.pixel['SATURATED']) != 0
+        data_ = data.copy()
+        data_[is_saturated] = np.nan
+        mask |= is_saturated
+        mask |= (dqarr & _L._bad_dq_bitmask(instrument)) != 0
+    else:
+        data_ = data
+    nan_replaced_data = interpolate_replace_nans(data_, kernel, convolve=convolve_fft,
+                                                 allow_huge=True)
+
+    # --- saturated-star fit + subtract (per phase, namespaced by satstar_label) ---
+    satstar_table = None
+    satstar_model_subtracted = None
+    fit_outside = getattr(options, 'fit_satstar_outside_fov', None)
+    if fit_outside is None:
+        fit_outside = not cutout_active
+    if fit_outside:
+        outside_star_pixels, outside_locked = _L.load_outside_fov_satstar_pixels(
+            basepath, ww, data_shape=nan_replaced_data.shape, max_offset_arcsec=32.0)
+    else:
+        outside_star_pixels, outside_locked = [], False
+    forced_grid_search_radius = 0 if outside_locked else 5
+    satstar_file_suffix = f'{bgsub}{_iteration_token(satstar_label)}'
+    satstar_table = _L.load_or_make_satstar_catalog(
+        filename, path_prefix=f'{basepath}/psfs',
+        use_merged_psf_for_merged=(module == 'merged'),
+        overwrite=bool(outside_star_pixels),
+        outside_star_pixels=outside_star_pixels, outside_star_fit_box=512,
+        forced_grid_search_radius=forced_grid_search_radius,
+        file_suffix=satstar_file_suffix)
+    ext_model = filename.replace('.fits', f'{satstar_file_suffix}_extended_satstar_model.fits')
+    sat_model = filename.replace('.fits', f'{satstar_file_suffix}_satstar_model.fits')
+    if os.path.exists(ext_model):
+        sat_model = ext_model
+    if os.path.exists(sat_model):
+        try:
+            sm = fits.getdata(sat_model).astype(float)
+        except (OSError, ValueError) as exc:
+            print(f"[manual] could not read satstar model {sat_model}: {exc}", flush=True)
+        else:
+            if sm.shape == nan_replaced_data.shape:
+                finite_model = np.where(np.isfinite(sm), sm, 0.0)
+                if dqarr is not None:
+                    was_sat = (dqarr & _L.dqflags.pixel['SATURATED']) != 0
+                    nan_replaced_data = np.where(was_sat, finite_model, nan_replaced_data)
+                nan_replaced_data = nan_replaced_data - finite_model
+                satstar_model_subtracted = finite_model
+                print(f"[manual] subtracted satstar model {os.path.basename(sat_model)} "
+                      f"(sum={float(np.nansum(finite_model)):.3e})", flush=True)
+
+    return types.SimpleNamespace(
+        fwhm_pix=fwhm_pix, aperture_radius_pix=aperture_radius_pix,
+        localbkg_inner=localbkg_inner, localbkg_outer=localbkg_outer,
+        desat=desat, bgsub=bgsub, epsf_=epsf_, blur_=blur_, group=group,
+        exposure_=exposure_, visitid_=visitid_, vgroupid_=vgroupid_,
+        inst_token=inst_token, im1=im1, ww=ww, data=data, err=err, bad=bad,
+        dqarr=dqarr, mask=mask, nan_replaced_data=nan_replaced_data,
+        dao_psf_model=dao_psf_model, grouper=grouper,
+        satstar_table=satstar_table, satstar_model_subtracted=satstar_model_subtracted,
+        original_data=original_data, background_map=background_map,
+        out_basepath=out_basepath, filename=filename,
+        proposal_id=proposal_id, field=field, filtername=filtername,
+        module=module, pupil=pupil)
+
+
+def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
+    """Write the per-frame catalog (``save_photutils_results``) + residual +
+    model for one manual pass, with the manual ``_m{N}`` iteration token.  The
+    residual is built against the pristine (pre-bg-subtraction) data minus the
+    satstar model minus the source model, so the smoothed-bg / mergedcat steps
+    see star-subtracted residuals with the extended background retained.
+    """
+    iter_ = _iteration_token(iteration_label)
+    bp = ctx.out_basepath
+    saved = _L.save_photutils_results(
+        result, ctx.ww, ctx.filename, im1=ctx.im1, detector=detector,
+        basepath=bp, filtername=ctx.filtername, module=ctx.module,
+        desat=ctx.desat, bgsub=ctx.bgsub, blur=options.blur,
+        exposure_=ctx.exposure_, visitid_=ctx.visitid_, vgroupid_=ctx.vgroupid_,
+        basic_or_iterative='basic', options=options, epsf_=ctx.epsf_,
+        group=ctx.group, psf=None, background_map=ctx.background_map,
+        iteration_label=iteration_label)
+
+    base = (ctx.original_data if ctx.satstar_model_subtracted is None
+            else ctx.original_data - ctx.satstar_model_subtracted)
+    residual = base - modsky
+    stub = (f'{bp}/{ctx.filtername}/pipeline/jw0{ctx.proposal_id}-o{ctx.field}_t001_'
+            f'{ctx.inst_token}_{ctx.pupil}-{ctx.filtername.lower()}-{ctx.module}'
+            f'{ctx.visitid_}{ctx.vgroupid_}{ctx.exposure_}{ctx.desat}{ctx.bgsub}'
+            f'{ctx.epsf_}{ctx.blur_}{ctx.group}{iter_}_daophot_basic')
+    _L.save_residual_datamodel(ctx.filename, f'{stub}_residual.fits', residual)
+    _L.save_residual_datamodel(ctx.filename, f'{stub}_model.fits', modsky)
+    return saved
+
+
+def do_photometry_step_manual(options, filtername, module, detector, field, basepath,
+                              filename, proposal_id, *, manual_phase,
+                              exposurenumber=None, visit_id=None, vgroup_id=None,
+                              bg_boxsizes=None, use_webbpsf=False, pupil='clear',
+                              prev_seed_catalog=None, resbg_path=None):
+    """Clean per-frame driver for the manual-iteration path.
+
+    ``manual_phase`` in {'m12','m3','m4','m5'}:
+      * 'm12' runs iter1 (unseeded daofind) then iter2 (daofind(residual1) +
+        same-frame iter1 catalog), no merge between -- saved as m1, m2.
+      * 'm3'/'m4'/'m5' run a single pass on the (bg-subtracted) data, seeded by
+        daofind + the projected previous merged/cross-band catalog.
+    """
+    overshoot_ratio = float(getattr(options, 'manual_overshoot_ratio', 1.2))
+    overshoot_action = str(getattr(options, 'manual_overshoot_action', 'refit'))
+    iter2_snr = float(getattr(options, 'manual_iter2_local_snr', 3.0))
+    first_snr = float(getattr(options, 'local_snr_threshold', 5.0))
+
+    ctx = _prepare_frame_for_photometry(
+        options, filtername, module, field, basepath, filename, proposal_id,
+        exposurenumber=exposurenumber, visit_id=visit_id, vgroup_id=vgroup_id,
+        bg_boxsizes=bg_boxsizes, use_webbpsf=use_webbpsf, pupil=pupil,
+        resbg_path=resbg_path, satstar_label=manual_phase)
+
+    def _pass(seed, label):
+        return _manual_phot_pass(
+            data=ctx.nan_replaced_data, mask=ctx.mask, err=ctx.err, bad=ctx.bad,
+            dao_psf_model=ctx.dao_psf_model, init_params=seed,
+            aperture_radius_pix=ctx.aperture_radius_pix,
+            localbkg_inner=ctx.localbkg_inner, localbkg_outer=ctx.localbkg_outer,
+            grouper=ctx.grouper, options=options, dq=ctx.dqarr,
+            satstar_model_subtracted=(ctx.satstar_model_subtracted
+                                      if ctx.satstar_model_subtracted is not None
+                                      else np.zeros(ctx.data.shape)),
+            label=label, xy_bounds_pix=None,
+            overshoot_ratio=overshoot_ratio, overshoot_action=overshoot_action)
+
+    if manual_phase == 'm12':
+        seed1 = _build_manual_seed(
+            detection_image=ctx.nan_replaced_data, nan_replaced_data=ctx.nan_replaced_data,
+            mask=ctx.mask, ww=ctx.ww, fwhm_pix=ctx.fwhm_pix,
+            satstar_table=ctx.satstar_table, prev_catalog=None,
+            local_snr_threshold=first_snr, roundlo=-1.0, roundhi=1.0,
+            sharplo=0.30, sharphi=1.40, dedup_min_sep_pix=0.5 * ctx.fwhm_pix,
+            label='m1', apply_snr_filter=False)
+        res1, modsky1, _ = _pass(seed1, 'm1')
+        saved1 = _save_manual_pass(ctx, res1, modsky1, options, 'm1', detector)
+        base1 = (ctx.original_data if ctx.satstar_model_subtracted is None
+                 else ctx.original_data - ctx.satstar_model_subtracted)
+        residual1 = base1 - modsky1
+        seed2 = _build_manual_seed(
+            detection_image=residual1, nan_replaced_data=ctx.nan_replaced_data,
+            mask=ctx.mask, ww=ctx.ww, fwhm_pix=ctx.fwhm_pix,
+            satstar_table=ctx.satstar_table, prev_catalog=saved1,
+            local_snr_threshold=iter2_snr, roundlo=-0.3, roundhi=0.3,
+            sharplo=0.50, sharphi=1.00, dedup_min_sep_pix=0.5 * ctx.fwhm_pix,
+            label='m2')
+        res2, modsky2, _ = _pass(seed2, 'm2')
+        _save_manual_pass(ctx, res2, modsky2, options, 'm2', detector)
+        return res2
+
+    # m3 / m4 / m5: single seeded pass
+    prev = Table.read(prev_seed_catalog) if prev_seed_catalog else None
+    snr = iter2_snr
+    seed = _build_manual_seed(
+        detection_image=ctx.nan_replaced_data, nan_replaced_data=ctx.nan_replaced_data,
+        mask=ctx.mask, ww=ctx.ww, fwhm_pix=ctx.fwhm_pix,
+        satstar_table=ctx.satstar_table, prev_catalog=prev,
+        local_snr_threshold=snr, roundlo=-0.3, roundhi=0.3,
+        sharplo=0.50, sharphi=1.00, dedup_min_sep_pix=0.5 * ctx.fwhm_pix,
+        label=manual_phase)
+    res, modsky, _ = _pass(seed, manual_phase)
+    _save_manual_pass(ctx, res, modsky, options, manual_phase, detector)
+    return res
+
+
+# ---------------------------------------------------------------------------
+# Cross-band stringent seed (step 18; multifilter only)
+# ---------------------------------------------------------------------------
+def _build_crossband_seed(cut_bp, modules, filternames, options, *,
+                          max_sep_mas=10.0, min_filters=2, snr_min=5.0,
+                          qfit_max=0.2):
+    """Cross-filter seed for m5: sources detected (well) in >= min_filters
+    filters within max_sep_mas, each with S/N > snr_min and good qfit.
+
+    NOTE: the stringent cross-match (>=2 filters, <10 mas, S/N>5 each) is a TODO;
+    the immediate cutout tests are single-filter so this path is not exercised.
+    For now it unions the per-filter vetted m4 skycoords (like the legacy union
+    seed) so the multifilter path is runnable.  Replace with
+    ``merge_catalogs.merge_catalogs(..., max_offset=max_sep_mas*u.mas)`` + the
+    >=min_filters / snr / qfit cut before relying on m5 scientifically.
+    """
+    from astropy.table import vstack as _vstack
+    desat = '_unsatstar' if options.desaturated else ''
+    bgsub = ('_bgsub' if options.bgsub else '') + '_resbgsub'
+    blur_ = '_blur' if options.blur else ''
+    tbls = []
+    for module in modules:
+        for filt in filternames:
+            p = (f'{cut_bp}/catalogs/{filt.lower()}_{module}_indivexp_merged'
+                 f'{desat}{bgsub}{blur_}_m4_dao_basic_vetted.fits')
+            if os.path.exists(p):
+                t = Table.read(p)
+                if 'skycoord' in t.colnames:
+                    tbls.append(Table({'skycoord': t['skycoord']}))
+    if not tbls:
+        raise ValueError(f"m5 crossband seed: no vetted m4 catalogs under {cut_bp}/catalogs/")
+    union = _vstack(tbls, metadata_conflicts='silent')
+    out = f'{cut_bp}/catalogs/crossband_seed_manual.fits'
+    union.write(out, overwrite=True)
+    print(f"[m5] wrote crossband seed {out} (n={len(union)}); "
+          f"TODO stringent >= {min_filters}-filter/{max_sep_mas}mas/SNR>{snr_min} cut",
+          flush=True)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator (mirrors _run_cutout_pipeline; manual phases, basic-only)
+# ---------------------------------------------------------------------------
+def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
+                        target, field, basepath, crowdsource_default_kwargs,
+                        bg_boxsizes):
+    """In-process manual-iteration cutout pipeline (parallels
+    ``_run_cutout_pipeline``).  Phases m12 -> m3 -> m4 (-> m5 if multifilter);
+    BASIC-only.  After each phase: merge per-frame catalogs, vet the merged
+    catalog (extended-emission filter), build the vetted mergedcat residual i2d,
+    smooth it into the background map fed to the next phase.
+    """
+    import copy
+    from jwst_gc_pipeline.photometry import merge_catalogs as _merge_catalogs
+
+    cut_bp = _L._cutout_out_basepath(basepath, options)
+    os.makedirs(os.path.join(cut_bp, 'catalogs'), exist_ok=True)
+    pupil = 'clear'
+    multifilter = len(filternames) > 1
+    phases = ['m12', 'm3', 'm4']
+    if multifilter:
+        phases.append('m5')
+    print(f"MANUAL PIPELINE: phases={phases} filters={filternames} "
+          f"modules={modules}", flush=True)
+
+    def _merged_path(label, module, filt, resbgsub):
+        desat = '_unsatstar' if options.desaturated else ''
+        bgsub = ('_bgsub' if options.bgsub else '') + ('_resbgsub' if resbgsub else '')
+        blur_ = '_blur' if options.blur else ''
+        return (f'{cut_bp}/catalogs/{filt.lower()}_{module}_indivexp_merged'
+                f'{desat}{bgsub}{blur_}_{label}_dao_basic.fits')
+
+    def _data_i2d_path(module, filt):
+        return (f'{cut_bp}/{filt}/pipeline/jw0{proposal_id}-o{field}_t001_'
+                f'{_L._inst_token(filt)}_{pupil}-{filt.lower()}-{module}_data_i2d.fits')
+
+    frame_cache = {}
+    bg_for_next = {}   # (module, filt) -> smoothed-bg path for the next phase
+    overlap_total = 0
+
+    for phase in phases:
+        resbgsub = phase in ('m3', 'm4', 'm5')
+        merge_label = 'm2' if phase == 'm12' else phase
+        opts_phase = copy.copy(options)
+        opts_phase.iteration_label = merge_label
+        opts_phase.seed_catalog = ''
+        opts_phase.use_iter3_residual_bg = resbgsub
+
+        for module in modules:
+            for filt in filternames:
+                prev_seed = None
+                resbg_path = None
+                if phase == 'm3':
+                    prev_seed = _merged_path('m2', module, filt, False).replace(
+                        '.fits', '_vetted.fits')
+                    resbg_path = bg_for_next.get((module, filt))
+                elif phase == 'm4':
+                    prev_seed = _merged_path('m3', module, filt, True).replace(
+                        '.fits', '_vetted.fits')
+                    resbg_path = bg_for_next.get((module, filt))
+                elif phase == 'm5':
+                    prev_seed = _build_crossband_seed(cut_bp, modules, filternames, options)
+                    resbg_path = bg_for_next.get((module, filt))
+
+                # candidate frames (scan on first phase, cache thereafter)
+                if phase == phases[0]:
+                    candidate_frames = []
+                    for visitid in range(1, nvisits[proposal_id][target] + 1):
+                        candidate_frames.extend(sorted(_L.get_filenames(
+                            basepath, filt, proposal_id, field,
+                            visitid=f'{visitid:03d}', each_suffix=options.each_suffix,
+                            module=module, pupil='clear')))
+                else:
+                    candidate_frames = frame_cache.get((module, filt), [])
+
+                overlapping_now = []
+                for filename in candidate_frames:
+                    exposure_id = filename.split("_")[2]
+                    visit_id = filename.split("_")[0][-3:]
+                    vgroup_id = filename.split("_")[1]
+                    file_detector = filename.split("_")[3]
+                    file_module = file_detector if module == 'merged' else module
+                    try:
+                        do_photometry_step_manual(
+                            opts_phase, filt, file_module, file_detector, field,
+                            basepath, filename, proposal_id,
+                            manual_phase=phase, exposurenumber=int(exposure_id),
+                            visit_id=visit_id, vgroup_id=vgroup_id,
+                            bg_boxsizes=bg_boxsizes, use_webbpsf=True, pupil=pupil,
+                            prev_seed_catalog=prev_seed, resbg_path=resbg_path)
+                    except _L.CutoutNoOverlap as ex:
+                        print(f"manual [{phase}]: skip non-overlapping {filename} ({ex})",
+                              flush=True)
+                        continue
+                    overlapping_now.append(filename)
+
+                if phase == phases[0]:
+                    frame_cache[(module, filt)] = overlapping_now
+                    overlap_total += len(overlapping_now)
+                if not overlapping_now:
+                    raise ValueError(
+                        f"--cutout-region overlapped none of the {filt}/{module} "
+                        f"frames in phase {phase}.")
+
+                # merge per-frame catalogs (BASIC only)
+                _merge_catalogs.merge_individual_frames(
+                    module=module, filtername=filt.lower(), progid=proposal_id,
+                    method='dao', suffix='_basic', target=target, basepath=cut_bp,
+                    iteration_label=merge_label, bgsub=options.bgsub,
+                    desat=options.desaturated, epsf=options.epsf, blur=options.blur,
+                    resbgsub=resbgsub, fwhm_basepath=basepath)
+
+                # data i2d once (m12), for peak-SB in the vetting step
+                if phase == phases[0]:
+                    try:
+                        _L.mosaic_cutout_input_data(
+                            cut_bp, filt, proposal_id, field, module,
+                            _L._cutout_label_for(options), pupil=pupil)
+                    except Exception as ex:
+                        print(f"manual: data i2d build failed: {ex}", flush=True)
+
+                # vet the merged catalog -> _vetted.fits
+                merged_path = _merged_path(merge_label, module, filt, resbgsub)
+                vetted_path = merged_path.replace('.fits', '_vetted.fits')
+                try:
+                    merged = Table.read(merged_path)
+                    d_i2d, ww_i2d = None, None
+                    dpath = _data_i2d_path(module, filt)
+                    if os.path.exists(dpath):
+                        with fits.open(dpath) as dh:
+                            hdu = dh['SCI'] if 'SCI' in [h.name for h in dh] else dh[0]
+                            d_i2d = hdu.data.astype(float)
+                            ww_i2d = wcs.WCS(hdu.header)
+                    vetted = _filter_extended_emission(
+                        merged, data_i2d_image=d_i2d, ww_i2d=ww_i2d,
+                        qfit_max=float(getattr(options, 'manual_ext_qfit_max', 0.2)),
+                        peak_over_bkg=float(getattr(options, 'manual_ext_peak_over_bkg', 20.0)),
+                        local_snr_min=float(getattr(options, 'manual_ext_local_snr_min', 5.0)),
+                        label=f'{phase}:{filt}')
+                    vetted.write(vetted_path, overwrite=True)
+                except Exception as ex:
+                    print(f"manual [{phase}]: vetting failed ({ex}); using unvetted "
+                          f"merged catalog as seed", flush=True)
+                    vetted_path = merged_path
+
+                # build vetted mergedcat residual i2d, smooth -> bg for next phase
+                try:
+                    outpaths = _L.build_mergedcat_residuals(
+                        cut_bp, basepath, vetted_path, filt, proposal_id, field,
+                        module, opts_phase, frame_cache.get((module, filt), []),
+                        merge_label, ['basic'], pupil=pupil)
+                    mc_i2d = outpaths.get('basic')
+                    if mc_i2d and os.path.exists(mc_i2d):
+                        bg_for_next[(module, filt)] = _L._cutout_smooth_residual_bg(mc_i2d)
+                        print(f"manual [{phase}]: smoothed bg for next phase = "
+                              f"{bg_for_next[(module, filt)]}", flush=True)
+                except Exception as ex:
+                    print(f"manual [{phase}]: mergedcat residual / bg build failed: {ex}",
+                          flush=True)
+
+    print(f"MANUAL PIPELINE DONE: {overlap_total} overlapping frames, "
+          f"phases={phases}", flush=True)

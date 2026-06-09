@@ -3636,6 +3636,34 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                           "tens of seconds per snapshot, dominating run time.  "
                           "Use only when chasing a memory leak."),
                     metavar="profile_memory")
+    # --- manual-iteration path (cataloging.py; replaces IterativePSFPhotometry) ---
+    parser.add_option("--manual-iterations", dest="manual_iterations",
+                    default=False, action='store_true',
+                    help=("Use the new manual-iteration PSF photometry path "
+                          "(jwst_gc_pipeline.photometry.cataloging) instead of the "
+                          "legacy IterativePSFPhotometry pipeline.  In-process "
+                          "cutout runs only (requires --cutout-region + "
+                          "--each-exposure).  BASIC single-pass fits with explicit "
+                          "iter1..iter5 reseeding + model/data-peak overshoot QC."),
+                    metavar="manual_iterations")
+    parser.add_option("--manual-overshoot-ratio", dest="manual_overshoot_ratio",
+                    type='float', default=1.2,
+                    help="Flag a fit when its model peak > this x the local data peak (default 1.2).")
+    parser.add_option("--manual-overshoot-action", dest="manual_overshoot_action",
+                    type='choice', choices=['flag', 'drop', 'refit'], default='refit',
+                    help="What to do with overshooting fits: flag|drop|refit (default refit at seed position).")
+    parser.add_option("--manual-iter2-local-snr", dest="manual_iter2_local_snr",
+                    type='float', default=3.0,
+                    help="Local-S/N threshold for daofind on residual/bg-subtracted images (default 3.0).")
+    parser.add_option("--manual-ext-qfit-max", dest="manual_ext_qfit_max",
+                    type='float', default=0.2,
+                    help="Extended-emission vetting: keep sources with qfit <= this (default 0.2).")
+    parser.add_option("--manual-ext-peak-over-bkg", dest="manual_ext_peak_over_bkg",
+                    type='float', default=20.0,
+                    help="Extended-emission vetting: keep if peak-SB > this x local bkg (default 20).")
+    parser.add_option("--manual-ext-local-snr-min", dest="manual_ext_local_snr_min",
+                    type='float', default=5.0,
+                    help="Extended-emission vetting: require local S/N >= this (default 5).")
     parser.add_option("--resbg-mosaic-module", dest="resbg_mosaic_module",
                     default='',
                     help=("Module token of the iter3 residual mosaic to use as "
@@ -4052,6 +4080,15 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     # multi-filter) -> iter4, merging and building residual mosaics between
     # phases.  The full-frame each-exposure path below is left byte-identical.
     if _cutout_run and os.getenv('SLURM_ARRAY_TASK_ID') is None and options.each_exposure:
+        if getattr(options, 'manual_iterations', False):
+            # New manual-iteration path (cataloging.py).  Imported lazily so the
+            # legacy path never depends on it and there is no import cycle
+            # (cataloging imports mosaicking/IO helpers from this module).
+            from jwst_gc_pipeline.photometry import cataloging as _cataloging
+            _cataloging.run_manual_pipeline(
+                options, modules, filternames, nvisits, proposal_id, target,
+                field, basepath, crowdsource_default_kwargs, bg_boxsizes)
+            return
         _run_cutout_pipeline(options, modules, filternames, nvisits, proposal_id,
                              target, field, basepath, crowdsource_default_kwargs,
                              bg_boxsizes)

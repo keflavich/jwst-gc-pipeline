@@ -548,6 +548,22 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # residual and for downstream callers that read it.
     data_working = data.astype(float, copy=True)
 
+    # Per-pixel 1-sigma uncertainty for INVERSE-VARIANCE weighting of the
+    # satstar PSF fit.  Without it (error=None) PSFPhotometry weights every
+    # pixel equally, so the linear-LSQ amplitude f = sum(d*p)/sum(p^2) is
+    # dominated by the bright inner-wing / first-sidelobe pixels (large p).
+    # That set the amplitude too high and over-subtracted the fainter SECOND
+    # sidelobes (negative ~-17 MJy/sr rings seen on sickle pillar satstars,
+    # 2026-06-09).  Inverse-variance weighting (w = 1/ERR^2) down-weights the
+    # high-Poisson-noise bright pixels and up-weights the low-noise faint
+    # sidelobes/outer wings, so the fit matches the full PSF shape instead of
+    # just the bright core, removing the amplitude overshoot.  Non-finite or
+    # non-positive ERR (saturated / unrecoverable pixels) is set huge so those
+    # pixels carry ~zero weight even if the mask were to miss them.
+    err_working = np.array(fitsdata['ERR'].data, dtype=float)
+    _bad_err = ~np.isfinite(err_working) | (err_working <= 0)
+    err_working[_bad_err] = 1e10
+
     # LW detectors (NRCALONG/NRCBLONG, internally NRCA5/NRCB5) get a larger
     # 1024-px PSF grid for in-FOV satstar fits.  PSF-size-vs-flux study
     # showed fovp512 underestimates bright LW star flux by 50-70%; fovp1024
@@ -666,6 +682,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # subtracted from ``data_working`` already, so this fit sees a
         # field with brighter neighbour satstars removed.
         cutout = data_working[y0:y1, x0:x1]
+        err_cutout = err_working[y0:y1, x0:x1]
         init_params = QTable()
         # For outside-FOV forced sources the star center may be outside the
         # cutout bounds (xcen < x0 or xcen > x1).  DO NOT clip to [0, width-1]:
@@ -964,7 +981,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 param.bounds = bounds
                 print(f"Set {pname}.bounds = {bounds}")
 
-            result = psfphot(cutout, init_params=init_params, mask=mask)
+            result = psfphot(cutout, init_params=init_params, mask=mask,
+                             error=err_cutout)
 
             if len(result) == 0:
                 # Empty result is a real fit failure for an existing
