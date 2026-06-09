@@ -404,7 +404,7 @@ def compute_adaptive_bkg_annulus(sat_area, bkg_inner_min=15, bkg_inner_max=50):
     return bkg_inner, bkg_outer
 
 
-def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5):
+def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0):
     """
     Detect and PSF-fit saturated sources in a JWST image.
 
@@ -785,6 +785,35 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # (half-subtracted residuals).  OR all three explicitly.
         mask = (cutout == 0) | np.isnan(cutout) | satmask_combined
 
+        # Extra down-weighting of pixels NEAR the saturated core.  Physical
+        # model (user, 2026-06-09): the central lobe is SUPPRESSED near
+        # saturation (charge overflow / nonlinearity), so the bright near-core
+        # pixels read systematically LOW.  Inverse-variance weighting alone
+        # still lets them constrain the amplitude (their formal ERR is modest),
+        # and because they sit low the fit raises the amplitude to compensate,
+        # over-subtracting the (well-validated) faint SECOND sidelobes.  Ramp an
+        # extra weight from ~0 at the saturated-mask edge up to 1 by a few px
+        # out (Gaussian in distance-to-saturation, scale =
+        # satstar_central_downweight_sigma px) and fold it into the per-pixel
+        # error: err_eff = err / sqrt(w_prox).  Only reshapes weights among
+        # UNMASKED pixels, so the trustworthy outer wings / sidelobes set the
+        # amplitude instead of the suppressed inner lobe.  Sidelobes are NOT
+        # down-weighted (they are far from the saturated pixels).
+        #
+        # DEFAULT OFF (sigma=0): empirically (sickle pillar satstars, 2026-06-09)
+        # this made the second-sidelobe oversubtraction WORSE (-9 -> -30 MJy/sr).
+        # The suppressed near-core pixels read LOW and were holding the fitted
+        # amplitude DOWN; down-weighting them let the amplitude rise to match the
+        # wings, overshooting the second sidelobe more.  Kept as a tunable knob,
+        # but inverse-variance weighting alone (above) is the win.
+        err_cutout_eff = err_cutout
+        if satstar_central_downweight_sigma and satstar_central_downweight_sigma > 0:
+            dist_to_sat = ndimage.distance_transform_edt(~satmask_combined)
+            _sig = float(satstar_central_downweight_sigma)
+            w_prox = 1.0 - np.exp(-(dist_to_sat ** 2) / (2.0 * _sig ** 2))
+            w_prox = np.clip(w_prox, 1e-3, 1.0)
+            err_cutout_eff = err_cutout / np.sqrt(w_prox)
+
         if forced_source:
             # Custom 3-parameter (x, y, flux) fit for off-edge sources.
             # photutils PSFPhotometry's fit_shape is centered at source
@@ -982,7 +1011,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 print(f"Set {pname}.bounds = {bounds}")
 
             result = psfphot(cutout, init_params=init_params, mask=mask,
-                             error=err_cutout)
+                             error=err_cutout_eff)
 
             if len(result) == 0:
                 # Empty result is a real fit failure for an existing

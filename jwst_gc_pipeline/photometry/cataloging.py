@@ -700,6 +700,84 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     return res
 
 
+def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
+                            mask_radius_fwhm=2.0, median_size=3):
+    """Build the smoothed background map from a mergedcat residual i2d with the
+    fitted SOURCE CORES MASKED OUT before smoothing.
+
+    Why: the plain smoothed residual is biased NEGATIVE at every star core (each
+    fit leaves a small negative hole there).  Subtracting that negative bg from
+    the data ADDS flux at the core, so the next iteration's fit inflates, deepens
+    the hole, and the bg gets more negative -- a positive-feedback loop that makes
+    faint stars go progressively negative with iteration (NOTES_star_vs_extended_emission.md;
+    sickle low_background sources 2026-06-09).  Masking the source disks and
+    interpolating over them makes the bg represent the DIFFUSE background only
+    (~0 in a star field, the true extended emission in pillar fields), so it no
+    longer feeds the source holes back into the fit.
+
+    Writes ``<mc_i2d>_..._smoothed_bg_i2d.fits`` (same name the plain smoother
+    would produce) and returns its path.
+    """
+    from astropy.io import fits as _fits
+    from astropy.wcs import WCS as _WCS
+    from astropy.coordinates import SkyCoord as _SkyCoord
+    from astropy.convolution import (Gaussian2DKernel as _G2D,
+                                     interpolate_replace_nans as _irn,
+                                     convolve_fft as _cfft)
+    from scipy import ndimage as _ndi
+
+    fh = _fits.open(mc_i2d_path)
+    hdu = fh['SCI'] if 'SCI' in [h.name for h in fh] else fh[0]
+    w = _WCS(hdu.header)
+    d = hdu.data.astype(float)
+    fov = np.isfinite(d)
+
+    # FWHM in i2d pixels
+    ftab = Table.read(_L.FWHM_TABLE)
+    fwhm_as = float(ftab[ftab['Filter'] == filtername]['PSF FWHM (arcsec)'][0])
+    pixscale_as = float(np.sqrt(np.abs(np.linalg.det(w.pixel_scale_matrix))) * 3600.0)
+    fwhm_px = fwhm_as / pixscale_as
+    R = max(2.0, mask_radius_fwhm * fwhm_px)
+
+    work = d.copy()
+    try:
+        t = Table.read(vetted_catalog_path)
+        if 'skycoord' in t.colnames and len(t) > 0:
+            sc = t['skycoord']
+            if not isinstance(sc, _SkyCoord):
+                sc = _SkyCoord(sc)
+            xs, ys = w.world_to_pixel(sc)
+            ny, nx = d.shape
+            Ri = int(np.ceil(R))
+            for xc, yc in zip(np.atleast_1d(xs), np.atleast_1d(ys)):
+                if not (np.isfinite(xc) and np.isfinite(yc)):
+                    continue
+                ix, iy = int(round(float(xc))), int(round(float(yc)))
+                y0, y1 = max(0, iy - Ri), min(ny, iy + Ri + 1)
+                x0, x1 = max(0, ix - Ri), min(nx, ix + Ri + 1)
+                if y0 >= y1 or x0 >= x1:
+                    continue
+                yy, xx = np.mgrid[y0:y1, x0:x1]
+                disk = (xx - xc) ** 2 + (yy - yc) ** 2 <= R ** 2
+                work[y0:y1, x0:x1][disk] = np.nan
+    except Exception as ex:
+        print(f"[bg] source-masking failed ({ex}); smoothing unmasked residual",
+              flush=True)
+
+    # interpolate over the masked source disks (fill from surrounding diffuse bg)
+    if np.any(np.isnan(work) & fov):
+        kern = _G2D(x_stddev=max(1.0, fwhm_px))
+        work = _irn(work, kern, convolve=_cfft, allow_huge=True)
+    sm = _ndi.median_filter(np.nan_to_num(work), size=int(median_size), mode='nearest')
+    sm[~fov] = np.nan
+    out = mc_i2d_path.replace('_residual_i2d.fits', '_residual_smoothed_bg_i2d.fits')
+    _fits.PrimaryHDU(data=sm.astype('float32'), header=hdu.header).writeto(out, overwrite=True)
+    print(f"[bg] wrote source-masked smoothed bg {os.path.basename(out)} "
+          f"(masked {0 if 'sc' not in dir() else len(np.atleast_1d(xs))} sources, "
+          f"R={R:.1f}px)", flush=True)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Cross-band stringent seed (step 18; multifilter only)
 # ---------------------------------------------------------------------------
@@ -893,7 +971,17 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         merge_label, ['basic'], pupil=pupil)
                     mc_i2d = outpaths.get('basic')
                     if mc_i2d and os.path.exists(mc_i2d):
-                        bg_for_next[(module, filt)] = _L._cutout_smooth_residual_bg(mc_i2d)
+                        # source-masked smoothed bg (breaks the bg<-source-hole
+                        # feedback loop that drives faint stars negative with
+                        # iteration); falls back to the plain smoother on error
+                        try:
+                            bg_for_next[(module, filt)] = _build_source_masked_bg(
+                                mc_i2d, vetted_path, filt,
+                                median_size=int(getattr(options, 'manual_residual_bg_median_size', 3)))
+                        except Exception as ex:
+                            print(f"manual [{phase}]: source-masked bg failed ({ex}); "
+                                  f"using plain smoother", flush=True)
+                            bg_for_next[(module, filt)] = _L._cutout_smooth_residual_bg(mc_i2d)
                         print(f"manual [{phase}]: smoothed bg for next phase = "
                               f"{bg_for_next[(module, filt)]}", flush=True)
                 except Exception as ex:
