@@ -3013,6 +3013,7 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     half_h, half_w = int(psf_shape[0]) // 2, int(psf_shape[1]) // 2
 
     written = {k: [] for k in kinds}
+    written_model = {k: [] for k in kinds}
     for orig in overlapping_frames:
         origin = _cutout_origin(orig, options)
         if origin is None:
@@ -3062,6 +3063,7 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
             save_residual_datamodel(raw_model, out_model,
                                     mc_model.astype('float32'))
             written[kind].append(out_resid)
+            written_model[kind].append(out_model)
     # mosaic each kind's merged-catalog residuals
     outpaths = {}
     bgsub_tok = _bgsub_token(options)
@@ -3080,6 +3082,16 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
         outpaths[kind] = _resample_to_i2d(written[kind], pipeline_dir,
                                           product_name, crop_to_data=True)
         print(f"mergedcat: wrote {kind} residual i2d {outpaths[kind]}", flush=True)
+        # also mosaic the merged-catalog MODEL so the CARTA loaders can show
+        # data / model / residual / bg side by side
+        model_product = product_name.replace('_mergedcat_residual',
+                                             '_mergedcat_model')
+        try:
+            mpath = _resample_to_i2d(written_model[kind], pipeline_dir,
+                                     model_product, crop_to_data=True)
+            print(f"mergedcat: wrote {kind} model i2d {mpath}", flush=True)
+        except Exception as ex:
+            print(f"mergedcat: model i2d build failed ({ex})", flush=True)
     return outpaths
 
 
@@ -3961,7 +3973,15 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     allowed_modules = field_policy[filt]
                     break
     
-    if allowed_modules is not None:
+    # The manual-iteration path abstracts detectors behind the module TOKEN
+    # (per-frame catalogs are saved as ``<filt>_<module>_...`` and get_filenames
+    # / merge_individual_frames resolve SW nrcb->nrcb1-4 and LW nrcb->nrcblong
+    # per filter internally), so a single token (e.g. 'nrcb') serves both a SW
+    # and a LW filter in one multifilter (crossband) run.  The legacy
+    # per-detector restriction below picks ONE filter's policy for all filters
+    # and pre-expands SW to nrcb1-4, which breaks a mixed SW+LW manual run; skip
+    # it for --manual-iterations (validated on arches F212N+F323N).
+    if allowed_modules is not None and not getattr(options, 'manual_iterations', False):
         expanded_modules = []
         for module in modules:
             if proposal_id == '3958' and field == '007' and module in ('nrca', 'nrcb'):

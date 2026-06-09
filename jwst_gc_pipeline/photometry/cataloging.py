@@ -246,6 +246,28 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
         modsky = _make_model_image(phot, data.shape, psf_shape=(21, 21),
                                    include_local_bkg=False)
 
+    # --- ban non-positive-flux (negative-peak) sources ---
+    # A PSF is strictly positive, so flux_fit <= 0 is a negative-peak model: it
+    # ADDS flux to the residual rather than subtracting a star, and (because the
+    # next iteration seeds from this catalog) it breeds more spurious negatives
+    # at over-subtracted spots -- the pillar_with_satstar iter6 explosion.  The
+    # closed-form forced refit (above) is unbounded and is the main source; the
+    # bounded LevMar (flux.min=0) can also land at ~0.  Drop them outright so
+    # they never enter the catalog or the seed.
+    res = phot.results
+    fpos = np.asarray(res['flux_fit'], dtype=float) > 0
+    n_neg = int(len(fpos) - np.sum(fpos))
+    if n_neg > 0:
+        phot.results = res[fpos]
+        if (phot.init_params is not None
+                and len(phot.init_params) == len(fpos)):
+            phot.init_params = phot.init_params[fpos]
+        phot.__dict__.pop('_model_image_params', None)
+        modsky = _make_model_image(phot, data.shape, psf_shape=(21, 21),
+                                   include_local_bkg=False)
+        print(f"[{label}] dropped {n_neg} non-positive-flux (negative-peak) "
+              f"sources", flush=True)
+
     return phot.results, modsky, phot
 
 
@@ -638,14 +660,16 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
                               prev_seed_catalog=None, resbg_path=None):
     """Clean per-frame driver for the manual-iteration path.
 
-    ``manual_phase`` in {'m12','m3','m4','m5','m6'}:
+    ``manual_phase`` in {'m12','m3','m4','m5','m6','m7'}:
       * 'm12' runs iter1 (unseeded daofind) then iter2 (daofind(residual1) +
         same-frame iter1 catalog), no merge between -- saved as m1, m2.
-      * 'm3' (iter3) runs a single pass on the RAW frames, seeded by the
-        i2d-augmented catalog (daofind(merged i2d) + vetted m2); its residual
-        builds the first, less source-biased background.
-      * 'm4'/'m5'/'m6' run a single pass on the background-subtracted data,
-        seeded by daofind + the projected previous merged/cross-band catalog.
+      * 'm3' (iter3) and 'm4' (iter4) run a single pass on the RAW frames,
+        seeded by per-frame daofind + the i2d-augmented catalog (daofind on the
+        raw i2d for m3, the source-subtracted residual i2d for m4); m4 builds the
+        first background map.
+      * 'm5'/'m6'/'m7' (iter5/6/7) run a single pass on the background-subtracted
+        data, seeded by daofind + the projected previous merged / cross-band
+        catalog.
     """
     overshoot_ratio = float(getattr(options, 'manual_overshoot_ratio', 1.2))
     overshoot_action = str(getattr(options, 'manual_overshoot_action', 'refit'))
@@ -794,12 +818,12 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
 def _build_crossband_seed(cut_bp, modules, filternames, options, *,
                           max_sep_mas=10.0, min_filters=2, snr_min=5.0,
                           qfit_max=0.2):
-    """Cross-filter seed for m6: sources detected (well) in >= min_filters
+    """Cross-filter seed for m7 (iter7): sources detected (well) in >= min_filters
     filters within max_sep_mas, each with S/N > snr_min and good qfit.
 
     NOTE: the stringent cross-match (>=2 filters, <10 mas, S/N>5 each) is a TODO;
     the immediate cutout tests are single-filter so this path is not exercised.
-    For now it unions the per-filter vetted m5 skycoords (like the legacy union
+    For now it unions the per-filter vetted m6 skycoords (like the legacy union
     seed) so the multifilter path is runnable.  Replace with
     ``merge_catalogs.merge_catalogs(..., max_offset=max_sep_mas*u.mas)`` + the
     >=min_filters / snr / qfit cut before relying on m5 scientifically.
@@ -812,17 +836,17 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
     for module in modules:
         for filt in filternames:
             p = (f'{cut_bp}/catalogs/{filt.lower()}_{module}_indivexp_merged'
-                 f'{desat}{bgsub}{blur_}_m5_dao_basic_vetted.fits')
+                 f'{desat}{bgsub}{blur_}_m6_dao_basic_vetted.fits')
             if os.path.exists(p):
                 t = Table.read(p)
                 if 'skycoord' in t.colnames:
                     tbls.append(Table({'skycoord': t['skycoord']}))
     if not tbls:
-        raise ValueError(f"m6 crossband seed: no vetted m5 catalogs under {cut_bp}/catalogs/")
+        raise ValueError(f"m7 crossband seed: no vetted m6 catalogs under {cut_bp}/catalogs/")
     union = _vstack(tbls, metadata_conflicts='silent')
     out = f'{cut_bp}/catalogs/crossband_seed_manual.fits'
     union.write(out, overwrite=True)
-    print(f"[m6] wrote crossband seed {out} (n={len(union)}); "
+    print(f"[m7] wrote crossband seed {out} (n={len(union)}); "
           f"TODO stringent >= {min_filters}-filter/{max_sep_mas}mas/SNR>{snr_min} cut",
           flush=True)
     return out
@@ -831,19 +855,30 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
 # ---------------------------------------------------------------------------
 # Detection on the merged i2d -> augmented seed for the next per-frame round
 # ---------------------------------------------------------------------------
-def _build_i2d_augmented_seed(data_i2d_path, prev_vetted_path, filtername, *,
+def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, *,
                               local_snr_min=5.0, roundlo=-0.5, roundhi=0.5,
-                              sharplo=0.4, sharphi=1.2, label=''):
+                              sharplo=0.4, sharphi=1.2, bg_subtract_path=None,
+                              label=''):
     """daofind on the merged i2d co-add, unioned with the previous vetted merged
     catalog, written as a seed catalog (``skycoord`` + ``flux``) for the next
     per-frame PSF-photometry round (the plan's iter3 seed = daofind(i2d) +
     previous catalog).
 
+    ``detection_i2d_path`` is the detection co-add for this iteration, which gets
+    progressively cleaner so sources hidden in one stage surface in the next:
+      * iter3: raw data i2d
+      * iter4: source-subtracted residual i2d (mergedcat residual)
+      * iter5: residual i2d with the diffuse background also subtracted
+               (``bg_subtract_path``)
+    This recovers significant sources (peak/ERR S/N >> 5) that are NOT local
+    maxima in the raw co-add because they sit on the wings of brighter stars or
+    on nebulosity -- daofind cannot find those at ANY threshold, and lowering the
+    threshold only injects noise/nebulosity false positives in crowded fields.
+    Subtracting the brighter stars (and then the background) makes them clean
+    local maxima with no threshold change -- region-safe.  See possible_stars.reg.
+
     PSF photometry is *never* run on the i2d -- the fit always runs on the raw
-    (or background-subtracted) frames.  This step is detection-only: the deep
-    co-add reveals faint stars the single-frame detections miss, so seeding the
-    next round with them yields a cleaner per-frame residual and therefore a
-    less source-biased background map (PSFPhotometryPlan2026-06-09.md).
+    (or background-subtracted) frames.  This step is detection-only.
 
     The i2d cutouts are drizzled at the native detector scale (0.063"/px), so the
     per-frame pixel FWHM applies unchanged.  Returns the seed-catalog path.
@@ -853,7 +888,7 @@ def _build_i2d_augmented_seed(data_i2d_path, prev_vetted_path, filtername, *,
     ftab = Table.read(_L.FWHM_TABLE)
     fwhm_pix = float(ftab[ftab['Filter'] == filtername]['PSF FWHM (pixel)'][0])
 
-    with fits.open(data_i2d_path) as dh:
+    with fits.open(detection_i2d_path) as dh:
         names = [h.name for h in dh]
         sci = dh['SCI'] if 'SCI' in names else dh[0]
         data = np.asarray(sci.data, dtype=float)
@@ -863,6 +898,18 @@ def _build_i2d_augmented_seed(data_i2d_path, prev_vetted_path, filtername, *,
     mask = ~np.isfinite(data)
     if wht is not None:
         mask |= ~np.isfinite(wht) | (wht <= 0)
+    # iter5: also subtract the diffuse background so faint sources sitting on
+    # nebulosity become local maxima (same grid as the residual i2d)
+    if bg_subtract_path and os.path.exists(bg_subtract_path):
+        with fits.open(bg_subtract_path) as bh:
+            bn = [h.name for h in bh]
+            bsci = bh['SCI'] if 'SCI' in bn else bh[0]
+            bg = np.asarray(bsci.data, dtype=float)
+        if bg.shape == data.shape:
+            data = data - np.where(np.isfinite(bg), bg, 0.0)
+        else:
+            print(f"[{label}] bg-subtract skipped: shape {bg.shape} != {data.shape}",
+                  flush=True)
     pixscale_as = float(np.sqrt(np.abs(np.linalg.det(ww_i2d.pixel_scale_matrix))) * 3600.0)
 
     # Detection threshold from the local-noise floor (as _build_manual_seed),
@@ -917,6 +964,13 @@ def _build_i2d_augmented_seed(data_i2d_path, prev_vetted_path, filtername, *,
         prev_flux = np.ones(len(prev), dtype=float)
         print(f"[{label}] WARNING: no flux/flux_fit column in {os.path.basename(prev_vetted_path)}; "
               f"seeding flux_init=1.0", flush=True)
+    # never seed from negative-peak (flux<=0) sources
+    _pos = prev_flux > 0
+    if not np.all(_pos):
+        prev_sky = prev_sky[_pos]
+        prev_flux = prev_flux[_pos]
+        print(f"[{label}] dropped {int(np.sum(~_pos))} non-positive-flux prev seeds",
+              flush=True)
 
     # i2d detections -> sky, keep only those NOT already in the previous catalog
     n_new = 0
@@ -959,25 +1013,29 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         target, field, basepath, crowdsource_default_kwargs,
                         bg_boxsizes):
     """In-process manual-iteration cutout pipeline (parallels
-    ``_run_cutout_pipeline``).  Phases m12 -> m3 -> m4 -> m5 (-> m6 if
-    multifilter); BASIC-only.  m12 = per-frame iter1+iter2.  m3 (iter3) re-seeds
-    from daofind on the merged i2d co-add + vetted m2 and refits the RAW frames,
-    producing the first less source-biased background.  m4/m5 are
-    background-subtracted refinements; m6 is the cross-band pass.  After each
-    phase: merge per-frame catalogs, vet the merged catalog (extended-emission
-    filter), build the vetted mergedcat residual i2d, smooth it into the
-    background map fed to the next phase.
+    ``_run_cutout_pipeline``).  Phases m12 -> m3 -> m4 -> m5 -> m6 (-> m7 if
+    multifilter); BASIC-only.  m12 = per-frame iter1+iter2.  The i2d-detection
+    co-add gets progressively cleaner (PSFPhotometryPlan2026-06-09):
+      m3 (iter3): daofind(raw i2d),                 fit RAW frames
+      m4 (iter4): daofind(residual i2d),            fit RAW frames; builds 1st bg
+      m5 (iter5): daofind(residual i2d - bg),       fit bg-subtracted frames
+      m6 (iter6): daofind(residual i2d - bg),       fit bg-subtracted frames
+      m7 (iter7): cross-filter seed,                fit bg-subtracted frames
+    After each phase: merge per-frame catalogs, tag iteration-found provenance,
+    vet (extended-emission filter), build the vetted mergedcat residual i2d, and
+    smooth it into the background map fed to the next phase.
     """
     import copy
+    from astropy.coordinates import SkyCoord
     from jwst_gc_pipeline.photometry import merge_catalogs as _merge_catalogs
 
     cut_bp = _L._cutout_out_basepath(basepath, options)
     os.makedirs(os.path.join(cut_bp, 'catalogs'), exist_ok=True)
     pupil = 'clear'
     multifilter = len(filternames) > 1
-    phases = ['m12', 'm3', 'm4', 'm5']
+    phases = ['m12', 'm3', 'm4', 'm5', 'm6']
     if multifilter:
-        phases.append('m6')
+        phases.append('m7')
     print(f"MANUAL PIPELINE: phases={phases} filters={filternames} "
           f"modules={modules}", flush=True)
 
@@ -993,13 +1051,15 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 f'{_L._inst_token(filt)}_{pupil}-{filt.lower()}-{module}_data_i2d.fits')
 
     frame_cache = {}
-    bg_for_next = {}   # (module, filt) -> smoothed-bg path for the next phase
+    bg_for_next = {}      # (module, filt) -> smoothed-bg path for the next phase
+    resid_i2d_for_next = {}  # (module, filt) -> mergedcat residual i2d (detection image)
+    prev_merged_for = {}  # (module, filt) -> (SkyCoord, iter_found array) for provenance
     overlap_total = 0
 
     for phase in phases:
-        # m3 is the i2d-detection-seeded round on RAW frames -- it produces the
-        # first (less source-biased) background; bg subtraction begins at m4.
-        resbgsub = phase in ('m4', 'm5', 'm6')
+        # iter3 (m3) and iter4 (m4) fit the RAW frames; m4 produces the first
+        # background map.  Background subtraction in the fit begins at iter5 (m5).
+        resbgsub = phase in ('m5', 'm6', 'm7')
         merge_label = 'm2' if phase == 'm12' else phase
         opts_phase = copy.copy(options)
         opts_phase.iteration_label = merge_label
@@ -1010,32 +1070,52 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
             for filt in filternames:
                 prev_seed = None
                 resbg_path = None
+                # m3..m6 seed = vetted previous catalog UNION daofind on a
+                # progressively cleaner i2d (per PSFPhotometryPlan2026-06-09):
+                #   iter3(m3): raw i2d                        fit RAW frames
+                #   iter4(m4): residual i2d (m3)              fit RAW frames
+                #   iter5(m5): residual i2d (m4) - bg (m4)    fit bg-sub frames
+                #   iter6(m6): residual i2d (m5) - bg (m5)    fit bg-sub frames
+                #   iter7(m7): cross-filter seed             fit bg-sub frames
+                # resid_i2d_for_next/bg_for_next hold the PRIOR phase's products.
+                vetted_prev = None
+                det_i2d = None
+                bg_sub = None
                 if phase == 'm3':
-                    # iter3: daofind(merged i2d) UNION vetted m2 -> seed; RAW frames
-                    m2v = _merged_path('m2', module, filt, False).replace(
-                        '.fits', '_vetted.fits')
+                    vetted_prev = _merged_path('m2', module, filt, False).replace('.fits', '_vetted.fits')
+                    det_i2d = _data_i2d_path(module, filt)          # raw i2d
+                    resbg_path = None                                # RAW frames
+                elif phase == 'm4':
+                    vetted_prev = _merged_path('m3', module, filt, False).replace('.fits', '_vetted.fits')
+                    det_i2d = resid_i2d_for_next.get((module, filt))  # m3 residual
+                    resbg_path = None                                # RAW frames
+                elif phase == 'm5':
+                    vetted_prev = _merged_path('m4', module, filt, False).replace('.fits', '_vetted.fits')
+                    det_i2d = resid_i2d_for_next.get((module, filt))  # m4 residual
+                    bg_sub = bg_for_next.get((module, filt))          # minus m4 bg
+                    resbg_path = bg_for_next.get((module, filt))      # fit on bg-sub frames
+                elif phase == 'm6':
+                    vetted_prev = _merged_path('m5', module, filt, True).replace('.fits', '_vetted.fits')
+                    det_i2d = resid_i2d_for_next.get((module, filt))  # m5 residual
+                    bg_sub = bg_for_next.get((module, filt))          # minus m5 bg
+                    resbg_path = bg_for_next.get((module, filt))      # fit on bg-sub frames
+                elif phase == 'm7':
+                    prev_seed = _build_crossband_seed(cut_bp, modules, filternames, options)
+                    resbg_path = bg_for_next.get((module, filt))      # bg from m6
+
+                if phase in ('m3', 'm4', 'm5', 'm6'):
+                    det_i2d = det_i2d or _data_i2d_path(module, filt)  # fallback
                     try:
                         prev_seed = _build_i2d_augmented_seed(
-                            _data_i2d_path(module, filt), m2v, filt,
+                            det_i2d, vetted_prev, filt,
                             local_snr_min=float(getattr(
                                 options, 'manual_ext_local_snr_min', 5.0)),
-                            label=f'm3:{filt}')
+                            bg_subtract_path=bg_sub,
+                            label=f'{phase}:{filt}')
                     except Exception as ex:
-                        print(f"manual [m3]: i2d-augmented seed failed ({ex}); "
-                              f"using vetted m2", flush=True)
-                        prev_seed = m2v
-                    resbg_path = None   # m3 fits the RAW frames (bg-sub starts m4)
-                elif phase == 'm4':
-                    prev_seed = _merged_path('m3', module, filt, False).replace(
-                        '.fits', '_vetted.fits')
-                    resbg_path = bg_for_next.get((module, filt))   # bg from m3
-                elif phase == 'm5':
-                    prev_seed = _merged_path('m4', module, filt, True).replace(
-                        '.fits', '_vetted.fits')
-                    resbg_path = bg_for_next.get((module, filt))   # bg from m4
-                elif phase == 'm6':
-                    prev_seed = _build_crossband_seed(cut_bp, modules, filternames, options)
-                    resbg_path = bg_for_next.get((module, filt))   # bg from m5
+                        print(f"manual [{phase}]: i2d-augmented seed failed ({ex}); "
+                              f"using {os.path.basename(vetted_prev)}", flush=True)
+                        prev_seed = vetted_prev
 
                 # candidate frames (scan on first phase, cache thereafter)
                 if phase == phases[0]:
@@ -1100,6 +1180,23 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 vetted_path = merged_path.replace('.fits', '_vetted.fits')
                 try:
                     merged = Table.read(merged_path)
+                    # --- iteration-found provenance: the first phase a source
+                    # appears in (matched across phases by sky position) ---
+                    _iter_num = {'m2': 2, 'm3': 3, 'm4': 4, 'm5': 5, 'm6': 6, 'm7': 7}[merge_label]
+                    _msc = SkyCoord(merged['skycoord'])
+                    _ifound = np.full(len(merged), _iter_num, dtype=int)
+                    _prev = prev_merged_for.get((module, filt))
+                    if _prev is not None and len(merged):
+                        _psc, _pif = _prev
+                        _ftab = Table.read(_L.FWHM_TABLE)
+                        _fw = float(_ftab[_ftab['Filter'] == filt]['PSF FWHM (arcsec)'][0])
+                        _idx, _sep, _ = _msc.match_to_catalog_sky(_psc)
+                        _m = _sep.arcsec < 0.5 * _fw   # within ~0.5 FWHM = same source
+                        _ifound[_m] = np.asarray(_pif)[np.asarray(_idx)][_m]
+                    merged['iter_found'] = _ifound
+                    merged.write(merged_path, overwrite=True)
+                    prev_merged_for[(module, filt)] = (_msc, _ifound)
+
                     d_i2d, ww_i2d = None, None
                     dpath = _data_i2d_path(module, filt)
                     if os.path.exists(dpath):
@@ -1127,6 +1224,9 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         merge_label, ['basic'], pupil=pupil)
                     mc_i2d = outpaths.get('basic')
                     if mc_i2d and os.path.exists(mc_i2d):
+                        # this phase's residual i2d is the detection image for the
+                        # next phase's i2d-augmented seed (blended-source recovery)
+                        resid_i2d_for_next[(module, filt)] = mc_i2d
                         # source-masked smoothed bg (breaks the bg<-source-hole
                         # feedback loop that drives faint stars negative with
                         # iteration); falls back to the plain smoother on error
