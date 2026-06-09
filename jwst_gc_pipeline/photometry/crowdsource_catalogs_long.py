@@ -2970,7 +2970,8 @@ def _cutout_origin(orig_filename, options):
 def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                               proposal_id, field, module, options,
                               overlapping_frames, iteration_label, kinds,
-                              pupil='clear', psf_shape=(21, 21)):
+                              pupil='clear', psf_shape=(21, 21),
+                              satstar_label=None):
     """Build residual i2d mosaics from the VETTED MERGED catalog (cutout path).
 
     The per-frame RAW residuals subtract every fitted source, including spurious
@@ -2983,6 +2984,12 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     fitter saw it); we re-render the model from the merged catalog (projected onto
     each frame, with the same cutout-re-origined PSF) and subtract.  No data /
     satstar reload, no re-fit.
+
+    ``satstar_label`` (manual-path phase token, e.g. ``'m12'``/``'m3'``): when
+    given, the per-frame saturated-star MODEL for that phase is added back into
+    the merged-catalog MODEL mosaic *for display only* -- so the model image
+    shows the saturated stars alongside the fitted point sources.  The RESIDUAL
+    is unaffected (it already has the satstar model subtracted via ``base``).
     """
     from astropy.nddata import NDData as _NDData
     merged = Table.read(merged_cat_path)
@@ -3031,6 +3038,12 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                                instrument=instrument)
     half_h, half_w = int(psf_shape[0]) // 2, int(psf_shape[1]) // 2
 
+    # satstar-model suffix matching _prepare_frame_for_photometry's
+    # ``satstar_file_suffix`` (manual path); used to add the saturated-star model
+    # back into the MODEL mosaic for display (never the residual).
+    sat_suffix = (_bgsub_token(options) + _iteration_token(satstar_label)
+                  if satstar_label is not None else None)
+
     written = {k: [] for k in kinds}
     written_model = {k: [] for k in kinds}
     for orig in overlapping_frames:
@@ -3038,6 +3051,27 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
         if origin is None:
             continue
         x0, y0 = origin
+        # the per-frame satstar model sits next to the FITTER INPUT (the cutout
+        # crop for cutout runs, the original frame full-frame), same pixel grid
+        # as the per-frame residual/model
+        satstar_sm = None
+        if sat_suffix is not None:
+            if getattr(options, 'cutout_region', ''):
+                _fitter_in = os.path.join(
+                    pipeline_dir, os.path.basename(orig).replace(
+                        '.fits', f"_cutout_{_cutout_label_for(options)}.fits"))
+            else:
+                _fitter_in = orig
+            for _smp in (_fitter_in.replace('.fits', f'{sat_suffix}_extended_satstar_model.fits'),
+                         _fitter_in.replace('.fits', f'{sat_suffix}_satstar_model.fits')):
+                if os.path.exists(_smp):
+                    try:
+                        _sm = fits.getdata(_smp).astype('float32')
+                        satstar_sm = np.where(np.isfinite(_sm), _sm, 0.0)
+                    except (OSError, ValueError) as _ex:
+                        print(f"mergedcat: could not read satstar model {_smp}: {_ex}",
+                              flush=True)
+                    break
         # re-origin the spatially-varying PSF grid to cutout pixel coords
         shifted_xy = [(gx - x0, gy - y0) for (gx, gy) in grid.grid_xypos]
         rg = type(grid)(_NDData(np.asarray(grid.data),
@@ -3075,12 +3109,16 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                          'y_fit': np.asarray(yy)[keep],
                          'flux_fit': mflux[keep]})
             mc_model = _render_model_from_table(tbl, rg, base.shape, psf_shape)
-            mc_resid = (base - mc_model).astype('float32')
+            mc_resid = (base - mc_model).astype('float32')   # residual: point-src model only
+            # display model includes the satstars (added back), if available and
+            # shape-matching; residual above is left untouched
+            mc_model_display = mc_model.astype('float32')
+            if satstar_sm is not None and satstar_sm.shape == mc_model.shape:
+                mc_model_display = mc_model_display + satstar_sm
             out_resid = f'{stem}_mergedcat_residual.fits'
             out_model = f'{stem}_mergedcat_model.fits'
             save_residual_datamodel(raw_resid, out_resid, mc_resid)
-            save_residual_datamodel(raw_model, out_model,
-                                    mc_model.astype('float32'))
+            save_residual_datamodel(raw_model, out_model, mc_model_display)
             written[kind].append(out_resid)
             written_model[kind].append(out_model)
     # mosaic each kind's merged-catalog residuals

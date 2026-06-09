@@ -1232,7 +1232,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     outpaths = _L.build_mergedcat_residuals(
                         cut_bp, basepath, vetted_path, filt, proposal_id, field,
                         module, opts_phase, frame_cache.get((module, filt), []),
-                        merge_label, ['basic'], pupil=pupil)
+                        merge_label, ['basic'], pupil=pupil, satstar_label=phase)
                     mc_i2d = outpaths.get('basic')
                     if mc_i2d and os.path.exists(mc_i2d):
                         # this phase's residual i2d is the detection image for the
