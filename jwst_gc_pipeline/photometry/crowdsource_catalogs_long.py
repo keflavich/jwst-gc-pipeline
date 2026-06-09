@@ -591,7 +591,12 @@ def _cutout_label_for(options):
 
 
 def _cutout_out_basepath(basepath, options):
-    """``<basepath>/cutouts/<label>`` for a --cutout-region run."""
+    """``<basepath>/cutouts/<label>`` for a --cutout-region run; ``basepath``
+    itself for a full-frame run (no ``--cutout-region``).  The manual pipeline
+    runs full-frame in place under ``basepath`` and only namespaces into the
+    ``cutouts/`` tree when a cutout region is requested."""
+    if not getattr(options, 'cutout_region', ''):
+        return basepath
     return os.path.join(basepath, 'cutouts', _cutout_label_for(options))
 
 
@@ -2829,20 +2834,27 @@ def _resample_to_i2d(files, pipeline_dir, product_name, crop_to_data=True):
 
 
 def mosaic_cutout_input_data(cut_bp, filtername, proposal_id, field, module,
-                             label, pupil='clear'):
-    """Resample the per-frame cutout INPUT data into a ``_data_i2d`` mosaic.
+                             label, pupil='clear', input_files=None):
+    """Resample the per-frame INPUT data into a ``_data_i2d`` mosaic.
 
     This is the ORIGINAL (non-residual) image on the same i2d grid as the
     residual mosaics, so catalog sky positions can be overplotted on real data
     (the residuals subtract the sources, leaving nothing to register against).
-    Cutout path only.
+
+    Cutout runs resample the per-frame ``*_cutout_<label>.fits`` crops; full-frame
+    runs pass the original frames explicitly via ``input_files`` (no cutout crop
+    exists), reprojecting them onto a common grid the same way.
     """
     pipeline_dir = f'{cut_bp}/{filtername}/pipeline'
     inst_token = _inst_token(filtername)
-    files = sorted(glob.glob(f'{pipeline_dir}/*_cutout_{label}.fits'))
+    if input_files is not None:
+        files = sorted(input_files)
+    else:
+        files = sorted(glob.glob(f'{pipeline_dir}/*_cutout_{label}.fits'))
     if not files:
-        print(f"mosaic_cutout_input_data: no cutout inputs "
-              f"*_cutout_{label}.fits in {pipeline_dir}", flush=True)
+        print(f"mosaic_cutout_input_data: no inputs "
+              f"(label={label!r}, input_files={input_files is not None}) "
+              f"in {pipeline_dir}", flush=True)
         return None
     product_name = (f'jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-'
                     f'{filtername.lower()}-{module}_data')
@@ -2935,9 +2947,12 @@ def _cutout_origin(orig_filename, options):
     """Return the (x0, y0) parent-frame origin of the cutout in ``orig_filename``
     (same math as _prepare_cutout_input) WITHOUT writing anything.  Returns None
     if the region doesn't overlap the frame.  Used to re-origin the PSF grid in
-    the merged-catalog residual render pass."""
+    the merged-catalog residual render pass.  Full-frame runs (no
+    ``--cutout-region``) have no crop, so the origin is ``(0, 0)``."""
     from astropy.nddata import Cutout2D, NoOverlapError
     from astropy.wcs import NoConvergence
+    if not getattr(options, 'cutout_region', ''):
+        return 0, 0
     with fits.open(orig_filename) as hdul:
         sci_ww = wcs.WCS(hdul['SCI'].header)
         center, size, _ = _parse_cutout_region(
@@ -2996,11 +3011,15 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     pipeline_dir = f'{cut_bp}/{filtername}/pipeline'
     inst_token = _inst_token(filtername)
 
-    # Load the PSF grid once (obsdate/instrument from the first cutout input).
-    first_cut = os.path.join(
-        pipeline_dir,
-        os.path.basename(overlapping_frames[0]).replace(
-            '.fits', f"_cutout_{_cutout_label_for(options)}.fits"))
+    # Load the PSF grid once (obsdate/instrument from the first frame).  Cutout
+    # runs read the cropped copy; full-frame runs read the original frame.
+    if getattr(options, 'cutout_region', ''):
+        first_cut = os.path.join(
+            pipeline_dir,
+            os.path.basename(overlapping_frames[0]).replace(
+                '.fits', f"_cutout_{_cutout_label_for(options)}.fits"))
+    else:
+        first_cut = overlapping_frames[0]
     fh, im1, _d, _w, _e, instrument, telescope, obsdate = load_data(first_cut)
     fh.close()
     grid, _psf = get_psf_model(filtername, proposal_id, field, module=module,
@@ -4111,24 +4130,37 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     _cutout_run = bool(getattr(options, 'cutout_region', ''))
     _cutout_overlap_count = 0
 
-    # A --cutout-region run (outside SLURM array mode) is small enough to run
-    # the whole multi-phase pipeline in-process: iter1 -> iter2 -> (iter3 if
-    # multi-filter) -> iter4, merging and building residual mosaics between
-    # phases.  The full-frame each-exposure path below is left byte-identical.
-    if _cutout_run and os.getenv('SLURM_ARRAY_TASK_ID') is None and options.each_exposure:
+    # The manual-iteration pipeline (cataloging.py) is the default path.  Its
+    # phases are sequential (each detects on the previous phase's merged residual
+    # mosaic), so the whole multi-phase pipeline runs IN-PROCESS as a single job
+    # -- full-frame OR cutout -- never split across a SLURM array.  It is NOT
+    # cutout-specific: with no --cutout-region it processes the full frames in
+    # place under ``basepath``.  Run it as a single (non-array) job.
+    #
+    # The legacy --cutout-region in-process path (_run_cutout_pipeline) is kept
+    # only for --legacy-iterations cutout runs.  Full-frame legacy runs still
+    # fall through to the SLURM-array each-exposure loop below (byte-identical).
+    if options.each_exposure and os.getenv('SLURM_ARRAY_TASK_ID') is None:
         if getattr(options, 'manual_iterations', False):
-            # New manual-iteration path (cataloging.py).  Imported lazily so the
-            # legacy path never depends on it and there is no import cycle
-            # (cataloging imports mosaicking/IO helpers from this module).
+            # Imported lazily so the legacy path never depends on it and there is
+            # no import cycle (cataloging imports mosaicking/IO from this module).
             from jwst_gc_pipeline.photometry import cataloging as _cataloging
             _cataloging.run_manual_pipeline(
                 options, modules, filternames, nvisits, proposal_id, target,
                 field, basepath, crowdsource_default_kwargs, bg_boxsizes)
             return
-        _run_cutout_pipeline(options, modules, filternames, nvisits, proposal_id,
-                             target, field, basepath, crowdsource_default_kwargs,
-                             bg_boxsizes)
-        return
+        if _cutout_run:
+            _run_cutout_pipeline(options, modules, filternames, nvisits, proposal_id,
+                                 target, field, basepath, crowdsource_default_kwargs,
+                                 bg_boxsizes)
+            return
+    if getattr(options, 'manual_iterations', False) and options.each_exposure \
+            and os.getenv('SLURM_ARRAY_TASK_ID') is not None:
+        raise SystemExit(
+            "manual-iteration pipeline runs as a single in-process job; its phases "
+            "are sequential and cannot be split across a SLURM array.  Re-submit "
+            "without --array (unset SLURM_ARRAY_TASK_ID), or pass --legacy-iterations "
+            "for the array-parallel per-exposure path.")
 
     for module in modules:
         detector = module # no sub-detectors for long-NIRCAM or for MIRI

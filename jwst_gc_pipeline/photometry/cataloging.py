@@ -1153,9 +1153,12 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     frame_cache[(module, filt)] = overlapping_now
                     overlap_total += len(overlapping_now)
                 if not overlapping_now:
+                    if getattr(options, 'cutout_region', ''):
+                        raise ValueError(
+                            f"--cutout-region overlapped none of the {filt}/{module} "
+                            f"frames in phase {phase}.")
                     raise ValueError(
-                        f"--cutout-region overlapped none of the {filt}/{module} "
-                        f"frames in phase {phase}.")
+                        f"no {filt}/{module} frames produced output in phase {phase}.")
 
                 # merge per-frame catalogs (BASIC only)
                 _merge_catalogs.merge_individual_frames(
@@ -1166,12 +1169,20 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     resbgsub=resbgsub, group=getattr(options, 'group', False),
                     fwhm_basepath=basepath)
 
-                # data i2d once (m12), for peak-SB in the vetting step
+                # data i2d once (m12), for peak-SB in the vetting step.  Cutout
+                # runs resample the per-frame crops (globbed by label); full-frame
+                # runs resample the original overlapping frames passed explicitly.
                 if phase == phases[0]:
                     try:
-                        _L.mosaic_cutout_input_data(
-                            cut_bp, filt, proposal_id, field, module,
-                            _L._cutout_label_for(options), pupil=pupil)
+                        if getattr(options, 'cutout_region', ''):
+                            _L.mosaic_cutout_input_data(
+                                cut_bp, filt, proposal_id, field, module,
+                                _L._cutout_label_for(options), pupil=pupil)
+                        else:
+                            _L.mosaic_cutout_input_data(
+                                cut_bp, filt, proposal_id, field, module, '',
+                                pupil=pupil,
+                                input_files=frame_cache.get((module, filt), []))
                     except Exception as ex:
                         print(f"manual: data i2d build failed: {ex}", flush=True)
 
