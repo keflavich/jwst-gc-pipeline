@@ -31,11 +31,17 @@ modeling, paper figures) remains in `brick2221`.
 
 - `jwst_gc_pipeline.photometry` — catalog-level processing
   - `crowdsource_catalogs_long.py` (also handles short) — crowdsource
-    photometry extraction
+    photometry extraction and the PSF-photometry driver / `main()`
+  - `cataloging.py` — the PSF-photometry pipeline (Hosek-style iterative
+    detect/fit/reseed); the default path. See `PHOTOMETRY_PIPELINE.md`.
   - `crowdsource_catalogs_short.py` — deprecated short-wave variant
   - `make_reftable.py` — astrometric reference table construction
   - `merge_catalogs.py` — multi-wavelength catalog merger
   - `isochrones.py` — fetch / handle MIST isochrones
+
+The default PSF-photometry pipeline is implemented in `cataloging.py` and
+documented in [`PHOTOMETRY_PIPELINE.md`](PHOTOMETRY_PIPELINE.md). Pass
+`--legacy-iterations` to use the old `IterativePSFPhotometry` path instead.
 
 - `jwst_gc_pipeline.plotting` — generic plotting helpers
   - `plot_tools.py` — color-color, color-magnitude, extinction-vector

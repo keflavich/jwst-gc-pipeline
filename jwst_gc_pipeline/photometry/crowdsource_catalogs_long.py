@@ -3650,14 +3650,23 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     metavar="profile_memory")
     # --- manual-iteration path (cataloging.py; replaces IterativePSFPhotometry) ---
     parser.add_option("--manual-iterations", dest="manual_iterations",
-                    default=False, action='store_true',
-                    help=("Use the new manual-iteration PSF photometry path "
-                          "(jwst_gc_pipeline.photometry.cataloging) instead of the "
-                          "legacy IterativePSFPhotometry pipeline.  In-process "
-                          "cutout runs only (requires --cutout-region + "
-                          "--each-exposure).  BASIC single-pass fits with explicit "
-                          "iter1..iter5 reseeding + model/data-peak overshoot QC."),
+                    default=True, action='store_true',
+                    help=("Use the default PSF photometry pipeline "
+                          "(jwst_gc_pipeline.photometry.cataloging).  This is THE "
+                          "default; pass --legacy-iterations to use the old "
+                          "IterativePSFPhotometry pipeline instead.  BASIC "
+                          "single-pass fits with explicit iter1..iter7 reseeding, "
+                          "model/data-peak overshoot QC, and a strict ban on "
+                          "negative-peak sources.  (End-to-end coverage is cutout "
+                          "in-process today; full-frame routing is pending.)  See "
+                          "PHOTOMETRY_PIPELINE.md."),
                     metavar="manual_iterations")
+    parser.add_option("--legacy-iterations", dest="manual_iterations",
+                    action='store_false',
+                    help=("Opt out of the default manual-iteration path and use "
+                          "the legacy IterativePSFPhotometry cutout pipeline "
+                          "(_run_cutout_pipeline).  Also re-enables the per-filter "
+                          "single-module restriction policy."))
     parser.add_option("--manual-overshoot-ratio", dest="manual_overshoot_ratio",
                     type='float', default=1.2,
                     help="Flag a fit when its model peak > this x the local data peak (default 1.2).")
