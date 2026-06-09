@@ -483,6 +483,17 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     full_model_image = np.zeros_like(data, dtype=float)
 
     saturated, sources, coms = find_saturated_stars(fitsdata, min_sep_from_edge=min_sep_from_edge, edge_npix=edge_npix)
+
+    # Diagnostic flag image (uint8 bitmask), written by remove_saturated_stars:
+    #   bit 0 (1) = partly saturated (DQ SATURATED but recoverable / nonlinear,
+    #               finite variance)
+    #   bit 1 (2) = totally saturated (unrecoverable: NaN variance -> data zeroed)
+    #   bit 2 (4) = pixel INCLUDED in an accepted saturated-star fit (unmasked
+    #               within that source's fit window)
+    _unrecoverable = np.isnan(fitsdata['VAR_POISSON'].data)
+    flag_img = np.zeros(data.shape, dtype=np.uint8)
+    flag_img[saturated & ~_unrecoverable] |= 1
+    flag_img[saturated & _unrecoverable] |= 2
     # Refine centroids: the mask centre-of-mass can be biased by
     # JUMP_DET-contamination, asymmetric edge clipping, or merged
     # neighbour saturation.  Re-centre to the flux-weighted centroid of
@@ -1094,7 +1105,26 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         else:
             sidelobe_resid_sigma = float('nan')
         # SSR ratio: fit-vs-no-fit sum-of-squared-residual.
-        _fit_pix = (~mask) & np.isfinite(resid_cutout) & np.isfinite(cutout)
+        # LOCALIZED (2026-06-08): evaluate over a DISK centred on the star
+        # (radius SSR_RADIUS_PIX), using the UNMASKED pixels.  The previous
+        # whole-cutout SSR was dominated by bright NEIGHBOURS and background, so
+        # a real saturated star next to a brighter one (sickle
+        # pillar_with_satstar A, 2"=~32 px from a 600k-count star) got
+        # ssr_ratio>1 and was wrongly rejected -> never subtracted.  A disk (not
+        # a thin ring) is essential: it spans the full core->background gradient,
+        # so ssr_before (cutout-median) is large and a good fit reduces it
+        # (ratio<1); a thin wing ring has little pre-fit variance, so subtracting
+        # the steep PSF wing ADDS variance (ratio>1) and rejects good fits.  The
+        # 15-px radius captures the LW PSF wings while excluding the 32-px
+        # neighbour.  Falls back to the whole cutout if too few disk pixels.
+        # EXPERIMENTAL: SSR_RADIUS_PIX may need per-filter tuning.
+        SSR_RADIUS_PIX = 15.0
+        _ssr_region = (_r2_c < SSR_RADIUS_PIX ** 2)
+        _fit_pix = (_ssr_region & (~mask)
+                    & np.isfinite(resid_cutout) & np.isfinite(cutout))
+        if int(_fit_pix.sum()) < 10:
+            # too few local pixels -> fall back to the whole-cutout SSR
+            _fit_pix = (~mask) & np.isfinite(resid_cutout) & np.isfinite(cutout)
         if _fit_pix.any():
             _ssr_after = float(np.sum(resid_cutout[_fit_pix] ** 2))
             _med_cut = float(np.median(cutout[_fit_pix]))
@@ -1211,6 +1241,11 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # accumulation happened before the accept check, so a rejected
             # bad fit still corrupted the cumulative satstar model.
             full_model_image[y0:y1, x0:x1] += model_image
+            # mark pixels this accepted fit actually used (unmasked in its window)
+            try:
+                flag_img[y0:y1, x0:x1][~mask] |= 4
+            except (ValueError, NameError):
+                pass
             # Also subtract from the working copy so subsequent fits in
             # this loop don't see this source's PSF wings (iterative
             # subtraction; pairs ordered by ``sat_area`` desc so the
@@ -1259,6 +1294,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         builtins.satstar_table = base_tab
         builtins.satstar_model = full_model_image
         builtins.satstar_resid = data - full_model_image
+        builtins.satstar_flagimg = flag_img
         return base_tab
 
 def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
@@ -1307,6 +1343,17 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
                 satstar_residual_filename, overwrite=overwrite
             )
             print(f"Saved saturated star residual image to {satstar_residual_filename}", flush=True)
+
+        if hasattr(builtins, 'satstar_flagimg'):
+            # uint8 bitmask: 1=partly saturated (nonlinear), 2=totally saturated
+            # (unrecoverable NaN), 4=included in a saturated-star fit.
+            fh_flag = fits.PrimaryHDU(data=builtins.satstar_flagimg, header=header)
+            fh_flag.header['FLAGBIT1'] = (1, 'partly saturated (nonlinear, recoverable)')
+            fh_flag.header['FLAGBIT2'] = (2, 'totally saturated (unrecoverable NaN)')
+            fh_flag.header['FLAGBIT4'] = (4, 'included in saturated-star fit')
+            fh_flag.writeto(filename.replace(".fits", f'{file_suffix}_satstar_flags.fits'),
+                            overwrite=overwrite)
+            print(f"Saved saturated star flag image", flush=True)
     else:
         print("No saturated stars found", flush=True)
         return

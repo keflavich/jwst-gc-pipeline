@@ -1391,7 +1391,40 @@ def load_satstar_catalog(filtername, target='brick',
 
     print(f"Using {len(fallback)} fallback saturated star catalogs for {filtername}")
     sat_tables = [Table.read(fn) for fn in fallback]
-    return table.vstack(sat_tables, metadata_conflicts='silent')
+    combined = table.vstack(sat_tables, metadata_conflicts='silent')
+    # The fallback globs the PER-EXPOSURE satstar catalogs, so the same physical
+    # saturated star appears once per frame it was fit in.  Without dedup,
+    # replace_saturated() add_row()s each copy -> the merged catalog gets N
+    # duplicate rows at one position (sickle cutouts showed a star 3-8x), and
+    # the merged-cat residual subtracts it N times.  Collapse to one row per
+    # physical star (keep the brightest as representative).
+    return _dedup_satstar_catalog(combined)
+
+
+def _dedup_satstar_catalog(tbl, radius=0.15 * u.arcsec):
+    """Collapse repeated per-frame satstar fits of the same physical star into
+    one row (the brightest), so downstream merging doesn't duplicate them."""
+    if tbl is None or len(tbl) <= 1 or 'skycoord_fit' not in tbl.colnames:
+        return tbl
+    coords = tbl['skycoord_fit']
+    finite = np.isfinite(coords.ra.deg) & np.isfinite(coords.dec.deg)
+    flux = np.asarray(tbl['flux_fit'], dtype=float) if 'flux_fit' in tbl.colnames \
+        else np.zeros(len(tbl))
+    order = np.argsort(-flux)  # brightest first -> representative per cluster
+    kept = []
+    for i in order:
+        if not finite[i]:
+            continue
+        if kept:
+            kc = SkyCoord([coords[j] for j in kept])
+            if kc.separation(coords[i]).min() < radius:
+                continue
+        kept.append(i)
+    n_drop = int(finite.sum()) - len(kept)
+    if n_drop:
+        print(f"  satstar dedup: {int(finite.sum())} -> {len(kept)} unique "
+              f"(dropped {n_drop} per-frame duplicates within {radius})")
+    return tbl[sorted(kept)]
 
 
 def flag_near_saturated(cat, filtername, radius=None, target='brick',
