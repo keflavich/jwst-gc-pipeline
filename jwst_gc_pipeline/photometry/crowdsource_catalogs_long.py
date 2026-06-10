@@ -2336,9 +2336,19 @@ def get_psf_model(filtername, proposal_id, field,
                 try:
                     Mast.login(api_token.strip())
                     break
-                except (requests.exceptions.ReadTimeout, urllib3.exceptions.ReadTimeoutError, TimeoutError) as ex:
-                    print(f"Attempt {ii} to log in to MAST: {ex}")
-                    time.sleep(5)
+                except (requests.exceptions.ReadTimeout,
+                        requests.exceptions.ConnectionError,
+                        urllib3.exceptions.ReadTimeoutError,
+                        urllib3.exceptions.ProtocolError,
+                        ConnectionError,
+                        TimeoutError) as ex:
+                    # Transient MAST hiccup (incl. RemoteDisconnected wrapped
+                    # in ConnectionError; this killed brick 34252892 + cloudc
+                    # 34252893 mid-run on 2026-06-10 after 3-7h of work).
+                    backoff = min(30, 2 ** ii)
+                    print(f"Attempt {ii} to log in to MAST: {type(ex).__name__}: {ex}; sleeping {backoff}s",
+                          flush=True)
+                    time.sleep(backoff)
             os.environ['MAST_API_TOKEN'] = api_token.strip()
 
             has_downloaded = False

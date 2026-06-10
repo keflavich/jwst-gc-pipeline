@@ -118,8 +118,16 @@ def get_psf(header, path_prefix='.', use_merged_psf_for_merged=False, fov_pixels
             os.environ['MAST_API_TOKEN'] = api_token.strip()
 
             psfgen.load_wss_opd_by_date(f'{obsdate}T00:00:00')
-        except (urllib3.exceptions.ReadTimeoutError, requests.exceptions.ReadTimeout, requests.HTTPError) as ex:
-            print(f"Failed to build PSF: {ex}")
+        except (urllib3.exceptions.ReadTimeoutError,
+                urllib3.exceptions.ProtocolError,
+                requests.exceptions.ReadTimeout,
+                requests.exceptions.ConnectionError,
+                requests.HTTPError,
+                ConnectionError) as ex:
+            # Transient MAST hiccup (incl. RemoteDisconnected wrapped in
+            # ConnectionError); proceed with whatever PSF state we have
+            # rather than crashing out of a multi-hour satstar grid build.
+            print(f"Failed to load WSS OPD from MAST: {type(ex).__name__}: {ex}")
 
         log.info(f"starfinding: Calculating grid for psf_fn={psf_fn}")
         # https://github.com/spacetelescope/webbpsf/blob/cc16c909b55b2a26e80b074b9ab79ed9a312f14c/webbpsf/webbpsf_core.py#L640
