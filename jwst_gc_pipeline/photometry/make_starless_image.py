@@ -109,6 +109,25 @@ TARGETS = {
         filters=['F150W', 'F200W', 'F277W'],
         catalog_rel_template='catalogs/seed_union_iter3_gc2211_o{field}.fits',
     ),
+    'wd1': dict(
+        basepath='/orange/adamginsburg/jwst/wd1',
+        filters=['F115W', 'F150W', 'F164N', 'F187N', 'F200W', 'F212N',
+                 'F277W', 'F323N', 'F405N', 'F444W', 'F466N'],
+        catalog_rel='catalogs/seed_union_iter3_wd1.fits',
+    ),
+    'wd2': dict(
+        basepath='/orange/adamginsburg/jwst/wd2',
+        filters=['F115W', 'F150W', 'F162M', 'F164N', 'F182M', 'F187N',
+                 'F200W', 'F212N', 'F250M', 'F277W', 'F300M', 'F323N',
+                 'F335M', 'F405N', 'F410M', 'F444W', 'F466N'],
+        catalog_rel='catalogs/seed_union_iter3_wd2.fits',
+    ),
+    'w51': dict(
+        basepath='/orange/adamginsburg/jwst/w51',
+        filters=['F115W', 'F140M', 'F150W', 'F162M', 'F182M', 'F187N',
+                 'F200W', 'F212N', 'F356W', 'F405N', 'F410M', 'F444W'],
+        catalog_rel='catalogs/seed_union_iter3_w51.fits',
+    ),
 }
 
 # ── algorithm parameters ──────────────────────────────────────────────────────

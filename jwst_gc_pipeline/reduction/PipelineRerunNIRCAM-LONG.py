@@ -95,10 +95,16 @@ fov_regname = {'brick': 'regions_/nircam_brick_fov.reg',
                }
 
 refnames = {'2221': 'F405ref',
-            '1182': 'VVV', # MAYBE need a different refcat for F115W?
+            # 1182 obs 004 = brick (Gaia untenable in GC, keep VVV).
+            # 1182 obs 002 / other = w51 (use Gaia -- W51 sits in the disk,
+            # not the GC, so Gaia DR3 is the right reference).  The pipeline
+            # uses (proposal_id, field) -> refcat path, so this label is
+            # informational only; the actual decision happens via
+            # REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD below.
+            '1182': 'VVV/Gaia',
             '3958': 'VVV',
             '5365': 'VVV',
-            '6151': 'UKIDSS', # gaia?
+            '6151': 'Gaia',  # w51: switched 2026-06-10 (was UKIDSS)
             '2092': 'VVV',
             '4147': 'VVV',
             # 2045 = arches (field 001) + quintuplet (field 003); both <0.25 deg
@@ -123,7 +129,10 @@ REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD = {
         '002': 'catalogs/crowdsource_based_nircam-f405n_reference_astrometric_catalog.ecsv',
     },
     '1182': {
+        # obs 004 = brick (kept on the original F405N self-bootstrap)
         '004': 'catalogs/crowdsource_based_nircam-f405n_reference_astrometric_catalog.ecsv',
+        # obs 002 = w51 short-wave coverage; use Gaia (W51 is in the disk)
+        '002': 'catalogs/gaia_refcat.fits',
     },
     '3958': {
         '007': 'catalogs/nircam_bootstrapped_to_gns_refcat.fits',
@@ -132,7 +141,8 @@ REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD = {
         '001': 'catalogs/crowdsource_based_nircam-f405n_reference_astrometric_catalog.ecsv',
     },
     '6151': {
-        '001': 'catalogs/crowdsource_based_nircam-f405n_reference_astrometric_catalog.ecsv',
+        # w51 main NIRCam pointing -- Gaia DR3 (disk field, not GC)
+        '001': 'catalogs/gaia_refcat.fits',
     },
     '2092': {
         # cloudef pointings: 002 (Cloud E) + 005 (Cloud F). Both outside
