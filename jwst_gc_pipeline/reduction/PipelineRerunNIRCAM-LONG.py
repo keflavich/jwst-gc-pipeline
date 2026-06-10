@@ -585,11 +585,23 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
             assert 'skycoord' in reftbl.colnames
         else:
             abs_refcat = get_reference_astrometric_catalog_path(basepath, proposal_id, field)
-            reftbl = Table.read(abs_refcat)
-            # For non-F410M, try aligning to F410M instead of VVV?
-            reftblversion = reftbl.meta['VERSION']
-            reftbl.meta['name'] = 'Reference Astrometric Catalog'
-            reftbl.meta['filename'] = abs_refcat
+            # The absolute reference catalog is only needed for the (derived)
+            # refcat-realignment that sets the mosaic's absolute zero point; the
+            # mosaic itself is produced by image3 regardless.  If it is missing
+            # (e.g. being rebuilt), degrade gracefully: skip refcat realign
+            # rather than crashing the whole reduction.
+            try:
+                reftbl = Table.read(abs_refcat)
+                # For non-F410M, try aligning to F410M instead of VVV?
+                reftblversion = reftbl.meta['VERSION']
+                reftbl.meta['name'] = 'Reference Astrometric Catalog'
+                reftbl.meta['filename'] = abs_refcat
+            except FileNotFoundError:
+                print(f"WARNING: reference astrometric catalog {abs_refcat} is "
+                      f"missing; skipping refcat realignment (mosaic still "
+                      f"produced; absolute zero point unset).", flush=True)
+                reftbl = None
+                reftblversion = None
 
             # truncate to top 10,000 sources
             # more recent versions are already truncated to only very high quality matches
@@ -617,11 +629,23 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
             reftbl.meta['name'] = f'VVV Reference Catalog {filtername}'
             assert 'skycoord' in reftbl.colnames
             abs_refcat = get_reference_astrometric_catalog_path(basepath, proposal_id, field)
-            reftbl = Table.read(abs_refcat)
-            # For non-F410M, try aligning to F410M instead of VVV?
-            reftblversion = reftbl.meta['VERSION']
-            reftbl.meta['name'] = 'Reference Astrometric Catalog'
-            reftbl.meta['filename'] = abs_refcat
+            # The absolute reference catalog is only needed for the (derived)
+            # refcat-realignment that sets the mosaic's absolute zero point; the
+            # mosaic itself is produced by image3 regardless.  If it is missing
+            # (e.g. being rebuilt), degrade gracefully: skip refcat realign
+            # rather than crashing the whole reduction.
+            try:
+                reftbl = Table.read(abs_refcat)
+                # For non-F410M, try aligning to F410M instead of VVV?
+                reftblversion = reftbl.meta['VERSION']
+                reftbl.meta['name'] = 'Reference Astrometric Catalog'
+                reftbl.meta['filename'] = abs_refcat
+            except FileNotFoundError:
+                print(f"WARNING: reference astrometric catalog {abs_refcat} is "
+                      f"missing; skipping refcat realignment (mosaic still "
+                      f"produced; absolute zero point unset).", flush=True)
+                reftbl = None
+                reftblversion = None
 
             # truncate to top 10,000 sources
             # more recent versions are already truncated to only very high quality matches
@@ -678,21 +702,25 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         else:
             print(f"Skipping VVV realignment for region {regionname} (module={module}, filter={filtername})")
 
-        print(f"Realigning to refcat (module={module}, filtername={filtername})")
-        realigned_refcat_filename = f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}{destreak_suffix}_realigned-to-refcat.fits'
-        shutil.copy(f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}_i2d.fits',
-                    realigned_refcat_filename)
-        print(f"Realigned refcat filename: {realigned_refcat_filename}")
-        realigned = realign_to_catalog(reftbl['skycoord'],
-                                       filtername=filtername.lower(),
-                                       basepath=basepath, module=module,
-                                       fieldnumber=field,
-                                       mag_limit=20, proposal_id=proposal_id,
-                                       max_offset=(0.4 if wavelength > 250 else 0.2)*u.arcsec,
-                                       imfile=realigned_refcat_filename,
-                                       #raoffset=raoffset, decoffset=decoffset
-                                       )
-        print(f"Done realigning to refcat (module={module}, filtername={filtername})")
+        if reftbl is None:
+            print(f"Skipping refcat realignment (no reference catalog) for "
+                  f"module={module}, filtername={filtername}", flush=True)
+        else:
+            print(f"Realigning to refcat (module={module}, filtername={filtername})")
+            realigned_refcat_filename = f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}{destreak_suffix}_realigned-to-refcat.fits'
+            shutil.copy(f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}_i2d.fits',
+                        realigned_refcat_filename)
+            print(f"Realigned refcat filename: {realigned_refcat_filename}")
+            realigned = realign_to_catalog(reftbl['skycoord'],
+                                           filtername=filtername.lower(),
+                                           basepath=basepath, module=module,
+                                           fieldnumber=field,
+                                           mag_limit=20, proposal_id=proposal_id,
+                                           max_offset=(0.4 if wavelength > 250 else 0.2)*u.arcsec,
+                                           imfile=realigned_refcat_filename,
+                                           #raoffset=raoffset, decoffset=decoffset
+                                           )
+            print(f"Done realigning to refcat (module={module}, filtername={filtername})")
 
         # saturated star "removal" should only be done in the cataloging stage
         # print(f"Removing saturated stars.  cwd={os.getcwd()}")
@@ -932,6 +960,26 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
             if 'nrca' in thismodule.lower():
                 decshift += 0.1*u.arcsec
                 rashift += -0.23*u.arcsec
+    elif (field == '002' and str(proposal_id) == '2092'):
+        # Cloud E (2092 obs002) is a 2-visit mosaic.  There is no per-frame
+        # absolute tweakreg here (TweakRegStep is skipped) and the post-resample
+        # realign is a single global median shift, so an internal visit-to-visit
+        # pointing difference passes straight through and blurs stars in the
+        # visit-001/002 overlap.  Measured offset (277 matched stars, F480M
+        # nrcblong overlap, 2026-06-10): visit002 - visit001 = (dRA -98, dDec
+        # +171) mas -- a PURE translation (linear-fit gradients <=0.3 mas/arcsec,
+        # residual <7 mas; no rotation/scale).  Bring visit 002 onto visit 001
+        # (verified in-WCS: this shift takes the overlap offset to (-6, -5) mas);
+        # the subsequent realign-to-refcat sets the common absolute zero point.
+        # The offset is a guide-star/pointing difference, so it is the same for
+        # all detectors/filters of the visit -> keyed on visit only.
+        visit = fn.split('_')[0][-3:]
+        if visit == '002':
+            rashift = 0.098*u.arcsec
+            decshift = -0.171*u.arcsec
+        else:
+            rashift = 0*u.arcsec
+            decshift = 0*u.arcsec
     else:
         rashift = 0*u.arcsec
         decshift = 0*u.arcsec

@@ -39,14 +39,34 @@ pl.rcParams['figure.dpi'] = 100
 # https://en.wikipedia.org/wiki/AB_magnitude
 ABMAG_OFFSET = 8.90
 
+# Keep in sync with crowdsource_catalogs_long.MIRI_FILTERS (not imported to
+# avoid pulling in that module's heavy webbpsf import chain).
+MIRI_FILTERS = frozenset(['f560w', 'f770w', 'f1000w', 'f1130w', 'f1280w',
+                          'f1500w', 'f1800w', 'f2100w', 'f2550w'])
+
+
+def _inst_token(filtername):
+    """Lowercased instrument token used in JWST i2d filename conventions."""
+    return 'miri' if str(filtername).lower() in MIRI_FILTERS else 'nircam'
+
+
+def _svo_filter_id(filtername):
+    """SVO FPS filterID (e.g. 'JWST/NIRCam.F480M', 'JWST/MIRI.F770W')."""
+    inst = 'MIRI' if str(filtername).lower() in MIRI_FILTERS else 'NIRCam'
+    return f'JWST/{inst}.{filtername.upper()}'
+
 filternames = filternames_narrow = ['f410m', 'f212n', 'f466n', 'f405n', 'f187n', 'f182m']
 all_filternames = ['f410m', 'f212n', 'f466n', 'f405n', 'f187n', 'f182m', 'f444w', 'f356w', 'f200w', 'f115w']
 obs_filters = {'brick': {'2221': filternames,
                          '1182': ['f444w', 'f356w', 'f200w', 'f115w'],
                          },
                'cloudc': {'2221': filternames},
-               'sickle': {'3958': ['f187n', 'f210m', 'f335m', 'f470n', 'f480m']},
-               'cloudef': {'2092': ['f162m', 'f210m', 'f360m', 'f480m']},
+               # sickle NIRCam (obs 007) + MIRI (obs 001/002/003)
+               'sickle': {'3958': ['f187n', 'f210m', 'f335m', 'f470n', 'f480m',
+                                   'f770w', 'f1130w', 'f1500w']},
+               # cloudef NIRCam (obs 002/005) + MIRI (obs 004/006/008)
+               'cloudef': {'2092': ['f162m', 'f210m', 'f360m', 'f480m',
+                                    'f770w', 'f2100w']},
                'sgrc': {'4147': ['f115w', 'f162m', 'f182m', 'f212n', 'f360m', 'f405n', 'f470n', 'f480m']},
                'sgrb2': {'5365': ['f150w', 'f182m', 'f187n', 'f210m', 'f212n', 'f300m', 'f360m', 'f405n', 'f410m', 'f466n', 'f480m']},
                'arches': {'2045': ['f212n', 'f323n']},
@@ -79,7 +99,10 @@ project_obsnum = {'brick': {'2221': '001',
                             },
                   'cloudc': {'2221': '002',
                              },
-                  'sickle': {'3958': '007',
+                  # sickle NIRCam is obs 007 but the MIRI pointings are obs
+                  # 001/002/003; use a wildcard (the per-filter glob already
+                  # disambiguates because the filter token is in the name).
+                  'sickle': {'3958': '*',
                              },
                   # cloudef (proposal 2092) covers Cloud E (obs 002, t001)
                   # and Cloud F (obs 005, t002) as two adjacent pointings.
@@ -137,7 +160,7 @@ def sanity_check_individual_table(tbl):
 
     jfilts = SvoFps.get_filter_list('JWST')
     jfilts.add_index('filterID')
-    zeropoint = u.Quantity(jfilts.loc[f'JWST/NIRCam.{filtername.upper()}']['ZeroPoint'], u.Jy)
+    zeropoint = u.Quantity(jfilts.loc[_svo_filter_id(filtername)]['ZeroPoint'], u.Jy)
 
     flux_jy = tbl['flux_jy'][finite_fluxes].quantity
     abmag_tbl = tbl['mag_ab'][finite_fluxes].quantity
@@ -1097,7 +1120,7 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
               for obsid in obs_filters[target]
               for filn in obs_filters[target][obsid]
               for x in glob.glob(f"{basepath}/{filn.upper()}/pipeline/"
-                                 f"jw0{obsid}-o{project_obsnum[target][obsid]}_t001_nircam*{filn.lower()}*{module}_i2d.fits")
+                                 f"jw0{obsid}-o{project_obsnum[target][obsid]}_t001_{_inst_token(filn)}*{filn.lower()}*{module}_i2d.fits")
               if f'{module}_' in x or f'{module}1_' in x
              ]
 
@@ -1184,7 +1207,7 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
             with warnings.catch_warnings():
                 warnings.simplefilter('ignore')
                 filtername = tbl.meta["filter"]
-                zeropoint = u.Quantity(jfilts.loc[f'JWST/NIRCam.{filtername.upper()}']['ZeroPoint'], u.Jy)
+                zeropoint = u.Quantity(jfilts.loc[_svo_filter_id(filtername)]['ZeroPoint'], u.Jy)
                 print(f"Zeropoint for {filtername} is {zeropoint}.  Max flux is {flux_jy.max()}")
                 abmag = -2.5 * np.log10(flux_jy / zeropoint) * u.mag
                 abmag_err = 2.5 / np.log(10) * np.abs(eflux_jy / flux_jy) * u.mag
@@ -1250,7 +1273,7 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
     imgfns = [x
               for filn in filternames
               for _proj in (_project_for_target_filter(target, filn),)
-              for x in glob.glob(f"{basepath}/{filn.upper()}/pipeline/jw0{_proj}-o{project_obsnum[target][_proj]}_t001_nircam*{filn.lower()}*{module}_i2d.fits")
+              for x in glob.glob(f"{basepath}/{filn.upper()}/pipeline/jw0{_proj}-o{project_obsnum[target][_proj]}_t001_{_inst_token(filn)}*{filn.lower()}*{module}_i2d.fits")
               if f'{module}_' in x or f'{module}1_' in x
              ]
 
@@ -1339,7 +1362,7 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
 
         with np.errstate(all='ignore'):
             flux_jy = (flux * u.MJy/u.sr * tbl.meta['pixelscale_deg2']).to(u.Jy)
-            zeropoint = u.Quantity(jfilts.loc[f'JWST/NIRCam.{filtername.upper()}']['ZeroPoint'], u.Jy)
+            zeropoint = u.Quantity(jfilts.loc[_svo_filter_id(filtername)]['ZeroPoint'], u.Jy)
             vegamag = -2.5 * np.log10(flux_jy / zeropoint) * u.mag
             abmag = (-2.5 * np.log10(flux_jy / u.Jy) + ABMAG_OFFSET) * u.mag
             try:
@@ -1398,13 +1421,20 @@ def load_satstar_catalog(filtername, target='brick',
     # gc2211 has obs 023/028/046/049/050) don't have a single primary
     # i2d satstar; fall back to globbing the per-exposure satstar
     # catalogs in the pipeline directory.
-    if target in project_obsnum and proj in project_obsnum[target]:
+    # The single-file "primary" satstar product only exists for NIRCam
+    # (the *_nircam_clear-<filt>-merged_i2d naming); MIRI runs always use
+    # the per-exposure fallback below.
+    if (_inst_token(filtername) == 'nircam'
+            and target in project_obsnum and proj in project_obsnum[target]):
         primary = (f'{basepath}/{filtername.upper()}/pipeline/'
                    f'jw0{proj}-o{project_obsnum[target][proj]}'
                    f'_t001_nircam_clear-{filtername}-merged_i2d_satstar_catalog.fits')
-        if os.path.exists(primary):
-            print(f"Using saturated star catalog {primary}")
-            return Table.read(primary)
+        # project_obsnum may hold a glob wildcard for multi-obs targets
+        # (sickle/cloudef/gc2211), so resolve via glob rather than exists().
+        primary_matches = sorted(glob.glob(primary))
+        if len(primary_matches) == 1:
+            print(f"Using saturated star catalog {primary_matches[0]}")
+            return Table.read(primary_matches[0])
 
     fallback = sorted(glob.glob(f'{basepath}/{filtername.upper()}/pipeline/*satstar_catalog.fits'))
     if len(fallback) == 0:
@@ -1487,6 +1517,17 @@ def flag_near_saturated(cat, filtername, radius=None, target='brick',
                   'f466n': 0.55*u.arcsec,
                   'f470n': 0.55*u.arcsec,
                   'f480m': 0.55*u.arcsec,
+                  # MIRI: scale the 0.55" NIRCam value by the PSF FWHM ratio
+                  # relative to F480M (0.16" FWHM) -> ~3.4x FWHM
+                  'f560w': 0.7*u.arcsec,
+                  'f770w': 0.9*u.arcsec,
+                  'f1000w': 1.1*u.arcsec,
+                  'f1130w': 1.3*u.arcsec,
+                  'f1280w': 1.45*u.arcsec,
+                  'f1500w': 1.7*u.arcsec,
+                  'f1800w': 2.0*u.arcsec,
+                  'f2100w': 2.3*u.arcsec,
+                  'f2550w': 2.75*u.arcsec,
                   }[filtername]
 
     satfinite = np.isfinite(satstar_coords.ra.deg) & np.isfinite(satstar_coords.dec.deg)
@@ -1563,13 +1604,24 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
                   'f466n': 0.1*u.arcsec,
                   'f470n': 0.1*u.arcsec,
                   'f480m': 0.1*u.arcsec,
+                  # MIRI: 0.11"/pix vs NIRCam LW 0.063"/pix; scale the 0.1"
+                  # LW match radius accordingly (positions are coarser)
+                  'f560w': 0.2*u.arcsec,
+                  'f770w': 0.2*u.arcsec,
+                  'f1000w': 0.2*u.arcsec,
+                  'f1130w': 0.25*u.arcsec,
+                  'f1280w': 0.25*u.arcsec,
+                  'f1500w': 0.3*u.arcsec,
+                  'f1800w': 0.35*u.arcsec,
+                  'f2100w': 0.4*u.arcsec,
+                  'f2550w': 0.5*u.arcsec,
                   }[filtername]
 
     fwhm_tbl = Table.read(f'{fwhm_basepath or basepath}/reduction/fwhm_table.ecsv')
     fwhm = u.Quantity(fwhm_tbl[fwhm_tbl['Filter'] == filtername.upper()]['PSF FWHM (arcsec)'], u.arcsec)
 
     filtername_meta = cat.meta.get('filter', filtername)
-    zeropoint = u.Quantity(jfilts.loc[f'JWST/NIRCam.{filtername_meta.upper()}']['ZeroPoint'], u.Jy)
+    zeropoint = u.Quantity(jfilts.loc[_svo_filter_id(filtername_meta)]['ZeroPoint'], u.Jy)
 
     pixelscale_deg2 = cat.meta.get('pixelscale_deg2', None)
     if pixelscale_deg2 is not None:
