@@ -227,7 +227,8 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
         seed['y_init'] = yseed[over]
         forced = forced_psf_photometry(data, dao_psf_model, seed,
                                        error=np.where(bad, 1e10, err),
-                                       mask=mask, fit_shape=(5, 5))
+                                       mask=mask, fit_shape=(5, 5),
+                                       nonnegative=True)
         if 'forced_refit' not in res.colnames:
             res['forced_refit'] = np.zeros(len(res), dtype=bool)
         idx = np.where(over)[0]
@@ -252,10 +253,14 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
     # A PSF is strictly positive, so flux_fit <= 0 is a negative-peak model: it
     # ADDS flux to the residual rather than subtracting a star, and (because the
     # next iteration seeds from this catalog) it breeds more spurious negatives
-    # at over-subtracted spots -- the pillar_with_satstar iter6 explosion.  The
-    # closed-form forced refit (above) is unbounded and is the main source; the
-    # bounded LevMar (flux.min=0) can also land at ~0.  Drop them outright so
-    # they never enter the catalog or the seed.
+    # at over-subtracted spots -- the pillar_with_satstar iter6 explosion.
+    # Negatives are PRODUCED by the closed-form forced refit (above): its
+    # unconstrained f = sum(d*p*w)/sum(p^2*w) goes negative wherever the local
+    # data is net-negative (neighbour / satstar / smoothed-bg over-subtraction,
+    # hence the m5+ onset).  We now clamp that refit (nonnegative=True), and the
+    # bounded LevMar group fit respects flux.min=0; this ban is the final safety
+    # net (e.g. an exact-0 clamp lands here) so non-positives never enter the
+    # catalog or the seed.
     res = phot.results
     fpos = np.asarray(res['flux_fit'], dtype=float) > 0
     n_neg = int(len(fpos) - np.sum(fpos))

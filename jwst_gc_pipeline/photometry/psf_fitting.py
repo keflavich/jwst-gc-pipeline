@@ -128,9 +128,19 @@ class CachingGriddedPSFModel(GriddedPSFModel):
 def forced_psf_photometry(image, psf_model, init_params, *,
                           error=None, mask=None,
                           fit_shape=(5, 5),
-                          aperture_radius=4):
+                          aperture_radius=4,
+                          nonnegative=False):
     """Closed-form linear flux solve at the (fixed) positions in
     ``init_params``.  Bypasses photutils LM entirely.
+
+    ``nonnegative`` clamps the solved flux at 0.  The unconstrained
+    closed-form ``f = sum(d*p*w) / sum(p^2*w)`` goes NEGATIVE wherever the
+    local data under the PSF is net-negative (neighbour / satstar / smoothed-
+    background over-subtraction).  A single strictly-positive PSF cannot have
+    negative flux, so for the photometry refit path this must be clamped:
+    a negative solve means "no positive source consistent with the (over-
+    subtracted) data here" -> flux 0 (then dropped by the non-positive ban).
+    Left ``False`` by default so other callers keep the signed estimator.
 
     Parameters
     ----------
@@ -207,7 +217,8 @@ def forced_psf_photometry(image, psf_model, init_params, *,
         if sxx <= 0:
             continue
         sxy = float((data * psf_stamp * w).sum())
-        flux_fit[i] = sxy / sxx
+        _f = sxy / sxx
+        flux_fit[i] = max(_f, 0.0) if nonnegative else _f
         flux_err[i] = 1.0 / np.sqrt(sxx)
         npix_fit[i] = int((w > 0).sum())
 
