@@ -803,7 +803,11 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         check_wcs(asn_data['products'][0]['name'] + "_i2d.fits")
 
         vvv_region_file = f"{basepath}/{fov_regname[regionname]}" if regionname in fov_regname else None
-        if vvv_region_file is not None and os.path.exists(vvv_region_file):
+        # Only run VVV realignment for targets whose refnames is 'VVV'.  Gaia /
+        # GNS / UKIDSS targets (Wd1, Wd2, W51, GC fields) must skip this
+        # because retrieve_vvv returns no rows outside VVV coverage.
+        if (vvv_region_file is not None and os.path.exists(vvv_region_file)
+                and refnames.get(proposal_id) == 'VVV'):
             print(f"Realigning to VVV (module={module})")
             realigned_vvv_filename = f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}{destreak_suffix}_realigned-to-vvv.fits'
             print(f"Realigned to VVV filename: {realigned_vvv_filename}")
@@ -818,7 +822,8 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
                            mag_limit=18 if filtername.lower() == 'f115w' else 15,
                            )
         else:
-            print(f"Skipping VVV realignment for region {regionname}: no valid FOV region file")
+            print(f"Skipping VVV realignment for region {regionname} (refnames={refnames.get(proposal_id)!r}): "
+                  f"either no FOV region or non-VVV reference catalog")
 
         if reftbl is not None:
             print(f"Realigning to refcat (module={module})")
@@ -1029,7 +1034,7 @@ if __name__ == "__main__":
 
 
     field_to_reg_mapping = {'2221': {'001': 'brick', '002': 'cloudc'},
-                            '1182': {'004': 'brick'},
+                            '1182': {'004': 'brick', '002': 'w51'},
                             '5365': {'001': 'sgrb2'},
                             '6151': {'001': 'w51'},
                             '3958': {'007': 'sickle', '001': 'sickle', '002': 'sickle'},
@@ -1040,6 +1045,8 @@ if __name__ == "__main__":
                             '2211': {'023': 'gc2211', '028': 'gc2211',
                                      '046': 'gc2211', '049': 'gc2211',
                                      '050': 'gc2211'},
+                            '1905': {'001': 'wd1', '003': 'wd1'},
+                            '3523': {'003': 'wd2', '005': 'wd2'},
                             }[proposal_id]
 
     for field in fields:
