@@ -1,9 +1,19 @@
 # Photometry pipeline
 
+<!--
+  DOC SYNC — last reviewed 2026-06-10, repo commit 17d0861 (+ uncommitted fixes).
+  This is the IMPLEMENTATION-facing doc (flags, tokens, file names, behaviours).
+  Its science-narrative companion is PIPELINE_METHODS.md (publication-style, no
+  code). KEEP THE TWO IN SYNC: when the algorithm changes, update BOTH and bump
+  the stamp in BOTH. PIPELINE_METHODS.md = "what & why"; this file = "how & where".
+-->
+
 This is **the** PSF-photometry pipeline (`jwst_gc_pipeline.photometry.cataloging`),
 the default path as of 2026-06-09. It implements the recipe in
 `PSFPhotometryPlan2026-06-09.md`. The previous `IterativePSFPhotometry` path is
-retained only as an explicit opt-out (`--legacy-iterations`).
+retained only as an explicit opt-out (`--legacy-iterations`). For the
+science-method narrative (publication style, no code), see
+[`PIPELINE_METHODS.md`](PIPELINE_METHODS.md).
 
 ## Why this replaced `IterativePSFPhotometry`
 
@@ -92,10 +102,23 @@ source-masked smoothed background fed to the next pass.
   `flux_fit <= 0` is a negative-peak model. These are dropped at the fitter and
   excluded from seeds — they never enter a catalog and cannot breed more
   negatives at over-subtracted spots.
-- **Overshoot QC + forced refit.** Fits whose rendered model peak exceeds
-  `--manual-overshoot-ratio` × the local data peak are, by default, re-fit as
-  forced photometry pinned at the trusted seed position (flux free), then the
-  result is positivity-checked.
+- **Overshoot QC + forced refit.** After each single-pass fit, every source's
+  rendered model **peak** is compared to the local **data** peak. A model peak
+  exceeding `--manual-overshoot-ratio` × the data peak is physically impossible
+  for one positive PSF and signals that the free-position fit let the centroid
+  **walk off the star** and settle at an inflated flux (the exact instability
+  that retired `IterativePSFPhotometry`). By default (`--manual-overshoot-action=refit`)
+  each flagged source is re-measured by **forced photometry**
+  (`forced_psf_photometry`): the position is **pinned at the trusted daofind/seed
+  position** (not the drifted fit position) and only the flux is solved. With
+  position fixed the model is linear in flux, so the flux is the exact
+  closed-form weighted least-squares value `f = Σ(d·p·w)/Σ(p²·w)` — one cheap
+  step (~80× faster than a fixed-position LM fit, which matters when dozens of
+  sources/frame are flagged), with no opportunity to re-drift. That closed form
+  is unbounded, so on background-/neighbour-subtracted data it can go negative;
+  the refit therefore clamps flux ≥ 0 (`nonnegative=True`) and the negative-peak
+  ban is the final net. See `forced_psf_photometry`'s docstring for the full
+  rationale.
 - **Grouping.** With `--group`, sources closer than
   `--manual-group-min-sep-fwhm` × FWHM are fit jointly. `min_separation` is a
   grouping *radius* (larger = group wider pairs); use ~3·FWHM to jointly fit

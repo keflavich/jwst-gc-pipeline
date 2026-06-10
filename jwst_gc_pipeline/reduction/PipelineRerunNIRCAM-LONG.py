@@ -90,6 +90,8 @@ fov_regname = {'brick': 'regions_/nircam_brick_fov.reg',
                'arches': 'regions_/nircam_arches_fov.reg',
                'quintuplet': 'regions_/nircam_quintuplet_fov.reg',
                'sgra': 'regions_/nircam_sgra_fov.reg',
+               'wd1': 'regions_/nircam_wd1_fov.reg',
+               'wd2': 'regions_/nircam_wd2_fov.reg',
                }
 
 refnames = {'2221': 'F405ref',
@@ -106,6 +108,11 @@ refnames = {'2221': 'F405ref',
             # 1939 = sgra, the inner GC field: GNS
             '1939': 'GNS',
             '2211': 'GNS',
+            # Westerlund 1 (Guarcello prop 1905) + Westerlund 2 (Guarcello prop 3523).
+            # Both clusters are outside the deep Galactic Center, so Gaia DR3 is
+            # the correct astrometric reference (NOT GNS, NOT VVV).
+            '1905': 'Gaia',
+            '3523': 'Gaia',
             }
 
 # Reference catalog configuration by proposal and field.
@@ -159,6 +166,14 @@ REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD = {
         # the standard bootstrap uses, so use a raw GNS refcat tailored to
         # obs 028's FOV instead.
         '028': 'catalogs/gns_refcat_obs028.fits',
+    },
+    # Westerlund 1 / Westerlund 2 main pointings: Gaia DR3 is the
+    # astrometric reference (outside GC, no GNS/VVV needed).
+    '1905': {
+        '001': 'catalogs/gaia_refcat.fits',
+    },
+    '3523': {
+        '005': 'catalogs/gaia_refcat.fits',
     },
 }
 
@@ -303,6 +318,12 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
     elif regionname == 'sgra':
         if proposal_id == '1939':
             assert field == '001'
+    elif regionname == 'wd1':
+        if proposal_id == '1905':
+            assert field in ('001', '003')
+    elif regionname == 'wd2':
+        if proposal_id == '3523':
+            assert field in ('003', '005')
 
     if "CRDS_PATH" not in os.environ:
         os.environ["CRDS_PATH"] = f"{basepath}/crds/"

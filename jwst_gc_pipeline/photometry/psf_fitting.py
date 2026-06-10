@@ -133,6 +133,34 @@ def forced_psf_photometry(image, psf_model, init_params, *,
     """Closed-form linear flux solve at the (fixed) positions in
     ``init_params``.  Bypasses photutils LM entirely.
 
+    When and why it is used
+    -----------------------
+    Used in ONE place: the *overshoot-refit* step of the manual-iteration
+    pipeline (``cataloging._manual_phot_pass``, with
+    ``--manual-overshoot-action=refit``, the default).  After each single-pass
+    BASIC ``PSFPhotometry`` fit, an overshoot check
+    (``_filter_or_flag_model_overshoot``) flags any source whose rendered model
+    PEAK exceeds ``--manual-overshoot-ratio`` x the local DATA peak.  That is
+    physically impossible for a single positive PSF and is the signature of the
+    free-position fit having let the centroid WALK OFF the star and settle at an
+    inflated-flux minimum (the failure mode that motivated replacing
+    ``IterativePSFPhotometry``).  Each flagged source is then re-fit here.
+
+    Two properties make this the right tool for that refit:
+
+    * **Position pinned at the trusted SEED** (``x_init``/``y_init``), not the
+      drifted ``x_fit``.  The whole failure is the centroid wandering, so the
+      flux must be re-measured where the star actually is (the seed), not where
+      the bad fit drifted to.  With position fixed, the model is LINEAR in flux,
+      so the weighted least-squares flux has the exact closed form
+      ``f = sum(d*p*w) / sum(p^2*w)``  (``sigma_f = 1/sqrt(sum(p^2*w))``) -- no
+      iteration, no chance of re-drifting.
+    * **~80x faster** than spinning up a fixed-position LM fit per source, which
+      matters because the seed-driven passes can flag dozens of sources/frame.
+
+    The flux is returned at the seed position; downstream the caller snaps
+    ``x_fit``/``y_fit`` back to the seed and clears the overshoot flag.
+
     ``nonnegative`` clamps the solved flux at 0.  The unconstrained
     closed-form ``f = sum(d*p*w) / sum(p^2*w)`` goes NEGATIVE wherever the
     local data under the PSF is net-negative (neighbour / satstar / smoothed-
