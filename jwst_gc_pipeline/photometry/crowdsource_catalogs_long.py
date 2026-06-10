@@ -3990,6 +3990,13 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                '2045': {'arches': 1, 'quintuplet': 1},
                '1939': {'sgra': 1},
                '2211': {'gc2211': 1},
+               # Westerlund 1 (1905) + Westerlund 2 (3523): each proposal has one
+               # main pointing per target.
+               '1905': {'wd1': 1},
+               '3523': {'wd2': 1},
+               # w51 already exists in this codebase under proposals 1182 (obs 004)
+               # and 6151 (obs 001).  Re-assert Gaia as ref via PipelineRerunNIRCAM-LONG.
+               '6151': {'w51': 1},
                }
     # 2211 is an asteroid-survey program with 5 separate GC pointings; all
     # map to the same 'gc2211' target/basepath, distinguished only by field.
@@ -4003,7 +4010,11 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             '1939': {'001': 'sgra'},
                             '2211': {'023': 'gc2211', '028': 'gc2211',
                                      '046': 'gc2211', '049': 'gc2211',
-                                     '050': 'gc2211'}}[proposal_id]
+                                     '050': 'gc2211'},
+                            '1905': {'001': 'wd1', '003': 'wd1'},
+                            '3523': {'003': 'wd2', '005': 'wd2'},
+                            '6151': {'001': 'w51'},
+                            }[proposal_id]
     reg_to_field_mapping = {v:k for k,v in field_to_reg_mapping.items()}
     # When multiple fields share a target (e.g. proposal 2211 / gc2211 has
     # 5 GC pointings 023/028/046/049/050), the inverted mapping collapses to
@@ -4069,7 +4080,7 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
             )
         modules = filtered_modules
 
-    if field_to_reg_mapping[field] in ('sickle', 'cloudef', 'sgrc', 'sgrb2', 'arches', 'quintuplet', 'sgra', 'gc2211'):
+    if field_to_reg_mapping[field] in ('sickle', 'cloudef', 'sgrc', 'sgrb2', 'arches', 'quintuplet', 'sgra', 'gc2211', 'wd1', 'wd2', 'w51'):
         basepath = f'/orange/adamginsburg/jwst/{field_to_reg_mapping[field]}/'
     else:
         basepath = f'/blue/adamginsburg/adamginsburg/jwst/{field_to_reg_mapping[field]}/'

@@ -53,6 +53,12 @@ obs_filters = {'brick': {'2221': filternames,
                'quintuplet': {'2045': ['f212n', 'f323n']},
                'sgra': {'1939': ['f115w', 'f212n', 'f405n']},
                'gc2211': {'2211': ['f150w', 'f200w', 'f277w']},
+               # Westerlund 1 (Guarcello 1905) + Westerlund 2 (Guarcello 3523)
+               'wd1': {'1905': ['f115w', 'f150w', 'f164n', 'f187n', 'f200w', 'f212n',
+                                'f277w', 'f323n', 'f405n', 'f444w', 'f466n']},
+               'wd2': {'3523': ['f115w', 'f150w', 'f162m', 'f164n', 'f182m', 'f187n',
+                                'f200w', 'f212n', 'f250m', 'f277w', 'f300m', 'f323n',
+                                'f335m', 'f405n', 'f410m', 'f444w', 'f466n']},
                }
 
 # Using the 'brick' keyword here makes it work for now, need to figure out how to
@@ -94,6 +100,10 @@ project_obsnum = {'brick': {'2221': '001',
                   # files from any of the 5 pointings.
                   'gc2211': {'2211': '*',
                              },
+                  'wd1': {'1905': '001',
+                          },
+                  'wd2': {'3523': '005',
+                          },
                   }
 
 
