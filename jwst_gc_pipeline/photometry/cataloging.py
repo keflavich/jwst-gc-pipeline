@@ -60,6 +60,8 @@ from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
 
 import os
 import types
+import traceback
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from astropy.io import fits
 from astropy import wcs
 from astropy import units as u
@@ -1009,6 +1011,34 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
 # ---------------------------------------------------------------------------
 # Orchestrator (mirrors _run_cutout_pipeline; manual phases, basic-only)
 # ---------------------------------------------------------------------------
+def _run_one_frame_manual(args):
+    """Pickleable per-frame worker for ProcessPoolExecutor parallelism in
+    ``run_manual_pipeline``.  ``args`` is a dict whose keys mirror the kwargs of
+    ``do_photometry_step_manual``.  Returns ``(filename, ok, err_str_or_None)``.
+    Catches ``_L.CutoutNoOverlap`` (non-fatal: frame doesn't overlap cutout)
+    and any other exception (logged, frame skipped) so a single bad frame
+    can't kill the whole phase.
+    """
+    filename = args['filename']
+    try:
+        do_photometry_step_manual(
+            args['options'], args['filtername'], args['module'], args['detector'],
+            args['field'], args['basepath'], filename, args['proposal_id'],
+            manual_phase=args['manual_phase'],
+            exposurenumber=args['exposurenumber'],
+            visit_id=args['visit_id'], vgroup_id=args['vgroup_id'],
+            bg_boxsizes=args['bg_boxsizes'],
+            use_webbpsf=args['use_webbpsf'], pupil=args['pupil'],
+            prev_seed_catalog=args['prev_seed_catalog'],
+            resbg_path=args['resbg_path'])
+        return (filename, True, None)
+    except _L.CutoutNoOverlap as ex:
+        return (filename, False, f'no-overlap: {ex}')
+    except Exception as ex:
+        return (filename, False,
+                f'{type(ex).__name__}: {ex}\n{traceback.format_exc()}')
+
+
 def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         target, field, basepath, crowdsource_default_kwargs,
                         bg_boxsizes):
@@ -1128,26 +1158,62 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 else:
                     candidate_frames = frame_cache.get((module, filt), [])
 
-                overlapping_now = []
+                # Build per-frame work units.  Per-frame fits within a phase
+                # are independent (phase-level dependencies only); parallelize
+                # them across N workers when ``--parallel-workers > 1``.
+                frame_args = []
                 for filename in candidate_frames:
                     exposure_id = filename.split("_")[2]
                     visit_id = filename.split("_")[0][-3:]
                     vgroup_id = filename.split("_")[1]
                     file_detector = filename.split("_")[3]
                     file_module = file_detector if module == 'merged' else module
-                    try:
-                        do_photometry_step_manual(
-                            opts_phase, filt, file_module, file_detector, field,
-                            basepath, filename, proposal_id,
-                            manual_phase=phase, exposurenumber=int(exposure_id),
-                            visit_id=visit_id, vgroup_id=vgroup_id,
-                            bg_boxsizes=bg_boxsizes, use_webbpsf=True, pupil=pupil,
-                            prev_seed_catalog=prev_seed, resbg_path=resbg_path)
-                    except _L.CutoutNoOverlap as ex:
-                        print(f"manual [{phase}]: skip non-overlapping {filename} ({ex})",
-                              flush=True)
-                        continue
-                    overlapping_now.append(filename)
+                    frame_args.append({
+                        'options': opts_phase, 'filtername': filt,
+                        'module': file_module, 'detector': file_detector,
+                        'field': field, 'basepath': basepath,
+                        'filename': filename, 'proposal_id': proposal_id,
+                        'manual_phase': phase,
+                        'exposurenumber': int(exposure_id),
+                        'visit_id': visit_id, 'vgroup_id': vgroup_id,
+                        'bg_boxsizes': bg_boxsizes,
+                        'use_webbpsf': True, 'pupil': pupil,
+                        'prev_seed_catalog': prev_seed,
+                        'resbg_path': resbg_path,
+                    })
+
+                max_workers = max(1, int(getattr(options, 'parallel_workers', 1) or 1))
+                overlapping_now = []
+                if max_workers > 1 and len(frame_args) > 1:
+                    n_workers = min(max_workers, len(frame_args))
+                    print(f"manual [{phase}]: fitting {len(frame_args)} frames "
+                          f"with {n_workers} parallel workers", flush=True)
+                    with ProcessPoolExecutor(max_workers=n_workers) as ex:
+                        futures = {ex.submit(_run_one_frame_manual, a): a['filename']
+                                   for a in frame_args}
+                        for fut in as_completed(futures):
+                            filename, ok, err = fut.result()
+                            if not ok:
+                                if err and err.startswith('no-overlap'):
+                                    print(f"manual [{phase}]: skip non-overlapping "
+                                          f"{filename} ({err})", flush=True)
+                                else:
+                                    print(f"manual [{phase}]: frame FAILED {filename}: "
+                                          f"{err}", flush=True)
+                                continue
+                            overlapping_now.append(filename)
+                else:
+                    for a in frame_args:
+                        filename, ok, err = _run_one_frame_manual(a)
+                        if not ok:
+                            if err and err.startswith('no-overlap'):
+                                print(f"manual [{phase}]: skip non-overlapping "
+                                      f"{filename} ({err})", flush=True)
+                            else:
+                                print(f"manual [{phase}]: frame FAILED {filename}: "
+                                      f"{err}", flush=True)
+                            continue
+                        overlapping_now.append(filename)
 
                 if phase == phases[0]:
                     frame_cache[(module, filt)] = overlapping_now

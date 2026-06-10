@@ -38,17 +38,30 @@ filter (e.g. `nrcb` → `nrcblong` for F480M and `nrcb1..4` for F210M):
 `--cutout-region` accepts a DS9 `.reg` file or an `'ra,dec,size_arcsec'` string;
 `--cutout-label` names the output tree under `<basepath>/cutouts/<label>/`.
 
+Full-frame is the same command without `--cutout-region`/`--cutout-label`:
+
+```
+python -m jwst_gc_pipeline.photometry.crowdsource_catalogs_long \
+    --filternames=F480M --modules=nrcb \
+    --proposal_id=3958 --field=007 --target=sickle \
+    --each-suffix=destreak_o007_crf --each-exposure --daophot --skip-crowdsource \
+    --group --max-group-size=10 --manual-group-min-sep-fwhm=3.0
+```
+
 To use the old `IterativePSFPhotometry` path instead:
 
 ```
     --legacy-iterations ...
 ```
 
-**Implementation status:** the default-on switch is wired for in-process cutout
-runs (`--cutout-region` + `--each-exposure`), which is where it currently runs
-end to end. Full-frame / SLURM-array routing through this same pipeline is the
-remaining plumbing; until then a full-frame run falls through to the legacy
-per-exposure loop. The algorithm below is the default regardless.
+**Single in-process job (not a SLURM array).** Each phase detects on the
+*previous* phase's merged residual mosaic, so the phases are strictly sequential
+and the whole run executes in one process — full-frame or cutout. Run it as a
+single (non-array) job: with `SLURM_ARRAY_TASK_ID` set the run aborts with a
+message telling you to drop `--array` (or pass `--legacy-iterations` for the old
+array-parallel per-exposure path). Full-frame outputs land in place under
+`<basepath>/<FILTER>/pipeline/` and `<basepath>/catalogs/`; cutout runs are
+namespaced under `<basepath>/cutouts/<label>/`.
 
 ## The iterations
 
@@ -105,8 +118,13 @@ Under `<basepath>/cutouts/<label>/`:
   plus `_vetted` and `_allcols` variants. Carry `skycoord`, `flux`, `qfit`,
   `iter_found`, etc.
 - `<filt>/pipeline/...-<module>_data_i2d.fits` — input data mosaic.
-- `..._m{N}_..._mergedcat_residual_i2d.fits` — residual mosaic per phase.
-- `..._m{N}_..._mergedcat_model_i2d.fits` — model mosaic per phase.
+- `..._m{N}_..._mergedcat_residual_i2d.fits` — residual mosaic per phase
+  (point-source models subtracted; saturated stars already removed via the
+  per-frame satstar model).
+- `..._m{N}_..._mergedcat_model_i2d.fits` — model mosaic per phase. **For display
+  it includes the saturated-star model added back** on top of the fitted
+  point-source model, so it overlays against the data; the residual above is
+  unaffected (satstars are not re-subtracted).
 - `..._m{N}_..._mergedcat_residual_smoothed_bg_i2d.fits` — background map.
 
 The iteration tokens (`_m1.._m7`, `_dao_basic`) are disjoint from the legacy
@@ -133,8 +151,9 @@ control is the default.
 
 ## Known limitations
 
-- End-to-end coverage is cutout-in-process today; full-frame / SLURM-array
-  routing through this pipeline is the remaining plumbing.
+- Runs as a single in-process job; it does not (yet) shard per-exposure fits
+  across a SLURM array, so a large full-frame multi-filter run is long-but-linear
+  in one process rather than array-parallel.
 - Cross-band seed is a plain union (stringent multi-filter cut is a TODO).
 - Faint sources blended on the wings of much brighter or saturated stars may be
   detected but dropped by the fit/dedup; resolving these needs fit-side
