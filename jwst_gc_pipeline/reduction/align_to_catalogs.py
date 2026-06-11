@@ -152,12 +152,41 @@ def retrieve_vvv(
     fov_regname='regions/nircam_brick_fov.reg',
     fieldnumber='001',
 ):
-    fov = regions.Regions.read(os.path.join(basepath, fov_regname))
-
-    coord = fov[0].center
-    height = fov[0].height
-    width = fov[0].width
-    height, width = width, height # CARTA wrote it wrong
+    # VVV query region.  Prefer the actual image footprint (``imfile``): the FOV
+    # region file holds only ONE box (``fov[0]``), so for a multi-pointing target
+    # (e.g. cloudef = Cloud E obs002 + Cloud F obs005, which are disjoint on sky)
+    # using fov[0] queries VVV in the wrong region for every observation that
+    # isn't fov[0]'s footprint -> 0 crossmatches in realign_to_catalog (the
+    # symptom that masqueraded as "no VVV overlap").  Deriving the region from
+    # the image being aligned is correct for any pointing.
+    if imfile is not None and os.path.exists(imfile):
+        with fits.open(imfile) as _hl:
+            _names = [h.name for h in _hl]
+            _hdr = _hl['SCI'].header if 'SCI' in _names else _hl[0].header
+            _w = WCS(_hdr)
+            _fp = _w.calc_footprint()   # (N,2) RA,Dec of corners, deg
+        _ra_lo, _ra_hi = float(_fp[:, 0].min()), float(_fp[:, 0].max())
+        _dec_lo, _dec_hi = float(_fp[:, 1].min()), float(_fp[:, 1].max())
+        _dec_c = 0.5 * (_dec_lo + _dec_hi)
+        _cosd = np.cos(np.radians(_dec_c))
+        coord = SkyCoord(0.5 * (_ra_lo + _ra_hi), _dec_c, unit='deg', frame='icrs')
+        # angular box covering the footprint + 15% margin (RA span -> on-sky via cos dec)
+        width = (_ra_hi - _ra_lo) * _cosd * 1.15 * u.deg
+        height = (_dec_hi - _dec_lo) * 1.15 * u.deg
+        log.info(f"retrieve_vvv: VVV query from {os.path.basename(imfile)} "
+                 f"footprint center={coord.to_string('hmsdms')} "
+                 f"width={width.to(u.arcmin):.2f} height={height.to(u.arcmin):.2f}")
+    else:
+        # Legacy fallback: single FOV box.  WRONG for multi-pointing targets;
+        # only safe when fov[0] actually covers the image being aligned.
+        log.warning(f"retrieve_vvv: no usable imfile ({imfile!r}); falling back to "
+                    f"fov[0] of {fov_regname} for the VVV query region -- this is "
+                    f"incorrect for multi-pointing targets.")
+        fov = regions.Regions.read(os.path.join(basepath, fov_regname))
+        coord = fov[0].center
+        height = fov[0].height
+        width = fov[0].width
+        height, width = width, height # CARTA wrote it wrong
 
     vvvdr4filename = f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{fieldnumber}_t001_nircam_clear-{filtername}-{module}_vvvcat.ecsv'
 
@@ -206,7 +235,7 @@ def realign_to_vvv(
     ksmag_limit is a *lower* limit (we want fainter sources from VVV), while mag_limit is an *upper limit* - we want brighter sources from JWST
     """
 
-    vvvdr4_crds, vvvdr4 = retrieve_vvv(basepath=basepath, filtername=filtername, module=module, fov_regname=fov_regname, fieldnumber=fieldnumber)
+    vvvdr4_crds, vvvdr4 = retrieve_vvv(basepath=basepath, filtername=filtername, module=module, fov_regname=fov_regname, fieldnumber=fieldnumber, proposal_id=proposal_id, imfile=imfile)
 
     if ksmag_limit:
         ksmag_priority = (
