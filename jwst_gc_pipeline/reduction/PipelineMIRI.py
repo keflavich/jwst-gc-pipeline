@@ -182,7 +182,17 @@ def main(filtername, Observations=None, regionname='brick',
         assert proposal_id == '3958'
         assert field in ('001', '002', '003')
 
-    os.environ["CRDS_PATH"] = f"{basepath}/crds/"
+    # Use the per-target CRDS cache when it is writable; some target caches
+    # (e.g. cloudc) are owned by another user and CRDS cannot update them for
+    # newer contexts, so fall back to the shared brick cache in that case.
+    crds_path = f"{basepath}/crds/"
+    crds_mapdir = os.path.join(crds_path, 'mappings', 'jwst')
+    if os.path.isdir(crds_mapdir) and not os.access(crds_mapdir, os.W_OK):
+        print(f"CRDS cache {crds_path} is not writable; using shared brick cache instead")
+        crds_path = "/orange/adamginsburg/jwst/brick/crds/"
+    else:
+        os.makedirs(crds_mapdir, exist_ok=True)
+    os.environ["CRDS_PATH"] = crds_path
     os.environ["CRDS_SERVER_URL"] = "https://jwst-crds.stsci.edu"
     mpl.rcParams['savefig.dpi'] = 80
     mpl.rcParams['figure.dpi'] = 80
@@ -270,7 +280,7 @@ def main(filtername, Observations=None, regionname='brick',
         else:
             raise ValueError(f"Mismatch: Did not find any asn files for field {field} in {output_dir}")
 
-        mapping = crds.rmap.load_mapping(f'/orange/adamginsburg/jwst/{regionname}/crds/mappings/jwst/jwst_miri_pars-tweakregstep_0003.rmap')
+        mapping = crds.rmap.load_mapping(f'{os.environ["CRDS_PATH"]}/mappings/jwst/jwst_miri_pars-tweakregstep_0003.rmap')
         print(f"Mapping: {mapping.todict()['selections']}")
         print(f"Filtername: {filtername}")
         filter_match = [x for x in mapping.todict()['selections'] if filtername.upper() in x]
@@ -390,11 +400,19 @@ def main(filtername, Observations=None, regionname='brick',
         else:
             print(f"No reference catalog found for proposal_id={proposal_id} field={field} in {basepath}; running without abs_refcat")
 
+        # subtract=True is essential: with subtract=False the matched sky
+        # levels are only recorded, so outlier_detection's median image sees
+        # the raw inter-visit thermal-background jumps and flags entire
+        # regions as OUTLIER in every frame -> resample gets zero valid
+        # inputs -> large NaN patches (brick F2550W showed 87-99% OUTLIER
+        # fractions in its NaN zones; fixed by this + gentler snr,
+        # validated 2026-06-10, jw02221-o002 f2550w pipeline_v2 experiment).
         skymatch_params = {'save_results': True,
-                           'subtract': False,
+                           'subtract': True,
                            'skymethod': 'match',
                            'match_down': False}
-        outlier_params = {'good_bits': "SATURATED, JUMP_DET"}
+        outlier_params = {'snr': '30.0 25.0',
+                          'good_bits': "SATURATED, JUMP_DET"}
         if marshall_tuning:
             skymatch_params = {'save_results': True,
                                'subtract': True,
@@ -451,11 +469,18 @@ def fix_alignment(fn, proposal_id=None, regionname='brick', field=None, basepath
     if basepath is None:
         basepath = f'/orange/adamginsburg/jwst/{regionname}'
 
-    print("TODO: calculate MIRI offsets and implement them")
-    # Default Brick/CloudC offset.
-    rashift = -3.895 * u.arcsec
-    decshift = 1.28 * u.arcsec
-    # Marshall W51 tuning: use a small global RA correction for MIRI.
+    # 2026-06-11: the historical "Brick/CloudC" shift (-3.895", +1.28") was
+    # measured offset-histogram-stacking the final mosaics against the NIRCam
+    # reference catalogs to be the dominant astrometric ERROR, not a fix:
+    # sickle o003 and cloudc F2550W both come out displaced by ~(-3.4..-3.5",
+    # +1.4..+1.5") -- i.e. by this shift -- because modern raw pointing is
+    # already good and tweakreg's search radii (0.05"/0.4") cannot recover a
+    # 4" imposed offset.  Default is now NO shift; per-target values can be
+    # reinstated here if a target is shown (by offset-histogram measurement,
+    # not nearest-neighbor matching!) to need one.
+    rashift = 0 * u.arcsec
+    decshift = 0 * u.arcsec
+    # Marshall W51 tuning: small global RA correction for MIRI.
     if regionname == 'w51':
         rashift = 0.2 * u.arcsec
         decshift = 0 * u.arcsec
