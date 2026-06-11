@@ -98,14 +98,14 @@ for fn in members:
     f2['DQ'].data = dq
     f2[1].header['COLPROF'] = (float(np.nanmax(np.abs(cp_s))),
                                'max |column-profile corr| [MJy/sr] 2026-06-11')
-    outfn = fn.replace('_align.fits', '_colprofcorr.fits')
+    outfn = fn.replace('_align.fits', SUFFIX)
     f2.writeto(outfn, overwrite=True)
     new_members.append(outfn)
     print(f'{os.path.basename(fn)}: max|colprof|={np.nanmax(np.abs(cp_s)):.0f} '
           f'east-50-col mean={np.nanmean(cp_s[-90:-40]):+.0f} MJy/sr', flush=True)
 
 from jwst.pipeline import calwebb_image3
-name = 'jw02221-o002_t001_miri_f2550w_v5'
+name = f'jw02221-o002_t001_miri_f2550w_{OUT_TAG}'
 asn_data['products'][0]['name'] = name
 asn_data['products'][0]['members'] = [
     {'expname': fn, 'exptype': 'science'} for fn in new_members]
@@ -124,8 +124,8 @@ calwebb_image3.Image3Pipeline.call(
     save_results=True)
 
 v2a = fits.open(f'{outdir}/jw02221-o002_t001_miri_f2550w_v2a_i2d.fits')['SCI'].data
-v5 = fits.open(f'{outdir}/{name}_i2d.fits')['SCI'].data
-for label, img in [('v2a', v2a), ('v5', v5)]:
+vnew = fits.open(f'{outdir}/{name}_i2d.fits')['SCI'].data
+for label, img in [('v2a', v2a), (OUT_TAG, vnew)]:
     for xseam in (1609, 1572):
         jumps = []
         for y0 in range(450, 800, 50):
