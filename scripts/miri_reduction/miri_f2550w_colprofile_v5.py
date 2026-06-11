@@ -29,6 +29,7 @@ Procedure:
     correction.
 """
 import os
+import sys
 import json
 import numpy as np
 from astropy.io import fits
@@ -48,8 +49,15 @@ os.environ["CRDS_SERVER_URL"] = "https://jwst-crds.stsci.edu"
 
 TRIM_EAST, TRIM_WEST, TRIM_ROWS = 40, 16, 12
 
-# reference: v4 mosaic with its CRVAL correction undone (frames are uncorrected)
-ref_fh = fits.open(f'{outdir}/jw02221-o002_t001_miri_f2550w_v4_i2d.fits')
+# iterate: pass reference tag and output tag (default v4 -> v5).  The
+# consensus reference itself contains residual glow on the first pass, so a
+# second iteration (v5 -> v6) tightens the correction.
+REF_TAG = sys.argv[1] if len(sys.argv) > 1 else 'v4'
+OUT_TAG = sys.argv[2] if len(sys.argv) > 2 else 'v5'
+SUFFIX = f'_colprofcorr_{OUT_TAG}.fits'
+
+# reference mosaic with its CRVAL correction undone (frames are uncorrected)
+ref_fh = fits.open(f'{outdir}/jw02221-o002_t001_miri_f2550w_{REF_TAG}_i2d.fits')
 ref_hdr = ref_fh[1].header.copy()
 if 'OLCRVAL1' in ref_hdr:
     ref_hdr['CRVAL1'] = ref_hdr['OLCRVAL1']
