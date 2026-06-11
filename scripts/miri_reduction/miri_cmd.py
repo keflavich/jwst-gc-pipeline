@@ -117,6 +117,46 @@ for col, (title, obs) in enumerate(FIELDS.items()):
         mb[ok] = cats[b][1][idx[ok]]
         tab[f'mag_{b}'] = mb
         print(f'  matched F770W-{b}: {ok.sum()}')
+    # F2550W (o003 only: the Brick-bg field lies inside the brick F2550W
+    # mosaic; both carry corrected WCS, so positions transfer directly).
+    # Forced aperture photometry at the F770W positions; keep S/N>3.
+    if obs == 'o003':
+        fn25 = '/orange/adamginsburg/jwst/brick/F2550W/pipeline/jw02221-o002_t001_miri_f2550w_i2d.fits'
+        fh25 = fits.open(fn25)
+        d25 = fh25['SCI'].data
+        ww25 = WCS(fh25['SCI'].header)
+        pixscale = np.sqrt(np.abs(np.linalg.det(ww25.pixel_scale_matrix))) * 3600
+        pixar_sr = (pixscale / 206265.)**2
+        fwhm25 = 0.803
+        x, y = ww25.world_to_pixel(sc7)
+        ap = CircularAperture(np.transpose([x, y]), r=1.5 * fwhm25 / pixscale)
+        ann = CircularAnnulus(np.transpose([x, y]), r_in=2.5 * fwhm25 / pixscale,
+                              r_out=4.0 * fwhm25 / pixscale)
+        astats = ApertureStats(d25, ann)
+        flux_jy = (aperture_photometry(d25, ap)['aperture_sum']
+                   - astats.median * ap.area) * 1e6 * pixar_sr
+        noise_jy = astats.std * np.sqrt(ap.area) * 1e6 * pixar_sr
+        snr25 = np.asarray(flux_jy / noise_jy)
+        zp25 = float(jfilts.loc['JWST/MIRI.F2550W']['ZeroPoint'])
+        m25 = np.full(len(sc7), np.nan)
+        det = np.isfinite(snr25) & (snr25 > 3) & (np.asarray(flux_jy) > 0)
+        m25[det] = -2.5 * np.log10(np.asarray(flux_jy)[det] / zp25)
+        # forced-aperture values are dominated by the structured nebular
+        # background (they form a slope-1 locus in the CMD); keep them in a
+        # separate column and flag genuine 25um POINT-SOURCE detections by
+        # matching DAOFind detections on the F2550W mosaic itself.
+        tab['mag_F2550W_forced'] = m25
+        mf25 = median_filter(np.nan_to_num(d25, nan=np.nanmedian(d25)), size=31)
+        hp25 = np.nan_to_num(d25) - mf25
+        s25 = DAOStarFinder(threshold=5 * mad_std(hp25), fwhm=7.3)(hp25)
+        xc25 = 'x_centroid' if 'x_centroid' in s25.colnames else 'xcentroid'
+        sc25det = ww25.pixel_to_world(s25[xc25], s25[xc25.replace('x', 'y')])
+        idx25, sep25, _ = sc7.match_to_catalog_sky(sc25det)
+        ps = sep25 < 0.5 * u.arcsec
+        m25ps = np.where(ps, m25, np.nan)
+        tab['mag_F2550W'] = m25ps
+        print(f'  F2550W: {det.sum()} forced S/N>3 (nebula-contaminated); '
+              f'{np.isfinite(m25ps).sum()} matched 25um point sources')
     out = f'/orange/adamginsburg/jwst/sickle/catalogs/{obs}_miri_cmd_matched.fits'
     tab.write(out, overwrite=True)
     print(f'  wrote {out}')
@@ -137,3 +177,26 @@ pl.tight_layout()
 outpng = '/blue/adamginsburg/adamginsburg/logs/miri_phot/miri_cmds.png'
 pl.savefig(outpng, dpi=130, bbox_inches='tight')
 print('wrote', outpng)
+
+# F2550W CMDs for the Brick-bg field
+t3 = Table.read('/orange/adamginsburg/jwst/sickle/catalogs/o003_miri_cmd_matched.fits')
+fig2, axs2 = pl.subplots(1, 2, figsize=(11, 5.5), sharey=True)
+for ax, blue in zip(axs2, ('F770W', 'F1500W')):
+    cforced = t3[f'mag_{blue}'] - t3['mag_F2550W_forced']
+    okf = np.isfinite(cforced)
+    ax.scatter(cforced[okf], t3['mag_F770W'][okf], s=6, color='0.7',
+               label='forced aper. (nebula-dominated)')
+    color = t3[f'mag_{blue}'] - t3['mag_F2550W']
+    ok = np.isfinite(color)
+    ax.scatter(color[ok], t3['mag_F770W'][ok], s=40, color='crimson',
+               label='25um point sources')
+    ax.set_xlabel(f'[{blue}] - [F2550W]')
+    ax.set_title(f'o003 (Brick bg)  n_ps={ok.sum()}')
+    ax.legend(loc='lower left', fontsize=8)
+axs2[0].set_ylabel('[F770W] (Vega)')
+axs2[0].invert_yaxis()
+pl.suptitle('Brick bg field: CMDs vs F2550W (forced phot on brick mosaic)', fontsize=13)
+pl.tight_layout()
+outpng2 = '/blue/adamginsburg/adamginsburg/logs/miri_phot/miri_cmds_f2550w.png'
+pl.savefig(outpng2, dpi=130, bbox_inches='tight')
+print('wrote', outpng2)
