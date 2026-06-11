@@ -123,8 +123,15 @@ for fn in members:
     diff = np.where((dq & 1) == 0, d - refproj, np.nan)
     if MODE == '2d':
         from astropy.convolution import convolve_fft, Gaussian2DKernel
-        clip2d = sigma_clip(diff, sigma=3, maxiters=3)  # global clip: stars/CRs
-        diffc = np.where(clip2d.mask, np.nan, diff)
+        from astropy.stats import mad_std as _mad
+        # clip STARS/CRs only, via a local high-pass: a global sigma-clip of
+        # `diff` removes the glow itself (it is the >3sigma tail of the diff
+        # distribution) -- that bug made v7/v8 corrections ~0.
+        filled = np.where(np.isfinite(diff), diff, np.nanmedian(diff))
+        lowpass = median_filter(filled, size=15)
+        resid = diff - lowpass
+        starmask = np.abs(resid) > 3 * _mad(resid, ignore_nan=True)
+        diffc = np.where(starmask, np.nan, diff)
         corr = convolve_fft(diffc, Gaussian2DKernel(24), nan_treatment='interpolate',
                             allow_huge=True, preserve_nan=False)
         corr[~np.isfinite(diff)] = 0.0
