@@ -19,7 +19,12 @@ there even for non-brick datasets.
 |---|---|---|
 | `miri_f2550w_image3_rerun_v2.py` | `/orange/adamginsburg/jwst/brick/reduction_scripts/` | Re-run image3 only (tweakreg skipped) on brick F2550W with skymatch(subtract=True) + outlier snr='30.0 25.0', writing to `pipeline_v2/`; the experiment that diagnosed/fixed the OUTLIER-overflag NaN holes and background seams.  Edit `asn_file`, `pipedir`, `variants` to adapt to another target. |
 | `apply_measured_miri_wcs_offsets.py` | `/orange/adamginsburg/jwst/brick/reduction_scripts/` | Apply offset-histogram-measured astrometric corrections to MIRI i2d FITS headers (CRVAL shift; ASDF gwcs left untouched, flagged with MIRIWCSN).  Idempotent via MIRIDRA/MIRIDDE keywords.  Contains `refine_offset()` -- the density-robust offset-histogram registration that should eventually move into `align_to_catalogs.py`. |
-| `f2550w_source_validation_o003.py` | `/orange/adamginsburg/jwst/brick/reduction_scripts/` | Validate brick F2550W point sources against the sickle SICKLE-MIR-BACKGROUND (jw03958-o003) F770W/F1130W/F1500W frames (which lie inside the F2550W mosaic): forced aperture photometry in all four bands at corrected positions, 7.7-25.5 um spectral index, YSO-vs-evolved classification.  Writes `brick/catalogs/f2550w_sources_o003_validation.fits`. |
+| `miri_f2550w_tile_homogenize_v3.py` | `/orange/adamginsburg/jwst/brick/reduction_scripts/` | Per-visit-tile background-plane homogenization: fit each tile's low-order deviation from the consensus mosaic (sigma-clipped plane), subtract (mean plane restored), rebuild image3.  Removes the residual tile-boundary seams that constant-per-frame skymatch cannot (frame edge brightening is variable frame-to-frame). |
+
+Analysis scripts (source validation/classification, CMDs) live in
+`brick-jwst-2221/brick2221/analysis/` (`f2550w_source_validation_o003.py`,
+`miri_cmd.py`) -- jwst-gc-pipeline is for pipeline work, brick2221 for
+analysis work.
 
 ## Key lessons encoded in these scripts
 
