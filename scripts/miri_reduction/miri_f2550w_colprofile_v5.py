@@ -134,7 +134,11 @@ for fn in members:
         diffc = np.where(starmask, np.nan, diff)
         corr = convolve_fft(diffc, Gaussian2DKernel(24), nan_treatment='interpolate',
                             allow_huge=True, preserve_nan=False)
-        corr[~np.isfinite(diff)] = 0.0
+        # keep the interpolated correction across reference-coverage holes
+        # (e.g. the narrow inter-tile-column strip that the E100 reference
+        # mask empties: zeroing there left an uncorrected band exactly at
+        # the seam in v9); zero only where the FRAME itself is invalid.
+        corr[(dq & 1) > 0] = 0.0
         corr = np.nan_to_num(corr)
         cp_s = corr  # for the logging line below
         f2['SCI'].data = (d - corr).astype(d.dtype)
