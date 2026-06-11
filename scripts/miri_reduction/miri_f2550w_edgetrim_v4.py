@@ -27,7 +27,7 @@ outdir = f'{basepath}/F2550W/pipeline_v2'
 os.environ["CRDS_PATH"] = f"{basepath}/crds/"
 os.environ["CRDS_SERVER_URL"] = "https://jwst-crds.stsci.edu"
 
-TRIM_EAST = 40   # high-x detector columns (worst edge glow)
+TRIM_EAST = int(os.environ.get('TRIM_EAST', 40))   # high-x detector columns (worst edge glow)
 TRIM_WEST = 16   # beyond the coronagraph/NON_SCIENCE region
 TRIM_ROWS = 12
 
@@ -54,14 +54,14 @@ for fn in members:
     f2['DQ'].data = dq
     f2[1].header['EDGETRIM'] = (f'E{TRIM_EAST} W{TRIM_WEST} R{TRIM_ROWS}',
                                 'edge columns/rows DQ-flagged 2026-06-11')
-    outfn = fn.replace('_align.fits', '_edgetrim.fits')
+    outfn = fn.replace('_align.fits', '_edgetrim' + os.environ.get('OUT_NAME','v4')[-3:].strip('_') + '.fits')
     f2.writeto(outfn, overwrite=True)
     new_members.append(outfn)
 print(f'wrote {len(new_members)} edge-trimmed frames '
       f'(sci cols {lo}-{hi}, trims E{TRIM_EAST}/W{TRIM_WEST}/rows{TRIM_ROWS})')
 
 from jwst.pipeline import calwebb_image3
-name = 'jw02221-o002_t001_miri_f2550w_v4'
+name = os.environ.get('OUT_NAME', 'jw02221-o002_t001_miri_f2550w_v4')
 asn_data['products'][0]['name'] = name
 asn_data['products'][0]['members'] = [
     {'expname': fn, 'exptype': 'science'} for fn in new_members]
