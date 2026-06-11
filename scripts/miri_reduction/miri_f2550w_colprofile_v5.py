@@ -54,6 +54,13 @@ TRIM_EAST, TRIM_WEST, TRIM_ROWS = 40, 16, 12
 # second iteration (v5 -> v6) tightens the correction.
 REF_TAG = sys.argv[1] if len(sys.argv) > 1 else 'v4'
 OUT_TAG = sys.argv[2] if len(sys.argv) > 2 else 'v5'
+# 'col' = 1D per-column profile (v5/v6; insufficient: the edge glow also
+# varies ALONG the columns, which is exactly the y-dependent seam jump);
+# '2d' = subtract a smoothed 2D (frame - consensus) map (v7): pulls every
+# frame to the consensus on >=7" scales in overlap regions, eliminating
+# seams by construction; single-coverage regions have diff ~= 0 (the
+# consensus there IS this frame), so they are unaffected.
+MODE = sys.argv[3] if len(sys.argv) > 3 else 'col'
 SUFFIX = f'_colprofcorr_{OUT_TAG}.fits'
 
 # reference mosaic with its CRVAL correction undone (frames are uncorrected)
@@ -80,13 +87,24 @@ for fn in members:
     ww = WCS(f2['SCI'].header)
     refproj, _ = reproject_interp((ref, ref_wcs), ww, shape_out=d.shape)
     diff = np.where((dq & 1) == 0, d - refproj, np.nan)
-    clipped = sigma_clip(diff, sigma=3, maxiters=3, axis=0)
-    colprof = np.ma.median(clipped, axis=0).filled(np.nan)
-    # smooth; fill gaps with 0 (no correction where unconstrained)
-    cp = np.where(np.isfinite(colprof), colprof, 0.0)
-    cp_s = median_filter(cp, size=15)
-    cp_s[~np.isfinite(colprof)] = 0.0
-    f2['SCI'].data = (d - cp_s[None, :]).astype(d.dtype)
+    if MODE == '2d':
+        from astropy.convolution import convolve_fft, Gaussian2DKernel
+        clip2d = sigma_clip(diff, sigma=3, maxiters=3)  # global clip: stars/CRs
+        diffc = np.where(clip2d.mask, np.nan, diff)
+        corr = convolve_fft(diffc, Gaussian2DKernel(24), nan_treatment='interpolate',
+                            allow_huge=True, preserve_nan=False)
+        corr[~np.isfinite(diff)] = 0.0
+        corr = np.nan_to_num(corr)
+        cp_s = corr  # for the logging line below
+        f2['SCI'].data = (d - corr).astype(d.dtype)
+    else:
+        clipped = sigma_clip(diff, sigma=3, maxiters=3, axis=0)
+        colprof = np.ma.median(clipped, axis=0).filled(np.nan)
+        # smooth; fill gaps with 0 (no correction where unconstrained)
+        cp = np.where(np.isfinite(colprof), colprof, 0.0)
+        cp_s = median_filter(cp, size=15)
+        cp_s[~np.isfinite(colprof)] = 0.0
+        f2['SCI'].data = (d - cp_s[None, :]).astype(d.dtype)
     # edge trim as in v4
     colgood = ((dq & 1) == 0).any(axis=0)
     sci_cols = np.where(colgood)[0]
