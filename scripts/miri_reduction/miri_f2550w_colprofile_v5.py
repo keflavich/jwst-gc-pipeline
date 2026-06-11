@@ -79,6 +79,40 @@ members = [m['expname'] if os.path.isabs(m['expname'])
            else os.path.join(pipedir, m['expname'])
            for m in asn_data['products'][0]['members']]
 
+if MODE == '2dref':
+    # An image3 mosaic as reference is itself glow-contaminated in overlap
+    # strips (it averages the glowy edge columns in), so 2d correction
+    # against it converges to a half-amplitude artifact ridge (v7 result).
+    # Build a clean reference instead: median stack of reprojected frames
+    # with a generous 100-column east mask (and 24-col west / 16-row), so
+    # only frame interiors contribute.
+    REFMASK_E, REFMASK_W, REFMASK_R = 100, 24, 16
+    ny, nx = ref.shape
+    stack = np.full((len(members), ny, nx), np.nan, dtype='float32')
+    for i, fn in enumerate(members):
+        f2 = fits.open(fn)
+        d = f2['SCI'].data.copy()
+        dq = f2['DQ'].data
+        bad = (dq & 1) > 0
+        colgood = (~bad).any(axis=0)
+        sci_cols = np.where(colgood)[0]
+        lo, hi = sci_cols.min(), sci_cols.max()
+        d[:, hi - REFMASK_E + 1:] = np.nan
+        d[:, :lo + REFMASK_W] = np.nan
+        d[:REFMASK_R, :] = np.nan
+        d[-REFMASK_R:, :] = np.nan
+        d[bad] = np.nan
+        r, _ = reproject_interp((d, WCS(f2['SCI'].header)), ref_wcs,
+                                shape_out=(ny, nx))
+        stack[i] = r
+        f2.close()
+    ref = np.nanmedian(stack, axis=0)
+    del stack
+    print(f'built interior-only median reference '
+          f'(masks E{REFMASK_E}/W{REFMASK_W}/R{REFMASK_R}); '
+          f'finite frac {np.isfinite(ref).mean():.3f}', flush=True)
+    MODE = '2d'
+
 new_members = []
 for fn in members:
     f2 = fits.open(fn)
