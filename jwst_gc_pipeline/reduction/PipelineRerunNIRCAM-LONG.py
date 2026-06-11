@@ -95,13 +95,16 @@ fov_regname = {'brick': 'regions_/nircam_brick_fov.reg',
                }
 
 refnames = {'2221': 'F405ref',
-            # 1182 obs 004 = brick (Gaia untenable in GC, keep VVV).
-            # 1182 obs 002 / other = w51 (use Gaia -- W51 sits in the disk,
-            # not the GC, so Gaia DR3 is the right reference).  The pipeline
-            # uses (proposal_id, field) -> refcat path, so this label is
-            # informational only; the actual decision happens via
-            # REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD below.
-            '1182': 'VVV/Gaia',
+            # 1182 obs 004 = brick (uses an F200W-derived offsets table on disk
+            # at offsets/Offsets_JWST_Brick1182_F200ref_average.csv, baked
+            # in by the original Aug-2024 reduction).  refnames[proposal_id]
+            # is used by fix_alignment() to build that filename, so changing
+            # it without renaming the offsets file breaks the merged-module
+            # destreak step.  Use 'F200ref' to match the existing offsets file;
+            # the refcat decision (Gaia for w51 obs 002 vs F200W-bootstrap for
+            # brick obs 004) lives in REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD
+            # below + the per-filter override.
+            '1182': 'F200ref',
             '3958': 'VVV',
             '5365': 'VVV',
             '6151': 'Gaia',  # w51: switched 2026-06-10 (was UKIDSS)
@@ -204,7 +207,25 @@ MODULES_BY_PROPOSAL_FIELD_FILTER = {
 }
 
 
-def get_reference_astrometric_catalog_path(basepath, proposal_id, field):
+# Per-filter overrides for the (proposal_id, field) refcat lookup.  Lets
+# us hand a different refcat to one specific filter (e.g. brick-1182
+# F115W tweakreg, where the F405N-based refcat has poor blue-star
+# overlap).  Lookup precedence is filter > field default.
+REFERENCE_ASTROMETRIC_CATALOG_BY_FILTER = {
+    '1182': {
+        '004': {
+            'F115W': 'catalogs/crowdsource_based_nircam-f200w_reference_astrometric_catalog.fits',
+        },
+    },
+}
+
+
+def get_reference_astrometric_catalog_path(basepath, proposal_id, field, filtername=None):
+    if filtername is not None:
+        override = (REFERENCE_ASTROMETRIC_CATALOG_BY_FILTER
+                    .get(proposal_id, {}).get(field, {}).get(filtername.upper()))
+        if override is not None:
+            return f'{basepath}/{override}'
     if proposal_id not in REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD:
         raise KeyError(f"No reference catalog mapping configured for proposal_id={proposal_id}")
     if field not in REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD[proposal_id]:
@@ -213,7 +234,14 @@ def get_reference_astrometric_catalog_path(basepath, proposal_id, field):
     return f'{basepath}/{relpath}'
 
 
-def get_existing_reference_astrometric_catalog_path(basepath, proposal_id, field):
+def get_existing_reference_astrometric_catalog_path(basepath, proposal_id, field, filtername=None):
+    if filtername is not None:
+        override = (REFERENCE_ASTROMETRIC_CATALOG_BY_FILTER
+                    .get(proposal_id, {}).get(field, {}).get(filtername.upper()))
+        if override is not None:
+            path = f'{basepath}/{override}'
+            if os.path.exists(path):
+                return path
     if proposal_id not in REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD:
         return None
     if field not in REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD[proposal_id]:
@@ -584,7 +612,7 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
             reftbl.meta['name'] = f'VVV Reference Catalog {filtername}'
             assert 'skycoord' in reftbl.colnames
         else:
-            abs_refcat = get_reference_astrometric_catalog_path(basepath, proposal_id, field)
+            abs_refcat = get_reference_astrometric_catalog_path(basepath, proposal_id, field, filtername=filtername)
             # The absolute reference catalog is only needed for the (derived)
             # refcat-realignment that sets the mosaic's absolute zero point; the
             # mosaic itself is produced by image3 regardless.  If it is missing
@@ -628,7 +656,7 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
             reftbl = Table.read(abs_refcat)
             reftbl.meta['name'] = f'VVV Reference Catalog {filtername}'
             assert 'skycoord' in reftbl.colnames
-            abs_refcat = get_reference_astrometric_catalog_path(basepath, proposal_id, field)
+            abs_refcat = get_reference_astrometric_catalog_path(basepath, proposal_id, field, filtername=filtername)
             # The absolute reference catalog is only needed for the (derived)
             # refcat-realignment that sets the mosaic's absolute zero point; the
             # mosaic itself is produced by image3 regardless.  If it is missing
@@ -794,7 +822,7 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
             reftbl = Table.read(abs_refcat)
             assert 'skycoord' in reftbl.colnames
         else:
-            abs_refcat = get_existing_reference_astrometric_catalog_path(basepath, proposal_id, field)
+            abs_refcat = get_existing_reference_astrometric_catalog_path(basepath, proposal_id, field, filtername=filtername)
             reftbl = None
             if abs_refcat is not None:
                 reftbl = Table.read(abs_refcat)
