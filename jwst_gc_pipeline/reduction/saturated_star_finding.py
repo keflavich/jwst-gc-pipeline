@@ -1498,14 +1498,35 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         #                subtracting a constant (white-point / "no
         #                star" failure mode in 0310g_00002).  Indicates
         #                no real source at the proposed position.
-        accept_source = (result is not None
-                         and np.isfinite(fluxerr)
-                         and snr > _snr_min_keep
-                         and flux > 0
-                         and (not np.isfinite(qfit) or qfit < _qfit_max_keep)
-                         and (not np.isfinite(sidelobe_resid_sigma)
-                              or sidelobe_resid_sigma > _sidelobe_min_keep)
-                         and (not np.isfinite(ssr_ratio) or ssr_ratio < _ssr_ratio_max_keep))
+        if _is_miri:
+            # MIRI: the ssr_ratio gate is dropped entirely.  ssr_ratio compares
+            # the residual to (data - median) in the inner annulus; for bright
+            # MIRI cores the gridded-PSF first/second-ring shape mismatches the
+            # real star, so ssr runs 17-400 even for an excellent fit (verified:
+            # a source with qfit=1.30, snr=1525 scored ssr_ratio=45).  It
+            # rejected EVERY real bright star (0/36 hand-selected captured even
+            # after the mask-dilation + position-bound fixes made the fits good).
+            # qfit and snr cleanly separate good fits (positive qfit~1, positive
+            # snr) from bad ones (negative qfit / negative snr), so gate on those
+            # instead: require a FINITE, POSITIVE qfit below the cap and a
+            # positive snr above threshold.
+            accept_source = (result is not None
+                             and np.isfinite(fluxerr)
+                             and snr > _snr_min_keep
+                             and flux > 0
+                             and np.isfinite(qfit)
+                             and 0.0 < qfit < _qfit_max_keep
+                             and (not np.isfinite(sidelobe_resid_sigma)
+                                  or sidelobe_resid_sigma > _sidelobe_min_keep))
+        else:
+            accept_source = (result is not None
+                             and np.isfinite(fluxerr)
+                             and snr > _snr_min_keep
+                             and flux > 0
+                             and (not np.isfinite(qfit) or qfit < _qfit_max_keep)
+                             and (not np.isfinite(sidelobe_resid_sigma)
+                                  or sidelobe_resid_sigma > _sidelobe_min_keep)
+                             and (not np.isfinite(ssr_ratio) or ssr_ratio < _ssr_ratio_max_keep))
         if forced_source and result is not None:
             xcent = np.asarray(result['xcentroid'], dtype=float)
             ycent = np.asarray(result['ycentroid'], dtype=float)

@@ -1143,29 +1143,46 @@ def _run_one_frame_manual(args):
     """Pickleable per-frame worker for ProcessPoolExecutor parallelism in
     ``run_manual_pipeline``.  ``args`` is a dict whose keys mirror the kwargs of
     ``do_photometry_step_manual``.  Returns ``(filename, ok, err_str_or_None)``.
-    Catches ``_L.CutoutNoOverlap`` (non-fatal: frame doesn't overlap cutout)
-    and any other exception (logged, frame skipped) so a single bad frame
-    can't kill the whole phase.
+
+    Only ``_L.CutoutNoOverlap`` is a legitimate non-fatal outcome (a frame that
+    does not overlap a requested cutout region).  EVERY other failure is reported
+    back as ``(False, err)`` and the caller HARD-CRASHES the whole run: silently
+    dropping any exposure from any phase irrecoverably corrupts all later steps
+    and the final catalog/mosaic.  Transient I/O (e.g. a truncated FITS read on a
+    busy shared filesystem) is retried a few times first so a flaky read does not
+    spuriously abort a long run; a persistent failure still aborts.
     """
+    import time as _time
     filename = args['filename']
-    try:
-        do_photometry_step_manual(
-            args['options'], args['filtername'], args['module'], args['detector'],
-            args['field'], args['basepath'], filename, args['proposal_id'],
-            manual_phase=args['manual_phase'],
-            exposurenumber=args['exposurenumber'],
-            visit_id=args['visit_id'], vgroup_id=args['vgroup_id'],
-            bg_boxsizes=args['bg_boxsizes'],
-            use_webbpsf=args['use_webbpsf'], pupil=args['pupil'],
-            prev_seed_catalog=args['prev_seed_catalog'],
-            resbg_path=args['resbg_path'],
-            satstar_flux_overrides=args.get('satstar_flux_overrides'))
-        return (filename, True, None)
-    except _L.CutoutNoOverlap as ex:
-        return (filename, False, f'no-overlap: {ex}')
-    except Exception as ex:
-        return (filename, False,
-                f'{type(ex).__name__}: {ex}\n{traceback.format_exc()}')
+    _N_RETRY = 4
+    last_err = None
+    for _attempt in range(_N_RETRY):
+        try:
+            do_photometry_step_manual(
+                args['options'], args['filtername'], args['module'], args['detector'],
+                args['field'], args['basepath'], filename, args['proposal_id'],
+                manual_phase=args['manual_phase'],
+                exposurenumber=args['exposurenumber'],
+                visit_id=args['visit_id'], vgroup_id=args['vgroup_id'],
+                bg_boxsizes=args['bg_boxsizes'],
+                use_webbpsf=args['use_webbpsf'], pupil=args['pupil'],
+                prev_seed_catalog=args['prev_seed_catalog'],
+                resbg_path=args['resbg_path'],
+                satstar_flux_overrides=args.get('satstar_flux_overrides'))
+            return (filename, True, None)
+        except _L.CutoutNoOverlap as ex:
+            return (filename, False, f'no-overlap: {ex}')
+        except (OSError, IOError) as ex:
+            # Transient shared-filesystem read errors ("Header missing END card",
+            # truncated reads, stale NFS handles) -- retry with backoff.
+            last_err = f'{type(ex).__name__}: {ex}\n{traceback.format_exc()}'
+            if _attempt < _N_RETRY - 1:
+                _time.sleep(2.0 * (_attempt + 1))
+                continue
+            return (filename, False, last_err)
+        except Exception as ex:
+            return (filename, False,
+                    f'{type(ex).__name__}: {ex}\n{traceback.format_exc()}')
 
 
 def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
@@ -1384,7 +1401,10 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     })
 
                 max_workers = max(1, int(getattr(options, 'parallel_workers', 1) or 1))
+                _is_cutout = bool(getattr(options, 'cutout_region', ''))
                 overlapping_now = []
+                no_overlap = []   # frames that legitimately miss a cutout region
+                failures = []     # (filename, err) -- ANY of these aborts the run
                 if max_workers > 1 and len(frame_args) > 1:
                     n_workers = min(max_workers, len(frame_args))
                     print(f"manual [{phase}]: fitting {len(frame_args)} frames "
@@ -1394,33 +1414,62 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                                    for a in frame_args}
                         for fut in as_completed(futures):
                             filename, ok, err = fut.result()
-                            if not ok:
-                                if err and err.startswith('no-overlap'):
-                                    print(f"manual [{phase}]: skip non-overlapping "
-                                          f"{filename} ({err})", flush=True)
-                                else:
-                                    print(f"manual [{phase}]: frame FAILED {filename}: "
-                                          f"{err}", flush=True)
-                                continue
-                            overlapping_now.append(filename)
+                            if ok:
+                                overlapping_now.append(filename)
+                            elif err and err.startswith('no-overlap'):
+                                no_overlap.append((filename, err))
+                            else:
+                                failures.append((filename, err))
                 else:
                     for a in frame_args:
                         filename, ok, err = _run_one_frame_manual(a)
-                        if not ok:
-                            if err and err.startswith('no-overlap'):
-                                print(f"manual [{phase}]: skip non-overlapping "
-                                      f"{filename} ({err})", flush=True)
-                            else:
-                                print(f"manual [{phase}]: frame FAILED {filename}: "
-                                      f"{err}", flush=True)
-                            continue
-                        overlapping_now.append(filename)
+                        if ok:
+                            overlapping_now.append(filename)
+                        elif err and err.startswith('no-overlap'):
+                            no_overlap.append((filename, err))
+                        else:
+                            failures.append((filename, err))
+
+                # HARD-CRASH on ANY frame failure.  Silently dropping even one
+                # exposure from any phase irrecoverably corrupts every later
+                # step and the final catalog/mosaic (missing-data holes), so a
+                # failed frame must abort the whole run -- never be skipped.
+                if failures:
+                    _msg = '\n'.join(f"    {os.path.basename(fn)}: {er}"
+                                     for fn, er in failures)
+                    raise RuntimeError(
+                        f"manual [{phase}] {filt}/{module}: {len(failures)} frame(s) "
+                        f"FAILED -- aborting (a dropped exposure corrupts all later "
+                        f"phases and the final catalog).  Fix the cause and re-run:\n"
+                        f"{_msg}")
+                # A non-overlapping frame is legitimate ONLY for a cutout region.
+                # In a full-frame run every input exposure must overlap and be fit.
+                if no_overlap and not _is_cutout:
+                    _msg = '\n'.join(f"    {os.path.basename(fn)}: {er}"
+                                     for fn, er in no_overlap)
+                    raise RuntimeError(
+                        f"manual [{phase}] {filt}/{module}: {len(no_overlap)} frame(s) "
+                        f"reported NO OVERLAP in a full-frame run -- every input "
+                        f"exposure must be processed.  Aborting:\n{_msg}")
 
                 if phase == phases[0]:
                     frame_cache[(module, filt)] = overlapping_now
                     overlap_total += len(overlapping_now)
+                else:
+                    # Every later phase MUST process the exact same set of frames
+                    # established in the first phase.  A frame that succeeded then
+                    # but is missing now means a silent mid-pipeline drop -> abort.
+                    _expected = set(frame_cache.get((module, filt), []))
+                    _got = set(overlapping_now)
+                    _missing = _expected - _got
+                    if _missing:
+                        raise RuntimeError(
+                            f"manual [{phase}] {filt}/{module}: {len(_missing)} frame(s) "
+                            f"processed in {phases[0]} did NOT produce output in {phase} "
+                            f"-- a mid-pipeline drop corrupts the catalog.  Aborting:\n"
+                            + '\n'.join(f"    {os.path.basename(m)}" for m in sorted(_missing)))
                 if not overlapping_now:
-                    if getattr(options, 'cutout_region', ''):
+                    if _is_cutout:
                         raise ValueError(
                             f"--cutout-region overlapped none of the {filt}/{module} "
                             f"frames in phase {phase}.")
@@ -1439,13 +1488,12 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     _per_frame = []
                     for _fr in overlapping_now:
                         _sp = _fr.replace('.fits', f'{_ss_suffix}_satstar_catalog.fits')
+                        # A missing satstar catalog is legitimate (the frame had no
+                        # saturated stars).  A catalog that EXISTS but can't be read
+                        # is corruption -- do not swallow it.
                         if not os.path.exists(_sp):
                             continue
-                        try:
-                            _per_frame.append((_fr, Table.read(_sp)))
-                        except Exception as _ex:
-                            print(f"manual [m12]: could not read satstar catalog "
-                                  f"{_sp}: {_ex}", flush=True)
+                        _per_frame.append((_fr, Table.read(_sp)))
                     try:
                         _ovr = reconcile_outside_fov_satstar_fluxes(
                             _per_frame,

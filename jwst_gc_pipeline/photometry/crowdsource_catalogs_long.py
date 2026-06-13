@@ -3108,9 +3108,16 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
             raw_resid = f'{stem}_residual.fits'
             raw_model = f'{stem}_model.fits'
             if not (os.path.exists(raw_resid) and os.path.exists(raw_model)):
-                print(f"mergedcat: missing raw {kind} products for {bn}; skip",
-                      flush=True)
-                continue
+                # This frame is one of the successfully-fit overlapping frames, so
+                # its per-frame residual+model MUST exist.  Missing products would
+                # silently drop the frame from the residual/model mosaic, punching
+                # a hole in the "final" image -- never acceptable.  Hard-crash.
+                raise FileNotFoundError(
+                    f"mergedcat: missing raw {kind} products for {bn} "
+                    f"(expected {os.path.basename(raw_resid)} + "
+                    f"{os.path.basename(raw_model)} in {pipeline_dir}).  This frame "
+                    f"was fit successfully, so its per-frame products must exist; a "
+                    f"missing one would punch a hole in the {kind} mosaic.  Aborting.")
             with fits.open(raw_resid) as h:
                 ww = wcs.WCS(h['SCI'].header)
                 base = h['SCI'].data.astype(float)
