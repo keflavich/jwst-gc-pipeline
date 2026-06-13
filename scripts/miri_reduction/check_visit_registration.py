@@ -39,8 +39,9 @@ target, filt, proposal, obs = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 basepath = f'/orange/adamginsburg/jwst/{target}'
 pipedir = f'{basepath}/{filt}/pipeline'
 
-# FWHM (pix) for detection, by filter wavelength
-fwhm_um = int(filt[1:5]) / 100.
+# FWHM (pix) for detection, by filter wavelength (F770W->7.70um, F2550W->25.50)
+import re as _re
+fwhm_um = int(_re.match(r'[Ff](\d+)', filt).group(1)) / 100.
 fwhm_pix = max(2.0, fwhm_um / 0.11 * 0.31)  # ~MIRI PSF FWHM in pixels
 
 cal = sorted(glob.glob(f'{pipedir}/jw0{proposal}{obs}*_mirimage_cal.fits'))
