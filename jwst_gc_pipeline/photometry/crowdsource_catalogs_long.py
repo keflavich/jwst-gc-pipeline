@@ -1945,6 +1945,7 @@ def annotate_and_filter_by_local_snr(detection_table, noise_map, snr_threshold=5
 def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merged=False, overwrite=False,
                                  outside_star_pixels=None, outside_star_fit_box=512,
                                  forced_grid_search_radius=5,
+                                 flux_overrides=None,
                                  file_suffix=''):
     """
     ``file_suffix`` is inserted into the satstar output filenames before
@@ -1961,6 +1962,10 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
     # are saturated in OTHER frames of the same filter (so the same set
     # of saturated stars is consistently fit across the whole filter).
     # See project_force_union_satstar.md for the design rationale.
+    # When flux_overrides are supplied (cross-frame out-of-field reconciliation),
+    # force a refit: the cached catalog predates the override and must be redone.
+    if flux_overrides:
+        overwrite = True
     extended_filename = filename.replace(
         '.fits', f'{file_suffix}_extended_satstar_catalog.fits')
     if os.path.exists(extended_filename) and not overwrite:
@@ -1974,6 +1979,7 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
                            outside_star_pixels=outside_star_pixels,
                            outside_star_fit_box=outside_star_fit_box,
                            forced_grid_search_radius=forced_grid_search_radius,
+                           flux_overrides=flux_overrides,
                            file_suffix=file_suffix)
     if os.path.exists(satstar_filename):
         return Table.read(satstar_filename)

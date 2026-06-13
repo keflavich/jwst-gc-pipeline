@@ -79,11 +79,11 @@ obs_filters = {'brick': {'2221': filternames,
                'wd2': {'3523': ['f115w', 'f150w', 'f162m', 'f164n', 'f182m', 'f187n',
                                 'f200w', 'f212n', 'f250m', 'f277w', 'f300m', 'f323n',
                                 'f335m', 'f405n', 'f410m', 'f444w', 'f466n']},
-               # W51 (Goddard prop 6151 main NIRCam + prop 1182 obs 002 short-wave).
-               # In disk -- use Gaia DR3 as astrometric ref.
-               'w51': {'6151': ['f115w', 'f140m', 'f150w', 'f162m', 'f182m',
-                                'f187n', 'f200w', 'f212n', 'f356w', 'f405n',
-                                'f410m', 'f444w']},
+               # W51 (Goddard prop 6151 NIRCam obs 001).  In disk -- use Gaia DR3
+               # as astrometric ref.  Filter list per user 2026-06-13: F140M
+               # F162M F182M F187N F210M F335M F360M F405N F410M F480M.
+               'w51': {'6151': ['f140m', 'f162m', 'f182m', 'f187n', 'f210m',
+                                'f335m', 'f360m', 'f405n', 'f410m', 'f480m']},
                }
 
 # Using the 'brick' keyword here makes it work for now, need to figure out how to
@@ -1591,6 +1591,9 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
                   'f200w': 0.05*u.arcsec,
                   'f210m': 0.05*u.arcsec,
                   'f212n': 0.05*u.arcsec,
+                  'f140m': 0.05*u.arcsec,
+                  'f164n': 0.05*u.arcsec,
+                  'f250m': 0.08*u.arcsec,
                   'f277w': 0.1*u.arcsec,
                   # long-wave (> ~2.5 um)
                   'f300m': 0.1*u.arcsec,

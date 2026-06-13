@@ -286,7 +286,7 @@ def _build_manual_seed(*, detection_image, nan_replaced_data, mask, ww, fwhm_pix
                        local_snr_threshold, roundlo, roundhi, sharplo, sharphi,
                        preferred_seed_skycoord_col=None,
                        dedup_min_sep_pix=None, label='', apply_snr_filter=True,
-                       struct_x=0.0, struct_y=0.0):
+                       struct_x=0.0, struct_y=0.0, coarse_bg_box=0):
     """Build ``seeded_init_params`` for one manual pass.
 
     daofind(detection_image) [local-noise-map threshold] -> local-S/N filter ->
@@ -299,6 +299,23 @@ def _build_manual_seed(*, detection_image, nan_replaced_data, mask, ww, fwhm_pix
     """
     if dedup_min_sep_pix is None:
         dedup_min_sep_pix = 0.5 * fwhm_pix
+
+    # MIRI early-phase coarse background subtraction (AG 2026-06-13): the F770W
+    # pedestal is huge (image min ~200 MJy/sr) but the bright stars are HIGH
+    # contrast above the *local* background -- they just sit on the pedestal.
+    # Subtract a coarse median (box >~ 5x FWHM so stars are not blurred into it)
+    # from the DETECTION image only (the fit still uses the unaltered frame), so
+    # daofind sees the stars.  Validated on the F770W hand-selected catalog:
+    # 51px coarse-sub recovers 24/34 (the unsaturated ones; saturated -> satstar).
+    # m5/m6 do NOT use this -- they detect on the trustworthy star-subtracted
+    # background-subtracted residual instead (coarse_bg_box=0 there).
+    if coarse_bg_box and coarse_bg_box > 0:
+        from scipy.ndimage import median_filter as _medfilt
+        _good = np.isfinite(detection_image)
+        _fill = np.where(_good, detection_image, np.nanmedian(detection_image[_good]))
+        detection_image = detection_image - _medfilt(_fill, size=int(coarse_bg_box))
+        print(f"[{label}] coarse-bg detection: subtracted {int(coarse_bg_box)}px median",
+              flush=True)
 
     # daofind on the detection image with a local-noise-map floor threshold
     noise_map = compute_local_noise_map(detection_image, smooth_sigma_pix=3.0)
@@ -485,7 +502,8 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
 def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
                                   filename, proposal_id, *, exposurenumber,
                                   visit_id, vgroup_id, bg_boxsizes, use_webbpsf,
-                                  pupil, resbg_path, satstar_label):
+                                  pupil, resbg_path, satstar_label,
+                                  satstar_flux_overrides=None):
     """Load a frame and produce everything a manual pass needs: scaled
     aperture/annulus, filename tokens, data + error + mask, the (cutout-
     re-origined) PSF grid, the SourceGrouper, and the satstar-subtracted
@@ -623,6 +641,7 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         overwrite=bool(outside_star_pixels),
         outside_star_pixels=outside_star_pixels, outside_star_fit_box=512,
         forced_grid_search_radius=forced_grid_search_radius,
+        flux_overrides=satstar_flux_overrides,
         file_suffix=satstar_file_suffix)
     ext_model = filename.replace('.fits', f'{satstar_file_suffix}_extended_satstar_model.fits')
     sat_model = filename.replace('.fits', f'{satstar_file_suffix}_satstar_model.fits')
@@ -693,7 +712,8 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
                               filename, proposal_id, *, manual_phase,
                               exposurenumber=None, visit_id=None, vgroup_id=None,
                               bg_boxsizes=None, use_webbpsf=False, pupil='clear',
-                              prev_seed_catalog=None, resbg_path=None):
+                              prev_seed_catalog=None, resbg_path=None,
+                              satstar_flux_overrides=None):
     """Clean per-frame driver for the manual-iteration path.
 
     ``manual_phase`` in {'m12','m3','m4','m5','m6','m7'}:
@@ -718,12 +738,19 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     # _build_i2d_augmented_seed (run_manual_pipeline passes struct_x/y there).
     struct_x = 0.0
     struct_y = 0.0
+    # Coarse-background detection (MIRI early phases only).  run_manual_pipeline
+    # sets options.coarse_bg_box=51 for m12/m3/m4 and =0 for m5/m6 (where the
+    # star-subtracted background is trustworthy).  Unlike the struct prune, a
+    # coarse median subtraction is safe per-frame: it only shifts the detection
+    # image pedestal, it does not reject sources.
+    coarse_bg_box = int(getattr(options, 'coarse_bg_box', 0))
 
     ctx = _prepare_frame_for_photometry(
         options, filtername, module, field, basepath, filename, proposal_id,
         exposurenumber=exposurenumber, visit_id=visit_id, vgroup_id=vgroup_id,
         bg_boxsizes=bg_boxsizes, use_webbpsf=use_webbpsf, pupil=pupil,
-        resbg_path=resbg_path, satstar_label=manual_phase)
+        resbg_path=resbg_path, satstar_label=manual_phase,
+        satstar_flux_overrides=satstar_flux_overrides)
 
     def _pass(seed, label):
         return _manual_phot_pass(
@@ -745,7 +772,7 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             satstar_table=ctx.satstar_table, prev_catalog=None,
             local_snr_threshold=first_snr, roundlo=-1.0, roundhi=1.0,
             sharplo=0.30, sharphi=1.40, dedup_min_sep_pix=0.5 * ctx.fwhm_pix,
-            label='m1', apply_snr_filter=False)
+            label='m1', apply_snr_filter=False, coarse_bg_box=coarse_bg_box)
         res1, modsky1, _ = _pass(seed1, 'm1')
         saved1 = _save_manual_pass(ctx, res1, modsky1, options, 'm1', detector)
         base1 = (ctx.original_data if ctx.satstar_model_subtracted is None
@@ -757,7 +784,8 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             satstar_table=ctx.satstar_table, prev_catalog=saved1,
             local_snr_threshold=iter2_snr, roundlo=-0.3, roundhi=0.3,
             sharplo=0.50, sharphi=1.00, dedup_min_sep_pix=0.5 * ctx.fwhm_pix,
-            label='m2', struct_x=struct_x, struct_y=struct_y)
+            label='m2', struct_x=struct_x, struct_y=struct_y,
+            coarse_bg_box=coarse_bg_box)
         res2, modsky2, _ = _pass(seed2, 'm2')
         _save_manual_pass(ctx, res2, modsky2, options, 'm2', detector)
         return res2
@@ -771,7 +799,8 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
         satstar_table=ctx.satstar_table, prev_catalog=prev,
         local_snr_threshold=snr, roundlo=-0.3, roundhi=0.3,
         sharplo=0.50, sharphi=1.00, dedup_min_sep_pix=0.5 * ctx.fwhm_pix,
-        label=manual_phase, struct_x=struct_x, struct_y=struct_y)
+        label=manual_phase, struct_x=struct_x, struct_y=struct_y,
+        coarse_bg_box=coarse_bg_box)
     res, modsky, _ = _pass(seed, manual_phase)
     _save_manual_pass(ctx, res, modsky, options, manual_phase, detector)
     return res
@@ -938,7 +967,7 @@ def _structure_noise_keep(data, err, xpix, ypix, *, struct_x=0.0, struct_y=0.0,
 def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, *,
                               local_snr_min=5.0, roundlo=-0.5, roundhi=0.5,
                               sharplo=0.4, sharphi=1.2, bg_subtract_path=None,
-                              struct_x=0.0, struct_y=0.0, label=''):
+                              struct_x=0.0, struct_y=0.0, coarse_bg_box=0, label=''):
     """daofind on the merged i2d co-add, unioned with the previous vetted merged
     catalog, written as a seed catalog (``skycoord`` + ``flux``) for the next
     per-frame PSF-photometry round (the plan's iter3 seed = daofind(i2d) +
@@ -990,6 +1019,17 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
         else:
             print(f"[{label}] bg-subtract skipped: shape {bg.shape} != {data.shape}",
                   flush=True)
+    elif coarse_bg_box and coarse_bg_box > 0:
+        # MIRI early phases (m3/m4, no trustworthy bg map yet): coarse median
+        # subtraction so high-local-contrast stars on the huge F770W pedestal
+        # become detectable (AG 2026-06-13).  m5/m6 take the bg_subtract_path
+        # branch above instead (the real star-subtracted background).
+        from scipy.ndimage import median_filter as _medfilt
+        _g = np.isfinite(data) & ~mask
+        _f = np.where(_g, data, np.nanmedian(data[_g]))
+        data = data - _medfilt(_f, size=int(coarse_bg_box))
+        print(f"[{label}] coarse-bg detection: subtracted {int(coarse_bg_box)}px median",
+              flush=True)
     pixscale_as = float(np.sqrt(np.abs(np.linalg.det(ww_i2d.pixel_scale_matrix))) * 3600.0)
 
     # Detection threshold from the local-noise floor (as _build_manual_seed),
@@ -1118,7 +1158,8 @@ def _run_one_frame_manual(args):
             bg_boxsizes=args['bg_boxsizes'],
             use_webbpsf=args['use_webbpsf'], pupil=args['pupil'],
             prev_seed_catalog=args['prev_seed_catalog'],
-            resbg_path=args['resbg_path'])
+            resbg_path=args['resbg_path'],
+            satstar_flux_overrides=args.get('satstar_flux_overrides'))
         return (filename, True, None)
     except _L.CutoutNoOverlap as ex:
         return (filename, False, f'no-overlap: {ex}')
@@ -1190,6 +1231,11 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
     bg_for_next = {}      # (module, filt) -> smoothed-bg path for the next phase
     resid_i2d_for_next = {}  # (module, filt) -> mergedcat residual i2d (detection image)
     prev_merged_for = {}  # (module, filt) -> (SkyCoord, iter_found array) for provenance
+    # (module, filt) -> [(SkyCoord, flux)] cross-frame reconciled out-of-field
+    # satstar fluxes, computed from m12's per-frame satstar catalogs and forwarded
+    # to every later phase so far-detector (spike-less) fits are pinned to the
+    # nearest-detector flux instead of mis-fitting scattered light.
+    satstar_overrides = {}
     overlap_total = 0
 
     for phase in phases:
@@ -1217,6 +1263,12 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 # high-purity structure-noise prune on the raw rounds
                 opts_phase.struct_x = 5.0
                 opts_phase.struct_y = 8.0
+                # coarse-bg detection: the raw rounds detect on a 51px-median-
+                # subtracted image so bright stars on the very high (but smooth)
+                # MIRI background are not lost to the global pedestal.  51px beats
+                # 101px (median peak/ERR 35.7 vs 18.5); captures 24/34
+                # hand-selected unsaturated stars, the rest via the satstar path.
+                opts_phase.coarse_bg_box = 51
             elif phase in ('m5', 'm6'):
                 opts_phase.manual_iter2_local_snr = min(base_iter2, 3.0)
                 opts_phase.manual_ext_local_snr_min = min(base_extsnr, 3.0)
@@ -1224,6 +1276,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 # relax the prune to recover faint point sources (tweak 3)
                 opts_phase.struct_x = 3.0
                 opts_phase.struct_y = 4.0
+                # bg already subtracted & trustworthy -> no coarse-bg detection
+                opts_phase.coarse_bg_box = 0
             opts_phase.manual_ext_qfit_max = max(base_qfit, 0.4)
             print(f"  [miri_tuning {phase}] first_snr="
                   f"{getattr(opts_phase,'local_snr_threshold',5.0)} iter2_snr="
@@ -1283,6 +1337,10 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                                       if miri_tuning else 0.0),
                             struct_y=(float(getattr(opts_phase, 'struct_y', 0.0))
                                       if miri_tuning else 0.0),
+                            # coarse-bg detection is MIRI-only & early-phase-only
+                            # (opts_phase.coarse_bg_box=51 for m3/m4, 0 for m5/m6)
+                            coarse_bg_box=(int(getattr(opts_phase, 'coarse_bg_box', 0))
+                                           if miri_tuning else 0),
                             label=f'{phase}:{filt}')
                     except Exception as ex:
                         print(f"manual [{phase}]: i2d-augmented seed failed ({ex}); "
@@ -1322,6 +1380,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         'use_webbpsf': True, 'pupil': pupil,
                         'prev_seed_catalog': prev_seed,
                         'resbg_path': resbg_path,
+                        'satstar_flux_overrides': satstar_overrides.get((module, filt)),
                     })
 
                 max_workers = max(1, int(getattr(options, 'parallel_workers', 1) or 1))
@@ -1367,6 +1426,42 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             f"frames in phase {phase}.")
                     raise ValueError(
                         f"no {filt}/{module} frames produced output in phase {phase}.")
+
+                # --- cross-frame out-of-field satstar reconciliation (after m12) ---
+                # m12 fit each frame's out-of-field bright stars independently;
+                # gather those per-frame satstar catalogs and pick, per star, the
+                # flux from the detector whose footprint is CLOSEST (it caught the
+                # diffraction spikes).  Forward as overrides to m3..m7.
+                if phase == 'm12':
+                    from jwst_gc_pipeline.reduction.saturated_star_finding import (
+                        reconcile_outside_fov_satstar_fluxes)
+                    _ss_suffix = f'{_bgsub_token(opts_phase)}{_iteration_token("m12")}'
+                    _per_frame = []
+                    for _fr in overlapping_now:
+                        _sp = _fr.replace('.fits', f'{_ss_suffix}_satstar_catalog.fits')
+                        if not os.path.exists(_sp):
+                            continue
+                        try:
+                            _per_frame.append((_fr, Table.read(_sp)))
+                        except Exception as _ex:
+                            print(f"manual [m12]: could not read satstar catalog "
+                                  f"{_sp}: {_ex}", flush=True)
+                    try:
+                        _ovr = reconcile_outside_fov_satstar_fluxes(
+                            _per_frame,
+                            match_radius=float(getattr(
+                                options, 'satstar_reconcile_radius_arcsec', 0.15)) * u.arcsec,
+                            disagree_factor=float(getattr(
+                                options, 'satstar_reconcile_disagree_factor', 2.0)))
+                    except Exception as _ex:
+                        print(f"manual [m12]: satstar reconciliation failed: {_ex}",
+                              flush=True)
+                        _ovr = []
+                    if _ovr:
+                        satstar_overrides[(module, filt)] = _ovr
+                        print(f"manual [m12]: reconciled {len(_ovr)} out-of-field "
+                              f"satstar flux(es) for {filt}/{module}; will pin on "
+                              f"m3..m7", flush=True)
 
                 # merge per-frame catalogs (BASIC only)
                 _merge_catalogs.merge_individual_frames(

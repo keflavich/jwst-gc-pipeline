@@ -38,6 +38,7 @@ from astropy.table import Table, QTable
 from astropy import table
 from astropy import log
 from astropy.coordinates import SkyCoord
+from astropy import units as u
 from .filtering import get_filtername, get_fwhm
 import functools
 import requests
@@ -314,7 +315,7 @@ def _nearest_window_bounds(center, full_size, window_size):
     return start, stop
 
 
-def compute_adaptive_mask_buffer(sat_area, mask_buffer_min=2, cap=6):
+def compute_adaptive_mask_buffer(sat_area, mask_buffer_min=2, cap=6, scale=0.4):
     """
     Return a brightness-dependent dilation radius for the saturation mask.
 
@@ -357,7 +358,7 @@ def compute_adaptive_mask_buffer(sat_area, mask_buffer_min=2, cap=6):
     =========  ===========  ==============
     """
     sat_radius = np.sqrt(sat_area / np.pi)
-    adaptive = int(np.ceil(sat_radius * 0.4))
+    adaptive = int(np.ceil(sat_radius * scale))
     return int(min(cap, max(mask_buffer_min, adaptive)))
 
 
@@ -412,7 +413,120 @@ def compute_adaptive_bkg_annulus(sat_area, bkg_inner_min=15, bkg_inner_max=50):
     return bkg_inner, bkg_outer
 
 
-def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0):
+def reconcile_outside_fov_satstar_fluxes(per_frame, match_radius=0.15 * u.arcsec,
+                                         disagree_factor=2.0, min_frames=2):
+    """Reconcile the flux of OUT-OF-FIELD (forced) saturated stars across frames.
+
+    A star outside the field of view, if bright enough, has its PSF detected in
+    the target frames.  It is fit independently in every frame whose PSF
+    footprint it touches.  Detectors *close* to the (off-field) star catch its
+    high-S/N diffraction spikes and recover a correct flux; detectors that only
+    catch a spike-less *corner* of the footprint fit scattered light and return
+    a badly wrong flux that over-contributes to the model.  We trust the frame
+    whose detector footprint centre is CLOSEST to the star (it sees the spikes)
+    and override the discordant far-frame fluxes with it.
+
+    Parameters
+    ----------
+    per_frame : list of (key, table)
+        One entry per frame.  ``key`` is any hashable frame identifier; ``table``
+        must have columns ``skycoord_fit`` (SkyCoord), ``flux`` (float), and
+        ``outside_fov_seed`` (bool), and ``table.meta['det_center']`` must be the
+        SkyCoord of that frame's detector footprint centre.
+    match_radius : Quantity
+        Cross-frame association radius for "same star".
+    disagree_factor : float
+        A far-frame flux is overridden only if it differs from the nearest-frame
+        flux by more than this multiplicative factor (max(a,b)/min(a,b) > factor),
+        so in-family agreement is left untouched.
+    min_frames : int
+        A star must be fit in at least this many frames to reconcile (else there
+        is nothing to compare against and the single fit is kept as-is).
+
+    Returns
+    -------
+    list of (SkyCoord, flux) : the reconciled (nearest-detector) flux for every
+        out-of-field star that had a cross-frame disagreement.  Empty if nothing
+        needed reconciling.  Pure function: it does not mutate the input tables.
+        The caller forwards this as ``flux_overrides`` to ``get_saturated_stars``
+        so every frame pins that star to the trusted flux on the next phase.
+    """
+    # Gather every out-of-field forced measurement as
+    # (key, row_index, SkyCoord, flux, det_center_SkyCoord).
+    recs = []
+    for key, tbl in per_frame:
+        if tbl is None or len(tbl) == 0 or 'outside_fov_seed' not in tbl.colnames:
+            continue
+        # det_center is stored as float meta keys (DET_RA/DET_DEC, deg) so it
+        # survives the FITS round-trip; reconstruct the SkyCoord here.
+        dc = tbl.meta.get('det_center', None)
+        if dc is None:
+            _ra = tbl.meta.get('DET_RA', None)
+            _dec = tbl.meta.get('DET_DEC', None)
+            if _ra is None or _dec is None:
+                continue
+            dc = SkyCoord(float(_ra) * u.deg, float(_dec) * u.deg)
+        oof = np.asarray(tbl['outside_fov_seed'], dtype=bool)
+        sc = SkyCoord(tbl['skycoord_fit'])
+        _fluxcol = 'flux_fit' if 'flux_fit' in tbl.colnames else 'flux'
+        flux = np.asarray(tbl[_fluxcol], dtype=float)
+        for ri in np.where(oof)[0]:
+            if np.isfinite(flux[ri]):
+                recs.append((key, int(ri), sc[ri], float(flux[ri]), dc))
+    if len(recs) < min_frames:
+        return []
+
+    all_sc = SkyCoord([r[2] for r in recs])
+    # Greedy single-linkage grouping by sky position (n is small: #forced fits).
+    n = len(recs)
+    unassigned = list(range(n))
+    groups = []
+    while unassigned:
+        seed = unassigned.pop(0)
+        seps = all_sc[unassigned].separation(all_sc[seed]) if unassigned else None
+        members = [seed]
+        if unassigned:
+            within = [unassigned[i] for i, s in enumerate(seps) if s < match_radius]
+            for w in within:
+                members.append(w)
+                unassigned.remove(w)
+        groups.append(members)
+
+    overrides = []
+    for members in groups:
+        if len(members) < min_frames:
+            continue
+        # distance from the star (use each member's own fitted position vs its
+        # own detector centre) -> the member with the smallest star-to-detector-
+        # centre distance is the most interior (sees the spikes).
+        dists = [recs[m][2].separation(recs[m][4]).arcsec for m in members]
+        near = members[int(np.argmin(dists))]
+        truth = recs[near][3]
+        if not (truth > 0):
+            continue
+        # Override only when some far frame disagrees badly with the trusted
+        # near-frame flux; otherwise leave the (already consistent) family alone.
+        disagrees = False
+        for m in members:
+            if m == near:
+                continue
+            f = recs[m][3]
+            ratio = max(f, truth) / min(f, truth) if min(f, truth) > 0 else np.inf
+            if ratio > disagree_factor:
+                disagrees = True
+                break
+        if disagrees:
+            overrides.append((recs[near][2], truth))
+    return overrides
+
+
+def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None):
+    # ``flux_overrides``: optional list of (SkyCoord, flux) pairs.  An out-of-field
+    # (forced) source whose seed sky position matches an override within ~0.2" uses
+    # that fixed flux instead of fitting -- the cross-frame reconciliation
+    # (reconcile_outside_fov_satstar_fluxes) supplies the nearest-detector flux so a
+    # far frame (which would fit the spike-less corner badly) renders the correct
+    # amplitude.  See run_manual_pipeline.
     """
     Detect and PSF-fit saturated sources in a JWST image.
 
@@ -654,6 +768,18 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         psfgen = stpsf.MIRI()
         fwhm, fwhm_pix = get_fwhm(header, instrument_replacement='MIRI')
 
+    # The accept gates below (sidelobe_resid_sigma, ssr_ratio, qfit) were tuned
+    # on NIRCam, where BFE/IPC make the STPSF first-sidelobe brighter than the
+    # real saturated-star PSF.  MIRI has no such BFE sidelobe and a much wider
+    # diffraction pattern at 7-25um, so the NIRCam-tuned cuts spuriously reject
+    # real saturated stars (e.g. ~10 of the 34 F770W hand-selected stars are
+    # DQ-saturated and were being dropped here).  Loosen for MIRI.
+    _is_miri = header['INSTRUME'].lower() == 'miri'
+    _qfit_max_keep = 15.0 if _is_miri else 5.0
+    _sidelobe_min_keep = -40.0 if _is_miri else -10.0
+    _ssr_ratio_max_keep = 2.0 if _is_miri else 1.0
+    _snr_min_keep = 2.0 if _is_miri else 3.0
+
     slices = find_objects(saturated)
 
     if size is None:
@@ -738,10 +864,20 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
 
         # Brightness-dependent mask dilation: scale buffer with saturated area
         # so deeply saturated sources exclude more of the non-linear fringe.
+        # MIRI: the nonlinear/charge-bleed fringe around a saturated core is
+        # WIDER than NIRCam (broad PSF, more charge spread).  The NIRCam-tuned
+        # buffer (scale 0.4, cap 6) under-masks it, leaving corrupt near-core
+        # pixels that drive the wing fit to overshoot (ssr_ratio~230, nan
+        # flux_err on the F770W hand-selected saturated stars).  Mask farther
+        # out for MIRI so only trustworthy outer wings set the amplitude.
         if adaptive_mask_buffer_scale and src_sat_area is not None:
-            effective_buffer = compute_adaptive_mask_buffer(
-                src_sat_area, mask_buffer_min=mask_buffer
-            )
+            if _is_miri:
+                effective_buffer = compute_adaptive_mask_buffer(
+                    src_sat_area, mask_buffer_min=max(mask_buffer, 4),
+                    cap=12, scale=0.8)
+            else:
+                effective_buffer = compute_adaptive_mask_buffer(
+                    src_sat_area, mask_buffer_min=mask_buffer)
         else:
             effective_buffer = mask_buffer
 
@@ -864,6 +1000,15 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                     f"{cutout.shape}; PSF model is misconfigured."
                 )
             psf_thresh = max(1e-10, float(np.nanmax(psf_center)) * 1e-6)
+            # PSF significance of the in-frame footprint: brightest in-frame PSF
+            # value vs the model's global peak.  For an off-FOV seed only the
+            # faint outer tail clips the frame, so this ratio is tiny; a seed
+            # whose bright core is in-frame gives a ratio near 1.  Used below to
+            # tell negligible off-FOV overlap (skip) from a real in-frame failure.
+            _psf_global_peak = float(np.nanmax(np.asarray(big_grid_large.data)))
+            _inframe_peak = float(np.nanmax(psf_center))
+            _inframe_psf_frac = (_inframe_peak / _psf_global_peak
+                                 if _psf_global_peak > 0 else 0.0)
             bg_mask = (~mask) & np.isfinite(cutout) & (psf_center <= psf_thresh)
             if int(bg_mask.sum()) >= 100:
                 bg_pix = cutout[bg_mask].astype(float)
@@ -881,13 +1026,38 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 sigma = float(1.4826 * np.median(np.abs(all_pix - np.median(all_pix))))
             sigma = max(sigma, 1e-30)
 
+            # Cross-frame reconciliation: if this out-of-field star's seed sky
+            # position matches a supplied override (the nearest-detector flux
+            # measured in a frame that caught its diffraction spikes), use that
+            # fixed flux at the seed position instead of fitting the spike-less
+            # corner this frame sees.  Rendering with the (large) PSF then gives
+            # the correct wing amplitude here (or ~0 where the PSF doesn't reach).
+            _ovr_flux = None
+            if flux_overrides:
+                try:
+                    _wpos = ww.pixel_to_world(xcen, ycen)
+                    for _osc, _of in flux_overrides:
+                        if np.isfinite(_of) and _wpos.separation(_osc).arcsec < 0.2:
+                            _ovr_flux = float(_of)
+                            break
+                except Exception:
+                    _ovr_flux = None
+
             best = None   # (chi2, dx, dy, flux, flux_err, n_pix, qfit, red_chi2, resid_at_d, p_vec_at_d)
+            # Track the largest number of IN-FRAME pixels where the tabulated PSF
+            # rises above threshold (ignoring the data mask).  This is the PSF's
+            # real reach: the stamp half-size overestimates it because the PSF
+            # model is ~0 over its outer support.  Used below to tell a genuine
+            # off-FOV non-overlap (PSF support never reaches the frame -> skip)
+            # from a real in-frame data failure (PSF reaches but data unusable).
+            max_psf_inframe = 0
             for dy in range(-FORCED_SHIFT_RADIUS, FORCED_SHIFT_RADIUS + 1):
                 for dx in range(-FORCED_SHIFT_RADIUS, FORCED_SHIFT_RADIUS + 1):
                     psf_try = big_grid_large(xx - (x_init + dx),
                                              yy - (y_init + dy))
-                    usable = ((~mask) & np.isfinite(cutout)
-                              & (psf_try > psf_thresh))
+                    psf_hot = psf_try > psf_thresh
+                    max_psf_inframe = max(max_psf_inframe, int(psf_hot.sum()))
+                    usable = (~mask) & np.isfinite(cutout) & psf_hot
                     n_use = int(usable.sum())
                     if n_use < 10:
                         continue
@@ -925,42 +1095,75 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                                 n_use, qfit_try, red_chi2,
                                 float(resid_try[0]))
 
+            # Apply cross-frame override: pin flux to the nearest-detector value
+            # at the seed position (dx=dy=0).  The grid search above this frame
+            # would otherwise lock onto the spike-less corner and mis-fit; here
+            # we keep the geometry (PSF at the seed) but force the trusted flux,
+            # so the rendered wings carry the correct amplitude into this frame.
+            if _ovr_flux is not None:
+                psf_seed = big_grid_large(xx - x_init, yy - y_init)
+                usable = ((~mask) & np.isfinite(cutout) & (psf_seed > psf_thresh))
+                n_use = int(usable.sum())
+                if n_use >= 10:
+                    d_vec = cutout[usable].astype(float)
+                    p_vec = psf_seed[usable].astype(float)
+                    denom = float(np.sum(p_vec * p_vec))
+                    if denom > 0:
+                        resid_ovr = d_vec - _ovr_flux * p_vec
+                        chi2_ovr = float(np.sum((resid_ovr / sigma) ** 2))
+                        red_chi2_ovr = chi2_ovr / max(n_use - 1, 1)
+                        qfit_ovr = (float(np.sum(np.abs(resid_ovr)))
+                                    / max(abs(_ovr_flux), 1e-30))
+                        flux_err_ovr = sigma / np.sqrt(denom)
+                        best = (chi2_ovr, 0, 0, float(_ovr_flux), flux_err_ovr,
+                                n_use, qfit_ovr, red_chi2_ovr,
+                                float(resid_ovr[0]))
+                        print(f"  Forced-source flux OVERRIDDEN by cross-frame "
+                              f"reconciliation: flux={_ovr_flux:.3e} (n_pix={n_use})",
+                              flush=True)
+
             if best is None:
                 # Force-fit at this seed position produced no candidate (dx,dy)
-                # with enough usable pixels.  Two cases:
-                #   1. Source center is far enough outside the frame that the
-                #      PSF wings genuinely do not reach into the data.
+                # with enough usable pixels.  Two cases, distinguished by whether
+                # the tabulated PSF actually has support reaching into the frame:
+                #   1. NON-OVERLAP: the PSF model is ~0 over the in-frame region
+                #      (max_psf_inframe < 10 above-threshold pixels at ANY offset).
+                #      The geometric stamp half-size overestimates the PSF reach
+                #      (the model is effectively zero over its outer support), so
+                #      a seed can sit "within the stamp" yet contribute nothing.
                 #      Nothing to fit, nothing to subtract -- skip cleanly.
-                #   2. Source center is inside the frame (or within PSF reach)
-                #      but the fit still failed.  This is a real problem
-                #      (corrupt data, bad mask, etc.); raise.
-                # Use the large-PSF half-width in detector pixels as the
-                # "PSF radius".  If the seed center is outside the frame by
-                # more than that distance, the PSF cannot meaningfully
-                # overlap the data -- silent skip.
-                _psf_ny, _psf_nx = big_grid_large.data.shape[-2:]
-                _osamp = float(np.atleast_1d(big_grid_large.oversampling)[0])
-                _psf_radius_pix = 0.5 * max(_psf_ny, _psf_nx) / _osamp
+                #   2. DATA FAILURE: the PSF DOES have >=10 above-threshold pixels
+                #      in-frame, but the data there are all masked/non-finite, so
+                #      no usable pixels remain.  A real problem (corrupt data, bad
+                #      mask) -- raise.
                 _ny_frame, _nx_frame = data.shape
-                # Signed distance from each axis range; >0 if outside the frame.
                 _dx_out = max(0.0, -x_init, x_init - (_nx_frame - 1))
                 _dy_out = max(0.0, -y_init, y_init - (_ny_frame - 1))
                 _dist_outside = float(np.hypot(_dx_out, _dy_out))
-                if _dist_outside > _psf_radius_pix:
+                # Negligible-overlap (skip) vs real in-frame failure (raise).
+                # Skip when EITHER the PSF support barely reaches the frame
+                # (<10 above-threshold pixels) OR the in-frame footprint is only
+                # the faint outer tail (in-frame peak < 0.1% of the PSF peak):
+                # such an off-FOV seed contributes nothing fittable here even if
+                # its tail technically clips a few (possibly masked) pixels.
+                _SIG_FRAC = 1e-3
+                if max_psf_inframe < 10 or _inframe_psf_frac < _SIG_FRAC:
                     print(f"  Forced source {ii+1} at (x={x_init:.1f},y={y_init:.1f}): "
-                          f"no candidate (dx,dy) in +/-{FORCED_SHIFT_RADIUS} px gave "
-                          f">=10 usable PSF pixels; seed is {_dist_outside:.0f} px "
-                          f"outside frame (PSF radius {_psf_radius_pix:.0f} px), "
-                          f"so wings cannot reach the data; skipping.",
-                          flush=True)
+                          f"in-frame PSF is faint tail only "
+                          f"(peak {_inframe_psf_frac:.1e} of global, "
+                          f"{max_psf_inframe} px above threshold; seed {_dist_outside:.0f} "
+                          f"px outside the {_nx_frame}x{_ny_frame} frame); negligible "
+                          f"overlap -- skipping.", flush=True)
                     continue
                 raise ValueError(
                     f"Forced source {ii+1} at (x={x_init:.1f},y={y_init:.1f}): "
-                    f"no candidate (dx,dy) in +/-{FORCED_SHIFT_RADIUS} px gave "
-                    f">= 10 usable cutout pixels with nonzero PSF amplitude.  "
-                    f"Seed is {_dist_outside:.0f} px outside frame ({_nx_frame}x{_ny_frame}); "
-                    f"PSF radius is {_psf_radius_pix:.0f} px so PSF wings DO overlap "
-                    f"-- this is a real fit failure, not an off-FOV non-overlap."
+                    f"in-frame PSF reaches {_inframe_psf_frac:.1e} of the global peak "
+                    f"({max_psf_inframe} px above threshold) but no candidate (dx,dy) in "
+                    f"+/-{FORCED_SHIFT_RADIUS} px gave >= 10 USABLE (unmasked, finite) "
+                    f"cutout pixels.  Seed is {_dist_outside:.0f} px outside the "
+                    f"{_nx_frame}x{_ny_frame} frame; a SIGNIFICANT part of the PSF "
+                    f"overlaps the data region, so the data there are all masked/"
+                    f"non-finite -- a real fit failure, not an off-FOV non-overlap."
                 )
 
             (chi2_val, best_dx, best_dy, flux_fit_val, flux_err_val,
@@ -1000,10 +1203,21 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                                     psf_model=_psf_for_fit,
                                     fit_shape=size,
                                     aperture_radius=15*fwhm_pix)
-            low_x  = xcen - x0 - size_saturated
-            high_x = xcen - x0 + size_saturated
-            low_y  = ycen - y0 - size_saturated
-            high_y = ycen - y0 + size_saturated
+            # Position-fit bound radius.  ``size_saturated`` is sqrt(sat_area)/2,
+            # which is ~1 px for a small saturated core (sat_area~15).  A +/-1 px
+            # bound is so tight the LevMar fit pegs x_0/y_0 at the bound, making
+            # the covariance matrix singular -> flux_err (and snr) come back NaN
+            # even when the fit is excellent (qfit~1).  Widen for MIRI so the
+            # centroid converges freely and the covariance (hence flux_err) is
+            # finite; the init is already the bbox-refined saturated-core centre
+            # so a ~1.5 FWHM search is ample.  NIRCam keeps the validated value.
+            pos_bound = size_saturated
+            if _is_miri:
+                pos_bound = max(size_saturated, 1.5 * fwhm_pix)
+            low_x  = xcen - x0 - pos_bound
+            high_x = xcen - x0 + pos_bound
+            low_y  = ycen - y0 - pos_bound
+            high_y = ycen - y0 + pos_bound
 
             # get the underlying model and set bounds there
             model = getattr(psfphot, "psf_model", None)
@@ -1286,12 +1500,12 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         #                no real source at the proposed position.
         accept_source = (result is not None
                          and np.isfinite(fluxerr)
-                         and snr > 3
+                         and snr > _snr_min_keep
                          and flux > 0
-                         and (not np.isfinite(qfit) or qfit < 5.0)
+                         and (not np.isfinite(qfit) or qfit < _qfit_max_keep)
                          and (not np.isfinite(sidelobe_resid_sigma)
-                              or sidelobe_resid_sigma > -10.0)
-                         and (not np.isfinite(ssr_ratio) or ssr_ratio < 1.0))
+                              or sidelobe_resid_sigma > _sidelobe_min_keep)
+                         and (not np.isfinite(ssr_ratio) or ssr_ratio < _ssr_ratio_max_keep))
         if forced_source and result is not None:
             xcent = np.asarray(result['xcentroid'], dtype=float)
             ycent = np.asarray(result['ycentroid'], dtype=float)
@@ -1353,6 +1567,20 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             base_tab['x_0'] = base_tab['xcentroid']
         if 'y_0' not in base_tab.colnames and 'ycentroid' in base_tab.colnames:
             base_tab['y_0'] = base_tab['ycentroid']
+        # Record this frame's footprint center so cross-frame reconciliation
+        # (reconcile_outside_fov_satstar_fluxes) can pick the nearest detector
+        # to an out-of-field star.  Use the full frame's pixel center.
+        # Store as float RA/Dec (deg) keys so they survive the FITS round-trip
+        # (a SkyCoord object cannot serialise to a FITS header card).
+        try:
+            _ny_full, _nx_full = data.shape
+            _dc = ww.pixel_to_world((_nx_full - 1) / 2.0, (_ny_full - 1) / 2.0)
+            if isinstance(_dc, SkyCoord):
+                _icrs = _dc.icrs
+                base_tab.meta['DET_RA'] = float(_icrs.ra.deg)
+                base_tab.meta['DET_DEC'] = float(_icrs.dec.deg)
+        except Exception as ex:
+            log.warning(f"Could not record det_center in satstar table meta: {ex}")
         builtins.satstar_table = base_tab
         builtins.satstar_model = full_model_image
         builtins.satstar_resid = data - full_model_image
