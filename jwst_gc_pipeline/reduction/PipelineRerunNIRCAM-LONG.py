@@ -711,8 +711,8 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         if regionname in ('brick', 'cloudc', ):
             print(f"Realigning to VVV (module={module}, filter={filtername})")
             realigned_vvv_filename = f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}{destreak_suffix}_realigned-to-vvv.fits'
-            shutil.copy(f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}_i2d.fits',
-                        realigned_vvv_filename)
+            shutil.copyfile(f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}_i2d.fits',
+                            realigned_vvv_filename)
             print(f"Realigned to VVV filename: {realigned_vvv_filename}")
             realigned = realign_to_vvv(filtername=filtername.lower(),
                                        fov_regname=fov_regname[regionname],
@@ -736,8 +736,11 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         else:
             print(f"Realigning to refcat (module={module}, filtername={filtername})")
             realigned_refcat_filename = f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}{destreak_suffix}_realigned-to-refcat.fits'
-            shutil.copy(f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}_i2d.fits',
-                        realigned_refcat_filename)
+            # copyfile (not copy) skips chmod, avoiding PermissionError when
+            # a previous run by another user owns the destination file in a
+            # group-writable shared workspace (e.g. W51 with t.yoo files).
+            shutil.copyfile(f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}_i2d.fits',
+                            realigned_refcat_filename)
             print(f"Realigned refcat filename: {realigned_refcat_filename}")
             realigned = realign_to_catalog(reftbl['skycoord'],
                                            filtername=filtername.lower(),
@@ -867,8 +870,8 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
             print(f"Realigning to VVV (module={module})")
             realigned_vvv_filename = f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}{destreak_suffix}_realigned-to-vvv.fits'
             print(f"Realigned to VVV filename: {realigned_vvv_filename}")
-            shutil.copy(f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}_i2d.fits',
-                        realigned_vvv_filename)
+            shutil.copyfile(f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}_i2d.fits',
+                            realigned_vvv_filename)
             realign_to_vvv(filtername=filtername.lower(),
                            fov_regname=fov_regname[regionname], basepath=basepath, module=module,
                            fieldnumber=field, proposal_id=proposal_id,
@@ -885,8 +888,11 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
             print(f"Realigning to refcat (module={module})")
             realigned_refcat_filename = f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}{destreak_suffix}_realigned-to-refcat.fits'
             print(f"Realigned refcat filename: {realigned_refcat_filename}")
-            shutil.copy(f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}_i2d.fits',
-                        realigned_refcat_filename)
+            # copyfile (not copy) skips chmod, avoiding PermissionError when
+            # a previous run by another user owns the destination file in a
+            # group-writable shared workspace (e.g. W51 with t.yoo files).
+            shutil.copyfile(f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}_i2d.fits',
+                            realigned_refcat_filename)
             realign_to_catalog(reftbl['skycoord'],
                                filtername=filtername.lower(),
                                basepath=basepath, module=module,

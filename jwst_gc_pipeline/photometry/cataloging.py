@@ -285,7 +285,8 @@ def _build_manual_seed(*, detection_image, nan_replaced_data, mask, ww, fwhm_pix
                        satstar_table, prev_catalog,
                        local_snr_threshold, roundlo, roundhi, sharplo, sharphi,
                        preferred_seed_skycoord_col=None,
-                       dedup_min_sep_pix=None, label='', apply_snr_filter=True):
+                       dedup_min_sep_pix=None, label='', apply_snr_filter=True,
+                       struct_x=0.0, struct_y=0.0):
     """Build ``seeded_init_params`` for one manual pass.
 
     daofind(detection_image) [local-noise-map threshold] -> local-S/N filter ->
@@ -329,6 +330,20 @@ def _build_manual_seed(*, detection_image, nan_replaced_data, mask, ww, fwhm_pix
         print(f"[{label}] daofind: {len(detections)} detections "
               f"(no local-S/N cut on first pass)", flush=True)
 
+    # structure-noise prune on the per-frame daofind detections (AG method):
+    # this is the dominant junk source -- without it the per-frame daofind
+    # injects emission bumps into the merged catalog at every phase.  Prune on
+    # the detection image (raw/residual/bg-sub per phase) with the per-phase
+    # (struct_x, struct_y) schedule.  err=None -> mad_std noise floor.
+    if len(detections) and (struct_x or struct_y):
+        xdt, ydt = _L._best_available_xy(detections)
+        skeep = _structure_noise_keep(detection_image, None, xdt, ydt,
+                                      struct_x=struct_x, struct_y=struct_y)
+        n_b = len(detections)
+        detections = detections[skeep]
+        print(f"[{label}] per-frame struct-noise prune (x={struct_x},y={struct_y}): "
+              f"{n_b} -> {len(detections)}", flush=True)
+
     # seed base = previous catalog (if any) + satstars
     seed = _combine_seed_and_satstars(prev_catalog, satstar_table)
 
@@ -371,7 +386,8 @@ def _build_manual_seed(*, detection_image, nan_replaced_data, mask, ww, fwhm_pix
 def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               qfit_max=0.2, peak_over_bkg=20.0,
                               local_snr_min=5.0, keep_flags=(1,),
-                              drop_overshoot=True, label=''):
+                              drop_overshoot=True, struct_x=0.0, struct_y=0.0,
+                              label=''):
     """First-pass star-vs-extended-emission vetting of a MERGED catalog.
 
     Keep a source iff it looks like a confident star:
@@ -443,10 +459,23 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     if drop_overshoot and 'model_overshoot' in t.colnames:
         keep = keep & ~np.asarray(t['model_overshoot'], dtype=bool)
 
+    # structure-noise prune on the MERGED catalog (AG 2026-06-13): rejects
+    # emission-bump sources that the m12 round (which has no prune) carries
+    # forward.  Requires the data i2d to measure peak vs local structure noise.
+    n_struct = 0
+    if ((struct_x or struct_y) and data_i2d_image is not None
+            and ww_i2d is not None and 'skycoord' in t.colnames):
+        skeep = _structure_noise_keep(data_i2d_image, None,
+                                      np.asarray(xx), np.asarray(yy),
+                                      struct_x=struct_x, struct_y=struct_y)
+        n_struct = int(np.sum(keep & ~skeep))
+        keep = keep & skeep
+
     n_keep = int(np.sum(keep))
     print(f"[{label}] extended-emission filter: {n} -> {n_keep} "
           f"(qfit<={qfit_max}, flags in {keep_flags}, peakSB>{peak_over_bkg}x bkg, "
-          f"snr>={local_snr_min})", flush=True)
+          f"snr>={local_snr_min}, struct-prune dropped {n_struct} @x={struct_x},y={struct_y})",
+          flush=True)
     return t[keep]
 
 
@@ -682,6 +711,13 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     overshoot_action = str(getattr(options, 'manual_overshoot_action', 'refit'))
     iter2_snr = float(getattr(options, 'manual_iter2_local_snr', 3.0))
     first_snr = float(getattr(options, 'local_snr_threshold', 5.0))
+    # PER-FRAME struct prune is DISABLED: the (struct_x,struct_y) values are
+    # tuned on the deep i2d coadd; a single exposure has far higher structure
+    # noise, so the same cut drops every detection (m2: 87->0).  The structure
+    # prune is applied only where it is tuned -- on the i2d daofind in
+    # _build_i2d_augmented_seed (run_manual_pipeline passes struct_x/y there).
+    struct_x = 0.0
+    struct_y = 0.0
 
     ctx = _prepare_frame_for_photometry(
         options, filtername, module, field, basepath, filename, proposal_id,
@@ -721,7 +757,7 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             satstar_table=ctx.satstar_table, prev_catalog=saved1,
             local_snr_threshold=iter2_snr, roundlo=-0.3, roundhi=0.3,
             sharplo=0.50, sharphi=1.00, dedup_min_sep_pix=0.5 * ctx.fwhm_pix,
-            label='m2')
+            label='m2', struct_x=struct_x, struct_y=struct_y)
         res2, modsky2, _ = _pass(seed2, 'm2')
         _save_manual_pass(ctx, res2, modsky2, options, 'm2', detector)
         return res2
@@ -735,7 +771,7 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
         satstar_table=ctx.satstar_table, prev_catalog=prev,
         local_snr_threshold=snr, roundlo=-0.3, roundhi=0.3,
         sharplo=0.50, sharphi=1.00, dedup_min_sep_pix=0.5 * ctx.fwhm_pix,
-        label=manual_phase)
+        label=manual_phase, struct_x=struct_x, struct_y=struct_y)
     res, modsky, _ = _pass(seed, manual_phase)
     _save_manual_pass(ctx, res, modsky, options, manual_phase, detector)
     return res
@@ -862,10 +898,47 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
 # ---------------------------------------------------------------------------
 # Detection on the merged i2d -> augmented seed for the next per-frame round
 # ---------------------------------------------------------------------------
+def _structure_noise_keep(data, err, xpix, ypix, *, struct_x=0.0, struct_y=0.0,
+                          smooth_box=51, struct_box=51):
+    """Structure-noise prune (AG 2026-06-13): keep a detection only if its data
+    peak rises above the local extended-emission baseline by a combination of
+    photon/read noise AND emission-structure noise:
+
+        peak > smoothed_mean + struct_x * real_noise + struct_y * structure_noise
+
+    smoothed_mean   = median-filtered data on ``smooth_box`` (>~5x FWHM, so it is
+                      the large-scale background, NOT the filaments);
+    real_noise      = propagated per-pixel ERR;
+    structure_noise = local RMS of (data - smoothed) over ``struct_box`` -- the
+                      "noise" introduced by emission structure.  This rejects
+                      filament/PAH bumps (high structure noise) while keeping real
+                      point sources (peak >> both noises).  Tuned high-purity on
+                      sickle F770W: (struct_x, struct_y) ~ (5, 8).
+
+    Returns a boolean keep-mask aligned with (xpix, ypix).  No-op if both x,y=0.
+    """
+    if struct_x == 0.0 and struct_y == 0.0:
+        return np.ones(len(xpix), dtype=bool)
+    from scipy.ndimage import median_filter, uniform_filter
+    from astropy.stats import mad_std
+    good = np.isfinite(data)
+    filled = np.where(good, data, np.nanmedian(data[good]))
+    smoothed = median_filter(filled, size=smooth_box)
+    hp = filled - smoothed
+    struct_noise = np.sqrt(np.clip(uniform_filter(hp**2, size=struct_box), 0, None))
+    rn = (np.asarray(err, dtype=float) if err is not None
+          else np.full_like(data, mad_std(hp[good])))
+    ny, nx = data.shape
+    xi = np.clip(np.round(np.asarray(xpix)).astype(int), 0, nx - 1)
+    yi = np.clip(np.round(np.asarray(ypix)).astype(int), 0, ny - 1)
+    thresh = smoothed[yi, xi] + struct_x * rn[yi, xi] + struct_y * struct_noise[yi, xi]
+    return data[yi, xi] > thresh
+
+
 def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, *,
                               local_snr_min=5.0, roundlo=-0.5, roundhi=0.5,
                               sharplo=0.4, sharphi=1.2, bg_subtract_path=None,
-                              label=''):
+                              struct_x=0.0, struct_y=0.0, label=''):
     """daofind on the merged i2d co-add, unioned with the previous vetted merged
     catalog, written as a seed catalog (``skycoord`` + ``flux``) for the next
     per-frame PSF-photometry round (the plan's iter3 seed = daofind(i2d) +
@@ -951,6 +1024,16 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
         snr_basis = '(none)'
     print(f"[{label}] i2d daofind: {n_raw} -> {len(det)} after {snr_basis}",
           flush=True)
+
+    # structure-noise prune: reject extended-emission bumps (MIRI; AG method)
+    if len(det) and (struct_x or struct_y):
+        xd0, yd0 = _L._best_available_xy(det)
+        skeep = _structure_noise_keep(np.where(mask, np.nan, data), err, xd0, yd0,
+                                      struct_x=struct_x, struct_y=struct_y)
+        n_before = len(det)
+        det = det[skeep]
+        print(f"[{label}] struct-noise prune (x={struct_x},y={struct_y}): "
+              f"{n_before} -> {len(det)}", flush=True)
 
     # previous vetted merged catalog -> sky
     prev = _L._resolve_seed_skycoords(Table.read(prev_vetted_path))
@@ -1071,8 +1154,26 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
     phases = ['m12', 'm3', 'm4', 'm5', 'm6']
     if multifilter:
         phases.append('m7')
+
+    # MIRI tuning (2026-06-13).  MIRI imaging sits on dominant, structured
+    # extended emission with low star/background contrast, so it needs a
+    # different threshold schedule from NIRCam (same pipeline, small tweaks):
+    #   (1) no cross-filter extra-deep search (drop m7) -- the bright extended
+    #       background makes the union-of-filters seed unreliable;
+    #   (2) higher detection thresholds in the early raw-image rounds
+    #       (m12/m3/m4) so only high-confidence sources enter;
+    #   (3) more aggressive (lower) thresholds on the background-subtracted
+    #       rounds (m5/m6), where point sources finally stand out;
+    #   (4) relaxed qfit vetting (extended background degrades qfit).
+    # Applied per-phase to opts_phase below; auto-on for all-MIRI runs unless
+    # --no-miri-tuning is given.
+    is_miri = all(_L._instrument_from_filter(f) == 'MIRI' for f in filternames)
+    miri_tuning = is_miri and not getattr(options, 'no_miri_tuning', False)
+    if miri_tuning and 'm7' in phases:
+        phases.remove('m7')   # tweak (1)
+
     print(f"MANUAL PIPELINE: phases={phases} filters={filternames} "
-          f"modules={modules}", flush=True)
+          f"modules={modules} miri_tuning={miri_tuning}", flush=True)
 
     def _merged_path(label, module, filt, resbgsub):
         desat = '_unsatstar' if options.desaturated else ''
@@ -1100,6 +1201,35 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
         opts_phase.iteration_label = merge_label
         opts_phase.seed_catalog = ''
         opts_phase.use_iter3_residual_bg = resbgsub
+
+        if miri_tuning:
+            # tweak (2): raise thresholds on the raw-image rounds (m12/m3/m4)
+            # tweak (3): lower them on the background-subtracted rounds (m5/m6)
+            # tweak (4): relax qfit vetting everywhere for MIRI
+            base_first = float(getattr(options, 'local_snr_threshold', 5.0))
+            base_iter2 = float(getattr(options, 'manual_iter2_local_snr', 3.0))
+            base_extsnr = float(getattr(options, 'manual_ext_local_snr_min', 5.0))
+            base_qfit = float(getattr(options, 'manual_ext_qfit_max', 0.2))
+            if phase in ('m12', 'm3', 'm4'):
+                opts_phase.local_snr_threshold = max(base_first, 8.0)
+                opts_phase.manual_iter2_local_snr = max(base_iter2, 6.0)
+                opts_phase.manual_ext_local_snr_min = max(base_extsnr, 8.0)
+                # high-purity structure-noise prune on the raw rounds
+                opts_phase.struct_x = 5.0
+                opts_phase.struct_y = 8.0
+            elif phase in ('m5', 'm6'):
+                opts_phase.manual_iter2_local_snr = min(base_iter2, 3.0)
+                opts_phase.manual_ext_local_snr_min = min(base_extsnr, 3.0)
+                # background already subtracted -> structure noise is lower;
+                # relax the prune to recover faint point sources (tweak 3)
+                opts_phase.struct_x = 3.0
+                opts_phase.struct_y = 4.0
+            opts_phase.manual_ext_qfit_max = max(base_qfit, 0.4)
+            print(f"  [miri_tuning {phase}] first_snr="
+                  f"{getattr(opts_phase,'local_snr_threshold',5.0)} iter2_snr="
+                  f"{opts_phase.manual_iter2_local_snr} ext_snr_min="
+                  f"{opts_phase.manual_ext_local_snr_min} qfit_max="
+                  f"{opts_phase.manual_ext_qfit_max}", flush=True)
 
         for module in modules:
             for filt in filternames:
@@ -1144,8 +1274,15 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         prev_seed = _build_i2d_augmented_seed(
                             det_i2d, vetted_prev, filt,
                             local_snr_min=float(getattr(
-                                options, 'manual_ext_local_snr_min', 5.0)),
+                                opts_phase, 'manual_ext_local_snr_min', 5.0)),
                             bg_subtract_path=bg_sub,
+                            # structure-noise prune is MIRI-ONLY: gate on
+                            # miri_tuning so it can never apply to the default
+                            # NIRCam pipeline regardless of options.
+                            struct_x=(float(getattr(opts_phase, 'struct_x', 0.0))
+                                      if miri_tuning else 0.0),
+                            struct_y=(float(getattr(opts_phase, 'struct_y', 0.0))
+                                      if miri_tuning else 0.0),
                             label=f'{phase}:{filt}')
                     except Exception as ex:
                         print(f"manual [{phase}]: i2d-augmented seed failed ({ex}); "
@@ -1288,9 +1425,10 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             ww_i2d = wcs.WCS(hdu.header)
                     vetted = _filter_extended_emission(
                         merged, data_i2d_image=d_i2d, ww_i2d=ww_i2d,
-                        qfit_max=float(getattr(options, 'manual_ext_qfit_max', 0.2)),
-                        peak_over_bkg=float(getattr(options, 'manual_ext_peak_over_bkg', 20.0)),
-                        local_snr_min=float(getattr(options, 'manual_ext_local_snr_min', 5.0)),
+                        qfit_max=float(getattr(opts_phase, 'manual_ext_qfit_max', 0.2)),
+                        peak_over_bkg=float(getattr(opts_phase, 'manual_ext_peak_over_bkg', 20.0)),
+                        local_snr_min=float(getattr(opts_phase, 'manual_ext_local_snr_min', 5.0)),
+                        struct_x=0.0, struct_y=0.0,  # prune at detection, not here
                         label=f'{phase}:{filt}')
                     vetted.write(vetted_path, overwrite=True)
                 except Exception as ex:
