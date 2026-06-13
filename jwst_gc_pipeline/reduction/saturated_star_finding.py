@@ -594,17 +594,24 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     forced_sources_present = any(s.get('forced') for s in source_records)
     if forced_sources_present:
         from .filtering import get_filtername
+        _inst = header['INSTRUME'].lower()   # 'nircam' or 'miri'
         _det = header['DETECTOR']
         if _det == 'NRCALONG':
             _det = 'NRCA5'
         elif _det == 'NRCBLONG':
             _det = 'NRCB5'
+        elif _det.upper() == 'MIRIMAGE':
+            _det = 'mirim'
         _filt = get_filtername(header)
-        # SW detectors: NRCA1-4, NRCB1-4 → fov_pixels=2048
-        # LW (NRCA5/NRCB5):                 fov_pixels=1024
-        _is_lw = _det.upper().endswith('5')
-        _fovp = 1024 if _is_lw else 2048
-        _lg_fn = (f"{path_prefix}/nircam_{_det.lower()}_{_filt.lower()}"
+        # PSF grid fov_pixels sized so off-FOV diffraction spikes are modelled:
+        # NIRCam SW (NRC?1-4) 2048, NIRCam LW (NRC?5) 1024; MIRI (0.11"/px,
+        # spikes reach ~40"=364px) 1024.
+        if _inst == 'miri':
+            _fovp = 1024
+        else:
+            _is_lw = _det.upper().endswith('5')
+            _fovp = 1024 if _is_lw else 2048
+        _lg_fn = (f"{path_prefix}/{_inst}_{_det.lower()}_{_filt.lower()}"
                   f"_fovp{_fovp}_samp2_npsf16.fits")
         if not os.path.exists(_lg_fn):
             raise FileNotFoundError(
