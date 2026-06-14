@@ -5,6 +5,7 @@ import os
 import re
 import sys
 import warnings
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from astropy.io import fits
 import glob
 from photutils.background import MMMBackground, MADStdBackgroundRMS
@@ -586,6 +587,147 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     return newtbl
 
 
+def _skycoord_colname_for(tbl):
+    """Match combine_singleframe's column-name convention (crowd vs dao)."""
+    return 'skycoord' if 'qf' in tbl.colnames else 'skycoord_centroid'
+
+
+def _make_spatial_tiles(ras_deg, decs_deg, n_chunks):
+    """Partition the sky into ~n_chunks count-balanced rectangular CORE tiles.
+
+    Splits RA into nx quantile bands, then each band into ny quantile rows, so
+    each tile holds roughly equal source COUNT (good load balance in fields with
+    strong density gradients).  Returns a list of (ra_lo, ra_hi, dec_lo, dec_hi)
+    half-open core boxes whose union covers all input points (outer edges padded
+    so nothing falls outside).
+    """
+    n_chunks = max(1, int(n_chunks))
+    nx = int(np.ceil(np.sqrt(n_chunks)))
+    ny = int(np.ceil(n_chunks / nx))
+    eps = 1e-9
+    ra_edges = np.quantile(ras_deg, np.linspace(0, 1, nx + 1))
+    ra_edges[0] -= eps
+    ra_edges[-1] += eps
+    tiles = []
+    for ix in range(nx):
+        rlo, rhi = ra_edges[ix], ra_edges[ix + 1]
+        in_band = (ras_deg >= rlo) & (ras_deg < rhi)
+        band_decs = decs_deg[in_band]
+        if band_decs.size == 0:
+            continue
+        dec_edges = np.quantile(band_decs, np.linspace(0, 1, ny + 1))
+        dec_edges[0] -= eps
+        dec_edges[-1] += eps
+        for iy in range(ny):
+            tiles.append((rlo, rhi, dec_edges[iy], dec_edges[iy + 1]))
+    return tiles
+
+
+def _subset_tables_to_region(tbls, skycoord_colname, bounds, halo_deg):
+    """Subset each table to the core box grown by halo_deg (RA halo scaled by
+    1/cos(dec)).  Drops tables with no rows in the region.  Returns the list of
+    non-empty subset tables (meta preserved)."""
+    rlo, rhi, dlo, dhi = bounds
+    dec_c = 0.5 * (dlo + dhi)
+    halo_ra = halo_deg / max(np.cos(np.radians(dec_c)), 1e-6)
+    out = []
+    for tbl in tbls:
+        sc = tbl[skycoord_colname]
+        ra = sc.ra.deg
+        dec = sc.dec.deg
+        m = ((ra >= rlo - halo_ra) & (ra < rhi + halo_ra) &
+             (dec >= dlo - halo_deg) & (dec < dhi + halo_deg) &
+             np.isfinite(ra) & np.isfinite(dec))
+        if m.any():
+            sub = tbl[m]
+            sub.meta = dict(tbl.meta)
+            out.append(sub)
+    return out
+
+
+def _combine_chunk_worker(args):
+    """Pickleable worker: combine one spatial tile, then keep only sources whose
+    AVERAGED position falls in the tile CORE (so each star is owned by exactly
+    one tile -- the halo copies in neighbouring tiles are dropped)."""
+    subset_tables, bounds, kwargs = args
+    if len(subset_tables) == 0:
+        return None
+    newtbl = combine_singleframe(subset_tables, verbose=False, **kwargs)
+    if newtbl is None or len(newtbl) == 0:
+        return newtbl
+    rlo, rhi, dlo, dhi = bounds
+    avg = newtbl['skycoord_avg']
+    ra = avg.ra.deg
+    dec = avg.dec.deg
+    # half-open core ownership; NaN-avg rows are kept here (and dropped by the
+    # caller's existing NaN-sky reject) so they are not silently lost.
+    core = ((ra >= rlo) & (ra < rhi) & (dec >= dlo) & (dec < dhi)) | ~np.isfinite(ra) | ~np.isfinite(dec)
+    return newtbl[core]
+
+
+def combine_singleframe_chunked(tbls, n_chunks=8, halo=2.0 * u.arcsec,
+                                workers=None, **kwargs):
+    """Parallel, count-balanced spatial-tiling wrapper around combine_singleframe.
+
+    The serial combine_singleframe builds (n_src x n_tbl) arrays and runs
+    per-axis sigma-clip/nanaverage over them -- O(n_src) memory and serial CPU
+    that dominate dense-field merges (brick/sgrc: ~78k sources/frame, days of
+    wall time at ~1 core).  Here we split the sky into ~n_chunks count-balanced
+    CORE tiles, grow each by a halo (>= the cross-match radius so every core
+    star gathers ALL its per-frame detections), run combine_singleframe on each
+    tile IN PARALLEL, and keep only sources whose averaged position lands in the
+    tile core.  Core tiles are disjoint and cover the plane, so every star has
+    exactly one owner -- no edge cross-match needed, no duplicates, none lost.
+
+    Identical output schema to combine_singleframe.  n_chunks<=1 -> no chunking.
+    """
+    if n_chunks is None or int(n_chunks) <= 1 or len(tbls) == 0:
+        return combine_singleframe(tbls, **kwargs)
+
+    # Each tile runs in its own subprocess; use the plain-numpy reducer so we
+    # don't spawn dask worker threads inside every subprocess (oversubscription).
+    kwargs.setdefault('nanaverage', nanaverage_numpy)
+    skycoord_colname = _skycoord_colname_for(tbls[0])
+    # global detection distribution -> count-balanced tiles
+    all_ra = np.concatenate([np.asarray(t[skycoord_colname].ra.deg) for t in tbls])
+    all_dec = np.concatenate([np.asarray(t[skycoord_colname].dec.deg) for t in tbls])
+    finite = np.isfinite(all_ra) & np.isfinite(all_dec)
+    tiles = _make_spatial_tiles(all_ra[finite], all_dec[finite], n_chunks)
+    halo_deg = halo.to(u.deg).value
+    print(f"combine_singleframe_chunked: {len(tbls)} frames, "
+          f"{int(finite.sum())} detections -> {len(tiles)} tiles "
+          f"(halo={halo.to(u.arcsec):.2f}), workers={workers}", flush=True)
+
+    jobs = []
+    for bounds in tiles:
+        subset = _subset_tables_to_region(tbls, skycoord_colname, bounds, halo_deg)
+        if subset:
+            jobs.append((subset, bounds, kwargs))
+
+    results = []
+    nworkers = max(1, int(workers or 1))
+    if nworkers > 1 and len(jobs) > 1:
+        with ProcessPoolExecutor(max_workers=min(nworkers, len(jobs))) as ex:
+            futs = {ex.submit(_combine_chunk_worker, j): j[1] for j in jobs}
+            for fut in as_completed(futs):
+                r = fut.result()
+                if r is not None and len(r) > 0:
+                    results.append(r)
+    else:
+        for j in jobs:
+            r = _combine_chunk_worker(j)
+            if r is not None and len(r) > 0:
+                results.append(r)
+
+    if not results:
+        raise ValueError("combine_singleframe_chunked produced no rows from any tile")
+    merged = table.vstack(results, metadata_conflicts='silent')
+    merged.meta = dict(tbls[0].meta)
+    print(f"combine_singleframe_chunked: stitched {len(results)} tiles "
+          f"-> {len(merged)} merged sources", flush=True)
+    return merged
+
+
 def _bgsub_token(bgsub, resbgsub=False):
     """Filename token for the background-subtraction mode(s) in effect.
 
@@ -943,6 +1085,8 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
                                         do_replace_saturated=True,
                                         group=False,
                                         fwhm_basepath=None,
+                                        n_spatial_chunks=1,
+                                        merge_workers=1,
                                         basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
 
     desat = "_unsatstar" if desat else ""
@@ -1064,7 +1208,25 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     # a dense field.  min_offset=0.25" would actively mis-merge ~36% of
     # real neighbours (separations 0.10-0.15").  Keeping the historical
     # defaults.
-    merged_exposure_table = combine_singleframe(tables, offsets_table=offsets_table)
+    # Spatial chunking parallelizes + bounds the memory of the otherwise serial
+    # O(n_src) combine (the dense-field bottleneck).  n_spatial_chunks<=1 keeps
+    # the exact serial path.  Auto-scale chunk count to the source volume when
+    # the caller asks for chunking with workers but leaves n_spatial_chunks=1.
+    _nchunks = int(n_spatial_chunks)
+    if _nchunks <= 1 and int(merge_workers) > 1:
+        _total_det = sum(len(t) for t in tables)
+        if _total_det > 1_000_000:
+            # ~one tile per 250k detections, capped at the worker count
+            _nchunks = min(int(merge_workers),
+                           max(2, int(np.ceil(_total_det / 250_000))))
+    if _nchunks > 1:
+        print(f"merge_individual_frames: spatial-chunked combine "
+              f"({_nchunks} tiles, {merge_workers} workers)", flush=True)
+        merged_exposure_table = combine_singleframe_chunked(
+            tables, n_chunks=_nchunks, workers=int(merge_workers),
+            offsets_table=offsets_table)
+    else:
+        merged_exposure_table = combine_singleframe(tables, offsets_table=offsets_table)
 
     outfn = f"{basepath}/catalogs/{filtername.lower()}_{module}_indivexp_merged{desat}{bgsub}{fitpsf}{blur_}{iter_token}_{method}{suffix}_allcols.fits"
     print(f"Writing {outfn} with length {len(merged_exposure_table)}")

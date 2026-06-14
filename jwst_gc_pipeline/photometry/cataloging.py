@@ -602,8 +602,10 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     # multiplier (--manual-group-min-sep-fwhm) to jointly fit wider pairs.
     _grp_mult = float(getattr(options, 'manual_group_min_sep_fwhm', 2.0))
     _grp_sep = _grp_mult * fwhm_pix
-    _max_group_size = int(getattr(options, 'max_group_size', 0) or 0)
-    if _max_group_size > 0:
+    # resolve_max_group_size rejects the ambiguous 0; None == 'unlimited' (no cap).
+    _max_group_size = _L.resolve_max_group_size(
+        getattr(options, 'max_group_size', 'unlimited'))
+    if _max_group_size is not None:
         grouper = _L.CappedSourceGrouper(_grp_sep, max_size=_max_group_size)
     else:
         grouper = SourceGrouper(_grp_sep)
@@ -1384,7 +1386,14 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     visit_id = filename.split("_")[0][-3:]
                     vgroup_id = filename.split("_")[1]
                     file_detector = filename.split("_")[3]
-                    file_module = file_detector if module == 'merged' else module
+                    # Per-frame products MUST be named by the actual DETECTOR, never
+                    # the (coarser) requested module.  Otherwise SW exposures whose
+                    # 4 detectors (nrcb1-4) share visit+vgroup+exp collapse to one
+                    # filename (module='nrcb') and 3 of 4 are silently overwritten,
+                    # holing the residual/model mosaics and dropping detections from
+                    # the merge.  The merged-module products downstream still glob
+                    # all detector variants for module='nrcb'.
+                    file_module = file_detector
                     frame_args.append({
                         'options': opts_phase, 'filtername': filt,
                         'module': file_module, 'detector': file_detector,
@@ -1399,6 +1408,24 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         'resbg_path': resbg_path,
                         'satstar_flux_overrides': satstar_overrides.get((module, filt)),
                     })
+
+                # Collision guard: every frame's per-frame output identity
+                # (visit+vgroup+exp+detector) MUST be unique, else two frames write
+                # the same file and one is silently overwritten (= data loss).
+                _ident = {}
+                for a in frame_args:
+                    k = (a['visit_id'], a['vgroup_id'], a['exposurenumber'], a['module'])
+                    _ident.setdefault(k, []).append(a['filename'])
+                _collisions = {k: v for k, v in _ident.items() if len(v) > 1}
+                if _collisions:
+                    _msg = '\n'.join(
+                        f"    {k} <- " + ', '.join(os.path.basename(f) for f in v)
+                        for k, v in _collisions.items())
+                    raise RuntimeError(
+                        f"manual [{phase}] {filt}/{module}: per-frame output name "
+                        f"COLLISION -- {len(_collisions)} (visit,vgroup,exp,detector) "
+                        f"keys map to >1 input frame; outputs would silently "
+                        f"overwrite each other.  Aborting:\n{_msg}")
 
                 max_workers = max(1, int(getattr(options, 'parallel_workers', 1) or 1))
                 _is_cutout = bool(getattr(options, 'cutout_region', ''))
@@ -1518,7 +1545,12 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     iteration_label=merge_label, bgsub=options.bgsub,
                     desat=options.desaturated, epsf=options.epsf, blur=options.blur,
                     resbgsub=resbgsub, group=getattr(options, 'group', False),
-                    fwhm_basepath=basepath)
+                    fwhm_basepath=basepath,
+                    # parallelize the otherwise-serial dense-field merge: pass the
+                    # worker count so combine auto-spatial-chunks when the source
+                    # volume is large (>1M detections).
+                    n_spatial_chunks=int(getattr(options, 'merge_spatial_chunks', 1) or 1),
+                    merge_workers=max(1, int(getattr(options, 'parallel_workers', 1) or 1)))
 
                 # data i2d once (m12), for peak-SB in the vetting step.  Cutout
                 # runs resample the per-frame crops (globbed by label); full-frame

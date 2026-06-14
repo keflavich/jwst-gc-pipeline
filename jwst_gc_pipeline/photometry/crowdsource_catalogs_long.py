@@ -446,6 +446,37 @@ def _parallel_iterative_psfphotometry(image, *, photometry_kwargs, finder,
     return vstack(accumulated_tables)
 
 
+def resolve_max_group_size(raw):
+    """Resolve the --max-group-size option to either None (unlimited, no cap) or
+    a positive int (the cap).  The value 0 is REJECTED as ambiguous: it used to
+    mean "no cap" but reads like "no grouping", so callers must now be explicit
+    ('unlimited' or a positive integer).  Raises SystemExit on an invalid value.
+    """
+    if raw is None:
+        raise SystemExit(
+            "--max-group-size must be set explicitly to 'unlimited' or a positive "
+            "integer (it has no implicit default; 0 is not allowed).")
+    s = str(raw).strip().lower()
+    if s in ('unlimited', 'inf', 'infinite', 'nocap', 'none'):
+        return None
+    try:
+        n = int(s)
+    except ValueError:
+        raise SystemExit(
+            f"--max-group-size={raw!r} is invalid; use 'unlimited' or a positive "
+            f"integer.")
+    if n == 0:
+        raise SystemExit(
+            "--max-group-size=0 is ambiguous and no longer allowed: it meant "
+            "'unlimited group size' but reads like 'no grouping'.  Pass "
+            "--max-group-size=unlimited for no cap, or a positive integer "
+            "(e.g. 10-15) for a cap.")
+    if n < 0:
+        raise SystemExit(
+            f"--max-group-size={n} is invalid; use 'unlimited' or a positive integer.")
+    return n
+
+
 class CappedSourceGrouper:
     """SourceGrouper wrapper that caps the maximum group size.
 
@@ -3097,12 +3128,18 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
         visit_id = bn.split('_')[0][-3:]
         vgroup_id = bn.split('_')[1]
         exposure_id = bn.split('_')[2]
+        # Per-frame products are named by the actual DETECTOR (the manual path
+        # writes them per-detector to avoid SW filename collisions); use it in the
+        # stem so the raw residual/model are found and the mergedcat per-frame
+        # products are written per-detector too.  The FINAL coadded mosaic below
+        # keeps the requested ``module`` (merged-module) name.
+        frame_detector = bn.split('_')[3]
         (visitid_, vgroupid_, exposure_, desat, bgsub,
          epsf_, blur_, group_, iter_) = _predict_output_tokens(
             options, visit_id, vgroup_id, exposure_id, iteration_label)
         for kind in kinds:
             stem = (f'{pipeline_dir}/jw0{proposal_id}-o{field}_t001_{inst_token}_'
-                    f'{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}'
+                    f'{pupil}-{filtername.lower()}-{frame_detector}{visitid_}{vgroupid_}'
                     f'{exposure_}{desat}{bgsub}{epsf_}{blur_}{group_}{iter_}'
                     f'_daophot_{kind}')
             raw_resid = f'{stem}_residual.fits'
@@ -3908,13 +3945,16 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       default=False, action='store_true',
                       help='Enumerate --each-exposure work and print a comma-separated SLURM --array spec of only the bundled task indices that still need to run. Writes only the spec to stdout; logs go to stderr.')
     parser.add_option('--max-group-size', dest='max_group_size',
-                      default=0, type='int',
-                      help=('Cap on photutils SourceGrouper group size '
-                            '(0 = no cap, the default).  Groups larger than '
-                            'this are split into spatially coherent sub-groups '
-                            'via principal-axis sorting before the joint fit.  '
-                            'Set to 15 for iter3-class runs to keep dense-region '
-                            'fits tractable within the 96 h walltime.'))
+                      default='unlimited', type='string',
+                      help=("Cap on photutils SourceGrouper group size.  Must be "
+                            "EXPLICIT: 'unlimited' (no cap) or a POSITIVE integer. "
+                            "The value 0 is REJECTED -- it was ambiguous (read as "
+                            "'no grouping' but actually meant 'unlimited group "
+                            "size').  Groups larger than the cap are split into "
+                            "spatially coherent sub-groups via principal-axis "
+                            "sorting before the joint fit.  Use 10-15 for dense "
+                            "fields to keep joint fits tractable; 'unlimited' only "
+                            "where blends are rare."))
     parser.add_option('--n-seed-chunks', dest='n_seed_chunks',
                       default=1, type='int',
                       help=('Split the seed catalog into N image-pixel tiles '
@@ -4737,11 +4777,13 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
 
     # DAO Photometry setup.  Use a CappedSourceGrouper when the caller
     # asks for a group-size cap (--max-group-size); the inner SourceGrouper
-    # uses the same 2*FWHM linking distance as before.
-    _max_group_size = int(getattr(options, 'max_group_size', 0) or 0)
-    if _max_group_size > 0:
+    # uses the same 2*FWHM linking distance as before.  ``resolve_max_group_size``
+    # rejects the ambiguous 0 and returns None for 'unlimited'.
+    _max_group_size = resolve_max_group_size(getattr(options, 'max_group_size', 'unlimited'))
+    if _max_group_size is not None:
         grouper = CappedSourceGrouper(2 * fwhm_pix, max_size=_max_group_size)
     else:
+        print("max_group_size=unlimited: SourceGrouper has no group-size cap.", flush=True)
         grouper = SourceGrouper(2 * fwhm_pix)
     mmm_bkg = MMMBackground()
 
