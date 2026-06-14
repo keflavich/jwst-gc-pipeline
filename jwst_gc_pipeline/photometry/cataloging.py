@@ -701,6 +701,24 @@ def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
     base = (ctx.original_data if ctx.satstar_model_subtracted is None
             else ctx.original_data - ctx.satstar_model_subtracted)
     residual = base - modsky
+    # Saturated-core pixels carry detector-CLIPPED data (the true peak is lost),
+    # so (clipped data - bright PSF/satstar model) produces a huge negative PIT
+    # in the residual -- e.g. data~700 vs model~84000 -> -83000 MJy/sr.  This is
+    # NOT a real over-subtraction: the fit/flux is correct (qfit~0.2); the DATA
+    # there is invalid.  NaN those pixels (dilated 2px to catch the bleed/edge)
+    # so the residual + downstream detection/star-free products aren't polluted.
+    # Photometry is unaffected (fluxes already measured).
+    #
+    # MIRI-ONLY: NIRCam handles saturation differently (charge-trap ramp recovery
+    # partially reconstructs the core, and the NIRCam satstar nan-pit handling of
+    # 2026-05-28 already manages its residual cores), so a blanket NaN there could
+    # discard recoverable data / double-handle.  Gate strictly on MIRI.
+    if (ctx.dqarr is not None
+            and _L._instrument_from_filter(ctx.filtername) == 'MIRI'):
+        from scipy.ndimage import binary_dilation as _bd
+        _sat = (ctx.dqarr & _L.dqflags.pixel['SATURATED']) != 0
+        if _sat.any():
+            residual[_bd(_sat, iterations=2)] = np.nan
     stub = (f'{bp}/{ctx.filtername}/pipeline/jw0{ctx.proposal_id}-o{ctx.field}_t001_'
             f'{ctx.inst_token}_{ctx.pupil}-{ctx.filtername.lower()}-{ctx.module}'
             f'{ctx.visitid_}{ctx.vgroupid_}{ctx.exposure_}{ctx.desat}{ctx.bgsub}'
