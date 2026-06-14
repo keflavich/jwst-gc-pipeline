@@ -366,9 +366,16 @@ def main(filtername, Observations=None, regionname='brick',
         for member in asn_data['products'][0]['members']:
             print(f"Running  maybe alignment on {member}")
             fname = member['expname']
-            assert fname.endswith('_cal.fits')
-            member['expname'] = fname.replace("_cal.fits", "_align.fits")
-            shutil.copy(fname, member['expname'])
+            # Idempotent re-run: this loop rewrites the asn with _align.fits
+            # members at the end (json.dump below), so on a RE-RUN the members
+            # are already _align.fits and the old `assert _cal.fits` failed.
+            # Normalize back to the _cal.fits source, then re-copy + re-align
+            # fresh from cal each run.
+            cal_name = fname.replace("_align.fits", "_cal.fits")
+            assert cal_name.endswith('_cal.fits'), cal_name
+            align_name = cal_name.replace("_cal.fits", "_align.fits")
+            member['expname'] = align_name
+            shutil.copy(cal_name, align_name)
 
             fix_alignment(member['expname'], proposal_id=proposal_id,
                           field=field, basepath=basepath,
@@ -380,6 +387,15 @@ def main(filtername, Observations=None, regionname='brick',
         asn_file_each = asn_file
         with open(asn_file_each, 'w') as fh:
             json.dump(asn_data, fh)
+
+        # Force SHIFT-ONLY alignment (no rotation/scale).  MIRI BRIGHTSKY fields
+        # have very few matched stars per frame, and allowing rotation lets
+        # tweakreg fit a catastrophic spurious rotation -- e.g. sickle F1130W
+        # o001 came out rotated ~45deg + flipped.  We have never found a real
+        # nonzero MIRI rotation correction, so disallow it for both the relative
+        # (frame-to-frame) and absolute (to-refcat) fits.
+        tweakreg_parameters['fitgeometry'] = 'shift'
+        tweakreg_parameters['abs_fitgeometry'] = 'shift'
 
         abs_refcat = get_reference_astrometric_catalog_path(basepath, proposal_id, field, explicit_refcat=reference_catalog)
         if abs_refcat is not None:
