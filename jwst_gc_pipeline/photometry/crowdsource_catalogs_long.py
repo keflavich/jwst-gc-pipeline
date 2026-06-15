@@ -1977,6 +1977,7 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
                                  outside_star_pixels=None, outside_star_fit_box=512,
                                  forced_grid_search_radius=5,
                                  flux_overrides=None,
+                                 flux_drops=None,
                                  file_suffix=''):
     """
     ``file_suffix`` is inserted into the satstar output filenames before
@@ -1995,7 +1996,7 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
     # See project_force_union_satstar.md for the design rationale.
     # When flux_overrides are supplied (cross-frame out-of-field reconciliation),
     # force a refit: the cached catalog predates the override and must be redone.
-    if flux_overrides:
+    if flux_overrides or flux_drops:
         overwrite = True
     extended_filename = filename.replace(
         '.fits', f'{file_suffix}_extended_satstar_catalog.fits')
@@ -2011,6 +2012,7 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
                            outside_star_fit_box=outside_star_fit_box,
                            forced_grid_search_radius=forced_grid_search_radius,
                            flux_overrides=flux_overrides,
+                           flux_drops=flux_drops,
                            file_suffix=file_suffix)
     if os.path.exists(satstar_filename):
         return Table.read(satstar_filename)

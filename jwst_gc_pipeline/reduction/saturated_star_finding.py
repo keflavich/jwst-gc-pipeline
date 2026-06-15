@@ -414,7 +414,8 @@ def compute_adaptive_bkg_annulus(sat_area, bkg_inner_min=15, bkg_inner_max=50):
 
 
 def reconcile_outside_fov_satstar_fluxes(per_frame, match_radius=1.0 * u.arcsec,
-                                         disagree_factor=2.0, min_frames=2):
+                                         disagree_factor=2.0, min_frames=2,
+                                         min_detector_diversity=30.0 * u.arcsec):
     """Reconcile the flux of OUT-OF-FIELD (forced) saturated stars across frames.
 
     A star outside the field of view, if bright enough, has its PSF detected in
@@ -425,6 +426,19 @@ def reconcile_outside_fov_satstar_fluxes(per_frame, match_radius=1.0 * u.arcsec,
     a badly wrong flux that over-contributes to the model.  We trust the frame
     whose detector footprint centre is CLOSEST to the star (it sees the spikes)
     and override the discordant far-frame fluxes with it.
+
+    This nearest-detector premise REQUIRES detector diversity: the frames must
+    sample the off-field star from materially different detector positions, so
+    that the closest one genuinely sees more spike than the others.  For a
+    SINGLE-detector filter (e.g. NIRCam LW = one nrcblong detector, only
+    dithered), every frame is the same detector at ~the same place: "nearest"
+    is meaningless, and if the spikes never enter that one detector's FOV then
+    EVERY frame fits spike-less scattered light and no trustworthy flux exists.
+    Pinning any of those (mutually-discordant, all-inflated) values just spreads
+    a garbage flux to every frame -> the off-field star over-contributes a fake
+    background.  When a discordant group shows no detector diversity (all member
+    detector centres fall within ``min_detector_diversity``), the source is
+    UNFITTABLE here: we DROP it instead of pinning a bad flux.
 
     Parameters
     ----------
@@ -442,14 +456,29 @@ def reconcile_outside_fov_satstar_fluxes(per_frame, match_radius=1.0 * u.arcsec,
     min_frames : int
         A star must be fit in at least this many frames to reconcile (else there
         is nothing to compare against and the single fit is kept as-is).
+    min_detector_diversity : Quantity
+        Minimum spread (max pairwise separation) of member detector centres for
+        the nearest-detector premise to hold.  A discordant group whose detector
+        centres are all within this radius (single detector, only dithered) has
+        no trustworthy reference frame -> its source is dropped, not overridden.
+        Dithers are << a detector; distinct detectors are >> a dither, so 30"
+        cleanly separates "same detector dithered" from "different detectors".
 
     Returns
     -------
-    list of (SkyCoord, flux) : the reconciled (nearest-detector) flux for every
-        out-of-field star that had a cross-frame disagreement.  Empty if nothing
-        needed reconciling.  Pure function: it does not mutate the input tables.
-        The caller forwards this as ``flux_overrides`` to ``get_saturated_stars``
-        so every frame pins that star to the trusted flux on the next phase.
+    (overrides, drops) : tuple
+        ``overrides`` is a list of (SkyCoord, flux): the reconciled
+        (nearest-detector) flux for every out-of-field star that had a
+        cross-frame disagreement AND enough detector diversity to trust one
+        frame.  The caller forwards it as ``flux_overrides`` to
+        ``get_saturated_stars`` so every frame pins that star to the trusted
+        flux on the next phase.
+        ``drops`` is a list of SkyCoord: out-of-field stars that disagreed
+        across frames but had NO detector diversity (unfittable -- no frame
+        caught the spikes).  The caller forwards it as ``flux_drops`` so every
+        frame SKIPS the forced source instead of contributing a garbage model.
+        Both empty if nothing needed reconciling.  Pure function: it does not
+        mutate the input tables.
     """
     # Gather every out-of-field forced measurement as
     # (key, row_index, SkyCoord, flux, det_center_SkyCoord).
@@ -474,7 +503,7 @@ def reconcile_outside_fov_satstar_fluxes(per_frame, match_radius=1.0 * u.arcsec,
             if np.isfinite(flux[ri]):
                 recs.append((key, int(ri), sc[ri], float(flux[ri]), dc))
     if len(recs) < min_frames:
-        return []
+        return [], []
 
     all_sc = SkyCoord([r[2] for r in recs])
     # Greedy single-linkage grouping by sky position (n is small: #forced fits).
@@ -493,6 +522,7 @@ def reconcile_outside_fov_satstar_fluxes(per_frame, match_radius=1.0 * u.arcsec,
         groups.append(members)
 
     overrides = []
+    drops = []
     for members in groups:
         if len(members) < min_frames:
             continue
@@ -504,7 +534,7 @@ def reconcile_outside_fov_satstar_fluxes(per_frame, match_radius=1.0 * u.arcsec,
         truth = recs[near][3]
         if not (truth > 0):
             continue
-        # Override only when some far frame disagrees badly with the trusted
+        # Act only when some far frame disagrees badly with the trusted
         # near-frame flux; otherwise leave the (already consistent) family alone.
         disagrees = False
         for m in members:
@@ -515,12 +545,38 @@ def reconcile_outside_fov_satstar_fluxes(per_frame, match_radius=1.0 * u.arcsec,
             if ratio > disagree_factor:
                 disagrees = True
                 break
-        if disagrees:
+        if not disagrees:
+            continue
+        # Detector diversity: the nearest-detector premise only holds if the
+        # member detector centres are materially spread out (different
+        # detectors).  Max pairwise separation among member det_centres.
+        det_centres = SkyCoord([recs[m][4] for m in members])
+        if len(members) > 1:
+            spread = max(det_centres[i].separation(det_centres[j]).arcsec
+                         for i in range(len(members))
+                         for j in range(i + 1, len(members))) * u.arcsec
+        else:
+            spread = 0.0 * u.arcsec
+        if spread < min_detector_diversity:
+            # Single detector (only dithered): no frame is meaningfully more
+            # interior, and the discordant all-inflated fluxes mean the spikes
+            # never entered this detector's FOV.  No trustworthy reference ->
+            # drop the unfittable forced source (use the brightest member's
+            # position as the drop key; the per-frame seeds cluster within
+            # match_radius of it).
+            bright = members[int(np.argmax([recs[m][3] for m in members]))]
+            drops.append(recs[bright][2])
+        else:
             overrides.append((recs[near][2], truth))
-    return overrides
+    return overrides, drops
 
 
-def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None):
+def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None):
+    # ``flux_drops``: optional list of SkyCoord.  An out-of-field (forced) source
+    # whose seed sky position matches a drop within ~1.0" is SKIPPED entirely
+    # (not fit, not contributed): cross-frame reconciliation found no trustworthy
+    # reference for it (single detector, spikes never in FOV -> unfittable), so
+    # contributing any model would over-add a fake background.
     # ``flux_overrides``: optional list of (SkyCoord, flux) pairs.  An out-of-field
     # (forced) source whose seed sky position matches an override within ~0.2" uses
     # that fixed flux instead of fitting -- the cross-frame reconciliation
@@ -807,6 +863,23 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         print(f"Source {ii+1}: center at (x, y) = ({xcen}, {ycen}), forced={forced_source}")
 
         if forced_source:
+            # Cross-frame reconciliation may have flagged this off-field star as
+            # unfittable here (no detector saw its spikes -> any flux is garbage).
+            # Skip it entirely so it contributes no (fake-background) model.
+            if flux_drops:
+                try:
+                    _wpos_drop = ww.pixel_to_world(xcen, ycen)
+                    _dropped = any(
+                        _wpos_drop.separation(_dsc).arcsec < 1.0 for _dsc in flux_drops)
+                except Exception:
+                    _dropped = False
+                if _dropped:
+                    print(f"Source {ii+1}: out-of-field forced source at "
+                          f"(x={xcen},y={ycen}) DROPPED by cross-frame reconciliation "
+                          f"(no detector diversity -> no trustworthy flux; "
+                          f"unfittable here, skipping to avoid fake-background model).",
+                          flush=True)
+                    continue
             y0, y1 = _nearest_window_bounds(ycen, data.shape[0], outside_star_fit_box)
             x0, x1 = _nearest_window_bounds(xcen, data.shape[1], outside_star_fit_box)
             size_saturated = max(5, int(3 * fwhm_pix))

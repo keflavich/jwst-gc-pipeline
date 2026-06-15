@@ -558,7 +558,8 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
                                   filename, proposal_id, *, exposurenumber,
                                   visit_id, vgroup_id, bg_boxsizes, use_webbpsf,
                                   pupil, resbg_path, satstar_label,
-                                  satstar_flux_overrides=None):
+                                  satstar_flux_overrides=None,
+                                  satstar_flux_drops=None):
     """Load a frame and produce everything a manual pass needs: scaled
     aperture/annulus, filename tokens, data + error + mask, the (cutout-
     re-origined) PSF grid, the SourceGrouper, and the satstar-subtracted
@@ -699,6 +700,7 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         outside_star_pixels=outside_star_pixels, outside_star_fit_box=512,
         forced_grid_search_radius=forced_grid_search_radius,
         flux_overrides=satstar_flux_overrides,
+        flux_drops=satstar_flux_drops,
         file_suffix=satstar_file_suffix)
     ext_model = filename.replace('.fits', f'{satstar_file_suffix}_extended_satstar_model.fits')
     sat_model = filename.replace('.fits', f'{satstar_file_suffix}_satstar_model.fits')
@@ -770,7 +772,8 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
                               exposurenumber=None, visit_id=None, vgroup_id=None,
                               bg_boxsizes=None, use_webbpsf=False, pupil='clear',
                               prev_seed_catalog=None, resbg_path=None,
-                              satstar_flux_overrides=None):
+                              satstar_flux_overrides=None,
+                              satstar_flux_drops=None):
     """Clean per-frame driver for the manual-iteration path.
 
     ``manual_phase`` in {'m12','m3','m4','m5','m6','m7'}:
@@ -807,7 +810,8 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
         exposurenumber=exposurenumber, visit_id=visit_id, vgroup_id=vgroup_id,
         bg_boxsizes=bg_boxsizes, use_webbpsf=use_webbpsf, pupil=pupil,
         resbg_path=resbg_path, satstar_label=manual_phase,
-        satstar_flux_overrides=satstar_flux_overrides)
+        satstar_flux_overrides=satstar_flux_overrides,
+        satstar_flux_drops=satstar_flux_drops)
 
     # MIRI-only: enable the dpk<=0 overshoot blind-spot guard (group-fit
     # degeneracy near bright/saturated neighbours).  NIRCam unaffected.
@@ -1252,7 +1256,8 @@ def _run_one_frame_manual(args):
                 use_webbpsf=args['use_webbpsf'], pupil=args['pupil'],
                 prev_seed_catalog=args['prev_seed_catalog'],
                 resbg_path=args['resbg_path'],
-                satstar_flux_overrides=args.get('satstar_flux_overrides'))
+                satstar_flux_overrides=args.get('satstar_flux_overrides'),
+                satstar_flux_drops=args.get('satstar_flux_drops'))
             return (filename, True, None)
         except _L.CutoutNoOverlap as ex:
             return (filename, False, f'no-overlap: {ex}')
@@ -1337,6 +1342,11 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
     # to every later phase so far-detector (spike-less) fits are pinned to the
     # nearest-detector flux instead of mis-fitting scattered light.
     satstar_overrides = {}
+    # (module, filt) -> [SkyCoord] out-of-field satstars that disagreed across
+    # frames but had no detector diversity (single detector, spikes never in
+    # FOV).  No trustworthy flux exists, so these are DROPPED (skipped, not
+    # contributed) on every later phase to avoid a fake-background model.
+    satstar_drops = {}
     overlap_total = 0
 
     for phase in phases:
@@ -1489,6 +1499,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         'prev_seed_catalog': prev_seed,
                         'resbg_path': resbg_path,
                         'satstar_flux_overrides': satstar_overrides.get((module, filt)),
+                        'satstar_flux_drops': satstar_drops.get((module, filt)),
                     })
 
                 # Collision guard: every frame's per-frame output identity
@@ -1604,20 +1615,29 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             continue
                         _per_frame.append((_fr, Table.read(_sp)))
                     try:
-                        _ovr = reconcile_outside_fov_satstar_fluxes(
+                        _ovr, _drp = reconcile_outside_fov_satstar_fluxes(
                             _per_frame,
                             match_radius=float(getattr(
                                 options, 'satstar_reconcile_radius_arcsec', 1.0)) * u.arcsec,
                             disagree_factor=float(getattr(
-                                options, 'satstar_reconcile_disagree_factor', 2.0)))
+                                options, 'satstar_reconcile_disagree_factor', 2.0)),
+                            min_detector_diversity=float(getattr(
+                                options, 'satstar_reconcile_min_diversity_arcsec',
+                                30.0)) * u.arcsec)
                     except Exception as _ex:
                         print(f"manual [m12]: satstar reconciliation failed: {_ex}",
                               flush=True)
-                        _ovr = []
+                        _ovr, _drp = [], []
                     if _ovr:
                         satstar_overrides[(module, filt)] = _ovr
                         print(f"manual [m12]: reconciled {len(_ovr)} out-of-field "
                               f"satstar flux(es) for {filt}/{module}; will pin on "
+                              f"m3..m7", flush=True)
+                    if _drp:
+                        satstar_drops[(module, filt)] = _drp
+                        print(f"manual [m12]: DROPPING {len(_drp)} out-of-field "
+                              f"satstar(s) for {filt}/{module} (no detector "
+                              f"diversity -> no trustworthy flux); will skip on "
                               f"m3..m7", flush=True)
 
                 # merge per-frame catalogs (BASIC only)
