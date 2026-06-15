@@ -163,7 +163,8 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                       grouper, options, dq, satstar_model_subtracted,
                       label, xy_bounds_pix=None,
                       overshoot_ratio=1.2, overshoot_action='flag',
-                      miri_dpk_guard=False):
+                      miri_dpk_guard=False,
+                      satstar_excl_xy=None, satstar_excl_pix=0.0):
     """One single-pass ``PSFPhotometry`` fit seeded by ``init_params``, followed
     by the standard post-fit cleanup chain (mirrors the legacy BASIC block):
 
@@ -214,6 +215,44 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                               sig_K=float(options.satstar_artifact_sigK),
                               ratio_cut=float(options.satstar_artifact_ratio),
                               label=label)
+
+    # --- MIRI satstar-coincidence drop ---
+    # The satstar channel OWNS saturated stars (fit + subtracted before this
+    # daophot pass).  A daophot fit landing within satstar_excl_pix of a satstar
+    # catalog entry double-counts that star: the satstar model AND the daophot
+    # model are both subtracted, gouging a deep (-1e5) over-subtraction pit at
+    # the saturated core (verified: satstar 3.3e6 + daophot 3.5e5 -> -141k).
+    # The saturated core itself is masked, so any daophot "source" within ~1.5
+    # FWHM of a satstar is a wing / centroid-scatter spurious fit, not a real
+    # companion (a real companion that close to a bright saturated star is not
+    # separable anyway).  Unlike _filter_satstar_artifacts (which only drops
+    # fits DIMMER than the satstar wing), this catches the BRIGHT duplicate.
+    # MIRI-only; NIRCam unaffected (satstar_excl_pix stays 0).
+    if (satstar_excl_xy is not None and satstar_excl_pix > 0
+            and phot.results is not None and len(phot.results)):
+        _r = phot.results
+        _xs = np.asarray(_r['x_fit'], dtype=float)
+        _ys = np.asarray(_r['y_fit'], dtype=float)
+        _sx = np.asarray(satstar_excl_xy[:, 0], dtype=float)
+        _sy = np.asarray(satstar_excl_xy[:, 1], dtype=float)
+        _drop = np.zeros(len(_r), dtype=bool)
+        _r2 = float(satstar_excl_pix) ** 2
+        for _i in range(len(_r)):
+            if not (np.isfinite(_xs[_i]) and np.isfinite(_ys[_i])):
+                continue
+            _d2 = (_sx - _xs[_i]) ** 2 + (_sy - _ys[_i]) ** 2
+            if _d2.size and float(np.min(_d2)) < _r2:
+                _drop[_i] = True
+        _nd = int(_drop.sum())
+        if _nd:
+            phot.results = _r[~_drop]
+            if (phot.init_params is not None
+                    and len(phot.init_params) == len(_r)):
+                phot.init_params = phot.init_params[~_drop]
+            phot.__dict__.pop('_model_image_params', None)
+            print(f"[{label}] satstar-coincidence drop: {len(_r)} -> "
+                  f"{len(_r) - _nd} ({_nd} daophot fits within "
+                  f"{satstar_excl_pix:.1f}px of a satstar)", flush=True)
 
     # --- render model, then physical overshoot QC ---
     modsky = _make_model_image(phot, data.shape, psf_shape=(21, 21),
@@ -777,6 +816,21 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
         _instrume = ''
     _is_miri = 'MIRI' in _instrume
 
+    # MIRI satstar-coincidence exclusion: daophot fits within 1.5 FWHM of a
+    # satstar catalog entry are double-counts (see _manual_phot_pass).  Build
+    # the satstar pixel positions once.  NIRCam: leave disabled (pix=0).
+    _satstar_xy = None
+    _satstar_excl_pix = 0.0
+    if _is_miri and ctx.satstar_table is not None and len(ctx.satstar_table):
+        _sst = ctx.satstar_table
+        if 'x_fit' in _sst.colnames and 'y_fit' in _sst.colnames:
+            _sxv = np.asarray(_sst['x_fit'], dtype=float)
+            _syv = np.asarray(_sst['y_fit'], dtype=float)
+            _ok = np.isfinite(_sxv) & np.isfinite(_syv)
+            if _ok.any():
+                _satstar_xy = np.column_stack([_sxv[_ok], _syv[_ok]])
+                _satstar_excl_pix = 1.5 * ctx.fwhm_pix
+
     def _pass(seed, label):
         return _manual_phot_pass(
             data=ctx.nan_replaced_data, mask=ctx.mask, err=ctx.err, bad=ctx.bad,
@@ -789,7 +843,8 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
                                       else np.zeros(ctx.data.shape)),
             label=label, xy_bounds_pix=None,
             overshoot_ratio=overshoot_ratio, overshoot_action=overshoot_action,
-            miri_dpk_guard=_is_miri)
+            miri_dpk_guard=_is_miri,
+            satstar_excl_xy=_satstar_xy, satstar_excl_pix=_satstar_excl_pix)
 
     if manual_phase == 'm12':
         seed1 = _build_manual_seed(
