@@ -164,7 +164,8 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                       label, xy_bounds_pix=None,
                       overshoot_ratio=1.2, overshoot_action='flag',
                       miri_dpk_guard=False,
-                      satstar_excl_xy=None, satstar_excl_pix=0.0):
+                      satstar_excl_xy=None, satstar_excl_pix=0.0,
+                      near_sat_dist_pix=1.0):
     """One single-pass ``PSFPhotometry`` fit seeded by ``init_params``, followed
     by the standard post-fit cleanup chain (mirrors the legacy BASIC block):
 
@@ -210,7 +211,8 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
               f"({n_disagree} flux-disagree clusters)", flush=True)
 
     # --- near-saturation + satstar-wing rejection ---
-    _filter_near_saturation(phot, dq, max_sat_dist_pix=1.0, label=label)
+    _filter_near_saturation(phot, dq, max_sat_dist_pix=near_sat_dist_pix,
+                            label=label)
     _filter_satstar_artifacts(phot, satstar_model_subtracted, err,
                               sig_K=float(options.satstar_artifact_sigK),
                               ratio_cut=float(options.satstar_artifact_ratio),
@@ -844,7 +846,8 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             label=label, xy_bounds_pix=None,
             overshoot_ratio=overshoot_ratio, overshoot_action=overshoot_action,
             miri_dpk_guard=_is_miri,
-            satstar_excl_xy=_satstar_xy, satstar_excl_pix=_satstar_excl_pix)
+            satstar_excl_xy=_satstar_xy, satstar_excl_pix=_satstar_excl_pix,
+            near_sat_dist_pix=(1.5 * ctx.fwhm_pix if _is_miri else 1.0))
 
     if manual_phase == 'm12':
         seed1 = _build_manual_seed(
