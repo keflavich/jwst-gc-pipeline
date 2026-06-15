@@ -1338,8 +1338,15 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # whatever the core size.  Widen the band until >=8 px qualify.
             _dist = ndimage.distance_transform_edt(~satmask_combined)
             _psfok = (_psfu > _psfu.max() * 1e-5)
+            # Prefer the INNERMOST wing band (dist 2-5 px from the sat mask):
+            # the PSF is high there so data/psf pins the amplitude correctly.
+            # A wide band (out to 12+ px) is dominated by faint outer pixels
+            # whose data/psf is inflated (extended emission / noise over a tiny
+            # PSF), which pushes the percentile -- hence amplitude -- too high
+            # and OVER-predicts the inner wing (model ~3-14k vs data ~700 at
+            # r~5 -> -280k core pit).  Start tight; widen only if <8 px qualify.
             _wing = None
-            for _wid in (12, 20, 30, 45, 60):
+            for _wid in (5, 8, 12, 20, 30, 45, 60):
                 _w = ((~satmask_combined) & np.isfinite(cutout_fit)
                       & (_dist >= 2) & (_dist <= _wid) & _psfok)
                 if _w.sum() >= 8:
@@ -1357,21 +1364,24 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 _rat = (cutout_fit[_wing] / _psfu[_wing])
                 _rat = _rat[np.isfinite(_rat) & (_rat > 0)]
                 if _rat.size:
-                    # 20th pct: model exceeds data at ~20% of inner-wing px
-                    # (mild over-sub), subtracts the rest -- the "just touches
-                    # from below" amplitude the bottom-up scheme targets.  Also
-                    # cap at the absolute envelope (max ratio) so the model can
-                    # never exceed the data at ANY unmasked pixel -> no deep pit.
-                    _env = float(np.percentile(_rat, 20))
-                    _cap = float(np.percentile(_rat, 99))
+                    # p10 of (data-bg)/psf over the INNER wing = the bottom-up
+                    # amplitude where the model just touches the data from below
+                    # at the inner wing (model exceeds data at ~10% of px -> only
+                    # micro over-sub).  ALWAYS cap the amplitude at this envelope:
+                    # the masked-core LSQ frequently over-predicts the inner wing
+                    # (flux 3.3e6 -> model peak ~282k vs data ~750 -> -280k core
+                    # pit) yet sits BELOW a 99th-pct cap, so a "lower only if
+                    # >99th-pct" rule let it through.  Capping at p10 fixes the
+                    # over-prediction; a genuinely-fainter LSQ is kept (min).
+                    _env = float(np.percentile(_rat, 10))
                     _f0 = float(result['flux_fit'][0])
-                    _new = min(_env, _cap) if np.isfinite(_f0) else _env
-                    # only ever LOWER a runaway LSQ amplitude or replace a bad
-                    # (nan/<=0) one; never inflate a sane LSQ fit above the cap.
-                    if (not np.isfinite(_f0)) or _f0 <= 0 or _f0 > _cap:
+                    _new = (min(_f0, _env) if (np.isfinite(_f0) and _f0 > 0)
+                            else _env)
+                    if _new != _f0:
                         result['flux_fit'][0] = _new
-                        print(f"  [miri envelope amp] LSQ {_f0:.2e} -> {result['flux_fit'][0]:.2e} (env={_env:.2e} cap={_cap:.2e})",
-                              flush=True)
+                        print(f"  [miri envelope cap] LSQ {_f0:.2e} -> "
+                              f"{_new:.2e} (env_p10={_env:.2e}, "
+                              f"wing_px={int(_wing.sum())})", flush=True)
             # ALWAYS (MIRI in-FOV): the masked-core LSQ frequently returns a
             # NaN flux_err (singular covariance from x_0/y_0 pegging the bound),
             # which would make the accept gate reject an otherwise-good fit

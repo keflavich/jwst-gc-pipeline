@@ -693,11 +693,9 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         calwebb_image3.Image3Pipeline.call(
             asn_file_each,
             steps={'tweakreg': tweakreg_parameters,
-                   # Skymatch DISABLED: default skymatch over-corrects in
-                   # dense fields (W51, GC) — biased global LS constants
-                   # propagate east-edge glow into clean overlaps.  Per
-                   # user direction 2026-06-15.
-                   'skymatch': {'skip': True},
+                   # Skip skymatch: looks like it causes problems (but maybe not doing this is worse?)
+                   #'skymatch': {'save_results': True, 'skip': True,
+                   #             'skymethod': 'match', 'match_down': False},
             },
             output_dir=output_dir,
             save_results=True)
@@ -852,11 +850,8 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         print("Running Image3Pipeline with tweakreg (merged)")
         calwebb_image3.Image3Pipeline.call(
             asn_file_merged,
-            steps={'tweakreg': tweakreg_parameters,
-                   # Skymatch DISABLED per user 2026-06-15 (W51 bg-matching
-                   # over-corrects in dense fields).
-                   'skymatch': {'skip': True},
-            },
+            steps={'tweakreg': tweakreg_parameters,},
+            #steps={'tweakreg': False,}
             output_dir=output_dir,
             save_results=True)
         print(f"DONE running Image3Pipeline {asn_file_merged}.  This should have produced file {asn_data['products'][0]['name']}_i2d.fits")
