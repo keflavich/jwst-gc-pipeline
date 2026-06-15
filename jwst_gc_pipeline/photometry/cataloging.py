@@ -269,30 +269,39 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
     # pixel noise.  In low-emission regions bg~=0 so this reduces to ordinary
     # peak/noise and real stars pass freely; it only bites on bright emission.
     # MIRI-only; NIRCam leaves miri_prominence_snr=0 (off).
-    if (miri_prominence_snr > 0 and prominence_bg_box > 0
+    if (miri_prominence_snr > 0
             and phot.results is not None and len(phot.results)):
-        _df = np.where(np.isfinite(data), data, np.nan)
-        _fill = float(np.nanmedian(_df)) if np.isfinite(_df).any() else 0.0
-        _bgm = ndimage.median_filter(np.nan_to_num(_df, nan=_fill),
-                                     size=int(prominence_bg_box))
-        _nm = _L.compute_local_noise_map(data, smooth_sigma_pix=3.0)
+        # Prominence = (data peak in core) - (median in an annulus), over the
+        # annulus MAD.  The annulus (4-10 px) measures the LOCAL emission +
+        # its fluctuation; a real point source's core sits far above it
+        # (validated: hand-selected real F770W stars median ~126, 10th pct ~40),
+        # while a false source on flat emission has core ~= annulus (~1-3).  Do
+        # NOT use a high-pass noise map for the denominator: the source inflates
+        # its own local high-pass variance, crushing real stars' S/N too.
         _r = phot.results
         _xs = np.asarray(_r['x_fit'], dtype=float)
         _ys = np.asarray(_r['y_fit'], dtype=float)
         _ny, _nx = data.shape
+        _H = 10
+        _yo, _xo = np.mgrid[-_H:_H + 1, -_H:_H + 1]
+        _rr = np.hypot(_xo, _yo)
+        _cm = _rr < 1.5
+        _am = (_rr >= 4) & (_rr <= _H)
         _dropp = np.zeros(len(_r), dtype=bool)
         for _i in range(len(_r)):
             if not (np.isfinite(_xs[_i]) and np.isfinite(_ys[_i])):
                 continue
             _ix = int(round(_xs[_i])); _iy = int(round(_ys[_i]))
-            if not (1 <= _ix < _nx - 1 and 1 <= _iy < _ny - 1):
+            if not (_H <= _ix < _nx - _H and _H <= _iy < _ny - _H):
                 continue
-            _core = np.nanmax(data[_iy - 1:_iy + 2, _ix - 1:_ix + 2])
-            _bg = _bgm[_iy, _ix]
-            _noise = _nm[_iy, _ix]
-            if not (np.isfinite(_core) and np.isfinite(_bg) and _noise > 0):
+            _st = data[_iy - _H:_iy + _H + 1, _ix - _H:_ix + _H + 1]
+            _core = np.nanmax(_st[_cm])
+            _ann = _st[_am]
+            _bg = np.nanmedian(_ann)
+            _mad = 1.4826 * np.nanmedian(np.abs(_ann - _bg))
+            if not (np.isfinite(_core) and np.isfinite(_bg) and _mad > 0):
                 continue
-            if (_core - _bg) / _noise < miri_prominence_snr:
+            if (_core - _bg) / _mad < miri_prominence_snr:
                 _dropp[_i] = True
         _ndp = int(_dropp.sum())
         if _ndp:
@@ -302,8 +311,8 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                 phot.init_params = phot.init_params[~_dropp]
             phot.__dict__.pop('_model_image_params', None)
             print(f"[{label}] prominence reject: {len(_r)} -> {len(_r) - _ndp} "
-                  f"({_ndp} fits with data peak < {miri_prominence_snr:g}sigma "
-                  f"above local bg over {prominence_bg_box}px)", flush=True)
+                  f"({_ndp} fits with core < {miri_prominence_snr:g}*annulus-MAD "
+                  f"above local bg; false emission sources)", flush=True)
 
     # --- render model, then physical overshoot QC ---
     modsky = _make_model_image(phot, data.shape, psf_shape=(21, 21),
@@ -901,9 +910,9 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             miri_dpk_guard=_is_miri,
             satstar_excl_xy=_satstar_xy, satstar_excl_pix=_satstar_excl_pix,
             near_sat_dist_pix=(1.5 * ctx.fwhm_pix if _is_miri else 1.0),
-            miri_prominence_snr=(float(getattr(options, 'miri_prominence_snr', 0.0))
+            miri_prominence_snr=(float(getattr(options, 'miri_prominence_snr', 5.0))
                                  if _is_miri else 0.0),
-            prominence_bg_box=(int(round(5 * ctx.fwhm_pix)) if _is_miri else 0))
+            prominence_bg_box=0)
 
     if manual_phase == 'm12':
         seed1 = _build_manual_seed(
