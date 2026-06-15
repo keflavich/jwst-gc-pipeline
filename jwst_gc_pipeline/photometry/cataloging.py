@@ -165,7 +165,8 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                       overshoot_ratio=1.2, overshoot_action='flag',
                       miri_dpk_guard=False,
                       satstar_excl_xy=None, satstar_excl_pix=0.0,
-                      near_sat_dist_pix=1.0):
+                      near_sat_dist_pix=1.0,
+                      miri_prominence_snr=0.0, prominence_bg_box=0):
     """One single-pass ``PSFPhotometry`` fit seeded by ``init_params``, followed
     by the standard post-fit cleanup chain (mirrors the legacy BASIC block):
 
@@ -255,6 +256,54 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
             print(f"[{label}] satstar-coincidence drop: {len(_r)} -> "
                   f"{len(_r) - _nd} ({_nd} daophot fits within "
                   f"{satstar_excl_pix:.1f}px of a satstar)", flush=True)
+
+    # --- MIRI prominence reject: kill false sources on extended emission ---
+    # The detection local-S/N is peak/high-pass-noise; the high-pass removes
+    # the smooth MIRI emission from the NOISE but the peak still sits on the
+    # emission pedestal, so a "source" whose flux ~= the local emission still
+    # scores high S/N and is detected+fit, then over-subtracted into a negative
+    # residual (user 2026-06-15: most modelled stars are false, flux at star ~=
+    # flux in background).  Require the fitted source's DATA peak to rise at
+    # least ``miri_prominence_snr`` * local_noise ABOVE the local median
+    # background (the emission) -- i.e. a real PROMINENCE, not just flux above
+    # pixel noise.  In low-emission regions bg~=0 so this reduces to ordinary
+    # peak/noise and real stars pass freely; it only bites on bright emission.
+    # MIRI-only; NIRCam leaves miri_prominence_snr=0 (off).
+    if (miri_prominence_snr > 0 and prominence_bg_box > 0
+            and phot.results is not None and len(phot.results)):
+        _df = np.where(np.isfinite(data), data, np.nan)
+        _fill = float(np.nanmedian(_df)) if np.isfinite(_df).any() else 0.0
+        _bgm = ndimage.median_filter(np.nan_to_num(_df, nan=_fill),
+                                     size=int(prominence_bg_box))
+        _nm = _L.compute_local_noise_map(data, smooth_sigma_pix=3.0)
+        _r = phot.results
+        _xs = np.asarray(_r['x_fit'], dtype=float)
+        _ys = np.asarray(_r['y_fit'], dtype=float)
+        _ny, _nx = data.shape
+        _dropp = np.zeros(len(_r), dtype=bool)
+        for _i in range(len(_r)):
+            if not (np.isfinite(_xs[_i]) and np.isfinite(_ys[_i])):
+                continue
+            _ix = int(round(_xs[_i])); _iy = int(round(_ys[_i]))
+            if not (1 <= _ix < _nx - 1 and 1 <= _iy < _ny - 1):
+                continue
+            _core = np.nanmax(data[_iy - 1:_iy + 2, _ix - 1:_ix + 2])
+            _bg = _bgm[_iy, _ix]
+            _noise = _nm[_iy, _ix]
+            if not (np.isfinite(_core) and np.isfinite(_bg) and _noise > 0):
+                continue
+            if (_core - _bg) / _noise < miri_prominence_snr:
+                _dropp[_i] = True
+        _ndp = int(_dropp.sum())
+        if _ndp:
+            phot.results = _r[~_dropp]
+            if (phot.init_params is not None
+                    and len(phot.init_params) == len(_r)):
+                phot.init_params = phot.init_params[~_dropp]
+            phot.__dict__.pop('_model_image_params', None)
+            print(f"[{label}] prominence reject: {len(_r)} -> {len(_r) - _ndp} "
+                  f"({_ndp} fits with data peak < {miri_prominence_snr:g}sigma "
+                  f"above local bg over {prominence_bg_box}px)", flush=True)
 
     # --- render model, then physical overshoot QC ---
     modsky = _make_model_image(phot, data.shape, psf_shape=(21, 21),
@@ -851,7 +900,10 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             overshoot_ratio=overshoot_ratio, overshoot_action=overshoot_action,
             miri_dpk_guard=_is_miri,
             satstar_excl_xy=_satstar_xy, satstar_excl_pix=_satstar_excl_pix,
-            near_sat_dist_pix=(1.5 * ctx.fwhm_pix if _is_miri else 1.0))
+            near_sat_dist_pix=(1.5 * ctx.fwhm_pix if _is_miri else 1.0),
+            miri_prominence_snr=(float(getattr(options, 'miri_prominence_snr', 4.0))
+                                 if _is_miri else 0.0),
+            prominence_bg_box=(int(round(5 * ctx.fwhm_pix)) if _is_miri else 0))
 
     if manual_phase == 'm12':
         seed1 = _build_manual_seed(

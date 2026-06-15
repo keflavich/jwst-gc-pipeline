@@ -557,17 +557,28 @@ def reconcile_outside_fov_satstar_fluxes(per_frame, match_radius=1.0 * u.arcsec,
                          for j in range(i + 1, len(members))) * u.arcsec
         else:
             spread = 0.0 * u.arcsec
+        # Key the override/drop at the GROUP CENTROID, not at one extreme
+        # member.  The per-frame forced positions of a saturated off-FOV star
+        # scatter across the whole group (single-linkage chain up to ~the group
+        # diameter; observed ~1.2" for the sickle off-FOV stars), and the caller
+        # matches each frame's seed against ONE key within match_radius.  Keying
+        # at the nearest member (a chain endpoint) leaves the FARTHEST frames --
+        # exactly the runaway 1e11 mis-fits that most need fixing -- beyond the
+        # match radius, so they are never pinned and dominate the model.  The
+        # centroid halves the max key-to-member distance, so every frame matches.
+        member_sc = SkyCoord([recs[m][2] for m in members])
+        centroid = SkyCoord(member_sc.cartesian.mean(), frame=member_sc.frame).icrs
         if spread < min_detector_diversity:
             # Single detector (only dithered): no frame is meaningfully more
             # interior, and the discordant all-inflated fluxes mean the spikes
             # never entered this detector's FOV.  No trustworthy reference ->
-            # drop the unfittable forced source (use the brightest member's
-            # position as the drop key; the per-frame seeds cluster within
-            # match_radius of it).
-            bright = members[int(np.argmax([recs[m][3] for m in members]))]
-            drops.append(recs[bright][2])
+            # drop the unfittable forced source.
+            drops.append(centroid)
         else:
-            overrides.append((recs[near][2], truth))
+            # Multi-detector / mosaic: a real flux gradient with detector
+            # distance exists; the nearest detector caught the most spike and
+            # gives the trusted flux.  Pin it everywhere via the centroid key.
+            overrides.append((centroid, truth))
     return overrides, drops
 
 
@@ -870,7 +881,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 try:
                     _wpos_drop = ww.pixel_to_world(xcen, ycen)
                     _dropped = any(
-                        _wpos_drop.separation(_dsc).arcsec < 1.0 for _dsc in flux_drops)
+                        _wpos_drop.separation(_dsc).arcsec < 1.5 for _dsc in flux_drops)
                 except Exception:
                     _dropped = False
                 if _dropped:
@@ -1130,19 +1141,22 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # the correct wing amplitude here (or ~0 where the PSF doesn't reach).
             # Match tolerance must cover the CROSS-FRAME CENTROID SCATTER of a
             # saturated off-FOV star: each frame fits the spike-less corner and
-            # the fitted centroids wander ~0.7-1" between frames, while the
-            # override is keyed at ONE frame's fitted position.  The old 0.2"
-            # tolerance was tighter than that scatter, so the worst (runaway)
-            # frame -- the one MOST in need of the override -- was the farthest
-            # from it and never matched, leaving its 1.3e9 flux -> -180k pit.
-            # 1.0" matches the reconcile grouping radius (sparse off-FOV sources,
-            # so no risk of grabbing a different star).
+            # the forced positions wander ~1.2" across the whole group, while the
+            # override is keyed at ONE position.  The old 0.2" tolerance was
+            # tighter than that scatter, so the worst (runaway) frame -- the one
+            # MOST in need of the override -- was the farthest from it and never
+            # matched, leaving its 1e9-1e11 flux -> fake-background model.  The
+            # reconcile now keys at the GROUP CENTROID (max key-to-member ~half
+            # the group diameter, ~0.6"), plus the seed-vs-fit offset (~0.3");
+            # 1.5" gives margin and is still far below the spacing of (sparse)
+            # off-FOV saturated stars, so there is no risk of grabbing a
+            # different star.
             _ovr_flux = None
             if flux_overrides:
                 try:
                     _wpos = ww.pixel_to_world(xcen, ycen)
                     for _osc, _of in flux_overrides:
-                        if np.isfinite(_of) and _wpos.separation(_osc).arcsec < 1.0:
+                        if np.isfinite(_of) and _wpos.separation(_osc).arcsec < 1.5:
                             _ovr_flux = float(_of)
                             break
                 except Exception:
