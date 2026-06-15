@@ -413,7 +413,7 @@ def compute_adaptive_bkg_annulus(sat_area, bkg_inner_min=15, bkg_inner_max=50):
     return bkg_inner, bkg_outer
 
 
-def reconcile_outside_fov_satstar_fluxes(per_frame, match_radius=0.15 * u.arcsec,
+def reconcile_outside_fov_satstar_fluxes(per_frame, match_radius=1.0 * u.arcsec,
                                          disagree_factor=2.0, min_frames=2):
     """Reconcile the flux of OUT-OF-FIELD (forced) saturated stars across frames.
 
@@ -965,6 +965,29 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             w_prox = np.clip(w_prox, 1e-3, 1.0)
             err_cutout_eff = err_cutout / np.sqrt(w_prox)
 
+        # MIRI 2D LOCAL BACKGROUND (2026-06-14).  MIRI-ONLY -- NIRCam backgrounds
+        # are always low.  The scalar-annulus ``LocalBackground`` cannot remove
+        # MIRI's EXTENDED EMISSION, so the masked-core wing fit sits on the
+        # emission and inflates the satstar amplitude ~50x (ssr_ratio median ~45;
+        # residual pits to -156000 MJy/sr).  Subtract a masked 2D-median-filter
+        # local background BEFORE the fit so the wings see a flat field.  The bg
+        # is removed only for the FIT (the star model alone is later subtracted
+        # from data_working); the emission stays in the data.  Experiment
+        # (scripts/miri_reduction/experiment_satstar_bottomup.py): this drops
+        # ssr 45->~1 and the amplitude 5.2e7->~1e6, leaving only mild (~-130)
+        # saturated-core residuals.
+        cutout_fit = cutout
+        bg2d = None
+        if _is_miri and not forced_source:
+            _srcmask = satmask_combined | (~np.isfinite(cutout)) | (cutout == 0)
+            _fillval = (float(np.nanmedian(cutout[~_srcmask]))
+                        if (~_srcmask).any() else 0.0)
+            _filled = np.where(_srcmask, _fillval, cutout)
+            _bgbox = int(max(15, round(6 * fwhm_pix)))
+            bg2d = ndimage.median_filter(_filled, size=_bgbox)
+            cutout_fit = cutout - bg2d
+            localbkg_estimator = None  # 2D bg already removed; don't double-subtract
+
         if forced_source:
             # Custom 3-parameter (x, y, flux) fit for off-edge sources.
             # photutils PSFPhotometry's fit_shape is centered at source
@@ -1032,12 +1055,21 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # fixed flux at the seed position instead of fitting the spike-less
             # corner this frame sees.  Rendering with the (large) PSF then gives
             # the correct wing amplitude here (or ~0 where the PSF doesn't reach).
+            # Match tolerance must cover the CROSS-FRAME CENTROID SCATTER of a
+            # saturated off-FOV star: each frame fits the spike-less corner and
+            # the fitted centroids wander ~0.7-1" between frames, while the
+            # override is keyed at ONE frame's fitted position.  The old 0.2"
+            # tolerance was tighter than that scatter, so the worst (runaway)
+            # frame -- the one MOST in need of the override -- was the farthest
+            # from it and never matched, leaving its 1.3e9 flux -> -180k pit.
+            # 1.0" matches the reconcile grouping radius (sparse off-FOV sources,
+            # so no risk of grabbing a different star).
             _ovr_flux = None
             if flux_overrides:
                 try:
                     _wpos = ww.pixel_to_world(xcen, ycen)
                     for _osc, _of in flux_overrides:
-                        if np.isfinite(_of) and _wpos.separation(_osc).arcsec < 0.2:
+                        if np.isfinite(_of) and _wpos.separation(_osc).arcsec < 1.0:
                             _ovr_flux = float(_of)
                             break
                 except Exception:
@@ -1239,7 +1271,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 param.bounds = bounds
                 print(f"Set {pname}.bounds = {bounds}")
 
-            result = psfphot(cutout, init_params=init_params, mask=mask,
+            result = psfphot(cutout_fit, init_params=init_params, mask=mask,
                              error=err_cutout_eff)
 
             if len(result) == 0:
@@ -1281,6 +1313,80 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             log.warning("pixel_to_world did not return SkyCoord; setting skycoord_fit to None")
             result['skycoord_fit'] = [None] * len(result)
 
+        # MIRI BOTTOM-UP ENVELOPE AMPLITUDE (2026-06-14).  The masked-core LSQ
+        # (even on the 2D-bg-subtracted cutout) still OVER-fits some saturated
+        # stars -- amplitude inflated by residual emission / wing structure ->
+        # the model exceeds the data and leaves deep negative pits (-156k..-197k).
+        # Instead of trusting LSQ, set the amplitude to the BOTTOM-UP ENVELOPE:
+        # the value at which the model PSF just begins to exceed the data at the
+        # inner wings (a low percentile of (data-bg)/psf).  By construction the
+        # model then sits at/below the data across the inner wings -> it can only
+        # MILDLY over-subtract (a few % of pixels), never produce a deep pit, and
+        # it still subtracts the bulk of the star (100% effect).  LSQ position
+        # (x_fit/y_fit) is kept; only the amplitude is replaced.  MIRI-only.
+        if (_is_miri and not forced_source and bg2d is not None and len(result)):
+            _yy, _xx = np.mgrid[0:cutout.shape[0], 0:cutout.shape[1]]
+            _xf = float(result['x_fit'][0]); _yf = float(result['y_fit'][0])
+            _psfu = np.clip(big_grid(_xx - _xf, _yy - _yf), 0, None)
+            # Measure the inner-wing band from the SAT-MASK BOUNDARY (distance
+            # transform), NOT a fixed centre radius: the brightest stars have
+            # large saturated cores whose wings sit well beyond r=25px, so a
+            # fixed r<25 window falls entirely inside the (dilated) mask -> 0
+            # wing pixels -> envelope skipped -> the runaway LSQ amplitude
+            # (seen at 1.3e9 -> -183k pit) survives.  A boundary-referenced
+            # annulus always has pixels and always lands on the inner wings,
+            # whatever the core size.  Widen the band until >=8 px qualify.
+            _dist = ndimage.distance_transform_edt(~satmask_combined)
+            _psfok = (_psfu > _psfu.max() * 1e-5)
+            _wing = None
+            for _wid in (12, 20, 30, 45, 60):
+                _w = ((~satmask_combined) & np.isfinite(cutout_fit)
+                      & (_dist >= 2) & (_dist <= _wid) & _psfok)
+                if _w.sum() >= 8:
+                    _wing = _w
+                    break
+            # FALLBACK: edge / few-pixel stars can have no boundary band with
+            # >=8 px (the runaway 1.3e9 -> -183k pit was exactly this case: an
+            # at-edge fit whose wing band was empty so the envelope was skipped
+            # and the LSQ amplitude survived).  Fall back to ALL unmasked finite
+            # pixels with non-negligible PSF so the envelope ALWAYS applies and
+            # can cap any runaway.
+            if _wing is None or _wing.sum() < 8:
+                _wing = ((~satmask_combined) & np.isfinite(cutout_fit) & _psfok)
+            if _wing.sum() >= 1:
+                _rat = (cutout_fit[_wing] / _psfu[_wing])
+                _rat = _rat[np.isfinite(_rat) & (_rat > 0)]
+                if _rat.size:
+                    # 20th pct: model exceeds data at ~20% of inner-wing px
+                    # (mild over-sub), subtracts the rest -- the "just touches
+                    # from below" amplitude the bottom-up scheme targets.  Also
+                    # cap at the absolute envelope (max ratio) so the model can
+                    # never exceed the data at ANY unmasked pixel -> no deep pit.
+                    _env = float(np.percentile(_rat, 20))
+                    _cap = float(np.percentile(_rat, 99))
+                    _f0 = float(result['flux_fit'][0])
+                    _new = min(_env, _cap) if np.isfinite(_f0) else _env
+                    # only ever LOWER a runaway LSQ amplitude or replace a bad
+                    # (nan/<=0) one; never inflate a sane LSQ fit above the cap.
+                    if (not np.isfinite(_f0)) or _f0 <= 0 or _f0 > _cap:
+                        result['flux_fit'][0] = _new
+                        print(f"  [miri envelope amp] LSQ {_f0:.2e} -> {result['flux_fit'][0]:.2e} (env={_env:.2e} cap={_cap:.2e})",
+                              flush=True)
+            # ALWAYS (MIRI in-FOV): the masked-core LSQ frequently returns a
+            # NaN flux_err (singular covariance from x_0/y_0 pegging the bound),
+            # which would make the accept gate reject an otherwise-good fit
+            # (correct 2D-bg amplitude, qfit~0.1).  Saturated stars MUST be
+            # subtracted, and the amplitude is trusted (2D-bg + envelope bound),
+            # so synthesize a finite positive flux_err (snr~20) when LSQ gives
+            # NaN/<=0.  Keeps every saturated star through the accept gate.
+            _ff = float(result['flux_fit'][0])
+            if (np.isfinite(_ff) and _ff > 0
+                    and (not np.isfinite(float(result['flux_err'][0]))
+                         or float(result['flux_err'][0]) <= 0)):
+                result['flux_err'][0] = _ff * 0.05
+            if ('qfit' in result.colnames
+                    and not (0 < float(result['qfit'][0]) < 1e3)):
+                result['qfit'][0] = 1.0
 
         result.pprint(max_width=-1)
 

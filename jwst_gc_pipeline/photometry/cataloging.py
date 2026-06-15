@@ -76,7 +76,7 @@ from photutils.psf import SourceGrouper
 # ---------------------------------------------------------------------------
 def _filter_or_flag_model_overshoot(phot_obj, modsky, data, *,
                                     ratio=1.2, action='flag', label='',
-                                    box_half=1):
+                                    box_half=1, flag_nonpositive_data=False):
     """Flag / drop fits whose rendered model peak exceeds the local
     background-subtracted DATA peak by more than ``ratio``.
 
@@ -127,6 +127,19 @@ def _filter_or_flag_model_overshoot(phot_obj, modsky, data, *,
         data_pk[i] = dpk
         if dpk > 0:
             ratio_arr[i] = mpk / dpk
+        elif flag_nonpositive_data and np.isfinite(mpk) and mpk > 0:
+            # dpk<=0 BLIND SPOT (MIRI): near a bright/saturated neighbour the
+            # sampled local_bkg can exceed the faint local data peak, so the
+            # bkg-subtracted dpk goes <=0 and the source escapes the guard --
+            # this is exactly how a group-fit-degenerate member kept a runaway
+            # flux (5.94e6 on ~560 data) and drizzled to a -459k mosaic pit.
+            # A real positive source must have data above background, so dpk<=0
+            # with a positive model peak is spurious.  Use the RAW data peak
+            # (floored at 1) as the denominator so a runaway model is still
+            # caught while a genuinely faint source (mpk ~ its small peak) is
+            # not over-flagged.
+            _draw = float(np.nanmax(dbox))
+            ratio_arr[i] = mpk / max(_draw, 1.0)
 
     over = np.isfinite(ratio_arr) & (ratio_arr > ratio)
     res['model_data_peak_ratio'] = ratio_arr
@@ -149,7 +162,8 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                       aperture_radius_pix, localbkg_inner, localbkg_outer,
                       grouper, options, dq, satstar_model_subtracted,
                       label, xy_bounds_pix=None,
-                      overshoot_ratio=1.2, overshoot_action='flag'):
+                      overshoot_ratio=1.2, overshoot_action='flag',
+                      miri_dpk_guard=False):
     """One single-pass ``PSFPhotometry`` fit seeded by ``init_params``, followed
     by the standard post-fit cleanup chain (mirrors the legacy BASIC block):
 
@@ -207,7 +221,7 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
     over = _filter_or_flag_model_overshoot(
         phot, modsky, data, ratio=overshoot_ratio,
         action=('flag' if overshoot_action == 'refit' else overshoot_action),
-        label=label)
+        label=label, flag_nonpositive_data=miri_dpk_guard)
 
     if overshoot_action == 'refit' and np.any(over):
         # Re-fit the overshooting sources as forced photometry at their SEED
@@ -754,6 +768,15 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
         resbg_path=resbg_path, satstar_label=manual_phase,
         satstar_flux_overrides=satstar_flux_overrides)
 
+    # MIRI-only: enable the dpk<=0 overshoot blind-spot guard (group-fit
+    # degeneracy near bright/saturated neighbours).  NIRCam unaffected.
+    try:
+        _instrume = str(ctx.im1['SCI'].header.get('INSTRUME',
+                        ctx.im1[0].header.get('INSTRUME', ''))).upper()
+    except Exception:
+        _instrume = ''
+    _is_miri = 'MIRI' in _instrume
+
     def _pass(seed, label):
         return _manual_phot_pass(
             data=ctx.nan_replaced_data, mask=ctx.mask, err=ctx.err, bad=ctx.bad,
@@ -765,7 +788,8 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
                                       if ctx.satstar_model_subtracted is not None
                                       else np.zeros(ctx.data.shape)),
             label=label, xy_bounds_pix=None,
-            overshoot_ratio=overshoot_ratio, overshoot_action=overshoot_action)
+            overshoot_ratio=overshoot_ratio, overshoot_action=overshoot_action,
+            miri_dpk_guard=_is_miri)
 
     if manual_phase == 'm12':
         seed1 = _build_manual_seed(
@@ -1525,7 +1549,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         _ovr = reconcile_outside_fov_satstar_fluxes(
                             _per_frame,
                             match_radius=float(getattr(
-                                options, 'satstar_reconcile_radius_arcsec', 0.15)) * u.arcsec,
+                                options, 'satstar_reconcile_radius_arcsec', 1.0)) * u.arcsec,
                             disagree_factor=float(getattr(
                                 options, 'satstar_reconcile_disagree_factor', 2.0)))
                     except Exception as _ex:
