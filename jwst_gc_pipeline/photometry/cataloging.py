@@ -901,7 +901,7 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             miri_dpk_guard=_is_miri,
             satstar_excl_xy=_satstar_xy, satstar_excl_pix=_satstar_excl_pix,
             near_sat_dist_pix=(1.5 * ctx.fwhm_pix if _is_miri else 1.0),
-            miri_prominence_snr=(float(getattr(options, 'miri_prominence_snr', 4.0))
+            miri_prominence_snr=(float(getattr(options, 'miri_prominence_snr', 0.0))
                                  if _is_miri else 0.0),
             prominence_bg_box=(int(round(5 * ctx.fwhm_pix)) if _is_miri else 0))
 
