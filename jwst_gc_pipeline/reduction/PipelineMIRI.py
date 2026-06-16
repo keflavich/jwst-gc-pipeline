@@ -78,8 +78,11 @@ fov_regname = {'brick': 'regions_/nircam_brick_fov.reg',
 # Reference catalog configuration by proposal and field.
 # Paths are relative to basepath.
 REFERENCE_ASTROMETRIC_CATALOG_CANDIDATES_BY_FIELD = {
-    # Sickle MIRI fields. Prefer the short-wave merged astrometric catalog,
-    # then bootstrapped catalogs if needed.
+    # Program 3958 MIRI fields.  obs 001/002 are the SICKLE; obs 003 is the
+    # BRICK (routed to the brick/ tree -- see field_to_reg_mapping below).
+    # Paths are relative to basepath, which is sickle/ for 001/002 and brick/
+    # for 003, so 003 must point at the brick's NIRCam refcat (f405n-based),
+    # NOT the sickle f210m catalog (which does not exist under brick/).
     '3958': {
         '001': (
             'catalogs/pipeline_based_nircam-f210m_reference_astrometric_catalog.fits',
@@ -91,10 +94,11 @@ REFERENCE_ASTROMETRIC_CATALOG_CANDIDATES_BY_FIELD = {
             'catalogs/nircam_bootstrapped_to_gns_refcat.fits',
             'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
         ),
+        # obs 003 == brick field: align to the brick NIRCam f405n refcat.
         '003': (
-            'catalogs/pipeline_based_nircam-f210m_reference_astrometric_catalog.fits',
-            'catalogs/nircam_bootstrapped_to_gns_refcat.fits',
-            'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
+            'catalogs/crowdsource_based_nircam-f405n_reference_astrometric_catalog.fits',
+            'catalogs/crowdsource_based_nircam-f405n_reference_astrometric_catalog.ecsv',
+            'catalogs/twomass.fits',
         ),
     },
     '2221': {
@@ -175,12 +179,18 @@ def main(filtername, Observations=None, regionname='brick',
         if proposal_id == '2221':
             # jw02221-o002_t001_miri_f2550w_i2d.fits
             assert field == '002'
+        elif proposal_id == '3958':
+            # 3958 obs 003 (t003) is the brick MIRI field (shares the 3958
+            # program id with the sickle, but is spatially/scientifically the
+            # brick); routed here so it lands in brick/, not sickle/.
+            assert field == '003'
     elif regionname == 'cloudc':
         # jw02221-o001_t001_miri_f2550w_i2d.fits
         assert field == '001'
     elif regionname == 'sickle':
+        # ONLY obs 001/002 are the sickle; obs 003 is the brick (see above).
         assert proposal_id == '3958'
-        assert field in ('001', '002', '003')
+        assert field in ('001', '002')
 
     # Use the per-target CRDS cache when it is writable; some target caches
     # (e.g. cloudc) are owned by another user and CRDS cannot update them for
@@ -601,8 +611,12 @@ if __name__ == "__main__":
     Observations.login(api_token)
 
 
+    # NOTE: program 3958 obs 003 (t003) is the BRICK MIRI field, NOT the
+    # sickle.  Only 3958 obs 001/002 belong to the sickle.  Route o003 to the
+    # brick/ tree so its images + catalogs land under /orange/.../jwst/brick/
+    # and never clash with sickle/ products (which share the 3958 program id).
     field_to_reg_mapping = {'2221': {'002': 'brick', '001': 'cloudc'},
-                            '3958': {'001': 'sickle', '002': 'sickle', '003': 'sickle'},
+                            '3958': {'001': 'sickle', '002': 'sickle', '003': 'brick'},
                             '5365': {'001': 'sgrb2'},
                             '6151': {'001': 'w51_background', '002': 'w51'},
                             }[proposal_id]
