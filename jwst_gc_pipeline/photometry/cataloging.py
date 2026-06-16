@@ -637,15 +637,23 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         # star_like (qfit/peakSB) + snr cuts REJECT bright real MIRI stars that
         # sit on extended emission (peakSB/local_bkg < 20 because the emission
         # raises local_bkg; qfit > 0.2 for bright/saturated) -- they dropped 10
-        # of 36 hand-selected real stars.  Keep = prominent enough (or off-i2d,
-        # no data to judge) AND not a runaway-overshoot model.
-        keep = (~np.isfinite(prominence)) | (prominence >= min_prominence)
+        # of 36 hand-selected real stars.  Keep = prominent enough on THIS obs's
+        # data_i2d AND not a runaway-overshoot model.  OFF-I2D SOURCES ARE
+        # DROPPED: this vetting runs per-obs against one obs's data_i2d, so an
+        # off-i2d source belongs to a different obs's footprint and will be
+        # vetted (and kept) by that obs's own run -- keeping it here would carry
+        # it through UNVETTED (that was the 74%-false o001-footprint leak when a
+        # single all-obs vetting saw only o002's i2d).  The per-obs vetted
+        # catalogs are then vstack-combined downstream into the un-tokened
+        # all-obs catalog, each footprint cleaned by its own data_i2d.
+        keep = np.isfinite(prominence) & (prominence >= min_prominence)
         if drop_overshoot and 'model_overshoot' in t.colnames:
             keep = keep & ~np.asarray(t['model_overshoot'], dtype=bool)
         n_prom = int(np.sum(np.isfinite(prominence) & (prominence < min_prominence)))
-        print(f"[{label}] MIRI prominence gate: kept prominence>={min_prominence:g} "
-              f"(dropped {n_prom} false emission sources); star_like/snr cuts "
-              f"BYPASSED (they reject real stars on emission)", flush=True)
+        n_off = int(np.sum(~np.isfinite(prominence)))
+        print(f"[{label}] MIRI prominence gate: kept prominence>={min_prominence:g} on "
+              f"this obs i2d (dropped {n_prom} false + {n_off} off-i2d/other-obs); "
+              f"star_like/snr BYPASSED; per-obs vetted -> combined downstream", flush=True)
     else:
         keep = star_like & (np.isfinite(snr) & (snr >= local_snr_min) | ~np.isfinite(snr))
         if drop_overshoot and 'model_overshoot' in t.colnames:
@@ -1556,20 +1564,20 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 det_i2d = None
                 bg_sub = None
                 if phase == 'm3':
-                    vetted_prev = _merged_path('m2', module, filt, False).replace('.fits', '_vetted.fits')
+                    vetted_prev = _merged_path('m2', module, filt, False).replace('.fits', f'_o{field}_vetted.fits')
                     det_i2d = _data_i2d_path(module, filt)          # raw i2d
                     resbg_path = None                                # RAW frames
                 elif phase == 'm4':
-                    vetted_prev = _merged_path('m3', module, filt, False).replace('.fits', '_vetted.fits')
+                    vetted_prev = _merged_path('m3', module, filt, False).replace('.fits', f'_o{field}_vetted.fits')
                     det_i2d = resid_i2d_for_next.get((module, filt))  # m3 residual
                     resbg_path = None                                # RAW frames
                 elif phase == 'm5':
-                    vetted_prev = _merged_path('m4', module, filt, False).replace('.fits', '_vetted.fits')
+                    vetted_prev = _merged_path('m4', module, filt, False).replace('.fits', f'_o{field}_vetted.fits')
                     det_i2d = resid_i2d_for_next.get((module, filt))  # m4 residual
                     bg_sub = bg_for_next.get((module, filt))          # minus m4 bg
                     resbg_path = bg_for_next.get((module, filt))      # fit on bg-sub frames
                 elif phase == 'm6':
-                    vetted_prev = _merged_path('m5', module, filt, True).replace('.fits', '_vetted.fits')
+                    vetted_prev = _merged_path('m5', module, filt, True).replace('.fits', f'_o{field}_vetted.fits')
                     det_i2d = resid_i2d_for_next.get((module, filt))  # m5 residual
                     bg_sub = bg_for_next.get((module, filt))          # minus m5 bg
                     resbg_path = bg_for_next.get((module, filt))      # fit on bg-sub frames
@@ -1815,9 +1823,15 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     except Exception as ex:
                         print(f"manual: data i2d build failed: {ex}", flush=True)
 
-                # vet the merged catalog -> _vetted.fits
+                # vet the merged catalog -> per-obs tokened _o{field}_vetted.fits.
+                # The merged catalog is all-obs (merge globs all frames); the
+                # VETTED is per-obs (each vetted vs its own data_i2d) so footprints
+                # don't overwrite and off-i2d sources aren't carried unvetted.
+                # A combine step (below) vstacks per-obs vetted -> un-tokened
+                # all-obs _vetted.fits (the final science catalog + m7 seed).
                 merged_path = _merged_path(merge_label, module, filt, resbgsub)
-                vetted_path = merged_path.replace('.fits', '_vetted.fits')
+                vetted_path = merged_path.replace('.fits', f'_o{field}_vetted.fits')
+                combined_vetted_path = merged_path.replace('.fits', '_vetted.fits')
                 try:
                     merged = Table.read(merged_path)
                     # --- iteration-found provenance: the first phase a source
