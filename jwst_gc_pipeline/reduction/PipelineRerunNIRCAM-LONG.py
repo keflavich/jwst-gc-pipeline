@@ -630,7 +630,10 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
                 fname = member['expname']
                 assert fname.endswith('_cal.fits')
                 member['expname'] = fname.replace("_cal.fits", "_align.fits")
-                shutil.copy(fname, member['expname'])
+                # copyfile (not copy) skips chmod, avoiding PermissionError when
+                # a previous run by another user owns the destination file in a
+                # group-writable shared workspace (e.g. W51 with t.yoo files).
+                shutil.copyfile(fname, member['expname'])
 
                 fix_alignment(member['expname'], proposal_id=proposal_id,
                               module=module, field=field, basepath=basepath,
@@ -844,7 +847,10 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
                 fname = member['expname']
                 assert fname.endswith('_cal.fits')
                 member['expname'] = fname.replace("_cal.fits", "_align.fits")
-                shutil.copy(fname, member['expname'])
+                # copyfile (not copy) skips chmod, avoiding PermissionError when
+                # a previous run by another user owns the destination file in a
+                # group-writable shared workspace (e.g. W51 with t.yoo files).
+                shutil.copyfile(fname, member['expname'])
 
                 fix_alignment(member['expname'], proposal_id=proposal_id, module=module, field=field, basepath=basepath, filtername=filtername, use_average=use_average)
 
