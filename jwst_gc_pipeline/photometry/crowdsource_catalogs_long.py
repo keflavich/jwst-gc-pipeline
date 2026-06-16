@@ -4067,9 +4067,12 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     # map to the same 'gc2211' target/basepath, distinguished only by field.
     field_to_reg_mapping = {'2221': {'001': 'brick', '002': 'cloudc'},
                             '1182': {'004': 'brick'},
-                            # 3958: 007 = NIRCam; 001/002/003 = MIRI pointings
+                            # 3958: 007 = NIRCam (sickle); MIRI pointings
+                            # 001/002 = sickle, but 003 = the BRICK MIRI field
+                            # (shares the 3958 program id, routed to brick/ so
+                            # its catalogs do not land in / clash with sickle/).
                             '3958': {'007': 'sickle', '001': 'sickle',
-                                     '002': 'sickle', '003': 'sickle'},
+                                     '002': 'sickle', '003': 'brick'},
                             # 2092: 002/005 = NIRCam; 004/006/008 = MIRI
                             '2092': {'002': 'cloudef', '005': 'cloudef',
                                      '004': 'cloudef', '006': 'cloudef',
