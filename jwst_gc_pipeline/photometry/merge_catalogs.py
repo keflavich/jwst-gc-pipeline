@@ -1115,8 +1115,16 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
         # the literal 'merged' token so the merge glob picks them up.
         modules += ['merged']
     elif module in ('nrca', 'nrcb'):
-        # Exposure-level catalogs are often saved with detector-qualified module names.
-        modules = [module] + [f'{module}{n}' for n in range(1, 5)]
+        # Exposure-level catalogs are saved with detector-qualified module
+        # names.  SW exposures use nrc{a,b}1..4; LW exposures use nrc{a,b}long.
+        # A single filter is only ever one or the other, so include BOTH
+        # families here -- the globs for the absent family simply match nothing.
+        # (Omitting the 'long' detector silently dropped EVERY long-wave filter
+        # at merge time: module='nrcb' expanded only to nrcb1..4 and the literal
+        # 'nrcb', so f335m/f470n/f480m '*_nrcblong_*' files were never found ->
+        # "No tables found" crash.  Regression from the SW per-detector fix.)
+        modules = ([module] + [f'{module}{n}' for n in range(1, 5)]
+                   + [f'{module}long'])
     else:
         modules = (module, )
 

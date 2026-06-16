@@ -631,20 +631,25 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         | np.isin(flg, np.asarray(keep_flags, dtype=float))
         | (np.isfinite(peaksb) & (lbk > 0) & (peaksb > peak_over_bkg * lbk))
     )
-    keep = star_like & (np.isfinite(snr) & (snr >= local_snr_min) | ~np.isfinite(snr))
-    if drop_overshoot and 'model_overshoot' in t.colnames:
-        keep = keep & ~np.asarray(t['model_overshoot'], dtype=bool)
-    # REQUIRED prominence gate (MIRI): a source must rise >= min_prominence *
-    # annulus-MAD above the local emission, regardless of qfit -- this is what
-    # kills the false emission sources that pass via low qfit.  Sources off the
-    # i2d (prominence==nan) are kept (no data to judge).
     if min_prominence > 0:
-        n_prom = int(np.sum(keep & np.isfinite(prominence)
-                            & (prominence < min_prominence)))
-        keep = keep & ~(np.isfinite(prominence) & (prominence < min_prominence))
-        print(f"[{label}] prominence gate: dropped {n_prom} sources with "
-              f"core < {min_prominence:g}*annulus-MAD above local emission",
-              flush=True)
+        # MIRI: the deep-i2d PROMINENCE is the clean discriminator (real F770W
+        # stars >=40, false emission <5), so use it ALONE.  The NIRCam-tuned
+        # star_like (qfit/peakSB) + snr cuts REJECT bright real MIRI stars that
+        # sit on extended emission (peakSB/local_bkg < 20 because the emission
+        # raises local_bkg; qfit > 0.2 for bright/saturated) -- they dropped 10
+        # of 36 hand-selected real stars.  Keep = prominent enough (or off-i2d,
+        # no data to judge) AND not a runaway-overshoot model.
+        keep = (~np.isfinite(prominence)) | (prominence >= min_prominence)
+        if drop_overshoot and 'model_overshoot' in t.colnames:
+            keep = keep & ~np.asarray(t['model_overshoot'], dtype=bool)
+        n_prom = int(np.sum(np.isfinite(prominence) & (prominence < min_prominence)))
+        print(f"[{label}] MIRI prominence gate: kept prominence>={min_prominence:g} "
+              f"(dropped {n_prom} false emission sources); star_like/snr cuts "
+              f"BYPASSED (they reject real stars on emission)", flush=True)
+    else:
+        keep = star_like & (np.isfinite(snr) & (snr >= local_snr_min) | ~np.isfinite(snr))
+        if drop_overshoot and 'model_overshoot' in t.colnames:
+            keep = keep & ~np.asarray(t['model_overshoot'], dtype=bool)
 
     # structure-noise prune on the MERGED catalog (AG 2026-06-13): rejects
     # emission-bump sources that the m12 round (which has no prune) carries
