@@ -537,6 +537,7 @@ def _build_manual_seed(*, detection_image, nan_replaced_data, mask, ww, fwhm_pix
 # ---------------------------------------------------------------------------
 def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               qfit_max=0.2, peak_over_bkg=20.0,
+                              min_prominence=0.0,
                               local_snr_min=5.0, keep_flags=(1,),
                               drop_overshoot=True, struct_x=0.0, struct_y=0.0,
                               label=''):
@@ -582,8 +583,17 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     else:
         snr = np.full(n, np.inf)
 
-    # peak surface brightness from the data i2d (3x3 box max), if provided
+    # peak surface brightness (3x3 box max) AND annulus-MAD PROMINENCE from the
+    # data i2d, if provided.  Prominence = (core peak r<1.5) - (median in a
+    # 4-10px annulus) over the annulus MAD: it measures whether the "star" rises
+    # above the LOCAL EMISSION, which is the single robust discriminator on the
+    # DEEP coadd (validated: hand-selected real F770W stars median ~126, 10th
+    # pct ~40; false emission sources ~1-3).  This is the MERGED-catalog cut --
+    # measured ONCE at each final source position, so it is immune to the
+    # per-frame fit-position scatter that let false sources survive the
+    # per-frame cut and get re-unioned by the merge.
     peaksb = np.full(n, np.nan, dtype=float)
+    prominence = np.full(n, np.nan, dtype=float)
     if data_i2d_image is not None and ww_i2d is not None and 'skycoord' in t.colnames:
         from astropy.coordinates import SkyCoord
         sc = t['skycoord']
@@ -591,6 +601,11 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
             sc = SkyCoord(sc)
         xx, yy = ww_i2d.world_to_pixel(sc)
         ny, nx = data_i2d_image.shape
+        _H = 10
+        _yo, _xo = np.mgrid[-_H:_H + 1, -_H:_H + 1]
+        _rr = np.hypot(_xo, _yo)
+        _cm = _rr < 1.5
+        _am = (_rr >= 4) & (_rr <= _H)
         for i in range(n):
             if not (np.isfinite(xx[i]) and np.isfinite(yy[i])):
                 continue
@@ -601,6 +616,15 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                 box = data_i2d_image[ylo:yhi, xlo:xhi]
                 if np.any(np.isfinite(box)):
                     peaksb[i] = float(np.nanmax(box))
+            if (min_prominence > 0 and _H <= ix < nx - _H
+                    and _H <= iy < ny - _H):
+                st = data_i2d_image[iy - _H:iy + _H + 1, ix - _H:ix + _H + 1]
+                core = np.nanmax(st[_cm])
+                ann = st[_am]
+                bg = np.nanmedian(ann)
+                mad = 1.4826 * np.nanmedian(np.abs(ann - bg))
+                if np.isfinite(core) and np.isfinite(bg) and mad > 0:
+                    prominence[i] = (core - bg) / mad
 
     star_like = (
         (qf <= qfit_max)
@@ -610,6 +634,17 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     keep = star_like & (np.isfinite(snr) & (snr >= local_snr_min) | ~np.isfinite(snr))
     if drop_overshoot and 'model_overshoot' in t.colnames:
         keep = keep & ~np.asarray(t['model_overshoot'], dtype=bool)
+    # REQUIRED prominence gate (MIRI): a source must rise >= min_prominence *
+    # annulus-MAD above the local emission, regardless of qfit -- this is what
+    # kills the false emission sources that pass via low qfit.  Sources off the
+    # i2d (prominence==nan) are kept (no data to judge).
+    if min_prominence > 0:
+        n_prom = int(np.sum(keep & np.isfinite(prominence)
+                            & (prominence < min_prominence)))
+        keep = keep & ~(np.isfinite(prominence) & (prominence < min_prominence))
+        print(f"[{label}] prominence gate: dropped {n_prom} sources with "
+              f"core < {min_prominence:g}*annulus-MAD above local emission",
+              flush=True)
 
     # structure-noise prune on the MERGED catalog (AG 2026-06-13): rejects
     # emission-bump sources that the m12 round (which has no prune) carries
@@ -1804,10 +1839,19 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             hdu = dh['SCI'] if 'SCI' in [h.name for h in dh] else dh[0]
                             d_i2d = hdu.data.astype(float)
                             ww_i2d = wcs.WCS(hdu.header)
+                    # MIRI: required deep-i2d prominence gate kills false emission
+                    # sources that pass the qfit OR-branch.  NIRCam: off (0).
+                    _miri_field = (module == 'mirimage'
+                                   or str(filt).upper() in (
+                                       'F560W', 'F770W', 'F1000W', 'F1130W',
+                                       'F1280W', 'F1500W', 'F1800W', 'F2100W',
+                                       'F2550W'))
                     vetted = _filter_extended_emission(
                         merged, data_i2d_image=d_i2d, ww_i2d=ww_i2d,
                         qfit_max=float(getattr(opts_phase, 'manual_ext_qfit_max', 0.2)),
                         peak_over_bkg=float(getattr(opts_phase, 'manual_ext_peak_over_bkg', 20.0)),
+                        min_prominence=(float(getattr(opts_phase, 'miri_prominence_snr', 5.0))
+                                        if _miri_field else 0.0),
                         local_snr_min=float(getattr(opts_phase, 'manual_ext_local_snr_min', 5.0)),
                         struct_x=0.0, struct_y=0.0,  # prune at detection, not here
                         label=f'{phase}:{filt}')
