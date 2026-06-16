@@ -166,7 +166,9 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                       miri_dpk_guard=False,
                       satstar_excl_xy=None, satstar_excl_pix=0.0,
                       near_sat_dist_pix=1.0,
-                      miri_prominence_snr=0.0, prominence_bg_box=0):
+                      miri_prominence_snr=0.0, prominence_bg_box=0,
+                      prominence_data_i2d=None, prominence_ww_i2d=None,
+                      frame_ww=None):
     """One single-pass ``PSFPhotometry`` fit seeded by ``init_params``, followed
     by the standard post-fit cleanup chain (mirrors the legacy BASIC block):
 
@@ -279,9 +281,29 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
         # NOT use a high-pass noise map for the denominator: the source inflates
         # its own local high-pass variance, crushing real stars' S/N too.
         _r = phot.results
-        _xs = np.asarray(_r['x_fit'], dtype=float)
-        _ys = np.asarray(_r['y_fit'], dtype=float)
-        _ny, _nx = data.shape
+        # Measure prominence on the DEEP data i2d (frame-INVARIANT) when it is
+        # supplied: a per-frame measurement is noisy (a real star can dip below
+        # K in one exposure -> lost; a false bump can fluctuate above K in one
+        # exposure -> the merge re-unions it back).  One value per source on the
+        # deep coadd both keeps every real star and removes every false one.
+        # Falls back to the per-frame ``data`` if the i2d is unavailable.
+        if (prominence_data_i2d is not None and frame_ww is not None
+                and prominence_ww_i2d is not None):
+            _img = prominence_data_i2d
+            try:
+                _sk = frame_ww.pixel_to_world(np.asarray(_r['x_fit'], dtype=float),
+                                              np.asarray(_r['y_fit'], dtype=float))
+                _mx, _my = prominence_ww_i2d.world_to_pixel(_sk)
+                _xs = np.asarray(_mx, dtype=float); _ys = np.asarray(_my, dtype=float)
+            except Exception:
+                _img = data
+                _xs = np.asarray(_r['x_fit'], dtype=float)
+                _ys = np.asarray(_r['y_fit'], dtype=float)
+        else:
+            _img = data
+            _xs = np.asarray(_r['x_fit'], dtype=float)
+            _ys = np.asarray(_r['y_fit'], dtype=float)
+        _ny, _nx = _img.shape
         _H = 10
         _yo, _xo = np.mgrid[-_H:_H + 1, -_H:_H + 1]
         _rr = np.hypot(_xo, _yo)
@@ -294,7 +316,7 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
             _ix = int(round(_xs[_i])); _iy = int(round(_ys[_i]))
             if not (_H <= _ix < _nx - _H and _H <= _iy < _ny - _H):
                 continue
-            _st = data[_iy - _H:_iy + _H + 1, _ix - _H:_ix + _H + 1]
+            _st = _img[_iy - _H:_iy + _H + 1, _ix - _H:_ix + _H + 1]
             _core = np.nanmax(_st[_cm])
             _ann = _st[_am]
             _bg = np.nanmedian(_ann)
@@ -880,6 +902,25 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
         _instrume = ''
     _is_miri = 'MIRI' in _instrume
 
+    # MIRI: load the DEEP data i2d once so the prominence cut is measured on the
+    # coadd (frame-invariant), not single noisy exposures.  Path mirrors
+    # _data_i2d_path in run_manual_pipeline.
+    _prom_i2d = None
+    _prom_ww_i2d = None
+    if _is_miri:
+        try:
+            _i2dp = (f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}'
+                     f'_t001_{_L._inst_token(filtername)}_{pupil}-'
+                     f'{filtername.lower()}-{module}_data_i2d.fits')
+            if os.path.exists(_i2dp):
+                _ih = fits.open(_i2dp)
+                _prom_i2d = _ih['SCI'].data
+                _prom_ww_i2d = wcs.WCS(_ih['SCI'].header)
+        except Exception as _e:
+            print(f"[manual] prominence i2d load failed ({_e}); "
+                  f"falling back to per-frame data", flush=True)
+            _prom_i2d = None
+
     # MIRI satstar-coincidence exclusion: daophot fits within 1.5 FWHM of a
     # satstar catalog entry are double-counts (see _manual_phot_pass).  Build
     # the satstar pixel positions once.  NIRCam: leave disabled (pix=0).
@@ -912,7 +953,9 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             near_sat_dist_pix=(1.5 * ctx.fwhm_pix if _is_miri else 1.0),
             miri_prominence_snr=(float(getattr(options, 'miri_prominence_snr', 5.0))
                                  if _is_miri else 0.0),
-            prominence_bg_box=0)
+            prominence_bg_box=0,
+            prominence_data_i2d=_prom_i2d, prominence_ww_i2d=_prom_ww_i2d,
+            frame_ww=ctx.ww)
 
     if manual_phase == 'm12':
         seed1 = _build_manual_seed(

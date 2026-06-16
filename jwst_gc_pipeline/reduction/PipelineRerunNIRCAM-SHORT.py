@@ -68,6 +68,21 @@ medfilt_size = {'F182M': 55, 'F187N': 512, 'F212N': 512}
 def main(filtername, module, Observations=None, regionname='brick', field='001', proposal_id='2221'):
     log.info(f"Processing filter {filtername} module {module}")
 
+    # Field-dependent destreak policy (see PipelineRerunNIRCAM-LONG.py for the
+    # full explanation).  In nebulosity-dominated fields, destreak with
+    # use_background_map=True removes large-scale emission per-row and -- with no
+    # background map registered for the field -- never adds it back, doing so
+    # inconsistently between dithers.  outlier_detection then rejects the
+    # disagreeing bright pixels and punches coverage holes.  Until a proper
+    # extended-emission background map exists for these fields, skip destreak.
+    # TODO: build background maps for Sickle, WD2, W51 and re-enable destreak.
+    EXTENDED_EMISSION_FIELDS = ('w51', 'sickle', 'wd2')
+    do_destreak = regionname not in EXTENDED_EMISSION_FIELDS
+    if not do_destreak:
+        print(f"Region {regionname} is extended-emission-dominated and has no "
+              f"background map yet; skipping destreak to avoid "
+              f"outlier_detection coverage holes.", flush=True)
+
     # sanity check
     if regionname == 'brick':
         assert field == '001'
@@ -234,7 +249,7 @@ def main(filtername, module, Observations=None, regionname='brick', field='001',
             else:
                 print(f"Field {field} proposal {proposal_id} did not require re-alignment")
 
-            if filtername in (hdr['PUPIL'], hdr['FILTER']):
+            if do_destreak and filtername in (hdr['PUPIL'], hdr['FILTER']):
                 # changed filter size to be maximal now that we're using the background
                 outname = destreak(member['expname'], median_filter_size=2048,
                                     use_background_map=True)  # medfilt_size[filtername])
@@ -319,7 +334,7 @@ def main(filtername, module, Observations=None, regionname='brick', field='001',
 
         for member in asn_data['products'][0]['members']:
             hdr = fits.getheader(member['expname'])
-            if filtername in (hdr['PUPIL'], hdr['FILTER']):
+            if do_destreak and filtername in (hdr['PUPIL'], hdr['FILTER']):
                 # changed filter size to be maximal now that we're using the background
                 outname = destreak(member['expname'], median_filter_size=2048,
                                     use_background_map=True)  # medfilt_size[filtername])

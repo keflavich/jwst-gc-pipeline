@@ -314,6 +314,46 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
     """
     print(f"Processing filter {filtername} module {module} with do_destreak={do_destreak} and skip_step1and2={skip_step1and2} for field {field} and proposal id {proposal_id} in region {regionname}")
 
+    # ------------------------------------------------------------------
+    # Field-dependent destreak policy.
+    #
+    # The destreak step subtracts a per-row percentile.  With
+    # use_background_map=True it does NOT add the smoothed large scales
+    # back (add_smoothed = not use_background_map); those large scales are
+    # instead supposed to be restored by add_background_map().  If no
+    # background map exists for the field (background_mapping in
+    # destreak.py currently only has the Brick, '2221'), the large-scale
+    # flux is simply removed -- and because each dither places bright
+    # extended emission on different detector rows, it is removed
+    # *inconsistently between frames*.  outlier_detection then sees the
+    # frames disagree at the same sky position and rejects the bright
+    # pixels, producing coverage holes + flux jumps in nebulosity-
+    # dominated fields (confirmed on W51 F335M: cal frames -> ~4% flagged,
+    # destreaked frames -> ~26% flagged, same jwst/version).
+    #
+    # Policy:
+    #  - Nebulosity-dominated fields -> destreak OFF.  There is no
+    #    background map to add the emission back, so destreaking corrupts
+    #    it.  (W51, Sickle.)
+    #  - Star-dominated fields -> destreak is OK, BUT we should still build
+    #    a background map (or rely on add_smoothed=True, the streak-removal
+    #    mode that adds the smoothed large scales back) so large angular
+    #    scales are restored rather than lost.  TODO: audit each remaining
+    #    field below and confirm it is star-dominated before trusting
+    #    destreak there.
+    #
+    # TODO: build a proper extended-emission background map for Sickle,
+    # WD2, and W51 and register them in background_mapping (destreak.py).
+    # Once tested, destreak can be re-enabled for those fields.  Until
+    # then they run with do_destreak=False.
+    # ------------------------------------------------------------------
+    EXTENDED_EMISSION_FIELDS = ('w51', 'sickle', 'wd2')
+    if do_destreak and regionname in EXTENDED_EMISSION_FIELDS:
+        print(f"Region {regionname} is extended-emission-dominated and has no "
+              f"background map yet; forcing do_destreak=False to avoid "
+              f"outlier_detection coverage holes.", flush=True)
+        do_destreak = False
+
     wavelength = int(filtername[1:4])
 
     basepath = f'/orange/adamginsburg/jwst/{regionname}/'
