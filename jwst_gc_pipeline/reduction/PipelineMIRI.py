@@ -94,22 +94,24 @@ REFERENCE_ASTROMETRIC_CATALOG_CANDIDATES_BY_FIELD = {
             'catalogs/nircam_bootstrapped_to_gns_refcat.fits',
             'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
         ),
-        # obs 003 == brick field: align to the brick NIRCam f405n refcat.
+        # obs 003 == brick field: align to the brick NIRCam absolute refcat.
+        # NOTE 2026-06-16: the previous crowdsource_based_nircam-f405n_reference_
+        # astrometric_catalog.fits DOES NOT EXIST under brick/catalogs/, so this
+        # silently fell back to twomass (sparse/poor in the crowded GC).  Use the
+        # existing F182M absolute reference (per user); twomass kept as last
+        # resort only.
         '003': (
-            'catalogs/crowdsource_based_nircam-f405n_reference_astrometric_catalog.fits',
-            'catalogs/crowdsource_based_nircam-f405n_reference_astrometric_catalog.ecsv',
+            'catalogs/pipeline_based_nircam-f182m_reference_astrometric_catalog.fits',
             'catalogs/twomass.fits',
         ),
     },
     '2221': {
         '001': (
-            'catalogs/crowdsource_based_nircam-f405n_reference_astrometric_catalog.fits',
-            'catalogs/crowdsource_based_nircam-f405n_reference_astrometric_catalog.ecsv',
+            'catalogs/pipeline_based_nircam-f182m_reference_astrometric_catalog.fits',
             'catalogs/twomass.fits',
         ),
         '002': (
-            'catalogs/crowdsource_based_nircam-f405n_reference_astrometric_catalog.fits',
-            'catalogs/crowdsource_based_nircam-f405n_reference_astrometric_catalog.ecsv',
+            'catalogs/pipeline_based_nircam-f182m_reference_astrometric_catalog.fits',
             'catalogs/twomass.fits',
         ),
     },
