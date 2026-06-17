@@ -132,8 +132,11 @@ REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD = {
         '002': 'catalogs/crowdsource_based_nircam-f405n_reference_astrometric_catalog.ecsv',
     },
     '1182': {
-        # obs 004 = brick (kept on the original F405N self-bootstrap)
-        '004': 'catalogs/crowdsource_based_nircam-f405n_reference_astrometric_catalog.ecsv',
+        # obs 004 = brick. Re-anchored 2026-06 to the Gaia-tied seed
+        # (Gaia DR3 + VIRAC2 fill, epoch 2022.70). Replaces the F405N
+        # self-bootstrap, which inherited the VVV-DR4 (2MASS) frame ~24 mas
+        # off Gaia. VIRAC2 is Gaia-tied (~5 mas) with contiguous footprint.
+        '004': 'catalogs/gaia_virac2_refcat_epoch2022.70.fits',
         # obs 002 = w51 short-wave coverage; use Gaia (W51 is in the disk)
         '002': 'catalogs/gaia_refcat.fits',
     },
@@ -214,7 +217,9 @@ MODULES_BY_PROPOSAL_FIELD_FILTER = {
 REFERENCE_ASTROMETRIC_CATALOG_BY_FILTER = {
     '1182': {
         '004': {
-            'F115W': 'catalogs/crowdsource_based_nircam-f200w_reference_astrometric_catalog.fits',
+            # F115W (bluest/sharpest SW) anchored directly to the Gaia-tied seed
+            # (Gaia DR3 + VIRAC2). Was the F200W self-bootstrap (VVV-DR4 frame).
+            'F115W': 'catalogs/gaia_virac2_refcat_epoch2022.70.fits',
         },
     },
 }

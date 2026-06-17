@@ -582,7 +582,59 @@ def reconcile_outside_fov_satstar_fluxes(per_frame, match_radius=1.0 * u.arcsec,
     return overrides, drops
 
 
-def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None):
+def _seed_prominence(data, com, sat_area):
+    """Adaptive-radius prominence of a saturated-star SEED on the SCI data.
+
+    Distinguishes a genuine saturated STAR (compact bright core + bright PSF
+    wings) from a DQ-SATURATED patch of bright EXTENDED EMISSION (no compact
+    core; wings ~ local background).  MIRI F770W (and other MIRI broadbands)
+    saturate the detector on the Sickle's bright nebulosity, so the DQ plane
+    grows many non-stellar saturated components; fitting each as a PSF point
+    source produces phantom bright stars that over-subtract the data (deep
+    negative residual pits) and show up in the display model.
+
+    The core/annulus radii are scaled to the saturated footprint so the metric
+    survives deeply-saturated stars whose ENTIRE core is zeroed (NaN-variance
+    pixels are set to 0 upstream): a fixed r=4-10 annulus would sit inside such
+    a star's zeroed core and report ~0 prominence, dropping the brightest real
+    stars.  Sampling the core just OUTSIDE the saturated footprint catches the
+    bright PSF wing ring instead.
+
+    Returns NaN when the metric cannot be measured (too close to an edge, too
+    few finite annulus pixels) -- callers treat NaN as "keep" so a real star is
+    never dropped on an inability to measure it.
+
+    Calibrated on F770W Sickle o002: real hand-selected saturated stars score
+    >=15 (median ~130); extended-emission phantoms score ~1-3.
+    """
+    y, x = com
+    xi, yi = int(round(float(x))), int(round(float(y)))
+    ny, nx = data.shape
+    r_sat = max(2.0, np.sqrt(max(int(sat_area or 0), 1) / np.pi))
+    r_core = r_sat + 3.0       # bright PSF-wing ring just outside the sat core
+    r_in = r_sat + 5.0         # background annulus, beyond the wing ring
+    r_out = r_sat + 15.0
+    pad = int(np.ceil(r_out)) + 1
+    if not (pad < xi < nx - pad and pad < yi < ny - pad):
+        return np.nan
+    yy, xx = np.mgrid[yi - pad:yi + pad + 1, xi - pad:xi + pad + 1]
+    r = np.hypot(xx - xi, yy - yi)
+    sub = data[yi - pad:yi + pad + 1, xi - pad:xi + pad + 1]
+    # exclude exactly-zero pixels: those are the zeroed (unrecoverable) sat core
+    cm = (r <= r_core) & np.isfinite(sub) & (sub != 0)
+    am = (r >= r_in) & (r <= r_out) & np.isfinite(sub) & (sub != 0)
+    if cm.sum() < 3 or am.sum() < 10:
+        return np.nan
+    core = np.nanmax(sub[cm])
+    a = sub[am]
+    med = np.median(a)
+    mad = np.median(np.abs(a - med)) * 1.4826
+    if not (mad > 0):
+        return np.nan
+    return (core - med) / mad
+
+
+def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, seed_prominence_min=8.0):
     # ``flux_drops``: optional list of SkyCoord.  An out-of-field (forced) source
     # whose seed sky position matches a drop within ~1.0" is SKIPPED entirely
     # (not fit, not contributed): cross-frame reconciliation found no trustworthy
@@ -705,6 +757,34 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         sat_area_ii = int(_sizes_by_label[ii]) if ii < len(_sizes_by_label) else 0
         source_records.append({'com': com, 'label': ii + 1,
                                'forced': False, 'sat_area': sat_area_ii})
+
+    # MIRI-only seed prominence gate: drop DQ-SATURATED components that are NOT
+    # compact bright stars (i.e. saturated patches of bright EXTENDED EMISSION).
+    # F770W and the other MIRI broadbands saturate on the Sickle's nebulosity,
+    # so the DQ plane sprouts dozens of non-stellar saturated components; fitting
+    # each as a PSF point source produced phantom bright stars (flux_init<0 ->
+    # runaway flux_fit~1e6, model peak ~5e4 where the data peak is ~600) that
+    # over-subtract the data into deep negative pits and pollute the display
+    # model.  The adaptive-radius prominence cleanly separates real stars
+    # (>=15, median ~130) from these phantoms (~1-3); NaN (unmeasurable, e.g.
+    # near-edge) is KEPT so no real star is dropped on an inability to measure.
+    # NIRCam is untouched (gate is MIRI-only): its GC fields are also crowded
+    # but its saturation behaviour differs and is not validated here.
+    _is_miri_gate = (header.get('INSTRUME', '').lower() == 'miri')
+    if _is_miri_gate and seed_prominence_min and seed_prominence_min > 0:
+        kept_records, n_dropped = [], 0
+        for rec in source_records:
+            prom = _seed_prominence(data, rec['com'], rec.get('sat_area'))
+            if np.isfinite(prom) and prom < seed_prominence_min:
+                n_dropped += 1
+            else:
+                kept_records.append(rec)
+        if n_dropped:
+            print(f"satstar seed prominence gate (MIRI): dropped {n_dropped} "
+                  f"non-stellar saturated components (extended-emission "
+                  f"phantoms; prominence < {seed_prominence_min}); kept "
+                  f"{len(kept_records)} of {len(source_records)}", flush=True)
+        source_records = kept_records
 
     # Sort in-FOV sources by sat_area descending (brightest saturated cores
     # first) so iterative subtraction handles them in brightness order.

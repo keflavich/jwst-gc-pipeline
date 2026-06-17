@@ -1552,6 +1552,16 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
             for filt in filternames:
                 prev_seed = None
                 resbg_path = None
+                # MIRI: vetted catalog is PER-OBS tokened (_o{field}) -- each obs
+                # vetted vs its own data_i2d, then combined into the un-tokened
+                # all-obs catalog (see the vet + combine block below).  NIRCam:
+                # un-tokened (single all-obs vetting; unchanged behavior).
+                _miri_field = (module == 'mirimage'
+                               or str(filt).upper() in (
+                                   'F560W', 'F770W', 'F1000W', 'F1130W',
+                                   'F1280W', 'F1500W', 'F1800W', 'F2100W',
+                                   'F2550W'))
+                _vtok = f'_o{field}' if _miri_field else ''
                 # m3..m6 seed = vetted previous catalog UNION daofind on a
                 # progressively cleaner i2d (per PSFPhotometryPlan2026-06-09):
                 #   iter3(m3): raw i2d                        fit RAW frames
@@ -1564,20 +1574,20 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 det_i2d = None
                 bg_sub = None
                 if phase == 'm3':
-                    vetted_prev = _merged_path('m2', module, filt, False).replace('.fits', f'_o{field}_vetted.fits')
+                    vetted_prev = _merged_path('m2', module, filt, False).replace('.fits', f'{_vtok}_vetted.fits')
                     det_i2d = _data_i2d_path(module, filt)          # raw i2d
                     resbg_path = None                                # RAW frames
                 elif phase == 'm4':
-                    vetted_prev = _merged_path('m3', module, filt, False).replace('.fits', f'_o{field}_vetted.fits')
+                    vetted_prev = _merged_path('m3', module, filt, False).replace('.fits', f'{_vtok}_vetted.fits')
                     det_i2d = resid_i2d_for_next.get((module, filt))  # m3 residual
                     resbg_path = None                                # RAW frames
                 elif phase == 'm5':
-                    vetted_prev = _merged_path('m4', module, filt, False).replace('.fits', f'_o{field}_vetted.fits')
+                    vetted_prev = _merged_path('m4', module, filt, False).replace('.fits', f'{_vtok}_vetted.fits')
                     det_i2d = resid_i2d_for_next.get((module, filt))  # m4 residual
                     bg_sub = bg_for_next.get((module, filt))          # minus m4 bg
                     resbg_path = bg_for_next.get((module, filt))      # fit on bg-sub frames
                 elif phase == 'm6':
-                    vetted_prev = _merged_path('m5', module, filt, True).replace('.fits', f'_o{field}_vetted.fits')
+                    vetted_prev = _merged_path('m5', module, filt, True).replace('.fits', f'{_vtok}_vetted.fits')
                     det_i2d = resid_i2d_for_next.get((module, filt))  # m5 residual
                     bg_sub = bg_for_next.get((module, filt))          # minus m5 bg
                     resbg_path = bg_for_next.get((module, filt))      # fit on bg-sub frames
@@ -1830,7 +1840,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 # A combine step (below) vstacks per-obs vetted -> un-tokened
                 # all-obs _vetted.fits (the final science catalog + m7 seed).
                 merged_path = _merged_path(merge_label, module, filt, resbgsub)
-                vetted_path = merged_path.replace('.fits', f'_o{field}_vetted.fits')
+                vetted_path = merged_path.replace('.fits', f'{_vtok}_vetted.fits')
                 combined_vetted_path = merged_path.replace('.fits', '_vetted.fits')
                 try:
                     merged = Table.read(merged_path)
@@ -1875,6 +1885,69 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         struct_x=0.0, struct_y=0.0,  # prune at detection, not here
                         label=f'{phase}:{filt}')
                     vetted.write(vetted_path, overwrite=True)
+                    # MIRI: combine per-obs tokened vetted catalogs into the
+                    # un-tokened ALL-OBS vetted (the final science catalog + the
+                    # m7 cross-band seed read at _build_crossband_seed).  Globs
+                    # every `_o*_vetted` sibling so it's incremental: after o001
+                    # it holds o001; after o002 it holds o001+o002 (deduped by
+                    # sky position, brighter/first wins in the overlap).  Each
+                    # footprint was already cleaned by its own obs' data_i2d.
+                    if _vtok:
+                        try:
+                            import glob as _glob
+                            from astropy.table import vstack as _vstack
+                            from astropy.coordinates import SkyCoord as _SkyCoord
+                            _sibs = sorted(_glob.glob(
+                                merged_path.replace('.fits', '_o*_vetted.fits')))
+                            _tabs = []
+                            for _sp in _sibs:
+                                try:
+                                    _tabs.append(Table.read(_sp))
+                                except Exception:
+                                    continue
+                            if _tabs:
+                                _comb = _tabs[0] if len(_tabs) == 1 else _vstack(
+                                    _tabs, metadata_conflicts='silent')
+                                if len(_tabs) > 1 and 'skycoord' in _comb.colnames:
+                                    _csc = _SkyCoord(_comb['skycoord'])
+                                    _keepc = _dedup_close_sources(
+                                        xy=np.column_stack([_csc.ra.deg, _csc.dec.deg]),
+                                        flux=(np.asarray(_comb['flux'], dtype=float)
+                                              if 'flux' in _comb.colnames else None),
+                                        min_sep_pix=0.11 / 3600.0, quality=None)[0]
+                                    _comb = _comb[_keepc]
+                                _comb.write(combined_vetted_path, overwrite=True)
+                                print(f"manual [{phase}]: combined {len(_sibs)} per-obs "
+                                      f"vetted -> {os.path.basename(combined_vetted_path)} "
+                                      f"({len(_comb)} all-obs sources)", flush=True)
+                                # CARTA-friendly export: the science catalog uses
+                                # an astropy SkyCoord MIXIN column (serialized as
+                                # dotted ``skycoord.ra``/``skycoord.dec`` with mixin
+                                # metadata) that CARTA rejects ("Catalog type not
+                                # supported").  Write a sibling with plain float
+                                # ra/dec (deg) columns that CARTA loads directly.
+                                try:
+                                    from astropy.coordinates import SkyCoord as _SC2
+                                    _cart = Table()
+                                    if 'skycoord' in _comb.colnames:
+                                        _sc2 = _SC2(_comb['skycoord'])
+                                    else:
+                                        _sc2 = _SC2(_comb['ra'], _comb['dec'], unit='deg')
+                                    _cart['ra'] = np.asarray(_sc2.ra.deg, dtype='float64')
+                                    _cart['dec'] = np.asarray(_sc2.dec.deg, dtype='float64')
+                                    for _cc in ('flux', 'flux_err', 'qfit', 'cfit',
+                                                'flags', 'is_saturated',
+                                                'replaced_saturated', 'iter_found'):
+                                        if _cc in _comb.colnames:
+                                            _cart[_cc] = np.asarray(_comb[_cc])
+                                    _cart.write(combined_vetted_path.replace(
+                                        '.fits', '_carta.fits'), overwrite=True)
+                                except Exception as _cex2:
+                                    print(f"manual [{phase}]: CARTA catalog export "
+                                          f"failed: {_cex2}", flush=True)
+                        except Exception as _cex:
+                            print(f"manual [{phase}]: vetted combine failed: {_cex}",
+                                  flush=True)
                 except Exception as ex:
                     print(f"manual [{phase}]: vetting failed ({ex}); using unvetted "
                           f"merged catalog as seed", flush=True)
