@@ -72,7 +72,12 @@ def measure_offsets(reference_coordinates, skycrds_cat, refflux, skyflux, total_
                     print(f"Iterations were: {rejection_data}")
                     reject = np.zeros(ratio.size, dtype='bool')
 
-        # dra and ddec should be the vector added to CRVAL to put the image in the right place
+        # dra and ddec should be the vector added to CRVAL to put the image in the right place.
+        # NOTE: dra is RAW RA (no cos(dec)); it is applied raw to .ra below, so the routine is
+        # internally self-consistent. Caveat: the convergence `threshold` and reported std are in
+        # raw RA, i.e. ~cos(dec) smaller in true angle (~12% at the GC); negligible vs the threshold
+        # itself. For <10 mas absolute astrometry tie to GSC3.2/Gaia at the observation epoch and use
+        # a great-circle affine fit (see brick2221/analysis/retie_to_gsc.py).
         dra = -(skycrds_cat[sel][idx[keep][~reject]].ra - reference_coordinates[keep][~reject].ra).to(u.arcsec)
         ddec = -(skycrds_cat[sel][idx[keep][~reject]].dec - reference_coordinates[keep][~reject].dec).to(u.arcsec)
 

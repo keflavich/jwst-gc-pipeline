@@ -1379,11 +1379,16 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
                 filtername = tbl.meta["filter"]
                 zeropoint = u.Quantity(jfilts.loc[_svo_filter_id(filtername)]['ZeroPoint'], u.Jy)
                 print(f"Zeropoint for {filtername} is {zeropoint}.  Max flux is {flux_jy.max()}")
-                abmag = -2.5 * np.log10(flux_jy / zeropoint) * u.mag
+                # True AB (3631 Jy zeropoint) for mag_ab; Vega (SVO zeropoint) as a separate column.
+                # Previously mag_ab held the Vega magnitude, mislabeled (off by AB-Vega ~1.8 mag);
+                # this matched the daophot/satstar paths' convention bug for crowdsource only.
+                abmag = (-2.5 * np.log10(flux_jy / u.Jy) + ABMAG_OFFSET) * u.mag
+                vegamag = -2.5 * np.log10(flux_jy / zeropoint) * u.mag
                 abmag_err = 2.5 / np.log(10) * np.abs(eflux_jy / flux_jy) * u.mag
                 tbl.add_column(Column(flux_jy, name='flux_jy', unit=u.Jy))
                 tbl.add_column(Column(eflux_jy, name='eflux_jy', unit=u.Jy))
                 tbl.add_column(Column(abmag, name='mag_ab', unit=u.mag))
+                tbl.add_column(Column(vegamag, name='mag_vega', unit=u.mag))
                 tbl.add_column(Column(abmag_err, name='emag_ab', unit=u.mag))
                 print(f"Max flux={tbl['flux_jy'].max()}, min mag={np.nanmin(tbl['mag_ab'])}, median={np.nanmedian(tbl['mag_ab'])}")
         if hasattr(tbl['mag_ab'], 'mask'):
