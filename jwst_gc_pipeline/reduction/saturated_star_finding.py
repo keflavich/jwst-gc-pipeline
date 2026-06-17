@@ -415,7 +415,14 @@ def compute_adaptive_bkg_annulus(sat_area, bkg_inner_min=15, bkg_inner_max=50):
 
 def reconcile_outside_fov_satstar_fluxes(per_frame, match_radius=1.0 * u.arcsec,
                                          disagree_factor=2.0, min_frames=2,
-                                         min_detector_diversity=30.0 * u.arcsec):
+                                         high_outlier_factor=3.0,
+                                         low_floor_factor=4.0,
+                                         min_detector_diversity=None):
+    # ``min_detector_diversity`` is DEPRECATED/ignored: reconcile no longer
+    # drops stars for lack of detector diversity (that deleted real off-FOV
+    # sources).  ``high_outlier_factor``/``low_floor_factor`` tune the robust-low
+    # flux estimate (reject runaway corner mis-fits; floor against a single
+    # spurious-low frame).
     """Reconcile the flux of OUT-OF-FIELD (forced) saturated stars across frames.
 
     A star outside the field of view, if bright enough, has its PSF detected in
@@ -522,63 +529,48 @@ def reconcile_outside_fov_satstar_fluxes(per_frame, match_radius=1.0 * u.arcsec,
         groups.append(members)
 
     overrides = []
-    drops = []
+    drops = []  # retained for API compatibility; reconcile NEVER drops a star
+                # that is present in the data (that would delete real flux).
     for members in groups:
         if len(members) < min_frames:
             continue
-        # distance from the star (use each member's own fitted position vs its
-        # own detector centre) -> the member with the smallest star-to-detector-
-        # centre distance is the most interior (sees the spikes).
-        dists = [recs[m][2].separation(recs[m][4]).arcsec for m in members]
-        near = members[int(np.argmin(dists))]
-        truth = recs[near][3]
+        fluxes = np.array([recs[m][3] for m in members], dtype=float)
+        fluxes = fluxes[np.isfinite(fluxes) & (fluxes > 0)]
+        if len(fluxes) < min_frames:
+            continue
+        # Act only when the cross-frame fits disagree badly; a consistent family
+        # is already fine and is left untouched (each frame keeps its own fit).
+        if float(fluxes.max()) / float(fluxes.min()) <= disagree_factor:
+            continue
+        # Robust-LOW estimate of the off-FOV star's true flux.  A saturated star
+        # fit in the spike-less CORNER of a frame can only OVER-estimate it
+        # (scattered light + unmodelled neighbours get attributed to the point
+        # source), so the credible flux sits at the LOW end and the runaway
+        # 1e9-1e11 values are corner mis-fits to reject.  We:
+        #   1. reject high runaway outliers (flux > median * high_outlier_factor),
+        #   2. take the MINIMUM of the survivors (least-contaminated),
+        #   3. floored at survivor_median / low_floor_factor so a single
+        #      anomalously-low frame cannot drive a gross UNDER-subtraction.
+        # This biases LOW (avoids the over-subtracted negative holes) while still
+        # modelling the star, and it NEVER drops a present source -- earlier
+        # "drop when no detector diversity" wrongly deleted real, fittable
+        # off-FOV stars (e.g. sickle 17:46:12.67 in F480M/F470N).
+        med = float(np.median(fluxes))
+        kept = fluxes[fluxes <= med * high_outlier_factor]
+        if len(kept) == 0:
+            kept = fluxes
+        truth = max(float(np.min(kept)), float(np.median(kept)) / low_floor_factor)
         if not (truth > 0):
             continue
-        # Act only when some far frame disagrees badly with the trusted
-        # near-frame flux; otherwise leave the (already consistent) family alone.
-        disagrees = False
-        for m in members:
-            if m == near:
-                continue
-            f = recs[m][3]
-            ratio = max(f, truth) / min(f, truth) if min(f, truth) > 0 else np.inf
-            if ratio > disagree_factor:
-                disagrees = True
-                break
-        if not disagrees:
-            continue
-        # Detector diversity: the nearest-detector premise only holds if the
-        # member detector centres are materially spread out (different
-        # detectors).  Max pairwise separation among member det_centres.
-        det_centres = SkyCoord([recs[m][4] for m in members])
-        if len(members) > 1:
-            spread = max(det_centres[i].separation(det_centres[j]).arcsec
-                         for i in range(len(members))
-                         for j in range(i + 1, len(members))) * u.arcsec
-        else:
-            spread = 0.0 * u.arcsec
-        # Key the override/drop at the GROUP CENTROID, not at one extreme
-        # member.  The per-frame forced positions of a saturated off-FOV star
-        # scatter across the whole group (single-linkage chain up to ~the group
-        # diameter; observed ~1.2" for the sickle off-FOV stars), and the caller
-        # matches each frame's seed against ONE key within match_radius.  Keying
-        # at the nearest member (a chain endpoint) leaves the FARTHEST frames --
-        # exactly the runaway 1e11 mis-fits that most need fixing -- beyond the
-        # match radius, so they are never pinned and dominate the model.  The
-        # centroid halves the max key-to-member distance, so every frame matches.
+        # Key the override at the GROUP CENTROID (not an extreme member): the
+        # per-frame forced positions scatter across the whole group (~1.2" for
+        # the sickle off-FOV stars) and the caller matches each frame's seed
+        # against ONE key within match_radius.  The centroid halves the max
+        # key-to-member distance so every frame -- including the runaway ones
+        # that most need pinning -- matches and gets the robust-low flux.
         member_sc = SkyCoord([recs[m][2] for m in members])
         centroid = SkyCoord(member_sc.cartesian.mean(), frame=member_sc.frame).icrs
-        if spread < min_detector_diversity:
-            # Single detector (only dithered): no frame is meaningfully more
-            # interior, and the discordant all-inflated fluxes mean the spikes
-            # never entered this detector's FOV.  No trustworthy reference ->
-            # drop the unfittable forced source.
-            drops.append(centroid)
-        else:
-            # Multi-detector / mosaic: a real flux gradient with detector
-            # distance exists; the nearest detector caught the most spike and
-            # gives the trusted flux.  Pin it everywhere via the centroid key.
-            overrides.append((centroid, truth))
+        overrides.append((centroid, truth))
     return overrides, drops
 
 
@@ -600,12 +592,22 @@ def _seed_prominence(data, com, sat_area):
     stars.  Sampling the core just OUTSIDE the saturated footprint catches the
     bright PSF wing ring instead.
 
-    Returns NaN when the metric cannot be measured (too close to an edge, too
-    few finite annulus pixels) -- callers treat NaN as "keep" so a real star is
-    never dropped on an inability to measure it.
+    Returns ``(prominence, core)`` where ``core`` is the brightest data value in
+    the wing ring (an ABSOLUTE brightness, not background-relative).  Both are
+    NaN when the metric cannot be measured (too close to an edge, too few finite
+    annulus pixels) -- callers treat NaN as "keep" so a real star is never
+    dropped on an inability to measure it.
+
+    Two criteria are needed because they fail on different phantoms:
+      * prominence  -- (core-med)/MAD; drops DIFFUSE extended-emission saturation
+        (the bulk, ~50/frame).  But a small COMPACT bump on SMOOTH emission has a
+        tiny annulus MAD, so a modest absolute excess still scores high (12-55).
+      * core (absolute) -- drops those compact bumps: a real saturated star's
+        wing ring is intrinsically bright (>=~1191 on F770W; phantom bumps ~800).
 
     Calibrated on F770W Sickle o002: real hand-selected saturated stars score
-    >=15 (median ~130); extended-emission phantoms score ~1-3.
+    prominence >=15 (median ~130) AND core >=1191 (median ~4700); phantoms score
+    prominence ~1-3 (diffuse) or have core ~800 (compact bumps).
     """
     y, x = com
     xi, yi = int(round(float(x))), int(round(float(y)))
@@ -616,7 +618,7 @@ def _seed_prominence(data, com, sat_area):
     r_out = r_sat + 15.0
     pad = int(np.ceil(r_out)) + 1
     if not (pad < xi < nx - pad and pad < yi < ny - pad):
-        return np.nan
+        return np.nan, np.nan
     yy, xx = np.mgrid[yi - pad:yi + pad + 1, xi - pad:xi + pad + 1]
     r = np.hypot(xx - xi, yy - yi)
     sub = data[yi - pad:yi + pad + 1, xi - pad:xi + pad + 1]
@@ -624,17 +626,17 @@ def _seed_prominence(data, com, sat_area):
     cm = (r <= r_core) & np.isfinite(sub) & (sub != 0)
     am = (r >= r_in) & (r <= r_out) & np.isfinite(sub) & (sub != 0)
     if cm.sum() < 3 or am.sum() < 10:
-        return np.nan
-    core = np.nanmax(sub[cm])
+        return np.nan, np.nan
+    core = float(np.nanmax(sub[cm]))
     a = sub[am]
     med = np.median(a)
     mad = np.median(np.abs(a - med)) * 1.4826
     if not (mad > 0):
-        return np.nan
-    return (core - med) / mad
+        return np.nan, core
+    return (core - med) / mad, core
 
 
-def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, seed_prominence_min=8.0):
+def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, seed_prominence_min=8.0, seed_core_min=1000.0):
     # ``flux_drops``: optional list of SkyCoord.  An out-of-field (forced) source
     # whose seed sky position matches a drop within ~1.0" is SKIPPED entirely
     # (not fit, not contributed): cross-frame reconciliation found no trustworthy
@@ -758,32 +760,45 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         source_records.append({'com': com, 'label': ii + 1,
                                'forced': False, 'sat_area': sat_area_ii})
 
-    # MIRI-only seed prominence gate: drop DQ-SATURATED components that are NOT
-    # compact bright stars (i.e. saturated patches of bright EXTENDED EMISSION).
-    # F770W and the other MIRI broadbands saturate on the Sickle's nebulosity,
-    # so the DQ plane sprouts dozens of non-stellar saturated components; fitting
-    # each as a PSF point source produced phantom bright stars (flux_init<0 ->
-    # runaway flux_fit~1e6, model peak ~5e4 where the data peak is ~600) that
+    # MIRI-only seed gate: drop DQ-SATURATED components that are NOT compact
+    # bright stars (i.e. saturated patches of bright EXTENDED EMISSION).  F770W
+    # and the other MIRI broadbands saturate on the Sickle's nebulosity, so the
+    # DQ plane sprouts dozens of non-stellar saturated components; fitting each
+    # as a PSF point source produced phantom bright stars (flux_init<0 -> runaway
+    # flux_fit~1e6, model peak ~1e4-5e4 where the data peak is ~600-900) that
     # over-subtract the data into deep negative pits and pollute the display
-    # model.  The adaptive-radius prominence cleanly separates real stars
-    # (>=15, median ~130) from these phantoms (~1-3); NaN (unmeasurable, e.g.
-    # near-edge) is KEPT so no real star is dropped on an inability to measure.
-    # NIRCam is untouched (gate is MIRI-only): its GC fields are also crowded
-    # but its saturation behaviour differs and is not validated here.
+    # model.  TWO criteria, because they catch different phantoms:
+    #   - prominence < seed_prominence_min  -> diffuse extended-emission sat
+    #     (the bulk, ~50/frame; real >=15, phantom ~1-3).
+    #   - core < seed_core_min  -> compact bumps on SMOOTH emission whose tiny
+    #     annulus MAD inflates prominence to 12-55 but whose wing ring is faint
+    #     (real >=1191, phantom ~800).  seed_core_min is in the data's surface-
+    #     brightness units; the 1000 default is F770W-calibrated -- revisit for
+    #     other MIRI broadbands (set 0 to disable just this criterion).
+    # NaN (unmeasurable, e.g. near-edge) is KEPT so no real star is dropped on an
+    # inability to measure it.  NIRCam untouched (gate is MIRI-only).
     _is_miri_gate = (header.get('INSTRUME', '').lower() == 'miri')
-    if _is_miri_gate and seed_prominence_min and seed_prominence_min > 0:
-        kept_records, n_dropped = [], 0
+    if _is_miri_gate and ((seed_prominence_min and seed_prominence_min > 0)
+                          or (seed_core_min and seed_core_min > 0)):
+        kept_records, n_prom, n_core = [], 0, 0
         for rec in source_records:
-            prom = _seed_prominence(data, rec['com'], rec.get('sat_area'))
-            if np.isfinite(prom) and prom < seed_prominence_min:
-                n_dropped += 1
+            prom, core = _seed_prominence(data, rec['com'], rec.get('sat_area'))
+            drop_prom = (seed_prominence_min and seed_prominence_min > 0
+                         and np.isfinite(prom) and prom < seed_prominence_min)
+            drop_core = (seed_core_min and seed_core_min > 0
+                         and np.isfinite(core) and core < seed_core_min)
+            if drop_prom or drop_core:
+                n_prom += int(bool(drop_prom))
+                n_core += int(bool(drop_core and not drop_prom))
             else:
                 kept_records.append(rec)
+        n_dropped = len(source_records) - len(kept_records)
         if n_dropped:
-            print(f"satstar seed prominence gate (MIRI): dropped {n_dropped} "
-                  f"non-stellar saturated components (extended-emission "
-                  f"phantoms; prominence < {seed_prominence_min}); kept "
-                  f"{len(kept_records)} of {len(source_records)}", flush=True)
+            print(f"satstar seed gate (MIRI): dropped {n_dropped} non-stellar "
+                  f"saturated components (extended-emission phantoms; "
+                  f"{n_prom} by prominence<{seed_prominence_min}, {n_core} by "
+                  f"faint-core<{seed_core_min}); kept {len(kept_records)} of "
+                  f"{len(source_records)}", flush=True)
         source_records = kept_records
 
     # Sort in-FOV sources by sat_area descending (brightest saturated cores

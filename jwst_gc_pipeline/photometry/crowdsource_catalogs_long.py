@@ -2802,6 +2802,21 @@ def save_residual_datamodel(input_filename, output_filename, data):
         wcs = model.meta.wcs
         model.data = data
         model.meta.wcs = wcs  # explicit re-assignment ensures GWCS is serialized to ASDF extension
+        # The residual/model image is sky-pedestal-free BY CONSTRUCTION: the
+        # model is rendered point sources (>= 0) and the residual already has the
+        # source+satstar model subtracted.  But this datamodel inherits the input
+        # frame's meta.background.level (the sky level measured during reduction)
+        # with subtracted=False, so when ResampleStep coadds these per-frame
+        # images into the i2d mosaic it RE-SUBTRACTS that sky level -> a spurious
+        # uniform NEGATIVE pedestal (verified: F480M model i2d median -11.25 with
+        # the inherited level vs +1.07 with it zeroed).  Mark the background as
+        # already removed so resample adds nothing.
+        try:
+            model.meta.background.level = 0.0
+            model.meta.background.subtracted = True
+        except Exception as _ex:
+            print(f"save_residual_datamodel: could not zero meta.background "
+                  f"({_ex}); i2d mosaic may show a negative pedestal", flush=True)
         model.save(output_filename, overwrite=True)
 
     # Restore full S_REGION (with CONTINUE support) that ImageModel.save() may have truncated.
