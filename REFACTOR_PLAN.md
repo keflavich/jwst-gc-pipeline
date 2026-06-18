@@ -46,19 +46,19 @@ Expand `photometry/naming.py`, route through it.
 no-silent-frame-drops + collision guard, resolve_max_group_size, _max_r_for_source tiers,
 ERR/data shape-mismatch trim, _filter_to_wavelength specials.
 
-## Phase 3 — STScI / library redundancy (audit complete; IMPLEMENTATION GATED)
-Biggest WCS wins. **GATING FINDING (2026-06-18): commit 318b902 "propagate correction into
-gwcs" *added* `sync_gwcs_to_fits_wcs` brand-new yesterday — it is the user's deliberate,
-actively-developed fix, NOT redundant cruft. Do NOT rewrite WCS-alignment math blind; it
-changes absolute astrometry. Awaiting user direction on Tier 1. Tier 2/3 swaps also carry
-real behavioral risk (on-disk PSF-grid format compat; DS9 coord-system interpretation;
-reproject interpolation numerics) — none is a zero-risk win like Phase 1 was.**
+## Phase 3 — STScI / library redundancy  [STATUS: WCS items CLOSED — not redundant]
+**RESOLVED 2026-06-18 against latest origin/main.** The audit's WCS findings were wrong;
+they predated `reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md` (added this morning), which
+documents the WCS flow as deliberate, correct design:
+- `sync_gwcs_to_fits_wcs` is NOT replaceable by `adjust_wcs`: adjust_wcs's own docstring says
+  it is "not designed to handle GWCS of resampled images." STScI provides no resampled-i2d WCS
+  shifter; the hand-built FITSImagingWCSTransform is the minimal supported path (<0.01 mas,
+  idempotent). Doc already says "if a future jwst/gwcs ships one, replace it."
+- `fix_alignment` FITS+GWCS double-write and the skipped TweakRegStep are the deliberate
+  two-authoring-points / no-double-correction design.
+So: NOTHING to change for WCS.
 
-Tier 1 (WCS — HOLD, user's active code):
-- `reduction/align_to_catalogs.py:21-65` `sync_gwcs_to_fits_wcs` — freshly authored (318b902).
-  Audit suggested replacing with `adjust_wcs(model.meta.wcs, dra, ddec)` (the form already used
-  in fix_alignment), which would also close the silent no-op hole at 60-63. RECOMMEND but do
-  NOT apply without user sign-off + real-data astrometry check.
+Tier 1 (WCS): CLOSED — deliberate design, see the flow doc.
 - `reduction/align_to_catalogs.py:312-465` `realign_to_catalog` + `photometry/measure_offsets.py`
   + `make_reftable.py` — 3 hand-rolled tweakreg/CRVAL-shift aligners → `jwst.tweakreg` /
   `tweakwcs.fit_wcs`. Medium risk (custom cuts + diagnostics to reproduce).
