@@ -366,3 +366,46 @@ class TestNormalizeVgroupId:
         tok, n = L.normalize_vgroup_id('abc')
         assert tok == '_vgroupabc'
         assert n is None
+
+
+# ---------------------------------------------------------------------------
+# _output_suffix_tokens (do_photometry_step block B, extracted Phase 6 M3)
+# The function returns a namedtuple whose fields unpack in the SAME order as the
+# inline local assignments it replaced; do_photometry_step relies on that order.
+# ---------------------------------------------------------------------------
+class TestOutputSuffixTokens:
+    def _opts(self, **o):
+        base = dict(desaturated=False, bgsub=False, use_iter3_residual_bg=False,
+                    epsf=False, blur=False, group=False)
+        base.update(o)
+        return types.SimpleNamespace(**base)
+
+    def test_defaults_all_empty(self):
+        t = L._output_suffix_tokens(self._opts())
+        assert (t.desat, t.bgsub, t.epsf_, t.blur_, t.group, t.iter_) == ('',) * 6
+        assert (t.exposure_, t.visitid_, t.vgroupid_) == ('', '', '')
+        assert t.vgroup_numeric is None
+
+    def test_flags_set_tokens(self):
+        t = L._output_suffix_tokens(self._opts(
+            desaturated=True, bgsub=True, epsf=True, blur=True, group=True))
+        assert t.desat == '_unsatstar'
+        assert t.bgsub == '_bgsub'
+        assert t.epsf_ == '_epsf'
+        assert t.blur_ == '_blur'
+        assert t.group == '_group'
+
+    def test_exposure_visit_vgroup_iter(self):
+        t = L._output_suffix_tokens(self._opts(), exposurenumber=1, visit_id=3,
+                                    vgroup_id=7, iteration_label='iter3')
+        assert t.exposure_ == '_exp00001'
+        assert t.visitid_ == '_visit003'
+        assert t.vgroupid_ == '_vgroup7'
+        assert t.vgroup_numeric == 7
+        assert t.iter_ == '_iter3'
+
+    def test_field_order_matches_unpack(self):
+        # do_photometry_step unpacks by position; lock the field order.
+        assert L._SuffixTokens._fields == (
+            'desat', 'bgsub', 'epsf_', 'exposure_', 'visitid_', 'vgroupid_',
+            'vgroup_numeric', 'blur_', 'group', 'iter_')

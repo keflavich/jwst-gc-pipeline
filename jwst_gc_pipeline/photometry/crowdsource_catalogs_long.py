@@ -4571,6 +4571,37 @@ def get_filename(basepath, filtername, proposal_id, field, module, options, pupi
     raise ValueError(f"No input file found for filter={filtername} proposal={proposal_id} field={field} module={module} in {basepath}")
 
 
+from collections import namedtuple as _namedtuple
+
+_SuffixTokens = _namedtuple(
+    '_SuffixTokens',
+    'desat bgsub epsf_ exposure_ visitid_ vgroupid_ vgroup_numeric blur_ group iter_')
+
+
+def _output_suffix_tokens(options, exposurenumber=None, visit_id=None,
+                          vgroup_id=None, iteration_label=None):
+    """Filename-suffix tokens shared across one exposure's output products.
+
+    Factored out of ``do_photometry_step`` (block B).  Returns a
+    ``_SuffixTokens`` namedtuple whose fields unpack in the same order as the
+    local variables the function used to assign inline, so all downstream
+    filename construction is unchanged.
+    """
+    vgroupid_, vgroup_numeric = normalize_vgroup_id(vgroup_id)
+    return _SuffixTokens(
+        desat='_unsatstar' if options.desaturated else '',
+        bgsub=_bgsub_token(options),
+        epsf_="_epsf" if options.epsf else "",
+        exposure_=f'_exp{exposurenumber:05d}' if exposurenumber is not None else '',
+        visitid_=f'_visit{int(visit_id):03d}' if visit_id is not None else '',
+        vgroupid_=vgroupid_,
+        vgroup_numeric=vgroup_numeric,
+        blur_="_blur" if options.blur else "",
+        group="_group" if options.group else "",
+        iter_=_iteration_token(iteration_label),
+    )
+
+
 def do_photometry_step(options, filtername, module, detector, field, basepath,
                        filename, proposal_id, crowdsource_default_kwargs, exposurenumber=None,
                        visit_id=None, vgroup_id=None,
@@ -4637,16 +4668,11 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
     localbkg_inner = max(6, int(round(aperture_radius_pix + 0.5 * fwhm_pix)))
     localbkg_outer = localbkg_inner + max(4, int(round(fwhm_pix)))
 
-    # file naming suffixes
-    desat = '_unsatstar' if options.desaturated else ''
-    bgsub = _bgsub_token(options)
-    epsf_ = "_epsf" if options.epsf else ""
-    exposure_ = f'_exp{exposurenumber:05d}' if exposurenumber is not None else ''
-    visitid_ = f'_visit{int(visit_id):03d}' if visit_id is not None else ''
-    vgroupid_, vgroup_numeric = normalize_vgroup_id(vgroup_id)
-    blur_ = "_blur" if options.blur else ""
-    group = "_group" if options.group else ""
-    iter_ = _iteration_token(iteration_label)
+    # file naming suffixes (factored into _output_suffix_tokens; unpacked in the
+    # same order so all downstream filename construction is unchanged)
+    (desat, bgsub, epsf_, exposure_, visitid_, vgroupid_, vgroup_numeric,
+     blur_, group, iter_) = _output_suffix_tokens(
+        options, exposurenumber, visit_id, vgroup_id, iteration_label)
 
     print(f"Starting cataloging on {filename}", flush=True)
     # ---- Optional small-region cutout ----------------------------------

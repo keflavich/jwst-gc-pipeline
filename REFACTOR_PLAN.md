@@ -134,10 +134,14 @@ no-op without saturated DQ). Milestones, commit each:
   load_or_make_satstar_catalog→empty, SvoFps→1-row, save_residual_datamodel→noop,
   savefig→noop) on a synthetic 3-star frame; asserts the basic catalog is written and all 3
   sources recovered <1px. ~4min (webbpsf import). This is the SAFETY NET for M3+.
-- [ ] **M3+ extract blocks** (each: extract→unit test→re-run M2→commit). Order by safety:
-  seed snap/inject/satstar-snap machinery (5099-5434, 3 near-dup blocks), diagnostic-PNG render
-  (3 near-dup), satstar model load+subtract (5024-5093), shared fit_and_finalize for basic vs
-  iterative (P-R ≈ S-U). Target modules: seeding.py, postfit_filters.py, residual_io.py.
+- [x] **M3 block B → `_output_suffix_tokens`** (namedtuple, unpacked in field order; closes
+  Phase-1 "output_tokens ×8"). 4 unit tests + M2 re-run: 5 passed.
+- [ ] **M4+ extract more blocks** (each: extract→unit test→re-run M2→commit). M2 covers only the
+  BASIC UNSEEDED path (blocks A-D,G-J-else,K-noop,L',M,P,Q,R) — extractions there are validated.
+  Other paths (seeded L, iterative S-U, crowdsource O) need their own characterization tests
+  FIRST. Safe next (M2-covered): first-pass DAO finder (block J else-branch), basic post-fit
+  dedup+filters (block Q). Then add seeded + iterative characterization tests to unlock the rest.
+  Target modules: seeding.py, postfit_filters.py, residual_io.py.
 
 ---
 
