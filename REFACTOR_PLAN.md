@@ -114,13 +114,28 @@ Per-instrument param struct + MIRI-only hooks + agnostic core.
   `_skycoord_radec_arrays`, `_XY_COLUMN_CANDIDATES`) from crowdsource_catalogs_long.py into
   new `photometry/column_utils.py`; the monolith re-imports them (so `_L.<name>` access from
   cataloging.py is unchanged). Behavior-neutral pure move; covered by existing tests.
-- [ ] DEFERRED — the actual mega-function carve-up (`do_photometry_step` 1755 lines,
-  `get_saturated_stars` 1300) needs integration fixtures that DON'T exist yet (tests/README
-  "Deferred" list: a synthetic GriddedPSFModel + injected-star image driven through
-  do_photometry_step end-to-end). Splitting blind, in the user's hot files, with no safety
-  net = reckless. Build those fixtures FIRST, then split into cutout.py / residual_mosaicking.py
-  / seeding.py / postfit_filters.py / io_results.py / cli_config.py. naming.py + column_utils.py
-  are the first two such modules, done.
+- [x] First two extracted modules done: naming.py + column_utils.py.
+
+### Phase 6 carve-up of `do_photometry_step` (1758 lines, 4525-6283) — scope: this fn only
+(get_saturated_stars deferred — user's hot file). Contract fully mapped (blocks A-U, 3 method
+gates: `not nocrowdsource` / `daophot` / `daophot and not basic_only`; satstar always-on but
+no-op without saturated DQ). Milestones, commit each:
+
+- [ ] **M0 fixtures**: tests/ helpers — synthetic GriddedPSFModel builder, synthetic i2d FITS
+  (SCI+ERR+DQ, WCS in ext1, INSTRUME/TELESCOP/DATE-OBS), minimal-options factory.
+- [x] **M1 PSF centralization** (user request): new `psf_paths.py` with
+  `resolve_merged_psf_grid_path` (read central→legacy, central naming keyed by
+  inst+module+FILTER+oversample+blur). Wired into get_psf_model use_webbpsf=False read +
+  webbpsf cache outdir default → `psfs_shared/`. 6 unit tests (test_psf_paths.py) pass; both
+  edited files compile. NOTE: grid PRODUCERS (make_merged_psf.py) still write legacy paths —
+  follow-up to point them at central so the disk saving actually kicks in for new grids.
+- [ ] **M2 characterization test**: drive do_photometry_step shortest path (daophot basic-only,
+  unseeded, no satstar/cutout/bgsub/crowdsource; monkeypatch get_psf_model→synthetic grid,
+  load_or_make_satstar_catalog→empty). Golden-master the output catalog table.
+- [ ] **M3+ extract blocks** (each: extract→unit test→re-run M2→commit). Order by safety:
+  seed snap/inject/satstar-snap machinery (5099-5434, 3 near-dup blocks), diagnostic-PNG render
+  (3 near-dup), satstar model load+subtract (5024-5093), shared fit_and_finalize for basic vs
+  iterative (P-R ≈ S-U). Target modules: seeding.py, postfit_filters.py, residual_io.py.
 
 ---
 

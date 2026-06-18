@@ -551,6 +551,9 @@ from jwst_gc_pipeline.photometry.naming import (
     _CHUNK_TOKEN_RE, _chunk_token, _strip_chunk, _iteration_token, _bgsub_token,
     MIRI_FILTERS, _instrument_from_filter, _inst_token,
 )
+from jwst_gc_pipeline.photometry.psf_paths import (
+    resolve_merged_psf_grid_path, central_psf_dir,
+)
 
 
 def _seed_table_chunk_subset(seed_table, ww, image_shape,
@@ -2238,6 +2241,9 @@ def get_psf_model(filtername, proposal_id, field,
     instrument: 'NIRCam' or 'MIRI'.  If None, derived from filtername.
     """
 
+    # jwst_root is the shared root above the per-target trees; keep it so the
+    # centralized PSF store (psfs_shared/) can live as a sibling of {target}/.
+    jwst_root = basepath
     basepath = f'{basepath}/{target}'
 
     blur_ = "_blur" if blur else ""
@@ -2251,7 +2257,9 @@ def get_psf_model(filtername, proposal_id, field,
         # and skip the expensive MAST download + Poppy PSF generation (~17-20 min, ~300 GB peak).
         # Naming convention mirrors WebbPSF: {instrument}_{detector}_{filter}_fovp101_samp2_npsf16.fits
         _psf_oversample = 2
-        _psf_outdir = psf_cache_dir or '.'
+        # Default the webbpsf cache to the centralized shared store so freshly
+        # downloaded grids are reused across targets/fields, not re-downloaded.
+        _psf_outdir = psf_cache_dir or central_psf_dir(jwst_root)
         if instrument == 'MIRI':
             # MIRI imaging: single detector (MIRIM); no module split.
             _cache_detector = 'MIRIM'
@@ -2383,7 +2391,12 @@ def get_psf_model(filtername, proposal_id, field,
             return grid, psf_model
     else:
 
-        grid = psfgrid = to_griddedpsfmodel(f'{basepath}/psfs/{filtername.upper()}_{proposal_id}_{field}_merged_PSFgrid_oversample{oversample}{blur_}.fits')
+        # Centralized PSF store: prefer the shared psfs_shared/ grid, fall back
+        # to the legacy per-(proposal, field) path (resolve_merged_psf_grid_path).
+        _psf_grid_path = resolve_merged_psf_grid_path(
+            jwst_root, target, instrument, module, filtername,
+            proposal_id, field, oversample=oversample, blur=blur)
+        grid = psfgrid = to_griddedpsfmodel(_psf_grid_path)
 
         # if isinstance(grid, list):
         #     print(f"Grid is a list: {grid}")
