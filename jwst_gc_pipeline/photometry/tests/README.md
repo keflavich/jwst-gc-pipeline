@@ -38,6 +38,7 @@ each module import once per session.
 | make_starless_image.py:253-268 | `nan_gaussian` infill across NaN holes; far-from-data weight<0.01 → NaN not 0 | `…::TestNanGaussian` |
 | cataloging.py:`_filter_extended_emission` | NIRCam keep = star_like AND SNR cut (`_emission_keep_nircam`) | `test_cataloging_regressions.py::TestFilterExtendedEmissionNircam` |
 | cataloging.py:`_filter_extended_emission` | MIRI keep = deep-i2d prominence ALONE (star_like/SNR bypassed); NaN prominence (off-i2d) dropped (`_emission_keep_miri`) | `…::TestFilterExtendedEmissionMiri` |
+| plot_tools.py:`_filter_to_wavelength` | filter/color name → effective wavelength: special names (410m405/405m410/182m187/187m182/Hmag/Ksmag) + generic F⟨NNN⟩→NNN/100 um | `test_plot_tools_regressions.py` |
 
 ## Deferred (need full PSFPhotometry/IterativePSFPhotometry integration fixtures)
 

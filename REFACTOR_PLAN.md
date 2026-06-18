@@ -98,10 +98,15 @@ Per-instrument param struct + MIRI-only hooks + agnostic core.
   NIRCAM-LONG was edited on latest origin/main — re-verify the LONG 697-738 double-paste bug
   still exists before fixing.
 
-## Phase 5 — Loops→vectorize, if/elif→dispatch
-KDTree for O(N²) satstar matching, batch PSF grid-search, re-roll 3× unrolled isochrone loop,
-dict-backed `_filter_to_wavelength`, `PHASE_SOURCES` dict, `_first_col` resolver, vstack instead
-of per-row add_row.
+## Phase 5 — Loops→vectorize, if/elif→dispatch  [STATUS: partial]
+- [x] dict-backed `plot_tools._filter_to_wavelength` (was a 5-clause nested ternary copy-pasted
+  ~16× in 3 divergent variants) + test (test_plot_tools_regressions.py, 11 pass).
+- [x] re-rolled the 3× unrolled isochrone-age loop in `ccds_withiso` (ages 5/7/9 → zip loop,
+  matching the form already in `cmds_withiso`).
+- [ ] TODO (deferred — hot files / heavier risk): KDTree for O(N²) satstar matching
+  (satstar/merge), batch PSF grid-search (satstar), `PHASE_SOURCES` dict (cataloging
+  run_manual_pipeline), `_first_col` column resolver (merge_catalogs), vstack instead of
+  per-row add_row (merge_catalogs replace_saturated).
 
 ## Phase 6 — Split mega-functions (last, needs Phase-2 tests)
 `do_photometry_step` (1755) + `main` + `get_saturated_stars` → modules: cutout.py,
