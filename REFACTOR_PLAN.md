@@ -141,11 +141,17 @@ no-op without saturated DQ). Milestones, commit each:
   paths now covered too — 3 tests (basic/iterative/seeded) each recover 3 stars <1px.
 - [x] **M5b** extract `_svo_effective_wavelength` + `_make_grouper` (block H). 3 unit + 3
   characterization: 6 passed.
-- [ ] **M6+ larger extractions** (all 3 paths now covered). Candidates: block L seed-assembly
-  (~5145-5470: _as_table + snap/inject/satstar-snap + dedup + augment + SeededFinder) →
-  seeding.py; block Q/T post-fit dedup+filters (basic≈iterative, shareable) → postfit_filters.py.
-  NOTE: satstar model load+subtract (block K) SUBTRACT branch is only no-op-covered (tests stub
-  satstar empty) — add a satstar-model fixture before extracting that branch.
+- [x] **M6** extract `_subtract_satstar_model` (block K math; pure, sat-pixel→0 invariant).
+  3 unit + 3 characterization: 6 passed.
+- [ ] **M7+ remaining big blocks** (need new fixtures FIRST to extract safely):
+  - block L seed-assembly (~5145-5470): wide interface + snap/inject branches only fire when an
+    iter2 catalog exists on disk. STEP 1: add a seeded-characterization variant that writes
+    `{basepath}/catalogs/{filt}_merged_indivexp_merged_iter2_daoiterative_iterative.fits` (skycoord
+    col) so the snap branch executes; THEN extract → seeding.py.
+  - block Q/T post-fit dedup+filters: stateful (mutates the phot object). Extract a shared
+    `_apply_keep_mask_to_phot` + `_postfit_clean` → postfit_filters.py (covered by basic+iterative).
+  - block O crowdsource fit: needs a nocrowdsource=False characterization test (WrappedPSFModel
+    + fit_im path).
 
 ---
 
