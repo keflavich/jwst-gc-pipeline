@@ -2006,6 +2006,16 @@ def main():
                       help='Merge the catalogs produced with the merged iter3 '
                            'residual-bg subtraction (filenames carry a "_resbgsub" '
                            'token).  Must match the photometry run\'s flag.')
+    parser.add_option('--merge-workers', dest='merge_workers', default=4, type='int',
+                      help='Number of parallel workers for the spatial-chunked merge '
+                           '(combine_singleframe_chunked).  >1 triggers auto-spatial-chunking '
+                           'for fields with >1M detections; safe to leave at default 4 for '
+                           'smaller fields (no-op below the 1M threshold).  Requires the '
+                           'SLURM job to request --cpus-per-task >= this value.')
+    parser.add_option('--n-spatial-chunks', dest='n_spatial_chunks', default=0, type='int',
+                      help='Explicit spatial tile count for chunked merge.  0 = auto-derive '
+                           'from --merge-workers (recommended).  Only needed to force a '
+                           'specific tiling.')
     (options, args) = parser.parse_args()
 
     modules = options.modules.split(",")
@@ -2077,7 +2087,9 @@ def main():
                                                                         method=method,
                                                                         iteration_label=options.iteration_label,
                                                                         resbgsub=options.resbgsub,
-                                                                        basepath=basepath)
+                                                                        basepath=basepath,
+                                                                        n_spatial_chunks=int(options.n_spatial_chunks),
+                                                                        merge_workers=int(options.merge_workers))
                                             except ValueError as ex:
                                                 if blur and not options.strict_require_blur:
                                                     print("Skipping missing blur files")

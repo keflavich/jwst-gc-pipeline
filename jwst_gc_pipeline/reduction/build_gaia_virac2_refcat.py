@@ -14,6 +14,8 @@ from astropy.coordinates import SkyCoord
 
 BASE = '/orange/adamginsburg/jwst/brick'
 EPOCH = 2022.70
+GAIA_EPOCH = 2016.0    # Gaia DR3 reference epoch
+VIRAC2_EPOCH = 2014.0  # VIRAC2 reference epoch (Smith+2025: "fixed at the reference epoch, 2014.0")
 OUT = f'{BASE}/catalogs/gaia_virac2_refcat_epoch2022.70.fits'
 
 
@@ -28,13 +30,13 @@ def prop(ra, dec, pmra, pmde, dt):
 
 # Gaia DR3 (epoch 2016.0)
 g = Table.read(f'{BASE}/astrometry_analysis/reference_cache/basic_merged_photometry_tables_merged_gaia.fits')
-gra, gdec = prop(farr(g['RA_ICRS']), farr(g['DE_ICRS']), farr(g['pmRA']), farr(g['pmDE']), EPOCH - 2016.0)
+gra, gdec = prop(farr(g['RA_ICRS']), farr(g['DE_ICRS']), farr(g['pmRA']), farr(g['pmDE']), EPOCH - GAIA_EPOCH)
 gfin = np.isfinite(gra) & np.isfinite(gdec)
 gaia_sc = SkyCoord(gra[gfin] * u.deg, gdec[gfin] * u.deg)
 
-# VIRAC2 (epoch 2016.0, Gaia frame)
+# VIRAC2 (epoch 2014.0, Gaia frame)
 v = Table.read(f'{BASE}/astrometry_diag/refcache/virac2.fits')
-vra, vdec = prop(farr(v['RAJ2000']), farr(v['DEJ2000']), farr(v['pmRA']), farr(v['pmDE']), EPOCH - 2016.0)
+vra, vdec = prop(farr(v['RAJ2000']), farr(v['DEJ2000']), farr(v['pmRA']), farr(v['pmDE']), EPOCH - VIRAC2_EPOCH)
 vfin = np.isfinite(vra) & np.isfinite(vdec)
 virac_sc = SkyCoord(vra[vfin] * u.deg, vdec[vfin] * u.deg)
 vJ = farr(v['Jmag'])[vfin]; vH = farr(v['Hmag'])[vfin]; vK = farr(v['Ksmag'])[vfin]

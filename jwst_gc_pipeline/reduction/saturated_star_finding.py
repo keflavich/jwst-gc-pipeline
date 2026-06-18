@@ -636,7 +636,44 @@ def _seed_prominence(data, com, sat_area):
     return (core - med) / mad, core
 
 
-def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, seed_prominence_min=8.0, seed_core_min=1000.0, seed_gate_image=None, seed_gate_wcs=None):
+def _seed_concentration(data, com):
+    """Central concentration of a saturated-star seed = peak(r<1.5px) /
+    median(r=3-6px), measured on the deep coadd.
+
+    Separates a real (saturated) STAR -- a POINT SOURCE whose PSF falls steeply
+    (F770W FWHM ~2.4px, so r=3-6px is already 5-25% of peak -> concentration
+    >=~3) -- from a bright EXTENDED EMISSION KNOT, whose profile is flat/rising
+    across the same radii (concentration ~1-2.5).  This is the ONE axis the
+    brightness/prominence gates miss: a bright knot (data peak ~3000) passes
+    core>=1000 and prominence>=8 but is not a star, and the satstar fit
+    over-subtracts it into a deep negative pit.  Brightness-independent.
+
+    Calibrated on F770W Sickle o002: real hand-selected stars score >=3.2
+    (median ~10); emission knots score 1.0-2.5.  Returns NaN when unmeasurable
+    (near edge, or the central r<1.5 region is entirely zeroed -- a deeply-
+    saturated star's clipped core -- so callers treat NaN as KEEP and never drop
+    a real star on inability to measure).
+    """
+    y, x = com
+    xi, yi = int(round(float(x))), int(round(float(y)))
+    ny, nx = data.shape
+    if not (7 < xi < nx - 7 and 7 < yi < ny - 7):
+        return np.nan
+    yy, xx = np.mgrid[yi - 7:yi + 8, xi - 7:xi + 8]
+    r = np.hypot(xx - xi, yy - yi)
+    sub = data[yi - 7:yi + 8, xi - 7:xi + 8]
+    cen = (r < 1.5) & np.isfinite(sub) & (sub != 0)
+    ring = (r >= 3) & (r < 6) & np.isfinite(sub) & (sub != 0)
+    if cen.sum() < 1 or ring.sum() < 5:
+        return np.nan
+    peak = float(np.nanmax(sub[cen]))
+    mid = float(np.nanmedian(sub[ring]))
+    if not (mid > 0):
+        return np.nan
+    return peak / mid
+
+
+def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=3.0, seed_gate_image=None, seed_gate_wcs=None):
     # ``flux_drops``: optional list of SkyCoord.  An out-of-field (forced) source
     # whose seed sky position matches a drop within ~1.0" is SKIPPED entirely
     # (not fit, not contributed): cross-frame reconciliation found no trustworthy
@@ -791,7 +828,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         _frame_wcs = wcs.WCS(fitsdata['SCI'].header)
         _gate_img = seed_gate_image if seed_gate_image is not None else data
         _use_coadd = seed_gate_image is not None and seed_gate_wcs is not None
-        kept_records, n_prom, n_core = [], 0, 0
+        kept_records, n_prom, n_core, n_conc = [], 0, 0, 0
         for rec in source_records:
             cy, cx = rec['com']
             if _use_coadd:
@@ -805,13 +842,17 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             else:
                 gate_com = rec['com']
             prom, core = _seed_prominence(_gate_img, gate_com, rec.get('sat_area'))
+            conc = _seed_concentration(_gate_img, gate_com)
             drop_prom = (seed_prominence_min and seed_prominence_min > 0
                          and np.isfinite(prom) and prom < seed_prominence_min)
             drop_core = (seed_core_min and seed_core_min > 0
                          and np.isfinite(core) and core < seed_core_min)
-            if drop_prom or drop_core:
+            drop_conc = (seed_conc_min and seed_conc_min > 0
+                         and np.isfinite(conc) and conc < seed_conc_min)
+            if drop_prom or drop_core or drop_conc:
                 n_prom += int(bool(drop_prom))
                 n_core += int(bool(drop_core and not drop_prom))
+                n_conc += int(bool(drop_conc and not drop_prom and not drop_core))
             else:
                 kept_records.append(rec)
         n_dropped = len(source_records) - len(kept_records)
@@ -820,7 +861,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             print(f"satstar seed gate (MIRI, on {_on}): dropped {n_dropped} "
                   f"non-stellar saturated components (extended-emission "
                   f"phantoms; {n_prom} by prominence<{seed_prominence_min}, "
-                  f"{n_core} by faint-core<{seed_core_min}); kept "
+                  f"{n_core} by faint-core<{seed_core_min}, {n_conc} by "
+                  f"flat-profile/conc<{seed_conc_min}); kept "
                   f"{len(kept_records)} of {len(source_records)}", flush=True)
         source_records = kept_records
 
@@ -1873,16 +1915,20 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 _cx, _cy = seed_gate_wcs.world_to_pixel(_sky)
                 _pp, _cc = _seed_prominence(seed_gate_image, (float(_cy), float(_cx)),
                                             src_sat_area)
+                _kk = _seed_concentration(seed_gate_image, (float(_cy), float(_cx)))
                 _bad = ((seed_prominence_min and seed_prominence_min > 0
                          and np.isfinite(_pp) and _pp < seed_prominence_min)
                         or (seed_core_min and seed_core_min > 0
-                            and np.isfinite(_cc) and _cc < seed_core_min))
+                            and np.isfinite(_cc) and _cc < seed_core_min)
+                        or (seed_conc_min and seed_conc_min > 0
+                            and np.isfinite(_kk) and _kk < seed_conc_min))
                 if _bad:
                     accept_source = False
                     print(f"Post-fit coadd gate (MIRI): rejecting source {ii+1} "
-                          f"-- fit drifted to extended-emission phantom "
-                          f"(coadd prom={_pp:.1f}, core={_cc:.0f} < "
-                          f"prom{seed_prominence_min}/core{seed_core_min})",
+                          f"-- extended-emission phantom / bright knot "
+                          f"(coadd prom={_pp:.1f}, core={_cc:.0f}, "
+                          f"conc={_kk:.1f} < prom{seed_prominence_min}/"
+                          f"core{seed_core_min}/conc{seed_conc_min})",
                           flush=True)
             except Exception:
                 pass
