@@ -1700,11 +1700,42 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # deleted.  MIRI in-FOV only.
             _peak_cap_factor = 1.5
             _psf_peak = float(np.nanmax(_psfu)) if np.isfinite(_psfu).any() else np.nan
-            _near = ((~satmask_combined) & np.isfinite(cutout)
-                     & (_dist >= 1) & (_dist <= 8) & _psfok)
-            if _near.sum() < 3:
-                _near = ((~satmask_combined) & np.isfinite(cutout) & _psfok)
-            _dpk = float(np.nanmax(cutout[_near])) if _near.any() else np.nan
+            # Reference the cap to the DEEP COADD core peak (the star's real
+            # brightness), NOT the per-frame unsaturated wing.  The per-frame
+            # core is saturated/masked, and the brightest wing pixel just outside
+            # it is far fainter than the true peak -- referencing the wing capped
+            # bright saturated stars to ~1.5x wing and UNDER-subtracted them
+            # (model peak ~1130 while their coadd cores are 5000-12000).  The
+            # coadd cores are filled by dithers (not clipped), so the coadd peak
+            # at the fit position IS the real core brightness.  Cap model peak <=
+            # 1.5x that: subtracts the star to its core (mild, infillable
+            # residual) without the runaway over-subtraction.  Fall back to the
+            # per-frame wing only when the coadd is unavailable.
+            _dpk = np.nan
+            if seed_gate_image is not None and seed_gate_wcs is not None:
+                try:
+                    _xcg = x0 + float(result['x_fit'][0])
+                    _ycg = y0 + float(result['y_fit'][0])
+                    _skyc = ww.pixel_to_world(_xcg, _ycg)
+                    _gx, _gy = seed_gate_wcs.world_to_pixel(_skyc)
+                    _gxi, _gyi = int(round(float(_gx))), int(round(float(_gy)))
+                    _rr = int(max(3, np.ceil(np.sqrt(
+                        max(int(src_sat_area or 0), 1) / np.pi)) + 2))
+                    _gny, _gnx = seed_gate_image.shape
+                    if _rr < _gxi < _gnx - _rr and _rr < _gyi < _gny - _rr:
+                        _wd = seed_gate_image[_gyi - _rr:_gyi + _rr + 1,
+                                              _gxi - _rr:_gxi + _rr + 1]
+                        _wf = np.isfinite(_wd) & (_wd != 0)
+                        if _wf.any():
+                            _dpk = float(np.nanmax(_wd[_wf]))
+                except Exception:
+                    _dpk = np.nan
+            if not (np.isfinite(_dpk) and _dpk > 0):
+                _near = ((~satmask_combined) & np.isfinite(cutout)
+                         & (_dist >= 1) & (_dist <= 8) & _psfok)
+                if _near.sum() < 3:
+                    _near = ((~satmask_combined) & np.isfinite(cutout) & _psfok)
+                _dpk = float(np.nanmax(cutout[_near])) if _near.any() else np.nan
             if (np.isfinite(_psf_peak) and _psf_peak > 0
                     and np.isfinite(_dpk) and _dpk > 0):
                 _flux_cap = _peak_cap_factor * _dpk / _psf_peak
@@ -1712,9 +1743,9 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 if np.isfinite(_fcur) and _fcur > _flux_cap:
                     result['flux_fit'][0] = _flux_cap
                     print(f"  [miri peak cap] flux {_fcur:.2e} -> {_flux_cap:.2e} "
-                          f"(model peak would be {_fcur*_psf_peak:.0f} vs data "
-                          f"peak {_dpk:.0f}; capped to {_peak_cap_factor}x)",
-                          flush=True)
+                          f"(model peak {_fcur*_psf_peak:.0f} -> "
+                          f"{_flux_cap*_psf_peak:.0f} vs coadd core {_dpk:.0f}; "
+                          f"{_peak_cap_factor}x)", flush=True)
             # ALWAYS (MIRI in-FOV): the masked-core LSQ frequently returns a
             # NaN flux_err (singular covariance from x_0/y_0 pegging the bound),
             # which would make the accept gate reject an otherwise-good fit
