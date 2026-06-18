@@ -673,6 +673,47 @@ def _seed_concentration(data, com):
     return peak / mid
 
 
+def accept_satstar_fit(*, result_is_none, fluxerr, snr, flux, qfit,
+                       sidelobe_resid_sigma, ssr_ratio, is_miri,
+                       qfit_max_keep, sidelobe_min_keep, ssr_ratio_max_keep,
+                       snr_min_keep, ssr_trust_snr=10.0):
+    """Decide whether a fitted saturated-star candidate is accepted.
+
+    Pure predicate factored out of ``get_saturated_stars`` so the keep-logic is
+    unit-testable (see tests/test_satstar_accept_gate.py).  Behaviour is
+    IDENTICAL to the former inline expressions.
+
+    The ssr_ratio gate is the subtle one: it is unreliable for bright saturated
+    stars (STPSF wing-amplitude mismatch pushes ssr_ratio>1 even for excellent
+    fits with qfit<1, snr>>10), so it is DROPPED for MIRI entirely and, for
+    NIRCam, applied ONLY to low-confidence fits.  A high-snr (> ``ssr_trust_snr``)
+    good-qfit fit is trusted regardless of ssr_ratio -- otherwise real
+    must-detect bright stars get silently deleted from the satstar catalog and
+    linger in the residual.  The white-point/no-source failure ssr was built to
+    catch had snr~2, qfit=27, so the snr and qfit gates already reject it.
+    """
+    if result_is_none or not np.isfinite(fluxerr):
+        return False
+    if not (snr > snr_min_keep) or not (flux > 0):
+        return False
+    if is_miri:
+        # MIRI: ssr dropped; require a finite POSITIVE qfit below the cap.
+        return bool(np.isfinite(qfit) and 0.0 < qfit < qfit_max_keep
+                    and (not np.isfinite(sidelobe_resid_sigma)
+                         or sidelobe_resid_sigma > sidelobe_min_keep))
+    # NIRCam
+    if np.isfinite(qfit) and not (qfit < qfit_max_keep):
+        return False
+    if (np.isfinite(sidelobe_resid_sigma)
+            and not (sidelobe_resid_sigma > sidelobe_min_keep)):
+        return False
+    ssr_trustworthy = (np.isfinite(snr) and snr > ssr_trust_snr
+                       and np.isfinite(qfit) and qfit < qfit_max_keep)
+    if ssr_trustworthy:
+        return True
+    return bool((not np.isfinite(ssr_ratio)) or (ssr_ratio < ssr_ratio_max_keep))
+
+
 def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=3.0, seed_oversub_ratio=3.0, seed_gate_image=None, seed_gate_wcs=None):
     # ``flux_drops``: optional list of SkyCoord.  An out-of-field (forced) source
     # whose seed sky position matches a drop within ~1.0" is SKIPPED entirely
@@ -1861,54 +1902,17 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         #                subtracting a constant (white-point / "no
         #                star" failure mode in 0310g_00002).  Indicates
         #                no real source at the proposed position.
-        if _is_miri:
-            # MIRI: the ssr_ratio gate is dropped entirely.  ssr_ratio compares
-            # the residual to (data - median) in the inner annulus; for bright
-            # MIRI cores the gridded-PSF first/second-ring shape mismatches the
-            # real star, so ssr runs 17-400 even for an excellent fit (verified:
-            # a source with qfit=1.30, snr=1525 scored ssr_ratio=45).  It
-            # rejected EVERY real bright star (0/36 hand-selected captured even
-            # after the mask-dilation + position-bound fixes made the fits good).
-            # qfit and snr cleanly separate good fits (positive qfit~1, positive
-            # snr) from bad ones (negative qfit / negative snr), so gate on those
-            # instead: require a FINITE, POSITIVE qfit below the cap and a
-            # positive snr above threshold.
-            accept_source = (result is not None
-                             and np.isfinite(fluxerr)
-                             and snr > _snr_min_keep
-                             and flux > 0
-                             and np.isfinite(qfit)
-                             and 0.0 < qfit < _qfit_max_keep
-                             and (not np.isfinite(sidelobe_resid_sigma)
-                                  or sidelobe_resid_sigma > _sidelobe_min_keep))
-        else:
-            # The ssr_ratio gate ("fit makes the 15px disk WORSE than a
-            # constant") is UNRELIABLE for bright saturated stars: STPSF's
-            # first/second-ring wing amplitude mismatches the real NIRCam PSF
-            # (BFE/IPC), so subtracting an OTHERWISE-EXCELLENT fit (qfit<1,
-            # snr>>10) ADDS variance in the disk and pushes ssr_ratio>1 even
-            # though the star is unambiguously real.  This silently deleted
-            # must-detect bright stars from the satstar catalog (sickle F480M
-            # 266.5634,-28.8067 etc: snr 58-329, qfit 0.27-2.26, ssr 1.0-2.6 ->
-            # all wrongly rejected), so they lingered full-strength in the
-            # residual and were absent from the model.  The MIRI branch already
-            # drops the ssr gate for the same reason.  The white-point/no-source
-            # failure mode ssr was built to catch (0310g_00002) had snr~2,
-            # qfit=27 -- the snr>3 and qfit<5 gates already reject it.  So only
-            # apply ssr to LOW-CONFIDENCE fits; trust a high-snr, good-qfit fit
-            # regardless of ssr.
-            _ssr_trustworthy = (np.isfinite(snr) and snr > 10.0
-                                and np.isfinite(qfit) and qfit < _qfit_max_keep)
-            accept_source = (result is not None
-                             and np.isfinite(fluxerr)
-                             and snr > _snr_min_keep
-                             and flux > 0
-                             and (not np.isfinite(qfit) or qfit < _qfit_max_keep)
-                             and (not np.isfinite(sidelobe_resid_sigma)
-                                  or sidelobe_resid_sigma > _sidelobe_min_keep)
-                             and (_ssr_trustworthy
-                                  or not np.isfinite(ssr_ratio)
-                                  or ssr_ratio < _ssr_ratio_max_keep))
+        # MIRI drops the ssr gate entirely (gridded-PSF ring mismatch makes ssr
+        # run 17-400 even for excellent fits -> rejected every real bright
+        # star); NIRCam applies ssr ONLY to low-confidence fits (a high-snr,
+        # good-qfit fit is a real star regardless of ssr -- the ssr gate was
+        # silently deleting must-detect bright stars).  See accept_satstar_fit.
+        accept_source = accept_satstar_fit(
+            result_is_none=(result is None), fluxerr=fluxerr, snr=snr,
+            flux=flux, qfit=qfit, sidelobe_resid_sigma=sidelobe_resid_sigma,
+            ssr_ratio=ssr_ratio, is_miri=_is_miri,
+            qfit_max_keep=_qfit_max_keep, sidelobe_min_keep=_sidelobe_min_keep,
+            ssr_ratio_max_keep=_ssr_ratio_max_keep, snr_min_keep=_snr_min_keep)
         if forced_source and result is not None:
             xcent = np.asarray(result['xcentroid'], dtype=float)
             ycent = np.asarray(result['ycentroid'], dtype=float)
