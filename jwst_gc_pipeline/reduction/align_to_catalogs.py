@@ -18,6 +18,53 @@ from astropy.io import fits
 import datetime
 
 
+def sync_gwcs_to_fits_wcs(imfile):
+    """Rebuild the embedded ASDF GWCS to match a realigned SCI FITS-header WCS.
+
+    ``realign_to_catalog`` writes its CRVAL shift only to the SCI FITS header.
+    The resampled i2d GWCS is a ``gwcs.fitswcs.FITSImagingWCSTransform`` that
+    caches its tangent point at construction, so the shift never reaches the
+    GWCS and any GWCS consumer (datamodel photometry, GWCS-aware viewers) sees
+    the un-realigned frame.  Mutating the ``crval`` Parameter does not rebuild
+    the cached transform, so we construct a fresh transform from the updated
+    header CRVAL (keeping crpix/cdelt/pc/projection) and reassign the WCS.
+    """
+    try:
+        import stdatamodels.jwst.datamodels as dm
+        from gwcs.wcs import WCS as GWCS
+        from gwcs.fitswcs import FITSImagingWCSTransform
+    except ImportError as e:
+        log.warning(f"Could not import gwcs/datamodels to sync GWCS for {imfile}: {e}")
+        return
+
+    hdr = fits.getheader(imfile, ext=('SCI', 1))
+    new_crval = [hdr['CRVAL1'], hdr['CRVAL2']]
+    model = dm.open(imfile)
+    try:
+        gw = model.meta.wcs
+        if gw is None:
+            log.warning(f"No GWCS in {imfile}; nothing to sync.")
+            return
+        pipe = gw.pipeline
+        s0 = pipe[0]
+        ft = s0.transform
+        if isinstance(ft, FITSImagingWCSTransform):
+            new_ft = FITSImagingWCSTransform(ft.projection,
+                                             crpix=ft.crpix.value,
+                                             crval=new_crval,
+                                             cdelt=ft.cdelt.value,
+                                             pc=ft.pc.value)
+            model.meta.wcs = GWCS([type(s0)(s0.frame, new_ft)] + list(pipe[1:]))
+            model.save(imfile)
+            log.info(f"Synced embedded GWCS to realigned CRVAL {new_crval} in {imfile}")
+        else:
+            log.warning(f"GWCS forward transform is {type(ft).__name__}, not "
+                        f"FITSImagingWCSTransform; GWCS NOT synced for {imfile}. "
+                        f"GWCS consumers may see the un-realigned frame.")
+    finally:
+        model.close()
+
+
 def diagnostic_plots(fn, refcrds, meascrds, dra, ddec, savename=None):
     import pylab as pl
     from astropy.visualization import simple_norm
@@ -370,6 +417,10 @@ def realign_to_catalog(reference_coordinates, filtername='f212n',
         hdulist['SCI'].header['OLCRVAL2'] = (hdulist['SCI'].header['CRVAL2'], "Original CRVAL before ralign")
         hdulist['SCI'].header.update(ww.to_header())
         print("CRVAL after", hdulist['SCI'].header['CRVAL1'], hdulist['SCI'].header['CRVAL2'])
+
+    # propagate the CRVAL shift into the embedded ASDF GWCS (the SCI header
+    # update above does NOT touch the GWCS, which is what we actually use)
+    sync_gwcs_to_fits_wcs(imfile)
 
     # re-load the WCS to make sure it worked
     with warnings.catch_warnings():
