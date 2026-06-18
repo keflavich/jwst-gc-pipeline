@@ -151,10 +151,22 @@ manual m12/m3..m7 pipeline in cataloging.py). KEEP for benchmarks but SEQUESTER 
 code + the characterization tests now guard the legacy benchmark path). PSF centralization (M1)
 is genuinely shared and stays active.
 
-## Sequestration — move legacy crowdsource/iter2 entrypoint to photometry/legacy/
-Done so far: created `photometry/legacy/__init__.py` (banner); added LEGACY banner to
-`do_photometry_step`. Active CLI `main` stays; the active manual path keeps importing the shared
-helpers from crowdsource_catalogs_long.
+## Sequestration — move legacy crowdsource/iter2 entrypoint to photometry/legacy/  [STATUS: DONE]
+- [x] Created `photometry/legacy/__init__.py` + LEGACY banner on do_photometry_step.
+- [x] Moved the legacy entrypoint into `legacy/crowdsource_step.py` (2548 lines): do_photometry_step
+  + M3-M6 helpers + the parallel cluster + _run_cutout_pipeline/_build_cutout_union_seed +
+  save_crowdsource_results. The legacy module imports the host and copies its public namespace in
+  (`globals().update(vars(_host))`) so every shared-helper reference resolves verbatim; the one
+  mutable global write (`_SUPPRESS_DIAGNOSTICS`) targets `_host` so the host's
+  catalog_zoom_diagnostic sees it.
+- [x] Host `crowdsource_catalogs_long.py` 6365 → 3850 lines (−2515). Active CLI `main` stays;
+  its two legacy call sites lazily `from ...legacy.crowdsource_step import ...` (no import cycle).
+- [x] Tests repointed: integration test alias L → legacy module; the 4 moved-helper test classes
+  → `CS` (legacy), host-helper tests keep `L` (host).
+- [x] Full photometry suite: 116 passed.
+- [ ] FOLLOW-UP (optional, cleaner): the legacy module relies on namespace injection rather than
+  explicit imports; could be tidied to explicit `from host import (...)` later. And the shared
+  helpers still physically live in crowdsource_catalogs_long (fine — active path imports them).
 
 NEXT (one focused mechanical step, manifest below → `legacy/crowdsource_step.py`):
 - **MOVE** (legacy-only, verified no active callers): `do_photometry_step` (lines 4645-6362),

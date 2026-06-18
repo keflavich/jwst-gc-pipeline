@@ -28,7 +28,9 @@ from astropy.nddata import NDData
 from astropy.table import Table
 from astropy.wcs import WCS
 
-from jwst_gc_pipeline.photometry import crowdsource_catalogs_long as L
+# do_photometry_step now lives in the sequestered legacy module; patch the names
+# it resolves THERE (the legacy module injects the host's shared-helper namespace).
+from jwst_gc_pipeline.photometry.legacy import crowdsource_step as L
 
 SHAPE = (200, 200)
 FWHM_PIX = 2.165  # F405N, from fwhm_table.ecsv

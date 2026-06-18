@@ -44,6 +44,8 @@ from astropy.wcs import WCS
 import astropy.units as u
 
 from jwst_gc_pipeline.photometry import crowdsource_catalogs_long as L
+# The Phase-6-extracted helpers were sequestered into the legacy module.
+from jwst_gc_pipeline.photometry.legacy import crowdsource_step as CS
 
 
 def _make_wcs():
@@ -381,13 +383,13 @@ class TestOutputSuffixTokens:
         return types.SimpleNamespace(**base)
 
     def test_defaults_all_empty(self):
-        t = L._output_suffix_tokens(self._opts())
+        t = CS._output_suffix_tokens(self._opts())
         assert (t.desat, t.bgsub, t.epsf_, t.blur_, t.group, t.iter_) == ('',) * 6
         assert (t.exposure_, t.visitid_, t.vgroupid_) == ('', '', '')
         assert t.vgroup_numeric is None
 
     def test_flags_set_tokens(self):
-        t = L._output_suffix_tokens(self._opts(
+        t = CS._output_suffix_tokens(self._opts(
             desaturated=True, bgsub=True, epsf=True, blur=True, group=True))
         assert t.desat == '_unsatstar'
         assert t.bgsub == '_bgsub'
@@ -396,7 +398,7 @@ class TestOutputSuffixTokens:
         assert t.group == '_group'
 
     def test_exposure_visit_vgroup_iter(self):
-        t = L._output_suffix_tokens(self._opts(), exposurenumber=1, visit_id=3,
+        t = CS._output_suffix_tokens(self._opts(), exposurenumber=1, visit_id=3,
                                     vgroup_id=7, iteration_label='iter3')
         assert t.exposure_ == '_exp00001'
         assert t.visitid_ == '_visit003'
@@ -406,7 +408,7 @@ class TestOutputSuffixTokens:
 
     def test_field_order_matches_unpack(self):
         # do_photometry_step unpacks by position; lock the field order.
-        assert L._SuffixTokens._fields == (
+        assert CS._SuffixTokens._fields == (
             'desat', 'bgsub', 'epsf_', 'exposure_', 'visitid_', 'vgroupid_',
             'vgroup_numeric', 'blur_', 'group', 'iter_')
 
@@ -420,7 +422,7 @@ class TestFirstPassDaofinder:
         rng = np.random.default_rng(0)
         data = rng.normal(0.0, 2.0, size=(64, 64))   # mad_std ~ 2
         err = np.full((64, 64), 100.0)               # err over-estimated
-        finder, thr = L._first_pass_daofinder(
+        finder, thr = CS._first_pass_daofinder(
             data, err, nsigma=5, fwhm_pix=2.0, roundlo=-1.0, roundhi=1.0)
         _, _, std = L.stats.sigma_clipped_stats(data, stdfunc='mad_std')
         assert thr == pytest.approx(5 * std)         # min picks mad_std
@@ -430,7 +432,7 @@ class TestFirstPassDaofinder:
     def test_threshold_uses_err_when_smaller(self):
         data = np.zeros((32, 32)) + 1000.0           # mad_std ~ 0
         err = np.full((32, 32), 3.0)
-        finder, thr = L._first_pass_daofinder(
+        finder, thr = CS._first_pass_daofinder(
             data, err, nsigma=4, fwhm_pix=1.5, roundlo=-1.0, roundhi=1.0)
         # mad_std(data)=0 -> min is 0 -> threshold 0 (degenerate but exact)
         assert thr == pytest.approx(0.0)
@@ -445,17 +447,17 @@ class TestMakeGrouper:
         return types.SimpleNamespace(max_group_size=mgs)
 
     def test_unlimited_returns_plain_grouper(self):
-        g = L._make_grouper(self._opts('unlimited'), 2.0)
+        g = CS._make_grouper(self._opts('unlimited'), 2.0)
         assert isinstance(g, L.SourceGrouper)
         assert not isinstance(g, L.CappedSourceGrouper)
 
     def test_cap_returns_capped_grouper(self):
-        g = L._make_grouper(self._opts(10), 2.0)
+        g = CS._make_grouper(self._opts(10), 2.0)
         assert isinstance(g, L.CappedSourceGrouper)
 
     def test_zero_rejected(self):
         with pytest.raises(SystemExit):
-            L._make_grouper(self._opts(0), 2.0)
+            CS._make_grouper(self._opts(0), 2.0)
 
 
 # ---------------------------------------------------------------------------
@@ -466,7 +468,7 @@ class TestSubtractSatstarModel:
     def test_plain_subtraction_no_mask(self):
         data = np.full((4, 4), 10.0)
         model = np.full((4, 4), 3.0)
-        out, fm = L._subtract_satstar_model(data, model, None)
+        out, fm = CS._subtract_satstar_model(data, model, None)
         assert np.allclose(out, 7.0)
         assert np.allclose(fm, 3.0)
 
@@ -477,7 +479,7 @@ class TestSubtractSatstarModel:
         model = np.full((4, 4), 3.0)
         mask = np.zeros((4, 4), dtype=bool)
         mask[0, 0] = True
-        out, _ = L._subtract_satstar_model(data, model, mask)
+        out, _ = CS._subtract_satstar_model(data, model, mask)
         assert out[0, 0] == pytest.approx(0.0)
         assert out[1, 1] == pytest.approx(1e5 - 3.0)
 
@@ -485,6 +487,6 @@ class TestSubtractSatstarModel:
         data = np.full((3, 3), 5.0)
         model = np.full((3, 3), 1.0)
         model[0, 0] = np.nan
-        out, fm = L._subtract_satstar_model(data, model, None)
+        out, fm = CS._subtract_satstar_model(data, model, None)
         assert fm[0, 0] == 0.0
         assert out[0, 0] == pytest.approx(5.0)
