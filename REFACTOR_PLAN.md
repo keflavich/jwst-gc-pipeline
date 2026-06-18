@@ -143,15 +143,42 @@ no-op without saturated DQ). Milestones, commit each:
   characterization: 6 passed.
 - [x] **M6** extract `_subtract_satstar_model` (block K math; pure, sat-pixel→0 invariant).
   3 unit + 3 characterization: 6 passed.
-- [ ] **M7+ remaining big blocks** (need new fixtures FIRST to extract safely):
-  - block L seed-assembly (~5145-5470): wide interface + snap/inject branches only fire when an
-    iter2 catalog exists on disk. STEP 1: add a seeded-characterization variant that writes
-    `{basepath}/catalogs/{filt}_merged_indivexp_merged_iter2_daoiterative_iterative.fits` (skycoord
-    col) so the snap branch executes; THEN extract → seeding.py.
-  - block Q/T post-fit dedup+filters: stateful (mutates the phot object). Extract a shared
-    `_apply_keep_mask_to_phot` + `_postfit_clean` → postfit_filters.py (covered by basic+iterative).
-  - block O crowdsource fit: needs a nocrowdsource=False characterization test (WrappedPSFModel
-    + fit_im path).
+
+### DIRECTION CHANGE (2026-06-18, user): do_photometry_step is LEGACY.
+The crowdsource path and the "iter2"/"iter3" seeded-daophot are legacy (superseded by the
+manual m12/m3..m7 pipeline in cataloging.py). KEEP for benchmarks but SEQUESTER into
+`photometry/legacy/`. STOP decomposing it as active code. M1-M6 work stays (cleaner benchmark
+code + the characterization tests now guard the legacy benchmark path). PSF centralization (M1)
+is genuinely shared and stays active.
+
+## Sequestration — move legacy crowdsource/iter2 entrypoint to photometry/legacy/
+Done so far: created `photometry/legacy/__init__.py` (banner); added LEGACY banner to
+`do_photometry_step`. Active CLI `main` stays; the active manual path keeps importing the shared
+helpers from crowdsource_catalogs_long.
+
+NEXT (one focused mechanical step, manifest below → `legacy/crowdsource_step.py`):
+- **MOVE** (legacy-only, verified no active callers): `do_photometry_step` (lines 4645-6362),
+  `_run_cutout_pipeline` + `_build_cutout_union_seed` (legacy --cutout path), `save_crowdsource_results`,
+  the Phase-6 helpers (`_output_suffix_tokens`/`_SuffixTokens`, `_first_pass_daofinder`, `_make_grouper`,
+  `_svo_effective_wavelength`+`_SVO_INSTRUMENT_MAP`, `_subtract_satstar_model`), and the parallel cluster
+  (`_parallel_psfphotometry`, `_parallel_iterative_psfphotometry`, `_FakePhot`, `_render_model_from_table`,
+  `_chunk_init_by_group`, `_kdtree_group_ids`, `_par_worker_init/_fit`, `_PAR_*` globals).
+  Check `_seed_table_chunk_subset` (legacy-only unless cataloging chunked path uses it).
+- **KEEP** in crowdsource_catalogs_long (shared, used by active path / `_L.*` / mosaicking):
+  get_psf_model, get_uncertainty, load_data, load_or_make_satstar_catalog, load_outside_fov_satstar_pixels,
+  save_photutils_results, save_residual_datamodel, _resolve_seed_skycoords, _combine_seed_and_satstars,
+  _augment_seed_catalog_with_detections_sky, _filter_near_saturation, _filter_satstar_artifacts,
+  SeededFinder, compute_local_noise_map, annotate_and_filter_by_local_snr, _bad_dq_bitmask, _as_table,
+  catalog_zoom_diagnostic, postprocess_residual_image, _prepare_cutout_input + all _cutout_*/mosaic_* +
+  build_mergedcat_residuals/build_filtered_iter2_residual_bg/_flag_likely_extended_iter4, get_filenames,
+  resolve_max_group_size, CappedSourceGrouper, normalize_vgroup_id, CutoutNoOverlap, FWHM_TABLE,
+  REGIONS_DIR, _SUPPRESS_DIAGNOSTICS, _noop_savefig, custom `print`, dqflags, and `main`.
+- legacy/crowdsource_step.py imports the KEEP surface from crowdsource_catalogs_long; `main`'s legacy
+  branch (call at 4359) + the `_run_cutout_pipeline` call (4293) do a LAZY
+  `from ...legacy.crowdsource_step import do_photometry_step, _run_cutout_pipeline` (avoid import cycle).
+- Update test imports (test_do_photometry_step_integration.py, test_crowdsource_long_regressions.py
+  for the moved helpers) to the new module path.
+- VALIDATE: full photometry suite (the 3 characterization tests now exercise legacy/crowdsource_step).
 
 ---
 

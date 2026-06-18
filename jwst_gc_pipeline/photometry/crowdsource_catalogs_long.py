@@ -4694,6 +4694,13 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
                        residual_negative_threshold=0.0,
                        resbg_path=None):
     """
+    LEGACY (benchmarks only).  This is the crowdsource / "iter2"-"iter3" seeded
+    per-exposure pipeline, superseded by the manual-iteration path
+    (cataloging.do_photometry_step_manual / run_manual_pipeline).  It is kept for
+    benchmark reproduction and is being sequestered into photometry/legacy/
+    (see REFACTOR_PLAN.md).  Do not wire into active reductions; reach it only via
+    --legacy-iterations.
+
     nsigma is the threshold to multiply the error estimate by to get the detection threshold
     """
     print(f"Starting {field} filter {filtername} module {module} detector {detector} {exposurenumber}", flush=True)
