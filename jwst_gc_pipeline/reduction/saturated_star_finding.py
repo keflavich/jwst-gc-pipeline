@@ -673,7 +673,7 @@ def _seed_concentration(data, com):
     return peak / mid
 
 
-def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=3.0, seed_gate_image=None, seed_gate_wcs=None):
+def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=3.0, seed_oversub_ratio=3.0, seed_gate_image=None, seed_gate_wcs=None):
     # ``flux_drops``: optional list of SkyCoord.  An out-of-field (forced) source
     # whose seed sky position matches a drop within ~1.0" is SKIPPED entirely
     # (not fit, not contributed): cross-frame reconciliation found no trustworthy
@@ -1882,6 +1882,23 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                              and (not np.isfinite(sidelobe_resid_sigma)
                                   or sidelobe_resid_sigma > _sidelobe_min_keep))
         else:
+            # The ssr_ratio gate ("fit makes the 15px disk WORSE than a
+            # constant") is UNRELIABLE for bright saturated stars: STPSF's
+            # first/second-ring wing amplitude mismatches the real NIRCam PSF
+            # (BFE/IPC), so subtracting an OTHERWISE-EXCELLENT fit (qfit<1,
+            # snr>>10) ADDS variance in the disk and pushes ssr_ratio>1 even
+            # though the star is unambiguously real.  This silently deleted
+            # must-detect bright stars from the satstar catalog (sickle F480M
+            # 266.5634,-28.8067 etc: snr 58-329, qfit 0.27-2.26, ssr 1.0-2.6 ->
+            # all wrongly rejected), so they lingered full-strength in the
+            # residual and were absent from the model.  The MIRI branch already
+            # drops the ssr gate for the same reason.  The white-point/no-source
+            # failure mode ssr was built to catch (0310g_00002) had snr~2,
+            # qfit=27 -- the snr>3 and qfit<5 gates already reject it.  So only
+            # apply ssr to LOW-CONFIDENCE fits; trust a high-snr, good-qfit fit
+            # regardless of ssr.
+            _ssr_trustworthy = (np.isfinite(snr) and snr > 10.0
+                                and np.isfinite(qfit) and qfit < _qfit_max_keep)
             accept_source = (result is not None
                              and np.isfinite(fluxerr)
                              and snr > _snr_min_keep
@@ -1889,7 +1906,9 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                              and (not np.isfinite(qfit) or qfit < _qfit_max_keep)
                              and (not np.isfinite(sidelobe_resid_sigma)
                                   or sidelobe_resid_sigma > _sidelobe_min_keep)
-                             and (not np.isfinite(ssr_ratio) or ssr_ratio < _ssr_ratio_max_keep))
+                             and (_ssr_trustworthy
+                                  or not np.isfinite(ssr_ratio)
+                                  or ssr_ratio < _ssr_ratio_max_keep))
         if forced_source and result is not None:
             xcent = np.asarray(result['xcentroid'], dtype=float)
             ycent = np.asarray(result['ycentroid'], dtype=float)
@@ -1916,19 +1935,43 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 _pp, _cc = _seed_prominence(seed_gate_image, (float(_cy), float(_cx)),
                                             src_sat_area)
                 _kk = _seed_concentration(seed_gate_image, (float(_cy), float(_cx)))
+                # OVER-SUBTRACTION ratio: the fitted PSF model PEAK vs the deep
+                # coadd DATA at the fit position.  This is the most direct measure
+                # of the negative-fake-star pathology -- a satstar whose model
+                # vastly exceeds the data gouges a deep negative pit.  On the
+                # coadd (cores filled by dithers, not clipped) a well-fit real
+                # star has model <= data (ratio <=~0.5); EVERY over-fit phantom /
+                # bright knot / amplitude-runaway reads ratio >=4 (huge gap, no
+                # overlap).  Catches the cases concentration/core cannot (a bright
+                # compact knot scores conc~3.3 like a faint real star, but its
+                # model/data ratio is ~100).
+                _ix, _iy = int(round(float(_cx))), int(round(float(_cy)))
+                _gny, _gnx = seed_gate_image.shape
+                _dpk = np.nan
+                if 1 < _ix < _gnx - 1 and 1 < _iy < _gny - 1:
+                    _dwin = seed_gate_image[_iy - 1:_iy + 2, _ix - 1:_ix + 2]
+                    _fin = np.isfinite(_dwin) & (_dwin != 0)
+                    if _fin.any():
+                        _dpk = float(np.nanmax(_dwin[_fin]))
+                _mpk = float(np.nanmax(model_image)) if np.isfinite(model_image).any() else np.nan
+                _oversub = (seed_oversub_ratio and seed_oversub_ratio > 0
+                            and np.isfinite(_mpk) and np.isfinite(_dpk) and _dpk > 0
+                            and _mpk > seed_oversub_ratio * _dpk)
                 _bad = ((seed_prominence_min and seed_prominence_min > 0
                          and np.isfinite(_pp) and _pp < seed_prominence_min)
                         or (seed_core_min and seed_core_min > 0
                             and np.isfinite(_cc) and _cc < seed_core_min)
                         or (seed_conc_min and seed_conc_min > 0
-                            and np.isfinite(_kk) and _kk < seed_conc_min))
+                            and np.isfinite(_kk) and _kk < seed_conc_min)
+                        or _oversub)
                 if _bad:
                     accept_source = False
                     print(f"Post-fit coadd gate (MIRI): rejecting source {ii+1} "
-                          f"-- extended-emission phantom / bright knot "
-                          f"(coadd prom={_pp:.1f}, core={_cc:.0f}, "
-                          f"conc={_kk:.1f} < prom{seed_prominence_min}/"
-                          f"core{seed_core_min}/conc{seed_conc_min})",
+                          f"-- phantom/knot/over-fit (coadd prom={_pp:.1f}, "
+                          f"core={_cc:.0f}, conc={_kk:.1f}, model/data="
+                          f"{(_mpk/_dpk if (np.isfinite(_mpk) and np.isfinite(_dpk) and _dpk>0) else float('nan')):.1f}"
+                          f"; thresh prom{seed_prominence_min}/core{seed_core_min}/"
+                          f"conc{seed_conc_min}/oversub{seed_oversub_ratio})",
                           flush=True)
             except Exception:
                 pass
