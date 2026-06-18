@@ -456,3 +456,35 @@ class TestMakeGrouper:
     def test_zero_rejected(self):
         with pytest.raises(SystemExit):
             L._make_grouper(self._opts(0), 2.0)
+
+
+# ---------------------------------------------------------------------------
+# _subtract_satstar_model (do_photometry_step block K, Phase 6 M6)
+# Replace saturated-DQ pixels with the model, then subtract; -> residual 0 there.
+# ---------------------------------------------------------------------------
+class TestSubtractSatstarModel:
+    def test_plain_subtraction_no_mask(self):
+        data = np.full((4, 4), 10.0)
+        model = np.full((4, 4), 3.0)
+        out, fm = L._subtract_satstar_model(data, model, None)
+        assert np.allclose(out, 7.0)
+        assert np.allclose(fm, 3.0)
+
+    def test_saturated_pixels_forced_to_zero(self):
+        # JWST ramp-fitter leaves huge retained values at saturated pixels;
+        # they must be replaced by the model before subtracting -> residual 0.
+        data = np.full((4, 4), 1e5)
+        model = np.full((4, 4), 3.0)
+        mask = np.zeros((4, 4), dtype=bool)
+        mask[0, 0] = True
+        out, _ = L._subtract_satstar_model(data, model, mask)
+        assert out[0, 0] == pytest.approx(0.0)
+        assert out[1, 1] == pytest.approx(1e5 - 3.0)
+
+    def test_nonfinite_model_treated_as_zero(self):
+        data = np.full((3, 3), 5.0)
+        model = np.full((3, 3), 1.0)
+        model[0, 0] = np.nan
+        out, fm = L._subtract_satstar_model(data, model, None)
+        assert fm[0, 0] == 0.0
+        assert out[0, 0] == pytest.approx(5.0)

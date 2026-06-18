@@ -4636,6 +4636,27 @@ def _make_grouper(options, fwhm_pix):
     return SourceGrouper(2 * fwhm_pix)
 
 
+def _subtract_satstar_model(nan_replaced_data, satstar_model_image, saturated_mask):
+    """Replace saturated-DQ pixels with the satstar model, then subtract it.
+
+    Factored out of ``do_photometry_step`` (block K).  At SATURATED-DQ pixels
+    the data is REPLACED by the model before subtracting, forcing residual=0
+    there: the JWST ramp-fitter retains large numeric values at saturated pixels
+    (group-1 fits, often >> 1e3 MJy/sr) that interpolate_replace_nans does not
+    touch, and leaving them produced huge positive residuals (sickle F480M:
+    7078 MJy/sr at a worst star, baseline 682; 2026-06-01).  Non-finite model
+    pixels are treated as 0.  ``saturated_mask`` may be None (no DQ).
+
+    Returns ``(new_data, finite_model)``.
+    """
+    finite_model = np.where(np.isfinite(satstar_model_image),
+                            satstar_model_image, 0.0)
+    if saturated_mask is not None:
+        nan_replaced_data = np.where(saturated_mask, finite_model,
+                                     nan_replaced_data)
+    return nan_replaced_data - finite_model, finite_model
+
+
 def _first_pass_daofinder(data, err, nsigma, fwhm_pix, roundlo, roundhi):
     """First-pass (iter1) DAOStarFinder + its threshold.
 
@@ -5161,34 +5182,16 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
                           f"match data shape {nan_replaced_data.shape}; skipping "
                           f"satstar subtraction", flush=True)
                 else:
-                    finite_model = np.where(np.isfinite(satstar_model_image),
-                                            satstar_model_image, 0.0)
+                    # sat-pixel replacement + subtraction; see _subtract_satstar_model.
+                    saturated_mask = (
+                        ((im1['DQ'].data & dqflags.pixel['SATURATED']) != 0)
+                        if 'DQ' in im1 else None)
+                    nan_replaced_data, finite_model = _subtract_satstar_model(
+                        nan_replaced_data, satstar_model_image, saturated_mask)
+                    satstar_model_subtracted = finite_model
                     n_pos = int(np.sum(finite_model > 0))
                     total = float(np.nansum(finite_model))
-                    # At SATURATED-DQ pixels we replace the data with the
-                    # satstar model BEFORE subtracting, forcing residual=0
-                    # at those pixels.  Rationale: JWST ramp-fitter retains
-                    # numeric values at saturated pixels (from group-1
-                    # fits), often >> 1e3 MJy/sr.  interpolate_replace_nans
-                    # only touches actual NaN, so retained values pass
-                    # through.  Earlier "skip subtraction" attempt left
-                    # those large positive data values in the residual
-                    # (sickle F480M: 7078 MJy/sr at a worst-subtracted
-                    # star, baseline 682; see 2026-06-01).  Substituting
-                    # model-for-data at sat pixels is the user-directed
-                    # behaviour: "saturated pixels should be replaced with
-                    # model values from the fitted saturated stars".
-                    if 'DQ' in im1:
-                        was_saturated = (im1['DQ'].data
-                                         & dqflags.pixel['SATURATED']) != 0
-                        n_sat = int(was_saturated.sum())
-                        nan_replaced_data = np.where(was_saturated,
-                                                     finite_model,
-                                                     nan_replaced_data)
-                    else:
-                        n_sat = 0
-                    nan_replaced_data = nan_replaced_data - finite_model
-                    satstar_model_subtracted = finite_model
+                    n_sat = int(saturated_mask.sum()) if saturated_mask is not None else 0
                     print(f"Subtracted satstar_model ({satstar_model_path}) "
                           f"from nan_replaced_data: {n_pos} positive pixels, "
                           f"sum={total:.3e} counts; "
