@@ -40,21 +40,14 @@ pl.rcParams['figure.dpi'] = 100
 # https://en.wikipedia.org/wiki/AB_magnitude
 ABMAG_OFFSET = 8.90
 
-# Keep in sync with crowdsource_catalogs_long.MIRI_FILTERS (not imported to
-# avoid pulling in that module's heavy webbpsf import chain).
-MIRI_FILTERS = frozenset(['f560w', 'f770w', 'f1000w', 'f1130w', 'f1280w',
-                          'f1500w', 'f1800w', 'f2100w', 'f2550w'])
-
-
-def _inst_token(filtername):
-    """Lowercased instrument token used in JWST i2d filename conventions."""
-    return 'miri' if str(filtername).lower() in MIRI_FILTERS else 'nircam'
-
-
-def _svo_filter_id(filtername):
-    """SVO FPS filterID (e.g. 'JWST/NIRCam.F480M', 'JWST/MIRI.F770W')."""
-    inst = 'MIRI' if str(filtername).lower() in MIRI_FILTERS else 'NIRCam'
-    return f'JWST/{inst}.{filtername.upper()}'
+# Instrument/filter tokens live in photometry/naming.py (heavy-import-free) so
+# this module shares one source of truth without importing webbpsf.  The
+# flags-based bgsub token is imported as ``_bgsub_token`` (this module calls it
+# with explicit booleans, matching the producer-side names).
+from jwst_gc_pipeline.photometry.naming import (
+    MIRI_FILTERS, _inst_token, _svo_filter_id,
+    _bgsub_token_from_flags as _bgsub_token,
+)
 
 filternames = filternames_narrow = ['f410m', 'f212n', 'f466n', 'f405n', 'f187n', 'f182m']
 all_filternames = ['f410m', 'f212n', 'f466n', 'f405n', 'f187n', 'f182m', 'f444w', 'f356w', 'f200w', 'f115w']
@@ -726,23 +719,6 @@ def combine_singleframe_chunked(tbls, n_chunks=8, halo=2.0 * u.arcsec,
     print(f"combine_singleframe_chunked: stitched {len(results)} tiles "
           f"-> {len(merged)} merged sources", flush=True)
     return merged
-
-
-def _bgsub_token(bgsub, resbgsub=False):
-    """Filename token for the background-subtraction mode(s) in effect.
-
-    * ``--bgsub`` (global Background2D subtraction)        -> ``_bgsub``
-    * ``--use-iter3-residual-bg`` (merged iter3 residual-
-      smoothed background subtraction)                    -> ``_resbgsub``
-
-    Mirrors ``crowdsource_catalogs_long._bgsub_token`` so the merge globs
-    match the per-frame catalog names that producer wrote.  ``_bgsub`` is
-    never a substring of ``_resbgsub`` so token matching does not collide.
-    """
-    token = '_bgsub' if bgsub else ''
-    if resbgsub:
-        token += '_resbgsub'
-    return token
 
 
 def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',

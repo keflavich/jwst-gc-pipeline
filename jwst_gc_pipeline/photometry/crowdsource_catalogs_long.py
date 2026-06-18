@@ -549,6 +549,7 @@ class CappedSourceGrouper:
 # restructure).  Imported here so existing references keep working unchanged.
 from jwst_gc_pipeline.photometry.naming import (
     _CHUNK_TOKEN_RE, _chunk_token, _strip_chunk, _iteration_token, _bgsub_token,
+    MIRI_FILTERS, _instrument_from_filter, _inst_token,
 )
 
 
@@ -857,16 +858,8 @@ print("Done with imports", flush=True)
 FWHM_TABLE = Path(__file__).resolve().parents[1] / 'reduction' / 'fwhm_table.ecsv'
 REGIONS_DIR = Path(__file__).resolve().parents[2] / 'regions_'
 
-MIRI_FILTERS = frozenset(['f560w', 'f770w', 'f1000w', 'f1130w', 'f1280w',
-                          'f1500w', 'f1800w', 'f2100w', 'f2550w'])
-
-def _instrument_from_filter(filtername):
-    """Return 'MIRI' or 'NIRCam' based on filter name (no header read needed)."""
-    return 'MIRI' if str(filtername).lower() in MIRI_FILTERS else 'NIRCam'
-
-def _inst_token(filtername):
-    """Lowercased instrument token used in JWST i2d filename conventions."""
-    return _instrument_from_filter(filtername).lower()
+# MIRI_FILTERS / _instrument_from_filter / _inst_token are imported from
+# photometry/naming.py (see top-of-file import) so there is one source of truth.
 
 # DQ flags to drop from photometry.  DO_NOT_USE is the umbrella set
 # the JWST pipeline already curates; SATURATED is added explicitly so

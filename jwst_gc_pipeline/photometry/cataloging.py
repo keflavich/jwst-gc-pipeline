@@ -1645,10 +1645,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 # all-obs catalog (see the vet + combine block below).  NIRCam:
                 # un-tokened (single all-obs vetting; unchanged behavior).
                 _miri_field = (module == 'mirimage'
-                               or str(filt).upper() in (
-                                   'F560W', 'F770W', 'F1000W', 'F1130W',
-                                   'F1280W', 'F1500W', 'F1800W', 'F2100W',
-                                   'F2550W'))
+                               or _L._instrument_from_filter(filt) == 'MIRI')
                 _vtok = f'_o{field}' if _miri_field else ''
                 # m3..m6 seed = vetted previous catalog UNION daofind on a
                 # progressively cleaner i2d (per PSFPhotometryPlan2026-06-09):
@@ -1960,10 +1957,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     # MIRI: required deep-i2d prominence gate kills false emission
                     # sources that pass the qfit OR-branch.  NIRCam: off (0).
                     _miri_field = (module == 'mirimage'
-                                   or str(filt).upper() in (
-                                       'F560W', 'F770W', 'F1000W', 'F1130W',
-                                       'F1280W', 'F1500W', 'F1800W', 'F2100W',
-                                       'F2550W'))
+                                   or _L._instrument_from_filter(filt) == 'MIRI')
                     vetted = _filter_extended_emission(
                         merged, data_i2d_image=d_i2d, ww_i2d=ww_i2d,
                         qfit_max=float(getattr(opts_phase, 'manual_ext_qfit_max', 0.2)),
