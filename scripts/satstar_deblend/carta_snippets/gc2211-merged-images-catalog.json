@@ -1,0 +1,10 @@
+{
+    "$schema": "https://cartavis.org/schemas/snippet_schema_1.json",
+    "categories": [
+        "jwst-pipeline-june2026",
+        "gc2211"
+    ],
+    "code": "// gc2211 -- merged i2d deep images (per obs/filter) + merged daophot catalog overlay\nconst M = \"jwst/gc2211/images-merged/\";\nawait app.appendFile(M + \"jw02211-o028_t001_nircam_clear-f150w-merged_i2d.fits\");\nawait app.appendFile(M + \"jw02211-o028_t001_nircam_clear-f277w-merged_i2d.fits\");\nawait app.appendFile(M + \"jw02211-o046_t001_nircam_clear-f200w-merged_i2d.fits\");\nawait app.appendFile(M + \"jw02211-o049_t001_nircam_clear-f200w-merged_i2d.fits\");\nawait app.appendFile(M + \"jw02211-o050_t001_nircam_clear-f200w-merged_i2d.fits\");\n\n// merged daophot catalog (skycoord) -- is_saturated rows mark the saturated stars\nconst catId = await app.appendCatalog(\"jwst/gc2211/catalogs/\", \"f200w_merged_indivexp_merged_dao_basic.fits\", 200, 1);\nconst cw = app.catalogStore.getCatalogWidgetStore(catId);\nif (cw) { cw.setxAxis(\"skycoord.ra\"); cw.setyAxis(\"skycoord.dec\"); }\n\nfor (const frame of app.frames) {\n    frame.renderConfig.setScaling(2);\n    frame.renderConfig.setCustomScale(-1, 100);\n}",
+    "frontendVersion": "5.0.2",
+    "snippetVersion": 1
+}
