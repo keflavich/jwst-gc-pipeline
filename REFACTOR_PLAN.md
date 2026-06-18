@@ -136,12 +136,13 @@ no-op without saturated DQ). Milestones, commit each:
   sources recovered <1px. ~4min (webbpsf import). This is the SAFETY NET for M3+.
 - [x] **M3 block B → `_output_suffix_tokens`** (namedtuple, unpacked in field order; closes
   Phase-1 "output_tokens ×8"). 4 unit tests + M2 re-run: 5 passed.
-- [ ] **M4+ extract more blocks** (each: extract→unit test→re-run M2→commit). M2 covers only the
-  BASIC UNSEEDED path (blocks A-D,G-J-else,K-noop,L',M,P,Q,R) — extractions there are validated.
-  Other paths (seeded L, iterative S-U, crowdsource O) need their own characterization tests
-  FIRST. Safe next (M2-covered): first-pass DAO finder (block J else-branch), basic post-fit
-  dedup+filters (block Q). Then add seeded + iterative characterization tests to unlock the rest.
-  Target modules: seeding.py, postfit_filters.py, residual_io.py.
+- [x] **M4 block J else-branch → `_first_pass_daofinder`** (M2-covered). 2 unit tests + M2: 3 passed.
+- [ ] **M5+ continue extractions**. Still M2-covered & safe next: basic post-fit dedup+filters
+  (block Q ~5905-5985), the mask/uncertainty/grouper setup (block H). NOT yet covered (need new
+  characterization tests first): seeded seed-assembly (block L, ~5125-5460), iterative fit (S-U),
+  crowdsource (O). Plan: (1) add a SEEDED characterization test (pass seed_catalog Table) to
+  cover block L + the iter2/iter3 finder branch; (2) add an ITERATIVE test (basic_only=False) to
+  cover S-U; then extract those into seeding.py / postfit_filters.py / residual_io.py.
 
 ---
 
