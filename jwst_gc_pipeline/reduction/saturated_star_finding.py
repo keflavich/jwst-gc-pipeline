@@ -636,7 +636,7 @@ def _seed_prominence(data, com, sat_area):
     return (core - med) / mad, core
 
 
-def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, seed_prominence_min=8.0, seed_core_min=1000.0):
+def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, seed_prominence_min=8.0, seed_core_min=1000.0, seed_gate_image=None, seed_gate_wcs=None):
     # ``flux_drops``: optional list of SkyCoord.  An out-of-field (forced) source
     # whose seed sky position matches a drop within ~1.0" is SKIPPED entirely
     # (not fit, not contributed): cross-frame reconciliation found no trustworthy
@@ -775,14 +775,36 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     #     (real >=1191, phantom ~800).  seed_core_min is in the data's surface-
     #     brightness units; the 1000 default is F770W-calibrated -- revisit for
     #     other MIRI broadbands (set 0 to disable just this criterion).
+    # The gate is measured on the DEEP coadded ``seed_gate_image`` (the filter's
+    # data_i2d) when supplied, NOT this single frame: a single-frame noise spike
+    # in the wing ring can push a phantom's per-frame core >threshold in ONE of
+    # its overlapping frames, and the cross-frame satstar merge then keeps it.
+    # The coadd is noise-averaged and frame-invariant, so the same verdict
+    # applies in every frame and matches what the user sees in the final i2d
+    # (validated: phantom cores 573-966 on the coadd vs real >=1200).  Falls back
+    # to the per-frame ``data`` if no coadd is provided.
     # NaN (unmeasurable, e.g. near-edge) is KEPT so no real star is dropped on an
     # inability to measure it.  NIRCam untouched (gate is MIRI-only).
     _is_miri_gate = (header.get('INSTRUME', '').lower() == 'miri')
     if _is_miri_gate and ((seed_prominence_min and seed_prominence_min > 0)
                           or (seed_core_min and seed_core_min > 0)):
+        _frame_wcs = wcs.WCS(fitsdata['SCI'].header)
+        _gate_img = seed_gate_image if seed_gate_image is not None else data
+        _use_coadd = seed_gate_image is not None and seed_gate_wcs is not None
         kept_records, n_prom, n_core = [], 0, 0
         for rec in source_records:
-            prom, core = _seed_prominence(data, rec['com'], rec.get('sat_area'))
+            cy, cx = rec['com']
+            if _use_coadd:
+                # map this frame's component centroid onto the coadd grid
+                try:
+                    sky = _frame_wcs.pixel_to_world(float(cx), float(cy))
+                    gx, gy = seed_gate_wcs.world_to_pixel(sky)
+                    gate_com = (float(gy), float(gx))
+                except Exception:
+                    gate_com = rec['com']
+            else:
+                gate_com = rec['com']
+            prom, core = _seed_prominence(_gate_img, gate_com, rec.get('sat_area'))
             drop_prom = (seed_prominence_min and seed_prominence_min > 0
                          and np.isfinite(prom) and prom < seed_prominence_min)
             drop_core = (seed_core_min and seed_core_min > 0
@@ -794,11 +816,12 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 kept_records.append(rec)
         n_dropped = len(source_records) - len(kept_records)
         if n_dropped:
-            print(f"satstar seed gate (MIRI): dropped {n_dropped} non-stellar "
-                  f"saturated components (extended-emission phantoms; "
-                  f"{n_prom} by prominence<{seed_prominence_min}, {n_core} by "
-                  f"faint-core<{seed_core_min}); kept {len(kept_records)} of "
-                  f"{len(source_records)}", flush=True)
+            _on = 'coadd i2d' if _use_coadd else 'this frame'
+            print(f"satstar seed gate (MIRI, on {_on}): dropped {n_dropped} "
+                  f"non-stellar saturated components (extended-emission "
+                  f"phantoms; {n_prom} by prominence<{seed_prominence_min}, "
+                  f"{n_core} by faint-core<{seed_core_min}); kept "
+                  f"{len(kept_records)} of {len(source_records)}", flush=True)
         source_records = kept_records
 
     # Sort in-FOV sources by sat_area descending (brightest saturated cores
@@ -1829,6 +1852,40 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             xcent = np.asarray(result['xcentroid'], dtype=float)
             ycent = np.asarray(result['ycentroid'], dtype=float)
             accept_source = np.all(np.isfinite(xcent)) and np.all(np.isfinite(ycent))
+
+        # POST-FIT coadd gate (MIRI, in-FOV): the pre-fit seed gate measures at
+        # the DQ-component centroid, but the fit can DRIFT several px onto a
+        # faint extended-emission pit (the component centroid is pulled toward a
+        # bright neighbour or merged DQ blob, so the seed passes, then the fit
+        # settles on the phantom).  Re-check the prominence+faint-core gate on
+        # the deep coadd at the FITTED position so a drifted phantom is rejected
+        # where its model actually lands.  Real saturated stars (incl. deeply-
+        # saturated zeroed cores) keep core>=1191 via the adaptive wing ring;
+        # phantoms that drifted off-seed read core~700.  Forced sources are
+        # exempt (their position is locked, not fit-driven).
+        if (_is_miri and accept_source and not forced_source
+                and seed_gate_image is not None and seed_gate_wcs is not None
+                and result is not None):
+            try:
+                _xc = float(np.atleast_1d(result['xcentroid'])[0])
+                _yc = float(np.atleast_1d(result['ycentroid'])[0])
+                _sky = ww.pixel_to_world(_xc, _yc)
+                _cx, _cy = seed_gate_wcs.world_to_pixel(_sky)
+                _pp, _cc = _seed_prominence(seed_gate_image, (float(_cy), float(_cx)),
+                                            src_sat_area)
+                _bad = ((seed_prominence_min and seed_prominence_min > 0
+                         and np.isfinite(_pp) and _pp < seed_prominence_min)
+                        or (seed_core_min and seed_core_min > 0
+                            and np.isfinite(_cc) and _cc < seed_core_min))
+                if _bad:
+                    accept_source = False
+                    print(f"Post-fit coadd gate (MIRI): rejecting source {ii+1} "
+                          f"-- fit drifted to extended-emission phantom "
+                          f"(coadd prom={_pp:.1f}, core={_cc:.0f} < "
+                          f"prom{seed_prominence_min}/core{seed_core_min})",
+                          flush=True)
+            except Exception:
+                pass
 
         if accept_source:
             # Only accumulate the per-source model into the global

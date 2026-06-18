@@ -682,6 +682,30 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
 # ---------------------------------------------------------------------------
 # Per-frame frame setup (shared load / bg / PSF / mask / satstar)
 # ---------------------------------------------------------------------------
+def _resolve_each_suffix(options, filtername):
+    """Per-filter input per-exposure-crf suffix.
+
+    ``--each-suffix-overrides=F187N:destreak_o007_crf,F210M:destreak_o007_crf``
+    lets specific filters read a DIFFERENT per-exposure crf than the global
+    ``--each-suffix``.  Sickle: SW F187N/F210M want ``destreak`` (1/f streaks are
+    worse than the destreak artifacts), LW F335M/F470N/F480M want ``align``
+    (destreak corrupts the bright extended emission).  Falls back to
+    ``options.each_suffix`` for any filter not listed.
+    """
+    default = options.each_suffix
+    raw = getattr(options, 'each_suffix_overrides', None)
+    if not raw:
+        return default
+    for pair in str(raw).split(','):
+        pair = pair.strip()
+        if ':' not in pair:
+            continue
+        key, val = pair.split(':', 1)
+        if key.strip().upper() == str(filtername).upper():
+            return val.strip()
+    return default
+
+
 def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
                                   filename, proposal_id, *, exposurenumber,
                                   visit_id, vgroup_id, bg_boxsizes, use_webbpsf,
@@ -821,6 +845,30 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         outside_star_pixels, outside_locked = [], False
     forced_grid_search_radius = 0 if outside_locked else 5
     satstar_file_suffix = f'{bgsub}{_iteration_token(satstar_label)}'
+    # MIRI: feed the DEEP coadded data_i2d to the satstar seed gate so the
+    # extended-emission phantom rejection (prominence + faint-core) is measured
+    # on the noise-averaged coadd, not this single frame.  A per-frame measure
+    # lets a phantom escape via one frame's noise spike (the cross-frame satstar
+    # merge then keeps it).  This is the MANUAL-pipeline path (do_photometry_step
+    # is the legacy non-manual path); both must plumb the coadd.  NIRCam: the
+    # gate is MIRI-only inside get_saturated_stars, so this is a no-op there.
+    _seed_gate_image = _seed_gate_wcs = None
+    if module == 'mirimage':
+        _di2d_path = (f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-'
+                      f'o{field}_t001_{_L._inst_token(filtername)}_{pupil}-'
+                      f'{filtername.lower()}-{module}_data_i2d.fits')
+        if os.path.exists(_di2d_path):
+            try:
+                with fits.open(_di2d_path) as _dih:
+                    _ext = 'SCI' if 'SCI' in [h.name for h in _dih] else 0
+                    _seed_gate_image = _dih[_ext].data.astype(float)
+                    _seed_gate_wcs = wcs.WCS(_dih[_ext].header)
+            except Exception as _gex:
+                print(f"[manual] satstar seed gate: could not load coadd "
+                      f"{_di2d_path}: {_gex}", flush=True)
+        else:
+            print(f"[manual] satstar seed gate: coadd data_i2d not found "
+                  f"({_di2d_path}); gate falls back to per-frame data", flush=True)
     satstar_table = _L.load_or_make_satstar_catalog(
         filename, path_prefix=f'{basepath}/psfs',
         use_merged_psf_for_merged=(module == 'merged'),
@@ -829,7 +877,8 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         forced_grid_search_radius=forced_grid_search_radius,
         flux_overrides=satstar_flux_overrides,
         flux_drops=satstar_flux_drops,
-        file_suffix=satstar_file_suffix)
+        file_suffix=satstar_file_suffix,
+        seed_gate_image=_seed_gate_image, seed_gate_wcs=_seed_gate_wcs)
     ext_model = filename.replace('.fits', f'{satstar_file_suffix}_extended_satstar_model.fits')
     sat_model = filename.replace('.fits', f'{satstar_file_suffix}_satstar_model.fits')
     if os.path.exists(ext_model):
@@ -1626,7 +1675,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     for visitid in range(1, nvisits[proposal_id][target] + 1):
                         candidate_frames.extend(sorted(_L.get_filenames(
                             basepath, filt, proposal_id, field,
-                            visitid=f'{visitid:03d}', each_suffix=options.each_suffix,
+                            visitid=f'{visitid:03d}',
+                            each_suffix=_resolve_each_suffix(options, filt),
                             module=module, pupil='clear')))
                 else:
                     candidate_frames = frame_cache.get((module, filt), [])

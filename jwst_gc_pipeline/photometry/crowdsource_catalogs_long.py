@@ -1978,7 +1978,8 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
                                  forced_grid_search_radius=5,
                                  flux_overrides=None,
                                  flux_drops=None,
-                                 file_suffix=''):
+                                 file_suffix='',
+                                 seed_gate_image=None, seed_gate_wcs=None):
     """
     ``file_suffix`` is inserted into the satstar output filenames before
     the ``_satstar_catalog`` / ``_satstar_model`` / ``_satstar_residual``
@@ -2013,7 +2014,9 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
                            forced_grid_search_radius=forced_grid_search_radius,
                            flux_overrides=flux_overrides,
                            flux_drops=flux_drops,
-                           file_suffix=file_suffix)
+                           file_suffix=file_suffix,
+                           seed_gate_image=seed_gate_image,
+                           seed_gate_wcs=seed_gate_wcs)
     if os.path.exists(satstar_filename):
         return Table.read(satstar_filename)
     return None
@@ -3035,7 +3038,7 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                               proposal_id, field, module, options,
                               overlapping_frames, iteration_label, kinds,
                               pupil='clear', psf_shape=(21, 21),
-                              satstar_label=None):
+                              satstar_label=None, satstar_cover_thresh=10.0):
     """Build residual i2d mosaics from the VETTED MERGED catalog (cutout path).
 
     The per-frame RAW residuals subtract every fitted source, including spurious
@@ -3064,20 +3067,34 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     # (and with the wrong, non-saturated PSF).  Exclude them so the merged-cat
     # residual treats satstars exactly like the raw residual does (once, via the
     # satstar model in base).
-    if 'replaced_saturated' in merged.colnames:
-        _sat = np.asarray(merged['replaced_saturated'], dtype=bool)
-        n_sat = int(_sat.sum())
-        if n_sat:
-            merged = merged[~_sat]
-            print(f"mergedcat: excluded {n_sat} replaced_saturated rows "
-                  f"(already removed via per-frame satstar model in base)",
-                  flush=True)
-    if 'skycoord' in merged.colnames:
-        msc = merged['skycoord']
-    else:
-        msc = SkyCoord(merged['ra'], merged['dec'], unit='deg')
     fcol = 'flux_fit' if 'flux_fit' in merged.colnames else 'flux'
-    mflux = np.asarray(merged[fcol], dtype=float)
+    if 'skycoord' in merged.colnames:
+        _all_sc = SkyCoord(merged['skycoord'])
+    else:
+        _all_sc = SkyCoord(merged['ra'], merged['dec'], unit='deg')
+    _all_flux = np.asarray(merged[fcol], dtype=float)
+    # A ``replaced_saturated`` star is removed per-frame via the satstar MODEL
+    # (subtracted into ``base``), so rendering it here with the small point-source
+    # PSF would DOUBLE-subtract it.  BUT a star can be saturated in only SOME
+    # frames (satstar-fit there) and merely bright in OTHERS (no satstar fit in
+    # those frames) -- in the latter ``base`` never removed it, so it MUST be
+    # rendered or it lingers in the residual AND is missing from the model
+    # (observed: sickle F480M bright stars left at ~88% of data peak).  So we keep
+    # the saturated rows separate and decide PER FRAME (in the loop) whether THIS
+    # frame's satstar model actually covers each one; uncovered ones are rendered
+    # as ordinary point sources.  (See the QA POLICY block below.)
+    if 'replaced_saturated' in merged.colnames:
+        _satrow = np.asarray(merged['replaced_saturated'], dtype=bool)
+    else:
+        _satrow = np.zeros(len(merged), dtype=bool)
+    msc = _all_sc[~_satrow]
+    mflux = _all_flux[~_satrow]
+    sat_sc = _all_sc[_satrow]
+    sat_flux = _all_flux[_satrow]
+    print(f"mergedcat: {int((~_satrow).sum())} unsaturated + {int(_satrow.sum())} "
+          f"saturated rows; saturated rendered per-frame ONLY where this frame's "
+          f"satstar model does not cover them (thresh={satstar_cover_thresh})",
+          flush=True)
 
     pipeline_dir = f'{cut_bp}/{filtername}/pipeline'
     inst_token = _inst_token(filtername)
@@ -3182,14 +3199,73 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
             keep = (np.isfinite(xx) & np.isfinite(yy) & np.isfinite(mflux)
                     & (xx > -half_w) & (xx < nx + half_w)
                     & (yy > -half_h) & (yy < ny + half_h))
-            tbl = Table({'x_fit': np.asarray(xx)[keep],
-                         'y_fit': np.asarray(yy)[keep],
-                         'flux_fit': mflux[keep]})
+            rx = list(np.asarray(xx)[keep])
+            ry = list(np.asarray(yy)[keep])
+            rf = list(np.asarray(mflux)[keep])
+            # Saturated stars: render only the ones THIS frame's satstar model does
+            # NOT cover (else they linger in the residual -- see split above).  A
+            # star is "covered" when the per-frame satstar model has a real peak at
+            # its position; where it was not satstar-fit the model is exactly 0.
+            if len(sat_sc):
+                sxx, syy = ww.world_to_pixel(sat_sc)
+                n_render_sat = 0
+                for k in range(len(sat_sc)):
+                    sx, sy, sf = float(sxx[k]), float(syy[k]), float(sat_flux[k])
+                    if not (np.isfinite(sx) and np.isfinite(sy) and np.isfinite(sf)):
+                        continue
+                    if not (-half_w < sx < nx + half_w and -half_h < sy < ny + half_h):
+                        continue
+                    covered = False
+                    if satstar_sm is not None:
+                        xi, yi = int(round(sx)), int(round(sy))
+                        if 0 <= xi < nx and 0 <= yi < ny:
+                            sub = satstar_sm[max(0, yi - 3):yi + 4,
+                                             max(0, xi - 3):xi + 4]
+                            covered = (np.isfinite(sub).any()
+                                       and np.nanmax(sub) > satstar_cover_thresh)
+                    if not covered:
+                        rx.append(sx); ry.append(sy); rf.append(sf)
+                        n_render_sat += 1
+                if n_render_sat:
+                    print(f"mergedcat {kind} {os.path.basename(orig)}: rendering "
+                          f"{n_render_sat} saturated stars NOT covered by this "
+                          f"frame's satstar model (would otherwise stay in the "
+                          f"residual)", flush=True)
+            tbl = Table({'x_fit': np.asarray(rx, dtype=float),
+                         'y_fit': np.asarray(ry, dtype=float),
+                         'flux_fit': np.asarray(rf, dtype=float)})
             mc_model = _render_model_from_table(tbl, rg, base.shape, psf_shape)
-            mc_resid = (base - mc_model).astype('float32')   # residual: point-src model only
-            # display model includes the satstars (added back), if available and
-            # shape-matching; residual above is left untouched
-            mc_model_display = mc_model.astype('float32')
+            # ============================ QA POLICY ============================
+            # The residual and model QA images obey a STRICT content policy that
+            # downstream evaluation (and the residual-bg feedback loop) depend on:
+            #
+            #   RESIDUAL  = background ONLY.  NO stars -- neither saturated nor
+            #               unsaturated.  Built as base - mc_model, where
+            #                 base     = data - satstar_model  (data_for_residual;
+            #                            saturated stars ALREADY removed per-frame)
+            #                 mc_model = rendered UNSATURATED point sources only
+            #                            (replaced_saturated rows were dropped from
+            #                            `merged` above; rendering them here would
+            #                            double-subtract the satstars).
+            #               So the INTERMEDIATE model subtracted to make the
+            #               residual MUST EXCLUDE saturated stars (they are gone
+            #               via `base`).  A clean residual = pure extended bg.
+            #               (If saturated stars LINGER in the residual, the
+            #               per-frame satstar model under-fit them -- a satstar
+            #               problem, not a policy problem here.)
+            #
+            #   MODEL i2d = stars ONLY (saturated AND unsaturated), NO background.
+            #               mc_model (unsat point sources) + satstar_sm (the
+            #               saturated-star model added back FOR DISPLAY).  The
+            #               written datamodel also zeroes meta.background so the
+            #               resampled mosaic carries no sky pedestal.
+            #
+            # CRITICAL ASYMMETRY: the model SUBTRACTED to form the residual must
+            # NOT include satstars; the MODEL written to disk MUST include them.
+            # Regression: tests/test_residual_model_policy.py.
+            # ==================================================================
+            mc_resid = (base - mc_model).astype('float32')   # residual: bg only (no stars)
+            mc_model_display = mc_model.astype('float32')     # i2d model: stars, no bg
             if satstar_sm is not None and satstar_sm.shape == mc_model.shape:
                 mc_model_display = mc_model_display + satstar_sm
             out_resid = f'{stem}_mergedcat_residual.fits'
@@ -3899,6 +3975,16 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option('--each-suffix', dest='each_suffix',
                       default='destreak_o001_crf',
                       help='Suffix for the level-2 products', metavar='each_suffix')
+    parser.add_option('--each-suffix-overrides', dest='each_suffix_overrides',
+                      default=None,
+                      help=('Per-filter override of --each-suffix as a CSV of '
+                            'FILTER:suffix pairs, e.g. '
+                            '"F187N:destreak_o007_crf,F210M:destreak_o007_crf". '
+                            'Filters not listed use --each-suffix.  Manual path '
+                            'only; lets one run mix input crfs per filter (sickle '
+                            'SW=destreak, LW=align) while keeping the m7 '
+                            'cross-band seed.'),
+                      metavar='each_suffix_overrides')
     parser.add_option('--seed-catalog', dest='seed_catalog',
                       default='',
                       help='Optional seed catalog for a seeded photometry rerun', metavar='seed_catalog')
@@ -4993,6 +5079,31 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
         # the os.remove call.
         iter_tag = _iteration_token(iteration_label)
         satstar_file_suffix = f'{bgsub}{iter_tag}'
+        # MIRI: feed the DEEP coadded data_i2d to the satstar seed gate so the
+        # extended-emission phantom rejection (prominence + faint-core) is
+        # measured on the noise-averaged coadd, not this single frame.  A
+        # per-frame measurement lets a phantom escape via one frame's noise
+        # spike (the cross-frame satstar merge then keeps it).  Frame-invariant
+        # + matches what the user sees in the final i2d.  NIRCam: not loaded
+        # (the gate is MIRI-only inside get_saturated_stars anyway).
+        _seed_gate_image = _seed_gate_wcs = None
+        if module == 'mirimage':
+            _di2d_path = (f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-'
+                          f'o{field}_t001_{_inst_token(filtername)}_{pupil}-'
+                          f'{filtername.lower()}-{module}_data_i2d.fits')
+            if os.path.exists(_di2d_path):
+                try:
+                    with fits.open(_di2d_path) as _dih:
+                        _ext = 'SCI' if 'SCI' in [h.name for h in _dih] else 0
+                        _seed_gate_image = _dih[_ext].data.astype(float)
+                        _seed_gate_wcs = wcs.WCS(_dih[_ext].header)
+                except Exception as _gex:
+                    print(f"satstar seed gate: could not load coadd "
+                          f"{_di2d_path}: {_gex}", flush=True)
+            else:
+                print(f"satstar seed gate: coadd data_i2d not found "
+                      f"({_di2d_path}); gate falls back to per-frame data",
+                      flush=True)
         satstar_table = load_or_make_satstar_catalog(
             filename,
             path_prefix=f'{basepath}/psfs',
@@ -5002,6 +5113,8 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
             outside_star_fit_box=512,
             forced_grid_search_radius=forced_grid_search_radius,
             file_suffix=satstar_file_suffix,
+            seed_gate_image=_seed_gate_image,
+            seed_gate_wcs=_seed_gate_wcs,
         )
 
         # Pipeline-plumbing fix (2026-04-21):
