@@ -28,6 +28,17 @@ def sync_gwcs_to_fits_wcs(imfile):
     the un-realigned frame.  Mutating the ``crval`` Parameter does not rebuild
     the cached transform, so we construct a fresh transform from the updated
     header CRVAL (keeping crpix/cdelt/pc/projection) and reassign the WCS.
+
+    TOOLING NOTE: the sanctioned STScI GWCS shifter ``jwst.tweakreg.utils.adjust_wcs``
+    is used for *per-exposure* (_cal) GWCS in ``fix_alignment``, but its docstring
+    states it is "not designed to handle ... GWCS of resampled images" -- so it
+    CANNOT be used here.  Rebuilding the terminal FITSImagingWCSTransform via gwcs's
+    public model API is the minimal supported way to set a resampled tangent point.
+
+    IDEMPOTENT: this sets the GWCS tangent point EQUAL to the SCI-header CRVAL (an
+    absolute set, not a relative shift), so re-running is a no-op.
+
+    See ASTROMETRY_WCS_CORRECTION_FLOW.md (this directory) for the full flow.
     """
     try:
         import stdatamodels.jwst.datamodels as dm

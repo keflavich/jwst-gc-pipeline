@@ -73,6 +73,14 @@ For each field/program:
 - Configure the field-name → proposal-ID mappings used by
   `merge_catalogs` and `align_to_catalogs`.
 
+## Astrometric WCS corrections
+
+Before touching any alignment / WCS code, read
+[`jwst_gc_pipeline/reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md`](jwst_gc_pipeline/reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md).
+It documents which files get WCS corrections, the reproducible `_cal` → mosaic/catalog
+path, how double-correction is prevented, and the rule that per-exposure GWCS shifts
+use `jwst.tweakreg.utils.adjust_wcs` (resampled-image GWCS has no STScI shifter).
+
 ## License
 
 BSD 3-clause. See `licenses/LICENSE.rst`.

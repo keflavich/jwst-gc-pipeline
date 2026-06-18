@@ -144,7 +144,11 @@ REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD = {
         '007': 'catalogs/nircam_bootstrapped_to_gns_refcat.fits',
     },
     '5365': {
-        '001': 'catalogs/crowdsource_based_nircam-f405n_reference_astrometric_catalog.ecsv',
+        # Sgr B2 (GC field). Switched 2026-06-18 from the VVV-tied crowdsource F405N
+        # bootstrap (crowdsource deprecated) to the GC reference-frame policy: Gaia DR3
+        # + VIRAC2 NIR fill, per-star PM-propagated (VIRAC2 from 2014.0, Gaia from 2016.0)
+        # to the obs epoch 2024.685. Built by build_gaia_virac2_refcat_byquery.py.
+        '001': 'catalogs/gaia_virac2_refcat_epoch2024.68.fits',
     },
     '6151': {
         # w51 main NIRCam pointing -- Gaia DR3 (disk field, not GC)

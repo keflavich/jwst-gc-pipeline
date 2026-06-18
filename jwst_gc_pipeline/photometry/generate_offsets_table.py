@@ -69,7 +69,7 @@ print(f"Wrote {OUT}: {len(ot)} frames")
 
 # ---- validate: run shift_individual_catalog on a sample, check landing on VIRAC2 ----
 v = Table.read(f'{BASE}/astrometry_diag/refcache/virac2.fits')
-virac = SkyCoord(*prop(farr(v['RAJ2000']), farr(v['DEJ2000']), farr(v['pmRA']), farr(v['pmDE']), EPOCH - 2016.0), unit='deg')
+virac = SkyCoord(*prop(farr(v['RAJ2000']), farr(v['DEJ2000']), farr(v['pmRA']), farr(v['pmDE']), EPOCH - 2014.0), unit='deg')  # VIRAC2 ref epoch 2014.0 (II/387 paper value)
 
 
 def voff(sc):
