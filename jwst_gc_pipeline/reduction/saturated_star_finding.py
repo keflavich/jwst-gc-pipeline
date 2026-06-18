@@ -725,7 +725,7 @@ def accept_satstar_fit(*, result_is_none, fluxerr, snr, flux, qfit,
     return bool((not np.isfinite(ssr_ratio)) or (ssr_ratio < ssr_ratio_max_keep))
 
 
-def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_oversub_ratio=3.0, seed_gate_image=None, seed_gate_wcs=None):
+def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_oversub_ratio=3.0, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, deblend_daophot_xy=None, deblend_confirm_xy=None):
     # ``flux_drops``: optional list of SkyCoord.  An out-of-field (forced) source
     # whose seed sky position matches a drop within ~1.0" is SKIPPED entirely
     # (not fit, not contributed): cross-frame reconciliation found no trustworthy
@@ -843,11 +843,30 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     else:
         _sizes_by_label = np.array([], dtype=float)
 
-    source_records = []
-    for ii, com in enumerate(coms):
-        sat_area_ii = int(_sizes_by_label[ii]) if ii < len(_sizes_by_label) else 0
-        source_records.append({'com': com, 'label': ii + 1,
-                               'forced': False, 'sat_area': sat_area_ii})
+    # ZEROFRAME DEBLEND (opt-in): when a frame-zero image is supplied, expand a
+    # single merged-saturated component into one seed PER STAR.  In crowded GC
+    # fields (gc2211) bright stars' saturated cores TOUCH and label as one
+    # component, so the single bbox centroid lands BETWEEN two stars.  The
+    # ZEROFRAME (raw first read, saturates ~Ngroup higher) resolves the cores; see
+    # satstar_deblend.build_deblended_source_records.  When ``zeroframe is None``
+    # this block is skipped and the behaviour is identical to before (one seed per
+    # component at its refined centroid).
+    if zeroframe is not None:
+        from .satstar_deblend import build_deblended_source_records
+        _inst_repl = 'MIRI' if header['INSTRUME'].lower() == 'miri' else 'NIRCam'
+        _, _fwhm_pix_db = get_fwhm(header, instrument_replacement=_inst_repl)
+        source_records = build_deblended_source_records(
+            saturated, sources, coms, _sizes_by_label, zeroframe, data,
+            _fwhm_pix_db, daophot_xy=deblend_daophot_xy,
+            confirm_xy=deblend_confirm_xy)
+        print(f"satstar ZEROFRAME deblend: {len(coms)} components -> "
+              f"{len(source_records)} star seeds", flush=True)
+    else:
+        source_records = []
+        for ii, com in enumerate(coms):
+            sat_area_ii = int(_sizes_by_label[ii]) if ii < len(_sizes_by_label) else 0
+            source_records.append({'com': com, 'label': ii + 1,
+                                   'forced': False, 'sat_area': sat_area_ii})
 
     # MIRI-only seed gate: drop DQ-SATURATED components that are NOT compact
     # bright stars (i.e. saturated patches of bright EXTENDED EMISSION).  F770W
@@ -2158,8 +2177,41 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         builtins.satstar_flagimg = flag_img
         return base_tab
 
+def _find_zeroframe_for(filename):
+    """Locate and load the ZEROFRAME (frame zero) for a cal/crf ``filename``.
+
+    The satstar step runs on the 2D cal/crf image, which has no ZEROFRAME; it
+    lives in the matching ``_ramp.fits`` produced by Detector1 (same exposure
+    stem, in this target's ``pipeline/`` directory).  Returns the ZEROFRAME 2D
+    array (raw DN) or ``None`` if no ramp file is found.  Used to opt the
+    ZEROFRAME deblender into ``remove_saturated_stars``."""
+    base = os.path.basename(filename)
+    # exposure stem = jwNNNNN..._<detector>  (strip everything from the first
+    # post-detector token; both '<stem>_cal.fits' and
+    # '<stem>_destreak_..._crf.fits' share the same leading stem).
+    import re
+    m = re.match(r'(jw\d+_\d+_\d+_[a-z0-9]+)', base)
+    if not m:
+        return None
+    stem = m.group(1)
+    pipedir = os.path.dirname(filename)
+    cands = [os.path.join(pipedir, f'{stem}_ramp.fits'),
+             os.path.join(pipedir, 'pipeline', f'{stem}_ramp.fits'),
+             os.path.join(os.path.dirname(pipedir), 'pipeline', f'{stem}_ramp.fits')]
+    for rf in cands:
+        if os.path.exists(rf):
+            with fits.open(rf) as rh:
+                if 'ZEROFRAME' in rh:
+                    zf = np.asarray(rh['ZEROFRAME'].data[0], dtype=float)
+                    print(f"satstar deblend: loaded ZEROFRAME from {rf}", flush=True)
+                    return zf
+    print(f"satstar deblend: no _ramp.fits ZEROFRAME found for {base} "
+          f"(deblend disabled for this frame)", flush=True)
+    return None
+
+
 def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
-                           file_suffix='', **kwargs):
+                           file_suffix='', deblend_with_zeroframe=False, **kwargs):
     """
     ``file_suffix`` is inserted into the output filenames *before* the
     ``_satstar_{catalog,model,residual}`` suffix so that concurrent runs
@@ -2180,6 +2232,13 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
     header = fh[0].header
     if 'CRPIX1' not in header:
         header.update(wcs.WCS(fh['SCI'].header).to_header())
+    # Opt-in ZEROFRAME deblend of merged saturated cores (crowded GC fields).
+    # Auto-load the matching _ramp.fits ZEROFRAME unless the caller already passed
+    # one explicitly.  Off by default -> behaviour unchanged.
+    if deblend_with_zeroframe and kwargs.get('zeroframe') is None:
+        zf = _find_zeroframe_for(filename)
+        if zf is not None:
+            kwargs['zeroframe'] = zf
     print("Running get_saturated_stars", flush=True)
     satstar_table = get_saturated_stars(fh, **kwargs)
     if satstar_table is not None:
