@@ -36,6 +36,8 @@ each module import once per session.
 | crowdsource_catalogs_long.py:888-903 | `normalize_vgroup_id` token/int extraction, idempotent on prefixed | `…::TestNormalizeVgroupId` |
 | make_starless_image.py:273-283 | `_max_r_for_source` SNR-tier radius cascade (strict `>`; below SNR_SKIP→0) | `test_make_starless_regressions.py::TestMaxRForSource` |
 | make_starless_image.py:253-268 | `nan_gaussian` infill across NaN holes; far-from-data weight<0.01 → NaN not 0 | `…::TestNanGaussian` |
+| cataloging.py:`_filter_extended_emission` | NIRCam keep = star_like AND SNR cut (`_emission_keep_nircam`) | `test_cataloging_regressions.py::TestFilterExtendedEmissionNircam` |
+| cataloging.py:`_filter_extended_emission` | MIRI keep = deep-i2d prominence ALONE (star_like/SNR bypassed); NaN prominence (off-i2d) dropped (`_emission_keep_miri`) | `…::TestFilterExtendedEmissionMiri` |
 
 ## Deferred (need full PSFPhotometry/IterativePSFPhotometry integration fixtures)
 

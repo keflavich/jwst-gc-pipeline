@@ -83,12 +83,20 @@ Tier 3 (background/stats, medium, research-tuned — careful, not bit-identical)
 Leave-as-is (confirmed clean): cataloging/merge coord math, psf_fitting bespoke solve,
 merge_a_plus_b (reproject, ResampleStep deliberately abandoned).
 
-## Phase 4 — Untangle MIRI vs NIRCam
-Per-instrument param struct + MIRI-only hooks + agnostic core. Targets: `get_saturated_stars`
-(~250 MIRI lines woven in), `get_psf_model`, `_manual_phot_pass`, `_filter_extended_emission`
-(two algos in one fn), `run_manual_pipeline` MIRI tuning, satstar radii. Plus `pipeline_common.py`
-for reduction (NIRCAM-LONG vs MIRI 70-80% copy-paste; `check_wcs` byte-identical). BUG: LONG
-697-738 dups 662-695 (loads VVV then overwrites back) — test + fix.
+## Phase 4 — Untangle MIRI vs NIRCam  [STATUS: in progress]
+Per-instrument param struct + MIRI-only hooks + agnostic core.
+- [x] `_filter_extended_emission` (cataloging.py) two-algorithm split → `_emission_keep_miri`
+  / `_emission_keep_nircam` named helpers + hoisted the duplicated overshoot-drop.
+  Behavior-identical (pinned by test_cataloging_regressions.py, 4 tests, verified before+after).
+- [NOTE] `accept_satstar_fit` was already factored out by the user (origin/main 3f5a20d) —
+  the satstar accept-gate part of Phase 4 is DONE upstream.
+- [ ] `get_saturated_stars` (~1342 lines, MIRI branches at 866-906/1045-1049/1159/1266/1535/
+  1615/1931): HOLD — this is the user's hot file (actively edited this week). High conflict
+  risk for a big split; coordinate timing or extract only a localized instrument-policy struct.
+- [ ] `_manual_phot_pass` MIRI cleanup extraction, `run_manual_pipeline` MIRI tuning overrides.
+- [ ] reduction `pipeline_common.py` (NIRCAM-LONG vs MIRI 70-80% copy-paste). NOTE: PipelineRerun
+  NIRCAM-LONG was edited on latest origin/main — re-verify the LONG 697-738 double-paste bug
+  still exists before fixing.
 
 ## Phase 5 — Loops→vectorize, if/elif→dispatch
 KDTree for O(N²) satstar matching, batch PSF grid-search, re-roll 3× unrolled isochrone loop,
