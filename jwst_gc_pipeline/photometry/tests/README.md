@@ -32,6 +32,10 @@ each module import once per session.
 | make_reference_from_pipeline_catalogs.py:596-610 | `summarize_offsets` empty-input guard | `test_make_reference_regressions.py::TestSummarizeOffsets` |
 | make_reference_from_pipeline_catalogs.py:546-551 | `initial_spatial_photometric_match` MAD==0 fallback | `…::TestInitialSpatialPhotometricMatchMadFallback` |
 | make_reference_from_pipeline_catalogs.py:442-461 | Ks-column `nanmedian` stacking, drop all-NaN sources | `…::TestNormalizeReferenceKsMagnitude` |
+| crowdsource_catalogs_long.py:449-477 | `--max-group-size` 0 rejected as ambiguous; `unlimited`→None; +int passthrough | `test_crowdsource_long_regressions.py::TestResolveMaxGroupSize` |
+| crowdsource_catalogs_long.py:888-903 | `normalize_vgroup_id` token/int extraction, idempotent on prefixed | `…::TestNormalizeVgroupId` |
+| make_starless_image.py:273-283 | `_max_r_for_source` SNR-tier radius cascade (strict `>`; below SNR_SKIP→0) | `test_make_starless_regressions.py::TestMaxRForSource` |
+| make_starless_image.py:253-268 | `nan_gaussian` infill across NaN holes; far-from-data weight<0.01 → NaN not 0 | `…::TestNanGaussian` |
 
 ## Deferred (need full PSFPhotometry/IterativePSFPhotometry integration fixtures)
 

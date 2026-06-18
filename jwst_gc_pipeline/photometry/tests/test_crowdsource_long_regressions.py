@@ -304,3 +304,65 @@ class TestForcedPsfPhotometry:
         init = Table({'x_init': [1.0], 'y_init': [1.0]})  # stamp falls off edge
         out = L.forced_psf_photometry(image, psf, init, fit_shape=(5, 5))
         assert np.isnan(out['flux_fit'][0])
+
+
+# ---------------------------------------------------------------------------
+# resolve_max_group_size (crowdsource_catalogs_long.py:449-477)
+# 0 is REJECTED as ambiguous (used to mean "no cap", reads like "no grouping");
+# 'unlimited' -> None; positive int passes through.
+# ---------------------------------------------------------------------------
+class TestResolveMaxGroupSize:
+    @pytest.mark.parametrize('word', ['unlimited', 'inf', 'infinite',
+                                      'nocap', 'none', 'UNLIMITED'])
+    def test_unlimited_words_map_to_none(self, word):
+        assert L.resolve_max_group_size(word) is None
+
+    @pytest.mark.parametrize('raw,expected', [(10, 10), ('15', 15), (1, 1)])
+    def test_positive_int_passthrough(self, raw, expected):
+        assert L.resolve_max_group_size(raw) == expected
+
+    def test_zero_is_rejected(self):
+        with pytest.raises(SystemExit):
+            L.resolve_max_group_size(0)
+
+    def test_negative_is_rejected(self):
+        with pytest.raises(SystemExit):
+            L.resolve_max_group_size(-5)
+
+    def test_none_is_rejected(self):
+        # No implicit default: must be set explicitly.
+        with pytest.raises(SystemExit):
+            L.resolve_max_group_size(None)
+
+    def test_garbage_is_rejected(self):
+        with pytest.raises(SystemExit):
+            L.resolve_max_group_size('big')
+
+
+# ---------------------------------------------------------------------------
+# normalize_vgroup_id (crowdsource_catalogs_long.py:888-903)
+# Returns (token, int_id); token is always '_vgroup<value>', int extracted from
+# the first run of digits (None if none).  Idempotent on an already-prefixed id.
+# ---------------------------------------------------------------------------
+class TestNormalizeVgroupId:
+    def test_empty_returns_blank(self):
+        assert L.normalize_vgroup_id('') == ('', None)
+        assert L.normalize_vgroup_id(None) == ('', None)
+
+    def test_plain_digits(self):
+        assert L.normalize_vgroup_id('7') == ('_vgroup7', 7)
+        assert L.normalize_vgroup_id(3) == ('_vgroup3', 3)
+
+    def test_idempotent_on_prefixed(self):
+        # Already-prefixed -> prefix stripped before re-tokenizing, int recovered.
+        assert L.normalize_vgroup_id('_vgroup12') == ('_vgroup12', 12)
+
+    def test_mixed_token_extracts_first_int(self):
+        tok, n = L.normalize_vgroup_id('a4b')
+        assert tok == '_vgroupa4b'
+        assert n == 4
+
+    def test_no_digits_gives_none_id(self):
+        tok, n = L.normalize_vgroup_id('abc')
+        assert tok == '_vgroupabc'
+        assert n is None
