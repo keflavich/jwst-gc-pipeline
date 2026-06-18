@@ -4602,6 +4602,27 @@ def _output_suffix_tokens(options, exposurenumber=None, visit_id=None,
     )
 
 
+def _first_pass_daofinder(data, err, nsigma, fwhm_pix, roundlo, roundhi):
+    """First-pass (iter1) DAOStarFinder + its threshold.
+
+    Factored out of ``do_photometry_step`` (block J else-branch).  Threshold is
+    ``nsigma * min(median(err), mad_std(data))`` -- the sigma-clipped mad_std of
+    the data guards against err being over-estimated on extended-emission frames
+    (Sickle F470N had ~3x too high err).  Returns ``(finder, threshold)``.
+    """
+    filtered_errest = np.nanmedian(err)
+    print(f'Error estimate for DAO from median(err): {filtered_errest}', flush=True)
+    # sigma_clipped stats get _much_ lower uncertainty for frames dominated by extended emission (maybe?).  At least, Sickle F470N had 3x too high error
+    mean, med, std = stats.sigma_clipped_stats(data, stdfunc='mad_std')
+    print(f'Error estimate for DAO from stats.: std={std}', flush=True)
+    filtered_errest = min([filtered_errest, std])
+    threshold = nsigma * filtered_errest
+    finder = DAOStarFinder(threshold=threshold, fwhm=fwhm_pix,
+                           roundhi=roundhi, roundlo=roundlo,
+                           sharplo=0.30, sharphi=1.40)
+    return finder, threshold
+
+
 def do_photometry_step(options, filtername, module, detector, field, basepath,
                        filename, proposal_id, crowdsource_default_kwargs, exposurenumber=None,
                        visit_id=None, vgroup_id=None,
@@ -4993,18 +5014,10 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
             flush=True,
         )
     else:
-        # Keep original first-pass starfinding behavior unchanged.
-        filtered_errest = np.nanmedian(err)
-        print(f'Error estimate for DAO from median(err): {filtered_errest}', flush=True)
-        # sigma_clipped stats get _much_ lower uncertainty for frames dominated by extended emission (maybe?).  At least, Sickle F470N had 3x too high error
-        mean, med, std = stats.sigma_clipped_stats(data, stdfunc='mad_std')
-        print(f'Error estimate for DAO from stats.: std={std}', flush=True)
-        filtered_errest = min([filtered_errest, std])
-
-        daofind_threshold = nsigma * filtered_errest
-        daofind_tuned = DAOStarFinder(threshold=daofind_threshold,
-                                      fwhm=fwhm_pix, roundhi=daofind_roundhi, roundlo=daofind_roundlo,
-                                      sharplo=0.30, sharphi=1.40)
+        # Keep original first-pass starfinding behavior unchanged
+        # (factored into _first_pass_daofinder).
+        daofind_tuned, daofind_threshold = _first_pass_daofinder(
+            data, err, nsigma, fwhm_pix, daofind_roundlo, daofind_roundhi)
         print(
             f'DAO first-pass threshold={daofind_threshold}; '
             f'roundlo={daofind_roundlo}; roundhi={daofind_roundhi}',

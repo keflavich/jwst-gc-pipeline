@@ -409,3 +409,28 @@ class TestOutputSuffixTokens:
         assert L._SuffixTokens._fields == (
             'desat', 'bgsub', 'epsf_', 'exposure_', 'visitid_', 'vgroupid_',
             'vgroup_numeric', 'blur_', 'group', 'iter_')
+
+
+# ---------------------------------------------------------------------------
+# _first_pass_daofinder (do_photometry_step block J else-branch, Phase 6 M4)
+# threshold = nsigma * min(median(err), mad_std(data)); finder carries it.
+# ---------------------------------------------------------------------------
+class TestFirstPassDaofinder:
+    def test_threshold_uses_madstd_when_err_overestimated(self):
+        rng = np.random.default_rng(0)
+        data = rng.normal(0.0, 2.0, size=(64, 64))   # mad_std ~ 2
+        err = np.full((64, 64), 100.0)               # err over-estimated
+        finder, thr = L._first_pass_daofinder(
+            data, err, nsigma=5, fwhm_pix=2.0, roundlo=-1.0, roundhi=1.0)
+        _, _, std = L.stats.sigma_clipped_stats(data, stdfunc='mad_std')
+        assert thr == pytest.approx(5 * std)         # min picks mad_std
+        assert finder.threshold == pytest.approx(thr)
+        assert finder.fwhm == 2.0
+
+    def test_threshold_uses_err_when_smaller(self):
+        data = np.zeros((32, 32)) + 1000.0           # mad_std ~ 0
+        err = np.full((32, 32), 3.0)
+        finder, thr = L._first_pass_daofinder(
+            data, err, nsigma=4, fwhm_pix=1.5, roundlo=-1.0, roundhi=1.0)
+        # mad_std(data)=0 -> min is 0 -> threshold 0 (degenerate but exact)
+        assert thr == pytest.approx(0.0)
