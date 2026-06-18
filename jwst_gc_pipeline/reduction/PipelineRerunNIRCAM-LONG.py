@@ -95,16 +95,22 @@ fov_regname = {'brick': 'regions_/nircam_brick_fov.reg',
                }
 
 refnames = {'2221': 'F405ref',
-            # 1182 obs 004 = brick (uses an F200W-derived offsets table on disk
-            # at offsets/Offsets_JWST_Brick1182_F200ref_average.csv, baked
-            # in by the original Aug-2024 reduction).  refnames[proposal_id]
-            # is used by fix_alignment() to build that filename, so changing
-            # it without renaming the offsets file breaks the merged-module
-            # destreak step.  Use 'F200ref' to match the existing offsets file;
-            # the refcat decision (Gaia for w51 obs 002 vs F200W-bootstrap for
-            # brick obs 004) lives in REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD
-            # below + the per-filter override.
-            '1182': 'F200ref',
+            # 1182 obs 004 = brick.  refnames[proposal_id] is used by
+            # fix_alignment() to build the per-exposure offsets-table filename
+            # offsets/Offsets_JWST_Brick1182_<refname>_average.csv.
+            #
+            # 2026-06-18: switched 'F200ref' -> 'VIRAC2' (UPSTREAM FOLD).  The old
+            # F200ref_average table is F200W-derived (relative frame); applied to
+            # F115W it left ~97 mas (bulk + per-detector wrong-filter distortion)
+            # between the crf/_i2d/model/residual and the absolute (catalog/
+            # realigned) frame.  Offsets_JWST_Brick1182_VIRAC2_average.csv is a
+            # copy of F200ref_average with the F115W rows folded to the absolute
+            # VIRAC2-2014.0 frame (build_virac2_fixalign_offsets.py); non-F115W
+            # rows are still identical to F200ref (fold per-filter as processed).
+            # So crf -> _i2d -> model -> residual -> catalog -> realigned now
+            # share ONE frame and realign_to_catalog ~= 0.  See
+            # ASTROMETRY_WCS_CORRECTION_FLOW.md.
+            '1182': 'VIRAC2',
             '3958': 'VVV',
             '5365': 'VVV',
             '6151': 'Gaia',  # w51: switched 2026-06-10 (was UKIDSS)

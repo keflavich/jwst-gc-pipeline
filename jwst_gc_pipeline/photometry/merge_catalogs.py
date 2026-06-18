@@ -1422,7 +1422,18 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
                   ref_filter=None,
                   iteration_label=None,
                   resbgsub=False,
+                  vetted=False,
+                  filternames_override=None,
                   basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
+    """Cross-filter merge of per-filter daophot catalogs.
+
+    ``vetted`` (manual path): read the ``_vetted`` per-filter merged catalogs
+    (the quality-cut science catalogs) instead of the raw merged ones.
+    ``filternames_override``: restrict to this explicit filter list instead of
+    the full ``obs_filters[target]`` set -- REQUIRED for the manual NIRCam path,
+    whose target (e.g. sickle) registers MIRI filters in the same obs_filters
+    entry that must NOT enter the NIRCam cross-band merge.
+    """
 
     desat = "_unsatstar" if desat else ""
     bgsub_flag = bool(bgsub)
@@ -1439,7 +1450,10 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
     jfilts = SvoFps.get_filter_list('JWST')
     jfilts.add_index('filterID')
 
-    filternames = [filn for obsid in obs_filters[target] for filn in obs_filters[target][obsid]]
+    if filternames_override is not None:
+        filternames = [f.lower() for f in filternames_override]
+    else:
+        filternames = [filn for obsid in obs_filters[target] for filn in obs_filters[target][obsid]]
     print(f"Merging daophot {daophot_type}, {detector}, {module}, {desat}, {bgsub}, {epsf_}, {blur_}. filters {filternames}")
 
     # Use _project_for_target_filter rather than the global filter_to_project
@@ -1461,12 +1475,13 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
         # ``_daoiterative_iterative.fits`` so the glob always returned
         # zero matches and the cross-filter daoiterative merge never ran.
         method_name = 'dao' if daophot_type == 'basic' else 'daoiterative'
+        vetted_tok = '_vetted' if vetted else ''
         catfns = [x
                   for filn in filternames
-                  for x in glob.glob(f"{basepath}/catalogs/{filn.lower()}*{module}*indivexp_merged{desat}{bgsub}{blur_}{iter_token}_{method_name}_{daophot_type}.fits")
+                  for x in glob.glob(f"{basepath}/catalogs/{filn.lower()}*{module}*indivexp_merged{desat}{bgsub}{blur_}{iter_token}_{method_name}_{daophot_type}{vetted_tok}.fits")
                   ]
         if len(catfns) == 0:
-            raise ValueError(f"{basepath}/catalogs/<filt>*{module}*indivexp_merged{desat}{bgsub}{blur_}{iter_token}_{method_name}_{daophot_type}.fits had no matches across filters {filternames}")
+            raise ValueError(f"{basepath}/catalogs/<filt>*{module}*indivexp_merged{desat}{bgsub}{blur_}{iter_token}_{method_name}_{daophot_type}{vetted_tok}.fits had no matches across filters {filternames}")
         if len(catfns) != len(imgfns):
             print("WARNING: Different length of imgfns & catfns!")
             print("imgfns:", imgfns)

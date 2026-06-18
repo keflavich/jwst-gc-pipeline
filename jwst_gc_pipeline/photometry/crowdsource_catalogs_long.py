@@ -3985,6 +3985,13 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'SW=destreak, LW=align) while keeping the m7 '
                             'cross-band seed.'),
                       metavar='each_suffix_overrides')
+    parser.add_option('--manual-crossband-ref-filter', dest='manual_crossband_ref_filter',
+                      default='',
+                      help=('Astrometric reference filter for the manual-path '
+                            'cross-band merge (final multifilter step).  Must be '
+                            'one of --filternames.  Default: auto-select the '
+                            'reddest broad/medium band (e.g. sickle -> F480M).'),
+                      metavar='manual_crossband_ref_filter')
     parser.add_option('--seed-catalog', dest='seed_catalog',
                       default='',
                       help='Optional seed catalog for a seeded photometry rerun', metavar='seed_catalog')

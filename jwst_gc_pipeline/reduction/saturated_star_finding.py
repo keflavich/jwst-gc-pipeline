@@ -636,34 +636,45 @@ def _seed_prominence(data, com, sat_area):
     return (core - med) / mad, core
 
 
-def _seed_concentration(data, com):
-    """Central concentration of a saturated-star seed = peak(r<1.5px) /
-    median(r=3-6px), measured on the deep coadd.
+def _seed_concentration(data, com, sat_area=None):
+    """Concentration of a saturated-star seed = core peak / median just OUTSIDE
+    the saturated core, measured on the deep coadd.  Radii scale to the
+    saturated footprint (like _seed_prominence).
 
-    Separates a real (saturated) STAR -- a POINT SOURCE whose PSF falls steeply
-    (F770W FWHM ~2.4px, so r=3-6px is already 5-25% of peak -> concentration
-    >=~3) -- from a bright EXTENDED EMISSION KNOT, whose profile is flat/rising
-    across the same radii (concentration ~1-2.5).  This is the ONE axis the
-    brightness/prominence gates miss: a bright knot (data peak ~3000) passes
-    core>=1000 and prominence>=8 but is not a star, and the satstar fit
-    over-subtracts it into a deep negative pit.  Brightness-independent.
+    Separates a real (saturated) STAR -- a point source whose PSF falls steeply
+    once you pass the (possibly large, clipped) saturated core -- from a bright
+    EXTENDED EMISSION KNOT, whose profile stays flat across the same radii.
 
-    Calibrated on F770W Sickle o002: real hand-selected stars score >=3.2
-    (median ~10); emission knots score 1.0-2.5.  Returns NaN when unmeasurable
-    (near edge, or the central r<1.5 region is entirely zeroed -- a deeply-
-    saturated star's clipped core -- so callers treat NaN as KEEP and never drop
-    a real star on inability to measure).
+    CRITICAL: the radii MUST scale with the saturated footprint.  A fixed
+    r=3-6px annulus sits INSIDE the clipped plateau of a MASSIVE saturated star
+    (e.g. a 478-px core, R~12px), giving peak/median ~2 -- indistinguishable
+    from a flat knot -- which wrongly DROPS the brightest real stars (sickle
+    F770W o002 star at 17:46:17.515 scored 2.3 at fixed radii, 24.6 adaptive).
+    With ``sat_area`` the core peak is taken within r<=Rsat+1.5 and the
+    comparison annulus at Rsat+3..Rsat+8, i.e. always just outside the core.
+
+    Calibrated on F770W Sickle o002 (adaptive): real saturated stars score
+    >=1.6 (median ~12, big ones 6-25); the flattest emission knots ~1.0.
+    Returns NaN when unmeasurable (near edge, core entirely zeroed) -> callers
+    treat NaN as KEEP so a real star is never dropped on inability to measure.
     """
     y, x = com
     xi, yi = int(round(float(x))), int(round(float(y)))
     ny, nx = data.shape
-    if not (7 < xi < nx - 7 and 7 < yi < ny - 7):
+    r_sat = max(2.0, np.sqrt(max(int(sat_area or 0), 1) / np.pi))
+    # legacy fixed behaviour when no footprint given (Rsat clamps to 2 -> r_core
+    # 3.5, ring 5-10): kept for any caller that omits sat_area.
+    r_core = r_sat + 1.5
+    r_in = r_sat + 3.0
+    r_out = r_sat + 8.0
+    pad = int(np.ceil(r_out)) + 2
+    if not (pad < xi < nx - pad and pad < yi < ny - pad):
         return np.nan
-    yy, xx = np.mgrid[yi - 7:yi + 8, xi - 7:xi + 8]
+    yy, xx = np.mgrid[yi - pad:yi + pad + 1, xi - pad:xi + pad + 1]
     r = np.hypot(xx - xi, yy - yi)
-    sub = data[yi - 7:yi + 8, xi - 7:xi + 8]
-    cen = (r < 1.5) & np.isfinite(sub) & (sub != 0)
-    ring = (r >= 3) & (r < 6) & np.isfinite(sub) & (sub != 0)
+    sub = data[yi - pad:yi + pad + 1, xi - pad:xi + pad + 1]
+    cen = (r <= r_core) & np.isfinite(sub) & (sub != 0)
+    ring = (r >= r_in) & (r <= r_out) & np.isfinite(sub) & (sub != 0)
     if cen.sum() < 1 or ring.sum() < 5:
         return np.nan
     peak = float(np.nanmax(sub[cen]))
@@ -714,7 +725,7 @@ def accept_satstar_fit(*, result_is_none, fluxerr, snr, flux, qfit,
     return bool((not np.isfinite(ssr_ratio)) or (ssr_ratio < ssr_ratio_max_keep))
 
 
-def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=3.0, seed_oversub_ratio=3.0, seed_gate_image=None, seed_gate_wcs=None):
+def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_oversub_ratio=3.0, seed_gate_image=None, seed_gate_wcs=None):
     # ``flux_drops``: optional list of SkyCoord.  An out-of-field (forced) source
     # whose seed sky position matches a drop within ~1.0" is SKIPPED entirely
     # (not fit, not contributed): cross-frame reconciliation found no trustworthy
@@ -883,7 +894,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             else:
                 gate_com = rec['com']
             prom, core = _seed_prominence(_gate_img, gate_com, rec.get('sat_area'))
-            conc = _seed_concentration(_gate_img, gate_com)
+            conc = _seed_concentration(_gate_img, gate_com, rec.get('sat_area'))
             drop_prom = (seed_prominence_min and seed_prominence_min > 0
                          and np.isfinite(prom) and prom < seed_prominence_min)
             drop_core = (seed_core_min and seed_core_min > 0
@@ -1670,6 +1681,40 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                         print(f"  [miri envelope cap] LSQ {_f0:.2e} -> "
                               f"{_new:.2e} (env_p10={_env:.2e}, "
                               f"wing_px={int(_wing.sum())})", flush=True)
+            # PEAK-MATCHING CAP (2026-06-18).  The p10 envelope still OVER-predicts
+            # the central peak by 2-5x on many MIRI saturated stars: the masked
+            # core forces the amplitude to be extrapolated from wing pixels, and
+            # the STPSF concentrates more flux into the peak than a real (clipped /
+            # charge-bled) saturated star, so (data-bg)/psf at the inner wing lands
+            # above the amplitude that makes the MODEL PEAK match the DATA PEAK.
+            # Result: model peak 2-5x the data -> deep negative pits (e.g. sickle
+            # F770W o002 stars at 17:46:17.84/.515/18.92/20.21).  Directly bound it:
+            # the rendered model peak (flux * unit-PSF peak) must not exceed the
+            # brightest UNSATURATED data pixel just outside the masked core by more
+            # than SEED_PEAK_CAP_FACTOR.  This is a physical limit on how negative
+            # the subtraction can drive the residual (the only data we can subtract
+            # outside the clipped core is what is actually there).  Caps the
+            # runaways to ~1.5x (mild, infillable) while leaving well-fit stars
+            # (model<=data) untouched, and brings the brightest star's model/data
+            # under the post-fit oversub gate so it is SUBTRACTED instead of
+            # deleted.  MIRI in-FOV only.
+            _peak_cap_factor = 1.5
+            _psf_peak = float(np.nanmax(_psfu)) if np.isfinite(_psfu).any() else np.nan
+            _near = ((~satmask_combined) & np.isfinite(cutout)
+                     & (_dist >= 1) & (_dist <= 8) & _psfok)
+            if _near.sum() < 3:
+                _near = ((~satmask_combined) & np.isfinite(cutout) & _psfok)
+            _dpk = float(np.nanmax(cutout[_near])) if _near.any() else np.nan
+            if (np.isfinite(_psf_peak) and _psf_peak > 0
+                    and np.isfinite(_dpk) and _dpk > 0):
+                _flux_cap = _peak_cap_factor * _dpk / _psf_peak
+                _fcur = float(result['flux_fit'][0])
+                if np.isfinite(_fcur) and _fcur > _flux_cap:
+                    result['flux_fit'][0] = _flux_cap
+                    print(f"  [miri peak cap] flux {_fcur:.2e} -> {_flux_cap:.2e} "
+                          f"(model peak would be {_fcur*_psf_peak:.0f} vs data "
+                          f"peak {_dpk:.0f}; capped to {_peak_cap_factor}x)",
+                          flush=True)
             # ALWAYS (MIRI in-FOV): the masked-core LSQ frequently returns a
             # NaN flux_err (singular covariance from x_0/y_0 pegging the bound),
             # which would make the accept gate reject an otherwise-good fit
@@ -1938,7 +1983,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 _cx, _cy = seed_gate_wcs.world_to_pixel(_sky)
                 _pp, _cc = _seed_prominence(seed_gate_image, (float(_cy), float(_cx)),
                                             src_sat_area)
-                _kk = _seed_concentration(seed_gate_image, (float(_cy), float(_cx)))
+                _kk = _seed_concentration(seed_gate_image, (float(_cy), float(_cx)),
+                                          src_sat_area)
                 # OVER-SUBTRACTION ratio: the fitted PSF model PEAK vs the deep
                 # coadd DATA at the fit position.  This is the most direct measure
                 # of the negative-fake-star pathology -- a satstar whose model

@@ -1475,6 +1475,37 @@ def _run_one_frame_manual(args):
                     f'{type(ex).__name__}: {ex}\n{traceback.format_exc()}')
 
 
+def _resolve_crossband_ref_filter(options, filternames):
+    """Pick the astrometric reference filter for the cross-band merge.
+
+    Explicit ``--manual-crossband-ref-filter`` wins (must be one of the run's
+    filters).  Otherwise auto-select the reddest BROAD/MEDIUM band (filter not
+    ending in 'N'); fall back to the reddest band overall.  The reddest
+    broad/medium band is the most complete, highest-S/N detection list, so it
+    anchors the merged coordinate frame best (sickle -> F480M).
+    """
+    explicit = (getattr(options, 'manual_crossband_ref_filter', '') or '').strip()
+    names = list(filternames)
+    if explicit:
+        match = [f for f in names if f.upper() == explicit.upper()]
+        if not match:
+            raise ValueError(
+                f"--manual-crossband-ref-filter={explicit!r} is not one of the "
+                f"run filters {names}")
+        return match[0]
+
+    def _wl(f):
+        digits = ''.join(ch for ch in f if ch.isdigit())[:3]
+        return int(digits) if digits else 0
+    broad = [f for f in names if not f.upper().endswith('N')]
+    pool = broad if broad else names
+    pick = max(pool, key=_wl)
+    print(f"[crossband] ref_filter auto-selected: {pick} (reddest "
+          f"{'broad/medium' if broad else 'band'} of {names}); override with "
+          f"--manual-crossband-ref-filter", flush=True)
+    return pick
+
+
 def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         target, field, basepath, crowdsource_default_kwargs,
                         bg_boxsizes):
@@ -2030,6 +2061,38 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 except Exception as ex:
                     print(f"manual [{phase}]: mergedcat residual / bg build failed: {ex}",
                           flush=True)
+
+    # -------------------------------------------------------------------
+    # Cross-band merge (final step, multifilter only).  Port of the legacy
+    # merge_catalogs.merge_daophot -> merge_catalogs cross-filter match: one
+    # multi-filter photometry table (per-band fluxes/mags matched within
+    # max_offset, anchored on ref_filter) from the per-filter m7 VETTED
+    # catalogs.  Needs the per-filter reduction i2d mosaics (WCS/pixelscale),
+    # which exist for full-frame runs but not cutouts -> cutouts keep the
+    # per-filter catalogs + the union seed only.
+    # -------------------------------------------------------------------
+    last_phase = phases[-1]
+    if multifilter and not getattr(options, 'cutout_region', ''):
+        ref_filter = _resolve_crossband_ref_filter(options, filternames)
+        for module in modules:
+            print(f"manual [{last_phase}]: CROSS-BAND MERGE (module={module}, "
+                  f"ref_filter={ref_filter}, filters={list(filternames)})", flush=True)
+            _merge_catalogs.merge_daophot(
+                module=module, daophot_type='basic', indivexp=True,
+                desat=bool(options.desaturated), bgsub=bool(options.bgsub),
+                blur=bool(options.blur), resbgsub=True,
+                iteration_label=last_phase, target=target, basepath=cut_bp,
+                ref_filter=ref_filter.lower(),
+                filternames_override=[f.lower() for f in filternames],
+                vetted=True)
+            _xb = (f'{cut_bp}/catalogs/basic_{module}_indivexp_photometry_tables_'
+                   f'merged_resbgsub_{last_phase}.fits')
+            print(f"manual [{last_phase}]: CROSS-BAND MERGE done (module={module}) "
+                  f"-> {_xb}", flush=True)
+    elif multifilter:
+        print(f"manual [{last_phase}]: cross-band merge SKIPPED for cutout run "
+              f"(no full-frame per-filter i2d mosaics); per-filter {last_phase} "
+              f"catalogs + crossband seed only", flush=True)
 
     print(f"MANUAL PIPELINE DONE: {overlap_total} overlapping frames, "
           f"phases={phases}", flush=True)
