@@ -1577,7 +1577,15 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 print(f"MIRI: locked satstar position to seed "
                       f"(x={xcen}, y={ycen}); fitting flux only")
             else:
-                pos_bound = size_saturated
+                # NIRCam: bounded position fit.  ``size_saturated`` = sqrt(sat_area)/2
+                # is ~1 px for a small core, so tight the LevMar fit pegs x_0/y_0 at
+                # the bound -> singular covariance -> NaN flux_err -> NaN snr -> the
+                # accept-gate tosses a good fit.  The gc2211 baseline-vs-deblend
+                # comparison (2026-06-18) showed this dominates NIRCam rejections
+                # (nan_fluxerr/snr 447/604 at baseline).  Widen to >= 1.5 FWHM: the
+                # seed is already the bbox-refined / ZEROFRAME-deblended core centre,
+                # so a ~1.5 FWHM search is ample and keeps the covariance non-singular.
+                pos_bound = max(size_saturated, 1.5 * fwhm_pix)
                 low_x  = xcen - x0 - pos_bound
                 high_x = xcen - x0 + pos_bound
                 low_y  = ycen - y0 - pos_bound
