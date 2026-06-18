@@ -4602,6 +4602,40 @@ def _output_suffix_tokens(options, exposurenumber=None, visit_id=None,
     )
 
 
+_SVO_INSTRUMENT_MAP = {'NIRCAM': 'NIRCam', 'NIRISS': 'NIRISS',
+                       'NIRSPEC': 'NIRSpec', 'MIRI': 'MIRI'}
+
+
+def _svo_effective_wavelength(telescope, instrument, filt):
+    """Effective wavelength (Quantity) of a filter from the SVO FPS service.
+
+    Factored out of ``do_photometry_step``.  FITS headers use all-caps
+    instrument names (NIRCAM); SVO uses mixed case (NIRCam).
+    """
+    svo_instrument = _SVO_INSTRUMENT_MAP.get(instrument.upper(), instrument)
+    filter_table = SvoFps.get_filter_list(facility=telescope,
+                                          instrument=svo_instrument)
+    filter_table.add_index('filterID')
+    return filter_table.loc[
+        f'{telescope}/{svo_instrument}.{filt}']['WavelengthEff'] * u.AA
+
+
+def _make_grouper(options, fwhm_pix):
+    """Build the source grouper (2*FWHM linking) honoring --max-group-size.
+
+    Factored out of ``do_photometry_step``.  ``resolve_max_group_size`` rejects
+    the ambiguous 0 and maps 'unlimited' -> None (no cap -> plain SourceGrouper);
+    a positive cap -> CappedSourceGrouper.
+    """
+    max_group_size = resolve_max_group_size(
+        getattr(options, 'max_group_size', 'unlimited'))
+    if max_group_size is not None:
+        return CappedSourceGrouper(2 * fwhm_pix, max_size=max_group_size)
+    print("max_group_size=unlimited: SourceGrouper has no group-size cap.",
+          flush=True)
+    return SourceGrouper(2 * fwhm_pix)
+
+
 def _first_pass_daofinder(data, err, nsigma, fwhm_pix, roundlo, roundhi):
     """First-pass (iter1) DAOStarFinder + its threshold.
 
@@ -4873,24 +4907,10 @@ def do_photometry_step(options, filtername, module, detector, field, basepath,
 
     dq, weight, bad = get_uncertainty(err, data, wht=wht, dq=im1['DQ'].data if 'DQ' in im1 else None)
 
-    # SVO FPS uses mixed-case instrument names (e.g. NIRCam) while FITS headers
-    # use all-caps (NIRCAM). Map to SVO conventions before lookup.
-    _svo_inst_map = {'NIRCAM': 'NIRCam', 'NIRISS': 'NIRISS', 'NIRSPEC': 'NIRSpec', 'MIRI': 'MIRI'}
-    _svo_instrument = _svo_inst_map.get(instrument.upper(), instrument)
-    filter_table = SvoFps.get_filter_list(facility=telescope, instrument=_svo_instrument)
-    filter_table.add_index('filterID')
-    eff_wavelength = filter_table.loc[f'{telescope}/{_svo_instrument}.{filt}']['WavelengthEff'] * u.AA
+    eff_wavelength = _svo_effective_wavelength(telescope, instrument, filt)
 
-    # DAO Photometry setup.  Use a CappedSourceGrouper when the caller
-    # asks for a group-size cap (--max-group-size); the inner SourceGrouper
-    # uses the same 2*FWHM linking distance as before.  ``resolve_max_group_size``
-    # rejects the ambiguous 0 and returns None for 'unlimited'.
-    _max_group_size = resolve_max_group_size(getattr(options, 'max_group_size', 'unlimited'))
-    if _max_group_size is not None:
-        grouper = CappedSourceGrouper(2 * fwhm_pix, max_size=_max_group_size)
-    else:
-        print("max_group_size=unlimited: SourceGrouper has no group-size cap.", flush=True)
-        grouper = SourceGrouper(2 * fwhm_pix)
+    # DAO Photometry setup (grouper honors --max-group-size; see _make_grouper).
+    grouper = _make_grouper(options, fwhm_pix)
     mmm_bkg = MMMBackground()
 
     # empirically determined in debugging session with Taehwa on 2025-12-09:

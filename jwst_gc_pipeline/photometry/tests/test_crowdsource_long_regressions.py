@@ -434,3 +434,25 @@ class TestFirstPassDaofinder:
             data, err, nsigma=4, fwhm_pix=1.5, roundlo=-1.0, roundhi=1.0)
         # mad_std(data)=0 -> min is 0 -> threshold 0 (degenerate but exact)
         assert thr == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# _make_grouper (do_photometry_step block H, Phase 6 M5)
+# 'unlimited' -> plain SourceGrouper; positive cap -> CappedSourceGrouper; 0 rejected.
+# ---------------------------------------------------------------------------
+class TestMakeGrouper:
+    def _opts(self, mgs):
+        return types.SimpleNamespace(max_group_size=mgs)
+
+    def test_unlimited_returns_plain_grouper(self):
+        g = L._make_grouper(self._opts('unlimited'), 2.0)
+        assert isinstance(g, L.SourceGrouper)
+        assert not isinstance(g, L.CappedSourceGrouper)
+
+    def test_cap_returns_capped_grouper(self):
+        g = L._make_grouper(self._opts(10), 2.0)
+        assert isinstance(g, L.CappedSourceGrouper)
+
+    def test_zero_rejected(self):
+        with pytest.raises(SystemExit):
+            L._make_grouper(self._opts(0), 2.0)

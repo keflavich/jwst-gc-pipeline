@@ -137,12 +137,15 @@ no-op without saturated DQ). Milestones, commit each:
 - [x] **M3 block B → `_output_suffix_tokens`** (namedtuple, unpacked in field order; closes
   Phase-1 "output_tokens ×8"). 4 unit tests + M2 re-run: 5 passed.
 - [x] **M4 block J else-branch → `_first_pass_daofinder`** (M2-covered). 2 unit tests + M2: 3 passed.
-- [ ] **M5+ continue extractions**. Still M2-covered & safe next: basic post-fit dedup+filters
-  (block Q ~5905-5985), the mask/uncertainty/grouper setup (block H). NOT yet covered (need new
-  characterization tests first): seeded seed-assembly (block L, ~5125-5460), iterative fit (S-U),
-  crowdsource (O). Plan: (1) add a SEEDED characterization test (pass seed_catalog Table) to
-  cover block L + the iter2/iter3 finder branch; (2) add an ITERATIVE test (basic_only=False) to
-  cover S-U; then extract those into seeding.py / postfit_filters.py / residual_io.py.
+- [x] **M5a** expanded characterization net: iterative (basic_only=False) + seeded (seed_catalog)
+  paths now covered too — 3 tests (basic/iterative/seeded) each recover 3 stars <1px.
+- [x] **M5b** extract `_svo_effective_wavelength` + `_make_grouper` (block H). 3 unit + 3
+  characterization: 6 passed.
+- [ ] **M6+ larger extractions** (all 3 paths now covered). Candidates: block L seed-assembly
+  (~5145-5470: _as_table + snap/inject/satstar-snap + dedup + augment + SeededFinder) →
+  seeding.py; block Q/T post-fit dedup+filters (basic≈iterative, shareable) → postfit_filters.py.
+  NOTE: satstar model load+subtract (block K) SUBTRACT branch is only no-op-covered (tests stub
+  satstar empty) — add a satstar-model fixture before extracting that branch.
 
 ---
 
