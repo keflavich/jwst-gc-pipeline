@@ -421,7 +421,20 @@ def main(filtername, Observations=None, regionname='brick',
             tweakreg_parameters['searchrad'] = 0.05
             # MIRI BRIGHTSKY fields can have very few matched stars per frame.
             tweakreg_parameters['minobj'] = 2
-            tweakreg_parameters['abs_minobj'] = 2
+            # abs_minobj=2 let UNDER-COVERED frames (whose footprint extends
+            # beyond the reference catalog) latch onto 2 spurious cross-matches
+            # and apply a catastrophic, per-frame-divergent absolute shift --
+            # sickle F770W o001 came out shifted 20-62" southward (each frame
+            # different) because the f210m/GNS/VVV refcats only cover the
+            # NORTHERN strip (Dec >= -28.808) while o001 extends to -28.828, so
+            # its southern frames had ~0 real reference stars.  shift-only
+            # geometry does NOT help: a 2-point fit to wrong pairs still yields a
+            # wrong translation.  Require >=5 absolute matches so an
+            # under-covered frame instead FAILS the absolute fit and is left at
+            # its (good, ~0.1" guide-star) raw pointing -- a near-zero no-op
+            # rather than a tens-of-arcsec blunder.  Well-covered frames (o002,
+            # brick o003) have many matches and are unaffected.
+            tweakreg_parameters['abs_minobj'] = 5
             print(f"Reference catalog is {abs_refcat}")
 
             tweakreg_parameters.update({'abs_refcat': abs_refcat,})
