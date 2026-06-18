@@ -1814,6 +1814,29 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                     and not (0 < float(result['qfit'][0]) < 1e3)):
                 result['qfit'][0] = 1.0
 
+        # NIRCam (and any non-MIRI in-FOV): the masked-core LSQ has the SAME
+        # singular-covariance failure -> NaN flux_err -> NaN snr -> the snr
+        # accept-gate tosses an otherwise-good saturated fit.  The gc2211
+        # baseline-vs-deblend comparison (2026-06-18) showed this dominates
+        # rejections (nan_fluxerr/snr = 387/604 components at BASELINE).  The MIRI
+        # branch above already synthesises a finite flux_err for this case; mirror
+        # it for NIRCam, but CONSERVATIVELY: only rescue a finite, positive-flux
+        # fit whose qfit already passes the quality gate, so we convert
+        # "good-qfit-but-unmeasurable-snr -> accept" WITHOUT admitting bad fits
+        # (qfit/ssr still decide).  snr~20 (flux_err = 5% of flux).
+        if (not _is_miri and not forced_source and len(result)
+                and 'qfit' in result.colnames):
+            _ff = float(result['flux_fit'][0])
+            _qf = float(result['qfit'][0])
+            _fe = float(result['flux_err'][0])
+            if (np.isfinite(_ff) and _ff > 0 and np.isfinite(_qf)
+                    and _qf < _qfit_max_keep
+                    and (not np.isfinite(_fe) or _fe <= 0)):
+                result['flux_err'][0] = _ff * 0.05
+                print(f"  [satstar nan-fluxerr rescue] source {ii+1}: "
+                      f"qfit={_qf:.2f} < {_qfit_max_keep}, flux={_ff:.3e} -> "
+                      f"flux_err={_ff*0.05:.3e} (snr~20)", flush=True)
+
         result.pprint(max_width=-1)
 
         ny = cutout.shape[0]
