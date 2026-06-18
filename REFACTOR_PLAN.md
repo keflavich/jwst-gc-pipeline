@@ -121,17 +121,19 @@ Per-instrument param struct + MIRI-only hooks + agnostic core.
 gates: `not nocrowdsource` / `daophot` / `daophot and not basic_only`; satstar always-on but
 no-op without saturated DQ). Milestones, commit each:
 
-- [ ] **M0 fixtures**: tests/ helpers — synthetic GriddedPSFModel builder, synthetic i2d FITS
-  (SCI+ERR+DQ, WCS in ext1, INSTRUME/TELESCOP/DATE-OBS), minimal-options factory.
+- [x] **M0 fixtures** (built into the integration test): synthetic GriddedPSFModel builder,
+  synthetic i2d FITS (SCI+ERR+DQ, WCS, headers), minimal-options factory.
 - [x] **M1 PSF centralization** (user request): new `psf_paths.py` with
   `resolve_merged_psf_grid_path` (read central→legacy, central naming keyed by
   inst+module+FILTER+oversample+blur). Wired into get_psf_model use_webbpsf=False read +
   webbpsf cache outdir default → `psfs_shared/`. 6 unit tests (test_psf_paths.py) pass; both
   edited files compile. NOTE: grid PRODUCERS (make_merged_psf.py) still write legacy paths —
   follow-up to point them at central so the disk saving actually kicks in for new grids.
-- [ ] **M2 characterization test**: drive do_photometry_step shortest path (daophot basic-only,
-  unseeded, no satstar/cutout/bgsub/crowdsource; monkeypatch get_psf_model→synthetic grid,
-  load_or_make_satstar_catalog→empty). Golden-master the output catalog table.
+- [x] **M2 characterization test** (test_do_photometry_step_integration.py): drives the
+  shortest real path (daophot basic-only, unseeded; stubs get_psf_model→synthetic grid,
+  load_or_make_satstar_catalog→empty, SvoFps→1-row, save_residual_datamodel→noop,
+  savefig→noop) on a synthetic 3-star frame; asserts the basic catalog is written and all 3
+  sources recovered <1px. ~4min (webbpsf import). This is the SAFETY NET for M3+.
 - [ ] **M3+ extract blocks** (each: extract→unit test→re-run M2→commit). Order by safety:
   seed snap/inject/satstar-snap machinery (5099-5434, 3 near-dup blocks), diagnostic-PNG render
   (3 near-dup), satstar model load+subtract (5024-5093), shared fit_and_finalize for basic vs
