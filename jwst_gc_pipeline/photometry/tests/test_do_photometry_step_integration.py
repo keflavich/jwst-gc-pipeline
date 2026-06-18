@@ -22,6 +22,7 @@ import types
 import numpy as np
 import pytest
 
+from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.nddata import NDData
 from astropy.table import Table
@@ -120,26 +121,61 @@ def _stubs(monkeypatch):
     return grid
 
 
-def test_basic_daophot_recovers_injected_sources(tmp_path, _stubs):
-    grid = _stubs
+def _prep(tmp_path):
+    """Create the output tree + write the synthetic i2d; return (base, fname)."""
     ww = _wcs()
     base = tmp_path / 'base'
     (base / 'F405N' / 'pipeline').mkdir(parents=True)
     fname = str(base / 'F405N' / 'pipeline' / 'jw09999001_exp_cal.fits')
     _write_i2d(fname, ww, _render_image())
+    return base, fname
 
-    L.do_photometry_step(
-        _options(), 'F405N', 'nrca', 'nrca', '001', str(base), fname,
-        '9999', {}, exposurenumber=1)
 
-    out = base / 'F405N' / 'f405n_nrca_exp00001_daophot_basic.fits'
-    assert out.exists(), f"basic catalog not written: {out}"
-    cat = Table.read(out)
-    # all three injected stars recovered
+def _assert_sources_recovered(cat, tol=1.0):
     assert len(cat) >= len(SOURCES)
     xcol = 'x_fit' if 'x_fit' in cat.colnames else 'x_init'
     ycol = 'y_fit' if 'y_fit' in cat.colnames else 'y_init'
     for sx, sy, _flux in SOURCES:
         d = np.hypot(np.asarray(cat[xcol], float) - sx,
                      np.asarray(cat[ycol], float) - sy)
-        assert d.min() < 1.0, f"no fit within 1px of injected ({sx},{sy}); min={d.min():.2f}"
+        assert d.min() < tol, f"no fit within {tol}px of ({sx},{sy}); min={d.min():.2f}"
+
+
+def test_basic_daophot_recovers_injected_sources(tmp_path, _stubs):
+    base, fname = _prep(tmp_path)
+    L.do_photometry_step(
+        _options(), 'F405N', 'nrca', 'nrca', '001', str(base), fname,
+        '9999', {}, exposurenumber=1)
+
+    out = base / 'F405N' / 'f405n_nrca_exp00001_daophot_basic.fits'
+    assert out.exists(), f"basic catalog not written: {out}"
+    _assert_sources_recovered(Table.read(out))
+
+
+def test_iterative_daophot_recovers_injected_sources(tmp_path, _stubs):
+    # basic_only=False runs the iterative path (blocks S-U) after basic.
+    base, fname = _prep(tmp_path)
+    L.do_photometry_step(
+        _options(basic_only=False), 'F405N', 'nrca', 'nrca', '001', str(base),
+        fname, '9999', {}, exposurenumber=1)
+
+    out = base / 'F405N' / 'f405n_nrca_exp00001_daophot_iterative.fits'
+    assert out.exists(), f"iterative catalog not written: {out}"
+    _assert_sources_recovered(Table.read(out))
+
+
+def test_seeded_basic_recovers_injected_sources(tmp_path, _stubs):
+    # seed_catalog != None exercises the seed-assembly path (block L:
+    # _resolve_seed_skycoords, dedup, augment, SeededFinder, seeded fit).
+    base, fname = _prep(tmp_path)
+    ww = _wcs()
+    sc = SkyCoord([ww.pixel_to_world(sx, sy) for sx, sy, _ in SOURCES])
+    seed = Table({'skycoord': sc, 'flux': [f for *_, f in SOURCES]})
+
+    L.do_photometry_step(
+        _options(), 'F405N', 'nrca', 'nrca', '001', str(base), fname,
+        '9999', {}, exposurenumber=1, seed_catalog=seed)
+
+    out = base / 'F405N' / 'f405n_nrca_exp00001_daophot_basic.fits'
+    assert out.exists(), f"seeded basic catalog not written: {out}"
+    _assert_sources_recovered(Table.read(out))

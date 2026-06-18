@@ -39,6 +39,10 @@ each module import once per session.
 | cataloging.py:`_filter_extended_emission` | NIRCam keep = star_like AND SNR cut (`_emission_keep_nircam`) | `test_cataloging_regressions.py::TestFilterExtendedEmissionNircam` |
 | cataloging.py:`_filter_extended_emission` | MIRI keep = deep-i2d prominence ALONE (star_like/SNR bypassed); NaN prominence (off-i2d) dropped (`_emission_keep_miri`) | `…::TestFilterExtendedEmissionMiri` |
 | plot_tools.py:`_filter_to_wavelength` | filter/color name → effective wavelength: special names (410m405/405m410/182m187/187m182/Hmag/Ksmag) + generic F⟨NNN⟩→NNN/100 um | `test_plot_tools_regressions.py` |
+| psf_paths.py | centralized PSF-grid path resolver: central→legacy read order, central key = physics only | `test_psf_paths.py` |
+| crowdsource_catalogs_long.py:`do_photometry_step` (blocks A-U) | END-TO-END characterization (Phase-6 safety net): basic / iterative / seeded paths each recover 3 injected stars <1px on a synthetic frame (4 external seams stubbed) | `test_do_photometry_step_integration.py` |
+| crowdsource_catalogs_long.py:`_output_suffix_tokens` | filename-suffix tokens (block B), field-order locked | `test_crowdsource_long_regressions.py::TestOutputSuffixTokens` |
+| crowdsource_catalogs_long.py:`_first_pass_daofinder` | iter1 DAO threshold = nsigma·min(median err, mad_std data) (block J else) | `…::TestFirstPassDaofinder` |
 
 ## Deferred (need full PSFPhotometry/IterativePSFPhotometry integration fixtures)
 
