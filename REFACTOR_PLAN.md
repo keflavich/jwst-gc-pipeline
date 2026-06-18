@@ -108,9 +108,19 @@ Per-instrument param struct + MIRI-only hooks + agnostic core.
   run_manual_pipeline), `_first_col` column resolver (merge_catalogs), vstack instead of
   per-row add_row (merge_catalogs replace_saturated).
 
-## Phase 6 — Split mega-functions (last, needs Phase-2 tests)
-`do_photometry_step` (1755) + `main` + `get_saturated_stars` → modules: cutout.py,
-residual_mosaicking.py, seeding.py, postfit_filters.py, io_results.py, cli_config.py, naming.py.
+## Phase 6 — Split mega-functions  [STATUS: partial — safe extraction done]
+- [x] Extracted the pure table column-convention resolvers (`_get_source_xy`,
+  `_best_available_xy`, `_has_any_xy_columns`, `_column_to_float_array`,
+  `_skycoord_radec_arrays`, `_XY_COLUMN_CANDIDATES`) from crowdsource_catalogs_long.py into
+  new `photometry/column_utils.py`; the monolith re-imports them (so `_L.<name>` access from
+  cataloging.py is unchanged). Behavior-neutral pure move; covered by existing tests.
+- [ ] DEFERRED — the actual mega-function carve-up (`do_photometry_step` 1755 lines,
+  `get_saturated_stars` 1300) needs integration fixtures that DON'T exist yet (tests/README
+  "Deferred" list: a synthetic GriddedPSFModel + injected-star image driven through
+  do_photometry_step end-to-end). Splitting blind, in the user's hot files, with no safety
+  net = reckless. Build those fixtures FIRST, then split into cutout.py / residual_mosaicking.py
+  / seeding.py / postfit_filters.py / io_results.py / cli_config.py. naming.py + column_utils.py
+  are the first two such modules, done.
 
 ---
 
