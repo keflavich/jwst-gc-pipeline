@@ -1011,7 +1011,26 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
         exposure = int(fn.split("_")[-3])
         thismodule = fn.split("_")[-2]
         visit = fn.split("_")[0]
-        if use_average:
+        # MODULE-LOCKED per-exposure offsets (preferred). The NIRCam detectors are SIAF-locked
+        # to <0.01 px within an exposure, so the alignment must be ONE shift per exposure applied
+        # identically to all 8 detectors -- NOT an independent per-detector tweakreg shift, which
+        # breaks the lock and produces filter-to-filter 'quiltwork' (~10-15 mas). The locked table
+        # (built by brick2221/analysis/relock_exposures.py: undo the recorded per-detector offset
+        # -> SIAF -> one VIRAC2-tied shift jointly solved over all detectors) is keyed on
+        # (Visit, Exposure, Filter) with NO Module column.
+        locked_tbl = f'{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_VIRAC2locked.csv'
+        if os.path.exists(locked_tbl):
+            offsets_tbl = Table.read(locked_tbl)
+            match = ((offsets_tbl['Visit'] == visit) & (offsets_tbl['Exposure'] == exposure)
+                     & (offsets_tbl['Filter'] == filtername))
+            if match.sum() != 1:
+                raise ValueError(f"module-locked offset match={match.sum()} for {fn} "
+                                 f"(visit={visit}, exposure={exposure}, filter={filtername})")
+            row = offsets_tbl[match]
+            rashift = float(row['dra (arcsec)'][0]) * u.arcsec
+            decshift = float(row['ddec (arcsec)'][0]) * u.arcsec
+            print(f"MODULE-LOCKED per-exposure offset for {fn}: ({rashift}, {decshift})")
+        elif use_average:
             tblfn = f'{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_{refname}_average.csv'
             print(f"Using average offset table {tblfn}")
             offsets_tbl = Table.read(tblfn)
