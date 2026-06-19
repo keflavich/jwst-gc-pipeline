@@ -182,48 +182,6 @@ def _parallel_psfphotometry(image, *, photometry_kwargs, init_params,
     return result_tbl, model_image
 
 
-def _render_model_from_table(table, psf_model, shape, psf_shape):
-    """Render a model image by evaluating ``psf_model`` at each
-    (x_fit, y_fit, flux_fit) row of ``table``.  Used by the parallel
-    path's stand-in photometry object so downstream make_model_image
-    calls re-render from the (possibly filtered) results table without
-    needing the underlying photutils _fit_models state.
-
-    Stamp size is ``psf_shape`` (psf_h, psf_w); the stamp is placed
-    centered on the source rounded to integer pixel coords, but the
-    PSF is evaluated at exact (x_fit, y_fit) so sub-pixel registration
-    is preserved.
-    """
-    img = np.zeros(shape, dtype=np.float32)
-    if len(table) == 0:
-        return img
-    psf_h, psf_w = int(psf_shape[0]), int(psf_shape[1])
-    half_h, half_w = psf_h // 2, psf_w // 2
-    ny, nx = shape
-
-    xfit = np.asarray(table['x_fit'], dtype=float)
-    yfit = np.asarray(table['y_fit'], dtype=float)
-    flux = np.asarray(table['flux_fit'], dtype=float)
-
-    for i in range(len(table)):
-        x0, y0, f0 = xfit[i], yfit[i], flux[i]
-        if not (np.isfinite(x0) and np.isfinite(y0) and np.isfinite(f0)):
-            continue
-        ix = int(round(x0))
-        iy = int(round(y0))
-        y_lo = max(0, iy - half_h)
-        y_hi = min(ny, iy - half_h + psf_h)
-        x_lo = max(0, ix - half_w)
-        x_hi = min(nx, ix - half_w + psf_w)
-        if y_hi <= y_lo or x_hi <= x_lo:
-            continue
-        yy, xx = np.mgrid[y_lo:y_hi, x_lo:x_hi]
-        stamp = psf_model.evaluate(xx.astype(float), yy.astype(float),
-                                   f0, x0, y0)
-        img[y_lo:y_hi, x_lo:x_hi] += np.asarray(stamp, dtype=np.float32)
-    return img
-
-
 class _FakePhot:
     """Stand-in for an IterativePSFPhotometry/PSFPhotometry instance,
     exposing only the attributes downstream code reads/writes after the
