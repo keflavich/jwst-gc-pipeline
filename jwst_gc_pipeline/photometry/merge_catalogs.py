@@ -1631,7 +1631,30 @@ def load_satstar_catalog(filtername, target='brick',
         print(f"No saturated star catalog files found for {filtername} in {basepath}/{filtername.upper()}/pipeline")
         return None
 
-    print(f"Using {len(fallback)} fallback saturated star catalogs for {filtername}")
+    # Consolidated per-filter satstar cache.  Building the deduped catalog from
+    # the ~1000-1400 per-exposure satstar FITS (read + vstack + dedup) is the
+    # dominant cost of every merge: replace_saturated() / flag_near_saturated()
+    # call this once each, in EVERY phase's single-filter merge_individual_frames
+    # AND in the cross-band merge -- so the same ~1400-file re-read happens dozens
+    # of times per run over the shared filesystem (the cross-band merge alone took
+    # ~5 h).  Cache the deduped result in catalogs/ and reuse it while it is at
+    # least as new as the newest per-exposure satstar catalog; rebuild (and
+    # rewrite) whenever any per-exposure catalog is newer.  The cache lives in
+    # catalogs/ (NOT the pipeline dir) so the *satstar_catalog.fits glob above
+    # never re-globs it.  Result is identical to rebuilding every time.
+    cache = (f'{basepath}/catalogs/'
+             f'{filtername.lower()}_consolidated_satstar_catalog.fits')
+    try:
+        newest_src = max(os.path.getmtime(fn) for fn in fallback)
+        if os.path.exists(cache) and os.path.getmtime(cache) >= newest_src:
+            print(f"Using consolidated satstar catalog {cache} "
+                  f"(cache fresh vs {len(fallback)} per-exposure catalogs)")
+            return Table.read(cache)
+    except OSError:
+        pass  # stat/read failure -> rebuild from per-exposure catalogs below
+
+    print(f"Building consolidated satstar catalog for {filtername} from "
+          f"{len(fallback)} per-exposure catalogs")
     sat_tables = [Table.read(fn) for fn in fallback]
     combined = table.vstack(sat_tables, metadata_conflicts='silent')
     # The fallback globs the PER-EXPOSURE satstar catalogs, so the same physical
@@ -1640,33 +1663,65 @@ def load_satstar_catalog(filtername, target='brick',
     # duplicate rows at one position (sickle cutouts showed a star 3-8x), and
     # the merged-cat residual subtracts it N times.  Collapse to one row per
     # physical star (keep the brightest as representative).
-    return _dedup_satstar_catalog(combined)
+    deduped = _dedup_satstar_catalog(combined)
+    try:
+        os.makedirs(os.path.dirname(cache), exist_ok=True)
+        # write to a temp sibling + atomic rename so a concurrent reader never
+        # sees a half-written cache
+        tmp = f'{cache}.tmp{os.getpid()}'
+        deduped.write(tmp, overwrite=True, format='fits')
+        os.replace(tmp, cache)
+        print(f"Wrote consolidated satstar catalog {cache} (n={len(deduped)})")
+    except OSError as ex:
+        print(f"Could not write consolidated satstar cache {cache}: {ex}")
+    return deduped
 
 
 def _dedup_satstar_catalog(tbl, radius=0.15 * u.arcsec):
     """Collapse repeated per-frame satstar fits of the same physical star into
-    one row (the brightest), so downstream merging doesn't duplicate them."""
+    one row (the brightest), so downstream merging doesn't duplicate them.
+
+    Greedy brightest-first spatial dedup: process stars in descending flux and
+    keep one unless it falls within ``radius`` of an already-kept (brighter)
+    star.  Vectorized with ``search_around_sky`` (one O(N log N) KD-tree query
+    for all within-radius pairs) instead of rebuilding a SkyCoord of the kept
+    set inside the loop -- the old O(N^2) form took ~hours on the ~12k
+    per-exposure sickle F210M satstar pile-up.  Output is identical (same kept
+    set, original row order).
+    """
     if tbl is None or len(tbl) <= 1 or 'skycoord_fit' not in tbl.colnames:
         return tbl
+    from astropy.coordinates import search_around_sky
     coords = tbl['skycoord_fit']
     finite = np.isfinite(coords.ra.deg) & np.isfinite(coords.dec.deg)
     flux = np.asarray(tbl['flux_fit'], dtype=float) if 'flux_fit' in tbl.colnames \
         else np.zeros(len(tbl))
-    order = np.argsort(-flux)  # brightest first -> representative per cluster
-    kept = []
-    for i in order:
-        if not finite[i]:
+    fin_idx = np.where(finite)[0]            # original-row indices of finite rows
+    if len(fin_idx) == 0:
+        return tbl[[]]
+    sc = coords[fin_idx]
+    fl = flux[fin_idx]
+    # all within-radius neighbor pairs among the finite sources (both directions,
+    # plus self-pairs, which we drop)
+    i1, i2, _, _ = search_around_sky(sc, sc, radius)
+    nbrs = [[] for _ in range(len(fin_idx))]
+    for a, b in zip(i1, i2):
+        if a != b:
+            nbrs[a].append(b)
+    suppressed = np.zeros(len(fin_idx), dtype=bool)
+    kept_local = []
+    for i in np.argsort(-fl):                # brightest first
+        if suppressed[i]:
             continue
-        if kept:
-            kc = SkyCoord([coords[j] for j in kept])
-            if kc.separation(coords[i]).min() < radius:
-                continue
-        kept.append(i)
+        kept_local.append(i)
+        for j in nbrs[i]:                    # drop everything within radius of a kept star
+            suppressed[j] = True
+    kept = fin_idx[kept_local]
     n_drop = int(finite.sum()) - len(kept)
     if n_drop:
         print(f"  satstar dedup: {int(finite.sum())} -> {len(kept)} unique "
               f"(dropped {n_drop} per-frame duplicates within {radius})")
-    return tbl[sorted(kept)]
+    return tbl[np.sort(kept)]
 
 
 def flag_near_saturated(cat, filtername, radius=None, target='brick',
