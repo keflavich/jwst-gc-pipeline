@@ -44,6 +44,8 @@ from astropy.wcs import WCS
 import astropy.units as u
 
 from jwst_gc_pipeline.photometry import crowdsource_catalogs_long as L
+# The Phase-6-extracted helpers were sequestered into the legacy module.
+from jwst_gc_pipeline.photometry.legacy import crowdsource_step as CS
 
 
 def _make_wcs():
@@ -304,3 +306,187 @@ class TestForcedPsfPhotometry:
         init = Table({'x_init': [1.0], 'y_init': [1.0]})  # stamp falls off edge
         out = L.forced_psf_photometry(image, psf, init, fit_shape=(5, 5))
         assert np.isnan(out['flux_fit'][0])
+
+
+# ---------------------------------------------------------------------------
+# resolve_max_group_size (crowdsource_catalogs_long.py:449-477)
+# 0 is REJECTED as ambiguous (used to mean "no cap", reads like "no grouping");
+# 'unlimited' -> None; positive int passes through.
+# ---------------------------------------------------------------------------
+class TestResolveMaxGroupSize:
+    @pytest.mark.parametrize('word', ['unlimited', 'inf', 'infinite',
+                                      'nocap', 'none', 'UNLIMITED'])
+    def test_unlimited_words_map_to_none(self, word):
+        assert L.resolve_max_group_size(word) is None
+
+    @pytest.mark.parametrize('raw,expected', [(10, 10), ('15', 15), (1, 1)])
+    def test_positive_int_passthrough(self, raw, expected):
+        assert L.resolve_max_group_size(raw) == expected
+
+    def test_zero_is_rejected(self):
+        with pytest.raises(SystemExit):
+            L.resolve_max_group_size(0)
+
+    def test_negative_is_rejected(self):
+        with pytest.raises(SystemExit):
+            L.resolve_max_group_size(-5)
+
+    def test_none_is_rejected(self):
+        # No implicit default: must be set explicitly.
+        with pytest.raises(SystemExit):
+            L.resolve_max_group_size(None)
+
+    def test_garbage_is_rejected(self):
+        with pytest.raises(SystemExit):
+            L.resolve_max_group_size('big')
+
+
+# ---------------------------------------------------------------------------
+# normalize_vgroup_id (crowdsource_catalogs_long.py:888-903)
+# Returns (token, int_id); token is always '_vgroup<value>', int extracted from
+# the first run of digits (None if none).  Idempotent on an already-prefixed id.
+# ---------------------------------------------------------------------------
+class TestNormalizeVgroupId:
+    def test_empty_returns_blank(self):
+        assert L.normalize_vgroup_id('') == ('', None)
+        assert L.normalize_vgroup_id(None) == ('', None)
+
+    def test_plain_digits(self):
+        assert L.normalize_vgroup_id('7') == ('_vgroup7', 7)
+        assert L.normalize_vgroup_id(3) == ('_vgroup3', 3)
+
+    def test_idempotent_on_prefixed(self):
+        # Already-prefixed -> prefix stripped before re-tokenizing, int recovered.
+        assert L.normalize_vgroup_id('_vgroup12') == ('_vgroup12', 12)
+
+    def test_mixed_token_extracts_first_int(self):
+        tok, n = L.normalize_vgroup_id('a4b')
+        assert tok == '_vgroupa4b'
+        assert n == 4
+
+    def test_no_digits_gives_none_id(self):
+        tok, n = L.normalize_vgroup_id('abc')
+        assert tok == '_vgroupabc'
+        assert n is None
+
+
+# ---------------------------------------------------------------------------
+# _output_suffix_tokens (do_photometry_step block B, extracted Phase 6 M3)
+# The function returns a namedtuple whose fields unpack in the SAME order as the
+# inline local assignments it replaced; do_photometry_step relies on that order.
+# ---------------------------------------------------------------------------
+class TestOutputSuffixTokens:
+    def _opts(self, **o):
+        base = dict(desaturated=False, bgsub=False, use_iter3_residual_bg=False,
+                    epsf=False, blur=False, group=False)
+        base.update(o)
+        return types.SimpleNamespace(**base)
+
+    def test_defaults_all_empty(self):
+        t = CS._output_suffix_tokens(self._opts())
+        assert (t.desat, t.bgsub, t.epsf_, t.blur_, t.group, t.iter_) == ('',) * 6
+        assert (t.exposure_, t.visitid_, t.vgroupid_) == ('', '', '')
+        assert t.vgroup_numeric is None
+
+    def test_flags_set_tokens(self):
+        t = CS._output_suffix_tokens(self._opts(
+            desaturated=True, bgsub=True, epsf=True, blur=True, group=True))
+        assert t.desat == '_unsatstar'
+        assert t.bgsub == '_bgsub'
+        assert t.epsf_ == '_epsf'
+        assert t.blur_ == '_blur'
+        assert t.group == '_group'
+
+    def test_exposure_visit_vgroup_iter(self):
+        t = CS._output_suffix_tokens(self._opts(), exposurenumber=1, visit_id=3,
+                                    vgroup_id=7, iteration_label='iter3')
+        assert t.exposure_ == '_exp00001'
+        assert t.visitid_ == '_visit003'
+        assert t.vgroupid_ == '_vgroup7'
+        assert t.vgroup_numeric == 7
+        assert t.iter_ == '_iter3'
+
+    def test_field_order_matches_unpack(self):
+        # do_photometry_step unpacks by position; lock the field order.
+        assert CS._SuffixTokens._fields == (
+            'desat', 'bgsub', 'epsf_', 'exposure_', 'visitid_', 'vgroupid_',
+            'vgroup_numeric', 'blur_', 'group', 'iter_')
+
+
+# ---------------------------------------------------------------------------
+# _first_pass_daofinder (do_photometry_step block J else-branch, Phase 6 M4)
+# threshold = nsigma * min(median(err), mad_std(data)); finder carries it.
+# ---------------------------------------------------------------------------
+class TestFirstPassDaofinder:
+    def test_threshold_uses_madstd_when_err_overestimated(self):
+        rng = np.random.default_rng(0)
+        data = rng.normal(0.0, 2.0, size=(64, 64))   # mad_std ~ 2
+        err = np.full((64, 64), 100.0)               # err over-estimated
+        finder, thr = CS._first_pass_daofinder(
+            data, err, nsigma=5, fwhm_pix=2.0, roundlo=-1.0, roundhi=1.0)
+        _, _, std = L.stats.sigma_clipped_stats(data, stdfunc='mad_std')
+        assert thr == pytest.approx(5 * std)         # min picks mad_std
+        assert finder.threshold == pytest.approx(thr)
+        assert finder.fwhm == 2.0
+
+    def test_threshold_uses_err_when_smaller(self):
+        data = np.zeros((32, 32)) + 1000.0           # mad_std ~ 0
+        err = np.full((32, 32), 3.0)
+        finder, thr = CS._first_pass_daofinder(
+            data, err, nsigma=4, fwhm_pix=1.5, roundlo=-1.0, roundhi=1.0)
+        # mad_std(data)=0 -> min is 0 -> threshold 0 (degenerate but exact)
+        assert thr == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# _make_grouper (do_photometry_step block H, Phase 6 M5)
+# 'unlimited' -> plain SourceGrouper; positive cap -> CappedSourceGrouper; 0 rejected.
+# ---------------------------------------------------------------------------
+class TestMakeGrouper:
+    def _opts(self, mgs):
+        return types.SimpleNamespace(max_group_size=mgs)
+
+    def test_unlimited_returns_plain_grouper(self):
+        g = CS._make_grouper(self._opts('unlimited'), 2.0)
+        assert isinstance(g, L.SourceGrouper)
+        assert not isinstance(g, L.CappedSourceGrouper)
+
+    def test_cap_returns_capped_grouper(self):
+        g = CS._make_grouper(self._opts(10), 2.0)
+        assert isinstance(g, L.CappedSourceGrouper)
+
+    def test_zero_rejected(self):
+        with pytest.raises(SystemExit):
+            CS._make_grouper(self._opts(0), 2.0)
+
+
+# ---------------------------------------------------------------------------
+# _subtract_satstar_model (do_photometry_step block K, Phase 6 M6)
+# Replace saturated-DQ pixels with the model, then subtract; -> residual 0 there.
+# ---------------------------------------------------------------------------
+class TestSubtractSatstarModel:
+    def test_plain_subtraction_no_mask(self):
+        data = np.full((4, 4), 10.0)
+        model = np.full((4, 4), 3.0)
+        out, fm = CS._subtract_satstar_model(data, model, None)
+        assert np.allclose(out, 7.0)
+        assert np.allclose(fm, 3.0)
+
+    def test_saturated_pixels_forced_to_zero(self):
+        # JWST ramp-fitter leaves huge retained values at saturated pixels;
+        # they must be replaced by the model before subtracting -> residual 0.
+        data = np.full((4, 4), 1e5)
+        model = np.full((4, 4), 3.0)
+        mask = np.zeros((4, 4), dtype=bool)
+        mask[0, 0] = True
+        out, _ = CS._subtract_satstar_model(data, model, mask)
+        assert out[0, 0] == pytest.approx(0.0)
+        assert out[1, 1] == pytest.approx(1e5 - 3.0)
+
+    def test_nonfinite_model_treated_as_zero(self):
+        data = np.full((3, 3), 5.0)
+        model = np.full((3, 3), 1.0)
+        model[0, 0] = np.nan
+        out, fm = CS._subtract_satstar_model(data, model, None)
+        assert fm[0, 0] == 0.0
+        assert out[0, 0] == pytest.approx(5.0)

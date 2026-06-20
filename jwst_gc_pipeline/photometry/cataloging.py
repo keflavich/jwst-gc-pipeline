@@ -535,6 +535,25 @@ def _build_manual_seed(*, detection_image, nan_replaced_data, mask, ww, fwhm_pix
 # ---------------------------------------------------------------------------
 # Merged-catalog extended-emission vetting (step 9)
 # ---------------------------------------------------------------------------
+def _emission_keep_nircam(star_like, snr, local_snr_min):
+    """NIRCam star-vs-emission keep-mask.
+
+    Keep a star-like source unless its local S/N is measurable and below the
+    floor.  (Unmeasurable S/N -> kept; the star_like test already gated it.)
+    """
+    return star_like & (np.isfinite(snr) & (snr >= local_snr_min) | ~np.isfinite(snr))
+
+
+def _emission_keep_miri(prominence, min_prominence):
+    """MIRI star-vs-emission keep-mask: deep-i2d prominence is the SOLE cut.
+
+    A source must rise far enough above the local emission on THIS obs's data
+    i2d.  NaN prominence (off-i2d / other-obs footprint, or unmeasurable near an
+    edge) is dropped -- it will be vetted by the obs that owns its footprint.
+    """
+    return np.isfinite(prominence) & (prominence >= min_prominence)
+
+
 def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               qfit_max=0.2, peak_over_bkg=20.0,
                               min_prominence=0.0,
@@ -631,6 +650,8 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         | np.isin(flg, np.asarray(keep_flags, dtype=float))
         | (np.isfinite(peaksb) & (lbk > 0) & (peaksb > peak_over_bkg * lbk))
     )
+    # MIRI and NIRCam use DIFFERENT keep-logics (see _emission_keep_miri /
+    # _emission_keep_nircam).  min_prominence>0 selects the MIRI path.
     if min_prominence > 0:
         # MIRI: the deep-i2d PROMINENCE is the clean discriminator (real F770W
         # stars >=40, false emission <5), so use it ALONE.  The NIRCam-tuned
@@ -646,18 +667,18 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         # single all-obs vetting saw only o002's i2d).  The per-obs vetted
         # catalogs are then vstack-combined downstream into the un-tokened
         # all-obs catalog, each footprint cleaned by its own data_i2d.
-        keep = np.isfinite(prominence) & (prominence >= min_prominence)
-        if drop_overshoot and 'model_overshoot' in t.colnames:
-            keep = keep & ~np.asarray(t['model_overshoot'], dtype=bool)
+        keep = _emission_keep_miri(prominence, min_prominence)
         n_prom = int(np.sum(np.isfinite(prominence) & (prominence < min_prominence)))
         n_off = int(np.sum(~np.isfinite(prominence)))
         print(f"[{label}] MIRI prominence gate: kept prominence>={min_prominence:g} on "
               f"this obs i2d (dropped {n_prom} false + {n_off} off-i2d/other-obs); "
               f"star_like/snr BYPASSED; per-obs vetted -> combined downstream", flush=True)
     else:
-        keep = star_like & (np.isfinite(snr) & (snr >= local_snr_min) | ~np.isfinite(snr))
-        if drop_overshoot and 'model_overshoot' in t.colnames:
-            keep = keep & ~np.asarray(t['model_overshoot'], dtype=bool)
+        keep = _emission_keep_nircam(star_like, snr, local_snr_min)
+
+    # overshoot drop is shared by both instrument paths (was duplicated).
+    if drop_overshoot and 'model_overshoot' in t.colnames:
+        keep = keep & ~np.asarray(t['model_overshoot'], dtype=bool)
 
     # structure-noise prune on the MERGED catalog (AG 2026-06-13): rejects
     # emission-bump sources that the m12 round (which has no prune) carries
@@ -1645,10 +1666,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 # all-obs catalog (see the vet + combine block below).  NIRCam:
                 # un-tokened (single all-obs vetting; unchanged behavior).
                 _miri_field = (module == 'mirimage'
-                               or str(filt).upper() in (
-                                   'F560W', 'F770W', 'F1000W', 'F1130W',
-                                   'F1280W', 'F1500W', 'F1800W', 'F2100W',
-                                   'F2550W'))
+                               or _L._instrument_from_filter(filt) == 'MIRI')
                 _vtok = f'_o{field}' if _miri_field else ''
                 # m3..m6 seed = vetted previous catalog UNION daofind on a
                 # progressively cleaner i2d (per PSFPhotometryPlan2026-06-09):
@@ -1960,10 +1978,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     # MIRI: required deep-i2d prominence gate kills false emission
                     # sources that pass the qfit OR-branch.  NIRCam: off (0).
                     _miri_field = (module == 'mirimage'
-                                   or str(filt).upper() in (
-                                       'F560W', 'F770W', 'F1000W', 'F1130W',
-                                       'F1280W', 'F1500W', 'F1800W', 'F2100W',
-                                       'F2550W'))
+                                   or _L._instrument_from_filter(filt) == 'MIRI')
                     vetted = _filter_extended_emission(
                         merged, data_i2d_image=d_i2d, ww_i2d=ww_i2d,
                         qfit_max=float(getattr(opts_phase, 'manual_ext_qfit_max', 0.2)),

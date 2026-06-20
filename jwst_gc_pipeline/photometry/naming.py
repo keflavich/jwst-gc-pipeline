@@ -15,6 +15,27 @@ import re
 # iteration_label or filename component.
 _CHUNK_TOKEN_RE = re.compile(r'_chunk\d+of\d+')
 
+# Single source of truth for which JWST filters are MIRI vs NIRCam.  Lives here
+# (a heavy-import-free module) so merge_catalogs.py can import it without pulling
+# in crowdsource_catalogs_long.py's webbpsf chain.
+MIRI_FILTERS = frozenset(['f560w', 'f770w', 'f1000w', 'f1130w', 'f1280w',
+                          'f1500w', 'f1800w', 'f2100w', 'f2550w'])
+
+
+def _instrument_from_filter(filtername):
+    """Return 'MIRI' or 'NIRCam' based on filter name (no header read needed)."""
+    return 'MIRI' if str(filtername).lower() in MIRI_FILTERS else 'NIRCam'
+
+
+def _inst_token(filtername):
+    """Lowercased instrument token used in JWST i2d filename conventions."""
+    return _instrument_from_filter(filtername).lower()
+
+
+def _svo_filter_id(filtername):
+    """SVO FPS filterID (e.g. 'JWST/NIRCam.F480M', 'JWST/MIRI.F770W')."""
+    return f'JWST/{_instrument_from_filter(filtername)}.{filtername.upper()}'
+
 
 def _chunk_token(chunk_index, n_seed_chunks):
     """Filename token for spatial seed chunking.
@@ -54,7 +75,7 @@ def _iteration_token(iteration_label):
     return f'_{token}'
 
 
-def _bgsub_token(options):
+def _bgsub_token_from_flags(bgsub, resbgsub=False):
     """Filename token for the background-subtraction mode(s) in effect.
 
     * ``--bgsub`` (global Background2D subtraction)        -> ``_bgsub``
@@ -66,8 +87,19 @@ def _bgsub_token(options):
     skip-if-done prediction (_predict_output_tokens) stays in sync with the
     names actually written by do_photometry_step.  ``_bgsub`` is never a
     substring of ``_resbgsub`` so exact-token matching does not collide.
+
+    This is the canonical flags-based form; ``merge_catalogs`` imports it as
+    ``_bgsub_token`` (it works with explicit booleans) and the producer side
+    uses the ``_bgsub_token(options)`` wrapper below.
     """
-    token = '_bgsub' if options.bgsub else ''
-    if getattr(options, 'use_iter3_residual_bg', False):
+    token = '_bgsub' if bgsub else ''
+    if resbgsub:
         token += '_resbgsub'
     return token
+
+
+def _bgsub_token(options):
+    """``_bgsub_token_from_flags`` reading the flags off an options object."""
+    return _bgsub_token_from_flags(
+        getattr(options, 'bgsub', False),
+        getattr(options, 'use_iter3_residual_bg', False))
