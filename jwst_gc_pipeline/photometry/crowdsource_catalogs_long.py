@@ -2053,8 +2053,20 @@ def load_outside_fov_satstar_pixels(basepath, ww, data_shape=None,
         ``ww.array_shape``; if that's also None, no proximity filter is
         applied.
     """
+    # Precedence: a Spitzer/external-catalog PRIOR (refined further on the
+    # diffraction spikes by the forced-fit grid search) > a fully LOCKED
+    # hand-verified file (no position search) > the original coarse seeds.
+    spitzer_fn = f'{basepath}/regions_/saturated_stars_outside_fov_spitzer.reg'
     locked_fn = f'{basepath}/regions_/saturated_stars_outside_fov_locked.reg'
-    if os.path.exists(locked_fn):
+    if os.path.exists(spitzer_fn):
+        regfn = spitzer_fn
+        # NOT locked: the Spitzer position is only ~50 mas; the forced-fit grid
+        # search refines it onto the in-frame diffraction spikes (whose high PSF
+        # value constrains the amplitude that the faint outer wings cannot).
+        locked = False
+        print(f"Using SPITZER-refined outside-FOV seed PRIOR: {regfn} "
+              f"(grid-search refines on diffraction spikes)", flush=True)
+    elif os.path.exists(locked_fn):
         regfn = locked_fn
         locked = True
         print(f"Using LOCKED outside-FOV seeds: {regfn}", flush=True)

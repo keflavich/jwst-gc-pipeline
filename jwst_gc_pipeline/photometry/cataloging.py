@@ -843,7 +843,15 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
             basepath, ww, data_shape=nan_replaced_data.shape, max_offset_arcsec=32.0)
     else:
         outside_star_pixels, outside_locked = [], False
-    forced_grid_search_radius = 0 if outside_locked else 5
+    # Off-FOV forced-source position search radius (px).  0 when fully LOCKED
+    # (hand-verified, no search).  Otherwise wide enough to reach the in-frame
+    # diffraction spikes from the seed: a Spitzer prior is ~50 mas accurate but
+    # the per-FRAME WCS can be ~0.3" (5 px) off the true star (field astrometry),
+    # so a +/-5 px search hits its boundary and the spike-constrained amplitude
+    # is never found (the over-sub clamp then has to rescue it).  +/-9 px (~0.6")
+    # covers the observed frame-WCS offset with margin so the grid locks onto the
+    # spikes and the amplitude is constrained by them, not just clamped.
+    forced_grid_search_radius = 0 if outside_locked else 9
     satstar_file_suffix = f'{bgsub}{_iteration_token(satstar_label)}'
     # MIRI: feed the DEEP coadded data_i2d to the satstar seed gate so the
     # extended-emission phantom rejection (prominence + faint-core) is measured
