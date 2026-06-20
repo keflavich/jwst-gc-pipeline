@@ -1596,7 +1596,8 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
                                  flux_overrides=None,
                                  flux_drops=None,
                                  file_suffix='',
-                                 seed_gate_image=None, seed_gate_wcs=None):
+                                 seed_gate_image=None, seed_gate_wcs=None,
+                                 deblend_with_zeroframe=False):
     """
     ``file_suffix`` is inserted into the satstar output filenames before
     the ``_satstar_catalog`` / ``_satstar_model`` / ``_satstar_residual``
@@ -1633,7 +1634,8 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
                            flux_drops=flux_drops,
                            file_suffix=file_suffix,
                            seed_gate_image=seed_gate_image,
-                           seed_gate_wcs=seed_gate_wcs)
+                           seed_gate_wcs=seed_gate_wcs,
+                           deblend_with_zeroframe=deblend_with_zeroframe)
     if os.path.exists(satstar_filename):
         return Table.read(satstar_filename)
     return None
@@ -3286,6 +3288,15 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--no-fit-satstar-outside-fov", dest="fit_satstar_outside_fov",
                     action='store_false',
                     help="Force-disable fitting of saturated stars outside the FOV.")
+    parser.add_option("--deblend-satstars", dest="deblend_satstars",
+                    default=False, action='store_true',
+                    help=("ZEROFRAME-deblend merged saturated cores: in crowded GC "
+                          "fields (gc2211) bright stars' saturated cores touch and "
+                          "label as one component, so the single seed lands between "
+                          "stars.  Load the matching _ramp.fits ZEROFRAME and split "
+                          "each merged component into one seed per star.  Auto-degrades "
+                          "to legacy where a frame has no sibling _ramp.fits."),
+                    metavar="deblend_satstars")
     parser.add_option("--epsf", dest="epsf",
                     default=False,
                     action='store_true',

@@ -907,7 +907,11 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         flux_overrides=satstar_flux_overrides,
         flux_drops=satstar_flux_drops,
         file_suffix=satstar_file_suffix,
-        seed_gate_image=_seed_gate_image, seed_gate_wcs=_seed_gate_wcs)
+        seed_gate_image=_seed_gate_image, seed_gate_wcs=_seed_gate_wcs,
+        # ZEROFRAME deblend of merged saturated cores (gc2211 crowded GC fields).
+        # Opt-in via --deblend-satstars; auto-degrades to legacy where the frame
+        # has no sibling _ramp.fits ZEROFRAME.  See gc2211-zeroframe-satcore-deblend.
+        deblend_with_zeroframe=bool(getattr(options, 'deblend_satstars', False)))
     ext_model = filename.replace('.fits', f'{satstar_file_suffix}_extended_satstar_model.fits')
     sat_model = filename.replace('.fits', f'{satstar_file_suffix}_satstar_model.fits')
     if os.path.exists(ext_model):

@@ -54,6 +54,13 @@ EXTRA_ARGS=${EXTRA_ARGS:-}
 # holes; see submit_cataloging_chain.sh for the low-resource stream).
 PARALLEL_WORKERS=${PARALLEL_WORKERS:-${SLURM_CPUS_PER_TASK:-1}}
 
+# Opt-in ZEROFRAME deblend of merged saturated cores (crowded GC fields, e.g.
+# gc2211): set DEBLEND_SATSTARS=1.  Auto-degrades to legacy where a frame has no
+# sibling _ramp.fits ZEROFRAME, so it is safe to leave on for fields that lack it.
+DEBLEND_SATSTARS=${DEBLEND_SATSTARS:-}
+DEBLEND_ARG=""
+[ -n "$DEBLEND_SATSTARS" ] && DEBLEND_ARG="--deblend-satstars"
+
 read -r -a FILT_ARR <<< "$FILTERS"
 IDX=${SLURM_ARRAY_TASK_ID:-0}
 FILT=${FILT_ARR[$IDX]}
@@ -81,6 +88,7 @@ PYTHON=${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/p
     --each-suffix="$EACH_SUFFIX" \
     --max-group-size="$MAX_GROUP_SIZE" \
     --parallel-workers="$PARALLEL_WORKERS" \
+    $DEBLEND_ARG \
     $EXTRA_ARGS
 rc=$?
 echo "CATALOG done: filter=$FILT rc=$rc"

@@ -92,6 +92,10 @@ sbatch --array=0-3 --export=ALL,PROPOSAL=2221,FIELD=001,TARGET=brick,\
   (imports `brick2221.*`). **Stale; do not use.** These scripts replace it.
 - Pin a non-installed checkout (e.g. a worktree) with
   `--export=ALL,PIPE_ROOT=/path/to/checkout`.
+- **`DEBLEND_SATSTARS=1`** (cataloging) passes `--deblend-satstars`: ZEROFRAME-deblend
+  merged saturated cores for crowded GC fields (gc2211). Loads the matching
+  `_ramp.fits` ZEROFRAME and splits each merged saturated component into one seed per
+  star; auto-degrades to legacy where a frame lacks a sibling `_ramp.fits`.
 
 ## Resources
 
