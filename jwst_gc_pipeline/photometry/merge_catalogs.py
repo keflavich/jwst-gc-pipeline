@@ -1435,40 +1435,66 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
     # Use _project_for_target_filter rather than the global filter_to_project
     # so a filter shared across targets (e.g. f187n in both brick/2221 and
     # sgrb2/5365) resolves to the project matching this run's ``target``.
-    imgfns = [x
-              for filn in filternames
-              for _proj in (_project_for_target_filter(target, filn),)
-              for x in glob.glob(f"{basepath}/{filn.upper()}/pipeline/jw0{_proj}-o{project_obsnum[target][_proj]}_t001_{_inst_token(filn)}*{filn.lower()}*{module}_i2d.fits")
-              if f'{module}_' in x or f'{module}1_' in x
-             ]
+    # Map daophot_type -> per-filter merge filename token written by
+    # merge_individual_frames(): basic uses ``dao``, iterative uses
+    # ``daoiterative`` (matches the suffix-vs-method dict in main()).  The
+    # pattern was once hardcoded to ``_dao_{daophot_type}`` which only matched
+    # basic; the daoiterative filename is ``_daoiterative_iterative.fits``.
+    method_name = 'dao' if daophot_type == 'basic' else 'daoiterative'
 
-    if indivexp:
-        # Map daophot_type -> per-filter merge filename token written by
-        # merge_individual_frames(): basic uses ``dao``, iterative uses
-        # ``daoiterative`` (this matches the suffix-vs-method dict in
-        # main()).  The pattern was hardcoded to ``_dao_{daophot_type}``
-        # which only matched basic; the daoiterative filename is
-        # ``_daoiterative_iterative.fits`` so the glob always returned
-        # zero matches and the cross-filter daoiterative merge never ran.
-        method_name = 'dao' if daophot_type == 'basic' else 'daoiterative'
-        vetted_tok = '_vetted' if vetted else ''
-        catfns = [x
-                  for filn in filternames
-                  for x in glob.glob(f"{basepath}/catalogs/{filn.lower()}*{module}*indivexp_merged{desat}{bgsub}{blur_}{iter_token}_{method_name}_{daophot_type}{vetted_tok}.fits")
-                  ]
-        if len(catfns) == 0:
-            raise ValueError(f"{basepath}/catalogs/<filt>*{module}*indivexp_merged{desat}{bgsub}{blur_}{iter_token}_{method_name}_{daophot_type}{vetted_tok}.fits had no matches across filters {filternames}")
-        if len(catfns) != len(imgfns):
-            print("WARNING: Different length of imgfns & catfns!")
-            print("imgfns:", imgfns)
-            print("catfns:", catfns)
-            print(dict(zip(imgfns, catfns)))
-            # raise ValueError(f"{basepath}/catalogs/FILTER*{module}*obs*indivexp_merged{desat}{bgsub}{fitpsf}{blur_}_crowdsource{suffix}.fits had different n(imgs) than n(cats)")
-    else:
-        catfns = [
-            f"{basepath}/{filtername.upper()}/{filtername.lower()}_{module}{detector}{desat}{bgsub}{epsf_}{blur_}_daophot_{daophot_type}.fits"
-            for filtername in filternames
-        ]
+    vetted_tok = '_vetted' if vetted else ''
+
+    # Resolve each filter's catalog AND its i2d (for WCS) TOGETHER, keeping
+    # filternames / catfns / imgfns / tbls / wcses strictly aligned 1:1.
+    # Previously these were INDEPENDENT flattened globs: when a configured filter
+    # had no catalog (e.g. a partial-filter run), the catfns glob silently
+    # dropped it, then ``zip(catfns, tbls, filternames)`` paired the survivors
+    # with the WRONG filter names -- a silent filter mislabel that propagated
+    # wrong-band photometry.  imgfns could misalign with catfns the same way.
+    # Now we iterate filters once and drop any with no catalog (with a warning),
+    # so the remaining parallel lists are guaranteed consistent.
+    present_filters, catfns, imgfns = [], [], []
+    for filn in filternames:
+        if indivexp:
+            _cat_matches = sorted(glob.glob(
+                f"{basepath}/catalogs/{filn.lower()}*{module}*indivexp_merged"
+                f"{desat}{bgsub}{blur_}{iter_token}_{method_name}_{daophot_type}{vetted_tok}.fits"))
+            if not _cat_matches:
+                print(f"WARNING: no indivexp daophot {daophot_type} catalog for "
+                      f"filter {filn} (module={module}, vetted={vetted}); dropping "
+                      f"it from the cross-filter merge", flush=True)
+                continue
+            if len(_cat_matches) > 1:
+                print(f"WARNING: multiple indivexp catalogs for {filn}; using "
+                      f"{_cat_matches[0]}", flush=True)
+            catfn = _cat_matches[0]
+        else:
+            catfn = (f"{basepath}/{filn.upper()}/{filn.lower()}_{module}{detector}"
+                     f"{desat}{bgsub}{epsf_}{blur_}_daophot_{daophot_type}.fits")
+            if not os.path.exists(catfn):
+                print(f"WARNING: no daophot {daophot_type} catalog {catfn} for "
+                      f"filter {filn}; dropping it from the cross-filter merge",
+                      flush=True)
+                continue
+        _proj = _project_for_target_filter(target, filn)
+        _img_matches = [x for x in glob.glob(
+            f"{basepath}/{filn.upper()}/pipeline/jw0{_proj}-o{project_obsnum[target][_proj]}"
+            f"_t001_{_inst_token(filn)}*{filn.lower()}*{module}_i2d.fits")
+            if f'{module}_' in x or f'{module}1_' in x]
+        if not _img_matches:
+            print(f"WARNING: no {module} i2d for filter {filn}; will fall back to "
+                  f"the catalog's own skycoord/pixelscale for WCS", flush=True)
+        present_filters.append(filn)
+        catfns.append(catfn)
+        imgfns.append(_img_matches[0] if _img_matches else None)
+
+    filternames = present_filters
+    if len(catfns) == 0:
+        raise ValueError(
+            f"No daophot {daophot_type} catalogs found across filters for "
+            f"module={module} in {basepath} (indivexp={indivexp}, "
+            f"iter_token={iter_token!r}, desat={desat!r}, bgsub={bgsub!r}, "
+            f"vetted={vetted})")
 
     tbls = [Table.read(catfn) for catfn in catfns]
 
@@ -1478,9 +1504,8 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
 
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
-        # wcses = [wcs.WCS(fits.getheader(fn.replace("_crowdsource", "_crowdsource_skymodel"))) for fn in catfns]
-        # imgs = [fits.getdata(fn, ext=('SCI', 1)) for fn in imgfns]
-        wcses = [wcs.WCS(fits.getheader(fn, ext=('SCI', 1))) for fn in imgfns]
+        wcses = [wcs.WCS(fits.getheader(fn, ext=('SCI', 1))) if fn is not None else None
+                 for fn in imgfns]
 
     fwhm_tbl = Table.read(f'{basepath}/reduction/fwhm_table.ecsv')
 
