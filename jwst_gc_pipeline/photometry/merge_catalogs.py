@@ -309,6 +309,7 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
 
     # Loop 1: Add new sources, which are any that don't have a match in the existing catalog closer than min_offset
     # this loop _only_ adds new sources
+    basecrds = None   # set by the first NON-EMPTY frame
     for ii, tbl in enumerate(tbls):
         crds = tbl[skycoord_colname]
         # corner case: some fits resulted in flagged x, y that propagate through.  A parallel edit to crowdsource_catalogs_long.py removes these at the source, but I'm adding a catch here too
@@ -318,7 +319,17 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
             crds = crds[~bad]
             tbls[ii] = tbl
 
-        if ii == 0:
+        # A frame can legitimately have ZERO sources (sickle F1500W: longest
+        # wavelength, mostly extended emission -> some exposures detect nothing).
+        # match_to_catalog_sky crashes on a length-0 catalog, so skip empty frames
+        # (they contribute no new sources) and let the first non-empty frame seed
+        # the base.
+        if len(crds) == 0:
+            print(f"combine_singleframe: exposure "
+                  f"{tbl.meta.get('exposure','?')} has 0 sources; skipping",
+                  flush=True)
+            continue
+        if basecrds is None:
             basecrds = crds
         else:
             matches, sep, _ = crds.match_to_catalog_sky(basecrds, nthneighbor=1)
@@ -338,6 +349,12 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     print("Starting re-matching", flush=True)
     for ii, tbl in enumerate(tbls):
         crds = tbl[skycoord_colname]
+        if len(crds) == 0:   # empty exposure -> nothing to re-match
+            tbl.meta['ra_offset'] = np.nan
+            tbl.meta['dec_offset'] = np.nan
+            tbl.meta['dra_offset'] = np.nan
+            tbl.meta['ddec_offset'] = np.nan
+            continue
 
         match_inds, sep, _ = crds.match_to_catalog_sky(basecrds, nthneighbor=1)
         reverse_match_inds, reverse_sep, _ = basecrds.match_to_catalog_sky(crds, nthneighbor=1)
@@ -381,9 +398,12 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     if realign:
         print("Realigning")
         # remake base coordinates after the rematching
+        basecrds = None
         for ii, tbl in enumerate(tbls):
             crds = tbl[skycoord_colname]
-            if ii == 0:
+            if len(crds) == 0:
+                continue
+            if basecrds is None:
                 basecrds = crds
             else:
                 matches, sep, _ = crds.match_to_catalog_sky(basecrds, nthneighbor=1)
@@ -448,6 +468,14 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
 
     for ii, tbl in enumerate(tqdm(tbls, desc='Phase 1 (ra/dec/flux stack)')):
         crds = tbl[skycoord_colname]
+        if len(crds) == 0:
+            # empty exposure (e.g. F1500W frame with no detections): contributes
+            # no matches; leave its column NaN.
+            saved_match_inds[ii] = np.array([], dtype=np.int32)
+            saved_keep[ii] = np.array([], dtype=bool)
+            print(f"P1 {ii}: exposure {tbl.meta.get('exposure','?')} has 0 "
+                  f"sources; skipping", flush=True)
+            continue
         match_inds, sep, _ = crds.match_to_catalog_sky(basecrds, nthneighbor=1)
         reverse_match_inds, _, _ = basecrds.match_to_catalog_sky(crds, nthneighbor=1)
         mutual_matches = (reverse_match_inds[match_inds] == np.arange(len(match_inds)))
