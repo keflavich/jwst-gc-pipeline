@@ -487,7 +487,7 @@ def main(filtername, Observations=None, regionname='brick',
         # them into place so cataloging consumes the freshly-corrected WCS.
         from astropy.io import fits as _fits
         prod_name = asn_data['products'][0]['name']
-        prod_crf = sorted(glob.glob(os.path.join(output_dir, f'{prod_name}_*_o{field}_crf.fits')))
+        prod_crf = sorted(glob(os.path.join(output_dir, f'{prod_name}_*_o{field}_crf.fits')))
         if prod_crf:
             def _expstart(fn):
                 h = _fits.getheader(fn)
@@ -498,14 +498,14 @@ def main(filtername, Observations=None, regionname='brick',
             # target per-exposure name derived from each cal/align member
             targ_by_es = {}
             for member in asn_data['products'][0]['members']:
-                cal = member['expname'].replace('_align.fits', '_cal.fits')
-                target = cal.replace('_cal.fits', f'_o{field}_crf.fits')
-                if not os.path.isabs(target):
-                    target = os.path.join(output_dir, os.path.basename(target))
+                cal_base = os.path.basename(member['expname']).replace('_align.fits', '_cal.fits')
+                target = os.path.join(output_dir, cal_base.replace('_cal.fits', f'_o{field}_crf.fits'))
+                # cal may live in output_dir or resolve relative to cwd; try both
+                cal_path = cal_base if os.path.exists(cal_base) else os.path.join(output_dir, cal_base)
                 try:
-                    targ_by_es[_expstart(cal)] = target
+                    targ_by_es[_expstart(cal_path)] = target
                 except (FileNotFoundError, OSError, TypeError):
-                    pass
+                    print(f"  WARNING: cannot read EXPSTART of {cal_base}; skipping its crf mapping")
             for pc in prod_crf:
                 es = _expstart(pc)
                 target = targ_by_es.get(es)
