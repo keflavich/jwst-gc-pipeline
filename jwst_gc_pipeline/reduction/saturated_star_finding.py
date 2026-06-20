@@ -1103,6 +1103,39 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                           f"unfittable here, skipping to avoid fake-background model).",
                           flush=True)
                     continue
+            # DROP forced satstars the deep coadd does NOT cover (user choice
+            # 2026-06-19).  An off-FOV forced star whose TRUE (seed) position
+            # falls outside the joint coadd footprint has NO data anywhere to
+            # constrain its flux: the LSQ locks onto edge scattered light and
+            # returns a ~1e9 runaway whose wings gouge deep negative pits at the
+            # tile edge (sickle joint o001+o002: 25 such at 5-7e9 -> the -70k
+            # pit).  With no coadd core to cap against, the only correct action is
+            # NOT to fit it (contribute no fake-background model); the mild real
+            # scattered light it leaves is an honest POSITIVE edge residual, not a
+            # deep pit.  Stars the coadd DOES cover (in-FOV in some frame, e.g.
+            # star A) map onto finite coadd data and are KEPT (then flux-capped to
+            # the coadd core downstream).  MIRI only; needs the deep coadd.
+            if (_is_miri and seed_gate_image is not None
+                    and seed_gate_wcs is not None):
+                try:
+                    _scov = ww.pixel_to_world(xcen, ycen)
+                    _cxg, _cyg = seed_gate_wcs.world_to_pixel(_scov)
+                    _cxi, _cyi = int(round(float(_cxg))), int(round(float(_cyg)))
+                    _gny2, _gnx2 = seed_gate_image.shape
+                    _covered = False
+                    if 0 <= _cxi < _gnx2 and 0 <= _cyi < _gny2:
+                        _yl, _yh = max(0, _cyi - 3), min(_gny2, _cyi + 4)
+                        _xl, _xh = max(0, _cxi - 3), min(_gnx2, _cxi + 4)
+                        _cw = seed_gate_image[_yl:_yh, _xl:_xh]
+                        _covered = bool((np.isfinite(_cw) & (_cw != 0)).any())
+                    if not _covered:
+                        print(f"Source {ii+1}: forced outside-FOV star at "
+                              f"(x={xcen},y={ycen}) maps OUTSIDE the deep coadd "
+                              f"footprint -> DROPPED (no data to constrain flux; "
+                              f"avoids ~1e9 edge runaway / deep pit).", flush=True)
+                        continue
+                except Exception:
+                    pass
             y0, y1 = _nearest_window_bounds(ycen, data.shape[0], outside_star_fit_box)
             x0, x1 = _nearest_window_bounds(xcen, data.shape[1], outside_star_fit_box)
             size_saturated = max(5, int(3 * fwhm_pix))
@@ -1817,7 +1850,14 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                     _skyc = ww.pixel_to_world(xcen, ycen)
                     _gx, _gy = seed_gate_wcs.world_to_pixel(_skyc)
                     _gxi, _gyi = int(round(float(_gx))), int(round(float(_gy)))
-                    _rr = int(max(3, np.ceil(np.sqrt(
+                    # Use a min radius of 5px so the peak window reaches the
+                    # star's bright WING, not just its (possibly still-saturated,
+                    # low) coadd CENTER -- a forced star like A is saturated even
+                    # in the deep coadd (core ~689) while its wing peaks ~3377;
+                    # capping to the center would badly under-subtract.  Centered
+                    # on the TRUE seed position, so a 5px window is the star's own
+                    # wing, not a neighbour (off-coadd stars are already dropped).
+                    _rr = int(max(5, np.ceil(np.sqrt(
                         max(int(src_sat_area or 0), 1) / np.pi)) + 2))
                     # Off-FOV / forced stars map to the COADD EDGE, so don't
                     # require the full +/-_rr window to fit -- clip it to the
