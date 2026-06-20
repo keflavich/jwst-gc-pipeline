@@ -1504,6 +1504,26 @@ def _run_one_frame_manual(args):
                     f'{type(ex).__name__}: {ex}\n{traceback.format_exc()}')
 
 
+def _reconstruct_smoothed_bg_path(cut_bp, proposal_id, field, module, filt,
+                                  label, options, pupil):
+    """Rebuild the on-disk smoothed-bg i2d path for a completed phase ``label``.
+
+    Used by --manual-start-phase to recover the previous phase's background map
+    (the only cross-phase state) when starting partway through.  Mirrors the
+    name build_mergedcat_residuals + _build_source_masked_bg write:
+    ``...-{filt}-{module}{desat}{bgsub}{group}_{label}_daophot_basic_mergedcat_residual_smoothed_bg_i2d.fits``
+    (m5/m6/m7 are resbgsub).
+    """
+    desat = '_unsatstar' if options.desaturated else ''
+    bgsub = ('_bgsub' if options.bgsub else '') + (
+        '_resbgsub' if label in ('m5', 'm6', 'm7') else '')
+    group_ = '_group' if options.group else ''
+    inst = _L._inst_token(filt)
+    return (f'{cut_bp}/{filt}/pipeline/jw0{proposal_id}-o{field}_t001_{inst}_'
+            f'{pupil}-{filt.lower()}-{module}{desat}{bgsub}{group_}_{label}_'
+            f'daophot_basic_mergedcat_residual_smoothed_bg_i2d.fits')
+
+
 def _resolve_crossband_ref_filter(options, filternames):
     """Pick the astrometric reference filter for the cross-band merge.
 
@@ -1609,6 +1629,40 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
     # contributed) on every later phase to avoid a fake-background model.
     satstar_drops = {}
     overlap_total = 0
+
+    # Optional partial start (e.g. an m7-only "finalize" job that reuses the
+    # m12..m6 products written by per-filter jobs, so the big multifilter run can
+    # be split into small queue-friendly per-filter jobs + one finalize).  The
+    # ONLY cross-phase state a later phase consumes is the background map
+    # (bg_for_next); reconstruct it from the previous phase's on-disk smoothed-bg
+    # i2d.  m7's cross-band seed reads the previous VETTED catalogs from disk, and
+    # frames re-scan because the start phase becomes phases[0].  satstar overrides
+    # from m12's reconcile are not reconstructed, but the off-FOV path now uses
+    # the Spitzer-prior _spitzer.reg + the model<=data clamp, which load fresh
+    # each phase, so off-FOV handling is unaffected.
+    start_phase = (getattr(options, 'manual_start_phase', '') or '').strip()
+    if start_phase:
+        if start_phase not in phases:
+            raise ValueError(f"--manual-start-phase={start_phase!r} not in phases "
+                             f"{phases} (multifilter={multifilter})")
+        _si = phases.index(start_phase)
+        if _si > 0:
+            _prev = phases[_si - 1]
+            for module in modules:
+                for filt in filternames:
+                    _bg = _reconstruct_smoothed_bg_path(
+                        cut_bp, proposal_id, field, module, filt, _prev, options, pupil)
+                    if not os.path.exists(_bg):
+                        raise FileNotFoundError(
+                            f"--manual-start-phase={start_phase}: required {_prev} "
+                            f"smoothed-bg for {filt}/{module} is missing (expected "
+                            f"{_bg}).  Run the earlier per-filter phases first.")
+                    bg_for_next[(module, filt)] = _bg
+                    print(f"manual [start={start_phase}]: reusing {_prev} bg for "
+                          f"{filt}/{module}: {os.path.basename(_bg)}", flush=True)
+        phases = phases[_si:]
+        print(f"MANUAL PIPELINE: partial start at {start_phase}; phases now "
+              f"{phases}", flush=True)
 
     for phase in phases:
         # iter3 (m3) and iter4 (m4) fit the RAW frames; m4 produces the first

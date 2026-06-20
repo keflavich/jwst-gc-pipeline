@@ -3273,6 +3273,15 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'one of --filternames.  Default: auto-select the '
                             'reddest broad/medium band (e.g. sickle -> F480M).'),
                       metavar='manual_crossband_ref_filter')
+    parser.add_option('--manual-start-phase', dest='manual_start_phase',
+                      default='',
+                      help=('Start the manual pipeline partway through (e.g. '
+                            '"m7") reusing on-disk products from earlier phases, '
+                            'so the big multifilter run can be split into small '
+                            'per-filter jobs (m12..m6) + one finalize job (m7 + '
+                            'cross-band merge).  Requires the previous phase '
+                            'complete on disk.'),
+                      metavar='manual_start_phase')
     parser.add_option('--seed-catalog', dest='seed_catalog',
                       default='',
                       help='Optional seed catalog for a seeded photometry rerun', metavar='seed_catalog')
