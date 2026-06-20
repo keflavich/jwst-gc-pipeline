@@ -4179,8 +4179,11 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             # 001/002 = sickle, but 003 = the BRICK MIRI field
                             # (shares the 3958 program id, routed to brick/ so
                             # its catalogs do not land in / clash with sickle/).
+                            # '001-002' = JOINT sickle run (both MIRI obs
+                            # cataloged together; see get_filenames joint glob).
                             '3958': {'007': 'sickle', '001': 'sickle',
-                                     '002': 'sickle', '003': 'brick'},
+                                     '002': 'sickle', '003': 'brick',
+                                     '001-002': 'sickle'},
                             # 2092: 002/005 = NIRCam; 004/006/008 = MIRI
                             '2092': {'002': 'cloudef', '005': 'cloudef',
                                      '004': 'cloudef', '006': 'cloudef',
@@ -4582,12 +4585,26 @@ def get_filenames(basepath, filtername, proposal_id, field, each_suffix, module,
                             'nrcb1', 'nrcb2', 'nrcb3', 'nrcb4']
     else:
         glob_modules = [module]
+    # JOINT MULTI-OBS (2026-06-19): a hyphen-joined field token (e.g.
+    # ``001-002``) means "catalog both observations together" -- glob each real
+    # obs's frames so candidate_frames spans both pointings.  Everything
+    # downstream (merge globs by vgroup* not obs; data_i2d / residual i2d
+    # ResampleStep auto-unions the frame WCSs) is already obs-agnostic, so the
+    # only obs-locked step is this glob.  The leading filename token encodes the
+    # real obs number (jw0{proposal}{obs}{visit}); the ``o{obs}_crf`` suffix
+    # token does too, so derive a per-obs suffix by substituting the obs digits.
+    subfields = field.split('-') if '-' in str(field) else [field]
     fglob = []
     glstr_list = []
-    for gm in glob_modules:
-        glstr = f'{basepath}/{filtername}/pipeline/jw0{proposal_id}{field}{visitid}*{gm}*{each_suffix}.fits'
-        glstr_list.append(glstr)
-        fglob.extend(glob.glob(glstr))
+    for sf in subfields:
+        if len(subfields) > 1:
+            sf_suffix = re.sub(r'o\d{3}_crf', f'o{sf}_crf', each_suffix)
+        else:
+            sf_suffix = each_suffix
+        for gm in glob_modules:
+            glstr = f'{basepath}/{filtername}/pipeline/jw0{proposal_id}{sf}{visitid}*{gm}*{sf_suffix}.fits'
+            glstr_list.append(glstr)
+            fglob.extend(glob.glob(glstr))
     if len(fglob) == 0:
         raise ValueError(f"No matches found to any of {glstr_list}")
     else:

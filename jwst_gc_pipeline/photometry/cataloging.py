@@ -1978,8 +1978,16 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             import glob as _glob
                             from astropy.table import vstack as _vstack
                             from astropy.coordinates import SkyCoord as _SkyCoord
-                            _sibs = sorted(_glob.glob(
-                                merged_path.replace('.fits', '_o*_vetted.fits')))
+                            # JOINT run ('-' in field): one vetting pass against
+                            # the joint (both-obs) coadd is authoritative -- do
+                            # NOT vstack stale per-obs `_o001_vetted`/`_o002_vetted`
+                            # siblings from prior separate runs (the `_o*_vetted`
+                            # wildcard would catch them and double/triple-count).
+                            if '-' in str(field):
+                                _sibs = [vetted_path]
+                            else:
+                                _sibs = sorted(_glob.glob(
+                                    merged_path.replace('.fits', '_o*_vetted.fits')))
                             _tabs = []
                             for _sp in _sibs:
                                 try:

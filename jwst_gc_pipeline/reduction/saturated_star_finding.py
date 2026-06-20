@@ -1754,23 +1754,17 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                           f"(model peak {_fcur*_psf_peak:.0f} -> "
                           f"{_flux_cap*_psf_peak:.0f} vs coadd core {_dpk:.0f}; "
                           f"{_peak_cap_factor}x)", flush=True)
-                # AMPLITUDE FLOOR (2026-06-19): the LARGEST saturated cores have
-                # their unsaturated wings so far out / faint that the wing-LSQ
-                # UNDER-fits the amplitude (sickle F770W o002 star A, 1572-px
-                # core: model peak 263 vs coadd core 6378 -> star left
-                # unsubtracted).  A saturated star's model must at least reach its
-                # (measurable, dither-filled) coadd core peak.  Floor the flux so
-                # the model peak == the coadd core when the fit fell well below it
-                # (< 0.5x); correctly-fit stars (model ~ core) are untouched.
-                _flux_floor = _dpk / _psf_peak
-                _fcur2 = float(result['flux_fit'][0])
-                if (np.isfinite(_fcur2) and np.isfinite(_flux_floor)
-                        and _flux_floor > 0 and _fcur2 < 0.5 * _flux_floor):
-                    result['flux_fit'][0] = _flux_floor
-                    print(f"  [miri amplitude floor] flux {_fcur2:.2e} -> "
-                          f"{_flux_floor:.2e} (model peak {_fcur2*_psf_peak:.0f} "
-                          f"-> {_dpk:.0f} = coadd core; huge-core wing-LSQ "
-                          f"under-fit)", flush=True)
+                # NOTE: a previous "amplitude FLOOR" here (force model peak up to
+                # the coadd core when the wing-LSQ under-fit) was REVERTED
+                # 2026-06-19: it sampled _dpk over a sat_area-scaled radius that
+                # grabbed a BRIGHT NEIGHBOUR's coadd core, then floored the flux to
+                # it -> injected a model peak ~70k on faint data (-70k pit at
+                # 17:46:13.05 -28:48:18.5 in the joint o001+o002 run) and
+                # over-subtracted medium stars (B/C).  Well-fit saturated stars
+                # reach their core via the normal 2D-bg+envelope fit (joint B:
+                # model 8730 ~ data 10547) without the floor.  The huge-core
+                # under-fit it targeted (star A) is actually an OFF-FOV / seed
+                # problem, not a wing-LSQ amplitude problem -- handled elsewhere.
             # ALWAYS (MIRI in-FOV): the masked-core LSQ frequently returns a
             # NaN flux_err (singular covariance from x_0/y_0 pegging the bound),
             # which would make the accept gate reject an otherwise-good fit
@@ -1786,6 +1780,70 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             if ('qfit' in result.colnames
                     and not (0 < float(result['qfit'][0]) < 1e3)):
                 result['qfit'][0] = 1.0
+
+        # FORCED-SOURCE COADD-CORE CAP (2026-06-19).  The forced / outside-FOV
+        # LSQ (and the cross-frame reconcile that OVERRIDES the discordant frames
+        # to the "reference" flux) is amplitude-UNCONSTRAINED when only a faint
+        # spike-less PSF corner is in-frame: it locks onto scattered light and
+        # returns flux ~1e9 (sickle joint o001+o002: 25 forced accepts at
+        # 1.18e9, ssr_ratio 12-61), whose wings gouge deep pits and whose
+        # reconcile-propagated value poisons the merged catalog.  The in-FOV
+        # satstars already get a coadd-core peak cap; apply the SAME physical
+        # bound to forced sources -- the rendered model peak (flux * unit-PSF
+        # peak) must not exceed ~1.5x the DEEP COADD core at the source's sky
+        # position (its real, dither-filled brightness).  Maps the (possibly
+        # off-frame) fit position through the frame WCS to the coadd; if the
+        # coadd does not cover it (truly off-everything star) _dpk is NaN and the
+        # flux is left as-is (those rare cases are handled by the outside-FOV
+        # region file).  MIRI only.
+        if _is_miri and forced_source and len(result):
+            print(f"  [miri forced cap DIAG] src {ii+1}: seed_gate="
+                  f"{seed_gate_image is not None}/{seed_gate_wcs is not None}, "
+                  f"big_grid_large={big_grid_large is not None}, "
+                  f"flux={float(result['flux_fit'][0]):.2e}, sat_area={src_sat_area}",
+                  flush=True)
+        if (_is_miri and forced_source and seed_gate_image is not None
+                and seed_gate_wcs is not None and big_grid_large is not None
+                and len(result)):
+            try:
+                _fpk = float(np.nanmax(big_grid_large(np.zeros(1), np.zeros(1))))
+                _gny, _gnx = seed_gate_image.shape
+                for _ri in range(len(result)):
+                    # Use the SEED center (xcen,ycen = the star's TRUE projected
+                    # position, possibly off this frame) NOT the fitted x_fit/y_fit:
+                    # for a forced off-FOV source the cutout is clamped to the frame
+                    # EDGE, so x0+x_fit maps to the coadd edge (off-coadd) -- the
+                    # seed position maps to the star's real coadd core.
+                    _skyc = ww.pixel_to_world(xcen, ycen)
+                    _gx, _gy = seed_gate_wcs.world_to_pixel(_skyc)
+                    _gxi, _gyi = int(round(float(_gx))), int(round(float(_gy)))
+                    _rr = int(max(3, np.ceil(np.sqrt(
+                        max(int(src_sat_area or 0), 1) / np.pi)) + 2))
+                    # Off-FOV / forced stars map to the COADD EDGE, so don't
+                    # require the full +/-_rr window to fit -- clip it to the
+                    # coadd bounds and use whatever core pixels are present (the
+                    # star's real, dither-filled core).  Skip only if the
+                    # position is entirely off the coadd.
+                    _ylo, _yhi = max(0, _gyi - _rr), min(_gny, _gyi + _rr + 1)
+                    _xlo, _xhi = max(0, _gxi - _rr), min(_gnx, _gxi + _rr + 1)
+                    if _yhi <= _ylo or _xhi <= _xlo:
+                        continue
+                    _wd = seed_gate_image[_ylo:_yhi, _xlo:_xhi]
+                    _wf = np.isfinite(_wd) & (_wd != 0)
+                    if not _wf.any():
+                        continue
+                    _dpk = float(np.nanmax(_wd[_wf]))
+                    if not (np.isfinite(_fpk) and _fpk > 0 and _dpk > 0):
+                        continue
+                    _cap = 1.5 * _dpk / _fpk
+                    _fc = float(result['flux_fit'][_ri])
+                    if np.isfinite(_fc) and _fc > _cap:
+                        result['flux_fit'][_ri] = _cap
+                        print(f"  [miri forced coadd-core cap] flux {_fc:.2e} -> "
+                              f"{_cap:.2e} (model peak {_fc*_fpk:.0f} -> {_dpk*1.5:.0f}"
+                              f" = 1.5x coadd core {_dpk:.0f})", flush=True)
+            except Exception as _capex:
+                print(f"  [miri forced coadd-core cap] skipped: {_capex}", flush=True)
 
         result.pprint(max_width=-1)
 
