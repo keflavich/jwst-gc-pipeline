@@ -1534,41 +1534,49 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                                     psf_model=_psf_for_fit,
                                     fit_shape=size,
                                     aperture_radius=15*fwhm_pix)
-            # Position-fit bound radius.  ``size_saturated`` is sqrt(sat_area)/2,
-            # which is ~1 px for a small saturated core (sat_area~15).  A +/-1 px
-            # bound is so tight the LevMar fit pegs x_0/y_0 at the bound, making
-            # the covariance matrix singular -> flux_err (and snr) come back NaN
-            # even when the fit is excellent (qfit~1).  Widen for MIRI so the
-            # centroid converges freely and the covariance (hence flux_err) is
-            # finite; the init is already the bbox-refined saturated-core centre
-            # so a ~1.5 FWHM search is ample.  NIRCam keeps the validated value.
-            pos_bound = size_saturated
-            if _is_miri:
-                pos_bound = max(size_saturated, 1.5 * fwhm_pix)
-            low_x  = xcen - x0 - pos_bound
-            high_x = xcen - x0 + pos_bound
-            low_y  = ycen - y0 - pos_bound
-            high_y = ycen - y0 + pos_bound
-
-            # get the underlying model and set bounds there
+            # get the underlying model
             model = getattr(psfphot, "psf_model", None)
             if model is None:
                 raise RuntimeError("psfphot.psf_model is None — can't set parameter bounds")
 
-            for pname, bounds in (("x_0", (low_x, high_x)), ("y_0", (low_y, high_y))):
-                if not hasattr(model, pname):
-                    raise AttributeError(
-                        f"PSF model has no parameter '{pname}'; "
-                        f"param_names={getattr(model, 'param_names', None)}"
-                    )
-                param = getattr(model, pname)
-                # Set bounds via the supported astropy.modeling API.  If
-                # this ever raises, the photutils/astropy contract has
-                # changed and we want to know — silently falling back to
-                # ``_bounds`` could leave a fitter completely unbounded
-                # and corrupt every subsequent forced photometry result.
-                param.bounds = bounds
-                print(f"Set {pname}.bounds = {bounds}")
+            if _is_miri:
+                # LOCK the position to the (bbox-refined, ~0.05"-accurate)
+                # DQ-saturated-component seed and fit FLUX ONLY.  The old
+                # position-fit bound was ``size_saturated`` = sqrt(sat_area)/2,
+                # which for a MASSIVE saturated core (e.g. sat_area~1572 px ->
+                # ~20 px ~ 2.2") let the LevMar fit DRIFT ~1.5-2" off the star
+                # (sickle F770W o002 star A) -> the model subtracts at the wrong
+                # place and the amplitude mis-fits.  The masked/zeroed saturated
+                # core gives the position NO real constraint, so letting x_0/y_0
+                # float just invites drift; the seed centroid is already accurate
+                # (verified against raw-counts uncal centroids: <0.15").  Fixing
+                # x_0/y_0 also yields a finite flux_err (no singular covariance
+                # from a pegged bound -> the NaN-flux_err pathology disappears).
+                # NIRCam keeps the validated bounded-position fit below.
+                model.x_0.fixed = True
+                model.y_0.fixed = True
+                print(f"MIRI: locked satstar position to seed "
+                      f"(x={xcen}, y={ycen}); fitting flux only")
+            else:
+                pos_bound = size_saturated
+                low_x  = xcen - x0 - pos_bound
+                high_x = xcen - x0 + pos_bound
+                low_y  = ycen - y0 - pos_bound
+                high_y = ycen - y0 + pos_bound
+                for pname, bounds in (("x_0", (low_x, high_x)), ("y_0", (low_y, high_y))):
+                    if not hasattr(model, pname):
+                        raise AttributeError(
+                            f"PSF model has no parameter '{pname}'; "
+                            f"param_names={getattr(model, 'param_names', None)}"
+                        )
+                    param = getattr(model, pname)
+                    # Set bounds via the supported astropy.modeling API.  If
+                    # this ever raises, the photutils/astropy contract has
+                    # changed and we want to know — silently falling back to
+                    # ``_bounds`` could leave a fitter completely unbounded
+                    # and corrupt every subsequent forced photometry result.
+                    param.bounds = bounds
+                    print(f"Set {pname}.bounds = {bounds}")
 
             result = psfphot(cutout_fit, init_params=init_params, mask=mask,
                              error=err_cutout_eff)
@@ -1746,6 +1754,23 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                           f"(model peak {_fcur*_psf_peak:.0f} -> "
                           f"{_flux_cap*_psf_peak:.0f} vs coadd core {_dpk:.0f}; "
                           f"{_peak_cap_factor}x)", flush=True)
+                # AMPLITUDE FLOOR (2026-06-19): the LARGEST saturated cores have
+                # their unsaturated wings so far out / faint that the wing-LSQ
+                # UNDER-fits the amplitude (sickle F770W o002 star A, 1572-px
+                # core: model peak 263 vs coadd core 6378 -> star left
+                # unsubtracted).  A saturated star's model must at least reach its
+                # (measurable, dither-filled) coadd core peak.  Floor the flux so
+                # the model peak == the coadd core when the fit fell well below it
+                # (< 0.5x); correctly-fit stars (model ~ core) are untouched.
+                _flux_floor = _dpk / _psf_peak
+                _fcur2 = float(result['flux_fit'][0])
+                if (np.isfinite(_fcur2) and np.isfinite(_flux_floor)
+                        and _flux_floor > 0 and _fcur2 < 0.5 * _flux_floor):
+                    result['flux_fit'][0] = _flux_floor
+                    print(f"  [miri amplitude floor] flux {_fcur2:.2e} -> "
+                          f"{_flux_floor:.2e} (model peak {_fcur2*_psf_peak:.0f} "
+                          f"-> {_dpk:.0f} = coadd core; huge-core wing-LSQ "
+                          f"under-fit)", flush=True)
             # ALWAYS (MIRI in-FOV): the masked-core LSQ frequently returns a
             # NaN flux_err (singular covariance from x_0/y_0 pegging the bound),
             # which would make the accept gate reject an otherwise-good fit
