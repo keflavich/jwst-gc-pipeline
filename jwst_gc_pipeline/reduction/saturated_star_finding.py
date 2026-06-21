@@ -1125,7 +1125,11 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     _ssr_ratio_max_keep = 2.0 if _is_miri else 1.0
     _snr_min_keep = 2.0 if _is_miri else 3.0
 
-    slices = find_objects(saturated)
+    # (removed dead `slices = find_objects(saturated)`: the result was never
+    # used, and passing the BOOL `saturated` mask -- rather than the int-labelled
+    # `sources` -- raises under newer scipy/numpy ("'numpy.bool' object cannot be
+    # interpreted as an integer").  The per-source bounding boxes are taken from
+    # `sources`/`source_records` below, so this call was pure dead weight.)
 
     if size is None:
         size = pad
