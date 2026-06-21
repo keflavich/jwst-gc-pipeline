@@ -3296,20 +3296,35 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
             # Regression: tests/test_residual_model_policy.py.
             # ==================================================================
             mc_resid = (base - mc_model).astype('float32')   # residual: bg only (no stars)
-            # NaN-mask DQ-SATURATED pixels in the residual (MIRI): the DATA there
-            # is clipped/invalid, so subtracting a TRUE-amplitude satstar model
-            # (now fit from the unsaturated spikes for heavily-saturated stars)
-            # gouges a deep negative pit at the clipped core (sickle bright pillar
-            # star: -755k).  The residual is undefined where the data is missing
-            # -> NaN (honest; "NaN only where inputs were NaN").  Full-frame only
-            # (cutout shapes won't match the frame DQ -> guard skips them).
+            # NaN-mask ONLY deep over-subtraction PITS at saturated cores (MIRI).
+            # The clipped saturated core, minus a TRUE-amplitude satstar model, can
+            # gouge a deep negative pit (sickle bright pillar star: -755k) -- THOSE
+            # pixels are undefined and get NaN'd.  But the MIRI SATURATED DQ flag is
+            # broad (~16% of the detector: it tags the bright stars' spikes/wings,
+            # whose DATA is perfectly valid), and NaN-ing ALL of them (a) erased the
+            # bright flux the user needs in the residual and (b) BALLOONED through
+            # resample (16% detector -> 12.5% i2d).  So restrict the NaN to
+            # saturated pixels that are also a DEEP NEGATIVE pit; positive/normal
+            # residual at saturated pixels (the unsubtracted bright flux) is KEPT.
+            # Full-frame only (cutout shapes won't match the frame DQ -> guard skips).
             if _instrument_from_filter(filtername) == 'MIRI':
                 try:
                     with fits.open(orig) as _oh:
                         _onames = [h.name for h in _oh]
                         _dq = _oh['DQ'].data if 'DQ' in _onames else None
                     if _dq is not None and _dq.shape == mc_resid.shape:
-                        mc_resid[((_dq.astype(np.int64) & 2) > 0)] = np.nan
+                        _satmask = (_dq.astype(np.int64) & 2) > 0
+                        _fin = np.isfinite(mc_resid)
+                        if _fin.any():
+                            _med = np.nanmedian(mc_resid[_fin])
+                            _nmad = 1.4826 * np.nanmedian(
+                                np.abs(mc_resid[_fin] - _med)) + 1e-6
+                            # pit = saturated AND >10 robust-sigma below the median
+                            _pit = _satmask & (mc_resid < _med - 10.0 * _nmad)
+                            mc_resid[_pit] = np.nan
+                            print(f"  [miri resid] NaN'd {int(_pit.sum())} deep-pit "
+                                  f"sat px (of {int(_satmask.sum())} sat); kept "
+                                  f"bright flux", flush=True)
                 except Exception as _dqex:
                     print(f"mergedcat: DQ-sat NaN-mask skipped for "
                           f"{os.path.basename(orig)}: {_dqex}", flush=True)
