@@ -36,6 +36,15 @@ FILTERS=${FILTERS:-"F115W F162M F182M F212N F360M F405N F470N F480M"}
 PIPE_ROOT=${PIPE_ROOT:-}
 [ -n "$PIPE_ROOT" ] && export PYTHONPATH="$PIPE_ROOT:$PYTHONPATH"
 
+# --max-group-size caps overlap-group size so the joint LevMar PSF fit cost
+# (~cubic in group size) cannot blow up in dense/wide-PSF fields.  LW filters
+# (wider PSF -> larger groups) otherwise hit the walltime; set e.g. 12 for
+# dense fields.  Default 'unlimited' preserves prior behaviour for others.
+MAX_GROUP_SIZE=${MAX_GROUP_SIZE:-unlimited}
+# Extra passthrough args (e.g. method selection / resume):
+#   "--daophot --skip-crowdsource --skip-if-done"
+EXTRA_ARGS=${EXTRA_ARGS:-}
+
 read -r -a FILT_ARR <<< "$FILTERS"
 IDX=${SLURM_ARRAY_TASK_ID:-0}
 FILT=${FILT_ARR[$IDX]}
@@ -52,7 +61,9 @@ python -m jwst_gc_pipeline.photometry.crowdsource_catalogs_long \
     --proposal_id="$PROPOSAL" \
     --field="$FIELD" \
     --target="$TARGET" \
-    --each-suffix="$EACH_SUFFIX"
+    --each-suffix="$EACH_SUFFIX" \
+    --max-group-size="$MAX_GROUP_SIZE" \
+    $EXTRA_ARGS
 rc=$?
 echo "CATALOG done: filter=$FILT rc=$rc"
 exit $rc
