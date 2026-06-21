@@ -1078,7 +1078,12 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     _ssr_ratio_max_keep = 2.0 if _is_miri else 1.0
     _snr_min_keep = 2.0 if _is_miri else 3.0
 
-    slices = find_objects(saturated)
+    # NOTE: a former ``slices = find_objects(saturated)`` lived here but its
+    # result was never used (per-source windows are derived from ``src['com']``
+    # below).  Newer scipy rejects the boolean ``saturated`` array
+    # (find_objects needs an int label image), raising
+    # "'numpy.bool' object cannot be interpreted as an integer" and aborting
+    # every frame.  The dead call is removed.
 
     if size is None:
         size = pad

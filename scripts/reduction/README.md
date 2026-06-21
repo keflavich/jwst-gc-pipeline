@@ -22,12 +22,53 @@ Defaults: proposal 4147, field 012, modules `nrca,nrcb,merged`, `-s`
 
 ## 2. Cataloging
 
+Runs the active per-exposure manual pipeline (`crowdsource_catalogs_long.py
+--each-exposure`; phases m12→m3..m6, then m7 cross-band when >1 filter). Two
+streams, pick by what the queue will give you:
+
+### Stream 1 — fast / high-resource (per-filter array)
+
 ```
 sbatch --array=0-7 scripts/reduction/submit_cataloging.sbatch         # after stage 1
 ```
 
-Runs the active per-exposure manual pipeline
-(`crowdsource_catalogs_long.py --each-exposure`).
+One filter per task. Each task now passes `--parallel-workers=$SLURM_CPUS_PER_TASK`
+so the frame fits actually use every requested core (previously the fat job left
+all but one core idle). A single-filter task runs m12..m6 only — no cross-band
+m7. To also build the cross-band catalog, either run the monolithic multifilter
+job (one task, `FILTERS="all"`) or use stream 2.
+
+### Stream 2 — low-resource / dependency-chained (optional)
+
+```
+scripts/reduction/submit_cataloging_chain.sh            # Sgr C defaults
+PERFILTER_CPUS=4 scripts/reduction/submit_cataloging_chain.sh
+```
+
+Trades the one fat 32-core/48 h job for **N small per-filter jobs + one m7
+finalize**, chained with `--dependency=afterok`:
+
+- **stage 1:** per-filter array (single filter per task → m12..m6), small slice
+  (`PERFILTER_CPUS`, default 8) that fits small queue holes;
+- **stage 2:** `submit_cataloging_m7.sbatch` — m7 cross-band over all filters,
+  reusing on-disk m6 products via `--manual-start-phase m7`, run only after the
+  array finishes OK.
+
+Same science as the monolith **except** the standalone m7 job does not re-apply
+the out-of-FOV saturated-star flux pins computed at m12 (those live in memory in
+a monolithic run); this affects only off-FOV bright-star photometry in the final
+cross-band catalog. For full off-FOV-satstar fidelity, run the monolithic job.
+
+### Finer splitting (per-phase / per-frame) — not yet implemented
+
+Splitting below the filter boundary (e.g. 48× 1-core/16 GB array tasks) requires
+persisting three pieces of cross-phase state that are currently in-memory only:
+the residual-i2d detection image (`resid_i2d_for_next`), the off-FOV satstar
+pins (`satstar_overrides`/`satstar_drops`), and the `iter_found` provenance
+(`prev_merged_for`). Only the smoothed background map is reconstructed on resume
+today (`_reconstruct_smoothed_bg_path`). Implementing per-phase/per-frame jobs
+means adding reconstructors for the other three plus a single-frame + standalone-
+join entry point, then validating bit-identical against a monolithic run.
 
 ## Overriding the target
 

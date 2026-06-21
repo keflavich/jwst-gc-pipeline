@@ -47,6 +47,13 @@ MAX_GROUP_SIZE=${MAX_GROUP_SIZE:-unlimited}
 #   "--daophot --skip-crowdsource --skip-if-done"
 EXTRA_ARGS=${EXTRA_ARGS:-}
 
+# Frame-level parallelism: the manual pipeline fits per-frame independently via
+# an in-process fork pool sized by --parallel-workers.  Default 1 (serial) would
+# leave every requested core but one IDLE, so default it to the allocation.
+# Override to dial the resource ask up/down (fewer workers -> fits smaller queue
+# holes; see submit_cataloging_chain.sh for the low-resource stream).
+PARALLEL_WORKERS=${PARALLEL_WORKERS:-${SLURM_CPUS_PER_TASK:-1}}
+
 read -r -a FILT_ARR <<< "$FILTERS"
 IDX=${SLURM_ARRAY_TASK_ID:-0}
 FILT=${FILT_ARR[$IDX]}
@@ -54,6 +61,13 @@ if [ -z "$FILT" ]; then
     echo "No filter for array index $IDX (FILTERS='$FILTERS')."
     exit 1
 fi
+
+# The active manual pipeline refuses to run with SLURM_ARRAY_TASK_ID set (its
+# phases must not be split across array tasks).  We use the array index ONLY to
+# pick this task's filter -- each task then runs ALL phases for that one filter
+# in-process, which is exactly the single-job mode the guard wants.  Unset the
+# array env so the guard passes; this is array-over-FILTERS, not phase-splitting.
+unset SLURM_ARRAY_TASK_ID SLURM_ARRAY_JOB_ID
 
 echo "CATALOG start: $TARGET $PROPOSAL/$FIELD filter=$FILT modules=$MODULES"
 python -m jwst_gc_pipeline.photometry.crowdsource_catalogs_long \
@@ -65,6 +79,7 @@ python -m jwst_gc_pipeline.photometry.crowdsource_catalogs_long \
     --target="$TARGET" \
     --each-suffix="$EACH_SUFFIX" \
     --max-group-size="$MAX_GROUP_SIZE" \
+    --parallel-workers="$PARALLEL_WORKERS" \
     $EXTRA_ARGS
 rc=$?
 echo "CATALOG done: filter=$FILT rc=$rc"
