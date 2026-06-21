@@ -752,7 +752,7 @@ def accept_satstar_fit(*, result_is_none, fluxerr, snr, flux, qfit,
     return bool((not np.isfinite(ssr_ratio)) or (ssr_ratio < ssr_ratio_max_keep))
 
 
-def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_oversub_ratio=3.0, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, deblend_daophot_xy=None, deblend_confirm_xy=None):
+def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, deblend_daophot_xy=None, deblend_confirm_xy=None):
     # ``flux_drops``: optional list of SkyCoord.  An out-of-field (forced) source
     # whose seed sky position matches a drop within ~1.0" is SKIPPED entirely
     # (not fit, not contributed): cross-frame reconciliation found no trustworthy
@@ -939,8 +939,13 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                     gate_com = rec['com']
             else:
                 gate_com = rec['com']
-            prom, core = _seed_prominence(_gate_img, gate_com, rec.get('sat_area'))
-            conc = _seed_concentration(_gate_img, gate_com, rec.get('sat_area'))
+            # cap sat_area so a giant spurious-DQ cluster's prominence radius
+            # cannot grow to grab a distant real star (see post-fit gate note).
+            _seed_sa = rec.get('sat_area')
+            _seed_sa_cap = (min(int(_seed_sa), 1600)
+                            if _seed_sa is not None else _seed_sa)
+            prom, core = _seed_prominence(_gate_img, gate_com, _seed_sa_cap)
+            conc = _seed_concentration(_gate_img, gate_com, _seed_sa_cap)
             drop_prom = (seed_prominence_min and seed_prominence_min > 0
                          and np.isfinite(prom) and prom < seed_prominence_min)
             drop_core = (seed_core_min and seed_core_min > 0
@@ -1656,31 +1661,25 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
 
             if _is_miri:
                 # LOCK the position to the (bbox-refined, ~0.05"-accurate)
-                # DQ-saturated-component seed and fit FLUX ONLY.  The old
-                # position-fit bound was ``size_saturated`` = sqrt(sat_area)/2,
-                # which for a MASSIVE saturated core (e.g. sat_area~1572 px ->
-                # ~20 px ~ 2.2") let the LevMar fit DRIFT ~1.5-2" off the star
-                # (sickle F770W o002 star A) -> the model subtracts at the wrong
-                # place and the amplitude mis-fits.  The masked/zeroed saturated
-                # core gives the position NO real constraint, so letting x_0/y_0
-                # float just invites drift; the seed centroid is already accurate
-                # (verified against raw-counts uncal centroids: <0.15").  Fixing
-                # x_0/y_0 also yields a finite flux_err (no singular covariance
-                # from a pegged bound -> the NaN-flux_err pathology disappears).
-                # NIRCam keeps the validated bounded-position fit below.
+                # DQ-saturated-component seed and fit FLUX ONLY.  The masked/zeroed
+                # saturated core gives the position NO real constraint, so letting
+                # x_0/y_0 float invites DRIFT (the old sqrt(sat_area)/2 bound let
+                # star A drift ~1.5-2"); the seed centroid is already accurate
+                # (<0.15" vs raw-counts uncal).  Locking also yields a finite
+                # flux_err (no singular covariance).
+                # 2026-06-21: a tight 2px bounded fit for small-PSF (finite-core)
+                # stars was TRIED to clear the ~1px core dipoles -- it did NOT help
+                # (centroid offset stayed 0-2px, residcores no better) and added
+                # drift/NaN-flux_err risk, so reverted.  NIRCam keeps its bounded
+                # fit below.
                 model.x_0.fixed = True
                 model.y_0.fixed = True
                 print(f"MIRI: locked satstar position to seed "
                       f"(x={xcen}, y={ycen}); fitting flux only")
             else:
-                # NIRCam: bounded position fit.  ``size_saturated`` = sqrt(sat_area)/2
-                # is ~1 px for a small core, so tight the LevMar fit pegs x_0/y_0 at
-                # the bound -> singular covariance -> NaN flux_err -> NaN snr -> the
-                # accept-gate tosses a good fit.  The gc2211 baseline-vs-deblend
-                # comparison (2026-06-18) showed this dominates NIRCam rejections
-                # (nan_fluxerr/snr 447/604 at baseline).  Widen to >= 1.5 FWHM: the
-                # seed is already the bbox-refined / ZEROFRAME-deblended core centre,
-                # so a ~1.5 FWHM search is ample and keeps the covariance non-singular.
+                # NIRCam: bounded position fit (>=1.5 FWHM keeps covariance
+                # non-singular; tighter pegs x_0/y_0 -> NaN flux_err -> good fits
+                # tossed, the dominant gc2211 baseline rejection mode).
                 pos_bound = max(size_saturated, 1.5 * fwhm_pix)
                 low_x  = xcen - x0 - pos_bound
                 high_x = xcen - x0 + pos_bound
@@ -1759,6 +1758,48 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             _xf = float(result['x_fit'][0]); _yf = float(result['y_fit'][0])
             # use the SAME psf the fit used (flux normalization must match)
             _psfu = np.clip(_infov_psf(_xx - _xf, _yy - _yf), 0, None)
+            # SPIKE-WEIGHTED AMPLITUDE (2026-06-21).  Nearly all saturated stars
+            # came out UNDER-subtracted (model peak 25-45% of data) because the
+            # amplitude was capped at the p10 of the inner-wing (which samples the
+            # near-core SATURATED-flagged pixels: valid but fewer-group / slightly
+            # suppressed rates that drag the fit DOWN), while the bright UNSATURATED
+            # diffraction-spike ridges -- which carry the true amplitude -- were
+            # masked out by the ~99%-spurious DQ SATURATED flag.  Instead, estimate
+            # the amplitude as the optimal flux Sum(d*p)/Sum(p^2) over the SPIKE
+            # pixels: finite-data pixels OUTSIDE the GENUINE NaN core (+4px buffer,
+            # to drop the suppressed near-core) with non-negligible PSF.  The p^2
+            # weighting puts the weight on the bright spike ridges (high local PSF)
+            # and ~0 on faint inter-spike / outer tails; a 3-sigma clip rejects
+            # residual neighbours / CRs.  This includes the DQ-SATURATED-but-finite
+            # spike pixels (their early-group rate is valid), which is exactly the
+            # "underweight cores / overweight spikes" the under-sub demands.
+            _data_cut_raw = data[y0:y1, x0:x1]
+            _genuine_core = ~np.isfinite(_data_cut_raw)
+            _core_dist = (ndimage.distance_transform_edt(~_genuine_core)
+                          if _genuine_core.any()
+                          else np.full(cutout.shape, np.inf, dtype=float))
+            _spike_set = (np.isfinite(cutout_fit) & np.isfinite(_data_cut_raw)
+                          & (_psfu > _psfu.max() * 1e-3) & (_core_dist >= 4))
+            _spike_flux = None
+            if int(_spike_set.sum()) >= 8:
+                _sp = _psfu[_spike_set].astype(float)
+                _sd = cutout_fit[_spike_set].astype(float)
+                _den = float(np.sum(_sp * _sp))
+                if _den > 0:
+                    _sf = float(np.sum(_sd * _sp) / _den)
+                    for _ in range(3):
+                        _r = _sd - _sf * _sp
+                        _sg = 1.4826 * np.median(np.abs(_r - np.median(_r))) + 1e-9
+                        _kp = np.abs(_r) < 4.0 * _sg
+                        if int(_kp.sum()) < 8 or _kp.all():
+                            break
+                        _spk, _sdk = _sp[_kp], _sd[_kp]
+                        _dn = float(np.sum(_spk * _spk))
+                        if _dn <= 0:
+                            break
+                        _sf = float(np.sum(_sdk * _spk) / _dn)
+                    if np.isfinite(_sf) and _sf > 0:
+                        _spike_flux = _sf
             # Measure the inner-wing band from the SAT-MASK BOUNDARY (distance
             # transform), NOT a fixed centre radius: the brightest stars have
             # large saturated cores whose wings sit well beyond r=25px, so a
@@ -1806,23 +1847,32 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                     # over-prediction; a genuinely-fainter LSQ is kept (min).
                     _env = float(np.percentile(_rat, 10))
                     _f0 = float(result['flux_fit'][0])
-                    if _use_large_infov:
-                        # LARGE-PSF fit: the diffraction spikes already pin the
-                        # amplitude, so TRUST the LSQ; the envelope is only a
-                        # runaway guard (cap if LSQ exceeds 3x the wing envelope)
-                        # and a FLOOR for LSQ-negative cores.
-                        if np.isfinite(_f0) and _f0 > 0:
-                            _new = min(_f0, 3.0 * _env)
-                        else:
-                            _new = _env
+                    if _spike_flux is not None and not _use_large_infov:
+                        # PREFERRED (small-PSF / moderately-saturated): spike-
+                        # weighted amplitude (overweight spikes, underweight core).
+                        # Fixes the systemic under-subtraction (model 25-45% ->
+                        # ~75% of data peak).  Downstream peak-cap still guards any
+                        # over-shoot.  NOT used for the LARGE-PSF path: the fovp1024
+                        # spike pattern spans ~hundreds of px, so the spike_set
+                        # (n~650) sweeps in background/noise and the estimate is
+                        # unstable (broke A->0, B->4.6x over-sub).  Large-PSF keeps
+                        # the LSQ + env guard below.
+                        _new = _spike_flux
+                        _amp_src = f'spike Sum(dp)/Sum(p2) n={int(_spike_set.sum())}'
+                    elif _use_large_infov:
+                        # LARGE-PSF: trust LSQ, env guard (unchanged behaviour).
+                        _new = (min(_f0, 3.0 * _env)
+                                if (np.isfinite(_f0) and _f0 > 0) else _env)
+                        _amp_src = f'env_guard p10={_env:.2e}'
                     else:
                         # small-PSF fallback: original behaviour (cap at p10)
                         _new = (min(_f0, _env) if (np.isfinite(_f0) and _f0 > 0)
                                 else _env)
+                        _amp_src = f'env_cap p10={_env:.2e}'
                     if _new != _f0:
                         result['flux_fit'][0] = _new
-                        print(f"  [miri envelope {'guard' if _use_large_infov else 'cap'}] "
-                              f"LSQ {_f0:.2e} -> {_new:.2e} (env_p10={_env:.2e}, "
+                        print(f"  [miri amp {'large' if _use_large_infov else 'small'}] "
+                              f"LSQ {_f0:.2e} -> {_new:.2e} ({_amp_src}, "
                               f"wing_px={int(_wing.sum())})", flush=True)
             # PEAK-MATCHING CAP (2026-06-18).  The p10 envelope still OVER-predicts
             # the central peak by 2-5x on many MIRI saturated stars: the masked
@@ -1913,6 +1963,52 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 # model 8730 ~ data 10547) without the floor.  The huge-core
                 # under-fit it targeted (star A) is actually an OFF-FOV / seed
                 # problem, not a wing-LSQ amplitude problem -- handled elsewhere.
+            # AMPLITUDE FLOOR (2026-06-21, user-requested).  The spike-weighted
+            # small-PSF fit reaches only ~75-90% of the coadd core, so the bright
+            # cores still show ~10-27% residual.  Push the model peak up to the
+            # MEASURABLE coadd core so they fully clear.  Unlike the reverted
+            # 2026-06-19 floor (which used a sat_area-scaled radius that grabbed a
+            # bright NEIGHBOUR's core and injected -70k pits), this uses a TIGHT
+            # <=4px box at the fit position (this star's own core) and is gated to
+            # spike-fit small-PSF stars.  Floor to 0.95x the coadd core: model peak
+            # never exceeds the data core -> a small POSITIVE residual, never a pit.
+            if (not _use_large_infov and _spike_flux is not None
+                    and np.isfinite(_psf_peak) and _psf_peak > 0
+                    and seed_gate_image is not None and seed_gate_wcs is not None):
+                # Reference the coadd value at the EXACT fit-centre pixel (3x3
+                # MEDIAN, robust).  A box-MAX (2-4px) over-referenced a 1px-off
+                # bright pixel -> the floor pushed the model above the centre value
+                # -> mild core OVER-sub (-130..-500).  The 3x3 median ~ the centre
+                # level (not a single hot pixel), so 0.90x it leaves a guaranteed
+                # small POSITIVE core residual ("must not oversubtract").
+                _rc = 1
+                _dpk_core = np.nan
+                try:
+                    _skc = ww.pixel_to_world(x0 + float(result['x_fit'][0]),
+                                             y0 + float(result['y_fit'][0]))
+                    _gxc, _gyc = seed_gate_wcs.world_to_pixel(_skc)
+                    _gxic, _gyic = int(round(float(_gxc))), int(round(float(_gyc)))
+                    _gnyc, _gnxc = seed_gate_image.shape
+                    if _rc < _gxic < _gnxc - _rc and _rc < _gyic < _gnyc - _rc:
+                        _wdc = seed_gate_image[_gyic - _rc:_gyic + _rc + 1,
+                                               _gxic - _rc:_gxic + _rc + 1]
+                        _wfc = np.isfinite(_wdc) & (_wdc != 0)
+                        if _wfc.any():
+                            _dpk_core = float(np.median(_wdc[_wfc]))
+                except Exception:
+                    _dpk_core = np.nan
+                if np.isfinite(_dpk_core) and _dpk_core > 0:
+                    # 0.90 (was 0.95): leave a ~10% POSITIVE core residual margin
+                    # so a 1px model-vs-data centroid offset can't drive the core
+                    # negative ("must not oversubtract").
+                    _floor_flux = 0.90 * _dpk_core / _psf_peak
+                    _fcur3 = float(result['flux_fit'][0])
+                    if np.isfinite(_fcur3) and _fcur3 < _floor_flux:
+                        result['flux_fit'][0] = _floor_flux
+                        print(f"  [miri amp floor] flux {_fcur3:.2e} -> "
+                              f"{_floor_flux:.2e} (model peak "
+                              f"{_fcur3*_psf_peak:.0f} -> {_floor_flux*_psf_peak:.0f} "
+                              f"vs coadd core {_dpk_core:.0f})", flush=True)
             # ALWAYS (MIRI in-FOV): the masked-core LSQ frequently returns a
             # NaN flux_err (singular covariance from x_0/y_0 pegging the bound),
             # which would make the accept gate reject an otherwise-good fit
@@ -2276,10 +2372,21 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 _yc = float(np.atleast_1d(result['ycentroid'])[0])
                 _sky = ww.pixel_to_world(_xc, _yc)
                 _cx, _cy = seed_gate_wcs.world_to_pixel(_sky)
+                # CAP sat_area for the prominence radius (2026-06-21).  A spurious
+                # DQ-SATURATED cluster (detector artifact: sat_area 8000-20000 of
+                # flagged-but-finite ~1100 pixels) makes r_sat=sqrt(area/pi) grow
+                # to 50-80 px, so the prominence "core" max grabs a DISTANT real
+                # star -> prom inflates to 30-106 and the phantom (140k-727k model
+                # on ~1100 data) slips the gate.  Cap at 1600 (~22px radius): real
+                # saturated stars (A/B sat_area<=1572, pillar bright within ~22px)
+                # are unaffected, but a fake's 22px-radius core is just its own
+                # ~1100 data -> prom<8 -> rejected.
+                _capped_sa = (min(int(src_sat_area), 1600)
+                              if src_sat_area is not None else src_sat_area)
                 _pp, _cc = _seed_prominence(seed_gate_image, (float(_cy), float(_cx)),
-                                            src_sat_area)
+                                            _capped_sa)
                 _kk = _seed_concentration(seed_gate_image, (float(_cy), float(_cx)),
-                                          src_sat_area)
+                                          _capped_sa)
                 # OVER-SUBTRACTION ratio: the fitted PSF model PEAK vs the deep
                 # coadd DATA at the fit position.  This is the most direct measure
                 # of the negative-fake-star pathology -- a satstar whose model
@@ -2314,6 +2421,37 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                         if _fin.any():
                             _dpk = float(np.nanmax(_dwin[_fin]))
                 _mpk = float(np.nanmax(model_image)) if np.isfinite(model_image).any() else np.nan
+                # FAKE-BRIGHT gate (2026-06-22).  A class of phantoms sits on
+                # smooth diffuse emission (NOT a local peak) yet is fit with a
+                # HUGE amplitude (model peak 1e4-6e5 on coadd data ~700-1700) --
+                # severe over-additions that gouge bright fake stars where there
+                # is no star at all.  They evade every prior gate: a big spurious
+                # sat_area pushes them onto the large-PSF branch (oversub skipped),
+                # their wandering adaptive core/prominence can grab a real
+                # neighbour, and seed_core_min=1000 is below their ~1000-2700
+                # ring core.  The robust discriminator is a SMALL-radius LOCAL
+                # coadd peak: a genuine bright saturated star (A/B) has a bright
+                # near-core (>=6000 within 6px even when the very centre is NaN);
+                # these fakes peak <=~2300 within 6px.  So a source claiming a
+                # very bright model MUST be backed by a bright local coadd peak,
+                # else it is a fake.  Real under-subtracted stars are exempt:
+                # their models are all <1e4 (the model_min cut), so only the
+                # "claims to be very bright" sources are tested.  Uses a small
+                # fixed radius (not the adaptive ring) so an inflated sat_area
+                # cannot make the core wander onto a distant real star.
+                _lpk = np.nan
+                _lr = 6
+                if _lr < _ix < _gnx - _lr and _lr < _iy < _gny - _lr:
+                    _lwin = seed_gate_image[_iy - _lr:_iy + _lr + 1,
+                                            _ix - _lr:_ix + _lr + 1]
+                    _lfin = np.isfinite(_lwin) & (_lwin != 0)
+                    if _lfin.any():
+                        _lpk = float(np.nanmax(_lwin[_lfin]))
+                _fake_bright = (seed_fake_model_min and seed_fake_model_min > 0
+                                and seed_fake_localpk_max and seed_fake_localpk_max > 0
+                                and np.isfinite(_mpk) and np.isfinite(_lpk)
+                                and _mpk > seed_fake_model_min
+                                and _lpk < seed_fake_localpk_max)
                 # The over-subtraction ratio compares the model PEAK to the coadd
                 # core.  For a LARGE-PSF in-FOV fit the model peak is the star's
                 # TRUE (unclipped) brightness while the coadd core is saturation-
@@ -2331,15 +2469,19 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                             and np.isfinite(_cc) and _cc < seed_core_min)
                         or (seed_conc_min and seed_conc_min > 0
                             and np.isfinite(_kk) and _kk < seed_conc_min)
-                        or _oversub)
+                        or _oversub
+                        or _fake_bright)
                 if _bad:
                     accept_source = False
                     print(f"Post-fit coadd gate (MIRI): rejecting source {ii+1} "
                           f"-- phantom/knot/over-fit (coadd prom={_pp:.1f}, "
-                          f"core={_cc:.0f}, conc={_kk:.1f}, model/data="
+                          f"core={_cc:.0f}, conc={_kk:.1f}, localpk={_lpk:.0f}, "
+                          f"model/data="
                           f"{(_mpk/_dpk if (np.isfinite(_mpk) and np.isfinite(_dpk) and _dpk>0) else float('nan')):.1f}"
+                          f"{' FAKE-BRIGHT' if _fake_bright else ''}"
                           f"; thresh prom{seed_prominence_min}/core{seed_core_min}/"
-                          f"conc{seed_conc_min}/oversub{seed_oversub_ratio})",
+                          f"conc{seed_conc_min}/oversub{seed_oversub_ratio}/"
+                          f"fake(model>{seed_fake_model_min:.0f}&localpk<{seed_fake_localpk_max:.0f}))",
                           flush=True)
             except Exception:
                 pass
