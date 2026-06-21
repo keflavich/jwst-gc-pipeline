@@ -505,16 +505,21 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
                                      weights, pos_weights)
 
     # position averages
+    _t0 = time.time()
+    print(f"Phase 1: position+flux nanaverages over {n_src}x{n_tbl} "
+          f"(nanaverage={getattr(nanaverage, '__name__', nanaverage)})...", flush=True)
     avg_ra = nanaverage(arr_ra, axis=1, weights=pos_weights)
     avg_dec = nanaverage(arr_dec, axis=1, weights=pos_weights)
     std_ra = nanaverage((arr_ra - avg_ra[:, None])**2, weights=pos_weights, axis=1)**0.5
     std_dec = nanaverage((arr_dec - avg_dec[:, None])**2, weights=pos_weights, axis=1)**0.5
     avgpos = SkyCoord(avg_ra, avg_dec, unit=(u.deg, u.deg), frame='icrs')
+    print(f"Phase 1: position averages done in {time.time()-_t0:.1f}s", flush=True)
 
     # free ra/dec arrays -- no longer needed
     del arr_ra, arr_dec
 
     # flux and flux_err reductions
+    _t0 = time.time()
     flux_avg = nanaverage(arr_flux, weights=weights_with_fallback, axis=1)
     std_flux_avg = nanaverage((arr_flux - flux_avg[:, None])**2, weights=weights_with_fallback, axis=1)**0.5
     flux_err_avg = nanaverage(arr_fluxerr, weights=weights_with_fallback, axis=1)
@@ -524,6 +529,7 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     # with no inverse-variance contribution legitimately have NaN here.
     flux_err_prop = (np.nansum(arr_fluxerr**2 * weights, axis=1)
                      / np.nansum(weights, axis=1))**0.5
+    print(f"Phase 1: flux averages done in {time.time()-_t0:.1f}s", flush=True)
 
     # free phase-1 big arrays (keep weights / keepmask -- needed in Phase 2)
     del arr_flux, arr_fluxerr
@@ -550,14 +556,20 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     # (skycoord_avg, std_ra, std_dec).  flux and flux_err are already done.
     already_done = {flux_colname, flux_error_colname, 'ra', 'dec',
                     'skycoord', skycoord_colname}
-    print("Phase 2: streaming remaining columns one at a time", flush=True)
-    for key in column_names:
+    _p2_cols = [k for k in column_names
+                if k not in already_done and k in tbls[0].colnames]
+    print(f"Phase 2: streaming {len(_p2_cols)} remaining columns one at a time "
+          f"(n_src={n_src}, n_tbl={n_tbl}, ~{n_src*n_tbl*4/1e9:.2f} GB/column "
+          f"float32); columns={_p2_cols}", flush=True)
+    for _ci, key in enumerate(column_names):
         if key in already_done:
             continue
         if key not in tbls[0].colnames:
             print(f"  Skipping {key} (not in tbls[0])", flush=True)
             continue
-        print(f"  Phase 2: streaming column {key}", flush=True)
+        _t0 = time.time()
+        print(f"  Phase 2 [{_ci}] column {key!r}: allocating + filling "
+              f"({n_src}x{n_tbl})...", flush=True)
         arr = np.full((n_src, n_tbl), np.nan, dtype='float32')
         for ii, tbl in enumerate(tbls):
             if key not in tbl.colnames:
@@ -565,15 +577,23 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
             keep = saved_keep[ii]
             mi = saved_match_inds[ii]
             arr[mi[keep], ii] = tbl[key][keep]
+        _t_fill = time.time()
+        print(f"  Phase 2 [{_ci}] column {key!r}: fill done in {_t_fill-_t0:.1f}s; "
+              f"running nanaverage (mean) over {n_src}x{n_tbl}...", flush=True)
         # Use weights_with_fallback (same rationale as flux averages
         # in Phase 1): a basecrds source whose every matched frame has
         # NaN flux_err must still produce a non-NaN average of qfit,
         # cfit, flags, etc. or it gets dropped at the minimal step.
         key_avg = nanaverage(arr, weights=weights_with_fallback, axis=1)
+        _t_mean = time.time()
+        print(f"  Phase 2 [{_ci}] column {key!r}: mean done in {_t_mean-_t_fill:.1f}s; "
+              f"running nanaverage (std)...", flush=True)
         std_key = nanaverage((arr - key_avg[:, None])**2, weights=weights_with_fallback, axis=1)**0.5
         newtbl[f'{key}_avg'] = key_avg
         newtbl[f'std_{key}_avg'] = std_key
         del arr
+        print(f"  Phase 2 [{_ci}] column {key!r}: DONE (std {time.time()-_t_mean:.1f}s, "
+              f"total {time.time()-_t0:.1f}s)", flush=True)
 
     # weights, keepmask, saved_match_inds, saved_keep kept until function
     # return; Python will free them after caller drops newtbl reference.

@@ -1011,25 +1011,29 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
         exposure = int(fn.split("_")[-3])
         thismodule = fn.split("_")[-2]
         visit = fn.split("_")[0]
-        # MODULE-LOCKED per-exposure offsets (preferred). The NIRCam detectors are SIAF-locked
-        # to <0.01 px within an exposure, so the alignment must be ONE shift per exposure applied
-        # identically to all 8 detectors -- NOT an independent per-detector tweakreg shift, which
-        # breaks the lock and produces filter-to-filter 'quiltwork' (~10-15 mas). The locked table
-        # (built by brick2221/analysis/relock_exposures.py: undo the recorded per-detector offset
-        # -> SIAF -> one VIRAC2-tied shift jointly solved over all detectors) is keyed on
-        # (Visit, Exposure, Filter) with NO Module column.
+        # MODULE-LOCKED per-VISIT offsets (preferred). The NIRCam detectors are SIAF-locked
+        # to <0.01 px within an exposure, and the SIAF/assign_wcs solution already carries the
+        # correct per-exposure dithers + per-detector geometry; the only uncorrected term is the
+        # per-VISIT guide-star pointing error.  So the alignment must be ONE shift per visit applied
+        # identically to all exposures AND all 8 detectors -- NOT an independent per-detector (or
+        # per-exposure) tweakreg shift, which breaks the lock and produces filter-to-filter
+        # 'quiltwork' (~10-15 mas) and injects per-exposure VIRAC2 noise.  The locked table (built by
+        # brick2221/analysis/relock_exposures.py: undo the recorded per-detector offset -> SIAF ->
+        # one VIRAC2-tied shift jointly solved over all exposures+detectors of the visit) is keyed on
+        # (Visit, Filter) only -- NO Module, NO Exposure column.
         locked_tbl = f'{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_VIRAC2locked.csv'
         if os.path.exists(locked_tbl):
             offsets_tbl = Table.read(locked_tbl)
-            match = ((offsets_tbl['Visit'] == visit) & (offsets_tbl['Exposure'] == exposure)
+            match = ((offsets_tbl['Visit'] == visit)
                      & (offsets_tbl['Filter'] == filtername))
             if match.sum() != 1:
                 raise ValueError(f"module-locked offset match={match.sum()} for {fn} "
-                                 f"(visit={visit}, exposure={exposure}, filter={filtername})")
+                                 f"(visit={visit}, filter={filtername}); expected exactly 1 "
+                                 f"per-visit row in {locked_tbl}")
             row = offsets_tbl[match]
             rashift = float(row['dra (arcsec)'][0]) * u.arcsec
             decshift = float(row['ddec (arcsec)'][0]) * u.arcsec
-            print(f"MODULE-LOCKED per-exposure offset for {fn}: ({rashift}, {decshift})")
+            print(f"MODULE-LOCKED per-visit offset for {fn}: ({rashift}, {decshift})")
         elif use_average:
             tblfn = f'{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_{refname}_average.csv'
             print(f"Using average offset table {tblfn}")
@@ -1094,6 +1098,26 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
         else:
             rashift = 0*u.arcsec
             decshift = 0*u.arcsec
+    elif (field == '007' and str(proposal_id) == '3958'):
+        # Sickle NIRCam: tie each exposure to the GNS frame.  Audit 2026-06-20:
+        # sickle had NO per-exposure alignment (fell through to the else ->
+        # rashift=0), so its catalogs sat at the raw assign_wcs frame ~90 mas off
+        # the GNS-tied mosaics/refcat (mosaic frame != catalog frame).  The
+        # sickle->GNS offset is a single field translation, constant across
+        # filters/exposures to <3 mas; measured per filter on the m6/m7 merged
+        # catalogs vs catalogs/nircam_bootstrapped_to_gns_refcat.fits (see
+        # _bench/build_sickle_gns_offsets.py + offsets/Offsets_JWST_Brick3958_GNS.csv).
+        # corr below is ON-SKY (GNS - catalog), mas.  adjust_wcs's delta_ra is a
+        # COORDINATE (Delta-alpha) rotation -> on-sky RA = delta_ra*cos(dec)
+        # (preflight: delta_ra=-90 mas gave -78.9 mas on-sky = -90*cos(28.8));
+        # so delta_ra = corr_dRA_onsky / cos(dec).  delta_dec is on-sky 1:1.
+        _gns = {'F187N': (-89.7, -34.2), 'F210M': (-88.5, -34.5),
+                'F335M': (-89.5, -33.2), 'F470N': (-91.4, -33.9),
+                'F480M': (-90.6, -33.1)}
+        _cdra, _cddec = _gns.get(filtername.upper(), (-90.0, -34.0))
+        _cosd = np.cos(np.radians(-28.805))
+        rashift = (_cdra / 1000.0 / _cosd) * u.arcsec
+        decshift = (_cddec / 1000.0) * u.arcsec
     else:
         rashift = 0*u.arcsec
         decshift = 0*u.arcsec
