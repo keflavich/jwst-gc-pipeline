@@ -34,6 +34,8 @@
 # reusing existing *_cal.fits (skip_step1and2 / -s).
 # ---------------------------------------------------------------------------
 #SBATCH --job-name=gc_reduce
+#SBATCH --account=astronomy-dept
+#SBATCH --qos=astronomy-dept-b
 #SBATCH --partition=hpg-default
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128gb

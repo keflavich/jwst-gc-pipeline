@@ -15,6 +15,8 @@
 #          FILTERS="F405N F410M F466N F212N" scripts/reduction/submit_cataloging.sbatch
 # ---------------------------------------------------------------------------
 #SBATCH --job-name=gc_catalog
+#SBATCH --account=astronomy-dept
+#SBATCH --qos=astronomy-dept-b
 #SBATCH --partition=hpg-default
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=128gb

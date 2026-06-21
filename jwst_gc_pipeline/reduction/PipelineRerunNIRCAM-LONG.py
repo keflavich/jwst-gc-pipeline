@@ -369,6 +369,21 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
               f"outlier_detection coverage holes.", flush=True)
         do_destreak = False
 
+    # Sickle policy (user 2026-06-17, [[sickle...]]): the SHORT-wave filters USE
+    # destreak ("the streaks are worse than the destreak artifacts" for SW),
+    # while the LONG-wave filters stay nodestreak/align.  This overrides the
+    # extended-emission force above PER FILTER for sickle so SW -> *_destreak_crf
+    # and LW -> *_align_crf (the suffixes the cataloging --each-suffix consumes).
+    if regionname == 'sickle':
+        _sw_destreak = filtername.upper() in (
+            'F070W', 'F090W', 'F115W', 'F140M', 'F150W', 'F162M', 'F164N',
+            'F182M', 'F187N', 'F200W', 'F210M', 'F212N')
+        do_destreak = _sw_destreak
+        print(f"Sickle per-filter destreak policy: {filtername} -> "
+              f"do_destreak={do_destreak} "
+              f"({'SW=destreak' if _sw_destreak else 'LW=align/nodestreak'})",
+              flush=True)
+
     wavelength = int(filtername[1:4])
 
     basepath = f'/orange/adamginsburg/jwst/{regionname}/'

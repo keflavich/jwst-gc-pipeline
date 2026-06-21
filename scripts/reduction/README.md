@@ -2,6 +2,12 @@
 
 Two stages, each a SLURM **array over filters** (one array task per filter).
 
+**QOS (required):** all submitters set `#SBATCH --account=astronomy-dept` and
+`#SBATCH --qos=astronomy-dept-b`. This is mandatory — the default `adamginsburg`
+QOS caps total CPUs at 10, so any task requesting >10 cpus (these request 16/32)
+sits forever in `QOSGrpCpuLimit` pending. If you write a new submitter, copy
+these two lines.
+
 ## 1. Reduction + alignment
 
 ```
