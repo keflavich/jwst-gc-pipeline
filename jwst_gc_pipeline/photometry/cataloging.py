@@ -1504,6 +1504,90 @@ def _run_one_frame_manual(args):
                     f'{type(ex).__name__}: {ex}\n{traceback.format_exc()}')
 
 
+def _clean_offfov_dups_and_offfield(merged, filt, data_i2d_path, basepath, *,
+                                    dedup_arcsec=1.0, fov_pad_psf=5.0):
+    """Post-merge cleanup of off-FOV satstar artifacts (per-filter merged catalog).
+
+    A) Collapse ``replaced_saturated`` rows clustering within ``dedup_arcsec`` to a
+       SINGLE representative (the median-flux member).  An off-FOV bright star is
+       fit PER FRAME and the (degenerate) positions scatter wider than the 0.15"
+       satstar dedup, leaving many rows at one physical location -- the catalog
+       must have exactly ONE entry per off-FOV star (sickle F480M m7 had 12).
+    B) Drop NON-satstar rows projecting > ``fov_pad_psf`` PSF widths OUTSIDE this
+       filter's data FOV.  These are m7 cross-band-seed artifacts: the shared
+       seed unions positions from ALL filters, so positions covered only by other
+       (e.g. SW) filters fall outside this LW filter's FOV, get fit at off-field
+       locations, and are inserted as garbage (qfit up to 1e4, up to 56" out).
+       replaced_saturated rows are KEPT (a real off-FOV star legitimately sits
+       off-field -- but as ONE row after A).
+
+    Returns (cleaned_table, n_dedup_removed, n_offfield_removed).
+    """
+    if merged is None or len(merged) == 0:
+        return merged, 0, 0
+    from astropy.coordinates import SkyCoord, search_around_sky
+    sc = (SkyCoord(merged['skycoord']) if 'skycoord' in merged.colnames
+          else SkyCoord(merged['ra'], merged['dec'], unit='deg'))
+    fcol = ('flux' if 'flux' in merged.colnames
+            else ('flux_fit' if 'flux_fit' in merged.colnames else None))
+    rs = (np.asarray(merged['replaced_saturated'], dtype=bool)
+          if 'replaced_saturated' in merged.colnames else np.zeros(len(merged), bool))
+    drop = np.zeros(len(merged), bool)
+
+    # ---- A: dedup replaced_saturated clusters to one representative ----
+    if rs.any() and fcol is not None:
+        sat_idx = np.where(rs)[0]
+        ssc = sc[sat_idx]
+        i1, i2, _, _ = search_around_sky(ssc, ssc, dedup_arcsec * u.arcsec)
+        parent = list(range(len(sat_idx)))
+        def _find(a):
+            while parent[a] != a:
+                parent[a] = parent[parent[a]]; a = parent[a]
+            return a
+        for a, b in zip(i1, i2):
+            parent[_find(int(a))] = _find(int(b))
+        groups = {}
+        for i in range(len(sat_idx)):
+            groups.setdefault(_find(i), []).append(i)
+        flux = np.asarray(merged[fcol], dtype=float)
+        for g in groups.values():
+            if len(g) <= 1:
+                continue
+            gf = flux[sat_idx[g]]
+            keep = g[int(np.argmin(np.abs(gf - np.nanmedian(gf))))]
+            for j in g:
+                if j != keep:
+                    drop[sat_idx[j]] = True
+    n_dedup = int(drop.sum())
+
+    # ---- B: drop non-satstar rows far outside the FOV ----
+    n_off = 0
+    if data_i2d_path and os.path.exists(data_i2d_path):
+        try:
+            with fits.open(data_i2d_path) as dh:
+                _s = dh['SCI'] if 'SCI' in [x.name for x in dh] else dh[0]
+                ww = wcs.WCS(_s.header); ny, nx = _s.data.shape
+            px = float(ww.proj_plane_pixel_scales()[0].to('arcsec').value)
+            fw = 0.16
+            try:
+                _ft = Table.read(f'{basepath}/reduction/fwhm_table.ecsv')
+                _row = _ft[_ft['Filter'] == filt.upper()]
+                if len(_row):
+                    fw = float(_row['PSF FWHM (arcsec)'][0])
+            except Exception:
+                pass
+            pad = fov_pad_psf * fw / px
+            x, y = ww.world_to_pixel(sc)
+            outside = ((x < -pad) | (x > nx - 1 + pad)
+                       | (y < -pad) | (y > ny - 1 + pad))
+            offfield = outside & (~rs) & (~drop)
+            drop |= offfield
+            n_off = int(offfield.sum())
+        except Exception as ex:
+            print(f"  off-field FOV filter skipped ({ex})", flush=True)
+    return merged[~drop], n_dedup, n_off
+
+
 def _reconstruct_smoothed_bg_path(cut_bp, proposal_id, field, module, filt,
                                   label, options, pupil):
     """Rebuild the on-disk smoothed-bg i2d path for a completed phase ``label``.
@@ -2005,6 +2089,22 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 combined_vetted_path = merged_path.replace('.fits', '_vetted.fits')
                 try:
                     merged = Table.read(merged_path)
+                    # post-merge off-FOV cleanup: (A) one row per off-FOV satstar
+                    # (the per-frame fits scatter wider than the 0.15" satstar
+                    # dedup), (B) drop NON-satstar rows that fall >5 PSF widths
+                    # outside this filter's FOV (m7 cross-band-seed unions all
+                    # filters' positions -> off-this-FOV garbage).  See
+                    # _clean_offfov_dups_and_offfield.
+                    merged, _ndup, _noff = _clean_offfov_dups_and_offfield(
+                        merged, filt, _data_i2d_path(module, filt), basepath,
+                        dedup_arcsec=float(getattr(options, 'offfov_dedup_arcsec', 1.0)),
+                        fov_pad_psf=float(getattr(options, 'offfield_fov_pad_psf', 5.0)))
+                    if _ndup or _noff:
+                        print(f"manual [{phase}] {filt}/{module}: off-FOV cleanup "
+                              f"removed {_ndup} duplicate satstar row(s) + {_noff} "
+                              f"off-field cross-band-seed artifact(s) -> n={len(merged)}",
+                              flush=True)
+                        merged.write(merged_path, overwrite=True)
                     # --- iteration-found provenance: the first phase a source
                     # appears in (matched across phases by sky position) ---
                     _iter_num = {'m2': 2, 'm3': 3, 'm4': 4, 'm5': 5, 'm6': 6, 'm7': 7}[merge_label]
