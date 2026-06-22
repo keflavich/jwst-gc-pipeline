@@ -1847,17 +1847,17 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             local_snr_min=float(getattr(
                                 opts_phase, 'manual_ext_local_snr_min', 5.0)),
                             bg_subtract_path=bg_sub,
-                            # structure-noise prune is MIRI-ONLY: gate on
-                            # miri_tuning so it can never apply to the default
-                            # NIRCam pipeline regardless of options.
-                            struct_x=(float(getattr(opts_phase, 'struct_x', 0.0))
-                                      if miri_tuning else 0.0),
-                            struct_y=(float(getattr(opts_phase, 'struct_y', 0.0))
-                                      if miri_tuning else 0.0),
-                            # coarse-bg detection is MIRI-only & early-phase-only
-                            # (opts_phase.coarse_bg_box=51 for m3/m4, 0 for m5/m6)
-                            coarse_bg_box=(int(getattr(opts_phase, 'coarse_bg_box', 0))
-                                           if miri_tuning else 0),
+                            # Structure-noise prune / coarse-bg detection.  For
+                            # MIRI the miri_tuning block sets opts_phase.struct_x/y
+                            # and coarse_bg_box per phase (5/8 & 51 on raw rounds,
+                            # 3/4 on bg-subtracted rounds).  For NIRCam they come
+                            # straight from options (the --manual-struct-noise-x/-y
+                            # and --manual-coarse-bg-box flags), defaulting to 0 so
+                            # the default NIRCam pipeline is unchanged; set them to
+                            # enable the prune on extended-emission fields.
+                            struct_x=float(getattr(opts_phase, 'struct_x', 0.0)),
+                            struct_y=float(getattr(opts_phase, 'struct_y', 0.0)),
+                            coarse_bg_box=int(getattr(opts_phase, 'coarse_bg_box', 0)),
                             label=f'{phase}:{filt}')
                     except Exception as ex:
                         print(f"manual [{phase}]: i2d-augmented seed failed ({ex}); "

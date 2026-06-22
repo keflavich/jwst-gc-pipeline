@@ -3240,6 +3240,33 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--manual-ext-local-snr-min", dest="manual_ext_local_snr_min",
                     type='float', default=5.0,
                     help="Extended-emission vetting: require local S/N >= this (default 5).")
+    # Structure-noise prune + coarse-bg detection.  These shape/physics-based
+    # discriminators reject broad extended-emission (PAH/nebulosity) bumps while
+    # keeping faint point sources (which stay sharp and outpeak the local
+    # structure regardless of brightness) -- unlike raising an S/N threshold,
+    # which also kills faint real stars.  Previously only the miri_tuning path
+    # set these; expose them so NIRCam LW (W51/Sickle/WD2) extended-emission
+    # fields can enable them.  Default 0 = disabled (prior NIRCam behaviour).
+    # The miri_tuning per-phase schedule still overrides these for MIRI.
+    parser.add_option("--manual-struct-noise-x", dest="struct_x",
+                    type='float', default=0.0,
+                    help=("Structure-noise prune: keep a detection only if its peak "
+                          "exceeds smoothed_bg + struct_x*real_noise + "
+                          "struct_y*structure_noise.  struct_x scales the per-pixel "
+                          "photon-noise term.  0 disables (default 0.0); NIRCam LW "
+                          "PAH fields try ~2-3."))
+    parser.add_option("--manual-struct-noise-y", dest="struct_y",
+                    type='float', default=0.0,
+                    help=("Structure-noise prune: struct_y scales the local STRUCTURE "
+                          "noise (RMS of data-minus-smoothed-bg) -- the term that "
+                          "rejects PAH/filament bumps while sparing point sources.  "
+                          "0 disables (default 0.0); NIRCam LW try ~3-4."))
+    parser.add_option("--manual-coarse-bg-box", dest="coarse_bg_box",
+                    type='int', default=0,
+                    help=("Detect on a coarse-background-subtracted image: subtract a "
+                          "<box>px median before daofind so faint stars on a bright "
+                          "but smooth extended pedestal are not lost.  0 disables "
+                          "(default 0); MIRI raw rounds use 51."))
     parser.add_option("--manual-group-min-sep-fwhm", dest="manual_group_min_sep_fwhm",
                     type='float', default=2.0,
                     help=("SourceGrouper grouping radius in FWHM (manual path; "
