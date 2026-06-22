@@ -2346,9 +2346,21 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
     return infilled_filename
 
 
-def save_residual_datamodel(input_filename, output_filename, data):
+def save_residual_datamodel(input_filename, output_filename, data, clear_dq=False):
     """
     TODO: profile this code, it seems to take a minute or more even for cutouts
+
+    ``clear_dq`` (2026-06-20): for the MODEL image, reset DQ to GOOD and make
+    ERR/variance finite.  The model is a SYNTHETIC rendered image -- every pixel
+    is a valid model value, even where the DATA was DQ-SATURATED (the bright
+    saturated-star CORES).  If we inherit the data's DQ, ResampleStep zero-
+    weights the DO_NOT_USE/SATURATED pixels and the satstar model CORE is dropped
+    from the model i2d mosaic (sickle F770W stars A/B: per-frame model has the
+    core at 3378/10547, but the mosaic shows ~0 -- the saturated-core pixels were
+    weighted out).  Unsaturated stars (C/D) keep good DQ so they survive; only the
+    saturated cores were being lost.  Clearing DQ lets the full model resample.
+    Used ONLY for the model; the RESIDUAL keeps the data DQ (NaN cores there are
+    honest -- the data IS missing).
     """
     import astropy.io.fits as fits_io
 
@@ -2368,6 +2380,25 @@ def save_residual_datamodel(input_filename, output_filename, data):
         wcs = model.meta.wcs
         model.data = data
         model.meta.wcs = wcs  # explicit re-assignment ensures GWCS is serialized to ASDF extension
+        if clear_dq:
+            # synthetic model -> every pixel valid; drop the data's DQ/SATURATED
+            # flags so ResampleStep keeps the satstar model cores (see docstring).
+            try:
+                model.dq = np.zeros_like(model.dq)
+            except Exception:
+                pass
+            # ResampleStep ivm-weights by variance; make it finite & uniform so no
+            # model pixel is dropped for a NaN/inf inherited variance at the cores.
+            for _vn in ('err', 'var_rnoise', 'var_poisson', 'var_flat'):
+                try:
+                    _arr = getattr(model, _vn)
+                    if _arr is not None and np.size(_arr):
+                        _bad = ~np.isfinite(_arr)
+                        if _bad.any():
+                            _arr[_bad] = 1.0
+                            setattr(model, _vn, _arr)
+                except Exception:
+                    pass
         # The residual/model image is sky-pedestal-free BY CONSTRUCTION: the
         # model is rendered point sources (>= 0) and the residual already has the
         # source+satstar model subtracted.  But this datamodel inherits the input
@@ -2870,13 +2901,46 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
             # Regression: tests/test_residual_model_policy.py.
             # ==================================================================
             mc_resid = (base - mc_model).astype('float32')   # residual: bg only (no stars)
+            # NaN-mask ONLY deep over-subtraction PITS at saturated cores (MIRI).
+            # The clipped saturated core, minus a TRUE-amplitude satstar model, can
+            # gouge a deep negative pit (sickle bright pillar star: -755k) -- THOSE
+            # pixels are undefined and get NaN'd.  But the MIRI SATURATED DQ flag is
+            # broad (~16% of the detector: it tags the bright stars' spikes/wings,
+            # whose DATA is perfectly valid), and NaN-ing ALL of them (a) erased the
+            # bright flux the user needs in the residual and (b) BALLOONED through
+            # resample (16% detector -> 12.5% i2d).  So restrict the NaN to
+            # saturated pixels that are also a DEEP NEGATIVE pit; positive/normal
+            # residual at saturated pixels (the unsubtracted bright flux) is KEPT.
+            # Full-frame only (cutout shapes won't match the frame DQ -> guard skips).
+            if _instrument_from_filter(filtername) == 'MIRI':
+                try:
+                    with fits.open(orig) as _oh:
+                        _onames = [h.name for h in _oh]
+                        _dq = _oh['DQ'].data if 'DQ' in _onames else None
+                    if _dq is not None and _dq.shape == mc_resid.shape:
+                        _satmask = (_dq.astype(np.int64) & 2) > 0
+                        _fin = np.isfinite(mc_resid)
+                        if _fin.any():
+                            _med = np.nanmedian(mc_resid[_fin])
+                            _nmad = 1.4826 * np.nanmedian(
+                                np.abs(mc_resid[_fin] - _med)) + 1e-6
+                            # pit = saturated AND >10 robust-sigma below the median
+                            _pit = _satmask & (mc_resid < _med - 10.0 * _nmad)
+                            mc_resid[_pit] = np.nan
+                            print(f"  [miri resid] NaN'd {int(_pit.sum())} deep-pit "
+                                  f"sat px (of {int(_satmask.sum())} sat); kept "
+                                  f"bright flux", flush=True)
+                except Exception as _dqex:
+                    print(f"mergedcat: DQ-sat NaN-mask skipped for "
+                          f"{os.path.basename(orig)}: {_dqex}", flush=True)
             mc_model_display = mc_model.astype('float32')     # i2d model: stars, no bg
             if satstar_sm is not None and satstar_sm.shape == mc_model.shape:
                 mc_model_display = mc_model_display + satstar_sm
             out_resid = f'{stem}_mergedcat_residual.fits'
             out_model = f'{stem}_mergedcat_model.fits'
             save_residual_datamodel(raw_resid, out_resid, mc_resid)
-            save_residual_datamodel(raw_model, out_model, mc_model_display)
+            save_residual_datamodel(raw_model, out_model, mc_model_display,
+                                    clear_dq=True)
             written[kind].append(out_resid)
             written_model[kind].append(out_model)
     # mosaic each kind's merged-catalog residuals
