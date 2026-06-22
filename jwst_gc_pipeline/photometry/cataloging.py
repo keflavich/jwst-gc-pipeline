@@ -1994,7 +1994,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             basepath, filt, proposal_id, field,
                             visitid=f'{visitid:03d}',
                             each_suffix=_resolve_each_suffix(options, filt),
-                            module=module, pupil='clear')))
+                            module=module, pupil='clear', allow_empty=True)))
                 else:
                     candidate_frames = frame_cache.get((module, filt), [])
 

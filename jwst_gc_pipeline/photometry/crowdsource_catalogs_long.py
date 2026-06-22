@@ -3633,6 +3633,19 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             '3523': {'003': 'wd2', '005': 'wd2'},
                             '6151': {'001': 'w51'},
                             }[proposal_id]
+    # Instrument-dependent field numbering for MIRI (mirimage).  The map above is
+    # NIRCam-era; proposal 2221 numbers the brick/cloudc MIRI pointings OPPOSITE
+    # to its NIRCam pointings (NIRCam brick=001/cloudc=002; MIRI brick=002/
+    # cloudc=001), and the w51 (6151) / sgrb2 (5365) MIRI pointings are obs 002,
+    # which the NIRCam-era map omits.  Override only for mirimage so NIRCam runs
+    # are untouched.
+    if 'mirimage' in [str(m).lower() for m in modules]:
+        if proposal_id == '2221':
+            field_to_reg_mapping = {'002': 'brick', '001': 'cloudc'}
+        elif proposal_id == '6151':
+            field_to_reg_mapping = {'001': 'w51', '002': 'w51'}
+        elif proposal_id == '5365':
+            field_to_reg_mapping = {'001': 'sgrb2', '002': 'sgrb2'}
     reg_to_field_mapping = {v:k for k,v in field_to_reg_mapping.items()}
     # When multiple fields share a target (e.g. proposal 2211 / gc2211 has
     # 5 GC pointings 023/028/046/049/050), the inverted mapping collapses to
@@ -3995,7 +4008,7 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
             f"Check the region coordinates/target.")
 
 
-def get_filenames(basepath, filtername, proposal_id, field, each_suffix, module, pupil='clear', visitid='001'):
+def get_filenames(basepath, filtername, proposal_id, field, each_suffix, module, pupil='clear', visitid='001', allow_empty=False):
 
     # jw01182004002_02101_00012_nrcalong_destreak_o004_crf.fits
     # jw02221001001_07101_00012_nrcalong_destreak_o001_crf.fits
@@ -4044,6 +4057,13 @@ def get_filenames(basepath, filtername, proposal_id, field, each_suffix, module,
             glstr_list.append(glstr)
             fglob.extend(glob.glob(glstr))
     if len(fglob) == 0:
+        if allow_empty:
+            # Tolerated by callers sweeping a visit range (run_manual_pipeline):
+            # a target's configured nvisits can exceed the visits actually
+            # present for a given filter/obs (e.g. cloudc NIRCam has 2 visits but
+            # the MIRI F2550W obs 001 has only visit 001), so an absent visit
+            # must contribute zero frames, not crash the whole run.
+            return []
         raise ValueError(f"No matches found to any of {glstr_list}")
     else:
         return sorted(set(fglob))
