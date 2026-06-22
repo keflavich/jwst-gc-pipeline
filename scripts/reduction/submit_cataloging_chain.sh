@@ -60,9 +60,19 @@ COMMON_EXPORT="$COMMON_EXPORT,EACH_SUFFIX=$EACH_SUFFIX,MAX_GROUP_SIZE=$MAX_GROUP
 COMMON_EXPORT="$COMMON_EXPORT,FILTERS=$FILTERS"
 [ -n "$PIPE_ROOT" ] && COMMON_EXPORT="$COMMON_EXPORT,PIPE_ROOT=$PIPE_ROOT"
 
-echo "Stage 1: per-filter array (0-$((NF-1))) over: $FILTERS"
+# Optional upstream dependency (e.g. a reduction array job id): stage 1 waits
+# for it to finish OK before any cataloging starts.  Enables a full
+# reduction -> cataloging chain.  DEP="afterok:<jobid>" or just "<jobid>".
+DEP=${DEP:-}
+DEP_ARG=""
+if [ -n "$DEP" ]; then
+    case "$DEP" in after*:*) DEP_ARG="--dependency=$DEP";; *) DEP_ARG="--dependency=afterok:$DEP";; esac
+fi
+
+echo "Stage 1: per-filter array (0-$((NF-1))) over: $FILTERS${DEP_ARG:+  [$DEP_ARG]}"
 ARR=$(sbatch --parsable \
     --array=0-$((NF-1)) \
+    $DEP_ARG \
     --cpus-per-task="$PERFILTER_CPUS" --mem="$PERFILTER_MEM" --time="$PERFILTER_TIME" \
     --export="$COMMON_EXPORT,PARALLEL_WORKERS=$PERFILTER_CPUS" \
     "$HERE/submit_cataloging.sbatch")
