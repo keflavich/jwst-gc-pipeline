@@ -41,6 +41,23 @@ def query_virac2(ra, dec, radius):
     return res[0]
 
 
+def _query_gaia_vizier(ra, dec, radius):
+    """VizieR fallback (I/355/gaiadr3) -- works from compute nodes where the Gaia ESA
+    TAP service is firewalled.  Returns a table with ESA-TAP-style column names."""
+    from astroquery.vizier import Vizier
+    Vizier.ROW_LIMIT = -1
+    Vizier.columns = ['RA_ICRS', 'DE_ICRS', 'pmRA', 'pmDE', 'Gmag']
+    res = Vizier.query_region(SkyCoord(ra * u.deg, dec * u.deg), radius=radius * u.deg,
+                              catalog='I/355/gaiadr3')
+    if not res:
+        raise RuntimeError("VizieR Gaia DR3 query returned nothing")
+    t = res[0]
+    t.rename_column('RA_ICRS', 'ra'); t.rename_column('DE_ICRS', 'dec')
+    t.rename_column('pmRA', 'pmra'); t.rename_column('pmDE', 'pmdec')
+    t.rename_column('Gmag', 'phot_g_mean_mag')
+    return t
+
+
 def query_gaia(ra, dec, radius, retries=6):
     import time
     from astroquery.gaia import Gaia
@@ -60,7 +77,8 @@ def query_gaia(ra, dec, radius, retries=6):
                 last = e
                 print(f"  Gaia query attempt {i} ({launcher.__name__}) failed: {e}")
                 time.sleep(5 * (i + 1))
-    raise RuntimeError(f"Gaia query failed after {retries} retries: {last}")
+    print(f"  Gaia ESA TAP failed ({last}); falling back to VizieR I/355/gaiadr3")
+    return _query_gaia_vizier(ra, dec, radius)
 
 
 def main():

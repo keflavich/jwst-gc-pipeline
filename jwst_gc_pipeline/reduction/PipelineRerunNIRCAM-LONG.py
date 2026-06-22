@@ -135,7 +135,11 @@ refnames = {'2221': 'F405ref',
 REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD = {
     '2221': {
         '001': 'catalogs/crowdsource_based_nircam-f405n_reference_astrometric_catalog.ecsv',
-        '002': 'catalogs/crowdsource_based_nircam-f405n_reference_astrometric_catalog.ecsv',
+        # obs 002 = Cloud C. Re-anchored 2026-06-22 to the Gaia-tied seed (Gaia DR3 +
+        # VIRAC2 fill, per-star PM-propagated to obs epoch 2023.30). Audit found the old
+        # F405N crowdsource bootstrap (VVV-DR4/2MASS frame) was ~+22 mas RA / ~+90 mas Dec
+        # off Gaia.  Built by build_gaia_virac2_refcat_byquery.py (ra=266.588 dec=-28.583).
+        '002': 'catalogs/gaia_virac2_refcat_epoch2023.30.fits',
     },
     '1182': {
         # obs 004 = brick. Re-anchored 2026-06 to the Gaia-tied seed
