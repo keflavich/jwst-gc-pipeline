@@ -115,6 +115,15 @@ REFERENCE_ASTROMETRIC_CATALOG_CANDIDATES_BY_FIELD = {
             'catalogs/twomass.fits',
         ),
     },
+    # 2526 obs 021 == the "G0" CMZ cloud-c filament F770W pointing; routed into
+    # the cloudc/ tree, so use cloudc's NIRCam f182m absolute refcat (twomass
+    # last resort -- sparse in the crowded GC).
+    '2526': {
+        '021': (
+            'catalogs/pipeline_based_nircam-f182m_reference_astrometric_catalog.fits',
+            'catalogs/twomass.fits',
+        ),
+    },
 }
 
 
@@ -187,8 +196,14 @@ def main(filtername, Observations=None, regionname='brick',
             # brick); routed here so it lands in brick/, not sickle/.
             assert field == '003'
     elif regionname == 'cloudc':
-        # jw02221-o001_t001_miri_f2550w_i2d.fits
-        assert field == '001'
+        if proposal_id == '2221':
+            # jw02221-o001_t001_miri_f2550w_i2d.fits
+            assert field == '001'
+        elif proposal_id == '2526':
+            # 2526 obs 021 (t013) is the "G0" CMZ cloud-c filament F770W pointing
+            # (~5.4' from the 2221 cloudc field; distinct pointing, same region
+            # tree -- reuses cloudc reduction/fwhm_table + crds + catalogs).
+            assert field == '021'
     elif regionname == 'sickle':
         # ONLY obs 001/002 are the sickle; obs 003 is the brick (see above).
         assert proposal_id == '3958'
@@ -679,6 +694,8 @@ if __name__ == "__main__":
                             '3958': {'001': 'sickle', '002': 'sickle', '003': 'brick'},
                             '5365': {'001': 'sgrb2'},
                             '6151': {'001': 'w51_background', '002': 'w51'},
+                            # 2526 obs 021 = "G0" CMZ cloud-c filament F770W
+                            '2526': {'021': 'cloudc'},
                             }[proposal_id]
 
     for field in fields:
