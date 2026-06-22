@@ -70,8 +70,8 @@ fi
 unset SLURM_ARRAY_TASK_ID SLURM_ARRAY_JOB_ID
 
 echo "CATALOG start: $TARGET $PROPOSAL/$FIELD filter=$FILT modules=$MODULES"
-PYTHON=/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/python
-$python -m jwst_gc_pipeline.photometry.crowdsource_catalogs_long \
+PYTHON=${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/python}
+"$PYTHON" -m jwst_gc_pipeline.photometry.crowdsource_catalogs_long \
     --filternames="$FILT" \
     --modules="$MODULES" \
     --each-exposure \
