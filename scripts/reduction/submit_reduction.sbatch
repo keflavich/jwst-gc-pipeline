@@ -78,9 +78,15 @@ fi
 SKIP_FLAG=""
 [ "$SKIP" = "1" ] && SKIP_FLAG="-s"
 
+# Descriptive per-task job name (the #SBATCH --job-name is necessarily generic
+# because the filter is only known after indexing the array here).  Rename this
+# task so squeue shows what it actually is, e.g. "red_4147_012_F470N".
+scontrol update JobId="${SLURM_JOB_ID:-0}" Name="red_${PROPOSAL}_${FIELD}_${FILT}" 2>/dev/null || true
+
+PYTHON=${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/python}
 echo "REDUCE start: proposal=$PROPOSAL field=$FIELD filter=$FILT modules=$MODULES skip=$SKIP"
 echo "PIPE=$PIPE"
-python "$PIPE" -p "$PROPOSAL" -d "$FIELD" -f "$FILT" -m "$MODULES" $SKIP_FLAG
+"$PYTHON" "$PIPE" -p "$PROPOSAL" -d "$FIELD" -f "$FILT" -m "$MODULES" $SKIP_FLAG
 rc=$?
 echo "REDUCE done: filter=$FILT rc=$rc"
 exit $rc

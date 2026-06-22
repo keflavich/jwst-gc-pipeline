@@ -62,6 +62,9 @@ if [ -z "$FILT" ]; then
     exit 1
 fi
 
+# Descriptive per-task job name (filter only known after indexing the array).
+scontrol update JobId="${SLURM_JOB_ID:-0}" Name="cat_${TARGET}_${FILT}" 2>/dev/null || true
+
 # The active manual pipeline refuses to run with SLURM_ARRAY_TASK_ID set (its
 # phases must not be split across array tasks).  We use the array index ONLY to
 # pick this task's filter -- each task then runs ALL phases for that one filter
