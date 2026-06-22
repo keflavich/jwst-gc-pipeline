@@ -474,6 +474,51 @@ def main(filtername, Observations=None, regionname='brick',
             save_results=True)
         print(f"DONE running {asn_file_each}")
 
+        # CRF NAMING FIX (2026-06-20): because we set the asn product name above
+        # (line ~375) to 'jw0{prop}-o{field}_t001_miri_{filt}', outlier_detection
+        # names the CR-flagged products after the PRODUCT, not the exposure:
+        #   jw03958-o001_t001_miri_f770w_<N>_o{field}_crf.fits
+        # The per-frame photometry (crowdsource_catalogs_long.get_filenames) globs
+        # PER-EXPOSURE crf:  jw0{prop}{field}{visit}*{module}*o{field}_crf.fits
+        # i.e. jw03958001001_*_mirimage_o001_crf.fits .  Those two never matched,
+        # so a corrected re-reduction's crf silently never reached cataloging
+        # (the o001 37deg-rotation fix was invisible for days for exactly this).
+        # Map product-named crf -> per-exposure names by EXPSTART (1:1) and copy
+        # them into place so cataloging consumes the freshly-corrected WCS.
+        from astropy.io import fits as _fits
+        prod_name = asn_data['products'][0]['name']
+        prod_crf = sorted(glob(os.path.join(output_dir, f'{prod_name}_*_o{field}_crf.fits')))
+        if prod_crf:
+            def _expstart(fn):
+                h = _fits.getheader(fn)
+                es = h.get('EXPSTART')
+                if es is None and len(_fits.open(fn)) > 1:
+                    es = _fits.getheader(fn, 1).get('EXPSTART')
+                return round(float(es), 6)
+            # target per-exposure name derived from each cal/align member
+            targ_by_es = {}
+            for member in asn_data['products'][0]['members']:
+                cal_base = os.path.basename(member['expname']).replace('_align.fits', '_cal.fits')
+                target = os.path.join(output_dir, cal_base.replace('_cal.fits', f'_o{field}_crf.fits'))
+                # cal may live in output_dir or resolve relative to cwd; try both
+                cal_path = cal_base if os.path.exists(cal_base) else os.path.join(output_dir, cal_base)
+                try:
+                    targ_by_es[_expstart(cal_path)] = target
+                except (FileNotFoundError, OSError, TypeError):
+                    print(f"  WARNING: cannot read EXPSTART of {cal_base}; skipping its crf mapping")
+            for pc in prod_crf:
+                es = _expstart(pc)
+                target = targ_by_es.get(es)
+                if target is None:
+                    print(f"  WARNING: product crf {os.path.basename(pc)} EXPSTART={es} "
+                          f"has no per-exposure cal match; per-exposure crf NOT written")
+                    continue
+                shutil.copy(pc, target)
+                print(f"  crf rename: {os.path.basename(pc)} -> {os.path.basename(target)}")
+        else:
+            print(f"  (no product-named crf {prod_name}_*_o{field}_crf.fits found; "
+                  f"assuming crf already per-exposure named)")
+
         print("After tweakreg step, checking WCS headers:")
         for member in asn_data['products'][0]['members']:
             check_wcs(member['expname'])

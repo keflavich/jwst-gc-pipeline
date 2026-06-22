@@ -74,13 +74,30 @@ def crowdsource_diagnostic(basetable, exclude, filtername='f466n'):
     ax2.axis([1e1,3e5,1e1,3e5]);
 
 
+# Effective wavelengths (um) for color-pair / non-JWST-filter names that don't
+# follow the generic 'F<NNN>X' -> NNN/100 convention.  Generic JWST filter and
+# narrow-band names ('F410M', 'f405n', ...) fall back to int(name[1:-1])/100.
+_FILTER_WAVELENGTH_UM = {
+    '410m405': 4.10, '405m410': 4.05,
+    '182m187': 1.82, '187m182': 1.87,
+    'Hmag': 1.634, 'Ksmag': 2.143527,
+}
+
+
+def _filter_to_wavelength(name):
+    """Effective wavelength (astropy Quantity, um) for a filter / color name."""
+    if name in _FILTER_WAVELENGTH_UM:
+        return _FILTER_WAVELENGTH_UM[name] * u.um
+    return int(name[1:-1]) / 100 * u.um
+
+
 def plot_extvec_ccd(ax, color1, color2, ext=CT06_MWGC(), extvec_scale=200,
                     start=(0, 0),
                     color='y', head_width=0.5):
-    w1 = 4.10*u.um if color1[0] == '410m405' else 4.05*u.um if color1[0] == '405m410' else 1.634*u.um if color1[0] == 'Hmag' else 2.143527*u.um if color1[0] == 'Ksmag' else int(color1[0][1:-1])/100*u.um
-    w2 = 4.10*u.um if color1[1] == '410m405' else 4.05*u.um if color1[1] == '405m410' else 1.634*u.um if color1[1] == 'Hmag' else 2.143527*u.um if color1[1] == 'Ksmag' else int(color1[1][1:-1])/100*u.um
-    w3 = 4.10*u.um if color2[0] == '410m405' else 4.05*u.um if color2[0] == '405m410' else 1.634*u.um if color2[0] == 'Hmag' else 2.143527*u.um if color2[0] == 'Ksmag' else int(color2[0][1:-1])/100*u.um
-    w4 = 4.10*u.um if color2[1] == '410m405' else 4.05*u.um if color2[1] == '405m410' else 1.634*u.um if color2[1] == 'Hmag' else 2.143527*u.um if color2[1] == 'Ksmag' else int(color2[1][1:-1])/100*u.um
+    w1 = _filter_to_wavelength(color1[0])
+    w2 = _filter_to_wavelength(color1[1])
+    w3 = _filter_to_wavelength(color2[0])
+    w4 = _filter_to_wavelength(color2[1])
 
     if w1 > w2:
         w1,w2 = w2,w1
@@ -148,10 +165,10 @@ def ccd(basetable,
             A_V = np.asarray(A_V)
             if len(A_V) != len(basetable):
                 raise ValueError(f"A_V has length {len(A_V)} but basetable has {len(basetable)} rows.")
-            w1 = int(color1[0][1:-1])/100*u.um
-            w2 = int(color1[1][1:-1])/100*u.um
-            w3 = int(color2[0][1:-1])/100*u.um
-            w4 = int(color2[1][1:-1])/100*u.um
+            w1 = _filter_to_wavelength(color1[0])
+            w2 = _filter_to_wavelength(color1[1])
+            w3 = _filter_to_wavelength(color2[0])
+            w4 = _filter_to_wavelength(color2[1])
             e1 = ext(w1)
             e2 = ext(w2)
             e3 = ext(w3)
@@ -299,8 +316,8 @@ def cmd(ax=None, basetable=None, f1=None, f2=None, include=slice(None),
         A_V = np.asarray(A_V)
         if len(A_V) != len(basetable):
             raise ValueError(f"A_V has length {len(A_V)} but basetable has {len(basetable)} rows.")
-        w1 = 4.10*u.um if f1 == '410m405' else 4.05*u.um if f1 == '405m410' else int(f1[1:-1])/100*u.um
-        w2 = 4.10*u.um if f2 == '410m405' else 4.05*u.um if f2 == '405m410' else int(f2[1:-1])/100*u.um
+        w1 = _filter_to_wavelength(f1)
+        w2 = _filter_to_wavelength(f2)
         e_f1 = ext(w1)
         e_f2 = ext(w2)
         magp = magp - A_V * e_f1
@@ -335,8 +352,8 @@ def cmd(ax=None, basetable=None, f1=None, f2=None, include=slice(None),
             print(ex)
 
     if ext is not None:
-        w1 = 4.10*u.um if f1 == '410m405' else 4.05*u.um if f1 == '405m410' else int(f1[1:-1])/100*u.um
-        w2 = 4.10*u.um if f2 == '410m405' else 4.05*u.um if f2 == '405m410' else int(f2[1:-1])/100*u.um
+        w1 = _filter_to_wavelength(f1)
+        w2 = _filter_to_wavelength(f2)
         e_1 = ext(w1) * extvec_scale
         e_2 = ext(w2) * extvec_scale
 
@@ -659,26 +676,10 @@ def ccds_withiso(basetable, sel=True,
     for ii, (color1, color2) in enumerate(combos):
         f1, f2 = color1[0], color1[1]
         f3, f4 = color2[0], color2[1]
-        w1 = (4.10*u.um if color1[0] == '410m405'
-             else 4.05*u.um if color1[0] == '405m410'
-             else 1.82*u.um if f1 == '182m187'
-             else 1.87*u.um if f1 == '187m182'
-             else int(f1[1:-1])/100*u.um)
-        w2 = (4.10*u.um if color1[1] == '410m405'
-             else 4.05*u.um if color1[1] == '405m410'
-             else 1.82*u.um if f2 == '182m187'
-             else 1.87*u.um if f2 == '187m182'
-             else int(f2[1:-1])/100*u.um)
-        w3 = (4.10*u.um if color2[0] == '410m405'
-             else 4.05*u.um if color2[0] == '405m410'
-             else 1.82*u.um if f3 == '182m187'
-             else 1.87*u.um if f3 == '187m182'
-             else int(f3[1:-1])/100*u.um)
-        w4 = (4.10*u.um if color2[1] == '410m405'
-             else 4.05*u.um if color2[1] == '405m410'
-             else 1.82*u.um if f4 == '182m187'
-             else 1.87*u.um if f4 == '187m182'
-             else int(f4[1:-1])/100*u.um)
+        w1 = _filter_to_wavelength(f1)
+        w2 = _filter_to_wavelength(f2)
+        w3 = _filter_to_wavelength(f3)
+        w4 = _filter_to_wavelength(f4)
 
         if w1 > w2:
             w1,w2 = w2,w1
@@ -720,33 +721,16 @@ def ccds_withiso(basetable, sel=True,
             log_g_range=log_g_range,
             log_g_column=log_g_column,
             )
-            agesel = (mist['log10_isochrone_age_yr'] == 5) & phase_mask
-            xvals = mist[color1[0].upper()][agesel] - mist[color1[1].upper()][agesel]
-            yvals = mist[color2[0].upper()][agesel] - mist[color2[1].upper()][agesel]
-            ax.plot(xvals, yvals, color='b', linestyle='-', linewidth=1)
-            if phase_transition_markers:
-                transition_inds = _phase_transition_indices(mist[phase_column][agesel])
-                if len(transition_inds) > 0:
-                    ax.scatter(xvals[transition_inds], yvals[transition_inds], marker='s', s=phase_transition_marker_size,
-                               c='b', edgecolors='none', zorder=5)
-            agesel = (mist['log10_isochrone_age_yr'] == 7) & phase_mask
-            xvals = mist[color1[0].upper()][agesel] - mist[color1[1].upper()][agesel]
-            yvals = mist[color2[0].upper()][agesel] - mist[color2[1].upper()][agesel]
-            ax.plot(xvals, yvals, color='g', linestyle='-', linewidth=1)
-            if phase_transition_markers:
-                transition_inds = _phase_transition_indices(mist[phase_column][agesel])
-                if len(transition_inds) > 0:
-                    ax.scatter(xvals[transition_inds], yvals[transition_inds], marker='s', s=phase_transition_marker_size,
-                               c='g', edgecolors='none', zorder=5)
-            agesel = (mist['log10_isochrone_age_yr'] == 9) & phase_mask
-            xvals = mist[color1[0].upper()][agesel] - mist[color1[1].upper()][agesel]
-            yvals = mist[color2[0].upper()][agesel] - mist[color2[1].upper()][agesel]
-            ax.plot(xvals, yvals, color='c', linestyle='-', linewidth=1)
-            if phase_transition_markers:
-                transition_inds = _phase_transition_indices(mist[phase_column][agesel])
-                if len(transition_inds) > 0:
-                    ax.scatter(xvals[transition_inds], yvals[transition_inds], marker='s', s=phase_transition_marker_size,
-                               c='c', edgecolors='none', zorder=5)
+            for _age, _agecolor in zip((5, 7, 9), ('b', 'g', 'c')):
+                agesel = (mist['log10_isochrone_age_yr'] == _age) & phase_mask
+                xvals = mist[color1[0].upper()][agesel] - mist[color1[1].upper()][agesel]
+                yvals = mist[color2[0].upper()][agesel] - mist[color2[1].upper()][agesel]
+                ax.plot(xvals, yvals, color=_agecolor, linestyle='-', linewidth=1)
+                if phase_transition_markers:
+                    transition_inds = _phase_transition_indices(mist[phase_column][agesel])
+                    if len(transition_inds) > 0:
+                        ax.scatter(xvals[transition_inds], yvals[transition_inds], marker='s', s=phase_transition_marker_size,
+                                   c=_agecolor, edgecolors='none', zorder=5)
         ax.arrow(0, 0, e_1-e_2, e_3-e_4, color='y', head_width=arrowhead_width)
     return fig
 

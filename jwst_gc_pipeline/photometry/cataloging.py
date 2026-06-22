@@ -535,6 +535,25 @@ def _build_manual_seed(*, detection_image, nan_replaced_data, mask, ww, fwhm_pix
 # ---------------------------------------------------------------------------
 # Merged-catalog extended-emission vetting (step 9)
 # ---------------------------------------------------------------------------
+def _emission_keep_nircam(star_like, snr, local_snr_min):
+    """NIRCam star-vs-emission keep-mask.
+
+    Keep a star-like source unless its local S/N is measurable and below the
+    floor.  (Unmeasurable S/N -> kept; the star_like test already gated it.)
+    """
+    return star_like & (np.isfinite(snr) & (snr >= local_snr_min) | ~np.isfinite(snr))
+
+
+def _emission_keep_miri(prominence, min_prominence):
+    """MIRI star-vs-emission keep-mask: deep-i2d prominence is the SOLE cut.
+
+    A source must rise far enough above the local emission on THIS obs's data
+    i2d.  NaN prominence (off-i2d / other-obs footprint, or unmeasurable near an
+    edge) is dropped -- it will be vetted by the obs that owns its footprint.
+    """
+    return np.isfinite(prominence) & (prominence >= min_prominence)
+
+
 def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               qfit_max=0.2, peak_over_bkg=20.0,
                               min_prominence=0.0,
@@ -631,6 +650,8 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         | np.isin(flg, np.asarray(keep_flags, dtype=float))
         | (np.isfinite(peaksb) & (lbk > 0) & (peaksb > peak_over_bkg * lbk))
     )
+    # MIRI and NIRCam use DIFFERENT keep-logics (see _emission_keep_miri /
+    # _emission_keep_nircam).  min_prominence>0 selects the MIRI path.
     if min_prominence > 0:
         # MIRI: the deep-i2d PROMINENCE is the clean discriminator (real F770W
         # stars >=40, false emission <5), so use it ALONE.  The NIRCam-tuned
@@ -646,18 +667,18 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         # single all-obs vetting saw only o002's i2d).  The per-obs vetted
         # catalogs are then vstack-combined downstream into the un-tokened
         # all-obs catalog, each footprint cleaned by its own data_i2d.
-        keep = np.isfinite(prominence) & (prominence >= min_prominence)
-        if drop_overshoot and 'model_overshoot' in t.colnames:
-            keep = keep & ~np.asarray(t['model_overshoot'], dtype=bool)
+        keep = _emission_keep_miri(prominence, min_prominence)
         n_prom = int(np.sum(np.isfinite(prominence) & (prominence < min_prominence)))
         n_off = int(np.sum(~np.isfinite(prominence)))
         print(f"[{label}] MIRI prominence gate: kept prominence>={min_prominence:g} on "
               f"this obs i2d (dropped {n_prom} false + {n_off} off-i2d/other-obs); "
               f"star_like/snr BYPASSED; per-obs vetted -> combined downstream", flush=True)
     else:
-        keep = star_like & (np.isfinite(snr) & (snr >= local_snr_min) | ~np.isfinite(snr))
-        if drop_overshoot and 'model_overshoot' in t.colnames:
-            keep = keep & ~np.asarray(t['model_overshoot'], dtype=bool)
+        keep = _emission_keep_nircam(star_like, snr, local_snr_min)
+
+    # overshoot drop is shared by both instrument paths (was duplicated).
+    if drop_overshoot and 'model_overshoot' in t.colnames:
+        keep = keep & ~np.asarray(t['model_overshoot'], dtype=bool)
 
     # structure-noise prune on the MERGED catalog (AG 2026-06-13): rejects
     # emission-bump sources that the m12 round (which has no prune) carries
@@ -843,7 +864,15 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
             basepath, ww, data_shape=nan_replaced_data.shape, max_offset_arcsec=32.0)
     else:
         outside_star_pixels, outside_locked = [], False
-    forced_grid_search_radius = 0 if outside_locked else 5
+    # Off-FOV forced-source position search radius (px).  0 when fully LOCKED
+    # (hand-verified, no search).  Otherwise wide enough to reach the in-frame
+    # diffraction spikes from the seed: a Spitzer prior is ~50 mas accurate but
+    # the per-FRAME WCS can be ~0.3" (5 px) off the true star (field astrometry),
+    # so a +/-5 px search hits its boundary and the spike-constrained amplitude
+    # is never found (the over-sub clamp then has to rescue it).  +/-9 px (~0.6")
+    # covers the observed frame-WCS offset with margin so the grid locks onto the
+    # spikes and the amplitude is constrained by them, not just clamped.
+    forced_grid_search_radius = 0 if outside_locked else 9
     satstar_file_suffix = f'{bgsub}{_iteration_token(satstar_label)}'
     # MIRI: feed the DEEP coadded data_i2d to the satstar seed gate so the
     # extended-emission phantom rejection (prominence + faint-core) is measured
@@ -1475,6 +1504,110 @@ def _run_one_frame_manual(args):
                     f'{type(ex).__name__}: {ex}\n{traceback.format_exc()}')
 
 
+def _clean_offfov_dups_and_offfield(merged, filt, data_i2d_path, basepath, *,
+                                    dedup_arcsec=1.0, fov_pad_psf=5.0):
+    """Post-merge cleanup of off-FOV satstar artifacts (per-filter merged catalog).
+
+    A) Collapse ``replaced_saturated`` rows clustering within ``dedup_arcsec`` to a
+       SINGLE representative (the median-flux member).  An off-FOV bright star is
+       fit PER FRAME and the (degenerate) positions scatter wider than the 0.15"
+       satstar dedup, leaving many rows at one physical location -- the catalog
+       must have exactly ONE entry per off-FOV star (sickle F480M m7 had 12).
+    B) Drop NON-satstar rows projecting > ``fov_pad_psf`` PSF widths OUTSIDE this
+       filter's data FOV.  These are m7 cross-band-seed artifacts: the shared
+       seed unions positions from ALL filters, so positions covered only by other
+       (e.g. SW) filters fall outside this LW filter's FOV, get fit at off-field
+       locations, and are inserted as garbage (qfit up to 1e4, up to 56" out).
+       replaced_saturated rows are KEPT (a real off-FOV star legitimately sits
+       off-field -- but as ONE row after A).
+
+    Returns (cleaned_table, n_dedup_removed, n_offfield_removed).
+    """
+    if merged is None or len(merged) == 0:
+        return merged, 0, 0
+    from astropy.coordinates import SkyCoord, search_around_sky
+    sc = (SkyCoord(merged['skycoord']) if 'skycoord' in merged.colnames
+          else SkyCoord(merged['ra'], merged['dec'], unit='deg'))
+    fcol = ('flux' if 'flux' in merged.colnames
+            else ('flux_fit' if 'flux_fit' in merged.colnames else None))
+    rs = (np.asarray(merged['replaced_saturated'], dtype=bool)
+          if 'replaced_saturated' in merged.colnames else np.zeros(len(merged), bool))
+    drop = np.zeros(len(merged), bool)
+
+    # ---- A: dedup replaced_saturated clusters to one representative ----
+    if rs.any() and fcol is not None:
+        sat_idx = np.where(rs)[0]
+        ssc = sc[sat_idx]
+        i1, i2, _, _ = search_around_sky(ssc, ssc, dedup_arcsec * u.arcsec)
+        parent = list(range(len(sat_idx)))
+        def _find(a):
+            while parent[a] != a:
+                parent[a] = parent[parent[a]]; a = parent[a]
+            return a
+        for a, b in zip(i1, i2):
+            parent[_find(int(a))] = _find(int(b))
+        groups = {}
+        for i in range(len(sat_idx)):
+            groups.setdefault(_find(i), []).append(i)
+        flux = np.asarray(merged[fcol], dtype=float)
+        for g in groups.values():
+            if len(g) <= 1:
+                continue
+            gf = flux[sat_idx[g]]
+            keep = g[int(np.argmin(np.abs(gf - np.nanmedian(gf))))]
+            for j in g:
+                if j != keep:
+                    drop[sat_idx[j]] = True
+    n_dedup = int(drop.sum())
+
+    # ---- B: drop non-satstar rows far outside the FOV ----
+    n_off = 0
+    if data_i2d_path and os.path.exists(data_i2d_path):
+        try:
+            with fits.open(data_i2d_path) as dh:
+                _s = dh['SCI'] if 'SCI' in [x.name for x in dh] else dh[0]
+                ww = wcs.WCS(_s.header); ny, nx = _s.data.shape
+            px = float(ww.proj_plane_pixel_scales()[0].to('arcsec').value)
+            fw = 0.16
+            try:
+                _ft = Table.read(f'{basepath}/reduction/fwhm_table.ecsv')
+                _row = _ft[_ft['Filter'] == filt.upper()]
+                if len(_row):
+                    fw = float(_row['PSF FWHM (arcsec)'][0])
+            except Exception:
+                pass
+            pad = fov_pad_psf * fw / px
+            x, y = ww.world_to_pixel(sc)
+            outside = ((x < -pad) | (x > nx - 1 + pad)
+                       | (y < -pad) | (y > ny - 1 + pad))
+            offfield = outside & (~rs) & (~drop)
+            drop |= offfield
+            n_off = int(offfield.sum())
+        except Exception as ex:
+            print(f"  off-field FOV filter skipped ({ex})", flush=True)
+    return merged[~drop], n_dedup, n_off
+
+
+def _reconstruct_smoothed_bg_path(cut_bp, proposal_id, field, module, filt,
+                                  label, options, pupil):
+    """Rebuild the on-disk smoothed-bg i2d path for a completed phase ``label``.
+
+    Used by --manual-start-phase to recover the previous phase's background map
+    (the only cross-phase state) when starting partway through.  Mirrors the
+    name build_mergedcat_residuals + _build_source_masked_bg write:
+    ``...-{filt}-{module}{desat}{bgsub}{group}_{label}_daophot_basic_mergedcat_residual_smoothed_bg_i2d.fits``
+    (m5/m6/m7 are resbgsub).
+    """
+    desat = '_unsatstar' if options.desaturated else ''
+    bgsub = ('_bgsub' if options.bgsub else '') + (
+        '_resbgsub' if label in ('m5', 'm6', 'm7') else '')
+    group_ = '_group' if options.group else ''
+    inst = _L._inst_token(filt)
+    return (f'{cut_bp}/{filt}/pipeline/jw0{proposal_id}-o{field}_t001_{inst}_'
+            f'{pupil}-{filt.lower()}-{module}{desat}{bgsub}{group_}_{label}_'
+            f'daophot_basic_mergedcat_residual_smoothed_bg_i2d.fits')
+
+
 def _resolve_crossband_ref_filter(options, filternames):
     """Pick the astrometric reference filter for the cross-band merge.
 
@@ -1581,6 +1714,40 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
     satstar_drops = {}
     overlap_total = 0
 
+    # Optional partial start (e.g. an m7-only "finalize" job that reuses the
+    # m12..m6 products written by per-filter jobs, so the big multifilter run can
+    # be split into small queue-friendly per-filter jobs + one finalize).  The
+    # ONLY cross-phase state a later phase consumes is the background map
+    # (bg_for_next); reconstruct it from the previous phase's on-disk smoothed-bg
+    # i2d.  m7's cross-band seed reads the previous VETTED catalogs from disk, and
+    # frames re-scan because the start phase becomes phases[0].  satstar overrides
+    # from m12's reconcile are not reconstructed, but the off-FOV path now uses
+    # the Spitzer-prior _spitzer.reg + the model<=data clamp, which load fresh
+    # each phase, so off-FOV handling is unaffected.
+    start_phase = (getattr(options, 'manual_start_phase', '') or '').strip()
+    if start_phase:
+        if start_phase not in phases:
+            raise ValueError(f"--manual-start-phase={start_phase!r} not in phases "
+                             f"{phases} (multifilter={multifilter})")
+        _si = phases.index(start_phase)
+        if _si > 0:
+            _prev = phases[_si - 1]
+            for module in modules:
+                for filt in filternames:
+                    _bg = _reconstruct_smoothed_bg_path(
+                        cut_bp, proposal_id, field, module, filt, _prev, options, pupil)
+                    if not os.path.exists(_bg):
+                        raise FileNotFoundError(
+                            f"--manual-start-phase={start_phase}: required {_prev} "
+                            f"smoothed-bg for {filt}/{module} is missing (expected "
+                            f"{_bg}).  Run the earlier per-filter phases first.")
+                    bg_for_next[(module, filt)] = _bg
+                    print(f"manual [start={start_phase}]: reusing {_prev} bg for "
+                          f"{filt}/{module}: {os.path.basename(_bg)}", flush=True)
+        phases = phases[_si:]
+        print(f"MANUAL PIPELINE: partial start at {start_phase}; phases now "
+              f"{phases}", flush=True)
+
     for phase in phases:
         # iter3 (m3) and iter4 (m4) fit the RAW frames; m4 produces the first
         # background map.  Background subtraction in the fit begins at iter5 (m5).
@@ -1637,10 +1804,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 # all-obs catalog (see the vet + combine block below).  NIRCam:
                 # un-tokened (single all-obs vetting; unchanged behavior).
                 _miri_field = (module == 'mirimage'
-                               or str(filt).upper() in (
-                                   'F560W', 'F770W', 'F1000W', 'F1130W',
-                                   'F1280W', 'F1500W', 'F1800W', 'F2100W',
-                                   'F2550W'))
+                               or _L._instrument_from_filter(filt) == 'MIRI')
                 _vtok = f'_o{field}' if _miri_field else ''
                 # m3..m6 seed = vetted previous catalog UNION daofind on a
                 # progressively cleaner i2d (per PSFPhotometryPlan2026-06-09):
@@ -1925,6 +2089,22 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 combined_vetted_path = merged_path.replace('.fits', '_vetted.fits')
                 try:
                     merged = Table.read(merged_path)
+                    # post-merge off-FOV cleanup: (A) one row per off-FOV satstar
+                    # (the per-frame fits scatter wider than the 0.15" satstar
+                    # dedup), (B) drop NON-satstar rows that fall >5 PSF widths
+                    # outside this filter's FOV (m7 cross-band-seed unions all
+                    # filters' positions -> off-this-FOV garbage).  See
+                    # _clean_offfov_dups_and_offfield.
+                    merged, _ndup, _noff = _clean_offfov_dups_and_offfield(
+                        merged, filt, _data_i2d_path(module, filt), basepath,
+                        dedup_arcsec=float(getattr(options, 'offfov_dedup_arcsec', 1.0)),
+                        fov_pad_psf=float(getattr(options, 'offfield_fov_pad_psf', 5.0)))
+                    if _ndup or _noff:
+                        print(f"manual [{phase}] {filt}/{module}: off-FOV cleanup "
+                              f"removed {_ndup} duplicate satstar row(s) + {_noff} "
+                              f"off-field cross-band-seed artifact(s) -> n={len(merged)}",
+                              flush=True)
+                        merged.write(merged_path, overwrite=True)
                     # --- iteration-found provenance: the first phase a source
                     # appears in (matched across phases by sky position) ---
                     _iter_num = {'m2': 2, 'm3': 3, 'm4': 4, 'm5': 5, 'm6': 6, 'm7': 7}[merge_label]
@@ -1952,10 +2132,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     # MIRI: required deep-i2d prominence gate kills false emission
                     # sources that pass the qfit OR-branch.  NIRCam: off (0).
                     _miri_field = (module == 'mirimage'
-                                   or str(filt).upper() in (
-                                       'F560W', 'F770W', 'F1000W', 'F1130W',
-                                       'F1280W', 'F1500W', 'F1800W', 'F2100W',
-                                       'F2550W'))
+                                   or _L._instrument_from_filter(filt) == 'MIRI')
                     vetted = _filter_extended_emission(
                         merged, data_i2d_image=d_i2d, ww_i2d=ww_i2d,
                         qfit_max=float(getattr(opts_phase, 'manual_ext_qfit_max', 0.2)),

@@ -40,21 +40,14 @@ pl.rcParams['figure.dpi'] = 100
 # https://en.wikipedia.org/wiki/AB_magnitude
 ABMAG_OFFSET = 8.90
 
-# Keep in sync with crowdsource_catalogs_long.MIRI_FILTERS (not imported to
-# avoid pulling in that module's heavy webbpsf import chain).
-MIRI_FILTERS = frozenset(['f560w', 'f770w', 'f1000w', 'f1130w', 'f1280w',
-                          'f1500w', 'f1800w', 'f2100w', 'f2550w'])
-
-
-def _inst_token(filtername):
-    """Lowercased instrument token used in JWST i2d filename conventions."""
-    return 'miri' if str(filtername).lower() in MIRI_FILTERS else 'nircam'
-
-
-def _svo_filter_id(filtername):
-    """SVO FPS filterID (e.g. 'JWST/NIRCam.F480M', 'JWST/MIRI.F770W')."""
-    inst = 'MIRI' if str(filtername).lower() in MIRI_FILTERS else 'NIRCam'
-    return f'JWST/{inst}.{filtername.upper()}'
+# Instrument/filter tokens live in photometry/naming.py (heavy-import-free) so
+# this module shares one source of truth without importing webbpsf.  The
+# flags-based bgsub token is imported as ``_bgsub_token`` (this module calls it
+# with explicit booleans, matching the producer-side names).
+from jwst_gc_pipeline.photometry.naming import (
+    MIRI_FILTERS, _inst_token, _svo_filter_id,
+    _bgsub_token_from_flags as _bgsub_token,
+)
 
 filternames = filternames_narrow = ['f410m', 'f212n', 'f466n', 'f405n', 'f187n', 'f182m']
 all_filternames = ['f410m', 'f212n', 'f466n', 'f405n', 'f187n', 'f182m', 'f444w', 'f356w', 'f200w', 'f115w']
@@ -540,16 +533,21 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
                                      weights, pos_weights)
 
     # position averages
+    _t0 = time.time()
+    print(f"Phase 1: position+flux nanaverages over {n_src}x{n_tbl} "
+          f"(nanaverage={getattr(nanaverage, '__name__', nanaverage)})...", flush=True)
     avg_ra = nanaverage(arr_ra, axis=1, weights=pos_weights)
     avg_dec = nanaverage(arr_dec, axis=1, weights=pos_weights)
     std_ra = nanaverage((arr_ra - avg_ra[:, None])**2, weights=pos_weights, axis=1)**0.5
     std_dec = nanaverage((arr_dec - avg_dec[:, None])**2, weights=pos_weights, axis=1)**0.5
     avgpos = SkyCoord(avg_ra, avg_dec, unit=(u.deg, u.deg), frame='icrs')
+    print(f"Phase 1: position averages done in {time.time()-_t0:.1f}s", flush=True)
 
     # free ra/dec arrays -- no longer needed
     del arr_ra, arr_dec
 
     # flux and flux_err reductions
+    _t0 = time.time()
     flux_avg = nanaverage(arr_flux, weights=weights_with_fallback, axis=1)
     std_flux_avg = nanaverage((arr_flux - flux_avg[:, None])**2, weights=weights_with_fallback, axis=1)**0.5
     flux_err_avg = nanaverage(arr_fluxerr, weights=weights_with_fallback, axis=1)
@@ -559,6 +557,7 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     # with no inverse-variance contribution legitimately have NaN here.
     flux_err_prop = (np.nansum(arr_fluxerr**2 * weights, axis=1)
                      / np.nansum(weights, axis=1))**0.5
+    print(f"Phase 1: flux averages done in {time.time()-_t0:.1f}s", flush=True)
 
     # free phase-1 big arrays (keep weights / keepmask -- needed in Phase 2)
     del arr_flux, arr_fluxerr
@@ -585,14 +584,20 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     # (skycoord_avg, std_ra, std_dec).  flux and flux_err are already done.
     already_done = {flux_colname, flux_error_colname, 'ra', 'dec',
                     'skycoord', skycoord_colname}
-    print("Phase 2: streaming remaining columns one at a time", flush=True)
-    for key in column_names:
+    _p2_cols = [k for k in column_names
+                if k not in already_done and k in tbls[0].colnames]
+    print(f"Phase 2: streaming {len(_p2_cols)} remaining columns one at a time "
+          f"(n_src={n_src}, n_tbl={n_tbl}, ~{n_src*n_tbl*4/1e9:.2f} GB/column "
+          f"float32); columns={_p2_cols}", flush=True)
+    for _ci, key in enumerate(column_names):
         if key in already_done:
             continue
         if key not in tbls[0].colnames:
             print(f"  Skipping {key} (not in tbls[0])", flush=True)
             continue
-        print(f"  Phase 2: streaming column {key}", flush=True)
+        _t0 = time.time()
+        print(f"  Phase 2 [{_ci}] column {key!r}: allocating + filling "
+              f"({n_src}x{n_tbl})...", flush=True)
         arr = np.full((n_src, n_tbl), np.nan, dtype='float32')
         for ii, tbl in enumerate(tbls):
             if key not in tbl.colnames:
@@ -600,15 +605,23 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
             keep = saved_keep[ii]
             mi = saved_match_inds[ii]
             arr[mi[keep], ii] = tbl[key][keep]
+        _t_fill = time.time()
+        print(f"  Phase 2 [{_ci}] column {key!r}: fill done in {_t_fill-_t0:.1f}s; "
+              f"running nanaverage (mean) over {n_src}x{n_tbl}...", flush=True)
         # Use weights_with_fallback (same rationale as flux averages
         # in Phase 1): a basecrds source whose every matched frame has
         # NaN flux_err must still produce a non-NaN average of qfit,
         # cfit, flags, etc. or it gets dropped at the minimal step.
         key_avg = nanaverage(arr, weights=weights_with_fallback, axis=1)
+        _t_mean = time.time()
+        print(f"  Phase 2 [{_ci}] column {key!r}: mean done in {_t_mean-_t_fill:.1f}s; "
+              f"running nanaverage (std)...", flush=True)
         std_key = nanaverage((arr - key_avg[:, None])**2, weights=weights_with_fallback, axis=1)**0.5
         newtbl[f'{key}_avg'] = key_avg
         newtbl[f'std_{key}_avg'] = std_key
         del arr
+        print(f"  Phase 2 [{_ci}] column {key!r}: DONE (std {time.time()-_t_mean:.1f}s, "
+              f"total {time.time()-_t0:.1f}s)", flush=True)
 
     # weights, keepmask, saved_match_inds, saved_keep kept until function
     # return; Python will free them after caller drops newtbl reference.
@@ -754,23 +767,6 @@ def combine_singleframe_chunked(tbls, n_chunks=8, halo=2.0 * u.arcsec,
     print(f"combine_singleframe_chunked: stitched {len(results)} tiles "
           f"-> {len(merged)} merged sources", flush=True)
     return merged
-
-
-def _bgsub_token(bgsub, resbgsub=False):
-    """Filename token for the background-subtraction mode(s) in effect.
-
-    * ``--bgsub`` (global Background2D subtraction)        -> ``_bgsub``
-    * ``--use-iter3-residual-bg`` (merged iter3 residual-
-      smoothed background subtraction)                    -> ``_resbgsub``
-
-    Mirrors ``crowdsource_catalogs_long._bgsub_token`` so the merge globs
-    match the per-frame catalog names that producer wrote.  ``_bgsub`` is
-    never a substring of ``_resbgsub`` so token matching does not collide.
-    """
-    token = '_bgsub' if bgsub else ''
-    if resbgsub:
-        token += '_resbgsub'
-    return token
 
 
 def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
@@ -1487,40 +1483,66 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
     # Use _project_for_target_filter rather than the global filter_to_project
     # so a filter shared across targets (e.g. f187n in both brick/2221 and
     # sgrb2/5365) resolves to the project matching this run's ``target``.
-    imgfns = [x
-              for filn in filternames
-              for _proj in (_project_for_target_filter(target, filn),)
-              for x in glob.glob(f"{basepath}/{filn.upper()}/pipeline/jw0{_proj}-o{project_obsnum[target][_proj]}_t001_{_inst_token(filn)}*{filn.lower()}*{module}_i2d.fits")
-              if f'{module}_' in x or f'{module}1_' in x
-             ]
+    # Map daophot_type -> per-filter merge filename token written by
+    # merge_individual_frames(): basic uses ``dao``, iterative uses
+    # ``daoiterative`` (matches the suffix-vs-method dict in main()).  The
+    # pattern was once hardcoded to ``_dao_{daophot_type}`` which only matched
+    # basic; the daoiterative filename is ``_daoiterative_iterative.fits``.
+    method_name = 'dao' if daophot_type == 'basic' else 'daoiterative'
 
-    if indivexp:
-        # Map daophot_type -> per-filter merge filename token written by
-        # merge_individual_frames(): basic uses ``dao``, iterative uses
-        # ``daoiterative`` (this matches the suffix-vs-method dict in
-        # main()).  The pattern was hardcoded to ``_dao_{daophot_type}``
-        # which only matched basic; the daoiterative filename is
-        # ``_daoiterative_iterative.fits`` so the glob always returned
-        # zero matches and the cross-filter daoiterative merge never ran.
-        method_name = 'dao' if daophot_type == 'basic' else 'daoiterative'
-        vetted_tok = '_vetted' if vetted else ''
-        catfns = [x
-                  for filn in filternames
-                  for x in glob.glob(f"{basepath}/catalogs/{filn.lower()}*{module}*indivexp_merged{desat}{bgsub}{blur_}{iter_token}_{method_name}_{daophot_type}{vetted_tok}.fits")
-                  ]
-        if len(catfns) == 0:
-            raise ValueError(f"{basepath}/catalogs/<filt>*{module}*indivexp_merged{desat}{bgsub}{blur_}{iter_token}_{method_name}_{daophot_type}{vetted_tok}.fits had no matches across filters {filternames}")
-        if len(catfns) != len(imgfns):
-            print("WARNING: Different length of imgfns & catfns!")
-            print("imgfns:", imgfns)
-            print("catfns:", catfns)
-            print(dict(zip(imgfns, catfns)))
-            # raise ValueError(f"{basepath}/catalogs/FILTER*{module}*obs*indivexp_merged{desat}{bgsub}{fitpsf}{blur_}_crowdsource{suffix}.fits had different n(imgs) than n(cats)")
-    else:
-        catfns = [
-            f"{basepath}/{filtername.upper()}/{filtername.lower()}_{module}{detector}{desat}{bgsub}{epsf_}{blur_}_daophot_{daophot_type}.fits"
-            for filtername in filternames
-        ]
+    vetted_tok = '_vetted' if vetted else ''
+
+    # Resolve each filter's catalog AND its i2d (for WCS) TOGETHER, keeping
+    # filternames / catfns / imgfns / tbls / wcses strictly aligned 1:1.
+    # Previously these were INDEPENDENT flattened globs: when a configured filter
+    # had no catalog (e.g. a partial-filter run), the catfns glob silently
+    # dropped it, then ``zip(catfns, tbls, filternames)`` paired the survivors
+    # with the WRONG filter names -- a silent filter mislabel that propagated
+    # wrong-band photometry.  imgfns could misalign with catfns the same way.
+    # Now we iterate filters once and drop any with no catalog (with a warning),
+    # so the remaining parallel lists are guaranteed consistent.
+    present_filters, catfns, imgfns = [], [], []
+    for filn in filternames:
+        if indivexp:
+            _cat_matches = sorted(glob.glob(
+                f"{basepath}/catalogs/{filn.lower()}*{module}*indivexp_merged"
+                f"{desat}{bgsub}{blur_}{iter_token}_{method_name}_{daophot_type}{vetted_tok}.fits"))
+            if not _cat_matches:
+                print(f"WARNING: no indivexp daophot {daophot_type} catalog for "
+                      f"filter {filn} (module={module}, vetted={vetted}); dropping "
+                      f"it from the cross-filter merge", flush=True)
+                continue
+            if len(_cat_matches) > 1:
+                print(f"WARNING: multiple indivexp catalogs for {filn}; using "
+                      f"{_cat_matches[0]}", flush=True)
+            catfn = _cat_matches[0]
+        else:
+            catfn = (f"{basepath}/{filn.upper()}/{filn.lower()}_{module}{detector}"
+                     f"{desat}{bgsub}{epsf_}{blur_}_daophot_{daophot_type}.fits")
+            if not os.path.exists(catfn):
+                print(f"WARNING: no daophot {daophot_type} catalog {catfn} for "
+                      f"filter {filn}; dropping it from the cross-filter merge",
+                      flush=True)
+                continue
+        _proj = _project_for_target_filter(target, filn)
+        _img_matches = [x for x in glob.glob(
+            f"{basepath}/{filn.upper()}/pipeline/jw0{_proj}-o{project_obsnum[target][_proj]}"
+            f"_t001_{_inst_token(filn)}*{filn.lower()}*{module}_i2d.fits")
+            if f'{module}_' in x or f'{module}1_' in x]
+        if not _img_matches:
+            print(f"WARNING: no {module} i2d for filter {filn}; will fall back to "
+                  f"the catalog's own skycoord/pixelscale for WCS", flush=True)
+        present_filters.append(filn)
+        catfns.append(catfn)
+        imgfns.append(_img_matches[0] if _img_matches else None)
+
+    filternames = present_filters
+    if len(catfns) == 0:
+        raise ValueError(
+            f"No daophot {daophot_type} catalogs found across filters for "
+            f"module={module} in {basepath} (indivexp={indivexp}, "
+            f"iter_token={iter_token!r}, desat={desat!r}, bgsub={bgsub!r}, "
+            f"vetted={vetted})")
 
     tbls = [Table.read(catfn) for catfn in catfns]
 
@@ -1530,9 +1552,8 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
 
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
-        # wcses = [wcs.WCS(fits.getheader(fn.replace("_crowdsource", "_crowdsource_skymodel"))) for fn in catfns]
-        # imgs = [fits.getdata(fn, ext=('SCI', 1)) for fn in imgfns]
-        wcses = [wcs.WCS(fits.getheader(fn, ext=('SCI', 1))) for fn in imgfns]
+        wcses = [wcs.WCS(fits.getheader(fn, ext=('SCI', 1))) if fn is not None else None
+                 for fn in imgfns]
 
     fwhm_tbl = Table.read(f'{basepath}/reduction/fwhm_table.ecsv')
 

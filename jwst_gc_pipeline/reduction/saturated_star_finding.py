@@ -1130,6 +1130,12 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # `sources` -- raises under newer scipy/numpy ("'numpy.bool' object cannot be
     # interpreted as an integer").  The per-source bounding boxes are taken from
     # `sources`/`source_records` below, so this call was pure dead weight.)
+    # NOTE: a former ``slices = find_objects(saturated)`` lived here but its
+    # result was never used (per-source windows are derived from ``src['com']``
+    # below).  Newer scipy rejects the boolean ``saturated`` array
+    # (find_objects needs an int label image), raising
+    # "'numpy.bool' object cannot be interpreted as an integer" and aborting
+    # every frame.  The dead call is removed.
 
     if size is None:
         size = pad
@@ -1607,6 +1613,44 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
              n_usable, qfit_val, red_chi2_val, resid0_val) = best
             x_fit_val = x_init + best_dx
             y_fit_val = y_init + best_dy
+
+            # ---- INDEPENDENT over-subtraction check (forced/off-FOV sources) ----
+            # The amplitude was fit from the data above.  SEPARATELY (this is a
+            # post-fit validation, NOT a constraint folded into the fit), verify
+            # the rendered model does not exceed the data in its significant
+            # (>5 sigma) footprint.  An off-FOV star whose bright core never
+            # enters the frame has an amplitude only weakly constrained by the
+            # faint outer wings, so it can run away (1e8-1e11) and gouge a deep
+            # negative pit (model >> data).  For a CORRECT fit the model is the
+            # star's contribution, which is <= the data (data = star + bg +
+            # noise), so data/model >= ~1 and nothing is clamped.  Where the
+            # model over-subtracts, scale the amplitude DOWN to the largest value
+            # that keeps model <= data across the footprint (robust 10th-pct so a
+            # few noisy pixels can't zero it).  Under-subtracting slightly (some
+            # residual contamination) is preferred to a worse over-subtraction.
+            # Logged, never silent.  ``oversub_clamp_scale`` is recorded so the
+            # check is auditable.  (The position prior from Spitzer + the spike-
+            # constrained grid search should make this rarely trigger; it is the
+            # safety net for the residual unconstrained-amplitude cases.)
+            _oversub_scale = 1.0
+            if forced_source and np.isfinite(flux_fit_val) and flux_fit_val > 0:
+                _pmod = big_grid_large(xx - x_fit_val, yy - y_fit_val) * flux_fit_val
+                _foot = (~mask) & np.isfinite(cutout) & (_pmod > 5.0 * sigma)
+                _nf = int(_foot.sum())
+                if _nf >= 10:
+                    _ratio = cutout[_foot].astype(float) / _pmod[_foot]  # data/model
+                    _frac_over = float(np.mean(_ratio < 1.0))
+                    _scale = float(np.percentile(_ratio, 10.0))
+                    if _scale < 1.0:
+                        _oversub_scale = max(_scale, 0.0)
+                        print(f"  OVER-SUB CHECK (forced src {ii+1}): model>data on "
+                              f"{100*_frac_over:.0f}% of {_nf}-px >5sig footprint; "
+                              f"clamping flux {flux_fit_val:.3e} -> "
+                              f"{flux_fit_val*_oversub_scale:.3e} (scale="
+                              f"{_oversub_scale:.3f}) so model<=data", flush=True)
+                        flux_fit_val = flux_fit_val * _oversub_scale
+                        flux_err_val = flux_err_val * _oversub_scale
+
             print(f"  Custom forced-source fit: flux={flux_fit_val:.3e}  "
                   f"flux_err={flux_err_val:.3e}  n_pix={n_usable}  "
                   f"sigma_bg={sigma:.3e}  "
