@@ -1025,7 +1025,11 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
     if module is None:
         module = 'nrc' + mod.meta.instrument.module.lower()
 
-    if (field == '004' and proposal_id == '1182') or (field == '001' and proposal_id == '2221'):
+    if (field == '004' and proposal_id == '1182') or (field in ('001', '002') and proposal_id == '2221'):
+        # field 002 (Cloud C) added 2026-06-22: route through the per-exposure VIRAC2-locked
+        # table (cloudc/offsets/Offsets_JWST_Brick2221_VIRAC2locked.csv, built by
+        # build_virac2_locked_perexp.py --region cloudc) instead of the old hardcoded per-visit
+        # shifts below. Replaces the deprecated F405N-crowdsource frame (~90 mas off Gaia).
         refname = refnames[proposal_id]
         exposure = int(fn.split("_")[-3])
         thismodule = fn.split("_")[-2]
