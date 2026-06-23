@@ -2156,6 +2156,7 @@ def main():
                       '2045': None,
                       '1939': None,
                       '2211': None,
+                      '6151': None,  # W51; astrometry handled in imaging, no offsets table
     }
 
     # need to have incrementing _before_ test
