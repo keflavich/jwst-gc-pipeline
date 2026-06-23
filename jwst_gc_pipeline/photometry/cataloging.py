@@ -1689,6 +1689,24 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
     print(f"MANUAL PIPELINE: phases={phases} filters={filternames} "
           f"modules={modules} miri_tuning={miri_tuning}", flush=True)
 
+    # Extended-emission-dominated NIRCam fields (W51/Sickle/WD2): bright PAH/dust
+    # nebulosity -- especially at long wavelengths -- spawns many spurious
+    # DAOStarFinder detections that explode the source count and over-subtract.
+    # Default the structure-noise prune to (1, 2): validated on the W51-main
+    # F405N cutout to remove ~15% of detections (preferentially in bright
+    # emission, dropped/kept SB ratio ~1.85) at ~zero net real-source loss vs the
+    # SW F210M catalog.  Explicit --manual-struct-noise-x/-y override this.  MIRI
+    # is skipped (its per-phase miri_tuning schedule sets these itself).
+    EXTENDED_EMISSION_TARGETS = ('w51', 'sickle', 'wd2')
+    if (not miri_tuning and str(target).lower() in EXTENDED_EMISSION_TARGETS
+            and float(getattr(options, 'struct_x', 0.0)) == 0.0
+            and float(getattr(options, 'struct_y', 0.0)) == 0.0):
+        options.struct_x = 1.0
+        options.struct_y = 2.0
+        print(f"  [{target}] extended-emission NIRCam field: defaulting "
+              f"structure-noise prune to struct_x=1.0 struct_y=2.0 "
+              f"(override with --manual-struct-noise-x/-y).", flush=True)
+
     def _merged_path(label, module, filt, resbgsub):
         desat = '_unsatstar' if options.desaturated else ''
         bgsub = ('_bgsub' if options.bgsub else '') + ('_resbgsub' if resbgsub else '')
