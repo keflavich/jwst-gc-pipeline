@@ -3597,6 +3597,9 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     target = options.target
 
     nvisits = {'2221': {'brick': 1, 'cloudc': 2},
+               # 2526 obs 021 = "G0" CMZ cloud-c filament F770W (1 visit),
+               # routed into the cloudc tree.
+               '2526': {'cloudc': 1},
                '1182': {'brick': 2},
                '3958': {'sickle': 1},
                # cloudef = Cloud E (obs 002) + Cloud F (obs 005), two
@@ -3646,6 +3649,8 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             '1905': {'001': 'wd1', '003': 'wd1'},
                             '3523': {'003': 'wd2', '005': 'wd2'},
                             '6151': {'001': 'w51'},
+                            # 2526 obs 021 = "G0" CMZ cloud-c filament F770W
+                            '2526': {'021': 'cloudc'},
                             }[proposal_id]
     # Instrument-dependent field numbering for MIRI (mirimage).  The map above is
     # NIRCam-era; proposal 2221 numbers the brick/cloudc MIRI pointings OPPOSITE

@@ -54,7 +54,9 @@ all_filternames = ['f410m', 'f212n', 'f466n', 'f405n', 'f187n', 'f182m', 'f444w'
 obs_filters = {'brick': {'2221': filternames + ['f2550w'],
                          '1182': ['f444w', 'f356w', 'f200w', 'f115w'],
                          },
-               'cloudc': {'2221': filternames + ['f2550w']},
+               'cloudc': {'2221': filternames + ['f2550w'],
+                          # 2526 obs 021 = "G0" CMZ cloud-c filament F770W
+                          '2526': ['f770w']},
                # sickle NIRCam (obs 007) + MIRI (obs 001/002/003)
                'sickle': {'3958': ['f187n', 'f210m', 'f335m', 'f470n', 'f480m',
                                    'f770w', 'f1130w', 'f1500w']},
