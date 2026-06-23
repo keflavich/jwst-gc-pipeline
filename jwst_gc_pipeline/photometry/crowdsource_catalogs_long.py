@@ -1430,6 +1430,20 @@ class SeededFinder:
         self.preferred_skycoord_col = preferred_skycoord_col
 
     def __call__(self, data, mask=None):
+        # Empty seed (0 rows): a genuinely source-poor frame -- common at long
+        # MIRI wavelengths (e.g. w51 F2100W at 21um is almost all extended
+        # emission, so a single dither can detect zero point sources).
+        # _resolve_seed_skycoords early-returns an empty table WITHOUT a
+        # 'skycoord' column for nsrc==0, so indexing seeds['skycoord'] below
+        # would KeyError and abort the whole filter on one empty frame.  Return
+        # an empty result carrying the columns downstream expects instead.
+        if len(self.seed_table) == 0:
+            empty = Table(self.seed_table, copy=True)
+            for _c in ('flux', 'xcentroid', 'ycentroid', 'x_init', 'y_init',
+                       'flux_init'):
+                if _c not in empty.colnames:
+                    empty[_c] = np.zeros(0, dtype=float)
+            return empty
         seeds = _resolve_seed_skycoords(
             Table(self.seed_table, copy=True),
             ww=self.ww,

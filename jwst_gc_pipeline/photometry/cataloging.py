@@ -181,6 +181,32 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
     extra = {}
     if xy_bounds_pix is not None:
         extra['xy_bounds'] = (xy_bounds_pix, xy_bounds_pix)
+
+    # Empty seed (0 sources): a source-poor frame -- common at long MIRI
+    # wavelengths (w51 F2100W at 21um is mostly extended emission, so a single
+    # dither's residual detection can be empty).  photutils PSFPhotometry can't
+    # be called with zero init_params (its LocalBackground builds a
+    # CircularAnnulus from an empty positions array and raises), so short-circuit
+    # to an empty per-frame catalog + zero model.  Without this one empty frame
+    # aborts the whole filter (run_manual_pipeline treats any frame error as
+    # fatal).  Carry init_params' columns plus the standard PSFPhotometry output
+    # schema so save_photutils_results writes a valid (0-row) catalog.
+    n_seed = 0 if init_params is None else len(init_params)
+    if n_seed == 0:
+        print(f"[{label}] empty seed (0 sources): skipping PSF fit, emitting "
+              f"empty per-frame catalog", flush=True)
+        res = Table(init_params, copy=True) if init_params is not None else Table()
+        for _c, _dt in (('id', 'i8'), ('group_id', 'i8'), ('group_size', 'i8'),
+                        ('local_bkg', 'f8'), ('x_init', 'f8'), ('y_init', 'f8'),
+                        ('flux_init', 'f8'), ('x_fit', 'f8'), ('y_fit', 'f8'),
+                        ('flux_fit', 'f8'), ('x_err', 'f8'), ('y_err', 'f8'),
+                        ('flux_err', 'f8'), ('npixfit', 'i8'), ('qfit', 'f8'),
+                        ('cfit', 'f8'), ('flags', 'i8'), ('iter_detected', 'i8')):
+            if _c not in res.colnames:
+                res[_c] = np.zeros(0, dtype=_dt)
+        modsky = np.zeros_like(data, dtype=float)
+        return res, modsky, None
+
     phot = _make_psfphotometry(
         finder=None,
         localbkg_estimator=LocalBackground(localbkg_inner, localbkg_outer),
