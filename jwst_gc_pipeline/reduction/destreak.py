@@ -27,7 +27,11 @@ background_mapping = { '2221':
                         '002':
                        {
                         'regionname': 'cloudc',
-                        'f405n': 'jw02221-o002_t001_nircam_clear-f405n-merged_realigned-to-vvv_i2d_medfilt128.fits',
+                        # 2026-06-22: was '..._realigned-to-vvv_i2d_medfilt128.fits' (missing on
+                        # disk -> destreak crash). Point at the background map that actually exists.
+                        # NOTE: the other 5 Cloud C filters (f410m/f466n/f182m/f187n/f212n) have no
+                        # background map -> add_background_map warns + skips (degraded destreak).
+                        'f405n': 'jw02221-o002_t001_nircam_clear-f405n-merged-nodestreak_i2d_medfilt128.fits',
                        }
                       }
                      }
