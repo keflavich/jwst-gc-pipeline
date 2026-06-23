@@ -1049,10 +1049,18 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
             offsets_tbl = Table.read(locked_tbl)
             match = ((offsets_tbl['Visit'] == visit)
                      & (offsets_tbl['Filter'] == filtername))
+            # Support BOTH conventions: per-VISIT tables (1 row/visit, no usable Exposure) and
+            # per-EXPOSURE tables (N rows/visit, Exposure int).  Narrow by Exposure only when
+            # >1 row matches.  Per-exposure removes real per-exposure jitter (~7-8 mas, measured
+            # 2026-06-20; same sign across all filters) WITHOUT injecting per-exposure VIRAC2
+            # noise -- the per-exposure term is solved against the dense INTERNAL consensus
+            # (build_virac2_locked_perexp.py), only the per-visit bulk touches VIRAC2.
+            if match.sum() > 1 and 'Exposure' in offsets_tbl.colnames:
+                match = match & (offsets_tbl['Exposure'] == exposure)
             if match.sum() != 1:
                 raise ValueError(f"module-locked offset match={match.sum()} for {fn} "
-                                 f"(visit={visit}, filter={filtername}); expected exactly 1 "
-                                 f"per-visit row in {locked_tbl}")
+                                 f"(visit={visit}, exposure={exposure}, filter={filtername}); "
+                                 f"expected exactly 1 row in {locked_tbl}")
             row = offsets_tbl[match]
             rashift = float(row['dra (arcsec)'][0]) * u.arcsec
             decshift = float(row['ddec (arcsec)'][0]) * u.arcsec
