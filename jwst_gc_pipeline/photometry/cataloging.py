@@ -906,6 +906,8 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         forced_grid_search_radius=forced_grid_search_radius,
         flux_overrides=satstar_flux_overrides,
         flux_drops=satstar_flux_drops,
+        oversub_clamp_percentile=float(getattr(
+            options, 'satstar_oversub_clamp_percentile', 10.0)),
         file_suffix=satstar_file_suffix,
         seed_gate_image=_seed_gate_image, seed_gate_wcs=_seed_gate_wcs)
     ext_model = filename.replace('.fits', f'{satstar_file_suffix}_extended_satstar_model.fits')

@@ -752,7 +752,7 @@ def accept_satstar_fit(*, result_is_none, fluxerr, snr, flux, qfit,
     return bool((not np.isfinite(ssr_ratio)) or (ssr_ratio < ssr_ratio_max_keep))
 
 
-def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, deblend_daophot_xy=None, deblend_confirm_xy=None):
+def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, deblend_daophot_xy=None, deblend_confirm_xy=None):
     # ``flux_drops``: optional list of SkyCoord.  An out-of-field (forced) source
     # whose seed sky position matches a drop within ~1.0" is SKIPPED entirely
     # (not fit, not contributed): cross-frame reconciliation found no trustworthy
@@ -1640,14 +1640,24 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 if _nf >= 10:
                     _ratio = cutout[_foot].astype(float) / _pmod[_foot]  # data/model
                     _frac_over = float(np.mean(_ratio < 1.0))
-                    _scale = float(np.percentile(_ratio, 10.0))
+                    # ``oversub_clamp_percentile`` controls how strictly model<=data
+                    # is enforced over the >5sigma footprint: the scale is the Nth
+                    # percentile of data/model, so a smaller N forces model<=data on
+                    # a LARGER fraction of pixels (N=10 -> 90% of pixels; N=1 -> 99%;
+                    # N=0 -> every pixel).  Single-detector LW off-FOV stars over a
+                    # BRIGHT background (e.g. F335M at 3.35um) have no spike leverage,
+                    # so every per-frame fit over-estimates and the weak 10th-pct
+                    # ceiling still leaves deep negative spike residuals; a smaller
+                    # percentile under-subtracts slightly instead (preferred).
+                    _pct = float(np.clip(oversub_clamp_percentile, 0.0, 50.0))
+                    _scale = float(np.percentile(_ratio, _pct))
                     if _scale < 1.0:
                         _oversub_scale = max(_scale, 0.0)
                         print(f"  OVER-SUB CHECK (forced src {ii+1}): model>data on "
                               f"{100*_frac_over:.0f}% of {_nf}-px >5sig footprint; "
                               f"clamping flux {flux_fit_val:.3e} -> "
                               f"{flux_fit_val*_oversub_scale:.3e} (scale="
-                              f"{_oversub_scale:.3f}) so model<=data", flush=True)
+                              f"{_oversub_scale:.3f}, pct={_pct:.1f}) so model<=data", flush=True)
                         flux_fit_val = flux_fit_val * _oversub_scale
                         flux_err_val = flux_err_val * _oversub_scale
 

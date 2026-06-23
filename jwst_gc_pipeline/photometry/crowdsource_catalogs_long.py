@@ -1595,6 +1595,7 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
                                  forced_grid_search_radius=5,
                                  flux_overrides=None,
                                  flux_drops=None,
+                                 oversub_clamp_percentile=10.0,
                                  file_suffix='',
                                  seed_gate_image=None, seed_gate_wcs=None):
     """
@@ -1631,6 +1632,7 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
                            forced_grid_search_radius=forced_grid_search_radius,
                            flux_overrides=flux_overrides,
                            flux_drops=flux_drops,
+                           oversub_clamp_percentile=oversub_clamp_percentile,
                            file_suffix=file_suffix,
                            seed_gate_image=seed_gate_image,
                            seed_gate_wcs=seed_gate_wcs)
@@ -3415,6 +3417,17 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                            'Filter only applies where '
                            'satstar_model[y,x] > SIGK * median(err). '
                            'Default 3.')
+    parser.add_option('--satstar-oversub-clamp-percentile',
+                      dest='satstar_oversub_clamp_percentile',
+                      default=10.0, type='float',
+                      help='Percentile of data/model used as the over-subtraction '
+                           'clamp scale for OUT-OF-FIELD (forced) saturated stars: '
+                           'a smaller value enforces model<=data on a larger fraction '
+                           'of the >5sigma footprint (10 -> 90%% of pixels, 1 -> 99%%, '
+                           '0 -> every pixel), under-subtracting slightly instead of '
+                           'leaving deep negative spike residuals. Default 10. Lower '
+                           '(e.g. 1-2) for single-detector LW filters over bright '
+                           'background (F335M).')
     parser.add_option('--skip-mosaic-each-exposure-residuals',
                       dest='skip_mosaic_each_exposure_residuals',
                       default=False,
