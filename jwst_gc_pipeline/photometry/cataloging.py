@@ -163,6 +163,7 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                       grouper, options, dq, satstar_model_subtracted,
                       label, xy_bounds_pix=None,
                       overshoot_ratio=1.2, overshoot_action='flag',
+                      overshoot_cap_target=1.0,
                       miri_dpk_guard=False,
                       satstar_excl_xy=None, satstar_excl_pix=0.0,
                       near_sat_dist_pix=1.0,
@@ -409,6 +410,36 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
               f"photometry at the seed position (flux free)", flush=True)
         modsky = _make_model_image(phot, data.shape, psf_shape=(21, 21),
                                    include_local_bkg=False)
+
+    # --- HARD CAP residual overshoot (2026-06-23, MIRI) ---
+    # Even after the seed refit, a mildly EXTENDED source (low concentration --
+    # a bump on bright emission, or a source broader than the PSF) keeps
+    # model_peak > data_peak and leaves a NEGATIVE POCKMARK in the residual
+    # (2526 cloud-c filament: daophot model 449 on data 279 -> -170).  A single
+    # positive PSF physically cannot peak above the data, so rescale any
+    # still-overshooting fit's flux down until its model peak == the local data
+    # peak.  Corrects the amplitude without dropping the source (it stays in the
+    # catalog at its true, data-limited brightness).  MIRI-gated via the same
+    # dpk-guard flag so NIRCam is unchanged.
+    if (miri_dpk_guard and overshoot_cap_target and overshoot_cap_target > 0
+            and len(phot.results)):
+        modsky = _make_model_image(phot, data.shape, psf_shape=(21, 21),
+                                   include_local_bkg=False)
+        _capov = _filter_or_flag_model_overshoot(
+            phot, modsky, data, ratio=overshoot_ratio, action='flag',
+            label=f'{label}:cap', flag_nonpositive_data=miri_dpk_guard)
+        if np.any(_capov):
+            _res = phot.results
+            _r = np.asarray(_res['model_data_peak_ratio'], dtype=float)
+            _fl = np.asarray(_res['flux_fit'], dtype=float)
+            _scale = np.where(_capov & np.isfinite(_r) & (_r > 0),
+                              overshoot_cap_target / _r, 1.0)
+            _res['flux_fit'] = _fl * _scale
+            phot.__dict__.pop('_model_image_params', None)
+            modsky = _make_model_image(phot, data.shape, psf_shape=(21, 21),
+                                       include_local_bkg=False)
+            print(f"[{label}] capped {int(np.sum(_capov))} overshooting fits to "
+                  f"{overshoot_cap_target:g}x the local data peak", flush=True)
 
     # --- ban non-positive-flux (negative-peak) sources ---
     # A PSF is strictly positive, so flux_fit <= 0 is a negative-peak model: it
