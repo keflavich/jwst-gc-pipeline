@@ -1111,6 +1111,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
                                         fwhm_basepath=None,
                                         n_spatial_chunks=1,
                                         merge_workers=1,
+                                        field=None,
                                         basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
 
     desat = "_unsatstar" if desat else ""
@@ -1170,6 +1171,13 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     # chunked filename inserts a ``_chunkXXofYY`` token between the iter
     # token and ``_{method_suffix}``; chunks for the same frame share the
     # rest of the path.
+    # Per-observation token: prop 2211 (gc2211) per-frame catalog tables carry
+    # _o{field} so obs sharing a filter don't collide.  When merging a single obs
+    # (field set), globbing _o{field} pulls ONLY that obs's frames and the merged
+    # output catalogs are written per-obs.  Empty for single-obs targets.  MUST
+    # match obs_token() / save_photutils_results / _predict_tblfilename in
+    # crowdsource_catalogs_long.
+    obs_ = f'_o{field}' if (target == 'gc2211' and field not in (None, '')) else ''
     raw_fns = []
     for module_ in modules:
         for progid in obs_filters[target]:
@@ -1177,7 +1185,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
                 for exposure in exposure_numbers:
                     base_pat = (
                         f"{basepath}/{filtername.upper()}/"
-                        f"{filtername.lower()}_{module_}_visit{visitid:03d}_vgroup*_exp{exposure:05d}"
+                        f"{filtername.lower()}_{module_}{obs_}_visit{visitid:03d}_vgroup*_exp{exposure:05d}"
                         f"{desat}{bgsub}{fitpsf}{blur_}{group_}{iter_token}"
                     )
                     raw_fns.extend(glob.glob(
@@ -1260,7 +1268,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     else:
         merged_exposure_table = combine_singleframe(tables, offsets_table=offsets_table)
 
-    outfn = f"{basepath}/catalogs/{filtername.lower()}_{module}_indivexp_merged{desat}{bgsub}{fitpsf}{blur_}{iter_token}_{method}{suffix}_allcols.fits"
+    outfn = f"{basepath}/catalogs/{filtername.lower()}_{module}{obs_}_indivexp_merged{desat}{bgsub}{fitpsf}{blur_}{iter_token}_{method}{suffix}_allcols.fits"
     print(f"Writing {outfn} with length {len(merged_exposure_table)}")
     merged_exposure_table.write(outfn, overwrite=True)
 
@@ -1289,7 +1297,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
         print(f"Rejected {reject.sum()} sources that had nan coordinates.")
         minimal_table = minimal_table[~reject]
 
-    outfn = f"{basepath}/catalogs/{filtername.lower()}_{module}_indivexp_merged{desat}{bgsub}{fitpsf}{blur_}{iter_token}_{method}{suffix}.fits"
+    outfn = f"{basepath}/catalogs/{filtername.lower()}_{module}{obs_}_indivexp_merged{desat}{bgsub}{fitpsf}{blur_}{iter_token}_{method}{suffix}.fits"
     print(f"Final table length is {len(minimal_table)}.  Writing {outfn}")
     minimal_table.write(outfn, overwrite=True)
 
@@ -2096,6 +2104,16 @@ def main():
     parser.add_option("--target", dest="target",
                       default='brick',
                       help="target", metavar="target")
+    parser.add_option("--field", dest="field",
+                      default=None,
+                      help=("Restrict the merge to a single observation/field "
+                            "(e.g. 023).  REQUIRED for multi-obs targets like "
+                            "gc2211 whose 5 pointings share visit/vgroup/exp "
+                            "tuples: the per-frame catalog tables carry an "
+                            "_o{field} token, so the merge globs only that obs's "
+                            "frames and tolerates filters the obs does not have. "
+                            "Leave unset for single-obs targets (brick/sgrb2/...)."),
+                      metavar="field")
     parser.add_option("--skip-crowdsource", dest="skip_crowdsource",
                       default=False,
                       action="store_true",
@@ -2208,10 +2226,16 @@ def main():
                                                                         resbgsub=options.resbgsub,
                                                                         basepath=basepath,
                                                                         n_spatial_chunks=int(options.n_spatial_chunks),
+                                                                        field=options.field,
                                                                         merge_workers=int(options.merge_workers))
                                             except ValueError as ex:
                                                 if blur and not options.strict_require_blur:
                                                     print("Skipping missing blur files")
+                                                elif options.field not in (None, '') and 'No tables found' in str(ex):
+                                                    # Per-obs merge: this observation legitimately
+                                                    # lacks this filter (e.g. gc2211 o023 has no
+                                                    # F150W; o050 is module-B only).  Skip, don't fail.
+                                                    print(f"Skipping {filtername} for obs {options.field}: no frames ({ex})")
                                                 else:
                                                     raise ex
                                             print(f"Finished merge_individual_frames {suffix} {progid} {filtername} {method}")
