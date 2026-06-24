@@ -981,6 +981,29 @@ def _sample_background_map(background_map, xvals, yvals):
 # the import near the top of this module, beside _strip_chunk).
 
 
+def obs_token(proposal_id, field):
+    """Per-observation filename disambiguator for multi-obs targets.
+
+    Proposal 2211 (gc2211) comprises 5 GC pointings (obs 023/028/046/049/050)
+    that REUSE the same ``(visit, vgroup, exp)`` tuples, so the obs-less per-frame
+    catalog-table name ``{filter}_{module}_visit001_vgroup02201_exp00001_...`` is
+    identical across obs that share a filter and silently overwrites (= data loss;
+    F200W: o023/o046/o049/o050; F277W: all 5).  Insert ``_o{field}`` for prop 2211
+    so each obs writes a distinct catalog table.  The per-frame residual/model
+    products under ``{filter}/pipeline/`` already carry ``-o{field}`` and are
+    unaffected.  Other proposals are single-obs-per-basepath and get the empty
+    token, so their filenames and existing products are unchanged.
+    """
+    if str(proposal_id) == '2211' and field not in (None, ''):
+        return f'_o{field}'
+    return ''
+
+
+def _obs_token_from_options(options):
+    return obs_token(getattr(options, 'proposal_id', None),
+                     getattr(options, 'field', None))
+
+
 def _predict_output_tokens(options, visit_id=None, vgroup_id=None,
                            exposure_id=None, iteration_label=None):
     """Reproduce the per-exposure tokens used when writing catalog outputs.
@@ -1015,13 +1038,14 @@ def _predict_tblfilename(basepath, filtername, module, options,
     (visitid_, vgroupid_, exposure_, desat, bgsub,
      epsf_, blur_, group_, iter_) = _predict_output_tokens(
         options, visit_id, vgroup_id, exposure_id, iteration_label)
+    obs_ = _obs_token_from_options(options)
     if method == 'daophot':
         return (f'{basepath}/{filtername}/'
-                f'{filtername.lower()}_{module}{visitid_}{vgroupid_}{exposure_}'
+                f'{filtername.lower()}_{module}{obs_}{visitid_}{vgroupid_}{exposure_}'
                 f'{desat}{bgsub}{epsf_}{blur_}{group_}{iter_}'
                 f'_daophot_{basic_or_iterative}.fits')
     return (f'{basepath}/{filtername}/'
-            f'{filtername.lower()}_{module}{visitid_}{vgroupid_}{exposure_}'
+            f'{filtername.lower()}_{module}{obs_}{visitid_}{vgroupid_}{exposure_}'
             f'{desat}{bgsub}{blur_}{iter_}'
             f'_crowdsource_unweighted.fits')
 
@@ -1597,7 +1621,8 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
                                  flux_drops=None,
                                  oversub_clamp_percentile=10.0,
                                  file_suffix='',
-                                 seed_gate_image=None, seed_gate_wcs=None):
+                                 seed_gate_image=None, seed_gate_wcs=None,
+                                 deblend_with_zeroframe=False):
     """
     ``file_suffix`` is inserted into the satstar output filenames before
     the ``_satstar_catalog`` / ``_satstar_model`` / ``_satstar_residual``
@@ -1635,7 +1660,8 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
                            oversub_clamp_percentile=oversub_clamp_percentile,
                            file_suffix=file_suffix,
                            seed_gate_image=seed_gate_image,
-                           seed_gate_wcs=seed_gate_wcs)
+                           seed_gate_wcs=seed_gate_wcs,
+                           deblend_with_zeroframe=deblend_with_zeroframe)
     if os.path.exists(satstar_filename):
         return Table.read(satstar_filename)
     return None
@@ -1821,6 +1847,11 @@ def save_photutils_results(result, ww, filename,
         result.meta['BKGMETH'] = 'bkg2d_sampled' if background_map is not None else 'none'
 
     iter_ = _iteration_token(iteration_label)
+    # Per-observation disambiguator (prop 2211/gc2211 only; empty elsewhere).
+    # gc2211's 5 obs reuse the same visit/vgroup/exp tuples, so without _o{field}
+    # the catalog tables collide across obs and silently overwrite.  MUST match
+    # _predict_tblfilename and the merge_catalogs.py glob.  See obs_token().
+    obs_ = _obs_token_from_options(options)
     # Historical bug: this used to be `{module}{detector}` with no
     # separator, which produced doubled tokens like ``nrcbnrcb`` /
     # ``nrcanrca`` whenever ``module == detector`` (which is always
@@ -1829,7 +1860,7 @@ def save_photutils_results(result, ww, filename,
     # The original iter1 convention used only ``{module}`` and that's
     # what every other filename slot in this file (and the seed-catalog
     # inference at line ~1931) still uses.  Restored.
-    tblfilename = f"{basepath}/{filtername}/{filtername.lower()}_{module}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}{iter_}_daophot_{basic_or_iterative}.fits"
+    tblfilename = f"{basepath}/{filtername}/{filtername.lower()}_{module}{obs_}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}{iter_}_daophot_{basic_or_iterative}.fits"
 
     long_keys = [k for k in result.meta if len(k) > 8]
     for k in long_keys:
@@ -3315,6 +3346,15 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--no-fit-satstar-outside-fov", dest="fit_satstar_outside_fov",
                     action='store_false',
                     help="Force-disable fitting of saturated stars outside the FOV.")
+    parser.add_option("--deblend-satstars", dest="deblend_satstars",
+                    default=False, action='store_true',
+                    help=("ZEROFRAME-deblend merged saturated cores: in crowded GC "
+                          "fields (gc2211) bright stars' saturated cores touch and "
+                          "label as one component, so the single seed lands between "
+                          "stars.  Load the matching _ramp.fits ZEROFRAME and split "
+                          "each merged component into one seed per star.  Auto-degrades "
+                          "to legacy where a frame has no sibling _ramp.fits."),
+                    metavar="deblend_satstars")
     parser.add_option("--epsf", dest="epsf",
                     default=False,
                     action='store_true',

@@ -978,7 +978,11 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         oversub_clamp_percentile=float(getattr(
             options, 'satstar_oversub_clamp_percentile', 10.0)),
         file_suffix=satstar_file_suffix,
-        seed_gate_image=_seed_gate_image, seed_gate_wcs=_seed_gate_wcs)
+        seed_gate_image=_seed_gate_image, seed_gate_wcs=_seed_gate_wcs,
+        # ZEROFRAME deblend of merged saturated cores (gc2211 crowded GC fields).
+        # Opt-in via --deblend-satstars; auto-degrades to legacy where the frame
+        # has no sibling _ramp.fits ZEROFRAME.  See gc2211-zeroframe-satcore-deblend.
+        deblend_with_zeroframe=bool(getattr(options, 'deblend_satstars', False)))
     ext_model = filename.replace('.fits', f'{satstar_file_suffix}_extended_satstar_model.fits')
     sat_model = filename.replace('.fits', f'{satstar_file_suffix}_satstar_model.fits')
     if os.path.exists(ext_model):
@@ -1888,13 +1892,21 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
             for filt in filternames:
                 prev_seed = None
                 resbg_path = None
-                # MIRI: vetted catalog is PER-OBS tokened (_o{field}) -- each obs
-                # vetted vs its own data_i2d, then combined into the un-tokened
-                # all-obs catalog (see the vet + combine block below).  NIRCam:
-                # un-tokened (single all-obs vetting; unchanged behavior).
+                # Vetted catalog is PER-OBS tokened (_o{field}) -- each obs vetted
+                # vs its own data_i2d, then combined into the un-tokened all-obs
+                # catalog (see the vet + combine block below).  Enabled for:
+                #   - MIRI multi-obs targets (cloudef obs2+5), and
+                #   - gc2211 (prop 2211): 5 NIRCam pointings share ONE basepath and
+                #     reuse visit/vgroup/exp tuples; without per-obs vetting the
+                #     all-obs merge would pool every obs and a single vetting pass
+                #     would carry sources outside each obs's footprint.  Pairs with
+                #     the _o{field} per-frame catalog token + the _o* all-obs merge
+                #     glob in merge_catalogs (see obs_token()).
+                # Single-obs NIRCam targets keep _vtok='' (unchanged behavior).
                 _miri_field = (module == 'mirimage'
                                or _L._instrument_from_filter(filt) == 'MIRI')
-                _vtok = f'_o{field}' if _miri_field else ''
+                _multiobs = str(proposal_id) == '2211'
+                _vtok = f'_o{field}' if (_miri_field or _multiobs) else ''
                 # m3..m6 seed = vetted previous catalog UNION daofind on a
                 # progressively cleaner i2d (per PSFPhotometryPlan2026-06-09):
                 #   iter3(m3): raw i2d                        fit RAW frames
