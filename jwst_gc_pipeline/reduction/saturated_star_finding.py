@@ -231,14 +231,29 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000):
     # id 0 is the non-saturated zone that we've excluded [but reading this code 3/28/2026, I'm skeptical this makes sense]
     edge_ids = edge_ids[1:]
     edge_mask = np.isin(sources, edge_ids)
-    saturated = saturated & (~ndimage.binary_dilation(edge_mask, iterations=msfe))
+    _edge_remove = ndimage.binary_dilation(edge_mask, iterations=msfe)
+    # PRESERVE genuine-saturation cores (2026-06-23).  The >edge_npix suppression
+    # targets large detector-edge saturated bleeds, but bright EXTENDED EMISSION
+    # (2526 cloud-c filament) produces large spurious DQ-SATURATED regions
+    # (14717-px component) that ENGULF real saturated stars.  Erasing the whole
+    # component deletes the star -- it is then never seeded or fit (the
+    # "unidentified saturated star" failure).  The real star is the
+    # ``unrecoverable`` (NaN-variance) core, which is genuine even inside a giant
+    # spurious-DQ blob.  Keep those core pixels; only the finite spurious-DQ
+    # emission is removed, so the surviving component collapses onto the real core
+    # (correct COM + sat_area downstream).
+    if 'VAR_POISSON' in [h.name for h in fitsdata]:
+        _unrec = np.isnan(fitsdata['VAR_POISSON'].data)
+        _edge_remove = _edge_remove & (~_unrec)
+    saturated = saturated & (~_edge_remove)
 
     coms = center_of_mass(saturated, labels=sources, index=np.arange(nsource)+1)
 
     return saturated, sources, coms
 
 
-def _refine_coms_by_data(coms, data, sources, shift_warn_thresh_pix=3.0):
+def _refine_coms_by_data(coms, data, sources, shift_warn_thresh_pix=3.0,
+                         unrecoverable=None):
     """Refine DQ_SATURATED-mask centroids using the cluster bounding-box
     center as a regularizer.
 
@@ -289,6 +304,35 @@ def _refine_coms_by_data(coms, data, sources, shift_warn_thresh_pix=3.0):
         if len(ys) == 0:
             refined.append((cy, cx))
             continue
+        # GENUINE-SATURATION CORE refinement (2026-06-23).  A real saturated star
+        # buried in a LARGE spurious DQ-SATURATED emission blob (2526 cloud-c
+        # filament: a 45-px unrecoverable NaN-variance core inside a 14717-px DQ
+        # component of bright FINITE emission) has its mask-COM and eroded-COM
+        # dragged onto the emission, several px off the star -- the fit then lands
+        # on emission and is gated out, so the star is NEVER found.  The genuine
+        # saturated core is the ``unrecoverable`` (NaN-variance) sub-region,
+        # distinct from the finite spurious-DQ emission filling the rest of the
+        # component.  When such a core exists, recentre on its LARGEST sub-cluster
+        # (the real star).  This is the most reliable centre available and takes
+        # priority over the eroded-mask heuristic below.
+        if unrecoverable is not None:
+            _core = clmask & unrecoverable
+            if int(_core.sum()) >= 3:
+                _cl, _cn = ndimage.label(_core)
+                if _cn >= 1:
+                    _sz = ndimage.sum_labels(_core, _cl, np.arange(1, _cn + 1))
+                    _big = _cl == (int(np.argmax(_sz)) + 1)
+                    _ncy, _ncx = ndimage.center_of_mass(_big)
+                    if np.isfinite(_ncy) and np.isfinite(_ncx):
+                        _sh = float(np.hypot(_ncy - cy, _ncx - cx))
+                        if _sh > shift_warn_thresh_pix:
+                            print(f"  [satstar centroid refine] cluster "
+                                  f"{cluster_id}: mask_COM=({cx:.2f},{cy:.2f}) -> "
+                                  f"genuine-core=({_ncx:.2f},{_ncy:.2f}) "
+                                  f"shift={_sh:.2f} px (sat_area={len(ys)}, "
+                                  f"core={int(_core.sum())})", flush=True)
+                        refined.append((float(_ncy), float(_ncx)))
+                        continue
         # ERODED-CORE CENTROID (2026-06-20).  The bbox centre is biased when the
         # saturated cluster is asymmetric -- the brightest 6-pointed DIFFRACTION
         # SPIKE saturates farther out than the others, or a thin saturated bleed/
@@ -925,7 +969,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # the unsaturated wings -- much more reliable as a star-centre
     # estimate (the saturated mask should be centred on the star
     # centroid).  Added 2026-05-28.
-    coms = _refine_coms_by_data(coms, data, sources)
+    coms = _refine_coms_by_data(coms, data, sources, unrecoverable=_unrecoverable)
 
     # Precompute sat_area per labeled component so we can order in-FOV
     # source_records brightest-first for iterative-subtraction fitting
