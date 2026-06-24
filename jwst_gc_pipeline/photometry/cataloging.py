@@ -2024,6 +2024,34 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 else:
                     candidate_frames = frame_cache.get((module, filt), [])
 
+                # MIRI FAKE-STAR FIX (2026-06-23): the satstar seed gate's
+                # strongest, FIELD-GENERAL phantom rejection (coadd prominence /
+                # core / concentration -- RELATIVE metrics that separate a fake on
+                # smooth emission from a real saturated star regardless of field
+                # brightness) needs the deep detection coadd ``_data_i2d``.  On a
+                # field's FIRST run that coadd did not exist yet (it used to be
+                # built only by the later mosaic step), so the gate fell back to
+                # per-frame data and FAKE bright satstars survived (2526 cloud-c
+                # filament: satstar flux 4.4e6 on data ~340; prom 1.6/conc 1.2 on
+                # the coadd would have rejected it outright).  Build the coadd
+                # ONCE up front from the input frames so EVERY per-frame satstar
+                # fit gets the coadd gate.  Cheap vs the fits; skipped if present.
+                if (phase == phases[0] and module == 'mirimage'
+                        and candidate_frames):
+                    _det_i2d = _data_i2d_path(module, filt)
+                    if not os.path.exists(_det_i2d):
+                        try:
+                            _L.mosaic_cutout_input_data(
+                                basepath, filt, proposal_id, field, module,
+                                label=phase, pupil='clear',
+                                input_files=candidate_frames)
+                            print(f"[manual] built detection coadd for satstar "
+                                  f"gate: {_det_i2d}", flush=True)
+                        except Exception as _cex:
+                            print(f"[manual] could not build detection coadd "
+                                  f"{_det_i2d} ({_cex}); satstar gate falls back "
+                                  f"to per-frame data", flush=True)
+
                 # Build per-frame work units.  Per-frame fits within a phase
                 # are independent (phase-level dependencies only); parallelize
                 # them across N workers when ``--parallel-workers > 1``.
