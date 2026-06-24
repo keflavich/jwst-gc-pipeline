@@ -31,7 +31,13 @@ background_mapping = { '2221':
                         # disk -> destreak crash). Point at the background map that actually exists.
                         # NOTE: the other 5 Cloud C filters (f410m/f466n/f182m/f187n/f212n) have no
                         # background map -> add_background_map warns + skips (degraded destreak).
-                        'f405n': 'jw02221-o002_t001_nircam_clear-f405n-merged-nodestreak_i2d_medfilt128.fits',
+                        # 2026-06-24: the plain '..._medfilt128.fits' map has ~13% NaN holes (the
+                        # medfilt builder's zero->NaN spread) even though the source i2d is fully
+                        # covered; bilinear sampling propagated those NaNs into the destreaked frames
+                        # -> NaN blob in the merged image (~17:46:21.9 -28:37:34).  Use the
+                        # nearest-finite-filled (hole-free) map instead.  add_background_map also
+                        # nan_to_num-guards the map now as defence-in-depth.
+                        'f405n': 'jw02221-o002_t001_nircam_clear-f405n-merged-nodestreak_i2d_medfilt128_filled.fits',
                        }
                       }
                      }
@@ -156,6 +162,14 @@ def add_background_map(data, hdu, background_mapping=background_mapping,
     ww = WCS(hdu[ext].header)
 
     bg = fits.getdata(bgfile)
+
+    # Defence-in-depth: a background map with NaN holes (e.g. coverage gaps, or
+    # a medfilt builder that spread zeros->NaN) would otherwise propagate NaNs
+    # into the destreaked frame via bilinear sampling + `data += bg_sampled`,
+    # punching NaN blobs into the merged mosaic.  Fill holes with the map median
+    # so the added background is always finite.
+    if not np.all(np.isfinite(bg)):
+        bg = np.nan_to_num(bg, nan=np.nanmedian(bg))
 
     # we want the middles of the columns
     for start in range(0, 2048, 512):
