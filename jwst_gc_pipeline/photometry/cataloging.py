@@ -416,6 +416,42 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
 # ---------------------------------------------------------------------------
 # Seed building: daofind(image) + previous catalog + satstars
 # ---------------------------------------------------------------------------
+def _subset_seed_to_frame(seed_table, ww, data_shape, fwhm_pix,
+                          preferred_skycoord_col=None, margin_fwhm=3.0,
+                          label=''):
+    """Restrict a (possibly full-mosaic) seed catalog to the sources that land on
+    THIS frame, plus a PSF-wing margin, BEFORE the per-frame seed build.
+
+    The previous-phase merged seed catalog spans the WHOLE field (millions of
+    rows for dense SW filters).  ``SeededFinder`` clips it to the frame at the
+    end anyway, but only AFTER ``_combine_seed_and_satstars`` +
+    ``_augment_seed_catalog_with_detections_sky`` + the sky->pixel projection
+    carry the entire catalog (all columns) through memory -- which is the
+    dominant per-frame, per-worker RAM (tens of GB for F115W/F200W: the m5 OOM
+    at MaxRSS ~825 GB across 32 workers, 2026-06-23).  Subsetting to the frame
+    footprint here cuts that ~100x.  Off-frame seeds cannot produce in-frame
+    init params, so the fit is unchanged (the margin keeps stars whose wings
+    fall onto the frame).  Row count is the cost driver, not column count, so we
+    keep all columns (a few-k rows x ~100 cols is a few MB).
+    """
+    if seed_table is None or len(seed_table) == 0:
+        return seed_table
+    resolved = _L._resolve_seed_skycoords(seed_table, ww=ww,
+                                          preferred_skycoord_col=preferred_skycoord_col)
+    x, y = ww.world_to_pixel(resolved['skycoord'])
+    x = np.asarray(x, dtype=float); y = np.asarray(y, dtype=float)
+    ny, nx = int(data_shape[0]), int(data_shape[1])
+    margin = max(50.0, float(margin_fwhm) * float(fwhm_pix))
+    keep = (np.isfinite(x) & np.isfinite(y)
+            & (x > -margin) & (x < nx + margin)
+            & (y > -margin) & (y < ny + margin))
+    n0 = len(resolved); nk = int(np.sum(keep))
+    if nk < n0:
+        print(f"[{label}] seed footprint subset: {n0} -> {nk} sources on frame "
+              f"({nx}x{ny}, +{margin:.0f}px margin)", flush=True)
+    return resolved[keep]
+
+
 def _build_manual_seed(*, detection_image, nan_replaced_data, mask, ww, fwhm_pix,
                        satstar_table, prev_catalog,
                        local_snr_threshold, roundlo, roundhi, sharplo, sharphi,
@@ -434,6 +470,14 @@ def _build_manual_seed(*, detection_image, nan_replaced_data, mask, ww, fwhm_pix
     """
     if dedup_min_sep_pix is None:
         dedup_min_sep_pix = 0.5 * fwhm_pix
+
+    # Clip the previous (full-mosaic) seed catalog to this frame's footprint
+    # before combine/augment/projection -- the dominant per-frame, per-worker
+    # memory for dense SW fields (see _subset_seed_to_frame).
+    if prev_catalog is not None and len(prev_catalog):
+        prev_catalog = _subset_seed_to_frame(
+            prev_catalog, ww, np.asarray(nan_replaced_data).shape, fwhm_pix,
+            preferred_skycoord_col=preferred_seed_skycoord_col, label=label)
 
     # MIRI early-phase coarse background subtraction (AG 2026-06-13): the F770W
     # pedestal is huge (image min ~200 MJy/sr) but the bright stars are HIGH
