@@ -1171,13 +1171,22 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     # chunked filename inserts a ``_chunkXXofYY`` token between the iter
     # token and ``_{method_suffix}``; chunks for the same frame share the
     # rest of the path.
-    # Per-observation token: prop 2211 (gc2211) per-frame catalog tables carry
-    # _o{field} so obs sharing a filter don't collide.  When merging a single obs
-    # (field set), globbing _o{field} pulls ONLY that obs's frames and the merged
-    # output catalogs are written per-obs.  Empty for single-obs targets.  MUST
-    # match obs_token() / save_photutils_results / _predict_tblfilename in
-    # crowdsource_catalogs_long.
-    obs_ = f'_o{field}' if (target == 'gc2211' and field not in (None, '')) else ''
+    # Per-observation token (prop 2211/gc2211 per-frame catalog tables carry
+    # _o{field}; see obs_token() / save_photutils_results / _predict_tblfilename).
+    # The GLOB token and the OUTPUT token differ for the all-obs merge:
+    #   - field set (per-obs merge): glob only that obs (_o{field}), write per-obs.
+    #   - field unset on gc2211 (the manual pipeline's internal all-obs merge,
+    #     cataloging.py:run_manual_pipeline): glob EVERY obs (_o*) so the merged
+    #     catalog pools all obs-tagged tables (NOT the legacy un-tokened orphans),
+    #     and write the un-tokened all-obs name that the per-obs _vtok vetting +
+    #     combine step expects.
+    #   - other targets: no token (single-obs basepath).
+    if field not in (None, ''):
+        glob_obs_, out_obs_ = f'_o{field}', f'_o{field}'
+    elif target == 'gc2211':
+        glob_obs_, out_obs_ = '_o*', ''
+    else:
+        glob_obs_, out_obs_ = '', ''
     raw_fns = []
     for module_ in modules:
         for progid in obs_filters[target]:
@@ -1185,7 +1194,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
                 for exposure in exposure_numbers:
                     base_pat = (
                         f"{basepath}/{filtername.upper()}/"
-                        f"{filtername.lower()}_{module_}{obs_}_visit{visitid:03d}_vgroup*_exp{exposure:05d}"
+                        f"{filtername.lower()}_{module_}{glob_obs_}_visit{visitid:03d}_vgroup*_exp{exposure:05d}"
                         f"{desat}{bgsub}{fitpsf}{blur_}{group_}{iter_token}"
                     )
                     raw_fns.extend(glob.glob(
@@ -1268,7 +1277,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     else:
         merged_exposure_table = combine_singleframe(tables, offsets_table=offsets_table)
 
-    outfn = f"{basepath}/catalogs/{filtername.lower()}_{module}{obs_}_indivexp_merged{desat}{bgsub}{fitpsf}{blur_}{iter_token}_{method}{suffix}_allcols.fits"
+    outfn = f"{basepath}/catalogs/{filtername.lower()}_{module}{out_obs_}_indivexp_merged{desat}{bgsub}{fitpsf}{blur_}{iter_token}_{method}{suffix}_allcols.fits"
     print(f"Writing {outfn} with length {len(merged_exposure_table)}")
     merged_exposure_table.write(outfn, overwrite=True)
 
@@ -1297,7 +1306,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
         print(f"Rejected {reject.sum()} sources that had nan coordinates.")
         minimal_table = minimal_table[~reject]
 
-    outfn = f"{basepath}/catalogs/{filtername.lower()}_{module}{obs_}_indivexp_merged{desat}{bgsub}{fitpsf}{blur_}{iter_token}_{method}{suffix}.fits"
+    outfn = f"{basepath}/catalogs/{filtername.lower()}_{module}{out_obs_}_indivexp_merged{desat}{bgsub}{fitpsf}{blur_}{iter_token}_{method}{suffix}.fits"
     print(f"Final table length is {len(minimal_table)}.  Writing {outfn}")
     minimal_table.write(outfn, overwrite=True)
 
