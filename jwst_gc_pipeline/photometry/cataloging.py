@@ -436,6 +436,11 @@ def _subset_seed_to_frame(seed_table, ww, data_shape, fwhm_pix,
     """
     if seed_table is None or len(seed_table) == 0:
         return seed_table
+    # Debug/benchmark escape hatch (default OFF -> subset active): set
+    # _SEED_SUBSET_DISABLE=1 to keep the full-field seed (used to A/B the
+    # memory savings).  Not for production.
+    if os.environ.get('_SEED_SUBSET_DISABLE'):
+        return seed_table
     resolved = _L._resolve_seed_skycoords(seed_table, ww=ww,
                                           preferred_skycoord_col=preferred_skycoord_col)
     x, y = ww.world_to_pixel(resolved['skycoord'])
