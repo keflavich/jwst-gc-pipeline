@@ -794,8 +794,28 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         with fits.open(resbg_path) as bgh:
             bg_hdu = bgh['SCI'] if 'SCI' in [h.name for h in bgh] else bgh[0]
             bg_wcs = wcs.WCS(bg_hdu.header)
-            bg_data = bg_hdu.data.astype(float)
+            # MEMORY: crop the full-mosaic bg (~8766x11574) to just this frame's footprint
+            # (+margin) BEFORE loading/reprojecting.  Reprojecting the whole mosaic in every
+            # parallel worker was the OOM driver; a ~2k cutout is ~20x smaller per op.  Fall
+            # back to the full mosaic only if the crop can't be computed.
+            ny, nx = data.shape
+            try:
+                foot = ww.calc_footprint(axes=(nx, ny))            # sky corners (deg), shape (4,2)
+                bx, by = bg_wcs.world_to_pixel_values(foot[:, 0], foot[:, 1])
+                m = 64
+                x0 = max(int(np.floor(np.nanmin(bx))) - m, 0)
+                x1 = min(int(np.ceil(np.nanmax(bx))) + m, bg_hdu.shape[1])
+                y0 = max(int(np.floor(np.nanmin(by))) - m, 0)
+                y1 = min(int(np.ceil(np.nanmax(by))) + m, bg_hdu.shape[0])
+                if x1 - x0 < 2 or y1 - y0 < 2:
+                    raise ValueError("degenerate bg crop")
+                bg_data = bg_hdu.section[y0:y1, x0:x1].astype(float)  # .section = read only the cutout
+                bg_wcs = bg_wcs[y0:y1, x0:x1]
+            except Exception as _e:
+                print(f"[manual] bg crop failed ({_e}); reprojecting full mosaic", flush=True)
+                bg_data = bg_hdu.data.astype(float)
         bg_reproj, _ = reproject_interp((bg_data, bg_wcs), ww, shape_out=data.shape)
+        del bg_data
         bg_finite = np.where(np.isfinite(bg_reproj), bg_reproj, 0.0)
         zeros = data == 0
         data = data - bg_finite
