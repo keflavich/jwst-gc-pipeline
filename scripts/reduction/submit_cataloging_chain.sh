@@ -43,11 +43,14 @@ PIPE_ROOT=${PIPE_ROOT:-}
 export EXTRA_ARGS=${EXTRA_ARGS:-}
 
 # Per-filter (stage 1) resource slice -- keep small so it fits queue holes.
-PERFILTER_CPUS=${PERFILTER_CPUS:-8}
+# A smaller cpu ask only trades runtime for a faster start; mem/time stay
+# generous so a job is never killed (and its work lost) mid-run.
+PERFILTER_CPUS=${PERFILTER_CPUS:-4}
 PERFILTER_MEM=${PERFILTER_MEM:-64gb}
 PERFILTER_TIME=${PERFILTER_TIME:-24:00:00}
-# m7 finalize (stage 2) slice.
-M7_CPUS=${M7_CPUS:-8}
+# m7 finalize (stage 2) slice.  m7 is I/O + table-stack bound (not cpu-parallel),
+# so few cpus cost ~nothing in runtime but schedule far faster.
+M7_CPUS=${M7_CPUS:-4}
 M7_MEM=${M7_MEM:-64gb}
 M7_TIME=${M7_TIME:-24:00:00}
 

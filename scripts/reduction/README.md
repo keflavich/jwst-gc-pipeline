@@ -49,10 +49,10 @@ Trades the one fat 32-core/48 h job for **N small per-filter jobs + one m7
 finalize**, chained with `--dependency=afterok`:
 
 - **stage 1:** per-filter array (single filter per task → m12..m6), small slice
-  (`PERFILTER_CPUS`, default 8) that fits small queue holes;
+  (`PERFILTER_CPUS`, default 4) that fits small queue holes;
 - **stage 2:** `submit_cataloging_m7.sbatch` — m7 cross-band over all filters,
   reusing on-disk m6 products via `--manual-start-phase m7`, run only after the
-  array finishes OK.
+  array finishes OK (4 cpu — m7 is I/O/table-stack bound, not cpu-parallel).
 
 Same science as the monolith **except** the standalone m7 job does not re-apply
 the out-of-FOV saturated-star flux pins computed at m12 (those live in memory in
@@ -101,5 +101,17 @@ sbatch --array=0-3 --export=ALL,PROPOSAL=2221,FIELD=001,TARGET=brick,\
 
 Reduction (per-filter task): 16 cpu / 128 gb / 24 h is comfortable for a
 single filter's `nrca,nrcb,merged` Image3 (resample is the memory peak).
-Cataloging: 32 cpu / 128 gb / 48 h — dense GC fields are source-count
-bound and use multiprocessing.
+Cataloging (fast/Stream-1, fat per-filter): 32 cpu / 128 gb / 48 h — dense GC
+fields are source-count bound and use multiprocessing.
+
+**Scheduling note:** queue delay here is dominated by *large-cpu node scarcity*,
+not memory. The light/low-resource stages therefore ask few cpus so they backfill
+into small queue holes instead of waiting tens of hours for a big node:
+- Stream-2 per-filter (stage 1): 4 cpu (tune with `PERFILTER_CPUS`);
+- m7 cross-band finalize (stage 2): 4 cpu — it is I/O + table-stack bound, not
+  cpu-parallel, so extra cpus buy nothing but a longer wait.
+
+Only the **cpu** ask is shrunk. `--mem` and `--time` are kept generous on purpose:
+trimming those risks an OOM/timeout kill mid-run (losing the whole job's work),
+whereas a smaller cpu ask only changes *when* the job starts. Prefer "schedule
+later, finish once" over "start sooner, risk a re-run".
