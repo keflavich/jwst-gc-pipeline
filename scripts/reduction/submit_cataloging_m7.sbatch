@@ -20,7 +20,12 @@
 #SBATCH --account=astronomy-dept
 #SBATCH --qos=astronomy-dept-b
 #SBATCH --partition=hpg-default
-#SBATCH --cpus-per-task=8
+# m7 cross-band finalize is I/O + table-stack bound, NOT cpu-parallel (it streams
+# the merged columns one at a time).  Asking few cpus lets it backfill into small
+# queue holes instead of waiting tens of hours for a large-cpu node.  mem/time are
+# deliberately left generous -- shrinking THOSE risks an OOM/timeout kill mid-run
+# and losing the whole finalize, whereas a small cpu ask only changes start time.
+#SBATCH --cpus-per-task=4
 #SBATCH --mem=64gb
 #SBATCH --time=24:00:00
 #SBATCH --output=/orange/adamginsburg/jwst/logs/catalog_%x_%j.out
