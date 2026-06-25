@@ -1808,6 +1808,7 @@ def flag_near_saturated(cat, filtername, radius=None, target='brick',
         # (sickle/sgrb2/etc.) don't KeyError on filters that aren't listed.
         radius = {# short-wave (< ~2.5 um)
                   'f115w': 0.55*u.arcsec,
+                  'f140m': 0.55*u.arcsec,
                   'f150w': 0.55*u.arcsec,
                   'f162m': 0.55*u.arcsec,
                   'f164n': 0.55*u.arcsec,
