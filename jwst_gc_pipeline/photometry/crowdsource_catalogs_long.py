@@ -3596,7 +3596,7 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     proposal_id = options.proposal_id
     target = options.target
 
-    nvisits = {'2221': {'brick': 1, 'cloudc': 2},
+    nvisits = {'2221': {'brick': 2, 'cloudc': 2},
                # 2526 obs 021 = "G0" CMZ cloud-c filament F770W (1 visit),
                # routed into the cloudc tree.
                '2526': {'cloudc': 1},
