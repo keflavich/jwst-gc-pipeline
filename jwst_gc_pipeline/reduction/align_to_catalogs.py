@@ -1,6 +1,10 @@
 import numpy as np
 import shutil
 import os
+import matplotlib
+matplotlib.use('Agg')  # headless: diagnostic_plots' pylab savefig/tight_layout hangs on
+                       # compute nodes without a forced non-interactive backend (hung the
+                       # Cloud C pipe ~48h after the first realign diagnostic plot, 2026-06).
 import astropy.units as u
 from astropy.coordinates import SkyCoord
 from astroquery.gaia import Gaia
