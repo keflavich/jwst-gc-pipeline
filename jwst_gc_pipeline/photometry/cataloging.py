@@ -584,13 +584,29 @@ def _build_manual_seed(*, detection_image, nan_replaced_data, mask, ww, fwhm_pix
 # ---------------------------------------------------------------------------
 # Merged-catalog extended-emission vetting (step 9)
 # ---------------------------------------------------------------------------
-def _emission_keep_nircam(star_like, snr, local_snr_min):
+def _emission_keep_nircam(star_like, snr, local_snr_min, qfit_confident=None):
     """NIRCam star-vs-emission keep-mask.
 
     Keep a star-like source unless its local S/N is measurable and below the
     floor.  (Unmeasurable S/N -> kept; the star_like test already gated it.)
+
+    ``qfit_confident`` (qfit <= qfit_max) sources are kept REGARDLESS of S/N.
+    The formal S/N = flux / flux_err is unreliable for a source fit in a GROUP:
+    a near-degenerate joint normal matrix inflates flux_err by 100-1000x (e.g.
+    sickle F480M close pairs: flux 6200 / flux_err 8076 -> S/N 0.8, and 4402 /
+    144220 -> S/N 0.0) while the FLUX and qfit (0.016) stay excellent.  Without
+    this exemption the S/N floor silently DROPS a perfectly-fit bright star from
+    the vetted catalog -> it is removed from the next phase's seed AND from the
+    vetted residual mosaic, so it reappears as a strong unsubtracted source and
+    is never re-fit.  An extended-emission bump has a BAD qfit (poor PSF match),
+    so qfit<=qfit_max cannot re-admit emission; the model-overshoot drop still
+    applies downstream.
     """
-    return star_like & (np.isfinite(snr) & (snr >= local_snr_min) | ~np.isfinite(snr))
+    snr_ok = (np.isfinite(snr) & (snr >= local_snr_min)) | ~np.isfinite(snr)
+    keep = star_like & snr_ok
+    if qfit_confident is not None:
+        keep = keep | np.asarray(qfit_confident, dtype=bool)
+    return keep
 
 
 def _emission_keep_miri(prominence, min_prominence):
@@ -723,7 +739,12 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
               f"this obs i2d (dropped {n_prom} false + {n_off} off-i2d/other-obs); "
               f"star_like/snr BYPASSED; per-obs vetted -> combined downstream", flush=True)
     else:
-        keep = _emission_keep_nircam(star_like, snr, local_snr_min)
+        # qfit-confident sources are kept regardless of the formal flux/flux_err
+        # S/N (inflated to ~0 by group-fit covariance degeneracy for close pairs
+        # -- see _emission_keep_nircam): a well-fit star must never be dropped
+        # from the vetted catalog/residual on a broken uncertainty.
+        keep = _emission_keep_nircam(star_like, snr, local_snr_min,
+                                     qfit_confident=(qf <= qfit_max))
 
     # overshoot drop is shared by both instrument paths (was duplicated).
     if drop_overshoot and 'model_overshoot' in t.colnames:
