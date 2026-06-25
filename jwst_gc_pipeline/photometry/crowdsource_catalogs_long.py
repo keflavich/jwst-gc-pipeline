@@ -3415,6 +3415,34 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'cross-band merge).  Requires the previous phase '
                             'complete on disk.'),
                       metavar='manual_start_phase')
+    parser.add_option('--manual-stop-after-phase', dest='manual_stop_after_phase',
+                      default='',
+                      help=('Run the manual pipeline only through this phase '
+                            '(inclusive), then stop.  Combined with '
+                            '--manual-start-phase this runs exactly one phase per '
+                            'job -- the unit the per-frame SLURM fan-out '
+                            '(submit_cataloging_perframe.sh) schedules.'),
+                      metavar='manual_stop_after_phase')
+    parser.add_option('--manual-frame-shard', dest='manual_frame_shard',
+                      default='',
+                      help=('"I/N": in the per-frame fit, process only frames '
+                            'whose index %% N == I.  Lets one phase be fanned out '
+                            'across N independent small SLURM array tasks.  Default '
+                            'empty = fit all frames (monolithic).'),
+                      metavar='manual_frame_shard')
+    parser.add_option('--manual-skip-finalize', dest='manual_skip_finalize',
+                      default=False, action='store_true',
+                      help=('Fan-out worker mode: fit the (sharded) frames and '
+                            'write per-frame completion markers, then STOP before '
+                            'the per-phase barrier (reconcile/merge/vet/residual/'
+                            'bg).  Pairs with --manual-finalize-only.'))
+    parser.add_option('--manual-finalize-only', dest='manual_finalize_only',
+                      default=False, action='store_true',
+                      help=('Barrier job: do NOT fit frames; verify every '
+                            'candidate frame has its phase completion marker '
+                            '(hard-crash on any miss -> no silent exposure drop), '
+                            'then run the per-phase barrier over the per-frame '
+                            'products already on disk.'))
     parser.add_option('--seed-catalog', dest='seed_catalog',
                       default='',
                       help='Optional seed catalog for a seeded photometry rerun', metavar='seed_catalog')

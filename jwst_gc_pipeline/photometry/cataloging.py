@@ -1704,6 +1704,83 @@ def _reconstruct_smoothed_bg_path(cut_bp, proposal_id, field, module, filt,
             f'daophot_basic_mergedcat_residual_smoothed_bg_i2d.fits')
 
 
+def _reconstruct_resid_i2d_path(cut_bp, proposal_id, field, module, filt,
+                                label, options, pupil):
+    """The mergedcat residual i2d (the next phase's detection image) sits next to
+    the smoothed-bg i2d, differing only by the ``_smoothed_bg`` infix.  Derive it
+    from ``_reconstruct_smoothed_bg_path`` so per-frame SLURM jobs can rebuild
+    ``resid_i2d_for_next`` from disk (it is otherwise in-memory only)."""
+    bg = _reconstruct_smoothed_bg_path(cut_bp, proposal_id, field, module, filt,
+                                       label, options, pupil)
+    return bg.replace('_smoothed_bg_i2d.fits', '_i2d.fits')
+
+
+def _satstar_reconciled_path(cut_bp, module, filt):
+    """On-disk persistence for m12's cross-frame-reconciled out-of-FOV satstar
+    fluxes (``satstar_overrides``) + drops (``satstar_drops``).  In a monolithic
+    run these live only in memory and are forwarded to m3..m7; persisting them
+    lets a per-frame m3..m7 fan-out worker (a fresh process) reconstruct them."""
+    return (f'{cut_bp}/catalogs/{filt.lower()}_{module}_'
+            f'satstar_reconciled_m12.fits')
+
+
+def _persist_reconciled_satstars(path, ovr, drp):
+    """Write the reconciled satstar overrides/drops as one flat table.
+    ``ovr`` = list of (SkyCoord, flux); ``drp`` = list of SkyCoord (flux=NaN)."""
+    from astropy.table import Table
+    import numpy as _np
+    ras, decs, fluxes, kinds = [], [], [], []
+    for sc, fl in (ovr or []):
+        ras.append(float(sc.ra.deg)); decs.append(float(sc.dec.deg))
+        fluxes.append(float(fl)); kinds.append('override')
+    for sc in (drp or []):
+        ras.append(float(sc.ra.deg)); decs.append(float(sc.dec.deg))
+        fluxes.append(_np.nan); kinds.append('drop')
+    Table({'ra': _np.array(ras, dtype='float64'),
+           'dec': _np.array(decs, dtype='float64'),
+           'flux': _np.array(fluxes, dtype='float64'),
+           'kind': _np.array(kinds if kinds else [], dtype='U8')}
+          ).write(path, overwrite=True)
+
+
+def _reconstruct_reconciled_satstars(path):
+    """Inverse of :func:`_persist_reconciled_satstars`; returns ``(ovr, drp)`` in
+    the in-memory shapes m3..m7 expect, or ``([], [])`` if the file is absent."""
+    import os as _os
+    from astropy.table import Table
+    from astropy.coordinates import SkyCoord
+    import astropy.units as _u
+    import numpy as _np
+    if not _os.path.exists(path):
+        return [], []
+    t = Table.read(path)
+    ovr, drp = [], []
+    for row in t:
+        sc = SkyCoord(float(row['ra']) * _u.deg, float(row['dec']) * _u.deg)
+        if str(row['kind']) == 'drop' or not _np.isfinite(row['flux']):
+            drp.append(sc)
+        else:
+            ovr.append((sc, float(row['flux'])))
+    return ovr, drp
+
+
+def _reconstruct_prev_merged(merged_path):
+    """Rebuild ``prev_merged_for`` = (SkyCoord, iter_found array) from a prior
+    phase's on-disk merged catalog (it carries the ``iter_found`` column), so a
+    per-frame finalize job can tag provenance identically to a monolithic run.
+    Returns ``None`` if the catalog or its columns are unavailable."""
+    import os as _os
+    from astropy.table import Table
+    from astropy.coordinates import SkyCoord
+    import numpy as _np
+    if not _os.path.exists(merged_path):
+        return None
+    t = Table.read(merged_path)
+    if 'skycoord' not in t.colnames or 'iter_found' not in t.colnames:
+        return None
+    return (SkyCoord(t['skycoord']), _np.asarray(t['iter_found']))
+
+
 def _resolve_crossband_ref_filter(options, filternames):
     """Pick the astrometric reference filter for the cross-band merge.
 
@@ -1838,6 +1915,44 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
     # from m12's reconcile are not reconstructed, but the off-FOV path now uses
     # the Spitzer-prior _spitzer.reg + the model<=data clamp, which load fresh
     # each phase, so off-FOV handling is unaffected.
+    # --- per-frame fan-out controls (option C) ---------------------------------
+    # These let one phase run as N independent per-exposure SLURM tasks
+    # (--manual-skip-finalize) followed by a single barrier job
+    # (--manual-finalize-only), chained across phases.  All default-off, so a
+    # monolithic run is byte-for-byte unchanged.
+    stop_after = (getattr(options, 'manual_stop_after_phase', '') or '').strip()
+    skip_finalize = bool(getattr(options, 'manual_skip_finalize', False))
+    finalize_only = bool(getattr(options, 'manual_finalize_only', False))
+    if skip_finalize and finalize_only:
+        raise ValueError("--manual-skip-finalize and --manual-finalize-only are "
+                         "mutually exclusive.")
+    _shard = (getattr(options, 'manual_frame_shard', '') or '').strip()
+    shard_i, shard_n = 0, 1
+    if _shard:
+        try:
+            shard_i, shard_n = (int(x) for x in _shard.split('/'))
+        except (ValueError, TypeError):
+            raise ValueError(f"--manual-frame-shard must be 'I/N'; got {_shard!r}")
+        if not (shard_n >= 1 and 0 <= shard_i < shard_n):
+            raise ValueError(f"--manual-frame-shard 'I/N' needs N>=1 and 0<=I<N; "
+                             f"got {_shard!r}")
+    sharded = shard_n > 1
+    # Per-frame completion markers: a fan-out worker writes one per (frame,phase)
+    # on success; the finalize job verifies every candidate frame has its marker
+    # before merging (so a silently dropped exposure HARD-CRASHES, never slips
+    # through -- mirrors the in-memory frame-completeness guard).
+    _marker_dir = os.path.join(cut_bp, 'catalogs', '_perframe_markers')
+    if skip_finalize or finalize_only:
+        os.makedirs(_marker_dir, exist_ok=True)
+
+    def _marker_path(filename, module, filt, phase, kind='ok'):
+        # kind: 'ok' (fit produced output) or 'nooverlap' (legit cutout miss).
+        return os.path.join(
+            _marker_dir,
+            f'{os.path.basename(filename)}.{filt.lower()}.{module}.{phase}.{kind}')
+
+    orig_last_phase = phases[-1]
+
     start_phase = (getattr(options, 'manual_start_phase', '') or '').strip()
     if start_phase:
         if start_phase not in phases:
@@ -1846,6 +1961,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
         _si = phases.index(start_phase)
         if _si > 0:
             _prev = phases[_si - 1]
+            _prev_label = 'm2' if _prev == 'm12' else _prev
+            _prev_resbgsub = _prev in ('m5', 'm6', 'm7')
             for module in modules:
                 for filt in filternames:
                     _bg = _reconstruct_smoothed_bg_path(
@@ -1856,11 +1973,38 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             f"smoothed-bg for {filt}/{module} is missing (expected "
                             f"{_bg}).  Run the earlier per-filter phases first.")
                     bg_for_next[(module, filt)] = _bg
-                    print(f"manual [start={start_phase}]: reusing {_prev} bg for "
-                          f"{filt}/{module}: {os.path.basename(_bg)}", flush=True)
+                    # mergedcat residual i2d (detection image for m4..m6 seed)
+                    _ri = _reconstruct_resid_i2d_path(
+                        cut_bp, proposal_id, field, module, filt, _prev, options, pupil)
+                    if os.path.exists(_ri):
+                        resid_i2d_for_next[(module, filt)] = _ri
+                    # iter_found provenance from the prior merged catalog
+                    _pm = _reconstruct_prev_merged(
+                        _merged_path(_prev_label, module, filt, _prev_resbgsub))
+                    if _pm is not None:
+                        prev_merged_for[(module, filt)] = _pm
+                    # m12-reconciled out-of-FOV satstar overrides/drops
+                    _ov, _dr = _reconstruct_reconciled_satstars(
+                        _satstar_reconciled_path(cut_bp, module, filt))
+                    if _ov:
+                        satstar_overrides[(module, filt)] = _ov
+                    if _dr:
+                        satstar_drops[(module, filt)] = _dr
+                    print(f"manual [start={start_phase}]: reused {_prev} state for "
+                          f"{filt}/{module} (bg, resid_i2d={'y' if os.path.exists(_ri) else 'n'}, "
+                          f"prev_merged={'y' if _pm is not None else 'n'}, "
+                          f"satstar_ovr={len(_ov)}, satstar_drop={len(_dr)})", flush=True)
         phases = phases[_si:]
         print(f"MANUAL PIPELINE: partial start at {start_phase}; phases now "
               f"{phases}", flush=True)
+
+    if stop_after:
+        if stop_after not in phases:
+            raise ValueError(f"--manual-stop-after-phase={stop_after!r} not in "
+                             f"remaining phases {phases}")
+        phases = phases[:phases.index(stop_after) + 1]
+        print(f"MANUAL PIPELINE: stop after {stop_after}; phases now {phases}",
+              flush=True)
 
     for phase in phases:
         # iter3 (m3) and iter4 (m4) fit the RAW frames; m4 produces the first
@@ -2054,30 +2198,71 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 overlapping_now = []
                 no_overlap = []   # frames that legitimately miss a cutout region
                 failures = []     # (filename, err) -- ANY of these aborts the run
-                if max_workers > 1 and len(frame_args) > 1:
-                    n_workers = min(max_workers, len(frame_args))
-                    print(f"manual [{phase}]: fitting {len(frame_args)} frames "
-                          f"with {n_workers} parallel workers", flush=True)
-                    with ProcessPoolExecutor(max_workers=n_workers) as ex:
-                        futures = {ex.submit(_run_one_frame_manual, a): a['filename']
-                                   for a in frame_args}
-                        for fut in as_completed(futures):
-                            filename, ok, err = fut.result()
-                            if ok:
-                                overlapping_now.append(filename)
-                            elif err and err.startswith('no-overlap'):
-                                no_overlap.append((filename, err))
-                            else:
-                                failures.append((filename, err))
+                # Full candidate set (pre-shard) for the finalize completeness check.
+                all_frames = [a['filename'] for a in frame_args]
+
+                if finalize_only:
+                    # Barrier job: do NOT fit.  Require every candidate frame to
+                    # carry a completion marker written by a fan-out worker; a
+                    # missing marker = a silently dropped exposure -> HARD-CRASH.
+                    _missing_marker = []
+                    for fn in all_frames:
+                        _det = fn.split('_')[3]   # per-frame products keyed by detector
+                        if os.path.exists(_marker_path(fn, _det, filt, phase, 'ok')):
+                            overlapping_now.append(fn)
+                        elif os.path.exists(_marker_path(fn, _det, filt, phase, 'nooverlap')):
+                            no_overlap.append((fn, 'no-overlap (marker)'))
+                        else:
+                            _missing_marker.append(fn)
+                    if _missing_marker:
+                        raise RuntimeError(
+                            f"manual [{phase}] {filt}/{module}: --manual-finalize-only "
+                            f"found {len(_missing_marker)} candidate frame(s) with NO "
+                            f"completion marker -- the per-frame fan-out did not finish "
+                            f"them (a dropped exposure corrupts the catalog).  Re-run "
+                            f"the missing shard(s):\n"
+                            + '\n'.join(f"    {os.path.basename(m)}" for m in sorted(_missing_marker)))
+                    print(f"manual [{phase}] {filt}/{module}: finalize-only verified "
+                          f"{len(overlapping_now)} frame markers "
+                          f"({len(no_overlap)} no-overlap)", flush=True)
                 else:
-                    for a in frame_args:
-                        filename, ok, err = _run_one_frame_manual(a)
+                    # Fan-out / monolithic FIT.  In sharded mode keep only this
+                    # task's slice of frames (index % shard_n == shard_i).
+                    if sharded:
+                        frame_args = [a for j, a in enumerate(frame_args)
+                                      if j % shard_n == shard_i]
+                        print(f"manual [{phase}] {filt}/{module}: frame-shard "
+                              f"{shard_i}/{shard_n} -> {len(frame_args)} of "
+                              f"{len(all_frames)} frames", flush=True)
+
+                    def _on_result(filename, ok, err):
                         if ok:
                             overlapping_now.append(filename)
+                            if skip_finalize or finalize_only:
+                                open(_marker_path(filename, filename.split('_')[3],
+                                                  filt, phase, 'ok'), 'w').close()
                         elif err and err.startswith('no-overlap'):
                             no_overlap.append((filename, err))
+                            if skip_finalize or finalize_only:
+                                open(_marker_path(filename, filename.split('_')[3],
+                                                  filt, phase, 'nooverlap'), 'w').close()
                         else:
                             failures.append((filename, err))
+
+                    if max_workers > 1 and len(frame_args) > 1:
+                        n_workers = min(max_workers, len(frame_args))
+                        print(f"manual [{phase}]: fitting {len(frame_args)} frames "
+                              f"with {n_workers} parallel workers", flush=True)
+                        with ProcessPoolExecutor(max_workers=n_workers) as ex:
+                            futures = {ex.submit(_run_one_frame_manual, a): a['filename']
+                                       for a in frame_args}
+                            for fut in as_completed(futures):
+                                filename, ok, err = fut.result()
+                                _on_result(filename, ok, err)
+                    else:
+                        for a in frame_args:
+                            filename, ok, err = _run_one_frame_manual(a)
+                            _on_result(filename, ok, err)
 
                 # HARD-CRASH on ANY frame failure.  Silently dropping even one
                 # exposure from any phase irrecoverably corrupts every later
@@ -2118,12 +2303,26 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             f"-- a mid-pipeline drop corrupts the catalog.  Aborting:\n"
                             + '\n'.join(f"    {os.path.basename(m)}" for m in sorted(_missing)))
                 if not overlapping_now:
+                    # An empty slice is legitimate ONLY for a fan-out shard with
+                    # more tasks than frames; that worker simply has nothing to do.
+                    if sharded and skip_finalize:
+                        print(f"manual [{phase}] {filt}/{module}: frame-shard "
+                              f"{shard_i}/{shard_n} has no frames; nothing to fit.",
+                              flush=True)
+                        continue
                     if _is_cutout:
                         raise ValueError(
                             f"--cutout-region overlapped none of the {filt}/{module} "
                             f"frames in phase {phase}.")
                     raise ValueError(
                         f"no {filt}/{module} frames produced output in phase {phase}.")
+
+                # Fan-out worker: the (sharded) per-frame fits are done and their
+                # completion markers written.  Skip the per-phase barrier
+                # (reconcile/merge/vet/residual/bg); a single --manual-finalize-only
+                # job runs it once every shard has finished.
+                if skip_finalize:
+                    continue
 
                 # --- cross-frame out-of-field satstar reconciliation (after m12) ---
                 # m12 fit each frame's out-of-field bright stars independently;
@@ -2168,6 +2367,15 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                               f"satstar(s) for {filt}/{module} (no detector "
                               f"diversity -> no trustworthy flux); will skip on "
                               f"m3..m7", flush=True)
+                    # Persist the reconciled overrides/drops so a per-frame m3..m7
+                    # fan-out (a fresh process) can reconstruct them from disk; in a
+                    # monolithic run this file is simply an extra (harmless) artifact.
+                    try:
+                        _persist_reconciled_satstars(
+                            _satstar_reconciled_path(cut_bp, module, filt), _ovr, _drp)
+                    except Exception as _pex:
+                        print(f"manual [m12]: persisting reconciled satstars failed "
+                              f"for {filt}/{module}: {_pex}", flush=True)
 
                 # merge per-frame catalogs (BASIC only)
                 _merge_catalogs.merge_individual_frames(
@@ -2186,7 +2394,10 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 # data i2d once (m12), for peak-SB in the vetting step.  Cutout
                 # runs resample the per-frame crops (globbed by label); full-frame
                 # runs resample the original overlapping frames passed explicitly.
-                if phase == phases[0]:
+                # Gated on the actual m12 (not phases[0]) so a single-phase finalize
+                # job for a LATER phase reuses m12's data i2d instead of rebuilding
+                # it; monolithically phases[0] IS m12, so behaviour is unchanged.
+                if phase == 'm12':
                     try:
                         if getattr(options, 'cutout_region', ''):
                             _L.mosaic_cutout_input_data(
@@ -2379,7 +2590,16 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
     # per-filter catalogs + the union seed only.
     # -------------------------------------------------------------------
     last_phase = phases[-1]
-    if multifilter and not getattr(options, 'cutout_region', ''):
+    # The cross-band merge belongs ONLY to the job that completes the FINAL phase's
+    # barrier: never a fan-out worker (skip_finalize), never a partial-phase job
+    # (last_phase != the run's true final phase).  Monolithically both hold, so
+    # this is unchanged.
+    _do_crossband = (multifilter and not skip_finalize
+                     and last_phase == orig_last_phase)
+    if multifilter and not _do_crossband:
+        print(f"manual [{last_phase}]: cross-band merge SKIPPED (partial/fan-out "
+              f"job; runs in the {orig_last_phase} finalize)", flush=True)
+    if _do_crossband and not getattr(options, 'cutout_region', ''):
         ref_filter = _resolve_crossband_ref_filter(options, filternames)
         for module in modules:
             print(f"manual [{last_phase}]: CROSS-BAND MERGE (module={module}, "
@@ -2396,7 +2616,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                    f'merged_resbgsub_{last_phase}.fits')
             print(f"manual [{last_phase}]: CROSS-BAND MERGE done (module={module}) "
                   f"-> {_xb}", flush=True)
-    elif multifilter:
+    elif _do_crossband:
         print(f"manual [{last_phase}]: cross-band merge SKIPPED for cutout run "
               f"(no full-frame per-filter i2d mosaics); per-filter {last_phase} "
               f"catalogs + crossband seed only", flush=True)

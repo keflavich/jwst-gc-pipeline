@@ -59,16 +59,37 @@ the out-of-FOV saturated-star flux pins computed at m12 (those live in memory in
 a monolithic run); this affects only off-FOV bright-star photometry in the final
 cross-band catalog. For full off-FOV-satstar fidelity, run the monolithic job.
 
-### Finer splitting (per-phase / per-frame) — not yet implemented
+### Stream 3 — per-frame fan-out (finest split)
 
-Splitting below the filter boundary (e.g. 48× 1-core/16 GB array tasks) requires
-persisting three pieces of cross-phase state that are currently in-memory only:
-the residual-i2d detection image (`resid_i2d_for_next`), the off-FOV satstar
-pins (`satstar_overrides`/`satstar_drops`), and the `iter_found` provenance
-(`prev_merged_for`). Only the smoothed background map is reconstructed on resume
-today (`_reconstruct_smoothed_bg_path`). Implementing per-phase/per-frame jobs
-means adding reconstructors for the other three plus a single-frame + standalone-
-join entry point, then validating bit-identical against a monolithic run.
+```
+PIPE_ROOT=/path/to/checkout NSHARDS=16 \
+    scripts/reduction/submit_cataloging_perframe.sh        # Sgr C defaults
+```
+
+Splits BELOW the filter boundary: for each phase (`m12→m3→m4→m5→m6[→m7]`) it
+submits a per-frame **fan-out array** (`NSHARDS` tiny `FANOUT_CPUS`-core tasks,
+each fitting a frame shard) then one **finalize** barrier job, chained
+`afterok`, phase after phase. The fan-out tasks are the smallest possible ask,
+so they backfill into queue holes a per-filter job never sees.
+
+`NSHARDS` is only a granularity knob — the shard predicate (`frame_index % N`)
+covers every exposure for any `N` (no double-fit, no gaps); the finalize verifies
+a completion marker for every frame and **hard-crashes on any miss** (no silent
+exposure drop). This required persisting the cross-phase state that used to be
+in-memory only: `resid_i2d_for_next` (deterministic path),
+`satstar_overrides`/`satstar_drops` (new `_satstar_reconciled_m12.fits`),
+`prev_merged_for` (from the prior merged catalog's `iter_found` column); the
+smoothed bg already reconstructed (`_reconstruct_smoothed_bg_path`). All gated by
+new opts (`--manual-stop-after-phase`, `--manual-frame-shard`,
+`--manual-skip-finalize`, `--manual-finalize-only`) that default off, so a
+monolithic run is byte-for-byte unchanged.
+
+Verify equivalence on a small cutout before trusting it at scale:
+`scripts/reduction/validate_perframe_equivalence.sh` runs mono vs per-frame
+locally and diffs the final catalogs. Unit tests:
+`jwst_gc_pipeline/photometry/tests/test_perframe_helpers.py`.
+
+Same off-FOV-satstar fidelity caveat as Stream 2's standalone finalize.
 
 ## Overriding the target
 
