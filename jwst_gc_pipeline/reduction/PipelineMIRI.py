@@ -142,6 +142,52 @@ def get_reference_astrometric_catalog_path(basepath, proposal_id, field, explici
     return None
 
 
+# Detector edge-glow trim margins (columns/rows DQ-flagged DO_NOT_USE per frame
+# before image3).  MIRI imaging frames have excess flux at the detector edges --
+# worst on the high-x ("east") edge (thermal glow reaches +150-1400 MJy/sr at
+# 25um) and varying frame-to-frame -- which neither skymatch nor per-tile planes
+# can remove.  Left in, it produces tile-boundary SEAMS and bright edge rims that
+# the cataloger detects as fake sources (brick F2550W seam at x=1609; w51 edge
+# artifacts at all boundaries).  Excluding the margin removes them; in tile
+# overlaps the trimmed pixels are covered by neighbouring frames' interiors, so
+# the mosaic only shrinks by the trim width at the true outer boundary.
+# Generalized from scripts/miri_reduction/miri_f2550w_edgetrim_v4.py (2026-06-11).
+MIRI_TRIM_EAST = int(os.environ.get('MIRI_TRIM_EAST', 40))
+MIRI_TRIM_WEST = int(os.environ.get('MIRI_TRIM_WEST', 16))
+MIRI_TRIM_ROWS = int(os.environ.get('MIRI_TRIM_ROWS', 12))
+
+
+def _edge_trim_dq(fn, east=MIRI_TRIM_EAST, west=MIRI_TRIM_WEST, rows=MIRI_TRIM_ROWS):
+    """DQ-flag (DO_NOT_USE) a detector-edge margin in-place on a cal/align frame
+    so the edge-glow-contaminated pixels are excluded from the image3 resample.
+    The science-column span is detected per frame (where not everything is
+    already DO_NOT_USE) so the trim is measured from the illuminated region, not
+    the raw array edge.  Idempotent: re-flagging already-flagged pixels is a
+    no-op."""
+    with fits.open(fn, mode='update') as fh:
+        dq = fh['DQ'].data
+        if dq is None:
+            return
+        colgood = ((dq & 1) == 0).any(axis=0)
+        if not colgood.any():
+            return
+        sci_cols = np.where(colgood)[0]
+        lo, hi = int(sci_cols.min()), int(sci_cols.max())
+        if east > 0:
+            dq[:, hi - east + 1:] |= 1
+        if west > 0:
+            dq[:, :lo + west] |= 1
+        if rows > 0:
+            dq[:rows, :] |= 1
+            dq[-rows:, :] |= 1
+        fh['DQ'].data = dq
+        try:
+            fh[1].header['EDGETRIM'] = (f'E{east} W{west} R{rows}',
+                                        'detector edge-glow margin DQ-flagged')
+        except (KeyError, IndexError):
+            pass
+
+
 def relocate_manifest_products(manifest, output_dir):
     """Flatten MAST download tree into output_dir with idempotent relocation."""
     for row in manifest:
@@ -408,6 +454,14 @@ def main(filtername, Observations=None, regionname='brick',
             # setgid+ACL (w51 F2100W re-reduction 2026-06-25).  The align copy
             # only needs the cal DATA for fix_alignment; its mode is irrelevant.
             shutil.copyfile(cal_name, align_name)
+
+            # Detector edge-glow trim: DQ-flag a margin around the frame so the
+            # contaminated edge pixels are excluded from the image3 resample
+            # (removes tile-boundary seams + bright edge rims that the cataloger
+            # detects as fake sources).  Operates on DQ only; independent of the
+            # WCS correction that fix_alignment applies next.  Disable per-run
+            # with MIRI_TRIM_EAST=MIRI_TRIM_WEST=MIRI_TRIM_ROWS=0.
+            _edge_trim_dq(align_name)
 
             fix_alignment(member['expname'], proposal_id=proposal_id,
                           field=field, basepath=basepath,
