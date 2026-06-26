@@ -2092,6 +2092,18 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     visit_id = filename.split("_")[0][-3:]
                     vgroup_id = filename.split("_")[1]
                     file_detector = filename.split("_")[3]
+                    # JOINT multi-obs runs (field like '002-998'): two observations
+                    # can share visit+vgroup+exposure -- e.g. sgrb2 obs998 ("redo")
+                    # reused obs002's mosaic tile numbers, so both map to tile 02101
+                    # visit 001.  The per-frame output identity is named by the
+                    # joint FIELD token (o002-998 for both), so the obs is otherwise
+                    # lost and the two frames collide (overwrite).  Fold the per-frame
+                    # observation number into vgroup_id so the name + collision key
+                    # stay unique; the merge globs vgroup* so it still finds both.
+                    # Single-obs runs (no '-') are unchanged.
+                    if '-' in str(field):
+                        obs_id = filename.split("_")[0][-6:-3]
+                        vgroup_id = f'{obs_id}{vgroup_id}'
                     # Per-frame products MUST be named by the actual DETECTOR, never
                     # the (coarser) requested module.  Otherwise SW exposures whose
                     # 4 detectors (nrcb1-4) share visit+vgroup+exp collapse to one

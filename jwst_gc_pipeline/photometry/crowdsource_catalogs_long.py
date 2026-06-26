@@ -3688,7 +3688,10 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                                      '004': 'cloudef', '006': 'cloudef',
                                      '008': 'cloudef'},
                             '4147': {'012': 'sgrc'},
-                            '5365': {'001': 'sgrb2'},
+                            # 5365 sgrb2 MIRI: obs 002 + obs 998 (skipped_redo);
+                            # '002-998' = JOINT run combining both obs's 4 tiles.
+                            '5365': {'001': 'sgrb2', '002': 'sgrb2',
+                                     '998': 'sgrb2', '002-998': 'sgrb2'},
                             '2045': {'001': 'arches', '003': 'quintuplet'},
                             '1939': {'001': 'sgra'},
                             '2211': {'023': 'gc2211', '028': 'gc2211',
@@ -3712,7 +3715,8 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
         elif proposal_id == '6151':
             field_to_reg_mapping = {'001': 'w51', '002': 'w51'}
         elif proposal_id == '5365':
-            field_to_reg_mapping = {'001': 'sgrb2', '002': 'sgrb2'}
+            field_to_reg_mapping = {'001': 'sgrb2', '002': 'sgrb2',
+                                    '998': 'sgrb2', '002-998': 'sgrb2'}
     reg_to_field_mapping = {v:k for k,v in field_to_reg_mapping.items()}
     # When multiple fields share a target (e.g. proposal 2211 / gc2211 has
     # 5 GC pointings 023/028/046/049/050), the inverted mapping collapses to
