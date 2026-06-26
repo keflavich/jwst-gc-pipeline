@@ -152,9 +152,57 @@ def get_reference_astrometric_catalog_path(basepath, proposal_id, field, explici
 # overlaps the trimmed pixels are covered by neighbouring frames' interiors, so
 # the mosaic only shrinks by the trim width at the true outer boundary.
 # Generalized from scripts/miri_reduction/miri_f2550w_edgetrim_v4.py (2026-06-11).
-MIRI_TRIM_EAST = int(os.environ.get('MIRI_TRIM_EAST', 40))
+# MIRI_TRIM_EAST is now a FLOOR (minimum east columns always trimmed); the
+# actual east trim is ADAPTIVE per frame -- see _adaptive_east_trim.  A blind
+# fixed east margin discarded clean edge data in frames whose east edge does NOT
+# glow (brick F2550W visit-001 _08/10/12101 cover a detector-gap notch at their
+# far-east edge with flat, un-glowing data -- a fixed E40 flagged them
+# DO_NOT_USE and reopened the notch, since the eastern-neighbour tile carries
+# the coronagraph defect there).  The adaptive trim flags only the contiguous
+# east-edge run whose column-median is elevated above the frame interior (the
+# thermal-glow signature), so glowing frames are trimmed (often deeper than the
+# old fixed margin) while clean frames keep their real edge data.
+MIRI_TRIM_EAST = int(os.environ.get('MIRI_TRIM_EAST', 0))
 MIRI_TRIM_WEST = int(os.environ.get('MIRI_TRIM_WEST', 16))
 MIRI_TRIM_ROWS = int(os.environ.get('MIRI_TRIM_ROWS', 12))
+# adaptive east-trim controls
+MIRI_TRIM_EAST_ADAPT = int(os.environ.get('MIRI_TRIM_EAST_ADAPT', 1))
+MIRI_TRIM_EAST_THRESH = float(os.environ.get('MIRI_TRIM_EAST_THRESH', 0.08))
+MIRI_TRIM_EAST_MAX = int(os.environ.get('MIRI_TRIM_EAST_MAX', 96))
+
+
+def _adaptive_east_trim(dq, sci, lo, hi, thresh=MIRI_TRIM_EAST_THRESH,
+                        east_max=MIRI_TRIM_EAST_MAX, gap_tol=3,
+                        rowlo=200, rowhi=800):
+    """Number of east-edge columns to DQ-flag, measured as the contiguous run
+    (scanning inward from the science-column maximum ``hi``) whose central
+    column-median exceeds the frame's interior baseline by ``thresh`` -- the
+    edge-glow signature.  Returns 0 for frames with a flat (un-glowing) east
+    edge so genuine edge data is preserved.  ``gap_tol`` bridges short
+    column-median dips inside an otherwise-elevated glow run."""
+    good = (dq & 1) == 0
+    m = np.where(good, sci, np.nan)
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning)
+        colmed = np.nanmedian(m[rowlo:rowhi, :], axis=0)
+        ref = np.nanmedian(colmed[max(lo, hi - 200):max(lo + 1, hi - 70)])
+    if not np.isfinite(ref) or ref <= 0:
+        return 0
+    thr = ref * (1.0 + thresh)
+    run = 0
+    flagged = 0
+    gap = 0
+    for x in range(hi, max(lo, hi - east_max) - 1, -1):
+        if np.isfinite(colmed[x]) and colmed[x] > thr:
+            run += 1
+            gap = 0
+            flagged = run
+        else:
+            gap += 1
+            if gap > gap_tol:
+                break
+            run += 1
+    return flagged
 
 
 def _edge_trim_dq(fn, east=MIRI_TRIM_EAST, west=MIRI_TRIM_WEST, rows=MIRI_TRIM_ROWS):
@@ -162,8 +210,9 @@ def _edge_trim_dq(fn, east=MIRI_TRIM_EAST, west=MIRI_TRIM_WEST, rows=MIRI_TRIM_R
     so the edge-glow-contaminated pixels are excluded from the image3 resample.
     The science-column span is detected per frame (where not everything is
     already DO_NOT_USE) so the trim is measured from the illuminated region, not
-    the raw array edge.  Idempotent: re-flagging already-flagged pixels is a
-    no-op."""
+    the raw array edge.  The EAST trim is adaptive (per-frame glow detection)
+    unless MIRI_TRIM_EAST_ADAPT=0; ``east`` then acts as a floor (minimum east
+    columns).  Idempotent: re-flagging already-flagged pixels is a no-op."""
     with fits.open(fn, mode='update') as fh:
         dq = fh['DQ'].data
         if dq is None:
@@ -173,8 +222,12 @@ def _edge_trim_dq(fn, east=MIRI_TRIM_EAST, west=MIRI_TRIM_WEST, rows=MIRI_TRIM_R
             return
         sci_cols = np.where(colgood)[0]
         lo, hi = int(sci_cols.min()), int(sci_cols.max())
-        if east > 0:
-            dq[:, hi - east + 1:] |= 1
+        east_eff = east
+        if MIRI_TRIM_EAST_ADAPT:
+            adaptive = _adaptive_east_trim(dq, fh['SCI'].data, lo, hi)
+            east_eff = max(east, adaptive)
+        if east_eff > 0:
+            dq[:, hi - east_eff + 1:] |= 1
         if west > 0:
             dq[:, :lo + west] |= 1
         if rows > 0:
@@ -182,10 +235,48 @@ def _edge_trim_dq(fn, east=MIRI_TRIM_EAST, west=MIRI_TRIM_WEST, rows=MIRI_TRIM_R
             dq[-rows:, :] |= 1
         fh['DQ'].data = dq
         try:
-            fh[1].header['EDGETRIM'] = (f'E{east} W{west} R{rows}',
+            fh[1].header['EDGETRIM'] = (f'E{east_eff} W{west} R{rows}',
                                         'detector edge-glow margin DQ-flagged')
         except (KeyError, IndexError):
             pass
+
+
+def _regen_per_exposure_i2d(output_dir, field):
+    """Regenerate the per-exposure single-frame ``_i2d`` from the FINAL aligned
+    crf so the on-disk ``jw..._mirimage_i2d.fits`` carry the corrected
+    (post-tweakreg + fix_alignment) WCS, not the raw-pointing Image2 WCS.  The
+    Image2 _i2d are resampled from the raw cal -- leaving them in place puts
+    "final" files with wrong astrometry on disk (brick F2550W visit-001 was off
+    by 4.28")."""
+    import re
+    from jwst.resample import ResampleStep
+    crfs = sorted(glob(os.path.join(output_dir, f'jw*_mirimage_*o{field}_crf.fits')))
+    crfs = [c for c in crfs
+            if re.search(r'_\d{5}_\d{5}_mirimage', os.path.basename(c))]
+    # dedupe by output stem -> newest crf (a stale non-homogenized `_o{field}_crf`
+    # and the canonical `_align_o{field}_crf` both map to the same _i2d; a blind
+    # loop would overwrite last-write-wins and could pick the stale one).
+    by_stem = {}
+    for c in crfs:
+        stem = os.path.basename(c).split('_mirimage')[0] + '_mirimage'
+        if stem not in by_stem or os.path.getmtime(c) > os.path.getmtime(by_stem[stem]):
+            by_stem[stem] = c
+    crfs = sorted(by_stem.values())
+    n = 0
+    for crf in crfs:
+        stem = os.path.basename(crf).split('_mirimage')[0] + '_mirimage'
+        out = os.path.join(output_dir, f'{stem}_i2d.fits')
+        try:
+            res = ResampleStep.call(crf, output_dir=output_dir, save_results=False)
+            res.save(out, overwrite=True)
+            if hasattr(res, 'close'):
+                res.close()
+            n += 1
+        except Exception as ex:
+            print(f"  per-exposure _i2d regen FAILED {os.path.basename(crf)}: {ex}",
+                  flush=True)
+    print(f"regenerated {n}/{len(crfs)} per-exposure _i2d with corrected (crf) WCS",
+          flush=True)
 
 
 def relocate_manifest_products(manifest, output_dir):
@@ -592,6 +683,11 @@ def main(filtername, Observations=None, regionname='brick',
         else:
             print(f"  (no product-named crf {prod_name}_*_o{field}_crf.fits found; "
                   f"assuming crf already per-exposure named)")
+
+        # Update the per-exposure single-frame _i2d to the FINAL aligned WCS
+        # (regenerate from crf) -- the pipeline must not leave "final" _i2d on
+        # disk with the raw-pointing Image2 astrometry.
+        _regen_per_exposure_i2d(output_dir, field)
 
         print("After tweakreg step, checking WCS headers:")
         for member in asn_data['products'][0]['members']:
