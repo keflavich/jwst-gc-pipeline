@@ -991,6 +991,17 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     dqarr = im1['DQ'].data if 'DQ' in im1 else None
     if dqarr is not None:
         is_saturated = (dqarr & _L.dqflags.pixel['SATURATED']) != 0
+        # A real saturated core sits at/near the detector saturation level; but
+        # JUMP/persistence artifacts get mis-tagged SATURATED on UNsaturated
+        # sources (e.g. W51 F480M star RA=290.929589 Dec=+14.504683: DQ=6
+        # SATURATED|JUMP_DET on a 7x7 island peaking ~355, real F480M saturation
+        # >1e4).  Masking those drops a seeded real star from EVERY frame's fit.
+        # With --saturation-data-floor > 0, only treat a SATURATED pixel as
+        # un-fittable when its data actually exceeds the floor; default 0 keeps
+        # the original behaviour (mask all SATURATED).
+        sat_floor = float(getattr(options, 'saturation_data_floor', 0.0))
+        if sat_floor > 0:
+            is_saturated = is_saturated & (np.nan_to_num(data) > sat_floor)
         data_ = data.copy()
         data_[is_saturated] = np.nan
         mask |= is_saturated

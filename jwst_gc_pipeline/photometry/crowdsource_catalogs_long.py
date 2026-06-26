@@ -3314,6 +3314,14 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                           "<box>px median before daofind so faint stars on a bright "
                           "but smooth extended pedestal are not lost.  0 disables "
                           "(default 0); MIRI raw rounds use 51."))
+    parser.add_option("--saturation-data-floor", dest="saturation_data_floor",
+                    type='float', default=0.0,
+                    help=("Only treat a SATURATED-DQ pixel as un-fittable when its "
+                          "data exceeds this floor.  Guards against JUMP/persistence "
+                          "artifacts mis-tagged SATURATED on unsaturated sources, "
+                          "which otherwise drop a seeded real star from every frame "
+                          "(e.g. W51 F480M, peak ~355 vs true saturation >1e4).  "
+                          "0 = mask all SATURATED (default); F480M ~5000 is safe."))
     parser.add_option("--manual-group-min-sep-fwhm", dest="manual_group_min_sep_fwhm",
                     type='float', default=2.0,
                     help=("SourceGrouper grouping radius in FWHM (manual path; "
