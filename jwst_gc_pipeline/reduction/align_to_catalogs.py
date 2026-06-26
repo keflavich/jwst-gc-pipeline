@@ -81,6 +81,11 @@ def sync_gwcs_to_fits_wcs(imfile):
 
 
 def diagnostic_plots(fn, refcrds, meascrds, dra, ddec, savename=None):
+    # QA-only PNG.  Skipped by default: pl.tight_layout()/savefig on the multi-panel
+    # crf+scatter figure hung the Cloud C pipe for ~12h (twice), even with the Agg
+    # backend.  Opt in with REALIGN_DIAGNOSTIC_PLOTS=1 if you want the diagnostics.
+    if not os.environ.get('REALIGN_DIAGNOSTIC_PLOTS'):
+        return
     import pylab as pl
     from astropy.visualization import simple_norm
     fig = pl.figure(dpi=200)
