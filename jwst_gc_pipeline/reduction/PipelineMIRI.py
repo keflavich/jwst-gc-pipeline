@@ -866,7 +866,13 @@ if __name__ == "__main__":
     # and never clash with sickle/ products (which share the 3958 program id).
     field_to_reg_mapping = {'2221': {'002': 'brick', '001': 'cloudc'},
                             '3958': {'001': 'sickle', '002': 'sickle', '003': 'brick'},
-                            '5365': {'001': 'sgrb2'},
+                            # 5365 sgrb2 MIRI: the actual observations are obs
+                            # 002 + obs 998 ("..._skipped_redo"); together their
+                            # 4 mosaic tiles (002: 0210b/02105, 998: 06101/12101)
+                            # tile the full Sgr B2 field -- BOTH must be reduced
+                            # and joint-cataloged (--field=002-998) or the mosaic
+                            # is missing half the data.
+                            '5365': {'001': 'sgrb2', '002': 'sgrb2', '998': 'sgrb2'},
                             '6151': {'001': 'w51_background', '002': 'w51'},
                             # 2526 obs 021 = "G0" CMZ cloud-c filament F770W
                             '2526': {'021': 'cloudc'},
