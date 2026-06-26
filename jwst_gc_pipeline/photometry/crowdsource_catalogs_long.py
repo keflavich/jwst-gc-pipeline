@@ -2513,12 +2513,47 @@ def _cutout_smooth_residual_bg(residual_i2d_path, median_size=3, overwrite=False
     return out_path
 
 
-def _resample_to_i2d(files, pipeline_dir, product_name, crop_to_data=True):
+_REDUCTION_WCS_ASDF_CACHE = {}
+
+
+def _reduction_mosaic_output_wcs(pipeline_dir, proposal_id, field, inst_token,
+                                 filtername):
+    """Path to an ASDF holding the reduction-mosaic (image3 i2d) GWCS, or None.
+
+    When a reduction mosaic ``jw0{prop}-o{field}_t001_{inst}_{filt}_i2d.fits``
+    exists, the cataloging ``_data_i2d`` should be resampled onto its EXACT grid
+    so the 'data' image matches the canonical reduction mosaic pixel-for-pixel
+    (verified byte-identical: same crf + same output WCS -> max|diff|=0).
+    Returns None for fields with no reduction mosaic (NIRCam fields built only by
+    cataloging) or cutout runs, leaving the legacy tight-bbox behaviour intact.
+    """
+    mosaic = os.path.join(
+        pipeline_dir,
+        f'jw0{proposal_id}-o{field}_t001_{inst_token}_{filtername.lower()}_i2d.fits')
+    if not os.path.exists(mosaic):
+        return None
+    out = os.path.join(pipeline_dir,
+                       f'_reduction_grid_o{field}_{filtername.lower()}.asdf')
+    key = os.path.getmtime(mosaic)
+    if _REDUCTION_WCS_ASDF_CACHE.get(out) == key and os.path.exists(out):
+        return out
+    import asdf as _asdf
+    with ImageModel(mosaic) as _m:
+        _asdf.AsdfFile({'wcs': _m.meta.wcs}).write_to(out)
+    _REDUCTION_WCS_ASDF_CACHE[out] = key
+    return out
+
+
+def _resample_to_i2d(files, pipeline_dir, product_name, crop_to_data=True,
+                     output_wcs=None):
     """Resample an explicit list of per-frame datamodels into one i2d mosaic.
 
     Generic ResampleStep coadd shared by the cutout data-i2d and merged-catalog
     residual mosaics.  ``crop_to_data`` trims the (over-allocated) canvas back
-    to the finite-data bbox.
+    to the finite-data bbox.  ``output_wcs`` (path to an ASDF custom WCS) forces
+    the output onto an explicit grid -- used to land the data_i2d on the exact
+    reduction-mosaic grid; it implies no cropping (the mosaic grid is already the
+    full footprint).
     """
     files = sorted(set(files))
     if not files:
@@ -2531,8 +2566,12 @@ def _resample_to_i2d(files, pipeline_dir, product_name, crop_to_data=True):
         fh.write(serialized)
     output_filename = f'{pipeline_dir}/{product_name}_i2d.fits'
     print(f'Resampling {len(files)} frames into {product_name}_i2d.fits', flush=True)
+    _call_kw = {}
+    if output_wcs:
+        _call_kw['output_wcs'] = output_wcs
+        crop_to_data = False
     resampled = ResampleStep.call(asn_filename, output_dir=pipeline_dir,
-                                  save_results=False)
+                                  save_results=False, **_call_kw)
     resampled.save(output_filename, overwrite=True)
     if hasattr(resampled, 'close'):
         resampled.close()
@@ -2566,7 +2605,16 @@ def mosaic_cutout_input_data(cut_bp, filtername, proposal_id, field, module,
         return None
     product_name = (f'jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-'
                     f'{filtername.lower()}-{module}_data')
-    out = _resample_to_i2d(files, pipeline_dir, product_name, crop_to_data=True)
+    # Full-frame runs (input_files passed): if a reduction mosaic exists, land the
+    # data_i2d on its EXACT grid so the cataloging 'data' image == the canonical
+    # reduction i2d.  Cutout runs (input_files None) keep the tight-bbox crop.
+    output_wcs = None
+    if input_files is not None:
+        output_wcs = _reduction_mosaic_output_wcs(pipeline_dir, proposal_id,
+                                                  field, inst_token, filtername)
+    out = _resample_to_i2d(files, pipeline_dir, product_name,
+                           crop_to_data=(output_wcs is None),
+                           output_wcs=output_wcs)
     print(f'Wrote cutout data i2d {out}', flush=True)
     return out
 
