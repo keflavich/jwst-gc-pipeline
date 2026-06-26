@@ -3620,7 +3620,7 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                '3523': {'wd2': 1},
                # w51 already exists in this codebase under proposals 1182 (obs 004)
                # and 6151 (obs 001).  Re-assert Gaia as ref via PipelineRerunNIRCAM-LONG.
-               '6151': {'w51': 1},
+               '6151': {'w51': 2},
                }
     # 2211 is an asteroid-survey program with 5 separate GC pointings; all
     # map to the same 'gc2211' target/basepath, distinguished only by field.
