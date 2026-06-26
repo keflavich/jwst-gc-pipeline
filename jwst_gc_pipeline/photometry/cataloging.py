@@ -163,6 +163,7 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                       grouper, options, dq, satstar_model_subtracted,
                       label, xy_bounds_pix=None,
                       overshoot_ratio=1.2, overshoot_action='flag',
+                      overshoot_cap_target=1.0,
                       miri_dpk_guard=False,
                       satstar_excl_xy=None, satstar_excl_pix=0.0,
                       near_sat_dist_pix=1.0,
@@ -181,6 +182,32 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
     extra = {}
     if xy_bounds_pix is not None:
         extra['xy_bounds'] = (xy_bounds_pix, xy_bounds_pix)
+
+    # Empty seed (0 sources): a source-poor frame -- common at long MIRI
+    # wavelengths (w51 F2100W at 21um is mostly extended emission, so a single
+    # dither's residual detection can be empty).  photutils PSFPhotometry can't
+    # be called with zero init_params (its LocalBackground builds a
+    # CircularAnnulus from an empty positions array and raises), so short-circuit
+    # to an empty per-frame catalog + zero model.  Without this one empty frame
+    # aborts the whole filter (run_manual_pipeline treats any frame error as
+    # fatal).  Carry init_params' columns plus the standard PSFPhotometry output
+    # schema so save_photutils_results writes a valid (0-row) catalog.
+    n_seed = 0 if init_params is None else len(init_params)
+    if n_seed == 0:
+        print(f"[{label}] empty seed (0 sources): skipping PSF fit, emitting "
+              f"empty per-frame catalog", flush=True)
+        res = Table(init_params, copy=True) if init_params is not None else Table()
+        for _c, _dt in (('id', 'i8'), ('group_id', 'i8'), ('group_size', 'i8'),
+                        ('local_bkg', 'f8'), ('x_init', 'f8'), ('y_init', 'f8'),
+                        ('flux_init', 'f8'), ('x_fit', 'f8'), ('y_fit', 'f8'),
+                        ('flux_fit', 'f8'), ('x_err', 'f8'), ('y_err', 'f8'),
+                        ('flux_err', 'f8'), ('npixfit', 'i8'), ('qfit', 'f8'),
+                        ('cfit', 'f8'), ('flags', 'i8'), ('iter_detected', 'i8')):
+            if _c not in res.colnames:
+                res[_c] = np.zeros(0, dtype=_dt)
+        modsky = np.zeros_like(data, dtype=float)
+        return res, modsky, None
+
     phot = _make_psfphotometry(
         finder=None,
         localbkg_estimator=LocalBackground(localbkg_inner, localbkg_outer),
@@ -383,6 +410,36 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
               f"photometry at the seed position (flux free)", flush=True)
         modsky = _make_model_image(phot, data.shape, psf_shape=(21, 21),
                                    include_local_bkg=False)
+
+    # --- HARD CAP residual overshoot (2026-06-23, MIRI) ---
+    # Even after the seed refit, a mildly EXTENDED source (low concentration --
+    # a bump on bright emission, or a source broader than the PSF) keeps
+    # model_peak > data_peak and leaves a NEGATIVE POCKMARK in the residual
+    # (2526 cloud-c filament: daophot model 449 on data 279 -> -170).  A single
+    # positive PSF physically cannot peak above the data, so rescale any
+    # still-overshooting fit's flux down until its model peak == the local data
+    # peak.  Corrects the amplitude without dropping the source (it stays in the
+    # catalog at its true, data-limited brightness).  MIRI-gated via the same
+    # dpk-guard flag so NIRCam is unchanged.
+    if (miri_dpk_guard and overshoot_cap_target and overshoot_cap_target > 0
+            and len(phot.results)):
+        modsky = _make_model_image(phot, data.shape, psf_shape=(21, 21),
+                                   include_local_bkg=False)
+        _capov = _filter_or_flag_model_overshoot(
+            phot, modsky, data, ratio=overshoot_ratio, action='flag',
+            label=f'{label}:cap', flag_nonpositive_data=miri_dpk_guard)
+        if np.any(_capov):
+            _res = phot.results
+            _r = np.asarray(_res['model_data_peak_ratio'], dtype=float)
+            _fl = np.asarray(_res['flux_fit'], dtype=float)
+            _scale = np.where(_capov & np.isfinite(_r) & (_r > 0),
+                              overshoot_cap_target / _r, 1.0)
+            _res['flux_fit'] = _fl * _scale
+            phot.__dict__.pop('_model_image_params', None)
+            modsky = _make_model_image(phot, data.shape, psf_shape=(21, 21),
+                                       include_local_bkg=False)
+            print(f"[{label}] capped {int(np.sum(_capov))} overshooting fits to "
+                  f"{overshoot_cap_target:g}x the local data peak", flush=True)
 
     # --- ban non-positive-flux (negative-peak) sources ---
     # A PSF is strictly positive, so flux_fit <= 0 is a negative-peak model: it
@@ -1994,9 +2051,37 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             basepath, filt, proposal_id, field,
                             visitid=f'{visitid:03d}',
                             each_suffix=_resolve_each_suffix(options, filt),
-                            module=module, pupil='clear')))
+                            module=module, pupil='clear', allow_empty=True)))
                 else:
                     candidate_frames = frame_cache.get((module, filt), [])
+
+                # MIRI FAKE-STAR FIX (2026-06-23): the satstar seed gate's
+                # strongest, FIELD-GENERAL phantom rejection (coadd prominence /
+                # core / concentration -- RELATIVE metrics that separate a fake on
+                # smooth emission from a real saturated star regardless of field
+                # brightness) needs the deep detection coadd ``_data_i2d``.  On a
+                # field's FIRST run that coadd did not exist yet (it used to be
+                # built only by the later mosaic step), so the gate fell back to
+                # per-frame data and FAKE bright satstars survived (2526 cloud-c
+                # filament: satstar flux 4.4e6 on data ~340; prom 1.6/conc 1.2 on
+                # the coadd would have rejected it outright).  Build the coadd
+                # ONCE up front from the input frames so EVERY per-frame satstar
+                # fit gets the coadd gate.  Cheap vs the fits; skipped if present.
+                if (phase == phases[0] and module == 'mirimage'
+                        and candidate_frames):
+                    _det_i2d = _data_i2d_path(module, filt)
+                    if not os.path.exists(_det_i2d):
+                        try:
+                            _L.mosaic_cutout_input_data(
+                                basepath, filt, proposal_id, field, module,
+                                label=phase, pupil='clear',
+                                input_files=candidate_frames)
+                            print(f"[manual] built detection coadd for satstar "
+                                  f"gate: {_det_i2d}", flush=True)
+                        except Exception as _cex:
+                            print(f"[manual] could not build detection coadd "
+                                  f"{_det_i2d} ({_cex}); satstar gate falls back "
+                                  f"to per-frame data", flush=True)
 
                 # Build per-frame work units.  Per-frame fits within a phase
                 # are independent (phase-level dependencies only); parallelize

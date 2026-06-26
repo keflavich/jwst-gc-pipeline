@@ -51,10 +51,12 @@ from jwst_gc_pipeline.photometry.naming import (
 
 filternames = filternames_narrow = ['f410m', 'f212n', 'f466n', 'f405n', 'f187n', 'f182m']
 all_filternames = ['f410m', 'f212n', 'f466n', 'f405n', 'f187n', 'f182m', 'f444w', 'f356w', 'f200w', 'f115w']
-obs_filters = {'brick': {'2221': filternames,
+obs_filters = {'brick': {'2221': filternames + ['f2550w'],
                          '1182': ['f444w', 'f356w', 'f200w', 'f115w'],
                          },
-               'cloudc': {'2221': filternames},
+               'cloudc': {'2221': filternames + ['f2550w'],
+                          # 2526 obs 021 = "G0" CMZ cloud-c filament F770W
+                          '2526': ['f770w']},
                # sickle NIRCam (obs 007) + MIRI (obs 001/002/003)
                'sickle': {'3958': ['f187n', 'f210m', 'f335m', 'f470n', 'f480m',
                                    'f770w', 'f1130w', 'f1500w']},
@@ -62,7 +64,7 @@ obs_filters = {'brick': {'2221': filternames,
                'cloudef': {'2092': ['f162m', 'f210m', 'f360m', 'f480m',
                                     'f770w', 'f2100w']},
                'sgrc': {'4147': ['f115w', 'f162m', 'f182m', 'f212n', 'f360m', 'f405n', 'f470n', 'f480m']},
-               'sgrb2': {'5365': ['f150w', 'f182m', 'f187n', 'f210m', 'f212n', 'f300m', 'f360m', 'f405n', 'f410m', 'f466n', 'f480m']},
+               'sgrb2': {'5365': ['f150w', 'f182m', 'f187n', 'f210m', 'f212n', 'f300m', 'f360m', 'f405n', 'f410m', 'f466n', 'f480m', 'f2550w']},
                'arches': {'2045': ['f212n', 'f323n']},
                'quintuplet': {'2045': ['f212n', 'f323n']},
                'sgra': {'1939': ['f115w', 'f212n', 'f405n']},
@@ -77,7 +79,8 @@ obs_filters = {'brick': {'2221': filternames,
                # as astrometric ref.  Filter list per user 2026-06-13: F140M
                # F162M F182M F187N F210M F335M F360M F405N F410M F480M.
                'w51': {'6151': ['f140m', 'f162m', 'f182m', 'f187n', 'f210m',
-                                'f335m', 'f360m', 'f405n', 'f410m', 'f480m']},
+                                'f335m', 'f360m', 'f405n', 'f410m', 'f480m',
+                                'f770w', 'f1280w', 'f2100w']},
                }
 
 # Using the 'brick' keyword here makes it work for now, need to figure out how to

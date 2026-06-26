@@ -231,14 +231,29 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000):
     # id 0 is the non-saturated zone that we've excluded [but reading this code 3/28/2026, I'm skeptical this makes sense]
     edge_ids = edge_ids[1:]
     edge_mask = np.isin(sources, edge_ids)
-    saturated = saturated & (~ndimage.binary_dilation(edge_mask, iterations=msfe))
+    _edge_remove = ndimage.binary_dilation(edge_mask, iterations=msfe)
+    # PRESERVE genuine-saturation cores (2026-06-23).  The >edge_npix suppression
+    # targets large detector-edge saturated bleeds, but bright EXTENDED EMISSION
+    # (2526 cloud-c filament) produces large spurious DQ-SATURATED regions
+    # (14717-px component) that ENGULF real saturated stars.  Erasing the whole
+    # component deletes the star -- it is then never seeded or fit (the
+    # "unidentified saturated star" failure).  The real star is the
+    # ``unrecoverable`` (NaN-variance) core, which is genuine even inside a giant
+    # spurious-DQ blob.  Keep those core pixels; only the finite spurious-DQ
+    # emission is removed, so the surviving component collapses onto the real core
+    # (correct COM + sat_area downstream).
+    if 'VAR_POISSON' in [h.name for h in fitsdata]:
+        _unrec = np.isnan(fitsdata['VAR_POISSON'].data)
+        _edge_remove = _edge_remove & (~_unrec)
+    saturated = saturated & (~_edge_remove)
 
     coms = center_of_mass(saturated, labels=sources, index=np.arange(nsource)+1)
 
     return saturated, sources, coms
 
 
-def _refine_coms_by_data(coms, data, sources, shift_warn_thresh_pix=3.0):
+def _refine_coms_by_data(coms, data, sources, shift_warn_thresh_pix=3.0,
+                         unrecoverable=None):
     """Refine DQ_SATURATED-mask centroids using the cluster bounding-box
     center as a regularizer.
 
@@ -289,6 +304,35 @@ def _refine_coms_by_data(coms, data, sources, shift_warn_thresh_pix=3.0):
         if len(ys) == 0:
             refined.append((cy, cx))
             continue
+        # GENUINE-SATURATION CORE refinement (2026-06-23).  A real saturated star
+        # buried in a LARGE spurious DQ-SATURATED emission blob (2526 cloud-c
+        # filament: a 45-px unrecoverable NaN-variance core inside a 14717-px DQ
+        # component of bright FINITE emission) has its mask-COM and eroded-COM
+        # dragged onto the emission, several px off the star -- the fit then lands
+        # on emission and is gated out, so the star is NEVER found.  The genuine
+        # saturated core is the ``unrecoverable`` (NaN-variance) sub-region,
+        # distinct from the finite spurious-DQ emission filling the rest of the
+        # component.  When such a core exists, recentre on its LARGEST sub-cluster
+        # (the real star).  This is the most reliable centre available and takes
+        # priority over the eroded-mask heuristic below.
+        if unrecoverable is not None:
+            _core = clmask & unrecoverable
+            if int(_core.sum()) >= 3:
+                _cl, _cn = ndimage.label(_core)
+                if _cn >= 1:
+                    _sz = ndimage.sum_labels(_core, _cl, np.arange(1, _cn + 1))
+                    _big = _cl == (int(np.argmax(_sz)) + 1)
+                    _ncy, _ncx = ndimage.center_of_mass(_big)
+                    if np.isfinite(_ncy) and np.isfinite(_ncx):
+                        _sh = float(np.hypot(_ncy - cy, _ncx - cx))
+                        if _sh > shift_warn_thresh_pix:
+                            print(f"  [satstar centroid refine] cluster "
+                                  f"{cluster_id}: mask_COM=({cx:.2f},{cy:.2f}) -> "
+                                  f"genuine-core=({_ncx:.2f},{_ncy:.2f}) "
+                                  f"shift={_sh:.2f} px (sat_area={len(ys)}, "
+                                  f"core={int(_core.sum())})", flush=True)
+                        refined.append((float(_ncy), float(_ncx)))
+                        continue
         # ERODED-CORE CENTROID (2026-06-20).  The bbox centre is biased when the
         # saturated cluster is asymmetric -- the brightest 6-pointed DIFFRACTION
         # SPIKE saturates farther out than the others, or a thin saturated bleed/
@@ -593,6 +637,13 @@ def reconcile_outside_fov_satstar_fluxes(per_frame, match_radius=1.0 * u.arcsec,
     return overrides, drops
 
 
+# Fixed small footprint (~11px radius) for the secondary, neighbour-robust
+# prominence/core check in the post-fit gate.  Independent of a source's
+# (possibly spuriously huge) DQ-SATURATED sat_area so a fake on extended
+# emission cannot inflate its prominence by reaching a neighbouring real star.
+_SEED_SMALL_SAT_AREA = 400
+
+
 def _seed_prominence(data, com, sat_area):
     """Adaptive-radius prominence of a saturated-star SEED on the SCI data.
 
@@ -752,6 +803,65 @@ def accept_satstar_fit(*, result_is_none, fluxerr, snr, flux, qfit,
     return bool((not np.isfinite(ssr_ratio)) or (ssr_ratio < ssr_ratio_max_keep))
 
 
+def is_fake_bright(model_peak, local_peak, *, model_min=1.0e4, localpk_max=3.5e3,
+                   has_saturated_core=False):
+    """Pure predicate: is a satstar fit a FAKE bright star on faint emission?
+
+    The pathology (2526 cloud-c filament, sickle phantoms): a satstar is fit with
+    a HUGE amplitude (model peak 1e4-6e5) at a position where the image is faint,
+    smooth extended emission with NO compact source -- gouging a bright fake star
+    (and a NaN/deep-negative pit in the residual) where there is none.
+
+    Two signals, both needed to be field-general (an ABSOLUTE local-peak cut alone
+    does NOT generalise: a real saturated star in a faint field can have a local
+    peak of ~2000 while a fake in a bright field reaches ~2300):
+
+      * ``model_peak > model_min`` AND ``local_peak < localpk_max`` -- the fit
+        claims a very bright source the local image cannot support.
+      * ``not has_saturated_core`` -- a GENUINE saturated star has an
+        unrecoverable NaN (DO_NOT_USE) core in the per-frame SCI; a fake sits on
+        FINITE smooth emission (MIRI's DQ-SATURATED flag there is ~99% spurious).
+        So any fit with a genuine NaN core nearby is a real star and is EXEMPT
+        from the fake cut regardless of how bright its model is -- this is what
+        protects faint-field saturated stars (2526 SAT-faint: NaN core, local
+        peak 2065) while still killing fakes (2526 FAKE: finite core, peak ~400).
+
+    Returns False when inputs are non-finite or thresholds are disabled (<=0),
+    so an unmeasurable fit is never dropped as fake.
+    """
+    if has_saturated_core:
+        return False
+    if not (model_min and model_min > 0 and localpk_max and localpk_max > 0):
+        return False
+    if not (np.isfinite(model_peak) and np.isfinite(local_peak)):
+        return False
+    return bool(model_peak > model_min and local_peak < localpk_max)
+
+
+def is_small_radius_emission_phantom(prom_small, core_small, *,
+                                     prom_min=8.0, core_min=1000.0):
+    """Pure predicate: is a fit an extended-emission phantom by its SMALL-fixed-
+    radius prominence/core (neighbour-robust, independent of a spuriously large
+    DQ-SATURATED sat_area)?
+
+    The sat_area-scaled prominence is required for genuinely huge saturated stars
+    (their core is zeroed to ~22px; a small ring sits inside it -> NaN -> kept),
+    but on a FAKE the equally-large spurious footprint makes the scaled ring reach
+    a NEIGHBOURING real star and inflates prominence past the cut (2526 FAKE-1:
+    0.9 at r~11px vs 49 at r~22px).  Measuring at a small FIXED radius separates
+    them: a fake reads low, a normal star reads high, and a huge real star reads
+    NaN (zeroed core).  Reject only when the small-radius value is FINITE and
+    below threshold (NaN -> not a phantom -> kept).
+    """
+    if (prom_min and prom_min > 0 and np.isfinite(prom_small)
+            and prom_small < prom_min):
+        return True
+    if (core_min and core_min > 0 and np.isfinite(core_small)
+            and core_small < core_min):
+        return True
+    return False
+
+
 def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, deblend_daophot_xy=None, deblend_confirm_xy=None):
     # ``flux_drops``: optional list of SkyCoord.  An out-of-field (forced) source
     # whose seed sky position matches a drop within ~1.0" is SKIPPED entirely
@@ -859,7 +969,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # the unsaturated wings -- much more reliable as a star-centre
     # estimate (the saturated mask should be centred on the star
     # centroid).  Added 2026-05-28.
-    coms = _refine_coms_by_data(coms, data, sources)
+    coms = _refine_coms_by_data(coms, data, sources, unrecoverable=_unrecoverable)
 
     # Precompute sat_area per labeled component so we can order in-FOV
     # source_records brightest-first for iterative-subtraction fitting
@@ -2423,13 +2533,24 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # phantoms that drifted off-seed read core~700.  Forced sources are
         # exempt (their position is locked, not fit-driven).
         if (_is_miri and accept_source and not forced_source
-                and seed_gate_image is not None and seed_gate_wcs is not None
                 and result is not None):
+            # Per-frame FALLBACK (2026-06-23): on a field's FIRST run the deep
+            # coadd data_i2d does not exist yet, so seed_gate_image is None and
+            # this whole post-fit gate used to be SKIPPED -- letting FAKE bright
+            # satstars (huge model on faint emission) survive (2526 cloud-c
+            # filament: flux 4.4e6 on data ~340; sickle worked only because its
+            # coadd pre-existed).  The FAKE-BRIGHT check is robust on the
+            # per-frame SCI too (a real bright star's local peak is bright there
+            # as well), so fall back to ``data``/``ww`` for it.  The noisier
+            # prominence/core/conc/oversub coadd metrics stay coadd-ONLY.
+            _pf_img = seed_gate_image if seed_gate_image is not None else data
+            _pf_ww = seed_gate_wcs if seed_gate_wcs is not None else ww
+            _have_coadd = (seed_gate_image is not None and seed_gate_wcs is not None)
             try:
                 _xc = float(np.atleast_1d(result['xcentroid'])[0])
                 _yc = float(np.atleast_1d(result['ycentroid'])[0])
                 _sky = ww.pixel_to_world(_xc, _yc)
-                _cx, _cy = seed_gate_wcs.world_to_pixel(_sky)
+                _cx, _cy = _pf_ww.world_to_pixel(_sky)
                 # CAP sat_area for the prominence radius (2026-06-21).  A spurious
                 # DQ-SATURATED cluster (detector artifact: sat_area 8000-20000 of
                 # flagged-but-finite ~1100 pixels) makes r_sat=sqrt(area/pi) grow
@@ -2441,10 +2562,31 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 # ~1100 data -> prom<8 -> rejected.
                 _capped_sa = (min(int(src_sat_area), 1600)
                               if src_sat_area is not None else src_sat_area)
-                _pp, _cc = _seed_prominence(seed_gate_image, (float(_cy), float(_cx)),
-                                            _capped_sa)
-                _kk = _seed_concentration(seed_gate_image, (float(_cy), float(_cx)),
-                                          _capped_sa)
+                # prominence/core/conc are calibrated on the noise-averaged COADD;
+                # on the noisier per-frame fallback they over-reject real stars,
+                # so measure them ONLY when the coadd is available.
+                if _have_coadd:
+                    _pp, _cc = _seed_prominence(seed_gate_image, (float(_cy), float(_cx)),
+                                                _capped_sa)
+                    _kk = _seed_concentration(seed_gate_image, (float(_cy), float(_cx)),
+                                              _capped_sa)
+                    # SMALL-RADIUS prominence/core (2026-06-23).  The sat_area-
+                    # scaled radius is REQUIRED for genuinely huge saturated stars
+                    # (their core is zeroed out to ~22px; a small ring sits inside
+                    # the zeroed core -> NaN -> kept).  But for a FAKE on extended
+                    # emission the spurious DQ-SATURATED footprint is just as large,
+                    # so the capped (1600 -> ~22px) ring reaches a NEIGHBOURING real
+                    # star and inflates prominence past the cut (2526 FAKE-1: prom
+                    # 0.9 at r~11px but 49 at r~22px -> wrongly kept).  Also measure
+                    # at a small FIXED radius: a fake reads low here (its own faint
+                    # emission), while a huge real star reads NaN (zeroed core ->
+                    # kept) and a normal star reads high.  Reject if the small-radius
+                    # value is FINITE and below threshold.
+                    _pp_s, _cc_s = _seed_prominence(seed_gate_image,
+                                                    (float(_cy), float(_cx)),
+                                                    _SEED_SMALL_SAT_AREA)
+                else:
+                    _pp = _cc = _kk = _pp_s = _cc_s = np.nan
                 # OVER-SUBTRACTION ratio: the fitted PSF model PEAK vs the deep
                 # coadd DATA at the fit position.  This is the most direct measure
                 # of the negative-fake-star pathology -- a satstar whose model
@@ -2470,11 +2612,11 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 # reads >=4 and is rejected.  Falls back to the 3x3 centre when
                 # _cc is unmeasurable.
                 _ix, _iy = int(round(float(_cx))), int(round(float(_cy)))
-                _gny, _gnx = seed_gate_image.shape
+                _gny, _gnx = _pf_img.shape
                 _dpk = float(_cc) if (np.isfinite(_cc) and _cc > 0) else np.nan
                 if not (np.isfinite(_dpk) and _dpk > 0):
                     if 1 < _ix < _gnx - 1 and 1 < _iy < _gny - 1:
-                        _dwin = seed_gate_image[_iy - 1:_iy + 2, _ix - 1:_ix + 2]
+                        _dwin = _pf_img[_iy - 1:_iy + 2, _ix - 1:_ix + 2]
                         _fin = np.isfinite(_dwin) & (_dwin != 0)
                         if _fin.any():
                             _dpk = float(np.nanmax(_dwin[_fin]))
@@ -2500,16 +2642,26 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 _lpk = np.nan
                 _lr = 6
                 if _lr < _ix < _gnx - _lr and _lr < _iy < _gny - _lr:
-                    _lwin = seed_gate_image[_iy - _lr:_iy + _lr + 1,
-                                            _ix - _lr:_ix + _lr + 1]
+                    _lwin = _pf_img[_iy - _lr:_iy + _lr + 1,
+                                    _ix - _lr:_ix + _lr + 1]
                     _lfin = np.isfinite(_lwin) & (_lwin != 0)
                     if _lfin.any():
                         _lpk = float(np.nanmax(_lwin[_lfin]))
-                _fake_bright = (seed_fake_model_min and seed_fake_model_min > 0
-                                and seed_fake_localpk_max and seed_fake_localpk_max > 0
-                                and np.isfinite(_mpk) and np.isfinite(_lpk)
-                                and _mpk > seed_fake_model_min
-                                and _lpk < seed_fake_localpk_max)
+                # Genuine-saturation exemption: a real saturated star has an
+                # unrecoverable NaN/zero (DO_NOT_USE) core in the PER-FRAME SCI
+                # (``data`` retains it; the coadd fills it via dithers).  Check a
+                # small radius around the FIT position in the frame.
+                _has_satcore = False
+                _fx, _fy = int(round(_xc)), int(round(_yc))
+                _dny, _dnx = data.shape
+                if 2 < _fx < _dnx - 2 and 2 < _fy < _dny - 2:
+                    _ccut = data[_fy - 2:_fy + 3, _fx - 2:_fx + 3]
+                    _has_satcore = bool(np.any(~np.isfinite(_ccut))
+                                        or np.any(_ccut == 0))
+                _fake_bright = is_fake_bright(
+                    _mpk, _lpk, model_min=seed_fake_model_min,
+                    localpk_max=seed_fake_localpk_max,
+                    has_saturated_core=_has_satcore)
                 # The over-subtraction ratio compares the model PEAK to the coadd
                 # core.  For a LARGE-PSF in-FOV fit the model peak is the star's
                 # TRUE (unclipped) brightness while the coadd core is saturation-
@@ -2517,22 +2669,33 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 # this gate would wrongly DELETE every correctly-fit bright
                 # saturated star.  Skip it for _use_large_infov (prom/core/conc
                 # still apply; ssr_ratio guards genuine over-fits).
-                _oversub = ((not _use_large_infov)
+                _oversub = (_have_coadd and (not _use_large_infov)
                             and seed_oversub_ratio and seed_oversub_ratio > 0
                             and np.isfinite(_mpk) and np.isfinite(_dpk) and _dpk > 0
                             and _mpk > seed_oversub_ratio * _dpk)
-                _bad = ((seed_prominence_min and seed_prominence_min > 0
+                # coadd-only metrics (prom/core/conc/oversub) gate ONLY when the
+                # coadd is present; the fake-bright check runs on the per-frame
+                # fallback too (it is the #1-harm failure and is robust there).
+                _coadd_bad = (_have_coadd and (
+                        (seed_prominence_min and seed_prominence_min > 0
                          and np.isfinite(_pp) and _pp < seed_prominence_min)
                         or (seed_core_min and seed_core_min > 0
                             and np.isfinite(_cc) and _cc < seed_core_min)
                         or (seed_conc_min and seed_conc_min > 0
                             and np.isfinite(_kk) and _kk < seed_conc_min)
-                        or _oversub
-                        or _fake_bright)
+                        # small-radius prominence/core: catches fakes whose
+                        # inflated sat_area ring reaches a neighbour (NaN here for
+                        # huge real stars -> kept)
+                        or is_small_radius_emission_phantom(
+                            _pp_s, _cc_s, prom_min=seed_prominence_min,
+                            core_min=seed_core_min)
+                        or _oversub))
+                _bad = _coadd_bad or _fake_bright
                 if _bad:
                     accept_source = False
-                    print(f"Post-fit coadd gate (MIRI): rejecting source {ii+1} "
-                          f"-- phantom/knot/over-fit (coadd prom={_pp:.1f}, "
+                    print(f"Post-fit {'coadd' if _have_coadd else 'per-frame'} "
+                          f"gate (MIRI): rejecting source {ii+1} "
+                          f"-- phantom/knot/over-fit (prom={_pp:.1f}, "
                           f"core={_cc:.0f}, conc={_kk:.1f}, localpk={_lpk:.0f}, "
                           f"model/data="
                           f"{(_mpk/_dpk if (np.isfinite(_mpk) and np.isfinite(_dpk) and _dpk>0) else float('nan')):.1f}"

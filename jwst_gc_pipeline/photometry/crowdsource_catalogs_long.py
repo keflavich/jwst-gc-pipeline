@@ -1430,6 +1430,20 @@ class SeededFinder:
         self.preferred_skycoord_col = preferred_skycoord_col
 
     def __call__(self, data, mask=None):
+        # Empty seed (0 rows): a genuinely source-poor frame -- common at long
+        # MIRI wavelengths (e.g. w51 F2100W at 21um is almost all extended
+        # emission, so a single dither can detect zero point sources).
+        # _resolve_seed_skycoords early-returns an empty table WITHOUT a
+        # 'skycoord' column for nsrc==0, so indexing seeds['skycoord'] below
+        # would KeyError and abort the whole filter on one empty frame.  Return
+        # an empty result carrying the columns downstream expects instead.
+        if len(self.seed_table) == 0:
+            empty = Table(self.seed_table, copy=True)
+            for _c in ('flux', 'xcentroid', 'ycentroid', 'x_init', 'y_init',
+                       'flux_init'):
+                if _c not in empty.colnames:
+                    empty[_c] = np.zeros(0, dtype=float)
+            return empty
         seeds = _resolve_seed_skycoords(
             Table(self.seed_table, copy=True),
             ww=self.ww,
@@ -3582,7 +3596,10 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     proposal_id = options.proposal_id
     target = options.target
 
-    nvisits = {'2221': {'brick': 1, 'cloudc': 2},
+    nvisits = {'2221': {'brick': 2, 'cloudc': 2},
+               # 2526 obs 021 = "G0" CMZ cloud-c filament F770W (1 visit),
+               # routed into the cloudc tree.
+               '2526': {'cloudc': 1},
                '1182': {'brick': 2},
                '3958': {'sickle': 1},
                # cloudef = Cloud E (obs 002) + Cloud F (obs 005), two
@@ -3603,7 +3620,7 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                '3523': {'wd2': 1},
                # w51 already exists in this codebase under proposals 1182 (obs 004)
                # and 6151 (obs 001).  Re-assert Gaia as ref via PipelineRerunNIRCAM-LONG.
-               '6151': {'w51': 1},
+               '6151': {'w51': 2},
                }
     # 2211 is an asteroid-survey program with 5 separate GC pointings; all
     # map to the same 'gc2211' target/basepath, distinguished only by field.
@@ -3632,7 +3649,22 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             '1905': {'001': 'wd1', '003': 'wd1'},
                             '3523': {'003': 'wd2', '005': 'wd2'},
                             '6151': {'001': 'w51'},
+                            # 2526 obs 021 = "G0" CMZ cloud-c filament F770W
+                            '2526': {'021': 'cloudc'},
                             }[proposal_id]
+    # Instrument-dependent field numbering for MIRI (mirimage).  The map above is
+    # NIRCam-era; proposal 2221 numbers the brick/cloudc MIRI pointings OPPOSITE
+    # to its NIRCam pointings (NIRCam brick=001/cloudc=002; MIRI brick=002/
+    # cloudc=001), and the w51 (6151) / sgrb2 (5365) MIRI pointings are obs 002,
+    # which the NIRCam-era map omits.  Override only for mirimage so NIRCam runs
+    # are untouched.
+    if 'mirimage' in [str(m).lower() for m in modules]:
+        if proposal_id == '2221':
+            field_to_reg_mapping = {'002': 'brick', '001': 'cloudc'}
+        elif proposal_id == '6151':
+            field_to_reg_mapping = {'001': 'w51', '002': 'w51'}
+        elif proposal_id == '5365':
+            field_to_reg_mapping = {'001': 'sgrb2', '002': 'sgrb2'}
     reg_to_field_mapping = {v:k for k,v in field_to_reg_mapping.items()}
     # When multiple fields share a target (e.g. proposal 2211 / gc2211 has
     # 5 GC pointings 023/028/046/049/050), the inverted mapping collapses to
@@ -3995,7 +4027,7 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
             f"Check the region coordinates/target.")
 
 
-def get_filenames(basepath, filtername, proposal_id, field, each_suffix, module, pupil='clear', visitid='001'):
+def get_filenames(basepath, filtername, proposal_id, field, each_suffix, module, pupil='clear', visitid='001', allow_empty=False):
 
     # jw01182004002_02101_00012_nrcalong_destreak_o004_crf.fits
     # jw02221001001_07101_00012_nrcalong_destreak_o001_crf.fits
@@ -4044,6 +4076,13 @@ def get_filenames(basepath, filtername, proposal_id, field, each_suffix, module,
             glstr_list.append(glstr)
             fglob.extend(glob.glob(glstr))
     if len(fglob) == 0:
+        if allow_empty:
+            # Tolerated by callers sweeping a visit range (run_manual_pipeline):
+            # a target's configured nvisits can exceed the visits actually
+            # present for a given filter/obs (e.g. cloudc NIRCam has 2 visits but
+            # the MIRI F2550W obs 001 has only visit 001), so an absent visit
+            # must contribute zero frames, not crash the whole run.
+            return []
         raise ValueError(f"No matches found to any of {glstr_list}")
     else:
         return sorted(set(fglob))
