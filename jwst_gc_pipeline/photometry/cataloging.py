@@ -1375,11 +1375,15 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
     desat = '_unsatstar' if options.desaturated else ''
     bgsub = ('_bgsub' if options.bgsub else '') + '_resbgsub'
     blur_ = '_blur' if options.blur else ''
+    # Per-obs token for gc2211 (prop 2211): the m6 vetted catalogs + this seed
+    # are per-obs (see _obs_suffix usage in run_manual_pipeline).  Empty elsewhere.
+    _obssuf = _L.obs_token(getattr(options, 'proposal_id', None),
+                           getattr(options, 'field', None))
     tbls = []
     for module in modules:
         for filt in filternames:
             p = (f'{cut_bp}/catalogs/{filt.lower()}_{module}_indivexp_merged'
-                 f'{desat}{bgsub}{blur_}_m6_dao_basic_vetted.fits')
+                 f'{desat}{bgsub}{blur_}_m6_dao_basic{_obssuf}_vetted.fits')
             if os.path.exists(p):
                 t = Table.read(p)
                 if 'skycoord' in t.colnames:
@@ -1387,7 +1391,7 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
     if not tbls:
         raise ValueError(f"m7 crossband seed: no vetted m6 catalogs under {cut_bp}/catalogs/")
     union = _vstack(tbls, metadata_conflicts='silent')
-    out = f'{cut_bp}/catalogs/crossband_seed_manual.fits'
+    out = f'{cut_bp}/catalogs/crossband_seed_manual{_obssuf}.fits'
     union.write(out, overwrite=True)
     print(f"[m7] wrote crossband seed {out} (n={len(union)}); "
           f"TODO stringent >= {min_filters}-filter/{max_sep_mas}mas/SNR>{snr_min} cut",
@@ -1985,6 +1989,9 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                                or _L._instrument_from_filter(filt) == 'MIRI')
                 _multiobs = str(proposal_id) == '2211'
                 _vtok = f'_o{field}' if (_miri_field or _multiobs) else ''
+                # gc2211: the COMBINED (post-vet) catalog is also per-obs (no cross-
+                # obs vstack).  MIRI: combined stays un-tokened (all-obs).
+                _combsuf = f'_o{field}' if _multiobs else ''
                 # m3..m6 seed = vetted previous catalog UNION daofind on a
                 # progressively cleaner i2d (per PSFPhotometryPlan2026-06-09):
                 #   iter3(m3): raw i2d                        fit RAW frames
@@ -2293,7 +2300,11 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 # all-obs _vetted.fits (the final science catalog + m7 seed).
                 merged_path = _merged_path(merge_label, module, filt, resbgsub)
                 vetted_path = merged_path.replace('.fits', f'{_vtok}_vetted.fits')
-                combined_vetted_path = merged_path.replace('.fits', '_vetted.fits')
+                # gc2211 (prop 2211): the "combined" catalog is PER-OBS (each obs is
+                # its own target -- do NOT cross-combine obs), so token it _o{field}.
+                # MIRI multi-obs keeps the un-tokened all-obs combine (cloudef obs2+5
+                # ARE the same field).  _combsuf is set next to _vtok above.
+                combined_vetted_path = merged_path.replace('.fits', f'{_combsuf}_vetted.fits')
                 try:
                     merged = Table.read(merged_path)
                     # post-merge off-FOV cleanup: (A) one row per off-FOV satstar
@@ -2367,7 +2378,11 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             # NOT vstack stale per-obs `_o001_vetted`/`_o002_vetted`
                             # siblings from prior separate runs (the `_o*_vetted`
                             # wildcard would catch them and double/triple-count).
-                            if '-' in str(field):
+                            # JOINT run, or gc2211 (each obs a distinct target):
+                            # use ONLY this obs's vetted -- never cross-combine obs.
+                            # MIRI multi-obs (cloudef) still vstacks the _o*_vetted
+                            # siblings into the all-obs catalog.
+                            if '-' in str(field) or _multiobs:
                                 _sibs = [vetted_path]
                             else:
                                 _sibs = sorted(_glob.glob(
@@ -2476,9 +2491,11 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 iteration_label=last_phase, target=target, basepath=cut_bp,
                 ref_filter=ref_filter.lower(),
                 filternames_override=[f.lower() for f in filternames],
+                field=field,
                 vetted=True)
+            _xbsuf = _L.obs_token(proposal_id, field)
             _xb = (f'{cut_bp}/catalogs/basic_{module}_indivexp_photometry_tables_'
-                   f'merged_resbgsub_{last_phase}.fits')
+                   f'merged_resbgsub_{last_phase}{_xbsuf}.fits')
             print(f"manual [{last_phase}]: CROSS-BAND MERGE done (module={module}) "
                   f"-> {_xb}", flush=True)
     elif multifilter:

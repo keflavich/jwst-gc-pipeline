@@ -781,6 +781,7 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
                    min_nmatch_narrow=4,
                    iteration_label=None,
                    resbgsub=False,
+                   obs_suffix='',
                    basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
     print(f'Starting merge catalogs: catalog_type: {catalog_type} module: {module} target: {target}', flush=True)
 
@@ -1009,7 +1010,7 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
             print("WARNING: 212PXDG not present in metadata for this target")
 
         indivexp = '_indivexp' if indivexp else ''
-        tablename = f"{basepath}/catalogs/{catalog_type}_{module}{indivexp}_photometry_tables_merged{desat}{bgsub}{epsf_}{blur_}{iter_token}"
+        tablename = f"{basepath}/catalogs/{catalog_type}_{module}{indivexp}_photometry_tables_merged{desat}{bgsub}{epsf_}{blur_}{iter_token}{obs_suffix}"
         t0 = time.time()
         print(f"Writing table {tablename} with len={len(basetable)} and ncols={len(basetable.colnames)}", flush=True)
         # use caps b/c FITS will force it to caps anyway
@@ -1468,6 +1469,7 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
                   resbgsub=False,
                   vetted=False,
                   filternames_override=None,
+                  field=None,
                   basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
     """Cross-filter merge of per-filter daophot catalogs.
 
@@ -1510,7 +1512,12 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
     # basic; the daoiterative filename is ``_daoiterative_iterative.fits``.
     method_name = 'dao' if daophot_type == 'basic' else 'daoiterative'
 
-    vetted_tok = '_vetted' if vetted else ''
+    # Per-obs token for gc2211 (prop 2211): the per-filter vetted inputs AND the
+    # cross-band output catalog are per-obs (each gc2211 obs is a distinct target).
+    # Empty for other targets.  MUST match _vtok/_combsuf in cataloging.py and
+    # obs_token() in crowdsource_catalogs_long.
+    _obssuf = f'_o{field}' if (target == 'gc2211' and field not in (None, '')) else ''
+    vetted_tok = f'{_obssuf}_vetted' if vetted else ''
 
     # Resolve each filter's catalog AND its i2d (for WCS) TOGETHER, keeping
     # filternames / catfns / imgfns / tbls / wcses strictly aligned 1:1.
@@ -1647,6 +1654,7 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
                          resbgsub=resbgsub, desat=desat,
                          epsf=epsf, target=target, blur=blur, indivexp=indivexp,
                          iteration_label=iteration_label,
+                         obs_suffix=_obssuf,
                          basepath=basepath)
     if ref_filter is not None:
         _merge_kwargs['ref_filter'] = ref_filter
