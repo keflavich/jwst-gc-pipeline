@@ -402,7 +402,12 @@ def main(filtername, Observations=None, regionname='brick',
             assert cal_name.endswith('_cal.fits'), cal_name
             align_name = cal_name.replace("_cal.fits", "_align.fits")
             member['expname'] = align_name
-            shutil.copy(cal_name, align_name)
+            # copyFILE (data only), NOT copy: shutil.copy also copymode()s the
+            # destination to match the source, which raises PermissionError
+            # (EPERM) when the cal is owned by another user / the output dir is
+            # setgid+ACL (w51 F2100W re-reduction 2026-06-25).  The align copy
+            # only needs the cal DATA for fix_alignment; its mode is irrelevant.
+            shutil.copyfile(cal_name, align_name)
 
             fix_alignment(member['expname'], proposal_id=proposal_id,
                           field=field, basepath=basepath,
