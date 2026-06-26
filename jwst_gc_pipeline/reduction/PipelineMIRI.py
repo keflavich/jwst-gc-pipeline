@@ -644,6 +644,25 @@ def fix_alignment(fn, proposal_id=None, regionname='brick', field=None, basepath
     if regionname == 'w51':
         rashift = 0.2 * u.arcsec
         decshift = 0 * u.arcsec
+    # PER-VISIT WCS corrections (2026-06-25, restored).  Some obs have one VISIT
+    # mutually misregistered from the other by several arcsec -- a misregistration
+    # that standard tweakreg/refcat alignment CANNOT recover (too few F2550W
+    # refcat counterparts at 25um; frame-vs-mosaic cross-correlation follows each
+    # visit locally and is circular).  Left uncorrected it makes a DOUBLED star
+    # and a tile-boundary SEAM where the two visits' tiles abut.  Values measured
+    # from per-visit sub-mosaics vs NIRCam-confirmed stars (brick F2550W obs002
+    # visit001 = the v14 fix that achieved the seamless mosaic; the standard
+    # pipeline applying NO per-visit shift is the seam regression).
+    # (regionname, field/obs, visit) -> (dRA arcsec, dDec arcsec).
+    _PER_VISIT_SHIFT = {
+        ('brick', '002', '001'): (-1.01, 4.12),
+    }
+    _pvs = _PER_VISIT_SHIFT.get((regionname, str(field), str(visit)))
+    if _pvs is not None:
+        rashift = _pvs[0] * u.arcsec
+        decshift = _pvs[1] * u.arcsec
+        print(f"  PER-VISIT WCS correction ({regionname}/{field}/v{visit}): "
+              f"dRA={_pvs[0]}\", dDec={_pvs[1]}\"", flush=True)
     print(f"Shift for {fn} is {rashift}, {decshift}")
     align_fits = fits.open(fn)
     if 'RAOFFSET' in align_fits[1].header:
