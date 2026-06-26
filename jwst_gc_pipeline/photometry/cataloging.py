@@ -680,6 +680,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               qfit_max=0.2, peak_over_bkg=20.0,
                               min_prominence=0.0,
                               local_snr_min=5.0, keep_flags=(1,),
+                              snr_high_keep=20.0, qfit_high_keep_max=0.4,
                               drop_overshoot=True, struct_x=0.0, struct_y=0.0,
                               label=''):
     """First-pass star-vs-extended-emission vetting of a MERGED catalog.
@@ -767,10 +768,27 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                 if np.isfinite(core) and np.isfinite(bg) and mad > 0:
                     prominence[i] = (core - bg) / mad
 
+    # BRIGHT-ISOLATED keep (Mechanism 2): a real bright star whose qfit sits just
+    # above qfit_max (e.g. sickle F480M star3: flux 6381, S/N 201, qfit 0.282,
+    # peakSB only 16.8x bkg -> failed BOTH qfit and peakSB) was vetted out and
+    # left strong in the residual.  A high-S/N source that is fit as a SINGLETON
+    # (group_size==1, so flux_err -- hence S/N -- is NOT inflated by joint-fit
+    # covariance degeneracy) with a still-PSF-like qfit (< qfit_high_keep_max) is
+    # a confident star.  Extended-emission knots have BAD qfit (>~0.5, poor PSF
+    # match), so this cannot re-admit emission; the group_size==1 gate keeps the
+    # S/N trustworthy (a degenerate group inflates flux_err -> low fake S/N).
+    gsz = (np.asarray(t['group_size'], dtype=float)
+           if 'group_size' in t.colnames else np.ones(n))
+    bright_isolated = (
+        np.isfinite(snr) & (snr >= snr_high_keep)
+        & np.isfinite(qf) & (qf < qfit_high_keep_max)
+        & (gsz <= 1)
+    )
     star_like = (
         (qf <= qfit_max)
         | np.isin(flg, np.asarray(keep_flags, dtype=float))
         | (np.isfinite(peaksb) & (lbk > 0) & (peaksb > peak_over_bkg * lbk))
+        | bright_isolated
     )
     # MIRI and NIRCam use DIFFERENT keep-logics (see _emission_keep_miri /
     # _emission_keep_nircam).  min_prominence>0 selects the MIRI path.
@@ -830,6 +848,20 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
 # ---------------------------------------------------------------------------
 # Per-frame frame setup (shared load / bg / PSF / mask / satstar)
 # ---------------------------------------------------------------------------
+# Per-filter SATURATED data-floor (MJy/sr) for --saturation-data-floor auto mode.
+# JUMP/persistence artifacts get mis-tagged SATURATED on UNsaturated sources, and
+# masking those drops seeded real stars from every per-frame fit (W51 F480M).
+# Only mask a SATURATED pixel when its data exceeds the per-filter floor; genuine
+# saturated cores exceed it and stay masked / owned by the satstar channel.
+# Empirical from W51 per-frame crf SATURATED-pixel data distributions (p99 of the
+# real-saturation plateau).  Filter not listed (incl. all MIRI) -> 0 = mask all
+# SATURATED (original behaviour).  Override per-run with --saturation-data-floor.
+_NIRCAM_SAT_DATA_FLOOR = {
+    'f140m': 5000., 'f162m': 5000., 'f182m': 4000., 'f187n': 8000., 'f210m': 4000.,
+    'f335m': 2500., 'f360m': 2500., 'f405n': 5000., 'f410m': 2500., 'f480m': 5000.,
+}
+
+
 def _resolve_each_suffix(options, filtername):
     """Per-filter input per-exposure-crf suffix.
 
@@ -999,7 +1031,9 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         # With --saturation-data-floor > 0, only treat a SATURATED pixel as
         # un-fittable when its data actually exceeds the floor; default 0 keeps
         # the original behaviour (mask all SATURATED).
-        sat_floor = float(getattr(options, 'saturation_data_floor', 0.0))
+        sat_floor = float(getattr(options, 'saturation_data_floor', -1.0))
+        if sat_floor < 0:  # auto: per-filter default (0 for unlisted -> mask all)
+            sat_floor = _NIRCAM_SAT_DATA_FLOOR.get(filtername.lower(), 0.0)
         if sat_floor > 0:
             is_saturated = is_saturated & (np.nan_to_num(data) > sat_floor)
         data_ = data.copy()
@@ -2580,6 +2614,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         min_prominence=(float(getattr(opts_phase, 'miri_prominence_snr', 5.0))
                                         if _miri_field else 0.0),
                         local_snr_min=float(getattr(opts_phase, 'manual_ext_local_snr_min', 5.0)),
+                        snr_high_keep=float(getattr(opts_phase, 'manual_ext_snr_high_keep', 20.0)),
+                        qfit_high_keep_max=float(getattr(opts_phase, 'manual_ext_qfit_high_keep_max', 0.4)),
                         struct_x=0.0, struct_y=0.0,  # prune at detection, not here
                         label=f'{phase}:{filt}')
                     vetted.write(vetted_path, overwrite=True)
