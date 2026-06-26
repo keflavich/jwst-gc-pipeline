@@ -113,6 +113,40 @@ the residual rigid mosaic zero-point. Never add a third corrector, and never edi
 
 ---
 
+## Offsets-table provenance (how each `offsets/Offsets_*.csv` is built)
+
+`fix_alignment` reads a per-frame offsets table
+`offsets/Offsets_JWST_Brick<pid>_<refname>[_average].csv` (see
+`PipelineRerunNIRCAM-LONG.py` ~L1047–L1081). Those tables are **inputs** the
+pipeline consumes but does not itself generate — so the builders are tracked for
+provenance. Losing a builder means a correction can no longer be reproduced or
+audited from first principles even though catalogs/mosaics already carry it.
+
+| reference frame (`refname`) | offsets table | builder (tracked) |
+|---|---|---|
+| Gaia/VIRAC2 (brick/cloudc) | `Offsets_JWST_Brick<pid>_VIRAC2[locked].csv` | `build_gaia_virac2_refcat.py` (seed refcat) + the per-frame measure in the reduction |
+| **GNS (sickle, prop 3958)** | `Offsets_JWST_Brick3958_GNS.csv` | **`_bench/build_sickle_gns_offsets.py`** |
+
+**Sickle → GNS (`_bench/build_sickle_gns_offsets.py`):** a 2026-06-20 audit found
+sickle catalogs sit at the **raw `assign_wcs` frame** (`RAOFFSET=0`, no offsets
+table for 3958) — ~91 mas off the GNS reference the mosaics are tied to. The user
+chose the GNS frame. This script measures the per-filter bulk sickle→GNS
+correction and writes the per-frame table in the `shift_individual_catalog`
+convention (`dra_table = corr_dRA_onsky / cos(dec)`). Its output
+`Offsets_JWST_Brick3958_GNS.csv` is dropped into the sickle data tree's
+`offsets/` dir and consumed by `fix_alignment` like any other table.
+`_bench/sickle_gns_reduce_retry.sh` is the companion submitter that re-reduces
+sickle with the GNS table once the group QOS frees and releases the held
+cataloging jobs. (See the `PipelineRerunNIRCAM-LONG.py` ~L1140 note.)
+
+**MIRI registration** is a separate, manual pre-step — MIRI does **not** use the
+NIRCam offsets-table path. The sickle/cloudef MIRI frames are registered to the
+NIRCam F480M frame by the scripts in `scripts/miri_reduction/` (see that
+directory's README). They edit the per-frame FITS WCS / embedded gwcs in place
+(idempotent via `MIRIDRA`/`MIRIDDE`/`MIRIWCSN`) and **must be run before
+cataloging** a MIRI obs, or its mosaics sit ~3.3″ off truth while the catalog
+underneath is correct.
+
 ## Reference epochs (so propagation is reproducible)
 
 - Gaia DR3 reference epoch = **2016.0**.
@@ -124,5 +158,7 @@ the residual rigid mosaic zero-point. Never add a third corrector, and never edi
 
 ---
 
-_Last updated 2026-06-18. See also `align_to_catalogs.py:sync_gwcs_to_fits_wcs`
-docstring and `f115w-astrometry-*` analysis writeups in brick-jwst-2221._
+_Last updated 2026-06-25. See also `align_to_catalogs.py:sync_gwcs_to_fits_wcs`
+docstring, the offsets-table builders (`_bench/build_sickle_gns_offsets.py`,
+`scripts/miri_reduction/` registration scripts), and `f115w-astrometry-*`
+analysis writeups in brick-jwst-2221._
