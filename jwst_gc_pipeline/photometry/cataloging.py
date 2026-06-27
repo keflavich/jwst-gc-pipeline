@@ -1042,6 +1042,26 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         mask |= (dqarr & _L._bad_dq_bitmask(instrument)) != 0
     else:
         data_ = data
+    # MIRI detector-edge detection guard: daofind otherwise fires on the sharp
+    # good/bad boundary GRADIENT at the edge-glow rim, injecting spurious "stars"
+    # at the footprint border into the per-frame -> MERGED catalog.  These are
+    # dropped by the per-obs vetting (which checks the data_i2d footprint) but
+    # the model_i2d is built from the MERGED fits, so they render as huge edge
+    # blobs (brick F2550W: 74131-peak model sources hugging the border).  Dilate
+    # the BORDER-CONNECTED masked region inward by a margin so detection/fit
+    # cannot trigger within it; INTERIOR NaN holes (saturated cores) are left
+    # untouched so real stars there survive.  A genuine star within the margin of
+    # the detector edge is measured in the overlapping neighbour tile's interior.
+    _edge_margin = int(os.environ.get('MIRI_EDGE_DETECT_MARGIN', 8))
+    if 'miri' in inst_token and _edge_margin > 0:
+        from scipy.ndimage import binary_dilation as _bdil, label as _lab
+        _lbl, _nl = _lab(mask)
+        if _nl:
+            _bset = set(np.unique(np.concatenate(
+                [_lbl[0, :], _lbl[-1, :], _lbl[:, 0], _lbl[:, -1]]))) - {0}
+            if _bset:
+                _border = np.isin(_lbl, list(_bset))
+                mask = mask | _bdil(_border, iterations=_edge_margin)
     nan_replaced_data = interpolate_replace_nans(data_, kernel, convolve=convolve_fft,
                                                  allow_huge=True)
 
@@ -2288,6 +2308,18 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     visit_id = filename.split("_")[0][-3:]
                     vgroup_id = filename.split("_")[1]
                     file_detector = filename.split("_")[3]
+                    # JOINT multi-obs runs (field like '002-998'): two observations
+                    # can share visit+vgroup+exposure -- e.g. sgrb2 obs998 ("redo")
+                    # reused obs002's mosaic tile numbers, so both map to tile 02101
+                    # visit 001.  The per-frame output identity is named by the
+                    # joint FIELD token (o002-998 for both), so the obs is otherwise
+                    # lost and the two frames collide (overwrite).  Fold the per-frame
+                    # observation number into vgroup_id so the name + collision key
+                    # stay unique; the merge globs vgroup* so it still finds both.
+                    # Single-obs runs (no '-') are unchanged.
+                    if '-' in str(field):
+                        obs_id = filename.split("_")[0][-6:-3]
+                        vgroup_id = f'{obs_id}{vgroup_id}'
                     # Per-frame products MUST be named by the actual DETECTOR, never
                     # the (coarser) requested module.  Otherwise SW exposures whose
                     # 4 detectors (nrcb1-4) share visit+vgroup+exp collapse to one

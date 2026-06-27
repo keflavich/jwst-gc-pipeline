@@ -2513,12 +2513,47 @@ def _cutout_smooth_residual_bg(residual_i2d_path, median_size=3, overwrite=False
     return out_path
 
 
-def _resample_to_i2d(files, pipeline_dir, product_name, crop_to_data=True):
+_REDUCTION_WCS_ASDF_CACHE = {}
+
+
+def _reduction_mosaic_output_wcs(pipeline_dir, proposal_id, field, inst_token,
+                                 filtername):
+    """Path to an ASDF holding the reduction-mosaic (image3 i2d) GWCS, or None.
+
+    When a reduction mosaic ``jw0{prop}-o{field}_t001_{inst}_{filt}_i2d.fits``
+    exists, the cataloging ``_data_i2d`` should be resampled onto its EXACT grid
+    so the 'data' image matches the canonical reduction mosaic pixel-for-pixel
+    (verified byte-identical: same crf + same output WCS -> max|diff|=0).
+    Returns None for fields with no reduction mosaic (NIRCam fields built only by
+    cataloging) or cutout runs, leaving the legacy tight-bbox behaviour intact.
+    """
+    mosaic = os.path.join(
+        pipeline_dir,
+        f'jw0{proposal_id}-o{field}_t001_{inst_token}_{filtername.lower()}_i2d.fits')
+    if not os.path.exists(mosaic):
+        return None
+    out = os.path.join(pipeline_dir,
+                       f'_reduction_grid_o{field}_{filtername.lower()}.asdf')
+    key = os.path.getmtime(mosaic)
+    if _REDUCTION_WCS_ASDF_CACHE.get(out) == key and os.path.exists(out):
+        return out
+    import asdf as _asdf
+    with ImageModel(mosaic) as _m:
+        _asdf.AsdfFile({'wcs': _m.meta.wcs}).write_to(out)
+    _REDUCTION_WCS_ASDF_CACHE[out] = key
+    return out
+
+
+def _resample_to_i2d(files, pipeline_dir, product_name, crop_to_data=True,
+                     output_wcs=None):
     """Resample an explicit list of per-frame datamodels into one i2d mosaic.
 
     Generic ResampleStep coadd shared by the cutout data-i2d and merged-catalog
     residual mosaics.  ``crop_to_data`` trims the (over-allocated) canvas back
-    to the finite-data bbox.
+    to the finite-data bbox.  ``output_wcs`` (path to an ASDF custom WCS) forces
+    the output onto an explicit grid -- used to land the data_i2d on the exact
+    reduction-mosaic grid; it implies no cropping (the mosaic grid is already the
+    full footprint).
     """
     files = sorted(set(files))
     if not files:
@@ -2531,8 +2566,12 @@ def _resample_to_i2d(files, pipeline_dir, product_name, crop_to_data=True):
         fh.write(serialized)
     output_filename = f'{pipeline_dir}/{product_name}_i2d.fits'
     print(f'Resampling {len(files)} frames into {product_name}_i2d.fits', flush=True)
+    _call_kw = {}
+    if output_wcs:
+        _call_kw['output_wcs'] = output_wcs
+        crop_to_data = False
     resampled = ResampleStep.call(asn_filename, output_dir=pipeline_dir,
-                                  save_results=False)
+                                  save_results=False, **_call_kw)
     resampled.save(output_filename, overwrite=True)
     if hasattr(resampled, 'close'):
         resampled.close()
@@ -2566,7 +2605,16 @@ def mosaic_cutout_input_data(cut_bp, filtername, proposal_id, field, module,
         return None
     product_name = (f'jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-'
                     f'{filtername.lower()}-{module}_data')
-    out = _resample_to_i2d(files, pipeline_dir, product_name, crop_to_data=True)
+    # Full-frame runs (input_files passed): if a reduction mosaic exists, land the
+    # data_i2d on its EXACT grid so the cataloging 'data' image == the canonical
+    # reduction i2d.  Cutout runs (input_files None) keep the tight-bbox crop.
+    output_wcs = None
+    if input_files is not None:
+        output_wcs = _reduction_mosaic_output_wcs(pipeline_dir, proposal_id,
+                                                  field, inst_token, filtername)
+    out = _resample_to_i2d(files, pipeline_dir, product_name,
+                           crop_to_data=(output_wcs is None),
+                           output_wcs=output_wcs)
     print(f'Wrote cutout data i2d {out}', flush=True)
     return out
 
@@ -2845,6 +2893,14 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
         visit_id = bn.split('_')[0][-3:]
         vgroup_id = bn.split('_')[1]
         exposure_id = bn.split('_')[2]
+        # JOINT multi-obs runs (field like '002-998'): the per-frame products fold
+        # the observation number into vgroup_id (cataloging.py do_photometry frame
+        # loop) so two obs that share a visit+vgroup+exposure (e.g. sgrb2 obs998's
+        # redo reused obs002's tile 02101) don't collide.  Mirror that fold here so
+        # the raw per-frame residual/model are FOUND (else this build aborts with
+        # "missing raw basic products").  Single-obs runs (no '-') unchanged.
+        if '-' in str(field):
+            vgroup_id = f'{bn.split("_")[0][-6:-3]}{vgroup_id}'
         # Per-frame products are named by the actual DETECTOR (the manual path
         # writes them per-detector to avoid SW filename collisions); use it in the
         # stem so the raw residual/model are found and the mergedcat per-frame
@@ -3689,7 +3745,10 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                                      '004': 'cloudef', '006': 'cloudef',
                                      '008': 'cloudef'},
                             '4147': {'012': 'sgrc'},
-                            '5365': {'001': 'sgrb2'},
+                            # 5365 sgrb2 MIRI: obs 002 + obs 998 (skipped_redo);
+                            # '002-998' = JOINT run combining both obs's 4 tiles.
+                            '5365': {'001': 'sgrb2', '002': 'sgrb2',
+                                     '998': 'sgrb2', '002-998': 'sgrb2'},
                             '2045': {'001': 'arches', '003': 'quintuplet'},
                             '1939': {'001': 'sgra'},
                             '2211': {'023': 'gc2211', '028': 'gc2211',
@@ -3713,7 +3772,8 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
         elif proposal_id == '6151':
             field_to_reg_mapping = {'001': 'w51', '002': 'w51'}
         elif proposal_id == '5365':
-            field_to_reg_mapping = {'001': 'sgrb2', '002': 'sgrb2'}
+            field_to_reg_mapping = {'001': 'sgrb2', '002': 'sgrb2',
+                                    '998': 'sgrb2', '002-998': 'sgrb2'}
     reg_to_field_mapping = {v:k for k,v in field_to_reg_mapping.items()}
     # When multiple fields share a target (e.g. proposal 2211 / gc2211 has
     # 5 GC pointings 023/028/046/049/050), the inverted mapping collapses to
