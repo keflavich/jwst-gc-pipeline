@@ -839,6 +839,27 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         n_struct = int(np.sum(keep & ~skeep))
         keep = keep & skeep
 
+    # model==catalog invariant (user 2026-06-27): every saturated star that was
+    # SUBTRACTED into the per-frame model (replaced_saturated) MUST appear in
+    # the final catalog -- otherwise the subtracted-background MODEL image and
+    # the science catalog diverge (satstars rendered in model_i2d that the
+    # catalog lacks; the iterative background then trusts a catalog that is
+    # missing real, already-subtracted stars).  The emission/qfit/prominence
+    # gates can drop a real saturated star (the broad replaced core reads as
+    # low-prominence / high-qfit), so force the subtracted satstars back in.
+    _force = None
+    for _sc in ('replaced_saturated', 'is_saturated'):
+        if _sc in t.colnames:
+            _col = np.asarray(t[_sc], dtype=bool)
+            _force = _col if _force is None else (_force | _col)
+    if _force is not None:
+        n_force = int(np.sum(_force & ~keep))
+        keep = keep | _force
+        if n_force:
+            print(f"[{label}] model==catalog: force-kept {n_force} subtracted "
+                  f"saturated/replaced source(s) the emission filter dropped",
+                  flush=True)
+
     n_keep = int(np.sum(keep))
     print(f"[{label}] extended-emission filter: {n} -> {n_keep} "
           f"(qfit<={qfit_max}, flags in {keep_flags}, peakSB>{peak_over_bkg}x bkg, "
