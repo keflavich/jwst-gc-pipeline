@@ -103,3 +103,36 @@ def _bgsub_token(options):
     return _bgsub_token_from_flags(
         getattr(options, 'bgsub', False),
         getattr(options, 'use_iter3_residual_bg', False))
+
+
+# --- residual-i2d product-name family --------------------------------------
+# The cataloging products follow a fixed residual-i2d naming convention.  These
+# centralize the (otherwise scattered, inline ``.replace(...)``) transforms so
+# the convention has a single source of truth.
+
+def residual_to_smoothed_bg_i2d(residual_i2d_path):
+    """``..._residual_i2d.fits`` -> ``..._residual_smoothed_bg_i2d.fits``."""
+    return residual_i2d_path.replace('_residual_i2d.fits',
+                                     '_residual_smoothed_bg_i2d.fits')
+
+
+def smoothed_bg_to_detection_i2d(smoothed_bg_i2d_path):
+    """``..._residual_smoothed_bg_i2d.fits`` -> ``..._residual_i2d.fits`` (the
+    detection image sits next to the smoothed-bg, differing only by the infix)."""
+    return smoothed_bg_i2d_path.replace('_smoothed_bg_i2d.fits', '_i2d.fits')
+
+
+def residual_to_model_i2d(residual_i2d_path):
+    """``..._residual_i2d.fits`` -> ``..._model_i2d.fits``."""
+    return residual_i2d_path.replace('_residual_i2d.fits', '_model_i2d.fits')
+
+
+def residual_to_infilled_i2d(residual_i2d_path):
+    """``..._residual_i2d.fits`` -> ``..._residual_infilled_i2d.fits``."""
+    return residual_i2d_path.replace('_residual_i2d.fits',
+                                     '_residual_infilled_i2d.fits')
+
+
+def vetted_to_i2dseed(vetted_path):
+    """``..._vetted.fits`` -> ``..._i2dseed.fits``."""
+    return vetted_path.replace('_vetted.fits', '_i2dseed.fits')
