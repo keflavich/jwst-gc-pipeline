@@ -35,7 +35,9 @@ from photutils.background import LocalBackground
 from photutils.detection import DAOStarFinder
 from astropy.modeling.fitting import LevMarLSQFitter
 
-from jwst_gc_pipeline.photometry.naming import _iteration_token, _bgsub_token
+from jwst_gc_pipeline.photometry.naming import (
+    _iteration_token, _bgsub_token,
+    residual_to_smoothed_bg_i2d, smoothed_bg_to_detection_i2d, vetted_to_i2dseed)
 from jwst_gc_pipeline.photometry.psf_fitting import (
     _make_psfphotometry, _make_model_image, _dedup_close_sources,
     forced_psf_photometry,
@@ -1412,7 +1414,7 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
         work = _irn(work, kern, convolve=_cfft, allow_huge=True)
     sm = _ndi.median_filter(np.nan_to_num(work), size=int(median_size), mode='nearest')
     sm[~fov] = np.nan
-    out = mc_i2d_path.replace('_residual_i2d.fits', '_residual_smoothed_bg_i2d.fits')
+    out = residual_to_smoothed_bg_i2d(mc_i2d_path)
     _fits.PrimaryHDU(data=sm.astype('float32'), header=hdu.header).writeto(out, overwrite=True)
     print(f"[bg] wrote source-masked smoothed bg {os.path.basename(out)} "
           f"(masked {0 if 'sc' not in dir() else len(np.atleast_1d(xs))} sources, "
@@ -1669,7 +1671,7 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
     out = Table()
     out['skycoord'] = all_sky
     out['flux'] = all_flux
-    outpath = prev_vetted_path.replace('_vetted.fits', '_i2dseed.fits')
+    outpath = vetted_to_i2dseed(prev_vetted_path)
     out.write(outpath, overwrite=True)
     print(f"[{label}] i2d-augmented seed: {len(prev_sky)} prev + {n_new} new i2d "
           f"-> {len(out)} ({os.path.basename(outpath)})", flush=True)
@@ -1838,7 +1840,7 @@ def _reconstruct_resid_i2d_path(cut_bp, proposal_id, field, module, filt,
     ``resid_i2d_for_next`` from disk (it is otherwise in-memory only)."""
     bg = _reconstruct_smoothed_bg_path(cut_bp, proposal_id, field, module, filt,
                                        label, options, pupil)
-    return bg.replace('_smoothed_bg_i2d.fits', '_i2d.fits')
+    return smoothed_bg_to_detection_i2d(bg)
 
 
 def _satstar_reconciled_path(cut_bp, module, filt):
