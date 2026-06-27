@@ -260,6 +260,7 @@ class CappedSourceGrouper:
 from jwst_gc_pipeline.photometry.naming import (
     _CHUNK_TOKEN_RE, _chunk_token, _strip_chunk, _iteration_token, _bgsub_token,
     MIRI_FILTERS, _instrument_from_filter, _inst_token,
+    residual_to_smoothed_bg_i2d, residual_to_model_i2d, residual_to_infilled_i2d,
 )
 from jwst_gc_pipeline.photometry.psf_paths import (
     resolve_merged_psf_grid_path, central_psf_dir,
@@ -404,6 +405,20 @@ def _shift_gwcs(gwcs_obj, x0, y0):
                      output_frame=gwcs_obj.output_frame)
 
 
+def _crop_to_slices(a, ny, nx, yslc, xslc):
+    """Crop a datamodel array to ``[yslc, xslc]``: a 2-D ``(ny, nx)`` plane or a
+    3-D ``(..., ny, nx)`` cube; pass None / empty / other-shaped arrays through
+    unchanged.  Shared by the cutout-input and i2d-finite-crop datamodel
+    croppers (both crop the same attribute set against a fixed slice pair)."""
+    if a is None or np.size(a) == 0:
+        return a
+    if a.ndim == 2 and a.shape == (ny, nx):
+        return a[yslc, xslc]
+    if a.ndim == 3 and a.shape[-2:] == (ny, nx):
+        return a[:, yslc, xslc]
+    return a
+
+
 def _prepare_cutout_input(filename, basepath, filtername, options):
     """Write a cropped *datamodel* copy of ``filename`` for a
     ``--cutout-region`` run.  Returns ``(label, cutout_filename, out_basepath)``.
@@ -448,20 +463,11 @@ def _prepare_cutout_input(filename, basepath, filtername, options):
     with ImageModel(filename) as m:
         ny, nx = m.data.shape
 
-        def _crop(a):
-            if a is None or np.size(a) == 0:
-                return a
-            if a.ndim == 2 and a.shape == (ny, nx):
-                return a[yslc, xslc]
-            if a.ndim == 3 and a.shape[-2:] == (ny, nx):
-                return a[:, yslc, xslc]
-            return a
-
         new = m.copy()
         for attr in ('data', 'err', 'dq', 'wht', 'con', 'var_poisson',
                      'var_rnoise', 'var_flat', 'area'):
             if hasattr(m, attr):
-                setattr(new, attr, _crop(getattr(m, attr)))
+                setattr(new, attr, _crop_to_slices(getattr(m, attr), ny, nx, yslc, xslc))
         shifted = _shift_gwcs(m.meta.wcs, x0, y0)
         shifted.bounding_box = ((-0.5, nx_c - 0.5), (-0.5, ny_c - 0.5))
         new.meta.wcs = shifted
@@ -514,19 +520,10 @@ def _crop_datamodel_to_finite(filename, pad=4):
             return  # already tight
         yslc, xslc = slice(y0, y1), slice(x0, x1)
 
-        def _crop(a):
-            if a is None or np.size(a) == 0:
-                return a
-            if a.ndim == 2 and a.shape == (ny, nx):
-                return a[yslc, xslc]
-            if a.ndim == 3 and a.shape[-2:] == (ny, nx):
-                return a[:, yslc, xslc]
-            return a
-
         for attr in ('data', 'err', 'dq', 'wht', 'con', 'var_poisson',
                      'var_rnoise', 'var_flat', 'area'):
             if hasattr(m, attr):
-                setattr(m, attr, _crop(getattr(m, attr)))
+                setattr(m, attr, _crop_to_slices(getattr(m, attr), ny, nx, yslc, xslc))
         ny_c, nx_c = (y1 - y0), (x1 - x0)
         shifted = _shift_gwcs(m.meta.wcs, x0, y0)
         shifted.bounding_box = ((-0.5, nx_c - 0.5), (-0.5, ny_c - 0.5))
@@ -2348,7 +2345,7 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
             satstar_table=None,
         )
         model.data = infilled_data
-        infilled_filename = output_filename.replace('_residual_i2d.fits', '_residual_infilled_i2d.fits')
+        infilled_filename = residual_to_infilled_i2d(output_filename)
         model.save(infilled_filename, overwrite=True)
     print(f'Wrote residual infilled mosaic {infilled_filename}')
 
@@ -2481,8 +2478,7 @@ def _cutout_smooth_residual_bg(residual_i2d_path, median_size=3, overwrite=False
     Returns the smoothed-bg path.  ``..._residual_i2d.fits`` ->
     ``..._residual_smoothed_bg_i2d.fits``.
     """
-    out_path = residual_i2d_path.replace('_residual_i2d.fits',
-                                         '_residual_smoothed_bg_i2d.fits')
+    out_path = residual_to_smoothed_bg_i2d(residual_i2d_path)
     if os.path.exists(out_path) and not overwrite:
         return out_path
     with fits.open(residual_i2d_path) as hdul:
@@ -2691,7 +2687,7 @@ def _build_cutout_model_i2d(cut_bp, filtername, proposal_id, field, module,
                 out = fits.HDUList([fits.PrimaryHDU(header=hd[0].header),
                                     fits.ImageHDU(data=model, header=hd[di].header,
                                                   name='SCI')])
-                out_fn = resid_i2d.replace('_residual_i2d.fits', '_model_i2d.fits')
+                out_fn = residual_to_model_i2d(resid_i2d)
                 out.writeto(out_fn, overwrite=True)
             print(f"Wrote final model i2d {out_fn}", flush=True)
             return out_fn
