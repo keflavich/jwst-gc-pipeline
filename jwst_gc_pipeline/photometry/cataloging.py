@@ -2854,6 +2854,48 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                    f'merged_resbgsub_{last_phase}{_xbsuf}.fits')
             print(f"manual [{last_phase}]: CROSS-BAND MERGE done (module={module}) "
                   f"-> {_xb}", flush=True)
+
+            # ----------------------------------------------------------------
+            # m8: forced cross-band fill.  Force-fit every band at the merged
+            # reference position of sources that are a (non-saturated) NON-
+            # detection in that band -- recovering the phantom non-detections
+            # the independent-detection cross-match leaves behind, or producing
+            # a real per-source noise limit.  Self-contained: writes a sibling
+            # ..._resbgsub_m8 catalog and never mutates m7.  Failure here is
+            # non-fatal (m7 already written).
+            if getattr(options, 'forced_fill_m8', True):
+                try:
+                    from jwst_gc_pipeline.photometry import forced_fill as _ff
+                    _m8 = _xb.replace(f'resbgsub_{last_phase}', 'resbgsub_m8')
+
+                    def _frames_for(filt, _module=module):
+                        return frame_cache.get((_module, filt), [])
+
+                    def _builder_for(filt, _module=module):
+                        _resbg = bg_for_next.get((_module, filt))
+
+                        def _b(filename):
+                            return _ff._frame_args_from_filename(
+                                filename, options=opts_phase, filt=filt,
+                                field=field, basepath=basepath,
+                                proposal_id=proposal_id, bg_boxsizes=bg_boxsizes,
+                                pupil=pupil, resbg_path=_resbg,
+                                satstar_overrides=satstar_overrides,
+                                satstar_drops=satstar_drops, module=_module,
+                                satstar_label=last_phase)
+                        return _b
+
+                    _ff.run_forced_crossband_fill(
+                        _xb, _m8, filternames=list(filternames), module=module,
+                        frames_for=_frames_for,
+                        prepare_frame=_prepare_frame_for_photometry,
+                        frame_arg_builder_for=_builder_for,
+                        nsigma=float(getattr(options, 'forced_fill_nsigma', 3.0)))
+                except Exception as _m8ex:
+                    print(f"manual [{last_phase}]: m8 forced fill FAILED "
+                          f"(module={module}): {_m8ex}", flush=True)
+                    import traceback
+                    traceback.print_exc()
     elif _do_crossband:
         print(f"manual [{last_phase}]: cross-band merge SKIPPED for cutout run "
               f"(no full-frame per-filter i2d mosaics); per-filter {last_phase} "
