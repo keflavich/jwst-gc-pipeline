@@ -1037,6 +1037,23 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         _gate_img = seed_gate_image if seed_gate_image is not None else data
         _use_coadd = seed_gate_image is not None and seed_gate_wcs is not None
         kept_records, n_prom, n_core, n_conc = [], 0, 0, 0
+        # Off-footprint guard: an AUTO-detected saturated component whose centroid
+        # lands in a BORDER-CONNECTED NaN region of the gate image (off the data
+        # footprint, partly off-field) has no data to constrain it -> the PSF fit
+        # runs away to a huge flux (brick F2550W: 215k-5.8M) and renders a bright
+        # blob hugging the mosaic edge in the model_i2d.  Drop those.  INTERIOR
+        # NaN (a saturated star's own zeroed core, surrounded by data) is filled
+        # by binary_fill_holes, so it stays inside the footprint and the real star
+        # survives.  USER-SEEDED outside-FOV satstars are added later via
+        # ``outside_star_pixels`` and never enter this source_records loop, so
+        # they are explicitly NOT affected (per user: keep user-seeded off-fp).
+        _drop_offfp = int(os.environ.get('MIRI_DROP_OFFFP_SATSTAR', 1))
+        _gate_fp = None
+        if _drop_offfp:
+            from scipy.ndimage import binary_fill_holes as _bfh
+            _gate_fp = _bfh(np.isfinite(_gate_img))
+        _gh, _gw = _gate_img.shape
+        n_offfp = 0
         for rec in source_records:
             cy, cx = rec['com']
             if _use_coadd:
@@ -1049,6 +1066,21 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                     gate_com = rec['com']
             else:
                 gate_com = rec['com']
+            # drop auto-detected components off the data footprint (border-connected
+            # NaN) -- runaway edge satstars; interior saturated cores survive.
+            if _gate_fp is not None:
+                _gy, _gx = gate_com
+                # NaN gate_com == the component's sky maps OFF the coadd grid
+                # (world_to_pixel returned NaN) == off-footprint -> drop.
+                if not (np.isfinite(_gy) and np.isfinite(_gx)):
+                    n_offfp += 1
+                    continue
+                _gyi = int(round(_gy))
+                _gxi = int(round(_gx))
+                if (not (0 <= _gyi < _gh and 0 <= _gxi < _gw)
+                        or not _gate_fp[_gyi, _gxi]):
+                    n_offfp += 1
+                    continue
             # cap sat_area so a giant spurious-DQ cluster's prominence radius
             # cannot grow to grab a distant real star (see post-fit gate note).
             _seed_sa = rec.get('sat_area')
@@ -1075,7 +1107,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                   f"non-stellar saturated components (extended-emission "
                   f"phantoms; {n_prom} by prominence<{seed_prominence_min}, "
                   f"{n_core} by faint-core<{seed_core_min}, {n_conc} by "
-                  f"flat-profile/conc<{seed_conc_min}); kept "
+                  f"flat-profile/conc<{seed_conc_min}, {n_offfp} off-footprint "
+                  f"edge runaways); kept "
                   f"{len(kept_records)} of {len(source_records)}", flush=True)
         source_records = kept_records
 
