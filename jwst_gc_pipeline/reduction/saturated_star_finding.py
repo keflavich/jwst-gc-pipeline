@@ -158,7 +158,57 @@ def debug_wrap(function):
     return wrapper
 
 
-def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000):
+def _merge_spike_satellites(saturated, sources, nsource, gap, ratio):
+    """Merge small saturated diffraction-spike satellites into a dominant core.
+
+    A bright saturated star's six diffraction spikes saturate in DISCONNECTED
+    segments ~1-1.5" out from the core; ``scipy.ndimage.label`` splits each
+    into its own component, so each is fit as a separate satstar -> a HEX RING
+    of spurious duplicate models around the real star (brick F2550W o002: a
+    316-px core + five ~50-px satellites at ~13 px).  Group components by a
+    ``gap``-px dilation, and within each group fold every SMALL satellite into
+    the group's dominant core -- but ONLY when the core is >= ``ratio`` x the
+    satellite, so two genuinely-separate saturated stars of comparable size
+    (crowded GC fields) are NEVER fused.  Satellite pixels keep the core's
+    label even though they are spatially disconnected (no connectivity
+    relabel), so the core's center-of-mass/area absorb them.
+    """
+    if gap <= 0 or nsource <= 1:
+        return sources, nsource
+    comp_sizes = sum_labels(saturated, sources, np.arange(nsource) + 1)
+    grp, ngrp = label(binary_dilation(saturated, iterations=int(gap)))
+    new_sources = sources.copy()
+    n_merged = 0
+    for g in range(1, ngrp + 1):
+        members = np.unique(sources[(grp == g) & saturated])
+        members = members[members > 0]
+        if len(members) <= 1:
+            continue
+        msizes = comp_sizes[members - 1]
+        big = int(members[int(np.argmax(msizes))])
+        bigsz = float(msizes.max())
+        for c, sz in zip(members, msizes):
+            if int(c) == big:
+                continue
+            if bigsz >= ratio * float(sz):
+                new_sources[sources == int(c)] = big
+                n_merged += 1
+    if n_merged:
+        # value-remap surviving labels to a contiguous 1..K (do NOT re-label by
+        # connectivity -- that would re-split the disconnected satellites).
+        uniq = np.unique(new_sources[new_sources > 0])
+        remap = np.zeros(int(new_sources.max()) + 1, dtype=int)
+        remap[uniq] = np.arange(1, len(uniq) + 1)
+        new_sources = remap[new_sources]
+        print(f"Saturated starfinding: merged {n_merged} spike-tip satellite(s) "
+              f"into dominant cores (gap={gap}px, ratio={ratio}); "
+              f"nsources {nsource} -> {len(uniq)}", flush=True)
+        return new_sources, len(uniq)
+    return sources, nsource
+
+
+def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
+                         spike_merge_gap=0, spike_merge_ratio=3.0):
     """
     Identify candidate saturated stars from the DQ plane.
 
@@ -177,6 +227,13 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000):
     edge_npix : int, optional
         Minimum connected saturated area (pixels) used to classify a component
         as an edge source.
+    spike_merge_gap : int, optional
+        If >0, merge small saturated diffraction-spike satellite components into
+        a dominant nearby core within this many px (see
+        ``_merge_spike_satellites``).  0 = off (legacy connectivity labeling).
+    spike_merge_ratio : float, optional
+        A satellite is folded into the core only if core_area >= this x
+        satellite_area, protecting comparable-size separate stars.
 
     Returns
     -------
@@ -223,6 +280,12 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000):
 
     sources, nsource = label(saturated)
     print('Saturated starfinding: nsources=', nsource, flush=True)
+    # Fold disconnected diffraction-spike satellites into their dominant core
+    # BEFORE edge/size logic so one star -> one component -> one satstar fit
+    # (kills the per-frame hex of spike-tip duplicates).  Size-gated so two
+    # comparable separate stars are never fused.
+    sources, nsource = _merge_spike_satellites(
+        saturated, sources, nsource, spike_merge_gap, spike_merge_ratio)
     sizes = sum_labels(saturated, sources, np.arange(nsource)+1)
     msfe = min_sep_from_edge
 
@@ -951,7 +1014,16 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     dq = fitsdata['DQ'].data
     full_model_image = np.zeros_like(data, dtype=float)
 
-    saturated, sources, coms = find_saturated_stars(fitsdata, min_sep_from_edge=min_sep_from_edge, edge_npix=edge_npix)
+    # MIRI: fold saturated diffraction-spike satellites into the core so a
+    # bright star is ONE component (not a hex of spike-tip duplicates).  Gated
+    # by MIRI_SATSTAR_SPIKE_MERGE (gap px, default 3) + ..._RATIO (default 3.0).
+    # NIRCam keeps legacy connectivity labeling (gap=0).
+    _spike_gap = (int(os.environ.get('MIRI_SATSTAR_SPIKE_MERGE', 3))
+                  if header['INSTRUME'].lower() == 'miri' else 0)
+    _spike_ratio = float(os.environ.get('MIRI_SATSTAR_SPIKE_MERGE_RATIO', 3.0))
+    saturated, sources, coms = find_saturated_stars(
+        fitsdata, min_sep_from_edge=min_sep_from_edge, edge_npix=edge_npix,
+        spike_merge_gap=_spike_gap, spike_merge_ratio=_spike_ratio)
 
     # Diagnostic flag image (uint8 bitmask), written by remove_saturated_stars:
     #   bit 0 (1) = partly saturated (DQ SATURATED but recoverable / nonlinear,
@@ -1860,28 +1932,38 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             if model is None:
                 raise RuntimeError("psfphot.psf_model is None — can't set parameter bounds")
 
-            if _is_miri:
-                # LOCK the position to the (bbox-refined, ~0.05"-accurate)
-                # DQ-saturated-component seed and fit FLUX ONLY.  The masked/zeroed
-                # saturated core gives the position NO real constraint, so letting
-                # x_0/y_0 float invites DRIFT (the old sqrt(sat_area)/2 bound let
-                # star A drift ~1.5-2"); the seed centroid is already accurate
-                # (<0.15" vs raw-counts uncal).  Locking also yields a finite
-                # flux_err (no singular covariance).
-                # 2026-06-21: a tight 2px bounded fit for small-PSF (finite-core)
-                # stars was TRIED to clear the ~1px core dipoles -- it did NOT help
-                # (centroid offset stayed 0-2px, residcores no better) and added
-                # drift/NaN-flux_err risk, so reverted.  NIRCam keeps its bounded
-                # fit below.
+            # MIRI bounded fit (2026-06-27): reuse NIRCam's bounded-position
+            # infrastructure for MIRI in-FOV satstars instead of hard-locking.
+            # The DQ-mask eroded-core seed is NOT always ~0.05" accurate: for
+            # an ASYMMETRIC saturated cluster (diffraction spike/merge) it lands
+            # ~0.7" (~6px) off the true centre (brick F2550W o002), and the
+            # locked PSF then subtracts at the wrong place -> mispositioned +
+            # UNDER-subtracted satstar, and the per-frame seed scatter renders a
+            # ~1.3" HEX of duplicate models.  A bounded fit lets the unsaturated
+            # diffraction-spike wings pull x_0/y_0 to the true centre.
+            # CRITICAL bound choice: NIRCam uses max(size_saturated, 1.5*FWHM),
+            # but size_saturated = int(sqrt(sat_area)/2) is exactly the term that
+            # drove the historical MIRI drift (~1.5-2" on heavily-saturated star
+            # A).  So MIRI uses ONLY the 1.5*FWHM term -- the value NIRCam cites
+            # for a non-singular covariance / finite flux_err -- which for
+            # F2550W (~1.2") still covers the ~0.7" seed bias without the
+            # core-size runaway.  Gated by MIRI_SATSTAR_BOUNDED_FIT (default 1;
+            # set 0 to restore the legacy hard lock).
+            _miri_bounded = (_is_miri
+                             and int(os.environ.get('MIRI_SATSTAR_BOUNDED_FIT', 1)))
+            if _is_miri and not _miri_bounded:
+                # legacy hard lock (MIRI_SATSTAR_BOUNDED_FIT=0)
                 model.x_0.fixed = True
                 model.y_0.fixed = True
                 print(f"MIRI: locked satstar position to seed "
                       f"(x={xcen}, y={ycen}); fitting flux only")
             else:
-                # NIRCam: bounded position fit (>=1.5 FWHM keeps covariance
+                # bounded position fit (>=1.5 FWHM keeps covariance
                 # non-singular; tighter pegs x_0/y_0 -> NaN flux_err -> good fits
-                # tossed, the dominant gc2211 baseline rejection mode).
-                pos_bound = max(size_saturated, 1.5 * fwhm_pix)
+                # tossed, the dominant gc2211 baseline rejection mode).  MIRI
+                # drops the size_saturated term (see above); NIRCam keeps it.
+                pos_bound = (1.5 * fwhm_pix if _is_miri
+                             else max(size_saturated, 1.5 * fwhm_pix))
                 low_x  = xcen - x0 - pos_bound
                 high_x = xcen - x0 + pos_bound
                 low_y  = ycen - y0 - pos_bound
