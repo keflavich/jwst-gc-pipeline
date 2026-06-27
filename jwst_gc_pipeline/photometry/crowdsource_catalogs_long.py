@@ -3493,6 +3493,16 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'one of --filternames.  Default: auto-select the '
                             'reddest broad/medium band (e.g. sickle -> F480M).'),
                       metavar='manual_crossband_ref_filter')
+    parser.add_option('--manual-crossband-seed-dedup-mas', type=float,
+                      dest='manual_crossband_seed_dedup_mas', default=30.0,
+                      help=('Dedup radius (mas) for the m7 cross-band union seed: '
+                            'a star seen in N co-aligned filters appears N times '
+                            'within ~25 mas, so the union is deduped to one seed '
+                            'per star before fitting (avoids degenerate co-located '
+                            'groups that split flux).  Stay below the SW blend '
+                            'limit (~64 mas) so resolvable pairs survive.  0 '
+                            'disables.  Default 30.'),
+                      metavar='manual_crossband_seed_dedup_mas')
     parser.add_option('--manual-start-phase', dest='manual_start_phase',
                       default='',
                       help=('Start the manual pipeline partway through (e.g. '
