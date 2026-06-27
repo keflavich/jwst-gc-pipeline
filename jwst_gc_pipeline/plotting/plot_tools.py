@@ -91,6 +91,142 @@ def _filter_to_wavelength(name):
     return int(name[1:-1]) / 100 * u.um
 
 
+def _col(basetable, name, dtype=float, fill=np.nan):
+    """Return a plain ndarray for a (possibly masked) column, or None if absent.
+
+    Masked entries are filled with ``fill`` (NaN for floats, False for bools) so
+    downstream finite-checks behave; this keeps the plotting/limit logic free of
+    MaskedColumn quirks.
+    """
+    if name not in basetable.colnames:
+        return None
+    c = basetable[name]
+    if hasattr(c, 'filled'):
+        c = c.filled(fill)
+    return np.asarray(c, dtype=dtype)
+
+
+def band_detected(basetable, f, errprefix='emag_ab', max_emag=None,
+                  use_mask=True, exclude_saturated=True, magprefix='mag_ab'):
+    """Boolean array: source is a *firm* detection in band ``f``.
+
+    Firm = unmasked (``mask_{f}`` False), finite magnitude, finite (and optionally
+    < ``max_emag``) magnitude error, and -- when ``exclude_saturated`` -- not
+    flagged saturated / near-saturated / replaced-saturated (those fluxes are
+    known to be biased).  Synthetic line-subtracted bands (no error/mask columns)
+    fall back to finite-magnitude only.
+    """
+    n = len(basetable)
+    det = np.ones(n, dtype=bool)
+
+    m = _col(basetable, f'{magprefix}_{f}')
+    if m is None:
+        m = _col(basetable, f'mag_ab_{f}')
+    if m is not None:
+        det &= np.isfinite(m)
+
+    if use_mask:
+        mask = _col(basetable, f'mask_{f}', dtype=bool, fill=True)
+        if mask is not None:
+            det &= ~mask
+
+    e = _col(basetable, f'{errprefix}_{f}')
+    if e is not None:
+        det &= np.isfinite(e) & (e > 0)
+        if max_emag is not None:
+            det &= (e < max_emag)
+
+    if exclude_saturated:
+        for sc in (f'is_saturated_{f}', f'near_saturated_{f}_{f}',
+                   f'replaced_saturated_{f}'):
+            scol = _col(basetable, sc, dtype=bool, fill=False)
+            if scol is not None:
+                det &= ~scol
+
+    return det
+
+
+def band_nondetected(basetable, f):
+    """Boolean array: source is a genuine *non-detection* in band ``f``.
+
+    Non-detection = masked / no finite magnitude, AND not saturated (saturated
+    sources are bright, not faint -- they must not be treated as upper limits).
+    Used to select clean upper/lower-limit candidates.
+    """
+    n = len(basetable)
+    mask = _col(basetable, f'mask_{f}', dtype=bool, fill=True)
+    if mask is None:
+        # no mask column -> infer from finite magnitude
+        m = _col(basetable, f'mag_ab_{f}')
+        nd = ~np.isfinite(m) if m is not None else np.zeros(n, dtype=bool)
+    else:
+        nd = mask.copy()
+    for sc in (f'is_saturated_{f}', f'near_saturated_{f}_{f}',
+               f'replaced_saturated_{f}'):
+        scol = _col(basetable, sc, dtype=bool, fill=False)
+        if scol is not None:
+            nd &= ~scol
+    return nd
+
+
+def compute_band_limits(basetable, filters, nsigma=3, errprefix='emag_ab',
+                        magprefix='mag_vega', nbins=40, min_per_bin=10,
+                        verbose=False):
+    """Per-band limiting magnitude from the error-vs-magnitude envelope.
+
+    The limit is the magnitude at which the *median* photometric error of firm
+    detections crosses ``1.0857/nsigma`` mag (i.e. SNR = ``nsigma``).  Errors are
+    magnitude-system independent, so ``emag_ab`` is used regardless of
+    ``magprefix``.  Returns ``{filter: limit_mag}`` (in the ``magprefix`` system).
+
+    If the envelope never reaches the target SNR (shallow band), the faintest
+    populated bin centre is used; with too few sources the 95th magnitude
+    percentile is used as a coarse fallback.
+    """
+    target_emag = 1.0857 / nsigma
+    limits = {}
+    for f in filters:
+        m = _col(basetable, f'{magprefix}_{f}')
+        e = _col(basetable, f'{errprefix}_{f}')
+        if m is None or e is None:
+            continue
+        det = band_detected(basetable, f, errprefix=errprefix, magprefix=magprefix)
+        good = det & np.isfinite(m) & np.isfinite(e) & (e > 0)
+        if good.sum() < min_per_bin * 2:
+            continue
+        mm = m[good]
+        ee = e[good]
+        lo, hi = np.nanpercentile(mm, [1, 99.5])
+        if not (np.isfinite(lo) and np.isfinite(hi) and hi > lo):
+            continue
+        edges = np.linspace(lo, hi, nbins + 1)
+        centers = 0.5 * (edges[:-1] + edges[1:])
+        med = np.full(nbins, np.nan)
+        for i in range(nbins):
+            inb = (mm >= edges[i]) & (mm < edges[i + 1])
+            if inb.sum() >= min_per_bin:
+                med[i] = np.nanmedian(ee[inb])
+        valid = np.isfinite(med)
+        if valid.sum() < 2:
+            limits[f] = float(np.nanpercentile(mm, 95))
+            continue
+        cc = centers[valid]
+        mv = med[valid]
+        cross = np.where(mv >= target_emag)[0]
+        if cross.size == 0:
+            lim = cc[-1]
+        elif cross[0] == 0:
+            lim = cc[0]
+        else:
+            i = cross[0]
+            x0, x1, y0, y1 = cc[i - 1], cc[i], mv[i - 1], mv[i]
+            lim = x0 + (target_emag - y0) * (x1 - x0) / (y1 - y0) if y1 != y0 else cc[i]
+        limits[f] = float(lim)
+        if verbose:
+            print(f"  limit[{f}] = {limits[f]:.2f} ({magprefix}, SNR={nsigma})")
+    return limits
+
+
 def plot_extvec_ccd(ax, color1, color2, ext=CT06_MWGC(), extvec_scale=200,
                     start=(0, 0),
                     color='y', head_width=0.5):
@@ -151,15 +287,29 @@ def ccd(basetable,
         hexbin_cmap='gray',
         n_hexbin_bins=100,
         A_V=None,
+        magprefix='mag_ab',
+        errprefix='emag_ab',
+        limits=None,
+        limit_color='#1f77b4',
+        limit_alpha=0.15,
+        det_max_emag=None,
         **kwargs
        ):
+    """Color-color diagram: x = color1[0]-color1[1], y = color2[0]-color2[1].
 
-    keys1 = [f'mag_ab_{col}' for col in color1]
-    keys2 = [f'mag_ab_{col}' for col in color2]
+    ``magprefix`` selects the magnitude system.  If ``limits`` is given, sources
+    with exactly one band missing on an axis (the other firmly detected) are
+    drawn as limit points at ``limit_color``/``limit_alpha`` -- the missing band
+    is replaced by its limiting magnitude.  Points missing both bands of an axis,
+    or a missing band with no limit available, are dropped.
+    """
+
+    keys1 = [f'{magprefix}_{col}' for col in color1]
+    keys2 = [f'{magprefix}_{col}' for col in color2]
 
     try:
-        colorp1 = basetable[keys1[0]] - basetable[keys1[1]]
-        colorp2 = basetable[keys2[0]] - basetable[keys2[1]]
+        colorp1 = _col(basetable, keys1[0]) - _col(basetable, keys1[1])
+        colorp2 = _col(basetable, keys2[0]) - _col(basetable, keys2[1])
 
         if A_V is not None and ext is not None:
             A_V = np.asarray(A_V)
@@ -177,8 +327,20 @@ def ccd(basetable,
             colorp2 = colorp2 - A_V * (e3 - e4)
 
         if max_uncertainty is not None:
-            reject_1 = (basetable['e'+keys1[0]] > max_uncertainty) | (basetable['e'+keys1[1]] > max_uncertainty)
-            reject_2 = (basetable['e'+keys2[0]] > max_uncertainty) | (basetable['e'+keys2[1]] > max_uncertainty)
+            reject_1 = np.zeros(len(basetable), dtype=bool)
+            reject_2 = np.zeros(len(basetable), dtype=bool)
+            for col, rej in ((color1, 'r1'), (color2, 'r2')):
+                ea = _col(basetable, f'{errprefix}_{col[0]}')
+                eb = _col(basetable, f'{errprefix}_{col[1]}')
+                r = np.zeros(len(basetable), dtype=bool)
+                if ea is not None:
+                    r |= ~(ea < max_uncertainty)
+                if eb is not None:
+                    r |= ~(eb < max_uncertainty)
+                if rej == 'r1':
+                    reject_1 = r
+                else:
+                    reject_2 = r
             if exclude is None:
                 exclude = reject_1 | reject_2
             else:
@@ -189,6 +351,42 @@ def ccd(basetable,
         else:
             include = ~exclude
             sel = sel & include
+
+        # --- upper/lower-limit points: exactly one band missing per axis ------
+        if limits is not None:
+            def _axis_limit(cpair):
+                """(value, used_limit) for an axis when one band is missing."""
+                a, b = cpair
+                da = band_detected(basetable, a, errprefix=errprefix,
+                                   max_emag=det_max_emag, magprefix=magprefix)
+                db = band_detected(basetable, b, errprefix=errprefix,
+                                   max_emag=det_max_emag, magprefix=magprefix)
+                nda = band_nondetected(basetable, a)
+                ndb = band_nondetected(basetable, b)
+                ma = _col(basetable, f'{magprefix}_{a}')
+                mb = _col(basetable, f'{magprefix}_{b}')
+                val = np.full(len(basetable), np.nan)
+                firm = da & db
+                val[firm] = (ma - mb)[firm]
+                used = np.zeros(len(basetable), dtype=bool)
+                if b in limits and np.isfinite(limits[b]):
+                    s = da & ndb
+                    val[s] = ma[s] - limits[b]
+                    used |= s
+                if a in limits and np.isfinite(limits[a]):
+                    s = nda & db
+                    val[s] = limits[a] - mb[s]
+                    used |= s
+                return val, used, firm
+            x, usedx, firmx = _axis_limit(color1)
+            y, usedy, firmy = _axis_limit(color2)
+            lim_set = np.isfinite(x) & np.isfinite(y) & (usedx | usedy)
+            if lim_set.any():
+                lzorder = kwargs.get('zorder', None)
+                ax.scatter(x[lim_set], y[lim_set], s=markersize, alpha=limit_alpha,
+                           c=limit_color, marker='.', rasterized=rasterized,
+                           linewidths=0,
+                           zorder=(lzorder - 1) if lzorder is not None else -5)
 
         if hexbin:
             ax.hexbin(colorp1[include], colorp2[include], mincnt=1, gridsize=n_hexbin_bins, extent=axlims, cmap=hexbin_cmap)
@@ -221,6 +419,9 @@ def ccds(basetable, sel=True,
          gridspec_kwargs={},
          head_width=0.1,
          A_V=None,
+         magprefix='mag_ab',
+         errprefix='emag_ab',
+         limits=None,
          **kwargs
         ):
     if fig is None:
@@ -232,7 +433,7 @@ def ccds(basetable, sel=True,
         ccd(basetable, ax=ax, color1=color1, color2=color2,
             axlims=axlims, sel=sel,
             rasterized=rasterized, ext=ext, extvec_scale=extvec_scale, head_width=head_width,
-            A_V=A_V,
+            A_V=A_V, magprefix=magprefix, errprefix=errprefix, limits=limits,
             **kwargs)
 
     fig.subplots_adjust(**gridspec_kwargs)
@@ -264,6 +465,12 @@ def cmds(basetable, sel=True,
          zorder=None,
          sel_zorder=None,
          A_V=None,
+         magprefix='mag_ab',
+         errprefix='emag_ab',
+         limits=None,
+         limit_color='#1f77b4',
+         limit_alpha=0.15,
+         det_max_emag=None,
         ):
     if fig is None:
         fig = pl.figure()
@@ -279,7 +486,13 @@ def cmds(basetable, sel=True,
     for ii, (f1, f2) in enumerate(colors):
 
         if max_uncertainty is not None:
-            reject = (basetable[f'emag_ab_{f1}'] > max_uncertainty) | (basetable[f'emag_ab_{f2}'] > max_uncertainty)
+            e1 = _col(basetable, f'{errprefix}_{f1}')
+            e2 = _col(basetable, f'{errprefix}_{f2}')
+            reject = np.zeros(len(basetable), dtype=bool)
+            if e1 is not None:
+                reject |= ~(e1 < max_uncertainty)
+            if e2 is not None:
+                reject |= ~(e2 < max_uncertainty)
             include = (~exclude) & (~reject)
             sel = default_sel & (~reject)
         else:
@@ -293,7 +506,9 @@ def cmds(basetable, sel=True,
             extvec_start=extvec_start, color=color, selcolor=selcolor,
             hexbin=hexbin, n_hexbin_bins=n_hexbin_bins, hexbin_cmap=hexbin_cmap,
             sel_hexbin_cmap=sel_hexbin_cmap, zorder=zorder, sel_zorder=sel_zorder,
-            A_V=A_V)
+            A_V=A_V, magprefix=magprefix, errprefix=errprefix, limits=limits,
+            limit_color=limit_color, limit_alpha=limit_alpha,
+            det_max_emag=det_max_emag)
     return fig
 
 def cmd(ax=None, basetable=None, f1=None, f2=None, include=slice(None),
@@ -305,12 +520,49 @@ def cmd(ax=None, basetable=None, f1=None, f2=None, include=slice(None),
         sel_zorder=None,
         extvec_start=None,
         A_V=None,
+        magprefix='mag_ab',
+        errprefix='emag_ab',
+        limits=None,
+        limit_color='#1f77b4',
+        limit_alpha=0.15,
+        limit_markersize=None,
+        limit_marker='<',
+        det_max_emag=None,
         ):
+    """Color-magnitude diagram: y = mag(f1), x = mag(f1) - mag(f2).
+
+    ``magprefix`` selects the magnitude system ('mag_ab' or 'mag_vega').
+
+    Upper limits: if ``limits`` (a ``{filter: limiting_mag}`` dict, e.g. from
+    :func:`compute_band_limits`) is given and contains ``f2``, sources that are a
+    firm detection in ``f1`` but *not* detected in ``f2`` are plotted as colour
+    upper limits at ``mag(f1) - limits[f2]`` in ``limit_color`` at ``limit_alpha``
+    with a left-pointing ``limit_marker`` (true colour is bluer/smaller).  These
+    are drawn first (lowest zorder) so detections sit on top.
+    """
     if ax is None:
         ax = pl.gca()
 
-    colorp = basetable[f'mag_ab_{f1}'] - basetable[f'mag_ab_{f2}']
-    magp = basetable[f'mag_ab_{f1}']
+    m1 = _col(basetable, f'{magprefix}_{f1}')
+    m2 = _col(basetable, f'{magprefix}_{f2}')
+    colorp = m1 - m2
+    magp = m1.copy()
+
+    # --- upper-limit points: firm in f1, undetected in f2 ---------------------
+    if limits is not None and f2 in limits and np.isfinite(limits[f2]):
+        det1 = band_detected(basetable, f1, errprefix=errprefix,
+                             max_emag=det_max_emag, magprefix=magprefix)
+        nondet2 = band_nondetected(basetable, f2)
+        lim_set = det1 & nondet2 & np.isfinite(m1)
+        if lim_set.any():
+            cl = m1[lim_set] - limits[f2]
+            ml = m1[lim_set]
+            lms = limit_markersize if limit_markersize is not None else markersize
+            lzorder = (zorder - 1) if zorder is not None else -5
+            ax.scatter(cl, ml, s=lms, alpha=limit_alpha, c=limit_color,
+                       marker=limit_marker, rasterized=rasterized,
+                       zorder=lzorder, linewidths=0,
+                       label=f'{f2} non-det (upper lim)')
 
     if A_V is not None and ext is not None:
         A_V = np.asarray(A_V)
