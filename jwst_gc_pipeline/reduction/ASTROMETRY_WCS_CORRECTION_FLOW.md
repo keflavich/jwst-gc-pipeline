@@ -122,30 +122,35 @@ pipeline consumes but does not itself generate — so the builders are tracked f
 provenance. Losing a builder means a correction can no longer be reproduced or
 audited from first principles even though catalogs/mosaics already carry it.
 
-| reference frame (`refname`) | offsets table | builder (tracked) |
+| reference frame (`refname`) | offsets table | builder |
 |---|---|---|
 | Gaia/VIRAC2 (brick/cloudc) | `Offsets_JWST_Brick<pid>_VIRAC2[locked].csv` | `build_gaia_virac2_refcat.py` (seed refcat) + the per-frame measure in the reduction |
-| **GNS (sickle, prop 3958)** | `Offsets_JWST_Brick3958_GNS.csv` | **`_bench/build_sickle_gns_offsets.py`** |
+| **GNS (sickle, prop 3958)** | `Offsets_JWST_Brick3958_GNS.csv` | `brick2221/reduction/build_sickle_gns_offsets.py` (in **brick-jwst-2221** — region-specific) |
 
-**Sickle → GNS (`_bench/build_sickle_gns_offsets.py`):** a 2026-06-20 audit found
-sickle catalogs sit at the **raw `assign_wcs` frame** (`RAOFFSET=0`, no offsets
-table for 3958) — ~91 mas off the GNS reference the mosaics are tied to. The user
-chose the GNS frame. This script measures the per-filter bulk sickle→GNS
+**Sickle → GNS:** a 2026-06-20 audit found sickle catalogs sit at the **raw
+`assign_wcs` frame** (`RAOFFSET=0`, no offsets table for 3958) — ~91 mas off the
+GNS reference the mosaics are tied to. The user chose the GNS frame.
+`brick2221/reduction/build_sickle_gns_offsets.py` (in the **brick-jwst-2221**
+repo, where sickle-specific code lives) measures the per-filter bulk sickle→GNS
 correction and writes the per-frame table in the `shift_individual_catalog`
 convention (`dra_table = corr_dRA_onsky / cos(dec)`). Its output
 `Offsets_JWST_Brick3958_GNS.csv` is dropped into the sickle data tree's
 `offsets/` dir and consumed by `fix_alignment` like any other table.
-`_bench/sickle_gns_reduce_retry.sh` is the companion submitter that re-reduces
-sickle with the GNS table once the group QOS frees and releases the held
-cataloging jobs. (See the `PipelineRerunNIRCAM-LONG.py` ~L1140 note.)
+`brick2221/shellscripts/sickle_gns_reduce_retry.sh` is the companion submitter
+that re-reduces sickle with the GNS table. (See the `PipelineRerunNIRCAM-LONG.py`
+~L1140 note.)
 
 **MIRI registration** is a separate, manual pre-step — MIRI does **not** use the
-NIRCam offsets-table path. The sickle/cloudef MIRI frames are registered to the
-NIRCam F480M frame by the scripts in `scripts/miri_reduction/` (see that
-directory's README). They edit the per-frame FITS WCS / embedded gwcs in place
-(idempotent via `MIRIDRA`/`MIRIDDE`/`MIRIWCSN`) and **must be run before
-cataloging** a MIRI obs, or its mosaics sit ~3.3″ off truth while the catalog
-underneath is correct.
+NIRCam offsets-table path. The sickle MIRI frames are registered to the NIRCam
+F480M frame by region-specific scripts in **brick-jwst-2221**
+(`brick2221/reduction/register_sickle_miri_o001_o002.py`,
+`register_o002_f770w_per_frame_to_f480m.py`,
+`register_o002_f770w_gwcs_to_f480m.py`, `merge_sickle_miri_o001_o002.py`). They
+edit the per-frame FITS WCS / embedded gwcs in place (idempotent via
+`MIRIDRA`/`MIRIDDE`/`MIRIWCSN`) and **must be run before cataloging** a sickle
+MIRI obs, or its mosaics sit ~3.3″ off truth while the catalog underneath is
+correct. The brick F2550W reduction-tool scripts in `scripts/miri_reduction/`
+are region-general examples; the operational MIRI scripts live in brick-jwst-2221.
 
 ## Reference epochs (so propagation is reproducible)
 
