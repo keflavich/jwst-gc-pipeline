@@ -458,54 +458,44 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
             print(f'Failed to link {fn} to {os.path.basename(fn)} because of {ex}')
 
     Observations.cache_location = output_dir
-    obs_table = Observations.query_criteria(
-                                            proposal_id=proposal_id,
-                                            #proposal_pi="Ginsburg*",
-                                            #calib_level=3,
-                                            )
-    print("Obs table length:", len(obs_table))
 
-    # np.array wrapper needed as of 2026-04-10 to avoid masked array type error that shouldn't happen
-    msk = ((np.char.find(np.array(obs_table['filters']), filtername.upper()) >= 0) |
-           (np.char.find(np.array(obs_table['obs_id']), filtername.lower()) >= 0))
-    data_products_by_obs = Observations.get_product_list(obs_table[msk])
-    print("data prodcts by obs length: ", len(data_products_by_obs))
+    # The MAST block below exists only to fetch the image3 asn jsons (globbed
+    # back off disk further down) and, when not skip_step1and2, the uncal files.
+    # `Observations.get_product_list` has no effective timeout and was observed
+    # to hang forever in ssl.read on flaky compute-node networks (22h hang, job
+    # 35773493, 2026-06-26).  Skip the network entirely when the files we need
+    # are already on disk; otherwise set a hard TIMEOUT so a stalled MAST
+    # connection fails fast instead of hanging the whole pipeline.
+    existing_asn = glob(os.path.join(output_dir, f'jw0{proposal_id}-o{field}*_image3_*0[0-9][0-9]_asn.json'))
+    existing_uncal = glob(os.path.join(output_dir, f'jw0{proposal_id}{field}*_uncal.fits'))
+    mast_needed = (len(existing_asn) == 0) or (not skip_step1and2 and len(existing_uncal) == 0)
+    if not mast_needed:
+        print(f"Skipping MAST query for {filtername}: {len(existing_asn)} asn json(s) and "
+              f"{len(existing_uncal)} uncal already on disk (skip_step1and2={skip_step1and2})")
+    else:
+        Observations.TIMEOUT = 120  # seconds; avoid indefinite hang on a stalled MAST connection
+        obs_table = Observations.query_criteria(
+                                                proposal_id=proposal_id,
+                                                #proposal_pi="Ginsburg*",
+                                                #calib_level=3,
+                                                )
+        print("Obs table length:", len(obs_table))
 
-    products_asn = Observations.filter_products(data_products_by_obs, extension="json")
-    print("products_asn length:", len(products_asn))
-    #valid_obsids = products_asn['obs_id'][np.char.find(np.unique(products_asn['obs_id']), 'jw02221-o001', ) == 0]
-    #match = [x for x in valid_obsids if filtername.lower() in x][0]
+        # np.array wrapper needed as of 2026-04-10 to avoid masked array type error that shouldn't happen
+        msk = ((np.char.find(np.array(obs_table['filters']), filtername.upper()) >= 0) |
+               (np.char.find(np.array(obs_table['obs_id']), filtername.lower()) >= 0))
+        data_products_by_obs = Observations.get_product_list(obs_table[msk])
+        print("data prodcts by obs length: ", len(data_products_by_obs))
 
-    asn_mast_data = products_asn#[products_asn['obs_id'] == match]
-    print("asn_mast_data:", asn_mast_data)
+        products_asn = Observations.filter_products(data_products_by_obs, extension="json")
+        print("products_asn length:", len(products_asn))
+        #valid_obsids = products_asn['obs_id'][np.char.find(np.unique(products_asn['obs_id']), 'jw02221-o001', ) == 0]
+        #match = [x for x in valid_obsids if filtername.lower() in x][0]
 
-    manifest = Observations.download_products(asn_mast_data, download_dir=output_dir)
-    print("manifest:", manifest)
+        asn_mast_data = products_asn#[products_asn['obs_id'] == match]
+        print("asn_mast_data:", asn_mast_data)
 
-    # MAST creates deep directory structures we don't want
-    for row in manifest:
-        try:
-            shutil.move(row['Local Path'], os.path.join(output_dir, os.path.basename(row['Local Path'])))
-        except Exception as ex:
-            print(f"Failed to move file with error {ex}")
-
-    products_fits = Observations.filter_products(data_products_by_obs, extension="fits")
-    print("products_fits length:", len(products_fits))
-    uncal_mask = np.array([
-        uri.endswith('_uncal.fits')
-        and f'jw0{proposal_id}{field}' in uri
-        and ('_nrc' in uri)
-        for uri in products_fits['dataURI']
-    ])
-    uncal_mask &= products_fits['productType'] == 'SCIENCE'
-    print("uncal length:", (uncal_mask.sum()))
-
-    already_downloaded = np.array([os.path.exists(os.path.basename(uri)) for uri in products_fits['dataURI']])
-    uncal_mask &= ~already_downloaded
-    print(f"uncal to download: {uncal_mask.sum()}; {already_downloaded.sum()} were already downloaded")
-
-    if uncal_mask.any():
-        manifest = Observations.download_products(products_fits[uncal_mask], download_dir=output_dir)
+        manifest = Observations.download_products(asn_mast_data, download_dir=output_dir)
         print("manifest:", manifest)
 
         # MAST creates deep directory structures we don't want
@@ -514,6 +504,32 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
                 shutil.move(row['Local Path'], os.path.join(output_dir, os.path.basename(row['Local Path'])))
             except Exception as ex:
                 print(f"Failed to move file with error {ex}")
+
+        products_fits = Observations.filter_products(data_products_by_obs, extension="fits")
+        print("products_fits length:", len(products_fits))
+        uncal_mask = np.array([
+            uri.endswith('_uncal.fits')
+            and f'jw0{proposal_id}{field}' in uri
+            and ('_nrc' in uri)
+            for uri in products_fits['dataURI']
+        ])
+        uncal_mask &= products_fits['productType'] == 'SCIENCE'
+        print("uncal length:", (uncal_mask.sum()))
+
+        already_downloaded = np.array([os.path.exists(os.path.basename(uri)) for uri in products_fits['dataURI']])
+        uncal_mask &= ~already_downloaded
+        print(f"uncal to download: {uncal_mask.sum()}; {already_downloaded.sum()} were already downloaded")
+
+        if uncal_mask.any():
+            manifest = Observations.download_products(products_fits[uncal_mask], download_dir=output_dir)
+            print("manifest:", manifest)
+
+            # MAST creates deep directory structures we don't want
+            for row in manifest:
+                try:
+                    shutil.move(row['Local Path'], os.path.join(output_dir, os.path.basename(row['Local Path'])))
+                except Exception as ex:
+                    print(f"Failed to move file with error {ex}")
 
 
     # all cases, except if you're just doing a merger?
