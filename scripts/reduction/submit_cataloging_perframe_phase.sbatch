@@ -17,7 +17,8 @@
 # granularity (more shards = smaller/faster tasks).  A missing shard => the
 # finalize hard-crashes on the absent marker (no silent exposure drop).
 # ---------------------------------------------------------------------------
-#SBATCH --job-name=gc_pf
+# renamed to "<target>-pf-<phase>" at runtime (target is not always the GC)
+#SBATCH --job-name=pf
 #SBATCH --account=astronomy-dept
 #SBATCH --qos=astronomy-dept-b
 #SBATCH --partition=hpg-default
@@ -38,6 +39,8 @@ CROSSBAND_REF=${CROSSBAND_REF:-}
 PHASE=${PHASE:?set PHASE=m12|m3|m4|m5|m6|m7}
 MODE=${MODE:?set MODE=fanout|finalize}
 NSHARDS=${NSHARDS:-16}
+[ -n "${SLURM_JOB_ID:-}" ] && scontrol update JobId="$SLURM_JOB_ID" \
+    JobName="${TARGET}-pf-${PHASE}-${MODE}" 2>/dev/null || true
 EXTRA_ARGS=${EXTRA_ARGS:-}
 
 # Pin a worktree/branch (this feature is new -> usually needed until merged).
