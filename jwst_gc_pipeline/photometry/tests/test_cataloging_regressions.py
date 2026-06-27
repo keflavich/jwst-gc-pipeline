@@ -48,15 +48,71 @@ class TestFilterExtendedEmissionNircam:
         assert len(out) == 1
         np.testing.assert_allclose(out['qfit'][0], 0.1)
 
-    def test_low_snr_dropped_even_if_starlike(self):
+    def test_low_snr_dropped_if_starlike_but_NOT_qfit_confident(self):
+        # The snr floor still drops a low-snr star_like source PROVIDED it is not
+        # qfit-confident.  (Mechanism-1 fix `_emission_keep_nircam` KEEPS qfit<=
+        # qfit_max sources regardless of snr -- their flux_err is inflated by
+        # group-fit covariance -- so a qfit-confident low-snr source is NOT a
+        # valid drop case; star_like here comes via keep_flags with qfit>qfit_max.)
         t = Table({
-            'qfit': [0.1],
-            'flags': [0],
+            'qfit': [0.30],               # ABOVE qfit_max -> not qfit-confident
+            'flags': [1],                 # star_like via keep_flags=(1,)
             'flux': [10.0],
-            'flux_err': [10.0],            # snr = 1 < local_snr_min
+            'flux_err': [10.0],           # snr = 1 < local_snr_min
         })
         out = C._filter_extended_emission(t, min_prominence=0.0,
                                           qfit_max=0.2, local_snr_min=5.0,
+                                          label='nircam-test')
+        assert len(out) == 0
+
+    def test_qfit_confident_kept_despite_broken_snr(self):
+        # Mechanism 1: a qfit-confident source (group-fit covariance inflates
+        # flux_err -> S/N ~0) must be KEPT regardless of the formal S/N.
+        t = Table({
+            'qfit': [0.016],
+            'flags': [0],
+            'flux': [6200.0],
+            'flux_err': [8076.0],          # snr = 0.77 (broken by group degeneracy)
+        })
+        out = C._filter_extended_emission(t, min_prominence=0.0,
+                                          qfit_max=0.2, local_snr_min=5.0,
+                                          label='nircam-test')
+        assert len(out) == 1
+
+    def test_bright_isolated_keeps_borderline_qfit_star(self):
+        # Mechanism 2 (sickle F480M star3: flux 6381, S/N 201, qfit 0.282): a
+        # high-S/N SINGLETON (group_size==1 -> trustworthy S/N) with a still-
+        # PSF-like qfit just above qfit_max is a real star -> KEPT.
+        t = Table({'qfit': [0.282], 'flags': [0],
+                   'flux': [6381.0], 'flux_err': [31.7],   # snr ~ 201
+                   'group_size': [1.0]})
+        out = C._filter_extended_emission(t, min_prominence=0.0, qfit_max=0.2,
+                                          local_snr_min=5.0, label='nircam-test')
+        assert len(out) == 1
+
+    def test_bright_isolated_keeps_star2_faint_on_emission(self):
+        # sickle F480M star2: real, concentrated+symmetric by eye, faint on BRIGHT
+        # emission -> qfit 0.31 (>qfit_max), S/N ~23.6 singleton.  At the default
+        # snr_high_keep=20 it is a >20sigma point source -> KEPT.
+        t = Table({'qfit': [0.31], 'flags': [0],
+                   'flux': [560.0], 'flux_err': [23.7],    # snr ~ 23.6
+                   'group_size': [1.0]})
+        out = C._filter_extended_emission(t, min_prominence=0.0, qfit_max=0.2,
+                                          local_snr_min=5.0, label='nircam-test')
+        assert len(out) == 1
+
+    def test_bright_isolated_does_not_admit_grouped_or_faint_or_emission(self):
+        # group_size>1 (S/N untrustworthy), faint (S/N<snr_high_keep), and
+        # high-qfit (emission knot) variants must all be DROPPED.
+        t = Table({'qfit': [0.30, 0.30, 0.60],
+                   'flags': [0, 0, 0],
+                   'flux': [6381.0, 360.0, 6381.0],
+                   'flux_err': [31.7, 30.0, 31.7],         # snr 201, 12, 201
+                   'group_size': [2.0, 1.0, 1.0]})         # grouped, faint, emission
+        out = C._filter_extended_emission(t, min_prominence=0.0,
+                                          qfit_max=0.2, local_snr_min=5.0,
+                                          snr_high_keep=20.0,
+                                          qfit_high_keep_max=0.4,
                                           label='nircam-test')
         assert len(out) == 0
 
@@ -100,3 +156,51 @@ class TestFilterExtendedEmissionMiri:
         kept = SkyCoord(out['skycoord'])
         flat = ww.pixel_to_world(20, 20)
         assert all(k.separation(flat).arcsec > 0.5 for k in kept)
+
+
+class TestZeroframeRecoverSaturated:
+    """#2 ZEROFRAME saturated-rim recovery: de-inflate the brighter-fatter rim
+    of the most-saturated stars from the ramp first read."""
+
+    def _frame(self):
+        from jwst.datamodels import dqflags
+        ny = nx = 40
+        yy, xx = np.mgrid[0:ny, 0:nx]
+        r = np.hypot(xx - 20, yy - 20)
+        # group-0 (DN): bright star profile, clipped at the saturation ceiling.
+        g0 = 100.0 + 60000.0 * np.exp(-(r ** 2) / (2 * 3.0 ** 2))
+        ceiling = 50000.0
+        g0 = np.where(g0 > ceiling, ceiling, g0)
+        Rtrue = 1.10
+        cal = Rtrue * g0.copy()                 # cal = R*group0 at unsaturated px
+        sat = r < 5                             # DQ-SATURATED core+rim
+        dq = np.zeros((ny, nx), dtype=np.int32)
+        dq[sat] = dqflags.pixel['SATURATED']
+        # inflate the rim (saturated, group-0 not at ceiling) -> brighter-fatter
+        rim_true = sat & (g0 < ceiling)
+        cal[rim_true] = cal[rim_true] * 1.3
+        return cal, dq, g0, r, Rtrue
+
+    def test_deinflates_rim_flags_deepcore_leaves_far_untouched(self):
+        from jwst_gc_pipeline.reduction.saturated_star_finding import (
+            zeroframe_recover_saturated)
+        cal, dq, g0, r, Rtrue = self._frame()
+        rec, rim, deep, R = zeroframe_recover_saturated(
+            cal, dq, g0, R_g0_min=2000.0, sat_dilate=3)
+        # R recovered ~ the true ratio
+        assert np.isfinite(R) and abs(R - Rtrue) < 0.05
+        # rim pixels de-inflated (recovered below the inflated cal)
+        assert rim.sum() > 0
+        assert np.nanmedian(rec[rim]) < np.nanmedian(cal[rim])
+        # deep core (group-0 also saturated) flagged, not recovered
+        assert deep.sum() > 0
+        # pixels far from the star are untouched
+        far = r > 10
+        assert np.allclose(rec[far], cal[far])
+
+    def test_noop_without_group0(self):
+        from jwst_gc_pipeline.reduction.saturated_star_finding import (
+            zeroframe_recover_saturated)
+        cal, dq, g0, r, Rtrue = self._frame()
+        rec, rim, deep, R = zeroframe_recover_saturated(cal, dq, None)
+        assert np.array_equal(rec, cal) and rim.sum() == 0 and deep.sum() == 0

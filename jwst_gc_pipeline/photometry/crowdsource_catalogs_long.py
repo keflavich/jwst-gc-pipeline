@@ -3587,6 +3587,21 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                            'leaving deep negative spike residuals. Default 10. Lower '
                            '(e.g. 1-2) for single-detector LW filters over bright '
                            'background (F335M).')
+    parser.add_option("--satstar-zeroframe-recover", dest="satstar_zeroframe_recover",
+                      default=False, action='store_true',
+                      help=('Recover the brighter-fatter INFLATED rim of the most-'
+                            'saturated stars from the ramp first read (sibling '
+                            '_ramp.fits group-0): replace the saturated rim with '
+                            'R*group0 (R=median cal/group0 over bright unsat px) so '
+                            'the PSF-subtracted residual no longer leaves a positive '
+                            'ring/dot.  Deep core (group-0 also saturated) falls back '
+                            'to model-replacement.  No-op where no _ramp.fits exists.'))
+    parser.add_option("--satstar-zeroframe-dilate", type='int',
+                      dest="satstar_zeroframe_dilate", default=3,
+                      help=('Dilation (px) of the DQ-SATURATED mask for the ZEROFRAME '
+                            'rim recovery, to catch brighter-fatter pixels spreading '
+                            'beyond the hard DQ flag.  Default 3.'),
+                      metavar="satstar_zeroframe_dilate")
     parser.add_option('--skip-mosaic-each-exposure-residuals',
                       dest='skip_mosaic_each_exposure_residuals',
                       default=False,

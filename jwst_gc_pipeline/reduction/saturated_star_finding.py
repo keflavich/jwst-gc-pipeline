@@ -252,6 +252,101 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000):
     return saturated, sources, coms
 
 
+def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
+                                g0_sat_frac=0.9, sat_dilate=3, infl_tol=0.10,
+                                R=None):
+    """Recover the saturated-star RIM from the ramp first read (group-0).
+
+    A bright star's DQ-SATURATED region reads wrong in the calibrated frame: the
+    deep core is clipped LOW, but the rim is INFLATED above the true flux because
+    charge migrates outward during the integration (brighter-fatter).  Verified
+    on sickle F210M: at the rim the saturated-frame cal sits ~15% ABOVE the ramp
+    first read (recovered/cal ~ 0.85).  Subtracting a fixed PSF model from that
+    inflated rim leaves a positive ring (the "+7587 dot" the user sees on the
+    most-saturated stars).
+
+    The ramp GROUP-0 (single first read, before charge migration) samples the
+    TRUE stellar profile wherever group-0 is itself unsaturated.  Per frame:
+
+        R = median(cal / group0)  over BRIGHT unsaturated pixels (group0>R_g0_min)
+
+    is ~constant (calibration-free: cal[MJy/sr] ~ rate*photom*flat and
+    group0[DN] ~ rate*tframe, so R ~ photom*flat/tframe; measured 5% scatter for
+    group0>2000).  Then at saturated pixels whose group-0 is UNSATURATED (the
+    rim), replace the inflated cal with R*group0 (de-inflated truth) so the
+    PSF-subtracted residual collapses to ~0.  Where group-0 ALSO saturates (the
+    deep core), it cannot be recovered -> returned in ``deep_core_mask``.
+
+    Charge migration spreads a pixel or two BEYOND the hard DQ-SATURATED flag, so
+    the search region is the SATURATED mask dilated by ``sat_dilate``; within the
+    (non-DQ-flagged) dilation buffer a pixel is only rewritten if it is actually
+    inflated (cal > R*group0*(1+infl_tol)), leaving clean pixels untouched.
+
+    Parameters
+    ----------
+    data : 2-D float array
+        Calibrated frame SCI (MJy/sr), full detector grid.
+    dq : 2-D int array or None
+        DQ plane (same grid).  SATURATED bit selects the region.
+    group0 : 2-D float array or None
+        Ramp first read (DN), same detector grid as ``data``.
+    R_g0_min : float
+        Minimum group-0 (DN) for a pixel to enter the R estimate (bright regime
+        where R is stable).
+    g0_sat_frac : float
+        Fraction of the group-0 pile-up ceiling (99.9th pct) above which group-0
+        is itself treated as saturated (deep core, unrecoverable).
+    sat_dilate : int
+        Dilation (px) of the DQ-SATURATED mask to catch the brighter-fatter rim.
+    infl_tol : float
+        In the dilation buffer (not DQ-flagged), only rewrite pixels inflated by
+        more than this fraction above R*group0.
+    R : float or None
+        Precomputed ratio; if None it is measured from ``data``/``group0``.
+
+    Returns
+    -------
+    recovered : 2-D float array
+        Copy of ``data`` with rim pixels replaced by R*group0.
+    rim_mask : 2-D bool array
+        Pixels that were rewritten (recovered).
+    deep_core_mask : 2-D bool array
+        Saturated pixels whose group-0 is also saturated (unrecoverable).
+    R : float
+        The ratio used (NaN if it could not be estimated -> no-op).
+    """
+    shp = np.shape(data)
+    if group0 is None or np.shape(group0) != shp:
+        return data, np.zeros(shp, dtype=bool), np.zeros(shp, dtype=bool), np.nan
+    sat = ((dq & dqflags.pixel['SATURATED']) != 0) if dq is not None \
+        else np.zeros(shp, dtype=bool)
+    if not sat.any():
+        return data, np.zeros(shp, dtype=bool), np.zeros(shp, dtype=bool), np.nan
+    sat_buf = binary_dilation(sat, iterations=int(sat_dilate)) if sat_dilate else sat
+    g0_finite = np.isfinite(group0)
+    ceiling = (g0_sat_frac * np.nanpercentile(group0[g0_finite], 99.9)
+               if g0_finite.any() else np.inf)
+    g0_clean = g0_finite & (group0 < ceiling)
+    if R is None or not np.isfinite(R):
+        good = (~sat) & np.isfinite(data) & g0_finite & (group0 > R_g0_min) & (data > 0)
+        R = float(np.nanmedian(data[good] / group0[good])) if int(good.sum()) >= 20 else np.nan
+    recovered = np.array(data, dtype=float, copy=True)
+    rim_mask = np.zeros(shp, dtype=bool)
+    if np.isfinite(R):
+        recov_val = R * group0
+        # always rewrite genuinely-saturated rim pixels (group-0 clean); in the
+        # (non-DQ-flagged) dilation buffer rewrite only BRIGHT (group0>R_g0_min,
+        # so R*group0 is reliable) and INFLATED (brighter-fatter) pixels, leaving
+        # faint neighbours untouched.
+        rim_mask = (sat & g0_clean) | (
+            sat_buf & ~sat & g0_clean & np.isfinite(data)
+            & (group0 > R_g0_min)
+            & (data > recov_val * (1.0 + infl_tol)))
+        recovered[rim_mask] = recov_val[rim_mask]
+    deep_core_mask = sat_buf & ~g0_clean
+    return recovered, rim_mask, deep_core_mask, R
+
+
 def _refine_coms_by_data(coms, data, sources, shift_warn_thresh_pix=3.0,
                          unrecoverable=None):
     """Refine DQ_SATURATED-mask centroids using the cluster bounding-box

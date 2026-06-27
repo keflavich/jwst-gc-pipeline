@@ -886,6 +886,34 @@ def _resolve_each_suffix(options, filtername):
     return default
 
 
+def _load_ramp_group0(crf_path):
+    """Load the ramp first read (group-0) for a per-frame crf/cal file from its
+    sibling Detector1 ``_ramp.fits`` (same detector pixel grid, no reprojection).
+
+    The crf is named ``jw..._{detector}_<suffix>_crf.fits`` (suffix e.g.
+    ``align_o007`` / ``destreak_o007``); the ramp is ``jw..._{detector}_ramp.fits``.
+    Returns the 2-D first-read array (DN) or None if no ramp is found / not
+    NIRCam.  Used by the ZEROFRAME saturated-rim recovery (#2)."""
+    import re
+    ramp = re.sub(r'(_nrc[ab](?:long|[1-4]))_.*\.fits$', r'\1_ramp.fits',
+                  str(crf_path))
+    if ramp == str(crf_path) or not os.path.exists(ramp):
+        return None
+    try:
+        sci = fits.getdata(ramp, extname='SCI')
+    except (OSError, KeyError, ValueError):
+        return None
+    if sci is None:
+        return None
+    if sci.ndim == 4:      # (nints, ngroups, ny, nx)
+        g0 = sci[0, 0]
+    elif sci.ndim == 3:    # (ngroups, ny, nx)
+        g0 = sci[0]
+    else:
+        g0 = sci
+    return np.asarray(g0, dtype=float)
+
+
 def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
                                   filename, proposal_id, *, exposurenumber,
                                   visit_id, vgroup_id, bg_boxsizes, use_webbpsf,
@@ -1140,7 +1168,34 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
                 finite_model = np.where(np.isfinite(sm), sm, 0.0)
                 if dqarr is not None:
                     was_sat = (dqarr & _L.dqflags.pixel['SATURATED']) != 0
-                    nan_replaced_data = np.where(was_sat, finite_model, nan_replaced_data)
+                    # ZEROFRAME saturated-RIM recovery (#2, opt-in): the most-
+                    # saturated stars leave a positive ring because the cal-frame
+                    # rim is brighter-fatter-INFLATED above the true flux; the
+                    # ramp first read (group-0) samples the true profile wherever
+                    # it is unsaturated.  Replace the rim with R*group0 (de-
+                    # inflated) so model subtraction collapses the ring; the deep
+                    # core (group-0 also saturated) falls back to model-replace.
+                    _zf_done = False
+                    if getattr(options, 'satstar_zeroframe_recover', False):
+                        _g0 = _load_ramp_group0(filename)
+                        if _g0 is not None and _g0.shape == data.shape:
+                            from jwst_gc_pipeline.reduction.saturated_star_finding import (
+                                zeroframe_recover_saturated)
+                            _rec, _rim, _deep, _R = zeroframe_recover_saturated(
+                                np.asarray(data, dtype=float), dqarr, _g0,
+                                sat_dilate=int(getattr(
+                                    options, 'satstar_zeroframe_dilate', 3)))
+                            if np.isfinite(_R):
+                                # rim -> recovered truth; remaining sat -> model.
+                                nan_replaced_data = np.where(
+                                    _rim, _rec,
+                                    np.where(was_sat, finite_model, nan_replaced_data))
+                                _zf_done = True
+                                print(f"[manual] zeroframe rim recovery: R={_R:.3f} "
+                                      f"rim={int(_rim.sum())} deepcore={int(_deep.sum())}",
+                                      flush=True)
+                    if not _zf_done:
+                        nan_replaced_data = np.where(was_sat, finite_model, nan_replaced_data)
                 nan_replaced_data = nan_replaced_data - finite_model
                 satstar_model_subtracted = finite_model
                 print(f"[manual] subtracted satstar model {os.path.basename(sat_model)} "
