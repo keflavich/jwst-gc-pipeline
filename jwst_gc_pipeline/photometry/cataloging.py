@@ -2903,3 +2903,96 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
 
     print(f"MANUAL PIPELINE DONE: {overlap_total} overlapping frames, "
           f"phases={phases}", flush=True)
+
+
+def run_m8_only(options, modules, filternames, nvisits, proposal_id, target,
+                field, basepath, bg_boxsizes):
+    """Standalone m8 forced cross-band fill that REUSES the existing m7 catalogs
+    on disk -- no m12..m7 re-fitting.
+
+    For each band it rebuilds the m7 source-masked smoothed background from the
+    persisted per-frame products (``build_mergedcat_residuals`` ->
+    ``_build_source_masked_bg``) so the forced photometry runs on exactly the
+    data m7 used, then runs ``forced_fill.run_forced_crossband_fill`` on the
+    merged m7 catalog -> ``..._resbgsub_m8.fits``.  If a band's per-frame
+    products / vetted catalog are missing the bg cannot be rebuilt and that band
+    falls back to a per-frame ``Background2D`` pedestal (approximate; logged).
+
+    Use when m12..m7 are already final and only m8 is wanted.
+    """
+    import copy
+    from jwst_gc_pipeline.photometry import forced_fill as _ff
+    cut_bp = _L._cutout_out_basepath(basepath, options)
+    pupil = 'clear'
+    last_phase = 'm7'
+    median_size = int(getattr(options, 'manual_residual_bg_median_size', 3))
+    obs_token = _L.obs_token(proposal_id, field)
+    if len(filternames) <= 1:
+        raise ValueError("m8 forced cross-band fill requires >1 filter")
+
+    for module in modules:
+        merged_m7 = (f'{cut_bp}/catalogs/basic_{module}_indivexp_photometry_tables_'
+                     f'merged_resbgsub_{last_phase}{obs_token}.fits')
+        if not os.path.exists(merged_m7):
+            print(f"[m8-only] missing merged m7 {merged_m7}; skip module {module}",
+                  flush=True)
+            continue
+        m8_path = merged_m7.replace(f'resbgsub_{last_phase}', 'resbgsub_m8')
+
+        framemap = {}
+        bgmap = {}
+        for filt in filternames:
+            frames = []
+            for visitid in range(1, nvisits[proposal_id][target] + 1):
+                frames.extend(sorted(_L.get_filenames(
+                    basepath, filt, proposal_id, field, visitid=f'{visitid:03d}',
+                    each_suffix=_resolve_each_suffix(options, filt),
+                    module=module, pupil=pupil, allow_empty=True)))
+            framemap[(module, filt)] = frames
+            vetted = (f'{cut_bp}/catalogs/{filt.lower()}_{module}_indivexp_merged'
+                      f'_resbgsub_{last_phase}_dao_basic_vetted.fits')
+            if not (frames and os.path.exists(vetted)):
+                print(f"[m8-only] {filt}: {len(frames)} frames, vetted="
+                      f"{os.path.exists(vetted)}; Background2D fallback", flush=True)
+                bgmap[(module, filt)] = None
+                continue
+            try:
+                outpaths = _L.build_mergedcat_residuals(
+                    cut_bp, basepath, vetted, filt, proposal_id, field, module,
+                    options, frames, last_phase, ['basic'], pupil=pupil,
+                    satstar_label=last_phase)
+                mc_i2d = outpaths.get('basic')
+                bgmap[(module, filt)] = (
+                    _build_source_masked_bg(mc_i2d, vetted, filt, median_size=median_size)
+                    if mc_i2d and os.path.exists(mc_i2d) else None)
+                print(f"[m8-only] {filt}: rebuilt m7 bg -> "
+                      f"{bgmap[(module, filt)]}", flush=True)
+            except Exception as ex:
+                print(f"[m8-only] {filt}: bg rebuild failed ({ex}); "
+                      f"Background2D fallback", flush=True)
+                bgmap[(module, filt)] = None
+
+        def _frames_for(filt, _m=module):
+            return framemap.get((_m, filt), [])
+
+        def _builder_for(filt, _m=module):
+            _resbg = bgmap.get((_m, filt))
+            _opts = options
+            if _resbg is None:
+                _opts = copy.copy(options)
+                _opts.bgsub = True   # standalone pedestal when no resbg available
+            def _b(filename):
+                return _ff._frame_args_from_filename(
+                    filename, options=_opts, filt=filt, field=field,
+                    basepath=basepath, proposal_id=proposal_id,
+                    bg_boxsizes=bg_boxsizes, pupil=pupil, resbg_path=_resbg,
+                    satstar_overrides=None, satstar_drops=None, module=_m,
+                    satstar_label=last_phase)
+            return _b
+
+        _ff.run_forced_crossband_fill(
+            merged_m7, m8_path, filternames=list(filternames), module=module,
+            frames_for=_frames_for, prepare_frame=_prepare_frame_for_photometry,
+            frame_arg_builder_for=_builder_for,
+            nsigma=float(getattr(options, 'forced_fill_nsigma', 3.0)))
+    print("M8-ONLY DONE", flush=True)

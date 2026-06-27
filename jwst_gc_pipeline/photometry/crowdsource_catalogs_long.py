@@ -3315,6 +3315,19 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                           "in-process today; full-frame routing is pending.)  See "
                           "PHOTOMETRY_PIPELINE.md."),
                     metavar="manual_iterations")
+    parser.add_option("--m8-only", dest="m8_only",
+                    default=False, action='store_true',
+                    help=("Skip m12..m7 re-fitting; run ONLY the m8 forced "
+                          "cross-band fill on the existing merged m7 catalog "
+                          "(rebuilds the m7 source-masked bg from persisted "
+                          "per-frame products).  Use when m12..m7 are final."),
+                    metavar="m8_only")
+    parser.add_option("--forced-fill-nsigma", dest="forced_fill_nsigma",
+                    default=3.0, type=float,
+                    help=("SNR threshold above which an m8 forced cross-band "
+                          "measurement is promoted to a detection (mask cleared); "
+                          "below it the flux is kept as a per-source limit."),
+                    metavar="forced_fill_nsigma")
     parser.add_option("--legacy-iterations", dest="manual_iterations",
                     action='store_false',
                     help=("Opt out of the default manual-iteration path and use "
@@ -3964,6 +3977,14 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
             # Imported lazily so the legacy path never depends on it and there is
             # no import cycle (cataloging imports mosaicking/IO from this module).
             from jwst_gc_pipeline.photometry import cataloging as _cataloging
+            if getattr(options, 'm8_only', False):
+                # Reuse the existing m12..m7 catalogs; run ONLY the m8 forced
+                # cross-band fill (rebuilds the m7 bg from persisted per-frame
+                # products).  No re-fitting.
+                _cataloging.run_m8_only(
+                    options, modules, filternames, nvisits, proposal_id, target,
+                    field, basepath, bg_boxsizes)
+                return
             _cataloging.run_manual_pipeline(
                 options, modules, filternames, nvisits, proposal_id, target,
                 field, basepath, crowdsource_default_kwargs, bg_boxsizes)
