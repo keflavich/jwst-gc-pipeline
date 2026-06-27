@@ -88,3 +88,68 @@ if __name__ == '__main__':
     a = ap.parse_args()
     print(plot_pm_figure(a.pm_catalog, a.out_png, sig_thresh=a.sig,
                          max_err=a.max_err, m7_path=a.m7))
+
+
+def plot_pm_l_vs_extinction(pm_path, gns_path, out_png, sig_thresh=3.0, max_err=2.0,
+                            ehk_intrinsic=0.10, aks_per_ehk=1.328, match_radius=0.3):
+    """pm in Galactic longitude (mu_l*cosb) vs near-IR extinction A_Ks.
+
+    A_Ks from GNS (H-Ks) color: A_Ks = aks_per_ehk * ((H-Ks) - ehk_intrinsic).
+    In the GC, low-extinction foreground disk stars and high-extinction bulge /
+    nuclear-disk stars occupy different mu_l -- this plot separates them.
+    """
+    import astropy.units as u
+    from astropy.coordinates import SkyCoord
+    t = Table.read(pm_path)
+    fin = np.isfinite(t['pm_ra']) & np.isfinite(t['pm_dec']) & np.isfinite(t['pm_ra_err'])
+    sig, err = pm_significance(t)
+    good = fin & (sig > sig_thresh) & (err < max_err) & (np.abs(t['pm_tot']) < 200)
+
+    # ICRS pm -> Galactic (mu_l*cosb, mu_b)
+    c = SkyCoord(ra=np.asarray(t['ra0'])[good] * u.deg, dec=np.asarray(t['dec0'])[good] * u.deg,
+                 pm_ra_cosdec=np.asarray(t['pm_ra'])[good] * u.mas / u.yr,
+                 pm_dec=np.asarray(t['pm_dec'])[good] * u.mas / u.yr, frame='icrs')
+    g = c.galactic
+    pm_l = g.pm_l_cosb.to(u.mas / u.yr).value
+    pm_b = g.pm_b.to(u.mas / u.yr).value
+
+    # extinction from GNS H-Ks
+    gns = Table.read(gns_path)
+    gsc = SkyCoord(np.asarray(gns['RAJ2000'], float) * u.deg, np.asarray(gns['DEJ2000'], float) * u.deg)
+    idx, sep, _ = c.match_to_catalog_sky(gsc)
+    H = np.asarray(gns['Hmag'], float)[idx]; K = np.asarray(gns['Ksmag'], float)[idx]
+    hk = H - K
+    aks = aks_per_ehk * (hk - ehk_intrinsic)
+    m = (sep < match_radius * u.arcsec) & np.isfinite(aks) & np.isfinite(pm_l)
+    aks, pm_l, pm_b = aks[m], pm_l[m], pm_b[m]
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6.5), sharey=False)
+    # scatter: pm_l vs A_Ks
+    ax1.scatter(aks, pm_l, s=4, c='k', alpha=0.25, rasterized=True)
+    # running median + 16/84
+    bins = np.linspace(np.nanpercentile(aks, 1), np.nanpercentile(aks, 99), 16)
+    bc = 0.5 * (bins[1:] + bins[:-1])
+    med = np.array([np.nanmedian(pm_l[(aks >= bins[i]) & (aks < bins[i + 1])]) for i in range(len(bc))])
+    lo = np.array([np.nanpercentile(pm_l[(aks >= bins[i]) & (aks < bins[i + 1])], 16) if ((aks >= bins[i]) & (aks < bins[i + 1])).sum() > 5 else np.nan for i in range(len(bc))])
+    hi = np.array([np.nanpercentile(pm_l[(aks >= bins[i]) & (aks < bins[i + 1])], 84) if ((aks >= bins[i]) & (aks < bins[i + 1])).sum() > 5 else np.nan for i in range(len(bc))])
+    ax1.plot(bc, med, 'r-', lw=2, label='median')
+    ax1.fill_between(bc, lo, hi, color='r', alpha=0.2, label='16-84%')
+    ax1.axhline(0, color='b', lw=0.5, ls='--')
+    ax1.set_xlabel(r'$A_{Ks}$ (mag)'); ax1.set_ylabel(r'$\mu_\ell\cos b$ (mas/yr)')
+    ax1.set_ylim(np.nanpercentile(pm_l, [1, 99]) * 1.3)
+    ax1.set_title('PM in Galactic longitude vs extinction')
+    ax1.legend(fontsize=9)
+    # 2D density
+    hb = ax2.hexbin(aks, pm_l, gridsize=45, bins='log', cmap='inferno',
+                    extent=(np.nanpercentile(aks, 0.5), np.nanpercentile(aks, 99.5),
+                            *np.nanpercentile(pm_l, [1, 99])))
+    ax2.axhline(0, color='c', lw=0.6, ls='--')
+    ax2.set_xlabel(r'$A_{Ks}$ (mag)'); ax2.set_ylabel(r'$\mu_\ell\cos b$ (mas/yr)')
+    ax2.set_title(f'density ({m.sum()} stars, S/N>{sig_thresh:g})')
+    fig.colorbar(hb, ax=ax2, label='log N')
+    fig.suptitle(f'{pm_path.split("/")[-1]}: $\\mu_\\ell$ vs $A_{{Ks}}$', fontsize=12)
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=130, bbox_inches='tight')
+    plt.close(fig)
+    return dict(n=int(m.sum()), aks_range=[float(np.nanmin(aks)), float(np.nanmax(aks))],
+                pm_l_med=float(np.nanmedian(pm_l)))
