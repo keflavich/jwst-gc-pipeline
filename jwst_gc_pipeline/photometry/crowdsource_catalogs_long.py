@@ -2893,6 +2893,14 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
         visit_id = bn.split('_')[0][-3:]
         vgroup_id = bn.split('_')[1]
         exposure_id = bn.split('_')[2]
+        # JOINT multi-obs runs (field like '002-998'): the per-frame products fold
+        # the observation number into vgroup_id (cataloging.py do_photometry frame
+        # loop) so two obs that share a visit+vgroup+exposure (e.g. sgrb2 obs998's
+        # redo reused obs002's tile 02101) don't collide.  Mirror that fold here so
+        # the raw per-frame residual/model are FOUND (else this build aborts with
+        # "missing raw basic products").  Single-obs runs (no '-') unchanged.
+        if '-' in str(field):
+            vgroup_id = f'{bn.split("_")[0][-6:-3]}{vgroup_id}'
         # Per-frame products are named by the actual DETECTOR (the manual path
         # writes them per-detector to avoid SW filename collisions); use it in the
         # stem so the raw residual/model are found and the mergedcat per-frame
