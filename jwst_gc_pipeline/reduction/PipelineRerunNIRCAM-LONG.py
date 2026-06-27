@@ -325,7 +325,8 @@ def get_allowed_modules(proposal_id, field, requested_modules, filtername=None):
 
 
 def main(filtername, module, Observations=None, regionname='brick', do_destreak=True,
-         field='001', proposal_id='2221', skip_step1and2=False, use_average=True):
+         field='001', proposal_id='2221', skip_step1and2=False, use_average=True,
+         skymatch_method=None):
     """
     skip_step1and2 will not re-fit the ramps to produce the _cal images.  This
     can save time if you just want to redo the tweakreg steps but already have
@@ -782,14 +783,27 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
             tweakreg_parameters.update({'abs_refcat': abs_refcat})
             tweakreg_parameters.update({'skip': True})
 
+        # skymatch: OFF by default (skymatch_method=None) -- historically left
+        # skipped here because a global subtraction can eat real GC diffuse
+        # emission.  Opt-in via --skymatch-method=match to remove the per-exposure
+        # background pedestals that otherwise leave visible seams/stripes in the
+        # mosaic (sickle F470N: per-exposure medians spanned -27..+72, range ~99,
+        # never level-matched).  'match' equalizes RELATIVE inter-frame offsets
+        # using overlap regions only (it does NOT subtract a global sky), so the
+        # common diffuse structure is preserved; match_down=False matches up.
+        # subtract=True is essential (else the matched levels are only recorded,
+        # not applied -- see PipelineMIRI.py).
+        image3_steps = {'tweakreg': tweakreg_parameters}
+        if skymatch_method:
+            image3_steps['skymatch'] = {'save_results': True,
+                                        'subtract': True,
+                                        'skymethod': skymatch_method,
+                                        'match_down': False}
+            print(f"Running skymatch skymethod={skymatch_method} subtract=True ({module})")
         print(f"Running tweakreg ({module})")
         calwebb_image3.Image3Pipeline.call(
             asn_file_each,
-            steps={'tweakreg': tweakreg_parameters,
-                   # Skip skymatch: looks like it causes problems (but maybe not doing this is worse?)
-                   #'skymatch': {'save_results': True, 'skip': True,
-                   #             'skymethod': 'match', 'match_down': False},
-            },
+            steps=image3_steps,
             output_dir=output_dir,
             save_results=True)
         print(f"DONE running {asn_file_each}")
@@ -1249,6 +1263,14 @@ if __name__ == "__main__":
     parser.add_option("-p", "--proposal_id", dest="proposal_id",
                       default='2221',
                       help="proposal id (string)", metavar="proposal_id")
+    parser.add_option("--skymatch-method", dest="skymatch_method",
+                      default='',
+                      help="Image3 skymatch skymethod ('match'/'global'/'local'). "
+                           "Empty (default) skips skymatch (historical NIRCam "
+                           "behavior). Use 'match' to level-match per-exposure "
+                           "background pedestals and remove mosaic seams "
+                           "(subtract=True, match_down=False).",
+                      metavar="skymatch_method")
     (options, args) = parser.parse_args()
 
     filternames = options.filternames.split(",")
@@ -1257,6 +1279,7 @@ if __name__ == "__main__":
     proposal_id = options.proposal_id
     skip_step1and2 = options.skip_step1and2
     no_destreak = bool(options.no_destreak)
+    skymatch_method = (options.skymatch_method or '').strip() or None
     print(options)
 
     with open(os.path.expanduser('~/.mast_api_token'), 'r') as fh:
@@ -1293,6 +1316,7 @@ if __name__ == "__main__":
                                proposal_id=proposal_id,
                                skip_step1and2=skip_step1and2,
                                do_destreak=not no_destreak,
+                               skymatch_method=skymatch_method,
                               )
 
 

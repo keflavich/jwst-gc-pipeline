@@ -1480,9 +1480,46 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
 # ---------------------------------------------------------------------------
 # Cross-band stringent seed (step 18; multifilter only)
 # ---------------------------------------------------------------------------
+def _dedup_skycoords(coords, radius_mas):
+    """Collapse same-star duplicates in a SkyCoord set: union-find clusters of
+    sources within ``radius_mas`` of each other, return a boolean keep-mask with
+    exactly ONE survivor (the lowest original index) per cluster.
+
+    Used to dedup the cross-band union seed: the per-filter catalogs are tightly
+    co-aligned (sickle F187N<->F480M cross-filter offset median 5 mas, 90pct 25
+    mas), so a star detected in N filters lands N times within ~25 mas in the
+    union.  Seeding the m7 fit with N co-located positions forces a degenerate
+    N-source group at sub-pixel separation that splits the star's flux before the
+    1.0 px post-fit dedup removes the duplicates -- the fit is already degraded.
+    Deduping the SEED first gives one clean seed per star.  ``radius_mas`` must
+    stay below the finest blend limit (F187N FWHM ~64 mas) so a pair resolvable
+    even in the SW filters is never merged (default 30 mas <= 0.5 FWHM)."""
+    n = len(coords)
+    if n < 2:
+        return np.ones(n, dtype=bool)
+    i1, i2, _, _ = coords.search_around_sky(coords, radius_mas * u.mas)
+    parent = np.arange(n)
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    for a, b in zip(np.asarray(i1), np.asarray(i2)):
+        if a < b:
+            ra, rb = find(int(a)), find(int(b))
+            if ra != rb:
+                parent[max(ra, rb)] = min(ra, rb)  # keep lowest index as root
+    roots = np.array([find(i) for i in range(n)])
+    keep = np.zeros(n, dtype=bool)
+    keep[np.unique(roots)] = True
+    return keep
+
+
 def _build_crossband_seed(cut_bp, modules, filternames, options, *,
                           max_sep_mas=10.0, min_filters=2, snr_min=5.0,
-                          qfit_max=0.2):
+                          qfit_max=0.2, dedup_radius_mas=30.0):
     """Cross-filter seed for m7 (iter7): sources detected (well) in >= min_filters
     filters within max_sep_mas, each with S/N > snr_min and good qfit.
 
@@ -1492,8 +1529,16 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
     seed) so the multifilter path is runnable.  Replace with
     ``merge_catalogs.merge_catalogs(..., max_offset=max_sep_mas*u.mas)`` + the
     >=min_filters / snr / qfit cut before relying on m5 scientifically.
+
+    The union is deduped at ``dedup_radius_mas`` (Fix A, 2026-06-26): a star seen
+    in N filters appears N times within ~25 mas (filters co-aligned) -- without
+    the dedup the m7 fit gets N co-located seeds per star, a degenerate group that
+    splits flux before the 1.0 px post-fit dedup cleans the OUTPUT (fit already
+    degraded).  Deduping the seed gives one clean seed per star.  Radius stays
+    below the SW blend limit (F187N FWHM ~64 mas) so resolvable pairs survive.
     """
     from astropy.table import vstack as _vstack
+    from astropy.coordinates import SkyCoord
     desat = '_unsatstar' if options.desaturated else ''
     bgsub = ('_bgsub' if options.bgsub else '') + '_resbgsub'
     blur_ = '_blur' if options.blur else ''
@@ -1513,9 +1558,15 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
     if not tbls:
         raise ValueError(f"m7 crossband seed: no vetted m6 catalogs under {cut_bp}/catalogs/")
     union = _vstack(tbls, metadata_conflicts='silent')
+    n_union = len(union)
+    _rad = float(getattr(options, 'manual_crossband_seed_dedup_mas', dedup_radius_mas))
+    if _rad > 0 and n_union > 1:
+        keep = _dedup_skycoords(SkyCoord(union['skycoord']), _rad)
+        union = union[keep]
     out = f'{cut_bp}/catalogs/crossband_seed_manual{_obssuf}.fits'
     union.write(out, overwrite=True)
-    print(f"[m7] wrote crossband seed {out} (n={len(union)}); "
+    print(f"[m7] wrote crossband seed {out} (n={len(union)}, deduped from "
+          f"{n_union} @ {_rad:g} mas); "
           f"TODO stringent >= {min_filters}-filter/{max_sep_mas}mas/SNR>{snr_min} cut",
           flush=True)
     return out
