@@ -1724,9 +1724,21 @@ def load_satstar_catalog(filtername, target='brick',
     try:
         newest_src = max(os.path.getmtime(fn) for fn in fallback)
         if os.path.exists(cache) and os.path.getmtime(cache) >= newest_src:
-            print(f"Using consolidated satstar catalog {cache} "
-                  f"(cache fresh vs {len(fallback)} per-exposure catalogs)")
-            return Table.read(cache)
+            cached = Table.read(cache)
+            # mtime freshness alone is NOT sufficient: a phase merge can run
+            # before later phases' per-exposure satstar catalogs exist, building
+            # a cache from FEWER files whose mtime still passes this check on a
+            # later read.  That silently dropped saturated stars from the W51
+            # F480M catalog (cache of ~1500 vs the full ~27000).  Also require
+            # the cache to have been built from the same NUMBER of per-exposure
+            # catalogs; rebuild when more have appeared.
+            if int(cached.meta.get('NSATSRC', -1)) == len(fallback):
+                print(f"Using consolidated satstar catalog {cache} "
+                      f"(cache fresh vs {len(fallback)} per-exposure catalogs)")
+                return cached
+            print(f"Rebuilding satstar cache {cache}: built from "
+                  f"{cached.meta.get('NSATSRC', 'unknown')} per-exposure "
+                  f"catalogs but {len(fallback)} now exist")
     except OSError:
         pass  # stat/read failure -> rebuild from per-exposure catalogs below
 
@@ -1741,6 +1753,9 @@ def load_satstar_catalog(filtername, target='brick',
     # the merged-cat residual subtracts it N times.  Collapse to one row per
     # physical star (keep the brightest as representative).
     deduped = _dedup_satstar_catalog(combined)
+    # record how many per-exposure catalogs this cache was built from, so a
+    # later read can detect (and rebuild) when more have since appeared.
+    deduped.meta['NSATSRC'] = len(fallback)
     try:
         os.makedirs(os.path.dirname(cache), exist_ok=True)
         # write to a temp sibling + atomic rename so a concurrent reader never

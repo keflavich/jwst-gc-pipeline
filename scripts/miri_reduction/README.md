@@ -22,6 +22,19 @@ there even for non-brick datasets.
 | `miri_f2550w_tile_homogenize_v3.py` | `/orange/adamginsburg/jwst/brick/reduction_scripts/` | Per-visit-tile background-plane homogenization (fit each tile's plane deviation from the consensus mosaic, subtract, rebuild).  **Negative result**: did NOT reduce the x=1609 seam -- the plane mostly re-measured skymatch's constants, and the edge artifact varies along the boundary on ~50 px scales, which a plane cannot represent.  Kept for the record. |
 | `miri_f2550w_edgetrim_v4.py` | `/orange/adamginsburg/jwst/brick/reduction_scripts/` | Detector edge-trim: DQ-flag 40 east columns / 16 west columns / 12 rows per frame (the east-edge glow reaches +150..+1400 MJy/sr and varies frame-to-frame and along the edge), then rebuild image3 with the v2a configuration.  In overlap strips neighbors' clean interiors cover the trimmed pixels, removing the seam at its source. |
 
+### Sickle MIRI astrometric registration (prop 3958) — see brick-jwst-2221
+
+The sickle MIRI → NIRCam-F480M registration scripts are **region-specific** and
+live in the **brick-jwst-2221** repo, not here:
+`brick2221/reduction/register_sickle_miri_o001_o002.py`,
+`register_o002_f770w_per_frame_to_f480m.py`,
+`register_o002_f770w_gwcs_to_f480m.py`, `merge_sickle_miri_o001_o002.py`
+(+ `brick2221/reduction/build_sickle_gns_offsets.py` and
+`brick2221/shellscripts/sickle_gns_reduce_retry.sh` for the NIRCam sickle→GNS
+offsets). They are **manual pre-steps** — run before cataloging a sickle MIRI obs
+or its mosaics sit ~3.3″ off truth. See the "Offsets-table provenance" section of
+`jwst_gc_pipeline/reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md`.
+
 Analysis scripts (source validation/classification, CMDs) live in
 `brick-jwst-2221/brick2221/analysis/` (`f2550w_source_validation_o003.py`,
 `miri_cmd.py`) -- jwst-gc-pipeline is for pipeline work, brick2221 for

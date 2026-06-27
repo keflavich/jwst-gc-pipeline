@@ -33,7 +33,8 @@
 # Defaults below target Sgr C (proposal 4147, field 012), all 8 filters,
 # reusing existing *_cal.fits (skip_step1and2 / -s).
 # ---------------------------------------------------------------------------
-#SBATCH --job-name=gc_reduce
+# renamed to "red_<prop>_<field>_<filt>" at runtime (target is not always the GC)
+#SBATCH --job-name=reduce
 #SBATCH --account=astronomy-dept
 #SBATCH --qos=astronomy-dept-b
 #SBATCH --partition=hpg-default

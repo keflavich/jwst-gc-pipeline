@@ -3287,6 +3287,18 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--manual-ext-local-snr-min", dest="manual_ext_local_snr_min",
                     type='float', default=5.0,
                     help="Extended-emission vetting: require local S/N >= this (default 5).")
+    parser.add_option("--manual-ext-snr-high-keep", dest="manual_ext_snr_high_keep",
+                    type='float', default=20.0,
+                    help="Extended-emission vetting BRIGHT-ISOLATED keep: a "
+                         "group_size==1 source (trustworthy S/N) with S/N >= this "
+                         "AND qfit < --manual-ext-qfit-high-keep-max is kept even "
+                         "if its qfit is above the star_like qfit_max (real bright/"
+                         "faint stars on bright emission whose qfit/peakSB are "
+                         "degraded by the background; default 20).")
+    parser.add_option("--manual-ext-qfit-high-keep-max", dest="manual_ext_qfit_high_keep_max",
+                    type='float', default=0.4,
+                    help="Upper qfit cap for the bright-isolated keep (default 0.4); "
+                         "extended-emission knots have worse qfit so stay rejected.")
     # Structure-noise prune + coarse-bg detection.  These shape/physics-based
     # discriminators reject broad extended-emission (PAH/nebulosity) bumps while
     # keeping faint point sources (which stay sharp and outpeak the local
@@ -3314,6 +3326,15 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                           "<box>px median before daofind so faint stars on a bright "
                           "but smooth extended pedestal are not lost.  0 disables "
                           "(default 0); MIRI raw rounds use 51."))
+    parser.add_option("--saturation-data-floor", dest="saturation_data_floor",
+                    type='float', default=-1.0,
+                    help=("Only treat a SATURATED-DQ pixel as un-fittable when its "
+                          "data exceeds this floor.  Guards against JUMP/persistence "
+                          "artifacts mis-tagged SATURATED on unsaturated sources, "
+                          "which otherwise drop a seeded real star from every frame "
+                          "(e.g. W51 F480M, peak ~355 vs true saturation >1e4).  "
+                          "-1 (default) = per-filter auto (NIRCam table; MIRI/unlisted "
+                          "-> mask all); 0 = mask all SATURATED; >0 = explicit floor."))
     parser.add_option("--manual-group-min-sep-fwhm", dest="manual_group_min_sep_fwhm",
                     type='float', default=2.0,
                     help=("SourceGrouper grouping radius in FWHM (manual path; "

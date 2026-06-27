@@ -76,6 +76,7 @@ echo "Stage 1: per-filter array (0-$((NF-1))) over: $FILTERS${DEP_ARG:+  [$DEP_A
 ARR=$(sbatch --parsable \
     --array=0-$((NF-1)) \
     $DEP_ARG \
+    --job-name="${TARGET}-catalog" \
     --cpus-per-task="$PERFILTER_CPUS" --mem="$PERFILTER_MEM" --time="$PERFILTER_TIME" \
     --export="$COMMON_EXPORT,PARALLEL_WORKERS=$PERFILTER_CPUS" \
     "$HERE/submit_cataloging.sbatch")
@@ -86,6 +87,7 @@ M7_EXPORT="$COMMON_EXPORT,PARALLEL_WORKERS=$M7_CPUS"
 [ -n "$CROSSBAND_REF" ] && M7_EXPORT="$M7_EXPORT,CROSSBAND_REF=$CROSSBAND_REF"
 M7=$(sbatch --parsable \
     --dependency=afterok:"$ARR" \
+    --job-name="${TARGET}-catalog-m7" \
     --cpus-per-task="$M7_CPUS" --mem="$M7_MEM" --time="$M7_TIME" \
     --export="$M7_EXPORT" \
     "$HERE/submit_cataloging_m7.sbatch")

@@ -16,7 +16,8 @@
 # final cross-band catalog; in-FOV science is unaffected.  For full fidelity on
 # off-FOV satstars, run the monolithic multifilter job instead.
 # ---------------------------------------------------------------------------
-#SBATCH --job-name=gc_catalog_m7
+# renamed to "<target>-catalog-m7" at runtime (target is not always the GC)
+#SBATCH --job-name=catalog_m7
 #SBATCH --account=astronomy-dept
 #SBATCH --qos=astronomy-dept-b
 #SBATCH --partition=hpg-default
@@ -39,6 +40,8 @@ FIELD=${FIELD:-012}
 TARGET=${TARGET:-sgrc}
 MODULES=${MODULES:-nrcb}
 EACH_SUFFIX=${EACH_SUFFIX:-destreak_o012_crf}
+[ -n "${SLURM_JOB_ID:-}" ] && scontrol update JobId="$SLURM_JOB_ID" \
+    JobName="${TARGET}-catalog-m7" 2>/dev/null || true
 # ALL filters that participate in the cross-band merge (space-separated).
 FILTERS=${FILTERS:-"F115W F162M F182M F212N F360M F405N F470N F480M"}
 MAX_GROUP_SIZE=${MAX_GROUP_SIZE:-unlimited}
