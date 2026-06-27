@@ -94,16 +94,53 @@ if __name__ == '__main__':
 _AK_COEFF = {'f150w': 2.054, 'f200w': 1.167, 'f277w': 0.607, 'f212n': 1.043, 'f323n': 0.448}
 
 
-def plot_pm_l_vs_extinction(pm_path, m7_path, out_png, sig_thresh=3.0, max_err=2.5,
-                            blue=None, red=None, color_intrinsic=None, match_radius=0.15):
+def _aks_from_jwst(c, m7_path, blue, red, color_intrinsic, match_radius):
+    import astropy.units as u
+    from astropy.coordinates import SkyCoord
+    m7 = Table.read(m7_path)
+    filt = [cn[len('mag_ab_'):] for cn in m7.colnames
+            if cn.startswith('mag_ab_') and cn[len('mag_ab_'):] in _AK_COEFF]
+    filt = sorted(filt, key=lambda f: -_AK_COEFF[f])
+    blue = blue or filt[0]; red = red or filt[-1]
+    msc = SkyCoord(m7['skycoord_ref'])
+    idx, sep, _ = c.match_to_catalog_sky(msc)
+    mb = np.asarray(m7[f'mag_ab_{blue}'], float)[idx]
+    mr = np.asarray(m7[f'mag_ab_{red}'], float)[idx]
+    color = mb - mr
+    # bright PM stars saturate in JWST -> reject saturated / bad photometry
+    base = (sep < match_radius * u.arcsec) & np.isfinite(color)
+    base &= (mb > 13) & (mb < 24) & (mr > 13) & (mr < 24)
+    for f in (blue, red):
+        sat = f'is_saturated_{f}'
+        if sat in m7.colnames:
+            base &= ~np.asarray(m7[sat], bool)[idx]
+    clo, chi = np.nanpercentile(color[base], [2, 98]); base &= (color > clo) & (color < chi)
+    ci = float(np.nanpercentile(color[base], 5)) if color_intrinsic is None else color_intrinsic
+    aks = (color - ci) / (_AK_COEFF[blue] - _AK_COEFF[red])
+    return aks, base, f'JWST {blue.upper()}-{red.upper()}'
+
+
+def _aks_from_gns(c, gns_path, match_radius, ehk_intrinsic=0.10, aks_per_ehk=1.328):
+    import astropy.units as u
+    from astropy.coordinates import SkyCoord
+    gns = Table.read(gns_path)
+    gsc = SkyCoord(np.asarray(gns['RAJ2000'], float) * u.deg, np.asarray(gns['DEJ2000'], float) * u.deg)
+    idx, sep, _ = c.match_to_catalog_sky(gsc)
+    hk = np.asarray(gns['Hmag'], float)[idx] - np.asarray(gns['Ksmag'], float)[idx]
+    aks = aks_per_ehk * (hk - ehk_intrinsic)
+    base = (sep < match_radius * u.arcsec) & np.isfinite(aks)
+    return aks, base, 'GNS H-Ks'
+
+
+def plot_pm_l_vs_extinction(pm_path, out_png, ext_source='jwst', m7_path=None,
+                            gns_path=None, max_err=2.5, blue=None, red=None,
+                            color_intrinsic=None, match_radius=0.15):
     """pm in Galactic longitude (mu_l*cosb) vs near-IR extinction A_Ks.
 
-    A_Ks is derived from the JWST color of the m7 catalog:
-        A_Ks = (m_blue - m_red - color_intrinsic) / (k_blue - k_red),
-    with k = A_filt/A_Ks (GC lambda^-2 law).  ``blue``/``red`` default to the
-    bluest/reddest mag_ab_<filt> present.  Only PM uncertainty < max_err kept.
-    In the GC, low- vs high-extinction (foreground vs distant) populations stream
-    differently in mu_l.
+    ext_source='jwst': A_Ks from the JWST m7 color (needs m7_path); clean,
+    non-saturated photometry only.  ext_source='gns': A_Ks from GNS H-Ks
+    (needs gns_path).  Only PM uncertainty < max_err kept.  In the GC, low- vs
+    high-extinction (foreground vs distant) populations stream differently in mu_l.
     """
     import astropy.units as u
     from astropy.coordinates import SkyCoord
@@ -111,43 +148,16 @@ def plot_pm_l_vs_extinction(pm_path, m7_path, out_png, sig_thresh=3.0, max_err=2
     fin = np.isfinite(t['pm_ra']) & np.isfinite(t['pm_dec']) & np.isfinite(t['pm_ra_err'])
     sig, err = pm_significance(t)
     good = fin & (err < max_err) & (np.abs(t['pm_tot']) < 200)
-
     c = SkyCoord(ra=np.asarray(t['ra0'])[good] * u.deg, dec=np.asarray(t['dec0'])[good] * u.deg,
                  pm_ra_cosdec=np.asarray(t['pm_ra'])[good] * u.mas / u.yr,
                  pm_dec=np.asarray(t['pm_dec'])[good] * u.mas / u.yr, frame='icrs')
-    g = c.galactic
-    pm_l = g.pm_l_cosb.to(u.mas / u.yr).value
-
-    # JWST color -> A_Ks, matched from the m7 catalog
-    m7 = Table.read(m7_path)
-    filt = [cn[len('mag_ab_'):] for cn in m7.colnames
-            if cn.startswith('mag_ab_') and cn[len('mag_ab_'):] in _AK_COEFF]
-    filt = sorted(filt, key=lambda f: -_AK_COEFF[f])  # bluest (highest k) first
-    blue = blue or filt[0]; red = red or filt[-1]
-    msc = SkyCoord(m7['skycoord_ref'])
-    idx, sep, _ = c.match_to_catalog_sky(msc)
-    mb = np.asarray(m7[f'mag_ab_{blue}'], float)[idx]
-    mr = np.asarray(m7[f'mag_ab_{red}'], float)[idx]
-    color = mb - mr
-    # Bright PM stars saturate in JWST -> unreliable colors.  Keep only clean,
-    # non-saturated photometry: matched, finite mags in a sane range, color within
-    # a physical NIR window, and (if present) not flagged saturated in either band.
-    base = (sep < match_radius * u.arcsec) & np.isfinite(color) & np.isfinite(pm_l)
-    base &= (mb > 13) & (mb < 24) & (mr > 13) & (mr < 24)
-    for f in (blue, red):
-        sat = f'is_saturated_{f}'
-        if sat in m7.colnames:
-            base &= ~np.asarray(m7[sat], bool)[idx]
-    # robust color window (2-98 pct of the clean set) to drop residual outliers
-    clo, chi = np.nanpercentile(color[base], [2, 98])
-    base &= (color > clo) & (color < chi)
-    # intrinsic color = blue edge (least-reddened) of the clean distribution
-    if color_intrinsic is None:
-        color_intrinsic = float(np.nanpercentile(color[base], 5))
-    aks = (color - color_intrinsic) / (_AK_COEFF[blue] - _AK_COEFF[red])
-    m = base
+    pm_l = c.galactic.pm_l_cosb.to(u.mas / u.yr).value
+    if ext_source == 'gns':
+        aks, base, color_label = _aks_from_gns(c, gns_path, match_radius)
+    else:
+        aks, base, color_label = _aks_from_jwst(c, m7_path, blue, red, color_intrinsic, match_radius)
+    m = base & np.isfinite(pm_l)
     aks, pm_l = aks[m], pm_l[m]
-    color_label = f'{blue.upper()}-{red.upper()}'
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6.5), sharey=False)
     # scatter: pm_l vs A_Ks
@@ -174,9 +184,25 @@ def plot_pm_l_vs_extinction(pm_path, m7_path, out_png, sig_thresh=3.0, max_err=2
     ax2.set_title(f'density ({m.sum()} stars, $\\sigma_{{pm}}$<{max_err:g} mas/yr)')
     fig.colorbar(hb, ax=ax2, label='log N')
     fig.suptitle(f'{pm_path.split("/")[-1]}: $\\mu_\\ell$ vs $A_{{Ks}}$ '
-                 f'(from JWST {color_label}; $\\sigma_{{pm}}$<{max_err:g} mas/yr)', fontsize=12)
+                 f'($A_{{Ks}}$ from {color_label}; $\\sigma_{{pm}}$<{max_err:g} mas/yr)', fontsize=12)
     fig.tight_layout()
     fig.savefig(out_png, dpi=130, bbox_inches='tight')
     plt.close(fig)
     return dict(n=int(m.sum()), aks_range=[float(np.nanmin(aks)), float(np.nanmax(aks))],
                 pm_l_med=float(np.nanmedian(pm_l)))
+
+
+def make_all_pm_plots(pm_path, m7_path, gns_path, outdir, tag):
+    """Produce all PM figures for one field: VPD+spatial map, plus mu_l-vs-A_Ks
+    from BOTH GNS H-Ks and the JWST color."""
+    import os
+    res = {}
+    res['vpd'] = plot_pm_figure(pm_path, os.path.join(outdir, f'pm_{tag}_figure.png'),
+                                sig_thresh=5.0, max_err=1.0, m7_path=m7_path)
+    res['ext_gns'] = plot_pm_l_vs_extinction(
+        pm_path, os.path.join(outdir, f'pm_{tag}_pml_vs_Aks_gns.png'),
+        ext_source='gns', gns_path=gns_path, max_err=2.5)
+    res['ext_jwst'] = plot_pm_l_vs_extinction(
+        pm_path, os.path.join(outdir, f'pm_{tag}_pml_vs_Aks_jwst.png'),
+        ext_source='jwst', m7_path=m7_path, max_err=2.5)
+    return res
