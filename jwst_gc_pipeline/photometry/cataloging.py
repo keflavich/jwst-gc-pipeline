@@ -1440,7 +1440,7 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
 # Detection on the merged i2d -> augmented seed for the next per-frame round
 # ---------------------------------------------------------------------------
 def _structure_noise_keep(data, err, xpix, ypix, *, struct_x=0.0, struct_y=0.0,
-                          smooth_box=51, struct_box=51):
+                          smooth_box=51, struct_box=51, robust=False):
     """Structure-noise prune (AG 2026-06-13): keep a detection only if its data
     peak rises above the local extended-emission baseline by a combination of
     photon/read noise AND emission-structure noise:
@@ -1450,11 +1450,22 @@ def _structure_noise_keep(data, err, xpix, ypix, *, struct_x=0.0, struct_y=0.0,
     smoothed_mean   = median-filtered data on ``smooth_box`` (>~5x FWHM, so it is
                       the large-scale background, NOT the filaments);
     real_noise      = propagated per-pixel ERR;
-    structure_noise = local RMS of (data - smoothed) over ``struct_box`` -- the
+    structure_noise = local scatter of (data - smoothed) over ``struct_box`` -- the
                       "noise" introduced by emission structure.  This rejects
                       filament/PAH bumps (high structure noise) while keeping real
                       point sources (peak >> both noises).  Tuned high-purity on
                       sickle F770W: (struct_x, struct_y) ~ (5, 8).
+
+    ``robust``: the default structure_noise is a 51px MEAN-of-squares RMS, which
+    is contaminated by the point sources themselves -- a single bright residual
+    wing or neighbouring star spikes the window and inflates the threshold for
+    every faint source nearby, dropping ~80% of real faint point sources on the
+    bg-subtracted m5/m6 residual (cloudc F770W: 1311 point-like detections lost,
+    AG 2026-06-28).  ``robust=True`` measures the structure noise with a sliding
+    MAD instead (1.4826 * median |hp - median(hp)|), which is immune to source
+    spikes and tracks genuine diffuse emission only.  Use it where the bright
+    sources have already been subtracted (m5/m6); the constants differ between
+    the two metrics (MAD is smaller-magnitude, so it wants a larger struct_y).
 
     Returns a boolean keep-mask aligned with (xpix, ypix).  No-op if both x,y=0.
     """
@@ -1466,7 +1477,13 @@ def _structure_noise_keep(data, err, xpix, ypix, *, struct_x=0.0, struct_y=0.0,
     filled = np.where(good, data, np.nanmedian(data[good]))
     smoothed = median_filter(filled, size=smooth_box)
     hp = filled - smoothed
-    struct_noise = np.sqrt(np.clip(uniform_filter(hp**2, size=struct_box), 0, None))
+    if robust:
+        # sliding MAD: spike-immune estimate of the local emission-structure
+        # scatter (mean-of-squares below is dominated by point-source spikes).
+        hp_med = median_filter(hp, size=struct_box)
+        struct_noise = 1.4826 * median_filter(np.abs(hp - hp_med), size=struct_box)
+    else:
+        struct_noise = np.sqrt(np.clip(uniform_filter(hp**2, size=struct_box), 0, None))
     rn = (np.asarray(err, dtype=float) if err is not None
           else np.full_like(data, mad_std(hp[good])))
     ny, nx = data.shape
@@ -1479,7 +1496,8 @@ def _structure_noise_keep(data, err, xpix, ypix, *, struct_x=0.0, struct_y=0.0,
 def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, *,
                               local_snr_min=5.0, roundlo=-0.5, roundhi=0.5,
                               sharplo=0.4, sharphi=1.2, bg_subtract_path=None,
-                              struct_x=0.0, struct_y=0.0, coarse_bg_box=0, label=''):
+                              struct_x=0.0, struct_y=0.0, struct_robust=False,
+                              coarse_bg_box=0, label=''):
     """daofind on the merged i2d co-add, unioned with the previous vetted merged
     catalog, written as a seed catalog (``skycoord`` + ``flux``) for the next
     per-frame PSF-photometry round (the plan's iter3 seed = daofind(i2d) +
@@ -1581,11 +1599,12 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
     if len(det) and (struct_x or struct_y):
         xd0, yd0 = _L._best_available_xy(det)
         skeep = _structure_noise_keep(np.where(mask, np.nan, data), err, xd0, yd0,
-                                      struct_x=struct_x, struct_y=struct_y)
+                                      struct_x=struct_x, struct_y=struct_y,
+                                      robust=struct_robust)
         n_before = len(det)
         det = det[skeep]
-        print(f"[{label}] struct-noise prune (x={struct_x},y={struct_y}): "
-              f"{n_before} -> {len(det)}", flush=True)
+        print(f"[{label}] struct-noise prune (x={struct_x},y={struct_y},"
+              f"robust={struct_robust}): {n_before} -> {len(det)}", flush=True)
 
     # previous vetted merged catalog -> sky
     prev = _L._resolve_seed_skycoords(Table.read(prev_vetted_path))
@@ -1995,9 +2014,18 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 opts_phase.manual_iter2_local_snr = min(base_iter2, 3.0)
                 opts_phase.manual_ext_local_snr_min = min(base_extsnr, 3.0)
                 # background already subtracted -> structure noise is lower;
-                # relax the prune to recover faint point sources (tweak 3)
+                # relax the prune to recover faint point sources (tweak 3).
+                # The legacy MEAN-of-squares structure_noise was contaminated by
+                # the point sources themselves (a bright residual wing / neighbour
+                # spikes the 51px window), dropping ~80% of real faint point
+                # sources here (cloudc F770W m6: 2520->583, 1311 point-like lost;
+                # AG 2026-06-28).  Switch to the spike-immune sliding-MAD metric
+                # (struct_robust) -- valid because the bright sources are already
+                # subtracted on m5/m6 -- and raise struct_y to 8 (MAD is
+                # smaller-magnitude than the RMS): point-like retention 22%->76%.
                 opts_phase.struct_x = 3.0
-                opts_phase.struct_y = 4.0
+                opts_phase.struct_y = 8.0
+                opts_phase.struct_robust = True
                 # bg already subtracted & trustworthy -> no coarse-bg detection
                 opts_phase.coarse_bg_box = 0
             opts_phase.manual_ext_qfit_max = max(base_qfit, 0.4)
@@ -2077,6 +2105,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             # enable the prune on extended-emission fields.
                             struct_x=float(getattr(opts_phase, 'struct_x', 0.0)),
                             struct_y=float(getattr(opts_phase, 'struct_y', 0.0)),
+                            struct_robust=bool(getattr(opts_phase, 'struct_robust', False)),
                             coarse_bg_box=int(getattr(opts_phase, 'coarse_bg_box', 0)),
                             label=f'{phase}:{filt}')
                     except Exception as ex:
