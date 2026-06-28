@@ -2269,11 +2269,16 @@ def main():
                                             except ValueError as ex:
                                                 if blur and not options.strict_require_blur:
                                                     print("Skipping missing blur files")
-                                                elif options.field not in (None, '') and 'No tables found' in str(ex):
-                                                    # Per-obs merge: this observation legitimately
-                                                    # lacks this filter (e.g. gc2211 o023 has no
-                                                    # F150W; o050 is module-B only).  Skip, don't fail.
-                                                    print(f"Skipping {filtername} for obs {options.field}: no frames ({ex})")
+                                                elif 'No tables found' in str(ex):
+                                                    # This filter has zero per-frame catalogs for
+                                                    # this run -- skip it, don't kill the whole merge.
+                                                    # Legitimate cases: a per-obs merge where the obs
+                                                    # lacks the filter (gc2211 o023 has no F150W), OR a
+                                                    # target whose filter list includes bands not
+                                                    # cataloged in this pass (brick's 2221 list carries
+                                                    # MIRI f2550w, absent from the NIRCam m7 run).
+                                                    print(f"Skipping {filtername} (prog {progid}): no per-frame "
+                                                          f"catalogs found, continuing ({ex})", flush=True)
                                                 else:
                                                     raise ex
                                             print(f"Finished merge_individual_frames {suffix} {progid} {filtername} {method}")
