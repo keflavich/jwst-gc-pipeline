@@ -1188,8 +1188,29 @@ def _augment_seed_catalog_with_detections_sky(seed_catalog, detection_catalog, w
     return combined
 
 
+def _protect_mask(x, y, protect_xy, protect_radius_pix):
+    """Boolean mask over (x, y) fits within ``protect_radius_pix`` of any coadd-
+    confirmed seed position in ``protect_xy`` (Nx2 pixel array).  Used to exempt
+    real, independently-confirmed stars from the satstar-wing / near-saturation
+    drops in dense fields (W51 IRS2): a real star on a bright neighbour's wing
+    would otherwise be culled as a wing artifact."""
+    if protect_xy is None or len(protect_xy) == 0 or protect_radius_pix <= 0:
+        return np.zeros(len(x), dtype=bool)
+    from scipy.spatial import cKDTree
+    pts = np.column_stack([np.asarray(x, dtype=float), np.asarray(y, dtype=float)])
+    finite = np.isfinite(pts[:, 0]) & np.isfinite(pts[:, 1])
+    prot = np.zeros(len(x), dtype=bool)
+    if not np.any(finite):
+        return prot
+    tree = cKDTree(np.asarray(protect_xy, dtype=float))
+    dd, _ = tree.query(pts[finite], k=1)
+    prot[finite] = dd <= float(protect_radius_pix)
+    return prot
+
+
 def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
-                            label, max_log_rows=50):
+                            label, max_log_rows=50,
+                            protect_xy=None, protect_radius_pix=0.0):
     """Drop fits from ``phot_obj.results`` whose center is within
     ``max_sat_dist_pix`` pixels of any SATURATED-DQ pixel and keep the
     PSFPhotometry object's state consistent.
@@ -1232,6 +1253,13 @@ def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
         sat_dist[in_frame] = sat_dist_map[iy[in_frame], ix[in_frame]]
 
     drop = sat_dist <= float(max_sat_dist_pix)
+    if drop.any() and protect_xy is not None and protect_radius_pix > 0:
+        prot = _protect_mask(x, y, protect_xy, protect_radius_pix)
+        n_prot = int(np.sum(drop & prot))
+        if n_prot:
+            drop = drop & ~prot
+            print(f"Saturation-proximity filter ({label}): protected {n_prot} "
+                  f"coadd-confirmed seeds from drop", flush=True)
     n_drop = int(np.sum(drop))
     if n_drop == 0:
         return 0
@@ -1304,7 +1332,8 @@ def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
 
 
 def _filter_satstar_artifacts(phot_obj, satstar_model, err, *,
-                              sig_K, ratio_cut, label, max_log_rows=50):
+                              sig_K, ratio_cut, label, max_log_rows=50,
+                              protect_xy=None, protect_radius_pix=0.0):
     """Drop fits sitting inside significant satstar PSF wings whose own
     model contribution is < ``ratio_cut`` x ``satstar_model`` at that pixel.
 
@@ -1351,6 +1380,13 @@ def _filter_satstar_artifacts(phot_obj, satstar_model, err, *,
     safe_sat = np.where(sat_val > 0, sat_val, np.nan)
     ratio = np.where(in_gate, dao_val / safe_sat, np.inf)
     drop = in_gate & np.isfinite(ratio) & (ratio < ratio_cut)
+    if drop.any() and protect_xy is not None and protect_radius_pix > 0:
+        prot = _protect_mask(x, y, protect_xy, protect_radius_pix)
+        n_prot = int(np.sum(drop & prot))
+        if n_prot:
+            drop = drop & ~prot
+            print(f"Satstar-artifact filter ({label}): protected {n_prot} "
+                  f"coadd-confirmed seeds from drop", flush=True)
     n_drop = int(np.sum(drop))
     if n_drop == 0:
         print(f"Satstar-artifact filter ({label}): no drops "

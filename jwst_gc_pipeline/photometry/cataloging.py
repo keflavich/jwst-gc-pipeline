@@ -171,7 +171,7 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                       near_sat_dist_pix=1.0,
                       miri_prominence_snr=0.0, prominence_bg_box=0,
                       prominence_data_i2d=None, prominence_ww_i2d=None,
-                      frame_ww=None):
+                      frame_ww=None, protect_xy=None, protect_radius_pix=0.0):
     """One single-pass ``PSFPhotometry`` fit seeded by ``init_params``, followed
     by the standard post-fit cleanup chain (mirrors the legacy BASIC block):
 
@@ -244,11 +244,13 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
 
     # --- near-saturation + satstar-wing rejection ---
     _filter_near_saturation(phot, dq, max_sat_dist_pix=near_sat_dist_pix,
-                            label=label)
+                            label=label, protect_xy=protect_xy,
+                            protect_radius_pix=protect_radius_pix)
     _filter_satstar_artifacts(phot, satstar_model_subtracted, err,
                               sig_K=float(options.satstar_artifact_sigK),
                               ratio_cut=float(options.satstar_artifact_ratio),
-                              label=label)
+                              label=label, protect_xy=protect_xy,
+                              protect_radius_pix=protect_radius_pix)
 
     # --- MIRI satstar-coincidence drop ---
     # The satstar channel OWNS saturated stars (fit + subtracted before this
@@ -884,6 +886,12 @@ _NIRCAM_SAT_DATA_FLOOR = {
     'f335m': 2500., 'f360m': 2500., 'f405n': 5000., 'f410m': 2500., 'f480m': 5000.,
 }
 
+# Extended-emission / crowded NIRCam fields: dense saturated regions (e.g. W51
+# IRS2) need the structure-noise-prune default + the satstar-channel guards
+# (in-field dedup exemption, per-frame seed protection).  Used by
+# run_manual_pipeline and do_photometry_step_manual.
+_EXTENDED_EMISSION_TARGETS = ('w51', 'sickle', 'wd2')
+
 
 def _resolve_each_suffix(options, filtername):
     """Per-filter input per-exposure-crf suffix.
@@ -1358,6 +1366,35 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
                 _satstar_xy = np.column_stack([_sxv[_ok], _syv[_ok]])
                 _satstar_excl_pix = 1.5 * ctx.fwhm_pix
 
+    # Coadd-confirmed seed protection (extended-emission/crowded fields only):
+    # exempt fits at i2d-seed positions from the satstar-wing / near-saturation
+    # drops, so a real star on a bright neighbour's wing (W51 IRS2) survives the
+    # per-frame fit instead of being culled as a wing artifact.  Fresh per-frame
+    # daofind detections (the actual wing artifacts) are NOT in the i2d seed, so
+    # the filters still remove them.
+    _protect_xy = None
+    _protect_radius = 0.0
+    if (str(getattr(options, 'target', '')).lower() in _EXTENDED_EMISSION_TARGETS
+            and prev_seed_catalog):
+        try:
+            _pt = Table.read(prev_seed_catalog)
+            _psc = _pt['skycoord'] if 'skycoord' in _pt.colnames else None
+            if _psc is not None and len(_pt):
+                if not isinstance(_psc, SkyCoord):
+                    _psc = SkyCoord(_psc)
+                _px, _py = ctx.ww.world_to_pixel(_psc)
+                _ok = np.isfinite(_px) & np.isfinite(_py)
+                if np.any(_ok):
+                    _protect_xy = np.column_stack(
+                        [np.asarray(_px)[_ok], np.asarray(_py)[_ok]])
+                    _protect_radius = max(1.5, 0.5 * ctx.fwhm_pix)
+                    print(f"[{manual_phase}] seed protection: {len(_protect_xy)} "
+                          f"coadd-confirmed positions, r={_protect_radius:.1f}px",
+                          flush=True)
+        except (OSError, ValueError, KeyError) as _pex:
+            print(f"[{manual_phase}] seed-protection setup skipped: {_pex}",
+                  flush=True)
+
     def _pass(seed, label):
         return _manual_phot_pass(
             data=ctx.nan_replaced_data, mask=ctx.mask, err=ctx.err, bad=ctx.bad,
@@ -1377,7 +1414,8 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
                                  if _is_miri else 0.0),
             prominence_bg_box=0,
             prominence_data_i2d=_prom_i2d, prominence_ww_i2d=_prom_ww_i2d,
-            frame_ww=ctx.ww)
+            frame_ww=ctx.ww, protect_xy=_protect_xy,
+            protect_radius_pix=_protect_radius)
 
     if manual_phase == 'm12':
         seed1 = _build_manual_seed(
@@ -2160,7 +2198,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
     # emission, dropped/kept SB ratio ~1.85) at ~zero net real-source loss vs the
     # SW F210M catalog.  Explicit --manual-struct-noise-x/-y override this.  MIRI
     # is skipped (its per-phase miri_tuning schedule sets these itself).
-    EXTENDED_EMISSION_TARGETS = ('w51', 'sickle', 'wd2')
+    EXTENDED_EMISSION_TARGETS = _EXTENDED_EMISSION_TARGETS
     if (not miri_tuning and str(target).lower() in EXTENDED_EMISSION_TARGETS
             and float(getattr(options, 'struct_x', 0.0)) == 0.0
             and float(getattr(options, 'struct_y', 0.0)) == 0.0):
