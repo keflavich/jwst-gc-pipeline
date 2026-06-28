@@ -1873,7 +1873,8 @@ def _run_one_frame_manual(args):
 
 
 def _clean_offfov_dups_and_offfield(merged, filt, data_i2d_path, basepath, *,
-                                    dedup_arcsec=1.0, fov_pad_psf=5.0):
+                                    dedup_arcsec=1.0, fov_pad_psf=5.0,
+                                    dedup_offfov_only=False):
     """Post-merge cleanup of off-FOV satstar artifacts (per-filter merged catalog).
 
     A) Collapse ``replaced_saturated`` rows clustering within ``dedup_arcsec`` to a
@@ -1902,9 +1903,47 @@ def _clean_offfov_dups_and_offfield(merged, filt, data_i2d_path, basepath, *,
           if 'replaced_saturated' in merged.colnames else np.zeros(len(merged), bool))
     drop = np.zeros(len(merged), bool)
 
+    # ---- compute off-FOV (outside bbox + pad) mask up front ----
+    # Used to gate mechanism A (in-field saturated stars must NOT be collapsed)
+    # and for mechanism B below.  Computed once here so A can reference it.
+    outside = np.zeros(len(merged), bool)
+    have_fov = False
+    if data_i2d_path and os.path.exists(data_i2d_path):
+        try:
+            with fits.open(data_i2d_path) as dh:
+                _s = dh['SCI'] if 'SCI' in [x.name for x in dh] else dh[0]
+                ww = wcs.WCS(_s.header); ny, nx = _s.data.shape
+            px = float(ww.proj_plane_pixel_scales()[0].to('arcsec').value)
+            fw = 0.16
+            try:
+                _ft = Table.read(f'{basepath}/reduction/fwhm_table.ecsv')
+                _row = _ft[_ft['Filter'] == filt.upper()]
+                if len(_row):
+                    fw = float(_row['PSF FWHM (arcsec)'][0])
+            except Exception:
+                pass
+            pad = fov_pad_psf * fw / px
+            x, y = ww.world_to_pixel(sc)
+            outside = ((x < -pad) | (x > nx - 1 + pad)
+                       | (y < -pad) | (y > ny - 1 + pad))
+            have_fov = True
+        except Exception as ex:
+            print(f"  off-field FOV mask skipped ({ex})", flush=True)
+
     # ---- A: dedup replaced_saturated clusters to one representative ----
+    # The 1.0" collapse is for an OFF-FOV bright star fit per-frame, whose
+    # (degenerate) positions scatter wider than the 0.15" satstar dedup.  But an
+    # IN-FIELD dense saturated region (W51 IRS2: 11-23 satstars within 1.0" of a
+    # single star) holds DISTINCT real stars -- collapsing them at 1.0" deletes
+    # the very stars we want (2026-06-28: 7+ hand-flagged F480M stars were lost
+    # this way).  When ``dedup_offfov_only`` and we have an FOV, restrict the
+    # collapse to off-FOV rows; in-field replaced_saturated rows (already deduped
+    # at 0.15" in satstar consolidation) are left untouched.
     if rs.any() and fcol is not None:
-        sat_idx = np.where(rs)[0]
+        elig = rs.copy()
+        if dedup_offfov_only and have_fov:
+            elig &= outside
+        sat_idx = np.where(elig)[0]
         ssc = sc[sat_idx]
         i1, i2, _, _ = search_around_sky(ssc, ssc, dedup_arcsec * u.arcsec)
         parent = list(range(len(sat_idx)))
@@ -1930,29 +1969,10 @@ def _clean_offfov_dups_and_offfield(merged, filt, data_i2d_path, basepath, *,
 
     # ---- B: drop non-satstar rows far outside the FOV ----
     n_off = 0
-    if data_i2d_path and os.path.exists(data_i2d_path):
-        try:
-            with fits.open(data_i2d_path) as dh:
-                _s = dh['SCI'] if 'SCI' in [x.name for x in dh] else dh[0]
-                ww = wcs.WCS(_s.header); ny, nx = _s.data.shape
-            px = float(ww.proj_plane_pixel_scales()[0].to('arcsec').value)
-            fw = 0.16
-            try:
-                _ft = Table.read(f'{basepath}/reduction/fwhm_table.ecsv')
-                _row = _ft[_ft['Filter'] == filt.upper()]
-                if len(_row):
-                    fw = float(_row['PSF FWHM (arcsec)'][0])
-            except Exception:
-                pass
-            pad = fov_pad_psf * fw / px
-            x, y = ww.world_to_pixel(sc)
-            outside = ((x < -pad) | (x > nx - 1 + pad)
-                       | (y < -pad) | (y > ny - 1 + pad))
-            offfield = outside & (~rs) & (~drop)
-            drop |= offfield
-            n_off = int(offfield.sum())
-        except Exception as ex:
-            print(f"  off-field FOV filter skipped ({ex})", flush=True)
+    if have_fov:
+        offfield = outside & (~rs) & (~drop)
+        drop |= offfield
+        n_off = int(offfield.sum())
     return merged[~drop], n_dedup, n_off
 
 
@@ -2820,7 +2840,11 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     merged, _ndup, _noff = _clean_offfov_dups_and_offfield(
                         merged, filt, _data_i2d_path(module, filt), basepath,
                         dedup_arcsec=float(getattr(options, 'offfov_dedup_arcsec', 1.0)),
-                        fov_pad_psf=float(getattr(options, 'offfield_fov_pad_psf', 5.0)))
+                        fov_pad_psf=float(getattr(options, 'offfield_fov_pad_psf', 5.0)),
+                        # In dense saturated regions (W51 IRS2) the 1.0" satstar
+                        # dedup collapses DISTINCT in-field stars; restrict it to
+                        # off-FOV rows for the extended-emission/crowded fields.
+                        dedup_offfov_only=(str(target).lower() in EXTENDED_EMISSION_TARGETS))
                     if _ndup or _noff:
                         print(f"manual [{phase}] {filt}/{module}: off-FOV cleanup "
                               f"removed {_ndup} duplicate satstar row(s) + {_noff} "
