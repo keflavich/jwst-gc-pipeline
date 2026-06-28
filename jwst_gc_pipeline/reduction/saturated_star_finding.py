@@ -2828,6 +2828,54 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # accumulation happened before the accept check, so a rejected
             # bad fit still corrupted the cumulative satstar model.
             full_model_image[y0:y1, x0:x1] += model_image
+            # BRIGHTNESS-SCALED MODEL FOOTPRINT (MIRI).  The model is rendered
+            # only over the small +-pad FIT cutout, so a BRIGHT star's PSF wings
+            # are truncated at the box -> a hard SQUARE edge in the model/residual
+            # (user-reported, sgrb2).  The FIT stays in the small box (stable),
+            # but the bright star should be SUBTRACTED with a footprint big enough
+            # to contain its wings.  Re-render the accepted model out to where its
+            # wing falls below a noise floor (radius grows with brightness, capped
+            # at the PSF grid FOV) and add ONLY the region exterior to the cutout
+            # (interior already added above -> no double count).  Gated by
+            # MIRI_SATSTAR_RENDER_FOOTPRINT (default 1).
+            if (_is_miri and not forced_source
+                    and int(os.environ.get('MIRI_SATSTAR_RENDER_FOOTPRINT', 1))):
+                try:
+                    _wfloor = float(os.environ.get('MIRI_SATSTAR_WING_FLOOR', 5.0))
+                    _psf0 = float(_psf_for_model(np.array([0.0]),
+                                                 np.array([0.0]))[0])
+                    _maxhalf = int(min(512,
+                        min(_psf_for_model.data.shape[-2:])
+                        // (2 * int(max(1, getattr(_psf_for_model,
+                                                   'oversampling', [1])[0])))))
+                    for _xf, _yf, _fl in zip(result['x_fit'], result['y_fit'],
+                                             result['flux_fit']):
+                        if not np.isfinite(_fl):
+                            continue
+                        _peak = _psf0 * float(_fl)
+                        # ~r^-3 diffraction wing reaches _wfloor at this radius
+                        _rh = (int(pad * (max(1.0, _peak / _wfloor)) ** (1.0 / 3.0))
+                               if _peak > _wfloor else pad)
+                        _rh = int(np.clip(_rh, pad, _maxhalf))
+                        if _rh <= pad:
+                            continue
+                        _gcx = x0 + float(_xf)
+                        _gcy = y0 + float(_yf)
+                        _Y0 = int(max(0, _gcy - _rh)); _Y1 = int(min(data.shape[0], _gcy + _rh))
+                        _X0 = int(max(0, _gcx - _rh)); _X1 = int(min(data.shape[1], _gcx + _rh))
+                        _yb, _xb = np.mgrid[_Y0:_Y1, _X0:_X1]
+                        _wing = np.maximum(_psf_for_model(_xb - _gcx, _yb - _gcy)
+                                           * float(_fl), 0)
+                        _ext = np.ones(_wing.shape, dtype=bool)
+                        _iy0 = max(_Y0, y0); _iy1 = min(_Y1, y1)
+                        _ix0 = max(_X0, x0); _ix1 = min(_X1, x1)
+                        if _iy1 > _iy0 and _ix1 > _ix0:
+                            _ext[_iy0 - _Y0:_iy1 - _Y0, _ix0 - _X0:_ix1 - _X0] = False
+                        full_model_image[_Y0:_Y1, _X0:_X1][_ext] += _wing[_ext]
+                        data_working[_Y0:_Y1, _X0:_X1][_ext] -= _wing[_ext]
+                except (ValueError, TypeError, IndexError) as _wex:
+                    print(f"satstar wing-render skipped src {ii+1}: {_wex}",
+                          flush=True)
             # mark pixels this accepted fit actually used (unmasked in its window)
             try:
                 flag_img[y0:y1, x0:x1][~mask] |= 4
