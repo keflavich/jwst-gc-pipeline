@@ -454,6 +454,16 @@ def _prepare_cutout_input(filename, basepath, filtername, options):
     x0, y0 = int(xslc.start), int(yslc.start)
     ny_c, nx_c = cut.data.shape
 
+    # A region that only grazes the detector edge trims (mode='trim') to a
+    # degenerate (zero- or near-zero-size) crop without raising NoOverlapError.
+    # That is not a usable frame -- treat it as a non-overlap so the per-exposure
+    # driver SKIPS it (legitimate for a cutout) instead of feeding an empty image
+    # downstream (empty-array reductions then crash, e.g. get_saturated_stars).
+    if ny_c < 2 or nx_c < 2:
+        raise CutoutNoOverlap(
+            f"cutout region grazes {os.path.basename(filename)} -> degenerate "
+            f"{ny_c}x{nx_c} crop")
+
     out_basepath = os.path.join(basepath, 'cutouts', label)
     out_dir = os.path.join(out_basepath, filtername, 'pipeline')
     os.makedirs(out_dir, exist_ok=True)

@@ -280,6 +280,15 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
 
     sources, nsource = label(saturated)
     print('Saturated starfinding: nsources=', nsource, flush=True)
+    if nsource == 0:
+        # No saturated components in this frame -- common for a small cutout or a
+        # sparse field.  The spike-merge / size / edge / center-of-mass logic
+        # below all index ``np.arange(nsource)+1`` (an empty array), and
+        # ``sum_labels`` on an empty index reduces with ``np.amin`` over nothing
+        # -> ``ValueError: zero-size array to reduction operation minimum``.
+        # Short-circuit to the empty result the caller expects (mirrors the
+        # ``if _n > 0`` guard on the cosmic-ray sum_labels above).
+        return saturated, sources, []
     # Fold disconnected diffraction-spike satellites into their dominant core
     # BEFORE edge/size logic so one star -> one component -> one satstar fit
     # (kills the per-frame hex of spike-tip duplicates).  Size-gated so two
@@ -1141,7 +1150,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # Precompute sat_area per labeled component so we can order in-FOV
     # source_records brightest-first for iterative-subtraction fitting
     # (see ``data_working`` setup + post-accept subtraction below).
-    if sources.max() > 0:
+    if sources.size and sources.max() > 0:
         _sizes_by_label = sum_labels(saturated, sources,
                                      np.arange(int(sources.max())) + 1)
     else:
