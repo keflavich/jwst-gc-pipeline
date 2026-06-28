@@ -19,7 +19,7 @@ import dust_extinction
 from astroquery.svo_fps import SvoFps
 from astroquery.vizier import Vizier
 from dust_extinction.averages import RRP89_MWGC, CT06_MWGC, F11_MWGC
-from dust_extinction.parameter_averages import CCM89
+from dust_extinction.parameter_averages import CCM89, G23
 import matplotlib as mpl
 
 from matplotlib.path import Path
@@ -82,6 +82,17 @@ _FILTER_WAVELENGTH_UM = {
     '182m187': 1.82, '187m182': 1.87,
     'Hmag': 1.634, 'Ksmag': 2.143527,
 }
+
+
+_G23_FALLBACK = G23()
+
+
+def _eval_ext(ext, w):
+    """Evaluate extinction law at wavelength w, falling back to G23 if out of range."""
+    try:
+        return ext(w)
+    except ValueError:
+        return _G23_FALLBACK(w)
 
 
 def _filter_to_wavelength(name):
@@ -242,10 +253,10 @@ def plot_extvec_ccd(ax, color1, color2, ext=CT06_MWGC(), extvec_scale=200,
         w3,w4 = w4,w3
         color2 = color2[::-1]
 
-    e_1 = ext(w1) * extvec_scale
-    e_2 = ext(w2) * extvec_scale
-    e_3 = ext(w3) * extvec_scale
-    e_4 = ext(w4) * extvec_scale
+    e_1 = _eval_ext(ext, w1) * extvec_scale
+    e_2 = _eval_ext(ext, w2) * extvec_scale
+    e_3 = _eval_ext(ext, w3) * extvec_scale
+    e_4 = _eval_ext(ext, w4) * extvec_scale
     if False:
         ax.arrow(start[0],
                 start[1],
@@ -606,9 +617,8 @@ def cmd(ax=None, basetable=None, f1=None, f2=None, include=slice(None),
     if ext is not None:
         w1 = _filter_to_wavelength(f1)
         w2 = _filter_to_wavelength(f2)
-        e_1 = ext(w1) * extvec_scale
-        e_2 = ext(w2) * extvec_scale
-
+        e_1 = _eval_ext(ext, w1) * extvec_scale
+        e_2 = _eval_ext(ext, w2) * extvec_scale
         x0, y0 = extvec_start if extvec_start is not None else (0, 18)
         ax.arrow(x0, y0, e_1-e_2, e_2, color='y', head_width=head_width)
 
@@ -948,10 +958,10 @@ def ccds_withiso(basetable, sel=True,
             w3,w4 = w4,w3
             color2 = color2[::-1]
 
-        e_1 = ext(w1) * 20
-        e_2 = ext(w2) * 20
-        e_3 = ext(w3) * 20
-        e_4 = ext(w4) * 20
+        e_1 = _eval_ext(ext, w1) * 20
+        e_2 = _eval_ext(ext, w2) * 20
+        e_3 = _eval_ext(ext, w3) * 20
+        e_4 = _eval_ext(ext, w4) * 20
 
         ax = fig.add_subplot(gridspec[ii])
         keys1 = [f'mag_ab_{col}' for col in color1]

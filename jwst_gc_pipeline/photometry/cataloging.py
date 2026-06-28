@@ -1636,7 +1636,8 @@ def _structure_noise_keep(data, err, xpix, ypix, *, struct_x=0.0, struct_y=0.0,
 def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, *,
                               local_snr_min=5.0, roundlo=-0.5, roundhi=0.5,
                               sharplo=0.4, sharphi=1.2, bg_subtract_path=None,
-                              struct_x=0.0, struct_y=0.0, coarse_bg_box=0, label=''):
+                              struct_x=0.0, struct_y=0.0, coarse_bg_box=0,
+                              seed_struct_protect_snr=8.0, label=''):
     """daofind on the merged i2d co-add, unioned with the previous vetted merged
     catalog, written as a seed catalog (``skycoord`` + ``flux``) for the next
     per-frame PSF-photometry round (the plan's iter3 seed = daofind(i2d) +
@@ -1734,15 +1735,31 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
     print(f"[{label}] i2d daofind: {n_raw} -> {len(det)} after {snr_basis}",
           flush=True)
 
-    # structure-noise prune: reject extended-emission bumps (MIRI; AG method)
+    # structure-noise prune: reject extended-emission bumps (MIRI; AG method).
+    # NEVER prune a confident point source.  The struct threshold is
+    # smoothed_mean + struct_x*real_noise + struct_y*structure_noise; on a redder
+    # NIRCam coadd with bright pervasive nebulosity (W51 F480M) the
+    # structure_noise term is huge, so a flat struct(1,2) prune removed 70-91% of
+    # i2d detections -- INCLUDING bright real stars sitting on emission, which is
+    # exactly what this seed exists to recover (see docstring / possible_stars.reg
+    # and the 17 hand-flagged F480M IRS2 stars, 2026-06-28).  The propagated-ERR
+    # S/N cut above is the correct significance gate on a coadd; struct prune may
+    # only cull MARGINAL detections.  Protect any detection at or above
+    # ``seed_struct_protect_snr`` (ERR S/N) from the prune.
     if len(det) and (struct_x or struct_y):
         xd0, yd0 = _L._best_available_xy(det)
         skeep = _structure_noise_keep(np.where(mask, np.nan, data), err, xd0, yd0,
                                       struct_x=struct_x, struct_y=struct_y)
+        protect = np.zeros(len(det), dtype=bool)
+        if 'local_snr' in det.colnames:
+            protect = (np.asarray(det['local_snr'], dtype=float)
+                       >= float(seed_struct_protect_snr))
+        skeep = np.asarray(skeep, dtype=bool) | protect
         n_before = len(det)
         det = det[skeep]
-        print(f"[{label}] struct-noise prune (x={struct_x},y={struct_y}): "
-              f"{n_before} -> {len(det)}", flush=True)
+        print(f"[{label}] struct-noise prune (x={struct_x},y={struct_y}, "
+              f"protect ERR S/N>={seed_struct_protect_snr:g}): "
+              f"{n_before} -> {len(det)} ({int(protect.sum())} protected)", flush=True)
 
     # previous vetted merged catalog -> sky
     prev = _L._resolve_seed_skycoords(Table.read(prev_vetted_path))
@@ -2209,6 +2226,76 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
     orig_last_phase = phases[-1]
 
     start_phase = (getattr(options, 'manual_start_phase', '') or '').strip()
+    if start_phase == 'm8':
+        # Standalone forced cross-band fill: m7 is already done; reconstruct the
+        # context from disk (frame_cache, bg_for_next, satstar) and run m8 only.
+        if not multifilter:
+            raise ValueError("--manual-start-phase=m8 requires multifilter (>=2 filters)")
+        import copy as _copy
+        opts_phase = _copy.copy(options)
+        opts_phase.iteration_label = 'm7'
+        opts_phase.seed_catalog = ''
+        opts_phase.use_iter3_residual_bg = True
+        for _mod in modules:
+            for _filt in filternames:
+                _cframes = []
+                for _vid in range(1, nvisits[proposal_id][target] + 1):
+                    _cframes.extend(sorted(_L.get_filenames(
+                        basepath, _filt, proposal_id, field,
+                        visitid=f'{_vid:03d}',
+                        each_suffix=_resolve_each_suffix(options, _filt),
+                        module=_mod, pupil='clear', allow_empty=True)))
+                frame_cache[(_mod, _filt)] = _cframes
+                _bg = _reconstruct_smoothed_bg_path(
+                    cut_bp, proposal_id, field, _mod, _filt, 'm7', options, pupil)
+                if os.path.exists(_bg):
+                    bg_for_next[(_mod, _filt)] = _bg
+                else:
+                    print(f"manual [m8]: m7 smoothed-bg missing for {_filt}/{_mod}: "
+                          f"{_bg}", flush=True)
+                _satp = _satstar_reconciled_path(cut_bp, _mod, _filt)
+                _ovr, _drp = _reconstruct_reconciled_satstars(_satp)
+                if _ovr:
+                    satstar_overrides[(_mod, _filt)] = _ovr
+                if _drp:
+                    satstar_drops[(_mod, _filt)] = _drp
+        _xbsuf = _L.obs_token(proposal_id, field)
+        for module in modules:
+            _xb = (f'{cut_bp}/catalogs/basic_{module}_indivexp_photometry_tables_'
+                   f'merged_resbgsub_m7{_xbsuf}.fits')
+            if not os.path.exists(_xb):
+                print(f"manual [m8]: m7 merged catalog not found (module={module}): "
+                      f"{_xb}", flush=True)
+                continue
+            _m8 = _xb.replace('resbgsub_m7', 'resbgsub_m8')
+            from jwst_gc_pipeline.photometry import forced_fill as _ff
+
+            def _frames_for(filt, _module=module):
+                return frame_cache.get((_module, filt), [])
+
+            def _builder_for(filt, _module=module):
+                _resbg = bg_for_next.get((_module, filt))
+
+                def _b(filename):
+                    return _ff._frame_args_from_filename(
+                        filename, options=opts_phase, filt=filt,
+                        field=field, basepath=basepath,
+                        proposal_id=proposal_id, bg_boxsizes=bg_boxsizes,
+                        pupil=pupil, resbg_path=_resbg,
+                        satstar_overrides=satstar_overrides,
+                        satstar_drops=satstar_drops, module=_module,
+                        satstar_label='m7')
+                return _b
+
+            _ff.run_forced_crossband_fill(
+                _xb, _m8, filternames=list(filternames), module=module,
+                frames_for=_frames_for,
+                prepare_frame=_prepare_frame_for_photometry,
+                frame_arg_builder_for=_builder_for,
+                nsigma=float(getattr(options, 'forced_fill_nsigma', 3.0)))
+        print(f"MANUAL PIPELINE DONE: m8-only forced fill, phases=[m8]", flush=True)
+        return
+
     if start_phase:
         if start_phase not in phases:
             raise ValueError(f"--manual-start-phase={start_phase!r} not in phases "
