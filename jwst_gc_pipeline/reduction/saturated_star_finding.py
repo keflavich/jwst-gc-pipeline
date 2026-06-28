@@ -707,8 +707,19 @@ def reconcile_outside_fov_satstar_fluxes(per_frame, match_radius=1.0 * u.arcsec,
 _SEED_SMALL_SAT_AREA = 400
 
 
-def _seed_prominence(data, com, sat_area):
+def _seed_prominence(data, com, sat_area, robust=False):
     """Adaptive-radius prominence of a saturated-star SEED on the SCI data.
+
+    ``robust``: the default denominator is the annulus MAD, which a bright
+    NEIGHBOUR or structured emission in the annulus inflates -- on emission-rich
+    fields (cloudc 2526 F770W) this crushes a real faint saturated star's
+    prominence below the gate (28 by-eye-real stars dropped, AG 2026-06-28).
+    ``robust=True`` instead measures the background as the annulus 25th-percentile
+    (the emission FLOOR between neighbours) and the spread from the lower half of
+    the annulus (1.4826*MAD of pixels <= the annulus median), so a single bright
+    neighbour cannot inflate the denominator.  This lifts genuine faint saturated
+    stars (cloudc: prominence median 7.1->16.6, min 2.3->6.0) while diffuse
+    emission stays low.  Pair with a field-lowered ``seed_core_min``.
 
     Distinguishes a genuine saturated STAR (compact bright core + bright PSF
     wings) from a DQ-SATURATED patch of bright EXTENDED EMISSION (no compact
@@ -766,6 +777,17 @@ def _seed_prominence(data, com, sat_area):
         return np.nan, np.nan
     core = float(np.nanmax(sub[cm]))
     a = sub[am]
+    if robust:
+        # emission FLOOR (between neighbours) + lower-half robust spread, so a
+        # bright neighbour / structured emission in the annulus cannot inflate
+        # the denominator and crush a real faint saturated star's prominence.
+        bg = np.percentile(a, 25)
+        lower = a[a <= np.median(a)]
+        spread = (1.4826 * np.median(np.abs(lower - np.median(lower)))
+                  if lower.size > 5 else np.std(a))
+        if not (spread > 0):
+            return np.nan, core
+        return (core - bg) / spread, core
     med = np.median(a)
     mad = np.median(np.abs(a - med)) * 1.4826
     if not (mad > 0):
@@ -925,7 +947,7 @@ def is_small_radius_emission_phantom(prom_small, core_small, *,
     return False
 
 
-def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, deblend_daophot_xy=None, deblend_confirm_xy=None):
+def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_prominence_robust=False, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, deblend_daophot_xy=None, deblend_confirm_xy=None):
     # ``flux_drops``: optional list of SkyCoord.  An out-of-field (forced) source
     # whose seed sky position matches a drop within ~1.0" is SKIPPED entirely
     # (not fit, not contributed): cross-frame reconciliation found no trustworthy
@@ -1008,6 +1030,27 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     header = fitsdata[0].header
     data = fitsdata['SCI'].data
     assert data is not None
+
+    # Per-run seed-gate overrides (env).  The seed_core_min=1000 / prom_min=8
+    # defaults are F770W-Sickle-calibrated; emission-rich fields with fainter
+    # saturated stars (cloudc 2526 F770W: real wing-ring cores 300-760, dropped
+    # by core<1000) need a lower core floor + the neighbour-robust prominence
+    # (MIRI_SATSTAR_SEED_PROM_ROBUST) so the annulus MAD inflated by neighbouring
+    # stars/emission does not crush a real faint saturated star below the gate.
+    # Defaults preserve the prior behaviour; set per-field in the launcher.
+    # See project_cloudc_f770w_satstar_gate_miscalib.
+    _env_core = os.environ.get('MIRI_SATSTAR_SEED_CORE_MIN')
+    if _env_core is not None:
+        seed_core_min = float(_env_core)
+    _env_prom = os.environ.get('MIRI_SATSTAR_SEED_PROM_MIN')
+    if _env_prom is not None:
+        seed_prominence_min = float(_env_prom)
+    _env_conc = os.environ.get('MIRI_SATSTAR_SEED_CONC_MIN')
+    if _env_conc is not None:
+        seed_conc_min = float(_env_conc)
+    _env_robust = os.environ.get('MIRI_SATSTAR_SEED_PROM_ROBUST')
+    if _env_robust is not None:
+        seed_prominence_robust = bool(int(_env_robust))
 
     # nan_to_num data to avoid fitting NaNs
     data[np.isnan(fitsdata['VAR_POISSON'].data)] = 0
@@ -1158,7 +1201,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             _seed_sa = rec.get('sat_area')
             _seed_sa_cap = (min(int(_seed_sa), 1600)
                             if _seed_sa is not None else _seed_sa)
-            prom, core = _seed_prominence(_gate_img, gate_com, _seed_sa_cap)
+            prom, core = _seed_prominence(_gate_img, gate_com, _seed_sa_cap,
+                                          robust=seed_prominence_robust)
             conc = _seed_concentration(_gate_img, gate_com, _seed_sa_cap)
             drop_prom = (seed_prominence_min and seed_prominence_min > 0
                          and np.isfinite(prom) and prom < seed_prominence_min)
@@ -2682,7 +2726,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 # so measure them ONLY when the coadd is available.
                 if _have_coadd:
                     _pp, _cc = _seed_prominence(seed_gate_image, (float(_cy), float(_cx)),
-                                                _capped_sa)
+                                                _capped_sa, robust=seed_prominence_robust)
                     _kk = _seed_concentration(seed_gate_image, (float(_cy), float(_cx)),
                                               _capped_sa)
                     # SMALL-RADIUS prominence/core (2026-06-23).  The sat_area-
@@ -2699,7 +2743,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                     # value is FINITE and below threshold.
                     _pp_s, _cc_s = _seed_prominence(seed_gate_image,
                                                     (float(_cy), float(_cx)),
-                                                    _SEED_SMALL_SAT_AREA)
+                                                    _SEED_SMALL_SAT_AREA,
+                                                    robust=seed_prominence_robust)
                 else:
                     _pp = _cc = _kk = _pp_s = _cc_s = np.nan
                 # OVER-SUBTRACTION ratio: the fitted PSF model PEAK vs the deep
