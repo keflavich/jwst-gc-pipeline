@@ -1636,7 +1636,8 @@ def _structure_noise_keep(data, err, xpix, ypix, *, struct_x=0.0, struct_y=0.0,
 def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, *,
                               local_snr_min=5.0, roundlo=-0.5, roundhi=0.5,
                               sharplo=0.4, sharphi=1.2, bg_subtract_path=None,
-                              struct_x=0.0, struct_y=0.0, coarse_bg_box=0, label=''):
+                              struct_x=0.0, struct_y=0.0, coarse_bg_box=0,
+                              seed_struct_protect_snr=8.0, label=''):
     """daofind on the merged i2d co-add, unioned with the previous vetted merged
     catalog, written as a seed catalog (``skycoord`` + ``flux``) for the next
     per-frame PSF-photometry round (the plan's iter3 seed = daofind(i2d) +
@@ -1734,15 +1735,31 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
     print(f"[{label}] i2d daofind: {n_raw} -> {len(det)} after {snr_basis}",
           flush=True)
 
-    # structure-noise prune: reject extended-emission bumps (MIRI; AG method)
+    # structure-noise prune: reject extended-emission bumps (MIRI; AG method).
+    # NEVER prune a confident point source.  The struct threshold is
+    # smoothed_mean + struct_x*real_noise + struct_y*structure_noise; on a redder
+    # NIRCam coadd with bright pervasive nebulosity (W51 F480M) the
+    # structure_noise term is huge, so a flat struct(1,2) prune removed 70-91% of
+    # i2d detections -- INCLUDING bright real stars sitting on emission, which is
+    # exactly what this seed exists to recover (see docstring / possible_stars.reg
+    # and the 17 hand-flagged F480M IRS2 stars, 2026-06-28).  The propagated-ERR
+    # S/N cut above is the correct significance gate on a coadd; struct prune may
+    # only cull MARGINAL detections.  Protect any detection at or above
+    # ``seed_struct_protect_snr`` (ERR S/N) from the prune.
     if len(det) and (struct_x or struct_y):
         xd0, yd0 = _L._best_available_xy(det)
         skeep = _structure_noise_keep(np.where(mask, np.nan, data), err, xd0, yd0,
                                       struct_x=struct_x, struct_y=struct_y)
+        protect = np.zeros(len(det), dtype=bool)
+        if 'local_snr' in det.colnames:
+            protect = (np.asarray(det['local_snr'], dtype=float)
+                       >= float(seed_struct_protect_snr))
+        skeep = np.asarray(skeep, dtype=bool) | protect
         n_before = len(det)
         det = det[skeep]
-        print(f"[{label}] struct-noise prune (x={struct_x},y={struct_y}): "
-              f"{n_before} -> {len(det)}", flush=True)
+        print(f"[{label}] struct-noise prune (x={struct_x},y={struct_y}, "
+              f"protect ERR S/N>={seed_struct_protect_snr:g}): "
+              f"{n_before} -> {len(det)} ({int(protect.sum())} protected)", flush=True)
 
     # previous vetted merged catalog -> sky
     prev = _L._resolve_seed_skycoords(Table.read(prev_vetted_path))
