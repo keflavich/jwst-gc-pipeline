@@ -1150,7 +1150,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # Precompute sat_area per labeled component so we can order in-FOV
     # source_records brightest-first for iterative-subtraction fitting
     # (see ``data_working`` setup + post-accept subtraction below).
-    if sources.max() > 0:
+    if sources.size and sources.max() > 0:
         _sizes_by_label = sum_labels(saturated, sources,
                                      np.arange(int(sources.max())) + 1)
     else:
