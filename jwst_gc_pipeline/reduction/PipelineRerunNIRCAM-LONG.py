@@ -808,6 +808,64 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
             save_results=True)
         print(f"DONE running {asn_file_each}")
 
+        # CRF NAMING FIX (port of PipelineMIRI 2026-06-20): outlier_detection in
+        # Image3 names the CR-flagged crfs after the asn PRODUCT
+        #   jw0{prop}-o{field}_t001_nircam_clear-{filt}-{module}_<N>_o{field}_crf.fits
+        # but the manual cataloging globs PER-EXPOSURE crf with the destreak/align
+        # suffix
+        #   jw0{prop}{field}{visit}_..._{module}_{align|destreak}_o{field}_crf.fits .
+        # Those never matched, so a corrected re-reduction's crf (e.g. the skymatch
+        # background fix) silently never reached cataloging -- the per-exposure
+        # *_{align|destreak}_o{field}_crf.fits stayed at the OLD reduction's mtime.
+        # Map product-named crf -> per-exposure names by EXPSTART (1:1) and copy
+        # into place.  member['expname'] already carries the _align/_destreak
+        # suffix (set in the destreak/align loop above), so the target name matches
+        # what cataloging --each-suffix consumes.
+        _prod_name = asn_data['products'][0]['name']
+        _prod_crf = sorted(glob(os.path.join(
+            output_dir, f'{_prod_name}_*_o{field}_crf.fits')))
+        if _prod_crf:
+            def _crf_key(fn):
+                # (EXPSTART, DETECTOR): SW filters read nrcb1-4 SIMULTANEOUSLY, so
+                # EXPSTART alone collides across the 4 detectors of one exposure --
+                # the detector disambiguates (LW nrcblong is 1:1 on EXPSTART alone).
+                h = fits.getheader(fn)
+                es = h.get('EXPSTART')
+                det = h.get('DETECTOR')
+                if (es is None or det is None) and len(fits.open(fn)) > 1:
+                    h1 = fits.getheader(fn, 1)
+                    es = es if es is not None else h1.get('EXPSTART')
+                    det = det if det is not None else h1.get('DETECTOR')
+                return (round(float(es), 6), str(det))
+            _targ_by_es = {}
+            for member in asn_data['products'][0]['members']:
+                _mb = os.path.basename(member['expname'])
+                _target = os.path.join(
+                    output_dir, _mb.replace('.fits', f'_o{field}_crf.fits'))
+                _cal_path = (member['expname'] if os.path.exists(member['expname'])
+                             else os.path.join(output_dir, _mb))
+                try:
+                    _targ_by_es[_crf_key(_cal_path)] = _target
+                except (FileNotFoundError, OSError, TypeError, ValueError):
+                    print(f"  WARNING: cannot read EXPSTART/DETECTOR of {_mb}; "
+                          f"skipping its crf mapping", flush=True)
+            for _pc in _prod_crf:
+                try:
+                    _target = _targ_by_es.get(_crf_key(_pc))
+                except (FileNotFoundError, OSError, TypeError, ValueError):
+                    _target = None
+                if _target is None:
+                    print(f"  WARNING: product crf {os.path.basename(_pc)} has no "
+                          f"per-exposure cal match; per-exposure crf NOT written",
+                          flush=True)
+                    continue
+                shutil.copy(_pc, _target)
+                print(f"  crf rename: {os.path.basename(_pc)} -> "
+                      f"{os.path.basename(_target)}", flush=True)
+        else:
+            print(f"  (no product-named crf {_prod_name}_*_o{field}_crf.fits found; "
+                  f"assuming crf already per-exposure named)", flush=True)
+
         print("After tweakreg step, checking WCS headers:")
         for member in asn_data['products'][0]['members']:
             check_wcs(member['expname'])
