@@ -2949,11 +2949,27 @@ def run_m8_only(options, modules, filternames, nvisits, proposal_id, target,
                     each_suffix=_resolve_each_suffix(options, filt),
                     module=module, pupil=pupil, allow_empty=True)))
             framemap[(module, filt)] = frames
+            # Prefer REUSING the m7 source-masked smoothed-bg map already on disk
+            # (the m7 barrier wrote it to {basepath}/{FILT}/pipeline/).  Only if
+            # it is absent do we rebuild from per-frame products, and only if
+            # those are absent too do we fall back to Background2D.
+            import glob as _glob
+            bg_glob = os.path.join(
+                basepath, filt, 'pipeline',
+                f'*-{filt.lower()}-{module}_resbgsub_{last_phase}'
+                f'_daophot_basic_mergedcat_residual_smoothed_bg_i2d.fits')
+            existing_bg = sorted(_glob.glob(bg_glob))
+            if existing_bg:
+                bgmap[(module, filt)] = existing_bg[-1]
+                print(f"[m8-only] {filt}: reusing m7 bg -> "
+                      f"{os.path.basename(existing_bg[-1])}", flush=True)
+                continue
             vetted = (f'{cut_bp}/catalogs/{filt.lower()}_{module}_indivexp_merged'
                       f'_resbgsub_{last_phase}_dao_basic_vetted.fits')
             if not (frames and os.path.exists(vetted)):
-                print(f"[m8-only] {filt}: {len(frames)} frames, vetted="
-                      f"{os.path.exists(vetted)}; Background2D fallback", flush=True)
+                print(f"[m8-only] {filt}: no existing bg; {len(frames)} frames, "
+                      f"vetted={os.path.exists(vetted)}; Background2D fallback",
+                      flush=True)
                 bgmap[(module, filt)] = None
                 continue
             try:
