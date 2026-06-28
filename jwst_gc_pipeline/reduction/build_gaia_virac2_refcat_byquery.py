@@ -17,17 +17,10 @@ import astropy.units as u
 from astropy.table import Table, vstack
 from astropy.coordinates import SkyCoord
 
+from jwst_gc_pipeline.astrometry_utils import farr, prop
+
 GAIA_EPOCH = 2016.0    # Gaia DR3 reference epoch
 VIRAC2_EPOCH = 2014.0  # VIRAC2 reference epoch (Smith+2025 II/387: fixed at 2014.0)
-
-
-def farr(x):
-    return np.asarray(np.ma.filled(np.ma.masked_invalid(np.asarray(x, float)), np.nan), float)
-
-
-def prop(ra, dec, pmra, pmde, dt):
-    pmra = np.where(np.isfinite(pmra), pmra, 0.); pmde = np.where(np.isfinite(pmde), pmde, 0.)
-    return ra + (pmra * dt / 3.6e6) / np.cos(np.radians(dec)), dec + (pmde * dt / 3.6e6)
 
 
 def query_virac2(ra, dec, radius):

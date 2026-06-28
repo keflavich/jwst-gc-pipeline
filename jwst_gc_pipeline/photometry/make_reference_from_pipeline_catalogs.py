@@ -29,6 +29,7 @@ from astroquery.vizier import Vizier
 
 
 from jwst_gc_pipeline.photometry.measure_offsets import measure_offsets
+from jwst_gc_pipeline.catalog_utils import catalog_skycoord
 
 
 DEFAULT_GNS_CATALOG_PATH = Path("/orange/adamginsburg/jwst/brick/catalogs/GALACTICNUCLEUS_2021_merged.fits")
@@ -194,18 +195,6 @@ def generate_catalogs_from_i2d(pipeline_dir: Path) -> list[Path]:
     return generated
 
 
-def _extract_skycoord(tbl: Table) -> SkyCoord:
-    if "sky_centroid" in tbl.colnames:
-        return tbl["sky_centroid"]
-    if "skycoord" in tbl.colnames:
-        return tbl["skycoord"]
-    if "RA" in tbl.colnames and "DEC" in tbl.colnames:
-        return SkyCoord(tbl["RA"], tbl["DEC"], frame="fk5")
-    if "ra" in tbl.colnames and "dec" in tbl.colnames:
-        return SkyCoord(tbl["ra"], tbl["dec"], frame="fk5")
-    raise ValueError("Could not find sky coordinates in catalog table")
-
-
 def _extract_flux(tbl: Table) -> np.ndarray:
     preferred = (
         "aper_total_flux",
@@ -272,7 +261,7 @@ def load_supported_catalogs(catalog_files: list[Path]) -> list[Table]:
 
 def read_and_normalize(catalog_file: Path) -> Table:
     tbl = Table.read(catalog_file)
-    sky = _extract_skycoord(tbl)
+    sky = catalog_skycoord(tbl)
     flux = _extract_flux(tbl)
 
     good = np.isfinite(sky.ra) & np.isfinite(sky.dec) & np.isfinite(flux) & (flux > 0)

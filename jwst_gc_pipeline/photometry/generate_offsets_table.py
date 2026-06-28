@@ -19,21 +19,13 @@ from astropy.table import Table
 from astropy.coordinates import SkyCoord
 from astropy import stats
 from jwst_gc_pipeline.photometry.merge_catalogs import shift_individual_catalog
+from jwst_gc_pipeline.astrometry_utils import farr, prop
 
 warnings.simplefilter('ignore')
 BASE = '/orange/adamginsburg/jwst/brick'
 EPOCH = 2022.70
 SHIFTS = f'{BASE}/astrometry_diag/f115w_virac2_perframe_shifts.ecsv'
 OUT = f'{BASE}/offsets/Offsets_JWST_Brick1182_F115W_VIRAC2frame.csv'
-
-
-def farr(x):
-    return np.asarray(np.ma.filled(np.ma.masked_invalid(np.asarray(x, float)), np.nan), float)
-
-
-def prop(ra, dec, pmra, pmde, dt):
-    pmra = np.where(np.isfinite(pmra), pmra, 0.); pmde = np.where(np.isfinite(pmde), pmde, 0.)
-    return ra + (pmra * dt / 3.6e6) / np.cos(np.radians(dec)), dec + (pmde * dt / 3.6e6)
 
 
 sol = Table.read(SHIFTS)
