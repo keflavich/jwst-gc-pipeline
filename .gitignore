@@ -21,3 +21,16 @@ htmlcov/
 # Editor / OS
 .DS_Store
 *.swp
+
+# setuptools_scm auto-generated version file (regenerated on build/install)
+jwst_gc_pipeline/version.py
+
+# SLURM job output captured into the working tree
+slurm-*.out
+
+# Local scratch / benchmark / scratch-note artifacts (never committed)
+_bench/
+_*.txt
+_*.md
+TODO*.md
+NOTES*.md

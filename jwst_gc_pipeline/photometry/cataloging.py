@@ -2284,6 +2284,18 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
     orig_last_phase = phases[-1]
 
     start_phase = (getattr(options, 'manual_start_phase', '') or '').strip()
+    # Explicit ordering guard: with both set, start must not come after stop.
+    # Without this the downstream slice (phases[_si:] then stop check) only
+    # raises a cryptic "not in remaining phases", which reads as a typo rather
+    # than the real out-of-order mistake.  m8 is a standalone phase (not in the
+    # m12..m7 list) and handled separately below, so skip it here.
+    if (start_phase and start_phase != 'm8' and stop_after
+            and start_phase in phases and stop_after in phases
+            and phases.index(start_phase) > phases.index(stop_after)):
+        raise ValueError(
+            f"--manual-start-phase={start_phase!r} comes after "
+            f"--manual-stop-after-phase={stop_after!r} in {phases}; "
+            f"start must be at or before stop.")
     if start_phase == 'm8':
         # Standalone forced cross-band fill: m7 is already done; reconstruct the
         # context from disk (frame_cache, bg_for_next, satstar) and run m8 only.
