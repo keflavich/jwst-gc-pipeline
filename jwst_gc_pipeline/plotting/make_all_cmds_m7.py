@@ -282,8 +282,9 @@ def main():
     ap.add_argument('--magsystem', default='vega', choices=['vega', 'ab'])
     ap.add_argument('--vetting', default='qualcuts',
                     choices=['qualcuts', 'basic'])
-    ap.add_argument('--phase', default='m7', choices=['m7', 'm8'],
-                    help='photometry phase catalog to plot (m8 = forced cross-band fill)')
+    ap.add_argument('--phase', default='m7', choices=['m7', 'm8', 'm8_dedup'],
+                    help='photometry phase catalog to plot (m8 = forced cross-band '
+                         'fill; m8_dedup = + post-merge de-duplication)')
     ap.add_argument('--upper-limits', dest='do_limits', action='store_true', default=True)
     ap.add_argument('--no-upper-limits', dest='do_limits', action='store_false')
     ap.add_argument('--limit-nsigma', type=float, default=3.0)
