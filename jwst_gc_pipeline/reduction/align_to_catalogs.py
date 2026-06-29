@@ -21,6 +21,8 @@ from astropy.io import fits
 
 import datetime
 
+from jwst_gc_pipeline.catalog_utils import catalog_skycoord
+
 
 def sync_gwcs_to_fits_wcs(imfile):
     """Rebuild the embedded ASDF GWCS to match a realigned SCI FITS-header WCS.
@@ -146,23 +148,11 @@ def _get_catalog_selection_column(cat):
     )
 
 
-def _get_catalog_skycoord(cat):
-    if 'skycoord' in cat.colnames:
-        return cat['skycoord']
-    if 'sky_centroid' in cat.colnames:
-        return cat['sky_centroid']
-    if 'RA' in cat.colnames and 'DEC' in cat.colnames:
-        return SkyCoord(cat['RA'], cat['DEC'], frame='fk5')
-    if 'ra' in cat.colnames and 'dec' in cat.colnames:
-        return SkyCoord(cat['ra'], cat['dec'], frame='fk5')
-    return None
-
-
 def _get_catalog_pixel_coordinates(cat, ww):
     if 'xcentroid' in cat.colnames and 'ycentroid' in cat.colnames:
         return cat['xcentroid'], cat['ycentroid']
 
-    skycoord = _get_catalog_skycoord(cat)
+    skycoord = catalog_skycoord(cat, on_missing='none')
     if skycoord is not None:
         return ww.world_to_pixel(skycoord)
 

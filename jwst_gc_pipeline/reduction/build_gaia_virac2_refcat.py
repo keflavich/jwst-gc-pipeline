@@ -12,20 +12,13 @@ import astropy.units as u
 from astropy.table import Table, vstack
 from astropy.coordinates import SkyCoord
 
+from jwst_gc_pipeline.astrometry_utils import farr, prop
+
 BASE = '/orange/adamginsburg/jwst/brick'
 EPOCH = 2022.70
 GAIA_EPOCH = 2016.0    # Gaia DR3 reference epoch
 VIRAC2_EPOCH = 2014.0  # VIRAC2 reference epoch (Smith+2025: "fixed at the reference epoch, 2014.0")
 OUT = f'{BASE}/catalogs/gaia_virac2_refcat_epoch2022.70.fits'
-
-
-def farr(x):
-    return np.asarray(np.ma.filled(np.ma.masked_invalid(np.asarray(x, float)), np.nan), float)
-
-
-def prop(ra, dec, pmra, pmde, dt):
-    pmra = np.where(np.isfinite(pmra), pmra, 0.); pmde = np.where(np.isfinite(pmde), pmde, 0.)
-    return ra + (pmra * dt / 3.6e6) / np.cos(np.radians(dec)), dec + (pmde * dt / 3.6e6)
 
 
 # Gaia DR3 (epoch 2016.0)
