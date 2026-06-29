@@ -1377,11 +1377,12 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     if (str(getattr(options, 'target', '')).lower() in _EXTENDED_EMISSION_TARGETS
             and prev_seed_catalog):
         try:
+            from astropy.coordinates import SkyCoord as _SkyCoord
             _pt = Table.read(prev_seed_catalog)
             _psc = _pt['skycoord'] if 'skycoord' in _pt.colnames else None
             if _psc is not None and len(_pt):
-                if not isinstance(_psc, SkyCoord):
-                    _psc = SkyCoord(_psc)
+                if not isinstance(_psc, _SkyCoord):
+                    _psc = _SkyCoord(_psc)
                 _px, _py = ctx.ww.world_to_pixel(_psc)
                 _ok = np.isfinite(_px) & np.isfinite(_py)
                 if np.any(_ok):
