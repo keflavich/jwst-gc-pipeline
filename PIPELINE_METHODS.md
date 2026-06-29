@@ -134,11 +134,21 @@ pass.
 
 ## Multi-filter cross-band stage
 
-When more than one filter is processed together, a final pass seeds the fit with
-the union of the per-filter source lists, so that a source detected confidently
-in one band is measured in the others even where it is individually marginal.
-(A stricter cross-band requirement — detection in two or more bands within a
-tight positional tolerance — is planned but not yet the default.)
+When more than one filter is processed together, a final detect/fit pass seeds
+the fit with the union of the per-filter source lists — deduplicated so a star
+seen in several bands is seeded once — so that a source detected confidently in
+one band is measured in the others even where it is individually marginal. (A
+stricter cross-band requirement — detection in two or more bands within a tight
+positional tolerance — is planned but not yet the default.)
+
+The per-band catalogs are then cross-matched into a single multi-filter table.
+A closing **forced cross-band fill** step revisits that table: wherever a source
+is a non-saturated non-detection in a given band, its flux in that band is
+re-measured by forced photometry at the matched position (the position is fixed;
+only the flux is solved), so a cross-band non-detection carries a measured value
+or a genuine per-source noise limit rather than an empty cell. This fill is
+recorded in a separate catalog and never alters the independently detected
+measurements.
 
 ## Outputs and quality controls
 
@@ -157,13 +167,16 @@ loop; and joint fitting of close blends to avoid mutual over-subtraction.
 
 ## Known limitations
 
-- The pipeline currently runs as a single sequential process per field (its
-  passes are inherently ordered); per-exposure fits within a pass may be
-  parallelized, but the overall throughput is limited by the serial recombination
-  (resampling) between passes.
-- The cross-band seed is presently a simple union rather than a strict
-  multi-band coincidence requirement.
+- The passes are inherently ordered (each detects on the previous pass's
+  recombined residual image), so throughput is ultimately limited by the serial
+  recombination (resampling) between passes. The per-exposure fits *within* a
+  pass are embarrassingly parallel and can be distributed across many machines;
+  only the between-pass recombination is a barrier.
+- The cross-band seed is a deduplicated union rather than a strict multi-band
+  coincidence requirement.
 - Faint sources blended into the wings of much brighter or saturated stars are
-  detected but may still be lost at the fitting/deduplication stage; fully
-  recovering them requires forced photometry at the detected positions, which is
-  not yet applied as a dedicated deblending stage.
+  detected but may still be lost at the fitting/deduplication stage. The
+  forced cross-band fill recovers such sources where they were detected in at
+  least one other band; sources lost in every band still require a dedicated
+  fit-side deblending stage (forced photometry at detected positions), which is
+  not yet applied.
