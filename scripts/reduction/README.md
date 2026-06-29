@@ -23,8 +23,14 @@ Defaults: proposal 4147, field 012, modules `nrca,nrcb,merged`, `-s`
 ## 2. Cataloging
 
 Runs the active per-exposure manual pipeline (`crowdsource_catalogs_long.py
---each-exposure`; phases m12→m3..m6, then m7 cross-band when >1 filter). Two
-streams, pick by what the queue will give you:
+--each-exposure`; phases m12→m3..m6, then m7 cross-band when >1 filter, then m8).
+**m8** is the forced cross-band fill: right after the m7 cross-band merge it
+force-fits every band at the merged position of sources that are non-saturated
+non-detections there, writing a sibling `..._resbgsub_m8` table (full-frame
+only; on by default). It runs automatically in whichever job completes the final
+phase's finalize — the monolith, the Stream-2 m7 job, or the Stream-3 m7
+finalize — so you do not schedule it separately. Two streams, pick by what the
+queue will give you:
 
 ### Stream 1 — fast / high-resource (per-filter array)
 
@@ -70,7 +76,8 @@ Splits BELOW the filter boundary: for each phase (`m12→m3→m4→m5→m6[→m7
 submits a per-frame **fan-out array** (`NSHARDS` tiny `FANOUT_CPUS`-core tasks,
 each fitting a frame shard) then one **finalize** barrier job, chained
 `afterok`, phase after phase. The fan-out tasks are the smallest possible ask,
-so they backfill into queue holes a per-filter job never sees.
+so they backfill into queue holes a per-filter job never sees. (m8 is not a
+fan-out phase — it runs inside the m7 finalize barrier, same as the monolith.)
 
 `NSHARDS` is only a granularity knob — the shard predicate (`frame_index % N`)
 covers every exposure for any `N` (no double-fit, no gaps); the finalize verifies

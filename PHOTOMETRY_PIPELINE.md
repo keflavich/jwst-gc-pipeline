@@ -1,7 +1,9 @@
 # Photometry pipeline
 
 <!--
-  DOC SYNC — last reviewed 2026-06-10, repo commit 17d0861 (+ uncommitted fixes).
+  DOC SYNC — last reviewed 2026-06-28 (added m8 forced cross-band fill; documented
+  the per-frame distributed fan-out + monolith equivalence; cross-band seed is a
+  deduped union, no longer a "plain union").  Prior review 2026-06-10, commit 17d0861.
   This is the IMPLEMENTATION-facing doc (flags, tokens, file names, behaviours).
   Its science-narrative companion is PIPELINE_METHODS.md (publication-style, no
   code). KEEP THE TWO IN SYNC: when the algorithm changes, update BOTH and bump
@@ -64,21 +66,42 @@ To use the old `IterativePSFPhotometry` path instead:
     --legacy-iterations ...
 ```
 
-**Single in-process job (not a SLURM array).** Each phase detects on the
-*previous* phase's merged residual mosaic, so the phases are strictly sequential
-and the whole run executes in one process — full-frame or cutout. Run it as a
-single (non-array) job: with `SLURM_ARRAY_TASK_ID` set the run aborts with a
-message telling you to drop `--array` (or pass `--legacy-iterations` for the old
-array-parallel per-exposure path). Full-frame outputs land in place under
-`<basepath>/<FILTER>/pipeline/` and `<basepath>/catalogs/`; cutout runs are
-namespaced under `<basepath>/cutouts/<label>/`.
+**Monolithic in-process run (the simple path).** Each phase detects on the
+*previous* phase's merged residual mosaic, so the phases are strictly sequential.
+The simplest way to run is one process that executes every phase in order —
+full-frame or cutout. Run it as a single (non-array) job: with
+`SLURM_ARRAY_TASK_ID` set the run aborts with a message telling you to drop
+`--array` (or pass `--legacy-iterations` for the old array-parallel per-exposure
+path). Full-frame outputs land in place under `<basepath>/<FILTER>/pipeline/`
+and `<basepath>/catalogs/`; cutout runs are namespaced under
+`<basepath>/cutouts/<label>/`.
+
+**Distributed per-frame fan-out (recommended at scale).** The monolith is a
+single long job and is recommended *against* for large full-frame multi-filter
+runs (one 32-core/48 h job sits a long time waiting for a big node). The same
+pipeline can instead be sharded below the filter boundary: for each phase, many
+tiny per-frame "fan-out" worker jobs fit a frame shard, then one "finalize"
+barrier job merges/vets/builds the residual + background and (for the final
+phase) the cross-band catalogs — chained `afterok`, phase after phase. This is
+controlled by `--manual-frame-shard=I/N`, `--manual-skip-finalize` (worker),
+`--manual-finalize-only` (barrier), `--manual-start-phase`, and
+`--manual-stop-after-phase`; all default off, so a monolithic run is unchanged.
+The fan-out and finalize jobs run the **same** per-frame fit and per-phase
+barrier code as the monolith, so the two produce the **same** science output —
+the distributed path just splits it across small, backfill-friendly jobs. See
+[`scripts/reduction/README.md`](scripts/reduction/README.md) for the submitters
+(`submit_cataloging_perframe.sh`, the per-filter chain, the m7 finalize) and
+`scripts/reduction/validate_perframe_equivalence.sh`, which diffs a monolithic
+vs per-frame run on the same cutout to prove equivalence (it diffs the m6 vetted
+catalogs; the cross-band *merge* and the m8 fill are full-frame-only — see below).
 
 ## The iterations
 
-`m12` runs per-frame iter1+iter2; `m3..m7` are merged-i2d-seeded passes. Source
-*detection* uses a progressively cleaner co-add so sources hidden in one stage
-surface in the next; the *fit* always runs on the raw or background-subtracted
-**frames**, never on the i2d.
+`m12` runs per-frame iter1+iter2; `m3..m7` are merged-i2d-seeded passes; `m8` is
+the forced cross-band fill (multi-filter only). Source *detection* uses a
+progressively cleaner co-add so sources hidden in one stage surface in the next;
+the *fit* always runs on the raw or background-subtracted **frames**, never on
+the i2d.
 
 | iter | phase | detection co-add | frames fit | background |
 |------|-------|------------------|------------|------------|
@@ -88,6 +111,18 @@ surface in the next; the *fit* always runs on the raw or background-subtracted
 | 5    | m5    | residual i2d − background | bg-subtracted | recompute |
 | 6    | m6    | residual i2d − background | bg-subtracted | recompute |
 | 7    | m7    | cross-filter seed (multi-filter only) | bg-subtracted | — |
+| 8    | m8    | m7 merged positions (no new detection) | bg-subtracted | — |
+
+`m8` is not a detect/fit pass — it is a **forced cross-band fill** run right after
+the m7 cross-band merge. For every m7 merged source that is a *non-saturated
+non-detection* in some band, it force-fits the flux at the merged reference
+position in that band (`forced_psf_photometry`, position pinned, flux-only),
+recovering the phantom non-detections the independent-detection cross-match
+leaves behind or producing a real per-source noise limit. It is self-contained:
+it writes a sibling `..._resbgsub_m8` catalog, never mutates m7, and a failure is
+non-fatal. It is on by default (internal `forced_fill_m8`, no CLI flag) and, like
+the m7 cross-band merge, is **full-frame only** — cutout runs (which lack the
+per-filter reduction i2d mosaics) stop at the per-filter m6/m7 catalogs.
 
 Each pass: build seed (previous vetted catalog ∪ daofind on the detection
 co-add) → satstar-wing rejection + dedup → single-pass BASIC `PSFPhotometry` →
@@ -129,8 +164,14 @@ source-masked smoothed background fed to the next pass.
 - **`iter_found` column.** Every merged catalog records the first iteration
   (2..7) each source appears in, matched across phases by sky position.
 - **Cross-band (iter7).** Multi-filter runs union the per-filter vetted m6
-  catalogs into a cross-band seed. (The stringent ≥2-filter / <10 mas / S/N>5
-  cut is a documented TODO; currently a plain union.)
+  catalogs into a cross-band seed, then **dedup** co-located positions
+  (`--manual-crossband-seed-dedup-mas`, default 30 mas) so a star seen in several
+  bands seeds the m7 fit once, not N times (a degenerate co-located group
+  otherwise over-subtracts). The stringent ≥2-filter / S-N coincidence
+  *requirement* (vs the current union) is still a documented TODO.
+- **Forced cross-band fill (iter8).** After the m7 cross-band merge, m8
+  force-fits every band at the merged position of sources that are non-saturated
+  non-detections there (see the iterations table). Full-frame only.
 
 ## Outputs
 
@@ -140,6 +181,13 @@ Under `<basepath>/cutouts/<label>/`:
   per-phase catalogs (`m2`,`m3`,`m4`,`_resbgsub_m5`,`_resbgsub_m6`,`_resbgsub_m7`),
   plus `_vetted` and `_allcols` variants. Carry `skycoord`, `flux`, `qfit`,
   `iter_found`, etc.
+- `catalogs/basic_<module>_indivexp_photometry_tables_merged_resbgsub_m7<obs>.fits`
+  — the multi-filter **cross-band** table (per-band fluxes/mags matched within
+  `max_offset`, anchored on the reference filter). Full-frame only.
+- `..._resbgsub_m8<obs>.fits` — the **forced-fill** sibling of the m7 cross-band
+  table: same rows, but every band's flux is force-fit at the merged position so
+  cross-band non-detections carry a measured value / noise limit instead of a
+  gap. Full-frame only; never overwrites m7.
 - `<filt>/pipeline/...-<module>_data_i2d.fits` — input data mosaic.
 - `..._m{N}_..._mergedcat_residual_i2d.fits` — residual mosaic per phase
   (point-source models subtracted; saturated stars already removed via the
@@ -174,10 +222,14 @@ control is the default.
 
 ## Known limitations
 
-- Runs as a single in-process job; it does not (yet) shard per-exposure fits
-  across a SLURM array, so a large full-frame multi-filter run is long-but-linear
-  in one process rather than array-parallel.
-- Cross-band seed is a plain union (stringent multi-filter cut is a TODO).
+- The monolith runs as a single long in-process job. For large runs use the
+  per-frame distributed fan-out (above) instead, which shards the per-exposure
+  fits across many small SLURM jobs and reproduces the monolith's output; the
+  phases themselves remain strictly ordered (each detects on the previous phase's
+  residual mosaic), so the *finalize* barriers are still serialized phase-to-phase.
+- Cross-band seed is a deduped union; the stringent ≥2-filter coincidence
+  *requirement* is still a TODO.
 - Faint sources blended on the wings of much brighter or saturated stars may be
-  detected but dropped by the fit/dedup; resolving these needs fit-side
-  deblending (forced photometry at detected positions), not detection changes.
+  detected but dropped by the fit/dedup; the m8 forced cross-band fill recovers
+  such sources only where they were already detected in another band, not where
+  they are lost in every band.

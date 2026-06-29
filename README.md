@@ -27,7 +27,7 @@ modeling, paper figures) remains in `brick2221`.
   - `make_merged_psf.py` — gridded PSF construction
   - `merge_a_plus_b.py`, `realign_and_merge.py` — module merging and
     reprojection helpers
-  - `jwebbinar_tools.py`, `run_notebook.py` — utilities
+  - `run_notebook.py` — utilities
 
 - `jwst_gc_pipeline.photometry` — catalog-level processing
   - `crowdsource_catalogs_long.py` (also handles short) — crowdsource
@@ -37,7 +37,6 @@ modeling, paper figures) remains in `brick2221`.
   - `crowdsource_catalogs_short.py` — deprecated short-wave variant
   - `make_reftable.py` — astrometric reference table construction
   - `merge_catalogs.py` — multi-wavelength catalog merger
-  - `isochrones.py` — fetch / handle MIST isochrones
 
 The default PSF-photometry pipeline is implemented in `cataloging.py` and
 documented in [`PHOTOMETRY_PIPELINE.md`](PHOTOMETRY_PIPELINE.md). Pass
