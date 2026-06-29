@@ -3015,10 +3015,25 @@ def _find_zeroframe_for(filename):
     for rf in cands:
         if os.path.exists(rf):
             with fits.open(rf) as rh:
-                if 'ZEROFRAME' in rh:
+                names = [e.name for e in rh]
+                if 'ZEROFRAME' in names:
                     zf = np.asarray(rh['ZEROFRAME'].data[0], dtype=float)
                     print(f"satstar deblend: loaded ZEROFRAME from {rf}", flush=True)
                     return zf
+                # Fallback: Detector1 did not save a ZEROFRAME extension (cloudc
+                # 2526 ramps have none).  The ramp SCI cube's FIRST READ (first
+                # integration, first group) is the least-saturated frame -- the
+                # same first-read the ZEROFRAME captures -- so use it as a pseudo-
+                # zeroframe.  Validated on cloudc F770W: 9/10 blob-embedded
+                # saturated stars are distinct + unsaturated in the first read.
+                if 'SCI' in names:
+                    _sci = rh['SCI'].data
+                    if _sci is not None and getattr(_sci, 'ndim', 0) == 4:
+                        zf = np.asarray(_sci[0, 0], dtype=float)
+                        print(f"satstar deblend: no ZEROFRAME ext in {rf}; using "
+                              f"ramp first read SCI[0,0] as pseudo-zeroframe",
+                              flush=True)
+                        return zf
     print(f"satstar deblend: no _ramp.fits ZEROFRAME found for {base} "
           f"(deblend disabled for this frame)", flush=True)
     return None
