@@ -82,8 +82,8 @@ CCD_PAIRS = [
 ]
 
 
-def catalog_path(base, vetting):
-    stem = 'basic_merged_indivexp_photometry_tables_merged_resbgsub_m7'
+def catalog_path(base, vetting, phase='m7'):
+    stem = f'basic_merged_indivexp_photometry_tables_merged_resbgsub_{phase}'
     if vetting == 'qualcuts':
         fn = f'{base}/catalogs/{stem}_qualcuts_oksep2221.fits'
         if os.path.exists(fn):
@@ -150,11 +150,11 @@ def _axlims_ccd(xv, yv):
 
 
 def make_field(field, magsystem='vega', vetting='qualcuts', do_limits=True,
-               limit_nsigma=3, firm_emag=0.1, ext_model=None, dpi=150):
+               limit_nsigma=3, firm_emag=0.1, ext_model=None, dpi=150, phase='m7'):
     base = FIELDS[field]
     magprefix = f'mag_{magsystem}'
     errprefix = 'emag_ab'
-    path = catalog_path(base, vetting)
+    path = catalog_path(base, vetting, phase=phase)
     print(f'\n=== {field}: {os.path.basename(path)} ({magsystem}) ===')
     tbl = Table.read(path)
     rf = real_filters(tbl)
@@ -169,7 +169,7 @@ def make_field(field, magsystem='vega', vetting='qualcuts', do_limits=True,
                                      errprefix=errprefix, magprefix=magprefix,
                                      verbose=True)
 
-    outdir = f'{base}/catalogs/cmds_m7/{magsystem}'
+    outdir = f'{base}/catalogs/cmds_{phase}/{magsystem}'
     os.makedirs(outdir, exist_ok=True)
     ext = ext_model if ext_model is not None else CT06_MWGC()
     manifest = [f'# {field} {magsystem} vetting={vetting} firm_emag={firm_emag} '
@@ -282,6 +282,8 @@ def main():
     ap.add_argument('--magsystem', default='vega', choices=['vega', 'ab'])
     ap.add_argument('--vetting', default='qualcuts',
                     choices=['qualcuts', 'basic'])
+    ap.add_argument('--phase', default='m7', choices=['m7', 'm8'],
+                    help='photometry phase catalog to plot (m8 = forced cross-band fill)')
     ap.add_argument('--upper-limits', dest='do_limits', action='store_true', default=True)
     ap.add_argument('--no-upper-limits', dest='do_limits', action='store_false')
     ap.add_argument('--limit-nsigma', type=float, default=3.0)
@@ -293,7 +295,7 @@ def main():
     for field in fields:
         make_field(field, magsystem=args.magsystem, vetting=args.vetting,
                    do_limits=args.do_limits, limit_nsigma=args.limit_nsigma,
-                   firm_emag=args.firm_emag, dpi=args.dpi)
+                   firm_emag=args.firm_emag, dpi=args.dpi, phase=args.phase)
 
 
 if __name__ == '__main__':

@@ -91,6 +91,29 @@ def _filter_to_wavelength(name):
     return int(name[1:-1]) / 100 * u.um
 
 
+def _ext_eval(ext, w):
+    """Evaluate a dust_extinction model at wavelength ``w`` (Quantity, um),
+    clamping to the model's valid wavelength range.
+
+    Bands like F115W (1.15 um) fall just blueward of CT06_MWGC's range
+    (>=1.24 um); the model raises rather than extrapolating.  For the
+    indicative reddening vectors / corrections used here we clamp to the
+    nearest valid endpoint instead of crashing the whole figure.
+    """
+    xr = getattr(ext, 'x_range', None)
+    if xr is not None:
+        # x_range is in inverse microns; convert to a wavelength window.
+        wl_lo = (1.0 / max(xr)) * u.micron
+        wl_hi = (1.0 / min(xr)) * u.micron
+        wq = w.to(u.micron)
+        if wq < wl_lo:
+            wq = wl_lo
+        elif wq > wl_hi:
+            wq = wl_hi
+        return ext(wq)
+    return ext(w)
+
+
 def _col(basetable, name, dtype=float, fill=np.nan):
     """Return a plain ndarray for a (possibly masked) column, or None if absent.
 
@@ -242,10 +265,10 @@ def plot_extvec_ccd(ax, color1, color2, ext=CT06_MWGC(), extvec_scale=200,
         w3,w4 = w4,w3
         color2 = color2[::-1]
 
-    e_1 = ext(w1) * extvec_scale
-    e_2 = ext(w2) * extvec_scale
-    e_3 = ext(w3) * extvec_scale
-    e_4 = ext(w4) * extvec_scale
+    e_1 = _ext_eval(ext, w1) * extvec_scale
+    e_2 = _ext_eval(ext, w2) * extvec_scale
+    e_3 = _ext_eval(ext, w3) * extvec_scale
+    e_4 = _ext_eval(ext, w4) * extvec_scale
     if False:
         ax.arrow(start[0],
                 start[1],
@@ -319,10 +342,10 @@ def ccd(basetable,
             w2 = _filter_to_wavelength(color1[1])
             w3 = _filter_to_wavelength(color2[0])
             w4 = _filter_to_wavelength(color2[1])
-            e1 = ext(w1)
-            e2 = ext(w2)
-            e3 = ext(w3)
-            e4 = ext(w4)
+            e1 = _ext_eval(ext, w1)
+            e2 = _ext_eval(ext, w2)
+            e3 = _ext_eval(ext, w3)
+            e4 = _ext_eval(ext, w4)
             colorp1 = colorp1 - A_V * (e1 - e2)
             colorp2 = colorp2 - A_V * (e3 - e4)
 
@@ -570,8 +593,8 @@ def cmd(ax=None, basetable=None, f1=None, f2=None, include=slice(None),
             raise ValueError(f"A_V has length {len(A_V)} but basetable has {len(basetable)} rows.")
         w1 = _filter_to_wavelength(f1)
         w2 = _filter_to_wavelength(f2)
-        e_f1 = ext(w1)
-        e_f2 = ext(w2)
+        e_f1 = _ext_eval(ext, w1)
+        e_f2 = _ext_eval(ext, w2)
         magp = magp - A_V * e_f1
         colorp = colorp - A_V * (e_f1 - e_f2)
     if axlims is not None and axlims[2] > axlims[3]:
@@ -606,8 +629,8 @@ def cmd(ax=None, basetable=None, f1=None, f2=None, include=slice(None),
     if ext is not None:
         w1 = _filter_to_wavelength(f1)
         w2 = _filter_to_wavelength(f2)
-        e_1 = ext(w1) * extvec_scale
-        e_2 = ext(w2) * extvec_scale
+        e_1 = _ext_eval(ext, w1) * extvec_scale
+        e_2 = _ext_eval(ext, w2) * extvec_scale
 
         x0, y0 = extvec_start if extvec_start is not None else (0, 18)
         ax.arrow(x0, y0, e_1-e_2, e_2, color='y', head_width=head_width)
@@ -948,10 +971,10 @@ def ccds_withiso(basetable, sel=True,
             w3,w4 = w4,w3
             color2 = color2[::-1]
 
-        e_1 = ext(w1) * 20
-        e_2 = ext(w2) * 20
-        e_3 = ext(w3) * 20
-        e_4 = ext(w4) * 20
+        e_1 = _ext_eval(ext, w1) * 20
+        e_2 = _ext_eval(ext, w2) * 20
+        e_3 = _ext_eval(ext, w3) * 20
+        e_4 = _ext_eval(ext, w4) * 20
 
         ax = fig.add_subplot(gridspec[ii])
         keys1 = [f'mag_ab_{col}' for col in color1]
