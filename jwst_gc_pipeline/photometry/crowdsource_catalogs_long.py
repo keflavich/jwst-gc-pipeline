@@ -3603,8 +3603,17 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'combined m8.  Lets the m8 fill (which otherwise sweeps '
                             'all 264 frames serially and overruns the 18h wall) fan '
                             'out into 5 independent per-filter jobs; '
-                            'm8_merge_partials.py column-merges them into the final '
-                            '..._resbgsub_m8.fits.'))
+                            'scripts/reduction/m8_merge_partials.py column-merges '
+                            'them into the final ..._resbgsub_m8.fits.'))
+    parser.add_option('--no-m8-dedup', dest='m8_dedup',
+                      default=True, action='store_false',
+                      help=('Skip the post-m8 split-source de-duplication '
+                            '(dedup_catalog.dedup_merged_catalog).  By default the '
+                            'combined m8 is de-duplicated into a sibling '
+                            '..._resbgsub_m8_dedup.fits: crowded-field cross-band '
+                            'merges split a single star into two reference rows; the '
+                            'dedup collapses complementary-coverage pairs while '
+                            'preserving resolved binaries.'))
     parser.add_option('--seed-catalog', dest='seed_catalog',
                       default='',
                       help='Optional seed catalog for a seeded photometry rerun', metavar='seed_catalog')

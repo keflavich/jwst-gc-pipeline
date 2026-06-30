@@ -27,10 +27,32 @@ Runs the active per-exposure manual pipeline (`crowdsource_catalogs_long.py
 **m8** is the forced cross-band fill: right after the m7 cross-band merge it
 force-fits every band at the merged position of sources that are non-saturated
 non-detections there, writing a sibling `..._resbgsub_m8` table (full-frame
-only; on by default). It runs automatically in whichever job completes the final
-phase's finalize — the monolith, the Stream-2 m7 job, or the Stream-3 m7
-finalize — so you do not schedule it separately. Two streams, pick by what the
-queue will give you:
+only; on by default). The combined m8 is then de-duplicated into
+`..._resbgsub_m8_dedup.fits` (the science-final; crowded-field merges split a
+star into two reference rows, dedup collapses complementary-coverage pairs but
+keeps resolved binaries). m8 runs automatically in whichever job completes the
+final phase's finalize — the monolith, the Stream-2 m7 job, or the Stream-3 m7
+finalize — so you do not schedule it separately.
+
+**m8 fan-out (when the inline fill overruns the wall).** The monolithic m8
+sweeps every frame serially; on dense fields (sickle: 192 frames in F187N+F210M
+alone) it can time out before the long-wave bands run. To split it, run the m7
+job with `--no-forced-fill-m8` (skip the inline fill), then:
+
+```
+TARGET=sickle PROPOSAL=3958 FIELD=007 MODULES=nrcb \
+FILTERS="F187N F210M F335M F470N F480M" \
+SUFFIXES="destreak_o007_crf destreak_o007_crf align_o007_crf align_o007_crf align_o007_crf" \
+scripts/reduction/submit_cataloging_m8.sh
+```
+
+This submits one `submit_cataloging_m8_partial.sbatch` per band (each fills only
+its band → `..._resbgsub_m8_partial_<FILT>.fits` via `--manual-m8-partial`) plus
+a merge (`submit_cataloging_m8_merge.sbatch` → `m8_merge_partials.py`), chained
+`afterok`. The merge **refuses to write a half-merged m8 if any band's partial
+is missing** (no silent band fallback), then dedups. `SUFFIXES` must align 1:1
+with `FILTERS` (SW vs LW bands usually differ). Two streams below for the main
+m12..m7 work, pick by what the queue will give you:
 
 ### Stream 1 — fast / high-resource (per-filter array)
 

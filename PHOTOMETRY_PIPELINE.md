@@ -120,9 +120,17 @@ position in that band (`forced_psf_photometry`, position pinned, flux-only),
 recovering the phantom non-detections the independent-detection cross-match
 leaves behind or producing a real per-source noise limit. It is self-contained:
 it writes a sibling `..._resbgsub_m8` catalog, never mutates m7, and a failure is
-non-fatal. It is on by default (internal `forced_fill_m8`, no CLI flag) and, like
-the m7 cross-band merge, is **full-frame only** — cutout runs (which lack the
-per-filter reduction i2d mosaics) stop at the per-filter m6/m7 catalogs.
+non-fatal. It is on by default (disable the inline fill with `--no-forced-fill-m8`)
+and, like the m7 cross-band merge, is **full-frame only** — cutout runs (which
+lack the per-filter reduction i2d mosaics) stop at the per-filter m6/m7 catalogs.
+The combined m8 is then **de-duplicated** into a `..._resbgsub_m8_dedup.fits`
+sibling (`--no-m8-dedup` to skip): the cross-band merge can split one star into
+two reference rows in crowded fields, and the dedup collapses complementary-
+coverage pairs while preserving resolved binaries. Because the monolithic fill
+sweeps every frame serially and can overrun the wall, m8 can instead be fanned
+out one band per job with `--manual-m8-partial` (pair the m7 job with
+`--no-forced-fill-m8`); `scripts/reduction/submit_cataloging_m8.sh` schedules the
+per-band partials + the merge (`m8_merge_partials.py`, which also dedups).
 
 Each pass: build seed (previous vetted catalog ∪ daofind on the detection
 co-add) → satstar-wing rejection + dedup → single-pass BASIC `PSFPhotometry` →

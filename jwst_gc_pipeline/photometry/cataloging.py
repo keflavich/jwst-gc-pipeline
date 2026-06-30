@@ -2143,6 +2143,36 @@ def _resolve_crossband_ref_filter(options, filternames):
     return pick
 
 
+def _maybe_dedup_m8(m8_path, options, label='m8'):
+    """De-duplicate a combined m8 catalog into a ``..._m8_dedup`` sibling.
+
+    The cross-band merge can split one star into two reference rows in crowded
+    fields; ``dedup_catalog.dedup_merged_catalog`` collapses complementary-
+    coverage pairs while preserving resolved binaries.  Best-effort and
+    non-destructive: writes a sibling (never mutates the raw m8) and a failure is
+    logged, not raised (the m8 product is already on disk).  Skipped when
+    ``--no-m8-dedup`` is passed or the m8 file is absent.  Returns the dedup path
+    or ``None``.
+    """
+    if not getattr(options, 'm8_dedup', True):
+        return None
+    if not (m8_path and os.path.exists(m8_path)):
+        return None
+    out = m8_path.replace('_m8.fits', '_m8_dedup.fits')
+    if out == m8_path:
+        out = m8_path.replace('.fits', '_dedup.fits')
+    try:
+        from jwst_gc_pipeline.photometry.dedup_catalog import dedup_merged_catalog
+        dedup_merged_catalog(m8_path, out)
+        print(f"manual [{label}]: m8 dedup -> {out}", flush=True)
+        return out
+    except Exception as _dex:
+        print(f"manual [{label}]: m8 dedup FAILED ({m8_path}): {_dex}", flush=True)
+        import traceback
+        traceback.print_exc()
+        return None
+
+
 def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         target, field, basepath, crowdsource_default_kwargs,
                         bg_boxsizes):
@@ -2305,7 +2335,15 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
             raise ValueError(
                 "--manual-start-phase=m8 requires multifilter (>=2 filters) unless "
                 "--manual-m8-partial (single-band partial fill, merged later by "
-                "m8_merge_partials.py)")
+                "scripts/reduction/m8_merge_partials.py)")
+        if _m8_partial and len(filternames) != 1:
+            # The partial path fills exactly one band and labels the output by it
+            # (resbgsub_m8_partial_<FILT>); >1 filter would mislabel the file and
+            # silently produce a multi-band catalog the merger cannot overlay.
+            raise ValueError(
+                f"--manual-m8-partial fills ONE band per job; got "
+                f"--filternames={list(filternames)}.  Run one filter per partial "
+                f"job and combine with scripts/reduction/m8_merge_partials.py.")
         import copy as _copy
         opts_phase = _copy.copy(options)
         opts_phase.iteration_label = 'm7'
@@ -2374,6 +2412,10 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 prepare_frame=_prepare_frame_for_photometry,
                 frame_arg_builder_for=_builder_for,
                 nsigma=float(getattr(options, 'forced_fill_nsigma', 3.0)))
+            # Partial fill writes one band only -> dedup waits for the merge
+            # (scripts/reduction/m8_merge_partials.py); a full m8 dedups here.
+            if not _m8_partial:
+                _maybe_dedup_m8(_m8, options, label='m8')
         print(f"MANUAL PIPELINE DONE: m8-only forced fill, phases=[m8]", flush=True)
         return
 
@@ -3135,6 +3177,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         prepare_frame=_prepare_frame_for_photometry,
                         frame_arg_builder_for=_builder_for,
                         nsigma=float(getattr(options, 'forced_fill_nsigma', 3.0)))
+                    _maybe_dedup_m8(_m8, options, label=last_phase)
                 except Exception as _m8ex:
                     print(f"manual [{last_phase}]: m8 forced fill FAILED "
                           f"(module={module}): {_m8ex}", flush=True)
