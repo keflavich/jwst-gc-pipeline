@@ -685,6 +685,11 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               min_prominence=0.0,
                               local_snr_min=5.0, keep_flags=(1,),
                               snr_high_keep=20.0, qfit_high_keep_max=0.4,
+                              qfit_recover_max=None,
+                              recover_satstar_guard_arcsec=2.0,
+                              recover_prom_gate=True,
+                              recover_prom_log_intercept=0.20,
+                              recover_prom_log_slope=0.77,
                               drop_overshoot=True, struct_x=0.0, struct_y=0.0,
                               label=''):
     """First-pass star-vs-extended-emission vetting of a MERGED catalog.
@@ -738,6 +743,16 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     # measured ONCE at each final source position, so it is immune to the
     # per-frame fit-position scatter that let false sources survive the
     # per-frame cut and get re-unioned by the merge.
+    # RECOVER tier needs the data-i2d PROMINENCE (rise above local emission) to
+    # tell a crowded real star (high prominence) from an extended-emission ridge
+    # knot (low prominence -- it sits IN the bright ridge).  qfit alone CANNOT:
+    # qfit 0.2-0.5 means "crowded real star" in a dense star field but "emission
+    # knot" on bright nebulosity (verified pillar_head: 1 real star prominence
+    # 7.4 vs 8 emission knots prominence <=2.4).  Prominence is computed for ALL
+    # sources (when a data_i2d is supplied) and PERSISTED on the catalog as the
+    # 'prominence' column -- a universally-useful star-vs-emission / quality metric.
+    _qrec = qfit_max if qfit_recover_max is None else float(qfit_recover_max)
+    _recover_on = (_qrec > qfit_max) and (min_prominence <= 0)
     peaksb = np.full(n, np.nan, dtype=float)
     prominence = np.full(n, np.nan, dtype=float)
     if data_i2d_image is not None and ww_i2d is not None and 'skycoord' in t.colnames:
@@ -762,8 +777,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                 box = data_i2d_image[ylo:yhi, xlo:xhi]
                 if np.any(np.isfinite(box)):
                     peaksb[i] = float(np.nanmax(box))
-            if (min_prominence > 0 and _H <= ix < nx - _H
-                    and _H <= iy < ny - _H):
+            if _H <= ix < nx - _H and _H <= iy < ny - _H:
                 st = data_i2d_image[iy - _H:iy + _H + 1, ix - _H:ix + _H + 1]
                 core = np.nanmax(st[_cm])
                 ann = st[_am]
@@ -771,6 +785,13 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                 mad = 1.4826 * np.nanmedian(np.abs(ann - bg))
                 if np.isfinite(core) and np.isfinite(bg) and mad > 0:
                     prominence[i] = (core - bg) / mad
+
+    # Persist the data_i2d quality metrics on the catalog so every downstream
+    # cut is reproducible.  'prominence' = (core peak - annulus median)/annulus
+    # MAD on the data_i2d (rise above local emission; star-vs-emission); 'peak_sb'
+    # = 3x3-box peak surface brightness.  NaN where no data_i2d / off the i2d.
+    t['prominence'] = prominence
+    t['peak_sb'] = peaksb
 
     # BRIGHT-ISOLATED keep (Mechanism 2): a real bright star whose qfit sits just
     # above qfit_max (e.g. sickle F480M star3: flux 6381, S/N 201, qfit 0.282,
@@ -794,6 +815,67 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         | (np.isfinite(peaksb) & (lbk > 0) & (peaksb > peak_over_bkg * lbk))
         | bright_isolated
     )
+    # RECOVER tier (opt-in: qfit_recover_max > qfit_max; NIRCam only).  A real
+    # star whose fit is degraded by neighbour blending sits at
+    # qfit_max < qfit <= ~0.5 with good S/N -- the strict qfit<=qfit_max cut
+    # deletes ~24k such real stars in crowded Arches F212N (dropped-real median
+    # qfit 0.30, S/N 14.6) while diffraction spikes / emission knots sit at
+    # qfit>0.5 (median 0.52).  Admit them to star_like so they are CATALOGUED
+    # (=> in the model => SUBTRACTED; the "cataloged implies subtracted"
+    # invariant is preserved, no floating unsubtracted source) and re-fit each
+    # later phase.  Gated by: (a) the qfit ceiling, (b) the S/N floor (applied
+    # below via snr_ok in _emission_keep_nircam -- recovered sources are NOT
+    # qfit_confident, so they must clear local_snr_min), (c) NOT on a
+    # saturated-star spike.  The per-frame _filter_satstar_artifacts already
+    # drops wing/spike-dominated fits; this is the merged-level satstar-
+    # proximity backstop (a recovered source within guard arcsec of a catalog
+    # saturated star is rejected).  Default (qfit_recover_max None/<=qfit_max)
+    # is a NO-OP -> behaviour byte-identical to before.
+    if _recover_on:
+        near_satstar = np.zeros(n, dtype=bool)
+        if 'is_saturated' in t.colnames and 'skycoord' in t.colnames:
+            _iss = t['is_saturated']
+            _iss = np.asarray(_iss.filled(False) if hasattr(_iss, 'filled') else _iss,
+                              dtype=bool)
+            if _iss.any():
+                from astropy.coordinates import SkyCoord
+                import astropy.units as _u
+                _sc = t['skycoord']
+                if not isinstance(_sc, SkyCoord):
+                    _sc = SkyCoord(_sc)
+                _, _sep, _ = _sc.match_to_catalog_sky(_sc[_iss])
+                near_satstar = _sep < (float(recover_satstar_guard_arcsec) * _u.arcsec)
+        # PROMINENCE gate is MANDATORY for recover: a recovered source MUST rise
+        # above the local annulus (be a point source, not a bump on a continuous
+        # emission ridge).  The threshold is a SLOPED line in (qfit, log10 prom):
+        #     log10(prominence) >= recover_prom_log_intercept
+        #                          + recover_prom_log_slope * qfit
+        # i.e. the prominence floor RISES with qfit -- a well-fit source (low
+        # qfit) is trusted at lower prominence; a poorly-fit one (high qfit) must
+        # be more prominent to not be emission.  Fit on labelled sickle cutouts
+        # (low_background=real, pillar_head=emission): the sloped line keeps 40/41
+        # real at 1/6 emission, vs a flat prom>=5 keeping only 33/41.  NaN
+        # prominence (no data_i2d / off-edge) -> NOT recovered (safe).  Without
+        # this, on bright extended emission the qfit<=0.5 gate admits emission
+        # knots as false "stars" (pillar_head: 8 ridge knots vs 1 real star).
+        if not recover_prom_gate:
+            _prom_ok = np.ones(n, dtype=bool)   # gate disabled (unit tests / opt-out)
+        else:
+            with np.errstate(invalid='ignore'):
+                _logp = np.log10(np.where(prominence > 0, prominence, np.nan))
+                _thr = (float(recover_prom_log_intercept)
+                        + float(recover_prom_log_slope) * qf)
+                _prom_ok = np.isfinite(_logp) & (_logp >= _thr)
+        recovered = ((qf > qfit_max) & (qf <= _qrec) & ~near_satstar & _prom_ok)
+        star_like = star_like | recovered
+        _n_qfit = int(((qf > qfit_max) & (qf <= _qrec) & ~near_satstar).sum())
+        print(f"[{label}] recover tier: +{int(recovered.sum())} star-like "
+              f"(qfit in ({qfit_max:g},{_qrec:g}], S/N>={local_snr_min:g}, "
+              f"log10(prom)>={recover_prom_log_intercept:g}+"
+              f"{recover_prom_log_slope:g}*qfit, not within "
+              f"{recover_satstar_guard_arcsec:g}\" of a satstar); prominence gate "
+              f"rejected {_n_qfit - int(recovered.sum())} emission/low-prominence "
+              f"candidate(s)", flush=True)
     # MIRI and NIRCam use DIFFERENT keep-logics (see _emission_keep_miri /
     # _emission_keep_nircam).  min_prominence>0 selects the MIRI path.
     if min_prominence > 0:
@@ -2991,6 +3073,15 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         local_snr_min=float(getattr(opts_phase, 'manual_ext_local_snr_min', 5.0)),
                         snr_high_keep=float(getattr(opts_phase, 'manual_ext_snr_high_keep', 20.0)),
                         qfit_high_keep_max=float(getattr(opts_phase, 'manual_ext_qfit_high_keep_max', 0.4)),
+                        qfit_recover_max=float(getattr(opts_phase, 'manual_ext_qfit_recover_max', 0.2)),
+                        recover_satstar_guard_arcsec=float(getattr(
+                            opts_phase, 'manual_ext_recover_satstar_guard_arcsec', 2.0)),
+                        recover_prom_gate=bool(getattr(
+                            opts_phase, 'manual_ext_recover_prom_gate', True)),
+                        recover_prom_log_intercept=float(getattr(
+                            opts_phase, 'manual_ext_recover_prom_log_intercept', 0.20)),
+                        recover_prom_log_slope=float(getattr(
+                            opts_phase, 'manual_ext_recover_prom_log_slope', 0.77)),
                         struct_x=0.0, struct_y=0.0,  # prune at detection, not here
                         label=f'{phase}:{filt}')
                     vetted.write(vetted_path, overwrite=True)
