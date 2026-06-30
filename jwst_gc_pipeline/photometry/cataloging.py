@@ -1332,12 +1332,27 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
         _instrume = ''
     _is_miri = 'MIRI' in _instrume
 
-    # MIRI: load the DEEP data i2d once so the prominence cut is measured on the
-    # coadd (frame-invariant), not single noisy exposures.  Path mirrors
-    # _data_i2d_path in run_manual_pipeline.
+    # Extended-emission NIRCam fields (w51/sickle/wd2): optional per-pass
+    # prominence gate to kill fake stars on bright nebulosity (the m2 carpet).
+    # 0 = off (default -> other fields unchanged).  Tunable via options so a
+    # conservative->aggressive schedule (lenient m1, strict m2) can be A/B'd.
+    _is_ext_nircam = ((not _is_miri)
+                      and str(getattr(options, 'target', '')).lower()
+                      in _EXTENDED_EMISSION_TARGETS)
+    _nprom_m1 = float(getattr(options, 'nircam_prom_m1', 0.0))
+    _nprom_m2 = float(getattr(options, 'nircam_prom_m2', 0.0))
+    _nprom_m3p = float(getattr(options, 'nircam_prom_m3plus', 0.0))
+    _nircam_prom_any = _is_ext_nircam and (_nprom_m1 > 0 or _nprom_m2 > 0
+                                           or _nprom_m3p > 0)
+
+    # Load the DEEP data i2d once so the prominence cut is measured on the coadd
+    # (frame-invariant), not single noisy exposures.  Path mirrors _data_i2d_path
+    # in run_manual_pipeline.  MIRI always; ext-NIRCam only when a prom gate is
+    # requested.  (At m12 the data_i2d is not built yet -> falls back to per-frame
+    # data, which still discriminates a star core from flat emission.)
     _prom_i2d = None
     _prom_ww_i2d = None
-    if _is_miri:
+    if _is_miri or _nircam_prom_any:
         try:
             _i2dp = (f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}'
                      f'_t001_{_L._inst_token(filtername)}_{pupil}-'
@@ -1396,7 +1411,13 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             print(f"[{manual_phase}] seed-protection setup skipped: {_pex}",
                   flush=True)
 
-    def _pass(seed, label):
+    def _pass(seed, label, prom_snr=None):
+        # prom_snr: per-pass prominence-reject threshold.  None -> default
+        # (MIRI uses miri_prominence_snr; NIRCam 0=off).  The ext-NIRCam m12/m3+
+        # branches pass an explicit schedule.
+        if prom_snr is None:
+            prom_snr = (float(getattr(options, 'miri_prominence_snr', 5.0))
+                        if _is_miri else 0.0)
         return _manual_phot_pass(
             data=ctx.nan_replaced_data, mask=ctx.mask, err=ctx.err, bad=ctx.bad,
             dao_psf_model=ctx.dao_psf_model, init_params=seed,
@@ -1411,8 +1432,7 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             miri_dpk_guard=_is_miri,
             satstar_excl_xy=_satstar_xy, satstar_excl_pix=_satstar_excl_pix,
             near_sat_dist_pix=(1.5 * ctx.fwhm_pix if _is_miri else 1.0),
-            miri_prominence_snr=(float(getattr(options, 'miri_prominence_snr', 5.0))
-                                 if _is_miri else 0.0),
+            miri_prominence_snr=prom_snr,
             prominence_bg_box=0,
             prominence_data_i2d=_prom_i2d, prominence_ww_i2d=_prom_ww_i2d,
             frame_ww=ctx.ww, protect_xy=_protect_xy,
@@ -1426,7 +1446,8 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             local_snr_threshold=first_snr, roundlo=-1.0, roundhi=1.0,
             sharplo=0.30, sharphi=1.40, dedup_min_sep_pix=0.5 * ctx.fwhm_pix,
             label='m1', apply_snr_filter=False, coarse_bg_box=coarse_bg_box)
-        res1, modsky1, _ = _pass(seed1, 'm1')
+        res1, modsky1, _ = _pass(seed1, 'm1',
+                                 _nprom_m1 if _is_ext_nircam else None)
         saved1 = _save_manual_pass(ctx, res1, modsky1, options, 'm1', detector)
         base1 = (ctx.original_data if ctx.satstar_model_subtracted is None
                  else ctx.original_data - ctx.satstar_model_subtracted)
@@ -1439,7 +1460,8 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             sharplo=0.50, sharphi=1.00, dedup_min_sep_pix=0.5 * ctx.fwhm_pix,
             label='m2', struct_x=struct_x, struct_y=struct_y,
             coarse_bg_box=coarse_bg_box)
-        res2, modsky2, _ = _pass(seed2, 'm2')
+        res2, modsky2, _ = _pass(seed2, 'm2',
+                                 _nprom_m2 if _is_ext_nircam else None)
         _save_manual_pass(ctx, res2, modsky2, options, 'm2', detector)
         return res2
 
@@ -1454,7 +1476,8 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
         sharplo=0.50, sharphi=1.00, dedup_min_sep_pix=0.5 * ctx.fwhm_pix,
         label=manual_phase, struct_x=struct_x, struct_y=struct_y,
         coarse_bg_box=coarse_bg_box)
-    res, modsky, _ = _pass(seed, manual_phase)
+    res, modsky, _ = _pass(seed, manual_phase,
+                           _nprom_m3p if _is_ext_nircam else None)
     _save_manual_pass(ctx, res, modsky, options, manual_phase, detector)
     return res
 

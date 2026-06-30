@@ -3418,6 +3418,24 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                           "noise (RMS of data-minus-smoothed-bg) -- the term that "
                           "rejects PAH/filament bumps while sparing point sources.  "
                           "0 disables (default 0.0); NIRCam LW try ~3-4."))
+    parser.add_option("--nircam-prom-m1", dest="nircam_prom_m1",
+                    type='float', default=0.0,
+                    help=("Extended-emission NIRCam (w51/sickle/wd2) per-pass "
+                          "prominence-reject threshold for the m1 (iter1) pass: drop "
+                          "fits whose data core does not rise >= this * annulus-MAD "
+                          "above the local emission.  0 disables (default).  Use a "
+                          "CONSERVATIVE (low) value here -- iter1 has no background "
+                          "model yet."))
+    parser.add_option("--nircam-prom-m2", dest="nircam_prom_m2",
+                    type='float', default=0.0,
+                    help=("Same as --nircam-prom-m1 but for the m2 (iter2) pass, which "
+                          "detects on the iter1 source-subtracted residual.  Use a "
+                          "more AGGRESSIVE (higher) value -- real stars stand out more "
+                          "once iter1 sources are removed.  0 disables (default)."))
+    parser.add_option("--nircam-prom-m3plus", dest="nircam_prom_m3plus",
+                    type='float', default=0.0,
+                    help=("Same prominence gate for m3..m6 (the background-subtracted "
+                          "passes).  0 disables (default)."))
     parser.add_option("--manual-coarse-bg-box", dest="coarse_bg_box",
                     type='int', default=0,
                     help=("Detect on a coarse-background-subtracted image: subtract a "
