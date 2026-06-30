@@ -2026,6 +2026,16 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
         opts_phase.use_iter3_residual_bg = resbgsub
 
         if miri_tuning:
+            # Prominence-gate threshold (env MIRI_PROM_SNR, default 5).  Drives
+            # BOTH MIRI prominence gates -- the per-frame _manual_phot_pass reject
+            # and the per-obs _filter_extended_emission vetting (both read
+            # opts_phase.miri_prominence_snr).  With the neighbour-robust
+            # prominence (MIRI_DAOPHOT_PROM_ROBUST) real stars score ~16 and
+            # emission ~5; lower this to recover more faint stars on emission
+            # (user: cloudc catalog looks clean, many real stars still uncatalogued).
+            opts_phase.miri_prominence_snr = float(
+                os.environ.get('MIRI_PROM_SNR',
+                               getattr(options, 'miri_prominence_snr', 5.0)))
             # tweak (2): raise thresholds on the raw-image rounds (m12/m3/m4)
             # tweak (3): lower them on the background-subtracted rounds (m5/m6)
             # tweak (4): relax qfit vetting everywhere for MIRI
