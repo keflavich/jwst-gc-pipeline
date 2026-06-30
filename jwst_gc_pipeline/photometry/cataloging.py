@@ -2300,8 +2300,12 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
     if start_phase == 'm8':
         # Standalone forced cross-band fill: m7 is already done; reconstruct the
         # context from disk (frame_cache, bg_for_next, satstar) and run m8 only.
-        if not multifilter:
-            raise ValueError("--manual-start-phase=m8 requires multifilter (>=2 filters)")
+        _m8_partial = bool(getattr(options, 'manual_m8_partial', False))
+        if not multifilter and not _m8_partial:
+            raise ValueError(
+                "--manual-start-phase=m8 requires multifilter (>=2 filters) unless "
+                "--manual-m8-partial (single-band partial fill, merged later by "
+                "m8_merge_partials.py)")
         import copy as _copy
         opts_phase = _copy.copy(options)
         opts_phase.iteration_label = 'm7'
@@ -2338,7 +2342,13 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 print(f"manual [m8]: m7 merged catalog not found (module={module}): "
                       f"{_xb}", flush=True)
                 continue
-            _m8 = _xb.replace('resbgsub_m7', 'resbgsub_m8')
+            if _m8_partial:
+                # one band per job -> partial catalog (only this band's columns
+                # are meaningful); m8_merge_partials.py overlays them onto _xb.
+                _tag = '-'.join(filternames)
+                _m8 = _xb.replace('resbgsub_m7', f'resbgsub_m8_partial_{_tag}')
+            else:
+                _m8 = _xb.replace('resbgsub_m7', 'resbgsub_m8')
             from jwst_gc_pipeline.photometry import forced_fill as _ff
 
             def _frames_for(filt, _module=module):

@@ -3586,6 +3586,25 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             '(hard-crash on any miss -> no silent exposure drop), '
                             'then run the per-phase barrier over the per-frame '
                             'products already on disk.'))
+    parser.add_option('--no-forced-fill-m8', dest='forced_fill_m8',
+                      default=True, action='store_false',
+                      help=('Skip the inline m8 forced cross-band fill at the end of '
+                            'the multifilter finalize (m7 + cross-band merge).  Use '
+                            'when the m8 fill is fanned out into per-filter jobs '
+                            '(perfilter_m8.sbatch + m8_merge_partials.py) instead, '
+                            'since the monolithic fill over all 264 frames overruns '
+                            'the 18h wall.'))
+    parser.add_option('--manual-m8-partial', dest='manual_m8_partial',
+                      default=False, action='store_true',
+                      help=('With --manual-start-phase=m8 and a single --filternames '
+                            'entry: run the forced cross-band fill for that one band '
+                            'only and write a partial catalog '
+                            '(..._resbgsub_m8_partial_<FILT>.fits) instead of the '
+                            'combined m8.  Lets the m8 fill (which otherwise sweeps '
+                            'all 264 frames serially and overruns the 18h wall) fan '
+                            'out into 5 independent per-filter jobs; '
+                            'm8_merge_partials.py column-merges them into the final '
+                            '..._resbgsub_m8.fits.'))
     parser.add_option('--seed-catalog', dest='seed_catalog',
                       default='',
                       help='Optional seed catalog for a seeded photometry rerun', metavar='seed_catalog')
