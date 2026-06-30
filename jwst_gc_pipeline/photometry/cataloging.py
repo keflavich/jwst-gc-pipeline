@@ -2026,16 +2026,36 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
         opts_phase.use_iter3_residual_bg = resbgsub
 
         if miri_tuning:
-            # Prominence-gate threshold (env MIRI_PROM_SNR, default 5).  Drives
-            # BOTH MIRI prominence gates -- the per-frame _manual_phot_pass reject
-            # and the per-obs _filter_extended_emission vetting (both read
-            # opts_phase.miri_prominence_snr).  With the neighbour-robust
-            # prominence (MIRI_DAOPHOT_PROM_ROBUST) real stars score ~16 and
-            # emission ~5; lower this to recover more faint stars on emission
-            # (user: cloudc catalog looks clean, many real stars still uncatalogued).
-            opts_phase.miri_prominence_snr = float(
-                os.environ.get('MIRI_PROM_SNR',
-                               getattr(options, 'miri_prominence_snr', 5.0)))
+            # Prominence-gate threshold (drives BOTH MIRI prominence gates -- the
+            # per-frame _manual_phot_pass reject and the per-obs
+            # _filter_extended_emission vetting, both read
+            # opts_phase.miri_prominence_snr).  Three modes, in priority order:
+            #   1. MIRI_PROM_SNR set -> flat threshold (all phases).
+            #   2. MIRI_PROM_SNR_PROGRESSIVE=1 -> loosen the threshold across
+            #      iterations: STRICT on the raw, emission-heavy early rounds
+            #      (m12/m3/m4) where a low cut would seed emission false sources,
+            #      LOOSE on the late bg-subtracted residual rounds (m5/m6) where
+            #      the emission is already removed and faint stars are trustworthy
+            #      -- so the final catalog recovers the faintest real stars without
+            #      ever propagating early-round emission seeds.  Schedule endpoints
+            #      env-tunable (MIRI_PROM_SNR_HI raw, MIRI_PROM_SNR_LO m6).
+            #   3. otherwise the prior flat default (5).
+            # With the neighbour-robust prominence real stars score ~16, emission ~5.
+            if os.environ.get('MIRI_PROM_SNR') is not None:
+                opts_phase.miri_prominence_snr = float(os.environ['MIRI_PROM_SNR'])
+            elif int(os.environ.get('MIRI_PROM_SNR_PROGRESSIVE', 0)):
+                _phi = float(os.environ.get('MIRI_PROM_SNR_HI', 8.0))
+                _plo = float(os.environ.get('MIRI_PROM_SNR_LO', 3.0))
+                _prom_sched = {'m12': _phi, 'm3': _phi,
+                               'm4': 0.5 * (_phi + _plo),
+                               'm5': _plo + 0.5 * (_phi - _plo) * 0.5,
+                               'm6': _plo}
+                opts_phase.miri_prominence_snr = _prom_sched.get(phase, _plo)
+            else:
+                opts_phase.miri_prominence_snr = getattr(
+                    options, 'miri_prominence_snr', 5.0)
+            print(f"  [miri_tuning {phase}] prominence_snr="
+                  f"{opts_phase.miri_prominence_snr:g}", flush=True)
             # tweak (2): raise thresholds on the raw-image rounds (m12/m3/m4)
             # tweak (3): lower them on the background-subtracted rounds (m5/m6)
             # tweak (4): relax qfit vetting everywhere for MIRI
