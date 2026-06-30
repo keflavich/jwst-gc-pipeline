@@ -205,6 +205,23 @@ REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD = {
     '3523': {
         '005': 'catalogs/gaia_refcat.fits',
     },
+    # --- Globular clusters (Jay Anderson co-I programs; added 2026-06-30) ---
+    # Non-GC clusters outside the VIRAC2/VVV footprint -> pure Gaia DR3 frame
+    # (PM-propagated to obs epoch). Built by build_gc_gaia_refcat.py.
+    '1334': {  # Weisz ERS; M92 (halo GC)
+        '001': 'catalogs/gaia_refcat.fits',
+    },
+    '1979': {  # Bedin; NGC6397 (o001), M-4 (o002), M-4-shift (o003)
+        '001': 'catalogs/gaia_refcat.fits',
+        '002': 'catalogs/gaia_refcat.fits',
+        '003': 'catalogs/gaia_refcat.fits',
+    },
+    '8322': {  # Haeberle oMEGACat; Omega Cen (NGC5139)
+        '001': 'catalogs/gaia_refcat.fits',
+    },
+    '12587': {  # Haeberle oMEGACat; Omega Cen (NGC5139)
+        '001': 'catalogs/gaia_refcat.fits',
+    },
 }
 
 # Module restrictions per proposal/field/filter for single-module datasets
@@ -1361,6 +1378,11 @@ if __name__ == "__main__":
                                      '050': 'gc2211'},
                             '1905': {'001': 'wd1', '003': 'wd1'},
                             '3523': {'003': 'wd2', '005': 'wd2'},
+                            # Globular clusters (Jay Anderson co-I; added 2026-06-30)
+                            '1334': {'001': 'm92'},
+                            '1979': {'001': 'ngc6397', '002': 'm4', '003': 'm4'},
+                            '8322': {'001': 'omegacen'},
+                            '12587': {'001': 'omegacen'},
                             }[proposal_id]
 
     for field in fields:
