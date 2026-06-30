@@ -3549,6 +3549,27 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'limit (~64 mas) so resolvable pairs survive.  0 '
                             'disables.  Default 30.'),
                       metavar='manual_crossband_seed_dedup_mas')
+    parser.add_option('--manual-crossband-seed-min-filters', type=int,
+                      dest='manual_crossband_seed_min_filters', default=2,
+                      help=('STRINGENT m7 cross-band seed: only seed positions '
+                            'independently confirmed (SNR>min, qfit<max) in >= this '
+                            'many filters.  Prevents a single-band (or i2d-structure) '
+                            'detection from being force-fit into all bands as a fake '
+                            'multi-band source (2026-06-30 fix).  Default 2.  Set 1 '
+                            'to restore the legacy union seed (NOT recommended).'),
+                      metavar='manual_crossband_seed_min_filters')
+    parser.add_option('--manual-crossband-seed-snr-min', type=float,
+                      dest='manual_crossband_seed_snr_min', default=5.0,
+                      help='Per-filter SNR threshold for m7 cross-band seed confirmation. Default 5.',
+                      metavar='manual_crossband_seed_snr_min')
+    parser.add_option('--manual-crossband-seed-qfit-max', type=float,
+                      dest='manual_crossband_seed_qfit_max', default=0.2,
+                      help='Per-filter qfit ceiling for m7 cross-band seed confirmation. Default 0.2.',
+                      metavar='manual_crossband_seed_qfit_max')
+    parser.add_option('--manual-crossband-seed-max-sep-mas', type=float,
+                      dest='manual_crossband_seed_max_sep_mas', default=30.0,
+                      help='Cross-filter match radius (mas) for m7 cross-band seed confirmation clustering. Default 30.',
+                      metavar='manual_crossband_seed_max_sep_mas')
     parser.add_option('--manual-start-phase', dest='manual_start_phase',
                       default='',
                       help=('Start the manual pipeline partway through (e.g. '
