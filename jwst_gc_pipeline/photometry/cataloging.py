@@ -764,6 +764,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         _rr = np.hypot(_xo, _yo)
         _cm = _rr < 1.5
         _am = (_rr >= 4) & (_rr <= _H)
+        _prom_robust = bool(int(os.environ.get('MIRI_DAOPHOT_PROM_ROBUST', 0)))
         for i in range(n):
             if not (np.isfinite(xx[i]) and np.isfinite(yy[i])):
                 continue
@@ -779,10 +780,21 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                 st = data_i2d_image[iy - _H:iy + _H + 1, ix - _H:ix + _H + 1]
                 core = np.nanmax(st[_cm])
                 ann = st[_am]
-                bg = np.nanmedian(ann)
-                mad = 1.4826 * np.nanmedian(np.abs(ann - bg))
-                if np.isfinite(core) and np.isfinite(bg) and mad > 0:
-                    prominence[i] = (core - bg) / mad
+                annf = ann[np.isfinite(ann)]
+                if annf.size >= 10 and np.isfinite(core):
+                    if _prom_robust:
+                        # neighbour-robust: 25th-pct emission FLOOR + lower-half
+                        # spread, immune to a bright neighbour inflating the MAD
+                        # (cloudc faint stars on emission).  See _manual_phot_pass.
+                        bg = np.percentile(annf, 25)
+                        lower = annf[annf <= np.median(annf)]
+                        spread = (1.4826 * np.median(np.abs(lower - np.median(lower)))
+                                  if lower.size > 5 else np.std(annf))
+                    else:
+                        bg = np.median(annf)
+                        spread = 1.4826 * np.median(np.abs(annf - bg))
+                    if np.isfinite(bg) and spread > 0:
+                        prominence[i] = (core - bg) / spread
 
     star_like = (
         (qf <= qfit_max)
