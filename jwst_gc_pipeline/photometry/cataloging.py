@@ -1011,6 +1011,13 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     mask = np.isnan(data) | bad
     dqarr = im1['DQ'].data if 'DQ' in im1 else None
     if dqarr is not None:
+        # Correct the SATURATED bit to FIRST-group saturation (env-gated, MIRI):
+        # the cal/crf flag marks any pixel saturated in ANY ramp group, which on
+        # bright emission vetoes real point sources from daophot although the
+        # ramp fitter recovers their flux.  Clearing the later-group-only flags
+        # here propagates to is_saturated, the fit mask, AND _filter_near_saturation
+        # (which reads ctx.dqarr).  See first_group_saturation_mask.
+        dqarr = _L.correct_dq_first_group_saturation(dqarr, filename, instrument)
         is_saturated = (dqarr & _L.dqflags.pixel['SATURATED']) != 0
         data_ = data.copy()
         data_[is_saturated] = np.nan

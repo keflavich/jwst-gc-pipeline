@@ -551,7 +551,8 @@ import crowdsource
 from crowdsource import crowdsource_base
 from crowdsource.crowdsource_base import fit_im, psfmod
 
-from jwst_gc_pipeline.reduction.saturated_star_finding import remove_saturated_stars
+from jwst_gc_pipeline.reduction.saturated_star_finding import (
+    remove_saturated_stars, correct_dq_first_group_saturation)
 
 from astroquery.svo_fps import SvoFps
 

@@ -2991,19 +2991,11 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         builtins.satstar_flagimg = flag_img
         return base_tab
 
-def _find_zeroframe_for(filename):
-    """Locate and load the ZEROFRAME (frame zero) for a cal/crf ``filename``.
-
-    The satstar step runs on the 2D cal/crf image, which has no ZEROFRAME; it
-    lives in the matching ``_ramp.fits`` produced by Detector1 (same exposure
-    stem, in this target's ``pipeline/`` directory).  Returns the ZEROFRAME 2D
-    array (raw DN) or ``None`` if no ramp file is found.  Used to opt the
-    ZEROFRAME deblender into ``remove_saturated_stars``."""
-    base = os.path.basename(filename)
-    # exposure stem = jwNNNNN..._<detector>  (strip everything from the first
-    # post-detector token; both '<stem>_cal.fits' and
-    # '<stem>_destreak_..._crf.fits' share the same leading stem).
+def _find_ramp_for(filename):
+    """Return the path to the sibling ``_ramp.fits`` for a cal/crf ``filename``,
+    or None.  Shared by the ZEROFRAME loader and the first-group saturation map."""
     import re
+    base = os.path.basename(filename)
     m = re.match(r'(jw\d+_\d+_\d+_[a-z0-9]+)', base)
     if not m:
         return None
@@ -3014,28 +3006,97 @@ def _find_zeroframe_for(filename):
              os.path.join(os.path.dirname(pipedir), 'pipeline', f'{stem}_ramp.fits')]
     for rf in cands:
         if os.path.exists(rf):
-            with fits.open(rf) as rh:
-                names = [e.name for e in rh]
-                if 'ZEROFRAME' in names:
-                    zf = np.asarray(rh['ZEROFRAME'].data[0], dtype=float)
-                    print(f"satstar deblend: loaded ZEROFRAME from {rf}", flush=True)
+            return rf
+    return None
+
+
+def first_group_saturation_mask(filename):
+    """Boolean mask of pixels saturated in the FIRST ramp group (the only
+    TRULY-unrecoverable pixels), read from the sibling ``_ramp.fits`` GROUPDQ.
+
+    The cal/crf ``SATURATED`` flag marks any pixel that saturates in ANY group.
+    On bright MIRI emission that floods enormous regions (cloudc 2526 F770W:
+    69852 px / 904 connected components, max 16231 px -- fusing many real point
+    sources into ONE giant DQ "blob") even though the ramp fitter recovers a
+    valid flux for every pixel that has >=1 good (pre-saturation) group.  Only a
+    pixel whose FIRST group already saturates has no good read and is genuinely
+    unrecoverable (cloudc: 720 px / 26 components, max 54 px).  Using this map in
+    place of the cal SATURATED flag stops real stars-on-bright-emission from
+    being swept into the satstar channel / vetoed from daophot.
+
+    Returns the (ny, nx) boolean mask, or None if no ramp / no GROUPDQ."""
+    rf = _find_ramp_for(filename)
+    if rf is None:
+        return None
+    with fits.open(rf) as rh:
+        if 'GROUPDQ' not in [e.name for e in rh]:
+            return None
+        gdq = rh['GROUPDQ'].data
+        if gdq is None or getattr(gdq, 'ndim', 0) != 4:
+            return None
+        # (nint, ngroup, ny, nx): first group of each integration; a pixel is
+        # truly saturated if its first read is saturated in ANY integration.
+        return ((gdq[:, 0] & dqflags.pixel['SATURATED']) > 0).any(axis=0)
+
+
+def correct_dq_first_group_saturation(dq, filename, instrument=''):
+    """Clear the ``SATURATED`` bit on pixels that saturate only in LATER ramp
+    groups (recoverable by the ramp fitter), leaving it set only where the FIRST
+    group saturates.  See ``first_group_saturation_mask`` for the rationale.
+
+    Opt-in via env ``MIRI_FIRSTGROUP_SAT_DQ`` (default off); MIRI-only.  Returns
+    ``dq`` unchanged when disabled, non-MIRI, or no sibling ramp/GROUPDQ exists."""
+    if dq is None or not int(os.environ.get('MIRI_FIRSTGROUP_SAT_DQ', 0)):
+        return dq
+    if 'MIRI' not in str(instrument).upper():
+        return dq
+    fg = first_group_saturation_mask(filename)
+    if fg is None or fg.shape != dq.shape:
+        return dq
+    SAT = dqflags.pixel['SATURATED']
+    clear = ((dq & SAT) > 0) & (~fg)
+    n = int(clear.sum())
+    if n:
+        dq = dq.copy()
+        dq[clear] &= ~np.array(SAT, dtype=dq.dtype)
+        print(f"first-group-sat DQ correction ({os.path.basename(filename)}): cleared "
+              f"SATURATED on {n} later-group-only px; kept {int(fg.sum())} "
+              f"first-group-saturated", flush=True)
+    return dq
+
+
+def _find_zeroframe_for(filename):
+    """Locate and load the ZEROFRAME (frame zero) for a cal/crf ``filename``.
+
+    The satstar step runs on the 2D cal/crf image, which has no ZEROFRAME; it
+    lives in the matching ``_ramp.fits`` produced by Detector1 (same exposure
+    stem, in this target's ``pipeline/`` directory).  Returns the ZEROFRAME 2D
+    array (raw DN) or ``None`` if no ramp file is found.  Used to opt the
+    ZEROFRAME deblender into ``remove_saturated_stars``."""
+    rf = _find_ramp_for(filename)
+    if rf is not None:
+        with fits.open(rf) as rh:
+            names = [e.name for e in rh]
+            if 'ZEROFRAME' in names:
+                zf = np.asarray(rh['ZEROFRAME'].data[0], dtype=float)
+                print(f"satstar deblend: loaded ZEROFRAME from {rf}", flush=True)
+                return zf
+            # Fallback: Detector1 did not save a ZEROFRAME extension (cloudc
+            # 2526 ramps have none).  The ramp SCI cube's FIRST READ (first
+            # integration, first group) is the least-saturated frame -- the
+            # same first-read the ZEROFRAME captures -- so use it as a pseudo-
+            # zeroframe.  Validated on cloudc F770W: 9/10 blob-embedded
+            # saturated stars are distinct + unsaturated in the first read.
+            if 'SCI' in names:
+                _sci = rh['SCI'].data
+                if _sci is not None and getattr(_sci, 'ndim', 0) == 4:
+                    zf = np.asarray(_sci[0, 0], dtype=float)
+                    print(f"satstar deblend: no ZEROFRAME ext in {rf}; using "
+                          f"ramp first read SCI[0,0] as pseudo-zeroframe",
+                          flush=True)
                     return zf
-                # Fallback: Detector1 did not save a ZEROFRAME extension (cloudc
-                # 2526 ramps have none).  The ramp SCI cube's FIRST READ (first
-                # integration, first group) is the least-saturated frame -- the
-                # same first-read the ZEROFRAME captures -- so use it as a pseudo-
-                # zeroframe.  Validated on cloudc F770W: 9/10 blob-embedded
-                # saturated stars are distinct + unsaturated in the first read.
-                if 'SCI' in names:
-                    _sci = rh['SCI'].data
-                    if _sci is not None and getattr(_sci, 'ndim', 0) == 4:
-                        zf = np.asarray(_sci[0, 0], dtype=float)
-                        print(f"satstar deblend: no ZEROFRAME ext in {rf}; using "
-                              f"ramp first read SCI[0,0] as pseudo-zeroframe",
-                              flush=True)
-                        return zf
-    print(f"satstar deblend: no _ramp.fits ZEROFRAME found for {base} "
-          f"(deblend disabled for this frame)", flush=True)
+    print(f"satstar deblend: no _ramp.fits ZEROFRAME found for "
+          f"{os.path.basename(filename)} (deblend disabled for this frame)", flush=True)
     return None
 
 
@@ -3052,6 +3113,16 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
     print(f"Removing saturated stars from {filename}", flush=True)
     fh = fits.open(filename)
     data = fh['SCI'].data
+
+    # Correct the SATURATED DQ bit to FIRST-group saturation (env-gated, MIRI).
+    # The cal/crf SATURATED flag floods bright emission and fuses real point
+    # sources into giant DQ blobs; only first-group-saturated pixels are truly
+    # unrecoverable.  Correcting it here shrinks the saturated components the
+    # satstar finder sees to the genuine cores.  See first_group_saturation_mask.
+    if 'DQ' in fh:
+        _instr = fh[0].header.get('INSTRUME', '')
+        fh['DQ'].data = correct_dq_first_group_saturation(
+            fh['DQ'].data, filename, _instr)
 
     # there are examples, especially in F405, where the variance is NaN but the value
     # is negative
