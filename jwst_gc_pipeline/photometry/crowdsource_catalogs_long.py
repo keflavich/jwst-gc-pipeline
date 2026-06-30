@@ -3419,21 +3419,22 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "Default 2.0\".")
     parser.add_option("--manual-ext-recover-prom-log-intercept",
                     dest="manual_ext_recover_prom_log_intercept",
-                    type='float', default=0.20,
+                    type='float', default=-0.77,
                     help="Recover-tier prominence gate, SLOPED in (qfit, log10 prom): "
                          "a recovered source must satisfy log10(prominence) >= "
                          "intercept + slope*qfit on the data_i2d (rise above the "
                          "local emission, scaled by fit quality).  Intercept "
-                         "(default 0.20).  Fit on sickle cutouts (low_background=real, "
-                         "pillar_head=emission): keeps 40/41 real at 1/6 emission vs "
-                         "33/41 for a flat prom>=5.  NaN prominence -> NOT recovered.")
+                         "(default -0.77).  Fit on sickle + W51 cutouts (69 real / "
+                         "142 emission, F480M+F187N): keeps 63/69 real at 5/142 "
+                         "emission vs 52/69 for a flat prom>=5.  NaN -> NOT recovered.")
     parser.add_option("--manual-ext-recover-prom-log-slope",
                     dest="manual_ext_recover_prom_log_slope",
-                    type='float', default=0.77,
+                    type='float', default=5.6,
                     help="Slope of the recover-tier prominence gate in log10(prom) "
-                         "per unit qfit (default 0.77): the prominence floor RISES "
+                         "per unit qfit (default 5.6): the prominence floor RISES "
                          "with qfit so a well-fit (low-qfit) source is trusted at "
-                         "lower prominence and a poorly-fit one needs more.")
+                         "lower prominence and a poorly-fit one needs much more "
+                         "(high-qfit recovery is unsafe on emission fields).")
     parser.add_option("--manual-ext-recover-no-prom-gate",
                     dest="manual_ext_recover_prom_gate",
                     action='store_false', default=True,

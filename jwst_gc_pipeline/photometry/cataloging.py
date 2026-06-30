@@ -688,8 +688,8 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               qfit_recover_max=None,
                               recover_satstar_guard_arcsec=2.0,
                               recover_prom_gate=True,
-                              recover_prom_log_intercept=0.20,
-                              recover_prom_log_slope=0.77,
+                              recover_prom_log_intercept=-0.77,
+                              recover_prom_log_slope=5.6,
                               drop_overshoot=True, struct_x=0.0, struct_y=0.0,
                               label=''):
     """First-pass star-vs-extended-emission vetting of a MERGED catalog.
@@ -852,9 +852,12 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         #                          + recover_prom_log_slope * qfit
         # i.e. the prominence floor RISES with qfit -- a well-fit source (low
         # qfit) is trusted at lower prominence; a poorly-fit one (high qfit) must
-        # be more prominent to not be emission.  Fit on labelled sickle cutouts
-        # (low_background=real, pillar_head=emission): the sloped line keeps 40/41
-        # real at 1/6 emission, vs a flat prom>=5 keeping only 33/41.  NaN
+        # be more prominent to not be emission.  Fit on labelled sickle + W51
+        # cutouts (low_background=real; pillar_head + W51 darkfilament F480M/F187N
+        # =emission, 69 real / 142 emission): the sloped line keeps 63/69 real at
+        # 5/142 emission, vs a flat prom>=5 keeping 52/69 at 12/142.  The steep
+        # slope reflects that high-qfit recovery is unsafe on emission fields
+        # (emission reaches high prominence there).  Params are CLI-tunable.  NaN
         # prominence (no data_i2d / off-edge) -> NOT recovered (safe).  Without
         # this, on bright extended emission the qfit<=0.5 gate admits emission
         # knots as false "stars" (pillar_head: 8 ridge knots vs 1 real star).
@@ -3079,9 +3082,9 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         recover_prom_gate=bool(getattr(
                             opts_phase, 'manual_ext_recover_prom_gate', True)),
                         recover_prom_log_intercept=float(getattr(
-                            opts_phase, 'manual_ext_recover_prom_log_intercept', 0.20)),
+                            opts_phase, 'manual_ext_recover_prom_log_intercept', -0.77)),
                         recover_prom_log_slope=float(getattr(
-                            opts_phase, 'manual_ext_recover_prom_log_slope', 0.77)),
+                            opts_phase, 'manual_ext_recover_prom_log_slope', 5.6)),
                         struct_x=0.0, struct_y=0.0,  # prune at detection, not here
                         label=f'{phase}:{filt}')
                     vetted.write(vetted_path, overwrite=True)
