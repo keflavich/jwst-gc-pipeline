@@ -337,6 +337,14 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
         _cm = _rr < 1.5
         _am = (_rr >= 4) & (_rr <= _H)
         _dropp = np.zeros(len(_r), dtype=bool)
+        # Neighbour-robust prominence (env MIRI_DAOPHOT_PROM_ROBUST): on bright
+        # structured emission a bright neighbour in the 4-10px annulus inflates
+        # the annulus median+MAD and crushes a real faint star's prominence below
+        # the gate (cloudc 2526 F770W: pt10-15,19 prominence 1.7-4.8 < 5 though
+        # they are obvious point sources).  The robust estimate reads the annulus
+        # 25th-pct emission FLOOR + the lower-half spread, immune to neighbour
+        # spikes -- mirrors the satstar _seed_prominence(robust=True) fix.
+        _prom_robust = bool(int(os.environ.get('MIRI_DAOPHOT_PROM_ROBUST', 0)))
         for _i in range(len(_r)):
             if not (np.isfinite(_xs[_i]) and np.isfinite(_ys[_i])):
                 continue
@@ -346,11 +354,20 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
             _st = _img[_iy - _H:_iy + _H + 1, _ix - _H:_ix + _H + 1]
             _core = np.nanmax(_st[_cm])
             _ann = _st[_am]
-            _bg = np.nanmedian(_ann)
-            _mad = 1.4826 * np.nanmedian(np.abs(_ann - _bg))
-            if not (np.isfinite(_core) and np.isfinite(_bg) and _mad > 0):
+            _annf = _ann[np.isfinite(_ann)]
+            if _annf.size < 10 or not np.isfinite(_core):
                 continue
-            if (_core - _bg) / _mad < miri_prominence_snr:
+            if _prom_robust:
+                _bg = np.percentile(_annf, 25)
+                _lower = _annf[_annf <= np.median(_annf)]
+                _spread = (1.4826 * np.median(np.abs(_lower - np.median(_lower)))
+                           if _lower.size > 5 else np.std(_annf))
+            else:
+                _bg = np.median(_annf)
+                _spread = 1.4826 * np.median(np.abs(_annf - _bg))
+            if not (np.isfinite(_bg) and _spread > 0):
+                continue
+            if (_core - _bg) / _spread < miri_prominence_snr:
                 _dropp[_i] = True
         _ndp = int(_dropp.sum())
         if _ndp:
