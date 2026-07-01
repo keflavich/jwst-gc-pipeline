@@ -398,6 +398,16 @@ def realign_to_catalog(reference_coordinates, filtername='f212n',
     med_dra = 100*u.arcsec
     med_ddec = 100*u.arcsec
     iteration = 0
+    # Minimum matches required to trust a realignment shift. This post-resample
+    # realign is only a small refinement on top of the tweakreg/assign_wcs frame
+    # (which for well-guided fields is already tens of mas from the reference).
+    # If the image source catalog crossmatches to too few reference stars -- e.g.
+    # wide short-wave bands (F150W2) where SourceCatalogStep's aper_total_vegamag
+    # selection keeps mostly saturated/spurious sources and only a handful land on
+    # Gaia -- do NOT apply a shift driven by that noise, and (crucially) do NOT
+    # crash: a refinement step must never destroy an otherwise-good mosaic. Keep
+    # the current WCS and fall through to write the (unchanged) product.
+    min_matches = 5
     while np.abs(med_dra) > threshold or np.abs(med_ddec) > threshold:
         skycrds_cat = ww.pixel_to_world(xpix, ypix)
 
@@ -411,13 +421,15 @@ def realign_to_catalog(reference_coordinates, filtername='f212n',
         print(f'At realignment iteration {iteration}, offset is {med_dra}, {med_ddec}.  Found {len(idx)} matches.')
         iteration += 1
 
-        if np.isnan(med_dra):
-            print(f'len(refcoords) = {len(reference_coordinates)}')
-            print(f'len(cat) = {len(cat)}')
-            print(f'len(idx) = {len(idx)}')
-            print(f'len(sidx) = {len(sidx)}')
-            print(cat, sel, idx, sidx, sep)
-            raise ValueError(f"median(dra) = {med_dra}.  np.nanmedian(dra) = {np.nanmedian(dra)}")
+        if len(idx) < min_matches or not np.isfinite(med_dra.value):
+            log.warning(
+                f"realign_to_catalog: only {len(idx)} match(es) within {max_offset} for "
+                f"{filtername} {module} {fieldnumber} (need >= {min_matches}); "
+                f"keeping the pre-realign WCS unchanged (no shift applied)."
+            )
+            med_dra = 0*u.arcsec
+            med_ddec = 0*u.arcsec
+            break
 
         ww.wcs.crval = ww.wcs.crval - [med_dra.to(u.deg).value, med_ddec.to(u.deg).value]
 
@@ -442,10 +454,12 @@ def realign_to_catalog(reference_coordinates, filtername='f212n',
     dra = (skycrds_cat_new[sel][idx].ra - reference_coordinates[sidx].ra).to(u.arcsec)
     ddec = (skycrds_cat_new[sel][idx].dec - reference_coordinates[sidx].dec).to(u.arcsec)
 
-    pngname = f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{fieldnumber}_t001_nircam_clear-{filtername}-{module}_xmatch_diagnostics.png'
-    diagnostic_plots(imfile, reference_coordinates, skycrds_cat_new[sel][idx], dra, ddec, savename=pngname)
-
-    print(f'After realignment, offset is {np.median(dra)}, {np.median(ddec)} with {len(idx)} matches')
+    if len(idx) >= min_matches:
+        pngname = f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{fieldnumber}_t001_nircam_clear-{filtername}-{module}_xmatch_diagnostics.png'
+        diagnostic_plots(imfile, reference_coordinates, skycrds_cat_new[sel][idx], dra, ddec, savename=pngname)
+        print(f'After realignment, offset is {np.median(dra)}, {np.median(ddec)} with {len(idx)} matches')
+    else:
+        print(f'After realignment (skipped: {len(idx)} matches < {min_matches}), WCS left unchanged.')
 
     # redundant
     # ww.wcs.crval = ww.wcs.crval - [np.median(dra).to(u.deg).value, np.median(ddec).to(u.deg).value]

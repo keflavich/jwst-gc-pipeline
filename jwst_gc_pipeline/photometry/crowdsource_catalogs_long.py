@@ -3492,6 +3492,13 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     type='float', default=5.0,
                     help=("S/N threshold for --manual-detect-noise-floor-box (peak must "
                           "exceed k * local emission-noise floor).  Default 5."))
+    parser.add_option("--manual-detect-noise-floor-i2dseed", dest="detect_noise_floor_i2dseed",
+                    type='int', default=0,
+                    help=("Also apply the emission-noise-floor detection to the i2d "
+                          "coadd-augmented seed (default 0 = per-frame passes only, so "
+                          "the deep coadd still recovers faint-on-emission stars the "
+                          "per-frame cut drops).  Set 1 for the most aggressive cost cut "
+                          "at the expense of faint completeness."))
     parser.add_option("--manual-coarse-bg-box", dest="coarse_bg_box",
                     type='int', default=0,
                     help=("Detect on a coarse-background-subtracted image: subtract a "

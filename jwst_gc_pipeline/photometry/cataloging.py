@@ -2879,9 +2879,16 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             coarse_bg_box=int(getattr(opts_phase, 'coarse_bg_box', 0)),
                             # emission-noise-floor detection: ext-emission NIRCam
                             # only (MIRI has its own coarse-bg/struct schedule).
+                            # Applied to the COADD seed only when explicitly opted
+                            # in (--manual-detect-noise-floor-i2dseed): per-frame-
+                            # only leaves the coadd seed at the full-depth threshold
+                            # so faint-on-emission stars the per-frame passes miss
+                            # are still recovered here.
                             noise_floor_box=(int(getattr(options, 'detect_noise_floor_box', 0))
                                              if (not miri_tuning and str(target).lower()
-                                                 in _EXTENDED_EMISSION_TARGETS) else 0),
+                                                 in _EXTENDED_EMISSION_TARGETS
+                                                 and int(getattr(options, 'detect_noise_floor_i2dseed', 0)))
+                                             else 0),
                             noise_floor_k=float(getattr(options, 'detect_noise_floor_k', 5.0)),
                             label=f'{phase}:{filt}')
                     except Exception as ex:
