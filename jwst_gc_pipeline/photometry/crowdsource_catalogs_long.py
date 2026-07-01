@@ -3923,6 +3923,10 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                # w51 already exists in this codebase under proposals 1182 (obs 004)
                # and 6151 (obs 001).  Re-assert Gaia as ref via PipelineRerunNIRCAM-LONG.
                '6151': {'w51': 2},
+               # Globular clusters (Jay Anderson co-I; added 2026-07-01). 1 visit
+               # per field; 1979 'm4' spans two fields (o002, o003) run separately.
+               '1334': {'m92': 1},
+               '1979': {'ngc6397': 1, 'm4': 1},
                }
     # 2211 is an asteroid-survey program with 5 separate GC pointings; all
     # map to the same 'gc2211' target/basepath, distinguished only by field.
@@ -3956,6 +3960,9 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             '6151': {'001': 'w51'},
                             # 2526 obs 021 = "G0" CMZ cloud-c filament F770W
                             '2526': {'021': 'cloudc'},
+                            # Globular clusters (Jay Anderson co-I; added 2026-07-01)
+                            '1334': {'001': 'm92'},
+                            '1979': {'001': 'ngc6397', '002': 'm4', '003': 'm4'},
                             }[proposal_id]
     # Instrument-dependent field numbering for MIRI (mirimage).  The map above is
     # NIRCam-era; proposal 2221 numbers the brick/cloudc MIRI pointings OPPOSITE
@@ -4036,7 +4043,9 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
             )
         modules = filtered_modules
 
-    if field_to_reg_mapping[field] in ('sickle', 'cloudef', 'sgrc', 'sgrb2', 'arches', 'quintuplet', 'sgra', 'gc2211', 'wd1', 'wd2', 'w51'):
+    if field_to_reg_mapping[field] in ('sickle', 'cloudef', 'sgrc', 'sgrb2', 'arches', 'quintuplet', 'sgra', 'gc2211', 'wd1', 'wd2', 'w51',
+                                       # globular clusters (Anderson co-I) live on /orange
+                                       'm92', 'ngc6397', 'm4'):
         basepath = f'/orange/adamginsburg/jwst/{field_to_reg_mapping[field]}/'
     else:
         basepath = f'/blue/adamginsburg/adamginsburg/jwst/{field_to_reg_mapping[field]}/'
