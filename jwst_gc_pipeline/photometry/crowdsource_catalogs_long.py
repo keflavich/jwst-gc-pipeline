@@ -3479,6 +3479,19 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     type='float', default=0.0,
                     help=("Same prominence gate for m3..m6 (the background-subtracted "
                           "passes).  0 disables (default)."))
+    parser.add_option("--manual-detect-noise-floor-box", dest="detect_noise_floor_box",
+                    type='int', default=0,
+                    help=("Extended-emission NIRCam (w51/sickle/wd2) detection cost cut: "
+                          "when >0, daofind detects on the S/N image data/floor at a "
+                          "fixed --manual-detect-noise-floor-k, where floor = the local "
+                          "noise map median-filtered over this many px.  Raises the "
+                          "detection bar on bright clumpy emission (fewer fake stars to "
+                          "FIT) without a global threshold hike.  0 = off (default; the "
+                          "historical min-noise threshold).  Try 61."))
+    parser.add_option("--manual-detect-noise-floor-k", dest="detect_noise_floor_k",
+                    type='float', default=5.0,
+                    help=("S/N threshold for --manual-detect-noise-floor-box (peak must "
+                          "exceed k * local emission-noise floor).  Default 5."))
     parser.add_option("--manual-coarse-bg-box", dest="coarse_bg_box",
                     type='int', default=0,
                     help=("Detect on a coarse-background-subtracted image: subtract a "

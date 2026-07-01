@@ -518,12 +518,62 @@ def _subset_seed_to_frame(seed_table, ww, data_shape, fwhm_pix,
     return resolved[keep]
 
 
+def _daofind_emission_floor(detection_image, noise_map, mask, fwhm_pix, *,
+                            roundlo, roundhi, sharplo, sharphi,
+                            noise_floor_box=0, noise_floor_k=5.0, label=''):
+    """daofind with either the global-min-noise threshold (default) or a
+    spatially-varying EMISSION-NOISE-FLOOR S/N threshold.
+
+    Default (noise_floor_box<=0): threshold = min(noise_map) -- the historical
+    over-detect-everything behaviour.
+
+    Floor variant (noise_floor_box>0, extended-emission fields): detect on the
+    S/N image ``data / floor`` at a fixed ``noise_floor_k``, where ``floor`` is
+    the local-noise map median-filtered over ``noise_floor_box`` px.  The median
+    box is large enough that an isolated star's own high-pass spike does not
+    raise its own floor, but bright clumpy EMISSION (structured on the box scale)
+    does -- so the detection bar is raised only on emission, cutting the W51
+    F480M "fake stars on nebulosity" carpet without a global threshold hike that
+    would also drop faint stars on dark sky.  Positions are detected on the S/N
+    image; ``peak`` is then re-sampled from the REAL detection image so the
+    downstream local-S/N annotation / struct prune use real-image values.
+    """
+    finite = np.isfinite(noise_map) & (noise_map > 0)
+    if not np.any(finite):
+        raise ValueError(f"[{label}] local noise map has no positive finite values")
+    gmin = float(np.nanmin(noise_map[finite]))
+    if not (noise_floor_box and noise_floor_box > 0):
+        det = DAOStarFinder(threshold=gmin, fwhm=fwhm_pix, roundlo=roundlo,
+                            roundhi=roundhi, sharplo=sharplo, sharphi=sharphi)(
+                                detection_image, mask=mask)
+        return det if det is not None else Table()
+    from scipy.ndimage import median_filter as _mf
+    floor = _mf(np.where(finite, noise_map, gmin), size=int(noise_floor_box))
+    floor = np.where(floor < gmin, gmin, floor)
+    sn = np.where(mask, 0.0, detection_image) / np.where(floor > 0, floor, np.inf)
+    det = DAOStarFinder(threshold=float(noise_floor_k), fwhm=fwhm_pix,
+                        roundlo=roundlo, roundhi=roundhi,
+                        sharplo=sharplo, sharphi=sharphi)(sn, mask=mask)
+    if det is None:
+        return Table()
+    # re-sample 'peak' from the REAL image so downstream S/N / prominence are
+    # measured in data units, not S/N units.
+    xd, yd = _L._best_available_xy(det)
+    ix = np.clip(np.rint(np.asarray(xd, float)).astype(int), 0, detection_image.shape[1] - 1)
+    iy = np.clip(np.rint(np.asarray(yd, float)).astype(int), 0, detection_image.shape[0] - 1)
+    det['peak'] = np.asarray(detection_image, float)[iy, ix]
+    print(f"[{label}] emission-floor detect (box={noise_floor_box}, k={noise_floor_k:g}): "
+          f"{len(det)} detections", flush=True)
+    return det
+
+
 def _build_manual_seed(*, detection_image, nan_replaced_data, mask, ww, fwhm_pix,
                        satstar_table, prev_catalog,
                        local_snr_threshold, roundlo, roundhi, sharplo, sharphi,
                        preferred_seed_skycoord_col=None,
                        dedup_min_sep_pix=None, label='', apply_snr_filter=True,
-                       struct_x=0.0, struct_y=0.0, coarse_bg_box=0):
+                       struct_x=0.0, struct_y=0.0, coarse_bg_box=0,
+                       noise_floor_box=0, noise_floor_k=5.0):
     """Build ``seeded_init_params`` for one manual pass.
 
     daofind(detection_image) [local-noise-map threshold] -> local-S/N filter ->
@@ -567,13 +617,10 @@ def _build_manual_seed(*, detection_image, nan_replaced_data, mask, ww, fwhm_pix
     finite = np.isfinite(noise_map) & (noise_map > 0)
     if not np.any(finite):
         raise ValueError(f"[{label}] local noise map has no positive finite values")
-    threshold = float(np.nanmin(noise_map[finite]))
-    daofind = DAOStarFinder(threshold=threshold, fwhm=fwhm_pix,
-                            roundlo=roundlo, roundhi=roundhi,
-                            sharplo=sharplo, sharphi=sharphi)
-    detections = daofind(detection_image, mask=mask)
-    if detections is None:
-        detections = Table()
+    detections = _daofind_emission_floor(
+        detection_image, noise_map, mask, fwhm_pix,
+        roundlo=roundlo, roundhi=roundhi, sharplo=sharplo, sharphi=sharphi,
+        noise_floor_box=noise_floor_box, noise_floor_k=noise_floor_k, label=label)
     if apply_snr_filter:
         detections, snr_stats = annotate_and_filter_by_local_snr(
             detections, noise_map, snr_threshold=local_snr_threshold)
@@ -1427,6 +1474,11 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     _nprom_m1 = float(getattr(options, 'nircam_prom_m1', 0.0))
     _nprom_m2 = float(getattr(options, 'nircam_prom_m2', 0.0))
     _nprom_m3p = float(getattr(options, 'nircam_prom_m3plus', 0.0))
+    # emission-noise-floor detection (compute win: fewer emission detections to
+    # fit).  0 = off (default).  Only applied for ext-emission NIRCam fields.
+    _nfloor_box = (int(getattr(options, 'detect_noise_floor_box', 0))
+                   if _is_ext_nircam else 0)
+    _nfloor_k = float(getattr(options, 'detect_noise_floor_k', 5.0))
     _nircam_prom_any = _is_ext_nircam and (_nprom_m1 > 0 or _nprom_m2 > 0
                                            or _nprom_m3p > 0)
 
@@ -1530,7 +1582,8 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             satstar_table=ctx.satstar_table, prev_catalog=None,
             local_snr_threshold=first_snr, roundlo=-1.0, roundhi=1.0,
             sharplo=0.30, sharphi=1.40, dedup_min_sep_pix=0.5 * ctx.fwhm_pix,
-            label='m1', apply_snr_filter=False, coarse_bg_box=coarse_bg_box)
+            label='m1', apply_snr_filter=False, coarse_bg_box=coarse_bg_box,
+            noise_floor_box=_nfloor_box, noise_floor_k=_nfloor_k)
         res1, modsky1, _ = _pass(seed1, 'm1',
                                  _nprom_m1 if _is_ext_nircam else None)
         saved1 = _save_manual_pass(ctx, res1, modsky1, options, 'm1', detector)
@@ -1544,7 +1597,8 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             local_snr_threshold=iter2_snr, roundlo=-0.3, roundhi=0.3,
             sharplo=0.50, sharphi=1.00, dedup_min_sep_pix=0.5 * ctx.fwhm_pix,
             label='m2', struct_x=struct_x, struct_y=struct_y,
-            coarse_bg_box=coarse_bg_box)
+            coarse_bg_box=coarse_bg_box,
+            noise_floor_box=_nfloor_box, noise_floor_k=_nfloor_k)
         res2, modsky2, _ = _pass(seed2, 'm2',
                                  _nprom_m2 if _is_ext_nircam else None)
         _save_manual_pass(ctx, res2, modsky2, options, 'm2', detector)
@@ -1560,7 +1614,8 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
         local_snr_threshold=snr, roundlo=-0.3, roundhi=0.3,
         sharplo=0.50, sharphi=1.00, dedup_min_sep_pix=0.5 * ctx.fwhm_pix,
         label=manual_phase, struct_x=struct_x, struct_y=struct_y,
-        coarse_bg_box=coarse_bg_box)
+        coarse_bg_box=coarse_bg_box,
+        noise_floor_box=_nfloor_box, noise_floor_k=_nfloor_k)
     res, modsky, _ = _pass(seed, manual_phase,
                            _nprom_m3p if _is_ext_nircam else None)
     _save_manual_pass(ctx, res, modsky, options, manual_phase, detector)
@@ -1908,7 +1963,8 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
                               local_snr_min=5.0, roundlo=-0.5, roundhi=0.5,
                               sharplo=0.4, sharphi=1.2, bg_subtract_path=None,
                               struct_x=0.0, struct_y=0.0, coarse_bg_box=0,
-                              seed_struct_protect_snr=8.0, label=''):
+                              seed_struct_protect_snr=8.0,
+                              noise_floor_box=0, noise_floor_k=5.0, label=''):
     """daofind on the merged i2d co-add, unioned with the previous vetted merged
     catalog, written as a seed catalog (``skycoord`` + ``flux``) for the next
     per-frame PSF-photometry round (the plan's iter3 seed = daofind(i2d) +
@@ -1983,13 +2039,10 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
     finite = np.isfinite(noise_map) & (noise_map > 0)
     if not np.any(finite):
         raise ValueError(f"[{label}] i2d local noise map has no positive finite values")
-    threshold = float(np.nanmin(noise_map[finite]))
-    daofind = DAOStarFinder(threshold=threshold, fwhm=fwhm_pix,
-                            roundlo=roundlo, roundhi=roundhi,
-                            sharplo=sharplo, sharphi=sharphi)
-    det = daofind(np.where(mask, 0.0, data), mask=mask)
-    if det is None:
-        det = Table()
+    det = _daofind_emission_floor(
+        np.where(mask, 0.0, data), noise_map, mask, fwhm_pix,
+        roundlo=roundlo, roundhi=roundhi, sharplo=sharplo, sharphi=sharphi,
+        noise_floor_box=noise_floor_box, noise_floor_k=noise_floor_k, label=label)
     n_raw = len(det)
     if len(det):
         if err is not None:
@@ -2824,6 +2877,12 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             struct_x=float(getattr(opts_phase, 'struct_x', 0.0)),
                             struct_y=float(getattr(opts_phase, 'struct_y', 0.0)),
                             coarse_bg_box=int(getattr(opts_phase, 'coarse_bg_box', 0)),
+                            # emission-noise-floor detection: ext-emission NIRCam
+                            # only (MIRI has its own coarse-bg/struct schedule).
+                            noise_floor_box=(int(getattr(options, 'detect_noise_floor_box', 0))
+                                             if (not miri_tuning and str(target).lower()
+                                                 in _EXTENDED_EMISSION_TARGETS) else 0),
+                            noise_floor_k=float(getattr(options, 'detect_noise_floor_k', 5.0)),
                             label=f'{phase}:{filt}')
                     except Exception as ex:
                         print(f"manual [{phase}]: i2d-augmented seed failed ({ex}); "
