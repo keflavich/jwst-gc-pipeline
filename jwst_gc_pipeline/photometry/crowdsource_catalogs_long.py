@@ -3397,6 +3397,49 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     type='float', default=0.4,
                     help="Upper qfit cap for the bright-isolated keep (default 0.4); "
                          "extended-emission knots have worse qfit so stay rejected.")
+    parser.add_option("--manual-ext-qfit-recover-max", dest="manual_ext_qfit_recover_max",
+                    type='float', default=0.2,
+                    help="RECOVER-tier qfit ceiling for the extended-emission vetting "
+                         "(NIRCam).  Keep a source whose qfit is in "
+                         "(--manual-ext-qfit-max, this] AND S/N >= "
+                         "--manual-ext-local-snr-min AND NOT within "
+                         "--manual-ext-recover-satstar-guard-arcsec of a saturated "
+                         "star.  Recovers real neighbour-blended stars (median qfit "
+                         "~0.30) that the strict qfit<=0.2 cut deletes; spikes/emission "
+                         "(qfit>~0.5) stay rejected.  Cataloged => subtracted "
+                         "(invariant preserved).  Default 0.2 == qfit_max => NO-OP "
+                         "(byte-identical to prior behaviour); set 0.5 to enable.")
+    parser.add_option("--manual-ext-recover-satstar-guard-arcsec",
+                    dest="manual_ext_recover_satstar_guard_arcsec",
+                    type='float', default=2.0,
+                    help="Merged-level satstar-proximity backstop for the recover "
+                         "tier: a recovered source within this many arcsec of a "
+                         "catalog saturated star is rejected (diffraction-spike "
+                         "guard, on top of the per-frame _filter_satstar_artifacts). "
+                         "Default 2.0\".")
+    parser.add_option("--manual-ext-recover-prom-log-intercept",
+                    dest="manual_ext_recover_prom_log_intercept",
+                    type='float', default=-0.77,
+                    help="Recover-tier prominence gate, SLOPED in (qfit, log10 prom): "
+                         "a recovered source must satisfy log10(prominence) >= "
+                         "intercept + slope*qfit on the data_i2d (rise above the "
+                         "local emission, scaled by fit quality).  Intercept "
+                         "(default -0.77).  Fit on sickle + W51 cutouts (69 real / "
+                         "142 emission, F480M+F187N): keeps 63/69 real at 5/142 "
+                         "emission vs 52/69 for a flat prom>=5.  NaN -> NOT recovered.")
+    parser.add_option("--manual-ext-recover-prom-log-slope",
+                    dest="manual_ext_recover_prom_log_slope",
+                    type='float', default=5.6,
+                    help="Slope of the recover-tier prominence gate in log10(prom) "
+                         "per unit qfit (default 5.6): the prominence floor RISES "
+                         "with qfit so a well-fit (low-qfit) source is trusted at "
+                         "lower prominence and a poorly-fit one needs much more "
+                         "(high-qfit recovery is unsafe on emission fields).")
+    parser.add_option("--manual-ext-recover-no-prom-gate",
+                    dest="manual_ext_recover_prom_gate",
+                    action='store_false', default=True,
+                    help="Disable the recover-tier prominence gate (UNSAFE on "
+                         "extended emission; for diagnostics only).")
     # Structure-noise prune + coarse-bg detection.  These shape/physics-based
     # discriminators reject broad extended-emission (PAH/nebulosity) bumps while
     # keeping faint point sources (which stay sharp and outpeak the local
