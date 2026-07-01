@@ -685,6 +685,11 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               min_prominence=0.0,
                               local_snr_min=5.0, keep_flags=(1,),
                               snr_high_keep=20.0, qfit_high_keep_max=0.4,
+                              qfit_recover_max=None,
+                              recover_satstar_guard_arcsec=2.0,
+                              recover_prom_gate=True,
+                              recover_prom_log_intercept=-0.77,
+                              recover_prom_log_slope=5.6,
                               drop_overshoot=True, struct_x=0.0, struct_y=0.0,
                               label=''):
     """First-pass star-vs-extended-emission vetting of a MERGED catalog.
@@ -738,6 +743,16 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     # measured ONCE at each final source position, so it is immune to the
     # per-frame fit-position scatter that let false sources survive the
     # per-frame cut and get re-unioned by the merge.
+    # RECOVER tier needs the data-i2d PROMINENCE (rise above local emission) to
+    # tell a crowded real star (high prominence) from an extended-emission ridge
+    # knot (low prominence -- it sits IN the bright ridge).  qfit alone CANNOT:
+    # qfit 0.2-0.5 means "crowded real star" in a dense star field but "emission
+    # knot" on bright nebulosity (verified pillar_head: 1 real star prominence
+    # 7.4 vs 8 emission knots prominence <=2.4).  Prominence is computed for ALL
+    # sources (when a data_i2d is supplied) and PERSISTED on the catalog as the
+    # 'prominence' column -- a universally-useful star-vs-emission / quality metric.
+    _qrec = qfit_max if qfit_recover_max is None else float(qfit_recover_max)
+    _recover_on = (_qrec > qfit_max) and (min_prominence <= 0)
     peaksb = np.full(n, np.nan, dtype=float)
     prominence = np.full(n, np.nan, dtype=float)
     if data_i2d_image is not None and ww_i2d is not None and 'skycoord' in t.colnames:
@@ -762,8 +777,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                 box = data_i2d_image[ylo:yhi, xlo:xhi]
                 if np.any(np.isfinite(box)):
                     peaksb[i] = float(np.nanmax(box))
-            if (min_prominence > 0 and _H <= ix < nx - _H
-                    and _H <= iy < ny - _H):
+            if _H <= ix < nx - _H and _H <= iy < ny - _H:
                 st = data_i2d_image[iy - _H:iy + _H + 1, ix - _H:ix + _H + 1]
                 core = np.nanmax(st[_cm])
                 ann = st[_am]
@@ -771,6 +785,13 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                 mad = 1.4826 * np.nanmedian(np.abs(ann - bg))
                 if np.isfinite(core) and np.isfinite(bg) and mad > 0:
                     prominence[i] = (core - bg) / mad
+
+    # Persist the data_i2d quality metrics on the catalog so every downstream
+    # cut is reproducible.  'prominence' = (core peak - annulus median)/annulus
+    # MAD on the data_i2d (rise above local emission; star-vs-emission); 'peak_sb'
+    # = 3x3-box peak surface brightness.  NaN where no data_i2d / off the i2d.
+    t['prominence'] = prominence
+    t['peak_sb'] = peaksb
 
     # BRIGHT-ISOLATED keep (Mechanism 2): a real bright star whose qfit sits just
     # above qfit_max (e.g. sickle F480M star3: flux 6381, S/N 201, qfit 0.282,
@@ -794,6 +815,70 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         | (np.isfinite(peaksb) & (lbk > 0) & (peaksb > peak_over_bkg * lbk))
         | bright_isolated
     )
+    # RECOVER tier (opt-in: qfit_recover_max > qfit_max; NIRCam only).  A real
+    # star whose fit is degraded by neighbour blending sits at
+    # qfit_max < qfit <= ~0.5 with good S/N -- the strict qfit<=qfit_max cut
+    # deletes ~24k such real stars in crowded Arches F212N (dropped-real median
+    # qfit 0.30, S/N 14.6) while diffraction spikes / emission knots sit at
+    # qfit>0.5 (median 0.52).  Admit them to star_like so they are CATALOGUED
+    # (=> in the model => SUBTRACTED; the "cataloged implies subtracted"
+    # invariant is preserved, no floating unsubtracted source) and re-fit each
+    # later phase.  Gated by: (a) the qfit ceiling, (b) the S/N floor (applied
+    # below via snr_ok in _emission_keep_nircam -- recovered sources are NOT
+    # qfit_confident, so they must clear local_snr_min), (c) NOT on a
+    # saturated-star spike.  The per-frame _filter_satstar_artifacts already
+    # drops wing/spike-dominated fits; this is the merged-level satstar-
+    # proximity backstop (a recovered source within guard arcsec of a catalog
+    # saturated star is rejected).  Default (qfit_recover_max None/<=qfit_max)
+    # is a NO-OP -> behaviour byte-identical to before.
+    if _recover_on:
+        near_satstar = np.zeros(n, dtype=bool)
+        if 'is_saturated' in t.colnames and 'skycoord' in t.colnames:
+            _iss = t['is_saturated']
+            _iss = np.asarray(_iss.filled(False) if hasattr(_iss, 'filled') else _iss,
+                              dtype=bool)
+            if _iss.any():
+                from astropy.coordinates import SkyCoord
+                import astropy.units as _u
+                _sc = t['skycoord']
+                if not isinstance(_sc, SkyCoord):
+                    _sc = SkyCoord(_sc)
+                _, _sep, _ = _sc.match_to_catalog_sky(_sc[_iss])
+                near_satstar = _sep < (float(recover_satstar_guard_arcsec) * _u.arcsec)
+        # PROMINENCE gate is MANDATORY for recover: a recovered source MUST rise
+        # above the local annulus (be a point source, not a bump on a continuous
+        # emission ridge).  The threshold is a SLOPED line in (qfit, log10 prom):
+        #     log10(prominence) >= recover_prom_log_intercept
+        #                          + recover_prom_log_slope * qfit
+        # i.e. the prominence floor RISES with qfit -- a well-fit source (low
+        # qfit) is trusted at lower prominence; a poorly-fit one (high qfit) must
+        # be more prominent to not be emission.  Fit on labelled sickle + W51
+        # cutouts (low_background=real; pillar_head + W51 darkfilament F480M/F187N
+        # =emission, 69 real / 142 emission): the sloped line keeps 63/69 real at
+        # 5/142 emission, vs a flat prom>=5 keeping 52/69 at 12/142.  The steep
+        # slope reflects that high-qfit recovery is unsafe on emission fields
+        # (emission reaches high prominence there).  Params are CLI-tunable.  NaN
+        # prominence (no data_i2d / off-edge) -> NOT recovered (safe).  Without
+        # this, on bright extended emission the qfit<=0.5 gate admits emission
+        # knots as false "stars" (pillar_head: 8 ridge knots vs 1 real star).
+        if not recover_prom_gate:
+            _prom_ok = np.ones(n, dtype=bool)   # gate disabled (unit tests / opt-out)
+        else:
+            with np.errstate(invalid='ignore'):
+                _logp = np.log10(np.where(prominence > 0, prominence, np.nan))
+                _thr = (float(recover_prom_log_intercept)
+                        + float(recover_prom_log_slope) * qf)
+                _prom_ok = np.isfinite(_logp) & (_logp >= _thr)
+        recovered = ((qf > qfit_max) & (qf <= _qrec) & ~near_satstar & _prom_ok)
+        star_like = star_like | recovered
+        _n_qfit = int(((qf > qfit_max) & (qf <= _qrec) & ~near_satstar).sum())
+        print(f"[{label}] recover tier: +{int(recovered.sum())} star-like "
+              f"(qfit in ({qfit_max:g},{_qrec:g}], S/N>={local_snr_min:g}, "
+              f"log10(prom)>={recover_prom_log_intercept:g}+"
+              f"{recover_prom_log_slope:g}*qfit, not within "
+              f"{recover_satstar_guard_arcsec:g}\" of a satstar); prominence gate "
+              f"rejected {_n_qfit - int(recovered.sum())} emission/low-prominence "
+              f"candidate(s)", flush=True)
     # MIRI and NIRCam use DIFFERENT keep-logics (see _emission_keep_miri /
     # _emission_keep_nircam).  min_prominence>0 selects the MIRI path.
     if min_prominence > 0:
@@ -1601,58 +1686,182 @@ def _dedup_skycoords(coords, radius_mas):
 
 
 def _build_crossband_seed(cut_bp, modules, filternames, options, *,
-                          max_sep_mas=10.0, min_filters=2, snr_min=5.0,
+                          max_sep_mas=30.0, min_filters=2, snr_min=5.0,
                           qfit_max=0.2, dedup_radius_mas=30.0):
-    """Cross-filter seed for m7 (iter7): sources detected (well) in >= min_filters
-    filters within max_sep_mas, each with S/N > snr_min and good qfit.
+    """Cross-filter seed for m7 (iter7): STRINGENT -- only positions independently
+    confirmed (S/N > snr_min AND qfit < qfit_max) in >= ``min_filters`` filters,
+    clustered within ``max_sep_mas``.
 
-    NOTE: the stringent cross-match (>=2 filters, <10 mas, S/N>5 each) is a TODO;
-    the immediate cutout tests are single-filter so this path is not exercised.
-    For now it unions the per-filter vetted m6 skycoords (like the legacy union
-    seed) so the multifilter path is runnable.  Replace with
-    ``merge_catalogs.merge_catalogs(..., max_offset=max_sep_mas*u.mas)`` + the
-    >=min_filters / snr / qfit cut before relying on m5 scientifically.
+    WHY (2026-06-30, root-caused with Adam): the legacy behaviour UNIONED every
+    filter's m6 detection and seeded EVERY filter at EVERY position, so a single-
+    band (or i2d-structure) detection was force-fit in all bands at the same
+    position -> a fake multi-band source with manufactured cross-band-consistent
+    positions, stored as if independently detected (the spurious "embedded
+    reddened-F405N-excess" set; cross-band agreement was an artifact of the shared
+    seed, not evidence).  The stringent >=N-filter confirmation -- the long-
+    standing TODO -- removes single-band/structure detections from the seed so
+    they never propagate.  A genuine source bright enough to matter is confirmed
+    in >=2 filters; the rare pure-single-band line emitter is the deliberate cost
+    of purity (lower ``min_filters`` via CLI to recover it).
 
-    The union is deduped at ``dedup_radius_mas`` (Fix A, 2026-06-26): a star seen
-    in N filters appears N times within ~25 mas (filters co-aligned) -- without
-    the dedup the m7 fit gets N co-located seeds per star, a degenerate group that
-    splits flux before the 1.0 px post-fit dedup cleans the OUTPUT (fit already
-    degraded).  Deduping the seed gives one clean seed per star.  Radius stays
-    below the SW blend limit (F187N FWHM ~64 mas) so resolvable pairs survive.
+    Provenance: the seed records, per kept position, ``n_filt_confirmed`` and
+    ``confirming_filters`` so downstream can tell which bands independently saw it
+    (see also the per-band ``independently_detected_<filt>`` flag added at merge
+    by ``annotate_independent_detection``).
+
+    CLI overrides (run_manual_pipeline wires these from options, all optional):
+      manual_crossband_seed_min_filters (default 2), _snr_min (5), _qfit_max
+      (0.2), _max_sep_mas (30).  Set min_filters=1 to restore union-like behavior
+      (NOT recommended -- reintroduces the single-band propagation bug).
     """
-    from astropy.table import vstack as _vstack
     from astropy.coordinates import SkyCoord
     desat = '_unsatstar' if options.desaturated else ''
     bgsub = ('_bgsub' if options.bgsub else '') + '_resbgsub'
     blur_ = '_blur' if options.blur else ''
-    # Per-obs token for gc2211 (prop 2211): the m6 vetted catalogs + this seed
-    # are per-obs (see _obs_suffix usage in run_manual_pipeline).  Empty elsewhere.
     _obssuf = _L.obs_token(getattr(options, 'proposal_id', None),
                            getattr(options, 'field', None))
-    tbls = []
+    min_filters = int(getattr(options, 'manual_crossband_seed_min_filters', min_filters))
+    snr_min = float(getattr(options, 'manual_crossband_seed_snr_min', snr_min))
+    qfit_max = float(getattr(options, 'manual_crossband_seed_qfit_max', qfit_max))
+    max_sep_mas = float(getattr(options, 'manual_crossband_seed_max_sep_mas', max_sep_mas))
+
+    # collect GOOD (independently-confirmed) detections from each filter's m6
+    ras = []; decs = []; filtidx = []; snrs = []
+    flist = []
     for module in modules:
-        for filt in filternames:
+        for fi, filt in enumerate(filternames):
             p = (f'{cut_bp}/catalogs/{filt.lower()}_{module}_indivexp_merged'
                  f'{desat}{bgsub}{blur_}_m6_dao_basic{_obssuf}_vetted.fits')
-            if os.path.exists(p):
-                t = Table.read(p)
-                if 'skycoord' in t.colnames:
-                    tbls.append(Table({'skycoord': t['skycoord']}))
-    if not tbls:
-        raise ValueError(f"m7 crossband seed: no vetted m6 catalogs under {cut_bp}/catalogs/")
-    union = _vstack(tbls, metadata_conflicts='silent')
-    n_union = len(union)
-    _rad = float(getattr(options, 'manual_crossband_seed_dedup_mas', dedup_radius_mas))
-    if _rad > 0 and n_union > 1:
-        keep = _dedup_skycoords(SkyCoord(union['skycoord']), _rad)
-        union = union[keep]
+            if not os.path.exists(p):
+                continue
+            t = Table.read(p)
+            if 'skycoord' not in t.colnames or len(t) == 0:
+                continue
+            sc = t['skycoord'] if isinstance(t['skycoord'], SkyCoord) else SkyCoord(t['skycoord'])
+            qf = np.asarray(t['qfit'], float) if 'qfit' in t.colnames else np.zeros(len(t))
+            fx = np.asarray(t['flux'], float) if 'flux' in t.colnames else np.full(len(t), np.nan)
+            fe = np.asarray(t['flux_err'], float) if 'flux_err' in t.colnames else np.full(len(t), np.nan)
+            with np.errstate(invalid='ignore', divide='ignore'):
+                snr = np.where(fe > 0, fx / fe, np.nan)
+            good = np.isfinite(snr) & (snr > snr_min) & (qf < qfit_max)
+            key = f'{filt.lower()}'
+            if key not in flist:
+                flist.append(key)
+            k = flist.index(key)
+            ras.extend(np.atleast_1d(sc.ra.deg)[good])
+            decs.extend(np.atleast_1d(sc.dec.deg)[good])
+            snrs.extend(snr[good])
+            filtidx.extend([k] * int(good.sum()))
+    if not ras:
+        raise ValueError(f"m7 crossband seed: no confirmed m6 detections under {cut_bp}/catalogs/ "
+                         f"(snr>{snr_min}, qfit<{qfit_max})")
+    ras = np.array(ras); decs = np.array(decs); snrs = np.array(snrs); filtidx = np.array(filtidx)
+    coords = SkyCoord(ras * u.deg, decs * u.deg)
+    n = len(coords)
+    # union-find cluster within max_sep_mas, tracking filter membership
+    parent = np.arange(n)
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    if n > 1:
+        i1, i2, _, _ = coords.search_around_sky(coords, max_sep_mas * u.mas)
+        for a, b in zip(np.asarray(i1), np.asarray(i2)):
+            if a < b:
+                ra_, rb_ = find(int(a)), find(int(b))
+                if ra_ != rb_:
+                    parent[max(ra_, rb_)] = min(ra_, rb_)
+    roots = np.array([find(i) for i in range(n)])
+    from collections import defaultdict as _dd
+    members = _dd(list)
+    for i, r in enumerate(roots):
+        members[r].append(i)
+    seed_ra = []; seed_dec = []; nfilt = []; confl = []
+    for r, mem in members.items():
+        mem = np.array(mem)
+        ufilt = np.unique(filtidx[mem])
+        if len(ufilt) < min_filters:
+            continue
+        # seed position = highest-SNR member of the cluster
+        best = mem[np.nanargmax(snrs[mem])]
+        seed_ra.append(ras[best]); seed_dec.append(decs[best])
+        nfilt.append(len(ufilt))
+        confl.append(','.join(sorted(flist[k] for k in ufilt)))
+    if not seed_ra:
+        raise ValueError(f"m7 crossband seed: 0 positions confirmed in >={min_filters} filters "
+                         f"(from {n} good detections) -- loosen manual_crossband_seed_min_filters")
+    seed = Table()
+    seed['skycoord'] = SkyCoord(np.array(seed_ra) * u.deg, np.array(seed_dec) * u.deg)
+    seed['n_filt_confirmed'] = np.array(nfilt, dtype='i4')
+    seed['confirming_filters'] = np.array(confl)
     out = f'{cut_bp}/catalogs/crossband_seed_manual{_obssuf}.fits'
-    union.write(out, overwrite=True)
-    print(f"[m7] wrote crossband seed {out} (n={len(union)}, deduped from "
-          f"{n_union} @ {_rad:g} mas); "
-          f"TODO stringent >= {min_filters}-filter/{max_sep_mas}mas/SNR>{snr_min} cut",
-          flush=True)
+    seed.write(out, overwrite=True)
+    print(f"[m7] wrote STRINGENT crossband seed {out} (n={len(seed)} confirmed in "
+          f">={min_filters} filters @ {max_sep_mas:g} mas, SNR>{snr_min}, qfit<{qfit_max}; "
+          f"from {n} good m6 detections across {len(flist)} filters)", flush=True)
     return out
+
+
+def annotate_independent_detection(merged_path, cut_bp, filternames, options, *,
+                                   radius_mas=30.0):
+    """Add ``independently_detected_<filt>`` to the cross-band merged catalog.
+
+    True iff filter ``<filt>`` has an INDEPENDENT m6 (pre-cross-band-seed)
+    detection within ``radius_mas`` of the merged reference position.  This is
+    the critical provenance flag: an m7 per-band measurement can be a real
+    independent detection OR a cross-band-SEEDED force-fit (the m7 seed pins a
+    position from another band; ``_build_crossband_seed``).  Both look identical
+    in the merged catalog (same columns, mask=False), so without this flag a
+    single-band source force-fit into the other bands reads as a genuine multi-
+    band source.  m6 is the last per-band catalog built BEFORE the cross-band
+    seed, so an m6 match == band saw it on its own.
+
+    Tight ``radius_mas`` (30) keeps the dense-field chance-coincidence rate low
+    (per-band m6 catalogs are far sparser than the merged catalog).  Additive +
+    idempotent: re-running overwrites the flags.  Failure is non-fatal.
+    """
+    from astropy.coordinates import SkyCoord
+    if not os.path.exists(merged_path):
+        return
+    t = Table.read(merged_path)
+    if 'skycoord_ref' not in t.colnames:
+        print(f"[provenance] {os.path.basename(merged_path)}: no skycoord_ref; skip", flush=True)
+        return
+    ref = t['skycoord_ref']
+    ref = ref if isinstance(ref, SkyCoord) else SkyCoord(ref)
+    desat = '_unsatstar' if options.desaturated else ''
+    bgsub = ('_bgsub' if options.bgsub else '') + '_resbgsub'
+    blur_ = '_blur' if options.blur else ''
+    _obssuf = _L.obs_token(getattr(options, 'proposal_id', None),
+                           getattr(options, 'field', None))
+    nfilt_indep = np.zeros(len(t), dtype='i4')
+    for module in (getattr(options, 'modules', '') or 'merged').split(','):
+        for filt in filternames:
+            f = filt.lower()
+            col = f'independently_detected_{f}'
+            p = (f'{cut_bp}/catalogs/{f}_{module}_indivexp_merged'
+                 f'{desat}{bgsub}{blur_}_m6_dao_basic{_obssuf}_vetted.fits')
+            if not os.path.exists(p):
+                t[col] = np.zeros(len(t), dtype=bool)
+                continue
+            m6 = Table.read(p)
+            if 'skycoord' not in m6.colnames or len(m6) == 0:
+                t[col] = np.zeros(len(t), dtype=bool)
+                continue
+            sc6 = m6['skycoord'] if isinstance(m6['skycoord'], SkyCoord) else SkyCoord(m6['skycoord'])
+            _, sep, _ = ref.match_to_catalog_sky(sc6)
+            indep = np.asarray(sep < radius_mas * u.mas)
+            t[col] = indep
+            nfilt_indep += indep.astype('i4')
+    t['n_filt_independent'] = nfilt_indep
+    t.write(merged_path, overwrite=True)
+    print(f"[provenance] {os.path.basename(merged_path)}: wrote "
+          f"independently_detected_<filt> (+ n_filt_independent); "
+          f"{int((nfilt_indep == 0).sum())}/{len(t)} rows have NO independent "
+          f"per-band detection (pure cross-band-seeded)", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -3014,6 +3223,15 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         local_snr_min=float(getattr(opts_phase, 'manual_ext_local_snr_min', 5.0)),
                         snr_high_keep=float(getattr(opts_phase, 'manual_ext_snr_high_keep', 20.0)),
                         qfit_high_keep_max=float(getattr(opts_phase, 'manual_ext_qfit_high_keep_max', 0.4)),
+                        qfit_recover_max=float(getattr(opts_phase, 'manual_ext_qfit_recover_max', 0.2)),
+                        recover_satstar_guard_arcsec=float(getattr(
+                            opts_phase, 'manual_ext_recover_satstar_guard_arcsec', 2.0)),
+                        recover_prom_gate=bool(getattr(
+                            opts_phase, 'manual_ext_recover_prom_gate', True)),
+                        recover_prom_log_intercept=float(getattr(
+                            opts_phase, 'manual_ext_recover_prom_log_intercept', -0.77)),
+                        recover_prom_log_slope=float(getattr(
+                            opts_phase, 'manual_ext_recover_prom_log_slope', 5.6)),
                         struct_x=0.0, struct_y=0.0,  # prune at detection, not here
                         label=f'{phase}:{filt}')
                     vetted.write(vetted_path, overwrite=True)
@@ -3163,6 +3381,17 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                    f'merged_resbgsub_{last_phase}{_xbsuf}.fits')
             print(f"manual [{last_phase}]: CROSS-BAND MERGE done (module={module}) "
                   f"-> {_xb}", flush=True)
+
+            # provenance: flag which per-band measurements are INDEPENDENT m6
+            # detections vs cross-band-seeded force-fits (critical to tell a real
+            # multi-band source from a single-band detection propagated by the m7
+            # seed).  Additive; non-fatal.
+            try:
+                annotate_independent_detection(_xb, cut_bp, filternames, options)
+            except Exception as _aex:
+                print(f"manual [{last_phase}]: independent-detection annotation "
+                      f"failed ({_aex}); merged catalog written without provenance "
+                      f"flags", flush=True)
 
             # ----------------------------------------------------------------
             # m8: forced cross-band fill.  Force-fit every band at the merged
