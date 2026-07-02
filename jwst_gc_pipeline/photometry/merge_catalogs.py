@@ -1695,9 +1695,29 @@ def load_satstar_catalog(filtername, target='brick',
             print(f"Using saturated star catalog {primary_matches[0]}")
             return Table.read(primary_matches[0])
 
-    fallback = sorted(glob.glob(f'{basepath}/{filtername.upper()}/pipeline/*satstar_catalog.fits'))
+    # Require an ITERATION TOKEN (_m12/_m3.../_m7) in the satstar filename.  The
+    # current pipeline always writes one (..._crf[_resbgsub]_m<N>_satstar_catalog).
+    # A too-broad *satstar_catalog.fits glob also swept in STALE OLD-SCHEME files
+    # left in the pipeline dir -- e.g. w51 Oct-2025
+    # jw06151-o002_..._<N>_o002_crf_satstar_catalog.fits (ungated emission
+    # phantoms, ~2600 rows each) -- which ballooned the consolidated satstar
+    # catalog ~40x (38764 vs ~150 real) and corrupted the daophot merge via
+    # near-sat flagging.  See project_miri_partialsat_divot.
+    _all_sat = sorted(glob.glob(f'{basepath}/{filtername.upper()}/pipeline/*satstar_catalog.fits'))
+    _tok = re.compile(r'_m\d+_satstar_catalog\.fits$')
+    fallback = [f for f in _all_sat if _tok.search(os.path.basename(f))]
+    _n_excluded = len(_all_sat) - len(fallback)
+    if _n_excluded:
+        print(f"load_satstar_catalog: EXCLUDED {_n_excluded} of {len(_all_sat)} "
+              f"satstar file(s) for {filtername} lacking an iteration token "
+              f"(_m<N>_) -- stale/old-scheme, not this pipeline's output", flush=True)
     if len(fallback) == 0:
-        print(f"No saturated star catalog files found for {filtername} in {basepath}/{filtername.upper()}/pipeline")
+        if _all_sat:
+            print(f"WARNING: {len(_all_sat)} satstar file(s) for {filtername} in "
+                  f"{basepath}/{filtername.upper()}/pipeline but NONE carry an "
+                  f"iteration token; treating as no satstar catalog (not polluting)")
+        else:
+            print(f"No saturated star catalog files found for {filtername} in {basepath}/{filtername.upper()}/pipeline")
         return None
 
     # Consolidated per-filter satstar cache.  Building the deduped catalog from
