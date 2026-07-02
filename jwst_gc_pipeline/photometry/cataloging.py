@@ -1038,22 +1038,34 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
 
     kernel = Gaussian2DKernel(x_stddev=fwhm_pix / 2.355)
     mask = np.isnan(data) | bad
+    fit_extra_mask = np.zeros(np.asarray(data).shape, dtype=bool)
     dqarr = im1['DQ'].data if 'DQ' in im1 else None
     if dqarr is not None:
-        # Correct the SATURATED bit to FIRST-group saturation (env-gated, MIRI):
-        # the cal/crf flag marks any pixel saturated in ANY ramp group, which on
-        # bright emission vetoes real point sources from daophot although the
-        # ramp fitter recovers their flux.  Clearing the later-group-only flags
-        # here propagates to is_saturated, the fit mask, AND _filter_near_saturation
-        # (which reads ctx.dqarr).  See first_group_saturation_mask.
-        dqarr = _L.correct_dq_first_group_saturation(dqarr, filename, instrument)
+        dqarr_orig = dqarr
+        # DETECTION mask uses FIRST-group saturation (env-gated, MIRI): the cal/crf
+        # flag marks any pixel saturated in ANY ramp group, which on bright emission
+        # masks/vetoes real point sources whose PEAK is still a good local maximum
+        # (rampfit recovers their flux).  First-group keeps those peaks visible for
+        # daofind + spares them from the near-sat veto (ctx.dqarr).  See
+        # first_group_saturation_mask / correct_dq_first_group_saturation.
+        dqarr = _L.correct_dq_first_group_saturation(dqarr_orig, filename, instrument)
         is_saturated = (dqarr & _L.dqflags.pixel['SATURATED']) != 0
         data_ = data.copy()
         data_[is_saturated] = np.nan
         mask |= is_saturated
         mask |= (dqarr & _L._bad_dq_bitmask(instrument)) != 0
+        # The FIT, however, must additionally mask pixels saturated in ANY group:
+        # a moderately-bright star whose core saturates in LATER groups has a
+        # clipped/flat-topped core in the cal image; fitting a peaked PSF to it
+        # drives the amplitude too high off the wings -> over-subtracted central
+        # divot + first-Airy-ring in the residual (project_miri_partialsat_divot).
+        # Masking the clipped core makes the amplitude come from the unsaturated
+        # wings (correct, no ring); the core stays a NaN hole (genuine saturation).
+        # Detection is unaffected (peaks stay visible via the first-group mask).
+        fit_extra_mask = ((dqarr_orig & _L.dqflags.pixel['SATURATED']) != 0) & (~is_saturated)
     else:
         data_ = data
+    fit_mask = mask | fit_extra_mask
     # MIRI detector-edge detection guard: daofind otherwise fires on the sharp
     # good/bad boundary GRADIENT at the edge-glow rim, injecting spurious "stars"
     # at the footprint border into the per-frame -> MERGED catalog.  These are
@@ -1164,7 +1176,7 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         desat=desat, bgsub=bgsub, epsf_=epsf_, blur_=blur_, group=group,
         exposure_=exposure_, visitid_=visitid_, vgroupid_=vgroupid_,
         inst_token=inst_token, im1=im1, ww=ww, data=data, err=err, bad=bad,
-        dqarr=dqarr, mask=mask, nan_replaced_data=nan_replaced_data,
+        dqarr=dqarr, mask=mask, fit_mask=fit_mask, nan_replaced_data=nan_replaced_data,
         dao_psf_model=dao_psf_model, grouper=grouper,
         satstar_table=satstar_table, satstar_model_subtracted=satstar_model_subtracted,
         original_data=original_data, background_map=background_map,
@@ -1294,7 +1306,7 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
 
     def _pass(seed, label):
         return _manual_phot_pass(
-            data=ctx.nan_replaced_data, mask=ctx.mask, err=ctx.err, bad=ctx.bad,
+            data=ctx.nan_replaced_data, mask=ctx.fit_mask, err=ctx.err, bad=ctx.bad,
             dao_psf_model=ctx.dao_psf_model, init_params=seed,
             aperture_radius_pix=ctx.aperture_radius_pix,
             localbkg_inner=ctx.localbkg_inner, localbkg_outer=ctx.localbkg_outer,
