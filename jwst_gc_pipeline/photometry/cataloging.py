@@ -1036,7 +1036,7 @@ _NIRCAM_SAT_DATA_FLOOR = {
 # IRS2) need the structure-noise-prune default + the satstar-channel guards
 # (in-field dedup exemption, per-frame seed protection).  Used by
 # run_manual_pipeline and do_photometry_step_manual.
-_EXTENDED_EMISSION_TARGETS = ('w51', 'sickle', 'wd2')
+_EXTENDED_EMISSION_TARGETS = ('w51', 'sickle', 'wd2', 'ngc6334')
 
 
 def _is_extended_emission(options):

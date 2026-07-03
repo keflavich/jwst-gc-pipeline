@@ -222,6 +222,14 @@ REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD = {
     '12587': {  # Haeberle oMEGACat; Omega Cen (NGC5139)
         '001': 'catalogs/gaia_refcat.fits',
     },
+    # --- NGC 6334 (Cat's Paw SFR; extended emission; galactic plane l=351) ---
+    # Gaia DR3 + VIRAC2 fill (VVV bulge footprint), PM-propagated to obs epoch.
+    '7213': {  # Cheng; NGC6334_I_N (proprietary), epoch 2026.30
+        '001': 'catalogs/gaia_virac2_refcat_epoch2026.30.fits',
+    },
+    '6778': {  # Garcia Marin; SF_reg_1, epoch 2024.68
+        '001': 'catalogs/gaia_virac2_refcat_epoch2024.68.fits',
+    },
 }
 
 # Module restrictions per proposal/field/filter for single-module datasets
@@ -384,7 +392,7 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
     # Once tested, destreak can be re-enabled for those fields.  Until
     # then they run with do_destreak=False.
     # ------------------------------------------------------------------
-    EXTENDED_EMISSION_FIELDS = ('w51', 'sickle', 'wd2')
+    EXTENDED_EMISSION_FIELDS = ('w51', 'sickle', 'wd2', 'ngc6334')
     if do_destreak and regionname in EXTENDED_EMISSION_FIELDS:
         print(f"Region {regionname} is extended-emission-dominated and has no "
               f"background map yet; forcing do_destreak=False to avoid "
@@ -1393,6 +1401,9 @@ if __name__ == "__main__":
                             '1979': {'001': 'ngc6397', '002': 'm4', '003': 'm4'},
                             '8322': {'001': 'omegacen'},
                             '12587': {'001': 'omegacen'},
+                            # NGC 6334 (Cat's Paw SFR; extended emission)
+                            '7213': {'001': 'ngc6334'},
+                            '6778': {'001': 'ngc6334'},
                             }[proposal_id]
 
     for field in fields:
