@@ -3535,6 +3535,29 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     action='store_false', default=True,
                     help="Disable the recover-tier prominence gate (UNSAFE on "
                          "extended emission; for diagnostics only).")
+    parser.add_option("--manual-ext-nmatch-confirm", dest="manual_ext_nmatch_confirm",
+                    type='int', default=0,
+                    help="MULTI-FRAME CONFIRMATION keep (Hosek ndet-style): keep any "
+                         "source detected in >= N exposures (nmatch>=N) with qfit <= "
+                         "--manual-ext-nmatch-confirm-qfit-max, regardless of the "
+                         "single-catalog qfit/snr cuts.  Recovers faint stars we "
+                         "DETECT but the vetting drops (Arches F212N vs Hosek: 0.43 "
+                         "-> ~0.53-0.56).  Default 0 = OFF; set 3 to match Hosek's "
+                         "ndet>=3.  Emission repeats across dithers too -- pair with "
+                         "--manual-ext-nmatch-confirm-maxpos-mas on emission fields.")
+    parser.add_option("--manual-ext-nmatch-confirm-qfit-max",
+                    dest="manual_ext_nmatch_confirm_qfit_max",
+                    type='float', default=0.6,
+                    help="qfit ceiling for the multi-frame confirmation keep "
+                         "(default 0.6).")
+    parser.add_option("--manual-ext-nmatch-confirm-maxpos-mas",
+                    dest="manual_ext_nmatch_confirm_maxpos_mas",
+                    type='float', default=0.0,
+                    help="Position-stability guard for the multi-frame keep: only "
+                         "keep if the across-exposure centroid scatter "
+                         "hypot(std_ra,std_dec) <= this many mas (real stars ~3-7 "
+                         "mas; emission-knot centroids wander).  Default 0 = off; "
+                         "set ~20-30 on extended-emission fields.")
     # Structure-noise prune + coarse-bg detection.  These shape/physics-based
     # discriminators reject broad extended-emission (PAH/nebulosity) bumps while
     # keeping faint point sources (which stay sharp and outpeak the local
