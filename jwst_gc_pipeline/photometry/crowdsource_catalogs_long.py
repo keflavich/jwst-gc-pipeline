@@ -3471,6 +3471,18 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                           "noise (RMS of data-minus-smoothed-bg) -- the term that "
                           "rejects PAH/filament bumps while sparing point sources.  "
                           "0 disables (default 0.0); NIRCam LW try ~3-4."))
+    parser.add_option("--extended-emission", dest="extended_emission",
+                    action="store_true", default=None,
+                    help=("Force extended-emission handling ON regardless of "
+                          "--target: structure-noise prune (struct_x=1/struct_y=2), "
+                          "emission noise-floor / prominence detection gates, and "
+                          "coadd-seed protection.  Use for bright PAH/dust "
+                          "nebulosity fields not in the built-in list "
+                          "(w51/sickle/wd2/...)."))
+    parser.add_option("--no-extended-emission", dest="extended_emission",
+                    action="store_false",
+                    help=("Force extended-emission handling OFF even for a target "
+                          "that is in the built-in extended-emission list."))
     parser.add_option("--nircam-prom-m1", dest="nircam_prom_m1",
                     type='float', default=0.0,
                     help=("Extended-emission NIRCam (w51/sickle/wd2) per-pass "

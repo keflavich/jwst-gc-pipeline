@@ -1039,6 +1039,23 @@ _NIRCAM_SAT_DATA_FLOOR = {
 _EXTENDED_EMISSION_TARGETS = ('w51', 'sickle', 'wd2')
 
 
+def _is_extended_emission(options):
+    """Whether extended-emission handling is active for this run.
+
+    Governs the structure-noise prune (struct_x=1/struct_y=2), the emission
+    noise-floor / prominence detection gates, and the coadd-seed protection.
+    ``--extended-emission`` forces it ON and ``--no-extended-emission`` forces it
+    OFF (the ``extended_emission`` option is tri-state, default ``None``); when
+    unset it falls back to membership in ``_EXTENDED_EMISSION_TARGETS`` so the
+    built-in targets keep working without the flag.  Lets any bright PAH/dust
+    field opt in without being hardcoded in the list.
+    """
+    _opt = getattr(options, 'extended_emission', None)
+    if _opt is not None:
+        return bool(_opt)
+    return str(getattr(options, 'target', '')).lower() in _EXTENDED_EMISSION_TARGETS
+
+
 def _resolve_each_suffix(options, filtername):
     """Per-filter input per-exposure-crf suffix.
 
@@ -1482,9 +1499,7 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     # prominence gate to kill fake stars on bright nebulosity (the m2 carpet).
     # 0 = off (default -> other fields unchanged).  Tunable via options so a
     # conservative->aggressive schedule (lenient m1, strict m2) can be A/B'd.
-    _is_ext_nircam = ((not _is_miri)
-                      and str(getattr(options, 'target', '')).lower()
-                      in _EXTENDED_EMISSION_TARGETS)
+    _is_ext_nircam = (not _is_miri) and _is_extended_emission(options)
     _nprom_m1 = float(getattr(options, 'nircam_prom_m1', 0.0))
     _nprom_m2 = float(getattr(options, 'nircam_prom_m2', 0.0))
     _nprom_m3p = float(getattr(options, 'nircam_prom_m3plus', 0.0))
@@ -1540,7 +1555,7 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     # the filters still remove them.
     _protect_xy = None
     _protect_radius = 0.0
-    if (str(getattr(options, 'target', '')).lower() in _EXTENDED_EMISSION_TARGETS
+    if (_is_extended_emission(options)
             and prev_seed_catalog):
         try:
             from astropy.coordinates import SkyCoord as _SkyCoord
@@ -2528,8 +2543,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
     # emission, dropped/kept SB ratio ~1.85) at ~zero net real-source loss vs the
     # SW F210M catalog.  Explicit --manual-struct-noise-x/-y override this.  MIRI
     # is skipped (its per-phase miri_tuning schedule sets these itself).
-    EXTENDED_EMISSION_TARGETS = _EXTENDED_EMISSION_TARGETS
-    if (not miri_tuning and str(target).lower() in EXTENDED_EMISSION_TARGETS
+    if (not miri_tuning and _is_extended_emission(options)
             and float(getattr(options, 'struct_x', 0.0)) == 0.0
             and float(getattr(options, 'struct_y', 0.0)) == 0.0):
         options.struct_x = 1.0
