@@ -3273,7 +3273,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         # In dense saturated regions (W51 IRS2) the 1.0" satstar
                         # dedup collapses DISTINCT in-field stars; restrict it to
                         # off-FOV rows for the extended-emission/crowded fields.
-                        dedup_offfov_only=(str(target).lower() in EXTENDED_EMISSION_TARGETS))
+                        dedup_offfov_only=(str(target).lower() in _EXTENDED_EMISSION_TARGETS))
                     if _ndup or _noff:
                         print(f"manual [{phase}] {filt}/{module}: off-FOV cleanup "
                               f"removed {_ndup} duplicate satstar row(s) + {_noff} "
