@@ -3056,7 +3056,16 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
 
     header = fh[0].header
     if 'CRPIX1' not in header:
-        header.update(wcs.WCS(fh['SCI'].header).to_header())
+        # Copy the SCI WCS -- INCLUDING SIP distortion -- into the satstar
+        # catalog/model/residual header.  ``WCS(...).to_header()`` drops the
+        # SIP A_i_j/B_i_j terms by default (SIP is non-standard, omitted unless
+        # relax=True on BOTH read and write), so for the common JWST case where
+        # the SCI CTYPE is ``RA---TAN-SIP`` the distortion is silently lost.
+        # The satstar model/residual live on the SCI pixel grid, so a SIP-less
+        # header makes them reproject a few 0.1" off (the SIP magnitude at the
+        # detector edges) and contaminates the merged image.  relax=True keeps
+        # the SIP coefficients verbatim.
+        header.update(wcs.WCS(fh['SCI'].header, relax=True).to_header(relax=True))
     # Opt-in ZEROFRAME deblend of merged saturated cores (crowded GC fields).
     # Auto-load the matching _ramp.fits ZEROFRAME unless the caller already passed
     # one explicitly.  Off by default -> behaviour unchanged.
