@@ -89,6 +89,11 @@ obs_filters = {'brick': {'2221': filternames + ['f2550w'],
                # (1979 is not multi-obs like 2211), so cataloging it into the same
                # basepath would collide/overwrite; deferred (its aligned i2d exist).
                'm4': {'1979': ['f150w2', 'f322w2']},
+               # NGC 6334 (Cat's Paw SFR; extended emission). 7213 (Cheng) + 6778
+               # (Garcia Marin), both NIRCam. Filters = effective bandpass; verify
+               # vs downloaded cal headers.
+               'ngc6334': {'7213': ['f115w', 'f162m', 'f182m', 'f200w', 'f356w', 'f405n', 'f444w', 'f470n'],
+                           '6778': ['f090w', 'f187n', 'f200w', 'f277w', 'f335m', 'f470n']},
                }
 
 # Using the 'brick' keyword here makes it work for now, need to figure out how to
@@ -144,6 +149,8 @@ project_obsnum = {'brick': {'2221': '001',
                   'm92': {'1334': '001'},
                   'ngc6397': {'1979': '001'},
                   'm4': {'1979': '002'},  # primary pointing; obs 003 deferred
+                  # NGC 6334 (Cat's Paw SFR)
+                  'ngc6334': {'7213': '001', '6778': '001'},
                   }
 
 
@@ -2213,7 +2220,8 @@ def main():
     print("Options:", options)
 
     if target in ('sickle', 'cloudef', 'sgrc', 'sgrb2', 'arches', 'quintuplet', 'sgra', 'gc2211', 'w51',
-                  'm92', 'ngc6397', 'm4'):  # globular clusters (Anderson co-I) on /orange
+                  'm92', 'ngc6397', 'm4',  # globular clusters (Anderson co-I) on /orange
+                  'ngc6334'):  # NGC 6334 (Cat's Paw SFR)
         basepath = f'/orange/adamginsburg/jwst/{target}/'
     else:
         basepath = f'/blue/adamginsburg/adamginsburg/jwst/{target}/'
@@ -2230,6 +2238,8 @@ def main():
                       '6151': None,  # W51; astrometry handled in imaging, no offsets table
                       '1334': None,  # M92 (Anderson co-I); alignment done in imaging
                       '1979': None,  # M4 / NGC6397 (Anderson co-I); alignment done in imaging
+                      '7213': None,  # NGC 6334 (Cheng); alignment done in imaging
+                      '6778': None,  # NGC 6334 (Garcia Marin); alignment done in imaging
     }
 
     # need to have incrementing _before_ test

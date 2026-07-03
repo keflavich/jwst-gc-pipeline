@@ -3471,6 +3471,18 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                           "noise (RMS of data-minus-smoothed-bg) -- the term that "
                           "rejects PAH/filament bumps while sparing point sources.  "
                           "0 disables (default 0.0); NIRCam LW try ~3-4."))
+    parser.add_option("--extended-emission", dest="extended_emission",
+                    action="store_true", default=None,
+                    help=("Force extended-emission handling ON regardless of "
+                          "--target: structure-noise prune (struct_x=1/struct_y=2), "
+                          "emission noise-floor / prominence detection gates, and "
+                          "coadd-seed protection.  Use for bright PAH/dust "
+                          "nebulosity fields not in the built-in list "
+                          "(w51/sickle/wd2/...)."))
+    parser.add_option("--no-extended-emission", dest="extended_emission",
+                    action="store_false",
+                    help=("Force extended-emission handling OFF even for a target "
+                          "that is in the built-in extended-emission list."))
     parser.add_option("--nircam-prom-m1", dest="nircam_prom_m1",
                     type='float', default=0.0,
                     help=("Extended-emission NIRCam (w51/sickle/wd2) per-pass "
@@ -3978,6 +3990,9 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             # Globular clusters (Jay Anderson co-I; added 2026-07-01)
                             '1334': {'001': 'm92'},
                             '1979': {'001': 'ngc6397', '002': 'm4', '003': 'm4'},
+                            # NGC 6334 (Cat's Paw SFR; extended emission)
+                            '7213': {'001': 'ngc6334'},
+                            '6778': {'001': 'ngc6334'},
                             }[proposal_id]
     # Instrument-dependent field numbering for MIRI (mirimage).  The map above is
     # NIRCam-era; proposal 2221 numbers the brick/cloudc MIRI pointings OPPOSITE
@@ -4060,7 +4075,8 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
 
     if field_to_reg_mapping[field] in ('sickle', 'cloudef', 'sgrc', 'sgrb2', 'arches', 'quintuplet', 'sgra', 'gc2211', 'wd1', 'wd2', 'w51',
                                        # globular clusters (Anderson co-I) live on /orange
-                                       'm92', 'ngc6397', 'm4'):
+                                       'm92', 'ngc6397', 'm4',
+                                       'ngc6334'):  # NGC 6334 (Cat's Paw SFR)
         basepath = f'/orange/adamginsburg/jwst/{field_to_reg_mapping[field]}/'
     else:
         basepath = f'/blue/adamginsburg/adamginsburg/jwst/{field_to_reg_mapping[field]}/'
