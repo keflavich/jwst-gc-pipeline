@@ -1403,7 +1403,14 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             if isinstance(big_grid_large, list):
                 big_grid_large = big_grid_large[0]
 
-    ww = wcs.WCS(header)
+    # WCS for ALL pixel->sky conversions below (sky_centroid, skycoord_fit, etc.)
+    # MUST come from the SCI header, which carries the full RA---TAN-SIP
+    # distortion.  ``header`` is the PRIMARY header (fitsdata[0]) and only has a
+    # WCS at all because remove_saturated_stars copies one in -- historically via
+    # a plain to_header() that DROPPED the SIP terms, so every satstar position
+    # was ~0.1" off at the detector edges.  Read SCI directly (relax=True keeps
+    # SIP) so the fit coordinates are correct regardless of the primary copy.
+    ww = wcs.WCS(fitsdata['SCI'].header, relax=True)
 
     # We force the centroid to be fixed b/c the fitter doesn't do a great job with this...
     # ....this is not optimal...
