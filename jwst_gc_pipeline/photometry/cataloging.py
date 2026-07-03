@@ -547,8 +547,22 @@ def _daofind_emission_floor(detection_image, noise_map, mask, fwhm_pix, *,
                             roundhi=roundhi, sharplo=sharplo, sharphi=sharphi)(
                                 detection_image, mask=mask)
         return det if det is not None else Table()
-    from scipy.ndimage import median_filter as _mf
-    floor = _mf(np.where(finite, noise_map, gmin), size=int(noise_floor_box))
+    # Emission-noise floor = a smooth local median of the noise map.  A full-res
+    # median_filter(box) is O(N*box^2) and prohibitively slow on the deep coadd
+    # (5645x2506, box~61) -- it timed out a 12 h F480M i2dseed run.  Downsample by
+    # ~box/8, median-filter the small map (robust to star spikes), bilinear-
+    # upsample back: ~64x fewer median ops for an indistinguishable floor.
+    from scipy.ndimage import median_filter as _mf, zoom as _zoom
+    _filled = np.where(finite, noise_map, gmin)
+    _ds = max(1, int(noise_floor_box) // 8)
+    if _ds > 1:
+        _small = _filled[::_ds, ::_ds]
+        _sm = _mf(_small, size=max(3, int(round(noise_floor_box / _ds))))
+        floor = _zoom(_sm, (_filled.shape[0] / _sm.shape[0],
+                            _filled.shape[1] / _sm.shape[1]), order=1)
+        floor = floor[:_filled.shape[0], :_filled.shape[1]]
+    else:
+        floor = _mf(_filled, size=int(noise_floor_box))
     floor = np.where(floor < gmin, gmin, floor)
     sn = np.where(mask, 0.0, detection_image) / np.where(floor > 0, floor, np.inf)
     det = DAOStarFinder(threshold=float(noise_floor_k), fwhm=fwhm_pix,
