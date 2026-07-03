@@ -1751,10 +1751,17 @@ def load_satstar_catalog(filtername, target='brick',
             # F480M catalog (cache of ~1500 vs the full ~27000).  Also require
             # the cache to have been built from the same NUMBER of per-exposure
             # catalogs; rebuild when more have appeared.
-            if int(cached.meta.get('NSATSRC', -1)) == len(fallback):
+            _rcur = float(_satstar_dedup_radius().to(u.arcsec).value)
+            _rcache = float(cached.meta.get('SATDDUPR', 0.15))
+            if (int(cached.meta.get('NSATSRC', -1)) == len(fallback)
+                    and abs(_rcache - _rcur) < 1e-6):
                 print(f"Using consolidated satstar catalog {cache} "
-                      f"(cache fresh vs {len(fallback)} per-exposure catalogs)")
+                      f"(cache fresh vs {len(fallback)} per-exposure catalogs, "
+                      f"dedup radius {_rcur}\")")
                 return cached
+            if abs(_rcache - _rcur) >= 1e-6:
+                print(f"Rebuilding satstar cache {cache}: dedup radius changed "
+                      f"{_rcache}\" -> {_rcur}\"")
             print(f"Rebuilding satstar cache {cache}: built from "
                   f"{cached.meta.get('NSATSRC', 'unknown')} per-exposure "
                   f"catalogs but {len(fallback)} now exist")
@@ -1775,6 +1782,7 @@ def load_satstar_catalog(filtername, target='brick',
     # record how many per-exposure catalogs this cache was built from, so a
     # later read can detect (and rebuild) when more have since appeared.
     deduped.meta['NSATSRC'] = len(fallback)
+    deduped.meta['SATDDUPR'] = float(_satstar_dedup_radius().to(u.arcsec).value)
     try:
         os.makedirs(os.path.dirname(cache), exist_ok=True)
         # write to a temp sibling + atomic rename so a concurrent reader never
@@ -1788,7 +1796,22 @@ def load_satstar_catalog(filtername, target='brick',
     return deduped
 
 
-def _dedup_satstar_catalog(tbl, radius=0.15 * u.arcsec):
+def _satstar_dedup_radius():
+    """Consolidation dedup radius for per-frame satstar fits.  Default 0.15";
+    override with env SATSTAR_DEDUP_ARCSEC.  A saturated star's per-frame fit
+    position scatters WIDELY across exposures (the core is NaN-masked; centroid +
+    flux come from the wings/DQ region and are unstable -- W51 F480M measured
+    ~0.5-0.65" scatter, flux swinging 2.5x for ONE star).  At 0.15" that leaves
+    5-8 duplicate rows per star, which replace_saturated() subtracts N times ->
+    an over-subtraction ring whose residual spawns ~11 spurious daophot "stars"
+    around every bright saturated star.  A larger radius (~0.5") collapses the
+    per-frame scatter; distinct saturated stars that close already merge into one
+    DQ-connected component per frame, so they are not split to begin with.
+    """
+    return float(os.environ.get('SATSTAR_DEDUP_ARCSEC', 0.15)) * u.arcsec
+
+
+def _dedup_satstar_catalog(tbl, radius=None):
     """Collapse repeated per-frame satstar fits of the same physical star into
     one row (the brightest), so downstream merging doesn't duplicate them.
 
@@ -1800,6 +1823,8 @@ def _dedup_satstar_catalog(tbl, radius=0.15 * u.arcsec):
     per-exposure sickle F210M satstar pile-up.  Output is identical (same kept
     set, original row order).
     """
+    if radius is None:
+        radius = _satstar_dedup_radius()
     if tbl is None or len(tbl) <= 1 or 'skycoord_fit' not in tbl.colnames:
         return tbl
     from astropy.coordinates import search_around_sky
