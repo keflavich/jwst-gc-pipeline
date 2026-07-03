@@ -2573,7 +2573,17 @@ def _reduction_mosaic_output_wcs(pipeline_dir, proposal_id, field, inst_token,
         pipeline_dir,
         f'jw0{proposal_id}-o{field}_t001_{inst_token}_{filtername.lower()}_i2d.fits')
     if not os.path.exists(mosaic):
-        return None
+        # This pipeline names its reduction mosaic with the custom
+        # 'clear-{filt}-merged' token (PipelineRerunNIRCAM-*), not the STScI
+        # default '{inst}_{filt}'. Fall back to it so data_i2d lands on the exact
+        # reduction grid instead of a tight crop-to-data bbox.
+        alt = os.path.join(
+            pipeline_dir,
+            f'jw0{proposal_id}-o{field}_t001_{inst_token}_clear-{filtername.lower()}-merged_i2d.fits')
+        if os.path.exists(alt):
+            mosaic = alt
+        else:
+            return None
     out = os.path.join(pipeline_dir,
                        f'_reduction_grid_o{field}_{filtername.lower()}.asdf')
     key = os.path.getmtime(mosaic)
@@ -3918,7 +3928,12 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                '2211': {'gc2211': 1},
                # Westerlund 1 (1905) + Westerlund 2 (3523): each proposal has one
                # main pointing per target.
-               '1905': {'wd1': 1},
+               # Wd1 (1905) o001 is a 3-VISIT NIRCam mosaic (visits 001/002/003 are
+               # offset tiles stepping ~2.7' E; together they span the full reduction
+               # footprint). nvisits=1 previously cataloged only visit 001 (the west
+               # tile) -> catalog + data_i2d covered ~1/3. Wd2 (3523) o005 is a single
+               # visit (32 frames), so 1 is correct there.
+               '1905': {'wd1': 3},
                '3523': {'wd2': 1},
                # w51 already exists in this codebase under proposals 1182 (obs 004)
                # and 6151 (obs 001).  Re-assert Gaia as ref via PipelineRerunNIRCAM-LONG.

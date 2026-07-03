@@ -81,6 +81,14 @@ obs_filters = {'brick': {'2221': filternames + ['f2550w'],
                'w51': {'6151': ['f140m', 'f162m', 'f182m', 'f187n', 'f210m',
                                 'f335m', 'f360m', 'f405n', 'f410m', 'f480m',
                                 'f770w', 'f1280w', 'f2100w']},
+               # Globular clusters (Jay Anderson co-I; added 2026-07-01)
+               'm92': {'1334': ['f090w', 'f150w', 'f277w', 'f444w']},
+               'ngc6397': {'1979': ['f150w2', 'f322w2']},
+               # m4: primary pointing obs 002 only. obs 003 (M-4-shift) shares
+               # visit/vgroup/exp tuples (both visit 001) with no per-obs token
+               # (1979 is not multi-obs like 2211), so cataloging it into the same
+               # basepath would collide/overwrite; deferred (its aligned i2d exist).
+               'm4': {'1979': ['f150w2', 'f322w2']},
                }
 
 # Using the 'brick' keyword here makes it work for now, need to figure out how to
@@ -132,6 +140,10 @@ project_obsnum = {'brick': {'2221': '001',
                   'w51': {'6151': '001',
                           '1182': '002',
                           },
+                  # Globular clusters (Jay Anderson co-I; added 2026-07-01)
+                  'm92': {'1334': '001'},
+                  'ngc6397': {'1979': '001'},
+                  'm4': {'1979': '002'},  # primary pointing; obs 003 deferred
                   }
 
 
@@ -1922,6 +1934,9 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
 
     if radius is None:
         radius = {# short-wave (< ~2.5 um)
+                  'f090w': 0.05*u.arcsec,   # globular clusters (Anderson co-I)
+                  'f150w2': 0.05*u.arcsec,  # wide SW
+                  'f322w2': 0.1*u.arcsec,   # wide LW
                   'f115w': 0.05*u.arcsec,
                   'f150w': 0.05*u.arcsec,
                   'f162m': 0.05*u.arcsec,
@@ -2197,7 +2212,8 @@ def main():
     indiv_merge_methods = options.indiv_merge_methods.split(",")
     print("Options:", options)
 
-    if target in ('sickle', 'cloudef', 'sgrc', 'sgrb2', 'arches', 'quintuplet', 'sgra', 'gc2211', 'w51'):
+    if target in ('sickle', 'cloudef', 'sgrc', 'sgrb2', 'arches', 'quintuplet', 'sgra', 'gc2211', 'w51',
+                  'm92', 'ngc6397', 'm4'):  # globular clusters (Anderson co-I) on /orange
         basepath = f'/orange/adamginsburg/jwst/{target}/'
     else:
         basepath = f'/blue/adamginsburg/adamginsburg/jwst/{target}/'
@@ -2212,6 +2228,8 @@ def main():
                       '1939': None,
                       '2211': None,
                       '6151': None,  # W51; astrometry handled in imaging, no offsets table
+                      '1334': None,  # M92 (Anderson co-I); alignment done in imaging
+                      '1979': None,  # M4 / NGC6397 (Anderson co-I); alignment done in imaging
     }
 
     # need to have incrementing _before_ test

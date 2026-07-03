@@ -47,6 +47,14 @@ source ~/.bash_profile 2>/dev/null
 export CRDS_PATH=/orange/adamginsburg/jwst/crds
 export CRDS_SERVER_URL=https://jwst-crds.stsci.edu
 
+# Keep all scratch (jwst/astropy/tempfile) on the node-local SLURM scratch, NOT
+# /tmp -- the pipeline's intermediates otherwise fill the node root fs (/dev/md0)
+# and wedge the node.  SLURM_TMPDIR is per-job node-local; fall back to a large
+# shared path (never /tmp).
+export TMPDIR="${SLURM_TMPDIR:-/blue/adamginsburg/adamginsburg/tmp}"
+export TMP="$TMPDIR" TEMP="$TMPDIR"
+mkdir -p "$TMPDIR"
+
 # --- parameters (override via --export=ALL,VAR=...) ---
 PROPOSAL=${PROPOSAL:-4147}
 FIELD=${FIELD:-012}

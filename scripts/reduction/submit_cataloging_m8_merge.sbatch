@@ -15,6 +15,7 @@
 #SBATCH --output=/orange/adamginsburg/jwst/logs/catalog_%x_%j.out
 
 source ~/.bash_profile 2>/dev/null
+export TMPDIR="${SLURM_TMPDIR:-/blue/adamginsburg/adamginsburg/tmp}"; export TMP="$TMPDIR" TEMP="$TMPDIR"; mkdir -p "$TMPDIR"
 
 TARGET=${TARGET:-sickle}
 MODULES=${MODULES:-nrcb}

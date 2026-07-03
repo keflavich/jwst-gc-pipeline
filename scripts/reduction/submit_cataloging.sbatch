@@ -30,6 +30,11 @@ source ~/.bash_profile 2>/dev/null
 export CRDS_PATH=/orange/adamginsburg/jwst/crds
 export CRDS_SERVER_URL=https://jwst-crds.stsci.edu
 
+# Scratch on node-local SLURM_TMPDIR, never /tmp (fills node root fs).
+export TMPDIR="${SLURM_TMPDIR:-/blue/adamginsburg/adamginsburg/tmp}"
+export TMP="$TMPDIR" TEMP="$TMPDIR"
+mkdir -p "$TMPDIR"
+
 PROPOSAL=${PROPOSAL:-4147}
 FIELD=${FIELD:-012}
 TARGET=${TARGET:-sgrc}
