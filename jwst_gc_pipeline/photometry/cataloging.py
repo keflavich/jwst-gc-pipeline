@@ -341,6 +341,14 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
         _cm = _rr < 1.5
         _am = (_rr >= 4) & (_rr <= _H)
         _dropp = np.zeros(len(_r), dtype=bool)
+        # Neighbour-robust prominence (env MIRI_DAOPHOT_PROM_ROBUST): on bright
+        # structured emission a bright neighbour in the 4-10px annulus inflates
+        # the annulus median+MAD and crushes a real faint star's prominence below
+        # the gate (cloudc 2526 F770W: pt10-15,19 prominence 1.7-4.8 < 5 though
+        # they are obvious point sources).  The robust estimate reads the annulus
+        # 25th-pct emission FLOOR + the lower-half spread, immune to neighbour
+        # spikes -- mirrors the satstar _seed_prominence(robust=True) fix.
+        _prom_robust = bool(int(os.environ.get('MIRI_DAOPHOT_PROM_ROBUST', 0)))
         for _i in range(len(_r)):
             if not (np.isfinite(_xs[_i]) and np.isfinite(_ys[_i])):
                 continue
@@ -350,11 +358,20 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
             _st = _img[_iy - _H:_iy + _H + 1, _ix - _H:_ix + _H + 1]
             _core = np.nanmax(_st[_cm])
             _ann = _st[_am]
-            _bg = np.nanmedian(_ann)
-            _mad = 1.4826 * np.nanmedian(np.abs(_ann - _bg))
-            if not (np.isfinite(_core) and np.isfinite(_bg) and _mad > 0):
+            _annf = _ann[np.isfinite(_ann)]
+            if _annf.size < 10 or not np.isfinite(_core):
                 continue
-            if (_core - _bg) / _mad < miri_prominence_snr:
+            if _prom_robust:
+                _bg = np.percentile(_annf, 25)
+                _lower = _annf[_annf <= np.median(_annf)]
+                _spread = (1.4826 * np.median(np.abs(_lower - np.median(_lower)))
+                           if _lower.size > 5 else np.std(_annf))
+            else:
+                _bg = np.median(_annf)
+                _spread = 1.4826 * np.median(np.abs(_annf - _bg))
+            if not (np.isfinite(_bg) and _spread > 0):
+                continue
+            if (_core - _bg) / _spread < miri_prominence_snr:
                 _dropp[_i] = True
         _ndp = int(_dropp.sum())
         if _ndp:
@@ -828,6 +845,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         _rr = np.hypot(_xo, _yo)
         _cm = _rr < 1.5
         _am = (_rr >= 4) & (_rr <= _H)
+        _prom_robust = bool(int(os.environ.get('MIRI_DAOPHOT_PROM_ROBUST', 0)))
         for i in range(n):
             if not (np.isfinite(xx[i]) and np.isfinite(yy[i])):
                 continue
@@ -842,10 +860,21 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                 st = data_i2d_image[iy - _H:iy + _H + 1, ix - _H:ix + _H + 1]
                 core = np.nanmax(st[_cm])
                 ann = st[_am]
-                bg = np.nanmedian(ann)
-                mad = 1.4826 * np.nanmedian(np.abs(ann - bg))
-                if np.isfinite(core) and np.isfinite(bg) and mad > 0:
-                    prominence[i] = (core - bg) / mad
+                annf = ann[np.isfinite(ann)]
+                if annf.size >= 10 and np.isfinite(core):
+                    if _prom_robust:
+                        # neighbour-robust: 25th-pct emission FLOOR + lower-half
+                        # spread, immune to a bright neighbour inflating the MAD
+                        # (cloudc faint stars on emission).  See _manual_phot_pass.
+                        bg = np.percentile(annf, 25)
+                        lower = annf[annf <= np.median(annf)]
+                        spread = (1.4826 * np.median(np.abs(lower - np.median(lower)))
+                                  if lower.size > 5 else np.std(annf))
+                    else:
+                        bg = np.median(annf)
+                        spread = 1.4826 * np.median(np.abs(annf - bg))
+                    if np.isfinite(bg) and spread > 0:
+                        prominence[i] = (core - bg) / spread
 
     # Persist the data_i2d quality metrics on the catalog so every downstream
     # cut is reproducible.  'prominence' = (core peak - annulus median)/annulus
@@ -1244,6 +1273,13 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     mask = np.isnan(data) | bad
     dqarr = im1['DQ'].data if 'DQ' in im1 else None
     if dqarr is not None:
+        # Correct the SATURATED bit to FIRST-group saturation (env-gated, MIRI):
+        # the cal/crf flag marks any pixel saturated in ANY ramp group, which on
+        # bright emission vetoes real point sources from daophot although the
+        # ramp fitter recovers their flux.  Clearing the later-group-only flags
+        # here propagates to is_saturated, the fit mask, AND _filter_near_saturation
+        # (which reads ctx.dqarr).  See first_group_saturation_mask.
+        dqarr = _L.correct_dq_first_group_saturation(dqarr, filename, instrument)
         is_saturated = (dqarr & _L.dqflags.pixel['SATURATED']) != 0
         # A real saturated core sits at/near the detector saturation level; but
         # JUMP/persistence artifacts get mis-tagged SATURATED on UNsaturated
@@ -1952,7 +1988,7 @@ def annotate_independent_detection(merged_path, cut_bp, filternames, options, *,
 # Detection on the merged i2d -> augmented seed for the next per-frame round
 # ---------------------------------------------------------------------------
 def _structure_noise_keep(data, err, xpix, ypix, *, struct_x=0.0, struct_y=0.0,
-                          smooth_box=51, struct_box=51):
+                          smooth_box=51, struct_box=51, robust=False):
     """Structure-noise prune (AG 2026-06-13): keep a detection only if its data
     peak rises above the local extended-emission baseline by a combination of
     photon/read noise AND emission-structure noise:
@@ -1962,11 +1998,22 @@ def _structure_noise_keep(data, err, xpix, ypix, *, struct_x=0.0, struct_y=0.0,
     smoothed_mean   = median-filtered data on ``smooth_box`` (>~5x FWHM, so it is
                       the large-scale background, NOT the filaments);
     real_noise      = propagated per-pixel ERR;
-    structure_noise = local RMS of (data - smoothed) over ``struct_box`` -- the
+    structure_noise = local scatter of (data - smoothed) over ``struct_box`` -- the
                       "noise" introduced by emission structure.  This rejects
                       filament/PAH bumps (high structure noise) while keeping real
                       point sources (peak >> both noises).  Tuned high-purity on
                       sickle F770W: (struct_x, struct_y) ~ (5, 8).
+
+    ``robust``: the default structure_noise is a 51px MEAN-of-squares RMS, which
+    is contaminated by the point sources themselves -- a single bright residual
+    wing or neighbouring star spikes the window and inflates the threshold for
+    every faint source nearby, dropping ~80% of real faint point sources on the
+    bg-subtracted m5/m6 residual (cloudc F770W: 1311 point-like detections lost,
+    AG 2026-06-28).  ``robust=True`` measures the structure noise with a sliding
+    MAD instead (1.4826 * median |hp - median(hp)|), which is immune to source
+    spikes and tracks genuine diffuse emission only.  Use it where the bright
+    sources have already been subtracted (m5/m6); the constants differ between
+    the two metrics (MAD is smaller-magnitude, so it wants a larger struct_y).
 
     Returns a boolean keep-mask aligned with (xpix, ypix).  No-op if both x,y=0.
     """
@@ -1978,7 +2025,13 @@ def _structure_noise_keep(data, err, xpix, ypix, *, struct_x=0.0, struct_y=0.0,
     filled = np.where(good, data, np.nanmedian(data[good]))
     smoothed = median_filter(filled, size=smooth_box)
     hp = filled - smoothed
-    struct_noise = np.sqrt(np.clip(uniform_filter(hp**2, size=struct_box), 0, None))
+    if robust:
+        # sliding MAD: spike-immune estimate of the local emission-structure
+        # scatter (mean-of-squares below is dominated by point-source spikes).
+        hp_med = median_filter(hp, size=struct_box)
+        struct_noise = 1.4826 * median_filter(np.abs(hp - hp_med), size=struct_box)
+    else:
+        struct_noise = np.sqrt(np.clip(uniform_filter(hp**2, size=struct_box), 0, None))
     rn = (np.asarray(err, dtype=float) if err is not None
           else np.full_like(data, mad_std(hp[good])))
     ny, nx = data.shape
@@ -1991,8 +2044,8 @@ def _structure_noise_keep(data, err, xpix, ypix, *, struct_x=0.0, struct_y=0.0,
 def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, *,
                               local_snr_min=5.0, roundlo=-0.5, roundhi=0.5,
                               sharplo=0.4, sharphi=1.2, bg_subtract_path=None,
-                              struct_x=0.0, struct_y=0.0, coarse_bg_box=0,
-                              seed_struct_protect_snr=8.0,
+                              struct_x=0.0, struct_y=0.0, struct_robust=False,
+                              coarse_bg_box=0, seed_struct_protect_snr=8.0,
                               noise_floor_box=0, noise_floor_k=5.0, label=''):
     """daofind on the merged i2d co-add, unioned with the previous vetted merged
     catalog, written as a seed catalog (``skycoord`` + ``flux``) for the next
@@ -2102,7 +2155,8 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
     if len(det) and (struct_x or struct_y):
         xd0, yd0 = _L._best_available_xy(det)
         skeep = _structure_noise_keep(np.where(mask, np.nan, data), err, xd0, yd0,
-                                      struct_x=struct_x, struct_y=struct_y)
+                                      struct_x=struct_x, struct_y=struct_y,
+                                      robust=struct_robust)
         protect = np.zeros(len(det), dtype=bool)
         if 'local_snr' in det.colnames:
             protect = (np.asarray(det['local_snr'], dtype=float)
@@ -2110,9 +2164,10 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
         skeep = np.asarray(skeep, dtype=bool) | protect
         n_before = len(det)
         det = det[skeep]
-        print(f"[{label}] struct-noise prune (x={struct_x},y={struct_y}, "
-              f"protect ERR S/N>={seed_struct_protect_snr:g}): "
+        print(f"[{label}] struct-noise prune (x={struct_x},y={struct_y},"
+              f"robust={struct_robust}, protect ERR S/N>={seed_struct_protect_snr:g}): "
               f"{n_before} -> {len(det)} ({int(protect.sum())} protected)", flush=True)
+
 
     # previous vetted merged catalog -> sky
     prev = _L._resolve_seed_skycoords(Table.read(prev_vetted_path))
@@ -2795,6 +2850,36 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
         opts_phase.use_iter3_residual_bg = resbgsub
 
         if miri_tuning:
+            # Prominence-gate threshold (drives BOTH MIRI prominence gates -- the
+            # per-frame _manual_phot_pass reject and the per-obs
+            # _filter_extended_emission vetting, both read
+            # opts_phase.miri_prominence_snr).  Three modes, in priority order:
+            #   1. MIRI_PROM_SNR set -> flat threshold (all phases).
+            #   2. MIRI_PROM_SNR_PROGRESSIVE=1 -> loosen the threshold across
+            #      iterations: STRICT on the raw, emission-heavy early rounds
+            #      (m12/m3/m4) where a low cut would seed emission false sources,
+            #      LOOSE on the late bg-subtracted residual rounds (m5/m6) where
+            #      the emission is already removed and faint stars are trustworthy
+            #      -- so the final catalog recovers the faintest real stars without
+            #      ever propagating early-round emission seeds.  Schedule endpoints
+            #      env-tunable (MIRI_PROM_SNR_HI raw, MIRI_PROM_SNR_LO m6).
+            #   3. otherwise the prior flat default (5).
+            # With the neighbour-robust prominence real stars score ~16, emission ~5.
+            if os.environ.get('MIRI_PROM_SNR') is not None:
+                opts_phase.miri_prominence_snr = float(os.environ['MIRI_PROM_SNR'])
+            elif int(os.environ.get('MIRI_PROM_SNR_PROGRESSIVE', 0)):
+                _phi = float(os.environ.get('MIRI_PROM_SNR_HI', 8.0))
+                _plo = float(os.environ.get('MIRI_PROM_SNR_LO', 3.0))
+                _prom_sched = {'m12': _phi, 'm3': _phi,
+                               'm4': 0.5 * (_phi + _plo),
+                               'm5': _plo + 0.5 * (_phi - _plo) * 0.5,
+                               'm6': _plo}
+                opts_phase.miri_prominence_snr = _prom_sched.get(phase, _plo)
+            else:
+                opts_phase.miri_prominence_snr = getattr(
+                    options, 'miri_prominence_snr', 5.0)
+            print(f"  [miri_tuning {phase}] prominence_snr="
+                  f"{opts_phase.miri_prominence_snr:g}", flush=True)
             # tweak (2): raise thresholds on the raw-image rounds (m12/m3/m4)
             # tweak (3): lower them on the background-subtracted rounds (m5/m6)
             # tweak (4): relax qfit vetting everywhere for MIRI
@@ -2819,9 +2904,18 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 opts_phase.manual_iter2_local_snr = min(base_iter2, 3.0)
                 opts_phase.manual_ext_local_snr_min = min(base_extsnr, 3.0)
                 # background already subtracted -> structure noise is lower;
-                # relax the prune to recover faint point sources (tweak 3)
+                # relax the prune to recover faint point sources (tweak 3).
+                # The legacy MEAN-of-squares structure_noise was contaminated by
+                # the point sources themselves (a bright residual wing / neighbour
+                # spikes the 51px window), dropping ~80% of real faint point
+                # sources here (cloudc F770W m6: 2520->583, 1311 point-like lost;
+                # AG 2026-06-28).  Switch to the spike-immune sliding-MAD metric
+                # (struct_robust) -- valid because the bright sources are already
+                # subtracted on m5/m6 -- and raise struct_y to 8 (MAD is
+                # smaller-magnitude than the RMS): point-like retention 22%->76%.
                 opts_phase.struct_x = 3.0
-                opts_phase.struct_y = 4.0
+                opts_phase.struct_y = 8.0
+                opts_phase.struct_robust = True
                 # bg already subtracted & trustworthy -> no coarse-bg detection
                 opts_phase.coarse_bg_box = 0
             opts_phase.manual_ext_qfit_max = max(base_qfit, 0.4)
@@ -2904,6 +2998,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             # enable the prune on extended-emission fields.
                             struct_x=float(getattr(opts_phase, 'struct_x', 0.0)),
                             struct_y=float(getattr(opts_phase, 'struct_y', 0.0)),
+                            struct_robust=bool(getattr(opts_phase, 'struct_robust', False)),
                             coarse_bg_box=int(getattr(opts_phase, 'coarse_bg_box', 0)),
                             # emission-noise-floor detection: ext-emission NIRCam
                             # only (MIRI has its own coarse-bg/struct schedule).

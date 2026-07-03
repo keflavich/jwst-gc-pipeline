@@ -558,7 +558,8 @@ import crowdsource
 from crowdsource import crowdsource_base
 from crowdsource.crowdsource_base import fit_im, psfmod
 
-from jwst_gc_pipeline.reduction.saturated_star_finding import remove_saturated_stars
+from jwst_gc_pipeline.reduction.saturated_star_finding import (
+    remove_saturated_stars, correct_dq_first_group_saturation)
 
 from astroquery.svo_fps import SvoFps
 
@@ -3056,37 +3057,47 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
             # Regression: tests/test_residual_model_policy.py.
             # ==================================================================
             mc_resid = (base - mc_model).astype('float32')   # residual: bg only (no stars)
-            # NaN-mask ONLY deep over-subtraction PITS at saturated cores (MIRI).
-            # The clipped saturated core, minus a TRUE-amplitude satstar model, can
-            # gouge a deep negative pit (sickle bright pillar star: -755k) -- THOSE
-            # pixels are undefined and get NaN'd.  But the MIRI SATURATED DQ flag is
-            # broad (~16% of the detector: it tags the bright stars' spikes/wings,
-            # whose DATA is perfectly valid), and NaN-ing ALL of them (a) erased the
-            # bright flux the user needs in the residual and (b) BALLOONED through
-            # resample (16% detector -> 12.5% i2d).  So restrict the NaN to
-            # saturated pixels that are also a DEEP NEGATIVE pit; positive/normal
-            # residual at saturated pixels (the unsubtracted bright flux) is KEPT.
-            # Full-frame only (cutout shapes won't match the frame DQ -> guard skips).
+            # NaN-mask deep over-subtraction PITS (MIRI).  A satstar model with
+            # over-estimated amplitude gouges a deep NEGATIVE pit; at the masked
+            # saturated CORE (sickle pillar -755k) and -- crucially -- out in the
+            # UNSATURATED WINGS, where the DATA is valid (~700) but the broad model
+            # subtracts ~1e6 (w51 F770W 11.2e6-flux satstar: resid -1.02e6 at
+            # data=667, NOT a DQ-SATURATED pixel).  The legacy mask required
+            # DQ-SATURATED and so MISSED every wing pit, leaving -1e6 holes in the
+            # residual the iterative background must not see.  Broaden: NaN ANY
+            # deeply-negative pit (over-subtraction signature) regardless of DQ,
+            # plus the legacy saturated-core pits, then dilate to fill the basin.
+            # Positive residual (unsubtracted bright flux the user wants) is KEPT --
+            # a pit must be < 0.  Far fewer pixels than the broad SATURATED flag,
+            # so no resample balloon.  Thresholds env-tunable.
             if _instrument_from_filter(filtername) == 'MIRI':
                 try:
-                    with fits.open(orig) as _oh:
-                        _onames = [h.name for h in _oh]
-                        _dq = _oh['DQ'].data if 'DQ' in _onames else None
-                    if _dq is not None and _dq.shape == mc_resid.shape:
-                        _satmask = (_dq.astype(np.int64) & 2) > 0
-                        _fin = np.isfinite(mc_resid)
-                        if _fin.any():
-                            _med = np.nanmedian(mc_resid[_fin])
-                            _nmad = 1.4826 * np.nanmedian(
-                                np.abs(mc_resid[_fin] - _med)) + 1e-6
-                            # pit = saturated AND >10 robust-sigma below the median
-                            _pit = _satmask & (mc_resid < _med - 10.0 * _nmad)
-                            mc_resid[_pit] = np.nan
-                            print(f"  [miri resid] NaN'd {int(_pit.sum())} deep-pit "
-                                  f"sat px (of {int(_satmask.sum())} sat); kept "
-                                  f"bright flux", flush=True)
-                except Exception as _dqex:
-                    print(f"mergedcat: DQ-sat NaN-mask skipped for "
+                    _fin = np.isfinite(mc_resid)
+                    if _fin.any():
+                        _med = np.nanmedian(mc_resid[_fin])
+                        _nmad = 1.4826 * np.nanmedian(
+                            np.abs(mc_resid[_fin] - _med)) + 1e-6
+                        _k = float(os.environ.get('MIRI_RESID_PIT_NMAD', 15.0))
+                        # over-subtraction pit: deeply negative below the bg
+                        _pit = _fin & (mc_resid < _med - _k * _nmad) & (mc_resid < 0)
+                        # legacy: saturated-core pits at a gentler threshold
+                        with fits.open(orig) as _oh:
+                            _onames = [h.name for h in _oh]
+                            _dq = _oh['DQ'].data if 'DQ' in _onames else None
+                        if _dq is not None and _dq.shape == mc_resid.shape:
+                            _satmask = (_dq.astype(np.int64) & 2) > 0
+                            _pit = _pit | (_satmask
+                                           & (mc_resid < _med - 10.0 * _nmad)
+                                           & (mc_resid < 0))
+                        from scipy.ndimage import binary_dilation as _bd
+                        _pit = _bd(_pit, iterations=int(
+                            os.environ.get('MIRI_RESID_PIT_DILATE', 2)))
+                        mc_resid[_pit] = np.nan
+                        print(f"  [miri resid] NaN'd {int(_pit.sum())} over-sub pit "
+                              f"px (deep-negative + sat-core; med={_med:.0f} "
+                              f"nmad={_nmad:.0f})", flush=True)
+                except (OSError, ValueError) as _dqex:
+                    print(f"mergedcat: pit NaN-mask skipped for "
                           f"{os.path.basename(orig)}: {_dqex}", flush=True)
             mc_model_display = mc_model.astype('float32')     # i2d model: stars, no bg
             if satstar_sm is not None and satstar_sm.shape == mc_model.shape:
@@ -3116,6 +3127,36 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
         outpaths[kind] = _resample_to_i2d(written[kind], pipeline_dir,
                                           product_name, crop_to_data=True)
         print(f"mergedcat: wrote {kind} residual i2d {outpaths[kind]}", flush=True)
+        # FINAL coadd-level over-subtraction pit cleanup (MIRI).  The per-frame
+        # pit NaN-mask + resample averaging is LEAKY: a pixel that is a deep pit
+        # in only SOME overlapping frames (shallow/positive in others) averages
+        # to a moderate-but-still-negative pit that survives on the mosaic
+        # (w51 F770W: per-frame fix took -1.02e6 -> coadd still had -5.9e3 pits).
+        # NaN any deep-negative pit that REMAINS on the assembled residual_i2d so
+        # the displayed/iterated residual has NO negative holes.  Positive flux
+        # KEPT (pit must be < 0).
+        if (_instrument_from_filter(filtername) == 'MIRI'
+                and outpaths[kind] and os.path.exists(outpaths[kind])):
+            try:
+                with fits.open(outpaths[kind], mode='update') as _rh:
+                    _rd = _rh['SCI'].data
+                    _fin = np.isfinite(_rd)
+                    if _fin.any():
+                        _med = np.nanmedian(_rd[_fin])
+                        _nmad = 1.4826 * np.nanmedian(
+                            np.abs(_rd[_fin] - _med)) + 1e-6
+                        _k = float(os.environ.get('MIRI_RESID_PIT_NMAD', 15.0))
+                        _pit = _fin & (_rd < _med - _k * _nmad) & (_rd < 0)
+                        from scipy.ndimage import binary_dilation as _bd
+                        _pit = _bd(_pit, iterations=int(
+                            os.environ.get('MIRI_RESID_PIT_DILATE', 2)))
+                        _rd[_pit] = np.nan
+                        _rh['SCI'].data = _rd
+                        _rh.flush()
+                        print(f"  [miri resid i2d] NaN'd {int(_pit.sum())} coadd "
+                              f"pit px (med={_med:.0f} nmad={_nmad:.0f})", flush=True)
+            except (OSError, ValueError) as _e:
+                print(f"mergedcat: resid i2d pit cleanup skipped: {_e}", flush=True)
         # also mosaic the merged-catalog MODEL so the CARTA loaders can show
         # data / model / residual / bg side by side
         model_product = product_name.replace('_mergedcat_residual',

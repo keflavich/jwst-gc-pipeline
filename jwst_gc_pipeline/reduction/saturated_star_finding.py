@@ -811,8 +811,19 @@ def reconcile_outside_fov_satstar_fluxes(per_frame, match_radius=1.0 * u.arcsec,
 _SEED_SMALL_SAT_AREA = 400
 
 
-def _seed_prominence(data, com, sat_area):
+def _seed_prominence(data, com, sat_area, robust=False):
     """Adaptive-radius prominence of a saturated-star SEED on the SCI data.
+
+    ``robust``: the default denominator is the annulus MAD, which a bright
+    NEIGHBOUR or structured emission in the annulus inflates -- on emission-rich
+    fields (cloudc 2526 F770W) this crushes a real faint saturated star's
+    prominence below the gate (28 by-eye-real stars dropped, AG 2026-06-28).
+    ``robust=True`` instead measures the background as the annulus 25th-percentile
+    (the emission FLOOR between neighbours) and the spread from the lower half of
+    the annulus (1.4826*MAD of pixels <= the annulus median), so a single bright
+    neighbour cannot inflate the denominator.  This lifts genuine faint saturated
+    stars (cloudc: prominence median 7.1->16.6, min 2.3->6.0) while diffuse
+    emission stays low.  Pair with a field-lowered ``seed_core_min``.
 
     Distinguishes a genuine saturated STAR (compact bright core + bright PSF
     wings) from a DQ-SATURATED patch of bright EXTENDED EMISSION (no compact
@@ -870,6 +881,17 @@ def _seed_prominence(data, com, sat_area):
         return np.nan, np.nan
     core = float(np.nanmax(sub[cm]))
     a = sub[am]
+    if robust:
+        # emission FLOOR (between neighbours) + lower-half robust spread, so a
+        # bright neighbour / structured emission in the annulus cannot inflate
+        # the denominator and crush a real faint saturated star's prominence.
+        bg = np.percentile(a, 25)
+        lower = a[a <= np.median(a)]
+        spread = (1.4826 * np.median(np.abs(lower - np.median(lower)))
+                  if lower.size > 5 else np.std(a))
+        if not (spread > 0):
+            return np.nan, core
+        return (core - bg) / spread, core
     med = np.median(a)
     mad = np.median(np.abs(a - med)) * 1.4826
     if not (mad > 0):
@@ -1029,7 +1051,7 @@ def is_small_radius_emission_phantom(prom_small, core_small, *,
     return False
 
 
-def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, deblend_daophot_xy=None, deblend_confirm_xy=None):
+def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_prominence_robust=False, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, deblend_daophot_xy=None, deblend_confirm_xy=None):
     # ``flux_drops``: optional list of SkyCoord.  An out-of-field (forced) source
     # whose seed sky position matches a drop within ~1.0" is SKIPPED entirely
     # (not fit, not contributed): cross-frame reconciliation found no trustworthy
@@ -1112,6 +1134,27 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     header = fitsdata[0].header
     data = fitsdata['SCI'].data
     assert data is not None
+
+    # Per-run seed-gate overrides (env).  The seed_core_min=1000 / prom_min=8
+    # defaults are F770W-Sickle-calibrated; emission-rich fields with fainter
+    # saturated stars (cloudc 2526 F770W: real wing-ring cores 300-760, dropped
+    # by core<1000) need a lower core floor + the neighbour-robust prominence
+    # (MIRI_SATSTAR_SEED_PROM_ROBUST) so the annulus MAD inflated by neighbouring
+    # stars/emission does not crush a real faint saturated star below the gate.
+    # Defaults preserve the prior behaviour; set per-field in the launcher.
+    # See project_cloudc_f770w_satstar_gate_miscalib.
+    _env_core = os.environ.get('MIRI_SATSTAR_SEED_CORE_MIN')
+    if _env_core is not None:
+        seed_core_min = float(_env_core)
+    _env_prom = os.environ.get('MIRI_SATSTAR_SEED_PROM_MIN')
+    if _env_prom is not None:
+        seed_prominence_min = float(_env_prom)
+    _env_conc = os.environ.get('MIRI_SATSTAR_SEED_CONC_MIN')
+    if _env_conc is not None:
+        seed_conc_min = float(_env_conc)
+    _env_robust = os.environ.get('MIRI_SATSTAR_SEED_PROM_ROBUST')
+    if _env_robust is not None:
+        seed_prominence_robust = bool(int(_env_robust))
 
     # nan_to_num data to avoid fitting NaNs
     data[np.isnan(fitsdata['VAR_POISSON'].data)] = 0
@@ -1262,7 +1305,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             _seed_sa = rec.get('sat_area')
             _seed_sa_cap = (min(int(_seed_sa), 1600)
                             if _seed_sa is not None else _seed_sa)
-            prom, core = _seed_prominence(_gate_img, gate_com, _seed_sa_cap)
+            prom, core = _seed_prominence(_gate_img, gate_com, _seed_sa_cap,
+                                          robust=seed_prominence_robust)
             conc = _seed_concentration(_gate_img, gate_com, _seed_sa_cap)
             drop_prom = (seed_prominence_min and seed_prominence_min > 0
                          and np.isfinite(prom) and prom < seed_prominence_min)
@@ -2793,7 +2837,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 # so measure them ONLY when the coadd is available.
                 if _have_coadd:
                     _pp, _cc = _seed_prominence(seed_gate_image, (float(_cy), float(_cx)),
-                                                _capped_sa)
+                                                _capped_sa, robust=seed_prominence_robust)
                     _kk = _seed_concentration(seed_gate_image, (float(_cy), float(_cx)),
                                               _capped_sa)
                     # SMALL-RADIUS prominence/core (2026-06-23).  The sat_area-
@@ -2810,7 +2854,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                     # value is FINITE and below threshold.
                     _pp_s, _cc_s = _seed_prominence(seed_gate_image,
                                                     (float(_cy), float(_cx)),
-                                                    _SEED_SMALL_SAT_AREA)
+                                                    _SEED_SMALL_SAT_AREA,
+                                                    robust=seed_prominence_robust)
                 else:
                     _pp = _cc = _kk = _pp_s = _cc_s = np.nan
                 # OVER-SUBTRACTION ratio: the fitted PSF model PEAK vs the deep
@@ -2939,6 +2984,54 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # accumulation happened before the accept check, so a rejected
             # bad fit still corrupted the cumulative satstar model.
             full_model_image[y0:y1, x0:x1] += model_image
+            # BRIGHTNESS-SCALED MODEL FOOTPRINT (MIRI).  The model is rendered
+            # only over the small +-pad FIT cutout, so a BRIGHT star's PSF wings
+            # are truncated at the box -> a hard SQUARE edge in the model/residual
+            # (user-reported, sgrb2).  The FIT stays in the small box (stable),
+            # but the bright star should be SUBTRACTED with a footprint big enough
+            # to contain its wings.  Re-render the accepted model out to where its
+            # wing falls below a noise floor (radius grows with brightness, capped
+            # at the PSF grid FOV) and add ONLY the region exterior to the cutout
+            # (interior already added above -> no double count).  Gated by
+            # MIRI_SATSTAR_RENDER_FOOTPRINT (default 1).
+            if (_is_miri and not forced_source
+                    and int(os.environ.get('MIRI_SATSTAR_RENDER_FOOTPRINT', 1))):
+                try:
+                    _wfloor = float(os.environ.get('MIRI_SATSTAR_WING_FLOOR', 5.0))
+                    _psf0 = float(_psf_for_model(np.array([0.0]),
+                                                 np.array([0.0]))[0])
+                    _maxhalf = int(min(512,
+                        min(_psf_for_model.data.shape[-2:])
+                        // (2 * int(max(1, getattr(_psf_for_model,
+                                                   'oversampling', [1])[0])))))
+                    for _xf, _yf, _fl in zip(result['x_fit'], result['y_fit'],
+                                             result['flux_fit']):
+                        if not np.isfinite(_fl):
+                            continue
+                        _peak = _psf0 * float(_fl)
+                        # ~r^-3 diffraction wing reaches _wfloor at this radius
+                        _rh = (int(pad * (max(1.0, _peak / _wfloor)) ** (1.0 / 3.0))
+                               if _peak > _wfloor else pad)
+                        _rh = int(np.clip(_rh, pad, _maxhalf))
+                        if _rh <= pad:
+                            continue
+                        _gcx = x0 + float(_xf)
+                        _gcy = y0 + float(_yf)
+                        _Y0 = int(max(0, _gcy - _rh)); _Y1 = int(min(data.shape[0], _gcy + _rh))
+                        _X0 = int(max(0, _gcx - _rh)); _X1 = int(min(data.shape[1], _gcx + _rh))
+                        _yb, _xb = np.mgrid[_Y0:_Y1, _X0:_X1]
+                        _wing = np.maximum(_psf_for_model(_xb - _gcx, _yb - _gcy)
+                                           * float(_fl), 0)
+                        _ext = np.ones(_wing.shape, dtype=bool)
+                        _iy0 = max(_Y0, y0); _iy1 = min(_Y1, y1)
+                        _ix0 = max(_X0, x0); _ix1 = min(_X1, x1)
+                        if _iy1 > _iy0 and _ix1 > _ix0:
+                            _ext[_iy0 - _Y0:_iy1 - _Y0, _ix0 - _X0:_ix1 - _X0] = False
+                        full_model_image[_Y0:_Y1, _X0:_X1][_ext] += _wing[_ext]
+                        data_working[_Y0:_Y1, _X0:_X1][_ext] -= _wing[_ext]
+                except (ValueError, TypeError, IndexError) as _wex:
+                    print(f"satstar wing-render skipped src {ii+1}: {_wex}",
+                          flush=True)
             # mark pixels this accepted fit actually used (unmasked in its window)
             try:
                 flag_img[y0:y1, x0:x1][~mask] |= 4
@@ -3009,19 +3102,11 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         builtins.satstar_flagimg = flag_img
         return base_tab
 
-def _find_zeroframe_for(filename):
-    """Locate and load the ZEROFRAME (frame zero) for a cal/crf ``filename``.
-
-    The satstar step runs on the 2D cal/crf image, which has no ZEROFRAME; it
-    lives in the matching ``_ramp.fits`` produced by Detector1 (same exposure
-    stem, in this target's ``pipeline/`` directory).  Returns the ZEROFRAME 2D
-    array (raw DN) or ``None`` if no ramp file is found.  Used to opt the
-    ZEROFRAME deblender into ``remove_saturated_stars``."""
-    base = os.path.basename(filename)
-    # exposure stem = jwNNNNN..._<detector>  (strip everything from the first
-    # post-detector token; both '<stem>_cal.fits' and
-    # '<stem>_destreak_..._crf.fits' share the same leading stem).
+def _find_ramp_for(filename):
+    """Return the path to the sibling ``_ramp.fits`` for a cal/crf ``filename``,
+    or None.  Shared by the ZEROFRAME loader and the first-group saturation map."""
     import re
+    base = os.path.basename(filename)
     m = re.match(r'(jw\d+_\d+_\d+_[a-z0-9]+)', base)
     if not m:
         return None
@@ -3032,13 +3117,97 @@ def _find_zeroframe_for(filename):
              os.path.join(os.path.dirname(pipedir), 'pipeline', f'{stem}_ramp.fits')]
     for rf in cands:
         if os.path.exists(rf):
-            with fits.open(rf) as rh:
-                if 'ZEROFRAME' in rh:
-                    zf = np.asarray(rh['ZEROFRAME'].data[0], dtype=float)
-                    print(f"satstar deblend: loaded ZEROFRAME from {rf}", flush=True)
+            return rf
+    return None
+
+
+def first_group_saturation_mask(filename):
+    """Boolean mask of pixels saturated in the FIRST ramp group (the only
+    TRULY-unrecoverable pixels), read from the sibling ``_ramp.fits`` GROUPDQ.
+
+    The cal/crf ``SATURATED`` flag marks any pixel that saturates in ANY group.
+    On bright MIRI emission that floods enormous regions (cloudc 2526 F770W:
+    69852 px / 904 connected components, max 16231 px -- fusing many real point
+    sources into ONE giant DQ "blob") even though the ramp fitter recovers a
+    valid flux for every pixel that has >=1 good (pre-saturation) group.  Only a
+    pixel whose FIRST group already saturates has no good read and is genuinely
+    unrecoverable (cloudc: 720 px / 26 components, max 54 px).  Using this map in
+    place of the cal SATURATED flag stops real stars-on-bright-emission from
+    being swept into the satstar channel / vetoed from daophot.
+
+    Returns the (ny, nx) boolean mask, or None if no ramp / no GROUPDQ."""
+    rf = _find_ramp_for(filename)
+    if rf is None:
+        return None
+    with fits.open(rf) as rh:
+        if 'GROUPDQ' not in [e.name for e in rh]:
+            return None
+        gdq = rh['GROUPDQ'].data
+        if gdq is None or getattr(gdq, 'ndim', 0) != 4:
+            return None
+        # (nint, ngroup, ny, nx): first group of each integration; a pixel is
+        # truly saturated if its first read is saturated in ANY integration.
+        return ((gdq[:, 0] & dqflags.pixel['SATURATED']) > 0).any(axis=0)
+
+
+def correct_dq_first_group_saturation(dq, filename, instrument=''):
+    """Clear the ``SATURATED`` bit on pixels that saturate only in LATER ramp
+    groups (recoverable by the ramp fitter), leaving it set only where the FIRST
+    group saturates.  See ``first_group_saturation_mask`` for the rationale.
+
+    Opt-in via env ``MIRI_FIRSTGROUP_SAT_DQ`` (default off); MIRI-only.  Returns
+    ``dq`` unchanged when disabled, non-MIRI, or no sibling ramp/GROUPDQ exists."""
+    if dq is None or not int(os.environ.get('MIRI_FIRSTGROUP_SAT_DQ', 0)):
+        return dq
+    if 'MIRI' not in str(instrument).upper():
+        return dq
+    fg = first_group_saturation_mask(filename)
+    if fg is None or fg.shape != dq.shape:
+        return dq
+    SAT = dqflags.pixel['SATURATED']
+    clear = ((dq & SAT) > 0) & (~fg)
+    n = int(clear.sum())
+    if n:
+        dq = dq.copy()
+        dq[clear] &= ~np.array(SAT, dtype=dq.dtype)
+        print(f"first-group-sat DQ correction ({os.path.basename(filename)}): cleared "
+              f"SATURATED on {n} later-group-only px; kept {int(fg.sum())} "
+              f"first-group-saturated", flush=True)
+    return dq
+
+
+def _find_zeroframe_for(filename):
+    """Locate and load the ZEROFRAME (frame zero) for a cal/crf ``filename``.
+
+    The satstar step runs on the 2D cal/crf image, which has no ZEROFRAME; it
+    lives in the matching ``_ramp.fits`` produced by Detector1 (same exposure
+    stem, in this target's ``pipeline/`` directory).  Returns the ZEROFRAME 2D
+    array (raw DN) or ``None`` if no ramp file is found.  Used to opt the
+    ZEROFRAME deblender into ``remove_saturated_stars``."""
+    rf = _find_ramp_for(filename)
+    if rf is not None:
+        with fits.open(rf) as rh:
+            names = [e.name for e in rh]
+            if 'ZEROFRAME' in names:
+                zf = np.asarray(rh['ZEROFRAME'].data[0], dtype=float)
+                print(f"satstar deblend: loaded ZEROFRAME from {rf}", flush=True)
+                return zf
+            # Fallback: Detector1 did not save a ZEROFRAME extension (cloudc
+            # 2526 ramps have none).  The ramp SCI cube's FIRST READ (first
+            # integration, first group) is the least-saturated frame -- the
+            # same first-read the ZEROFRAME captures -- so use it as a pseudo-
+            # zeroframe.  Validated on cloudc F770W: 9/10 blob-embedded
+            # saturated stars are distinct + unsaturated in the first read.
+            if 'SCI' in names:
+                _sci = rh['SCI'].data
+                if _sci is not None and getattr(_sci, 'ndim', 0) == 4:
+                    zf = np.asarray(_sci[0, 0], dtype=float)
+                    print(f"satstar deblend: no ZEROFRAME ext in {rf}; using "
+                          f"ramp first read SCI[0,0] as pseudo-zeroframe",
+                          flush=True)
                     return zf
-    print(f"satstar deblend: no _ramp.fits ZEROFRAME found for {base} "
-          f"(deblend disabled for this frame)", flush=True)
+    print(f"satstar deblend: no _ramp.fits ZEROFRAME found for "
+          f"{os.path.basename(filename)} (deblend disabled for this frame)", flush=True)
     return None
 
 
@@ -3055,6 +3224,16 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
     print(f"Removing saturated stars from {filename}", flush=True)
     fh = fits.open(filename)
     data = fh['SCI'].data
+
+    # Correct the SATURATED DQ bit to FIRST-group saturation (env-gated, MIRI).
+    # The cal/crf SATURATED flag floods bright emission and fuses real point
+    # sources into giant DQ blobs; only first-group-saturated pixels are truly
+    # unrecoverable.  Correcting it here shrinks the saturated components the
+    # satstar finder sees to the genuine cores.  See first_group_saturation_mask.
+    if 'DQ' in fh:
+        _instr = fh[0].header.get('INSTRUME', '')
+        fh['DQ'].data = correct_dq_first_group_saturation(
+            fh['DQ'].data, filename, _instr)
 
     # there are examples, especially in F405, where the variance is NaN but the value
     # is negative

@@ -199,3 +199,52 @@ def test_merge_catalogs_missing_ref_filter_raises():
 
     with pytest.raises(ValueError, match="not present"):
         MC.merge_catalogs([t1, t2], ref_filter='f187n')
+
+
+class TestSatstarStaleFileExclusion:
+    """load_satstar_catalog must EXCLUDE stale/old-scheme per-exposure satstar
+    files that lack an iteration token (_m<N>_).  A too-broad
+    ``*satstar_catalog.fits`` glob swept in w51 Oct-2025 files
+    (jw06151-o002_..._<N>_o002_crf_satstar_catalog.fits, ~2600 ungated
+    emission-phantom rows each) and ballooned the consolidated catalog ~40x.
+    See project_miri_partialsat_divot.
+    """
+
+    def _write(self, path, nrows):
+        from astropy.table import Table
+        import numpy as np
+        from astropy.coordinates import SkyCoord
+        import astropy.units as u
+        t = Table()
+        t['x_fit'] = np.arange(nrows, dtype=float)
+        t['y_fit'] = np.arange(nrows, dtype=float)
+        t['flux_fit'] = np.full(nrows, 1000.0)
+        t['skycoord_fit'] = SkyCoord(np.linspace(266.5, 266.6, nrows) * u.deg,
+                                     np.linspace(-28.6, -28.7, nrows) * u.deg)
+        t.write(path, overwrite=True)
+
+    def test_stale_untokened_files_excluded(self, tmp_path, monkeypatch):
+        import os
+        from jwst_gc_pipeline.photometry import merge_catalogs as M
+        pdir = tmp_path / 'F770W' / 'pipeline'
+        pdir.mkdir(parents=True)
+        # current-scheme tokened files (2 frames x m6) = real satstars
+        self._write(pdir / 'jw06151002001_02103_00001_mirimage_o002_crf_resbgsub_m6_satstar_catalog.fits', 3)
+        self._write(pdir / 'jw06151002001_02103_00002_mirimage_o002_crf_resbgsub_m6_satstar_catalog.fits', 3)
+        # stale old-scheme untokened file (emission phantoms)
+        self._write(pdir / 'jw06151-o002_t001_miri_f770w_0_o002_crf_satstar_catalog.fits', 500)
+        (tmp_path / 'catalogs').mkdir()
+        out = M.load_satstar_catalog('f770w', target='w51', basepath=str(tmp_path) + '/')
+        assert out is not None
+        # the 500-row stale file is excluded; only the tokened frames feed the
+        # consolidation (the 2 frames share positions -> dedup to 3 unique).
+        assert len(out) == 3, f'expected 3 (tokened+deduped), got {len(out)} -- stale not excluded?'
+
+    def test_only_stale_returns_none(self, tmp_path):
+        from jwst_gc_pipeline.photometry import merge_catalogs as M
+        pdir = tmp_path / 'F770W' / 'pipeline'
+        pdir.mkdir(parents=True)
+        self._write(pdir / 'jw06151-o002_t001_miri_f770w_0_o002_crf_satstar_catalog.fits', 500)
+        (tmp_path / 'catalogs').mkdir()
+        out = M.load_satstar_catalog('f770w', target='w51', basepath=str(tmp_path) + '/')
+        assert out is None  # do not pollute from stale-only dirs
