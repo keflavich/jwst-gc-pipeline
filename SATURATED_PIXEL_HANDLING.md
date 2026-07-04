@@ -8,8 +8,8 @@ diffraction spikes** (PSF fit with the core masked), and optionally from the
 **ramp first read (ZEROFRAME / group-0)**, which saturates at a much higher flux.
 
 NIRCam and MIRI are handled differently — different detector physics (PSF width,
-brighter-fatter, extended emission, edge glow) drive different masking, fitting,
-and vetting. Both share one engine:
+IPC / charge migration, extended emission, edge glow) drive different masking,
+fitting, and vetting. Both share one engine:
 `jwst_gc_pipeline/reduction/saturated_star_finding.py`.
 
 File:line references are current as of this audit (2026-07); treat them as
@@ -38,7 +38,7 @@ starting points, not fixed addresses.
    prominence / core-brightness / concentration (`:1292`).
 8. **Accept gate** — keep the fit on qfit / sidelobe / ssr / snr (`:1018`,
    defaults `:1558`).
-9. **(opt) ZEROFRAME rim recovery** — de-inflate the brighter-fatter rim using
+9. **(opt) ZEROFRAME rim recovery** — de-inflate the charge-migration rim using
    group-0 (`zeroframe_recover_saturated`, `:389`; `--satstar-zeroframe-recover`).
 10. **(opt) Off-FOV stars** — fit bright stars whose *centers* are outside the
     frame but whose spikes reach in; reconcile flux across frames
@@ -225,9 +225,14 @@ flux, trading depth for a brighter saturation ceiling:
 | **(MIRI) first-group DQ** | group-0 GROUPDQ | keep only unrecoverable core | env `MIRI_FIRSTGROUP_SAT_DQ` | MIRI over bright background |
 
 - **`--satstar-zeroframe-recover`** (`zeroframe_recover_saturated`, `:389`):
-  the `_cal` rim is *inflated* above truth by charge migration (brighter-fatter);
-  group-0 (read before migration) gives the true profile. Rewrites inflated rim
-  pixels with `R×group0` (`R` = median `cal/group0` over bright unsaturated px).
+  the `_cal` rim is *inflated* above truth because charge from the saturating core
+  **migrates/blooms outward** during the integration — a near-saturation
+  well-overflow effect, **not** the classical brighter-fatter effect (BFE) and
+  not IPC. Verified on **NIRCam** (sickle F210M: rim `_cal` sits ~15% above the
+  ramp first read, `recovered/cal ≈ 0.85`), so it is not MIRI-specific; it
+  applies to any saturating source with a `_ramp.fits`. Group-0 (read before the
+  migration) gives the true profile → rewrite inflated rim pixels with `R×group0`
+  (`R` = median `cal/group0` over bright unsaturated px).
   Where group-0 itself saturates (deep core), unrecoverable → PSF-model fallback.
 - **`--deblend-satstars`**: in crowded GC fields two bright cores can share one
   DQ blob so the single seed lands *between* the stars. The ZEROFRAME (saturates
@@ -301,7 +306,7 @@ these flag sets would remove the footgun of setting them individually.)*
 | `--desaturated` / `-d` | `desaturated` | False | use the satstar-removed image |
 | `--fit-satstar-outside-fov` / `--no-…` | `fit_satstar_outside_fov` | None (auto) | fit stars whose centers are off-frame (auto: on full-frame, off cutout) |
 | `--deblend-satstars` | `deblend_satstars` | False | ZEROFRAME-deblend touching saturated cores |
-| `--satstar-zeroframe-recover` | `satstar_zeroframe_recover` | False | de-inflate brighter-fatter rim from group-0 |
+| `--satstar-zeroframe-recover` | `satstar_zeroframe_recover` | False | de-inflate charge-migration rim from group-0 |
 | `--satstar-zeroframe-dilate` | `satstar_zeroframe_dilate` | 3 | DQ-mask dilation (px) for rim recovery |
 | `--satstar-artifact-ratio` | `satstar_artifact_ratio` | 1.0 | reject daophot fits dimmer than the satstar wing; 0 = off |
 | `--satstar-artifact-sigK` | `satstar_artifact_sigK` | 3.0 | gate applies where satstar_model > sigK × median(err) |
