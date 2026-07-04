@@ -3878,7 +3878,7 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                            'background (F335M).')
     parser.add_option("--satstar-zeroframe-recover", dest="satstar_zeroframe_recover",
                       default=False, action='store_true',
-                      help=('Recover the brighter-fatter INFLATED rim of the most-'
+                      help=('Recover the charge-migration-INFLATED rim of the most-'
                             'saturated stars from the ramp first read (sibling '
                             '_ramp.fits group-0): replace the saturated rim with '
                             'R*group0 (R=median cal/group0 over bright unsat px) so '
@@ -3888,7 +3888,7 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--satstar-zeroframe-dilate", type='int',
                       dest="satstar_zeroframe_dilate", default=3,
                       help=('Dilation (px) of the DQ-SATURATED mask for the ZEROFRAME '
-                            'rim recovery, to catch brighter-fatter pixels spreading '
+                            'rim recovery, to catch charge-migration pixels spreading '
                             'beyond the hard DQ flag.  Default 3.'),
                       metavar="satstar_zeroframe_dilate")
     parser.add_option('--skip-mosaic-each-exposure-residuals',

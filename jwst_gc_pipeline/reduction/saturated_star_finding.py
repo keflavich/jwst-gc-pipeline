@@ -437,8 +437,10 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
 
     A bright star's DQ-SATURATED region reads wrong in the calibrated frame: the
     deep core is clipped LOW, but the rim is INFLATED above the true flux because
-    charge migrates outward during the integration (brighter-fatter).  Verified
-    on sickle F210M: at the rim the saturated-frame cal sits ~15% ABOVE the ramp
+    charge migrates/blooms outward from the saturating core during the
+    integration (a near-saturation well-overflow effect -- NOT the classical
+    brighter-fatter effect, and not IPC).  Verified
+    on sickle F210M (NIRCam): at the rim the saturated-frame cal sits ~15% ABOVE the ramp
     first read (recovered/cal ~ 0.85).  Subtracting a fixed PSF model from that
     inflated rim leaves a positive ring (the "+7587 dot" the user sees on the
     most-saturated stars).
@@ -475,7 +477,7 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
         Fraction of the group-0 pile-up ceiling (99.9th pct) above which group-0
         is itself treated as saturated (deep core, unrecoverable).
     sat_dilate : int
-        Dilation (px) of the DQ-SATURATED mask to catch the brighter-fatter rim.
+        Dilation (px) of the DQ-SATURATED mask to catch the charge-migration rim.
     infl_tol : float
         In the dilation buffer (not DQ-flagged), only rewrite pixels inflated by
         more than this fraction above R*group0.
@@ -514,7 +516,7 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
         recov_val = R * group0
         # always rewrite genuinely-saturated rim pixels (group-0 clean); in the
         # (non-DQ-flagged) dilation buffer rewrite only BRIGHT (group0>R_g0_min,
-        # so R*group0 is reliable) and INFLATED (brighter-fatter) pixels, leaving
+        # so R*group0 is reliable) and INFLATED (charge-migration) pixels, leaving
         # faint neighbours untouched.
         rim_mask = (sat & g0_clean) | (
             sat_buf & ~sat & g0_clean & np.isfinite(data)
@@ -1649,8 +1651,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         fwhm, fwhm_pix = get_fwhm(header, instrument_replacement='MIRI')
 
     # The accept gates below (sidelobe_resid_sigma, ssr_ratio, qfit) were tuned
-    # on NIRCam, where BFE/IPC make the STPSF first-sidelobe brighter than the
-    # real saturated-star PSF.  MIRI has no such BFE sidelobe and a much wider
+    # on NIRCam, where IPC makes the STPSF first-sidelobe brighter than the
+    # real saturated-star PSF.  MIRI has no such sidelobe mismatch and a much wider
     # diffraction pattern at 7-25um, so the NIRCam-tuned cuts spuriously reject
     # real saturated stars (e.g. ~10 of the 34 F770W hand-selected stars are
     # DQ-saturated and were being dropped here).  Loosen for MIRI.
@@ -2978,7 +2980,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         #                badly over-fit (Sickle 0310g_00002 cyan stars
         #                show ~2× over-subtraction with values < -30).
         #                STPSF first-sidelobe is brighter than the real
-        #                NIRCam PSF for saturated stars (BFE / IPC); a
+        #                NIRCam PSF for saturated stars (IPC); a
         #                fit that matches the wing amplitude leaves a
         #                strong negative residual at this radius.
         #  - ssr_ratio > 1 : the fit makes the cutout WORSE than just
