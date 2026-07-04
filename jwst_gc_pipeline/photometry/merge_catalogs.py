@@ -1774,11 +1774,15 @@ def load_satstar_catalog(filtername, target='brick',
             _rcur = float(_satstar_dedup_radius().to(u.arcsec).value)
             _rcache = float(cached.meta.get('SATDDUPR', 0.15))
             if (int(cached.meta.get('NSATSRC', -1)) == len(fallback)
-                    and abs(_rcache - _rcur) < 1e-6):
+                    and abs(_rcache - _rcur) < 1e-6
+                    and str(cached.meta.get('SATDDALG', '')) == _SATSTAR_DEDUP_ALG):
                 print(f"Using consolidated satstar catalog {cache} "
                       f"(cache fresh vs {len(fallback)} per-exposure catalogs, "
-                      f"dedup radius {_rcur}\")")
+                      f"dedup radius {_rcur}\", alg {_SATSTAR_DEDUP_ALG})")
                 return cached
+            if str(cached.meta.get('SATDDALG', '')) != _SATSTAR_DEDUP_ALG:
+                print(f"Rebuilding satstar cache {cache}: dedup algorithm changed "
+                      f"{cached.meta.get('SATDDALG', 'legacy')!r} -> {_SATSTAR_DEDUP_ALG!r}")
             if abs(_rcache - _rcur) >= 1e-6:
                 print(f"Rebuilding satstar cache {cache}: dedup radius changed "
                       f"{_rcache}\" -> {_rcur}\"")
@@ -1798,11 +1802,12 @@ def load_satstar_catalog(filtername, target='brick',
     # duplicate rows at one position (sickle cutouts showed a star 3-8x), and
     # the merged-cat residual subtracts it N times.  Collapse to one row per
     # physical star (keep the brightest as representative).
-    deduped = _dedup_satstar_catalog(combined)
+    deduped = _dedup_satstar_catalog(combined, target=target)
     # record how many per-exposure catalogs this cache was built from, so a
     # later read can detect (and rebuild) when more have since appeared.
     deduped.meta['NSATSRC'] = len(fallback)
     deduped.meta['SATDDUPR'] = float(_satstar_dedup_radius().to(u.arcsec).value)
+    deduped.meta['SATDDALG'] = _SATSTAR_DEDUP_ALG
     try:
         os.makedirs(os.path.dirname(cache), exist_ok=True)
         # write to a temp sibling + atomic rename so a concurrent reader never
@@ -1814,6 +1819,14 @@ def load_satstar_catalog(filtername, target='brick',
     except OSError as ex:
         print(f"Could not write consolidated satstar cache {cache}: {ex}")
     return deduped
+
+
+# Bump when _dedup_satstar_catalog's algorithm changes so the consolidated
+# satstar cache (keyed by NSATSRC + SATDDUPR) rebuilds instead of silently
+# serving results from the previous algorithm.  'fp2' = footprint-scaled merge
+# = footprint-scaled flux-consistent merge (default); opt-in component-anchor
+# merge (SATSTAR_FP_USE_ANCHOR) and big-footprint reject (SATSTAR_FP_REJECT).
+_SATSTAR_DEDUP_ALG = 'fp3'
 
 
 def _satstar_dedup_radius():
@@ -1831,17 +1844,37 @@ def _satstar_dedup_radius():
     return float(os.environ.get('SATSTAR_DEDUP_ARCSEC', 0.15)) * u.arcsec
 
 
-def _dedup_satstar_catalog(tbl, radius=None):
+def _dedup_satstar_catalog(tbl, radius=None, target=None):
     """Collapse repeated per-frame satstar fits of the same physical star into
     one row (the brightest), so downstream merging doesn't duplicate them.
 
     Greedy brightest-first spatial dedup: process stars in descending flux and
-    keep one unless it falls within ``radius`` of an already-kept (brighter)
-    star.  Vectorized with ``search_around_sky`` (one O(N log N) KD-tree query
-    for all within-radius pairs) instead of rebuilding a SkyCoord of the kept
-    set inside the loop -- the old O(N^2) form took ~hours on the ~12k
-    per-exposure sickle F210M satstar pile-up.  Output is identical (same kept
-    set, original row order).
+    keep one unless it falls within a merge radius of an already-kept (brighter)
+    star.  Vectorized with ``search_around_sky`` (one O(N log N) KD-tree query).
+
+    FOOTPRINT-SCALED MERGE (fix 1).  A bright saturated star's per-frame satstar
+    position scatters by ~the saturated-core radius r_sat (the core is NaN-masked;
+    the centroid comes from the wings/DQ region).  A fixed 0.15" radius leaves the
+    scatter of a LARGE footprint un-merged: W51 F480M's extended-emission saturated
+    core (~370 px, r_sat~0.7") produced ~5 separate "stars" from one blob.  When
+    the per-exposure catalog carries ``sat_area`` we scale the merge radius to
+    r_sat (clamped to [base, SATSTAR_FP_MERGE_MAX_ARCSEC]) so those collapse to one,
+    while COMPACT stars keep the tight base radius (distinct close stars stay
+    split).  A footprint-scale neighbour is absorbed only if its flux is CONSISTENT
+    with the kept star (ratio <= SATSTAR_FP_FLUXRATIO) -- so a genuinely different
+    neighbouring star at the same separation is NOT swallowed.  Same-position dups
+    (within base radius) are absorbed regardless of flux, as before.
+
+    BIG-FOOTPRINT INCONSISTENT REJECT (fix 2, extended-emission targets only).
+    When >= SATSTAR_FP_REJECT_MIN_N comparable-brightness satstars pile onto ONE
+    large saturated footprint yet disagree in flux by > SATSTAR_FP_REJECT_RATIO,
+    they are unstable PSF fits on bright EXTENDED EMISSION, not a star -> drop the
+    whole pile.  Gated to the extended-emission targets (w51/sickle/wd2) and
+    guarded to comparable-brightness members so a real star + faint junk is never
+    dropped.  Env SATSTAR_FP_REJECT (default 1) toggles it.
+
+    Backward-compatible: without a ``sat_area`` column every source uses the base
+    radius and fix 2 is inert, reproducing the old brightest-first behaviour.
     """
     if radius is None:
         radius = _satstar_dedup_radius()
@@ -1857,26 +1890,110 @@ def _dedup_satstar_catalog(tbl, radius=None):
         return tbl[[]]
     sc = coords[fin_idx]
     fl = flux[fin_idx]
-    # all within-radius neighbor pairs among the finite sources (both directions,
-    # plus self-pairs, which we drop)
-    i1, i2, _, _ = search_around_sky(sc, sc, radius)
+    base_as = float(radius.to(u.arcsec).value)
+
+    # --- footprint-scaled merge radius (fix 1) ---
+    pixscale = float(os.environ.get('SATSTAR_PIXSCALE_ARCSEC', 0.063))
+    max_as = float(os.environ.get('SATSTAR_FP_MERGE_MAX_ARCSEC', 0.8))
+    frmax = float(os.environ.get('SATSTAR_FP_FLUXRATIO', 2.0))
+    if 'sat_area' in tbl.colnames:
+        area = np.asarray(tbl['sat_area'], dtype=float)[fin_idx]
+        rsat_as = np.where(area > 0, np.sqrt(np.clip(area, 0, None) / np.pi) * pixscale, 0.0)
+        merge_r = np.clip(rsat_as, base_as, max_as)
+    else:
+        rsat_as = np.zeros(len(fin_idx))
+        merge_r = np.full(len(fin_idx), base_as)
+    query_r = float(np.max(merge_r)) if len(merge_r) else base_as
+
+    # --- component-identity anchor (primary merge key) ---
+    # A footprint-scale neighbour is the SAME physical saturated source when it
+    # shares the same DQ-SATURATED component; the component's bbox-centre sky
+    # anchor (sat_com_ra/dec, written by the finder) is stable across exposures
+    # even when the fitted position/flux is not.  Merge same-anchor neighbours
+    # regardless of flux (collapses an extended-emission blob seen N times), and
+    # KEEP anchor-distinct neighbours even at the same separation (preserves a
+    # real crowded cluster of separate saturated cores).  Falls back to
+    # flux-consistency where the anchor is missing (forced seeds / legacy caches).
+    comp_as = float(os.environ.get('SATSTAR_FP_COMP_ARCSEC', 0.2))
+    if 'sat_com_ra' in tbl.colnames and 'sat_com_dec' in tbl.colnames:
+        anc_ra = np.asarray(tbl['sat_com_ra'], dtype=float)[fin_idx]
+        anc_dec = np.asarray(tbl['sat_com_dec'], dtype=float)[fin_idx]
+        has_anchor = np.isfinite(anc_ra) & np.isfinite(anc_dec)
+    else:
+        anc_ra = anc_dec = None
+        has_anchor = np.zeros(len(fin_idx), dtype=bool)
+
+    # Default merge test is FLUX-CONSISTENCY (fix 1): a footprint-scale neighbour
+    # is the same physical star only if its flux agrees.  The saturated-component
+    # sky anchor was also tried (SATSTAR_FP_USE_ANCHOR=1) but on W51 the extended
+    # blob's bbox/COM centre wanders ~0.3" frame-to-frame -- as far as a real
+    # crowded cluster's stars are separated -- so no anchor radius collapses the
+    # blob without also fusing real cluster stars; it is left opt-in for other
+    # fields, not the default.
+    _use_anchor = bool(int(os.environ.get('SATSTAR_FP_USE_ANCHOR', 0)))
+
+    def _same_component(a, b):
+        if _use_anchor and has_anchor[a] and has_anchor[b]:
+            dra = (anc_ra[a] - anc_ra[b]) * np.cos(np.radians(anc_dec[a]))
+            dsep = np.hypot(dra, anc_dec[a] - anc_dec[b]) * 3600.0
+            return dsep <= comp_as
+        # flux-consistency (default / anchor-missing)
+        return max(fl[a], fl[b]) / max(min(fl[a], fl[b]), 1e-9) <= frmax
+
+    # --- big-footprint inconsistent reject (fix 2, OFF by default) ---
+    # Superseded by the component-identity merge above (flux-inconsistency cannot
+    # distinguish a real crowded cluster from an extended-emission blob -- it
+    # deleted the real W51 cluster).  Kept behind SATSTAR_FP_REJECT for
+    # diagnostics; default 0.
+    _ext_target = (target is not None
+                   and any(t in str(target).lower() for t in ('w51', 'sickle', 'wd2')))
+    reject_on = bool(int(os.environ.get('SATSTAR_FP_REJECT', 0))) and _ext_target
+    big_fp = float(os.environ.get('SATSTAR_FP_BIG_ARCSEC', 0.4))
+    reject_ratio = float(os.environ.get('SATSTAR_FP_REJECT_RATIO', 2.0))
+    reject_min_n = int(os.environ.get('SATSTAR_FP_REJECT_MIN_N', 3))
+    reject_bright_frac = float(os.environ.get('SATSTAR_FP_REJECT_BRIGHTFRAC', 0.4))
+
+    # neighbour pairs + separations, queried at the largest merge radius in play
+    i1, i2, sep2d, _ = search_around_sky(sc, sc, query_r * u.arcsec)
+    sepas = sep2d.to(u.arcsec).value
     nbrs = [[] for _ in range(len(fin_idx))]
-    for a, b in zip(i1, i2):
+    for a, b, s in zip(i1, i2, sepas):
         if a != b:
-            nbrs[a].append(b)
+            nbrs[a].append((int(b), float(s)))
+
     suppressed = np.zeros(len(fin_idx), dtype=bool)
     kept_local = []
+    n_reject_rows = 0
     for i in np.argsort(-fl):                # brightest first
         if suppressed[i]:
             continue
+        R_i = merge_r[i]
+        # position-group: unclaimed neighbours within this footprint radius
+        pg = [i] + [b for (b, s) in nbrs[i] if s <= R_i and not suppressed[b]]
+        if reject_on and rsat_as[i] >= big_fp and len(pg) >= reject_min_n:
+            pgfl = fl[pg]
+            bright = pgfl[pgfl >= reject_bright_frac * float(pgfl.max())]
+            if (len(bright) >= reject_min_n
+                    and float(bright.max()) / max(float(bright.min()), 1e-9) > reject_ratio):
+                # unstable extended-emission satstar pile -> drop the whole group
+                for j in pg:
+                    suppressed[j] = True
+                n_reject_rows += len(pg)
+                continue
         kept_local.append(i)
-        for j in nbrs[i]:                    # drop everything within radius of a kept star
-            suppressed[j] = True
+        for (b, s) in nbrs[i]:              # absorb same-position dups + same-component nbrs
+            if suppressed[b]:
+                continue
+            if s <= base_as or (s <= R_i and _same_component(i, b)):
+                suppressed[b] = True
+        suppressed[i] = True
     kept = fin_idx[kept_local]
     n_drop = int(finite.sum()) - len(kept)
     if n_drop:
         print(f"  satstar dedup: {int(finite.sum())} -> {len(kept)} unique "
-              f"(dropped {n_drop} per-frame duplicates within {radius})")
+              f"(merged {n_drop - n_reject_rows} per-frame duplicates within "
+              f"footprint radius; rejected {n_reject_rows} big-footprint "
+              f"extended-emission pile rows)")
     return tbl[np.sort(kept)]
 
 
