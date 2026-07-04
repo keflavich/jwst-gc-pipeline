@@ -3285,6 +3285,34 @@ def correct_dq_first_group_saturation(dq, filename, instrument=''):
     return dq
 
 
+def truly_lost_saturated_mask(dq):
+    """Pixel mask of TRULY-LOST saturation: ``SATURATED & DO_NOT_USE``.
+
+    A pixel flagged ``SATURATED`` only in a LATE ramp group still has a good
+    group 0, so the ramp fit recovers a valid rate and it carries NO
+    ``DO_NOT_USE``; only pixels the fit could not recover (0 good groups) carry
+    ``DO_NOT_USE``.  The cal/crf ``SATURATED`` flag alone marks *any-group*
+    saturation and so over-masks recovered data -- which in the daophot path
+    both discards the recovered flux and lets ``_filter_near_saturation`` veto
+    real point sources on bright emission.  Restricting to the truly-lost core
+    keeps recovered bright pixels fittable and only vetoes around genuinely
+    unrecoverable cores.
+
+    Falls back to the full ``SATURATED`` mask when NO saturated pixel carries
+    ``DO_NOT_USE`` (synthetic frames / older products without per-group DQ
+    propagated).  Gate off with ``SATSTAR_REQUIRE_DO_NOT_USE=0``.  This is the
+    daophot-path twin of the ``find_saturated_stars`` finder restriction, so
+    both channels agree on what "saturated" means; instrument-agnostic, on by
+    default.
+    """
+    SAT = dqflags.pixel['SATURATED']
+    sat = (dq & SAT) > 0
+    if not int(os.environ.get('SATSTAR_REQUIRE_DO_NOT_USE', 1)):
+        return sat
+    truly = sat & ((dq & dqflags.pixel['DO_NOT_USE']) > 0)
+    return truly if np.any(truly) else sat
+
+
 def _find_zeroframe_for(filename):
     """Locate and load the ZEROFRAME (frame zero) for a cal/crf ``filename``.
 
