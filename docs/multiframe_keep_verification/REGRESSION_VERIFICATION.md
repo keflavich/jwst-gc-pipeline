@@ -7,18 +7,26 @@ the recover tier + multi-frame-confirmation keep (Hosek `ndet≥3` style) added 
 ## What & why
 
 Benchmarking the Arches F212N NRCA4 catalog against Matt Hosek's UCLA pipeline
-showed we were ~1–2 mag shallower. Investigation established the deficit is **not
-detection** — our per-frame detection already finds 68% of Hosek's stars (a
-DAOStarFinder pass on the deep coadd is *worse*, 43%, from crowding). The loss is
-**survival**: the first extended-emission vetting drops faint *detected* stars
-(completeness 0.64 → 0.42). Hosek's depth edge is that he keeps faint marginal
-stars via `ndet≥3`; we were dropping them per-vetting on single-catalog `qfit`/`snr`.
+showed we were ~1–2 mag shallower. Investigation split the deficit in two: a
+**survival** loss (fixable here) and a **detection** floor (residual). Our
+per-frame detection already finds ~68% of Hosek's stars (a DAOStarFinder pass on
+the deep coadd is *worse*, 43%, from crowding), but the first extended-emission
+vetting then drops faint *detected* stars (completeness 0.64 → 0.42). Hosek keeps
+those faint marginal stars via `ndet≥3`; we were dropping them per-vetting on
+single-catalog `qfit`/`snr`. This change recovers the survival loss. The ~32% of
+Hosek we never detect (faint / crowded / spike-blocked) is the detection floor and
+is NOT addressed here — see the remaining-miss anatomy at the end.
 
 The fix (opt-in, default OFF): keep any source with `nmatch ≥ N` and
-`qfit ≤ cap`, regardless of the qfit/snr cuts. Because emission is fixed on-sky
-and also repeats across dithers, an optional **position-stability guard**
-(`--manual-ext-nmatch-confirm-maxpos-mas`) requires a tight across-exposure
-centroid (real stars ~3–7 mas; emission-knot daofind centroids wander).
+`qfit ≤ cap`, regardless of the qfit/snr cuts. An optional position-stability
+guard (`--manual-ext-nmatch-confirm-maxpos-mas`) rejects position-*unstable*
+spurious (cosmic-ray / noise coincidences). **It does NOT reject extended
+emission** — emission is fixed on-sky, so an emission-knot daofind bump also
+repeats across dithers *with a stable centroid* and passes the guard. So this is
+a **star-field tool**: a clean win on star-dominated fields (Arches), but it
+re-admits emission on emission-dominated fields (see the cutout section) and must
+be left OFF there (its default). This scope limit is the honest result of the
+verification below.
 
 ## Depth benchmark vs Hosek (Arches F212N NRCA4, 74,896 Hosek sources)
 
@@ -54,8 +62,10 @@ daofind (red) is worse than per-frame, so detecting harder does not help.
 - Recover tier: no-op default; admit blended real; reject emission/low-snr/near-satstar;
   sloped-prominence admit/reject on a synthetic i2d; persisted `prominence`/`peak_sb` columns.
 - Multi-frame keep (5 new): default-off; admit faint multi-frame star; respect qfit
-  ceiling; require ≥N frames; **position guard rejects a wandering (100 mas) source and
-  keeps the tight (3 mas) one**.
+  ceiling; require ≥N frames; position guard rejects a synthetic wandering (100 mas)
+  source and keeps the tight (3 mas) one. (Note: this exercises the guard mechanism;
+  it does NOT imply emission is rejected — real extended emission has a *stable*
+  centroid, see the cutout section.)
 
 ### Full photometry suite
 `pytest jwst_gc_pipeline/photometry/tests/` → **205 passed** (0 failures). The
