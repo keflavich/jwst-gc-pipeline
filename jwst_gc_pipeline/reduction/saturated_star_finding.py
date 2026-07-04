@@ -1577,6 +1577,15 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
 
     index = 0
     print(f"Found {nsource} saturated sources to process", flush=True)
+    # Per-component bounding boxes (one pass over the label image) -> a STABLE
+    # sky anchor per saturated component.  The fitted satstar position of a large
+    # component (extended-emission core) scatters by ~r_sat across exposures, so
+    # the consolidation dedup cannot tell "one blob seen N times" from "N stars";
+    # the component bbox-centre barely moves frame-to-frame, so tagging each
+    # per-exposure satstar with it lets the dedup merge same-component detections
+    # regardless of the (unstable) fitted flux/position.
+    _comp_slices = (ndimage.find_objects(sources)
+                    if sources is not None and getattr(sources, 'size', 0) else [])
     for ii, src in enumerate(source_records):
         # get the center of pixels with this label
 
@@ -1702,8 +1711,17 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # Compute sat_area once; used by both adaptive mask buffer and adaptive bkg annulus.
         if not forced_source:
             src_sat_area = int(sum_labels(saturated, labels=sources, index=src_label))
+            # stable component anchor = bbox centre of this labeled component
+            _sl = (_comp_slices[src_label - 1]
+                   if 0 < src_label <= len(_comp_slices) else None)
+            if _sl is not None and _sl[0] is not None:
+                src_comp_cy = 0.5 * (_sl[0].start + _sl[0].stop - 1)
+                src_comp_cx = 0.5 * (_sl[1].start + _sl[1].stop - 1)
+            else:
+                src_comp_cy = src_comp_cx = np.nan
         else:
             src_sat_area = None
+            src_comp_cy = src_comp_cx = np.nan
 
         # Brightness-dependent mask dilation: scale buffer with saturated area
         # so deeply saturated sources exclude more of the non-linear fringe.
@@ -2244,6 +2262,21 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # unmeasured seed.
         result['sat_area'] = np.full(
             len(result), int(src_sat_area) if src_sat_area else -1, dtype=int)
+
+        # stable saturated-component sky anchor (bbox centre) -> lets the
+        # consolidation dedup merge same-component per-frame detections even when
+        # the fitted position/flux is unstable (see _comp_slices note above).
+        if np.isfinite(src_comp_cx) and np.isfinite(src_comp_cy):
+            _canchor = ww.pixel_to_world(float(src_comp_cx), float(src_comp_cy))
+            if isinstance(_canchor, SkyCoord):
+                result['sat_com_ra'] = np.full(len(result), float(_canchor.ra.deg))
+                result['sat_com_dec'] = np.full(len(result), float(_canchor.dec.deg))
+            else:
+                result['sat_com_ra'] = np.full(len(result), np.nan)
+                result['sat_com_dec'] = np.full(len(result), np.nan)
+        else:
+            result['sat_com_ra'] = np.full(len(result), np.nan)
+            result['sat_com_dec'] = np.full(len(result), np.nan)
 
         result['xcentroid'] = result['x_fit'] + x0
         result['ycentroid'] = result['y_fit'] + y0

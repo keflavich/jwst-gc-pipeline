@@ -1823,9 +1823,10 @@ def load_satstar_catalog(filtername, target='brick',
 
 # Bump when _dedup_satstar_catalog's algorithm changes so the consolidated
 # satstar cache (keyed by NSATSRC + SATDDUPR) rebuilds instead of silently
-# serving results from the previous algorithm.  'fp1' = footprint-scaled merge +
-# big-footprint inconsistent reject.
-_SATSTAR_DEDUP_ALG = 'fp1'
+# serving results from the previous algorithm.  'fp2' = footprint-scaled merge
+# keyed on the saturated-component sky anchor (component-identity), with a
+# flux-consistency fallback and an opt-in big-footprint reject.
+_SATSTAR_DEDUP_ALG = 'fp2'
 
 
 def _satstar_dedup_radius():
@@ -1904,10 +1905,40 @@ def _dedup_satstar_catalog(tbl, radius=None, target=None):
         merge_r = np.full(len(fin_idx), base_as)
     query_r = float(np.max(merge_r)) if len(merge_r) else base_as
 
-    # --- big-footprint inconsistent reject (fix 2) ---
+    # --- component-identity anchor (primary merge key) ---
+    # A footprint-scale neighbour is the SAME physical saturated source when it
+    # shares the same DQ-SATURATED component; the component's bbox-centre sky
+    # anchor (sat_com_ra/dec, written by the finder) is stable across exposures
+    # even when the fitted position/flux is not.  Merge same-anchor neighbours
+    # regardless of flux (collapses an extended-emission blob seen N times), and
+    # KEEP anchor-distinct neighbours even at the same separation (preserves a
+    # real crowded cluster of separate saturated cores).  Falls back to
+    # flux-consistency where the anchor is missing (forced seeds / legacy caches).
+    comp_as = float(os.environ.get('SATSTAR_FP_COMP_ARCSEC', 0.2))
+    if 'sat_com_ra' in tbl.colnames and 'sat_com_dec' in tbl.colnames:
+        anc_ra = np.asarray(tbl['sat_com_ra'], dtype=float)[fin_idx]
+        anc_dec = np.asarray(tbl['sat_com_dec'], dtype=float)[fin_idx]
+        has_anchor = np.isfinite(anc_ra) & np.isfinite(anc_dec)
+    else:
+        anc_ra = anc_dec = None
+        has_anchor = np.zeros(len(fin_idx), dtype=bool)
+
+    def _same_component(a, b):
+        if has_anchor[a] and has_anchor[b]:
+            dra = (anc_ra[a] - anc_ra[b]) * np.cos(np.radians(anc_dec[a]))
+            dsep = np.hypot(dra, anc_dec[a] - anc_dec[b]) * 3600.0
+            return dsep <= comp_as
+        # no anchor -> flux-consistency fallback
+        return max(fl[a], fl[b]) / max(min(fl[a], fl[b]), 1e-9) <= frmax
+
+    # --- big-footprint inconsistent reject (fix 2, OFF by default) ---
+    # Superseded by the component-identity merge above (flux-inconsistency cannot
+    # distinguish a real crowded cluster from an extended-emission blob -- it
+    # deleted the real W51 cluster).  Kept behind SATSTAR_FP_REJECT for
+    # diagnostics; default 0.
     _ext_target = (target is not None
                    and any(t in str(target).lower() for t in ('w51', 'sickle', 'wd2')))
-    reject_on = bool(int(os.environ.get('SATSTAR_FP_REJECT', 1))) and _ext_target
+    reject_on = bool(int(os.environ.get('SATSTAR_FP_REJECT', 0))) and _ext_target
     big_fp = float(os.environ.get('SATSTAR_FP_BIG_ARCSEC', 0.4))
     reject_ratio = float(os.environ.get('SATSTAR_FP_REJECT_RATIO', 2.0))
     reject_min_n = int(os.environ.get('SATSTAR_FP_REJECT_MIN_N', 3))
@@ -1941,11 +1972,10 @@ def _dedup_satstar_catalog(tbl, radius=None, target=None):
                 n_reject_rows += len(pg)
                 continue
         kept_local.append(i)
-        for (b, s) in nbrs[i]:              # absorb dups + flux-consistent footprint nbrs
+        for (b, s) in nbrs[i]:              # absorb same-position dups + same-component nbrs
             if suppressed[b]:
                 continue
-            if s <= base_as or (
-                    s <= R_i and max(fl[i], fl[b]) / max(min(fl[i], fl[b]), 1e-9) <= frmax):
+            if s <= base_as or (s <= R_i and _same_component(i, b)):
                 suppressed[b] = True
         suppressed[i] = True
     kept = fin_idx[kept_local]
