@@ -1,11 +1,11 @@
-"""The satstar finder must seed on TRULY-LOST cores, not frame0-recovered pixels.
+"""Satstar SEEDING vs FIT-MASKING are decoupled.
 
 A pixel flagged DQ-SATURATED but with a good group 0 is recovered by the ramp fit
-(valid rate, NO DO_NOT_USE); only 0-good-group pixels carry DO_NOT_USE.  The finder
-restricts to SATURATED & DO_NOT_USE (the compact lost core) and drops scattered
-sub-core fragments, so bright RECOVERED emission never seeds a phantom satstar.
-Falls back to the raw SATURATED mask when no pixel carries DO_NOT_USE (synthetic
-frames without per-group DQ), preserving legacy behaviour.
+(valid rate, NO DO_NOT_USE).  Such RECOVERED-saturated stars must still be SEEDED
+(daofind cannot fit their saturated cores), so seeding uses the full SATURATED
+mask by default.  The truly-lost (SATURATED & DO_NOT_USE) distinction is applied
+to the FIT MASK, not seeding.  The stricter truly-lost SEED restriction remains
+available opt-in via SATSTAR_SEED_REQUIRE_DO_NOT_USE=1.
 """
 import numpy as np
 from astropy.io import fits
@@ -31,53 +31,43 @@ def _blob(dq, y, x, r, flag):
     dq[(np.hypot(yy - y, xx - x) <= r)] |= flag
 
 
-def test_recovered_saturation_not_seeded(monkeypatch):
-    monkeypatch.setenv('SATSTAR_REQUIRE_DO_NOT_USE', '1')
-    dq = np.zeros((80, 80), np.uint32)
-    # a real truly-lost core elsewhere activates the restriction (real frames
-    # always carry some DO_NOT_USE)
-    _blob(dq, 15, 15, 3, SAT | DNU)
-    # big SATURATED-but-RECOVERED blob (no DO_NOT_USE) -> must NOT seed
-    _blob(dq, 55, 55, 8, SAT)
-    _, _, coms = find_saturated_stars(_frame(dq))
-    assert len(coms) == 1                    # only the truly-lost core
-    cy, cx = coms[0]
-    assert abs(cy - 15) < 2 and abs(cx - 15) < 2
-
-
-def test_truly_lost_compact_core_seeded(monkeypatch):
-    monkeypatch.setenv('SATSTAR_REQUIRE_DO_NOT_USE', '1')
+def test_recovered_saturation_is_seeded_by_default():
+    # a RECOVERED-saturated star (SATURATED, no DO_NOT_USE) must still be seeded
     dq = np.zeros((60, 60), np.uint32)
-    _blob(dq, 30, 30, 8, SAT)            # recovered wings
-    _blob(dq, 30, 30, 3, SAT | DNU)     # compact truly-lost core (>=5px)
+    _blob(dq, 30, 30, 6, SAT)
     _, _, coms = find_saturated_stars(_frame(dq))
     assert len(coms) == 1
     cy, cx = coms[0]
     assert abs(cy - 30) < 2 and abs(cx - 30) < 2
 
 
-def test_scattered_fragments_not_seeded(monkeypatch):
-    monkeypatch.setenv('SATSTAR_REQUIRE_DO_NOT_USE', '1')
+def test_truly_lost_core_seeded_by_default():
     dq = np.zeros((60, 60), np.uint32)
-    _blob(dq, 30, 30, 10, SAT)                       # big recovered blob
-    for (y, x) in [(25, 25), (33, 34), (28, 36), (35, 27)]:
-        dq[y, x] |= (SAT | DNU)                      # isolated 1px truly-lost fragments
+    _blob(dq, 30, 30, 6, SAT)
+    _blob(dq, 30, 30, 3, SAT | DNU)
     _, _, coms = find_saturated_stars(_frame(dq))
-    assert len(coms) == 0                            # min-core gate drops all
+    assert len(coms) == 1
 
 
-def test_fallback_without_do_not_use(monkeypatch):
-    # no DO_NOT_USE anywhere -> fallback to SATURATED mask, legacy behaviour
-    monkeypatch.setenv('SATSTAR_REQUIRE_DO_NOT_USE', '1')
+def test_opt_in_restriction_drops_recovered(monkeypatch):
+    # SATSTAR_SEED_REQUIRE_DO_NOT_USE=1: a real truly-lost core elsewhere activates
+    # the restriction; the recovered-only blob is then NOT seeded.
+    monkeypatch.setenv('SATSTAR_SEED_REQUIRE_DO_NOT_USE', '1')
+    dq = np.zeros((80, 80), np.uint32)
+    _blob(dq, 15, 15, 3, SAT | DNU)     # truly-lost core
+    _blob(dq, 55, 55, 6, SAT)            # recovered-only -> dropped under restriction
+    _, _, coms = find_saturated_stars(_frame(dq))
+    assert len(coms) == 1
+    cy, cx = coms[0]
+    assert abs(cy - 15) < 2 and abs(cx - 15) < 2
+
+
+def test_opt_in_restriction_min_core(monkeypatch):
+    # under the restriction, scattered <min-core truly-lost fragments are dropped
+    monkeypatch.setenv('SATSTAR_SEED_REQUIRE_DO_NOT_USE', '1')
     dq = np.zeros((60, 60), np.uint32)
-    _blob(dq, 30, 30, 5, SAT)
+    _blob(dq, 30, 30, 8, SAT)                        # recovered blob
+    for (y, x) in [(25, 25), (33, 34), (28, 36)]:
+        dq[y, x] |= (SAT | DNU)                      # 1px fragments
     _, _, coms = find_saturated_stars(_frame(dq))
-    assert len(coms) == 1                            # seeded via fallback
-
-
-def test_disable_via_env(monkeypatch):
-    monkeypatch.setenv('SATSTAR_REQUIRE_DO_NOT_USE', '0')
-    dq = np.zeros((60, 60), np.uint32)
-    _blob(dq, 30, 30, 8, SAT)                        # recovered, but restriction OFF
-    _, _, coms = find_saturated_stars(_frame(dq))
-    assert len(coms) == 1                            # legacy: seeds on raw SATURATED
+    assert len(coms) == 0
