@@ -579,6 +579,33 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
             skipped = set(asn_file_search) - set(nircam_asn_files)
             print(f"Filtered out non-NIRCam asn files: {sorted(skipped)}")
         asn_file_search = nircam_asn_files
+        # Disambiguate by effective bandpass.  MAST names two-element products
+        # alphabetically as 'nircam_{a}-{b}' (e.g. clear-f444w, f405n-f444w,
+        # f444w-f470n), so a substring match on the filter name pulls in the
+        # narrowband products that merely use this filter as a blocker.  Keep
+        # only the asn whose effective band (pupil narrow/medium band if present,
+        # else the wide filter) equals the filter we are reducing.  Additive:
+        # fall back to the legacy sorted()[-1] pick if this leaves 0 or >1.
+        def _asn_effective_band(asn_path):
+            try:
+                with open(asn_path) as _fh:
+                    prod = json.load(_fh)['products'][0]['name']
+            except (json.JSONDecodeError, KeyError, IndexError, OSError):
+                return None
+            tail = prod.split('nircam_')[-1]
+            toks = [t.upper() for t in tail.split('-') if t]
+            ftoks = [t for t in toks if t.startswith('F') and t[1:2].isdigit()]
+            if len(ftoks) == 1:
+                return ftoks[0]
+            narrow = [t for t in ftoks if t.endswith('N') or t.endswith('M')]
+            if len(narrow) == 1:
+                return narrow[0]
+            return None
+        band_match = [a for a in asn_file_search
+                      if _asn_effective_band(a) == filtername.upper()]
+        if len(band_match) == 1:
+            asn_file_search = band_match
+            print(f"Selected asn by effective band {filtername}: {band_match[0]}")
         if len(asn_file_search) == 1:
             asn_file = asn_file_search[0]
         elif len(asn_file_search) > 1:
