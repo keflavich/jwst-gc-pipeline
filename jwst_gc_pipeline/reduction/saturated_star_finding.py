@@ -2234,6 +2234,17 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
 
         result['outside_fov_seed'] = np.full(len(result), forced_source, dtype=bool)
 
+        # Saturated-footprint area (px) of the DQ-SATURATED component this seed
+        # came from.  Carried into the per-exposure catalog so the consolidation
+        # dedup can scale its merge radius to the footprint: a bright star's
+        # per-frame satstar position scatters ~r_sat, so a LARGE footprint (e.g.
+        # a saturated core embedded in extended emission, ~370px -> r~11px) needs
+        # a ~0.7" merge radius to collapse to one row, while compact stars keep a
+        # tight radius (so distinct close stars are not fused).  -1 == forced /
+        # unmeasured seed.
+        result['sat_area'] = np.full(
+            len(result), int(src_sat_area) if src_sat_area else -1, dtype=int)
+
         result['xcentroid'] = result['x_fit'] + x0
         result['ycentroid'] = result['y_fit'] + y0
         x_centroid = np.asarray(result['xcentroid'], dtype=float)
