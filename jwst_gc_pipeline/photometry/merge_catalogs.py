@@ -1824,9 +1824,9 @@ def load_satstar_catalog(filtername, target='brick',
 # Bump when _dedup_satstar_catalog's algorithm changes so the consolidated
 # satstar cache (keyed by NSATSRC + SATDDUPR) rebuilds instead of silently
 # serving results from the previous algorithm.  'fp2' = footprint-scaled merge
-# keyed on the saturated-component sky anchor (component-identity), with a
-# flux-consistency fallback and an opt-in big-footprint reject.
-_SATSTAR_DEDUP_ALG = 'fp2'
+# = footprint-scaled flux-consistent merge (default); opt-in component-anchor
+# merge (SATSTAR_FP_USE_ANCHOR) and big-footprint reject (SATSTAR_FP_REJECT).
+_SATSTAR_DEDUP_ALG = 'fp3'
 
 
 def _satstar_dedup_radius():
@@ -1923,12 +1923,21 @@ def _dedup_satstar_catalog(tbl, radius=None, target=None):
         anc_ra = anc_dec = None
         has_anchor = np.zeros(len(fin_idx), dtype=bool)
 
+    # Default merge test is FLUX-CONSISTENCY (fix 1): a footprint-scale neighbour
+    # is the same physical star only if its flux agrees.  The saturated-component
+    # sky anchor was also tried (SATSTAR_FP_USE_ANCHOR=1) but on W51 the extended
+    # blob's bbox/COM centre wanders ~0.3" frame-to-frame -- as far as a real
+    # crowded cluster's stars are separated -- so no anchor radius collapses the
+    # blob without also fusing real cluster stars; it is left opt-in for other
+    # fields, not the default.
+    _use_anchor = bool(int(os.environ.get('SATSTAR_FP_USE_ANCHOR', 0)))
+
     def _same_component(a, b):
-        if has_anchor[a] and has_anchor[b]:
+        if _use_anchor and has_anchor[a] and has_anchor[b]:
             dra = (anc_ra[a] - anc_ra[b]) * np.cos(np.radians(anc_dec[a]))
             dsep = np.hypot(dra, anc_dec[a] - anc_dec[b]) * 3600.0
             return dsep <= comp_as
-        # no anchor -> flux-consistency fallback
+        # flux-consistency (default / anchor-missing)
         return max(fl[a], fl[b]) / max(min(fl[a], fl[b]), 1e-9) <= frmax
 
     # --- big-footprint inconsistent reject (fix 2, OFF by default) ---

@@ -36,19 +36,20 @@ def _tbl(dec_offsets_arcsec, fluxes, sat_area, anchor_dec_arcsec=None):
     return t
 
 
-def test_same_component_merges_despite_flux_scatter():
-    # one extended blob: 3 detections, WILDLY different flux, but all share the
-    # same component anchor -> collapse to ONE (this is the W51 extended source)
+def test_same_component_merges_despite_flux_scatter(monkeypatch):
+    # opt-in anchor merge (SATSTAR_FP_USE_ANCHOR): one extended blob, 3 detections
+    # of WILDLY different flux sharing one component anchor -> collapse to ONE
+    monkeypatch.setenv('SATSTAR_FP_USE_ANCHOR', '1')
     t = _tbl([0.0, 0.3, 0.6], [356e3, 156e3, 149e3], sat_area=[370, 400, 413],
              anchor_dec_arcsec=[0.30, 0.30, 0.30])
     out = _dedup_satstar_catalog(t, target='w51')
     assert len(out) == 1
 
 
-def test_distinct_components_preserved_even_when_close():
-    # a real crowded cluster: 4 stars, SEPARATE component anchors (>0.2" apart),
-    # within ~1.4" -> all preserved (flux-inconsistency would have wrongly
-    # merged/dropped them)
+def test_distinct_components_preserved_even_when_close(monkeypatch):
+    # opt-in anchor merge: a real crowded cluster, 4 stars with SEPARATE component
+    # anchors (>0.2" apart) within ~1.4" -> all preserved
+    monkeypatch.setenv('SATSTAR_FP_USE_ANCHOR', '1')
     t = _tbl([0.0, 0.35, 0.7, 1.05], [164e3, 72e3, 58e3, 42e3],
              sat_area=[97, 45, 280, 377],
              anchor_dec_arcsec=[0.0, 0.35, 0.7, 1.05])
