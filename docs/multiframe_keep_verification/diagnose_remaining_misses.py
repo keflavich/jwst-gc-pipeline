@@ -45,9 +45,13 @@ fig,ax=plt.subplots(2,2,figsize=(15,12))
 a=ax[0,0]
 a.scatter(H['ra'][matched],H['dec'][matched],s=1,c='0.75',alpha=0.3,label=f'matched {matched.sum()}')
 a.scatter(H['ra'][miss],H['dec'][miss],s=2,c='tab:red',alpha=0.4,label=f'Hosek-only {miss.sum()}')
-if len(satc): a.scatter(satc.ra.deg,satc.dec.deg,s=40,marker='x',c='blue',label=f'our satstars {sat.sum()}')
-a.set_xlabel('RA'); a.set_ylabel('Dec'); a.invert_xaxis(); a.set_aspect('equal'); a.legend(fontsize=8)
-a.set_title('(a) spatial: Hosek-only (red) vs satstars (blue X)')
+if len(satc): a.scatter(satc.ra.deg,satc.dec.deg,s=40,marker='x',c='blue',label=f'our satstars in-fp')
+# zoom to the Hosek comparison footprint (with a small pad), not the whole NRCA field
+_pad=2/3600
+a.set_xlim(H['ra'].max()+_pad, H['ra'].min()-_pad)   # RA descending (already inverted)
+a.set_ylim(H['dec'].min()-_pad, H['dec'].max()+_pad)
+a.set_xlabel('RA'); a.set_ylabel('Dec'); a.set_aspect('equal'); a.legend(fontsize=8)
+a.set_title('(a) spatial (Hosek footprint): Hosek-only (red) vs satstars (blue X)')
 # (b) recovery vs Hosek ndet
 a=ax[0,1]
 nd=np.arange(3,12); rec_nd=[matched[hndet==n].mean() if (hndet==n).sum() else np.nan for n in nd]
