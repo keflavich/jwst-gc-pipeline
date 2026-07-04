@@ -207,8 +207,40 @@ def _merge_spike_satellites(saturated, sources, nsource, gap, ratio):
     return sources, nsource
 
 
+# Per-filter DATA-value floor (MJy/sr) for the saturated-star finder.  A pixel
+# flagged DQ-SATURATED whose data (and charge-migration wings) sit BELOW this
+# floor is a SPURIOUS flag (persistence / JUMP mis-tag / bad pixel), NOT a real
+# saturated star: the finder would otherwise invent a satstar there and
+# extrapolate an enormous flux from a faint pixel (W51 F480M: ~80% of the
+# satstars around bright sources had i2d data < 500; a fake at flux 104948 was
+# fit onto a 127-count DQ-SATURATED pixel, with cfit=0 because satstars bypass
+# the daophot fit -- so nothing downstream rejected it).  Genuine saturated cores
+# read low/NaN in the core but have NaN-variance (unrecoverable) centers and/or
+# bright saturated wings, so they clear the floor.  0 = off (default for unlisted
+# filters -> behaviour unchanged).  Override per run with env SATSTAR_DATA_FLOOR.
+_SATSTAR_DATA_FLOOR = {
+    'f140m': 1000., 'f162m': 1000., 'f182m': 1000., 'f187n': 1000., 'f210m': 1000.,
+    'f335m': 800.,  'f360m': 800.,  'f405n': 1000., 'f410m': 800.,  'f480m': 1000.,
+}
+
+
+def _resolve_satstar_data_floor(filtername, explicit=None):
+    """Data floor for the satstar finder: explicit arg > env SATSTAR_DATA_FLOOR >
+    per-filter default > 0 (off)."""
+    if explicit is not None and float(explicit) > 0:
+        return float(explicit)
+    _env = os.environ.get('SATSTAR_DATA_FLOOR')
+    if _env is not None:
+        try:
+            return float(_env)
+        except ValueError:
+            pass
+    return float(_SATSTAR_DATA_FLOOR.get(str(filtername).lower(), 0.0))
+
+
 def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
-                         spike_merge_gap=0, spike_merge_ratio=3.0):
+                         spike_merge_gap=0, spike_merge_ratio=3.0,
+                         sat_data_floor=0.0):
     """
     Identify candidate saturated stars from the DQ plane.
 
@@ -289,6 +321,36 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
         # Short-circuit to the empty result the caller expects (mirrors the
         # ``if _n > 0`` guard on the cosmic-ray sum_labels above).
         return saturated, sources, []
+
+    # DATA-VALUE FLOOR: drop DQ-SATURATED components sitting on FAINT data (a
+    # spurious flag), keeping only genuine saturated stars (bright wings, or a
+    # NaN-variance unrecoverable core).  See _SATSTAR_DATA_FLOOR docstring.  Runs
+    # BEFORE spike-merge/edge logic so spurious components never participate.
+    if sat_data_floor and sat_data_floor > 0:
+        sci = np.asarray(fitsdata['SCI'].data, dtype=float)
+        unrec = (np.isnan(fitsdata['VAR_POISSON'].data)
+                 if 'VAR_POISSON' in [h.name for h in fitsdata]
+                 else np.zeros(sci.shape, dtype=bool))
+        # 5px max-filter picks up the charge-migration wings just outside the
+        # (low/NaN) saturated core of a real star.
+        sci_wing = ndimage.maximum_filter(
+            np.where(np.isfinite(sci), sci, -np.inf), size=5)
+        _idx = np.arange(1, nsource + 1)
+        comp_wingmax = np.asarray(
+            ndimage.maximum(sci_wing, labels=sources, index=_idx), dtype=float)
+        comp_unrec = np.asarray(
+            ndimage.maximum(unrec.astype(np.uint8), labels=sources, index=_idx)) > 0
+        drop_lab = _idx[(~comp_unrec) & np.isfinite(comp_wingmax)
+                        & (comp_wingmax < float(sat_data_floor))]
+        if len(drop_lab):
+            saturated = saturated & (~np.isin(sources, drop_lab))
+            sources, nsource = label(saturated)
+            print(f"Saturated starfinding: data-floor ({sat_data_floor:g} MJy/sr) "
+                  f"dropped {len(drop_lab)} spurious low-data DQ-SATURATED "
+                  f"component(s) -> nsources={nsource}", flush=True)
+            if nsource == 0:
+                return saturated, sources, []
+
     # Fold disconnected diffraction-spike satellites into their dominant core
     # BEFORE edge/size logic so one star -> one component -> one satstar fit
     # (kills the per-frame hex of spike-tip duplicates).  Size-gated so two
@@ -1051,7 +1113,7 @@ def is_small_radius_emission_phantom(prom_small, core_small, *,
     return False
 
 
-def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_prominence_robust=False, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, deblend_daophot_xy=None, deblend_confirm_xy=None):
+def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_prominence_robust=False, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, deblend_daophot_xy=None, deblend_confirm_xy=None, sat_data_floor=None):
     # ``flux_drops``: optional list of SkyCoord.  An out-of-field (forced) source
     # whose seed sky position matches a drop within ~1.0" is SKIPPED entirely
     # (not fit, not contributed): cross-frame reconciliation found no trustworthy
@@ -1168,9 +1230,12 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     _spike_gap = (int(os.environ.get('MIRI_SATSTAR_SPIKE_MERGE', 3))
                   if header['INSTRUME'].lower() == 'miri' else 0)
     _spike_ratio = float(os.environ.get('MIRI_SATSTAR_SPIKE_MERGE_RATIO', 3.0))
+    _sat_floor = _resolve_satstar_data_floor(header.get('FILTER', ''),
+                                             explicit=sat_data_floor)
     saturated, sources, coms = find_saturated_stars(
         fitsdata, min_sep_from_edge=min_sep_from_edge, edge_npix=edge_npix,
-        spike_merge_gap=_spike_gap, spike_merge_ratio=_spike_ratio)
+        spike_merge_gap=_spike_gap, spike_merge_ratio=_spike_ratio,
+        sat_data_floor=_sat_floor)
 
     # Diagnostic flag image (uint8 bitmask), written by remove_saturated_stars:
     #   bit 0 (1) = partly saturated (DQ SATURATED but recoverable / nonlinear,
