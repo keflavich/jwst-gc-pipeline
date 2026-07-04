@@ -20,7 +20,7 @@ exemption is what makes it general -- these tests lock that in.
 import pytest
 import numpy as np
 from jwst_gc_pipeline.reduction.saturated_star_finding import (
-    is_fake_bright, is_small_radius_emission_phantom)
+    is_fake_bright, is_small_radius_emission_phantom, is_bright_flux_phantom)
 
 # (label, model_peak, local_peak, has_saturated_core, expect_fake)
 CASES = [
@@ -87,3 +87,45 @@ SMALL_RADIUS_CASES = [
                          ids=[c[0] for c in SMALL_RADIUS_CASES])
 def test_small_radius_phantom(label, prom, core, expect):
     assert is_small_radius_emission_phantom(prom, core) is expect, label
+
+
+# --- POST-FIT bright-flux phantom predicate (W51 F770W) ---------------------
+# Recorded (flux_fit, flux_init, ssr_ratio) from the W51 F770W consolidated
+# satstar catalog at user-flagged positions.  These sit on saturated extended
+# emission where EVERY pre-fit metric ranks the phantom >= a real star (verified:
+# seed prominence REAL=8.6 was the LOWEST of the three); only the post-fit flux +
+# ssr/ratio signals separate them.  The flux_floor precondition is load-bearing:
+# it protects the real deeply-saturated spiky star whose faint wing-seed gives a
+# ratio of 61 but whose flux (2e4) is far below the 1e5 floor.
+# (label, flux_fit, flux_init, ssr_ratio, expect_phantom)
+BRIGHT_PHANTOM_CASES = [
+    # user-flagged spurious super-bright phantoms -> REJECT
+    ('W51-SPUR1-highssr',    2.84e6, 175806.0, 139.0, True),   # ssr 139
+    ('W51-SPUR2-hiratio',    7.04e6,   6677.0,  10.1, True),   # flux/init 1054
+    # user's real well-fit bright star -> KEEP (ssr 12, ratio 14)
+    ('W51-REAL-bright',      2.89e6, 200806.0,  12.1, False),
+    # real deep-sat spiky star: high ratio (61) but modest flux 2e4 < floor -> KEEP
+    ('W51-real-spiky-lowflux', 2.0e4,   328.0,  62.0, False),
+    # bright + clean fit (low ssr, low ratio) -> KEEP
+    ('bright-clean',         5.0e6, 300000.0,  15.0, False),
+    # ratio-only trigger at high flux -> REJECT
+    ('bright-hiratio-lowssr', 3.0e6,  20000.0,   8.0, True),   # ratio 150
+]
+
+
+@pytest.mark.parametrize('label,flux,finit,ssr,expect', BRIGHT_PHANTOM_CASES,
+                         ids=[c[0] for c in BRIGHT_PHANTOM_CASES])
+def test_bright_flux_phantom(label, flux, finit, ssr, expect):
+    assert is_bright_flux_phantom(flux, finit, ssr) is expect, label
+
+
+def test_bright_phantom_disabled_by_zero_floor():
+    # flux_floor<=0 disables the gate entirely (default OFF -> no regression)
+    assert is_bright_flux_phantom(7e6, 100.0, 999.0, flux_floor=0.0) is False
+
+
+def test_bright_phantom_nan_inputs_never_phantom():
+    assert is_bright_flux_phantom(float('nan'), 100.0, 999.0) is False
+    # non-finite flux_init just disables the ratio arm; ssr arm still valid
+    assert is_bright_flux_phantom(5e6, float('nan'), 999.0) is True
+    assert is_bright_flux_phantom(5e6, float('nan'), 5.0) is False
