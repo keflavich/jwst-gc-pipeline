@@ -152,6 +152,48 @@ MIRI obs, or its mosaics sit ~3.3″ off truth while the catalog underneath is
 correct. The brick F2550W reduction-tool scripts in `scripts/miri_reduction/`
 are region-general examples; the operational MIRI scripts live in brick-jwst-2221.
 
+## Module-lock policy (NRCA == NRCB) and the F410M inter-module offset
+
+`fix_alignment` applies **one shift per (visit, filter) to BOTH modules** (NRCA and
+NRCB) — the locked table (`Offsets_JWST_Brick<pid>_VIRAC2locked.csv`) is keyed on
+(Visit, Filter), not Module. This is deliberate: NIRCam's SIAF/`assign_wcs` solution
+co-registers the two long-wave detectors (NRCA5, NRCB5) to <~1 mas *when assign_wcs is
+run with a correct jwst version*, so an independent per-module tweak would normally inject
+VIRAC2 noise and break the lock.
+
+**The F410M inter-module offset was a STALE-jwst-version bug, NOT a CRDS/distortion issue
+(corrected 2026-07-04).** Our brick/cloudc `_cal` files (jw02221, epoch 2022.70) were
+processed 2024-07-18 with **jwst 1.14.1.dev43** (CRDS jwst_1253.pmap). That old jwst
+mis-computed the F410M long-module WCS, leaving NRCALONG ~52 mas off VIRAC2 vs NRCBLONG
+~17 mas (~68 mas inter-module). **This is a jwst-VERSION effect, not CRDS:** re-running
+`AssignWcsStep` on the same `_cal` with current jwst (1.21) shifts the two modules
+antisymmetrically (NRCALONG ≈ (−11,−24) mas, NRCBLONG ≈ (+11,+24) mas at pixel 1024,1024;
+~48 mas Dec differential), dropping the inter-module differential from ~70 mas to ~18 mas.
+Verified byte-identical under CRDS jwst_1253.pmap **and** jwst_1581.pmap — both assign the
+SAME distortion refs (`nircam_distortion_0249` NRCALONG / `0300` NRCBLONG) and produce the
+SAME shift. So the distortion files are fine; jwst 1.14 applied them wrong. F405N (same
+detectors, refs `0278`/`0190`) was already consistent ~17 mas because that band was not hit
+by the same 1.14 bug. (Test scripts: re-run `AssignWcsStep.call` on the `_cal` and diff the
+WCS at a fiducial pixel; see `brick-f405n-permodule-astrom-breaks-provenance` note.)
+
+**Correct fix (surgical): re-run Image2 (assign_wcs) with current jwst.** CRDS 1253 keeps
+flat/photom references identical → photometry is preserved (no flux perturbation mid-release)
+while astrometry is fixed. This needs NO offsets-table hack.
+
+**Interim workaround currently in place (must be reverted if Image2 is re-run):** F410M was
+given per-module rows (a `Module` column = `nrcalong`/`nrcblong`) in the locked table with a
+~48 mas extra shift on NRCALONG, and `fix_alignment` (PipelineRerunNIRCAM-LONG.py ~L1180)
+narrows the match by module when >1 row matches and a `Module` column is present. That
+band-aid empirically reproduces what correct assign_wcs does (verified: F410M mosaic
+module step 68 → ~0 mas). **DANGER:** it is applied on top of the OLD (buggy) `_cal` WCS.
+If the `_cal` is regenerated with current jwst, remove the F410M split (revert to a single
+both-module row) or it will double-correct by ~48 mas.
+
+**Rule for the offsets-table builder:** a per-module split is a LAST-RESORT workaround for a
+frame that cannot be reprocessed. Before splitting, first check whether re-running assign_wcs
+with a current jwst version removes the inter-module inconsistency — a stale jwst version, not
+CRDS distortion, was the actual cause for F410M.
+
 ## Reference epochs (so propagation is reproducible)
 
 - Gaia DR3 reference epoch = **2016.0**.
@@ -163,7 +205,7 @@ are region-general examples; the operational MIRI scripts live in brick-jwst-222
 
 ---
 
-_Last updated 2026-06-25. See also `align_to_catalogs.py:sync_gwcs_to_fits_wcs`
+_Last updated 2026-07-03 (added module-lock policy + F410M exception). See also `align_to_catalogs.py:sync_gwcs_to_fits_wcs`
 docstring, the offsets-table builders (`_bench/build_sickle_gns_offsets.py`,
 `scripts/miri_reduction/` registration scripts), and `f115w-astrometry-*`
 analysis writeups in brick-jwst-2221._
