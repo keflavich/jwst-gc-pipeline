@@ -1400,7 +1400,7 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
                     was_sat = (dqarr & _L.dqflags.pixel['SATURATED']) != 0
                     # ZEROFRAME saturated-RIM recovery (#2, opt-in): the most-
                     # saturated stars leave a positive ring because the cal-frame
-                    # rim is brighter-fatter-INFLATED above the true flux; the
+                    # rim is charge-migration-INFLATED above the true flux; the
                     # ramp first read (group-0) samples the true profile wherever
                     # it is unsaturated.  Replace the rim with R*group0 (de-
                     # inflated) so model subtraction collapses the ring; the deep
