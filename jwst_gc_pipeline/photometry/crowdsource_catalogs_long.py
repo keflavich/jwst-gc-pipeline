@@ -3535,6 +3535,50 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     action='store_false', default=True,
                     help="Disable the recover-tier prominence gate (UNSAFE on "
                          "extended emission; for diagnostics only).")
+    parser.add_option("--manual-ext-nmatch-confirm", dest="manual_ext_nmatch_confirm",
+                    type='int', default=0,
+                    help="MULTI-FRAME CONFIRMATION keep (Hosek ndet-style): keep any "
+                         "source detected in >= N exposures (nmatch>=N) with qfit <= "
+                         "--manual-ext-nmatch-confirm-qfit-max, regardless of the "
+                         "single-catalog qfit/snr cuts.  Recovers faint stars we "
+                         "DETECT but the vetting drops (Arches F212N vs Hosek: 0.43 "
+                         "-> 0.58).  Default 0 = OFF; set 3 to match Hosek's ndet>=3. "
+                         "STAR-FIELD TOOL: extended emission is fixed on-sky so it "
+                         "ALSO repeats across dithers with a stable centroid -- the "
+                         "position guard does NOT reject it (W51 dark filament: +110 "
+                         "emission knots admitted).  Leave OFF on emission-dominated "
+                         "fields.")
+    parser.add_option("--manual-ext-nmatch-confirm-qfit-max",
+                    dest="manual_ext_nmatch_confirm_qfit_max",
+                    type='float', default=0.6,
+                    help="qfit ceiling for the multi-frame confirmation keep "
+                         "(default 0.6).")
+    parser.add_option("--manual-seed-round-max", dest="manual_seed_round_max",
+                    type='float', default=0.5,
+                    help="DAOStarFinder roundness bound for the i2d-augmented "
+                         "RESIDUAL seed detection (roundlo=-x, roundhi=+x).  Default "
+                         "0.5 (tight, rejects extended emission).  On STAR-dominated "
+                         "fields loosen to ~1.0: faint companions sitting on a bright "
+                         "neighbour's residual gradient are distorted and fail the "
+                         "tight cut (Arches: ~3x more recovered).  Do NOT loosen on "
+                         "emission fields (shape is what rejects emission knots).")
+    parser.add_option("--manual-seed-sharp-lo", dest="manual_seed_sharp_lo",
+                    type='float', default=0.4,
+                    help="DAOStarFinder sharpness lower bound for the residual seed "
+                         "detection (default 0.4; star-field loosen ~0.2).")
+    parser.add_option("--manual-seed-sharp-hi", dest="manual_seed_sharp_hi",
+                    type='float', default=1.2,
+                    help="DAOStarFinder sharpness upper bound for the residual seed "
+                         "detection (default 1.2; star-field loosen ~1.5).")
+    parser.add_option("--manual-ext-nmatch-confirm-maxpos-mas",
+                    dest="manual_ext_nmatch_confirm_maxpos_mas",
+                    type='float', default=0.0,
+                    help="Position-stability guard for the multi-frame keep: only "
+                         "keep if the across-exposure centroid scatter "
+                         "hypot(std_ra,std_dec) <= this many mas.  Rejects "
+                         "position-UNSTABLE spurious (cosmic-ray / noise "
+                         "coincidences).  Does NOT reject extended emission (fixed "
+                         "on-sky -> stable centroid).  Default 0 = off.")
     # Structure-noise prune + coarse-bg detection.  These shape/physics-based
     # discriminators reject broad extended-emission (PAH/nebulosity) bumps while
     # keeping faint point sources (which stay sharp and outpeak the local

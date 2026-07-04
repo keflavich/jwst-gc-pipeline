@@ -768,6 +768,9 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               recover_prom_gate=True,
                               recover_prom_log_intercept=-0.77,
                               recover_prom_log_slope=5.6,
+                              nmatch_confirm=0,
+                              nmatch_confirm_qfit_max=0.6,
+                              nmatch_confirm_maxpos_mas=0.0,
                               drop_overshoot=True, struct_x=0.0, struct_y=0.0,
                               label=''):
     """First-pass star-vs-extended-emission vetting of a MERGED catalog.
@@ -999,6 +1002,38 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         # from the vetted catalog/residual on a broken uncertainty.
         keep = _emission_keep_nircam(star_like, snr, local_snr_min,
                                      qfit_confident=(qf <= qfit_max))
+
+    # MULTI-FRAME CONFIRMATION keep (Hosek ndet-style; opt-in, nmatch_confirm>0).
+    # A source detected in >= nmatch_confirm exposures with a still-plausible qfit
+    # is real -- the per-vetting qfit/snr cuts drop faint stars that DO repeat
+    # across dithers (Arches F212N: we DETECT 68% of Hosek but the first vetting
+    # drops faint detections 0.64 -> 0.42; nmatch>=3 recovers to 0.58).
+    # SCOPE: this is a STAR-FIELD tool.  Extended emission is fixed on-sky, so an
+    # emission-knot daofind bump ALSO repeats across dithers AND has a stable
+    # centroid -- the nmatch_confirm_maxpos_mas position guard does NOT reject it
+    # (verified on W51 dark filament: +110 admitted sources have prominence ~0.9,
+    # posscatter ~0 mas).  So on emission-dominated fields this re-admits emission
+    # and should be left OFF (its default) or given a real emission discriminator.
+    # On star-dominated fields (Arches) it is a large clean win.  The position
+    # guard only helps against genuinely position-unstable spurious (cosmic-ray /
+    # noise coincidences), not fixed emission.  overshoot + struct-noise prune
+    # below still apply.  Default off.
+    if nmatch_confirm > 0 and 'nmatch' in t.colnames:
+        _nm = t['nmatch']
+        _nm = np.asarray(_nm.filled(0) if hasattr(_nm, 'filled') else _nm, dtype=float)
+        mf = np.isfinite(_nm) & (_nm >= nmatch_confirm) & (qf <= nmatch_confirm_qfit_max)
+        if (nmatch_confirm_maxpos_mas > 0 and 'std_ra' in t.colnames
+                and 'std_dec' in t.colnames):
+            _sr = np.asarray(t['std_ra'], dtype=float)
+            _sd = np.asarray(t['std_dec'], dtype=float)
+            _posmas = np.hypot(_sr, _sd) * 3.6e6
+            mf = mf & np.isfinite(_posmas) & (_posmas <= nmatch_confirm_maxpos_mas)
+        _n_mf = int(np.sum(mf & ~keep))
+        keep = keep | mf
+        print(f"[{label}] multi-frame keep: +{_n_mf} (nmatch>={nmatch_confirm:g}, "
+              f"qfit<={nmatch_confirm_qfit_max:g}"
+              f"{(', posscatter<=%gmas' % nmatch_confirm_maxpos_mas) if nmatch_confirm_maxpos_mas > 0 else ''})",
+              flush=True)
 
     # overshoot drop is shared by both instrument paths (was duplicated).
     if drop_overshoot and 'model_overshoot' in t.colnames:
@@ -2987,10 +3022,14 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 if phase in ('m3', 'm4', 'm5', 'm6'):
                     det_i2d = det_i2d or _data_i2d_path(module, filt)  # fallback
                     try:
+                        _sround = float(getattr(opts_phase, 'manual_seed_round_max', 0.5))
                         prev_seed = _build_i2d_augmented_seed(
                             det_i2d, vetted_prev, filt,
                             local_snr_min=float(getattr(
                                 opts_phase, 'manual_ext_local_snr_min', 5.0)),
+                            roundlo=-_sround, roundhi=_sround,
+                            sharplo=float(getattr(opts_phase, 'manual_seed_sharp_lo', 0.4)),
+                            sharphi=float(getattr(opts_phase, 'manual_seed_sharp_hi', 1.2)),
                             bg_subtract_path=bg_sub,
                             # Structure-noise prune / coarse-bg detection.  For
                             # MIRI the miri_tuning block sets opts_phase.struct_x/y
@@ -3425,6 +3464,12 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             opts_phase, 'manual_ext_recover_prom_log_intercept', -0.77)),
                         recover_prom_log_slope=float(getattr(
                             opts_phase, 'manual_ext_recover_prom_log_slope', 5.6)),
+                        nmatch_confirm=int(getattr(
+                            opts_phase, 'manual_ext_nmatch_confirm', 0)),
+                        nmatch_confirm_qfit_max=float(getattr(
+                            opts_phase, 'manual_ext_nmatch_confirm_qfit_max', 0.6)),
+                        nmatch_confirm_maxpos_mas=float(getattr(
+                            opts_phase, 'manual_ext_nmatch_confirm_maxpos_mas', 0.0)),
                         struct_x=0.0, struct_y=0.0,  # prune at detection, not here
                         label=f'{phase}:{filt}')
                     vetted.write(vetted_path, overwrite=True)

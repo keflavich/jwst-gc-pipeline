@@ -30,7 +30,8 @@ import astropy.units as u
 from jwst_gc_pipeline.photometry.cataloging import _filter_extended_emission
 
 
-def _mk(qfit, flux, flux_err, is_sat=None, ra0=266.5, dec0=-28.8, dra=0.001):
+def _mk(qfit, flux, flux_err, is_sat=None, ra0=266.5, dec0=-28.8, dra=0.001,
+        nmatch=None, std_ra=None, std_dec=None):
     n = len(qfit)
     ras = ra0 + np.arange(n) * dra
     t = Table({
@@ -43,7 +44,61 @@ def _mk(qfit, flux, flux_err, is_sat=None, ra0=266.5, dec0=-28.8, dra=0.001):
     })
     if is_sat is not None:
         t['is_saturated'] = np.asarray(is_sat, bool)
+    if nmatch is not None:
+        t['nmatch'] = np.asarray(nmatch, int)
+    if std_ra is not None:
+        t['std_ra'] = np.asarray(std_ra, float)
+        t['std_dec'] = np.asarray(std_dec, float)
     return t
+
+
+# a faint blended star: qfit 0.40 (fails qfit<=0.2 and the recover prominence
+# gate), low snr, but detected in 6 exposures -> real by multi-frame confirmation.
+def _faint_multiframe(nmatch=6, std=1e-6):
+    return _mk(qfit=[0.40], flux=[60.0], flux_err=[12.0], nmatch=[nmatch],
+               std_ra=[std], std_dec=[std])
+
+
+def test_nmatch_confirm_default_off_drops_faint_multiframe():
+    vet = _filter_extended_emission(_faint_multiframe(), qfit_max=0.2,
+                                    local_snr_min=5.0, label='t')
+    assert len(vet) == 0   # nmatch_confirm defaults to 0 -> keep is unchanged
+
+
+def test_nmatch_confirm_admits_faint_multiframe_star():
+    vet = _filter_extended_emission(_faint_multiframe(), qfit_max=0.2,
+                                    nmatch_confirm=3, local_snr_min=5.0, label='t')
+    assert len(vet) == 1
+
+
+def test_nmatch_confirm_respects_qfit_ceiling():
+    t = _mk(qfit=[0.70], flux=[60.0], flux_err=[12.0], nmatch=[6],
+            std_ra=[1e-6], std_dec=[1e-6])            # qfit 0.70 > 0.6 ceiling
+    vet = _filter_extended_emission(t, qfit_max=0.2, nmatch_confirm=3,
+                                    nmatch_confirm_qfit_max=0.6, local_snr_min=5.0, label='t')
+    assert len(vet) == 0
+
+
+def test_nmatch_confirm_requires_enough_frames():
+    t = _faint_multiframe(nmatch=2)                    # only 2 frames < 3
+    vet = _filter_extended_emission(t, qfit_max=0.2, nmatch_confirm=3,
+                                    local_snr_min=5.0, label='t')
+    assert len(vet) == 0
+
+
+def test_nmatch_confirm_position_guard_rejects_wandering():
+    # nmatch=6 but centroid scatter ~100 mas (2.8e-5 deg) -> emission-like, rejected
+    t = _mk(qfit=[0.40], flux=[60.0], flux_err=[12.0], nmatch=[6],
+            std_ra=[2.8e-5], std_dec=[2.8e-5])
+    vet = _filter_extended_emission(t, qfit_max=0.2, nmatch_confirm=3,
+                                    nmatch_confirm_maxpos_mas=20.0, local_snr_min=5.0, label='t')
+    assert len(vet) == 0
+    # same source with tight ~3 mas scatter -> kept
+    t2 = _mk(qfit=[0.40], flux=[60.0], flux_err=[12.0], nmatch=[6],
+             std_ra=[8e-7], std_dec=[8e-7])
+    vet2 = _filter_extended_emission(t2, qfit_max=0.2, nmatch_confirm=3,
+                                     nmatch_confirm_maxpos_mas=20.0, local_snr_min=5.0, label='t')
+    assert len(vet2) == 1
 
 
 BLENDED_REAL = dict(qfit=[0.30], flux=[150.0], flux_err=[10.0])  # S/N 15
