@@ -677,7 +677,7 @@ def _build_manual_seed(*, detection_image, nan_replaced_data, mask, ww, fwhm_pix
     # (struct_x, struct_y) schedule.  err=None -> mad_std noise floor.
     if len(detections) and (struct_x or struct_y):
         xdt, ydt = _L._best_available_xy(detections)
-        skeep = _structure_noise_keep(detection_image, None, xdt, ydt,
+        skeep = _structure_noise_keep(detection_image, None, xpix=xdt, ypix=ydt,
                                       struct_x=struct_x, struct_y=struct_y)
         n_b = len(detections)
         detections = detections[skeep]
@@ -1011,7 +1011,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     if ((struct_x or struct_y) and data_i2d_image is not None
             and ww_i2d is not None and 'skycoord' in t.colnames):
         skeep = _structure_noise_keep(data_i2d_image, None,
-                                      np.asarray(xx), np.asarray(yy),
+                                      xpix=np.asarray(xx), ypix=np.asarray(yy),
                                       struct_x=struct_x, struct_y=struct_y)
         n_struct = int(np.sum(keep & ~skeep))
         keep = keep & skeep
@@ -1651,7 +1651,9 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             noise_floor_box=_nfloor_box, noise_floor_k=_nfloor_k)
         res1, modsky1, _ = _pass(seed1, 'm1',
                                  _nprom_m1 if _is_ext_nircam else None)
-        saved1 = _save_manual_pass(ctx, res1, modsky1, options, 'm1', detector)
+        saved1 = _save_manual_pass(ctx=ctx, result=res1, modsky=modsky1,
+                                   options=options, iteration_label='m1',
+                                   detector=detector)
         base1 = (ctx.original_data if ctx.satstar_model_subtracted is None
                  else ctx.original_data - ctx.satstar_model_subtracted)
         residual1 = base1 - modsky1
@@ -1666,7 +1668,8 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             noise_floor_box=_nfloor_box, noise_floor_k=_nfloor_k)
         res2, modsky2, _ = _pass(seed2, 'm2',
                                  _nprom_m2 if _is_ext_nircam else None)
-        _save_manual_pass(ctx, res2, modsky2, options, 'm2', detector)
+        _save_manual_pass(ctx=ctx, result=res2, modsky=modsky2, options=options,
+                          iteration_label='m2', detector=detector)
         return res2
 
     # m3 / m4 / m5: single seeded pass
@@ -1683,7 +1686,8 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
         noise_floor_box=_nfloor_box, noise_floor_k=_nfloor_k)
     res, modsky, _ = _pass(seed, manual_phase,
                            _nprom_m3p if _is_ext_nircam else None)
-    _save_manual_pass(ctx, res, modsky, options, manual_phase, detector)
+    _save_manual_pass(ctx=ctx, result=res, modsky=modsky, options=options,
+                      iteration_label=manual_phase, detector=detector)
     return res
 
 
@@ -1987,7 +1991,7 @@ def annotate_independent_detection(merged_path, cut_bp, filternames, options, *,
 # ---------------------------------------------------------------------------
 # Detection on the merged i2d -> augmented seed for the next per-frame round
 # ---------------------------------------------------------------------------
-def _structure_noise_keep(data, err, xpix, ypix, *, struct_x=0.0, struct_y=0.0,
+def _structure_noise_keep(data, err, *, xpix, ypix, struct_x=0.0, struct_y=0.0,
                           smooth_box=51, struct_box=51, robust=False):
     """Structure-noise prune (AG 2026-06-13): keep a detection only if its data
     peak rises above the local extended-emission baseline by a combination of
@@ -2154,7 +2158,7 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
     # ``seed_struct_protect_snr`` (ERR S/N) from the prune.
     if len(det) and (struct_x or struct_y):
         xd0, yd0 = _L._best_available_xy(det)
-        skeep = _structure_noise_keep(np.where(mask, np.nan, data), err, xd0, yd0,
+        skeep = _structure_noise_keep(np.where(mask, np.nan, data), err, xpix=xd0, ypix=yd0,
                                       struct_x=struct_x, struct_y=struct_y,
                                       robust=struct_robust)
         protect = np.zeros(len(det), dtype=bool)
