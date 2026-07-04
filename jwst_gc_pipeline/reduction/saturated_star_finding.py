@@ -280,6 +280,29 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
 
     dq = fitsdata['DQ'].data
     saturated = (dq & dqflags.pixel['SATURATED']) > 0
+    # TRULY-LOST vs FRAME0-RECOVERED saturation (2026-07-04).  A pixel flagged
+    # SATURATED in a late group but with a good group 0 is RECOVERED by the ramp
+    # fit (valid rate, NO DO_NOT_USE); only pixels the fit could not recover (0
+    # good groups) carry DO_NOT_USE.  The finder used to treat EVERY SATURATED
+    # pixel as a lost core -- but ~94% are recovered valid data (W51 F480M: a
+    # bright extended-emission source read 429 SATURATED px, only ~27 truly lost,
+    # and those were scattered bad/DNU pixels, not a star core).  Masking the
+    # recovered pixels starved the PSF fit and invented phantom satstars on bright
+    # RECOVERED emission.  Restrict the finder to the truly-lost core
+    # (SATURATED & DO_NOT_USE): a genuine saturated star keeps its COMPACT lost
+    # core (seeded, then fit from the now-unmasked recovered wings), while
+    # barely/recovered-saturated bright emission has no coherent lost core.
+    # Fallback: if NO saturated pixel carries DO_NOT_USE (synthetic test frames or
+    # older products without per-group DQ propagated), keep the SATURATED mask and
+    # the legacy behaviour (``_truly_lost_restricted`` stays False, so the
+    # min-core gate below is also skipped).  Disable with
+    # SATSTAR_REQUIRE_DO_NOT_USE=0.
+    _truly_lost_restricted = False
+    if int(os.environ.get('SATSTAR_REQUIRE_DO_NOT_USE', 1)):
+        _truly_lost = saturated & ((dq & dqflags.pixel['DO_NOT_USE']) > 0)
+        if np.any(_truly_lost):
+            saturated = _truly_lost
+            _truly_lost_restricted = True
     cosmic_rays = (dq & dqflags.pixel['JUMP_DET']) > 0
     # JUMP_DET vs SATURATED disambiguation: the JWST ramp fitter sets
     # JUMP_DET on saturated ramps because non-linear ramp curvature looks
@@ -321,6 +344,27 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
         # Short-circuit to the empty result the caller expects (mirrors the
         # ``if _n > 0`` guard on the cosmic-ray sum_labels above).
         return saturated, sources, []
+
+    # MIN LOST-CORE SIZE.  A genuine saturated star's truly-lost core is a COMPACT
+    # cluster (W51 F480M deep-saturated star: 75 px core); scattered 1-4 px
+    # truly-lost fragments on bright extended emission are isolated bad/DNU
+    # pixels, not a star core.  Drop components below the floor so they never seed
+    # a phantom satstar.  Applied ONLY when the truly-lost (DO_NOT_USE) restriction
+    # is active -- in the SATURATED-only fallback we cannot tell a small real core
+    # from a fragment, so the legacy behaviour is preserved.  Tune/disable with
+    # SATSTAR_MIN_LOST_CORE (default 5; 0/1 disables).
+    _min_core = int(os.environ.get('SATSTAR_MIN_LOST_CORE', 5))
+    if _truly_lost_restricted and _min_core > 1:
+        _sz = sum_labels(saturated, sources, np.arange(nsource) + 1)
+        _small_lab = (np.arange(nsource) + 1)[_sz < _min_core]
+        if len(_small_lab):
+            saturated = saturated & (~np.isin(sources, _small_lab))
+            sources, nsource = label(saturated)
+            print(f"Saturated starfinding: min-core ({_min_core}px) dropped "
+                  f"{len(_small_lab)} scattered truly-lost fragment(s) -> "
+                  f"nsources={nsource}", flush=True)
+            if nsource == 0:
+                return saturated, sources, []
 
     # DATA-VALUE FLOOR: drop DQ-SATURATED components sitting on FAINT data (a
     # spurious flag), keeping only genuine saturated stars (bright wings, or a
