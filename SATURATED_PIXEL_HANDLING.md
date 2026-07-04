@@ -74,6 +74,64 @@ starting points, not fixed addresses.
 
 ---
 
+## 2b. KNOWN DEFECT — detection uses the *any-group* SATURATED bit
+
+**The saturation detection flags every pixel that saturates in *any* ramp group,
+including pixels the ramp fitter fully recovered from good earlier groups.** This
+over-flags the saturated set, masks recoverable data, and (worse) sweeps real
+stars on bright emission into the satstar channel while vetoing them from daophot
+— so they vanish from the catalog.
+
+**Where:** `find_saturated_stars` (`saturated_star_finding.py:282`):
+```python
+saturated = (dq & dqflags.pixel['SATURATED']) > 0
+```
+`dq` is the 2-D cal/crf `DQ`, whose `SATURATED` bit (per the JWST pipeline) is set
+if the pixel saturated in *any* group. Only a pixel whose **first** group
+saturates is genuinely unrecoverable; any later-group saturation still yields a
+valid ramp-fit slope. The code documents this itself
+(`first_group_saturation_mask`, `:3189`; `correct_dq_first_group_saturation`,
+`:3218`).
+
+**Empirical scale** (MIRI sgrb2 F770W, `jw05365998001_02101_00003`): the cal DQ
+flags 3,114 px SATURATED; only **345 (11%)** are first-group (truly
+unrecoverable); **2,769 (89%)** saturated only in later groups, and **62% of
+those carry finite recovered flux** (median ~760 MJy/sr). So ~9× over-flagging.
+Documented downstream harm: cloudc 2526 F770W — 28 by-eye-real stars fused into
+saturated blobs and lost from the catalog (commit `e4039e6`).
+
+**When created:** commit **`8837408` (2026-05-04, "first real commit")** — the
+detection has used the any-group bit since the repository's first commit (the
+satstar finder predates the git history; this is the earliest tracked commit).
+
+**Affected commit range:** **`8837408` (2026-05-04) → HEAD** — *every* commit. The
+default behaviour is still affected:
+- **NIRCam: entirely unmitigated.** The correction returns `dq` unchanged unless
+  the instrument is MIRI (`correct_dq_first_group_saturation`, `:3227`).
+- **MIRI: unmitigated by default.** The correction is env-gated
+  `MIRI_FIRSTGROUP_SAT_DQ` (default `0`) and needs a sibling `_ramp.fits`.
+
+**Mitigation history:**
+- `e4039e6` (2026-06-30) — added `first_group_saturation_mask` /
+  `correct_dq_first_group_saturation` (reads `_ramp.fits` GROUPDQ, clears
+  SATURATED on later-group-only px). **MIRI-only, opt-in, default off** → does not
+  change the shipped default for any instrument.
+- `e08952d` (2026-07-02) — "decouple detection vs fit mask": the *correct* shape
+  of the fix — use the first-group mask for **detection/classification** (so
+  recoverable stars aren't swept into satstar / vetoed from daophot) but keep the
+  any-group mask for the **fit** (the clipped near-saturation core must stay
+  masked or its wings drive the PSF amplitude too high → over-subtraction
+  divot + Airy ring). **Reverted 15 min later by `b60a16c` (2026-07-02) with no
+  stated reason** → the proper fix is currently absent.
+
+**Bottom line:** the "mistake" is using one any-group mask for both *detecting*
+and *fitting* saturated stars. Detection should key off the **first-group**
+(truly-unrecoverable) mask; the fit should keep masking the any-group clipped
+core. That decoupling was written and backed out; re-landing it (and extending it
+to NIRCam, not just MIRI, and not gating it off by default) is the fix.
+
+---
+
 ## 3. NIRCam handling
 
 - **Fit engine** (`get_saturated_stars`, `:1116`): per component, mask the
