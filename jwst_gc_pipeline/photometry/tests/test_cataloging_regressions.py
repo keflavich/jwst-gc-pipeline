@@ -56,9 +56,9 @@ class TestStructureNoiseKeepRobust:
 
     def test_meansq_drops_faint_neighbour_robust_keeps(self):
         data, err, x, y = self._scene()
-        old = C._structure_noise_keep(data, err, x, y, struct_x=3.0,
+        old = C._structure_noise_keep(data, err, xpix=x, ypix=y, struct_x=3.0,
                                       struct_y=4.0, robust=False)
-        new = C._structure_noise_keep(data, err, x, y, struct_x=3.0,
+        new = C._structure_noise_keep(data, err, xpix=x, ypix=y, struct_x=3.0,
                                       struct_y=8.0, robust=True)
         # the bright neighbour's spike makes the mean-of-squares prune reject the
         # genuine faint point source; the robust MAD prune keeps it.
@@ -73,8 +73,8 @@ class TestStructureNoiseKeepRobust:
         yy, xx = np.mgrid[0:121, 0:121]
         data += 12.0 * np.exp(-(((xx - 60)**2 + (yy - 60)**2) / (2 * 18.0**2)))
         err = np.ones_like(data)
-        keep = C._structure_noise_keep(data, err, np.array([60.0]),
-                                       np.array([60.0]), struct_x=3.0,
+        keep = C._structure_noise_keep(data, err, xpix=np.array([60.0]),
+                                       ypix=np.array([60.0]), struct_x=3.0,
                                        struct_y=8.0, robust=True)
         assert not bool(keep[0])
 
