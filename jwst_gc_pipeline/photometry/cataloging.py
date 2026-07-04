@@ -1273,14 +1273,20 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     mask = np.isnan(data) | bad
     dqarr = im1['DQ'].data if 'DQ' in im1 else None
     if dqarr is not None:
-        # Correct the SATURATED bit to FIRST-group saturation (env-gated, MIRI):
-        # the cal/crf flag marks any pixel saturated in ANY ramp group, which on
-        # bright emission vetoes real point sources from daophot although the
-        # ramp fitter recovers their flux.  Clearing the later-group-only flags
-        # here propagates to is_saturated, the fit mask, AND _filter_near_saturation
-        # (which reads ctx.dqarr).  See first_group_saturation_mask.
+        # TRULY-LOST vs recovered saturation.  The cal/crf SATURATED flag marks
+        # any pixel saturated in ANY ramp group, but a late-group saturation with
+        # a good group 0 is RECOVERED by the ramp fit (valid rate, no
+        # DO_NOT_USE).  Keying is_saturated off the raw SATURATED bit therefore
+        # (a) discards the recovered flux (masked from the daophot fit) and
+        # (b) lets _filter_near_saturation veto real point sources on bright
+        # emission.  Restrict to the truly-lost core (SATURATED & DO_NOT_USE) --
+        # instrument-agnostic, on by default, no ramp file needed -- so is_saturated,
+        # the fit mask, AND the near-sat veto all use the same truly-lost set the
+        # satstar FINDER uses (find_saturated_stars).  The MIRI-only, opt-in
+        # first-group correction is kept as a subordinate pre-pass for older
+        # products where DO_NOT_USE is absent.
         dqarr = _L.correct_dq_first_group_saturation(dqarr, filename, instrument)
-        is_saturated = (dqarr & _L.dqflags.pixel['SATURATED']) != 0
+        is_saturated = _L.truly_lost_saturated_mask(dqarr)
         # A real saturated core sits at/near the detector saturation level; but
         # JUMP/persistence artifacts get mis-tagged SATURATED on UNsaturated
         # sources (e.g. W51 F480M star RA=290.929589 Dec=+14.504683: DQ=6
