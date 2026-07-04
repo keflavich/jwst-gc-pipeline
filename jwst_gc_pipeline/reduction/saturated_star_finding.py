@@ -280,25 +280,24 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
 
     dq = fitsdata['DQ'].data
     saturated = (dq & dqflags.pixel['SATURATED']) > 0
-    # TRULY-LOST vs FRAME0-RECOVERED saturation (2026-07-04).  A pixel flagged
-    # SATURATED in a late group but with a good group 0 is RECOVERED by the ramp
-    # fit (valid rate, NO DO_NOT_USE); only pixels the fit could not recover (0
-    # good groups) carry DO_NOT_USE.  The finder used to treat EVERY SATURATED
-    # pixel as a lost core -- but ~94% are recovered valid data (W51 F480M: a
-    # bright extended-emission source read 429 SATURATED px, only ~27 truly lost,
-    # and those were scattered bad/DNU pixels, not a star core).  Masking the
-    # recovered pixels starved the PSF fit and invented phantom satstars on bright
-    # RECOVERED emission.  Restrict the finder to the truly-lost core
-    # (SATURATED & DO_NOT_USE): a genuine saturated star keeps its COMPACT lost
-    # core (seeded, then fit from the now-unmasked recovered wings), while
-    # barely/recovered-saturated bright emission has no coherent lost core.
-    # Fallback: if NO saturated pixel carries DO_NOT_USE (synthetic test frames or
-    # older products without per-group DQ propagated), keep the SATURATED mask and
-    # the legacy behaviour (``_truly_lost_restricted`` stays False, so the
-    # min-core gate below is also skipped).  Disable with
-    # SATSTAR_REQUIRE_DO_NOT_USE=0.
+    # TRULY-LOST vs FRAME0-RECOVERED saturation, and why SEEDING and FIT-MASKING
+    # must be DECOUPLED (2026-07-04).  A pixel flagged SATURATED in a late group
+    # but with a good group 0 is RECOVERED by the ramp fit (valid rate, NO
+    # DO_NOT_USE); only 0-good-group pixels carry DO_NOT_USE (== NaN VAR_POISSON).
+    #   - FIT MASK: only the truly-lost (unrecoverable) pixels should be excluded
+    #     from the PSF fit; the recovered wings are valid data and improve the
+    #     centroid/flux.  This is done in get_saturated_stars (the fit masks
+    #     ``saturated & _unrecoverable``).
+    #   - SEEDING: a saturated STAR must still be SEEDED from its full saturated
+    #     core even when the core was frame0-recovered.  Moderate saturated stars
+    #     (recovered, NO truly-lost core) are otherwise never seeded and never
+    #     cataloged -- daofind cannot fit their saturated cores -- which dropped
+    #     real W51 cluster stars (A/B) when seeding was restricted to the truly-
+    #     lost core.  So SEED on the full SATURATED mask.
+    # The earlier truly-lost SEED restriction remains available (debugging /
+    # special cases) via SATSTAR_SEED_REQUIRE_DO_NOT_USE=1, default OFF.
     _truly_lost_restricted = False
-    if int(os.environ.get('SATSTAR_REQUIRE_DO_NOT_USE', 1)):
+    if int(os.environ.get('SATSTAR_SEED_REQUIRE_DO_NOT_USE', 0)):
         _truly_lost = saturated & ((dq & dqflags.pixel['DO_NOT_USE']) > 0)
         if np.any(_truly_lost):
             saturated = _truly_lost
