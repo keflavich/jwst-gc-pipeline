@@ -1089,6 +1089,49 @@ def is_fake_bright(model_peak, local_peak, *, model_min=1.0e4, localpk_max=3.5e3
     return bool(model_peak > model_min and local_peak < localpk_max)
 
 
+def is_bright_flux_phantom(flux, flux_init, ssr_ratio, *, flux_floor=1.0e5,
+                           ssr_max=50.0, ratio_max=50.0):
+    """Pure predicate: is a VERY BRIGHT satstar fit a spurious super-bright phantom
+    on saturated extended emission?
+
+    The pathology (W51 F770W, and any MIRI field where bright nebulosity saturates
+    the detector): real stars and pure-emission knots saturate into ONE connected
+    ~10^5-px DQ-SATURATED blob, so every PRE-fit metric fails -- an emission knot is
+    a compact bright peak that the seed gate scores as MORE stellar than a genuine
+    saturated star whose own core is zeroed (prominence/core/conc/data-floor/NaN-
+    core/morphology all rank the phantom >= the real star; verified W51 F770W).  The
+    two signals that DO separate them are POST-fit, and only for very bright fits
+    (the ``flux_floor`` precondition is load-bearing -- it protects genuine deeply-
+    saturated stars whose faint wing-seed gives a large extrapolation ratio, e.g. a
+    real spiky star at flux 2e4 with flux/flux_init=61):
+
+      * ``ssr_ratio > ssr_max`` -- the model leaves a badly STRUCTURED residual
+        (model-on-emission: the PSF has no counterpart in the flat data; W51 SPUR1
+        ssr=139 vs a real bright star ssr=12).
+      * ``flux / flux_init > ratio_max`` -- the fit EXTRAPOLATED an enormous flux
+        from a faint seed (W51 SPUR2: flux_init 6677 -> flux_fit 7.0e6, 1054x).
+
+    Requires ``flux > flux_floor`` AND (bad ssr OR bad ratio).  Verified on W51
+    F770W: flags 7/153 satstars, all confirmed emission phantoms by eye, zero real-
+    star false drops (the user's real well-fit bright star: ssr=12, ratio=14 ->
+    kept).  Thresholds are F770W-surface-brightness-calibrated; ``flux_floor`` is
+    field/filter dependent -> override per run (MIRI_SATSTAR_PHANTOM_*).  Returns
+    False when disabled (flux_floor<=0) or inputs non-finite, so a fit is never
+    dropped on an inability to measure it.  See project_miri_partialsat_divot /
+    the W51 F770W spurious-super-bright investigation.
+    """
+    if not (flux_floor and flux_floor > 0):
+        return False
+    if not (np.isfinite(flux) and flux > flux_floor):
+        return False
+    bad_ssr = (ssr_max and ssr_max > 0 and np.isfinite(ssr_ratio)
+               and ssr_ratio > ssr_max)
+    ratio = (flux / flux_init) if (np.isfinite(flux_init) and flux_init > 0) else np.nan
+    bad_ratio = (ratio_max and ratio_max > 0 and np.isfinite(ratio)
+                 and ratio > ratio_max)
+    return bool(bad_ssr or bad_ratio)
+
+
 def is_small_radius_emission_phantom(prom_small, core_small, *,
                                      prom_min=8.0, core_min=1000.0):
     """Pure predicate: is a fit an extended-emission phantom by its SMALL-fixed-
@@ -1113,7 +1156,7 @@ def is_small_radius_emission_phantom(prom_small, core_small, *,
     return False
 
 
-def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_prominence_robust=False, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, deblend_daophot_xy=None, deblend_confirm_xy=None, sat_data_floor=None):
+def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_prominence_robust=False, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, deblend_daophot_xy=None, deblend_confirm_xy=None, sat_data_floor=None, phantom_flux_floor=0.0, phantom_ssr_max=50.0, phantom_ratio_max=50.0):
     # ``flux_drops``: optional list of SkyCoord.  An out-of-field (forced) source
     # whose seed sky position matches a drop within ~1.0" is SKIPPED entirely
     # (not fit, not contributed): cross-frame reconciliation found no trustworthy
@@ -1217,6 +1260,19 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     _env_robust = os.environ.get('MIRI_SATSTAR_SEED_PROM_ROBUST')
     if _env_robust is not None:
         seed_prominence_robust = bool(int(_env_robust))
+    # Post-fit BRIGHT-PHANTOM gate (env).  Rejects spurious super-bright satstars
+    # on saturated extended emission that evade every pre-fit gate (W51 F770W).
+    # OFF by default (flux_floor=0); F770W-calibrated floor 1e5 / ssr 50 / ratio 50
+    # set in the launcher.  See is_bright_flux_phantom.
+    _env_pff = os.environ.get('MIRI_SATSTAR_PHANTOM_FLUX_FLOOR')
+    if _env_pff is not None:
+        phantom_flux_floor = float(_env_pff)
+    _env_pssr = os.environ.get('MIRI_SATSTAR_PHANTOM_SSR_MAX')
+    if _env_pssr is not None:
+        phantom_ssr_max = float(_env_pssr)
+    _env_prat = os.environ.get('MIRI_SATSTAR_PHANTOM_RATIO_MAX')
+    if _env_prat is not None:
+        phantom_ratio_max = float(_env_prat)
 
     # nan_to_num data to avoid fitting NaNs
     data[np.isnan(fitsdata['VAR_POISSON'].data)] = 0
@@ -3042,6 +3098,34 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                           flush=True)
             except Exception:
                 pass
+
+        # POST-FIT BRIGHT-PHANTOM gate (MIRI, in-FOV, auto-detected only).  A
+        # spurious super-bright satstar on saturated extended emission (W51 F770W:
+        # real stars + emission knots saturate into one connected ~1e5-px blob, so
+        # every pre-fit gate ranks the phantom >= a real star) is caught only by
+        # its very bright flux PLUS a badly structured residual (ssr_ratio) or an
+        # enormous flux-from-faint-seed extrapolation (flux/flux_init).  Forced /
+        # user-seeded sources are exempt (position locked, trusted).  OFF unless
+        # phantom_flux_floor>0 (launcher-set for MIRI).  See is_bright_flux_phantom.
+        if (_is_miri and accept_source and not forced_source
+                and result is not None
+                and phantom_flux_floor and phantom_flux_floor > 0):
+            _pf_init = (float(np.atleast_1d(result['flux_init'])[0])
+                        if 'flux_init' in result.colnames else float('nan'))
+            if is_bright_flux_phantom(flux, _pf_init, ssr_ratio,
+                                      flux_floor=phantom_flux_floor,
+                                      ssr_max=phantom_ssr_max,
+                                      ratio_max=phantom_ratio_max):
+                accept_source = False
+                _pf_ratio = (flux / _pf_init
+                             if (np.isfinite(_pf_init) and _pf_init > 0)
+                             else float('nan'))
+                print(f"Post-fit bright-phantom gate (MIRI): rejecting source "
+                      f"{ii+1} -- spurious super-bright emission phantom "
+                      f"(flux={flux:.2e} > {phantom_flux_floor:.0e}; "
+                      f"ssr_ratio={ssr_ratio:.1f} (>{phantom_ssr_max:g}?) or "
+                      f"flux/flux_init={_pf_ratio:.0f} (>{phantom_ratio_max:g}?))",
+                      flush=True)
 
         if accept_source:
             # Only accumulate the per-source model into the global
