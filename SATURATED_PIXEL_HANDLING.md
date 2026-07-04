@@ -105,30 +105,39 @@ detection has used the any-group bit since the repository's first commit (the
 satstar finder predates the git history; this is the earliest tracked commit).
 
 **Affected commit range:** **`8837408` (2026-05-04) → HEAD** — *every* commit. The
-default behaviour is still affected:
-- **NIRCam: entirely unmitigated.** The correction returns `dq` unchanged unless
-  the instrument is MIRI (`correct_dq_first_group_saturation`, `:3227`).
-- **MIRI: unmitigated by default.** The correction is env-gated
+default behaviour on `main` is affected. **A proper fix is now in flight (PRs #40
++ #41, see below)**; until merged, on `main`:
+- **NIRCam: entirely unmitigated.** The only correction returns `dq` unchanged
+  unless the instrument is MIRI (`correct_dq_first_group_saturation`, `:3227`).
+- **MIRI: unmitigated by default.** That correction is env-gated
   `MIRI_FIRSTGROUP_SAT_DQ` (default `0`) and needs a sibling `_ramp.fits`.
 
-**Mitigation history:**
+**Mitigation / fix history:**
 - `e4039e6` (2026-06-30) — added `first_group_saturation_mask` /
   `correct_dq_first_group_saturation` (reads `_ramp.fits` GROUPDQ, clears
   SATURATED on later-group-only px). **MIRI-only, opt-in, default off** → does not
   change the shipped default for any instrument.
-- `e08952d` (2026-07-02) — "decouple detection vs fit mask": the *correct* shape
-  of the fix — use the first-group mask for **detection/classification** (so
-  recoverable stars aren't swept into satstar / vetoed from daophot) but keep the
-  any-group mask for the **fit** (the clipped near-saturation core must stay
-  masked or its wings drive the PSF amplitude too high → over-subtraction
-  divot + Airy ring). **Reverted 15 min later by `b60a16c` (2026-07-02) with no
-  stated reason** → the proper fix is currently absent.
+- `e08952d` (2026-07-02) — "decouple detection vs fit mask" — **reverted 15 min
+  later by `b60a16c`** (no stated reason). Correct instinct (separate the
+  detection mask from the fit mask) but ramp-based and MIRI-scoped.
+- **`#40` `satstar-truly-saturated`** — the real fix, cleaner route: the *finder*
+  detects on **`SATURATED & DO_NOT_USE`** (truly-lost cores; `DO_NOT_USE` = the
+  ramp produced no valid value = 0 good groups) + a min-lost-core-size gate. Uses
+  the crf `DO_NOT_USE` bit → **no ramp file, all instruments, on by default**
+  (fallback to full SATURATED when `DO_NOT_USE` is absent; gate
+  `SATSTAR_REQUIRE_DO_NOT_USE`). Recovered wings are now *unmasked and fit*, so
+  there is no divot/ring — the pixels e08952d re-masked shouldn't have been masked
+  at all. Frame-wide 209 → 84 seeds.
+- **`#41` `fix-daophot-truly-lost-sat`** (stacked on #40) — same restriction on
+  the **daophot** path (`_prepare_frame_for_photometry`): `is_saturated =
+  truly_lost_saturated_mask(dq)`, so the daophot fit mask *and* the
+  `_filter_near_saturation` veto stop dropping recoverable point sources.
 
-**Bottom line:** the "mistake" is using one any-group mask for both *detecting*
-and *fitting* saturated stars. Detection should key off the **first-group**
-(truly-unrecoverable) mask; the fit should keep masking the any-group clipped
-core. That decoupling was written and backed out; re-landing it (and extending it
-to NIRCam, not just MIRI, and not gating it off by default) is the fix.
+**Bottom line:** the mistake was using one **any-group** mask for both detecting
+and fitting. The fix keys both channels off the **truly-lost** core
+(`SATURATED & DO_NOT_USE`) and fits the recovered wings — instrument-agnostic,
+default-on, no ramp file. Landed across PRs #40 (finder) + #41 (daophot); merge
+both to close it on `main`.
 
 ---
 
