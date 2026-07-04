@@ -3022,10 +3022,14 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 if phase in ('m3', 'm4', 'm5', 'm6'):
                     det_i2d = det_i2d or _data_i2d_path(module, filt)  # fallback
                     try:
+                        _sround = float(getattr(opts_phase, 'manual_seed_round_max', 0.5))
                         prev_seed = _build_i2d_augmented_seed(
                             det_i2d, vetted_prev, filt,
                             local_snr_min=float(getattr(
                                 opts_phase, 'manual_ext_local_snr_min', 5.0)),
+                            roundlo=-_sround, roundhi=_sround,
+                            sharplo=float(getattr(opts_phase, 'manual_seed_sharp_lo', 0.4)),
+                            sharphi=float(getattr(opts_phase, 'manual_seed_sharp_hi', 1.2)),
                             bg_subtract_path=bg_sub,
                             # Structure-noise prune / coarse-bg detection.  For
                             # MIRI the miri_tuning block sets opts_phase.struct_x/y

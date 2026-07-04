@@ -3553,6 +3553,23 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     type='float', default=0.6,
                     help="qfit ceiling for the multi-frame confirmation keep "
                          "(default 0.6).")
+    parser.add_option("--manual-seed-round-max", dest="manual_seed_round_max",
+                    type='float', default=0.5,
+                    help="DAOStarFinder roundness bound for the i2d-augmented "
+                         "RESIDUAL seed detection (roundlo=-x, roundhi=+x).  Default "
+                         "0.5 (tight, rejects extended emission).  On STAR-dominated "
+                         "fields loosen to ~1.0: faint companions sitting on a bright "
+                         "neighbour's residual gradient are distorted and fail the "
+                         "tight cut (Arches: ~3x more recovered).  Do NOT loosen on "
+                         "emission fields (shape is what rejects emission knots).")
+    parser.add_option("--manual-seed-sharp-lo", dest="manual_seed_sharp_lo",
+                    type='float', default=0.4,
+                    help="DAOStarFinder sharpness lower bound for the residual seed "
+                         "detection (default 0.4; star-field loosen ~0.2).")
+    parser.add_option("--manual-seed-sharp-hi", dest="manual_seed_sharp_hi",
+                    type='float', default=1.2,
+                    help="DAOStarFinder sharpness upper bound for the residual seed "
+                         "detection (default 1.2; star-field loosen ~1.5).")
     parser.add_option("--manual-ext-nmatch-confirm-maxpos-mas",
                     dest="manual_ext_nmatch_confirm_maxpos_mas",
                     type='float', default=0.0,
