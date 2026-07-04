@@ -3,12 +3,12 @@
 Findings from user (AG) visual inspection of the 8-field gate rollout
 (re-cataloged against `satstar-bright-phantom-gate` = current `main` + PR #36).
 
-**Scope note.** With one exception (see F2550W fake density), none of these are
-regressions from the bright-phantom gate (PR #36) — the gate only *removes*
-super-bright phantoms on saturated emission and left every real star verified
-in place. The problems below are **pre-existing MIRI satstar / detection
-behaviour** surfaced by careful inspection of the freshly-regenerated products.
-They are documented here for follow-up (likely separate PRs), not fixed in #36.
+**Scope note.** None of these are regressions from the bright-phantom gate
+(PR #36) — the gate only *removes* super-bright phantoms on saturated emission
+and left every real star verified in place. The problems below are **pre-existing
+MIRI satstar / detection / flux behaviour** surfaced by careful inspection of the
+freshly-regenerated products. They are documented here for follow-up (likely
+separate PRs), not fixed in #36.
 
 Each item: **observation → cutout → mechanism (confirmed / hypothesis) →
 proposed solution(s) → risk of the solution**.
@@ -86,38 +86,60 @@ in this field. Any amplitude bump risks flipping under-sub → over-sub pits.
 
 ---
 
-## 3. cloudc F2550W — fake stars on emission + boxy under-sub
-![cloudc2550o](03_cloudc_f2550w_fakes_overview.png)
-![cloudc2550z](04_cloudc_f2550w_undersub_boxy.png)
+## 3. cloudc F2550W — faint stars MASSIVELY OVER-subtracted (pockmarks)
+![cloudc2550](03_cloudc_f2550w_oversubtraction.png)
+data−bg | model | residual−bg (blue = over-sub pit). 7 AG-flagged stars.
 
-**Confirmed.** Real stars subtract well, but the field is "pockmarked": (a)
-faint **fake detections on bright extended emission** (long-λ broad PSF + bright
-nebulosity → daofind picks emission bumps as point sources → each gets a PSF
-subtracted → pit), and (b) **boxy square edges** + positive halos around
-subtracted bright stars (the brightness-scaled model render footprint — see
-existing task/PR on render footprint — truncates wings at the cutout box). The
-vetted count rose 1964→2241; part of that increase is these emission fakes.
+> **Correction (AG, 2026-07-04).** An earlier draft of this section called these
+> "fake stars on emission" / "under-subtracted." Both wrong. The residual reads
+> below the ~1000 F2550W thermal-background **pedestal**; measured against zero it
+> looked positive, but measured against the pedestal every one is a **deep
+> negative pit = massive over-subtraction.** Corrected below.
 
-*This is the one place the gate interacts:* removing super-bright phantom
-over-subtraction gouges left a cleaner residual, on which daofind then finds
-*more* faint emission bumps. Net: more faint fakes, not fewer.
+**Confirmed.** Real bright stars subtract fine, but faint/moderate stars are
+grossly **over-subtracted**. Measured against the local background (~1000):
+
+| star | star flux (data−bg) | model peak | pit depth (resid−bg) | catalog flux |
+|---|---|---|---|---|
+| `17:46:13.71 -28:34:27.1` | **6** | 422 | **−420** | **37142** |
+| `17:46:16.735 -28:35:17`  | 23 | 238 | −223 | 9781 |
+| `17:46:16.16 -28:35:13.2` | 19 | 147 | −128 | 1498 |
+| `17:46:16.64 -28:35:28.8` | 8 | 174 | −167 | 1248 |
+| `17:46:13.58 -28:34:16.6` | 24 | 134 | −111 | 2104 |
+| `17:46:13.224 -28:34:22.1`| 40 | 123 | −83  | 3747 |
+
+The **catalog fluxes are inflated 5–70×** (37142 for a 6-count star), so the
+rendered PSF hugely over-predicts and gouges a pit 80–420 below background. 6 of
+7 are **non-saturated daophot** sources (not satstars), so this is a **daophot
+flux/background failure at F2550W**, not a satstar-model issue. The fluxes are
+also *erratic* (1248→37142 for near-identical ~1000-count peaks) → the fit is
+ill-conditioned. Boxy render edges are also visible (secondary).
+
+**Mechanism (hypotheses, to confirm).**
+1. **Background pedestal absorbed into the flux.** F2550W has a huge (~1000
+   MJy/sr) thermal background. If the local-background estimate under a faint
+   source is too low, the PSF fit assigns the pedestal to the star → 10–70×
+   flux over-estimate → over-subtraction pit. (Check `local_bkg` in the catalog
+   for these rows; the erratic fluxes point here.)
+2. **Ill-conditioned broad-PSF fit.** The F2550W PSF is very broad (~7–8 px
+   FWHM); fitting it to a faint compact bump on structured background is
+   degenerate → runaway amplitude.
 
 **Proposed solutions.**
-- (A) **Filter-dependent detection stringency** for F1280W/F2550W: raise the
-  prominence / sharpness floor (`MIRI_PROM_SNR_*`, daofind `sharplo/roundlo`)
-  where the PSF is broad and emission dominates.
-- (B) **Shape/concentration vetting**: reject detections broader than the PSF
-  (extended-emission bumps) via a concentration or PSF-χ² cut.
-- (C) Better pre-detection background (coarse-bg / smoothed-bg already exist;
-  tune box size for F2550W) so emission structure is flattened before daofind.
-- (D) Boxy edges: grow / taper the model render footprint for bright stars
-  (existing render-footprint task).
+- Confirm (1): dump `local_bkg` + refit one star with a forced correct local
+  background; if the pit vanishes, it's the background estimate.
+- Fix the F2550W local-background estimation (larger/robust annulus, or subtract
+  a proper coarse background before the fit — the `coarse_bg`/smoothed-bg paths
+  already exist and are off here).
+- Guard: reject / cap fits whose flux implies a model peak ≫ the local
+  data-minus-background excess (an over-prediction gate analogous to the
+  bright-phantom gate but for the faint over-sub regime).
 
-**Risk.** (A)/(B) directly re-open the cloudc **F770W** tension — the same
-stringency that kills emission fakes also killed the 28 by-eye-real faint
-saturated stars we worked to recover. Must be filter-scoped and vetted per
-field. (C) over-flattening removes real extended sources / faint stars on
-gradients.
+**Risk.** A background-annulus change that works here can bias fluxes in the
+crowded short-λ fields (F770W) where the annulus hits neighbours. An
+over-prediction cap risks clipping genuine bright stars on faint background.
+Must be filter-scoped and vetted per field. Ties to the F2550W model/residual
+inconsistency + negative-pit tasks already open.
 
 ---
 
@@ -138,16 +160,17 @@ Faint sources, minor mis-subtraction (model 72/32 vs data 145/110); small
 residual dimples. Low harm.
 
 **(d) `17:47:17.805 -28:24:04.5` — fake on emission.** A bright emission ridge
-(no compact source) is cataloged and PSF-subtracted → over-sub pit. Same as
-cloudc F2550W (a).
+(no compact source) is cataloged and PSF-subtracted → over-sub pit. (A genuine
+emission-detection fake here, distinct from the cloudc F2550W flux-over-estimate
+over-sub.)
 
 **Proposed solutions.**
 - (a) For clipped-core over-sub: **cap the subtracted model peak to the data's
   charge-migration wing level** (subtract only out to where model ≈ data), or
   NaN the clipped-core region consistently so it's a clean mask, not a
   variable-depth pit. Ties to the existing negative-pit / render tasks.
-- (d) Same as cloudc F2550W emission-fake solutions (filter-scoped detection
-  stringency + shape vetting).
+- (d) Filter-scoped detection stringency + shape/concentration vetting to reject
+  emission ridges (broader than the PSF).
 
 **Risk.** Capping the model peak *under*-subtracts the true wings of a genuinely
 bright star (flips a hole into a positive halo). Detection stringency risks real
@@ -159,10 +182,11 @@ faint stars (as in §2/§3).
 
 | theme | fields | root | key risk of fixing |
 |---|---|---|---|
+| **faint-star flux over-estimate → deep over-sub pits** | **cloudc F2550W** | daophot flux inflated 5–70× (bg pedestal absorbed / ill-conditioned broad-PSF fit) | bg-annulus change biases crowded short-λ fields; over-prediction cap clips real bright stars |
 | clipped-core over/under-sub | cloudc F770W (under), sgrb2 F1280W-a (over), brick F2550W | PSF amplitude vs saturation-clipped/NaN core; deblend splits flux | any amplitude change flips over↔under; deblend removal re-merges real pairs |
-| emission fakes → pockmarks | cloudc F2550W, sgrb2 F1280W-d | long-λ broad PSF + bright emission; daofind + vetting too permissive | stringency kills real faint stars (cloudc F770W recovery) |
+| emission-detection fakes | sgrb2 F1280W-d | long-λ broad PSF + bright emission; daofind + vetting too permissive | stringency kills real faint stars (cloudc F770W recovery) |
 | low-coverage / mosaic seams | brick F2550W | few exposures → unreliable amplitude | coverage-gating leaves real stars unsubtracted |
-| boxy render footprint | cloudc F2550W | model rendered only over fit cutout | compute cost of larger footprint |
+| boxy render footprint | cloudc F2550W, others | model rendered only over fit cutout | compute cost of larger footprint |
 
 **Recommendation.** These are filter- and field-dependent and the fixes are
 mutually tensioned (stringency vs completeness, amplitude over vs under). Treat
