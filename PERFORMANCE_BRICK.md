@@ -23,10 +23,12 @@ the job logs under `/blue/adamginsburg/adamginsburg/logs/jwst/`.
 | m7 (cross-band merge, per-proposal) | ~16 h | one job, all filters |
 | m8 (forced cross-band fill, per-proposal) | ~14 h | one job, all filters |
 
-Cataloging dominates reduction, and inside cataloging it is **per-frame
-photometry fitting** that costs the time. The **first pass (m12) is the biggest
-single phase** (~2.4 h LW / ~9 h SW) because it detects + fits every source from
-scratch; the seeded re-fits (m3–m6) are cheaper.
+Cataloging dominates reduction, and inside cataloging it is **per-frame PSF
+fitting** that costs the time. *Every* phase runs its own per-frame `daofind` +
+fit — m12 is not "unseeded." m12 costs the most only because it is **two fit
+passes** (iter1, then iter2 on the residual) instead of one, so it is ~2× a
+single seeded phase, not 5×. Detection (`daofind`) is cheap; the fit is the
+cost.
 
 ### Important correction: the "33.5 h" F444W run was an I/O anomaly, not the norm
 
@@ -80,16 +82,18 @@ photometry logs is a millisecond-scale post-fit cull, not the fit.
 
 ## 3. Per-iteration breakdown
 
-Same 48 (LW) / 192 (SW) frames are re-fit every phase. m12 fits from scratch;
-m3–m6 re-fit from the previous phase's seed. Clean-run per-phase (no I/O stall):
+Same 48 (LW) / 192 (SW) frames are fit every phase, each with its own per-frame
+`daofind` + PSF fit. m12 runs **two** passes (iter1, then iter2 on the residual);
+m3–m6 run one pass each, seeded by that phase's `daofind` + the projected
+previous/cross-band catalog. Clean-run per-phase (no I/O stall):
 
 | phase | LW (48 fr) | SW (192 fr) | what it is |
 |---|---|---|---|
-| **m12** | ~2.4 h | ~9 h | first pass: detect + fit from scratch |
-| m3 | ~0.2–2 h | ~0.4–2 h | re-fit, seeded |
-| m4 | ~0.2–2 h | ~0.4–2 h | re-fit, seeded |
-| m5 | ~2 h | ~2 h | re-fit, seeded |
-| m6 | ~0.2–1 h | ~1 h | re-fit, seeded |
+| **m12** | ~2.4 h | ~9 h | daofind+fit ×2 (iter1 + iter2-on-residual) |
+| m3 | ~0.2–2 h | ~0.4–2 h | daofind+fit ×1, seeded |
+| m4 | ~0.2–2 h | ~0.4–2 h | daofind+fit ×1, seeded |
+| m5 | ~2 h | ~2 h | daofind+fit ×1, seeded |
+| m6 | ~0.2–1 h | ~1 h | daofind+fit ×1, seeded |
 | finalize | ~0.6 h | ~0.6 h | vetting + write |
 | **full total** | **~10.5 h** | **~18–20 h** | |
 | m7 (cross-band, per-proposal) | ~16 h (all filters, one job) | |
@@ -144,22 +148,26 @@ Brick-center density.
 
 1. **Fix the m12 I/O contention.** This is the real lever for the observed
    blow-ups.
-   - Write per-frame intermediate products to **node-local scratch**
-     (`$SLURM_TMPDIR`) instead of shared `/orange` `/blue`, then copy results back
-     once. (The submit scripts were recently pointed at `$SLURM_TMPDIR` for temp
-     files — extend that to the heavy per-frame m12 writes.)
+   - Build per-frame products on **node-local scratch** (`$SLURM_TMPDIR`) and
+     copy the finished file to shared `/orange` `/blue` in a single sequential
+     write, instead of doing the many-small-write FITS/table construction
+     directly on the shared mount. Implemented via `write_via_local_scratch`
+     (applied to the per-frame catalog write); extend to the per-frame
+     residual/model image writers as well.
    - **Stagger array-task starts** (or cap concurrent tasks per node) so N tasks ×
      8 workers don't all peak-I/O the same mount simultaneously.
    - Consider fewer workers for m12 specifically, or spread the frame set across
      nodes, to cut peak I/O concurrency.
-2. **Seed m12.** m12 is the most expensive phase because it detects + fits from
-   scratch. Giving it a seed (e.g. the deep-i2d detection already computed) makes
-   it behave like the cheaper seeded re-fits.
-3. **Per-frame sharding across nodes** (`--manual-frame-shard` exists) — biggest
+2. **Per-frame sharding across nodes** (`--manual-frame-shard` exists) — biggest
    lever for SW (192 frames), and it also spreads I/O across nodes.
-4. **Leave the merge alone.** The chunked merge is already <5 min/phase.
-5. **Do NOT special-case "dense" frames.** Density is uniform; cost-by-density
+3. **Leave the merge alone.** The chunked merge is already <5 min/phase.
+4. **Do NOT special-case "dense" frames.** Density is uniform; cost-by-density
    scheduling would buy nothing.
+5. **Seeding won't help m12.** Every phase already runs `daofind`, and detection
+   is cheap next to the PSF fit — the cost is fitting every source, not finding
+   them. m12's extra cost is its second fit pass (iter2), not a lack of seed.
+   Cutting m12 means cheaper fitting (fewer sources / faster fitter) or dropping
+   a pass, not "seeding."
 
 ---
 
