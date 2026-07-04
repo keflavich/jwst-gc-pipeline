@@ -3542,9 +3542,12 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "--manual-ext-nmatch-confirm-qfit-max, regardless of the "
                          "single-catalog qfit/snr cuts.  Recovers faint stars we "
                          "DETECT but the vetting drops (Arches F212N vs Hosek: 0.43 "
-                         "-> ~0.53-0.56).  Default 0 = OFF; set 3 to match Hosek's "
-                         "ndet>=3.  Emission repeats across dithers too -- pair with "
-                         "--manual-ext-nmatch-confirm-maxpos-mas on emission fields.")
+                         "-> 0.58).  Default 0 = OFF; set 3 to match Hosek's ndet>=3. "
+                         "STAR-FIELD TOOL: extended emission is fixed on-sky so it "
+                         "ALSO repeats across dithers with a stable centroid -- the "
+                         "position guard does NOT reject it (W51 dark filament: +110 "
+                         "emission knots admitted).  Leave OFF on emission-dominated "
+                         "fields.")
     parser.add_option("--manual-ext-nmatch-confirm-qfit-max",
                     dest="manual_ext_nmatch_confirm_qfit_max",
                     type='float', default=0.6,
@@ -3555,9 +3558,10 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     type='float', default=0.0,
                     help="Position-stability guard for the multi-frame keep: only "
                          "keep if the across-exposure centroid scatter "
-                         "hypot(std_ra,std_dec) <= this many mas (real stars ~3-7 "
-                         "mas; emission-knot centroids wander).  Default 0 = off; "
-                         "set ~20-30 on extended-emission fields.")
+                         "hypot(std_ra,std_dec) <= this many mas.  Rejects "
+                         "position-UNSTABLE spurious (cosmic-ray / noise "
+                         "coincidences).  Does NOT reject extended emission (fixed "
+                         "on-sky -> stable centroid).  Default 0 = off.")
     # Structure-noise prune + coarse-bg detection.  These shape/physics-based
     # discriminators reject broad extended-emission (PAH/nebulosity) bumps while
     # keeping faint point sources (which stay sharp and outpeak the local

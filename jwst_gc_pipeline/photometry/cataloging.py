@@ -1007,11 +1007,17 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     # A source detected in >= nmatch_confirm exposures with a still-plausible qfit
     # is real -- the per-vetting qfit/snr cuts drop faint stars that DO repeat
     # across dithers (Arches F212N: we DETECT 68% of Hosek but the first vetting
-    # drops faint detections 0.64 -> 0.42; nmatch>=3 recovers to ~0.53-0.56).
-    # Emission is fixed on-sky and also repeats, so guard on POSITION STABILITY:
-    # real stars have tight centroids across frames (std_ra/dec ~3-7 mas), while
-    # emission-knot daofind centroids wander -- gate via nmatch_confirm_maxpos_mas
-    # (0 = off).  overshoot + struct-noise prune below still apply.  Default off.
+    # drops faint detections 0.64 -> 0.42; nmatch>=3 recovers to 0.58).
+    # SCOPE: this is a STAR-FIELD tool.  Extended emission is fixed on-sky, so an
+    # emission-knot daofind bump ALSO repeats across dithers AND has a stable
+    # centroid -- the nmatch_confirm_maxpos_mas position guard does NOT reject it
+    # (verified on W51 dark filament: +110 admitted sources have prominence ~0.9,
+    # posscatter ~0 mas).  So on emission-dominated fields this re-admits emission
+    # and should be left OFF (its default) or given a real emission discriminator.
+    # On star-dominated fields (Arches) it is a large clean win.  The position
+    # guard only helps against genuinely position-unstable spurious (cosmic-ray /
+    # noise coincidences), not fixed emission.  overshoot + struct-noise prune
+    # below still apply.  Default off.
     if nmatch_confirm > 0 and 'nmatch' in t.colnames:
         _nm = t['nmatch']
         _nm = np.asarray(_nm.filled(0) if hasattr(_nm, 'filled') else _nm, dtype=float)

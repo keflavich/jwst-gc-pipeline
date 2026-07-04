@@ -61,32 +61,46 @@ daofind (red) is worse than per-frame, so detecting harder does not help.
 `pytest jwst_gc_pipeline/photometry/tests/` → **205 passed** (0 failures). The
 merge, satstar, box-artifact, off-FOV, and integration regressions all stay green.
 
-### Extended-emission cutouts (the key check)
+### Extended-emission cutouts — the multi-frame keep is NOT emission-safe
+
 All 5 cutouts re-run end-to-end with recover + multi-frame keep *enabled*
 (`--manual-ext-nmatch-confirm=3 --manual-ext-nmatch-confirm-qfit-max=0.6
 --manual-ext-nmatch-confirm-maxpos-mas=20`), compared to the recover-off baseline:
 
-| cutout (type) | vetted base→nm | bg median | bg max | over-sub min |
-|---|---|---|---|---|
-| pillar_head (sickle emission) | 12 → 15 | 54.4 → 53.7 ↓ | 139.9 = | unchanged |
-| pillar_with_satstar (sickle) | 37 → 53 | 6.55 → 6.32 ↓ | ~= | unchanged |
-| w51 darkfilament F480M (emission) | 106 → 186 | 56.0 → 55.4 ↓ | 478.8 = | unchanged |
-| w51 darkfilament F187N (emission) | 69 → 84 | 14.8 → 14.8 = | 191.3 = | unchanged |
-| low_background (star field) | 46 → 66 | 1.03 → 0.78 ↓ | = | unchanged |
+| cutout (type) | vetted base→nm | added | verdict |
+|---|---|---|---|
+| low_background (star field) | 46 → 66 | +20 | real stars (star-dominated field) |
+| pillar_head (sickle emission) | 12 → 15 | +3 | includes ~1+ fake emission source |
+| pillar_with_satstar (sickle) | 37 → 53 | +16 | mixed |
+| **w51 darkfilament F480M (emission)** | 106 → **186** | **+110** | **mostly EMISSION** |
+| w51 darkfilament F187N (emission) | 69 → 84 | +15 | mixed |
 
-**Every emission field's background median goes DOWN (never inflates), maxes are
-unchanged, residuals are cleaner, and no new over-subtraction holes appear** — the
-extended-emission scheme is preserved.
+**On emission-heavy fields the multi-frame keep RE-ADMITS EMISSION.** The W51
+dark-filament +110 sources are emission knots, not stars: median prominence 0.9
+(95% below 3), sitting on bright background — the same low-prominence emission the
+recover prominence gate rejects. pillar_head gained a fake as well (it got worse,
+not "unchanged").
 
-Visual confirmation on the emission-heaviest field (W51 dark filament, +80
-sources). Panel 3 (nm − base) shows the newly-subtracted sources are **discrete
-point stars scattered across the field, not the continuous emission ridges** —
-the ridge structure in panels 1–2 is unchanged between base and nm. The position
-guard did its job.
+**Why the position guard fails:** on-sky emission is spatially *fixed*, so a
+daofind bump on an emission knot has a *stable* centroid across dithers
+(measured posscatter median ~0 mas) and passes `nmatch-confirm-maxpos-mas`. The
+guard assumption ("emission centroids wander") is wrong for compact emission.
 
-![W51 dark filament emission safety](w51_darkfilament_emission_safety.png)
+The bg medians going *down* on these fields is NOT a safety pass — it is the
+emission being (wrongly) subtracted into the model, which lowers the residual.
 
-![pillar_head emission safety](pillar_head_emission_safety.png)
+![W51 dark filament: added sources are emission](w51_darkfilament_emission_safety.png)
+
+![pillar_head](pillar_head_emission_safety.png)
+
+**Scope of the feature (revised):** the multi-frame keep is a *star-field* tool.
+On star-dominated fields (Arches: +14,719 real Hosek matches; sickle
+low_background: real stars) it is a large, clean win. On emission-dominated fields
+(W51 dark filament; the sickle pillars to a lesser degree) it re-admits emission
+and should be left OFF (its default) or paired with a real emission discriminator
+— prominence is the one that separates them, but a flat prominence floor also
+drops faint real stars (the tension the recover sloped gate manages). A robust
+per-source star-vs-emission cut for the multi-frame tier is future work.
 
 ### Recover-tier prominence boundary (context)
 
@@ -107,3 +121,25 @@ sbatch arches_nmatch.sbatch        # slope-5.6 recover + nmatch=3 + maxpos=20
 ```
 
 Default OFF (`--manual-ext-nmatch-confirm 0`) is byte-identical to prior behaviour.
+
+## Anatomy of the remaining Hosek-only (~28.6k), recover+nmatch m6
+
+Diagnostic (`diagnose_remaining_misses.py`):
+
+- **(c) recovery vs OUR nmatch** — the keep works: `our_nmatch≥3` recovers 76–99%.
+  The residual misses are dominated by `our_nmatch=0` (24,001 — never detected,
+  0.16 recovery) and `our_nmatch=1–2` (8,907 — sub-3-frame, below the keep).
+- **(d) satstar spikes** — 11,416 of 28,648 (40%) are within 1.5″ of a saturated
+  star (unmeasurable spike zones / Hosek artifacts). Significant but not the majority.
+- **(b) recovery vs Hosek ndet** — rises 0.35 (ndet=3) → 0.85 (ndet=11): we recover
+  Hosek's robust stars and miss 65% of his marginal `ndet=3` (his minimum confidence).
+- **(a) spatial** — the misses cluster in the densest sub-region (crowding-limited).
+
+**Conclusion:** the multi-frame keep closed the *survival* loss (detected-but-dropped
+faint stars). The remaining gap is the *detection* floor — ~24k never detected
+(faint / crowded / spike-blocked; a deep-coadd daofind is worse, 0.43, so they are
+genuinely hard), ~9k sub-3-frame, ~40% in spike zones, plus Hosek's own marginal
+ndet=3. Closing further needs better detection in crowded/spike regions, not more
+vetting relaxation.
+
+![remaining Hosek-only anatomy](remaining_hosek_only_anatomy.png)
