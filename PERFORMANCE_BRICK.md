@@ -1,31 +1,40 @@
 # Brick Pipeline Performance Report
 
 Where the wall-clock goes, measured from the current-code Brick 1182 re-reduction
-+ re-catalog (July 2026). Numbers are from SLURM `sacct` elapsed times and the
-per-line ISO timestamps in the job logs under
-`/blue/adamginsburg/adamginsburg/logs/jwst/`.
++ re-catalog (July 2026), cross-checked against earlier Brick cataloging runs.
+Numbers are from SLURM `sacct` elapsed times and the per-line ISO timestamps in
+the job logs under `/blue/adamginsburg/adamginsburg/logs/jwst/`.
 
-**Reference run:** F444W (LW), proposal 1182 field 004, 48 exposures, 8 parallel
-workers.
+**Runs used:**
 - reduction: `reduce_reduce_36306458_*.out`
-- cataloging (m12→m6): `catalog_brick-catalog_36240928_3.out` (elapsed 1d 09:30:58)
+- cataloging (stalled): `catalog_brick-catalog_36240928_{0,1,3}.out`
+- cataloging (clean baseline, no stall): `catalog_brick-catalog_36013569_0.out`
+  (SW, 192 frames), `catalog_brick-catalog_36013571_3.out` (LW, 48 frames)
 
 ---
 
-## TL;DR — where the time goes
+## TL;DR
 
-| stage | time (LW / F444W) | note |
+| stage | clean time | note |
 |---|---|---|
-| **Reduction (imaging)** | ~1 h | fast; SW ~4–5 h |
-| **Cataloging m12→m6** | **33.5 h** | the whole ballgame |
+| **Reduction (imaging)** | ~1 h LW / ~4–5 h SW | Image3 per module; not the bottleneck |
+| **Cataloging (full, LW)** | **~10.5 h** | clean run 36013571_3 |
+| **Cataloging (full, SW)** | **~18–20 h** | ~2× LW (192 vs 48 frames) |
 | m7 (cross-band merge, per-proposal) | ~16 h | one job, all filters |
 | m8 (forced cross-band fill, per-proposal) | ~14 h | one job, all filters |
 
-**Cataloging dominates by ~30×.** Inside cataloging, essentially all the time is
-**per-frame photometry fitting**. The catalog merge (chunked) is now trivial
-(<5 min/phase). The single biggest block is **m12, the first pass (18 h)**, and
-within m12 a **dense-frame long tail** (~13 h where the densest Brick-center
-frames fit while the rest sit idle — worker load imbalance).
+Cataloging dominates reduction, and inside cataloging it is **per-frame
+photometry fitting** that costs the time. The **first pass (m12) is the biggest
+single phase** (~2.4 h LW / ~9 h SW) because it detects + fits every source from
+scratch; the seeded re-fits (m3–m6) are cheaper.
+
+### Important correction: the "33.5 h" F444W run was an I/O anomaly, not the norm
+
+The first draft of this report measured job `36240928` and saw m12 take 18 h with
+a ~13 h "tail," and wrongly attributed it to dense Brick-center frames. **That is
+not supported** — the Brick stellar density is nearly uniform, and the data prove
+it. That 18 h was a **one-time I/O stall**, not compute (see §4). The clean-run
+numbers above are the real cost.
 
 ---
 
@@ -39,8 +48,7 @@ Per-filter Image3 wall-clock (`sacct`, job 36306458):
 | F200W (SW) | 192 | 4:55 |
 | F444W (LW) | 48 | 0:56 |
 
-Per **module** Image3 chain (F115W, ~26 min/module), from stpipe step
-timestamps:
+Per **module** Image3 chain (F115W, ~26 min/module), from stpipe step timestamps:
 
 | step | duration |
 |---|---|
@@ -50,10 +58,8 @@ timestamps:
 | resample | ~10 min |
 | source_catalog | ~1 min |
 
-Times three modules (`nrca`, `nrcb`, `merged`) plus destreak and the
-`realign_to_catalog` up-front alignment → the ~4 h SW total. SW is ~4–5× the LW
-cost because SW has 8 detectors/exposure (vs 2 LW) → 192 vs 48 frames, plus
-per-frame destreak.
+× three modules (`nrca`, `nrcb`, `merged`) + destreak + `realign_to_catalog`.
+SW is ~4–5× LW because SW has 8 detectors/exposure (vs 2 LW) → 192 vs 48 frames.
 
 **Reduction is not the bottleneck.**
 
@@ -63,90 +69,101 @@ per-frame destreak.
 
 Saturated-star models (`*_satstar_model.fits`) are built per-frame by
 `remove_saturated_stars` (`crowdsource_catalogs_long.py:1711`) during the first
-cataloging pass, then **cached on disk and reused** across all later phases and
-across re-catalog reruns. In the reference run they were reused from a prior
-build (file mtimes predate the run), so satstar contributed ~0 to the 33.5 h.
+cataloging pass, then **cached on disk and reused** across later phases and across
+re-catalog reruns. In the reference run they were reused from a prior build, so
+satstar contributed ~0. The per-frame `Satstar-artifact filter` gate in the
+photometry logs is a millisecond-scale post-fit cull, not the fit.
 
-The per-frame `Satstar-artifact filter` gate seen throughout the photometry logs
-is a millisecond-scale post-fit cull, not the satstar fit.
-
-**Satstar is not a steady-state bottleneck** (it is paid once, then cached). It
-only matters on a cold run with no cached models.
+**Satstar is not a steady-state bottleneck** (paid once, then cached).
 
 ---
 
-## 3. Per-iteration breakdown (F444W, 48 frames, 8 workers)
+## 3. Per-iteration breakdown
 
-Phase boundaries from the `mergedcat:` and `combine_singleframe_chunked:`
-timestamps. "fit" = per-frame photometry across all 48 frames; "merge" =
-`combine_singleframe_chunked` (spatial-tile parallel merge + dedup).
+Same 48 (LW) / 192 (SW) frames are re-fit every phase. m12 fits from scratch;
+m3–m6 re-fit from the previous phase's seed. Clean-run per-phase (no I/O stall):
 
-| phase | whole | per-frame fit | merge | per-frame (CPU-h) | what it is |
-|---|---|---|---|---|---|
-| **m12** | **18.2 h** | 17.7 h | 0.5 h | ~3.0 (skewed) | first pass: detect + fit from scratch |
-| m3 | 3.47 h | 3.44 h | 2 min | 0.57 | re-fit, seeded |
-| m4 | 3.62 h | 3.56 h | 4 min | 0.59 | re-fit, seeded |
-| m5 | 3.78 h | 3.74 h | 3 min | 0.62 | re-fit, seeded |
-| m6 | 3.82 h | 3.79 h | 1 min | 0.63 | re-fit, seeded |
-| finalize | 0.6 h | — | — | — | vetting + write |
-| **total** | **33.5 h** | | | | |
+| phase | LW (48 fr) | SW (192 fr) | what it is |
+|---|---|---|---|
+| **m12** | ~2.4 h | ~9 h | first pass: detect + fit from scratch |
+| m3 | ~0.2–2 h | ~0.4–2 h | re-fit, seeded |
+| m4 | ~0.2–2 h | ~0.4–2 h | re-fit, seeded |
+| m5 | ~2 h | ~2 h | re-fit, seeded |
+| m6 | ~0.2–1 h | ~1 h | re-fit, seeded |
+| finalize | ~0.6 h | ~0.6 h | vetting + write |
+| **full total** | **~10.5 h** | **~18–20 h** | |
+| m7 (cross-band, per-proposal) | ~16 h (all filters, one job) | |
+| m8 (forced fill, per-proposal) | ~14 h (all filters, one job) | |
 
-Per-proposal (all filters in one job):
+**Per-image:** with 8 workers, a phase runs in `frames/8` waves. Clean m3–m6 show
+**~0.5 h/wave, and every wave is within 0.06 h of every other** — i.e. the frames
+cost the same. There is no dense-frame subset.
 
-| phase | time | scope |
-|---|---|---|
-| m7 (cross-band merge) | ~16 h | one job over all filters (job 36013572) |
-| m8 (forced cross-band fill) | ~14 h | one job over all filters (job 35882156) |
-
-### Reading the table
-- **Merge is solved.** The chunked spatial-tile merge is <5 min even on
-  ~2.1 M detections/phase. Not worth further work.
-- **m12 is 5× the cost of m3–m6.** m12 detects and fits every source from
-  scratch; m3–m6 re-fit from the previous phase's seed catalog and converge far
-  faster. Same 48 frames, same fitter — the difference is from-scratch detection
-  + first-fit vs seeded re-fit.
-- **Per-image is highly non-uniform.** m12's 17.7 h of fit is not 48 equal
-  frames: the log shows fast waves finishing in minutes, then one ~13 h stretch
-  with no output — the densest Brick-center frames fitting while the other
-  workers are idle. m3–m6 are ~35 min/frame and much more even.
+**Merge is solved.** The chunked spatial-tile merge (`combine_singleframe_chunked`)
+is <5 min even on ~2 M detections/phase. Not worth further work.
 
 ---
 
-## 4. Bottleneck analysis
+## 4. The I/O stall (why the F444W run took 33.5 h)
 
-1. **Per-frame photometry fitting is ~99% of cataloging.** Everything else
-   (detection merge, satstar, vetting, I/O) is minor.
-2. **m12 first-pass dominates** (18 h of 33.5 h). Seeded re-fits (m3–m6) are 5×
-   cheaper, so anything that makes m12 start from a seed instead of from scratch
-   pays back hugely.
-3. **Worker load imbalance on dense frames.** Frames are dispatched in
-   chunk/order, not by cost. The Brick-center frames carry most of the sources;
-   when they land in the same wave, 7 workers finish and idle while 1 grinds for
-   hours. This is the ~13 h tail.
-4. **SW is 2–4× the LW cataloging cost** (192 vs 48 frames), which is why
-   F115W/F200W were still running >1.5 days when F444W finished at 33.5 h.
+Per-frame completion timestamps, gap analysis:
+
+| run | frames | m12 (m1) span | m12 max single gap | m3 max gap |
+|---|---|---|---|---|
+| 36240928_0 (F115W) | 192 | 23.6 h | **13.8 h** | 0.06 h |
+| 36240928_1 (F200W) | 192 | 18.2 h | **14.8 h** | 0.06 h |
+| 36240928_3 (F444W) | 48 | 17.9 h | **11.8 h** | 0.5 h |
+| 36013569_0 (F115W, earlier) | 192 | **8.4 h** | **0.38 h** | 0.06 h |
+| 36013571_3 (LW, earlier) | 48 | **2.1 h** | **0.42 h** | 0.36 h |
+
+The diagnosis:
+
+1. **Frame density is uniform.** In every run, m3–m6 finish with max inter-frame
+   gaps of ~0.06 h — all frames cost the same. If a subset of frames were genuinely
+   dense, they would be slow in *every* phase; they are not. The earlier runs'
+   m12 is also uniform (max gap ~0.4 h).
+2. **The 33.5 h run had a single 12–15 h stall in m12**, and it hit **all three
+   array tasks (F115W, F200W, F444W) at once**. A simultaneous multi-hour stall
+   across independent tasks is not a property of any one frame — it is a **shared
+   resource**: the node / NFS / scratch filesystem hung.
+3. **m12 is the peak-I/O phase.** It is the only phase that reads every `_crf`
+   frame fresh, loads the PSF grids, and writes every per-frame residual/model
+   FITS for the first time. Three array tasks × 8 workers = 24 processes all
+   hammering shared `/orange` + `/blue` at once during m12 is what tipped it over;
+   m3–m6 reuse cached inputs and write less, so they never stalled.
+4. **The earlier runs prove m12 without the stall is ~2 h (LW) / ~8 h (SW).** The
+   ~12–15 h is pure overhead from one bad I/O episode.
+
+So: cataloging is per-frame-photometry-bound (§3), but the specific 33.5 h figure
+was an **I/O incident**, not the steady-state cost, and had nothing to do with
+Brick-center density.
 
 ---
 
-## 5. Recommendations (ranked by expected payoff)
+## 5. Recommendations (ranked)
 
-1. **Cost-balanced frame scheduling.** Sort frames by source count (or a cheap
-   density proxy) and hand them to workers longest-first (LPT). Removes the
-   idle-workers-behind-one-dense-frame tail; could cut m12 wall-clock materially
-   without more CPUs.
-2. **Seed m12.** Give the first pass a coarse detection/seed (e.g. the deep i2d
-   detection already computed) so it behaves like the 5×-faster m3–m6 re-fit
-   instead of a from-scratch fit.
-3. **Per-frame sharding across nodes.** `--manual-frame-shard` already exists;
-   split the frame set across array tasks so the dense frames run on separate
-   nodes in parallel rather than serially inside one 8-worker job. Biggest lever
-   for SW (192 frames).
-4. **More workers for m12 specifically.** The dense tail is effectively serial at
-   8 workers; m12 alone benefits from a wider pool (m3–m6 less so).
-5. **Leave the merge alone.** The chunked merge is already <5 min/phase.
+1. **Fix the m12 I/O contention.** This is the real lever for the observed
+   blow-ups.
+   - Write per-frame intermediate products to **node-local scratch**
+     (`$SLURM_TMPDIR`) instead of shared `/orange` `/blue`, then copy results back
+     once. (The submit scripts were recently pointed at `$SLURM_TMPDIR` for temp
+     files — extend that to the heavy per-frame m12 writes.)
+   - **Stagger array-task starts** (or cap concurrent tasks per node) so N tasks ×
+     8 workers don't all peak-I/O the same mount simultaneously.
+   - Consider fewer workers for m12 specifically, or spread the frame set across
+     nodes, to cut peak I/O concurrency.
+2. **Seed m12.** m12 is the most expensive phase because it detects + fits from
+   scratch. Giving it a seed (e.g. the deep-i2d detection already computed) makes
+   it behave like the cheaper seeded re-fits.
+3. **Per-frame sharding across nodes** (`--manual-frame-shard` exists) — biggest
+   lever for SW (192 frames), and it also spreads I/O across nodes.
+4. **Leave the merge alone.** The chunked merge is already <5 min/phase.
+5. **Do NOT special-case "dense" frames.** Density is uniform; cost-by-density
+   scheduling would buy nothing.
 
 ---
 
-*Generated from the July 2026 Brick 1182 current-code run. To refresh: re-read
-the `mergedcat:` / step timestamps in the cataloging and reduction logs under
-`/blue/adamginsburg/adamginsburg/logs/jwst/` for the run of interest.*
+*Generated from the July 2026 Brick 1182 current-code run + earlier-run baselines.
+To refresh: parse the `mergedcat:` / stpipe step timestamps in the cataloging and
+reduction logs under `/blue/adamginsburg/adamginsburg/logs/jwst/`, and always
+check per-frame gap uniformity before attributing cost to "hard" frames.*
