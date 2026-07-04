@@ -709,6 +709,47 @@ class WrappedPSFModel(crowdsource.psf.SimplePSF):
         return self.psfgridmodel.evaluate(cols, rows, 1, col, row).T.squeeze()
 
 
+def write_via_local_scratch(final_path, write_fn):
+    """Build a per-frame product on node-local ``$SLURM_TMPDIR``, then copy it to
+    ``final_path`` on shared storage.
+
+    The many-small-write FITS/table construction (header padding, table
+    serialisation, checksums) lands on fast local disk, and only a single
+    sequential streaming copy touches the shared filesystem.  This cuts the
+    random-I/O + metadata burst that ``N`` array-tasks x ``M`` workers create
+    during the per-frame m12 write storm -- the failure mode behind the
+    multi-hour shared-FS stall documented in ``PERFORMANCE_BRICK.md``.
+
+    ``write_fn`` is a callable taking a path and writing the product there, e.g.
+    ``lambda p: tbl.write(p, overwrite=True)``.  Falls back to writing
+    ``final_path`` directly when no local scratch is configured, or if the
+    local write/copy fails (e.g. scratch full), so behaviour is unchanged off
+    SLURM and never loses the output.
+    """
+    scratch = os.environ.get('SLURM_TMPDIR')
+    if not scratch or not os.path.isdir(scratch):
+        write_fn(final_path)
+        return
+    import tempfile
+    import shutil
+    fd, tmp = tempfile.mkstemp(prefix='wlc_',
+                               suffix='_' + os.path.basename(final_path),
+                               dir=scratch)
+    os.close(fd)
+    try:
+        write_fn(tmp)
+        shutil.copyfile(tmp, final_path)
+    except OSError as ex:
+        print(f"[io] local-scratch write for {final_path} failed ({ex}); "
+              f"writing directly to shared storage", flush=True)
+        write_fn(final_path)
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
 def save_epsf(epsf, filename, overwrite=True):
     header = {}
     header['OVERSAMP'] = list(epsf.oversampling)
@@ -1927,7 +1968,10 @@ def save_photutils_results(result, ww, filename,
 
     print(f"tblfilename={tblfilename}, filename={filename}, filtername={filtername}, module={module}, desat={desat}, bgsub={bgsub}, fpsf={fpsf} blur={blur}")
 
-    result.write(tblfilename, overwrite=True)
+    # Per-frame catalog write -- the highest-frequency per-frame output (once per
+    # frame per pass).  Build on node-local scratch then copy, to spare the
+    # shared FS the metadata/random-I/O burst during the m12 write storm.
+    write_via_local_scratch(tblfilename, lambda p: result.write(p, overwrite=True))
     print(f"Completed {basic_or_iterative} photometry, and wrote out file {tblfilename}")
 
     return result
