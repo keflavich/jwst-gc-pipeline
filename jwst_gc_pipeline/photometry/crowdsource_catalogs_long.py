@@ -3995,6 +3995,9 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                # per field; 1979 'm4' spans two fields (o002, o003) run separately.
                '1334': {'m92': 1},
                '1979': {'ngc6397': 1, 'm4': 1},
+               # NGC 6334 (Cat's Paw): 7213 o001 = 2 visits, 6778 o001 = 3 visits.
+               '7213': {'ngc6334': 2},
+               '6778': {'ngc6334': 3},
                }
     # 2211 is an asteroid-survey program with 5 separate GC pointings; all
     # map to the same 'gc2211' target/basepath, distinguished only by field.
