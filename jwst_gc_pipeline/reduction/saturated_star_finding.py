@@ -1201,6 +1201,75 @@ def is_small_radius_emission_phantom(prom_small, core_small, *,
     return False
 
 
+def flattop_satstar_model(model_image, data_bg_sub, plateau_frac=0.15,
+                          core_mask=None):
+    """Replace a saturated-star PSF model by the DATA over its flat-topped core.
+
+    STPSF is sharply PEAKED, but a charge-bled saturated core is a flat-topped
+    PLATEAU.  Subtracting ``amp*PSF`` therefore UNDER-subtracts the core (a
+    bright ring at r~3px; cloudc F770W "every saturated-core star undersubtracted")
+    and, when the amplitude is pushed up to clear the core, OVER-subtracts it (a
+    central divot / negative pit).  Over the plateau footprint the model is
+    instead set to the (background-subtracted) DATA itself, so ``data - model``
+    -> ~0 there -- flat, no ring, no divot.  The PSF WINGS are left untouched
+    (they are peaked-PSF-correct outside the saturated core).
+
+    Plateau footprint (on the cutout):
+      * NaN core        -- data saturated/masked; keep the PSF (only estimate
+                          available; those pixels are masked downstream anyway).
+      * ``core_mask``    -- the geometric core+shoulder region (a radius from the
+                          fit centre scaled by the saturated footprint + PSF
+                          FWHM).  This is what actually covers the under-sub RING:
+                          the pipeline's peak-cap keeps the model peak AT the
+                          coadd-core level, so ``model>data`` never fires in the
+                          core and the shoulder ring sits just below
+                          ``plateau_frac*peak`` -- a purely amplitude-based mask
+                          misses it.  The geometric mask is amplitude-independent.
+      * model > data     -- the PSF over-predicts; capping to data prevents the
+                          over-subtraction pit (a global guard, also in the wings).
+      * data > frac*peak -- the bright plateau (kept as a floor when no core_mask).
+
+    Parameters
+    ----------
+    model_image : ndarray
+        Rendered ``amp*PSF`` model (>=0), cutout-sized.
+    data_bg_sub : ndarray
+        Background-subtracted data on the SAME cutout (``cutout_fit``); NaN in
+        the saturated core.
+    plateau_frac : float
+        Bright-plateau threshold as a fraction of the finite-data peak.
+    core_mask : ndarray of bool, optional
+        Geometric core+shoulder footprint (same shape).  Inside it, finite data
+        is subtracted flat.  When None, only the amplitude-based terms apply
+        (used by the unit tests / synthetic flat cores).
+
+    Returns
+    -------
+    ndarray
+        Flat-topped model (>=0), same shape.  If ``data_bg_sub`` has no finite
+        pixel (a fully-saturated core with nothing to subtract) the input model
+        is returned unchanged, so the caller's peaked-PSF behaviour is preserved.
+    """
+    db = np.asarray(data_bg_sub, dtype=float)
+    mpsf = np.asarray(model_image, dtype=float)
+    finite = np.isfinite(db)
+    if not finite.any():
+        return model_image
+    peak = float(np.max(db[finite]))
+    if not (np.isfinite(peak) and peak > 0):
+        return model_image
+    # NaN core / geometric core+shoulder / model-over-data / bright plateau all
+    # get flat-topped; NaN comparisons resolve False, so ``~finite`` covers the
+    # saturated core and ``core_mask`` covers the under-sub RING.
+    plateau = (~finite) | (mpsf > db) | (db > plateau_frac * peak)
+    if core_mask is not None:
+        plateau = plateau | np.asarray(core_mask, dtype=bool)
+    # In the plateau use the DATA where it exists (subtract it flat); keep the
+    # PSF in the NaN core (no data to subtract) and everywhere outside.
+    out = np.where(plateau & finite, db, mpsf)
+    return np.maximum(out, 0)
+
+
 def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_prominence_robust=False, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, deblend_daophot_xy=None, deblend_confirm_xy=None, sat_data_floor=None, phantom_flux_floor=0.0, phantom_ssr_max=50.0, phantom_ratio_max=50.0):
     # ``flux_drops``: optional list of SkyCoord.  An out-of-field (forced) source
     # whose seed sky position matches a drop within ~1.0" is SKIPPED entirely
@@ -1318,6 +1387,20 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     _env_prat = os.environ.get('MIRI_SATSTAR_PHANTOM_RATIO_MAX')
     if _env_prat is not None:
         phantom_ratio_max = float(_env_prat)
+
+    # FLAT-TOPPED SATURATED-CORE MODEL (env, MIRI).  When enabled, an accepted
+    # in-FOV satstar's model is replaced INSIDE its flat-topped plateau by the
+    # (bg-subtracted) data, so the residual there -> ~0 (no under-sub ring, no
+    # over-sub divot).  OFF by default; launcher opts in with MIRI_SATSTAR_FLATTOP=1.
+    # plateau_frac tunes the bright-plateau threshold (fraction of data peak).
+    # See flattop_satstar_model + the accept block below.
+    _env_ft = os.environ.get('MIRI_SATSTAR_FLATTOP')
+    satstar_flattop = bool(int(_env_ft)) if _env_ft is not None else False
+    _env_ftf = os.environ.get('MIRI_SATSTAR_FLATTOP_PLATEAU_FRAC')
+    satstar_flattop_frac = float(_env_ftf) if _env_ftf is not None else 0.15
+    if satstar_flattop:
+        print(f"[flat-top cfg] MIRI flat-topped saturated cores ENABLED "
+              f"(frac={satstar_flattop_frac})", flush=True)
 
     # nan_to_num data to avoid fitting NaNs
     data[np.isnan(fitsdata['VAR_POISSON'].data)] = 0
@@ -3217,6 +3300,41 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                       flush=True)
 
         if accept_source:
+            # FLAT-TOPPED CORE (MIRI in-FOV, env-gated).  The gates above used
+            # the peaked amp*PSF model_image; now, before it is subtracted,
+            # replace it inside the saturated PLATEAU by the (bg-subtracted)
+            # data so the core residual -> ~0 (no under-sub ring / over-sub
+            # divot).  bg2d is required (defines the bg-subtracted data =
+            # cutout_fit) and forced sources are exempt (off-FOV; no core to
+            # flat-top).  OFF unless MIRI_SATSTAR_FLATTOP=1.
+            if (satstar_flattop and _is_miri and not forced_source
+                    and bg2d is not None):
+                # Geometric core+shoulder mask (amplitude-independent): a radius
+                # from the fit centre = saturated-footprint radius + k*FWHM.  The
+                # peak-cap holds the model at the coadd-core level so an
+                # amplitude-only plateau misses the under-sub RING just outside
+                # the saturated core; this covers it.  k via
+                # MIRI_SATSTAR_FLATTOP_SHOULDER_FWHM (default 2.0).
+                _ft_k = float(os.environ.get(
+                    'MIRI_SATSTAR_FLATTOP_SHOULDER_FWHM', 2.0))
+                _r_core = np.sqrt(max(int(src_sat_area or 0), 1) / np.pi)
+                _r_ft = _r_core + _ft_k * float(fwhm_pix)
+                _cy_ft = (float(result['y_fit'][0]) if len(result)
+                          else float(y_init))
+                _cx_ft = (float(result['x_fit'][0]) if len(result)
+                          else float(x_init))
+                _yy_ft, _xx_ft = np.mgrid[0:cutout.shape[0], 0:cutout.shape[1]]
+                _core_mask_ft = (np.hypot(_xx_ft - _cx_ft, _yy_ft - _cy_ft)
+                                 <= _r_ft)
+                _mi_ft = flattop_satstar_model(model_image, cutout_fit,
+                                               satstar_flattop_frac,
+                                               core_mask=_core_mask_ft)
+                _dpk_ft = float(np.nanmax(model_image)) if np.isfinite(model_image).any() else np.nan
+                print(f"  [miri flat-top] src {ii+1}: plateau data-subtract "
+                      f"(R={_r_ft:.1f}px, model peak {_dpk_ft:.0f} -> "
+                      f"{float(np.nanmax(_mi_ft)):.0f}, frac={satstar_flattop_frac})",
+                      flush=True)
+                model_image = _mi_ft
             # Only accumulate the per-source model into the global
             # full_model_image AFTER passing all gates.  Previously this
             # accumulation happened before the accept check, so a rejected
