@@ -282,10 +282,51 @@ def shift_individual_catalog(tbl, offsets_table, verbose=True):
     return tbl
 
 
+# MIRI imager PSF FWHM (arcsec) per filter.  Used to scale the merge dedup
+# radius: the NIRCam-calibrated 0.10" min/max_offset is far TOO TIGHT for the
+# broad long-wavelength MIRI PSF (F2550W FWHM 0.80"), so daofind's split
+# detections of ONE star (positional scatter ~0.14") survive as many un-merged
+# duplicates -> their broad-PSF models STACK in the coadd -> deep over-subtraction
+# pits ("pockmarks") + a ~3x over-counted catalog (cloudc F2550W: 2268 rows,
+# ~800 real).  Merging sources closer than ~0.5xFWHM is CORRECT: they are
+# physically unresolvable at that FWHM.  See project_miri_f2550w_dedup_pileup.
+_MIRI_FWHM_ARCSEC = {
+    'f560w': 0.207, 'f770w': 0.269, 'f1000w': 0.328, 'f1130w': 0.375,
+    'f1280w': 0.420, 'f1500w': 0.488, 'f1800w': 0.591, 'f2100w': 0.674,
+    'f2550w': 0.803,
+}
+
+
+def _resolve_dedup_offset(filtername, current):
+    """Merge dedup radius: env MERGE_DEDUP_OFFSET_ARCSEC (absolute) >
+    MERGE_DEDUP_FWHM_FRAC * per-filter MIRI FWHM > ``current`` (unchanged default).
+
+    Returns an ``astropy`` Quantity in arcsec.  With neither env set, returns
+    ``current`` verbatim so existing (NIRCam / unset) behaviour is identical.
+    """
+    _abs = os.environ.get('MERGE_DEDUP_OFFSET_ARCSEC')
+    if _abs is not None:
+        try:
+            return float(_abs) * u.arcsec
+        except ValueError:
+            pass
+    _frac = os.environ.get('MERGE_DEDUP_FWHM_FRAC')
+    if _frac is not None:
+        try:
+            frac = float(_frac)
+        except ValueError:
+            frac = 0.0
+        fwhm = _MIRI_FWHM_ARCSEC.get(str(filtername).lower())
+        if frac > 0 and fwhm is not None:
+            return frac * fwhm * u.arcsec
+    return current
+
+
 def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaverage=nanaverage_dask,
                         min_offset=0.10*u.arcsec,
                         offsets_table=None,
-                        verbose=True
+                        verbose=True,
+                        filtername=None
                         ):
     """
 
@@ -302,6 +343,20 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     """
     if offsets_table is not None:
         tbls = [shift_individual_catalog(tbl, offsets_table, verbose=verbose) for tbl in tbls]
+
+    # Filter-scale the dedup radius (broad MIRI PSF -> tighten-proof; see
+    # _resolve_dedup_offset).  Default (no env) leaves min/max_offset unchanged.
+    # Prefer the EXPLICIT filtername (threaded from the caller); fall back to the
+    # table meta (which the manual daophot per-frame tables do not always carry).
+    _filt = str(filtername) if filtername else (
+        str(tbls[0].meta.get('filter', '')) if len(tbls) and hasattr(tbls[0], 'meta') else '')
+    _min0, _max0 = min_offset, max_offset
+    min_offset = _resolve_dedup_offset(_filt, min_offset)
+    max_offset = _resolve_dedup_offset(_filt, max_offset)
+    if verbose and (min_offset != _min0 or max_offset != _max0):
+        print(f"combine_singleframe: filter {_filt!r} dedup radius "
+              f"min_offset {_min0}->{min_offset}, max_offset {_max0}->{max_offset}",
+              flush=True)
 
     # set up DAO vs crowd column names
     if 'qf' in tbls[0].colnames:
@@ -1296,9 +1351,10 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
               f"({_nchunks} tiles, {merge_workers} workers)", flush=True)
         merged_exposure_table = combine_singleframe_chunked(
             tables, n_chunks=_nchunks, workers=int(merge_workers),
-            offsets_table=offsets_table)
+            offsets_table=offsets_table, filtername=filtername)
     else:
-        merged_exposure_table = combine_singleframe(tables, offsets_table=offsets_table)
+        merged_exposure_table = combine_singleframe(
+            tables, offsets_table=offsets_table, filtername=filtername)
 
     outfn = f"{basepath}/catalogs/{filtername.lower()}_{module}{out_obs_}_indivexp_merged{desat}{bgsub}{fitpsf}{blur_}{iter_token}_{method}{suffix}_allcols.fits"
     print(f"Writing {outfn} with length {len(merged_exposure_table)}")

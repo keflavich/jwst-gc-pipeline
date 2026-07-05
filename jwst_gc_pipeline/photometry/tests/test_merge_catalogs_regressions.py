@@ -248,3 +248,37 @@ class TestSatstarStaleFileExclusion:
         (tmp_path / 'catalogs').mkdir()
         out = M.load_satstar_catalog('f770w', target='w51', basepath=str(tmp_path) + '/')
         assert out is None  # do not pollute from stale-only dirs
+
+
+class TestDedupOffsetResolver:
+    """merge dedup radius must scale to the broad MIRI PSF FWHM (env-gated),
+    else daofind's split detections of one star survive as duplicates whose
+    models stack -> over-subtraction pits + ~3x over-counted catalog.
+    See project_miri_f2550w_dedup_pileup."""
+
+    def test_default_unchanged(self, monkeypatch):
+        import astropy.units as u
+        from jwst_gc_pipeline.photometry import merge_catalogs as M
+        monkeypatch.delenv('MERGE_DEDUP_OFFSET_ARCSEC', raising=False)
+        monkeypatch.delenv('MERGE_DEDUP_FWHM_FRAC', raising=False)
+        cur = 0.10 * u.arcsec
+        assert M._resolve_dedup_offset('f2550w', cur) == cur
+        assert M._resolve_dedup_offset('f405n', cur) == cur
+
+    def test_fwhm_frac_scales_miri(self, monkeypatch):
+        import astropy.units as u
+        from jwst_gc_pipeline.photometry import merge_catalogs as M
+        monkeypatch.delenv('MERGE_DEDUP_OFFSET_ARCSEC', raising=False)
+        monkeypatch.setenv('MERGE_DEDUP_FWHM_FRAC', '0.5')
+        out = M._resolve_dedup_offset('f2550w', 0.10 * u.arcsec)
+        assert abs(out.to_value(u.arcsec) - 0.5 * 0.803) < 1e-9
+        # unknown filter (NIRCam) -> unchanged even with frac set
+        assert M._resolve_dedup_offset('f405n', 0.10 * u.arcsec) == 0.10 * u.arcsec
+
+    def test_absolute_env_wins(self, monkeypatch):
+        import astropy.units as u
+        from jwst_gc_pipeline.photometry import merge_catalogs as M
+        monkeypatch.setenv('MERGE_DEDUP_OFFSET_ARCSEC', '0.35')
+        monkeypatch.setenv('MERGE_DEDUP_FWHM_FRAC', '0.5')
+        out = M._resolve_dedup_offset('f2550w', 0.10 * u.arcsec)
+        assert abs(out.to_value(u.arcsec) - 0.35) < 1e-9
