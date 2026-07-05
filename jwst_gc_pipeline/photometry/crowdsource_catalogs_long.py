@@ -2037,6 +2037,14 @@ def get_psf_model(filtername, proposal_id, field,
                 _cache_detector = f'{module.upper()}5'
             else:
                 _cache_detector = f'{module.upper()}1'
+        elif module.lower() in ('nrcalong', 'nrcblong'):
+            # Per-frame path passes the physical DETECTOR as ``module``
+            # (cataloging sets file_module=file_detector), so LW frames arrive
+            # here as 'nrcblong'.  WebbPSF names its LW grid by detector
+            # 'NRCB5', so map long->5; otherwise the lookup builds
+            # nircam_nrcblong_* and misses the cached nircam_nrcb5_* grid,
+            # forcing a full MAST/Poppy rebuild on every frame.
+            _cache_detector = f'{module.lower()[:4].upper()}5'
         elif 'nrc' in module:
             _cache_detector = module.upper()
         else:
