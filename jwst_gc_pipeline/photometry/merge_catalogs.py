@@ -1979,14 +1979,29 @@ def _dedup_satstar_catalog(tbl, radius=None, target=None):
         anc_ra = anc_dec = None
         has_anchor = np.zeros(len(fin_idx), dtype=bool)
 
-    # Default merge test is FLUX-CONSISTENCY (fix 1): a footprint-scale neighbour
-    # is the same physical star only if its flux agrees.  The saturated-component
-    # sky anchor was also tried (SATSTAR_FP_USE_ANCHOR=1) but on W51 the extended
-    # blob's bbox/COM centre wanders ~0.3" frame-to-frame -- as far as a real
-    # crowded cluster's stars are separated -- so no anchor radius collapses the
-    # blob without also fusing real cluster stars; it is left opt-in for other
-    # fields, not the default.
-    _use_anchor = bool(int(os.environ.get('SATSTAR_FP_USE_ANCHOR', 0)))
+    # Merge test = SATURATED-COMPONENT ANCHOR (sat_com_ra/dec, the DQ component's
+    # stable bbox centre) for extended-emission targets, else FLUX-CONSISTENCY.
+    #
+    # A bright saturated core embedded in nebulosity (W51 darkfil) is fit as a
+    # satstar at a position that scatters ~0.7" frame-to-frame (the core is
+    # NaN-masked, so the fit slides) AND at a flux that scatters >2x -- so BOTH
+    # the position-radius and the flux-consistency tests fail and the ONE star is
+    # kept as 2-3 rows, force-catalogued, and modelled as a PSF cluster -> a
+    # subtraction crater.  But the DQ-SATURATED COMPONENT itself is stable: all 8
+    # per-frame seeds of the darkfil blob share a bbox-centre anchor to ~0.1"
+    # (<< comp_as), while genuinely distinct cluster stars have SEPARATE
+    # components (anchors > comp_as apart) and are preserved.  The anchor is thus
+    # the correct physical-identity key; it is defaulted ON for the extended-
+    # emission targets where the over-fragmentation occurs.  (An earlier note
+    # claimed the COM wandered ~0.3"; that predated the bbox-centre anchor from
+    # the component-identity commit, which is stable to ~0.1" here.)  Off for
+    # other fields (crowded GC keeps flux-consistency); force with
+    # SATSTAR_FP_USE_ANCHOR=0/1.  Falls back to flux where the anchor is missing.
+    _ext_anchor_default = (target is not None
+                           and any(t in str(target).lower()
+                                   for t in ('w51', 'sickle', 'wd2')))
+    _use_anchor = bool(int(os.environ.get('SATSTAR_FP_USE_ANCHOR',
+                                          1 if _ext_anchor_default else 0)))
 
     def _same_component(a, b):
         if _use_anchor and has_anchor[a] and has_anchor[b]:
