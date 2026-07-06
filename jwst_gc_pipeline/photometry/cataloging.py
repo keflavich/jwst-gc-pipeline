@@ -771,6 +771,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               nmatch_confirm=0,
                               nmatch_confirm_qfit_max=0.6,
                               nmatch_confirm_maxpos_mas=0.0,
+                              ext_prom_min=0.0,
                               drop_overshoot=True, struct_x=0.0, struct_y=0.0,
                               label=''):
     """First-pass star-vs-extended-emission vetting of a MERGED catalog.
@@ -1050,6 +1051,30 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                                       struct_x=struct_x, struct_y=struct_y)
         n_struct = int(np.sum(keep & ~skeep))
         keep = keep & skeep
+
+    # EXTENDED-EMISSION PROMINENCE GATE (NIRCam; user 2026-07-06): on a bright
+    # extended-emission field the qfit / peak_SB / flags / bright-isolated
+    # star_like OR-branches all leak -- an emission bump can fit with qfit<=0.2,
+    # sit at peak_SB>20x the (emission-raised) local bkg, or (the dominant leak)
+    # carry flags==1 because it lands in a saturated-star's wing, so ALL bypass
+    # the star tests.  The ONE robust discriminator on the deep data_i2d is the
+    # annulus-MAD PROMINENCE (rise above the LOCAL emission): hand-labelled W51
+    # darkfilament F480M real stars have prominence median ~5 (13/14 >= 3) while
+    # false emission/wing bumps sit at ~0.9 (100/108 < 3).  Apply it as a HARD
+    # AND on the NIRCam keep (the MIRI path already gates on prominence alone via
+    # min_prominence>0, so skip there).  NaN prominence (off-i2d / no data_i2d) is
+    # NOT kept -- safe on a cutout where every source is on the i2d.  The
+    # model==catalog satstar force-keep BELOW still overrides this, so real
+    # subtracted saturated cores (broad => low prominence) are never dropped.
+    # OFF by default (ext_prom_min<=0); the driver auto-enables it (=3.0) only for
+    # extended-emission NIRCam fields, so star-dominated fields are byte-identical.
+    if ext_prom_min > 0 and min_prominence <= 0:
+        _prom_keep = np.isfinite(prominence) & (prominence >= float(ext_prom_min))
+        _n_prom = int(np.sum(keep & ~_prom_keep))
+        keep = keep & _prom_keep
+        print(f"[{label}] extended-emission prominence gate: dropped {_n_prom} "
+              f"low-prominence source(s) (prominence < {ext_prom_min:g} on data_i2d)",
+              flush=True)
 
     # model==catalog invariant (user 2026-06-27): every saturated star that was
     # SUBTRACTED into the per-frame model (replaced_saturated) MUST appear in
@@ -3471,6 +3496,18 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     # sources that pass the qfit OR-branch.  NIRCam: off (0).
                     _miri_field = (module == 'mirimage'
                                    or _L._instrument_from_filter(filt) == 'MIRI')
+                    # Hard prominence floor for NIRCam extended-emission vetting.
+                    # --manual-ext-prom-min < 0 (default) => AUTO: 3.0 for an
+                    # extended-emission NIRCam field, off elsewhere; >= 0 uses the
+                    # value verbatim (0 forces it off).  MIRI already gates on
+                    # prominence via min_prominence, so leave its ext_prom_min 0.
+                    _ext_prom_opt = float(getattr(opts_phase, 'manual_ext_prom_min', -1.0))
+                    if _ext_prom_opt < 0:
+                        _ext_prom_min = (3.0 if (not _miri_field
+                                                 and _is_extended_emission(opts_phase))
+                                         else 0.0)
+                    else:
+                        _ext_prom_min = _ext_prom_opt
                     vetted = _filter_extended_emission(
                         merged, data_i2d_image=d_i2d, ww_i2d=ww_i2d,
                         qfit_max=float(getattr(opts_phase, 'manual_ext_qfit_max', 0.2)),
@@ -3495,6 +3532,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             opts_phase, 'manual_ext_nmatch_confirm_qfit_max', 0.6)),
                         nmatch_confirm_maxpos_mas=float(getattr(
                             opts_phase, 'manual_ext_nmatch_confirm_maxpos_mas', 0.0)),
+                        ext_prom_min=_ext_prom_min,
                         struct_x=0.0, struct_y=0.0,  # prune at detection, not here
                         label=f'{phase}:{filt}')
                     vetted.write(vetted_path, overwrite=True)
