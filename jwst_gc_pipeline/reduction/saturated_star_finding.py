@@ -2384,8 +2384,26 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 # non-singular; tighter pegs x_0/y_0 -> NaN flux_err -> good fits
                 # tossed, the dominant gc2211 baseline rejection mode).  MIRI
                 # drops the size_saturated term (see above); NIRCam keeps it.
-                pos_bound = (1.5 * fwhm_pix if _is_miri
-                             else max(size_saturated, 1.5 * fwhm_pix))
+                #
+                # NIRCAM extended-emission tight bound (user 2026-07-06): on a
+                # bright saturated core embedded in nebulosity, size_saturated =
+                # int(sqrt(sat_area)/2) is HUGE (blob sat_area~600 -> 12px =
+                # 0.76") so the fit slides that far per frame across the NaN-
+                # masked core.  The per-frame subtracted satstar model then lands
+                # at 8 different places and the COADD is a multi-peak smear ->
+                # oversubtraction crater (user: "modeled as a cluster") even after
+                # the catalog/consolidation dedup collapse it to one row.  This is
+                # the SAME failure MIRI fixed by dropping size_saturated; the
+                # DQ-component seed is stable to ~0.1" here, so the 1.5*FWHM bound
+                # is enough.  Gated by NIRCAM_SATSTAR_TIGHT_BOUND (the driver sets
+                # it for extended-emission NIRCam fields); default preserves the
+                # size_saturated bound for star-dominated fields.
+                _nc_tight = (not _is_miri
+                             and int(os.environ.get('NIRCAM_SATSTAR_TIGHT_BOUND', 0)))
+                if _is_miri or _nc_tight:
+                    pos_bound = 1.5 * fwhm_pix
+                else:
+                    pos_bound = max(size_saturated, 1.5 * fwhm_pix)
                 low_x  = xcen - x0 - pos_bound
                 high_x = xcen - x0 + pos_bound
                 low_y  = ycen - y0 - pos_bound

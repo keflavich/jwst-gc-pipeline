@@ -1428,6 +1428,18 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         else:
             print(f"[manual] satstar seed gate: coadd data_i2d not found "
                   f"({_di2d_path}); gate falls back to per-frame data", flush=True)
+    # Extended-emission NIRCam: use the tight (1.5*FWHM) satstar position bound
+    # so a large saturated core's per-frame fit cannot slide ~0.76" across the
+    # NaN-masked core -> per-frame subtracted-model scatter -> coadd smear /
+    # oversubtraction crater (the "one star modelled as a cluster" residual).
+    # Env because get_saturated_stars is several call layers down; one cataloging
+    # process runs one filter of one target, so a process-global env is safe.  A
+    # user export of NIRCAM_SATSTAR_TIGHT_BOUND is respected (not overridden).
+    if 'NIRCAM_SATSTAR_TIGHT_BOUND' not in os.environ:
+        _sat_is_miri = (module == 'mirimage'
+                        or _L._instrument_from_filter(filtername) == 'MIRI')
+        os.environ['NIRCAM_SATSTAR_TIGHT_BOUND'] = (
+            '1' if (_is_extended_emission(options) and not _sat_is_miri) else '0')
     satstar_table = _L.load_or_make_satstar_catalog(
         filename, path_prefix=f'{basepath}/psfs',
         use_merged_psf_for_merged=(module == 'merged'),
