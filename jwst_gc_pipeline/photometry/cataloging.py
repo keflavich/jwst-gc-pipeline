@@ -1727,7 +1727,8 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
 
 
 def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
-                            mask_radius_fwhm=2.0, median_size=3):
+                            mask_radius_fwhm=2.0, median_size=3,
+                            extra_source_catalogs=()):
     """Build the smoothed background map from a mergedcat residual i2d with the
     fitted SOURCE CORES MASKED OUT before smoothing.
 
@@ -1766,29 +1767,54 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
     R = max(2.0, mask_radius_fwhm * fwhm_px)
 
     work = d.copy()
-    try:
-        t = Table.read(vetted_catalog_path)
-        if 'skycoord' in t.colnames and len(t) > 0:
-            sc = t['skycoord']
-            if not isinstance(sc, _SkyCoord):
-                sc = _SkyCoord(sc)
-            xs, ys = w.world_to_pixel(sc)
-            ny, nx = d.shape
-            Ri = int(np.ceil(R))
-            for xc, yc in zip(np.atleast_1d(xs), np.atleast_1d(ys)):
-                if not (np.isfinite(xc) and np.isfinite(yc)):
-                    continue
-                ix, iy = int(round(float(xc))), int(round(float(yc)))
-                y0, y1 = max(0, iy - Ri), min(ny, iy + Ri + 1)
-                x0, x1 = max(0, ix - Ri), min(nx, ix + Ri + 1)
-                if y0 >= y1 or x0 >= x1:
-                    continue
-                yy, xx = np.mgrid[y0:y1, x0:x1]
-                disk = (xx - xc) ** 2 + (yy - yc) ** 2 <= R ** 2
-                work[y0:y1, x0:x1][disk] = np.nan
-    except Exception as ex:
-        print(f"[bg] source-masking failed ({ex}); smoothing unmasked residual",
-              flush=True)
+    ny, nx = d.shape
+    # Mask fitted SOURCE cores from the vetted catalog PLUS any extra source
+    # catalogs (the i2d detection seed).  A real star dropped from the vetted
+    # catalog -- by a group-fit flux collapse or a prior bg over-subtraction --
+    # is absent from ``vetted_catalog_path``, so masking the vetted list alone
+    # leaves its full flux as a positive peak in the residual.  The smoother then
+    # spreads that flux into the "background"; the next phase subtracts it, drives
+    # the star's fit non-positive, and the ban drops it -- so the star never
+    # re-enters the vetted catalog and the bg stays contaminated.  This is a
+    # self-reinforcing cycle that permanently loses real bright stars: ngc6334
+    # F405N (2026-07) the reconstructed bg reached 164 at a 298-peak star (global
+    # median 7), 55% of the flux, so subtracting it killed the star.  The i2d
+    # detection seed still lists these coadd-confirmed point sources, so masking
+    # the UNION keeps them out of the diffuse-background estimate and breaks the
+    # cycle at its first iteration.  Seeds are daofind point sources, not
+    # emission, so genuine extended emission is left in the background untouched.
+    src_ra, src_dec = [], []
+    for _cp in [vetted_catalog_path, *[c for c in extra_source_catalogs if c]]:
+        try:
+            _t = Table.read(_cp)
+        except (OSError, ValueError, FileNotFoundError):
+            print(f"[bg] source catalog unreadable ({_cp}); skipping", flush=True)
+            continue
+        if 'skycoord' not in _t.colnames or len(_t) == 0:
+            continue
+        _sc = _t['skycoord']
+        if not isinstance(_sc, _SkyCoord):
+            _sc = _SkyCoord(_sc)
+        src_ra.append(np.atleast_1d(np.asarray(_sc.ra.deg, dtype=float)))
+        src_dec.append(np.atleast_1d(np.asarray(_sc.dec.deg, dtype=float)))
+
+    n_masked = 0
+    if src_ra:
+        sc = _SkyCoord(np.concatenate(src_ra), np.concatenate(src_dec), unit='deg')
+        xs, ys = w.world_to_pixel(sc)
+        Ri = int(np.ceil(R))
+        for xc, yc in zip(np.atleast_1d(xs), np.atleast_1d(ys)):
+            if not (np.isfinite(xc) and np.isfinite(yc)):
+                continue
+            ix, iy = int(round(float(xc))), int(round(float(yc)))
+            y0, y1 = max(0, iy - Ri), min(ny, iy + Ri + 1)
+            x0, x1 = max(0, ix - Ri), min(nx, ix + Ri + 1)
+            if y0 >= y1 or x0 >= x1:
+                continue
+            yy, xx = np.mgrid[y0:y1, x0:x1]
+            disk = (xx - xc) ** 2 + (yy - yc) ** 2 <= R ** 2
+            work[y0:y1, x0:x1][disk] = np.nan
+            n_masked += 1
 
     # interpolate over the masked source disks (fill from surrounding diffuse bg)
     if np.any(np.isnan(work) & fov):
@@ -1799,8 +1825,7 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
     out = residual_to_smoothed_bg_i2d(mc_i2d_path)
     _fits.PrimaryHDU(data=sm.astype('float32'), header=hdu.header).writeto(out, overwrite=True)
     print(f"[bg] wrote source-masked smoothed bg {os.path.basename(out)} "
-          f"(masked {0 if 'sc' not in dir() else len(np.atleast_1d(xs))} sources, "
-          f"R={R:.1f}px)", flush=True)
+          f"(masked {n_masked} sources, R={R:.1f}px)", flush=True)
     return out
 
 
@@ -3568,9 +3593,19 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         # feedback loop that drives faint stars negative with
                         # iteration); falls back to the plain smoother on error
                         try:
+                            # Also mask the i2d detection seed (coadd-confirmed
+                            # point sources), not just this phase's vetted
+                            # catalog: a bright star dropped from the vetted list
+                            # is still in the seed, so masking the union keeps its
+                            # flux out of the diffuse-bg estimate and stops the
+                            # bg-absorption -> over-subtraction -> non-positive-ban
+                            # cycle that permanently loses it (ngc6334 F405N).
+                            _seed_for_bg = locals().get('prev_seed')
                             bg_for_next[(module, filt)] = _build_source_masked_bg(
                                 mc_i2d, vetted_path, filt,
-                                median_size=int(getattr(options, 'manual_residual_bg_median_size', 3)))
+                                median_size=int(getattr(options, 'manual_residual_bg_median_size', 3)),
+                                extra_source_catalogs=([_seed_for_bg]
+                                                       if _seed_for_bg else ()))
                         except Exception as ex:
                             print(f"manual [{phase}]: source-masked bg failed ({ex}); "
                                   f"using plain smoother", flush=True)
