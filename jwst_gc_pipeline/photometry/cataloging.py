@@ -771,6 +771,7 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               nmatch_confirm=0,
                               nmatch_confirm_qfit_max=0.6,
                               nmatch_confirm_maxpos_mas=0.0,
+                              ext_prom_min=0.0,
                               drop_overshoot=True, struct_x=0.0, struct_y=0.0,
                               label=''):
     """First-pass star-vs-extended-emission vetting of a MERGED catalog.
@@ -1050,6 +1051,30 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                                       struct_x=struct_x, struct_y=struct_y)
         n_struct = int(np.sum(keep & ~skeep))
         keep = keep & skeep
+
+    # EXTENDED-EMISSION PROMINENCE GATE (NIRCam; user 2026-07-06): on a bright
+    # extended-emission field the qfit / peak_SB / flags / bright-isolated
+    # star_like OR-branches all leak -- an emission bump can fit with qfit<=0.2,
+    # sit at peak_SB>20x the (emission-raised) local bkg, or (the dominant leak)
+    # carry flags==1 because it lands in a saturated-star's wing, so ALL bypass
+    # the star tests.  The ONE robust discriminator on the deep data_i2d is the
+    # annulus-MAD PROMINENCE (rise above the LOCAL emission): hand-labelled W51
+    # darkfilament F480M real stars have prominence median ~5 (13/14 >= 3) while
+    # false emission/wing bumps sit at ~0.9 (100/108 < 3).  Apply it as a HARD
+    # AND on the NIRCam keep (the MIRI path already gates on prominence alone via
+    # min_prominence>0, so skip there).  NaN prominence (off-i2d / no data_i2d) is
+    # NOT kept -- safe on a cutout where every source is on the i2d.  The
+    # model==catalog satstar force-keep BELOW still overrides this, so real
+    # subtracted saturated cores (broad => low prominence) are never dropped.
+    # OFF by default (ext_prom_min<=0); the driver auto-enables it (=3.0) only for
+    # extended-emission NIRCam fields, so star-dominated fields are byte-identical.
+    if ext_prom_min > 0 and min_prominence <= 0:
+        _prom_keep = np.isfinite(prominence) & (prominence >= float(ext_prom_min))
+        _n_prom = int(np.sum(keep & ~_prom_keep))
+        keep = keep & _prom_keep
+        print(f"[{label}] extended-emission prominence gate: dropped {_n_prom} "
+              f"low-prominence source(s) (prominence < {ext_prom_min:g} on data_i2d)",
+              flush=True)
 
     # model==catalog invariant (user 2026-06-27): every saturated star that was
     # SUBTRACTED into the per-frame model (replaced_saturated) MUST appear in
@@ -1403,6 +1428,24 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         else:
             print(f"[manual] satstar seed gate: coadd data_i2d not found "
                   f"({_di2d_path}); gate falls back to per-frame data", flush=True)
+    # Extended-emission NIRCam: use the tight (1.5*FWHM) satstar position bound
+    # so a large saturated core's per-frame fit cannot slide ~0.76" across the
+    # NaN-masked core -> per-frame subtracted-model scatter -> coadd smear /
+    # oversubtraction crater (the "one star modelled as a cluster" residual).
+    # Env because get_saturated_stars is several call layers down; one cataloging
+    # process runs one filter of one target, so a process-global env is safe.  A
+    # user export of NIRCAM_SATSTAR_TIGHT_BOUND is respected (not overridden).
+    _sat_is_miri = (module == 'mirimage'
+                    or _L._instrument_from_filter(filtername) == 'MIRI')
+    _sat_ext_nircam = _is_extended_emission(options) and not _sat_is_miri
+    if 'NIRCAM_SATSTAR_TIGHT_BOUND' not in os.environ:
+        os.environ['NIRCAM_SATSTAR_TIGHT_BOUND'] = '1' if _sat_ext_nircam else '0'
+    # Merge one bright saturated star's DQ-fragmented cores (comparable-size
+    # overlapping components) into one seed so it is fit ONCE per frame -> no
+    # overlapping-PSF oversubtraction crater.  Ext-emission NIRCam only; a user
+    # export is respected.
+    if 'SATSTAR_COMPONENT_OVERLAP_FRAC' not in os.environ:
+        os.environ['SATSTAR_COMPONENT_OVERLAP_FRAC'] = '0.5' if _sat_ext_nircam else '0'
     satstar_table = _L.load_or_make_satstar_catalog(
         filename, path_prefix=f'{basepath}/psfs',
         use_merged_psf_for_merged=(module == 'merged'),
@@ -1727,7 +1770,8 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
 
 
 def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
-                            mask_radius_fwhm=2.0, median_size=3):
+                            mask_radius_fwhm=2.0, median_size=3,
+                            extra_source_catalogs=()):
     """Build the smoothed background map from a mergedcat residual i2d with the
     fitted SOURCE CORES MASKED OUT before smoothing.
 
@@ -1766,29 +1810,54 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
     R = max(2.0, mask_radius_fwhm * fwhm_px)
 
     work = d.copy()
-    try:
-        t = Table.read(vetted_catalog_path)
-        if 'skycoord' in t.colnames and len(t) > 0:
-            sc = t['skycoord']
-            if not isinstance(sc, _SkyCoord):
-                sc = _SkyCoord(sc)
-            xs, ys = w.world_to_pixel(sc)
-            ny, nx = d.shape
-            Ri = int(np.ceil(R))
-            for xc, yc in zip(np.atleast_1d(xs), np.atleast_1d(ys)):
-                if not (np.isfinite(xc) and np.isfinite(yc)):
-                    continue
-                ix, iy = int(round(float(xc))), int(round(float(yc)))
-                y0, y1 = max(0, iy - Ri), min(ny, iy + Ri + 1)
-                x0, x1 = max(0, ix - Ri), min(nx, ix + Ri + 1)
-                if y0 >= y1 or x0 >= x1:
-                    continue
-                yy, xx = np.mgrid[y0:y1, x0:x1]
-                disk = (xx - xc) ** 2 + (yy - yc) ** 2 <= R ** 2
-                work[y0:y1, x0:x1][disk] = np.nan
-    except Exception as ex:
-        print(f"[bg] source-masking failed ({ex}); smoothing unmasked residual",
-              flush=True)
+    ny, nx = d.shape
+    # Mask fitted SOURCE cores from the vetted catalog PLUS any extra source
+    # catalogs (the i2d detection seed).  A real star dropped from the vetted
+    # catalog -- by a group-fit flux collapse or a prior bg over-subtraction --
+    # is absent from ``vetted_catalog_path``, so masking the vetted list alone
+    # leaves its full flux as a positive peak in the residual.  The smoother then
+    # spreads that flux into the "background"; the next phase subtracts it, drives
+    # the star's fit non-positive, and the ban drops it -- so the star never
+    # re-enters the vetted catalog and the bg stays contaminated.  This is a
+    # self-reinforcing cycle that permanently loses real bright stars: ngc6334
+    # F405N (2026-07) the reconstructed bg reached 164 at a 298-peak star (global
+    # median 7), 55% of the flux, so subtracting it killed the star.  The i2d
+    # detection seed still lists these coadd-confirmed point sources, so masking
+    # the UNION keeps them out of the diffuse-background estimate and breaks the
+    # cycle at its first iteration.  Seeds are daofind point sources, not
+    # emission, so genuine extended emission is left in the background untouched.
+    src_ra, src_dec = [], []
+    for _cp in [vetted_catalog_path, *[c for c in extra_source_catalogs if c]]:
+        try:
+            _t = Table.read(_cp)
+        except (OSError, ValueError, FileNotFoundError):
+            print(f"[bg] source catalog unreadable ({_cp}); skipping", flush=True)
+            continue
+        if 'skycoord' not in _t.colnames or len(_t) == 0:
+            continue
+        _sc = _t['skycoord']
+        if not isinstance(_sc, _SkyCoord):
+            _sc = _SkyCoord(_sc)
+        src_ra.append(np.atleast_1d(np.asarray(_sc.ra.deg, dtype=float)))
+        src_dec.append(np.atleast_1d(np.asarray(_sc.dec.deg, dtype=float)))
+
+    n_masked = 0
+    if src_ra:
+        sc = _SkyCoord(np.concatenate(src_ra), np.concatenate(src_dec), unit='deg')
+        xs, ys = w.world_to_pixel(sc)
+        Ri = int(np.ceil(R))
+        for xc, yc in zip(np.atleast_1d(xs), np.atleast_1d(ys)):
+            if not (np.isfinite(xc) and np.isfinite(yc)):
+                continue
+            ix, iy = int(round(float(xc))), int(round(float(yc)))
+            y0, y1 = max(0, iy - Ri), min(ny, iy + Ri + 1)
+            x0, x1 = max(0, ix - Ri), min(nx, ix + Ri + 1)
+            if y0 >= y1 or x0 >= x1:
+                continue
+            yy, xx = np.mgrid[y0:y1, x0:x1]
+            disk = (xx - xc) ** 2 + (yy - yc) ** 2 <= R ** 2
+            work[y0:y1, x0:x1][disk] = np.nan
+            n_masked += 1
 
     # interpolate over the masked source disks (fill from surrounding diffuse bg)
     if np.any(np.isnan(work) & fov):
@@ -1799,8 +1868,7 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
     out = residual_to_smoothed_bg_i2d(mc_i2d_path)
     _fits.PrimaryHDU(data=sm.astype('float32'), header=hdu.header).writeto(out, overwrite=True)
     print(f"[bg] wrote source-masked smoothed bg {os.path.basename(out)} "
-          f"(masked {0 if 'sc' not in dir() else len(np.atleast_1d(xs))} sources, "
-          f"R={R:.1f}px)", flush=True)
+          f"(masked {n_masked} sources, R={R:.1f}px)", flush=True)
     return out
 
 
@@ -3446,6 +3514,18 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     # sources that pass the qfit OR-branch.  NIRCam: off (0).
                     _miri_field = (module == 'mirimage'
                                    or _L._instrument_from_filter(filt) == 'MIRI')
+                    # Hard prominence floor for NIRCam extended-emission vetting.
+                    # --manual-ext-prom-min < 0 (default) => AUTO: 3.0 for an
+                    # extended-emission NIRCam field, off elsewhere; >= 0 uses the
+                    # value verbatim (0 forces it off).  MIRI already gates on
+                    # prominence via min_prominence, so leave its ext_prom_min 0.
+                    _ext_prom_opt = float(getattr(opts_phase, 'manual_ext_prom_min', -1.0))
+                    if _ext_prom_opt < 0:
+                        _ext_prom_min = (3.0 if (not _miri_field
+                                                 and _is_extended_emission(opts_phase))
+                                         else 0.0)
+                    else:
+                        _ext_prom_min = _ext_prom_opt
                     vetted = _filter_extended_emission(
                         merged, data_i2d_image=d_i2d, ww_i2d=ww_i2d,
                         qfit_max=float(getattr(opts_phase, 'manual_ext_qfit_max', 0.2)),
@@ -3470,6 +3550,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             opts_phase, 'manual_ext_nmatch_confirm_qfit_max', 0.6)),
                         nmatch_confirm_maxpos_mas=float(getattr(
                             opts_phase, 'manual_ext_nmatch_confirm_maxpos_mas', 0.0)),
+                        ext_prom_min=_ext_prom_min,
                         struct_x=0.0, struct_y=0.0,  # prune at detection, not here
                         label=f'{phase}:{filt}')
                     vetted.write(vetted_path, overwrite=True)
@@ -3568,9 +3649,19 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         # feedback loop that drives faint stars negative with
                         # iteration); falls back to the plain smoother on error
                         try:
+                            # Also mask the i2d detection seed (coadd-confirmed
+                            # point sources), not just this phase's vetted
+                            # catalog: a bright star dropped from the vetted list
+                            # is still in the seed, so masking the union keeps its
+                            # flux out of the diffuse-bg estimate and stops the
+                            # bg-absorption -> over-subtraction -> non-positive-ban
+                            # cycle that permanently loses it (ngc6334 F405N).
+                            _seed_for_bg = locals().get('prev_seed')
                             bg_for_next[(module, filt)] = _build_source_masked_bg(
                                 mc_i2d, vetted_path, filt,
-                                median_size=int(getattr(options, 'manual_residual_bg_median_size', 3)))
+                                median_size=int(getattr(options, 'manual_residual_bg_median_size', 3)),
+                                extra_source_catalogs=([_seed_for_bg]
+                                                       if _seed_for_bg else ()))
                         except Exception as ex:
                             print(f"manual [{phase}]: source-masked bg failed ({ex}); "
                                   f"using plain smoother", flush=True)

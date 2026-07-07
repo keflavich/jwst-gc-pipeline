@@ -3482,6 +3482,16 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--manual-ext-qfit-max", dest="manual_ext_qfit_max",
                     type='float', default=0.2,
                     help="Extended-emission vetting: keep sources with qfit <= this (default 0.2).")
+    parser.add_option("--manual-ext-prom-min", dest="manual_ext_prom_min",
+                    type='float', default=-1.0,
+                    help="Extended-emission NIRCam vetting: HARD prominence floor on "
+                         "the deep data_i2d (rise above local emission) that the "
+                         "qfit/peakSB/flags/bright-isolated star tests CANNOT bypass "
+                         "-- the single robust real-star-vs-emission discriminator on "
+                         "bright extended fields (W51 darkfil: real median ~5, false "
+                         "~0.9).  -1 (default) = AUTO: 3.0 for extended-emission NIRCam "
+                         "fields, off otherwise.  0 = force off.  Satstar force-keep "
+                         "(model==catalog) still overrides it.")
     parser.add_option("--manual-ext-peak-over-bkg", dest="manual_ext_peak_over_bkg",
                     type='float', default=20.0,
                     help="Extended-emission vetting: keep if peak-SB > this x local bkg (default 20).")

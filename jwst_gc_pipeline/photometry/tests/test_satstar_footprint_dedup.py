@@ -80,6 +80,24 @@ def test_fix2_reject_is_opt_in(monkeypatch):
     assert len(_dedup_satstar_catalog(_pile(), target='brick')) >= 1
 
 
+def test_anchor_default_on_for_extended_targets():
+    # W51 darkfil blob1 signature: 8 per-frame seeds of ONE bright saturated core,
+    # fit positions scattered ~0.7" and flux scattered 2.4e5-6.3e5 (ratio 2.6, so
+    # flux-consistency FAILS), but the DQ-component bbox anchor is stable to ~0.1".
+    # With no env override, an extended-emission target must default to the anchor
+    # merge and collapse them to ONE (fixes the PSF-cluster oversubtraction
+    # crater); a non-extended target keeps the flux-consistency fallback.
+    fits = [352e3, 402e3, 245e3, 333e3, 344e3, 313e3, 629e3, 634e3]
+    fit_dec = [0.40, 0.18, -0.36, -0.36, -0.68, -0.65, 0.06, 0.06]  # ~0.7" spread
+    area = [370, 381, 483, 413, 513, 617, 659, 659]
+    anc = [0.05] * 8                                                 # stable anchor
+    t = _tbl(fit_dec, fits, sat_area=area, anchor_dec_arcsec=anc)
+    # no SATSTAR_FP_USE_ANCHOR set -> w51 defaults ON -> one star
+    assert len(_dedup_satstar_catalog(t.copy(), target='w51')) == 1
+    # non-extended target -> anchor default OFF -> flux fallback keeps >1
+    assert len(_dedup_satstar_catalog(t.copy(), target='brick')) > 1
+
+
 def test_backward_compat_without_sat_area():
     # no sat_area column -> base-radius behaviour: 0.1" dup absorbed, 0.5" kept
     t = _tbl([0.0, 0.1, 0.5], [300e3, 250e3, 200e3], sat_area=None)
