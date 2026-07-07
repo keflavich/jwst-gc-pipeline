@@ -456,14 +456,20 @@ def _prepare_cutout_input(filename, basepath, filtername, options):
     ny_c, nx_c = cut.data.shape
 
     # A region that only grazes the detector edge trims (mode='trim') to a
-    # degenerate (zero- or near-zero-size) crop without raising NoOverlapError.
-    # That is not a usable frame -- treat it as a non-overlap so the per-exposure
-    # driver SKIPS it (legitimate for a cutout) instead of feeding an empty image
-    # downstream (empty-array reductions then crash, e.g. get_saturated_stars).
-    if ny_c < 2 or nx_c < 2:
+    # degenerate (thin-strip) crop without raising NoOverlapError.  That is not a
+    # usable frame -- treat it as a non-overlap so the per-exposure driver SKIPS
+    # it (legitimate for a cutout) instead of feeding a near-empty image
+    # downstream, where it crashes: the m1 local-noise map (Gaussian smooth,
+    # sigma=3 px) on a <~10 px all-edge strip has no positive finite values.
+    # Require each dimension to exceed the noise-smoothing scale, and a minimum
+    # count of finite SCI pixels (an edge sliver is mostly NaN/DQ).
+    _MIN_CUTOUT_PIX = 16          # > several * smooth_sigma_pix (3.0)
+    _MIN_CUTOUT_FINITE = 64
+    _n_finite = int(np.isfinite(cut.data).sum())
+    if ny_c < _MIN_CUTOUT_PIX or nx_c < _MIN_CUTOUT_PIX or _n_finite < _MIN_CUTOUT_FINITE:
         raise CutoutNoOverlap(
             f"cutout region grazes {os.path.basename(filename)} -> degenerate "
-            f"{ny_c}x{nx_c} crop")
+            f"{ny_c}x{nx_c} crop ({_n_finite} finite px)")
 
     out_basepath = os.path.join(basepath, 'cutouts', label)
     out_dir = os.path.join(out_basepath, filtername, 'pipeline')
@@ -3585,6 +3591,21 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--manual-iter2-local-snr", dest="manual_iter2_local_snr",
                     type='float', default=MANUAL_DEFAULTS['manual_iter2_local_snr'],
                     help="Local-S/N threshold for daofind on residual/bg-subtracted images (default 3.0).")
+    parser.add_option("--manual-detect-threshold-scale", dest="manual_detect_threshold_scale",
+                    type='float', default=MANUAL_DEFAULTS['manual_detect_threshold_scale'],
+                    help="Scale on the daofind DETECTION threshold (min-noise floor) for the "
+                         "residual passes m2..m6; <1 detects fainter local maxima (default 1.0 = no-op). "
+                         "m1 (raw data) is unaffected. Purity relies on multi-frame nmatch confirmation.")
+    parser.add_option("--manual-resid-roundlo", dest="manual_resid_roundlo", type='float', default=MANUAL_DEFAULTS['manual_resid_roundlo'],
+                    help="daofind roundness LOWER bound on the residual passes m2..m6 (default -1.0; "
+                         "loosened from -0.3 on 2026-07-06 -- emission-safe, recovers blended companions "
+                         "which are intrinsically less round). Tighten to -0.3 for the historical behaviour.")
+    parser.add_option("--manual-resid-roundhi", dest="manual_resid_roundhi", type='float', default=MANUAL_DEFAULTS['manual_resid_roundhi'],
+                    help="daofind roundness UPPER bound on the residual passes m2..m6 (default 1.0).")
+    parser.add_option("--manual-resid-sharplo", dest="manual_resid_sharplo", type='float', default=MANUAL_DEFAULTS['manual_resid_sharplo'],
+                    help="daofind sharpness LOWER bound on the residual passes m2..m6 (default 0.50).")
+    parser.add_option("--manual-resid-sharphi", dest="manual_resid_sharphi", type='float', default=MANUAL_DEFAULTS['manual_resid_sharphi'],
+                    help="daofind sharpness UPPER bound on the residual passes m2..m6 (default 1.00).")
     parser.add_option("--manual-ext-qfit-max", dest="manual_ext_qfit_max",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_qfit_max'],
                     help="Extended-emission vetting: keep sources with qfit <= this (default 0.2).")
