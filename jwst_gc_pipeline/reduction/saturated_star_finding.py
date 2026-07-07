@@ -207,84 +207,6 @@ def _merge_spike_satellites(saturated, sources, nsource, gap, ratio):
     return sources, nsource
 
 
-def _merge_overlapping_components(saturated, sources, nsource, overlap_frac,
-                                  min_big_px=250):
-    """Merge saturated components whose cores OVERLAP into one physical star.
-
-    A bright saturated star embedded in nebulosity (W51 darkfil F480M) fragments
-    into 2+ COMPARABLE-size DQ-SATURATED components split by a thin unsaturated
-    gap; ``scipy.ndimage.label`` gives each its own label, each is fit as a
-    separate satstar, and the overlapping PSF models over-subtract into a crater.
-    ``_merge_spike_satellites`` only folds a SMALL satellite into a >=ratio-larger
-    core, so it leaves a 1.78x-area pair (blob1: 659 + 370 px) split.
-
-    Merge b into the LARGER component a when b's centroid lies within
-    ``overlap_frac`` x a's footprint radius (r = sqrt(area/pi)) -- i.e. b's centre
-    is inside a's saturated core, so they are one physical saturation region.
-    Gated on a being genuinely large (>= ``min_big_px``): two DISTINCT compact
-    stars have small radii, so their containment distance is small and they are
-    NEVER fused (a real crowded cluster of separate cores is preserved); only
-    large overlapping cores (whose saturation is physically blended and
-    unresolvable anyway) merge.  Size-ratio-agnostic (complements the spike
-    merge).  OFF by default (overlap_frac<=0); the driver enables it for
-    extended-emission NIRCam fields.  Disconnected pixels keep the root label (no
-    connectivity relabel), so the merged COM/area absorb them.
-    """
-    if overlap_frac <= 0 or nsource <= 1:
-        return sources, nsource
-    labels = np.arange(1, nsource + 1)
-    sizes = sum_labels(saturated, sources, labels)
-    coms = center_of_mass(saturated, labels=sources, index=labels)  # list of (y,x)
-    radii = np.sqrt(np.maximum(sizes, 1.0) / np.pi)
-    parent = {int(l): int(l) for l in labels}
-
-    def _find(a):
-        while parent[a] != a:
-            parent[a] = parent[parent[a]]
-            a = parent[a]
-        return a
-
-    order = [int(l) for l in labels[np.argsort(-sizes)]]   # largest first
-    for ii in range(len(order)):
-        a = order[ii]
-        if sizes[a - 1] < min_big_px:
-            continue
-        ya, xa = coms[a - 1]
-        if not (np.isfinite(ya) and np.isfinite(xa)):
-            continue
-        for jj in range(ii + 1, len(order)):
-            b = order[jj]
-            yb, xb = coms[b - 1]
-            if not (np.isfinite(yb) and np.isfinite(xb)):
-                continue
-            if np.hypot(ya - yb, xa - xb) <= overlap_frac * radii[a - 1]:
-                ra_root, rb_root = _find(a), _find(b)
-                if ra_root != rb_root:
-                    # attach smaller root under the larger
-                    if sizes[ra_root - 1] >= sizes[rb_root - 1]:
-                        parent[rb_root] = ra_root
-                    else:
-                        parent[ra_root] = rb_root
-    new_sources = sources.copy()
-    n_merged = 0
-    for l in labels:
-        root = _find(int(l))
-        if root != int(l):
-            new_sources[sources == int(l)] = root
-            n_merged += 1
-    if n_merged:
-        uniq = np.unique(new_sources[new_sources > 0])
-        remap = np.zeros(int(new_sources.max()) + 1, dtype=int)
-        remap[uniq] = np.arange(1, len(uniq) + 1)
-        new_sources = remap[new_sources]
-        print(f"Saturated starfinding: merged {n_merged} overlapping-core "
-              f"component(s) into their host (overlap_frac={overlap_frac}, "
-              f"min_big_px={min_big_px}); nsources {nsource} -> {len(uniq)}",
-              flush=True)
-        return new_sources, len(uniq)
-    return sources, nsource
-
-
 # Per-filter DATA-value floor (MJy/sr) for the saturated-star finder.  A pixel
 # flagged DQ-SATURATED whose data (and charge-migration wings) sit BELOW this
 # floor is a SPURIOUS flag (persistence / JUMP mis-tag / bad pixel), NOT a real
@@ -478,14 +400,6 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
     # comparable separate stars are never fused.
     sources, nsource = _merge_spike_satellites(
         saturated, sources, nsource, spike_merge_gap, spike_merge_ratio)
-    # Merge COMPARABLE-size overlapping saturated cores (one bright star split by
-    # a DQ gap into fragments the spike merge's ratio gate leaves separate ->
-    # per-frame overlapping-PSF crater).  Ext-emission NIRCam only (driver sets
-    # SATSTAR_COMPONENT_OVERLAP_FRAC); 0 = off -> other fields unchanged.
-    _ovl_frac = float(os.environ.get('SATSTAR_COMPONENT_OVERLAP_FRAC', 0.0))
-    _ovl_minpx = int(os.environ.get('SATSTAR_COMPONENT_OVERLAP_MIN_PX', 250))
-    sources, nsource = _merge_overlapping_components(
-        saturated, sources, nsource, _ovl_frac, min_big_px=_ovl_minpx)
     sizes = sum_labels(saturated, sources, np.arange(nsource)+1)
     msfe = min_sep_from_edge
 
