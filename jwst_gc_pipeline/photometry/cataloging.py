@@ -537,12 +537,18 @@ def _subset_seed_to_frame(seed_table, ww, data_shape, fwhm_pix,
 
 def _daofind_emission_floor(detection_image, noise_map, mask, fwhm_pix, *,
                             roundlo, roundhi, sharplo, sharphi,
-                            noise_floor_box=0, noise_floor_k=5.0, label=''):
+                            noise_floor_box=0, noise_floor_k=5.0,
+                            threshold_scale=1.0, label=''):
     """daofind with either the global-min-noise threshold (default) or a
     spatially-varying EMISSION-NOISE-FLOOR S/N threshold.
 
-    Default (noise_floor_box<=0): threshold = min(noise_map) -- the historical
-    over-detect-everything behaviour.
+    Default (noise_floor_box<=0): threshold = ``threshold_scale`` * min(noise_map)
+    -- the historical over-detect-everything behaviour at threshold_scale=1.0.
+    ``threshold_scale`` < 1 lowers the daofind detection floor so fainter local
+    maxima (isolated stars just below min-noise, or companions exposed on the
+    residual after a bright neighbour is subtracted) are detected; downstream
+    purity is protected by multi-frame nmatch confirmation, not by the raw floor.
+    Floor variant scales ``noise_floor_k`` by the same factor.
 
     Floor variant (noise_floor_box>0, extended-emission fields): detect on the
     S/N image ``data / floor`` at a fixed ``noise_floor_k``, where ``floor`` is
@@ -560,8 +566,9 @@ def _daofind_emission_floor(detection_image, noise_map, mask, fwhm_pix, *,
         raise ValueError(f"[{label}] local noise map has no positive finite values")
     gmin = float(np.nanmin(noise_map[finite]))
     if not (noise_floor_box and noise_floor_box > 0):
-        det = DAOStarFinder(threshold=gmin, fwhm=fwhm_pix, roundlo=roundlo,
-                            roundhi=roundhi, sharplo=sharplo, sharphi=sharphi)(
+        det = DAOStarFinder(threshold=gmin * float(threshold_scale), fwhm=fwhm_pix,
+                            roundlo=roundlo, roundhi=roundhi,
+                            sharplo=sharplo, sharphi=sharphi)(
                                 detection_image, mask=mask)
         return det if det is not None else Table()
     # Emission-noise floor = a smooth local median of the noise map.  A full-res
@@ -582,8 +589,8 @@ def _daofind_emission_floor(detection_image, noise_map, mask, fwhm_pix, *,
         floor = _mf(_filled, size=int(noise_floor_box))
     floor = np.where(floor < gmin, gmin, floor)
     sn = np.where(mask, 0.0, detection_image) / np.where(floor > 0, floor, np.inf)
-    det = DAOStarFinder(threshold=float(noise_floor_k), fwhm=fwhm_pix,
-                        roundlo=roundlo, roundhi=roundhi,
+    det = DAOStarFinder(threshold=float(noise_floor_k) * float(threshold_scale),
+                        fwhm=fwhm_pix, roundlo=roundlo, roundhi=roundhi,
                         sharplo=sharplo, sharphi=sharphi)(sn, mask=mask)
     if det is None:
         return Table()
@@ -604,7 +611,7 @@ def _build_manual_seed(*, detection_image, nan_replaced_data, mask, ww, fwhm_pix
                        preferred_seed_skycoord_col=None,
                        dedup_min_sep_pix=None, label='', apply_snr_filter=True,
                        struct_x=0.0, struct_y=0.0, coarse_bg_box=0,
-                       noise_floor_box=0, noise_floor_k=5.0):
+                       noise_floor_box=0, noise_floor_k=5.0, threshold_scale=1.0):
     """Build ``seeded_init_params`` for one manual pass.
 
     daofind(detection_image) [local-noise-map threshold] -> local-S/N filter ->
@@ -651,7 +658,8 @@ def _build_manual_seed(*, detection_image, nan_replaced_data, mask, ww, fwhm_pix
     detections = _daofind_emission_floor(
         detection_image, noise_map, mask, fwhm_pix,
         roundlo=roundlo, roundhi=roundhi, sharplo=sharplo, sharphi=sharphi,
-        noise_floor_box=noise_floor_box, noise_floor_k=noise_floor_k, label=label)
+        noise_floor_box=noise_floor_box, noise_floor_k=noise_floor_k,
+        threshold_scale=threshold_scale, label=label)
     if apply_snr_filter:
         detections, snr_stats = annotate_and_filter_by_local_snr(
             detections, noise_map, snr_threshold=local_snr_threshold)
@@ -1534,6 +1542,23 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     overshoot_ratio = float(getattr(options, 'manual_overshoot_ratio', 1.2))
     overshoot_action = str(getattr(options, 'manual_overshoot_action', 'refit'))
     iter2_snr = float(getattr(options, 'manual_iter2_local_snr', 3.0))
+    # daofind detection-floor scale for the residual passes (m2 + m3..m6).  < 1
+    # lowers the threshold to detect fainter local maxima; m1 (raw data) stays at
+    # 1.0 to avoid flooding the first pass with noise.  Default 1.0 = no-op.
+    detect_scale = float(getattr(options, 'manual_detect_threshold_scale', 1.0))
+    # per-frame residual-pass (m2..m6) daofind shape cuts.  Companions sitting on a
+    # brighter neighbour's PSF wing are intrinsically LESS round, so the historical
+    # tight roundness (+-0.3) rejected real blended stars.  DEFAULT loosened to
+    # +-1.0 (2026-07-06): emission-safe regression (pillar/W51 F187N+F480M -- the
+    # extended emission stays in the residual, over-subtraction unchanged) + a free
+    # depth win on star fields (arches clump 2/10 -> 7/10, purity unchanged 0.885);
+    # purity is protected by the fit + nmatch confirmation, not the shape cut.  The
+    # COADD i2d-seed roundness (--manual-seed-round-max) stays TIGHT (0.5): loosening
+    # it too is a star-field opt-in (plants fake stars on nebulosity in emission fields).
+    resid_roundlo = float(getattr(options, 'manual_resid_roundlo', -1.0))
+    resid_roundhi = float(getattr(options, 'manual_resid_roundhi', 1.0))
+    resid_sharplo = float(getattr(options, 'manual_resid_sharplo', 0.50))
+    resid_sharphi = float(getattr(options, 'manual_resid_sharphi', 1.00))
     first_snr = float(getattr(options, 'local_snr_threshold', 5.0))
     # PER-FRAME struct prune is DISABLED: the (struct_x,struct_y) values are
     # tuned on the deep i2d coadd; a single exposure has far higher structure
@@ -1696,11 +1721,14 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             detection_image=residual1, nan_replaced_data=ctx.nan_replaced_data,
             mask=ctx.mask, ww=ctx.ww, fwhm_pix=ctx.fwhm_pix,
             satstar_table=ctx.satstar_table, prev_catalog=saved1,
-            local_snr_threshold=iter2_snr, roundlo=-0.3, roundhi=0.3,
-            sharplo=0.50, sharphi=1.00, dedup_min_sep_pix=0.5 * ctx.fwhm_pix,
+            local_snr_threshold=iter2_snr,
+            roundlo=resid_roundlo, roundhi=resid_roundhi,
+            sharplo=resid_sharplo, sharphi=resid_sharphi,
+            dedup_min_sep_pix=0.5 * ctx.fwhm_pix,
             label='m2', struct_x=struct_x, struct_y=struct_y,
             coarse_bg_box=coarse_bg_box,
-            noise_floor_box=_nfloor_box, noise_floor_k=_nfloor_k)
+            noise_floor_box=_nfloor_box, noise_floor_k=_nfloor_k,
+            threshold_scale=detect_scale)
         res2, modsky2, _ = _pass(seed2, 'm2',
                                  _nprom_m2 if _is_ext_nircam else None)
         _save_manual_pass(ctx=ctx, result=res2, modsky=modsky2, options=options,
@@ -1714,11 +1742,14 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
         detection_image=ctx.nan_replaced_data, nan_replaced_data=ctx.nan_replaced_data,
         mask=ctx.mask, ww=ctx.ww, fwhm_pix=ctx.fwhm_pix,
         satstar_table=ctx.satstar_table, prev_catalog=prev,
-        local_snr_threshold=snr, roundlo=-0.3, roundhi=0.3,
-        sharplo=0.50, sharphi=1.00, dedup_min_sep_pix=0.5 * ctx.fwhm_pix,
+        local_snr_threshold=snr,
+        roundlo=resid_roundlo, roundhi=resid_roundhi,
+        sharplo=resid_sharplo, sharphi=resid_sharphi,
+        dedup_min_sep_pix=0.5 * ctx.fwhm_pix,
         label=manual_phase, struct_x=struct_x, struct_y=struct_y,
         coarse_bg_box=coarse_bg_box,
-        noise_floor_box=_nfloor_box, noise_floor_k=_nfloor_k)
+        noise_floor_box=_nfloor_box, noise_floor_k=_nfloor_k,
+        threshold_scale=detect_scale)
     res, modsky, _ = _pass(seed, manual_phase,
                            _nprom_m3p if _is_ext_nircam else None)
     _save_manual_pass(ctx=ctx, result=res, modsky=modsky, options=options,
