@@ -1661,6 +1661,23 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     overshoot_ratio = float(mopt(options, 'manual_overshoot_ratio'))
     overshoot_action = str(mopt(options, 'manual_overshoot_action'))
     iter2_snr = float(mopt(options, 'manual_iter2_local_snr'))
+    # daofind detection-floor scale for the residual passes (m2 + m3..m6).  < 1
+    # lowers the threshold to detect fainter local maxima; m1 (raw data) stays at
+    # 1.0 to avoid flooding the first pass with noise.  Default 1.0 = no-op.
+    detect_scale = float(mopt(options, 'manual_detect_threshold_scale'))
+    # per-frame residual-pass (m2..m6) daofind shape cuts.  Companions sitting on a
+    # brighter neighbour's PSF wing are intrinsically LESS round, so the historical
+    # tight roundness (+-0.3) rejected real blended stars.  DEFAULT loosened to
+    # +-1.0 (2026-07-06): emission-safe regression (pillar/W51 F187N+F480M -- the
+    # extended emission stays in the residual, over-subtraction unchanged) + a free
+    # depth win on star fields (arches clump 2/10 -> 7/10, purity unchanged 0.885);
+    # purity is protected by the fit + nmatch confirmation, not the shape cut.  The
+    # COADD i2d-seed roundness (--manual-seed-round-max) stays TIGHT (0.5): loosening
+    # it too is a star-field opt-in (plants fake stars on nebulosity in emission fields).
+    resid_roundlo = float(mopt(options, 'manual_resid_roundlo'))
+    resid_roundhi = float(mopt(options, 'manual_resid_roundhi'))
+    resid_sharplo = float(mopt(options, 'manual_resid_sharplo'))
+    resid_sharphi = float(mopt(options, 'manual_resid_sharphi'))
     first_snr = float(mopt(options, 'local_snr_threshold'))
     # daofind detection-floor scale for the residual passes (m2 + m3..m6).  < 1
     # lowers the threshold to detect fainter local maxima; m1 (raw data) stays at
