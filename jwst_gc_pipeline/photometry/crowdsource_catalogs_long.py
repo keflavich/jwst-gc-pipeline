@@ -2828,6 +2828,66 @@ def _cutout_origin(orig_filename, options):
     return int(xslc.start), int(yslc.start)
 
 
+def _resolve_render_psf_shape(fwhm_pix, grid, default=(21, 21)):
+    """Render-stamp size scaled to the PSF FWHM (detector pixels).
+
+    The default (21,21) = +-10px is NIRCam-calibrated.  For the broad MIRI
+    long-wavelength PSFs (F2550W FWHM 7.3px) it clips the diffraction wings at
+    ~1.4 FWHM, so a bright star's real flux out to r~16px is never subtracted --
+    it lingers as a square halo in the residual and is missing from the model
+    (cloudc F2550W: "bright stars use too small a PSF footprint").  Grow the
+    stamp to +-MULT*FWHM (default 3 -> 6*FWHM across), forced odd, never smaller
+    than ``default``, and capped by the PSF grid's own pixel stamp (can't render
+    wings the grid does not contain).  NIRCam / short-MIRI (FWHM<~3.3px) stay at
+    the 21px default.  Env overrides: MERGE_RENDER_PSF_SHAPE (absolute odd int)
+    and MERGE_RENDER_FWHM_MULT (float, default 3.0).
+    """
+    _env = os.environ.get('MERGE_RENDER_PSF_SHAPE')
+    if _env is not None:
+        n = int(_env)
+        n = n if n % 2 else n + 1
+        return (n, n)
+    if not (fwhm_pix and np.isfinite(fwhm_pix) and fwhm_pix > 0):
+        return default
+    mult = float(os.environ.get('MERGE_RENDER_FWHM_MULT', 3.0))
+    n = 2 * int(np.ceil(mult * float(fwhm_pix))) + 1   # odd, centred
+    n = max(n, int(default[0]))
+    # cap by the grid's own pixel stamp (over-sampled data / oversampling)
+    try:
+        over = int(np.atleast_1d(getattr(grid, 'oversampling', [1]))[0])
+        gstamp = int(min(np.asarray(grid.data).shape[-2:]) / max(1, over))
+        if gstamp >= int(default[0]):
+            n = min(n, gstamp if gstamp % 2 else gstamp - 1)
+    except (AttributeError, TypeError, ValueError):
+        pass
+    return (int(n), int(n))
+
+
+def _cap_render_to_pedestal(model, base, bgbox):
+    """Cap a rendered satstar model to the ABOVE-PEDESTAL data.
+
+    An uncovered saturated star re-rendered at its merged (saturation-clipped)
+    flux as a peaked point source over-predicts the star in the frames where it
+    is UNsaturated, and the excess gouges the (large MIRI thermal) background
+    pedestal into a negative hole (cloudc F2550W bright star A: model 2879 vs
+    data-bg 2185 -> residual -711 below the ~1000 pedestal).  Capping the model
+    to ``clip(base - bg_coarse, 0)`` makes the core model = data-bg -> residual
+    = bg (flat, no hole) while leaving the fainter wings (model < data-bg)
+    subtracted.  ``bg_coarse`` is a coarse (bgbox) median filter of ``base``;
+    NaN pixels in ``base`` are filled with its global median for the filter and
+    left uncapped in the result.
+
+    Returns the capped model (same shape).
+    """
+    from scipy.ndimage import median_filter as _medfilt
+    base = np.asarray(base, dtype=float)
+    finite = np.isfinite(base)
+    fill = float(np.nanmedian(base[finite])) if finite.any() else 0.0
+    bg_coarse = _medfilt(np.where(finite, base, fill), size=int(bgbox))
+    cap = np.clip(base - bg_coarse, 0, None)          # above-pedestal signal
+    return np.where(np.isfinite(cap), np.minimum(model, cap), model)
+
+
 def _render_model_from_table(table, psf_model, shape, psf_shape):
     """Render a model image by evaluating ``psf_model`` at each
     (x_fit, y_fit, flux_fit) row of ``table``.  Used by the active mergedcat
@@ -2953,6 +3013,21 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                                basepath='/blue/adamginsburg/adamginsburg/jwst/',
                                psf_cache_dir=os.path.join(basepath, 'psfs'),
                                instrument=instrument)
+    # FWHM-scale the render stamp so broad MIRI long-wavelength PSFs are not
+    # clipped (see _resolve_render_psf_shape).  Falls back to the (21,21) default
+    # for NIRCam / short-MIRI and if the FWHM lookup fails.
+    from jwst_gc_pipeline.reduction.filtering import get_fwhm as _get_fwhm
+    _fwhm_pix = None
+    try:
+        _hdr = fits.getheader(first_cut)
+        _, _fwhm_pix = _get_fwhm(_hdr)
+    except (KeyError, IndexError, FileNotFoundError, OSError):
+        _fwhm_pix = None
+    _new_shape = _resolve_render_psf_shape(_fwhm_pix, grid, default=psf_shape)
+    if tuple(_new_shape) != tuple(psf_shape):
+        print(f"mergedcat render psf_shape {tuple(psf_shape)} -> {tuple(_new_shape)} "
+              f"(filter {filtername}, FWHM {_fwhm_pix:.1f}px detector)", flush=True)
+    psf_shape = _new_shape
     half_h, half_w = int(psf_shape[0]) // 2, int(psf_shape[1]) // 2
 
     # satstar-model suffix matching _prepare_frame_for_photometry's
@@ -3050,9 +3125,15 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
             # NOT cover (else they linger in the residual -- see split above).  A
             # star is "covered" when the per-frame satstar model has a real peak at
             # its position; where it was not satstar-fit the model is exactly 0.
+            # These UNCOVERED saturated stars are rendered SEPARATELY (srx/sry/srf)
+            # so their model can be capped to the data (below) -- rendering them at
+            # the merged (saturation-clipped) flux as a peaked point source
+            # over-predicts the star in the frames where it is UNsaturated (cloudc
+            # F2550W bright star A: model 2797 vs true star 2296) and gouges the
+            # thermal-background pedestal (a -501 hole).
+            srx, sry, srf = [], [], []
             if len(sat_sc):
                 sxx, syy = ww.world_to_pixel(sat_sc)
-                n_render_sat = 0
                 for k in range(len(sat_sc)):
                     sx, sy, sf = float(sxx[k]), float(syy[k]), float(sat_flux[k])
                     if not (np.isfinite(sx) and np.isfinite(sy) and np.isfinite(sf)):
@@ -3068,17 +3149,41 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                             covered = (np.isfinite(sub).any()
                                        and np.nanmax(sub) > satstar_cover_thresh)
                     if not covered:
-                        rx.append(sx); ry.append(sy); rf.append(sf)
-                        n_render_sat += 1
-                if n_render_sat:
+                        srx.append(sx); sry.append(sy); srf.append(sf)
+                if srx:
                     print(f"mergedcat {kind} {os.path.basename(orig)}: rendering "
-                          f"{n_render_sat} saturated stars NOT covered by this "
+                          f"{len(srx)} saturated stars NOT covered by this "
                           f"frame's satstar model (would otherwise stay in the "
                           f"residual)", flush=True)
             tbl = Table({'x_fit': np.asarray(rx, dtype=float),
                          'y_fit': np.asarray(ry, dtype=float),
                          'flux_fit': np.asarray(rf, dtype=float)})
             mc_model = _render_model_from_table(tbl, rg, base.shape, psf_shape)
+            # Uncovered saturated stars: render separately and CAP to the above-
+            # pedestal data so a peaked/over-flux model cannot gouge the (large
+            # MIRI thermal) background pedestal.  In the star CORE the cap makes
+            # model = data-bg -> residual = bg (flat, no hole); in the wings the
+            # model is < data-bg and is kept (the star wing is still subtracted).
+            # MIRI-only; env-gated MERGE_SATSTAR_RENDER_CAP (default off).
+            if (srx and _instrument_from_filter(filtername) == 'MIRI'
+                    and int(os.environ.get('MERGE_SATSTAR_RENDER_CAP', 0))):
+                stbl = Table({'x_fit': np.asarray(srx, dtype=float),
+                              'y_fit': np.asarray(sry, dtype=float),
+                              'flux_fit': np.asarray(srf, dtype=float)})
+                mc_sat = _render_model_from_table(stbl, rg, base.shape, psf_shape)
+                _bgbox = int(max(15, round(6 * (_fwhm_pix or 3.0))))
+                mc_sat_capped = _cap_render_to_pedestal(mc_sat, base, _bgbox)
+                mc_model = mc_model + mc_sat_capped
+                print(f"  [miri satstar render cap] capped {len(srx)} uncovered "
+                      f"satstar renders to above-pedestal data (bgbox={_bgbox})",
+                      flush=True)
+            elif srx:
+                # cap disabled (or non-MIRI): render at merged flux as before
+                stbl = Table({'x_fit': np.asarray(srx, dtype=float),
+                              'y_fit': np.asarray(sry, dtype=float),
+                              'flux_fit': np.asarray(srf, dtype=float)})
+                mc_model = mc_model + _render_model_from_table(
+                    stbl, rg, base.shape, psf_shape)
             # ============================ QA POLICY ============================
             # The residual and model QA images obey a STRICT content policy that
             # downstream evaluation (and the residual-bg feedback loop) depend on:
