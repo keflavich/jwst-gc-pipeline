@@ -1435,11 +1435,20 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     # Env because get_saturated_stars is several call layers down; one cataloging
     # process runs one filter of one target, so a process-global env is safe.  A
     # user export of NIRCAM_SATSTAR_TIGHT_BOUND is respected (not overridden).
+    _sat_is_miri = (module == 'mirimage'
+                    or _L._instrument_from_filter(filtername) == 'MIRI')
+    _sat_ext_nircam = _is_extended_emission(options) and not _sat_is_miri
     if 'NIRCAM_SATSTAR_TIGHT_BOUND' not in os.environ:
-        _sat_is_miri = (module == 'mirimage'
-                        or _L._instrument_from_filter(filtername) == 'MIRI')
-        os.environ['NIRCAM_SATSTAR_TIGHT_BOUND'] = (
-            '1' if (_is_extended_emission(options) and not _sat_is_miri) else '0')
+        os.environ['NIRCAM_SATSTAR_TIGHT_BOUND'] = '1' if _sat_ext_nircam else '0'
+    # LOCK the per-frame satstar position to its stable data-refined seed (flux-
+    # only fit) for extended-emission NIRCam.  The bounded fit splits per-frame
+    # positions into ~0.25" clusters -> the coadded per-frame satstar model
+    # (subtracted into data_for_residual) over-subtracts into a CRATER the catalog
+    # / consolidation dedup cannot touch (it lives in the per-frame model, not the
+    # catalog).  Locking makes every frame subtract at the same (per-frame-stable,
+    # ~0.13") seed -> one clean coadded PSF.  A user export is respected.
+    if 'NIRCAM_SATSTAR_LOCK_POS' not in os.environ:
+        os.environ['NIRCAM_SATSTAR_LOCK_POS'] = '1' if _sat_ext_nircam else '0'
     satstar_table = _L.load_or_make_satstar_catalog(
         filename, path_prefix=f'{basepath}/psfs',
         use_merged_psf_for_merged=(module == 'merged'),
