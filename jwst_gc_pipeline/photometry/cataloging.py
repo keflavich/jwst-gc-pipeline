@@ -1681,6 +1681,15 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
                 print(f"[manual] partner-band satstar seeds: no {_partner} "
                       f"satstar catalogs found yet (first pass?); seeding "
                       f"skipped", flush=True)
+    # LOCK the per-frame satstar position to its stable data-refined seed (flux-
+    # only fit) for extended-emission NIRCam.  The bounded fit splits per-frame
+    # positions into ~0.25" clusters -> the coadded per-frame satstar model
+    # (subtracted into data_for_residual) over-subtracts into a CRATER the catalog
+    # / consolidation dedup cannot touch (it lives in the per-frame model, not the
+    # catalog).  Locking makes every frame subtract at the same (per-frame-stable,
+    # ~0.13") seed -> one clean coadded PSF.  A user export is respected.
+    if 'NIRCAM_SATSTAR_LOCK_POS' not in os.environ:
+        os.environ['NIRCAM_SATSTAR_LOCK_POS'] = '1' if _sat_ext_nircam else '0'
     satstar_table = _L.load_or_make_satstar_catalog(
         filename, path_prefix=f'{basepath}/psfs',
         use_merged_psf_for_merged=(module == 'merged'),

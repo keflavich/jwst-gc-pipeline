@@ -1958,7 +1958,17 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # the unsaturated wings -- much more reliable as a star-centre
     # estimate (the saturated mask should be centred on the star
     # centroid).  Added 2026-05-28.
-    coms = _refine_coms_by_data(coms, data, sources, unrecoverable=_unrecoverable)
+    # For the extended-emission NIRCam POSITION LOCK, keep the RAW mask
+    # center-of-mass: it is stable cross-frame (~0.13" spread on the W51 darkfil
+    # blob), whereas _refine_coms_by_data recentres on THIS frame's saturation
+    # extent (eroded-core / unrecoverable sub-cluster), which varies frame-to-frame
+    # as the saturated area does (370->659 px) and so wanders ~0.6" -- defeating the
+    # lock (the whole point is one shared subtraction position across frames).  The
+    # refine's asymmetric-spike benefit is irrelevant here: the locked flux-only
+    # fit needs a CONSISTENT seed, not a per-frame-accurate one.  Other paths keep
+    # the refine.
+    if not int(os.environ.get('NIRCAM_SATSTAR_LOCK_POS', 0)):
+        coms = _refine_coms_by_data(coms, data, sources, unrecoverable=_unrecoverable)
 
     # Precompute sat_area per labeled component so we can order in-FOV
     # source_records brightest-first for iterative-subtraction fitting
@@ -2947,12 +2957,32 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # set 0 to restore the legacy hard lock).
             _miri_bounded = (_is_miri
                              and int(os.environ.get('MIRI_SATSTAR_BOUNDED_FIT', 1)))
-            if _is_miri and not _miri_bounded:
-                # legacy hard lock (MIRI_SATSTAR_BOUNDED_FIT=0)
+            # NIRCam extended-emission POSITION LOCK (user 2026-07-08): the ROOT
+            # cause of the residual crater is CROSS-FRAME position inconsistency.
+            # Every frame has one stable DQ-component seed (~0.13" spread), but the
+            # bounded PSF fit slides each frame's satstar to a slightly different
+            # place (the asymmetric NaN-masked core has multiple local optima -> the
+            # per-frame fits split into 2 clusters ~0.25" apart).  Each frame's
+            # satstar MODEL is subtracted into ``data_for_residual`` at ITS position,
+            # so the coadded mergedcat residual has a 2-peak oversubtraction crater
+            # -- and this lives in the per-frame subtracted model, so no catalog /
+            # consolidation dedup can remove it.  LOCK the position to the stable
+            # data-refined seed and fit FLUX ONLY: every frame then subtracts at the
+            # same (per-frame-stable) seed -> the coadd is one clean PSF.  A full
+            # lock (not a tight BOUND) keeps flux_err finite -- the NaN-flux_err /
+            # tossed-fit failure was from near-singular 2D position covariance under
+            # a tight bound, not from a 1D flux-only fit.  Gated by
+            # NIRCAM_SATSTAR_LOCK_POS (driver sets it for extended-emission NIRCam);
+            # supersedes the bound.  Off -> unchanged.
+            _nc_lock = (not _is_miri
+                        and int(os.environ.get('NIRCAM_SATSTAR_LOCK_POS', 0)))
+            if (_is_miri and not _miri_bounded) or _nc_lock:
+                # hard lock: fit flux only at the seed (MIRI legacy / NIRCam ext)
                 model.x_0.fixed = True
                 model.y_0.fixed = True
-                print(f"MIRI: locked satstar position to seed "
-                      f"(x={xcen}, y={ycen}); fitting flux only")
+                print(f"{'MIRI' if _is_miri else 'NIRCam-ext'}: locked satstar "
+                      f"position to seed (x={xcen}, y={ycen}); fitting flux only",
+                      flush=True)
             else:
                 # bounded position fit (>=1.5 FWHM keeps covariance
                 # non-singular; tighter pegs x_0/y_0 -> NaN flux_err -> good fits
