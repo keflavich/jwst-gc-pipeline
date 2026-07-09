@@ -535,10 +535,31 @@ def _subset_seed_to_frame(seed_table, ww, data_shape, fwhm_pix,
     return resolved[keep]
 
 
+def _find_peaks_table(img, thresh, mask, fwhm_pix, box_frac):
+    """Raw local-maxima finder (photutils find_peaks) normalised to the
+    DAOStarFinder output columns the seed pipeline consumes (xcentroid/ycentroid/
+    peak).  Unlike DAOStarFinder/IRAFStarFinder/StarFinder it does NOT convolve
+    with a ~FWHM kernel before finding maxima, so it RESOLVES sub-FWHM close pairs
+    that the matched-filter finders merge into one peak (the dominant limiter for
+    dense clumps).  box = max(2, round(box_frac*fwhm)) px -- smaller resolves
+    closer pairs; downstream fit + nmatch + prominence gate carry the purity."""
+    from photutils.detection import find_peaks
+    box = max(2, int(round(float(box_frac) * float(fwhm_pix))))
+    fp = find_peaks(img, threshold=float(thresh), box_size=box, mask=mask)
+    if fp is None or len(fp) == 0:
+        return Table()
+    t = Table()
+    t['xcentroid'] = np.asarray(fp['x_peak'], float)
+    t['ycentroid'] = np.asarray(fp['y_peak'], float)
+    t['peak'] = np.asarray(fp['peak_value'], float)
+    return t
+
+
 def _daofind_emission_floor(detection_image, noise_map, mask, fwhm_pix, *,
                             roundlo, roundhi, sharplo, sharphi,
                             noise_floor_box=0, noise_floor_k=5.0,
-                            threshold_scale=1.0, label=''):
+                            threshold_scale=1.0, finder='dao', findpeaks_box=1.2,
+                            label=''):
     """daofind with either the global-min-noise threshold (default) or a
     spatially-varying EMISSION-NOISE-FLOOR S/N threshold.
 
@@ -566,6 +587,9 @@ def _daofind_emission_floor(detection_image, noise_map, mask, fwhm_pix, *,
         raise ValueError(f"[{label}] local noise map has no positive finite values")
     gmin = float(np.nanmin(noise_map[finite]))
     if not (noise_floor_box and noise_floor_box > 0):
+        if finder == 'findpeaks':
+            return _find_peaks_table(detection_image, gmin * float(threshold_scale),
+                                     mask, fwhm_pix, findpeaks_box)
         det = DAOStarFinder(threshold=gmin * float(threshold_scale), fwhm=fwhm_pix,
                             roundlo=roundlo, roundhi=roundhi,
                             sharplo=sharplo, sharphi=sharphi)(
@@ -589,10 +613,14 @@ def _daofind_emission_floor(detection_image, noise_map, mask, fwhm_pix, *,
         floor = _mf(_filled, size=int(noise_floor_box))
     floor = np.where(floor < gmin, gmin, floor)
     sn = np.where(mask, 0.0, detection_image) / np.where(floor > 0, floor, np.inf)
-    det = DAOStarFinder(threshold=float(noise_floor_k) * float(threshold_scale),
-                        fwhm=fwhm_pix, roundlo=roundlo, roundhi=roundhi,
-                        sharplo=sharplo, sharphi=sharphi)(sn, mask=mask)
-    if det is None:
+    if finder == 'findpeaks':
+        det = _find_peaks_table(sn, float(noise_floor_k) * float(threshold_scale),
+                                mask, fwhm_pix, findpeaks_box)
+    else:
+        det = DAOStarFinder(threshold=float(noise_floor_k) * float(threshold_scale),
+                            fwhm=fwhm_pix, roundlo=roundlo, roundhi=roundhi,
+                            sharplo=sharplo, sharphi=sharphi)(sn, mask=mask)
+    if det is None or len(det) == 0:
         return Table()
     # re-sample 'peak' from the REAL image so downstream S/N / prominence are
     # measured in data units, not S/N units.
@@ -611,7 +639,8 @@ def _build_manual_seed(*, detection_image, nan_replaced_data, mask, ww, fwhm_pix
                        preferred_seed_skycoord_col=None,
                        dedup_min_sep_pix=None, label='', apply_snr_filter=True,
                        struct_x=0.0, struct_y=0.0, coarse_bg_box=0,
-                       noise_floor_box=0, noise_floor_k=5.0, threshold_scale=1.0):
+                       noise_floor_box=0, noise_floor_k=5.0, threshold_scale=1.0,
+                       finder='dao', findpeaks_box=1.2):
     """Build ``seeded_init_params`` for one manual pass.
 
     daofind(detection_image) [local-noise-map threshold] -> local-S/N filter ->
@@ -659,7 +688,8 @@ def _build_manual_seed(*, detection_image, nan_replaced_data, mask, ww, fwhm_pix
         detection_image, noise_map, mask, fwhm_pix,
         roundlo=roundlo, roundhi=roundhi, sharplo=sharplo, sharphi=sharphi,
         noise_floor_box=noise_floor_box, noise_floor_k=noise_floor_k,
-        threshold_scale=threshold_scale, label=label)
+        threshold_scale=threshold_scale, finder=finder, findpeaks_box=findpeaks_box,
+        label=label)
     if apply_snr_filter:
         detections, snr_stats = annotate_and_filter_by_local_snr(
             detections, noise_map, snr_threshold=local_snr_threshold)
@@ -1559,6 +1589,11 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     resid_roundhi = float(getattr(options, 'manual_resid_roundhi', 1.0))
     resid_sharplo = float(getattr(options, 'manual_resid_sharplo', 0.50))
     resid_sharphi = float(getattr(options, 'manual_resid_sharphi', 1.00))
+    # source finder for the residual passes (m2..m6) + coadd seed.  'dao'
+    # (default) = DAOStarFinder (matched-filter, merges sub-FWHM pairs);
+    # 'findpeaks' = raw local maxima (resolves close pairs in dense clumps).
+    finder = str(getattr(options, 'manual_finder', 'dao'))
+    findpeaks_box = float(getattr(options, 'manual_findpeaks_box', 1.2))
     first_snr = float(getattr(options, 'local_snr_threshold', 5.0))
     # PER-FRAME struct prune is DISABLED: the (struct_x,struct_y) values are
     # tuned on the deep i2d coadd; a single exposure has far higher structure
@@ -1728,7 +1763,7 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
             label='m2', struct_x=struct_x, struct_y=struct_y,
             coarse_bg_box=coarse_bg_box,
             noise_floor_box=_nfloor_box, noise_floor_k=_nfloor_k,
-            threshold_scale=detect_scale)
+            threshold_scale=detect_scale, finder=finder, findpeaks_box=findpeaks_box)
         res2, modsky2, _ = _pass(seed2, 'm2',
                                  _nprom_m2 if _is_ext_nircam else None)
         _save_manual_pass(ctx=ctx, result=res2, modsky=modsky2, options=options,
@@ -1749,7 +1784,7 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
         label=manual_phase, struct_x=struct_x, struct_y=struct_y,
         coarse_bg_box=coarse_bg_box,
         noise_floor_box=_nfloor_box, noise_floor_k=_nfloor_k,
-        threshold_scale=detect_scale)
+        threshold_scale=detect_scale, finder=finder, findpeaks_box=findpeaks_box)
     res, modsky, _ = _pass(seed, manual_phase,
                            _nprom_m3p if _is_ext_nircam else None)
     _save_manual_pass(ctx=ctx, result=res, modsky=modsky, options=options,
@@ -2141,7 +2176,8 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
                               sharplo=0.4, sharphi=1.2, bg_subtract_path=None,
                               struct_x=0.0, struct_y=0.0, struct_robust=False,
                               coarse_bg_box=0, seed_struct_protect_snr=8.0,
-                              noise_floor_box=0, noise_floor_k=5.0, label=''):
+                              noise_floor_box=0, noise_floor_k=5.0,
+                              finder='dao', findpeaks_box=1.2, label=''):
     """daofind on the merged i2d co-add, unioned with the previous vetted merged
     catalog, written as a seed catalog (``skycoord`` + ``flux``) for the next
     per-frame PSF-photometry round (the plan's iter3 seed = daofind(i2d) +
@@ -2219,7 +2255,8 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
     det = _daofind_emission_floor(
         np.where(mask, 0.0, data), noise_map, mask, fwhm_pix,
         roundlo=roundlo, roundhi=roundhi, sharplo=sharplo, sharphi=sharphi,
-        noise_floor_box=noise_floor_box, noise_floor_k=noise_floor_k, label=label)
+        noise_floor_box=noise_floor_box, noise_floor_k=noise_floor_k,
+        finder=finder, findpeaks_box=findpeaks_box, label=label)
     n_raw = len(det)
     if len(det):
         if err is not None:
@@ -3086,6 +3123,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             roundlo=-_sround, roundhi=_sround,
                             sharplo=float(getattr(opts_phase, 'manual_seed_sharp_lo', 0.4)),
                             sharphi=float(getattr(opts_phase, 'manual_seed_sharp_hi', 1.2)),
+                            finder=str(getattr(opts_phase, 'manual_finder', 'dao')),
+                            findpeaks_box=float(getattr(opts_phase, 'manual_findpeaks_box', 1.2)),
                             bg_subtract_path=bg_sub,
                             # Structure-noise prune / coarse-bg detection.  For
                             # MIRI the miri_tuning block sets opts_phase.struct_x/y

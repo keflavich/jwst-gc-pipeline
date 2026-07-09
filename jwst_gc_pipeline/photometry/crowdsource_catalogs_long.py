@@ -3490,6 +3490,14 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     help="Scale on the daofind DETECTION threshold (min-noise floor) for the "
                          "residual passes m2..m6; <1 detects fainter local maxima (default 1.0 = no-op). "
                          "m1 (raw data) is unaffected. Purity relies on multi-frame nmatch confirmation.")
+    parser.add_option("--manual-finder", dest="manual_finder", type='string', default='dao',
+                    help="Source finder for the residual passes m2..m6 + coadd seed: 'dao' "
+                         "(DAOStarFinder, matched-filter -- merges sub-FWHM pairs) or 'findpeaks' "
+                         "(raw local maxima -- resolves close pairs in dense clumps; purity from "
+                         "the fit + nmatch + prominence gate). Default 'dao'.")
+    parser.add_option("--manual-findpeaks-box", dest="manual_findpeaks_box", type='float', default=1.2,
+                    help="find_peaks peak-separation box = max(2, round(box*fwhm)) px (default 1.2); "
+                         "smaller resolves closer pairs (only with --manual-finder=findpeaks).")
     parser.add_option("--manual-resid-roundlo", dest="manual_resid_roundlo", type='float', default=-1.0,
                     help="daofind roundness LOWER bound on the residual passes m2..m6 (default -1.0; "
                          "loosened from -0.3 on 2026-07-06 -- emission-safe, recovers blended companions "
