@@ -122,3 +122,24 @@ def test_good_qfit_star_unaffected():
     assert len(_run(rows, add_star_at=[(X_CLEAN, 200.0)])) == 1
     assert len(_run(rows, add_star_at=[(X_CLEAN, 200.0)],
                     sky_clean_keep=False)) == 1
+
+
+def test_confident_star_mask_tiers():
+    """confident_star_mask: qfit tier, sky-clean tier, satstar tier, overshoot
+    exclusion, and graceful fallback when sky-clean columns are absent."""
+    from jwst_gc_pipeline.photometry.column_utils import confident_star_mask
+    t = Table({
+        'qfit':               [0.05, 0.8,  0.8,  0.8,  0.05, 0.8],
+        'sky_clean':          [False, True, True, False, False, False],
+        'prominence':         [50.,  20.,  2.,   20.,  50.,  np.nan],
+        'flux':               [100.] * 6,
+        'flux_err':           [10.] * 6,
+        'replaced_saturated': [False, False, False, False, False, True],
+        'model_overshoot':    [False, False, False, False, True, False],
+    })
+    m = confident_star_mask(t)
+    #        qfit  sky   low-prom  not-clean  overshoot  satstar
+    assert list(m) == [True, True, False, False, False, True]
+    # catalog predating the sky-clean columns: only the qfit tier fires
+    t2 = Table({'qfit': [0.05, 0.8], 'flux': [1., 1.], 'flux_err': [.1, .1]})
+    assert list(confident_star_mask(t2)) == [True, False]
