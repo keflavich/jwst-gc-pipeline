@@ -142,3 +142,18 @@ def test_cap_leaves_nan_base_uncapped():
     model = np.full_like(base, 5000.0)
     capped = _cap_render_to_pedestal(model, base, bgbox=43)
     assert np.all(capped[r < 1.5] == 5000.0)          # uncapped where base NaN
+
+
+def test_cap_core_mask_fills_undersub_shoulder():
+    """A peaked model that UNDER-predicts a broad core (cloudc F2550W B: r3-9
+    shoulder +110) is filled to the data inside core_mask -> residual = bg."""
+    base, r = _star_on_pedestal(peak=2300.0, fwhm=8.0, pedestal=1000.0)
+    # peaked model too NARROW: matches peak, under-predicts the shoulder
+    narrow = 2300.0 * np.exp(-0.5 * (r / (4.0 / 2.3548)) ** 2)  # fwhm 4 vs data 8
+    shoulder = (r >= 3) & (r <= 7)
+    resid_no_mask = base - _cap_render_to_pedestal(narrow, base, bgbox=43)
+    assert np.median(resid_no_mask[shoulder]) > 1100.0     # under-sub ring survives
+    cm = r <= 9.0
+    resid = base - _cap_render_to_pedestal(narrow, base, bgbox=43, core_mask=cm)
+    # shoulder filled to the data -> residual ~ pedestal
+    assert abs(np.median(resid[shoulder]) - 1000.0) < 60.0
