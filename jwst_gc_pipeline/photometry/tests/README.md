@@ -43,6 +43,7 @@ each module import once per session.
 | crowdsource_catalogs_long.py:`do_photometry_step` (blocks A-U) | END-TO-END characterization (Phase-6 safety net): basic / iterative / seeded paths each recover 3 injected stars <1px on a synthetic frame (4 external seams stubbed) | `test_do_photometry_step_integration.py` |
 | crowdsource_catalogs_long.py:`_output_suffix_tokens` | filename-suffix tokens (block B), field-order locked | `test_crowdsource_long_regressions.py::TestOutputSuffixTokens` |
 | crowdsource_catalogs_long.py:`_first_pass_daofinder` | iter1 DAO threshold = nsigma·min(median err, mad_std data) (block J else) | `…::TestFirstPassDaofinder` |
+| cataloging.py:`_filter_extended_emission` | SKY-CLEAN keep tier: on emission-free sky (local 25th-pct annulus floor ≈ dark-sky ref) keep on prominence+S/N, qfit ignored; inert on emission; satstar-proximity guard | `test_sky_clean_keep.py` |
 
 ## Deferred (need full PSFPhotometry/IterativePSFPhotometry integration fixtures)
 
