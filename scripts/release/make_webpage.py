@@ -231,10 +231,16 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None):
     obs_col = "<th>Obs</th>" if multi else ""
     order = {"science": 0, "residual": 1, "model": 2}
 
+    # per-file version: an explicit per-file version if the manifest records one,
+    # else the field release version.  Lets a mixed release (some files bumped to a
+    # newer version) show each file's own version.
+    def file_version(f):
+        return html.escape(str(f.get("version") or manifest["version"]))
+
     # images table grouped by (observation, filter)
     out.append("<h2>Images</h2>")
     out.append(f"<table><tr>{obs_col}<th>Filter</th><th>Type</th><th>Iteration</th>"
-               "<th>Size</th><th>Download</th></tr>")
+               "<th>Version</th><th>Size</th><th>Download</th></tr>")
     groups = {}
     for f in images:
         groups.setdefault((f.get("observation") or "", f["filter"]), []).append(f)
@@ -250,6 +256,7 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None):
             out.append(f"<tr>{obs_cell}<td>{filt_cell}</td>"
                        f"<td>{KIND_LABEL.get(f['kind'], f['kind'])}</td>"
                        f"<td><span class=tag>{html.escape(f['iteration'] or '')}</span></td>"
+                       f"<td><span class=tag>{file_version(f)}</span></td>"
                        f"<td class=size>{human_size(f['size_bytes'])}</td>"
                        f"<td>{dl(f)}</td></tr>")
     out.append("</table>")
@@ -262,7 +269,7 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None):
                    "vetted catalogs are provided for now. The merged table will be added "
                    "in a later update.</p>")
     out.append(f"<table><tr><th>Catalog</th>{obs_col}<th>Filter</th><th>Iteration</th>"
-               "<th>Size</th><th>Download</th></tr>")
+               "<th>Version</th><th>Size</th><th>Download</th></tr>")
     cat_order = {"catalog_full": 0, "catalog_qualcut": 1, "seed": 2,
                  "catalog_per_filter_vetted": 3}
     for f in sorted(catalogs, key=lambda f: (f.get("observation") or "",
@@ -275,6 +282,7 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None):
         out.append(f"<tr><td>{name} <span class=muted>({fmt})</span></td>{obs_cell}"
                    f"<td>{html.escape(f['filter'] or '—')}</td>"
                    f"<td><span class=tag>{html.escape(f['iteration'] or '')}</span></td>"
+                   f"<td><span class=tag>{file_version(f)}</span></td>"
                    f"<td class=size>{human_size(f['size_bytes'])}</td>"
                    f"<td>{dl(f)}</td></tr>")
     out.append("</table>")
