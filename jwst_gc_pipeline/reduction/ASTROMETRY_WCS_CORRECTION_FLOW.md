@@ -12,6 +12,32 @@ Implemented in:
 
 ---
 
+## ⛔ FORBIDDEN: dense-nearest-neighbour-median astrometry
+
+**Never compute or apply an astrometric offset as the MEDIAN (or mean) of
+nearest-neighbour matches (`match_to_catalog_sky` / `search_around_sky`) against a
+DENSE reference catalog (VIRAC2 / VVV / GNS, median NN spacing ≲ 3").** When the
+true shift exceeds the reference's nearest-neighbour spacing, NN pairs the WRONG
+star and the median **collapses toward ~0** (or a spurious value). This silently
+corrupted **brick-1182 astrometry twice** (mosaic left ~1.6–4" off the absolute
+frame) and repeatedly fooled *validation* that used the same method.
+
+This is now enforced in code:
+`jwst_gc_pipeline.photometry.measure_offsets.assert_sparse_reference_for_nn_median`
+**raises `DenseNNMedianAstrometryError`** on a dense reference. It guards
+`measure_offsets`, `realign_to_catalog`, `bootstrap_reference_catalog`,
+`combine_singleframe(realign=True)`, and the `generate_offsets_table` validation.
+
+**Use instead:**
+- **2D offset-histogram stacking** — histogram *all* pairwise offsets within ~3",
+  take the peak (robust no matter how large the shift). See
+  `scripts/reduction/astrometry_audit.py::xcorr` and
+  `scripts/miri_reduction/apply_measured_miri_wcs_offsets.py::refine_offset`.
+- **a SPARSE reference** — the Gaia-only subset (`source == b'GaiaDR3'`, medNN
+  ~5.7"), never the full dense catalog.
+
+---
+
 ## TL;DR — where astrometric corrections live
 
 | Product (role) | Gets a WCS correction? | Mechanism | Idempotent? |

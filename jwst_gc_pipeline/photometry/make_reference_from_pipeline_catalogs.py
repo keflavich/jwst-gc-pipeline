@@ -28,7 +28,9 @@ import matplotlib.pyplot as plt
 from astroquery.vizier import Vizier
 
 
-from jwst_gc_pipeline.photometry.measure_offsets import measure_offsets
+from jwst_gc_pipeline.photometry.measure_offsets import (
+    measure_offsets, assert_sparse_reference_for_nn_median,
+    DenseNNMedianAstrometryError)
 from jwst_gc_pipeline.catalog_utils import catalog_skycoord
 
 
@@ -698,6 +700,14 @@ def bootstrap_reference_catalog(
     iteration = 0
     max_iterations = 6
 
+    # FORBIDDEN-METHOD GUARD: the loop below applies the (sigma-clipped) MEAN of
+    # nearest-neighbour matches to the whole catalogue -- invalid against a dense
+    # reference (collapses to a spurious shift; corrupted brick-1182 twice).  A
+    # dense bootstrap reference must be aligned with offset-histogram stacking or a
+    # sparse (Gaia-only) reference instead.
+    assert_sparse_reference_for_nn_median(
+        reference["skycoord"], max_sep,
+        context=f"bootstrap_reference_catalog(reference={reference_name!r})")
     while True:
         matched = match_catalog_to_reference(
             corrected["skycoord"][selection],

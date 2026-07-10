@@ -13,6 +13,88 @@ import glob
 import os
 
 
+class DenseNNMedianAstrometryError(RuntimeError):
+    """Raised when the FORBIDDEN dense-nearest-neighbour-median astrometry method
+    is attempted against a dense reference catalogue.  See
+    ``assert_sparse_reference_for_nn_median`` and ASTROMETRY_WCS_CORRECTION_FLOW.md."""
+
+
+_DENSE_NN_MEDIAN_MESSAGE = (
+    "\n"
+    "*************************************************************************\n"
+    "*** FORBIDDEN: dense-nearest-neighbour-median astrometry ***\n"
+    "*************************************************************************\n"
+    "You tried to compute/apply a bulk astrometric offset as the MEDIAN (or mean)\n"
+    "of nearest-neighbour matches (match_to_catalog_sky / search_around_sky)\n"
+    "against a DENSE reference catalogue.\n"
+    "  context           : {context}\n"
+    "  reference sources : {n}\n"
+    "  reference NN spacing (median): {med_nn:.3f}\"  <  dense threshold {mr:.3f}\"\n"
+    "\n"
+    "THIS METHOD IS KNOWN-BROKEN.  When the true shift exceeds the reference's\n"
+    "nearest-neighbour spacing, NN pairs the WRONG stars and the median COLLAPSES\n"
+    "toward ~0 (or a spurious value).  It has SILENTLY CORRUPTED brick-1182\n"
+    "astrometry TWICE (mosaic left ~1.6-4\" off the absolute frame).\n"
+    "\n"
+    "USE INSTEAD:\n"
+    "  - 2D offset-HISTOGRAM stacking: histogram ALL pairwise offsets within ~3\",\n"
+    "    take the peak (robust no matter how large the shift), OR\n"
+    "  - a SPARSE reference: the Gaia-only subset (source==b'GaiaDR3'), never the\n"
+    "    full dense VIRAC2/VVV/GNS catalogue.\n"
+    "See ASTROMETRY_WCS_CORRECTION_FLOW.md and the brick-1182 memory.\n"
+    "*************************************************************************\n"
+)
+
+
+# A reference whose median nearest-neighbour spacing is below this is "dense": a
+# plausible uncorrected JWST frame error (up to ~2"; brick-1182 was 1.9") can
+# exceed the spacing, so NN matching pairs the WRONG star and the median offset is
+# spurious.  Calibration (brick gaia_virac2 refcat): full/VIRAC2 medNN ~1.15"
+# (DENSE, the catalog that corrupted 1182); the Gaia-only subset medNN ~5.72"
+# (SPARSE, safe).  3" cleanly separates them.  Override via env for diagnostics.
+DENSE_NN_MEDIAN_MIN_SPACING_ARCSEC = float(
+    os.environ.get('DENSE_NN_MEDIAN_MIN_SPACING_ARCSEC', 3.0))
+
+
+def assert_sparse_reference_for_nn_median(reference_coordinates, match_radius, *,
+                                          context="", min_spacing_factor=3.0,
+                                          min_nn_spacing=None, sample=3000):
+    """Guard the FORBIDDEN dense-NN-median astrometry method.
+
+    Raise ``DenseNNMedianAstrometryError`` when ``reference_coordinates`` is DENSE:
+    its own median nearest-neighbour spacing is below ``min_nn_spacing`` (default
+    ``DENSE_NN_MEDIAN_MIN_SPACING_ARCSEC`` = 3"), or below ``min_spacing_factor`` x
+    ``match_radius`` (whichever is larger).  In that regime nearest-neighbour /
+    search-around-sky median offset estimation returns a SPURIOUS shift (it
+    collapses toward ~0 when the true offset exceeds the NN spacing).  Sparse
+    references (e.g. a Gaia-only subset, medNN ~5.7") pass through unchanged, so the
+    only thing this forbids is exactly the method that keeps corrupting the GC
+    mosaics.  Never silently downgrade -- callers must switch to offset-histogram
+    stacking or a sparse reference.
+    """
+    rc = reference_coordinates
+    try:
+        n = int(len(rc))
+    except TypeError:
+        return
+    if n < 3:
+        return
+    step = max(1, n // int(sample))
+    rc_sample = rc[::step]
+    # nthneighbor=2: the reference point's own nearest OTHER reference source.
+    _, sep2, _ = rc_sample.match_to_catalog_sky(rc, nthneighbor=2)
+    med_nn = float(np.nanmedian(sep2.to(u.arcsec).value))
+    mr = match_radius.to(u.arcsec).value if hasattr(match_radius, 'to') else float(match_radius)
+    floor = DENSE_NN_MEDIAN_MIN_SPACING_ARCSEC if min_nn_spacing is None else (
+        min_nn_spacing.to(u.arcsec).value if hasattr(min_nn_spacing, 'to') else float(min_nn_spacing))
+    threshold = max(floor, min_spacing_factor * mr)
+    if med_nn < threshold:
+        raise DenseNNMedianAstrometryError(
+            _DENSE_NN_MEDIAN_MESSAGE.format(context=context or "(unspecified)",
+                                            n=n, med_nn=med_nn, mr=threshold,
+                                            factor=min_spacing_factor))
+
+
 def measure_offsets(reference_coordinates, skycrds_cat, refflux, skyflux, total_dra=0*u.arcsec,
                     total_ddec=0*u.arcsec, max_offset=0.2*u.arcsec, threshold=0.01*u.arcsec,
                     sel=slice(None),
@@ -21,6 +103,12 @@ def measure_offsets(reference_coordinates, skycrds_cat, refflux, skyflux, total_
                     nsigma_reject=5,
                     reject_niter=7,
                     filtername='', ab='', expno=''):
+    # FORBIDDEN-METHOD GUARD: this routine estimates a bulk shift as the median of
+    # nearest-neighbour matches, which is invalid against a dense reference (see
+    # assert_sparse_reference_for_nn_median).  Refuse dense references outright.
+    assert_sparse_reference_for_nn_median(
+        reference_coordinates, max_offset,
+        context=f"measure_offsets(filter={filtername!r}, ab={ab!r}, expno={expno!r})")
     med_dra = 100*u.arcsec
     med_ddec = 100*u.arcsec
 
