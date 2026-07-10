@@ -88,8 +88,55 @@ def _band_calibration(tbl, filt):
     return conv_jy, vega_zp
 
 
+def _satstar_partner_guard(tbl, filt, ref, targets,
+                           guard_radius=0.5 * u.arcsec):
+    """Veto fill targets that are saturated-star rows with a real ``filt``
+    detection nearby -- filling them measures the star-subtracted residual.
+
+    A row that is ``replaced_saturated``/``is_saturated`` in ANY band but a
+    "non-detection" in ``filt`` is almost always the same physical star as a
+    nearby independent ``filt`` detection that the cross-band merge failed to
+    associate (saturated-core centroids scatter ~0.2"; Brick F182M: median
+    0.214" to the partner detection, 78% within 0.5").  Force-fitting at the
+    satstar position then measures the residual AFTER that detection's flux
+    was subtracted -- ~5 mag too faint -- and plants a wildly wrong color on
+    the CMD bright end.  Those rows should be merged by the catalog dedup
+    (``dedup_catalog.dedup_merged_catalog`` ``sat_link_radius``), not filled.
+
+    Returns the boolean veto mask aligned to ``tbl`` (True = do NOT fill).
+    """
+    n = len(tbl)
+    is_sat_any = np.zeros(n, bool)
+    for c in tbl.colnames:
+        if c.startswith('replaced_saturated_') or c.startswith('is_saturated_'):
+            col = tbl[c]
+            is_sat_any |= np.asarray(col.filled(False) if hasattr(col, 'filled')
+                                     else col, dtype=bool)
+    cand = targets & is_sat_any
+    if not cand.any():
+        return np.zeros(n, bool)
+    # independent firm detections in this band: finite mag, not masked
+    mag = tbl[f'mag_vega_{filt}'] if f'mag_vega_{filt}' in tbl.colnames else None
+    if mag is None or f'mask_{filt}' not in tbl.colnames:
+        return np.zeros(n, bool)
+    mag = np.asarray(mag.filled(np.nan) if hasattr(mag, 'filled') else mag,
+                     dtype=float)
+    msk = tbl[f'mask_{filt}']
+    msk = np.asarray(msk.filled(True) if hasattr(msk, 'filled') else msk,
+                     dtype=bool)
+    det = np.isfinite(mag) & ~msk
+    if not det.any():
+        return np.zeros(n, bool)
+    ci = np.where(cand)[0]
+    _, sep, _ = ref[ci].match_to_catalog_sky(ref[det])
+    veto = np.zeros(n, bool)
+    veto[ci[sep < guard_radius]] = True
+    return veto
+
+
 def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
-                     nsigma=3.0, fit_shape=(5, 5), verbose=True):
+                     nsigma=3.0, fit_shape=(5, 5),
+                     satstar_partner_guard=0.5 * u.arcsec, verbose=True):
     """Force-fit ``filt`` at the reference position of every source that is a
     non-detection (and not saturated) in ``filt``, combine across ``frames``,
     and write the results back into ``tbl`` in place.
@@ -117,7 +164,10 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
     mask = np.asarray(tbl[f'mask_{filt}'].filled(True) if hasattr(tbl[f'mask_{filt}'], 'filled')
                       else tbl[f'mask_{filt}'], dtype=bool)
     sat = np.zeros(n, dtype=bool)
-    for sc in (f'is_saturated_{filt}', f'near_saturated_{filt}_{filt}',
+    # NOTE 'near_saturated_{filt}_{filt}' (doubled suffix) was checked here
+    # since aef909b -- that column never exists, so near-saturated rows were
+    # silently NOT excluded from the fill.  Fixed to the real column name.
+    for sc in (f'is_saturated_{filt}', f'near_saturated_{filt}',
                f'replaced_saturated_{filt}'):
         if sc in tbl.colnames:
             c = tbl[sc]
@@ -127,6 +177,15 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
     if not isinstance(ref, SkyCoord):
         ref = SkyCoord(ref)
     targets = mask & (~sat) & np.isfinite(ref.ra.deg) & np.isfinite(ref.dec.deg)
+    if satstar_partner_guard is not None and satstar_partner_guard > 0:
+        veto = _satstar_partner_guard(tbl, filt, ref, targets,
+                                      guard_radius=satstar_partner_guard)
+        if veto.any() and verbose:
+            print(f"  [m8 {filt}] satstar-partner guard: skipping "
+                  f"{int(veto.sum())} saturated-row target(s) with a real "
+                  f"{filt} detection within {satstar_partner_guard} "
+                  f"(fill would measure the subtracted residual)", flush=True)
+        targets &= ~veto
     tgt_idx = np.where(targets)[0]
     if tgt_idx.size == 0:
         if verbose:
