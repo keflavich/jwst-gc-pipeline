@@ -1314,6 +1314,30 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
     if 'RAOFFSET' in align_fits[1].header:
         # don't shift twice if we re-run
         print(f"{fn} is already aligned ({align_fits[1].header['RAOFFSET']}, {align_fits[1].header['DEOFFSET']})")
+        # DISAGREEMENT GUARD: the plain skip-if-present check silently KEPT a stale
+        # RAOFFSET after the offsets table was corrected -- brick-1182 v001 crf held
+        # +1.9" while the table said -17.5", so half the mosaic stayed ~20" off and
+        # the idempotent guard blocked the fix. Compare the baked-in RAOFFSET to the
+        # value we WOULD apply now; if they disagree, this frame is stale.
+        _cur_ra = float(align_fits[1].header['RAOFFSET'])
+        _cur_de = float(align_fits[1].header.get('DEOFFSET', 'nan'))
+        _dra = abs(_cur_ra - rashift.value)
+        _dde = abs(_cur_de - decshift.value)
+        _tol = float(os.environ.get('RAOFFSET_DISAGREE_TOL_ARCSEC', 0.05))
+        if _dra > _tol or _dde > _tol:
+            _msg = (f"STALE ASTROMETRY: {fn} carries RAOFFSET/DEOFFSET "
+                    f"({_cur_ra:+.4f},{_cur_de:+.4f})\" but the current table would "
+                    f"apply ({rashift.value:+.4f},{decshift.value:+.4f})\" "
+                    f"(disagree {_dra:.3f},{_dde:.3f}\" > {_tol}\"). This frame was "
+                    f"built from an OLD table and the skip-if-present guard is hiding "
+                    f"it. Regenerate the working copy from _cal (destreak overwrite) "
+                    f"so RAOFFSET resets and the current table is applied, OR set "
+                    f"FORCE_REALIGN_ON_DISAGREE=1 to re-apply now.")
+            if os.environ.get('FORCE_REALIGN_ON_DISAGREE') == '1':
+                raise RuntimeError(
+                    _msg + " [FORCE_REALIGN_ON_DISAGREE=1: refusing to silently keep "
+                    "a stale frame; regenerate it from _cal.]")
+            warnings.warn(_msg)
     else:
         # ASDF header
         fa = ImageModel(fn)
