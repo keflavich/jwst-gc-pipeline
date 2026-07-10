@@ -30,11 +30,22 @@ This is now enforced in code:
 
 **Use instead:**
 - **2D offset-histogram stacking** — histogram *all* pairwise offsets within ~3",
-  take the peak (robust no matter how large the shift). See
+  take the peak (robust no matter how large the shift). Public helper:
+  `jwst_gc_pipeline.photometry.astrometry_offsets.measure_offset` (and
+  `measure_offset_grid` for the mandatory per-tile map). See also
   `scripts/reduction/astrometry_audit.py::xcorr` and
   `scripts/miri_reduction/apply_measured_miri_wcs_offsets.py::refine_offset`.
 - **a SPARSE reference** — the Gaia-only subset (`source == b'GaiaDR3'`, medNN
   ~5.7"), never the full dense catalog.
+
+**A bulk offset ≈ 0 is NOT sign-off.** A half-mosaic can be untied while the
+field-average reads ~0 (brick-1182 visit-001). Always map the offset PER TILE
+(`measure_offset_grid`, `registration_failsafes.py`) and require per-tile peak
+contrast ≳ 5 everywhere.
+
+A grep-guard test (`jwst_gc_pipeline/photometry/tests/test_no_adhoc_nn_median_astrometry.py`)
+fails CI if a new file pairs a NN match with a median/mean — do not write ad-hoc
+`match_to_catalog_sky(...).median()`; call `measure_offset` instead.
 
 ---
 
