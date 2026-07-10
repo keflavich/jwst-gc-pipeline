@@ -20,14 +20,19 @@ the reviewed allowlist below.  A new file that trips it must either
 See CLAUDE.md and reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md.
 """
 import re
+import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
-# NN-match calls and median/mean reductions.  File-level co-occurrence is a coarse
-# but strong tripwire for a NEW astrometry script; the allowlist carries the
-# already-reviewed files.
-_MATCH = re.compile(r"\b(match_to_catalog_sky|search_around_sky)\b")
+# Key on match_to_catalog_sky specifically -- that is NEAREST-neighbour (nthneighbor
+# defaults to 1), the method that collapses to ~0 in a crowded field.  We deliberately
+# do NOT flag search_around_sky: it returns ALL pairs within a radius, which is the
+# BASIS of the sanctioned offset-histogram stacking (which then medians only to refine
+# the peak).  Flagging it would fire on the correct method.  File-level co-occurrence
+# of a NN match with a median/mean is a strong tripwire for a NEW ad-hoc NN-median
+# astrometry script; the allowlist carries the already-reviewed legitimate users.
+_MATCH = re.compile(r"\bmatch_to_catalog_sky\b")
 _REDUCE = re.compile(r"\b(np\.n?median|np\.n?mean|\.median\(|\.mean\()")
 
 # Reviewed files where match+median is legitimate (source association for merging /
@@ -59,18 +64,22 @@ ALLOWLIST = {
     "scripts/reduction/combine_brick_allband.py",  # cross-band merge
 }
 
-# Directories not worth scanning.
-_SKIP_DIRS = {".git", "build", "dist", "__pycache__", ".egg-info", "licenses"}
-
-
 def _iter_py_files():
-    for p in REPO_ROOT.rglob("*.py"):
-        rel = p.relative_to(REPO_ROOT)
-        parts = set(rel.parts)
-        if parts & _SKIP_DIRS or any(s.endswith(".egg-info") for s in rel.parts):
+    """Only GIT-TRACKED .py files -- the guard polices committed code, not local
+    scratch scripts in the working tree (which would false-positive on CI runners
+    that never see them and annoy locally)."""
+    try:
+        out = subprocess.run(["git", "-C", str(REPO_ROOT), "ls-files", "*.py"],
+                             capture_output=True, text=True, check=True).stdout
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return  # not a git checkout (e.g. sdist install) -> nothing to police
+    for line in out.splitlines():
+        rel = Path(line)
+        p = REPO_ROOT / rel
+        if not p.is_file():
             continue
         # tests reference the forbidden tokens in strings on purpose
-        if "tests" in parts or p.name.startswith("test_"):
+        if "tests" in rel.parts or p.name.startswith("test_"):
             continue
         yield rel, p
 
