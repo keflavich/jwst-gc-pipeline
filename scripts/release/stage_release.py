@@ -447,6 +447,10 @@ def build_manifest(field, version):
         src = Path(item["src"])
         item["dest"] = str(assign_dest(item, field))
         item["size_bytes"] = src.stat().st_size if src.is_file() else None
+        # per-file version: defaults to the field release version so every file carries
+        # an explicit version on the download page. A file bumped independently (e.g. a
+        # re-tied mosaic staged into an otherwise-older release) can override this.
+        item.setdefault("version", version)
     return items
 
 
