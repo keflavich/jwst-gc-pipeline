@@ -47,12 +47,6 @@ MANUAL_DEFAULTS = {
     'manual_sky_clean_max_sky_snr': 2.0,
     'manual_sky_clean_prom_min': 5.0,
     'manual_sky_clean_snr_min': 3.0,
-    # -- per-frame residual-pass (m2..m6) daofind shape cuts + threshold scale
-    'manual_detect_threshold_scale': 1.0,   # <1 = detect fainter (no headroom found)
-    'manual_resid_roundlo': -1.0,      # loosened from -0.3 2026-07-06 (emission-safe)
-    'manual_resid_roundhi': 1.0,
-    'manual_resid_sharplo': 0.50,
-    'manual_resid_sharphi': 1.00,
     # -- i2d residual-seed DAO shape cuts
     'manual_seed_round_max': 0.5,      # star fields: loosen to ~1.0
     'manual_seed_sharp_lo': 0.4,

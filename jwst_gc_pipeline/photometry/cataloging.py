@@ -787,6 +787,8 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               sky_clean_max_sky_snr=2.0,
                               sky_clean_prom_min=5.0,
                               sky_clean_snr_min=3.0,
+                              nmatch_confirm_strong=0,
+                              low_fit_quality_qfit=0.0,
                               drop_overshoot=True, struct_x=0.0, struct_y=0.0,
                               label=''):
     """First-pass star-vs-extended-emission vetting of a MERGED catalog.
@@ -1052,10 +1054,23 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     # guard only helps against genuinely position-unstable spurious (cosmic-ray /
     # noise coincidences), not fixed emission.  overshoot + struct-noise prune
     # below still apply.  Default off.
+    # TIERED multi-frame keep:
+    #   NORMAL tier:  nmatch>=nmatch_confirm AND qfit<=nmatch_confirm_qfit_max
+    #   STRONG tier:  nmatch>=nmatch_confirm_strong (opt-in, >0) keeps ANY qfit --
+    #     a source at a FIXED sky position in many frames is real regardless of how
+    #     well the PSF fits it; on structured emission a faint real star fits poorly
+    #     (qfit~1) but repeats, so the strong tier recovers it.  Trade-off: its FLUX
+    #     is unreliable -> flagged low_fit_quality so photometry users can cut it
+    #     while astrometry/completeness users keep it.  Default off (strong=0).
+    # The position guard (if set) applies to BOTH tiers.
     if nmatch_confirm > 0 and 'nmatch' in t.colnames:
         _nm = t['nmatch']
         _nm = np.asarray(_nm.filled(0) if hasattr(_nm, 'filled') else _nm, dtype=float)
-        mf = np.isfinite(_nm) & (_nm >= nmatch_confirm) & (qf <= nmatch_confirm_qfit_max)
+        _fin = np.isfinite(_nm)
+        mf_normal = _fin & (_nm >= nmatch_confirm) & (qf <= nmatch_confirm_qfit_max)
+        mf_strong = (_fin & (_nm >= nmatch_confirm_strong)
+                     if nmatch_confirm_strong > 0 else np.zeros(len(t), bool))
+        mf = mf_normal | mf_strong
         if (nmatch_confirm_maxpos_mas > 0 and 'std_ra' in t.colnames
                 and 'std_dec' in t.colnames):
             _sr = np.asarray(t['std_ra'], dtype=float)
@@ -1063,9 +1078,11 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
             _posmas = np.hypot(_sr, _sd) * 3.6e6
             mf = mf & np.isfinite(_posmas) & (_posmas <= nmatch_confirm_maxpos_mas)
         _n_mf = int(np.sum(mf & ~keep))
+        _n_strong = int(np.sum(mf_strong & ~mf_normal & mf & ~keep))
         keep = keep | mf
         print(f"[{label}] multi-frame keep: +{_n_mf} (nmatch>={nmatch_confirm:g}, "
               f"qfit<={nmatch_confirm_qfit_max:g}"
+              f"{(', +strong nmatch>=%g any-qfit=%d' % (nmatch_confirm_strong, _n_strong)) if nmatch_confirm_strong > 0 else ''}"
               f"{(', posscatter<=%gmas' % nmatch_confirm_maxpos_mas) if nmatch_confirm_maxpos_mas > 0 else ''})",
               flush=True)
 
@@ -1119,6 +1136,12 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                   f"{sky_clean_prom_min:g}, S/N >= {sky_clean_snr_min:g}, "
                   f"qfit ignored; {int(sky_clean.sum())}/{n} sources on clean sky)",
                   flush=True)
+
+    # LOW-FIT-QUALITY flag: mark kept sources whose fit is poor (qfit above the
+    # threshold) so downstream photometry can cut them while positions are kept.
+    # Threshold defaults to nmatch_confirm_qfit_max (the normal keep ceiling).
+    _lfq_thr = float(low_fit_quality_qfit) if low_fit_quality_qfit > 0 else float(nmatch_confirm_qfit_max)
+    t['low_fit_quality'] = np.asarray(qf, dtype=float) > _lfq_thr
 
     # overshoot drop is shared by both instrument paths (was duplicated).
     if drop_overshoot and 'model_overshoot' in t.colnames:
@@ -3683,6 +3706,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         nmatch_confirm=int(mopt(opts_phase, 'manual_ext_nmatch_confirm')),
                         nmatch_confirm_qfit_max=float(mopt(opts_phase, 'manual_ext_nmatch_confirm_qfit_max')),
                         nmatch_confirm_maxpos_mas=float(mopt(opts_phase, 'manual_ext_nmatch_confirm_maxpos_mas')),
+                        nmatch_confirm_strong=int(mopt(opts_phase, 'manual_ext_nmatch_confirm_strong')),
+                        low_fit_quality_qfit=float(mopt(opts_phase, 'manual_ext_low_fit_quality_qfit')),
                         ext_prom_min=_ext_prom_min,
                         sky_clean_keep=bool(mopt(opts_phase, 'manual_sky_clean_keep')),
                         sky_clean_max_sky_snr=float(mopt(
