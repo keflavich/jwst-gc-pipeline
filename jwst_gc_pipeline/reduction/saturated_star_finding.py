@@ -547,6 +547,32 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
             if nsource == 0:
                 return saturated, sources, []
 
+    # PEAK-BASED SEEDING (2026-07-10): stars whose pixels EXCEED the filter's
+    # true-saturation level but were never DQ-SATURATED-flagged (brick F182M:
+    # 96% of the 13.5<mB<14.25 red-offset stars have ZERO SAT pixels yet peak
+    # ~7300 MJy/sr > the 4000 floor).  Their cores are charge-migration
+    # suppressed (flux bled to the rim, outside daophot's 5x5 stamp), biasing
+    # daophot ~0.3 mag faint -- the residual CMD red bump between the floor
+    # and the DQ-flagging level.  Seed them into the satstar channel, whose
+    # masked-core + calibrated-wing machinery handles migration correctly.
+    if severity_floor and severity_floor > 0:
+        sci_ps = np.asarray(fitsdata['SCI'].data, dtype=float)
+        bright_unflagged = (np.isfinite(sci_ps) & (sci_ps > float(severity_floor))
+                            & (~saturated))
+        if bright_unflagged.any():
+            add, nadd = label(bright_unflagged)
+            # keep components of >=2 px (single hot pixels are CRs/artifacts)
+            szs = np.asarray(ndimage.sum_labels(bright_unflagged, add,
+                                                np.arange(1, nadd + 1)))
+            keep_lab = np.arange(1, nadd + 1)[szs >= 2]
+            if len(keep_lab):
+                saturated = saturated | np.isin(add, keep_lab)
+                sources, nsource = label(saturated)
+                print(f"Saturated starfinding: peak-based seeding added "
+                      f"{len(keep_lab)} unflagged charge-migration component(s) "
+                      f"(data > {severity_floor:g}) -> nsources={nsource}",
+                      flush=True)
+
     # Fold disconnected diffraction-spike satellites into their dominant core
     # BEFORE edge/size logic so one star -> one component -> one satstar fit
     # (kills the per-frame hex of spike-tip duplicates).  Size-gated so two
@@ -3389,7 +3415,22 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 _xf = _yf = np.nan
             _implied = (satstar_implied_peak(flux, _psf_for_fit, _xf, _yf)
                         if np.isfinite(_xf) and np.isfinite(_yf) else np.nan)
-            if np.isfinite(_implied) and _implied < 0.5 * float(_sev_floor):
+            # OBSERVED-PEAK second chance: narrow-band wing fits UNDER-estimate
+            # (F187N/F212N bias 0.5-0.7 at deep masks), halving the implied
+            # peak and wrongly rejecting REAL deep satstars (brick F187N: only
+            # 157 satstars survived vs ~300 real).  A genuinely saturated star
+            # always shows near-full-well pixels in its cutout (recovered rim
+            # or unflagged shoulder), so require BOTH the model-implied AND
+            # the observed unmasked peak to fall below the threshold before
+            # rejecting.  Fakes stay rejected (their observed peaks are far
+            # below the floor by construction).
+            try:
+                _obs_pk = float(np.nanmax(np.where(mask, np.nan, cutout)))
+            except (ValueError, TypeError):
+                _obs_pk = np.nan
+            if (np.isfinite(_implied) and _implied < 0.5 * float(_sev_floor)
+                    and not (np.isfinite(_obs_pk)
+                             and _obs_pk >= 0.5 * float(_sev_floor))):
                 print(f"Satstar severity gate: REJECT fitted 'satstar' whose "
                       f"model peak {_implied:.0f} MJy/sr cannot reach the "
                       f"{_sev_floor:g} saturation level (flux_fit={flux:.3g}; "
