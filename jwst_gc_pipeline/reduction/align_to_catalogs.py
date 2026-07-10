@@ -22,6 +22,8 @@ from astropy.io import fits
 import datetime
 
 from jwst_gc_pipeline.catalog_utils import catalog_skycoord
+from jwst_gc_pipeline.photometry.measure_offsets import (
+    assert_sparse_reference_for_nn_median, DenseNNMedianAstrometryError)
 
 
 def sync_gwcs_to_fits_wcs(imfile):
@@ -408,6 +410,15 @@ def realign_to_catalog(reference_coordinates, filtername='f212n',
     # crash: a refinement step must never destroy an otherwise-good mosaic. Keep
     # the current WCS and fall through to write the (unchanged) product.
     min_matches = 5
+    # FORBIDDEN-METHOD GUARD: the loop below applies (to the FITS CRVAL and the
+    # embedded GWCS) the MEDIAN of search-around-sky matches -- invalid against a
+    # dense reference, where it collapses to a spurious ~0 and has corrupted
+    # brick-1182 twice.  Refuse a dense reference; callers must pass a sparse
+    # (Gaia-only) reference or align with offset-histogram stacking instead.
+    assert_sparse_reference_for_nn_median(
+        reference_coordinates, max_offset,
+        context=f"realign_to_catalog(imfile={os.path.basename(str(imfile))}, "
+                f"{filtername} {module} {fieldnumber})")
     while np.abs(med_dra) > threshold or np.abs(med_ddec) > threshold:
         skycrds_cat = ww.pixel_to_world(xpix, ypix)
 
