@@ -680,22 +680,42 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
     else:
         ceiling = np.inf
     g0_clean = g0_finite & (group0 > 0) & (group0 < ceiling)
+    _Rcurve = None
     if R is None or not np.isfinite(R):
-        # R drifts ~25% between faint and bright pixels (residual
-        # nonlinearity/IPC); the rim pixels being recovered are BRIGHT, so
-        # calibrate R in the bright regime: prefer the brightest decade with
-        # enough pixels.
-        good0 = (~sat) & np.isfinite(data) & g0_finite & (data > 0)
+        # cal/group0 DRIFTS ~25% from faint to bright pixels even after the
+        # linearity step (0.229 at group0~2k -> 0.167 at ~20k on brick F182M
+        # nrca1; residual single-read nonlinearity / charge migration).  A
+        # scalar R therefore mis-scales the recovered rim by up to 25%
+        # depending on each pixel's brightness -- a 0.1-0.3 mag flux-scale
+        # systematic on zeroframe-anchored satstar fits.  Calibrate R AS A
+        # FUNCTION OF group0 from this frame's bright unsaturated pixels
+        # (binned medians in log g0, interpolated per rim pixel).
+        good = ((~sat) & np.isfinite(data) & g0_finite & (data > 0)
+                & (group0 > R_g0_min) & (group0 < ceiling))
         R = np.nan
-        for _thr in (10.0 * R_g0_min, 4.0 * R_g0_min, R_g0_min):
-            good = good0 & (group0 > _thr) & (group0 < ceiling)
-            if int(good.sum()) >= 50:
-                R = float(np.nanmedian(data[good] / group0[good]))
-                break
+        if int(good.sum()) >= 50:
+            _g = group0[good]
+            _r = data[good] / _g
+            _edges = np.geomspace(R_g0_min, max(ceiling, R_g0_min * 1.01), 9)
+            _ctr, _med = [], []
+            for _k in range(len(_edges) - 1):
+                _inb = (_g >= _edges[_k]) & (_g < _edges[_k + 1])
+                if int(_inb.sum()) >= 20:
+                    _ctr.append(np.sqrt(_edges[_k] * _edges[_k + 1]))
+                    _med.append(float(np.nanmedian(_r[_inb])))
+            if len(_ctr) >= 2:
+                _Rcurve = (np.array(_ctr), np.array(_med))
+                R = float(_med[-1])   # bright-end value, for logging/back-compat
+            else:
+                R = float(np.nanmedian(_r))
     recovered = np.array(data, dtype=float, copy=True)
     rim_mask = np.zeros(shp, dtype=bool)
     if np.isfinite(R):
-        recov_val = R * group0
+        if _Rcurve is not None:
+            recov_val = np.interp(np.log(np.clip(group0, 1, None)),
+                                  np.log(_Rcurve[0]), _Rcurve[1]) * group0
+        else:
+            recov_val = R * group0
         # always rewrite genuinely-saturated rim pixels (group-0 clean); in the
         # (non-DQ-flagged) dilation buffer rewrite only BRIGHT (group0>R_g0_min,
         # so R*group0 is reliable) and INFLATED (charge-migration) pixels, leaving
