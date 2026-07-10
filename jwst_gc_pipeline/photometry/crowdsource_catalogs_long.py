@@ -2649,6 +2649,25 @@ def _reduction_mosaic_output_wcs(pipeline_dir, proposal_id, field, inst_token,
     return out
 
 
+def _i2d_grid_output_wcs(i2d_path, out_asdf):
+    """Write the GWCS of an existing i2d datamodel to ``out_asdf`` (for
+    ResampleStep ``output_wcs``), or return None if the i2d is missing.
+
+    Used to land the mergedcat RESIDUAL and MODEL mosaics on the EXACT grid of
+    the ``_data_i2d`` so data / residual / model are pixel-aligned (CARTA blink).
+    Previously each mosaic cropped to its OWN finite-data bbox, so the sparse
+    MODEL (stars only, zero background) came out on a smaller grid than the
+    full-frame residual/data (task: sgrb2 F2550W model 1104x1558 vs data/resid
+    1163x1740).
+    """
+    if not (i2d_path and os.path.exists(i2d_path)):
+        return None
+    import asdf as _asdf
+    with ImageModel(i2d_path) as _m:
+        _asdf.AsdfFile({'wcs': _m.meta.wcs}).write_to(out_asdf)
+    return out_asdf
+
+
 def _resample_to_i2d(files, pipeline_dir, product_name, crop_to_data=True,
                      output_wcs=None):
     """Resample an explicit list of per-frame datamodels into one i2d mosaic.
@@ -3324,6 +3343,21 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     epsf_tok = '_epsf' if options.epsf else ''
     blur_tok = '_blur' if options.blur else ''
     group_tok = '_group' if options.group else ''
+    # Land the residual AND model mosaics on the EXACT grid of the _data_i2d so
+    # data / residual / model are pixel-aligned (CARTA blink; task sgrb2 F2550W
+    # model 1104x1558 vs data/resid 1163x1740).  Falls back to per-mosaic
+    # crop-to-data when the data_i2d is absent.
+    _data_i2d = os.path.join(
+        pipeline_dir,
+        f'jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-'
+        f'{filtername.lower()}-{module}_data_i2d.fits')
+    _shared_wcs = _i2d_grid_output_wcs(
+        _data_i2d,
+        os.path.join(pipeline_dir,
+                     f'_mergedcat_grid_o{field}_{filtername.lower()}.asdf'))
+    if _shared_wcs is not None:
+        print(f"mergedcat: landing residual+model on data_i2d grid "
+              f"({os.path.basename(_data_i2d)})", flush=True)
     for kind in kinds:
         if not written[kind]:
             continue
@@ -3331,8 +3365,9 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                         f'{filtername.lower()}-{module}{desat_tok}{bgsub_tok}'
                         f'{epsf_tok}{blur_tok}{group_tok}{iter_tok}'
                         f'_daophot_{kind}_mergedcat_residual')
-        outpaths[kind] = _resample_to_i2d(written[kind], pipeline_dir,
-                                          product_name, crop_to_data=True)
+        outpaths[kind] = _resample_to_i2d(
+            written[kind], pipeline_dir, product_name,
+            crop_to_data=(_shared_wcs is None), output_wcs=_shared_wcs)
         print(f"mergedcat: wrote {kind} residual i2d {outpaths[kind]}", flush=True)
         # FINAL coadd-level over-subtraction pit cleanup (MIRI).  The per-frame
         # pit NaN-mask + resample averaging is LEAKY: a pixel that is a deep pit
@@ -3369,8 +3404,9 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
         model_product = product_name.replace('_mergedcat_residual',
                                              '_mergedcat_model')
         try:
-            mpath = _resample_to_i2d(written_model[kind], pipeline_dir,
-                                     model_product, crop_to_data=True)
+            mpath = _resample_to_i2d(
+                written_model[kind], pipeline_dir, model_product,
+                crop_to_data=(_shared_wcs is None), output_wcs=_shared_wcs)
             print(f"mergedcat: wrote {kind} model i2d {mpath}", flush=True)
         except Exception as ex:
             print(f"mergedcat: model i2d build failed ({ex})", flush=True)
