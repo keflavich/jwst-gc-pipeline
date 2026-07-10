@@ -1,0 +1,38 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # setuptools_scm needs history for the version
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install package + test deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[test]
+
+      - name: Run test suite (local-survey-data tests auto-skip)
+        env:
+          # CRDS is never contacted by the unit tests, but imports want the vars
+          CRDS_PATH: ${{ runner.temp }}/crds
+          CRDS_SERVER_URL: https://jwst-crds.stsci.edu
+          MPLBACKEND: Agg
+        run: |
+          pytest jwst_gc_pipeline tests -q -rs --color=yes

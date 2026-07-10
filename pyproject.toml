@@ -28,6 +28,7 @@ dependencies = [
   "stpsf",
   "crds",
   "jwst",
+  "crowdsourcephoto",
 ]
 dynamic = ["version"]
 
