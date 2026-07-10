@@ -628,7 +628,8 @@ def main(argv=None):
     parser.add_argument("--allow-registration-fail", action="store_true",
                         help="stage even if the local-registration failsafe FAILs "
                              "(a band is locally misregistered). DANGEROUS -- only for "
-                             "deliberate overrides; the default refuses to stage.")
+                             "deliberate overrides; ALSO requires ALLOW_REGISTRATION_FAIL=1 "
+                             "in the environment. The default refuses to stage.")
     args = parser.parse_args(argv)
 
     items = build_manifest(args.field, args.version)
@@ -647,18 +648,34 @@ def main(argv=None):
     # bulk ~0). Before staging, run the spatially-resolved cross-band + own-catalog
     # failsafe over every band; REFUSE to stage if any band FAILs. This makes that
     # corruption unable to reach a release by construction.
-    if not args.allow_registration_fail:
+    # The override is deliberately hard to reach: --allow-registration-fail ALONE is
+    # not enough, it also requires ALLOW_REGISTRATION_FAIL=1 in the environment. This
+    # stops an agent from flipping a red gate green with a single flag (the exact
+    # failure mode that keeps letting 4" astrometry into releases).
+    override = args.allow_registration_fail and os.environ.get("ALLOW_REGISTRATION_FAIL") == "1"
+    if args.allow_registration_fail and not override:
+        print("\nREFUSING TO STAGE: --allow-registration-fail also requires "
+              "ALLOW_REGISTRATION_FAIL=1 in the environment. This override bypasses "
+              "the astrometry failsafe -- only set it with a written justification.",
+              file=sys.stderr)
+        return 2
+    if not override:
         gate = Path(__file__).with_name("registration_failsafes.py")
         rc = subprocess.run([sys.executable, str(gate), "--field", args.field, "--scan"]).returncode
         if rc == 1:
             print(f"\nREFUSING TO STAGE '{args.field}': local-registration failsafe FAILED "
                   f"-- a band's mosaic is locally misregistered vs the other bands / its own "
                   f"catalog (see the scan output above). Fix the reduction, or override with "
-                  f"--allow-registration-fail (dangerous).", file=sys.stderr)
+                  f"--allow-registration-fail AND ALLOW_REGISTRATION_FAIL=1 (dangerous).",
+                  file=sys.stderr)
             return 2
         if rc != 0:
-            print(f"WARNING: registration failsafe could not run (rc={rc}); staging anyway.",
+            # Fail CLOSED: a failsafe that cannot run is NOT a passing failsafe.
+            print(f"\nREFUSING TO STAGE '{args.field}': registration failsafe could not run "
+                  f"(rc={rc}); cannot confirm astrometry. Fix the failsafe, or override with "
+                  f"--allow-registration-fail AND ALLOW_REGISTRATION_FAIL=1 (dangerous).",
                   file=sys.stderr)
+            return 2
 
     mode = "copy" if args.copy else "symlink"
     field_dir = stage(items, args.field, args.version, args.release_root,
