@@ -316,9 +316,50 @@ def _resolve_satstar_data_floor(filtername, explicit=None):
     return float(_SATSTAR_DATA_FLOOR.get(str(filtername).lower(), 0.0))
 
 
+# Per-filter SATURATION-SEVERITY floor (MJy/sr): the data level at which the
+# filter genuinely saturates -- the same physical level the NORMAL fit uses to
+# decide a SATURATED-DQ pixel is truly unusable (cataloging imports this table
+# as its --saturation-data-floor auto default; single source of truth).  Used
+# by the finder's severity gate: a DQ-SATURATED component whose brightest
+# in-component pixel is BELOW this level, with NO unrecoverable (NaN-variance)
+# core, cannot contain a saturated star -- it is the any-group SAT-bit
+# over-flag (recoverable later-group pixels on an ordinary star).  Such
+# components were seeded as satstars, wing-only fit 0.4-2.2 mag too FAINT
+# (their valid core is masked out of the fit), and force-substituted over the
+# correct daophot flux: Brick F182M carried 362 fake satstars at mag 16-18
+# with ZERO saturated pixels in the frames (45% of the satstar catalog; 44%
+# F187N/F212N) -- the sat<->unsat CMD discontinuity and most of the ~0.2-0.4"
+# satstar 'centroid jitter' (fake wing fits wander; real satstars repeat to
+# 0.077" cross-band).  f140m..f480m values = W51 per-frame crf SATURATED-pixel
+# plateau p99 (same provenance as the normal-fit floor); the other filters are
+# channel-sibling estimates (marked); unlisted (incl. all MIRI) -> 0 = gate
+# off.  Override per run with env SATSTAR_SEVERITY_FLOOR (0 disables).
+SAT_SEVERITY_FLOOR = {
+    'f140m': 5000., 'f162m': 5000., 'f182m': 4000., 'f187n': 8000., 'f210m': 4000.,
+    'f335m': 2500., 'f360m': 2500., 'f405n': 5000., 'f410m': 2500., 'f480m': 5000.,
+    # channel-sibling estimates (not yet measured from per-field crf data):
+    'f212n': 4000., 'f466n': 5000., 'f115w': 4000., 'f200w': 4000.,
+    'f356w': 2500., 'f444w': 2500.,
+}
+
+
+def _resolve_satstar_severity_floor(filtername, explicit=None):
+    """Severity floor: explicit arg > env SATSTAR_SEVERITY_FLOOR > per-filter
+    SAT_SEVERITY_FLOOR > 0 (gate off)."""
+    if explicit is not None and float(explicit) > 0:
+        return float(explicit)
+    _env = os.environ.get('SATSTAR_SEVERITY_FLOOR')
+    if _env is not None:
+        try:
+            return float(_env)
+        except ValueError:
+            pass
+    return float(SAT_SEVERITY_FLOOR.get(str(filtername).lower(), 0.0))
+
+
 def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
                          spike_merge_gap=0, spike_merge_ratio=3.0,
-                         sat_data_floor=0.0):
+                         sat_data_floor=0.0, severity_floor=0.0):
     """
     Identify candidate saturated stars from the DQ plane.
 
@@ -469,6 +510,40 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
             print(f"Saturated starfinding: data-floor ({sat_data_floor:g} MJy/sr) "
                   f"dropped {len(drop_lab)} spurious low-data DQ-SATURATED "
                   f"component(s) -> nsources={nsource}", flush=True)
+            if nsource == 0:
+                return saturated, sources, []
+
+    # SATURATION-SEVERITY GATE: a component with NO unrecoverable (NaN-variance)
+    # core whose brightest IN-COMPONENT pixel is below the filter's true
+    # saturation level cannot be a saturated star -- it is the any-group
+    # SATURATED over-flag on an ordinary star (recoverable later-group pixels).
+    # Seeding it produces a wing-only satstar fit 0.4-2.2 mag too FAINT that
+    # then OVERWRITES the star's correct daophot flux (the sat<->unsat CMD
+    # jump; Brick F182M: 362 fakes = 45% of the satstar catalog, zero saturated
+    # pixels in-frame).  Distinct from the wing data-floor above: that guard
+    # kills faint spurious flags; this one kills BRIGHT-star over-flags whose
+    # wings easily clear the wing floor.  See SAT_SEVERITY_FLOOR.
+    if severity_floor and severity_floor > 0:
+        sci = np.asarray(fitsdata['SCI'].data, dtype=float)
+        unrec = (np.isnan(fitsdata['VAR_POISSON'].data)
+                 if 'VAR_POISSON' in [h.name for h in fitsdata]
+                 else np.zeros(sci.shape, dtype=bool))
+        _idx = np.arange(1, nsource + 1)
+        comp_coremax = np.asarray(
+            ndimage.maximum(np.where(np.isfinite(sci), sci, -np.inf),
+                            labels=sources, index=_idx), dtype=float)
+        comp_unrec = np.asarray(
+            ndimage.maximum(unrec.astype(np.uint8), labels=sources,
+                            index=_idx)) > 0
+        drop_lab = _idx[(~comp_unrec) & np.isfinite(comp_coremax)
+                        & (comp_coremax < float(severity_floor))]
+        if len(drop_lab):
+            saturated = saturated & (~np.isin(sources, drop_lab))
+            sources, nsource = label(saturated)
+            print(f"Saturated starfinding: severity gate ({severity_floor:g} "
+                  f"MJy/sr) dropped {len(drop_lab)} unsaturated over-flagged "
+                  f"component(s) (no NaN-variance core, peak below the true "
+                  f"saturation level) -> nsources={nsource}", flush=True)
             if nsource == 0:
                 return saturated, sources, []
 
@@ -1144,6 +1219,24 @@ def _seed_concentration(data, com, sat_area=None):
     return peak / mid
 
 
+def satstar_implied_peak(flux, psf_model, x_fit, y_fit):
+    """Peak pixel value the fitted satstar model implies at its own position.
+
+    A saturated star's model must, at minimum, reach the level at which the
+    filter saturates -- otherwise the "saturated star" cannot be saturated.
+    Evaluated by setting the fitted (flux, x_0, y_0) on a copy of the fit PSF
+    and sampling it at its centre.  Returns NaN on any failure (gate then
+    stays out of the way)."""
+    try:
+        m = psf_model.copy()
+        m.flux = float(flux)
+        m.x_0 = float(x_fit)
+        m.y_0 = float(y_fit)
+        return float(m(float(x_fit), float(y_fit)))
+    except Exception:
+        return np.nan
+
+
 def accept_satstar_fit(*, result_is_none, fluxerr, snr, flux, qfit,
                        sidelobe_resid_sigma, ssr_ratio, is_miri,
                        qfit_max_keep, sidelobe_min_keep, ssr_ratio_max_keep,
@@ -1356,7 +1449,7 @@ def flattop_satstar_model(model_image, data_bg_sub, plateau_frac=0.15,
     return np.maximum(out, 0)
 
 
-def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_prominence_robust=False, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, deblend_daophot_xy=None, deblend_confirm_xy=None, sat_data_floor=None, phantom_flux_floor=0.0, phantom_ssr_max=50.0, phantom_ratio_max=50.0):
+def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_prominence_robust=False, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, deblend_daophot_xy=None, deblend_confirm_xy=None, sat_data_floor=None, satstar_severity_floor=None, phantom_flux_floor=0.0, phantom_ssr_max=50.0, phantom_ratio_max=50.0):
     # ``flux_drops``: optional list of SkyCoord.  An out-of-field (forced) source
     # whose seed sky position matches a drop within ~1.0" is SKIPPED entirely
     # (not fit, not contributed): cross-frame reconciliation found no trustworthy
@@ -1502,10 +1595,12 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     _spike_ratio = float(os.environ.get('MIRI_SATSTAR_SPIKE_MERGE_RATIO', 3.0))
     _sat_floor = _resolve_satstar_data_floor(header.get('FILTER', ''),
                                              explicit=sat_data_floor)
+    _sev_floor = _resolve_satstar_severity_floor(header.get('FILTER', ''),
+                                                 explicit=satstar_severity_floor)
     saturated, sources, coms = find_saturated_stars(
         fitsdata, min_sep_from_edge=min_sep_from_edge, edge_npix=edge_npix,
         spike_merge_gap=_spike_gap, spike_merge_ratio=_spike_ratio,
-        sat_data_floor=_sat_floor)
+        sat_data_floor=_sat_floor, severity_floor=_sev_floor)
 
     # Diagnostic flag image (uint8 bitmask), written by remove_saturated_stars:
     #   bit 0 (1) = partly saturated (DQ SATURATED but recoverable / nonlinear,
@@ -1865,6 +1960,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # defaults (overridden in the in-FOV fit branch); guard later references
         _use_large_infov = False
         _infov_psf = big_grid
+        _psf_for_fit = big_grid
         #center_of_mass(saturated, labels=sources, index=ii+1)
         # center_of_mass can return (nan, nan) for degenerate labels; guard against that
         if com is None:
@@ -3184,6 +3280,38 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             ssr_ratio=ssr_ratio, is_miri=_is_miri,
             qfit_max_keep=_qfit_max_keep, sidelobe_min_keep=_sidelobe_min_keep,
             ssr_ratio_max_keep=_ssr_ratio_max_keep, snr_min_keep=_snr_min_keep)
+
+        # POST-FIT SATURATION-SEVERITY GATE (NIRCam, in-FOV; 2026-07-10): the
+        # cal any-group SATURATED bit over-flags recoverable pixels on ordinary
+        # stars; in the crf products EVERY SATURATED pixel is blanked
+        # (SCI=NaN, VAR_POISSON=NaN), so neither the frame data nor the
+        # variance can distinguish a real saturated core from the over-flag --
+        # but the FIT can: a genuine saturated star's model must at minimum
+        # reach the filter's saturation level at its own peak.  Brick F182M:
+        # 362 fakes (45% of the satstar catalog, mag 16-18, wing-fit 0.4-2.2
+        # mag too faint, positions wandering 0.2-0.4") all imply peaks far
+        # below the floor; real satstars imply peaks >> floor.  Margin 0.5x
+        # allows wing-fit scatter for genuinely borderline saturation.
+        # Rejected stars fall through to the normal daophot channel, whose
+        # photometry for them was correct all along.  MIRI is excluded (its
+        # own envelope/cap machinery + flat-top model handle amplitude), as
+        # are forced/off-FOV sources (flux pinned externally).
+        if (accept_source and not _is_miri and not forced_source
+                and result is not None and _sev_floor and _sev_floor > 0):
+            try:
+                _xf = float(np.atleast_1d(result['x_fit'])[0])
+                _yf = float(np.atleast_1d(result['y_fit'])[0])
+            except (KeyError, IndexError, TypeError, ValueError):
+                _xf = _yf = np.nan
+            _implied = (satstar_implied_peak(flux, _psf_for_fit, _xf, _yf)
+                        if np.isfinite(_xf) and np.isfinite(_yf) else np.nan)
+            if np.isfinite(_implied) and _implied < 0.5 * float(_sev_floor):
+                print(f"Satstar severity gate: REJECT fitted 'satstar' whose "
+                      f"model peak {_implied:.0f} MJy/sr cannot reach the "
+                      f"{_sev_floor:g} saturation level (flux_fit={flux:.3g}; "
+                      f"over-flagged unsaturated star -> daophot channel)",
+                      flush=True)
+                accept_source = False
         if forced_source and result is not None:
             xcent = np.asarray(result['xcentroid'], dtype=float)
             ycent = np.asarray(result['ycentroid'], dtype=float)

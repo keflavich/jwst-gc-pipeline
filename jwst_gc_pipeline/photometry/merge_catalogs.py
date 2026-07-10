@@ -2159,6 +2159,21 @@ def flag_near_saturated(cat, filtername, radius=None, target='brick',
     cat.add_column(near_sat, name=f'near_saturated_{filtername}')
 
 
+
+def _faint_replacement_veto(catflux, satflux, factor=0.8):
+    """True where a satstar flux must NOT overwrite the daophot flux.
+
+    A truly saturated core CLIPS the daophot flux low, so a genuine satstar
+    fit always satisfies satflux >= catflux; a satstar fit FAINTER than
+    ``factor`` x the daophot flux is a wing-only fit of a not-actually-
+    saturated star (the any-group SAT-bit over-flag; Brick F182M: 362 such
+    fakes 0.4-2.2 mag too faint) or an otherwise broken fit.  Non-finite
+    fluxes are never vetoed (nothing trustworthy to compare)."""
+    catflux = np.asarray(catflux, dtype=float)
+    satflux = np.asarray(satflux, dtype=float)
+    return (np.isfinite(catflux) & np.isfinite(satflux)
+            & (satflux < factor * catflux))
+
 def replace_saturated(cat, filtername, radius=None, target='brick',
                       fwhm_basepath=None,
                       basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
@@ -2271,6 +2286,33 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
         idx_cat = np.array([], dtype=int)
         idx_sat = np.array([], dtype=int)
 
+    # FAINT-REPLACEMENT GUARD (2026-07-10): a satstar flux must EXCEED the
+    # daophot flux it overwrites.  A truly saturated core CLIPS the daophot
+    # flux low, so satstar >= daophot always holds for a genuine saturated
+    # star; a satstar fit FAINTER than the daophot flux is a wing-only fit of
+    # a NOT-actually-saturated star (the any-group SAT-bit over-flag -- Brick
+    # F182M: 362 such fakes were 0.4-2.2 mag too faint) or an otherwise
+    # broken fit.  Keep the daophot flux and do NOT mark the row replaced.
+    # Belt-and-braces behind the finder's severity gate
+    # (saturated_star_finding.SAT_SEVERITY_FLOOR): this also protects
+    # catalogs built against older satstar caches.  Guard factor 0.8 allows
+    # normal fit scatter for borderline cores.
+    _vetoed_sat = np.array([], dtype=int)
+    _cfcol = ('flux' if 'flux' in cat.colnames
+              else ('flux_fit' if 'flux_fit' in cat.colnames else None))
+    if len(idx_cat) and _cfcol is not None:
+        _catflux = np.asarray(cat[_cfcol], dtype=float)[idx_cat]
+        _satflux = np.asarray(satstar_cat['flux_fit'], dtype=float)[idx_sat]
+        _fainter = _faint_replacement_veto(_catflux, _satflux)
+        if _fainter.any():
+            print(f"replace_saturated: faint-replacement guard kept the "
+                  f"daophot flux for {int(_fainter.sum())}/{len(idx_cat)} "
+                  f"match(es) (satstar fit < 0.8x the daophot flux it would "
+                  f"overwrite -- over-flagged unsaturated star)", flush=True)
+            _vetoed_sat = idx_sat[_fainter]
+            idx_cat = idx_cat[~_fainter]
+            idx_sat = idx_sat[~_fainter]
+
     replaced_sat = np.zeros(len(cat), dtype='bool')
     replaced_sat[idx_cat] = True
 
@@ -2317,6 +2359,10 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
         # ID the stars that are saturated-only (not INCluded in the orig cat)
         satstar_not_inc = np.ones(len(satstar_cat), dtype='bool')
         satstar_not_inc[idx_sat] = False
+        # a satstar vetoed by the faint-replacement guard matched a (correct)
+        # daophot row -- appending it would duplicate the star with the bad
+        # wing-fit flux, so exclude it from the add list as well.
+        satstar_not_inc[_vetoed_sat] = False
         satstar_toadd = satstar_cat[satstar_not_inc]
 
         satstar_toadd.rename_column('flux_fit', 'flux')
@@ -2360,6 +2406,10 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
         # ID the stars that are saturated-only (not INCluded in the orig cat)
         satstar_not_inc = np.ones(len(satstar_cat), dtype='bool')
         satstar_not_inc[idx_sat] = False
+        # a satstar vetoed by the faint-replacement guard matched a (correct)
+        # daophot row -- appending it would duplicate the star with the bad
+        # wing-fit flux, so exclude it from the add list as well.
+        satstar_not_inc[_vetoed_sat] = False
         satstar_toadd = satstar_cat[satstar_not_inc]
 
         satstar_toadd.rename_column('skycoord_fit', 'skycoord')

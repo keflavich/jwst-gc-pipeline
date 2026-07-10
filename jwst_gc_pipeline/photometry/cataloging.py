@@ -1189,13 +1189,11 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
 # masking those drops seeded real stars from every per-frame fit (W51 F480M).
 # Only mask a SATURATED pixel when its data exceeds the per-filter floor; genuine
 # saturated cores exceed it and stay masked / owned by the satstar channel.
-# Empirical from W51 per-frame crf SATURATED-pixel data distributions (p99 of the
-# real-saturation plateau).  Filter not listed (incl. all MIRI) -> 0 = mask all
-# SATURATED (original behaviour).  Override per-run with --saturation-data-floor.
-_NIRCAM_SAT_DATA_FLOOR = {
-    'f140m': 5000., 'f162m': 5000., 'f182m': 4000., 'f187n': 8000., 'f210m': 4000.,
-    'f335m': 2500., 'f360m': 2500., 'f405n': 5000., 'f410m': 2500., 'f480m': 5000.,
-}
+# The table now lives in reduction.saturated_star_finding.SAT_SEVERITY_FLOOR
+# (single source of truth: the satstar finder's severity gate and this
+# photometry mask describe the SAME physical level -- where the filter truly
+# saturates).  Filter not listed (incl. all MIRI) -> 0 = mask all SATURATED
+# (original behaviour).  Override per-run with --saturation-data-floor.
 
 # Extended-emission / crowded NIRCam fields: dense saturated regions (e.g. W51
 # IRS2) need the structure-noise-prune default + the satstar-channel guards
@@ -1427,7 +1425,9 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         # the original behaviour (mask all SATURATED).
         sat_floor = float(getattr(options, 'saturation_data_floor', -1.0))
         if sat_floor < 0:  # auto: per-filter default (0 for unlisted -> mask all)
-            sat_floor = _NIRCAM_SAT_DATA_FLOOR.get(filtername.lower(), 0.0)
+            from jwst_gc_pipeline.reduction.saturated_star_finding import (
+                SAT_SEVERITY_FLOOR)
+            sat_floor = SAT_SEVERITY_FLOOR.get(filtername.lower(), 0.0)
         if sat_floor > 0:
             is_saturated = is_saturated & (np.nan_to_num(data) > sat_floor)
         data_ = data.copy()
