@@ -413,12 +413,24 @@ def realign_to_catalog(reference_coordinates, filtername='f212n',
     # FORBIDDEN-METHOD GUARD: the loop below applies (to the FITS CRVAL and the
     # embedded GWCS) the MEDIAN of search-around-sky matches -- invalid against a
     # dense reference, where it collapses to a spurious ~0 and has corrupted
-    # brick-1182 twice.  Refuse a dense reference; callers must pass a sparse
-    # (Gaia-only) reference or align with offset-histogram stacking instead.
-    assert_sparse_reference_for_nn_median(
-        reference_coordinates, max_offset,
-        context=f"realign_to_catalog(imfile={os.path.basename(str(imfile))}, "
-                f"{filtername} {module} {fieldnumber})")
+    # brick-1182 twice.  But this whole routine is a post-resample REFINEMENT whose
+    # ``_realigned-to-refcat`` output is not consumed (the science mosaic tie comes
+    # from per-exposure fix_alignment).  So against a DENSE reference, SKIP it with
+    # a loud warning rather than crash the reduction -- do NOT apply a spurious
+    # shift, and do NOT destroy an otherwise-correct mosaic.  A SPARSE (Gaia-only)
+    # reference still runs normally.  (Pure offset-MEASUREMENT functions --
+    # measure_offsets, bootstrap_reference_catalog -- still raise, since a garbage
+    # offset table is worse than a crash.)
+    try:
+        assert_sparse_reference_for_nn_median(
+            reference_coordinates, max_offset,
+            context=f"realign_to_catalog(imfile={os.path.basename(str(imfile))}, "
+                    f"{filtername} {module} {fieldnumber})")
+    except DenseNNMedianAstrometryError as _ex:
+        log.warning(f"SKIPPING realign_to_catalog against a DENSE reference "
+                    f"(forbidden dense-NN-median); the mosaic tie comes from "
+                    f"per-exposure fix_alignment. {_ex}")
+        return None
     while np.abs(med_dra) > threshold or np.abs(med_ddec) > threshold:
         skycrds_cat = ww.pixel_to_world(xpix, ypix)
 
