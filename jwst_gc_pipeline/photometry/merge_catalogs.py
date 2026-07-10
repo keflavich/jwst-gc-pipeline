@@ -1910,10 +1910,13 @@ _SATSTAR_DEDUP_ALG = 'fp3'
 # overrides; set 0 to disable the second pass.
 def _satstar_replace_radius():
     _env = os.environ.get('SATSTAR_REPLACE_RADIUS_ARCSEC')
+    # 0.5": wide-band saturated blobs scatter worse than SW (brick f356w
+    # catastrophic clipped rows: satstar at med 0.16", 77% < 0.3" but 90% <
+    # 0.5"); mutual-nearest keeps the wide radius crowding-safe.
     try:
-        val = float(_env) if _env is not None else 0.3
+        val = float(_env) if _env is not None else 0.5
     except ValueError:
-        val = 0.3
+        val = 0.5
     return (val * u.arcsec) if val > 0 else None
 
 
@@ -2350,6 +2353,7 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
     # catalogs built against older satstar caches.  Guard factor 0.8 allows
     # normal fit scatter for borderline cores.
     _vetoed_sat = np.array([], dtype=int)
+    _vetoed_cat = np.array([], dtype=int)
     _cfcol = ('flux' if 'flux' in cat.colnames
               else ('flux_fit' if 'flux_fit' in cat.colnames else None))
     if len(idx_cat) and _cfcol is not None:
@@ -2362,6 +2366,7 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
                   f"match(es) (satstar fit < 0.8x the daophot flux it would "
                   f"overwrite -- over-flagged unsaturated star)", flush=True)
             _vetoed_sat = idx_sat[_fainter]
+            _vetoed_cat = idx_cat[_fainter]
             idx_cat = idx_cat[~_fainter]
             idx_sat = idx_sat[~_fainter]
 
@@ -2487,9 +2492,19 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
           f"in filter {filtername}.  "
           f"{satstar_not_inc.sum()} are newly added.  The total replaced stars={replaced_sat_.sum()}")
 
+    # DECOUPLED FLAGS (2026-07-10): 'is_saturated' marks the STAR as saturated
+    # in this band -- replaced rows AND rows that matched a satstar but whose
+    # replacement was vetoed (their daophot flux is the saturation-CLIPPED
+    # value: +0.2..+0.5 mag faint in narrow bands, +3..+5 in wide -- the
+    # forensics 'unflagged clipped' class).  'replaced_saturated' remains the
+    # actual-overwrite flag.  Downstream vetting force-keep and CMD tools can
+    # now distinguish 'saturated but not repaired' from clean photometry.
+    is_sat_ = replaced_sat_.copy()
+    if len(_vetoed_cat):
+        is_sat_[_vetoed_cat] = True
     if 'is_saturated' in cat.colnames:
         cat.remove_column('is_saturated')
-    cat.add_column(replaced_sat_.astype(bool), name='is_saturated')
+    cat.add_column(is_sat_.astype(bool), name='is_saturated')
 
     if 'replaced_saturated' in cat.colnames:
         cat.remove_column('replaced_saturated')

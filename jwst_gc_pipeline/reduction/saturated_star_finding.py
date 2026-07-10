@@ -2207,11 +2207,17 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 this_source_sat, iterations=effective_buffer)
             other_sources_sat = saturated_mask & (~this_source_sat)
             satmask_combined = this_source_sat_expanded | other_sources_sat
+            # effective circular-equivalent mask radius of THIS source's core
+            # (drives the wing self-calibration: the wing-fit bias grows with
+            # how much core is masked -- see _wing_selfcal)
+            _wingcal_rmask = float(np.sqrt(
+                max(int(this_source_sat_expanded.sum()), 1) / np.pi))
         else:
             # Forced sources or no src_label: fall back to dilating the
             # whole saturated mask (legacy behaviour).
             satmask_combined = binary_dilation(saturated_mask,
                                                iterations=effective_buffer)
+            _wingcal_rmask = np.nan   # forced/off-FOV: no wing self-cal
         # NB: np.logical_or takes only TWO array operands; a 3rd positional arg
         # is interpreted as ``out``.  The previous
         # ``np.logical_or(cutout==0, np.isnan(cutout), satmask_combined)`` therefore
@@ -3694,6 +3700,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             else:
                 print(f"Accepting source {ii+1} with flux={flux}, fluxerr={fluxerr}, snr={snr}, "
                       f"sidelobe_resid_sigma={sidelobe_resid_sigma:.2f}, ssr_ratio={ssr_ratio:.3f}", flush=True)
+            result['wingcal_rmask'] = _wingcal_rmask
             if index == 0:
                 base_tab = result
             else:
@@ -3742,11 +3749,193 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 base_tab.meta['DET_DEC'] = float(_icrs.dec.deg)
         except Exception as ex:
             log.warning(f"Could not record det_center in satstar table meta: {ex}")
+        # WING SELF-CALIBRATION: correct the catalog fluxes for the frame's
+        # measured wing-fit bias (STPSF wing deficit); the model/residual keep
+        # the raw amplitudes (they subtract the observed wings cleanly).
+        try:
+            _inst_wc = 'MIRI' if header['INSTRUME'].lower() == 'miri' else 'NIRCam'
+            _, _fwhm_wc = get_fwhm(header, instrument_replacement=_inst_wc)
+        except Exception:
+            _fwhm_wc = 2.0
+        base_tab = apply_wing_selfcal(
+            base_tab, data - full_model_image, err_working, saturated,
+            big_grid, fwhm_pix=float(_fwhm_wc),
+            severity_floor=float(_sev_floor or 0.0))
         builtins.satstar_table = base_tab
         builtins.satstar_model = full_model_image
         builtins.satstar_resid = data - full_model_image
         builtins.satstar_flagimg = flag_img
         return base_tab
+
+
+def _wing_selfcal(data, err, sat_mask, psf_grid, radii, *, fwhm_pix=2.0,
+                  peak_lo=None, peak_hi=None, severity_floor=0.0,
+                  n_stars_max=30, min_stars=8, edge=110):
+    """Per-frame WING-FIT self-calibration: measure the bias of masked-core
+    PSF fitting on BRIGHT UNSATURATED stars in this very frame.
+
+    The satstar amplitude comes from fitting the STPSF model to the wings
+    (core masked).  Measured on Brick F182M (two detectors, ~60 stars): the
+    real PSF carries 10-25% MORE wing flux relative to its core than the
+    STPSF model (the model Airy troughs are too deep), so wing-only fits are
+    systematically too BRIGHT -- bias(r_mask) = 1.02/1.11/1.20/1.27 at
+    r_mask = 3/4/8/12 px and still rising, while the unmasked control fit is
+    1.004.  The bias is per-filter (F187N shows none at small radii) and
+    varies ~3-10% frame-to-frame, so a static correction table is unsafe:
+    calibrate on each frame from its own bright unsaturated stars, fitting
+    each once normally (truth) and once with the core masked to each satstar
+    effective mask radius.  Median ratio precision ~ madstd/sqrt(K) ~= 3-5%
+    for K ~= 20-40, removing a 0.1-0.5+ mag systematic.
+
+    Returns dict {radius_px: (median_ratio, n_stars, madstd)} for the
+    requested ``radii`` (empty dict when calibration is impossible).
+    """
+    from photutils.detection import DAOStarFinder
+    from astropy.stats import sigma_clipped_stats, mad_std as _madstd
+
+    if peak_hi is None:
+        peak_hi = 0.875 * severity_floor if severity_floor > 0 else 0.0
+    if peak_lo is None:
+        peak_lo = 0.12 * severity_floor if severity_floor > 0 else 0.0
+    if not (peak_hi > peak_lo > 0):
+        print("wing-selfcal: no usable peak window (severity floor unset); "
+              "skipping", flush=True)
+        return {}
+
+    bad = ~np.isfinite(data)
+    _, med, std = sigma_clipped_stats(data[~bad], sigma=3.0, maxiters=5)
+    dao = DAOStarFinder(threshold=10 * std, fwhm=fwhm_pix, exclude_border=True)
+    cat = dao(np.nan_to_num(data - med), mask=bad)
+    if cat is None or len(cat) == 0:
+        print("wing-selfcal: no detections; skipping", flush=True)
+        return {}
+    xc = 'x_centroid' if 'x_centroid' in cat.colnames else 'xcentroid'
+    yc = 'y_centroid' if 'y_centroid' in cat.colnames else 'ycentroid'
+    x = np.asarray(cat[xc], dtype=float)
+    y = np.asarray(cat[yc], dtype=float)
+    peak = np.asarray(cat['peak'], dtype=float)
+
+    ny, nx = data.shape
+    cand = np.where((peak > peak_lo) & (peak < peak_hi)
+                    & (x > edge) & (x < nx - edge)
+                    & (y > edge) & (y < ny - edge))[0]
+    sy, sx = np.nonzero(sat_mask) if sat_mask is not None else ([], [])
+    sel = []
+    for i in cand:
+        d2 = (x - x[i]) ** 2 + (y - y[i]) ** 2
+        d2[i] = np.inf
+        if np.any((d2 < 20 ** 2) & (peak > 0.05 * peak[i])):
+            continue
+        if np.any((d2 < 60 ** 2) & (peak > 0.3 * peak[i])):
+            continue
+        if len(sx) and np.any((np.asarray(sx) - x[i]) ** 2
+                              + (np.asarray(sy) - y[i]) ** 2 < 40 ** 2):
+            continue
+        sel.append(i)
+    if len(sel) < min_stars:
+        print(f"wing-selfcal: only {len(sel)} isolated bright unsaturated "
+              f"star(s) (need {min_stars}); skipping", flush=True)
+        return {}
+    sel = np.array(sel)[np.argsort(peak[np.array(sel)])[::-1]][:n_stars_max]
+    localbkg = LocalBackground(25, 50)
+
+    def _fit(xi, yi, fmask, fit_shape, fixed):
+        m = psf_grid.copy()
+        # the satstar loop sets position BOUNDS on the shared grid object;
+        # a stale bound anchored to the last satstar makes every fit here
+        # fail silently -- reset all constraints.
+        for par in ('x_0', 'y_0', 'flux'):
+            getattr(m, par).bounds = (None, None)
+            getattr(m, par).fixed = False
+        m.x_0.fixed = fixed
+        m.y_0.fixed = fixed
+        phot = PSFPhotometry(psf_model=m, fit_shape=(fit_shape, fit_shape),
+                             localbkg_estimator=localbkg, aperture_radius=5)
+        init = table.Table({'x_init': [xi], 'y_init': [yi]})
+        try:
+            res = phot(data, error=err, mask=fmask, init_params=init)
+            f = float(res['flux_fit'][0])
+            return f if np.isfinite(f) and f > 0 else np.nan
+        except Exception:
+            return np.nan
+
+    yy, xx = np.mgrid[0:ny, 0:nx]
+    truths = {}
+    for i in sel:
+        truths[i] = _fit(x[i], y[i], bad, 11, False)
+    good = [i for i in sel if np.isfinite(truths[i])]
+    print(f"wing-selfcal: {len(sel)} calibration star(s), {len(good)} good "
+          f"truth fit(s)", flush=True)
+    out = {}
+    for r in sorted(set(int(round(min(max(rr, 3), 30))) for rr in radii
+                        if np.isfinite(rr))):
+        fs = int(min(4 * r + 21, 101)) | 1
+        ratios = []
+        for i in good:
+            cm = ((xx - x[i]) ** 2 + (yy - y[i]) ** 2) < r ** 2
+            f = _fit(x[i], y[i], bad | cm, fs, True)
+            if np.isfinite(f) and truths[i] > 0:
+                ratios.append(f / truths[i])
+        if len(ratios) >= min_stars:
+            ratios = np.array(ratios)
+            out[r] = (float(np.median(ratios)), len(ratios),
+                      float(_madstd(ratios)))
+        else:
+            print(f"wing-selfcal: r={r}px only {len(ratios)} usable masked "
+                  f"fit(s) (<{min_stars}); bucket dropped", flush=True)
+    if out:
+        print("wing-selfcal: " + "; ".join(
+            f"r={r}px ratio={v[0]:.3f}+/-{v[2]:.3f} (n={v[1]})"
+            for r, v in sorted(out.items())), flush=True)
+    return out
+
+
+def apply_wing_selfcal(base_tab, data_sub, err, sat_mask, psf_grid, *,
+                       fwhm_pix=2.0, severity_floor=0.0):
+    """Correct satstar CATALOG fluxes for the wing-fit bias measured on this
+    frame (see _wing_selfcal).  The rendered/subtracted MODEL keeps the raw
+    fitted amplitude on purpose: the fit matched the observed wings, so
+    model-with-raw-flux subtracts the wings cleanly; only the total-flux
+    NUMBER is biased by the model's wing deficit.  Adds columns
+    ``flux_fit_raw``, ``wingcal_ratio``; divides ``flux_fit`` and
+    ``flux_err`` by the per-star interpolated ratio.  Env
+    SATSTAR_WINGCAL=0 disables."""
+    if os.environ.get('SATSTAR_WINGCAL', '1') in ('0', 'false', 'False'):
+        return base_tab
+    if base_tab is None or 'wingcal_rmask' not in base_tab.colnames:
+        return base_tab
+    rmask = np.asarray(base_tab['wingcal_rmask'], dtype=float)
+    want = rmask[np.isfinite(rmask)]
+    if want.size == 0:
+        print("wing-selfcal: no in-FOV satstars with a mask radius; skipping",
+              flush=True)
+        return base_tab
+    print(f"wing-selfcal: calibrating {len(base_tab)} satstar(s), mask radii "
+          f"{np.nanmin(want):.1f}-{np.nanmax(want):.1f} px, severity floor "
+          f"{severity_floor:g}", flush=True)
+    cal = _wing_selfcal(data_sub, err, sat_mask, psf_grid,
+                        radii=list(want), fwhm_pix=fwhm_pix,
+                        severity_floor=severity_floor)
+    base_tab['flux_fit_raw'] = np.asarray(base_tab['flux_fit'], dtype=float)
+    base_tab['wingcal_ratio'] = np.ones(len(base_tab))
+    if not cal:
+        return base_tab
+    rs = np.array(sorted(cal))
+    vs = np.array([cal[r][0] for r in rs])
+    ratio = np.interp(np.clip(rmask, rs.min(), rs.max()), rs, vs)
+    ratio = np.where(np.isfinite(rmask), ratio, 1.0)
+    base_tab['wingcal_ratio'] = ratio
+    base_tab['flux_fit'] = base_tab['flux_fit_raw'] / ratio
+    if 'flux_err' in base_tab.colnames:
+        base_tab['flux_err'] = np.asarray(base_tab['flux_err'],
+                                          dtype=float) / ratio
+    n = int(np.sum(ratio != 1.0))
+    print(f"wing-selfcal: corrected {n}/{len(base_tab)} satstar catalog "
+          f"flux(es); median ratio "
+          f"{np.median(ratio[ratio != 1.0]) if n else 1.0:.3f}", flush=True)
+    return base_tab
+
+
 
 def _find_ramp_for(filename):
     """Return the path to the sibling ``_ramp.fits`` for a cal/crf ``filename``,
