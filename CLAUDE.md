@@ -3,6 +3,8 @@
 Instructions for any agent (or human) working in this repo. **Read this before
 touching astrometry, alignment, reference catalogs, or reduction/cataloging.**
 
+When editing jwst-gc-pipeline, use git worktrees.
+
 ---
 
 ## ⛔ ASTROMETRY RULE #1 — never nearest-neighbour-median against a dense catalog
