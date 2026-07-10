@@ -120,3 +120,52 @@ def _skycoord_radec_arrays(tbl, colname):
         ra[:] = ra_v
         dec[:] = dec_v
     return ra, dec
+
+
+def confident_star_mask(cat, *, qfit_max=0.2, sky_clean_prom_min=5.0,
+                        sky_clean_snr_min=3.0, drop_overshoot=True):
+    """Boolean mask of CONFIDENT STARS for plotting / science analysis.
+
+    The vetted catalog deliberately retains some lower-confidence tiers (e.g.
+    peakSB / bright-isolated keeps) so the model==catalog subtraction invariant
+    holds; for CMDs and completeness plots you usually want only sources whose
+    star-nature is positively established.  A source qualifies via ANY of:
+
+    - qfit-confident: ``qfit <= qfit_max`` (well-fit point source), or
+    - sky-clean tier: ``sky_clean`` (measured local emission consistent with
+      dark sky -- emission contamination physically impossible there) AND
+      ``prominence >= sky_clean_prom_min`` AND fit S/N >= sky_clean_snr_min,
+      qfit ignored (blend-degraded), or
+    - subtracted saturated star (``replaced_saturated``): real bright star,
+      but note its flux comes from the wing/spike fit -- plot with care.
+
+    Sources flagged ``model_overshoot`` are excluded (inflated fits) unless
+    ``drop_overshoot=False``.  Columns absent from ``cat`` make their tier
+    contribute False (e.g. a pre-sky-clean catalog just falls back to the
+    qfit tier), so the mask is safe on any catalog generation.
+    """
+    n = len(cat)
+
+    def _col(name, default=np.nan):
+        if name not in cat.colnames:
+            return np.full(n, default)
+        c = cat[name]
+        c = c.filled(default) if hasattr(c, 'filled') else c
+        return np.asarray(c, dtype=float)
+
+    qf = _col('qfit')
+    tier_qfit = np.isfinite(qf) & (qf <= qfit_max)
+
+    sk = _col('sky_clean', 0.0).astype(bool)
+    prom = _col('prominence')
+    with np.errstate(divide='ignore', invalid='ignore'):
+        snr = _col('flux') / _col('flux_err')
+    tier_sky = (sk & np.isfinite(prom) & (prom >= sky_clean_prom_min)
+                & np.isfinite(snr) & (snr >= sky_clean_snr_min))
+
+    tier_sat = _col('replaced_saturated', 0.0).astype(bool)
+
+    mask = tier_qfit | tier_sky | tier_sat
+    if drop_overshoot:
+        mask &= ~_col('model_overshoot', 0.0).astype(bool)
+    return mask

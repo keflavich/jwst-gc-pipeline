@@ -34,6 +34,11 @@ MANUAL_DEFAULTS = {
     'manual_ext_nmatch_confirm': 0,      # OFF; star-field-only tool
     'manual_ext_nmatch_confirm_qfit_max': 0.6,
     'manual_ext_nmatch_confirm_maxpos_mas': 0.0,
+    # -- sky-clean keep tier (per-source deep-where-no-emission vetting)
+    'manual_sky_clean_keep': True,
+    'manual_sky_clean_max_sky_snr': 2.0,
+    'manual_sky_clean_prom_min': 5.0,
+    'manual_sky_clean_snr_min': 3.0,
     # -- i2d residual-seed DAO shape cuts
     'manual_seed_round_max': 0.5,      # star fields: loosen to ~1.0
     'manual_seed_sharp_lo': 0.4,

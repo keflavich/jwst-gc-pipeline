@@ -399,6 +399,28 @@ The iteration tokens (`_m1.._m7`, `_dao_basic`) are disjoint from the legacy
 `iter2/iter3/iter4`, `_daoiterative` products, so the two paths coexist in one
 tree without collision.
 
+<<<<<<< HEAD
+## Flags (defaults)
+
+The `--manual-*` flag names are retained for back-compatibility; the path they
+control is the default.
+
+| flag | default | meaning |
+|------|---------|---------|
+| `--manual-iterations` | on | use this pipeline (default) |
+| `--legacy-iterations` | — | opt out, use the legacy `IterativePSFPhotometry` cutout path |
+| `--manual-overshoot-ratio` | 1.2 | model-peak / local-data-peak flag threshold |
+| `--manual-overshoot-action` | refit | `flag` \| `drop` \| `refit` (forced photometry at seed) |
+| `--manual-iter2-local-snr` | 3.0 | local-S/N cut for residual-seeded passes |
+| `--manual-ext-qfit-max` | 0.2 | extended-emission vetting: keep if qfit ≤ this |
+| `--manual-ext-peak-over-bkg` | 20 | …or peak surface brightness > this × local bkg |
+| `--manual-ext-local-snr-min` | 5.0 | …and local S/N ≥ this; also the i2d-detection S/N cut |
+| `--manual-no-sky-clean-keep` | (tier on) | disable the sky-clean keep tier: on emission-free sky (deep-i2d local floor ≈ dark-sky ref) keep on prominence ≥ `--manual-sky-clean-prom-min` (5) + S/N ≥ `--manual-sky-clean-snr-min` (3), qfit ignored; inert where emission is measured |
+| `--manual-group-min-sep-fwhm` | 2.0 | grouping radius in FWHM (use ~3.0 for blends) |
+| `--group` / `--max-group-size` | off / — | enable joint fitting; cap group size |
+
+=======
+>>>>>>> main
 ## Known limitations
 
 - The monolith runs as a single long in-process job; for large runs use the

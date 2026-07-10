@@ -3774,6 +3774,33 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     type='float', default=MANUAL_DEFAULTS['manual_ext_nmatch_confirm_qfit_max'],
                     help="qfit ceiling for the multi-frame confirmation keep "
                          "(default 0.6).")
+    parser.add_option("--manual-no-sky-clean-keep", dest="manual_sky_clean_keep",
+                    action='store_false',
+                    default=MANUAL_DEFAULTS['manual_sky_clean_keep'],
+                    help="Disable the SKY-CLEAN vetting keep tier.  By default "
+                         "(enabled), a source whose deep-i2d local emission floor "
+                         "(robust 25th-pct annulus) is consistent with the field's "
+                         "dark-sky reference is kept on prominence + S/N alone, "
+                         "IGNORING qfit: where there is no emission, a high-qfit "
+                         "source is a blend-degraded real star, not an emission "
+                         "knot (Brick F182M clump: recovers 7/15 real stars the "
+                         "qfit gate deleted).  Inert wherever the local floor is "
+                         "elevated (real nebulosity), so emission regions are "
+                         "unchanged.  Satstar-proximity and overshoot guards "
+                         "still apply.")
+    parser.add_option("--manual-sky-clean-max-sky-snr",
+                    dest="manual_sky_clean_max_sky_snr",
+                    type='float', default=MANUAL_DEFAULTS['manual_sky_clean_max_sky_snr'],
+                    help="Sky-clean tier: local emission floor must be <= this many "
+                         "dark-sky sigmas above the dark-sky reference (default 2).")
+    parser.add_option("--manual-sky-clean-prom-min",
+                    dest="manual_sky_clean_prom_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_sky_clean_prom_min'],
+                    help="Sky-clean tier: minimum deep-i2d prominence (default 5).")
+    parser.add_option("--manual-sky-clean-snr-min",
+                    dest="manual_sky_clean_snr_min",
+                    type='float', default=MANUAL_DEFAULTS['manual_sky_clean_snr_min'],
+                    help="Sky-clean tier: minimum fit S/N (default 3).")
     parser.add_option("--manual-seed-round-max", dest="manual_seed_round_max",
                     type='float', default=MANUAL_DEFAULTS['manual_seed_round_max'],
                     help="DAOStarFinder roundness bound for the i2d-augmented "
