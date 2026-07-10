@@ -664,12 +664,34 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
         return data, np.zeros(shp, dtype=bool), np.zeros(shp, dtype=bool), np.nan
     sat_buf = binary_dilation(sat, iterations=int(sat_dilate)) if sat_dilate else sat
     g0_finite = np.isfinite(group0)
-    ceiling = (g0_sat_frac * np.nanpercentile(group0[g0_finite], 99.9)
-               if g0_finite.any() else np.inf)
-    g0_clean = g0_finite & (group0 < ceiling)
+    # group-0 SATURATION CEILING: percentile-of-the-whole-frame breaks on a
+    # mostly-dark frame (brick F182M: global p99.9 = 2.6k while the true
+    # first-read pile-up plateau sits at ~48k -> everything bright was called
+    # "deep core").  The pile-up plateau IS visible at the DQ-SATURATED
+    # pixels whose group-0 went to the rail, so estimate the ceiling there;
+    # fall back to the global percentile when no positive saturated pixels
+    # exist.  Some products also ZERO group-0 at flagged pixels (ramp
+    # ZEROFRAME ext) -- a non-positive group-0 is INVALID, never "clean".
+    _g0sat = group0[sat & g0_finite & (group0 > 0)] if sat.any() else np.array([])
+    if _g0sat.size >= 10:
+        ceiling = g0_sat_frac * np.nanpercentile(_g0sat, 99.0)
+    elif g0_finite.any():
+        ceiling = g0_sat_frac * np.nanpercentile(group0[g0_finite], 99.9)
+    else:
+        ceiling = np.inf
+    g0_clean = g0_finite & (group0 > 0) & (group0 < ceiling)
     if R is None or not np.isfinite(R):
-        good = (~sat) & np.isfinite(data) & g0_finite & (group0 > R_g0_min) & (data > 0)
-        R = float(np.nanmedian(data[good] / group0[good])) if int(good.sum()) >= 20 else np.nan
+        # R drifts ~25% between faint and bright pixels (residual
+        # nonlinearity/IPC); the rim pixels being recovered are BRIGHT, so
+        # calibrate R in the bright regime: prefer the brightest decade with
+        # enough pixels.
+        good0 = (~sat) & np.isfinite(data) & g0_finite & (data > 0)
+        R = np.nan
+        for _thr in (10.0 * R_g0_min, 4.0 * R_g0_min, R_g0_min):
+            good = good0 & (group0 > _thr) & (group0 < ceiling)
+            if int(good.sum()) >= 50:
+                R = float(np.nanmedian(data[good] / group0[good]))
+                break
     recovered = np.array(data, dtype=float, copy=True)
     rim_mask = np.zeros(shp, dtype=bool)
     if np.isfinite(R):
@@ -1449,7 +1471,7 @@ def flattop_satstar_model(model_image, data_bg_sub, plateau_frac=0.15,
     return np.maximum(out, 0)
 
 
-def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_prominence_robust=False, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, deblend_daophot_xy=None, deblend_confirm_xy=None, sat_data_floor=None, satstar_severity_floor=None, phantom_flux_floor=0.0, phantom_ssr_max=50.0, phantom_ratio_max=50.0):
+def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_prominence_robust=False, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, zeroframe_deblend=False, deblend_daophot_xy=None, deblend_confirm_xy=None, sat_data_floor=None, satstar_severity_floor=None, phantom_flux_floor=0.0, phantom_ssr_max=50.0, phantom_ratio_max=50.0):
     # ``flux_drops``: optional list of SkyCoord.  An out-of-field (forced) source
     # whose seed sky position matches a drop within ~1.0" is SKIPPED entirely
     # (not fit, not contributed): cross-frame reconciliation found no trustworthy
@@ -1637,7 +1659,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # satstar_deblend.build_deblended_source_records.  When ``zeroframe is None``
     # this block is skipped and the behaviour is identical to before (one seed per
     # component at its refined centroid).
-    if zeroframe is not None:
+    if zeroframe is not None and zeroframe_deblend:
         from .satstar_deblend import build_deblended_source_records
         _inst_repl = 'MIRI' if header['INSTRUME'].lower() == 'miri' else 'NIRCam'
         _, _fwhm_pix_db = get_fwhm(header, instrument_replacement=_inst_repl)
@@ -1787,6 +1809,33 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
 
     nsource = len(source_records)
 
+    # ZEROFRAME-ANCHORED FIT DATA (2026-07-10): when the ramp first read is
+    # available, replace the clipped/NaN/charge-inflated DQ-SATURATED rim with
+    # its group-0 truth (R * group0, self-calibrated per frame -- see
+    # zeroframe_recover_saturated) BEFORE fitting.  For marginally saturated
+    # stars (SW mag ~12-15.5) group-0 is unsaturated across most of the core,
+    # so the amplitude is anchored by real profile pixels instead of a
+    # wing-only extrapolation -- the wing extrapolation left those stars
+    # 0.5-3.6 mag too faint (or, unreplaced, kept clipped daophot fluxes),
+    # producing the unphysical red jog / gap / split clouds at the CMD
+    # saturation boundary.  Only the group-0-SATURATED deep core stays
+    # unmeasurable: ``zf_deep_core`` replaces the full any-group blob in the
+    # fit mask below.  No zeroframe (or no usable R) -> zf_deep_core = None,
+    # behaviour unchanged.
+    zf_deep_core = None
+    if zeroframe is not None:
+        _dqarr_zf = (fitsdata['DQ'].data
+                     if 'DQ' in [h.name for h in fitsdata] else None)
+        _rec, _rim, _deep, _R = zeroframe_recover_saturated(
+            data, _dqarr_zf, zeroframe)
+        if np.isfinite(_R) and _rim.any():
+            print(f"satstar ZEROFRAME fit-anchor: recovered {int(_rim.sum())} "
+                  f"rim/core pixels from group-0 (R={_R:.4g}); "
+                  f"{int(_deep.sum())} deep-core pixels remain masked",
+                  flush=True)
+            data = _rec
+            zf_deep_core = _deep
+
     # Working copy of the data that gets per-source PSF models subtracted
     # after each accepted fit, so subsequent fits see a cleaner field.
     # ``data`` itself is preserved for the final ``data - full_model_image``
@@ -1806,6 +1855,12 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # non-positive ERR (saturated / unrecoverable pixels) is set huge so those
     # pixels carry ~zero weight even if the mask were to miss them.
     err_working = np.array(fitsdata['ERR'].data, dtype=float)
+    # recovered rim pixels carry no valid ERR (NaN at SATURATED px in crf);
+    # assign the ~5% per-pixel scatter of the R calibration so the fit can
+    # inverse-variance weight them instead of dropping/inf-weighting.
+    if zf_deep_core is not None:
+        _rimfix = _rim & ~np.isfinite(err_working)
+        err_working[_rimfix] = np.abs(data[_rimfix]) * 0.05
     _bad_err = ~np.isfinite(err_working) | (err_working <= 0)
     err_working[_bad_err] = 1e10
 
@@ -2133,7 +2188,10 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # diffraction spike pattern (extending ~40" into the FOV) is actually
         # represented in the model.  Default 512-px grid (256 px radius) is
         # far too small for stars 200-600 px off-edge.
-        saturated_mask = saturated[y0:y1, x0:x1]
+        # with a zeroframe anchor the recovered rim holds real data -- only
+        # the group-0-saturated deep core is unmeasurable and masked.
+        _sat_for_mask = zf_deep_core if zf_deep_core is not None else saturated
+        saturated_mask = _sat_for_mask[y0:y1, x0:x1]
         # Only dilate the CURRENT source's saturated component.  Other
         # saturated stars in the same cutout were fit earlier (sorted by
         # sat_area desc) and their PSF models were subtracted from
@@ -3776,24 +3834,26 @@ def _find_zeroframe_for(filename):
     if rf is not None:
         with fits.open(rf) as rh:
             names = [e.name for e in rh]
-            if 'ZEROFRAME' in names:
-                zf = np.asarray(rh['ZEROFRAME'].data[0], dtype=float)
-                print(f"satstar deblend: loaded ZEROFRAME from {rf}", flush=True)
-                return zf
-            # Fallback: Detector1 did not save a ZEROFRAME extension (cloudc
-            # 2526 ramps have none).  The ramp SCI cube's FIRST READ (first
-            # integration, first group) is the least-saturated frame -- the
-            # same first-read the ZEROFRAME captures -- so use it as a pseudo-
-            # zeroframe.  Validated on cloudc F770W: 9/10 blob-embedded
-            # saturated stars are distinct + unsaturated in the first read.
+            # PREFER the ramp SCI cube's FIRST READ (first integration, first
+            # group): it is superbias/refpix/linearity-corrected by Detector1
+            # (measured cal/group0 scatter 2.7-4.9% in the bright regime) and,
+            # unlike the ZEROFRAME extension, is NOT zeroed at flagged pixels
+            # (brick F182M ramps: ZEROFRAME ext reads 0 at every DQ-SATURATED
+            # pixel -> R*0 'recoveries').  Validated on cloudc F770W: 9/10
+            # blob-embedded saturated stars are distinct + unsaturated in the
+            # first read.
             if 'SCI' in names:
                 _sci = rh['SCI'].data
                 if _sci is not None and getattr(_sci, 'ndim', 0) == 4:
                     zf = np.asarray(_sci[0, 0], dtype=float)
-                    print(f"satstar deblend: no ZEROFRAME ext in {rf}; using "
-                          f"ramp first read SCI[0,0] as pseudo-zeroframe",
-                          flush=True)
+                    print(f"satstar zeroframe: using ramp first read SCI[0,0] "
+                          f"from {rf}", flush=True)
                     return zf
+            if 'ZEROFRAME' in names:
+                zf = np.asarray(rh['ZEROFRAME'].data[0], dtype=float)
+                print(f"satstar zeroframe: loaded ZEROFRAME ext from {rf} "
+                      f"(no 4-D SCI cube)", flush=True)
+                return zf
     print(f"satstar deblend: no _ramp.fits ZEROFRAME found for "
           f"{os.path.basename(filename)} (deblend disabled for this frame)", flush=True)
     return None
@@ -3840,13 +3900,19 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
         # detector edges) and contaminates the merged image.  relax=True keeps
         # the SIP coefficients verbatim.
         header.update(wcs.WCS(fh['SCI'].header, relax=True).to_header(relax=True))
-    # Opt-in ZEROFRAME deblend of merged saturated cores (crowded GC fields).
-    # Auto-load the matching _ramp.fits ZEROFRAME unless the caller already passed
-    # one explicitly.  Off by default -> behaviour unchanged.
-    if deblend_with_zeroframe and kwargs.get('zeroframe') is None:
+    # ZEROFRAME auto-discovery.  Two independent consumers:
+    #  * FIT ANCHORING (default ON; env SATSTAR_ZEROFRAME_FIT=0 disables):
+    #    recovered group-0 rim pixels anchor the satstar amplitude, fixing the
+    #    0.5-3.6 mag wing-extrapolation deficit for marginally saturated stars
+    #    (the CMD saturation-boundary jog/gap).
+    #  * DEBLEND seeding (opt-in via deblend_with_zeroframe, experimental).
+    _zf_fit_on = os.environ.get('SATSTAR_ZEROFRAME_FIT', '1') not in ('0', 'false', 'False')
+    if kwargs.get('zeroframe') is None and (_zf_fit_on or deblend_with_zeroframe):
         zf = _find_zeroframe_for(filename)
         if zf is not None:
             kwargs['zeroframe'] = zf
+    if deblend_with_zeroframe:
+        kwargs['zeroframe_deblend'] = True
     print("Running get_saturated_stars", flush=True)
     satstar_table = get_saturated_stars(fh, **kwargs)
     if satstar_table is not None:

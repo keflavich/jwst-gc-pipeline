@@ -1903,6 +1903,23 @@ def load_satstar_catalog(filtername, target='brick',
 _SATSTAR_DEDUP_ALG = 'fp3'
 
 
+# Wide second-chance radius for matching a fitted satstar to its daophot row
+# in replace_saturated (mutual-nearest only; see the second-pass block there).
+# Satstar positions scatter ~0.08-0.15" from the true position, so the tight
+# per-filter radii miss most pairings.  Env SATSTAR_REPLACE_RADIUS_ARCSEC
+# overrides; set 0 to disable the second pass.
+def _satstar_replace_radius():
+    _env = os.environ.get('SATSTAR_REPLACE_RADIUS_ARCSEC')
+    try:
+        val = float(_env) if _env is not None else 0.3
+    except ValueError:
+        val = 0.3
+    return (val * u.arcsec) if val > 0 else None
+
+
+SATSTAR_REPLACE_RADIUS = _satstar_replace_radius()
+
+
 def _satstar_dedup_radius():
     """Consolidation dedup radius for per-frame satstar fits.  Default 0.15";
     override with env SATSTAR_DEDUP_ARCSEC.  A saturated star's per-frame fit
@@ -2282,6 +2299,41 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
     if len(valid_cat_inds) > 0 and len(satstar_cat) > 0:
         idx_cat_sub, idx_sat, sep, _ = satstar_coords.search_around_sky(cat_coords[catfinite], radius)
         idx_cat = valid_cat_inds[idx_cat_sub]
+
+        # SECOND-CHANCE MUTUAL-NEAREST MATCH (2026-07-10): saturated-star fit
+        # positions scatter ~0.08" (p90 0.155") from the star's catalog
+        # position, so the tight per-filter radius above (0.05" SW) MISSED the
+        # daophot row for most real satstars: the row kept its CLIPPED daophot
+        # flux (0.5-3.6 mag too faint -- the unphysical red jog / gap /
+        # distinct clouds at the CMD saturation boundary; Brick F182M: 120
+        # bright rows, 62% with their correct satstar fit 0.05-0.15" away)
+        # while the correct satstar row was appended as a near-duplicate.
+        # Satstars unmatched at the tight radius get one more chance at
+        # SATSTAR_REPLACE_RADIUS, but only as a MUTUAL nearest-neighbour pair
+        # (each is the other's closest) -- crowding-safe where the plain
+        # radius bump would mis-pair neighbours.  The faint-replacement guard
+        # below still vetoes any pairing whose satstar flux is below the
+        # daophot flux (a clipped row is always fainter than its satstar fit).
+        _wide = SATSTAR_REPLACE_RADIUS
+        _unmatched_sat = np.setdiff1d(np.arange(len(satstar_cat)), idx_sat)
+        if _wide is not None and len(_unmatched_sat) and len(valid_cat_inds):
+            _catc = cat_coords[catfinite]
+            _i_c, _d_c, _ = satstar_coords[_unmatched_sat].match_to_catalog_sky(_catc)
+            _i_s, _d_s, _ = _catc.match_to_catalog_sky(satstar_coords)
+            _newc, _news = [], []
+            _already = set(idx_cat.tolist())
+            for k, si in enumerate(_unmatched_sat):
+                ci = int(_i_c[k])
+                mutual = (int(_i_s[ci]) == si) and (_d_c[k] < _wide)
+                if mutual and valid_cat_inds[ci] not in _already:
+                    _newc.append(valid_cat_inds[ci])
+                    _news.append(si)
+            if _newc:
+                print(f"replace_saturated: mutual-nearest second pass matched "
+                      f"{len(_newc)} satstar(s) at {radius} < sep < {_wide} "
+                      f"(clipped-daophot rows recovered)", flush=True)
+                idx_cat = np.concatenate([idx_cat, np.array(_newc, dtype=int)])
+                idx_sat = np.concatenate([idx_sat, np.array(_news, dtype=int)])
     else:
         idx_cat = np.array([], dtype=int)
         idx_sat = np.array([], dtype=int)
