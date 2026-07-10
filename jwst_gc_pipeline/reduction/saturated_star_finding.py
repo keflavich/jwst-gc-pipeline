@@ -2804,6 +2804,48 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                     and not (0 < float(result['qfit'][0]) < 1e3)):
                 result['qfit'][0] = 1.0
 
+        # NIRCAM extended-emission RECOVERED-CORE flux cap (user 2026-07-10).  A
+        # DQ-SATURATED core that is actually frame0-RECOVERED (finite data, NOT
+        # truly-lost / DO_NOT_USE) is NOT clipped, so its data IS the true surface
+        # brightness -- a point-source model must not exceed it.  An extended blob
+        # (or a mildly-saturated real star) seeded as a satstar extrapolates a huge
+        # flux from its broad wings with the core masked from the fit (W51 darkfil:
+        # model peak 20351 vs recovered data 4441 = 4.8x) -> over-subtraction
+        # crater.  Cap the model peak to the recovered-core data (leaves a small
+        # POSITIVE residual).  No fake/real discrimination is needed: on a recovered
+        # core the data is the truth for BOTH a fake blob and a real faint star
+        # (investigation found NO clean discriminator -- a real eye-star was also
+        # recovered with model/data 6x).  CRUCIAL gate: only when the core is
+        # MOSTLY recovered (truly-lost fraction < _max_lost); a real DEEPLY-
+        # saturated star has a clipped (truly-lost) core whose recovered ring sits
+        # far below its true peak, so capping to it would grossly UNDER-subtract --
+        # those are left uncapped to reconstruct normally.  Gated for ext-NIRCam
+        # (NIRCAM_SATSTAR_RECOVERED_CAP); off elsewhere -> byte-identical.
+        if (not _is_miri and int(os.environ.get('NIRCAM_SATSTAR_RECOVERED_CAP', 0))
+                and len(result) and np.isfinite(float(result['flux_fit'][0]))):
+            _unrec_cut = _unrecoverable[y0:y1, x0:x1]
+            _nsat = int(satmask_combined.sum())
+            _lostf = (int((satmask_combined & _unrec_cut).sum()) / _nsat
+                      if _nsat else 1.0)
+            _max_lost = float(os.environ.get('NIRCAM_SATSTAR_RECOVERED_MAXLOST', 0.2))
+            _rec_core = (satmask_combined & (~_unrec_cut)
+                         & np.isfinite(cutout) & (cutout > 0))
+            if _lostf < _max_lost and int(_rec_core.sum()) >= 3:
+                _xf2 = float(result['x_fit'][0]); _yf2 = float(result['y_fit'][0])
+                _yy2, _xx2 = np.mgrid[0:cutout.shape[0], 0:cutout.shape[1]]
+                _psf2 = np.clip(_infov_psf(_xx2 - _xf2, _yy2 - _yf2), 0, None)
+                _ppk = float(np.nanmax(_psf2)) if np.isfinite(_psf2).any() else np.nan
+                if np.isfinite(_ppk) and _ppk > 0:
+                    _drec = float(np.nanmax(cutout[_rec_core]))
+                    _cap = _drec / _ppk
+                    _fc = float(result['flux_fit'][0])
+                    if np.isfinite(_fc) and _fc > _cap:
+                        result['flux_fit'][0] = _cap
+                        print(f"  [nircam recovered-core cap] flux {_fc:.2e} -> "
+                              f"{_cap:.2e} (model peak {_fc*_ppk:.0f} -> {_drec:.0f} "
+                              f"vs recovered core {_drec:.0f}; lost {_lostf*100:.0f}%, "
+                              f"{int(_rec_core.sum())} rec px)", flush=True)
+
         # FORCED-SOURCE COADD-CORE CAP (2026-06-19).  The forced / outside-FOV
         # LSQ (and the cross-frame reconcile that OVERRIDES the discordant frames
         # to the "reference" flux) is amplitude-UNCONSTRAINED when only a faint
