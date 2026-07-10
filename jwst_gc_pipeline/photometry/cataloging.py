@@ -775,6 +775,10 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                               nmatch_confirm_qfit_max=0.6,
                               nmatch_confirm_maxpos_mas=0.0,
                               ext_prom_min=0.0,
+                              sky_clean_keep=True,
+                              sky_clean_max_sky_snr=2.0,
+                              sky_clean_prom_min=5.0,
+                              sky_clean_snr_min=3.0,
                               drop_overshoot=True, struct_x=0.0, struct_y=0.0,
                               label=''):
     """First-pass star-vs-extended-emission vetting of a MERGED catalog.
@@ -785,6 +789,12 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         OR (peak_SB > peak_over_bkg * local_bkg)  # bright real star
     AND (local_snr >= local_snr_min where available)
     AND (not model_overshoot, if that column exists and drop_overshoot).
+
+    SKY-CLEAN keep tier (``sky_clean_keep``, NIRCam path): where the deep-i2d
+    LOCAL EMISSION at a source is consistent with the field's dark-sky floor,
+    a "star turned from extended emission" is physically impossible, so the
+    qfit gate (which conflates blend-degraded real stars with emission knots)
+    is replaced by prominence + S/N alone.  See the block comment below.
 
     ``peak_SB`` needs a pixel value: pass the merged data i2d image + its WCS to
     sample a 3x3-box max at each source; otherwise the peak-SB criterion is
@@ -840,6 +850,12 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     _recover_on = (_qrec > qfit_max) and (min_prominence <= 0)
     peaksb = np.full(n, np.nan, dtype=float)
     prominence = np.full(n, np.nan, dtype=float)
+    # robust LOCAL EMISSION floor: 25th percentile of the same 4-10px annulus.
+    # The low percentile resists stellar-wing / neighbour contamination (in a
+    # dense clump the annulus median is pulled up by PSF wings, but the darkest
+    # quartile still samples the true inter-star sky), so it measures the
+    # DIFFUSE emission level at the source, not the crowding.
+    ann_floor = np.full(n, np.nan, dtype=float)
     if data_i2d_image is not None and ww_i2d is not None and 'skycoord' in t.colnames:
         from astropy.coordinates import SkyCoord
         sc = t['skycoord']
@@ -868,6 +884,8 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                 core = np.nanmax(st[_cm])
                 ann = st[_am]
                 annf = ann[np.isfinite(ann)]
+                if annf.size >= 10:
+                    ann_floor[i] = np.percentile(annf, 25)
                 if annf.size >= 10 and np.isfinite(core):
                     if _prom_robust:
                         # neighbour-robust: 25th-pct emission FLOOR + lower-half
@@ -928,20 +946,24 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     # proximity backstop (a recovered source within guard arcsec of a catalog
     # saturated star is rejected).  Default (qfit_recover_max None/<=qfit_max)
     # is a NO-OP -> behaviour byte-identical to before.
+    # saturated-star proximity guard, shared by the RECOVER and SKY-CLEAN keep
+    # tiers (both admit qfit>qfit_max sources, so both must refuse candidates
+    # sitting in a satstar's wing/diffraction-spike zone).
+    near_satstar = np.zeros(n, dtype=bool)
+    if ((_recover_on or sky_clean_keep)
+            and 'is_saturated' in t.colnames and 'skycoord' in t.colnames):
+        _iss = t['is_saturated']
+        _iss = np.asarray(_iss.filled(False) if hasattr(_iss, 'filled') else _iss,
+                          dtype=bool)
+        if _iss.any():
+            from astropy.coordinates import SkyCoord
+            import astropy.units as _u
+            _sc = t['skycoord']
+            if not isinstance(_sc, SkyCoord):
+                _sc = SkyCoord(_sc)
+            _, _sep, _ = _sc.match_to_catalog_sky(_sc[_iss])
+            near_satstar = _sep < (float(recover_satstar_guard_arcsec) * _u.arcsec)
     if _recover_on:
-        near_satstar = np.zeros(n, dtype=bool)
-        if 'is_saturated' in t.colnames and 'skycoord' in t.colnames:
-            _iss = t['is_saturated']
-            _iss = np.asarray(_iss.filled(False) if hasattr(_iss, 'filled') else _iss,
-                              dtype=bool)
-            if _iss.any():
-                from astropy.coordinates import SkyCoord
-                import astropy.units as _u
-                _sc = t['skycoord']
-                if not isinstance(_sc, SkyCoord):
-                    _sc = SkyCoord(_sc)
-                _, _sep, _ = _sc.match_to_catalog_sky(_sc[_iss])
-                near_satstar = _sep < (float(recover_satstar_guard_arcsec) * _u.arcsec)
         # PROMINENCE gate is MANDATORY for recover: a recovered source MUST rise
         # above the local annulus (be a point source, not a bump on a continuous
         # emission ridge).  The threshold is a SLOPED line in (qfit, log10 prom):
@@ -1038,6 +1060,57 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
               f"qfit<={nmatch_confirm_qfit_max:g}"
               f"{(', posscatter<=%gmas' % nmatch_confirm_maxpos_mas) if nmatch_confirm_maxpos_mas > 0 else ''})",
               flush=True)
+
+    # SKY-CLEAN keep tier (user 2026-07-09, Brick F182M selected-stars test bed):
+    # the qfit gate exists to reject extended-emission knots masquerading as
+    # stars, but qfit is ALSO degraded by neighbour blending -- in the Brick's
+    # zero-background extinction-wall clump it deleted 7/15 detected real stars
+    # (qfit 0.36-1.09, S/N 3.6-9.3, prominence 16-48 on the deep i2d) where NO
+    # emission exists to be mistaken for a star.  The two cases are separable
+    # PER SOURCE by the measured local emission level: compare the robust
+    # annulus floor (25th pct, wing-resistant -- see ann_floor above) to the
+    # field's DARK-SKY reference (5th pct of the i2d, scatter from the darkest
+    # quartile; a LOW percentile so that on emission-dominated fields the
+    # reference is the darkest lanes, not the median emission).  Where the
+    # floor is consistent with dark sky (<= sky_clean_max_sky_snr sigma above
+    # it), "emission turned into a star" is physically impossible, so keep on
+    # prominence + S/N alone and ignore qfit: a >= sky_clean_prom_min rise
+    # over the annulus MAD on the DEEP coadd with a >= sky_clean_snr_min fit
+    # S/N is a real point source there.  Where the floor is elevated (real
+    # nebulosity), this tier is inert and the conservative gates above stand
+    # unchanged -- this is the per-source deep-vs-conservative switch that the
+    # whole-target _is_extended_emission flag cannot provide.  Satstar
+    # proximity is excluded (spike knots on dark sky are prominent + bad-qfit,
+    # exactly this tier's admit pattern).  The overshoot drop below still
+    # applies (inflated fits are never admitted).  MIRI (min_prominence>0)
+    # keeps its prominence-alone path.  Thresholds are FIRST-PASS (Brick
+    # clump) and CLI-tunable; disable with --manual-no-sky-clean-keep.
+    if (sky_clean_keep and min_prominence <= 0
+            and data_i2d_image is not None and np.any(np.isfinite(ann_floor))):
+        _fin = data_i2d_image[np.isfinite(data_i2d_image)]
+        if _fin.size > 4_000_000:
+            _fin = _fin[::_fin.size // 4_000_000]
+        _sky_ref = np.percentile(_fin, 5)
+        _dark = _fin[_fin <= np.percentile(_fin, 25)]
+        _sky_sig = 1.4826 * np.median(np.abs(_dark - np.median(_dark)))
+        if np.isfinite(_sky_sig) and _sky_sig > 0:
+            with np.errstate(invalid='ignore'):
+                _emiss_snr = (ann_floor - _sky_ref) / _sky_sig
+            sky_clean = np.isfinite(_emiss_snr) & (_emiss_snr <= sky_clean_max_sky_snr)
+            _sc_keep = (sky_clean
+                        & np.isfinite(prominence) & (prominence >= sky_clean_prom_min)
+                        & np.isfinite(snr) & (snr >= sky_clean_snr_min)
+                        & ~near_satstar)
+            t['local_emission_snr'] = _emiss_snr
+            t['sky_clean'] = sky_clean
+            _n_sc = int(np.sum(_sc_keep & ~keep))
+            keep = keep | _sc_keep
+            print(f"[{label}] sky-clean keep: +{_n_sc} on emission-free sky "
+                  f"(local floor <= {sky_clean_max_sky_snr:g} sky-sigma over "
+                  f"dark-sky ref {_sky_ref:.3g}+/-{_sky_sig:.3g}, prominence >= "
+                  f"{sky_clean_prom_min:g}, S/N >= {sky_clean_snr_min:g}, "
+                  f"qfit ignored; {int(sky_clean.sum())}/{n} sources on clean sky)",
+                  flush=True)
 
     # overshoot drop is shared by both instrument paths (was duplicated).
     if drop_overshoot and 'model_overshoot' in t.colnames:
@@ -3548,6 +3621,13 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         nmatch_confirm_qfit_max=float(mopt(opts_phase, 'manual_ext_nmatch_confirm_qfit_max')),
                         nmatch_confirm_maxpos_mas=float(mopt(opts_phase, 'manual_ext_nmatch_confirm_maxpos_mas')),
                         ext_prom_min=_ext_prom_min,
+                        sky_clean_keep=bool(mopt(opts_phase, 'manual_sky_clean_keep')),
+                        sky_clean_max_sky_snr=float(mopt(
+                            opts_phase, 'manual_sky_clean_max_sky_snr')),
+                        sky_clean_prom_min=float(mopt(
+                            opts_phase, 'manual_sky_clean_prom_min')),
+                        sky_clean_snr_min=float(mopt(
+                            opts_phase, 'manual_sky_clean_snr_min')),
                         struct_x=0.0, struct_y=0.0,  # prune at detection, not here
                         label=f'{phase}:{filt}')
                     vetted.write(vetted_path, overwrite=True)
