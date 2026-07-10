@@ -44,6 +44,8 @@ each module import once per session.
 | crowdsource_catalogs_long.py:`_output_suffix_tokens` | filename-suffix tokens (block B), field-order locked | `test_crowdsource_long_regressions.py::TestOutputSuffixTokens` |
 | crowdsource_catalogs_long.py:`_first_pass_daofinder` | iter1 DAO threshold = nsigma·min(median err, mad_std data) (block J else) | `…::TestFirstPassDaofinder` |
 | cataloging.py:`_filter_extended_emission` | SKY-CLEAN keep tier: on emission-free sky (local 25th-pct annulus floor ≈ dark-sky ref) keep on prominence+S/N, qfit ignored; inert on emission; satstar-proximity guard | `test_sky_clean_keep.py` |
+| cataloging.py:`_build_source_masked_bg` | bg must mask the UNION of vetted catalog + i2d detection seed (a vetted-dropped real star must not be absorbed into the bg) | `test_bg_masks_unmodeled_seed_star.py` |
+| cataloging.py:`_build_source_masked_bg` | end-to-end: transiently-dropped blended star survives 7 subtract-bg→re-detect iterations with seed masking (ngc6334 F405N loss cycle) | `test_iterative_bg_preserves_blended_star.py` |
 
 ## Deferred (need full PSFPhotometry/IterativePSFPhotometry integration fixtures)
 

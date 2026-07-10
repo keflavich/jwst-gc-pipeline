@@ -2720,6 +2720,21 @@ def _maybe_dedup_m8(m8_path, options, label='m8'):
         from jwst_gc_pipeline.photometry.dedup_catalog import dedup_merged_catalog
         dedup_merged_catalog(m8_path, out)
         print(f"manual [{label}]: m8 dedup -> {out}", flush=True)
+        # PROPOSAL-SCOPED COPY (brick only): the brick 'target' spans TWO proposals that
+        # share this generic filename -- jw01182 broadbands (field o004) and jw02221
+        # narrows (field o001) -- so their merges CLOBBER each other's m8/m8_dedup. Write
+        # an additive per-field copy so neither is lost. Primary output name is unchanged
+        # (readers unaffected); a combined all-band table is built by combine_brick_allband.py.
+        # Only brick collides (other targets have unique target dirs), so guard on it.
+        import shutil
+        _tgt = str(getattr(options, 'target', '') or '')
+        _fld = str(getattr(options, 'field', '') or '')
+        if _tgt == 'brick' and _fld:
+            for _src in (m8_path, out):
+                _scoped = _src.replace('.fits', f'_o{_fld}.fits')
+                if _scoped != _src:
+                    shutil.copy(_src, _scoped)
+            print(f"manual [{label}]: proposal-scoped copies -> *_o{_fld}.fits (anti-clobber)", flush=True)
         return out
     except Exception as _dex:
         print(f"manual [{label}]: m8 dedup FAILED ({m8_path}): {_dex}", flush=True)
