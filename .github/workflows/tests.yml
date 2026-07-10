@@ -15,8 +15,6 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0   # setuptools_scm needs history for the version
 
       - uses: actions/setup-python@v5
         with:
@@ -24,6 +22,10 @@ jobs:
           cache: pip
 
       - name: Install package + test deps
+        env:
+          # the repo tag style (v1.0-2026.06) is unparseable by setuptools_scm;
+          # CI does not need a real version
+          SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.dev0
         run: |
           python -m pip install --upgrade pip
           pip install -e .[test]
