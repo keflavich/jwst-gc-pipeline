@@ -1045,6 +1045,17 @@ def obs_token(proposal_id, field):
     """
     if str(proposal_id) == '2211' and field not in (None, ''):
         return f'_o{field}'
+    # ngc6334: TWO proposals (7213 + 6778) share the same target dir and share
+    # the filters F200W + F470N, cataloged with the SAME obs number (001) and the
+    # SAME (visit, vgroup, exp) tuples -- so the per-frame catalog-table name
+    # ``f200w_{module}_visit001_vgroup02101_exp00001_...`` is identical across the
+    # two proposals and the second run silently overwrites the first (= data loss:
+    # 6778 clobbered 7213's F200W/F470N catalogs, 2026-07-09).  These two proposal
+    # ids appear ONLY in ngc6334, so disambiguate by proposal id (no field/target
+    # threading needed).  Non-shared filters get the token too (harmless -- one
+    # proposal per filter -> nothing to collide with), keeping the scheme uniform.
+    if str(proposal_id) in ('7213', '6778'):
+        return f'_j{proposal_id}'
     return ''
 
 
