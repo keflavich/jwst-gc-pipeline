@@ -111,8 +111,15 @@ refnames = {'2221': 'F405ref',
             # share ONE frame and realign_to_catalog ~= 0.  See
             # ASTROMETRY_WCS_CORRECTION_FLOW.md.
             '1182': 'VIRAC2',
-            '3958': 'VVV',
-            '5365': 'VVV',
+            # sickle: GNS-anchored (nircam_bootstrapped_to_gns_refcat.fits), NOT
+            # VVV.  refnames gates VVV realignment (see ~line 1089) and names the
+            # offsets table; 'VVV' here wrongly triggered VVV realignment on a
+            # GNS-frame field.
+            '3958': 'GNS',
+            # sgrb2: re-anchored 2026-06-18 to Gaia DR3 + VIRAC2
+            # (gaia_virac2_refcat_epoch2024.68.fits).  Token left as 'VVV' after
+            # that switch, so VVV realignment kept firing on a VIRAC2-frame field.
+            '5365': 'VIRAC2',
             '6151': 'Gaia',  # w51: switched 2026-06-10 (was UKIDSS)
             '2092': 'VVV',
             '4147': 'VVV',

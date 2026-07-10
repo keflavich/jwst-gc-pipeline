@@ -5,9 +5,18 @@ Default behavior is configured for Sickle (target=sickle, proposal_id=3958, fiel
 but this script can be used for other targets/proposals/fields (e.g. brick-2221,
 brick-1182, sgrb2-5365) by changing CLI options.
 
-Outputs:
-- {basepath}/catalogs/pipeline_based_nircam-{filter}_reference_astrometric_catalog.ecsv
-- {basepath}/catalogs/pipeline_based_nircam-{filter}_reference_astrometric_catalog.fits
+Outputs (named by the bootstrap reference; see BOOTSTRAPPED_REFCAT_FILENAMES):
+- {basepath}/catalogs/nircam_bootstrapped_to_{vvv,gns}_refcat.ecsv
+- {basepath}/catalogs/nircam_bootstrapped_to_{vvv,gns}_refcat.fits
+
+NOTE: this script does NOT (any longer) emit
+pipeline_based_nircam-{filter}_reference_astrometric_catalog.{ecsv,fits}.  Older
+versions did, and PipelineMIRI's REFERENCE_ASTROMETRIC_CATALOG_CANDIDATES_BY_FIELD
+still lists those pipeline_based-* names as its first f210m/f182m candidate --
+which is why they exist under some trees (sickle f210m, brick f182m) but are
+absent under others (e.g. cloudc), where alignment then falls through to the next
+candidate.  Consumers of THIS script must expect the nircam_bootstrapped_to_*
+names above.
 """
 
 from __future__ import annotations

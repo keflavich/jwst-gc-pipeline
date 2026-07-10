@@ -116,10 +116,15 @@ REFERENCE_ASTROMETRIC_CATALOG_CANDIDATES_BY_FIELD = {
         ),
     },
     # 2526 obs 021 == the "G0" CMZ cloud-c filament F770W pointing; routed into
-    # the cloudc/ tree, so use cloudc's NIRCam f182m absolute refcat (twomass
-    # last resort -- sparse in the crowded GC).
+    # the cloudc/ tree.  cloudc/catalogs has NO pipeline_based_nircam-f182m
+    # refcat (unlike sickle/brick), so that first candidate silently fell through
+    # to sparse twomass.  cloudc's NIRCam absolute frame is the Gaia DR3 + VIRAC2
+    # seed (gaia_virac2_refcat_epoch2023.30.fits, the same frame cloudc NIRCam
+    # 2221/002 aligns to); use it first, keeping the pipeline_based-* name (in
+    # case it is ever built) and twomass as fallbacks.
     '2526': {
         '021': (
+            'catalogs/gaia_virac2_refcat_epoch2023.30.fits',
             'catalogs/pipeline_based_nircam-f182m_reference_astrometric_catalog.fits',
             'catalogs/twomass.fits',
         ),
