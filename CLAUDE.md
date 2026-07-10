@@ -40,12 +40,31 @@ Import `measure_offset` instead.
 
 ### A bulk offset ≈ 0 does NOT mean "clean"
 
-A field-average / whole-mosaic offset can read ~0 while HALF the mosaic is untied
-(brick-1182: visit-001 exposures tile the top half with a non-rigid/broken WCS;
-bulk peak washed it out). **Always map the offset PER TILE** and report per-tile
-peak-contrast (peak/median): contrast ≳5 = real tie, ~1 = broken.
-`measure_offset(..., per_tile=True)` and `scripts/release/registration_failsafes.py`
-do this. A single global number is never sufficient sign-off.
+A field-average / whole-mosaic offset can read ~0 while HALF the mosaic is offset
+(brick-1182: visit-001 exposures tile the top half, shifted ~20" from visit-002;
+bulk peak washed it out). **Always map the offset PER TILE** (`measure_offset_grid`,
+`registration_failsafes.py`) and report per-tile peak-contrast: ≳5 = real tie, ~1 =
+broken. A single global number is never sufficient sign-off.
+
+### A LOW contrast can mean "offset ≫ window", NOT "no tie"
+
+A large rigid offset has ZERO true pairs inside a narrow search window, so the peak
+is noise (low contrast, and different against a dense vs sparse reference). That is
+exactly how brick-1182 v001's ~20" offset first read as ~2"/incoherent. So:
+- `measure_offset` now **sweeps the window** (3→10→30→60") by default and takes the
+  highest-contrast peak — do not disable `sweep`. A returned `swept=True` /
+  `window_arcsec ≫` your expected offset means the frame is grossly shifted.
+- On a weak tie, cross-check TWO references (`agree_across_references`, VIRAC vs
+  Gaia-only): a real tie agrees; a spurious peak moves.
+
+### Correcting an already-aligned frame after the offsets table changes
+
+`fix_alignment` skips a frame that already has a `RAOFFSET` header (idempotent). If
+you CORRECT the offsets table, the stale frame is silently kept (this is how v001
+stayed ~20" off). The disagreement guard warns when a frame's baked `RAOFFSET`
+differs from the current table value; set `FORCE_REALIGN_ON_DISAGREE=1` to hard-stop.
+The fix is to REGENERATE the working copy from `_cal` (destreak overwrite → RAOFFSET
+resets → current table applied), never to re-apply on top of the stale shift.
 
 ### Reading list before any astrometry change
 - `jwst_gc_pipeline/reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md` — the full flow,
