@@ -12,6 +12,7 @@ import regions
 import numpy as np
 from pathlib import Path
 from functools import cache
+from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
 from astropy.convolution import convolve, convolve_fft, Gaussian2DKernel, interpolate_replace_nans
 from astropy.table import Table, vstack
 from astropy.coordinates import SkyCoord
@@ -2660,6 +2661,25 @@ def _reduction_mosaic_output_wcs(pipeline_dir, proposal_id, field, inst_token,
     return out
 
 
+def _i2d_grid_output_wcs(i2d_path, out_asdf):
+    """Write the GWCS of an existing i2d datamodel to ``out_asdf`` (for
+    ResampleStep ``output_wcs``), or return None if the i2d is missing.
+
+    Used to land the mergedcat RESIDUAL and MODEL mosaics on the EXACT grid of
+    the ``_data_i2d`` so data / residual / model are pixel-aligned (CARTA blink).
+    Previously each mosaic cropped to its OWN finite-data bbox, so the sparse
+    MODEL (stars only, zero background) came out on a smaller grid than the
+    full-frame residual/data (task: sgrb2 F2550W model 1104x1558 vs data/resid
+    1163x1740).
+    """
+    if not (i2d_path and os.path.exists(i2d_path)):
+        return None
+    import asdf as _asdf
+    with ImageModel(i2d_path) as _m:
+        _asdf.AsdfFile({'wcs': _m.meta.wcs}).write_to(out_asdf)
+    return out_asdf
+
+
 def _resample_to_i2d(files, pipeline_dir, product_name, crop_to_data=True,
                      output_wcs=None):
     """Resample an explicit list of per-frame datamodels into one i2d mosaic.
@@ -2874,21 +2894,32 @@ def _resolve_render_psf_shape(fwhm_pix, grid, default=(21, 21)):
     return (int(n), int(n))
 
 
-def _cap_render_to_pedestal(model, base, bgbox):
-    """Cap a rendered satstar model to the ABOVE-PEDESTAL data.
+def _cap_render_to_pedestal(model, base, bgbox, core_mask=None):
+    """Flat-top a rendered bright-star model against the ABOVE-PEDESTAL data.
 
-    An uncovered saturated star re-rendered at its merged (saturation-clipped)
-    flux as a peaked point source over-predicts the star in the frames where it
-    is UNsaturated, and the excess gouges the (large MIRI thermal) background
-    pedestal into a negative hole (cloudc F2550W bright star A: model 2879 vs
-    data-bg 2185 -> residual -711 below the ~1000 pedestal).  Capping the model
-    to ``clip(base - bg_coarse, 0)`` makes the core model = data-bg -> residual
-    = bg (flat, no hole) while leaving the fainter wings (model < data-bg)
-    subtracted.  ``bg_coarse`` is a coarse (bgbox) median filter of ``base``;
-    NaN pixels in ``base`` are filled with its global median for the filter and
-    left uncapped in the result.
+    Two failure modes of rendering a very bright star as a peaked point source on
+    the large MIRI thermal-background pedestal:
 
-    Returns the capped model (same shape).
+      * OVER-prediction (uncovered saturated star re-rendered at its merged,
+        saturation-clipped flux): model > data -> gouges a negative hole below the
+        pedestal (cloudc F2550W A: model 2879 vs data-bg 2185 -> resid -711).
+      * UNDER-prediction of the broad near-saturation CORE (very bright but
+        un-saturated star, e.g. cloudc F2550W B): the peaked STPSF matches the
+        peak but under-predicts the r3-9 shoulder -> a +110 under-sub ring.
+
+    Both are cured by the DATA over the star's core:
+      * ``cap = clip(base - bg_coarse, 0)`` (above-pedestal signal) is the ceiling
+        everywhere (``min(model, cap)``) -> a model can never over-subtract into
+        the pedestal (fixes over-prediction, incl. the wings).
+      * inside ``core_mask`` (the star's core+shoulder footprint) the model is set
+        EXACTLY to ``cap`` -> residual = bg there, filling an under-predicted
+        shoulder as well (fixes under-prediction).
+
+    ``bg_coarse`` is a coarse (bgbox) median filter of ``base``; NaN pixels in
+    ``base`` are filled with its global median for the filter and left untouched
+    in the result.  With ``core_mask=None`` only the cap (over-sub guard) applies.
+
+    Returns the flat-topped model (same shape).
     """
     from scipy.ndimage import median_filter as _medfilt
     base = np.asarray(base, dtype=float)
@@ -2896,7 +2927,11 @@ def _cap_render_to_pedestal(model, base, bgbox):
     fill = float(np.nanmedian(base[finite])) if finite.any() else 0.0
     bg_coarse = _medfilt(np.where(finite, base, fill), size=int(bgbox))
     cap = np.clip(base - bg_coarse, 0, None)          # above-pedestal signal
-    return np.where(np.isfinite(cap), np.minimum(model, cap), model)
+    out = np.where(np.isfinite(cap), np.minimum(model, cap), model)
+    if core_mask is not None:
+        cm = np.asarray(core_mask, dtype=bool) & np.isfinite(cap)
+        out = np.where(cm, cap, out)                  # fill core to data (flat-top)
+    return out
 
 
 def _render_model_from_table(table, psf_model, shape, psf_shape):
@@ -3129,9 +3164,34 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
             keep = (np.isfinite(xx) & np.isfinite(yy) & np.isfinite(mflux)
                     & (xx > -half_w) & (xx < nx + half_w)
                     & (yy > -half_h) & (yy < ny + half_h))
-            rx = list(np.asarray(xx)[keep])
-            ry = list(np.asarray(yy)[keep])
-            rf = list(np.asarray(mflux)[keep])
+            kx = np.asarray(xx)[keep]
+            ky = np.asarray(yy)[keep]
+            kf = np.asarray(mflux)[keep]
+            # BRIGHT / faint split (MIRI, gated by MERGE_SATSTAR_RENDER_CAP).  A very
+            # bright star's broad near-saturation core is mis-fit by the peaked
+            # STPSF -- over-predicted (a pedestal-gouging hole) or under-predicted
+            # (a +110 shoulder ring at r3-9; cloudc F2550W B).  Flat-top these
+            # against the data (below).  A star is "bright" when its rendered PEAK
+            # (flux * unit-PSF peak) exceeds MERGE_BRIGHT_FLATTOP_MULT (default 1.0)
+            # x the local background pedestal -- self-calibrating across filters.
+            _do_bright = (_instrument_from_filter(filtername) == 'MIRI'
+                          and int(os.environ.get('MERGE_SATSTAR_RENDER_CAP', 0)))
+            bright_nonsat = np.zeros(len(kf), dtype=bool)
+            if _do_bright and len(kf):
+                _unit = _render_model_from_table(
+                    Table({'x_fit': [nx / 2.0], 'y_fit': [ny / 2.0],
+                           'flux_fit': [1.0]}), rg, base.shape, psf_shape)
+                _pk = float(np.nanmax(_unit)) if np.isfinite(_unit).any() else 0.0
+                _ped = (float(np.nanmedian(base[np.isfinite(base)]))
+                        if np.isfinite(base).any() else 0.0)
+                _bmult = float(os.environ.get('MERGE_BRIGHT_FLATTOP_MULT', 1.0))
+                if _pk > 0 and _ped > 0:
+                    bright_nonsat = (kf * _pk) > (_bmult * _ped)
+            faint = ~bright_nonsat
+            rx = list(kx[faint]); ry = list(ky[faint]); rf = list(kf[faint])
+            # bright non-saturated rows -> flat-topped with the saturated group
+            bx = list(kx[bright_nonsat]); by = list(ky[bright_nonsat])
+            bf = list(kf[bright_nonsat])
             # Saturated stars: render only the ones THIS frame's satstar model does
             # NOT cover (else they linger in the residual -- see split above).  A
             # star is "covered" when the per-frame satstar model has a real peak at
@@ -3170,26 +3230,36 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                          'y_fit': np.asarray(ry, dtype=float),
                          'flux_fit': np.asarray(rf, dtype=float)})
             mc_model = _render_model_from_table(tbl, rg, base.shape, psf_shape)
-            # Uncovered saturated stars: render separately and CAP to the above-
-            # pedestal data so a peaked/over-flux model cannot gouge the (large
-            # MIRI thermal) background pedestal.  In the star CORE the cap makes
-            # model = data-bg -> residual = bg (flat, no hole); in the wings the
-            # model is < data-bg and is kept (the star wing is still subtracted).
-            # MIRI-only; env-gated MERGE_SATSTAR_RENDER_CAP (default off).
-            if (srx and _instrument_from_filter(filtername) == 'MIRI'
-                    and int(os.environ.get('MERGE_SATSTAR_RENDER_CAP', 0))):
-                stbl = Table({'x_fit': np.asarray(srx, dtype=float),
-                              'y_fit': np.asarray(sry, dtype=float),
-                              'flux_fit': np.asarray(srf, dtype=float)})
-                mc_sat = _render_model_from_table(stbl, rg, base.shape, psf_shape)
+            # BRIGHT group = bright non-saturated rows + uncovered saturated stars.
+            # Render them and FLAT-TOP against the above-pedestal data over a
+            # core+shoulder mask (radius k*FWHM): the cap stops a peaked/over-flux
+            # model gouging the MIRI thermal pedestal (over-prediction hole), and
+            # the core fill raises an under-predicted broad core to the data ->
+            # residual = bg (flat).  MIRI-only; env-gated MERGE_SATSTAR_RENDER_CAP.
+            gx = bx + srx; gy = by + sry; gf = bf + srf
+            if _do_bright and gx:
+                gtbl = Table({'x_fit': np.asarray(gx, dtype=float),
+                              'y_fit': np.asarray(gy, dtype=float),
+                              'flux_fit': np.asarray(gf, dtype=float)})
+                mc_bright = _render_model_from_table(gtbl, rg, base.shape, psf_shape)
                 _bgbox = int(max(15, round(6 * (_fwhm_pix or 3.0))))
-                mc_sat_capped = _cap_render_to_pedestal(mc_sat, base, _bgbox)
-                mc_model = mc_model + mc_sat_capped
-                print(f"  [miri satstar render cap] capped {len(srx)} uncovered "
-                      f"satstar renders to above-pedestal data (bgbox={_bgbox})",
-                      flush=True)
+                # core+shoulder mask: union of disks R = k*FWHM around bright stars
+                _kfw = float(os.environ.get('MERGE_BRIGHT_FLATTOP_SHOULDER_FWHM', 1.5))
+                _R = max(3.0, _kfw * (_fwhm_pix or 3.0))
+                _yg, _xg = np.mgrid[0:ny, 0:nx]
+                core_mask = np.zeros((ny, nx), dtype=bool)
+                for _px, _py in zip(gx, gy):
+                    if -_R < _px < nx + _R and -_R < _py < ny + _R:
+                        core_mask |= (np.hypot(_xg - _px, _yg - _py) <= _R)
+                mc_bright = _cap_render_to_pedestal(mc_bright, base, _bgbox,
+                                                    core_mask=core_mask)
+                mc_model = mc_model + mc_bright
+                print(f"  [miri bright flat-top] flat-topped {len(bx)} bright + "
+                      f"{len(srx)} uncovered-satstar renders to the data "
+                      f"(R={_R:.0f}px, bgbox={_bgbox})", flush=True)
             elif srx:
-                # cap disabled (or non-MIRI): render at merged flux as before
+                # flat-top disabled (or non-MIRI): render uncovered satstars at
+                # merged flux as before (bright_nonsat is empty when disabled).
                 stbl = Table({'x_fit': np.asarray(srx, dtype=float),
                               'y_fit': np.asarray(sry, dtype=float),
                               'flux_fit': np.asarray(srf, dtype=float)})
@@ -3285,6 +3355,21 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     epsf_tok = '_epsf' if options.epsf else ''
     blur_tok = '_blur' if options.blur else ''
     group_tok = '_group' if options.group else ''
+    # Land the residual AND model mosaics on the EXACT grid of the _data_i2d so
+    # data / residual / model are pixel-aligned (CARTA blink; task sgrb2 F2550W
+    # model 1104x1558 vs data/resid 1163x1740).  Falls back to per-mosaic
+    # crop-to-data when the data_i2d is absent.
+    _data_i2d = os.path.join(
+        pipeline_dir,
+        f'jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-'
+        f'{filtername.lower()}-{module}_data_i2d.fits')
+    _shared_wcs = _i2d_grid_output_wcs(
+        _data_i2d,
+        os.path.join(pipeline_dir,
+                     f'_mergedcat_grid_o{field}_{filtername.lower()}.asdf'))
+    if _shared_wcs is not None:
+        print(f"mergedcat: landing residual+model on data_i2d grid "
+              f"({os.path.basename(_data_i2d)})", flush=True)
     for kind in kinds:
         if not written[kind]:
             continue
@@ -3292,8 +3377,9 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                         f'{filtername.lower()}-{module}{desat_tok}{bgsub_tok}'
                         f'{epsf_tok}{blur_tok}{group_tok}{iter_tok}'
                         f'_daophot_{kind}_mergedcat_residual')
-        outpaths[kind] = _resample_to_i2d(written[kind], pipeline_dir,
-                                          product_name, crop_to_data=True)
+        outpaths[kind] = _resample_to_i2d(
+            written[kind], pipeline_dir, product_name,
+            crop_to_data=(_shared_wcs is None), output_wcs=_shared_wcs)
         print(f"mergedcat: wrote {kind} residual i2d {outpaths[kind]}", flush=True)
         # FINAL coadd-level over-subtraction pit cleanup (MIRI).  The per-frame
         # pit NaN-mask + resample averaging is LEAKY: a pixel that is a deep pit
@@ -3330,8 +3416,9 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
         model_product = product_name.replace('_mergedcat_residual',
                                              '_mergedcat_model')
         try:
-            mpath = _resample_to_i2d(written_model[kind], pipeline_dir,
-                                     model_product, crop_to_data=True)
+            mpath = _resample_to_i2d(
+                written_model[kind], pipeline_dir, model_product,
+                crop_to_data=(_shared_wcs is None), output_wcs=_shared_wcs)
             print(f"mergedcat: wrote {kind} model i2d {mpath}", flush=True)
         except Exception as ex:
             print(f"mergedcat: model i2d build failed ({ex})", flush=True)
@@ -3587,19 +3674,19 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                           "(_run_cutout_pipeline).  Also re-enables the per-filter "
                           "single-module restriction policy."))
     parser.add_option("--manual-overshoot-ratio", dest="manual_overshoot_ratio",
-                    type='float', default=1.2,
+                    type='float', default=MANUAL_DEFAULTS['manual_overshoot_ratio'],
                     help="Flag a fit when its model peak > this x the local data peak (default 1.2).")
     parser.add_option("--manual-overshoot-action", dest="manual_overshoot_action",
-                    type='choice', choices=['flag', 'drop', 'refit'], default='refit',
+                    type='choice', choices=['flag', 'drop', 'refit'], default=MANUAL_DEFAULTS['manual_overshoot_action'],
                     help="What to do with overshooting fits: flag|drop|refit (default refit at seed position).")
     parser.add_option("--manual-iter2-local-snr", dest="manual_iter2_local_snr",
-                    type='float', default=3.0,
+                    type='float', default=MANUAL_DEFAULTS['manual_iter2_local_snr'],
                     help="Local-S/N threshold for daofind on residual/bg-subtracted images (default 3.0).")
     parser.add_option("--manual-ext-qfit-max", dest="manual_ext_qfit_max",
-                    type='float', default=0.2,
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_qfit_max'],
                     help="Extended-emission vetting: keep sources with qfit <= this (default 0.2).")
     parser.add_option("--manual-ext-prom-min", dest="manual_ext_prom_min",
-                    type='float', default=-1.0,
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_prom_min'],
                     help="Extended-emission NIRCam vetting: HARD prominence floor on "
                          "the deep data_i2d (rise above local emission) that the "
                          "qfit/peakSB/flags/bright-isolated star tests CANNOT bypass "
@@ -3609,13 +3696,13 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "fields, off otherwise.  0 = force off.  Satstar force-keep "
                          "(model==catalog) still overrides it.")
     parser.add_option("--manual-ext-peak-over-bkg", dest="manual_ext_peak_over_bkg",
-                    type='float', default=20.0,
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_peak_over_bkg'],
                     help="Extended-emission vetting: keep if peak-SB > this x local bkg (default 20).")
     parser.add_option("--manual-ext-local-snr-min", dest="manual_ext_local_snr_min",
-                    type='float', default=5.0,
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_local_snr_min'],
                     help="Extended-emission vetting: require local S/N >= this (default 5).")
     parser.add_option("--manual-ext-snr-high-keep", dest="manual_ext_snr_high_keep",
-                    type='float', default=20.0,
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_snr_high_keep'],
                     help="Extended-emission vetting BRIGHT-ISOLATED keep: a "
                          "group_size==1 source (trustworthy S/N) with S/N >= this "
                          "AND qfit < --manual-ext-qfit-high-keep-max is kept even "
@@ -3623,11 +3710,11 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "faint stars on bright emission whose qfit/peakSB are "
                          "degraded by the background; default 20).")
     parser.add_option("--manual-ext-qfit-high-keep-max", dest="manual_ext_qfit_high_keep_max",
-                    type='float', default=0.4,
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_qfit_high_keep_max'],
                     help="Upper qfit cap for the bright-isolated keep (default 0.4); "
                          "extended-emission knots have worse qfit so stay rejected.")
     parser.add_option("--manual-ext-qfit-recover-max", dest="manual_ext_qfit_recover_max",
-                    type='float', default=0.2,
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_qfit_recover_max'],
                     help="RECOVER-tier qfit ceiling for the extended-emission vetting "
                          "(NIRCam).  Keep a source whose qfit is in "
                          "(--manual-ext-qfit-max, this] AND S/N >= "
@@ -3640,7 +3727,7 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "(byte-identical to prior behaviour); set 0.5 to enable.")
     parser.add_option("--manual-ext-recover-satstar-guard-arcsec",
                     dest="manual_ext_recover_satstar_guard_arcsec",
-                    type='float', default=2.0,
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_recover_satstar_guard_arcsec'],
                     help="Merged-level satstar-proximity backstop for the recover "
                          "tier: a recovered source within this many arcsec of a "
                          "catalog saturated star is rejected (diffraction-spike "
@@ -3648,7 +3735,7 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "Default 2.0\".")
     parser.add_option("--manual-ext-recover-prom-log-intercept",
                     dest="manual_ext_recover_prom_log_intercept",
-                    type='float', default=-0.77,
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_recover_prom_log_intercept'],
                     help="Recover-tier prominence gate, SLOPED in (qfit, log10 prom): "
                          "a recovered source must satisfy log10(prominence) >= "
                          "intercept + slope*qfit on the data_i2d (rise above the "
@@ -3658,7 +3745,7 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "emission vs 52/69 for a flat prom>=5.  NaN -> NOT recovered.")
     parser.add_option("--manual-ext-recover-prom-log-slope",
                     dest="manual_ext_recover_prom_log_slope",
-                    type='float', default=5.6,
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_recover_prom_log_slope'],
                     help="Slope of the recover-tier prominence gate in log10(prom) "
                          "per unit qfit (default 5.6): the prominence floor RISES "
                          "with qfit so a well-fit (low-qfit) source is trusted at "
@@ -3666,11 +3753,11 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "(high-qfit recovery is unsafe on emission fields).")
     parser.add_option("--manual-ext-recover-no-prom-gate",
                     dest="manual_ext_recover_prom_gate",
-                    action='store_false', default=True,
+                    action='store_false', default=MANUAL_DEFAULTS['manual_ext_recover_prom_gate'],
                     help="Disable the recover-tier prominence gate (UNSAFE on "
                          "extended emission; for diagnostics only).")
     parser.add_option("--manual-ext-nmatch-confirm", dest="manual_ext_nmatch_confirm",
-                    type='int', default=0,
+                    type='int', default=MANUAL_DEFAULTS['manual_ext_nmatch_confirm'],
                     help="MULTI-FRAME CONFIRMATION keep (Hosek ndet-style): keep any "
                          "source detected in >= N exposures (nmatch>=N) with qfit <= "
                          "--manual-ext-nmatch-confirm-qfit-max, regardless of the "
@@ -3684,11 +3771,11 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "fields.")
     parser.add_option("--manual-ext-nmatch-confirm-qfit-max",
                     dest="manual_ext_nmatch_confirm_qfit_max",
-                    type='float', default=0.6,
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_nmatch_confirm_qfit_max'],
                     help="qfit ceiling for the multi-frame confirmation keep "
                          "(default 0.6).")
     parser.add_option("--manual-seed-round-max", dest="manual_seed_round_max",
-                    type='float', default=0.5,
+                    type='float', default=MANUAL_DEFAULTS['manual_seed_round_max'],
                     help="DAOStarFinder roundness bound for the i2d-augmented "
                          "RESIDUAL seed detection (roundlo=-x, roundhi=+x).  Default "
                          "0.5 (tight, rejects extended emission).  On STAR-dominated "
@@ -3697,16 +3784,16 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                          "tight cut (Arches: ~3x more recovered).  Do NOT loosen on "
                          "emission fields (shape is what rejects emission knots).")
     parser.add_option("--manual-seed-sharp-lo", dest="manual_seed_sharp_lo",
-                    type='float', default=0.4,
+                    type='float', default=MANUAL_DEFAULTS['manual_seed_sharp_lo'],
                     help="DAOStarFinder sharpness lower bound for the residual seed "
                          "detection (default 0.4; star-field loosen ~0.2).")
     parser.add_option("--manual-seed-sharp-hi", dest="manual_seed_sharp_hi",
-                    type='float', default=1.2,
+                    type='float', default=MANUAL_DEFAULTS['manual_seed_sharp_hi'],
                     help="DAOStarFinder sharpness upper bound for the residual seed "
                          "detection (default 1.2; star-field loosen ~1.5).")
     parser.add_option("--manual-ext-nmatch-confirm-maxpos-mas",
                     dest="manual_ext_nmatch_confirm_maxpos_mas",
-                    type='float', default=0.0,
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_nmatch_confirm_maxpos_mas'],
                     help="Position-stability guard for the multi-frame keep: only "
                          "keep if the across-exposure centroid scatter "
                          "hypot(std_ra,std_dec) <= this many mas.  Rejects "
@@ -3747,7 +3834,7 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     help=("Force extended-emission handling OFF even for a target "
                           "that is in the built-in extended-emission list."))
     parser.add_option("--nircam-prom-m1", dest="nircam_prom_m1",
-                    type='float', default=0.0,
+                    type='float', default=MANUAL_DEFAULTS['nircam_prom_m1'],
                     help=("Extended-emission NIRCam (w51/sickle/wd2) per-pass "
                           "prominence-reject threshold for the m1 (iter1) pass: drop "
                           "fits whose data core does not rise >= this * annulus-MAD "
@@ -3755,17 +3842,17 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                           "CONSERVATIVE (low) value here -- iter1 has no background "
                           "model yet."))
     parser.add_option("--nircam-prom-m2", dest="nircam_prom_m2",
-                    type='float', default=0.0,
+                    type='float', default=MANUAL_DEFAULTS['nircam_prom_m2'],
                     help=("Same as --nircam-prom-m1 but for the m2 (iter2) pass, which "
                           "detects on the iter1 source-subtracted residual.  Use a "
                           "more AGGRESSIVE (higher) value -- real stars stand out more "
                           "once iter1 sources are removed.  0 disables (default)."))
     parser.add_option("--nircam-prom-m3plus", dest="nircam_prom_m3plus",
-                    type='float', default=0.0,
+                    type='float', default=MANUAL_DEFAULTS['nircam_prom_m3plus'],
                     help=("Same prominence gate for m3..m6 (the background-subtracted "
                           "passes).  0 disables (default)."))
     parser.add_option("--manual-detect-noise-floor-box", dest="detect_noise_floor_box",
-                    type='int', default=0,
+                    type='int', default=MANUAL_DEFAULTS['detect_noise_floor_box'],
                     help=("Extended-emission NIRCam (w51/sickle/wd2) detection cost cut: "
                           "when >0, daofind detects on the S/N image data/floor at a "
                           "fixed --manual-detect-noise-floor-k, where floor = the local "
@@ -3774,18 +3861,18 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                           "FIT) without a global threshold hike.  0 = off (default; the "
                           "historical min-noise threshold).  Try 61."))
     parser.add_option("--manual-detect-noise-floor-k", dest="detect_noise_floor_k",
-                    type='float', default=5.0,
+                    type='float', default=MANUAL_DEFAULTS['detect_noise_floor_k'],
                     help=("S/N threshold for --manual-detect-noise-floor-box (peak must "
                           "exceed k * local emission-noise floor).  Default 5."))
     parser.add_option("--manual-detect-noise-floor-i2dseed", dest="detect_noise_floor_i2dseed",
-                    type='int', default=0,
+                    type='int', default=MANUAL_DEFAULTS['detect_noise_floor_i2dseed'],
                     help=("Also apply the emission-noise-floor detection to the i2d "
                           "coadd-augmented seed (default 0 = per-frame passes only, so "
                           "the deep coadd still recovers faint-on-emission stars the "
                           "per-frame cut drops).  Set 1 for the most aggressive cost cut "
                           "at the expense of faint completeness."))
     parser.add_option("--manual-coarse-bg-box", dest="coarse_bg_box",
-                    type='int', default=0,
+                    type='int', default=MANUAL_DEFAULTS['coarse_bg_box'],
                     help=("Detect on a coarse-background-subtracted image: subtract a "
                           "<box>px median before daofind so faint stars on a bright "
                           "but smooth extended pedestal are not lost.  0 disables "
@@ -3800,7 +3887,7 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                           "-1 (default) = per-filter auto (NIRCam table; MIRI/unlisted "
                           "-> mask all); 0 = mask all SATURATED; >0 = explicit floor."))
     parser.add_option("--manual-group-min-sep-fwhm", dest="manual_group_min_sep_fwhm",
-                    type='float', default=2.0,
+                    type='float', default=MANUAL_DEFAULTS['manual_group_min_sep_fwhm'],
                     help=("SourceGrouper grouping radius in FWHM (manual path; "
                           "requires --group).  Sources closer than this are fit "
                           "jointly.  Raise above 2.0 to jointly fit wider close "
@@ -3916,7 +4003,7 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'disables.  Default 30.'),
                       metavar='manual_crossband_seed_dedup_mas')
     parser.add_option('--manual-crossband-seed-min-filters', type=int,
-                      dest='manual_crossband_seed_min_filters', default=2,
+                      dest='manual_crossband_seed_min_filters', default=MANUAL_DEFAULTS['manual_crossband_seed_min_filters'],
                       help=('STRINGENT m7 cross-band seed: only seed positions '
                             'independently confirmed (SNR>min, qfit<max) in >= this '
                             'many filters.  Prevents a single-band (or i2d-structure) '
@@ -3925,15 +4012,15 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'to restore the legacy union seed (NOT recommended).'),
                       metavar='manual_crossband_seed_min_filters')
     parser.add_option('--manual-crossband-seed-snr-min', type=float,
-                      dest='manual_crossband_seed_snr_min', default=5.0,
+                      dest='manual_crossband_seed_snr_min', default=MANUAL_DEFAULTS['manual_crossband_seed_snr_min'],
                       help='Per-filter SNR threshold for m7 cross-band seed confirmation. Default 5.',
                       metavar='manual_crossband_seed_snr_min')
     parser.add_option('--manual-crossband-seed-qfit-max', type=float,
-                      dest='manual_crossband_seed_qfit_max', default=0.2,
+                      dest='manual_crossband_seed_qfit_max', default=MANUAL_DEFAULTS['manual_crossband_seed_qfit_max'],
                       help='Per-filter qfit ceiling for m7 cross-band seed confirmation. Default 0.2.',
                       metavar='manual_crossband_seed_qfit_max')
     parser.add_option('--manual-crossband-seed-max-sep-mas', type=float,
-                      dest='manual_crossband_seed_max_sep_mas', default=30.0,
+                      dest='manual_crossband_seed_max_sep_mas', default=MANUAL_DEFAULTS['manual_crossband_seed_max_sep_mas'],
                       help='Cross-filter match radius (mas) for m7 cross-band seed confirmation clustering. Default 30.',
                       metavar='manual_crossband_seed_max_sep_mas')
     parser.add_option('--manual-start-phase', dest='manual_start_phase',
@@ -4020,7 +4107,7 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       type='float',
                       help='Pixels below this threshold are replaced with Gaussian infill before detection')
     parser.add_option('--local-snr-threshold', dest='local_snr_threshold',
-                      default=5.0,
+                      default=MANUAL_DEFAULTS['local_snr_threshold'],
                       type='float',
                       help='Per-source local S/N threshold for retaining DAO detections')
     parser.add_option('--daofind-roundlo', dest='daofind_roundlo',
