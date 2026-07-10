@@ -2728,6 +2728,22 @@ def main():
         import make_reftable
         make_reftable.main()
 
+    # Tailing registration failsafe: a full all-band merge just finished, so this is
+    # the first moment a whole-field cross-band scan is meaningful. Catches a
+    # brick-1182-style LOCALIZED misregistration (a half-mosaic untied while the bulk
+    # offset reads ~0) at build time instead of at release. Opt-in and non-fatal by
+    # default so it can never wedge a run or disrupt in-flight remediation chains:
+    #   RUN_REGISTRATION_GATE=1          -> run it, WARN on FAIL
+    #   REGISTRATION_GATE_STRICT=1       -> also RAISE on FAIL (hard gate)
+    if os.environ.get('RUN_REGISTRATION_GATE') == '1':
+        from jwst_gc_pipeline.photometry.registration_gate import run_registration_gate
+        strict = os.environ.get('REGISTRATION_GATE_STRICT') == '1'
+        res = run_registration_gate(options.target, strict=strict)
+        if res['returncode'] == 1:
+            print(f"WARNING: registration gate FAILED for '{options.target}' -- a band "
+                  f"is locally misregistered (see scan above). Do NOT release these "
+                  f"products; set REGISTRATION_GATE_STRICT=1 to hard-fail.", flush=True)
+
     print("Done")
 
 
