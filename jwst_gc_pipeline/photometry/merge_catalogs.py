@@ -1828,6 +1828,12 @@ def load_satstar_catalog(filtername, target='brick',
             # the cache to have been built from the same NUMBER of per-exposure
             # catalogs; rebuild when more have appeared.
             _rcur = float(_satstar_dedup_radius().to(u.arcsec).value)
+            # 0.15 here is FROZEN HISTORY, not the live default: caches written
+            # before the SATDDUPR meta key existed were all built at the
+            # then-default 0.15", so that is the radius they must be validated
+            # against.  Do NOT replace with _satstar_dedup_radius() -- that
+            # would auto-validate legacy caches against whatever the current
+            # setting happens to be.
             _rcache = float(cached.meta.get('SATDDUPR', 0.15))
             if (int(cached.meta.get('NSATSRC', -1)) == len(fallback)
                     and abs(_rcache - _rcur) < 1e-6

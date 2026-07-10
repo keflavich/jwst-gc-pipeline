@@ -38,6 +38,7 @@ from astropy.modeling.fitting import LevMarLSQFitter
 from jwst_gc_pipeline.photometry.naming import (
     _iteration_token, _bgsub_token,
     residual_to_smoothed_bg_i2d, smoothed_bg_to_detection_i2d, vetted_to_i2dseed)
+from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS, mopt
 from jwst_gc_pipeline.photometry.psf_fitting import (
     _make_psfphotometry, _make_model_image, _dedup_close_sources,
     forced_psf_photometry,
@@ -77,7 +78,8 @@ from photutils.psf import SourceGrouper
 # Physical overshoot QC: the fix qfit misses
 # ---------------------------------------------------------------------------
 def _filter_or_flag_model_overshoot(phot_obj, modsky, data, *,
-                                    ratio=1.2, action='flag', label='',
+                                    ratio=MANUAL_DEFAULTS['manual_overshoot_ratio'],
+                                    action='flag', label='',
                                     box_half=1, flag_nonpositive_data=False):
     """Flag / drop fits whose rendered model peak exceeds the local
     background-subtracted DATA peak by more than ``ratio``.
@@ -164,7 +166,8 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                       aperture_radius_pix, localbkg_inner, localbkg_outer,
                       grouper, options, dq, satstar_model_subtracted,
                       label, xy_bounds_pix=None,
-                      overshoot_ratio=1.2, overshoot_action='flag',
+                      overshoot_ratio=MANUAL_DEFAULTS['manual_overshoot_ratio'],
+                      overshoot_action=MANUAL_DEFAULTS['manual_overshoot_action'],
                       overshoot_cap_target=1.0,
                       miri_dpk_guard=False,
                       satstar_excl_xy=None, satstar_excl_pix=0.0,
@@ -1319,7 +1322,7 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     # so close blends (e.g. sickle S2 + neighbor at 2.36*FWHM) are fit
     # independently and over-subtract in the valley between them.  Raise the
     # multiplier (--manual-group-min-sep-fwhm) to jointly fit wider pairs.
-    _grp_mult = float(getattr(options, 'manual_group_min_sep_fwhm', 2.0))
+    _grp_mult = float(mopt(options, 'manual_group_min_sep_fwhm'))
     _grp_sep = _grp_mult * fwhm_pix
     # resolve_max_group_size rejects the ambiguous 0; None == 'unlimited' (no cap).
     _max_group_size = _L.resolve_max_group_size(
@@ -1574,10 +1577,10 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
         data, seeded by daofind + the projected previous merged / cross-band
         catalog.
     """
-    overshoot_ratio = float(getattr(options, 'manual_overshoot_ratio', 1.2))
-    overshoot_action = str(getattr(options, 'manual_overshoot_action', 'refit'))
-    iter2_snr = float(getattr(options, 'manual_iter2_local_snr', 3.0))
-    first_snr = float(getattr(options, 'local_snr_threshold', 5.0))
+    overshoot_ratio = float(mopt(options, 'manual_overshoot_ratio'))
+    overshoot_action = str(mopt(options, 'manual_overshoot_action'))
+    iter2_snr = float(mopt(options, 'manual_iter2_local_snr'))
+    first_snr = float(mopt(options, 'local_snr_threshold'))
     # PER-FRAME struct prune is DISABLED: the (struct_x,struct_y) values are
     # tuned on the deep i2d coadd; a single exposure has far higher structure
     # noise, so the same cut drops every detection (m2: 87->0).  The structure
@@ -1590,7 +1593,7 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     # star-subtracted background is trustworthy).  Unlike the struct prune, a
     # coarse median subtraction is safe per-frame: it only shifts the detection
     # image pedestal, it does not reject sources.
-    coarse_bg_box = int(getattr(options, 'coarse_bg_box', 0))
+    coarse_bg_box = int(mopt(options, 'coarse_bg_box'))
 
     ctx = _prepare_frame_for_photometry(
         options, filtername, module, field, basepath, filename, proposal_id,
@@ -1614,14 +1617,14 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     # 0 = off (default -> other fields unchanged).  Tunable via options so a
     # conservative->aggressive schedule (lenient m1, strict m2) can be A/B'd.
     _is_ext_nircam = (not _is_miri) and _is_extended_emission(options)
-    _nprom_m1 = float(getattr(options, 'nircam_prom_m1', 0.0))
-    _nprom_m2 = float(getattr(options, 'nircam_prom_m2', 0.0))
-    _nprom_m3p = float(getattr(options, 'nircam_prom_m3plus', 0.0))
+    _nprom_m1 = float(mopt(options, 'nircam_prom_m1'))
+    _nprom_m2 = float(mopt(options, 'nircam_prom_m2'))
+    _nprom_m3p = float(mopt(options, 'nircam_prom_m3plus'))
     # emission-noise-floor detection (compute win: fewer emission detections to
     # fit).  0 = off (default).  Only applied for ext-emission NIRCam fields.
-    _nfloor_box = (int(getattr(options, 'detect_noise_floor_box', 0))
+    _nfloor_box = (int(mopt(options, 'detect_noise_floor_box'))
                    if _is_ext_nircam else 0)
-    _nfloor_k = float(getattr(options, 'detect_noise_floor_k', 5.0))
+    _nfloor_k = float(mopt(options, 'detect_noise_floor_k'))
     _nircam_prom_any = _is_ext_nircam and (_nprom_m1 > 0 or _nprom_m2 > 0
                                            or _nprom_m3p > 0)
 
@@ -1696,7 +1699,7 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
         # (MIRI uses miri_prominence_snr; NIRCam 0=off).  The ext-NIRCam m12/m3+
         # branches pass an explicit schedule.
         if prom_snr is None:
-            prom_snr = (float(getattr(options, 'miri_prominence_snr', 5.0))
+            prom_snr = (float(mopt(options, 'miri_prominence_snr'))
                         if _is_miri else 0.0)
         return _manual_phot_pass(
             data=ctx.nan_replaced_data, mask=ctx.mask, err=ctx.err, bad=ctx.bad,
@@ -1913,8 +1916,11 @@ def _dedup_skycoords(coords, radius_mas):
 
 
 def _build_crossband_seed(cut_bp, modules, filternames, options, *,
-                          max_sep_mas=30.0, min_filters=2, snr_min=5.0,
-                          qfit_max=0.2, dedup_radius_mas=30.0):
+                          max_sep_mas=MANUAL_DEFAULTS['manual_crossband_seed_max_sep_mas'],
+                          min_filters=MANUAL_DEFAULTS['manual_crossband_seed_min_filters'],
+                          snr_min=MANUAL_DEFAULTS['manual_crossband_seed_snr_min'],
+                          qfit_max=MANUAL_DEFAULTS['manual_crossband_seed_qfit_max'],
+                          dedup_radius_mas=30.0):
     """Cross-filter seed for m7 (iter7): STRINGENT -- only positions independently
     confirmed (S/N > snr_min AND qfit < qfit_max) in >= ``min_filters`` filters,
     clustered within ``max_sep_mas``.
@@ -2983,17 +2989,16 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                                'm6': _plo}
                 opts_phase.miri_prominence_snr = _prom_sched.get(phase, _plo)
             else:
-                opts_phase.miri_prominence_snr = getattr(
-                    options, 'miri_prominence_snr', 5.0)
+                opts_phase.miri_prominence_snr = mopt(options, 'miri_prominence_snr')
             print(f"  [miri_tuning {phase}] prominence_snr="
                   f"{opts_phase.miri_prominence_snr:g}", flush=True)
             # tweak (2): raise thresholds on the raw-image rounds (m12/m3/m4)
             # tweak (3): lower them on the background-subtracted rounds (m5/m6)
             # tweak (4): relax qfit vetting everywhere for MIRI
-            base_first = float(getattr(options, 'local_snr_threshold', 5.0))
-            base_iter2 = float(getattr(options, 'manual_iter2_local_snr', 3.0))
-            base_extsnr = float(getattr(options, 'manual_ext_local_snr_min', 5.0))
-            base_qfit = float(getattr(options, 'manual_ext_qfit_max', 0.2))
+            base_first = float(mopt(options, 'local_snr_threshold'))
+            base_iter2 = float(mopt(options, 'manual_iter2_local_snr'))
+            base_extsnr = float(mopt(options, 'manual_ext_local_snr_min'))
+            base_qfit = float(mopt(options, 'manual_ext_qfit_max'))
             if phase in ('m12', 'm3', 'm4'):
                 opts_phase.local_snr_threshold = max(base_first, 8.0)
                 opts_phase.manual_iter2_local_snr = max(base_iter2, 6.0)
@@ -3027,7 +3032,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 opts_phase.coarse_bg_box = 0
             opts_phase.manual_ext_qfit_max = max(base_qfit, 0.4)
             print(f"  [miri_tuning {phase}] first_snr="
-                  f"{getattr(opts_phase,'local_snr_threshold',5.0)} iter2_snr="
+                  f"{mopt(opts_phase, 'local_snr_threshold')} iter2_snr="
                   f"{opts_phase.manual_iter2_local_snr} ext_snr_min="
                   f"{opts_phase.manual_ext_local_snr_min} qfit_max="
                   f"{opts_phase.manual_ext_qfit_max}", flush=True)
@@ -3090,14 +3095,13 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 if phase in ('m3', 'm4', 'm5', 'm6'):
                     det_i2d = det_i2d or _data_i2d_path(module, filt)  # fallback
                     try:
-                        _sround = float(getattr(opts_phase, 'manual_seed_round_max', 0.5))
+                        _sround = float(mopt(opts_phase, 'manual_seed_round_max'))
                         prev_seed = _build_i2d_augmented_seed(
                             det_i2d, vetted_prev, filt,
-                            local_snr_min=float(getattr(
-                                opts_phase, 'manual_ext_local_snr_min', 5.0)),
+                            local_snr_min=float(mopt(opts_phase, 'manual_ext_local_snr_min')),
                             roundlo=-_sround, roundhi=_sround,
-                            sharplo=float(getattr(opts_phase, 'manual_seed_sharp_lo', 0.4)),
-                            sharphi=float(getattr(opts_phase, 'manual_seed_sharp_hi', 1.2)),
+                            sharplo=float(mopt(opts_phase, 'manual_seed_sharp_lo')),
+                            sharphi=float(mopt(opts_phase, 'manual_seed_sharp_hi')),
                             bg_subtract_path=bg_sub,
                             # Structure-noise prune / coarse-bg detection.  For
                             # MIRI the miri_tuning block sets opts_phase.struct_x/y
@@ -3110,7 +3114,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             struct_x=float(getattr(opts_phase, 'struct_x', 0.0)),
                             struct_y=float(getattr(opts_phase, 'struct_y', 0.0)),
                             struct_robust=bool(getattr(opts_phase, 'struct_robust', False)),
-                            coarse_bg_box=int(getattr(opts_phase, 'coarse_bg_box', 0)),
+                            coarse_bg_box=int(mopt(opts_phase, 'coarse_bg_box')),
                             # emission-noise-floor detection: ext-emission NIRCam
                             # only (MIRI has its own coarse-bg/struct schedule).
                             # Applied to the COADD seed only when explicitly opted
@@ -3118,12 +3122,12 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             # only leaves the coadd seed at the full-depth threshold
                             # so faint-on-emission stars the per-frame passes miss
                             # are still recovered here.
-                            noise_floor_box=(int(getattr(options, 'detect_noise_floor_box', 0))
+                            noise_floor_box=(int(mopt(options, 'detect_noise_floor_box'))
                                              if (not miri_tuning and str(target).lower()
                                                  in _EXTENDED_EMISSION_TARGETS
-                                                 and int(getattr(options, 'detect_noise_floor_i2dseed', 0)))
+                                                 and int(mopt(options, 'detect_noise_floor_i2dseed')))
                                              else 0),
-                            noise_floor_k=float(getattr(options, 'detect_noise_floor_k', 5.0)),
+                            noise_floor_k=float(mopt(options, 'detect_noise_floor_k')),
                             label=f'{phase}:{filt}')
                     except Exception as ex:
                         print(f"manual [{phase}]: i2d-augmented seed failed ({ex}); "
@@ -3519,7 +3523,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     # extended-emission NIRCam field, off elsewhere; >= 0 uses the
                     # value verbatim (0 forces it off).  MIRI already gates on
                     # prominence via min_prominence, so leave its ext_prom_min 0.
-                    _ext_prom_opt = float(getattr(opts_phase, 'manual_ext_prom_min', -1.0))
+                    _ext_prom_opt = float(mopt(opts_phase, 'manual_ext_prom_min'))
                     if _ext_prom_opt < 0:
                         _ext_prom_min = (3.0 if (not _miri_field
                                                  and _is_extended_emission(opts_phase))
@@ -3528,28 +3532,21 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         _ext_prom_min = _ext_prom_opt
                     vetted = _filter_extended_emission(
                         merged, data_i2d_image=d_i2d, ww_i2d=ww_i2d,
-                        qfit_max=float(getattr(opts_phase, 'manual_ext_qfit_max', 0.2)),
-                        peak_over_bkg=float(getattr(opts_phase, 'manual_ext_peak_over_bkg', 20.0)),
-                        min_prominence=(float(getattr(opts_phase, 'miri_prominence_snr', 5.0))
+                        qfit_max=float(mopt(opts_phase, 'manual_ext_qfit_max')),
+                        peak_over_bkg=float(mopt(opts_phase, 'manual_ext_peak_over_bkg')),
+                        min_prominence=(float(mopt(opts_phase, 'miri_prominence_snr'))
                                         if _miri_field else 0.0),
-                        local_snr_min=float(getattr(opts_phase, 'manual_ext_local_snr_min', 5.0)),
-                        snr_high_keep=float(getattr(opts_phase, 'manual_ext_snr_high_keep', 20.0)),
-                        qfit_high_keep_max=float(getattr(opts_phase, 'manual_ext_qfit_high_keep_max', 0.4)),
-                        qfit_recover_max=float(getattr(opts_phase, 'manual_ext_qfit_recover_max', 0.2)),
-                        recover_satstar_guard_arcsec=float(getattr(
-                            opts_phase, 'manual_ext_recover_satstar_guard_arcsec', 2.0)),
-                        recover_prom_gate=bool(getattr(
-                            opts_phase, 'manual_ext_recover_prom_gate', True)),
-                        recover_prom_log_intercept=float(getattr(
-                            opts_phase, 'manual_ext_recover_prom_log_intercept', -0.77)),
-                        recover_prom_log_slope=float(getattr(
-                            opts_phase, 'manual_ext_recover_prom_log_slope', 5.6)),
-                        nmatch_confirm=int(getattr(
-                            opts_phase, 'manual_ext_nmatch_confirm', 0)),
-                        nmatch_confirm_qfit_max=float(getattr(
-                            opts_phase, 'manual_ext_nmatch_confirm_qfit_max', 0.6)),
-                        nmatch_confirm_maxpos_mas=float(getattr(
-                            opts_phase, 'manual_ext_nmatch_confirm_maxpos_mas', 0.0)),
+                        local_snr_min=float(mopt(opts_phase, 'manual_ext_local_snr_min')),
+                        snr_high_keep=float(mopt(opts_phase, 'manual_ext_snr_high_keep')),
+                        qfit_high_keep_max=float(mopt(opts_phase, 'manual_ext_qfit_high_keep_max')),
+                        qfit_recover_max=float(mopt(opts_phase, 'manual_ext_qfit_recover_max')),
+                        recover_satstar_guard_arcsec=float(mopt(opts_phase, 'manual_ext_recover_satstar_guard_arcsec')),
+                        recover_prom_gate=bool(mopt(opts_phase, 'manual_ext_recover_prom_gate')),
+                        recover_prom_log_intercept=float(mopt(opts_phase, 'manual_ext_recover_prom_log_intercept')),
+                        recover_prom_log_slope=float(mopt(opts_phase, 'manual_ext_recover_prom_log_slope')),
+                        nmatch_confirm=int(mopt(opts_phase, 'manual_ext_nmatch_confirm')),
+                        nmatch_confirm_qfit_max=float(mopt(opts_phase, 'manual_ext_nmatch_confirm_qfit_max')),
+                        nmatch_confirm_maxpos_mas=float(mopt(opts_phase, 'manual_ext_nmatch_confirm_maxpos_mas')),
                         ext_prom_min=_ext_prom_min,
                         struct_x=0.0, struct_y=0.0,  # prune at detection, not here
                         label=f'{phase}:{filt}')

@@ -5,6 +5,13 @@ the shared helpers stay there.  Superseded by the manual-iteration pipeline
 (``cataloging.do_photometry_step_manual`` / ``run_manual_pipeline``).  Reached
 only via ``--legacy-iterations``; do not wire into active reductions.
 
+FROZEN: bug fixes and threshold tuning land in the manual path only.  In
+particular the qfit/peak-over-bkg vetting constants here (and in
+``build_filtered_iter2_residual_bg`` / ``_flag_likely_extended_iter4`` in the
+host module) are deliberately NOT kept in sync with
+``manual_defaults.MANUAL_DEFAULTS`` -- they preserve the legacy behaviour for
+benchmarking.  Do not "fix" them to match.
+
 Implementation note: this module reuses the shared helpers, constants and
 third-party imports that live in ``crowdsource_catalogs_long`` by importing that
 module and copying its public module namespace in below, so the relocated code
