@@ -431,7 +431,7 @@ def assign_dest(item, field):
     return Path("catalogs") / src_name
 
 
-def build_manifest(field, version):
+def build_manifest(field, version, images_only=False):
     field_cfg = FIELDS[field]
     items = []
     # auto-discovered per-filter NIRCam mosaics (skip with no_auto_images, e.g.
@@ -440,9 +440,14 @@ def build_manifest(field, version):
         items += discover_images(field_cfg)
     items += discover_nircam(field_cfg)   # explicit NIRCam list (if any)
     items += discover_miri(field_cfg)
-    # catalogs: skip while cataloging is still in progress (skip_catalogs)
-    if not field_cfg.get("miri_only") and not field_cfg.get("skip_catalogs"):
+    # catalogs: skip while cataloging is still in progress (skip_catalogs), or for an
+    # explicit image-only release (--images-only): ship mosaics without catalogs.
+    if not field_cfg.get("miri_only") and not field_cfg.get("skip_catalogs") and not images_only:
         items += discover_catalogs(field_cfg, field)
+    if images_only:
+        # science mosaics only: drop the catalog-derived residual/model i2d, which encode
+        # the (uncertified) catalog fit, and any catalog products.
+        items = [it for it in items if it.get("kind") == "science"]
     for item in items:
         src = Path(item["src"])
         item["dest"] = str(assign_dest(item, field))
@@ -637,6 +642,9 @@ def main(argv=None):
                         help="grant all-authenticated-users read on the release path")
     parser.add_argument("--print-urls", action="store_true",
                         help="print HTTPS download URLs (requires --stage)")
+    parser.add_argument("--images-only", action="store_true",
+                        help="ship mosaics only, no catalogs (e.g. images are internally "
+                             "consistent but the catalog/absolute frame is not yet certified)")
     parser.add_argument("--allow-registration-fail", action="store_true",
                         help="stage even if the local-registration failsafe FAILs "
                              "(a band is locally misregistered). DANGEROUS -- only for "
@@ -644,7 +652,7 @@ def main(argv=None):
                              "in the environment. The default refuses to stage.")
     args = parser.parse_args(argv)
 
-    items = build_manifest(args.field, args.version)
+    items = build_manifest(args.field, args.version, images_only=args.images_only)
     if not items:
         print(f"No deliverables discovered for field '{args.field}'.", file=sys.stderr)
         return 1
@@ -673,7 +681,10 @@ def main(argv=None):
         return 2
     if not override:
         gate = Path(__file__).with_name("registration_failsafes.py")
-        rc = subprocess.run([sys.executable, str(gate), "--field", args.field, "--scan"]).returncode
+        gate_cmd = [sys.executable, str(gate), "--field", args.field, "--scan"]
+        if args.images_only:   # image-only: gate on cross-band image consistency, not own-catalog
+            gate_cmd.append("--images-only")
+        rc = subprocess.run(gate_cmd).returncode
         if rc == 1:
             print(f"\nREFUSING TO STAGE '{args.field}': local-registration failsafe FAILED "
                   f"-- a band's mosaic is locally misregistered vs the other bands / its own "

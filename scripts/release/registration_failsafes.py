@@ -198,12 +198,17 @@ def field_bands(field):
     return sorted(set(out))
 
 
-def scan_field(field, verbose=True):
+def scan_field(field, verbose=True, images_only=False):
     """Run the cross-band + own-catalog failsafes on EVERY band of a field.
 
     Cross-band truth for band F = the pooled detections of all OTHER bands of the field
     (same stars, JWST-internal registration).  Returns {band: {check: verdict}} and an
     overall PASS/FAIL.  Detects each band once.
+
+    ``images_only``: gate an IMAGE-ONLY release -- run the reference-free cross-band
+    (image-to-image) check only, and SKIP own-catalog.  An image-only release ships the
+    mosaics without the catalog, so a mosaic<->catalog mismatch (own_catalog FAIL) is not
+    a reason to block; the images can still be internally consistent and shippable.
     """
     bands = field_bands(field)
     if len(bands) < 2:
@@ -227,10 +232,11 @@ def scan_field(field, verbose=True):
                            np.concatenate([s.dec.deg for s in others]) * u.deg)
             r = per_cell(d, fl, tru, f"{b} vs cross-band"); r.pop("_g", None)
             checks["cross_band"] = r
-        cat = catalog_sc(field, b)
-        if cat is not None:
-            r = per_cell(d, fl, cat, f"{b} vs own-catalog"); r.pop("_g", None)
-            checks["own_catalog"] = r
+        if not images_only:
+            cat = catalog_sc(field, b)
+            if cat is not None:
+                r = per_cell(d, fl, cat, f"{b} vs own-catalog"); r.pop("_g", None)
+                checks["own_catalog"] = r
         bad = any((not c.get("PASS", True)) for c in checks.values())
         report[b] = checks
         any_fail = any_fail or bad
@@ -247,12 +253,15 @@ def main(argv=None):
     ap.add_argument("--filter", default=None, help="single band (omit for --scan)")
     ap.add_argument("--xband", default=None, help="cross-band reference filter (e.g. F200W)")
     ap.add_argument("--scan", action="store_true", help="scan EVERY band of the field (gate mode)")
+    ap.add_argument("--images-only", action="store_true",
+                    help="cross-band (image-to-image) check only; skip own-catalog "
+                         "(gate for an image-only release)")
     ap.add_argument("--plot", default=None)
     ap.add_argument("--json", default=None)
     args = ap.parse_args(argv)
 
     if args.scan or not args.filter:
-        res = scan_field(args.field)
+        res = scan_field(args.field, images_only=args.images_only)
         if args.json:
             json.dump(res, open(args.json, "w"), indent=2, default=str)
         print(json.dumps({"field": res.get("field"), "PASS": res.get("PASS"),
