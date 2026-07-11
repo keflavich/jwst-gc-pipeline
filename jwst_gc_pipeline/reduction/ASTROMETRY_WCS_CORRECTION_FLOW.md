@@ -248,13 +248,6 @@ band-aid split is gone.)
 
 ---
 
-_Last updated 2026-07-11 (retired the post-resample mosaic realign: `realign_to_catalog` /
-`realign_to_vvv` / `sync_gwcs_to_fits_wcs` / `*_realigned-to-refcat.fits` are gone; the tie is now
-applied once, per-exposure, and the `_i2d` mosaic is the final image deliverable). See also
-the offsets-table builders (`_bench/build_sickle_gns_offsets.py`,
-`scripts/miri_reduction/` registration scripts), and `f115w-astrometry-*`
-analysis writeups in brick-jwst-2221._
-
 ## Inter-detector DVA correction (`dva_correction.py`, opt-in)
 
 **What DVA is.** Velocity aberration: the spacecraft's ~30 km/s velocity
@@ -297,3 +290,13 @@ mechanism as `fix_alignment`); idempotency via the `DVACORR` marker keyword
 
 Shareable technical report on this issue (for STScI / upstream):
 `docs/reports/DVA_INTERDETECTOR_REPORT.md`.
+
+---
+
+_Last updated 2026-07-11: retired the post-resample mosaic realign (`realign_to_catalog` /
+`realign_to_vvv` / `sync_gwcs_to_fits_wcs` / `*_realigned-to-refcat.fits` gone — the tie is applied
+once, per-exposure, and `_i2d` is the final image deliverable); added the opt-in inter-detector DVA
+correction (section above); corrected the F410M module-lock root cause to a stale local CRDS
+`filteroffset` cache (module-lock section). See also the offsets-table builders
+(`_bench/build_sickle_gns_offsets.py`, `scripts/miri_reduction/` registration scripts) and
+`f115w-astrometry-*` writeups in brick-jwst-2221._
