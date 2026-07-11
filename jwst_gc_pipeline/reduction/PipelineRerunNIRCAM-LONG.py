@@ -146,7 +146,14 @@ refnames = {'2221': 'F405ref',
 # Paths are relative to basepath.
 REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD = {
     '2221': {
-        '001': 'catalogs/crowdsource_based_nircam-f405n_reference_astrometric_catalog.ecsv',
+        # obs 001 = Brick. Re-anchored 2026-07-11 to the Gaia-tied seed (Gaia DR3 +
+        # VIRAC2 fill, per-star PM-propagated to epoch 2022.70; obs epoch 2022.655,
+        # 0.045 yr * 5.6 mas/yr = 0.25 mas -- negligible).  This retires the LAST
+        # remaining crowdsource-F405N bootstrap entry (VVV-DR4/2MASS frame, ~90 mas
+        # off Gaia) -- the frame that silently propagated into the NIRSpec 6927 MSA
+        # plan v11 target list (measured TA(Gaia)-vs-plan mismatch (+47,+73) mas).
+        # RELEASED CATALOGS MUST STATE THEIR FRAME + EPOCH (see stage_release.py).
+        '001': 'catalogs/gaia_virac2_refcat_epoch2022.70.fits',
         # obs 002 = Cloud C. Re-anchored 2026-06-22 to the Gaia-tied seed (Gaia DR3 +
         # VIRAC2 fill, per-star PM-propagated to obs epoch 2023.30). Audit found the old
         # F405N crowdsource bootstrap (VVV-DR4/2MASS frame) was ~+22 mas RA / ~+90 mas Dec
