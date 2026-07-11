@@ -2385,6 +2385,15 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
         print(satstar_cat.colnames)
         raise KeyError("Missing flux error column")
 
+    # x_fit/y_fit in satstar catalogs are CUTOUT-frame coordinates (the fit
+    # runs in a pad-centered stamp, so most rows read ~(pad, pad)); the
+    # detector-frame positions live in xcentroid/ycentroid (= x_fit + cutout
+    # origin, the coordinates skycoord_fit is computed from).  Writing x_fit
+    # into the catalog's pixel columns silently corrupted the x/y of every
+    # replaced row.  Use the detector-frame columns whenever present.
+    _sat_xcol = 'xcentroid' if 'xcentroid' in satstar_cat.colnames else 'x_fit'
+    _sat_ycol = 'ycentroid' if 'ycentroid' in satstar_cat.colnames else 'y_fit'
+
     # Record the daophot->satstar match separation BEFORE the position is
     # overwritten, so downstream users can cut on match quality (identity
     # swaps at GC densities move a star by up to the match radius).
@@ -2411,8 +2420,8 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
         cat['skycoord'][idx_cat] = satstar_cat['skycoord_fit'][idx_sat]
         if 'x' in cat.colnames:
             # the merged, individual field catalogs don't have these
-            cat['x'][idx_cat] = satstar_cat['x_fit'][idx_sat]
-            cat['y'][idx_cat] = satstar_cat['y_fit'][idx_sat]
+            cat['x'][idx_cat] = satstar_cat[_sat_xcol][idx_sat]
+            cat['y'][idx_cat] = satstar_cat[_sat_ycol][idx_sat]
             cat['dx'][idx_cat] = satstar_cat[xerr_colname][idx_sat]
             cat['dy'][idx_cat] = satstar_cat[yerr_colname][idx_sat]
 
@@ -2437,6 +2446,9 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
             satstar_toadd.rename_column(flux_err_colname, cat_fluxerr_col)
         satstar_toadd.rename_column('skycoord_fit', 'skycoord')
         if 'x' in cat.colnames:
+            if _sat_xcol != 'x_fit':
+                satstar_toadd['x_fit'] = satstar_toadd[_sat_xcol]
+                satstar_toadd['y_fit'] = satstar_toadd[_sat_ycol]
             satstar_toadd.rename_column('x_fit', 'x')
             satstar_toadd.rename_column('y_fit', 'y')
             satstar_toadd.rename_column(xerr_colname, 'dx')
@@ -2458,8 +2470,8 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
         cat['flux_err'][idx_cat] = satstar_cat[flux_err_colname][idx_sat]
         cat['skycoord'][idx_cat] = satstar_cat['skycoord_fit'][idx_sat]
         if 'x_fit' in satstar_cat.colnames and 'x_fit' in cat.colnames:
-            cat['x_fit'][idx_cat] = satstar_cat['x_fit'][idx_sat]
-            cat['y_fit'][idx_cat] = satstar_cat['y_fit'][idx_sat]
+            cat['x_fit'][idx_cat] = satstar_cat[_sat_xcol][idx_sat]
+            cat['y_fit'][idx_cat] = satstar_cat[_sat_ycol][idx_sat]
             cat['x_err'][idx_cat] = satstar_cat[xerr_colname][idx_sat]
             cat['y_err'][idx_cat] = satstar_cat[yerr_colname][idx_sat]
 
@@ -2481,6 +2493,9 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
 
         satstar_toadd.rename_column('skycoord_fit', 'skycoord')
         satstar_toadd['skycoord_centroid'] = satstar_toadd['skycoord']
+        if _sat_xcol != 'x_fit' and 'x_fit' in satstar_toadd.colnames:
+            satstar_toadd['x_fit'] = satstar_toadd[_sat_xcol]
+            satstar_toadd['y_fit'] = satstar_toadd[_sat_ycol]
 
         for colname in cat.colnames:
             if colname not in satstar_toadd.colnames:
