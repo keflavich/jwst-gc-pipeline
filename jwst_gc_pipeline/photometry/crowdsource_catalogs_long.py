@@ -4864,10 +4864,10 @@ def get_filename(basepath, filtername, proposal_id, field, module, options, pupi
     if os.path.exists(filename):
         return filename
 
+    # 2026-07-11: dropped the two *_realigned-to-refcat.fits fallbacks (realign retired).
+    # The plain _i2d.fits above is returned first anyway; realigned files are no longer produced.
     candidate_patterns = [
-        f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}_realigned-to-refcat.fits',
         f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}_i2d{desat}.fits',
-        f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_F444W-{filtername.lower()}-{module}_nodestreak_realigned-to-refcat.fits',
         f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t*_{inst_token}_*{filtername.lower()}*{module}*i2d*.fits',
         f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t*_{inst_token}_*{filtername.lower()}*i2d*.fits',
         f'{basepath}/mastDownload/JWST/**/jw0{proposal_id}-o{field}_t*_{inst_token}_*{filtername.lower()}*{module}*i2d*.fits',

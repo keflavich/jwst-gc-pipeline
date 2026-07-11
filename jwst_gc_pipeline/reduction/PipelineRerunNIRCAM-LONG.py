@@ -47,7 +47,7 @@ from jwst.datamodels import ImageModel
 
 from jwst_gc_pipeline.reduction.destreak import destreak
 
-from jwst_gc_pipeline.reduction.align_to_catalogs import realign_to_vvv, realign_to_catalog, merge_a_plus_b, retrieve_vvv
+from jwst_gc_pipeline.reduction.align_to_catalogs import merge_a_plus_b, retrieve_vvv
 from jwst_gc_pipeline.reduction.saturated_star_finding import remove_saturated_stars
 
 import crds
@@ -936,51 +936,10 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
             check_wcs(member['expname'].replace('destreak', 'i2d'))
         check_wcs(asn_data['products'][0]['name'] + "_i2d.fits")
 
-        did_vvv_realign = False
-        if regionname in ('brick', 'cloudc', ):
-            print(f"Realigning to VVV (module={module}, filter={filtername})")
-            realigned_vvv_filename = f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}{destreak_suffix}_realigned-to-vvv.fits'
-            shutil.copyfile(f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}_i2d.fits',
-                            realigned_vvv_filename)
-            print(f"Realigned to VVV filename: {realigned_vvv_filename}")
-            realigned = realign_to_vvv(filtername=filtername.lower(),
-                                       fov_regname=fov_regname[regionname],
-                                       basepath=basepath, module=module,
-                                       fieldnumber=field, proposal_id=proposal_id,
-                                       imfile=realigned_vvv_filename,
-                                       ksmag_limit=15 if filtername.lower() == 'f410m' else 11,
-                                       mag_limit=18 if filtername.lower() == 'f115w' else 15,
-                                       max_offset=(0.4 if wavelength > 250 else 0.2)*u.arcsec,
-                                       #raoffset=raoffset,
-                                       #decoffset=decoffset
-                                       )
-            print(f"Done realigning to VVV (module={module}, filtername={filtername})")
-            did_vvv_realign = True
-        else:
-            print(f"Skipping VVV realignment for region {regionname} (module={module}, filter={filtername})")
-
-        if reftbl is None:
-            print(f"Skipping refcat realignment (no reference catalog) for "
-                  f"module={module}, filtername={filtername}", flush=True)
-        else:
-            print(f"Realigning to refcat (module={module}, filtername={filtername})")
-            realigned_refcat_filename = f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}{destreak_suffix}_realigned-to-refcat.fits'
-            # copyfile (not copy) skips chmod, avoiding PermissionError when
-            # a previous run by another user owns the destination file in a
-            # group-writable shared workspace (e.g. W51 with t.yoo files).
-            shutil.copyfile(f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}_i2d.fits',
-                            realigned_refcat_filename)
-            print(f"Realigned refcat filename: {realigned_refcat_filename}")
-            realigned = realign_to_catalog(reftbl['skycoord'],
-                                           filtername=filtername.lower(),
-                                           basepath=basepath, module=module,
-                                           fieldnumber=field,
-                                           mag_limit=20, proposal_id=proposal_id,
-                                           max_offset=(0.4 if wavelength > 250 else 0.2)*u.arcsec,
-                                           imfile=realigned_refcat_filename,
-                                           #raoffset=raoffset, decoffset=decoffset
-                                           )
-            print(f"Done realigning to refcat (module={module}, filtername={filtername})")
+        # NOTE (2026-07-11): retired the post-Image3 realign_to_vvv / realign_to_catalog
+        # step -- the mosaic tie comes from per-exposure fix_alignment; this rigid CRVAL
+        # nudge was a no-op on dense-refcat fields and only wrote a ~5GB _realigned-to-refcat
+        # duplicate of _i2d.  Not the release deliverable (release uses _i2d).
 
         # saturated star "removal" should only be done in the cataloging stage
         # print(f"Removing saturated stars.  cwd={os.getcwd()}")
@@ -995,10 +954,7 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
     if module == 'nrcb':
         # assume nrca is run before nrcb
         if do_merge:
-            print("Merging already-combined nrca + nrcb modules")
-            merge_a_plus_b(filtername, basepath=basepath, fieldnumber=field, suffix=f'{destreak_suffix}_realigned-to-refcat',
-                           proposal_id=proposal_id)
-            print("DONE Merging already-combined nrca + nrcb modules")
+            print("nrca+nrcb merged mosaic comes from Image3 module='merged'; no realign merge")
         else:
             print("NRCB-only subarray mode; merge step is not expected or required.")
 
@@ -1097,45 +1053,10 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         # Only run VVV realignment for targets whose refnames is 'VVV'.  Gaia /
         # GNS / UKIDSS targets (Wd1, Wd2, W51, GC fields) must skip this
         # because retrieve_vvv returns no rows outside VVV coverage.
-        if (vvv_region_file is not None and os.path.exists(vvv_region_file)
-                and refnames.get(proposal_id) == 'VVV'):
-            print(f"Realigning to VVV (module={module})")
-            realigned_vvv_filename = f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}{destreak_suffix}_realigned-to-vvv.fits'
-            print(f"Realigned to VVV filename: {realigned_vvv_filename}")
-            shutil.copyfile(f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}_i2d.fits',
-                            realigned_vvv_filename)
-            realign_to_vvv(filtername=filtername.lower(),
-                           fov_regname=fov_regname[regionname], basepath=basepath, module=module,
-                           fieldnumber=field, proposal_id=proposal_id,
-                           imfile=realigned_vvv_filename,
-                           max_offset=(0.4 if wavelength > 250 else 0.2)*u.arcsec,
-                           ksmag_limit=15 if filtername.lower() == 'f410m' else 11,
-                           mag_limit=18 if filtername.lower() == 'f115w' else 15,
-                           )
-        else:
-            print(f"Skipping VVV realignment for region {regionname} (refnames={refnames.get(proposal_id)!r}): "
-                  f"either no FOV region or non-VVV reference catalog")
-
-        if reftbl is not None:
-            print(f"Realigning to refcat (module={module})")
-            realigned_refcat_filename = f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}{destreak_suffix}_realigned-to-refcat.fits'
-            print(f"Realigned refcat filename: {realigned_refcat_filename}")
-            # copyfile (not copy) skips chmod, avoiding PermissionError when
-            # a previous run by another user owns the destination file in a
-            # group-writable shared workspace (e.g. W51 with t.yoo files).
-            shutil.copyfile(f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}_i2d.fits',
-                            realigned_refcat_filename)
-            realign_to_catalog(reftbl['skycoord'],
-                               filtername=filtername.lower(),
-                               basepath=basepath, module=module,
-                               fieldnumber=field,
-                               max_offset=(0.4 if wavelength > 250 else 0.2)*u.arcsec,
-                               mag_limit=20,
-                               proposal_id=proposal_id,
-                               imfile=realigned_refcat_filename,
-                               )
-        else:
-            print(f"Skipping refcat realignment for proposal_id={proposal_id} field={field} because no reference catalog is available yet")
+        # NOTE (2026-07-11): retired the post-Image3 realign_to_vvv / realign_to_catalog
+        # step -- the mosaic tie comes from per-exposure fix_alignment; this rigid CRVAL
+        # nudge was a no-op on dense-refcat fields and only wrote a ~5GB _realigned-to-refcat
+        # duplicate of _i2d.  Not the release deliverable (release uses _i2d).
 
         # removing saturated stars should only be done in cataloging stage
         # print(f"Removing saturated stars.  cwd={os.getcwd()}")
