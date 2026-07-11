@@ -40,12 +40,16 @@ fix the others; two can produce conflicting offsets for the same data.
   bridges the ~22" per-visit errors a 0.3" NN median cannot. (relock_exposures
   already gained a histogram bridge in PR #34; the other two have NOT.)
 
-### R3 (HIGH) — two near-identical realign blocks in `PipelineRerunNIRCAM-LONG.py`
+### R3 (HIGH) — two near-identical realign blocks in `PipelineRerunNIRCAM-LONG.py` — ✅ RESOLVED 2026-07-11
 Two `realign_to_catalog(reftbl['skycoord'], ...)` call blocks (~L962 and ~L1123),
 each preceded by a VVV block, differing only slightly. A fix applied to one (e.g.
 the dense-NN skip) must be duplicated in the other or one path regresses.
-- **Fix:** factor the post-Image3 VVV+refcat realign into one helper called from
-  both code paths.
+- **Resolution:** rather than factor the duplicate into a helper, the entire
+  post-Image3 mosaic realign was **retired**. On the dense-refcat GC fields it was a
+  guarded no-op (a byte-identical copy of `_i2d`) and was never the release
+  deliverable. Both call blocks are gone; `realign_to_catalog` / `realign_to_vvv` are
+  now `NotImplementedError` stubs. The astrometric tie has one authoring point
+  (per-exposure `fix_alignment`). See `ASTROMETRY_WCS_CORRECTION_FLOW.md`.
 
 ### R4 (MEDIUM) — convention chaos across solvers (cosδ vs no-cosδ, mas vs arcsec)
 `measure_offset` = on-sky (×cosδ), mas. `coarse_xcorr`/`coord_shift` = coordinate
@@ -73,7 +77,8 @@ PRs #65/#66/#68 shipped: the dense-NN-median guard (`assert_sparse_reference_for
 raises on dense refs), `astrometry_offsets.measure_offset` (window sweep +
 `min_contrast`), `measure_offset_grid` (per-tile — catches half-mosaic untying),
 `agree_across_references` (VIRAC vs Gaia), a RAOFFSET-vs-table disagreement guard
-in `fix_alignment`, `realign_to_catalog` skip-on-dense, and tests
+in `fix_alignment` (the `realign_to_catalog` skip-on-dense guard is moot — realign
+retired 2026-07-11), and tests
 `test_dense_nn_median_guard`, `test_astrometry_offsets_sweep`,
 `test_no_adhoc_nn_median_astrometry`, `test_registration_gate`.
 
@@ -91,7 +96,8 @@ collapse possible in the first place.
    `measure_offset`. (touches brick-jwst-2221 — coordinate with PR #34.) Call
    `assert_offsets_table_sane(..., raise_on_issue=True)` at the end of the surviving
    builder so a collapse can never be written to disk.
-2. Factor the duplicated realign block in PipelineRerunNIRCAM-LONG into one helper.
+2. ~~Factor the duplicated realign block in PipelineRerunNIRCAM-LONG into one helper.~~
+   ✅ DONE 2026-07-11 — realign retired entirely (see R3); both blocks removed.
 3. Add an `|offset| > 60"` insane-magnitude check to `validate_offsets_table`
    (catches mas/arcsec unit slips) — not yet covered by the collapse check.
 4. Archive deprecated `offsets/*` tables; resolve the `_VIRAC2_average` reader.

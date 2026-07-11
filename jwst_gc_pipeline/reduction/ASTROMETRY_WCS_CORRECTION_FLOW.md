@@ -6,9 +6,18 @@ L2 products (`*_cal.fits`) to the final mosaics and catalogs, and to prevent
 **double-correction** of the astrometric WCS.
 
 Implemented in:
-- `PipelineRerunNIRCAM-LONG.py` — `fix_alignment()` (per-exposure), Image3 call, `realign_to_catalog()` call sites.
-- `align_to_catalogs.py` — `realign_to_catalog()`, `sync_gwcs_to_fits_wcs()`.
+- `PipelineRerunNIRCAM-LONG.py` — `fix_alignment()` (per-exposure), Image3 call.
 - `photometry/merge_catalogs.py` — `shift_individual_catalog()` (catalog side).
+
+> **Retired 2026-07-11:** the post-resample mosaic realign (`realign_to_catalog` /
+> `realign_to_vvv` → `*_realigned-to-refcat.fits` / `*_realigned-to-vvv.fits` +
+> `sync_gwcs_to_fits_wcs`) is **gone**. On the dense-refcat GC fields it was a
+> guarded no-op (OLCRVAL = none, i.e. a byte-identical ~5 GB copy of `_i2d`) and was
+> **never the release deliverable** (`scripts/release/stage_release.py` publishes
+> `_i2d.fits`). The astrometric solution now has **exactly one** authoring point —
+> per-exposure `fix_alignment` — and the `_i2d` mosaic is correct *by construction*.
+> The `realign_to_catalog` / `realign_to_vvv` functions remain as `NotImplementedError`
+> stubs so any stale caller fails loudly instead of silently mis-aligning.
 
 ---
 
@@ -28,8 +37,9 @@ of failure and must never be used.)
 This is now enforced in code:
 `jwst_gc_pipeline.photometry.measure_offsets.assert_sparse_reference_for_nn_median`
 **raises `DenseNNMedianAstrometryError`** on a dense reference. It guards
-`measure_offsets`, `realign_to_catalog`, `bootstrap_reference_catalog`,
+`measure_offsets`, `bootstrap_reference_catalog`,
 `combine_singleframe(realign=True)`, and the `generate_offsets_table` validation.
+(The former `realign_to_catalog` guard-site was retired with the realign step.)
 
 **Use instead:**
 - **2D offset-histogram stacking** — histogram *all* pairwise offsets within ~3",
@@ -60,14 +70,14 @@ fails CI if a new file pairs a NN match with a median/mean — do not write ad-h
 | `*_cal.fits` (archive L2b, per-exposure) | **No** — never modified in place | — | (immutable input) |
 | `*_destreak*.fits` / `*_align.fits` (per-exposure working copy) | **Yes — GWCS** | `fix_alignment()` → `jwst.tweakreg.utils.adjust_wcs` | **Yes** (`RAOFFSET` header guard) |
 | `*_crf.fits` (CR-flagged per-exposure, from Image3) | inherits the corrected GWCS | (produced by Image3 from the corrected input) | n/a |
-| `*_i2d.fits` (resampled mosaic) | inherits, **not separately shifted** | resample of the corrected exposures | (pristine) |
-| `*_realigned-to-refcat.fits` (i2d copy) | **Yes — FITS hdr + GWCS** | `realign_to_catalog()` + `sync_gwcs_to_fits_wcs()` | regenerated from pristine `_i2d` each run; GWCS sync is an absolute set |
+| `*_i2d.fits` (resampled mosaic — **final image deliverable**) | inherits, **not separately shifted** | resample of the corrected exposures | (pristine) |
 | per-frame catalogs (`*_daophot_basic.fits`) | use the corrected crf GWCS | (read crf GWCS) | n/a |
 | merged catalog | **Yes — table-space** | `shift_individual_catalog()`: `final = centroid − RAOFFSET_meta + dra_table` | re-derivable from any offsets table |
 
-**The astrometric solution has exactly two authoring points:**
-1. **Per-exposure** (`fix_alignment` → `adjust_wcs`): the science-bearing tie. Catalogs (on crf) and the `_i2d` mosaic both inherit it.
-2. **Post-resample rigid tie** (`realign_to_catalog`): a final whole-mosaic CRVAL nudge, applied **only** to the `_realigned-to-refcat` copy of the i2d.
+**The astrometric solution now has exactly ONE authoring point:**
+1. **Per-exposure** (`fix_alignment` → `adjust_wcs`): the science-bearing tie.
+   Catalogs (on crf) and the `_i2d` mosaic both inherit it. There is no
+   post-resample mosaic realign (retired 2026-07-11 — see the note at the top).
 
 ---
 
@@ -82,35 +92,26 @@ archive  jw…_cal.fits                          (MAST L2b; assign_wcs GWCS; NEV
    ▼
 Image3Pipeline.call(..., tweakreg skip=True)    (TweakRegStep is SKIPPED — see note)
    ├─►  jw…-<filt>-merged_crf.fits  (per-exposure, CR-flagged, corrected GWCS)  ──► CATALOGS (crf-space)
-   └─►  jw…-<filt>-merged_i2d.fits  (resampled mosaic, corrected GWCS; pristine)
-            │  shutil.copyfile → …_realigned-to-refcat.fits
-            │  realign_to_catalog(...)           (rigid CRVAL shift to external refcat; FITS hdr)
-            │  sync_gwcs_to_fits_wcs(...)         (propagate that shift into the i2d GWCS)
-            ▼
-        jw…-<filt>-merged_realigned-to-refcat.fits   ← FINAL IMAGE DELIVERABLE
+   └─►  jw…-<filt>-merged_i2d.fits  (resampled mosaic, corrected GWCS; pristine)  ← FINAL IMAGE DELIVERABLE
 ```
 
 **TweakRegStep is intentionally skipped** (`tweakreg_parameters['skip'] = True`).
-All absolute alignment is done by our `fix_alignment` (per-exposure) + the
-post-resample `realign_to_catalog`, **not** by the pipeline TweakReg step. Do not
-re-enable TweakReg without removing one of these, or you will double-correct.
+All absolute alignment is done by our `fix_alignment` (per-exposure), **not** by the
+pipeline TweakReg step. Do not re-enable TweakReg, or you will double-correct.
 
 ---
 
-## Why two stages, and why no double-correction
+## One correction stage, and why no double-correction
 
 - `fix_alignment` ties **each exposure** to the reference using the per-frame
   offsets table (relative frame-to-frame + bulk). It is **idempotent**: the first
   thing it does is check for a `RAOFFSET` keyword and bail if present
   (`align_to_catalogs.py` / `PipelineRerun … fix_alignment`, the `if 'RAOFFSET' in header` guard).
   Re-running the pipeline therefore never stacks shifts on the per-exposure files.
-- `realign_to_catalog` applies a single rigid whole-mosaic CRVAL shift to set the
-  absolute zero point of the **mosaic**. It always operates on a **fresh
-  `shutil.copyfile` of the pristine `_i2d.fits`** (the `_i2d` is never edited), so
-  it is reproducible run-to-run and cannot stack. It records `OLCRVAL1/2`.
-- `sync_gwcs_to_fits_wcs` sets the i2d GWCS tangent point **equal to** the
-  realigned SCI-header CRVAL (an **absolute set**, not a relative shift), so calling
-  it twice is a no-op — idempotent by construction.
+- Because the tie is baked into every exposure's GWCS **before** Image3, both the
+  `_crf` (→ catalogs) and the resampled `_i2d` mosaic inherit it. The mosaic is
+  correct *by construction* — there is no separate post-resample mosaic shift to
+  stack or drift (the old `realign_to_catalog` step was retired 2026-07-11).
 - Catalogs never read the i2d. They read the crf GWCS and then re-express the tie
   in table space: `shift_individual_catalog` does `centroid − RAOFFSET_meta + dra_table`,
   i.e. it *removes* the GWCS-baked `RAOFFSET` and re-applies the current offsets
@@ -118,11 +119,9 @@ re-enable TweakReg without removing one of these, or you will double-correct.
   **without** re-running the pipeline, and keeps catalog ↔ mosaic ties consistent
   (both ultimately trace to the same offsets table + refcat).
 
-**Single rule to avoid double-correction:** correct the astrometry at *exactly one*
-of {per-exposure `fix_alignment`, post-resample `realign_to_catalog`} for a given
-effect. `fix_alignment` owns the per-frame solution; `realign_to_catalog` owns only
-the residual rigid mosaic zero-point. Never add a third corrector, and never edit
-`_cal.fits` or `_i2d.fits` in place.
+**Single rule to avoid double-correction:** the astrometry is corrected at *exactly
+one* place — per-exposure `fix_alignment`. Never add a post-resample mosaic
+corrector, and never edit `_cal.fits` or `_i2d.fits` in place.
 
 ---
 
@@ -133,24 +132,16 @@ the residual rigid mosaic zero-point. Never add a third corrector, and never edi
   GWCS — the supported, correct path. `fix_alignment` already does this. Do **not**
   hand-edit `crval`/`pc` of a per-exposure GWCS.
 
-- **Resampled (i2d) GWCS: STScI provides NO tool.** `adjust_wcs`'s own docstring
-  states it is *"not designed to handle … GWCS of resampled images."* So for the
-  `_realigned-to-refcat` mosaic we cannot use `adjust_wcs`. `sync_gwcs_to_fits_wcs`
-  therefore rebuilds the resampled GWCS's terminal `gwcs.fitswcs.FITSImagingWCSTransform`
-  with the new `crval` (keeping `crpix`/`cdelt`/`pc`/`projection`) using gwcs's own
-  public model API — this is the minimal, supported way to set a resampled tangent
-  point, and it is verified to make GWCS == FITS-header WCS to < 0.01 mas. It is **not**
-  a free-form transform hack and it is idempotent (absolute set).
-
-  > If a future jwst/gwcs release ships a sanctioned resampled-WCS shifter, replace
-  > `sync_gwcs_to_fits_wcs` with it.
-
-- **Preferred long-term simplification (not yet implemented):** fold the
-  `realign_to_catalog` rigid offset into the per-exposure offsets table so the tie
-  is applied once, at the `_cal` level via `adjust_wcs`, and the resampled i2d is
-  correct *by construction* (no post-resample GWCS edit needed at all). This would
-  make the i2d and catalogs share a single tie mechanism. Left as a TODO because it
-  requires regenerating the offsets table to absorb the current rigid residual.
+- **No post-resample (i2d) GWCS edit is performed.** `adjust_wcs`'s own docstring
+  states it is *"not designed to handle … GWCS of resampled images"*, and STScI ships
+  no sanctioned resampled-WCS shifter. Rather than hand-edit the mosaic GWCS, the
+  pipeline applies the entire astrometric tie at the `_cal`/per-exposure level (via
+  `adjust_wcs` in `fix_alignment`) so the resampled i2d is correct *by construction* —
+  the i2d and catalogs share a single tie mechanism. **This is exactly the "preferred
+  simplification" the old design deferred; it is now the design** (the
+  `realign_to_catalog` + `sync_gwcs_to_fits_wcs` post-resample path was retired
+  2026-07-11). Any residual rigid mosaic zero-point must be absorbed into the
+  per-exposure offsets table, never re-introduced as a mosaic-level GWCS edit.
 
 ---
 
@@ -257,8 +248,10 @@ band-aid split is gone.)
 
 ---
 
-_Last updated 2026-07-03 (added module-lock policy + F410M exception). See also `align_to_catalogs.py:sync_gwcs_to_fits_wcs`
-docstring, the offsets-table builders (`_bench/build_sickle_gns_offsets.py`,
+_Last updated 2026-07-11 (retired the post-resample mosaic realign: `realign_to_catalog` /
+`realign_to_vvv` / `sync_gwcs_to_fits_wcs` / `*_realigned-to-refcat.fits` are gone; the tie is now
+applied once, per-exposure, and the `_i2d` mosaic is the final image deliverable). See also
+the offsets-table builders (`_bench/build_sickle_gns_offsets.py`,
 `scripts/miri_reduction/` registration scripts), and `f115w-astrometry-*`
 analysis writeups in brick-jwst-2221._
 

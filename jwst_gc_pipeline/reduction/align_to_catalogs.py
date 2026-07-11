@@ -1,20 +1,13 @@
 import numpy as np
-import shutil
 import os
-import matplotlib
-matplotlib.use('Agg')  # headless: diagnostic_plots' pylab savefig/tight_layout hangs on
-                       # compute nodes without a forced non-interactive backend (hung the
-                       # Cloud C pipe ~48h after the first realign diagnostic plot, 2026-06).
 import astropy.units as u
 from astropy.coordinates import SkyCoord
 from astroquery.gaia import Gaia
 import regions
 from astroquery.vizier import Vizier
-from astropy.visualization import quantity_support
 from astropy import log
 from astropy.table import Table
 import warnings
-from jwst.datamodels import ImageModel
 
 from astropy.wcs import WCS
 from astropy.io import fits
@@ -22,103 +15,7 @@ from astropy.io import fits
 import datetime
 
 from jwst_gc_pipeline.catalog_utils import catalog_skycoord
-from jwst_gc_pipeline.photometry.measure_offsets import (
-    assert_sparse_reference_for_nn_median, DenseNNMedianAstrometryError)
 
-
-def sync_gwcs_to_fits_wcs(imfile):
-    """Rebuild the embedded ASDF GWCS to match a realigned SCI FITS-header WCS.
-
-    ``realign_to_catalog`` writes its CRVAL shift only to the SCI FITS header.
-    The resampled i2d GWCS is a ``gwcs.fitswcs.FITSImagingWCSTransform`` that
-    caches its tangent point at construction, so the shift never reaches the
-    GWCS and any GWCS consumer (datamodel photometry, GWCS-aware viewers) sees
-    the un-realigned frame.  Mutating the ``crval`` Parameter does not rebuild
-    the cached transform, so we construct a fresh transform from the updated
-    header CRVAL (keeping crpix/cdelt/pc/projection) and reassign the WCS.
-
-    TOOLING NOTE: the sanctioned STScI GWCS shifter ``jwst.tweakreg.utils.adjust_wcs``
-    is used for *per-exposure* (_cal) GWCS in ``fix_alignment``, but its docstring
-    states it is "not designed to handle ... GWCS of resampled images" -- so it
-    CANNOT be used here.  Rebuilding the terminal FITSImagingWCSTransform via gwcs's
-    public model API is the minimal supported way to set a resampled tangent point.
-
-    IDEMPOTENT: this sets the GWCS tangent point EQUAL to the SCI-header CRVAL (an
-    absolute set, not a relative shift), so re-running is a no-op.
-
-    See ASTROMETRY_WCS_CORRECTION_FLOW.md (this directory) for the full flow.
-    """
-    try:
-        import stdatamodels.jwst.datamodels as dm
-        from gwcs.wcs import WCS as GWCS
-        from gwcs.fitswcs import FITSImagingWCSTransform
-    except ImportError as e:
-        log.warning(f"Could not import gwcs/datamodels to sync GWCS for {imfile}: {e}")
-        return
-
-    hdr = fits.getheader(imfile, ext=('SCI', 1))
-    new_crval = [hdr['CRVAL1'], hdr['CRVAL2']]
-    model = dm.open(imfile)
-    try:
-        gw = model.meta.wcs
-        if gw is None:
-            log.warning(f"No GWCS in {imfile}; nothing to sync.")
-            return
-        pipe = gw.pipeline
-        s0 = pipe[0]
-        ft = s0.transform
-        if isinstance(ft, FITSImagingWCSTransform):
-            new_ft = FITSImagingWCSTransform(ft.projection,
-                                             crpix=ft.crpix.value,
-                                             crval=new_crval,
-                                             cdelt=ft.cdelt.value,
-                                             pc=ft.pc.value)
-            model.meta.wcs = GWCS([type(s0)(s0.frame, new_ft)] + list(pipe[1:]))
-            model.save(imfile)
-            log.info(f"Synced embedded GWCS to realigned CRVAL {new_crval} in {imfile}")
-        else:
-            log.warning(f"GWCS forward transform is {type(ft).__name__}, not "
-                        f"FITSImagingWCSTransform; GWCS NOT synced for {imfile}. "
-                        f"GWCS consumers may see the un-realigned frame.")
-    finally:
-        model.close()
-
-
-def diagnostic_plots(fn, refcrds, meascrds, dra, ddec, savename=None):
-    # QA-only PNG.  Skipped by default: pl.tight_layout()/savefig on the multi-panel
-    # crf+scatter figure hung the Cloud C pipe for ~12h (twice), even with the Agg
-    # backend.  Opt in with REALIGN_DIAGNOSTIC_PLOTS=1 if you want the diagnostics.
-    if not os.environ.get('REALIGN_DIAGNOSTIC_PLOTS'):
-        return
-    import pylab as pl
-    from astropy.visualization import simple_norm
-    fig = pl.figure(dpi=200)
-    ax1 = pl.subplot(2, 2, 1)
-    ra = meascrds.ra
-    dec = meascrds.dec
-    ax1.quiver(ra.to(u.deg).value, dec.to(u.deg).value, dra.to(u.arcsec).value, ddec.to(u.arcsec).value)
-
-    img = ImageModel(fn)
-    ww = img.meta.wcs
-    ax2 = pl.subplot(2, 2, 2, projection=ww)
-    ax2.imshow(img.data, cmap='gray_r', norm=simple_norm(img.data, min_percent=1, max_percent=99, stretch='asinh'))
-    ax2.scatter_coord(refcrds, marker='x', color='r')
-
-    ax3 = pl.subplot(2, 2, 3, projection=ww)
-    ax3.imshow(img.data, cmap='gray_r', norm=simple_norm(img.data, min_percent=1, max_percent=99, stretch='asinh'))
-    ax3.scatter_coord(refcrds, marker='x', color='r')
-    ax3.scatter_coord(meascrds, marker='+', color='b')
-    ax3.axis([1000,1200,1000,1200])
-
-    ax4 = pl.subplot(2, 2, 4, projection=ww)
-    ax4.imshow(img.data, cmap='gray_r', norm=simple_norm(img.data, min_percent=1, max_percent=99, stretch='asinh'))
-    ax4.scatter_coord(refcrds, marker='x', color='r')
-    ax4.scatter_coord(meascrds, marker='+', color='b')
-    ax4.axis([200,400,200,400])
-
-    if savename is not None:
-        pl.tight_layout()
-        pl.savefig(savename, bbox_inches='tight')
 
 def print(*args, **kwargs):
     now = datetime.datetime.now().isoformat()
@@ -163,42 +60,11 @@ def _get_catalog_pixel_coordinates(cat, ww):
         f"{cat.colnames}"
     )
 
-def main(field='001',
-         basepath = '/orange/adamginsburg/jwst/brick/',
-         proposal_id='2221',
-        ):
-    for filtername in ( 'f405n', 'f410m', 'f466n', 'f182m', 'f187n', 'f212n',):
-        print()
-        print(f"Filter = {filtername}")
-        for module in ('nrca', 'nrcb', 'merged', ): #'merged-reproject'):
-            # merged-reproject shouldn't need realignment b/c it should be made from realigned images
-
-            print(filtername, module)
-            log.info(f"Realigning to vvv (module={module}")
-
-            realigned_vvv_filename = f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}_realigned-to-vvv.fits'
-            shutil.copy(f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}_i2d.fits',
-                        realigned_vvv_filename)
-            realigned = realign_to_vvv(filtername=filtername.lower(),
-                                    basepath=basepath, module=module, fieldnumber=field,
-                                    imfile=realigned_vvv_filename, ksmag_limit=15 if filtername=='f410m'
-                                    else 11, mag_limit=17 if filtername == 'F115W' else 15, proposal_id=proposal_id)
-
-            log.info(f"Realigning to refcat (module={module}")
-
-            abs_refcat = f'{basepath}/catalogs/crowdsource_based_nircam-f405n_reference_astrometric_catalog.ecsv'
-            reftbl = Table.read(abs_refcat)
-
-            realigned_refcat_filename = f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}_realigned-to-refcat.fits'
-            shutil.copy(f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername.lower()}-{module}_i2d.fits',
-                        realigned_refcat_filename)
-            realigned = realign_to_catalog(reftbl['skycoord'],
-                                           filtername=filtername.lower(),
-                                           basepath=basepath, module=module,
-                                           fieldnumber=field,
-                                           mag_limit=20,
-                                           proposal_id=proposal_id,
-                                           imfile=realigned_refcat_filename)
+# NOTE (2026-07-11): the legacy standalone `main()` driver that produced
+# `*_realigned-to-vvv.fits` / `*_realigned-to-refcat.fits` for every filter/module
+# was removed with the realign retirement (it called the now-retired
+# realign_to_vvv/realign_to_catalog). The reduction no longer produces those files;
+# the `_i2d.fits` mosaic is the deliverable. See ASTROMETRY_WCS_CORRECTION_FLOW.md.
 
 
 def retrieve_vvv(
@@ -276,240 +142,20 @@ def retrieve_vvv(
     assert 'skycoord' in vvvdr4.colnames
     return vvvdr4_crds, vvvdr4
 
-def realign_to_vvv(
-    basepath = '/orange/adamginsburg/jwst/brick/',
-    filtername = 'f212n',
-    module = 'nrca',
-    imfile = None,
-    catfile = None,
-    fov_regname='regions/nircam_brick_fov.reg',
-    fieldnumber='001',
-    proposal_id='2221',
-    ksmag_limit=15,
-    mag_limit=15,
-    max_offset=0.4*u.arcsec,
-    raoffset=0*u.arcsec, decoffset=0*u.arcsec,
-):
-    """
-    ksmag_limit is a *lower* limit (we want fainter sources from VVV), while mag_limit is an *upper limit* - we want brighter sources from JWST
-    """
-
-    vvvdr4_crds, vvvdr4 = retrieve_vvv(basepath=basepath, filtername=filtername, module=module, fov_regname=fov_regname, fieldnumber=fieldnumber, proposal_id=proposal_id, imfile=imfile)
-
-    if ksmag_limit:
-        ksmag_priority = (
-            'Ksmag3', 'Ksmag', 'KsMag3', 'KsMag',
-            'Ks2ap3', 'Ks1ap3', 'Ks2ap1', 'Ks1ap1',
-        )
-        ksmag_col = next((col for col in ksmag_priority if col in vvvdr4.colnames), None)
-        if ksmag_col is None:
-            raise KeyError(f"Could not find a Ks magnitude column in VVV table; available columns include: {vvvdr4.colnames}")
-
-        ksmag = np.array(vvvdr4[ksmag_col], dtype='float')
-        ksmag_sel = np.isfinite(ksmag) & (ksmag > ksmag_limit)
-        log.info(f"Kept {ksmag_sel.sum()} out of {len(vvvdr4)} VVV stars using ksmag_limit>{ksmag_limit}")
-        vvvdr4_crds = vvvdr4_crds[ksmag_sel]
-
-    return realign_to_catalog(vvvdr4_crds, filtername=filtername,
-                              module=module, basepath=basepath,
-                              fieldnumber=fieldnumber,
-                              catfile=catfile, imfile=imfile,
-                              mag_limit=mag_limit,
-                              max_offset=max_offset,
-                              raoffset=raoffset, decoffset=decoffset,
-                              proposal_id=proposal_id,
-                              )
+def realign_to_vvv(*args, **kwargs):
+    raise NotImplementedError(
+        "realign_to_vvv was RETIRED 2026-07-11. The post-Image3 VVV/refcat realign is gone; "
+        "the mosaic tie comes from per-exposure fix_alignment. Align dense refs with "
+        "offset-histogram stacking (jwst_gc_pipeline.photometry.astrometry_offsets.measure_offset).")
 
 
-def realign_to_catalog(reference_coordinates, filtername='f212n',
-                       module='nrca',
-                       basepath='/orange/adamginsburg/jwst/brick/',
-                       fieldnumber='001',
-                       proposal_id='2221',
-                       max_offset=0.4*u.arcsec,
-                       mag_limit=15,
-                       catfile=None, imfile=None,
-                       threshold=0.001*u.arcsec,
-                       raoffset=0*u.arcsec, decoffset=0*u.arcsec):
-    """
-    Realign one image to an external astrometric reference catalog.
+def realign_to_catalog(*args, **kwargs):
+    raise NotImplementedError(
+        "realign_to_catalog was RETIRED 2026-07-11. It was a post-resample rigid CRVAL nudge that, "
+        "after the dense-NN-median guard, was a no-op on GC/brick and only wrote a byte-identical "
+        "_realigned-to-refcat.fits duplicate of _i2d.fits (not the release deliverable). The mosaic "
+        "tie comes from per-exposure fix_alignment; validate with astrometry_offsets.measure_offset.")
 
-    Parameters
-    ----------
-    reference_coordinates : SkyCoord
-        The fixed reference frame to align *to* (for example VVV/GNS/JWST
-        bootstrap reference coordinates).
-    catfile : str or None
-        Catalog of sources measured from the image being aligned (``imfile``).
-        This is the moving/measurement catalog whose pixel positions are mapped
-        with the image WCS and shifted to match ``reference_coordinates``.
-        If None, defaults to the pipeline source catalog associated with the
-        image/filter/module/field.
-    imfile : str or None
-        FITS image whose WCS is updated in place.
-
-    Notes
-    -----
-    ``catfile`` should be the source catalog for ``imfile``, not the external
-    reference catalog.
-    """
-    if catfile is None:
-        catfile = f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{fieldnumber}_t001_nircam_clear-{filtername}-{module}_cat.ecsv'
-        print(f"Catalog file was None, so defaulting to {catfile}")
-    if imfile is None:
-        imfile = f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{fieldnumber}_t001_nircam_clear-{filtername}-{module}_i2d.fits'
-        print(f"imfile file was None, so defaulting to {imfile}")
-
-    print(f"Realigning to catalog {catfile}")
-
-    cat = Table.read(catfile)
-
-    # HACKETY HACK HACK filtering by flux
-    # 7e-8 is the empirical MJy/sr in one pixel-to-ABmag-flux conversion
-    # it seems to hold for all of the fields, kinda?
-    #sel = (flux > 7e-8*500*u.Jy) & (flux < 4000*7e-8*u.Jy)
-
-    # Manual checking in CARTA: didn't look like any good matches at mag>15
-    selection_column, selection_kind = _get_catalog_selection_column(cat)
-    selection_values = np.asarray(cat[selection_column])
-    finite = np.isfinite(selection_values)
-    if selection_kind == 'magnitude':
-        sel = finite & (selection_values < mag_limit)
-        selection_summary = f"{selection_column}<{mag_limit}"
-    else:
-        sel = finite & (selection_values > 0)
-        selection_summary = f"{selection_column}>0"
-
-    log.info(
-        f"For {filtername} {module} {fieldnumber} catalog {catfile}, "
-        f"using {selection_column} and found {sel.sum()} of {sel.size} sources "
-        f"meeting criteria {selection_summary}"
-    )
-
-    if sel.sum() == 0:
-        print(f"min {selection_column}: {np.nanmin(selection_values)}, max {selection_column}: {np.nanmax(selection_values)}")
-        raise ValueError("No sources passed basic selection criteria")
-
-    with warnings.catch_warnings():
-        warnings.simplefilter('ignore')
-        ww = WCS(fits.getheader(imfile, ext=('SCI', 1)))
-        xpix, ypix = _get_catalog_pixel_coordinates(cat, ww)
-        skycrds_cat_orig = ww.pixel_to_world(xpix, ypix)
-        ww.wcs.crval = ww.wcs.crval - [raoffset.to(u.deg).value, decoffset.to(u.deg).value] # visualize this adjustment separately from next, find out which step is wrong
-
-    med_dra = 100*u.arcsec
-    med_ddec = 100*u.arcsec
-    iteration = 0
-    # Minimum matches required to trust a realignment shift. This post-resample
-    # realign is only a small refinement on top of the tweakreg/assign_wcs frame
-    # (which for well-guided fields is already tens of mas from the reference).
-    # If the image source catalog crossmatches to too few reference stars -- e.g.
-    # wide short-wave bands (F150W2) where SourceCatalogStep's aper_total_vegamag
-    # selection keeps mostly saturated/spurious sources and only a handful land on
-    # Gaia -- do NOT apply a shift driven by that noise, and (crucially) do NOT
-    # crash: a refinement step must never destroy an otherwise-good mosaic. Keep
-    # the current WCS and fall through to write the (unchanged) product.
-    min_matches = 5
-    # FORBIDDEN-METHOD GUARD: the loop below applies (to the FITS CRVAL and the
-    # embedded GWCS) the MEDIAN of search-around-sky matches -- invalid against a
-    # dense reference, where it collapses to a spurious ~0 and has corrupted
-    # brick-1182 twice.  But this whole routine is a post-resample REFINEMENT whose
-    # ``_realigned-to-refcat`` output is not consumed (the science mosaic tie comes
-    # from per-exposure fix_alignment).  So against a DENSE reference, SKIP it with
-    # a loud warning rather than crash the reduction -- do NOT apply a spurious
-    # shift, and do NOT destroy an otherwise-correct mosaic.  A SPARSE (Gaia-only)
-    # reference still runs normally.  (Pure offset-MEASUREMENT functions --
-    # measure_offsets, bootstrap_reference_catalog -- still raise, since a garbage
-    # offset table is worse than a crash.)
-    try:
-        assert_sparse_reference_for_nn_median(
-            reference_coordinates, max_offset,
-            context=f"realign_to_catalog(imfile={os.path.basename(str(imfile))}, "
-                    f"{filtername} {module} {fieldnumber})")
-    except DenseNNMedianAstrometryError as _ex:
-        log.warning(f"SKIPPING realign_to_catalog against a DENSE reference "
-                    f"(forbidden dense-NN-median); the mosaic tie comes from "
-                    f"per-exposure fix_alignment. {_ex}")
-        return None
-    while np.abs(med_dra) > threshold or np.abs(med_ddec) > threshold:
-        skycrds_cat = ww.pixel_to_world(xpix, ypix)
-
-        idx, sidx, sep, sep3d = reference_coordinates.search_around_sky(skycrds_cat[sel], max_offset)
-        dra = (skycrds_cat[sel][idx].ra - reference_coordinates[sidx].ra).to(u.arcsec)
-        ddec = (skycrds_cat[sel][idx].dec - reference_coordinates[sidx].dec).to(u.arcsec)
-
-        med_dra = np.median(dra)
-        med_ddec = np.median(ddec)
-
-        print(f'At realignment iteration {iteration}, offset is {med_dra}, {med_ddec}.  Found {len(idx)} matches.')
-        iteration += 1
-
-        if len(idx) < min_matches or not np.isfinite(med_dra.value):
-            log.warning(
-                f"realign_to_catalog: only {len(idx)} match(es) within {max_offset} for "
-                f"{filtername} {module} {fieldnumber} (need >= {min_matches}); "
-                f"keeping the pre-realign WCS unchanged (no shift applied)."
-            )
-            med_dra = 0*u.arcsec
-            med_ddec = 0*u.arcsec
-            break
-
-        ww.wcs.crval = ww.wcs.crval - [med_dra.to(u.deg).value, med_ddec.to(u.deg).value]
-
-    with fits.open(imfile, mode='update') as hdulist:
-        print("CRVAL before", hdulist['SCI'].header['CRVAL1'], hdulist['SCI'].header['CRVAL2'])
-        hdulist['SCI'].header['OLCRVAL1'] = (hdulist['SCI'].header['CRVAL1'], "Original CRVAL before ralign")
-        hdulist['SCI'].header['OLCRVAL2'] = (hdulist['SCI'].header['CRVAL2'], "Original CRVAL before ralign")
-        hdulist['SCI'].header.update(ww.to_header())
-        print("CRVAL after", hdulist['SCI'].header['CRVAL1'], hdulist['SCI'].header['CRVAL2'])
-
-    # propagate the CRVAL shift into the embedded ASDF GWCS (the SCI header
-    # update above does NOT touch the GWCS, which is what we actually use)
-    sync_gwcs_to_fits_wcs(imfile)
-
-    # re-load the WCS to make sure it worked
-    with warnings.catch_warnings():
-        warnings.simplefilter('ignore')
-        ww =  WCS(hdulist['SCI'].header)
-    skycrds_cat_new = ww.pixel_to_world(xpix, ypix)
-
-    idx, sidx, sep, sep3d = reference_coordinates.search_around_sky(skycrds_cat_new[sel], max_offset)
-    dra = (skycrds_cat_new[sel][idx].ra - reference_coordinates[sidx].ra).to(u.arcsec)
-    ddec = (skycrds_cat_new[sel][idx].dec - reference_coordinates[sidx].dec).to(u.arcsec)
-
-    if len(idx) >= min_matches:
-        pngname = f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{fieldnumber}_t001_nircam_clear-{filtername}-{module}_xmatch_diagnostics.png'
-        diagnostic_plots(imfile, reference_coordinates, skycrds_cat_new[sel][idx], dra, ddec, savename=pngname)
-        print(f'After realignment, offset is {np.median(dra)}, {np.median(ddec)} with {len(idx)} matches')
-    else:
-        print(f'After realignment (skipped: {len(idx)} matches < {min_matches}), WCS left unchanged.')
-
-    # redundant
-    # ww.wcs.crval = ww.wcs.crval - [np.median(dra).to(u.deg).value, np.median(ddec).to(u.deg).value]
-    # with fits.open(imfile, mode='update') as hdulist:
-    #     print("CRVAL before", hdulist['SCI'].header['CRVAL1'], hdulist['SCI'].header['CRVAL2'])
-    #     hdulist['SCI'].header['OMCRVAL1'] = (hdulist['SCI'].header['CRVAL1'], "Old median CRVAL")
-    #     hdulist['SCI'].header['OMCRVAL2'] = (hdulist['SCI'].header['CRVAL2'], "Old median CRVAL")
-    #     hdulist['SCI'].header.update(ww.to_header())
-    #     print("CRVAL after", hdulist['SCI'].header['CRVAL1'], hdulist['SCI'].header['CRVAL2'])
-
-
-    # re-reload the file by reading from disk, with non-update mode
-    # this is a double-double-check that the solution was written to disk
-    with fits.open(imfile) as hdulist:
-        # re-load the WCS to make sure it worked
-        with warnings.catch_warnings():
-            warnings.simplefilter('ignore')
-            ww =  WCS(hdulist['SCI'].header)
-        skycrds_cat_new = ww.pixel_to_world(xpix, ypix)
-
-        idx, sidx, sep, sep3d = reference_coordinates.search_around_sky(skycrds_cat_new[sel], max_offset)
-        dra = (skycrds_cat_new[sel][idx].ra - reference_coordinates[sidx].ra).to(u.arcsec)
-        ddec = (skycrds_cat_new[sel][idx].dec - reference_coordinates[sidx].dec).to(u.arcsec)
-
-        print(f'After re-realignment, offset is {np.median(dra)}, {np.median(ddec)} using {len(idx)} matches')
-
-    return hdulist
 
 def merge_a_plus_b(filtername,
     basepath = '/orange/adamginsburg/jwst/brick/',
