@@ -135,6 +135,11 @@ refnames = {'2221': 'F405ref',
             # the correct astrometric reference (NOT GNS, NOT VVV).
             '1905': 'Gaia',
             '3523': 'Gaia',
+            # M92 (halo GC) + M4/NGC6397 (Bedin): non-GC clusters, pure Gaia DR3
+            # frame.  Tied per-(visit,filter) in fix_alignment (added 2026-07-11);
+            # 'Gaia' here keeps the VVV-realign gate OFF (it only fires on 'VVV').
+            '1334': 'Gaia',
+            '1979': 'Gaia',
             }
 
 # Reference catalog configuration by proposal and field.
@@ -1318,6 +1323,36 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
         _cosd = np.cos(np.radians(-28.805))
         rashift = (_cdra / 1000.0 / _cosd) * u.arcsec
         decshift = (_cddec / 1000.0) * u.arcsec
+    elif str(proposal_id) in ('1979', '1334'):
+        # M4 (1979 o002 + o003="M-4-shift") and M92 (1334 o001): non-GC halo
+        # clusters outside VIRAC2/VVV -> tie each exposure to Gaia DR3
+        # (gaia_refcat.fits, PM-propagated).  Audit 2026-07-11: these fell through
+        # to the else (rashift=0), sat at the raw assign_wcs frame ~2" off Gaia
+        # (RAOFFSET=0, no offsets table, no catalog).  Bulk tie = measure_offset
+        # histogram of the untied destreak crf vs gaia_refcat, per (visit,filter)
+        # (measure_perobs; c=94-530).  M92 is a PURE per-visit shift (all 4 filters
+        # agree to <20 mas); M4 differs SW(F150W2) vs LW(F322W2) ~300-500 mas so is
+        # keyed per (visit,filter).  corr is ON-SKY (Gaia - detection) mas; adjust_wcs
+        # delta_ra is a COORDINATE rotation -> delta_ra = corr_dRA_onsky / cos(dec),
+        # delta_dec 1:1 (same convention as the sickle GNS branch above).
+        _gaia_tie = {
+            ('jw01979002001', 'F150W2'): (104.7, -180.3),
+            ('jw01979002001', 'F322W2'): (-442.9, -87.9),
+            ('jw01979003001', 'F150W2'): (-2189.0, 370.7),
+            ('jw01979003001', 'F322W2'): (-1914.7, 546.9),
+            ('jw01334001001', 'F090W'): (-1832.1, -708.2),
+            ('jw01334001001', 'F150W'): (-1853.5, -710.6),
+            ('jw01334001001', 'F277W'): (-1852.1, -711.7),
+            ('jw01334001001', 'F444W'): (-1852.7, -710.7),
+        }
+        _visit = fn.split('_')[0]
+        _key = (_visit, filtername.upper())
+        _cdra, _cddec = _gaia_tie.get(_key, (0.0, 0.0))
+        _cosd = np.cos(np.radians(-26.427 if str(proposal_id) == '1979' else 43.139))
+        rashift = (_cdra / 1000.0 / _cosd) * u.arcsec
+        decshift = (_cddec / 1000.0) * u.arcsec
+        if _key not in _gaia_tie:
+            print(f"WARNING: no Gaia tie for {_key}; leaving {fn} at raw frame (0,0)")
     else:
         rashift = 0*u.arcsec
         decshift = 0*u.arcsec
