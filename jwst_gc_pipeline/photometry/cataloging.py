@@ -169,6 +169,7 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                       overshoot_ratio=MANUAL_DEFAULTS['manual_overshoot_ratio'],
                       overshoot_action=MANUAL_DEFAULTS['manual_overshoot_action'],
                       overshoot_cap_target=1.0,
+                      overshoot_drop_ratio=MANUAL_DEFAULTS['manual_overshoot_drop_ratio'],
                       miri_dpk_guard=False,
                       satstar_excl_xy=None, satstar_excl_pix=0.0,
                       near_sat_dist_pix=1.0,
@@ -464,6 +465,44 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
                                        include_local_bkg=False)
             print(f"[{label}] capped {int(np.sum(_capov))} overshooting fits to "
                   f"{overshoot_cap_target:g}x the local data peak", flush=True)
+
+    # --- FINAL field-agnostic overshoot DROP (2026-07-11, brick F182M m6) ---
+    # The refit above CLEARS model_overshoot unconditionally (it assumes the
+    # seed-pinned re-fit fixed the source) and the MIRI cap is dpk-guard-gated,
+    # so on NIRCam an over-fluxed fit that the refit did NOT fix -- or that was
+    # never flagged because a neighbour filled its 3x3 data box -- survives with
+    # a deceptively PERFECT qfit (the inflated model LOWERS qfit) and, because
+    # the merge drops the per-frame model_overshoot column, the merged-catalog
+    # vetting cannot catch it either.  The result is a phantom "star" whose
+    # subtraction gouges a deep NEGATIVE crater in the residual (brick F182M m6:
+    # flux 25434 on ~5-count sky, model peak 3352, -2419 sigma pit -- and the
+    # same failure produces obvious negative stars in the W51 emission residual).
+    # A single positive PSF cannot peak far above the data, so re-render the
+    # FINAL model and DROP any fit still peaking > drop_ratio x the local
+    # bkg-subtracted data peak.  drop_ratio=5 is safely above any real star
+    # (model_peak ~ data_peak, ratio ~1) or refit-/cap-corrected fit; saturated
+    # cores are already removed by the near-saturation + satstar-wing filters
+    # upstream, so they do not reach here.
+    if (overshoot_drop_ratio and overshoot_drop_ratio > 0
+            and len(phot.results)):
+        modsky = _make_model_image(phot, data.shape, psf_shape=(21, 21),
+                                   include_local_bkg=False)
+        # flag_nonpositive_data=True (always, both instruments): a model peak on
+        # data that is AT/BELOW the local background (dpk<=0) has no source to
+        # support it and is the worst kind of phantom, but it is exactly the
+        # dpk<=0 blind spot the flag/refit pass skips on NIRCam.  This last-resort
+        # drop must close it -- it uses the RAW data peak (floored at 1) so a real
+        # faint star (model peak ~ its raw peak, ratio ~1) is still safe.
+        _dropov = _filter_or_flag_model_overshoot(
+            phot, modsky, data, ratio=overshoot_drop_ratio, action='drop',
+            label=f'{label}:drop', flag_nonpositive_data=True)
+        if np.any(_dropov):
+            phot.__dict__.pop('_model_image_params', None)
+            modsky = _make_model_image(phot, data.shape, psf_shape=(21, 21),
+                                       include_local_bkg=False)
+            print(f"[{label}] dropped {int(np.sum(_dropov))} phantom (model peak "
+                  f">{overshoot_drop_ratio:g}x data peak) over-subtracting fits",
+                  flush=True)
 
     # --- ban non-positive-flux (negative-peak) sources ---
     # A PSF is strictly positive, so flux_fit <= 0 is a negative-peak model: it
@@ -1689,6 +1728,7 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     """
     overshoot_ratio = float(mopt(options, 'manual_overshoot_ratio'))
     overshoot_action = str(mopt(options, 'manual_overshoot_action'))
+    overshoot_drop_ratio = float(mopt(options, 'manual_overshoot_drop_ratio'))
     iter2_snr = float(mopt(options, 'manual_iter2_local_snr'))
     # daofind detection-floor scale for the residual passes (m2 + m3..m6).  < 1
     # lowers the threshold to detect fainter local maxima; m1 (raw data) stays at
@@ -1839,6 +1879,7 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
                                       else np.zeros(ctx.data.shape)),
             label=label, xy_bounds_pix=None,
             overshoot_ratio=overshoot_ratio, overshoot_action=overshoot_action,
+            overshoot_drop_ratio=overshoot_drop_ratio,
             miri_dpk_guard=_is_miri,
             satstar_excl_xy=_satstar_xy, satstar_excl_pix=_satstar_excl_pix,
             near_sat_dist_pix=(1.5 * ctx.fwhm_pix if _is_miri else 1.0),
