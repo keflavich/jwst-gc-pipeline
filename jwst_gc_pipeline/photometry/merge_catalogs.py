@@ -1279,33 +1279,31 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     # cross-frame stitch drops the smaller field.  Instead each proposal's run
     # writes its OWN proposal-scoped merged catalog (glob + out token _j{progid},
     # where ``progid`` is the RUNNING proposal), spanning only its own field.
+    # ``glob_obs_`` fully determines which frames are pooled, so we glob it ONCE
+    # per (module, visit, exposure) -- the old per-progid loop globbed the SAME
+    # pattern once per obs_filters entry and deduped, which was purely redundant.
     ngc6334_multiprop = any(str(p) in ('7213', '6778') for p in obs_filters[target])
     if ngc6334_multiprop:
         glob_obs_ = out_obs_ = f'_j{progid}'
-        merge_progids = [progid]
     elif field not in (None, ''):
         glob_obs_, out_obs_ = f'_o{field}', f'_o{field}'
-        merge_progids = list(obs_filters[target])
     elif target == 'gc2211':
         glob_obs_, out_obs_ = '_o*', ''
-        merge_progids = list(obs_filters[target])
     else:
         glob_obs_, out_obs_ = '', ''
-        merge_progids = list(obs_filters[target])
     raw_fns = []
     for module_ in modules:
-        for _progid in merge_progids:
-            for visitid in range(1, max_visitid + 1):
-                for exposure in exposure_numbers:
-                    base_pat = (
-                        f"{basepath}/{filtername.upper()}/"
-                        f"{filtername.lower()}_{module_}{glob_obs_}_visit{visitid:03d}_vgroup*_exp{exposure:05d}"
-                        f"{desat}{bgsub}{fitpsf}{blur_}{group_}{iter_token}"
-                    )
-                    raw_fns.extend(glob.glob(
-                        f"{base_pat}_{method_suffix}{suffix}.fits"))
-                    raw_fns.extend(glob.glob(
-                        f"{base_pat}_chunk*of*_{method_suffix}{suffix}.fits"))
+        for visitid in range(1, max_visitid + 1):
+            for exposure in exposure_numbers:
+                base_pat = (
+                    f"{basepath}/{filtername.upper()}/"
+                    f"{filtername.lower()}_{module_}{glob_obs_}_visit{visitid:03d}_vgroup*_exp{exposure:05d}"
+                    f"{desat}{bgsub}{fitpsf}{blur_}{group_}{iter_token}"
+                )
+                raw_fns.extend(glob.glob(
+                    f"{base_pat}_{method_suffix}{suffix}.fits"))
+                raw_fns.extend(glob.glob(
+                    f"{base_pat}_chunk*of*_{method_suffix}{suffix}.fits"))
     raw_fns = sorted(set(raw_fns))
 
     # Group chunks of the same frame by their chunk-stripped path, then
