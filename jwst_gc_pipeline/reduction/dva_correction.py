@@ -26,6 +26,32 @@ dominant term of the apparent "module A/B offset" -- and it is
 EPOCH-DEPENDENT (VA_SCALE swings by ~+-1e-4 over the year, so uncorrected
 module separations move by up to ~25 mas between epochs).
 
+SOURCE TRACE (jwst 1.21.0.dev314, commit 61bd2fe47) -- the inter-detector
+term is corrected nowhere in the chain:
+
+1. ``jwst/lib/set_telescope_pointing.py`` L1402-1461 (``calc_gs2gsapp``,
+   Eq. 40 of JWST-STScI-003222): the attitude-level VA correction is a RIGID
+   ROTATION "applied in the direction of the guide star" -- it de-aberrates
+   the guide-star direction only and cannot rescale aperture separations.
+   Used at ~L2552: ``m_eci2gs = M_ics2idl @ m_gs2gsapp @ m_eci2gsics``.
+2. The per-aperture ``RA_REF``/``DEC_REF`` therefore carry the SIAF
+   (physical, unaberrated) aperture separations attached to a guide-star
+   de-aberrated attitude, while photons arrive along aberrated directions.
+3. ``jwst/assign_wcs/nircam.py`` L100-108: ``va_corr =
+   pointing.dva_corr_model(va_scale, v2_ref=wcsinfo.v2_ref,
+   v3_ref=wcsinfo.v3_ref)`` -- each detector's OWN reference.
+4. ``jwst/assign_wcs/pointing.py`` L305-353 (``dva_corr_model``): L334
+   ``Scale(va_scale) & Scale(va_scale)`` composed at L348-351 with
+   ``Shift((1 - va_scale) * v2_ref)`` -- i.e. scale about the detector's own
+   reference; corrects only the within-detector differential.  (L342-343:
+   with ``v2_ref = v3_ref = 0`` the same model is a scale about the V1
+   origin -- the globally consistent variant is the degenerate case.)
+5. ``jwst/assign_wcs/pointing.py`` L35-62 (``v23tosky``): pure rotation.
+6. ``jwst/datamodels/utils/group_id.py`` L20-41: tweakreg ``group_id`` is
+   per EXPOSURE (program+obs+visit+visitgroup+seq+activity+exposure), so all
+   ten detectors move rigidly together downstream -- the term is not
+   absorbed by default Image3/MAST processing either.
+
 Measured empirically by network self-calibration on the Brick (2026-07-11):
 the fitted inter-detector scale tracks each program's own ``1 - VA_SCALE``
 (2221: 9.7-9.9e-5 vs 9.18e-5 predicted; 1182: 1.05-1.06e-4 vs 1.00e-4), and
