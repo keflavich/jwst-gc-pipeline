@@ -110,3 +110,15 @@ active `main` working tree (it is the live reduction environment).
 - New photometry code goes in new modules, not the `crowdsource_catalogs_long.py`
   monolith.
 - No bare `try/except`; catch specific exceptions only.
+
+## SLURM job naming (standing rule)
+
+Every submitted job name MUST identify **target + program** (+ **obsid** whenever
+the program has multiple observations), plus the stage and filter where
+applicable: `<target><program>-o<obsid>-<stage>[-FILTER]`, e.g.
+`brick2221-o001-reduce-F182M`, `cloudc2221-o002-cat`, `m4-1979-o002-reduce`.
+Pass it at **submit time** (`sbatch --job-name=...`) — the in-script runtime
+rename only fires when the job STARTS, and quota-bound jobs sit PENDING for
+hours under the generic name, which is exactly when the queue is being watched.
+Never leave `reduce`/`catalog` as the visible name. Multiple reduce/catalog
+jobs are almost always in flight simultaneously.
