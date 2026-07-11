@@ -3793,8 +3793,20 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--manual-ext-nmatch-confirm-qfit-max",
                     dest="manual_ext_nmatch_confirm_qfit_max",
                     type='float', default=MANUAL_DEFAULTS['manual_ext_nmatch_confirm_qfit_max'],
-                    help="qfit ceiling for the multi-frame confirmation keep "
+                    help="qfit ceiling for the NORMAL multi-frame confirmation keep "
                          "(default 0.6).")
+    parser.add_option("--manual-ext-nmatch-confirm-strong",
+                    dest="manual_ext_nmatch_confirm_strong",
+                    type='int', default=MANUAL_DEFAULTS['manual_ext_nmatch_confirm_strong'],
+                    help="STRONG multi-frame keep: sources with nmatch >= this are kept "
+                         "regardless of qfit (many-frame positional coincidence = real star "
+                         "even if the PSF fits poorly on structured emission). Default 0 = off. "
+                         "Kept high-qfit survivors are flagged low_fit_quality (unreliable flux).")
+    parser.add_option("--manual-ext-low-fit-quality-qfit",
+                    dest="manual_ext_low_fit_quality_qfit",
+                    type='float', default=MANUAL_DEFAULTS['manual_ext_low_fit_quality_qfit'],
+                    help="qfit threshold above which a kept source is flagged low_fit_quality "
+                         "(positions solid, flux unreliable). Default 0 = use the nmatch qfit ceiling.")
     parser.add_option("--manual-no-sky-clean-keep", dest="manual_sky_clean_keep",
                     action='store_false',
                     default=MANUAL_DEFAULTS['manual_sky_clean_keep'],

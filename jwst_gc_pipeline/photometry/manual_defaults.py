@@ -34,17 +34,19 @@ MANUAL_DEFAULTS = {
     'manual_ext_nmatch_confirm': 0,      # OFF; star-field-only tool
     'manual_ext_nmatch_confirm_qfit_max': 0.6,
     'manual_ext_nmatch_confirm_maxpos_mas': 0.0,
+    'manual_ext_nmatch_confirm_strong': 0,   # OFF; nmatch>=N keeps any qfit (+low_fit_quality flag)
+    'manual_ext_low_fit_quality_qfit': 0.0,  # 0 = use nmatch qfit ceiling
+    # -- per-frame residual-pass (m2..m6) daofind shape + detection-floor scale
+    'manual_detect_threshold_scale': 1.0,    # scale on min-noise floor (1.0 = no-op)
+    'manual_resid_roundlo': -1.0,            # loosened from -0.3 (blended companions)
+    'manual_resid_roundhi': 1.0,
+    'manual_resid_sharplo': 0.50,
+    'manual_resid_sharphi': 1.00,
     # -- sky-clean keep tier (per-source deep-where-no-emission vetting)
     'manual_sky_clean_keep': True,
     'manual_sky_clean_max_sky_snr': 2.0,
     'manual_sky_clean_prom_min': 5.0,
     'manual_sky_clean_snr_min': 3.0,
-    # -- per-frame residual-pass (m2..m6) daofind shape cuts + threshold scale
-    'manual_detect_threshold_scale': 1.0,   # <1 = detect fainter (no headroom found)
-    'manual_resid_roundlo': -1.0,      # loosened from -0.3 2026-07-06 (emission-safe)
-    'manual_resid_roundhi': 1.0,
-    'manual_resid_sharplo': 0.50,
-    'manual_resid_sharphi': 1.00,
     # -- i2d residual-seed DAO shape cuts
     'manual_seed_round_max': 0.5,      # star fields: loosen to ~1.0
     'manual_seed_sharp_lo': 0.4,
