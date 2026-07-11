@@ -2385,6 +2385,16 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
         print(satstar_cat.colnames)
         raise KeyError("Missing flux error column")
 
+    # Record the daophot->satstar match separation BEFORE the position is
+    # overwritten, so downstream users can cut on match quality (identity
+    # swaps at GC densities move a star by up to the match radius).
+    if 'skycoord' in cat.colnames and len(idx_cat):
+        _presep = cat['skycoord'][idx_cat].separation(
+            satstar_cat['skycoord_fit'][idx_sat]).to_value(u.arcsec)
+        if 'satstar_match_sep' not in cat.colnames:
+            cat['satstar_match_sep'] = np.full(len(cat), np.nan)
+        cat['satstar_match_sep'][idx_cat] = _presep
+
     if 'flux' in cat.colnames:
         if 'dflux' in cat.colnames:
             cat_fluxerr_col = 'dflux'

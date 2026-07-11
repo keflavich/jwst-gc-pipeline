@@ -282,3 +282,27 @@ class TestDedupOffsetResolver:
         monkeypatch.setenv('MERGE_DEDUP_FWHM_FRAC', '0.5')
         out = M._resolve_dedup_offset('f2550w', 0.10 * u.arcsec)
         assert abs(out.to_value(u.arcsec) - 0.35) < 1e-9
+
+
+def test_alignment_star_mask_excludes_position_unsafe_rows():
+    """Referee-4 gate: transformation star sets must exclude satstar-replaced,
+    saturated-unrepaired, forced-filled, and poor-qfit rows."""
+    import numpy as np
+    from astropy.table import Table
+    from jwst_gc_pipeline.photometry.column_utils import alignment_star_mask
+    cat = Table({
+        'replaced_saturated': [False, True, False, False, False],
+        'is_saturated': [False, False, True, False, False],
+        'forced_filled': [False, False, False, True, False],
+        'qfit': [0.1, 0.1, 0.1, 0.1, 0.9],
+    })
+    m = alignment_star_mask(cat)
+    assert list(m) == [True, False, False, False, False]
+    # per-band suffix form
+    cat2 = Table({'replaced_saturated_f182m': [True, False],
+                  'qfit_f182m': [0.05, 0.05]})
+    m2 = alignment_star_mask(cat2, suffix='_f182m')
+    assert list(m2) == [False, True]
+    # missing columns -> no exclusion (safe on any generation)
+    m3 = alignment_star_mask(Table({'flux': [1.0, 2.0]}))
+    assert m3.all()

@@ -169,3 +169,43 @@ def confident_star_mask(cat, *, qfit_max=0.2, sky_clean_prom_min=5.0,
     if drop_overshoot:
         mask &= ~_col('model_overshoot', 0.0).astype(bool)
     return mask
+
+
+def alignment_star_mask(cat, *, suffix='', qfit_max=0.4):
+    """Boolean mask of rows safe to use as ASTROMETRIC anchors (frame
+    alignment, epoch-to-epoch transformations, cross-band registration).
+
+    Wing-constrained satstar centroids are good (3 mas frame-to-frame
+    repeatability, 14 mas vs clean narrow-band centroids; Brick 2026-07-11)
+    but their errors are not guaranteed benign-Gaussian: a coherent ~34 mas
+    bulk offset relative to the daophot frame was measured on the demo
+    rebuild, exactly the class of systematic that does not average down in a
+    transformation fit.  Clipped/suppressed daophot centroids of saturated
+    and near-saturated stars are worse (core-skewed).  So transformation
+    star sets must EXCLUDE, per band:
+
+    - ``replaced_saturated``  (position = wing fit; possible coherent offset)
+    - ``is_saturated``        (clipped daophot centroid, unrepaired)
+    - ``forced_filled``       (position copied from another band)
+    - poor fits (``qfit > qfit_max``)
+
+    ``suffix`` selects per-band columns in merged catalogs (e.g.
+    ``suffix='_f182m'``).  Missing columns contribute no exclusion, so the
+    mask is safe on any catalog generation.
+    """
+    n = len(cat)
+
+    def _col(name, default=np.nan):
+        name = name + suffix
+        if name not in cat.colnames:
+            return np.full(n, default)
+        c = cat[name]
+        c = c.filled(default) if hasattr(c, 'filled') else c
+        return np.asarray(c, dtype=float)
+
+    bad = (_col('replaced_saturated', 0.0).astype(bool)
+           | _col('is_saturated', 0.0).astype(bool)
+           | _col('forced_filled', 0.0).astype(bool))
+    qf = _col('qfit')
+    bad |= np.isfinite(qf) & (qf > qfit_max)
+    return ~bad
