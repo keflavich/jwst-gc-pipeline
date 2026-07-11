@@ -1156,10 +1156,14 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
         print(f"Skipping manual align for nonexistent file {module} ({proposal_id} + {field}): {fn}", flush=True)
         return
 
-    if os.environ.get('APPLY_DVA_CORRECTION', '0') == '1':
-        # Opt-in inter-detector differential-velocity-aberration shift (see
-        # dva_correction.py).  Idempotent; applied BEFORE the reference tie so
-        # the offsets absorb its common-mode part.
+    if os.environ.get('APPLY_DVA_CORRECTION', '1') != '0':
+        # Inter-detector differential-velocity-aberration shift (see
+        # dva_correction.py).  ON BY DEFAULT until STScI corrects assign_wcs
+        # upstream (spacetelescope/jwst#9400) -- set APPLY_DVA_CORRECTION=0 to
+        # disable, and DISABLE it if/when the upstream fix lands (the DVACORR
+        # marker + the network-selfcal closure test guard double-correction).
+        # Idempotent; applied BEFORE the reference tie so the offsets absorb
+        # its common-mode part.
         from jwst_gc_pipeline.reduction.dva_correction import apply_dva_correction
         apply_dva_correction(fn)
 
