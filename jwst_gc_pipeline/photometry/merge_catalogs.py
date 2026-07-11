@@ -1274,29 +1274,32 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     # ngc6334 collision case: proposals 7213 + 6778 share this target and the
     # filters F200W/F470N; their per-frame catalog tables carry a ``_j{proposal}``
     # token (see obs_token() in crowdsource_catalogs_long) so the two proposals no
-    # longer overwrite each other.  Glob EACH proposal's tables (per-progid token
-    # below) and pool them into ONE proposal-agnostic merged catalog per filter
-    # (out token empty) -- a shared filter's union spans both fields, non-shared
-    # filters simply find frames for their one proposal.
+    # longer overwrite each other.  The two proposals image DIFFERENT, non-
+    # overlapping fields, so we do NOT pool them into one catalog -- the combine's
+    # cross-frame stitch drops the smaller field.  Instead each proposal's run
+    # writes its OWN proposal-scoped merged catalog (glob + out token _j{progid},
+    # where ``progid`` is the RUNNING proposal), spanning only its own field.
     ngc6334_multiprop = any(str(p) in ('7213', '6778') for p in obs_filters[target])
     if ngc6334_multiprop:
-        glob_obs_, out_obs_ = '', ''
+        glob_obs_ = out_obs_ = f'_j{progid}'
+        merge_progids = [progid]
     elif field not in (None, ''):
         glob_obs_, out_obs_ = f'_o{field}', f'_o{field}'
+        merge_progids = list(obs_filters[target])
     elif target == 'gc2211':
         glob_obs_, out_obs_ = '_o*', ''
+        merge_progids = list(obs_filters[target])
     else:
         glob_obs_, out_obs_ = '', ''
+        merge_progids = list(obs_filters[target])
     raw_fns = []
     for module_ in modules:
-        for progid in obs_filters[target]:
-            prog_obs_ = (f'_j{progid}' if str(progid) in ('7213', '6778')
-                         else glob_obs_)
+        for _progid in merge_progids:
             for visitid in range(1, max_visitid + 1):
                 for exposure in exposure_numbers:
                     base_pat = (
                         f"{basepath}/{filtername.upper()}/"
-                        f"{filtername.lower()}_{module_}{prog_obs_}_visit{visitid:03d}_vgroup*_exp{exposure:05d}"
+                        f"{filtername.lower()}_{module_}{glob_obs_}_visit{visitid:03d}_vgroup*_exp{exposure:05d}"
                         f"{desat}{bgsub}{fitpsf}{blur_}{group_}{iter_token}"
                     )
                     raw_fns.extend(glob.glob(
