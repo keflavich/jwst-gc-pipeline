@@ -199,27 +199,35 @@ are region-general examples; the operational MIRI scripts live in brick-jwst-222
 NRCB) — the locked table (`Offsets_JWST_Brick<pid>_VIRAC2locked.csv`) is keyed on
 (Visit, Filter), not Module. This is deliberate: NIRCam's SIAF/`assign_wcs` solution
 co-registers the two long-wave detectors (NRCA5, NRCB5) to <~1 mas *when assign_wcs is
-run with a correct jwst version*, so an independent per-module tweak would normally inject
-VIRAC2 noise and break the lock.
+run against a correct CRDS cache*, so an independent per-module tweak would normally
+inject VIRAC2 noise and break the lock.
 
-**The F410M inter-module offset was a STALE-jwst-version bug, NOT a CRDS/distortion issue
-(corrected 2026-07-04).** Our brick/cloudc `_cal` files (jw02221, epoch 2022.70) were
-processed 2024-07-18 with **jwst 1.14.1.dev43** (CRDS jwst_1253.pmap). That old jwst
-mis-computed the F410M long-module WCS, leaving NRCALONG ~52 mas off VIRAC2 vs NRCBLONG
-~17 mas (~68 mas inter-module). **This is a jwst-VERSION effect, not CRDS:** re-running
-`AssignWcsStep` on the same `_cal` with current jwst (1.21) shifts the two modules
-antisymmetrically (NRCALONG ≈ (−11,−24) mas, NRCBLONG ≈ (+11,+24) mas at pixel 1024,1024;
-~48 mas Dec differential), dropping the inter-module differential from ~70 mas to ~18 mas.
-Verified byte-identical under CRDS jwst_1253.pmap **and** jwst_1581.pmap — both assign the
-SAME distortion refs (`nircam_distortion_0249` NRCALONG / `0300` NRCBLONG) and produce the
-SAME shift. So the distortion files are fine; jwst 1.14 applied them wrong. F405N (same
-detectors, refs `0278`/`0190`) was already consistent ~17 mas because that band was not hit
-by the same 1.14 bug. (Test scripts: re-run `AssignWcsStep.call` on the `_cal` and diff the
-WCS at a fiducial pixel; see `brick-f405n-permodule-astrom-breaks-provenance` note.)
+**ROOT CAUSE CORRECTION (2026-07-11): the F410M inter-module offset was a STALE LOCAL
+CRDS CACHE serving a module-swapped LW `filteroffset` mapping — NOT a jwst-version bug
+and NOT a SIAF/distortion issue.** Full incident report, fingerprint table, and
+auditor checklist:
+**[docs/reports/CRDS_STALE_FILTEROFFSET_RMAP_INCIDENT.md](../../docs/reports/CRDS_STALE_FILTEROFFSET_RMAP_INCIDENT.md)**.
+Short version: `jwst_nircam_filteroffset_0004.rmap` was corrected in place by CRDS
+early in Cycle 1; local caches seeded 2022-09 (brick, arches, arches_quintuplet,
+cloudef, sgra, sgrb2, sickle, crds — all repaired 2026-07-11, stale copies kept as
+`*.stale_20220901_swappedAB`) mapped `('LONG','A')→filteroffset_0008` (the module-B
+file) and vice versa. Result: anti-symmetric per-module sky errors equal to the
+(own−other) filter-offset difference — F410M ±26.3 mas/module (52.5 mas A−B
+differential), F405N (F444W+F405N) ±11.0 (22.0), F466N ±1.9 — **independent of the
+installed jwst version**. Once the cache is correct, every band re-assigns to 0.0 mas
+across jwst 1.14→1.21; SW mappings were identical in both rmap generations, so SW was
+never affected. The earlier attribution to "jwst 1.14 applied the distortion wrong"
+came from CAL_VER correlating with which `CRDS_PATH` each reduction generation used;
+the "verified under jwst_1253 AND jwst_1581" cross-check varied the *context* but not
+the *cache*, so it could not detect the difference. Checks:
+`sha1sum $CRDS_PATH/mappings/jwst/jwst_nircam_filteroffset_0004.rmap`
+(`aade9b095a34…` correct, `98d39dc5403e…` stale/swapped) and the `_cal` header
+`R_FILOFF` (NRCALONG must use 0007, NRCBLONG 0008).
 
-**Correct fix (surgical): re-run Image2 (assign_wcs) with current jwst.** CRDS 1253 keeps
-flat/photom references identical → photometry is preserved (no flux perturbation mid-release)
-while astrometry is fixed. This needs NO offsets-table hack.
+**Correct fix (surgical): re-run Image2 (assign_wcs) with a verified-fresh CRDS cache.**
+Pinning the context keeps flat/photom references identical → photometry is preserved
+(no flux perturbation mid-release) while astrometry is fixed. This needs NO
+offsets-table hack. (Applied to brick+cloudc LW 2026-07-04.)
 
 **Interim workaround currently in place (must be reverted if Image2 is re-run):** F410M was
 given per-module rows (a `Module` column = `nrcalong`/`nrcblong`) in the locked table with a
@@ -231,9 +239,12 @@ If the `_cal` is regenerated with current jwst, remove the F410M split (revert t
 both-module row) or it will double-correct by ~48 mas.
 
 **Rule for the offsets-table builder:** a per-module split is a LAST-RESORT workaround for a
-frame that cannot be reprocessed. Before splitting, first check whether re-running assign_wcs
-with a current jwst version removes the inter-module inconsistency — a stale jwst version, not
-CRDS distortion, was the actual cause for F410M.
+frame that cannot be reprocessed. Before splitting, first verify the CRDS cache
+(sha1sum check above) and re-run assign_wcs against a fresh cache — a stale local CRDS
+cache (module-swapped LW filteroffset mapping), not jwst version and not CRDS
+distortion content, was the actual cause for F410M. (The brick 2221 locked table was
+rebuilt with a single both-module F410M row after the 2026-07-04 re-assign; the
+band-aid split is gone.)
 
 ## Reference epochs (so propagation is reproducible)
 
