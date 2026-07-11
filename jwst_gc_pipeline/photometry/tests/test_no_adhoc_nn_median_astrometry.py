@@ -62,6 +62,9 @@ ALLOWLIST = {
     "jwst_gc_pipeline/photometry/cataloging.py",
     "jwst_gc_pipeline/photometry/legacy/crowdsource_step.py",
     "scripts/reduction/combine_brick_allband.py",  # cross-band merge
+    # PR #57 diagnostic: nearest-neighbour SEPARATION histogram (median only for the
+    # figure-title label + a caveat plot) -- NOT an astrometric correction.
+    "docs/pr57_recovery_investigation/make_caveat_figs.py",
 }
 
 def _iter_py_files():
