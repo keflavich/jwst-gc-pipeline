@@ -106,3 +106,49 @@ Dead ends (not shipped): lowering the detection threshold (H1), raw find_peaks /
 `python docs/pr57_recovery_investigation/make_figs.py` regenerates the figures from the on-disk
 cutout products (Arches `groupA_{baseline,bothloose}`, W51 `w51df187_{base,loose}`, Brick
 `f182m_kt_{baseline,tiered}`). Cutout configs are in the benchmark workspace sbatches.
+
+---
+
+## Consequences & caveats of the expansion
+
+Measured on the Brick F182M tiered cutout (nrca; has `low_fit_quality`, `std_ra/dec`, `nmatch`).
+
+![caveats](figs/fig6_expansion_caveats.png)
+
+### Negative consequences checked
+
+1. **Excess subtraction in the residual maps (the worry) — NOT happening.** Residual cores at source
+   positions are **+4.7σ (under-subtracted, not over)**; over-subtraction holes (core < −3σ) barely rise
+   (2.7% → 3.2%) and are **not** elevated for flagged sources (3.5% vs 3.0% good). The faint keep-tier
+   sources are fit with low flux, so they don't carve holes. **Safe.**
+
+2. **Bad SW seeds → excessive LW deblending — blocked for uncertain sources.** The cross-band seed
+   (`_build_crossband_seed`) requires `qfit < 0.2` **and** confirmation in `≥ min_filters` (default 2).
+   The expansion's uncertain sources (recover-tier qfit 0.2–0.5, tiered-keep qfit > 0.6, all
+   `low_fit_quality`) **fail the qfit<0.2 gate and never seed cross-band.** Residual risk: a *genuine*
+   SW close pair confirmed in two SW filters could seed an LW fit below LW resolution → LW over-deblend;
+   this is pre-existing behaviour, modestly amplified, and **should be verified on a full multi-band m7
+   run** (the Arches benchmark is single-filter).
+
+3. **False cross-wavelength matches — density-scaled risk.** Source density rises **+39%**
+   (nrca 5.4 → 7.5 / arcsec²). At the 30 mas cross-band match radius the chance-match probability per
+   source is ~2%, rising ~in proportion to density.
+
+### Caveats for downstream analysis
+
+- **Centroid jitter:** faint / `low_fit_quality` sources jitter **~3× more** (median std(ra,dec)
+  9.4 mas vs 2.9 mas for good fits), but bounded — 90th pct 16.5 mas, **none exceed the 30 mas
+  cross-band radius**. Positions are usable but downweight by `std_ra`/`std_dec`.
+- **A deblend/uncertainty flag is NOT derivable from source separation.** The flagged/faint sources are
+  **not** preferentially close pairs — their nearest-neighbour distribution matches the good sources
+  (frac < 1 FWHM: 4% vs 6%). Separation ≠ reliability, so the **`low_fit_quality` flag is necessary and
+  non-redundant** (it captures fit quality on emission that separation cannot).
+
+### Safeguards
+
+1. **`low_fit_quality` flag (shipped)** — propagate through the cross-band merge; photometry users cut it,
+   astrometry/completeness users keep it.
+2. **`std_ra`/`std_dec` (already in the catalog)** — per-source position uncertainty for match weighting.
+3. **Cross-band seed already gates `qfit<0.2` + `min_filters≥2`** — uncertain expansion sources don't propagate.
+4. **Recommended:** a tighter cross-band match tolerance (or `std_ra/dec` weighting) for `low_fit_quality`
+   sources (~10 mas jitter vs the 30 mas default), and a full multi-band m7 run to confirm no LW over-deblend.
