@@ -299,3 +299,42 @@ should not feed proper-motion work.
 4. Certification is executable (`assert_saturation_continuity`) and blocked
    only on the full re-cataloging run; every frame-level component has been
    independently validated.
+
+## Postscript (2026-07-11): H10 — sub-floor suppression strips
+
+Referee review of this article predicted, and targeted forensics on two
+anomalous CMD boxes confirmed, a tenth mechanism: **core suppression is
+continuous in well fill, and the pipeline switched estimators discontinuously
+at the severity floor.** Every band has an unflagged strip
+[flagging floor, floor + ~1.1 mag] where stellar peaks reach 0.4–1.6× the
+severity floor with zero DQ-SATURATED pixels; daophot photometry there is
+clipped by up to ~0.4 mag. Evidence
+([brick_degenerate_pair_trends_2026-07-11.png](../evidence/brick_degenerate_pair_trends_2026-07-11.png)):
+**near-degenerate color pairs** (F405N−F410M at 4.05/4.10 μm, F182M−F187N at
+1.82/1.87 μm — intrinsic+reddened color nearly constant, so any
+magnitude-dependent drift is instrumental) break exactly at the floors:
+−0.10 → −0.49 below F410M 13.3; +0.18 → +0.72 below F187N 14.7. Cal-frame
+peak measurements put the strip stars at 0.4–0.8× (F410M) and 0.67–1.64×
+(F182M) of the floor; wing-annulus photometry (2.5–7 px, fully linear)
+shows the F410M strip catalog fluxes ≥0.17 mag too faint while F405N at the
+same magnitudes is clean. SW strips are migration-dominated (a 9×9 cal
+aperture recovers +0.15 mag over the PSF fit); LW strip flux is mostly not
+locally conserved (+0.06 mag).
+
+Fixes (this branch): (i) **sub-floor seeding** — DQ-clean components peaking
+in [0.35×floor, floor) enter the satstar channel with an amplitude-derived
+mask (bright pixels + 2 px shoulder; 2–50 px size window), so the flux comes
+from linear-regime wings; the post-fit implied-peak gate arbitrates
+(suppressed stars' wings imply peaks above threshold and are kept;
+unsuppressed sub-floor stars are rejected and keep their daophot values);
+(ii) a latent short-circuit fixed — frames with zero DQ-SATURATED components
+previously skipped seeding entirely; (iii) **degenerate-pair flatness**
+(`degenerate_pair_flatness` / `assert_degenerate_pair_flatness`) added as a
+certification gate: the released catalog's near-degenerate colors must be
+magnitude-flat to <0.05, which detects any residual strip, taper error, or
+flux-scale drift independent of locus models and saturation flags.
+
+The affected-window map for other pairs (strips at F212N 15.6–16.7,
+F182M 14.0–15.0, all three LW bands 12.0–13.3, and the o004 wide bands at
+their own floors) explains the residual wiggles in the wide-pair CMDs and is
+covered by the same gate.
