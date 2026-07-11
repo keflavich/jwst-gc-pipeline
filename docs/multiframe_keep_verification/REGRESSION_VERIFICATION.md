@@ -1,5 +1,7 @@
 # Multi-frame-confirmation keep — verification & regression notes
 
+> **Figures moved:** image files are no longer tracked in this repo; they live in the Overleaf astrometry-paper project (https://www.overleaf.com/project/6a521006b63a11a7e0d80fa0) under `figures/keep_verification/` (same filenames).
+
 This documents the depth benchmark and the extended-emission regression checks for
 the recover tier + multi-frame-confirmation keep (Hosek `ndet≥3` style) added to
 `_filter_extended_emission`.
@@ -44,7 +46,7 @@ tight (median separation 3.1 mas, robust 2.2–2.8 mas). Ours-only = 7,452
 remaining ~31k Hosek-only is ≈ half his own artifacts (spikes/emission) plus his
 sub-3-frame faint detections — near the fair-match ceiling.
 
-![Arches vs Hosek, nmatch m6](arches_hosek_nmatch_m6.png)
+> *Figure:* `figures/keep_verification/arches_hosek_nmatch_m6.png` (Overleaf)
 
 ### Detection is not the bottleneck — survival is
 
@@ -54,7 +56,7 @@ end — we *detect* the faint stars — but the final catalogs collapse; that ga
 the detected-but-dropped population the multi-frame keep recovers. The deep-coadd
 daofind (red) is worse than per-frame, so detecting harder does not help.
 
-![Completeness vs Hosek by magnitude](completeness_vs_hosek_by_mag.png)
+> *Figure:* `figures/keep_verification/completeness_vs_hosek_by_mag.png` (Overleaf)
 
 ## Regression verification
 
@@ -99,9 +101,9 @@ guard assumption ("emission centroids wander") is wrong for compact emission.
 The bg medians going *down* on these fields is NOT a safety pass — it is the
 emission being (wrongly) subtracted into the model, which lowers the residual.
 
-![W51 dark filament: added sources are emission](w51_darkfilament_emission_safety.png)
+> *Figure:* `figures/keep_verification/w51_darkfilament_emission_safety.png` (Overleaf)
 
-![pillar_head](pillar_head_emission_safety.png)
+> *Figure:* `figures/keep_verification/pillar_head_emission_safety.png` (Overleaf)
 
 **Scope of the feature (revised):** the multi-frame keep is a *star-field* tool.
 On star-dominated fields (Arches: +14,719 real Hosek matches; sickle
@@ -117,7 +119,7 @@ per-source star-vs-emission cut for the multi-frame tier is future work.
 The recover tier's sloped `(qfit, log prominence)` gate, fit on labelled sickle +
 W51 cutouts (real = blue, emission = red). Keeps 63/69 real at 5/142 emission.
 
-![qfit–prominence boundary](recover_qfit_prominence_boundary.png)
+> *Figure:* `figures/keep_verification/recover_qfit_prominence_boundary.png` (Overleaf)
 
 ## Reproduce
 
@@ -152,4 +154,4 @@ genuinely hard), ~9k sub-3-frame, ~40% in spike zones, plus Hosek's own marginal
 ndet=3. Closing further needs better detection in crowded/spike regions, not more
 vetting relaxation.
 
-![remaining Hosek-only anatomy](remaining_hosek_only_anatomy.png)
+> *Figure:* `figures/keep_verification/remaining_hosek_only_anatomy.png` (Overleaf)

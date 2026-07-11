@@ -1,5 +1,7 @@
 # Saturated-star flux recovery: the STPSF wing deficit, its proof, and the fix
 
+> **Figures moved:** image files are no longer tracked in this repo; they live in the Overleaf astrometry-paper project (https://www.overleaf.com/project/6a521006b63a11a7e0d80fa0) under `figures/evidence/` (same filenames).
+
 **Date:** 2026-07-10.  **Branch:** `satstar-replace-matching` (PR #61).
 **Figures:** `docs/evidence/*_2026-07-10.png` (referenced below).
 

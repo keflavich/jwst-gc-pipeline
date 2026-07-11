@@ -1,5 +1,7 @@
 # Photometry of Saturated Stars in JWST/NIRCam Crowded Fields: Failure Modes, Wing Calibration, and Recovered Accuracy
 
+> **Figures moved:** image files are no longer tracked in this repo; they live in the Overleaf astrometry-paper project (https://www.overleaf.com/project/6a521006b63a11a7e0d80fa0) under `figures/evidence/` (same filenames).
+
 **Date:** 2026-07-11.  **Branch:** `satstar-replace-matching` (PR #61).
 **Companion technical report:** [SATSTAR_WING_CALIBRATION_REPORT.md](SATSTAR_WING_CALIBRATION_REPORT.md).
 **Figures:** `docs/evidence/*_2026-07-{10,11}.png`, linked inline.
@@ -61,7 +63,7 @@ executable metric (`photometry/saturation_continuity.py`).
   `assert_saturation_continuity`.
 - **Class-decomposed CMDs:** every diagnostic CMD splits the population into
   unsaturated / flagged-recovered / zeroframe-anchored / substituted classes
-  ([brick_multiband_class_cmds_2026-07-10.png](../evidence/brick_multiband_class_cmds_2026-07-10.png)).
+  (`brick_multiband_class_cmds_2026-07-10.png`).
 
 ## 3. Hypotheses tested and rejected
 
@@ -81,7 +83,7 @@ necessary, not sufficient).** Satstar↔catalog matching used a 0.05″ radius,
 but satstar positions scatter 0.08–0.15″ relative to daophot centroids; 90% of
 catastrophically-clipped wide-band rows had their correct satstar within 0.5″.
 Mutual-nearest matching at 0.5″ (with a faint-replacement veto) fixed the
-bookkeeping ([brick_cmd_replace_radius_sim_2026-07-10.png](../evidence/brick_cmd_replace_radius_sim_2026-07-10.png)),
+bookkeeping (`brick_cmd_replace_radius_sim_2026-07-10.png`),
 and the clouds moved — but did not join the locus. The flux values themselves
 were still wrong.
 
@@ -104,7 +106,7 @@ severity/implied-peak gating (H3) superseded this approach.
 Reproducing the production geometry on unsaturated stars of known flux — the
 key controlled experiment — showed the daophot 5×5 fit with a 2.5 px masked
 core recovers only **18.8%** of the true flux
-([f182m_wingfit_bias_curves_2026-07-10.png](../evidence/f182m_wingfit_bias_curves_2026-07-10.png)).
+(`f182m_wingfit_bias_curves_2026-07-10.png`).
 Multiplying by ~5.3 amplifies every noise and normalization error by the same
 factor; inversion is unstable. Conclusion: clipped daophot photometry of
 saturated stars must be **substituted**, never corrected in place.
@@ -119,7 +121,7 @@ photometry by ~0.3 mag. Once identified, the satstar photometry matched the
 *faint, genuinely-unsaturated* locus and the F187N-implied truth to 6%.
 Fix: peak-based seeding (image peaks above the severity floor, ≥2 px
 components, 2 px shoulder dilation) routes these stars into the satstar
-channel ([brick_cmd_iter3_peakseed_2026-07-10.png](../evidence/brick_cmd_iter3_peakseed_2026-07-10.png)).
+channel (`brick_cmd_iter3_peakseed_2026-07-10.png`).
 
 **H7 — "The ZEROFRAME extension recovers the rim" (rejected on a technicality,
 then repaired).** The cal-file ZEROFRAME extension is zeroed exactly at the
@@ -135,8 +137,8 @@ g0 > 0 validity mask (a percentile ceiling failed on dark frames).
 structure, 812–1248 calibrators per configuration. The wing excess persisted,
 was **purely multiplicative** (additive term ≈ 0), and was flux-independent
 across brightness quartiles
-([m92_wing_stacks2d_2026-07-10.png](../evidence/m92_wing_stacks2d_2026-07-10.png),
-[m92_wing_ratio_curves_2026-07-10.png](../evidence/m92_wing_ratio_curves_2026-07-10.png)).
+(`m92_wing_stacks2d_2026-07-10.png`,
+`m92_wing_ratio_curves_2026-07-10.png`).
 An injected-model control run through the identical machinery recovered
 0.95–0.99 everywhere — the estimators do not invent excess. Stacking and
 registration artifacts were bounded < 3% by model-through-machinery and
@@ -146,7 +148,7 @@ deliberate mis-centering controls.
 PSF wings** by ~10–30% (filter- and radius-dependent; Airy troughs too deep).
 Demonstrated four independent ways — 2D sub-pixel-registered stacks vs the
 model through identical machinery
-([psfwing2d_summary_2026-07-10.png](../evidence/psfwing2d_summary_2026-07-10.png)),
+(`psfwing2d_summary_2026-07-10.png`),
 per-annulus LSQ amplitude (the estimator the fit actually uses), the
 masked-core fit experiment (H5), and the M92 cross-validation (H8) — on five
 filters and three detectors. The masked-core bias it predicts matches the
@@ -194,7 +196,7 @@ The production satstar channel now runs, per frame:
 Masked-core substitution calibration curves per filter (STPSF + stacked-PSF
 based, `scripts/analysis/wing_calibration/calcurves/`) quantify the bias as a
 function of masked-pixel count for 8 filters
-([masked_core_calibration_curves_2026-07-10.png](../evidence/masked_core_calibration_curves_2026-07-10.png));
+(`masked_core_calibration_curves_2026-07-10.png`);
 they motivated and validate the self-calibration but the production correction
 is the per-frame measurement, not the static curve (H9).
 
@@ -208,9 +210,9 @@ calibrated successfully.
 
 **CMD continuity.** F182M−F187N class-continuity metric: **0.74 → 0.11**
 (0.03 in the transition bins) on the catalog-level demo rebuild
-([brick_cmd_calibrated_substituted_2026-07-10.png](../evidence/brick_cmd_calibrated_substituted_2026-07-10.png)).
+(`brick_cmd_calibrated_substituted_2026-07-10.png`).
 Across the four requested additional pairs
-([brick_multipair_cmds_beforeafter_2026-07-11.png](../evidence/brick_multipair_cmds_beforeafter_2026-07-11.png)):
+(`brick_multipair_cmds_beforeafter_2026-07-11.png`):
 
 | Pair | Production | Wing-cal + substitution |
 |---|---|---|
@@ -321,7 +323,7 @@ at the severity floor.** Every band has an unflagged strip
 [flagging floor, floor + ~1.1 mag] where stellar peaks reach 0.4–1.6× the
 severity floor with zero DQ-SATURATED pixels; daophot photometry there is
 clipped by up to ~0.4 mag. Evidence
-([brick_degenerate_pair_trends_2026-07-11.png](../evidence/brick_degenerate_pair_trends_2026-07-11.png)):
+(`brick_degenerate_pair_trends_2026-07-11.png`):
 **near-degenerate color pairs** (F405N−F410M at 4.05/4.10 μm, F182M−F187N at
 1.82/1.87 μm — intrinsic+reddened color nearly constant, so any
 magnitude-dependent drift is instrumental) break exactly at the floors:
