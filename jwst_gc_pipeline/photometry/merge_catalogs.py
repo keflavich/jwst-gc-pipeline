@@ -2730,8 +2730,8 @@ def main():
 
     # Tailing registration failsafe: a full all-band merge just finished, so this is
     # the first moment a whole-field cross-band scan is meaningful. Catches a
-    # brick-1182-style LOCALIZED misregistration (a half-mosaic untied while the bulk
-    # offset reads ~0) at build time instead of at release. Opt-in and non-fatal by
+    # brick-1182-style LOCALIZED misregistration (a half-mosaic grossly shifted while
+    # the bulk offset reads ~0) at build time instead of at release. Opt-in and non-fatal by
     # default so it can never wedge a run or disrupt in-flight remediation chains:
     #   RUN_REGISTRATION_GATE=1          -> run it, WARN on FAIL
     #   REGISTRATION_GATE_STRICT=1       -> also RAISE on FAIL (hard gate)
