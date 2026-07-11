@@ -275,15 +275,27 @@ certifies every band pair in CI.
 | Flux precision (per star, consolidated) | ~1–2% | ~3–6% (self-cal 3–5%/frame, averaging over frames) |
 | Flux accuracy (systematic) | few % (ZP-limited) | ~6% vs narrow-band truth; up to −0.25 mag for the deepest-mask stratum (flagged) |
 | Color continuity across the boundary | — (reference) | 0.03–0.11 mag demo; <0.05 goal pending full recat |
-| Astrometry | ~2.7 mas (Hosek benchmark) | 0.08–0.15″ (wing-constrained centroid) |
+| Astrometry | ~2.7 mas (Hosek benchmark) | 3 mas frame-to-frame repeatability; 14 mas median vs clean narrow-band centroids |
 | Completeness at the bright end | 0 above saturation | all but ~12 extreme-clip stars per field |
 
 The satstar channel is, by construction, a factor ~3 noisier and a factor ~2
 less accurate than unsaturated photometry — but it now sits on the **same flux
 scale** (the self-calibration ties every satstar to unsaturated stars in the
-same frame), which is what CMD-based science requires. Positional accuracy is
-adequate for cross-band merging (0.5″ mutual-nearest) but satstar positions
-should not feed proper-motion work.
+same frame), which is what CMD-based science requires.
+
+A note on the astrometry numbers: the 0.08–0.15″ scatter quoted in §3 (H2) is
+the satstar-vs-**daophot** offset for the *same* saturated star — and the
+daophot centroid of a clipped, charge-migration-skewed core is itself the
+corrupted quantity. Measured properly, the wing-constrained satstar positions
+perform far better: frame-to-frame repeatability is **3 mas** median (F182M
+and F410M, ≥4 dithers per star), and consolidated satstar positions agree with
+*clean unsaturated* F187N daophot centroids of the same stars to **14 mas**
+median (90th percentile 109 mas, dominated by blends/mismatches at the 0.3″
+match radius). So the large replacement radius exists to catch the corrupted
+daophot positions being replaced, not because satstar positions are poor.
+Satstar astrometry is ~5× worse than the 2.7 mas unsaturated benchmark but
+usable — with per-star repeatability as the error estimate — even for
+proper-motion work at the long-baseline (multi-year) level.
 
 ## 8. Conclusions
 
