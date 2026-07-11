@@ -32,6 +32,7 @@ import astropy.units as u
 from photutils.detection import DAOStarFinder
 from scipy.ndimage import median_filter
 from reproject import reproject_interp
+from jwst_gc_pipeline.photometry.astrometry_offsets import measure_offset
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -96,21 +97,16 @@ ref_k = keys[0]
 print(f'\nreference visit: {ref_k[-5:]}')
 flagged = []
 for k in keys[1:]:
-    i_r, i_k, sep, _ = search_around_sky(cats[ref_k], cats[k], 4 * u.arcsec)
-    if len(i_r) < 3:
+    # offset-histogram peak via the sanctioned window-swept helper (single source
+    # of truth); measure_offset(ref, k) returns (k - ref) in mas.
+    r = measure_offset(cats[ref_k], cats[k], maxsep=4 * u.arcsec, bin_arcsec=0.1, min_pairs=3)
+    if r is None:
         print(f'  {k[-5:]}: <3 common sources, cannot register')
         continue
-    dra = ((cats[k].ra[i_k] - cats[ref_k].ra[i_r]) * np.cos(cats[k].dec[i_k])).to(u.arcsec).value
-    ddec = (cats[k].dec[i_k] - cats[ref_k].dec[i_r]).to(u.arcsec).value
-    bins = np.arange(-4, 4.05, 0.1)
-    H, xe, ye = np.histogram2d(dra, ddec, bins=[bins, bins])
-    pk = np.unravel_index(np.argmax(H), H.shape)
-    cx, cy = 0.5 * (xe[pk[0]] + xe[pk[0]+1]), 0.5 * (ye[pk[1]] + ye[pk[1]+1])
-    m = (np.abs(dra - cx) < 0.4) & (np.abs(ddec - cy) < 0.4)
-    rx, ry = np.median(dra[m]), np.median(ddec[m])
-    tag = '  <-- FLAG (>1")' if np.hypot(rx, ry) > 1.0 else ''
-    print(f'  {k[-5:]} vs {ref_k[-5:]}: dRA={rx:+.2f}" dDec={ry:+.2f}" (n={m.sum()}){tag}')
-    if np.hypot(rx, ry) > 1.0:
+    rx, ry = r['dra'] / 1000.0, r['ddec'] / 1000.0
+    tag = '  <-- FLAG (>1")' if r['off'] > 1000.0 else ''
+    print(f'  {k[-5:]} vs {ref_k[-5:]}: dRA={rx:+.2f}" dDec={ry:+.2f}" (npairs={r["npairs"]}){tag}')
+    if r['off'] > 1000.0:
         flagged.append((k, rx, ry))
 
 print(f'\n{"MISREGISTERED VISITS: " + str([f[0][-5:] for f in flagged]) if flagged else "all visits consistent (<1\")"}')

@@ -1144,6 +1144,10 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
     return locals()
 
 
+# offsets tables already collapse-checked this process (warn once per file, not per frame)
+_VALIDATED_OFFSETS_TABLES = set()
+
+
 def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, filtername=None,
                   use_average=True):
     if os.path.exists(fn):
@@ -1194,6 +1198,14 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
         locked_tbl = f'{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_VIRAC2locked.csv'
         if os.path.exists(locked_tbl):
             offsets_tbl = Table.read(locked_tbl)
+            # One-time collapse check: the ad-hoc VIRAC2locked curation once overwrote
+            # brick-1182 visit-001's offset with visit-002's (both ~+1.9" for a visit
+            # truly ~20" off). Warn if distinct visits share a value here so it can't
+            # be applied blind again. Once per file per process (not per frame).
+            if locked_tbl not in _VALIDATED_OFFSETS_TABLES:
+                _VALIDATED_OFFSETS_TABLES.add(locked_tbl)
+                from jwst_gc_pipeline.reduction.validate_offsets_table import assert_offsets_table_sane
+                assert_offsets_table_sane(offsets_tbl, context=os.path.basename(locked_tbl))
             match = ((offsets_tbl['Visit'] == visit)
                      & (offsets_tbl['Filter'] == filtername))
             # Support BOTH conventions: per-VISIT tables (1 row/visit, no usable Exposure) and

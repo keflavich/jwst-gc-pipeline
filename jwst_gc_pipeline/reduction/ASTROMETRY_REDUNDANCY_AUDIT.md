@@ -9,8 +9,11 @@ visit's offset). All findings below were verified by inspection; false alarms
 are called out.
 
 Companion docs: `ASTROMETRY_WCS_CORRECTION_FLOW.md` (the correct flow + the ⛔
-dense-NN-median rule). New safeguard shipped with this audit:
-`validate_offsets_table.py` (+ tests) — flags a collapsed offsets table.
+dense-NN-median rule). The collapse-detection safeguard now lives in
+`reduction/validate_offsets_table.py` (`flag_collapsed_visits` /
+`assert_offsets_table_sane`, wired into `fix_alignment` at
+`PipelineRerunNIRCAM-LONG.py:1207`); this doc records the *structural* redundancies
+that let the collapse happen and recur.
 
 ## Ranked redundancies
 
@@ -74,17 +77,21 @@ in `fix_alignment`, `realign_to_catalog` skip-on-dense, and tests
 `test_dense_nn_median_guard`, `test_astrometry_offsets_sweep`,
 `test_no_adhoc_nn_median_astrometry`, `test_registration_gate`.
 
-## New in this audit
-- `reduction/validate_offsets_table.py` + `reduction/tests/test_validate_offsets_table.py`
-  — flag a COLLAPSED offsets table (distinct visits sharing an offset to <5 mas)
-  and insane magnitudes (unit slips). Run it in every builder and (as a warning)
-  in `fix_alignment` before consuming the table. Verified: it flags the original
-  brick-1182 collapse and passes the corrected production table.
+## Collapse safeguard (already shipped, on main)
+`reduction/validate_offsets_table.py` (`flag_collapsed_visits` /
+`assert_offsets_table_sane` + `test_validate_offsets_table.py`) flags a COLLAPSED
+offsets table (distinct visits of a filter sharing an offset to within ~20 mas) and
+is wired into `fix_alignment` (`PipelineRerunNIRCAM-LONG.py:1207`). It fires a warning
+by default, or raises `CollapsedOffsetsTableError` with `OFFSETS_TABLE_COLLAPSE_RAISE=1`.
+This audit does NOT re-add it; it documents the redundancies below that make the
+collapse possible in the first place.
 
 ## Recommended follow-ups (not done here, to avoid colliding with in-flight work)
 1. Collapse the three VIRAC2locked builders to one; route their solvers through
-   `measure_offset`. (touches brick-jwst-2221 — coordinate with PR #34.)
+   `measure_offset`. (touches brick-jwst-2221 — coordinate with PR #34.) Call
+   `assert_offsets_table_sane(..., raise_on_issue=True)` at the end of the surviving
+   builder so a collapse can never be written to disk.
 2. Factor the duplicated realign block in PipelineRerunNIRCAM-LONG into one helper.
-3. Call `validate_offsets_table()` at the end of the surviving builder and as a
-   warning in `fix_alignment`.
+3. Add an `|offset| > 60"` insane-magnitude check to `validate_offsets_table`
+   (catches mas/arcsec unit slips) — not yet covered by the collapse check.
 4. Archive deprecated `offsets/*` tables; resolve the `_VIRAC2_average` reader.
