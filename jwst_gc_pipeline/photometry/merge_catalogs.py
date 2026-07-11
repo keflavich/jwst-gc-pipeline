@@ -1915,6 +1915,26 @@ def load_satstar_catalog(filtername, target='brick',
 _SATSTAR_DEDUP_ALG = 'fp3'
 
 
+# Wide second-chance radius for matching a fitted satstar to its daophot row
+# in replace_saturated (mutual-nearest only; see the second-pass block there).
+# Satstar positions scatter ~0.08-0.15" from the true position, so the tight
+# per-filter radii miss most pairings.  Env SATSTAR_REPLACE_RADIUS_ARCSEC
+# overrides; set 0 to disable the second pass.
+def _satstar_replace_radius():
+    _env = os.environ.get('SATSTAR_REPLACE_RADIUS_ARCSEC')
+    # 0.5": wide-band saturated blobs scatter worse than SW (brick f356w
+    # catastrophic clipped rows: satstar at med 0.16", 77% < 0.3" but 90% <
+    # 0.5"); mutual-nearest keeps the wide radius crowding-safe.
+    try:
+        val = float(_env) if _env is not None else 0.5
+    except ValueError:
+        val = 0.5
+    return (val * u.arcsec) if val > 0 else None
+
+
+SATSTAR_REPLACE_RADIUS = _satstar_replace_radius()
+
+
 def _satstar_dedup_radius():
     """Consolidation dedup radius for per-frame satstar fits.  Default 0.15";
     override with env SATSTAR_DEDUP_ARCSEC.  A saturated star's per-frame fit
@@ -2294,6 +2314,41 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
     if len(valid_cat_inds) > 0 and len(satstar_cat) > 0:
         idx_cat_sub, idx_sat, sep, _ = satstar_coords.search_around_sky(cat_coords[catfinite], radius)
         idx_cat = valid_cat_inds[idx_cat_sub]
+
+        # SECOND-CHANCE MUTUAL-NEAREST MATCH (2026-07-10): saturated-star fit
+        # positions scatter ~0.08" (p90 0.155") from the star's catalog
+        # position, so the tight per-filter radius above (0.05" SW) MISSED the
+        # daophot row for most real satstars: the row kept its CLIPPED daophot
+        # flux (0.5-3.6 mag too faint -- the unphysical red jog / gap /
+        # distinct clouds at the CMD saturation boundary; Brick F182M: 120
+        # bright rows, 62% with their correct satstar fit 0.05-0.15" away)
+        # while the correct satstar row was appended as a near-duplicate.
+        # Satstars unmatched at the tight radius get one more chance at
+        # SATSTAR_REPLACE_RADIUS, but only as a MUTUAL nearest-neighbour pair
+        # (each is the other's closest) -- crowding-safe where the plain
+        # radius bump would mis-pair neighbours.  The faint-replacement guard
+        # below still vetoes any pairing whose satstar flux is below the
+        # daophot flux (a clipped row is always fainter than its satstar fit).
+        _wide = SATSTAR_REPLACE_RADIUS
+        _unmatched_sat = np.setdiff1d(np.arange(len(satstar_cat)), idx_sat)
+        if _wide is not None and len(_unmatched_sat) and len(valid_cat_inds):
+            _catc = cat_coords[catfinite]
+            _i_c, _d_c, _ = satstar_coords[_unmatched_sat].match_to_catalog_sky(_catc)
+            _i_s, _d_s, _ = _catc.match_to_catalog_sky(satstar_coords)
+            _newc, _news = [], []
+            _already = set(idx_cat.tolist())
+            for k, si in enumerate(_unmatched_sat):
+                ci = int(_i_c[k])
+                mutual = (int(_i_s[ci]) == si) and (_d_c[k] < _wide)
+                if mutual and valid_cat_inds[ci] not in _already:
+                    _newc.append(valid_cat_inds[ci])
+                    _news.append(si)
+            if _newc:
+                print(f"replace_saturated: mutual-nearest second pass matched "
+                      f"{len(_newc)} satstar(s) at {radius} < sep < {_wide} "
+                      f"(clipped-daophot rows recovered)", flush=True)
+                idx_cat = np.concatenate([idx_cat, np.array(_newc, dtype=int)])
+                idx_sat = np.concatenate([idx_sat, np.array(_news, dtype=int)])
     else:
         idx_cat = np.array([], dtype=int)
         idx_sat = np.array([], dtype=int)
@@ -2310,6 +2365,7 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
     # catalogs built against older satstar caches.  Guard factor 0.8 allows
     # normal fit scatter for borderline cores.
     _vetoed_sat = np.array([], dtype=int)
+    _vetoed_cat = np.array([], dtype=int)
     _cfcol = ('flux' if 'flux' in cat.colnames
               else ('flux_fit' if 'flux_fit' in cat.colnames else None))
     if len(idx_cat) and _cfcol is not None:
@@ -2322,6 +2378,7 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
                   f"match(es) (satstar fit < 0.8x the daophot flux it would "
                   f"overwrite -- over-flagged unsaturated star)", flush=True)
             _vetoed_sat = idx_sat[_fainter]
+            _vetoed_cat = idx_cat[_fainter]
             idx_cat = idx_cat[~_fainter]
             idx_sat = idx_sat[~_fainter]
 
@@ -2340,6 +2397,25 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
         print(satstar_cat.colnames)
         raise KeyError("Missing flux error column")
 
+    # x_fit/y_fit in satstar catalogs are CUTOUT-frame coordinates (the fit
+    # runs in a pad-centered stamp, so most rows read ~(pad, pad)); the
+    # detector-frame positions live in xcentroid/ycentroid (= x_fit + cutout
+    # origin, the coordinates skycoord_fit is computed from).  Writing x_fit
+    # into the catalog's pixel columns silently corrupted the x/y of every
+    # replaced row.  Use the detector-frame columns whenever present.
+    _sat_xcol = 'xcentroid' if 'xcentroid' in satstar_cat.colnames else 'x_fit'
+    _sat_ycol = 'ycentroid' if 'ycentroid' in satstar_cat.colnames else 'y_fit'
+
+    # Record the daophot->satstar match separation BEFORE the position is
+    # overwritten, so downstream users can cut on match quality (identity
+    # swaps at GC densities move a star by up to the match radius).
+    if 'skycoord' in cat.colnames and len(idx_cat):
+        _presep = cat['skycoord'][idx_cat].separation(
+            satstar_cat['skycoord_fit'][idx_sat]).to_value(u.arcsec)
+        if 'satstar_match_sep' not in cat.colnames:
+            cat['satstar_match_sep'] = np.full(len(cat), np.nan)
+        cat['satstar_match_sep'][idx_cat] = _presep
+
     if 'flux' in cat.colnames:
         if 'dflux' in cat.colnames:
             cat_fluxerr_col = 'dflux'
@@ -2356,8 +2432,8 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
         cat['skycoord'][idx_cat] = satstar_cat['skycoord_fit'][idx_sat]
         if 'x' in cat.colnames:
             # the merged, individual field catalogs don't have these
-            cat['x'][idx_cat] = satstar_cat['x_fit'][idx_sat]
-            cat['y'][idx_cat] = satstar_cat['y_fit'][idx_sat]
+            cat['x'][idx_cat] = satstar_cat[_sat_xcol][idx_sat]
+            cat['y'][idx_cat] = satstar_cat[_sat_ycol][idx_sat]
             cat['dx'][idx_cat] = satstar_cat[xerr_colname][idx_sat]
             cat['dy'][idx_cat] = satstar_cat[yerr_colname][idx_sat]
 
@@ -2382,6 +2458,9 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
             satstar_toadd.rename_column(flux_err_colname, cat_fluxerr_col)
         satstar_toadd.rename_column('skycoord_fit', 'skycoord')
         if 'x' in cat.colnames:
+            if _sat_xcol != 'x_fit':
+                satstar_toadd['x_fit'] = satstar_toadd[_sat_xcol]
+                satstar_toadd['y_fit'] = satstar_toadd[_sat_ycol]
             satstar_toadd.rename_column('x_fit', 'x')
             satstar_toadd.rename_column('y_fit', 'y')
             satstar_toadd.rename_column(xerr_colname, 'dx')
@@ -2403,8 +2482,8 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
         cat['flux_err'][idx_cat] = satstar_cat[flux_err_colname][idx_sat]
         cat['skycoord'][idx_cat] = satstar_cat['skycoord_fit'][idx_sat]
         if 'x_fit' in satstar_cat.colnames and 'x_fit' in cat.colnames:
-            cat['x_fit'][idx_cat] = satstar_cat['x_fit'][idx_sat]
-            cat['y_fit'][idx_cat] = satstar_cat['y_fit'][idx_sat]
+            cat['x_fit'][idx_cat] = satstar_cat[_sat_xcol][idx_sat]
+            cat['y_fit'][idx_cat] = satstar_cat[_sat_ycol][idx_sat]
             cat['x_err'][idx_cat] = satstar_cat[xerr_colname][idx_sat]
             cat['y_err'][idx_cat] = satstar_cat[yerr_colname][idx_sat]
 
@@ -2426,6 +2505,9 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
 
         satstar_toadd.rename_column('skycoord_fit', 'skycoord')
         satstar_toadd['skycoord_centroid'] = satstar_toadd['skycoord']
+        if _sat_xcol != 'x_fit' and 'x_fit' in satstar_toadd.colnames:
+            satstar_toadd['x_fit'] = satstar_toadd[_sat_xcol]
+            satstar_toadd['y_fit'] = satstar_toadd[_sat_ycol]
 
         for colname in cat.colnames:
             if colname not in satstar_toadd.colnames:
@@ -2447,9 +2529,19 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
           f"in filter {filtername}.  "
           f"{satstar_not_inc.sum()} are newly added.  The total replaced stars={replaced_sat_.sum()}")
 
+    # DECOUPLED FLAGS (2026-07-10): 'is_saturated' marks the STAR as saturated
+    # in this band -- replaced rows AND rows that matched a satstar but whose
+    # replacement was vetoed (their daophot flux is the saturation-CLIPPED
+    # value: +0.2..+0.5 mag faint in narrow bands, +3..+5 in wide -- the
+    # forensics 'unflagged clipped' class).  'replaced_saturated' remains the
+    # actual-overwrite flag.  Downstream vetting force-keep and CMD tools can
+    # now distinguish 'saturated but not repaired' from clean photometry.
+    is_sat_ = replaced_sat_.copy()
+    if len(_vetoed_cat):
+        is_sat_[_vetoed_cat] = True
     if 'is_saturated' in cat.colnames:
         cat.remove_column('is_saturated')
-    cat.add_column(replaced_sat_.astype(bool), name='is_saturated')
+    cat.add_column(is_sat_.astype(bool), name='is_saturated')
 
     if 'replaced_saturated' in cat.colnames:
         cat.remove_column('replaced_saturated')

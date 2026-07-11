@@ -282,3 +282,90 @@ class TestDedupOffsetResolver:
         monkeypatch.setenv('MERGE_DEDUP_FWHM_FRAC', '0.5')
         out = M._resolve_dedup_offset('f2550w', 0.10 * u.arcsec)
         assert abs(out.to_value(u.arcsec) - 0.35) < 1e-9
+
+
+def test_alignment_star_mask_excludes_position_unsafe_rows():
+    """Referee-4 gate: transformation star sets must exclude satstar-replaced,
+    saturated-unrepaired, forced-filled, and poor-qfit rows."""
+    import numpy as np
+    from astropy.table import Table
+    from jwst_gc_pipeline.photometry.column_utils import alignment_star_mask
+    cat = Table({
+        'replaced_saturated': [False, True, False, False, False],
+        'is_saturated': [False, False, True, False, False],
+        'forced_filled': [False, False, False, True, False],
+        'qfit': [0.1, 0.1, 0.1, 0.1, 0.9],
+    })
+    m = alignment_star_mask(cat)
+    assert list(m) == [True, False, False, False, False]
+    # per-band suffix form
+    cat2 = Table({'replaced_saturated_f182m': [True, False],
+                  'qfit_f182m': [0.05, 0.05]})
+    m2 = alignment_star_mask(cat2, suffix='_f182m')
+    assert list(m2) == [False, True]
+    # missing columns -> no exclusion (safe on any generation)
+    m3 = alignment_star_mask(Table({'flux': [1.0, 2.0]}))
+    assert m3.all()
+
+
+def test_replace_saturated_uses_detector_coords(monkeypatch, tmp_path):
+    """x_fit/y_fit in satstar catalogs are CUTOUT coordinates (pad-centered,
+    ~(81,81)); detector coordinates live in xcentroid/ycentroid.  Replaced
+    rows and appended satstar-only rows must get the DETECTOR coordinates in
+    their pixel columns (regression: cutout coords silently corrupted x/y of
+    every replaced row)."""
+    import numpy as np
+    from astropy.table import Table
+    from astropy.coordinates import SkyCoord
+    import astropy.units as u
+    from jwst_gc_pipeline.photometry import merge_catalogs as M
+
+    ra0, dec0 = 266.5, -28.7
+    satstar = Table({
+        'skycoord_fit': SkyCoord([ra0, ra0 + 0.01]*u.deg, [dec0, dec0]*u.deg),
+        'flux_fit': [5000.0, 7000.0],
+        'flux_err': [10.0, 10.0],
+        'x_fit': [81.2, 80.9],          # cutout frame
+        'y_fit': [81.0, 81.4],
+        'x_err': [0.01, 0.01],
+        'y_err': [0.01, 0.01],
+        'xcentroid': [512.3, 1400.7],   # detector frame
+        'ycentroid': [300.1, 1650.2],
+    })
+    monkeypatch.setattr(M, 'load_satstar_catalog', lambda *a, **k: satstar)
+
+    class _FakeSvo:
+        @staticmethod
+        def get_filter_list(_):
+            t = Table({'filterID': ['JWST/NIRCam.F182M'], 'ZeroPoint': [850.0]})
+            t.add_index('filterID')
+            return t
+    monkeypatch.setattr(M, 'SvoFps', _FakeSvo)
+
+    (tmp_path / 'reduction').mkdir()
+    Table({'Filter': ['F182M'], 'PSF FWHM (arcsec)': [0.06]}).write(
+        tmp_path / 'reduction' / 'fwhm_table.ecsv', format='ascii.ecsv')
+
+    # catalog row 0 sits at satstar 0's position (clipped daophot, fainter);
+    # satstar 1 is unmatched -> appended as a new row.
+    cat = Table({
+        'skycoord': SkyCoord([ra0]*u.deg, [dec0]*u.deg),
+        'flux': [1000.0],
+        'dflux': [5.0],
+        'x': [512.0], 'y': [300.0], 'dx': [0.01], 'dy': [0.01],
+    })
+    M.replace_saturated(cat, 'f182m', basepath=str(tmp_path) + '/',
+                        fwhm_basepath=str(tmp_path))
+
+    assert bool(cat['replaced_saturated'][0])
+    # replaced row: detector coords, not the ~81 cutout coords
+    assert abs(cat['x'][0] - 512.3) < 1e-6
+    assert abs(cat['y'][0] - 300.1) < 1e-6
+    # appended satstar-only row: detector coords too
+    new = cat[~np.isfinite(np.asarray(cat['satstar_match_sep'], float))] \
+        if 'satstar_match_sep' in cat.colnames else cat[1:]
+    assert len(cat) == 2
+    assert abs(cat['x'][1] - 1400.7) < 1e-6
+    assert abs(cat['y'][1] - 1650.2) < 1e-6
+    # match separation recorded for the replaced row
+    assert np.isfinite(cat['satstar_match_sep'][0])
