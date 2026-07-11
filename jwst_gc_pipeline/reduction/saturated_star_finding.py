@@ -566,7 +566,13 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
                                                 np.arange(1, nadd + 1)))
             keep_lab = np.arange(1, nadd + 1)[szs >= 2]
             if len(keep_lab):
-                saturated = saturated | np.isin(add, keep_lab)
+                # DILATE by 2 px: charge migration suppresses the star's
+                # shoulder BEYOND the pixels that exceed the floor; without
+                # dilation the wing fit anchors on the partially-suppressed
+                # shoulder and stays ~0.1 mag faint (brick 13.5<mB<14.25
+                # residual after seeding: +0.12 vs +0.34 unseeded).
+                _addmask = binary_dilation(np.isin(add, keep_lab), iterations=2)
+                saturated = saturated | _addmask
                 sources, nsource = label(saturated)
                 print(f"Saturated starfinding: peak-based seeding added "
                       f"{len(keep_lab)} unflagged charge-migration component(s) "
