@@ -290,3 +290,6 @@ mechanism as `fix_alignment`); idempotency via the `DVACORR` marker keyword
   the module separation error is deterministic and epoch-dependent — a fitted
   per-module shift goes stale as VA changes and injects reference noise (see
   the module-lock section above).
+
+Shareable technical report on this issue (for STScI / upstream):
+`docs/reports/DVA_INTERDETECTOR_REPORT.md`.
