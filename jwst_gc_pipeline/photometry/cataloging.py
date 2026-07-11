@@ -2143,8 +2143,14 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
     flist = []
     for module in modules:
         for fi, filt in enumerate(filternames):
-            p = (f'{cut_bp}/catalogs/{filt.lower()}_{module}_indivexp_merged'
-                 f'{desat}{bgsub}{blur_}_m6_dao_basic{_obssuf}_vetted.fits')
+            # ngc6334's two proposals tag the per-proposal merged catalog AFTER
+            # the module (matching merge_individual_frames' _j{proposal} output);
+            # every other target keeps its token at the END (unchanged).
+            _jtok = (f'_j{getattr(options, "proposal_id", None)}'
+                     if str(getattr(options, 'proposal_id', None)) in ('7213', '6778') else '')
+            _endsuf = '' if _jtok else _obssuf
+            p = (f'{cut_bp}/catalogs/{filt.lower()}_{module}{_jtok}_indivexp_merged'
+                 f'{desat}{bgsub}{blur_}_m6_dao_basic{_endsuf}_vetted.fits')
             if not os.path.exists(p):
                 continue
             t = Table.read(p)
@@ -2255,8 +2261,13 @@ def annotate_independent_detection(merged_path, cut_bp, filternames, options, *,
         for filt in filternames:
             f = filt.lower()
             col = f'independently_detected_{f}'
-            p = (f'{cut_bp}/catalogs/{f}_{module}_indivexp_merged'
-                 f'{desat}{bgsub}{blur_}_m6_dao_basic{_obssuf}_vetted.fits')
+            # ngc6334 proposals tag the per-proposal merged catalog after the
+            # module (see merge_individual_frames); others keep the end token.
+            _jtok = (f'_j{getattr(options, "proposal_id", None)}'
+                     if str(getattr(options, 'proposal_id', None)) in ('7213', '6778') else '')
+            _endsuf = '' if _jtok else _obssuf
+            p = (f'{cut_bp}/catalogs/{f}_{module}{_jtok}_indivexp_merged'
+                 f'{desat}{bgsub}{blur_}_m6_dao_basic{_endsuf}_vetted.fits')
             if not os.path.exists(p):
                 t[col] = np.zeros(len(t), dtype=bool)
                 continue
@@ -2919,7 +2930,13 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
         desat = '_unsatstar' if options.desaturated else ''
         bgsub = ('_bgsub' if options.bgsub else '') + ('_resbgsub' if resbgsub else '')
         blur_ = '_blur' if options.blur else ''
-        return (f'{cut_bp}/catalogs/{filt.lower()}_{module}_indivexp_merged'
+        # ngc6334 shares its target dir between proposals 7213+6778 with shared
+        # filters (F200W/F470N), so merge_individual_frames writes PER-PROPOSAL
+        # merged catalogs tagged ``_j{proposal}`` (see merge_catalogs.py).  Match
+        # that token here so the manual pipeline reads back the file it wrote;
+        # every other target uses the empty token (unchanged).
+        _jtok = f'_j{proposal_id}' if str(proposal_id) in ('7213', '6778') else ''
+        return (f'{cut_bp}/catalogs/{filt.lower()}_{module}{_jtok}_indivexp_merged'
                 f'{desat}{bgsub}{blur_}_{label}_dao_basic.fits')
 
     def _data_i2d_path(module, filt):
