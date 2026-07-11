@@ -16,6 +16,17 @@ MANUAL_DEFAULTS = {
     # -- fit QC (model/data-peak overshoot; NOTES_star_vs_extended_emission.md)
     'manual_overshoot_ratio': 1.2,
     'manual_overshoot_action': 'refit',
+    # Field-agnostic FINAL overshoot DROP.  After the refit (and MIRI cap), any
+    # fit whose rendered model peak STILL exceeds this multiple of the local
+    # bkg-subtracted DATA peak is a phantom (flux fit >> data can support -- a
+    # negative-crater "star" in the residual) and is DROPPED.  Runs on NIRCam
+    # too (the refit clears model_overshoot without re-checking, and the merge
+    # drops the flag column so vetting can't catch it -- so an over-fluxed fit
+    # otherwise survives with a deceptively perfect qfit; brick F182M m6
+    # flux-25434 phantom, -2419 sigma crater).  5.0 is safely above any real
+    # star (model_peak ~ data_peak, ratio ~1) or refit-corrected fit; set 0 to
+    # disable.
+    'manual_overshoot_drop_ratio': 5.0,
     # -- detection S/N thresholds
     'local_snr_threshold': 5.0,        # iter1 (m1) per-source local S/N
     'manual_iter2_local_snr': 3.0,     # residual / bg-subtracted passes

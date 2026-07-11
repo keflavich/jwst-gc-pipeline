@@ -1,5 +1,7 @@
 # MIRI satstar / cataloging review — 2026-07-04
 
+> **Figures moved:** image files are no longer tracked in this repo; they live in the Overleaf astrometry-paper project (https://www.overleaf.com/project/6a521006b63a11a7e0d80fa0) under `figures/miri_review/` (same filenames).
+
 Findings from user (AG) visual inspection of the 8-field gate rollout
 (re-cataloged against `satstar-bright-phantom-gate` = current `main` + PR #36).
 
@@ -16,7 +18,7 @@ proposed solution(s) → risk of the solution**.
 ---
 
 ## 1. brick F2550W — negative cores at low-coverage / mosaic seams
-![brick](01_brick_f2550w_negatives.png)
+> *Figure:* `figures/miri_review/01_brick_f2550w_negatives.png` (Overleaf)
 Panels: data | model | residual | WHT (exposure-coverage).
 
 **Observation (AG).** Four bright sources along a ~vertical line are negative:
@@ -50,7 +52,7 @@ core. (C) hides information; the flux is still biased.
 ---
 
 ## 2. cloudc F770W — every saturated core UNDER-subtracted
-![cloudc770](02_cloudc_f770w_undersubtraction.png)
+> *Figure:* `figures/miri_review/02_cloudc_f770w_undersubtraction.png` (Overleaf)
 4 brightest satstars; data | model | residual.
 
 **Confirmed.** Non-saturated stars subtract cleanly, but **every star with a
@@ -87,8 +89,8 @@ in this field. Any amplitude bump risks flipping under-sub → over-sub pits.
 ---
 
 ## 3. cloudc F2550W — fake stars on emission + boxy under-sub
-![cloudc2550o](03_cloudc_f2550w_fakes_overview.png)
-![cloudc2550z](04_cloudc_f2550w_undersub_boxy.png)
+> *Figure:* `figures/miri_review/03_cloudc_f2550w_fakes_overview.png` (Overleaf)
+> *Figure:* `figures/miri_review/04_cloudc_f2550w_undersub_boxy.png` (Overleaf)
 
 **Confirmed.** Real stars subtract well, but the field is "pockmarked": (a)
 faint **fake detections on bright extended emission** (long-λ broad PSF + bright
@@ -122,7 +124,7 @@ gradients.
 ---
 
 ## 4. sgrb2 F1280W — three distinct problems
-![sgrb2](05_sgrb2_f1280w_issues.png)
+> *Figure:* `figures/miri_review/05_sgrb2_f1280w_issues.png` (Overleaf)
 Rows: (a) sat→hole | (b),(c) pockmarks | (d) emission fake.
 
 **(a) `17:47:18.15 -28:23:16.1` — bright sat star → NaN hole, "no star".**
