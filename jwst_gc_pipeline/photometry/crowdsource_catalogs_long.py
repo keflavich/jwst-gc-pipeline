@@ -3688,8 +3688,9 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--manual-overshoot-drop-ratio", dest="manual_overshoot_drop_ratio",
                     type='float', default=MANUAL_DEFAULTS['manual_overshoot_drop_ratio'],
                     help="Field-agnostic FINAL drop: after refit/cap, DROP any fit whose model peak "
-                         "still exceeds this x the local data peak -- a phantom that gouges a negative "
-                         "crater in the residual (default 5.0; 0 disables).")
+                         "still exceeds this x the local BACKGROUND-SUBTRACTED data peak (falling back "
+                         "to the raw data peak, floored at 1, where the bkg-subtracted peak <= 0) -- a "
+                         "phantom that gouges a negative crater in the residual (default 5.0; 0 disables).")
     parser.add_option("--manual-iter2-local-snr", dest="manual_iter2_local_snr",
                     type='float', default=MANUAL_DEFAULTS['manual_iter2_local_snr'],
                     help="Local-S/N threshold for daofind on residual/bg-subtracted images (default 3.0).")

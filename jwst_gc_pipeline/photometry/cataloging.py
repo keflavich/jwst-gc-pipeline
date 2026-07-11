@@ -493,16 +493,22 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
         # dpk<=0 blind spot the flag/refit pass skips on NIRCam.  This last-resort
         # drop must close it -- it uses the RAW data peak (floored at 1) so a real
         # faint star (model peak ~ its raw peak, ratio ~1) is still safe.
-        _dropov = _filter_or_flag_model_overshoot(
+        # action='drop' removes the overshooting rows from phot.results in place;
+        # key the recompute + count off the LENGTH DELTA rather than the returned
+        # mask (which is aligned to the pre-drop table -- robust if the helper's
+        # contract changes).
+        _n_before = len(phot.results)
+        _filter_or_flag_model_overshoot(
             phot, modsky, data, ratio=overshoot_drop_ratio, action='drop',
             label=f'{label}:drop', flag_nonpositive_data=True)
-        if np.any(_dropov):
+        _n_dropped = _n_before - len(phot.results)
+        if _n_dropped > 0:
             phot.__dict__.pop('_model_image_params', None)
             modsky = _make_model_image(phot, data.shape, psf_shape=(21, 21),
                                        include_local_bkg=False)
-            print(f"[{label}] dropped {int(np.sum(_dropov))} phantom (model peak "
-                  f">{overshoot_drop_ratio:g}x data peak) over-subtracting fits",
-                  flush=True)
+            print(f"[{label}] dropped {_n_dropped} phantom (model peak "
+                  f">{overshoot_drop_ratio:g}x local bkg-subtracted data peak) "
+                  f"over-subtracting fits", flush=True)
 
     # --- ban non-positive-flux (negative-peak) sources ---
     # A PSF is strictly positive, so flux_fit <= 0 is a negative-peak model: it
