@@ -145,7 +145,24 @@ def dl(item):
     return f"<a href='{html.escape(item['url'])}'>download</a>"
 
 
-def render_field_page(field, manifest, preview_rel, preview_channels=None):
+def _version_dropdown(field, active_version, all_versions):
+    """A <select> to switch this region's page between release versions.
+    Latest -> <field>.html; older -> <field>.<version>.html (static, no server)."""
+    if not all_versions or len(all_versions) < 2:
+        return ""
+    opts = []
+    latest = all_versions[0]
+    for v in all_versions:
+        href = f"{field}.html" if v == latest else f"{field}.{v}.html"
+        sel = " selected" if v == active_version else ""
+        label = html.escape(v) + (" (latest)" if v == latest else "")
+        opts.append(f"<option value='{html.escape(href)}'{sel}>{label}</option>")
+    return ("<label class=muted style='margin-left:1em'>version "
+            "<select onchange='if(this.value)location=this.value'>"
+            + "".join(opts) + "</select></label>")
+
+
+def render_field_page(field, manifest, preview_rel, preview_channels=None, all_versions=None):
     files = manifest["files"]
     images = [f for f in files if f["category"] == "image"]
     catalogs = [f for f in files if f["category"] == "catalog"]
@@ -158,8 +175,13 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None):
     out.append(f"<h1>{html.escape(survey)} — {html.escape(field)}</h1>")
     out.append(f"<div class=muted>Release {html.escape(manifest['version'])} · "
                f"built {html.escape(manifest['built'][:10])} · "
-               f"<a href='index.html'>← all fields</a></div>")
+               f"<a href='index.html'>← all fields</a>"
+               f"{_version_dropdown(field, manifest['version'], all_versions)}</div>")
     out.append("</header><main>")
+    if all_versions and manifest['version'] != all_versions[0]:
+        out.append(f"<p class=muted style='border:1px solid #b58900;padding:.5em'>"
+                   f"You are viewing an <b>older</b> release ({html.escape(manifest['version'])}). "
+                   f"The latest is <a href='{html.escape(field)}.html'>{html.escape(all_versions[0])}</a>.</p>")
 
     multi = any(f.get("observation") for f in files)
 
@@ -410,53 +432,60 @@ def main(argv=None):
     assets = out_dir / "assets"
     assets.mkdir(parents=True, exist_ok=True)
 
+    def discover_versions(field):
+        """All release versions of a field present on disk, latest first.
+        (Version strings like v1.0-2026.06 / v1.1-2026.07 sort correctly as text.)"""
+        root = Path(args.release_root)
+        found = [p.name for p in root.iterdir() if p.is_dir()
+                 and (field_release_dir(field, p.name, args.release_root) / "MANIFEST.json").is_file()]
+        return sorted(found, reverse=True)
+
     fields_info = []
     for field in args.fields:
-        field_dir = field_release_dir(field, args.version, args.release_root)
-        manifest_path = field_dir / "MANIFEST.json"
-        if not manifest_path.is_file():
-            print(f"skip {field}: no MANIFEST.json")
+        versions = discover_versions(field)
+        if not versions:
+            print(f"skip {field}: no MANIFEST.json in any version")
             continue
-        manifest = json.loads(manifest_path.read_text())
+        latest = versions[0]
+        latest_dir = field_release_dir(field, latest, args.release_root)
 
-        # copy preview jpg into assets if present; derive channels from name
-        # (<field>_rgb_<r>_<g>_<b>.jpg)
+        # preview from the latest version
         preview_rel = None
         preview_channels = None
-        previews = sorted((field_dir / "preview").glob("*.jpg")) \
-            if (field_dir / "preview").is_dir() else []
+        previews = sorted((latest_dir / "preview").glob("*.jpg")) \
+            if (latest_dir / "preview").is_dir() else []
         if previews:
-            dest = assets / f"{field}.jpg"
-            shutil.copy2(previews[0], dest)
+            shutil.copy2(previews[0], assets / f"{field}.jpg")
             preview_rel = f"assets/{field}.jpg"
             parts = previews[0].stem.split("_rgb_")
             if len(parts) == 2 and parts[1].count("_") == 2:
                 preview_channels = [c.upper() for c in parts[1].split("_")]
 
-        (out_dir / f"{field}.html").write_text(
-            render_field_page(field, manifest, preview_rel, preview_channels))
-
-        # plain URL lists for scripted/wget bulk download (tiny text files):
-        # all, images-only, catalogs-only
-        def write_urls(suffix, cats):
-            urls = [f["url"] for f in manifest["files"]
-                    if f.get("url") and (cats is None or f["category"] in cats)]
-            if urls:
-                (out_dir / f"{field}_{suffix}.txt").write_text("\n".join(urls) + "\n")
-        write_urls("files", None)
-        write_urls("images", {"image"})
-        write_urls("catalogs", {"catalog"})
-
-        files = manifest["files"]
-        fields_info.append({
-            "field": field,
-            "version": manifest["version"],
-            "group": manifest.get("group"),
-            "preview": preview_rel,
-            "n_images": sum(1 for f in files if f["category"] == "image"),
-            "n_catalogs": sum(1 for f in files if f["category"] == "catalog"),
-        })
-        print(f"wrote {field}.html")
+        # one page per region for the latest (<field>.html) + one per older version
+        for v in versions:
+            manifest = json.loads(
+                (field_release_dir(field, v, args.release_root) / "MANIFEST.json").read_text())
+            page = render_field_page(field, manifest, preview_rel, preview_channels,
+                                     all_versions=versions)
+            fname = f"{field}.html" if v == latest else f"{field}.{v}.html"
+            (out_dir / fname).write_text(page)
+            if v == latest:
+                def write_urls(suffix, cats):
+                    urls = [f["url"] for f in manifest["files"]
+                            if f.get("url") and (cats is None or f["category"] in cats)]
+                    if urls:
+                        (out_dir / f"{field}_{suffix}.txt").write_text("\n".join(urls) + "\n")
+                write_urls("files", None)
+                write_urls("images", {"image"})
+                write_urls("catalogs", {"catalog"})
+                files = manifest["files"]
+                fields_info.append({
+                    "field": field, "version": manifest["version"],
+                    "group": manifest.get("group"), "preview": preview_rel,
+                    "n_images": sum(1 for f in files if f["category"] == "image"),
+                    "n_catalogs": sum(1 for f in files if f["category"] == "catalog"),
+                })
+        print(f"wrote {field}.html ({len(versions)} version(s): {', '.join(versions)})")
 
     (out_dir / "index.html").write_text(render_index(fields_info))
     (out_dir / "download_help.html").write_text(render_help())

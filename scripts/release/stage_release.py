@@ -147,6 +147,28 @@ FIELDS = {
         "proposal_prefix": "jw03523-o005_t001_nircam_clear",
         "group": "galactic_plane",
     },
+    # ngc6334: PRIVATE (shared only with H. Bouy, not public). Two programs
+    # (jw06778 + jw07213); F200W exists in both, we ship the 06778 version. Merged
+    # NIRCam mosaics listed explicitly (two prefixes -> no_auto_images); image-only.
+    "ngc6334": {
+        "data_dir": Path("/orange/adamginsburg/jwst/ngc6334"),
+        "no_auto_images": True,
+        "skip_catalogs": True,
+        "nircam": [
+            {"filter": "F090W", "src": "/orange/adamginsburg/jwst/ngc6334/F090W/pipeline/jw06778-o001_t001_nircam_clear-f090w-merged_i2d.fits"},
+            {"filter": "F115W", "src": "/orange/adamginsburg/jwst/ngc6334/F115W/pipeline/jw07213-o001_t001_nircam_clear-f115w-merged_i2d.fits"},
+            {"filter": "F162M", "src": "/orange/adamginsburg/jwst/ngc6334/F162M/pipeline/jw07213-o001_t001_nircam_clear-f162m-merged_i2d.fits"},
+            {"filter": "F182M", "src": "/orange/adamginsburg/jwst/ngc6334/F182M/pipeline/jw07213-o001_t001_nircam_clear-f182m-merged_i2d.fits"},
+            {"filter": "F187N", "src": "/orange/adamginsburg/jwst/ngc6334/F187N/pipeline/jw06778-o001_t001_nircam_clear-f187n-merged_i2d.fits"},
+            {"filter": "F200W", "src": "/orange/adamginsburg/jwst/ngc6334/F200W/pipeline/jw06778-o001_t001_nircam_clear-f200w-merged_i2d.fits"},
+            {"filter": "F277W", "src": "/orange/adamginsburg/jwst/ngc6334/F277W/pipeline/jw06778-o001_t001_nircam_clear-f277w-merged_i2d.fits"},
+            {"filter": "F335M", "src": "/orange/adamginsburg/jwst/ngc6334/F335M/pipeline/jw06778-o001_t001_nircam_clear-f335m-merged_i2d.fits"},
+            {"filter": "F356W", "src": "/orange/adamginsburg/jwst/ngc6334/F356W/pipeline/jw07213-o001_t001_nircam_clear-f356w-merged_i2d.fits"},
+            {"filter": "F405N", "src": "/orange/adamginsburg/jwst/ngc6334/F405N/pipeline/jw07213-o001_t001_nircam_clear-f405n-merged_i2d.fits"},
+            {"filter": "F444W", "src": "/orange/adamginsburg/jwst/ngc6334/F444W/pipeline/jw07213-o001_t001_nircam_clear-f444w-merged_i2d.fits"},
+            {"filter": "F470N", "src": "/orange/adamginsburg/jwst/ngc6334/F470N/pipeline/jw06778-o001_t001_nircam_clear-f470n-merged_i2d.fits"},
+        ],
+    },
 }
 
 
