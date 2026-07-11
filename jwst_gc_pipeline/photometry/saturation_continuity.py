@@ -132,3 +132,90 @@ def assert_saturation_continuity(cat, pairs, threshold=0.10):
                          f"(n_sat={w['n_sat']}, n_unflg={w['n_unflg']})")
     assert not fails, ('saturation-boundary photometric discontinuity '
                        f'>= {threshold} mag:\n  ' + '\n  '.join(fails))
+
+
+# ---------------------------------------------------------------------------
+# Degenerate-pair flatness -- the sharpest instrumental-error detector we have.
+#
+# A NEAR-DEGENERATE pair is two filters so close in wavelength that the
+# intrinsic + reddened stellar color is nearly constant for the whole
+# population (F405N-F410M: 4.05 vs 4.10 um; F182M-F187N: 1.82 vs 1.87 um).
+# Any drift of the median color with magnitude is therefore a photometric
+# systematic in one band -- independent of extinction, of any locus model,
+# and of saturation bookkeeping.  This is how the sub-floor "suppression
+# strips" were found (2026-07-11): stars peaking at 0.4-1.0x the severity
+# floor carry up to ~0.4 mag of unflagged core suppression, and the
+# F405N-F410M median color plunges -0.10 -> -0.49 exactly below the F410M
+# flagging floor while staying flat everywhere else.
+# ---------------------------------------------------------------------------
+
+DEGENERATE_PAIRS = [('f405n', 'f410m'), ('f182m', 'f187n')]
+
+
+def degenerate_pair_flatness(cat, bandA, bandB, binwidth=0.25, min_n=20,
+                             ref_percentiles=(40.0, 75.0), include_flags=True):
+    """Max deviation of the binned median color from its faint-plateau value.
+
+    Bins mag_B in ``binwidth`` steps; the reference plateau is the median
+    color of rows whose mag_B lies between the given percentiles of the
+    finite mag_B distribution (safely fainter than any suppression strip,
+    brighter than the noise floor).  The metric is the maximum |bin median -
+    plateau| over bins BRIGHTER than the plateau with n >= min_n.
+
+    ``include_flags=True`` scans all rows including ``replaced_saturated``
+    ones (the released catalog must be flat through the satstar regime);
+    forced-filled rows are always excluded.
+
+    Returns dict(metric, plateau, worst_bin, bins).
+    """
+    n = len(cat)
+    magA = _get(cat, f'mag_vega_{bandA}', np.nan, n).astype(float)
+    magB = _get(cat, f'mag_vega_{bandB}', np.nan, n).astype(float)
+    ok = (np.isfinite(magA) & np.isfinite(magB)
+          & ~_get(cat, f'forced_filled_{bandA}', False, n).astype(bool)
+          & ~_get(cat, f'forced_filled_{bandB}', False, n).astype(bool))
+    if not include_flags:
+        ok &= (~_get(cat, f'replaced_saturated_{bandA}', False, n).astype(bool)
+               & ~_get(cat, f'replaced_saturated_{bandB}', False, n).astype(bool))
+    if ok.sum() < 10 * min_n:
+        return dict(metric=np.nan, plateau=np.nan, worst_bin=None, bins=[])
+    color = magA - magB
+    p_lo, p_hi = np.nanpercentile(magB[ok], ref_percentiles)
+    ref = ok & (magB >= p_lo) & (magB < p_hi)
+    plateau = float(np.median(color[ref]))
+
+    lo = np.floor(np.nanmin(magB[ok]) / binwidth) * binwidth
+    edges = np.arange(lo, p_lo, binwidth)
+    bins, worst = [], None
+    metric = 0.0
+    for e in edges:
+        inb = ok & (magB >= e) & (magB < e + binwidth)
+        nb = int(inb.sum())
+        if nb < min_n:
+            continue
+        dev = float(np.median(color[inb]) - plateau)
+        rec = dict(magB_lo=float(e), n=nb, dev=dev)
+        bins.append(rec)
+        if abs(dev) > metric:
+            metric, worst = abs(dev), rec
+    if not bins:
+        return dict(metric=np.nan, plateau=plateau, worst_bin=None, bins=[])
+    return dict(metric=float(metric), plateau=plateau, worst_bin=worst,
+                bins=bins)
+
+
+def assert_degenerate_pair_flatness(cat, pairs=None, threshold=0.10,
+                                    **kwargs):
+    """Regression/certification entry point: raises AssertionError listing
+    magnitude ranges where a degenerate pair's color drifts >= threshold."""
+    fails = []
+    for a, b in (pairs if pairs is not None else DEGENERATE_PAIRS):
+        r = degenerate_pair_flatness(cat, a, b, **kwargs)
+        if np.isfinite(r['metric']) and r['metric'] >= threshold:
+            w = r['worst_bin']
+            fails.append(f"{a}-{b}: drift {r['metric']:.3f} mag vs plateau "
+                         f"{r['plateau']:+.3f} at mag_{b}={w['magB_lo']:.2f} "
+                         f"(n={w['n']})")
+    assert not fails, ('degenerate-pair color drift >= '
+                       f'{threshold} mag (unflagged suppression strip or '
+                       'flux-scale error):\n  ' + '\n  '.join(fails))

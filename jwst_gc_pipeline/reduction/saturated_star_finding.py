@@ -453,15 +453,14 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
 
     sources, nsource = label(saturated)
     print('Saturated starfinding: nsources=', nsource, flush=True)
-    if nsource == 0:
-        # No saturated components in this frame -- common for a small cutout or a
-        # sparse field.  The spike-merge / size / edge / center-of-mass logic
-        # below all index ``np.arange(nsource)+1`` (an empty array), and
-        # ``sum_labels`` on an empty index reduces with ``np.amin`` over nothing
-        # -> ``ValueError: zero-size array to reduction operation minimum``.
-        # Short-circuit to the empty result the caller expects (mirrors the
-        # ``if _n > 0`` guard on the cosmic-ray sum_labels above).
-        return saturated, sources, []
+    # NOTE (2026-07-11): zero DQ-SATURATED components must NOT short-circuit
+    # here -- the PEAK-BASED and SUB-FLOOR seeding blocks below can still add
+    # unflagged charge-migration/suppression-strip components on a DQ-clean
+    # frame (previously such frames were never seeded at all).  The label-
+    # indexed gate blocks below are guarded with ``nsource`` instead, and the
+    # empty short-circuit happens after seeding (the spike-merge / size /
+    # edge logic below it cannot take an empty label set: ``sum_labels`` on
+    # an empty index reduces with ``np.amin`` over nothing -> ValueError).
 
     # MIN LOST-CORE SIZE.  A genuine saturated star's truly-lost core is a COMPACT
     # cluster (W51 F480M deep-saturated star: 75 px core); scattered 1-4 px
@@ -472,7 +471,7 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
     # from a fragment, so the legacy behaviour is preserved.  Tune/disable with
     # SATSTAR_MIN_LOST_CORE (default 5; 0/1 disables).
     _min_core = int(os.environ.get('SATSTAR_MIN_LOST_CORE', 5))
-    if _truly_lost_restricted and _min_core > 1:
+    if _truly_lost_restricted and _min_core > 1 and nsource:
         _sz = sum_labels(saturated, sources, np.arange(nsource) + 1)
         _small_lab = (np.arange(nsource) + 1)[_sz < _min_core]
         if len(_small_lab):
@@ -488,7 +487,7 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
     # spurious flag), keeping only genuine saturated stars (bright wings, or a
     # NaN-variance unrecoverable core).  See _SATSTAR_DATA_FLOOR docstring.  Runs
     # BEFORE spike-merge/edge logic so spurious components never participate.
-    if sat_data_floor and sat_data_floor > 0:
+    if sat_data_floor and sat_data_floor > 0 and nsource:
         sci = np.asarray(fitsdata['SCI'].data, dtype=float)
         unrec = (np.isnan(fitsdata['VAR_POISSON'].data)
                  if 'VAR_POISSON' in [h.name for h in fitsdata]
@@ -523,7 +522,7 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
     # pixels in-frame).  Distinct from the wing data-floor above: that guard
     # kills faint spurious flags; this one kills BRIGHT-star over-flags whose
     # wings easily clear the wing floor.  See SAT_SEVERITY_FLOOR.
-    if severity_floor and severity_floor > 0:
+    if severity_floor and severity_floor > 0 and nsource:
         sci = np.asarray(fitsdata['SCI'].data, dtype=float)
         unrec = (np.isnan(fitsdata['VAR_POISSON'].data)
                  if 'VAR_POISSON' in [h.name for h in fitsdata]
@@ -578,6 +577,54 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
                       f"{len(keep_lab)} unflagged charge-migration component(s) "
                       f"(data > {severity_floor:g}) -> nsources={nsource}",
                       flush=True)
+
+    # SUB-FLOOR SEEDING (2026-07-11): core suppression is CONTINUOUS in well
+    # fill, not a step at the severity floor.  Stars peaking at ~0.4-1.0x the
+    # floor carry up to ~0.4 mag of unflagged core suppression (Brick F410M
+    # 12.2<m<13.3: the F405N-F410M color plunges -0.10 -> -0.49 exactly below
+    # the flagging floor; wing-annulus photometry shows the catalog fluxes are
+    # >=0.17 mag too faint while F405N at the same mags is clean).  Seed
+    # components whose peak lies in [frac*floor, floor) so their suppressed
+    # cores are masked and the flux comes from the linear-regime wings.  The
+    # mask is AMPLITUDE-DERIVED by construction (pixels above frac*floor plus
+    # the 2-px shoulder dilation, r ~ 2-4 px) -- NOT the DQ-saturated area,
+    # which is zero for these stars and previously produced ~0.6-px masks
+    # whose "wing" fits just returned the same suppressed flux.  The post-fit
+    # implied-peak gate arbitrates naturally: a genuinely suppressed star's
+    # wing fit implies a peak above the gate threshold (kept), an unsuppressed
+    # star implies its observed sub-floor peak (rejected -> daophot row kept).
+    # Size-capped so extended emission crossing frac*floor cannot seed.
+    _subfloor_frac = float(os.environ.get('SATSTAR_SUBFLOOR_SEED_FRAC', 0.35))
+    if severity_floor and severity_floor > 0 and 0 < _subfloor_frac < 1:
+        sci_ps = np.asarray(fitsdata['SCI'].data, dtype=float)
+        sub_bright = (np.isfinite(sci_ps)
+                      & (sci_ps > _subfloor_frac * float(severity_floor))
+                      & (~saturated))
+        if sub_bright.any():
+            add, nadd = label(sub_bright)
+            _lab_idx = np.arange(1, nadd + 1)
+            szs = np.asarray(ndimage.sum_labels(sub_bright, add, _lab_idx))
+            pk = np.asarray(ndimage.maximum(
+                np.where(np.isfinite(sci_ps), sci_ps, -np.inf),
+                labels=add, index=_lab_idx))
+            # >=2 px (reject hot pixels/CRs), <=50 px (reject extended
+            # emission), peak below the floor (above-floor components were
+            # already seeded by the block above).
+            keep_lab = _lab_idx[(szs >= 2) & (szs <= 50)
+                                & (pk < float(severity_floor))]
+            if len(keep_lab):
+                _addmask = binary_dilation(np.isin(add, keep_lab), iterations=2)
+                saturated = saturated | _addmask
+                sources, nsource = label(saturated)
+                print(f"Saturated starfinding: sub-floor seeding added "
+                      f"{len(keep_lab)} suppression-strip component(s) "
+                      f"(data > {_subfloor_frac:g} x {severity_floor:g}) "
+                      f"-> nsources={nsource}", flush=True)
+
+    if nsource == 0:
+        # Nothing DQ-flagged and nothing seeded: empty result (the logic
+        # below cannot take an empty label set).
+        return saturated, sources, []
 
     # Fold disconnected diffraction-spike satellites into their dominant core
     # BEFORE edge/size logic so one star -> one component -> one satstar fit
