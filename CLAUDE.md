@@ -77,11 +77,24 @@ resets → current table applied), never to re-apply on top of the stale shift.
 
 ## Release gate
 
+Full blocking checklist: **`scripts/release/RELEASE_DEPLOYMENT_CHECKLIST.md`**.
+
 `scripts/release/stage_release.py` runs `registration_failsafes.py --scan` (per-tile,
 cross-band + own-catalog) and **REFUSES to stage** any field with a locally
 misregistered band. Do not stage around it. The `--allow-registration-fail`
 override additionally requires `ALLOW_REGISTRATION_FAIL=1` in the environment — it
 exists only for deliberate, justified overrides, not for making a red gate go green.
+
+**⛔ Inter-frame overlap check is BLOCKING and not fully covered by the stock gate.**
+The #1 recurring corruption: two overlapping observations/visits/pointings sit
+>1 pixel (usually >1″) apart, so the overlap region loses all its stars while the
+bulk offset still reads ~0. You MUST verify that wherever different frames overlap,
+their stars match `< 30 mas` — per pair, per tile, reference-free (JWST-internal)
+plus VIRAC2 & Gaia, with the **swept** estimator. `registration_failsafes.py`
+searches only ±2.5″ with no sweep, so it **cannot see a >2.5″ overlap offset**
+(zero pairs → "can't verify", not FAIL); a green `registration_failsafes` is
+therefore NOT sufficient — the swept per-visit/overlap check (`verify_brick_astrometry.py`)
+must also pass. See checklist item 0.
 
 ---
 
