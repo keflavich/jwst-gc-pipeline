@@ -1,0 +1,47 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install package + test deps
+        env:
+          # the repo tag style (v1.0-2026.06) is unparseable by setuptools_scm;
+          # CI does not need a real version.  MUST be package-scoped: the
+          # unscoped variable leaks into every scm-built sdist in the same
+          # pip run (it broke dust_extinction's build).
+          SETUPTOOLS_SCM_PRETEND_VERSION_FOR_JWST_GC_PIPELINE: 0.0.dev0
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[test]
+
+      - name: Run test suite (local-survey-data tests auto-skip)
+        env:
+          # CRDS is never contacted by the unit tests, but imports want the vars
+          CRDS_PATH: ${{ runner.temp }}/crds
+          CRDS_SERVER_URL: https://jwst-crds.stsci.edu
+          # saturated_star_finding refuses to import without STPSF_PATH; the
+          # unit tests never compute a PSF, so an empty dir satisfies it
+          STPSF_PATH: ${{ runner.temp }}/stpsf-data
+          WEBBPSF_PATH: ${{ runner.temp }}/stpsf-data
+          MPLBACKEND: Agg
+        run: |
+          mkdir -p "$STPSF_PATH"
+          pytest jwst_gc_pipeline tests -q -rs --color=yes

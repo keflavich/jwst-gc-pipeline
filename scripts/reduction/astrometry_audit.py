@@ -68,25 +68,20 @@ def detect(path, thr=50.0, fwhm=2.5):
 def xcorr(a: SkyCoord, b: SkyCoord, maxsep=XMAXSEP, binarc=XBIN):
     """Bulk on-sky offset (mas) to move ``a`` onto ``b`` via the peak of the 2-D
     histogram of all pair separations within ``maxsep``.  Crowding-proof.  Returns dict
-    with dra/ddec/off (mas), npairs, peak_ratio, or None."""
-    ia, ib, sep, _ = search_around_sky(a, b, maxsep)
-    if len(ia) < 30:
+    with dra/ddec/off (mas), npairs, peak_ratio, or None.
+
+    Thin wrapper over the sanctioned ``photometry.astrometry_offsets.measure_offset``
+    (single source of truth for offset-histogram stacking) -- so the audit inherits
+    the window-SWEEP: if the initial ``maxsep`` window shows no coherent tie, it
+    escalates the window (3->10->30->60") and reports the real peak. A fixed 2.5"
+    window is exactly what let brick-1182 v001's ~20" offset read as ~0."""
+    from jwst_gc_pipeline.photometry.astrometry_offsets import measure_offset
+    r = measure_offset(a, b, maxsep=maxsep, bin_arcsec=binarc, min_pairs=30)
+    if r is None:
         return None
-    dra = (b[ib].ra - a[ia].ra).to(u.arcsec).value * np.cos(np.radians(a[ia].dec.value))
-    ddec = (b[ib].dec - a[ia].dec).to(u.arcsec).value
-    m = maxsep.to(u.arcsec).value
-    bins = np.arange(-m, m + binarc, binarc)
-    H, xe, ye = np.histogram2d(dra, ddec, bins=[bins, bins])
-    i, j = np.unravel_index(H.argmax(), H.shape)
-    bg = float(np.median(H[H > 0])) if (H > 0).any() else 0.0
-    dra0 = (xe[i] + xe[i + 1]) / 2.0
-    ddec0 = (ye[j] + ye[j + 1]) / 2.0
-    # refine: mean of pairs within one bin of the peak
-    near = (np.abs(dra - dra0) < binarc) & (np.abs(ddec - ddec0) < binarc)
-    if near.sum() >= 5:
-        dra0, ddec0 = float(np.median(dra[near])), float(np.median(ddec[near]))
-    return dict(dra=dra0 * 1000, ddec=ddec0 * 1000, off=float(np.hypot(dra0, ddec0) * 1000),
-                npairs=int(len(ia)), peak_ratio=float(H.max() / bg) if bg else float("inf"))
+    # preserve this module's return contract (peak_ratio == contrast)
+    return dict(dra=r["dra"], ddec=r["ddec"], off=r["off"],
+                npairs=r["npairs"], peak_ratio=r["contrast"])
 
 
 def direct_intermodule(sc_a: SkyCoord, sc_b: SkyCoord, radius=0.1 * u.arcsec):

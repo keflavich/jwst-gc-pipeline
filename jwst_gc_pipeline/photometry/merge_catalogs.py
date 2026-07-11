@@ -48,6 +48,8 @@ from jwst_gc_pipeline.photometry.naming import (
     MIRI_FILTERS, _inst_token, _svo_filter_id,
     _bgsub_token_from_flags as _bgsub_token,
 )
+from jwst_gc_pipeline.photometry.measure_offsets import (
+    assert_sparse_reference_for_nn_median, DenseNNMedianAstrometryError)
 
 filternames = filternames_narrow = ['f410m', 'f212n', 'f466n', 'f405n', 'f187n', 'f182m']
 all_filternames = ['f410m', 'f212n', 'f466n', 'f405n', 'f187n', 'f182m', 'f444w', 'f356w', 'f200w', 'f115w']
@@ -416,6 +418,16 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
 
     # do one loop of re-matching
     # We use only mutual best-matches for the realignment measurement to avoid spurious matches, e.g., if there are three stars in a line, we only want to match two if they are each other's best match
+    # FORBIDDEN-METHOD GUARD: when ``realign=True`` the loop below applies the
+    # MEDIAN of nearest-neighbour matches to each exposure's sky coordinates.
+    # Against the dense internal base catalogue that is the dense-NN-median method
+    # that corrupted brick-1182; refuse it (realign defaults False, so production
+    # merges are unaffected).  Re-enable relative alignment only via offset-
+    # histogram stacking.
+    if realign and basecrds is not None:
+        assert_sparse_reference_for_nn_median(
+            basecrds, max_offset,
+            context="combine_singleframe(realign=True) frame-to-frame base catalog")
     print("Starting re-matching", flush=True)
     for ii, tbl in enumerate(tbls):
         crds = tbl[skycoord_colname]
@@ -2807,6 +2819,22 @@ def main():
     if options.make_refcat:
         import make_reftable
         make_reftable.main()
+
+    # Tailing registration failsafe: a full all-band merge just finished, so this is
+    # the first moment a whole-field cross-band scan is meaningful. Catches a
+    # brick-1182-style LOCALIZED misregistration (a half-mosaic grossly shifted while
+    # the bulk offset reads ~0) at build time instead of at release. Opt-in and non-fatal by
+    # default so it can never wedge a run or disrupt in-flight remediation chains:
+    #   RUN_REGISTRATION_GATE=1          -> run it, WARN on FAIL
+    #   REGISTRATION_GATE_STRICT=1       -> also RAISE on FAIL (hard gate)
+    if os.environ.get('RUN_REGISTRATION_GATE') == '1':
+        from jwst_gc_pipeline.photometry.registration_gate import run_registration_gate
+        strict = os.environ.get('REGISTRATION_GATE_STRICT') == '1'
+        res = run_registration_gate(options.target, strict=strict)
+        if res['returncode'] == 1:
+            print(f"WARNING: registration gate FAILED for '{options.target}' -- a band "
+                  f"is locally misregistered (see scan above). Do NOT release these "
+                  f"products; set REGISTRATION_GATE_STRICT=1 to hard-fail.", flush=True)
 
     print("Done")
 

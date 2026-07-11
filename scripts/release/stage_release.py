@@ -447,6 +447,10 @@ def build_manifest(field, version):
         src = Path(item["src"])
         item["dest"] = str(assign_dest(item, field))
         item["size_bytes"] = src.stat().st_size if src.is_file() else None
+        # per-file version: defaults to the field release version so every file carries
+        # an explicit version on the download page. A file bumped independently (e.g. a
+        # re-tied mosaic staged into an otherwise-older release) can override this.
+        item.setdefault("version", version)
     return items
 
 
@@ -621,6 +625,11 @@ def main(argv=None):
                         help="grant all-authenticated-users read on the release path")
     parser.add_argument("--print-urls", action="store_true",
                         help="print HTTPS download URLs (requires --stage)")
+    parser.add_argument("--allow-registration-fail", action="store_true",
+                        help="stage even if the local-registration failsafe FAILs "
+                             "(a band is locally misregistered). DANGEROUS -- only for "
+                             "deliberate overrides; ALSO requires ALLOW_REGISTRATION_FAIL=1 "
+                             "in the environment. The default refuses to stage.")
     args = parser.parse_args(argv)
 
     items = build_manifest(args.field, args.version)
@@ -632,6 +641,41 @@ def main(argv=None):
     if not args.stage:
         print("Dry run. Re-run with --stage to build the release tree.")
         return 0
+
+    # ---- LOCAL-REGISTRATION GATE ----------------------------------------------------
+    # A field-average astrometry check passes over a LOCALIZED several-arcsec seam
+    # misregistration in one band (brick 1182 F115W, 2026-07: 1.8" visit-seam junk,
+    # bulk ~0). Before staging, run the spatially-resolved cross-band + own-catalog
+    # failsafe over every band; REFUSE to stage if any band FAILs. This makes that
+    # corruption unable to reach a release by construction.
+    # The override is deliberately hard to reach: --allow-registration-fail ALONE is
+    # not enough, it also requires ALLOW_REGISTRATION_FAIL=1 in the environment. This
+    # stops an agent from flipping a red gate green with a single flag (the exact
+    # failure mode that keeps letting 4" astrometry into releases).
+    override = args.allow_registration_fail and os.environ.get("ALLOW_REGISTRATION_FAIL") == "1"
+    if args.allow_registration_fail and not override:
+        print("\nREFUSING TO STAGE: --allow-registration-fail also requires "
+              "ALLOW_REGISTRATION_FAIL=1 in the environment. This override bypasses "
+              "the astrometry failsafe -- only set it with a written justification.",
+              file=sys.stderr)
+        return 2
+    if not override:
+        gate = Path(__file__).with_name("registration_failsafes.py")
+        rc = subprocess.run([sys.executable, str(gate), "--field", args.field, "--scan"]).returncode
+        if rc == 1:
+            print(f"\nREFUSING TO STAGE '{args.field}': local-registration failsafe FAILED "
+                  f"-- a band's mosaic is locally misregistered vs the other bands / its own "
+                  f"catalog (see the scan output above). Fix the reduction, or override with "
+                  f"--allow-registration-fail AND ALLOW_REGISTRATION_FAIL=1 (dangerous).",
+                  file=sys.stderr)
+            return 2
+        if rc != 0:
+            # Fail CLOSED: a failsafe that cannot run is NOT a passing failsafe.
+            print(f"\nREFUSING TO STAGE '{args.field}': registration failsafe could not run "
+                  f"(rc={rc}); cannot confirm astrometry. Fix the failsafe, or override with "
+                  f"--allow-registration-fail AND ALLOW_REGISTRATION_FAIL=1 (dangerous).",
+                  file=sys.stderr)
+            return 2
 
     mode = "copy" if args.copy else "symlink"
     field_dir = stage(items, args.field, args.version, args.release_root,

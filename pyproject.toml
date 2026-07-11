@@ -28,6 +28,15 @@ dependencies = [
   "stpsf",
   "crds",
   "jwst",
+  "crowdsourcephoto",
+  "grid-strategy",
+  "dust_extinction",
+  "scikit-image",
+  "dask",
+  "requests",
+  "urllib3",
+  "PyYAML",
+  "packaging",
 ]
 dynamic = ["version"]
 

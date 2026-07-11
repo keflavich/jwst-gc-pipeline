@@ -209,3 +209,38 @@ def alignment_star_mask(cat, *, suffix='', qfit_max=0.4):
     qf = _col('qfit')
     bad |= np.isfinite(qf) & (qf > qfit_max)
     return ~bad
+
+
+def color_reliable_mask(cat, band1, band2):
+    """Boolean mask: the ``band1 - band2`` color of each row is trustworthy.
+
+    Brick CMD audit (2026-07-10): rows saturated in one band whose OTHER-band
+    magnitude came from the m8 forced fill produce colors wrong by 5-9 mag --
+    the cross-band merge missed the partner band's real detection (median
+    0.214" away; saturated-centroid scatter), so the fill measured the
+    star-subtracted residual.  92-100% of such colors are >2 mag off the
+    locus; they form the diagonal plumes on the CMD bright end.
+
+    A color is UNRELIABLE iff one band is ``forced_filled`` while the row is
+    ``replaced_saturated``/``is_saturated`` in the other (either direction).
+    Ordinary fill-vs-detection and fill-vs-fill colors are kept: fills at
+    unsaturated positions are genuine measurements/limits (5% bad, same as
+    detections).  Bands are the lowercase merged-catalog suffixes ('f182m').
+    Missing columns contribute False (a catalog with no fill or saturation
+    columns is fully reliable).
+    """
+    n = len(cat)
+
+    def _bool(name):
+        if name not in cat.colnames:
+            return np.zeros(n, dtype=bool)
+        c = cat[name]
+        c = c.filled(False) if hasattr(c, 'filled') else c
+        return np.asarray(c, dtype=bool)
+
+    def _sat(band):
+        return _bool(f'replaced_saturated_{band}') | _bool(f'is_saturated_{band}')
+
+    bad = ((_bool(f'forced_filled_{band1}') & _sat(band2))
+           | (_bool(f'forced_filled_{band2}') & _sat(band1)))
+    return ~bad

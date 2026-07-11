@@ -111,8 +111,15 @@ refnames = {'2221': 'F405ref',
             # share ONE frame and realign_to_catalog ~= 0.  See
             # ASTROMETRY_WCS_CORRECTION_FLOW.md.
             '1182': 'VIRAC2',
-            '3958': 'VVV',
-            '5365': 'VVV',
+            # sickle: GNS-anchored (nircam_bootstrapped_to_gns_refcat.fits), NOT
+            # VVV.  refnames gates VVV realignment (see ~line 1089) and names the
+            # offsets table; 'VVV' here wrongly triggered VVV realignment on a
+            # GNS-frame field.
+            '3958': 'GNS',
+            # sgrb2: re-anchored 2026-06-18 to Gaia DR3 + VIRAC2
+            # (gaia_virac2_refcat_epoch2024.68.fits).  Token left as 'VVV' after
+            # that switch, so VVV realignment kept firing on a VIRAC2-frame field.
+            '5365': 'VIRAC2',
             '6151': 'Gaia',  # w51: switched 2026-06-10 (was UKIDSS)
             '2092': 'VVV',
             '4147': 'VVV',
@@ -1137,6 +1144,10 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
     return locals()
 
 
+# offsets tables already collapse-checked this process (warn once per file, not per frame)
+_VALIDATED_OFFSETS_TABLES = set()
+
+
 def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, filtername=None,
                   use_average=True):
     if os.path.exists(fn):
@@ -1187,6 +1198,14 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
         locked_tbl = f'{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_VIRAC2locked.csv'
         if os.path.exists(locked_tbl):
             offsets_tbl = Table.read(locked_tbl)
+            # One-time collapse check: the ad-hoc VIRAC2locked curation once overwrote
+            # brick-1182 visit-001's offset with visit-002's (both ~+1.9" for a visit
+            # truly ~20" off). Warn if distinct visits share a value here so it can't
+            # be applied blind again. Once per file per process (not per frame).
+            if locked_tbl not in _VALIDATED_OFFSETS_TABLES:
+                _VALIDATED_OFFSETS_TABLES.add(locked_tbl)
+                from jwst_gc_pipeline.reduction.validate_offsets_table import assert_offsets_table_sane
+                assert_offsets_table_sane(offsets_tbl, context=os.path.basename(locked_tbl))
             match = ((offsets_tbl['Visit'] == visit)
                      & (offsets_tbl['Filter'] == filtername))
             # Support BOTH conventions: per-VISIT tables (1 row/visit, no usable Exposure) and
@@ -1307,6 +1326,30 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
     if 'RAOFFSET' in align_fits[1].header:
         # don't shift twice if we re-run
         print(f"{fn} is already aligned ({align_fits[1].header['RAOFFSET']}, {align_fits[1].header['DEOFFSET']})")
+        # DISAGREEMENT GUARD: the plain skip-if-present check silently KEPT a stale
+        # RAOFFSET after the offsets table was corrected -- brick-1182 v001 crf held
+        # +1.9" while the table said -17.5", so half the mosaic stayed ~20" off and
+        # the idempotent guard blocked the fix. Compare the baked-in RAOFFSET to the
+        # value we WOULD apply now; if they disagree, this frame is stale.
+        _cur_ra = float(align_fits[1].header['RAOFFSET'])
+        _cur_de = float(align_fits[1].header.get('DEOFFSET', 'nan'))
+        _dra = abs(_cur_ra - rashift.value)
+        _dde = abs(_cur_de - decshift.value)
+        _tol = float(os.environ.get('RAOFFSET_DISAGREE_TOL_ARCSEC', 0.05))
+        if _dra > _tol or _dde > _tol:
+            _msg = (f"STALE ASTROMETRY: {fn} carries RAOFFSET/DEOFFSET "
+                    f"({_cur_ra:+.4f},{_cur_de:+.4f})\" but the current table would "
+                    f"apply ({rashift.value:+.4f},{decshift.value:+.4f})\" "
+                    f"(disagree {_dra:.3f},{_dde:.3f}\" > {_tol}\"). This frame was "
+                    f"built from an OLD table and the skip-if-present guard is hiding "
+                    f"it. Regenerate the working copy from _cal (destreak overwrite) "
+                    f"so RAOFFSET resets and the current table is applied, OR set "
+                    f"FORCE_REALIGN_ON_DISAGREE=1 to re-apply now.")
+            if os.environ.get('FORCE_REALIGN_ON_DISAGREE') == '1':
+                raise RuntimeError(
+                    _msg + " [FORCE_REALIGN_ON_DISAGREE=1: refusing to silently keep "
+                    "a stale frame; regenerate it from _cal.]")
+            warnings.warn(_msg)
     else:
         # ASDF header
         fa = ImageModel(fn)

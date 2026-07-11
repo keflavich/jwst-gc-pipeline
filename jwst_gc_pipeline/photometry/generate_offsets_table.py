@@ -20,6 +20,7 @@ from astropy.coordinates import SkyCoord
 from astropy import stats
 from jwst_gc_pipeline.photometry.merge_catalogs import shift_individual_catalog
 from jwst_gc_pipeline.astrometry_utils import farr, prop
+from jwst_gc_pipeline.photometry.measure_offsets import assert_sparse_reference_for_nn_median
 
 warnings.simplefilter('ignore')
 BASE = '/orange/adamginsburg/jwst/brick'
@@ -65,6 +66,13 @@ virac = SkyCoord(*prop(farr(v['RAJ2000']), farr(v['DEJ2000']), farr(v['pmRA']), 
 
 
 def voff(sc):
+    # FORBIDDEN-METHOD GUARD: matching to the DENSE VIRAC2 catalog with a
+    # nearest-neighbour median is exactly the "got fooled twice" validation that
+    # reported a spurious ~0 offset and let brick-1182 ship ~1.9" off.  Refuse it;
+    # validate with offset-histogram stacking (or a Gaia-only subset) instead.
+    assert_sparse_reference_for_nn_median(
+        virac, 0.25 * u.arcsec,
+        context="generate_offsets_table VIRAC2 validation (voff)")
     ci, s, _ = sc.match_to_catalog_sky(virac); ri, _, _ = virac.match_to_catalog_sky(sc)
     k = (ri[ci] == np.arange(len(ci))) & (s <= 0.25 * u.arcsec)
     if k.sum() < 8: return None

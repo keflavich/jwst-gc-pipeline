@@ -5,9 +5,18 @@ Default behavior is configured for Sickle (target=sickle, proposal_id=3958, fiel
 but this script can be used for other targets/proposals/fields (e.g. brick-2221,
 brick-1182, sgrb2-5365) by changing CLI options.
 
-Outputs:
-- {basepath}/catalogs/pipeline_based_nircam-{filter}_reference_astrometric_catalog.ecsv
-- {basepath}/catalogs/pipeline_based_nircam-{filter}_reference_astrometric_catalog.fits
+Outputs (named by the bootstrap reference; see BOOTSTRAPPED_REFCAT_FILENAMES):
+- {basepath}/catalogs/nircam_bootstrapped_to_{vvv,gns}_refcat.ecsv
+- {basepath}/catalogs/nircam_bootstrapped_to_{vvv,gns}_refcat.fits
+
+NOTE: this script does NOT (any longer) emit
+pipeline_based_nircam-{filter}_reference_astrometric_catalog.{ecsv,fits}.  Older
+versions did, and PipelineMIRI's REFERENCE_ASTROMETRIC_CATALOG_CANDIDATES_BY_FIELD
+still lists those pipeline_based-* names as its first f210m/f182m candidate --
+which is why they exist under some trees (sickle f210m, brick f182m) but are
+absent under others (e.g. cloudc), where alignment then falls through to the next
+candidate.  Consumers of THIS script must expect the nircam_bootstrapped_to_*
+names above.
 """
 
 from __future__ import annotations
@@ -28,7 +37,9 @@ import matplotlib.pyplot as plt
 from astroquery.vizier import Vizier
 
 
-from jwst_gc_pipeline.photometry.measure_offsets import measure_offsets
+from jwst_gc_pipeline.photometry.measure_offsets import (
+    measure_offsets, assert_sparse_reference_for_nn_median,
+    DenseNNMedianAstrometryError)
 from jwst_gc_pipeline.catalog_utils import catalog_skycoord
 
 
@@ -698,6 +709,14 @@ def bootstrap_reference_catalog(
     iteration = 0
     max_iterations = 6
 
+    # FORBIDDEN-METHOD GUARD: the loop below applies the (sigma-clipped) MEAN of
+    # nearest-neighbour matches to the whole catalogue -- invalid against a dense
+    # reference (collapses to a spurious shift; corrupted brick-1182 twice).  A
+    # dense bootstrap reference must be aligned with offset-histogram stacking or a
+    # sparse (Gaia-only) reference instead.
+    assert_sparse_reference_for_nn_median(
+        reference["skycoord"], max_sep,
+        context=f"bootstrap_reference_catalog(reference={reference_name!r})")
     while True:
         matched = match_catalog_to_reference(
             corrected["skycoord"][selection],

@@ -39,11 +39,38 @@ all_filternames = ['f410m', 'f212n', 'f466n', 'f405n', 'f187n', 'f182m', 'f444w'
 sqgrid = strategies.SquareStrategy()
 rectgrid = strategies.RectangularStrategy()
 
-mist = Table.read(f'{basepath}/isochrones/MIST_iso_633a08f2d8bb1.iso.cmd', header_start=12, data_start=13, format='ascii', delimiter=' ', comment='#')
-# Hack, but good enough to first order
-mist['410M405'] = mist['F410M']
-mist['405M410'] = mist['F405N']
-padova = Table.read(f'{basepath}/isochrones/padova_isochrone_package.dat', header_start=14, data_start=15, format='ascii', delimiter=' ', comment='#')
+# Isochrone tables are loaded LAZILY: a module-level Table.read of survey
+# data made the module unimportable off-cluster (CI, laptops) and slowed
+# every import.  Access via _load_mist()/_load_padova() (cached); module
+# attribute access (plot_tools.mist / plot_tools.padova) still works via
+# PEP-562 __getattr__ below.
+from functools import lru_cache
+
+
+@lru_cache(maxsize=1)
+def _load_mist():
+    mist = Table.read(f'{basepath}/isochrones/MIST_iso_633a08f2d8bb1.iso.cmd',
+                      header_start=12, data_start=13, format='ascii',
+                      delimiter=' ', comment='#')
+    # Hack, but good enough to first order
+    mist['410M405'] = mist['F410M']
+    mist['405M410'] = mist['F405N']
+    return mist
+
+
+@lru_cache(maxsize=1)
+def _load_padova():
+    return Table.read(f'{basepath}/isochrones/padova_isochrone_package.dat',
+                      header_start=14, data_start=15, format='ascii',
+                      delimiter=' ', comment='#')
+
+
+def __getattr__(name):
+    if name == 'mist':
+        return _load_mist()
+    if name == 'padova':
+        return _load_padova()
+    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
 
 
 
@@ -745,6 +772,8 @@ def _mist_phase_mask(phase_include=None, phase_exclude=None, phase_column='phase
     Exclude white dwarf rows (if your table encodes them with a known value):
         phase_exclude=[wd_phase_value]
     """
+    mist = _load_mist()
+    padova = _load_padova()
     if (phase_include is None and phase_exclude is None and log_g_min is None
             and log_g_max is None and log_g_range is None):
         return np.ones(len(mist), dtype=bool)
@@ -836,6 +865,8 @@ def cmds_withiso(basetable, sel=True,
     Supported phase values in the current MIST table are:
         [-1.0, 0.0, 2.0, 3.0, 4.0, 5.0, 6.0, 9.0]
     """
+    mist = _load_mist()
+    padova = _load_padova()
     if yval != 'f1':
         raise ValueError("cmds_withiso currently supports yval='f1' only")
 
@@ -931,6 +962,8 @@ def ccds_withiso(basetable, sel=True,
                  rasterized=True,
                  max_uncertainty=None,
         ):
+    mist = _load_mist()
+    padova = _load_padova()
     if fig is None:
         fig = pl.figure()
     combos = list(itertools.combinations(colors, 2))
