@@ -17,6 +17,11 @@
 # NOTE: not all targets are in the Galactic Center -- the job is renamed to
 # "<target>-catalog" at runtime (below) once TARGET is known.  This static
 # default only shows until the job starts.
+# JOB NAMING (STANDING RULE -- do not submit with the generic name):
+#   ALWAYS pass a descriptive name at submit time:
+#     sbatch --job-name=<target><program>-o<obsid>-cat[-FILTER] ...
+#     e.g. --job-name=brick2221-o001-cat-F182M
+#   Pending jobs show ONLY this static name; the runtime rename fires at START.
 #SBATCH --job-name=catalog
 #SBATCH --account=astronomy-dept
 #SBATCH --qos=astronomy-dept-b
@@ -83,7 +88,10 @@ if [ -z "$FILT" ]; then
 fi
 
 # Descriptive per-task job name (filter only known after indexing the array).
-scontrol update JobId="${SLURM_JOB_ID:-0}" Name="cat_${TARGET}_${FILT}" 2>/dev/null || true
+# Fallback rename (fires at START; a submit-time --job-name is preserved).
+if [ "${SLURM_JOB_NAME:-catalog}" = "catalog" ]; then
+    scontrol update JobId="${SLURM_JOB_ID:-0}" Name="${TARGET}${PROPOSAL:+$PROPOSAL}-o${FIELD:-}-cat-${FILT}" 2>/dev/null || true
+fi
 
 # The active manual pipeline refuses to run with SLURM_ARRAY_TASK_ID set (its
 # phases must not be split across array tasks).  We use the array index ONLY to

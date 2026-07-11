@@ -34,6 +34,13 @@
 # reusing existing *_cal.fits (skip_step1and2 / -s).
 # ---------------------------------------------------------------------------
 # renamed to "red_<prop>_<field>_<filt>" at runtime (target is not always the GC)
+# JOB NAMING (STANDING RULE -- do not submit with the generic name):
+#   ALWAYS pass a descriptive name at submit time:
+#     sbatch --job-name=<target><program>-o<obsid>-reduce[-FILTER] ...
+#     e.g. --job-name=brick2221-o001-reduce-F182M  /  cloudc2221-o002-reduce
+#   Multiple reduce/catalog jobs are almost always in flight; a pending job
+#   shows ONLY this static name (the runtime rename below fires at START).
+#   Include the obsid whenever the program has more than one observation.
 #SBATCH --job-name=reduce
 #SBATCH --account=astronomy-dept
 #SBATCH --qos=astronomy-dept-b
@@ -97,7 +104,10 @@ SKYMATCH_FLAG=""
 # Descriptive per-task job name (the #SBATCH --job-name is necessarily generic
 # because the filter is only known after indexing the array here).  Rename this
 # task so squeue shows what it actually is, e.g. "red_4147_012_F470N".
-scontrol update JobId="${SLURM_JOB_ID:-0}" Name="red_${PROPOSAL}_${FIELD}_${FILT}" 2>/dev/null || true
+# Fallback rename (fires at START; a submit-time --job-name is preserved).
+if [ "${SLURM_JOB_NAME:-reduce}" = "reduce" ]; then
+    scontrol update JobId="${SLURM_JOB_ID:-0}" Name="jw${PROPOSAL}-o${FIELD}-reduce-${FILT}" 2>/dev/null || true
+fi
 
 PYTHON=${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/python}
 echo "REDUCE start: proposal=$PROPOSAL field=$FIELD filter=$FILT modules=$MODULES skip=$SKIP skymatch=${SKYMATCH:-off}"
