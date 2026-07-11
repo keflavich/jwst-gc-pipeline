@@ -18,9 +18,12 @@ Implemented in:
 nearest-neighbour matches (`match_to_catalog_sky` / `search_around_sky`) against a
 DENSE reference catalog (VIRAC2 / VVV / GNS, median NN spacing ≲ 3").** When the
 true shift exceeds the reference's nearest-neighbour spacing, NN pairs the WRONG
-star and the median **collapses toward ~0** (or a spurious value). This silently
-corrupted **brick-1182 astrometry twice** (mosaic left ~1.6–4" off the absolute
-frame) and repeatedly fooled *validation* that used the same method.
+star and the median **collapses toward ~0** (or a spurious value). It fabricates
+false agreement and has repeatedly fooled *validation* of the GC fields (a
+NN-median check "confirms 0.00 fine" on a frame that is really off). (Note: the
+brick-1182 v001 ~20" error itself was an offsets-table CURATION collapse, not a
+NN-median measurement — see the brick-1182 note — but NN-median is the same class
+of failure and must never be used.)
 
 This is now enforced in code:
 `jwst_gc_pipeline.photometry.measure_offsets.assert_sparse_reference_for_nn_median`
@@ -38,8 +41,9 @@ This is now enforced in code:
 - **a SPARSE reference** — the Gaia-only subset (`source == b'GaiaDR3'`, medNN
   ~5.7"), never the full dense catalog.
 
-**A bulk offset ≈ 0 is NOT sign-off.** A half-mosaic can be untied while the
-field-average reads ~0 (brick-1182 visit-001). Always map the offset PER TILE
+**A bulk offset ≈ 0 is NOT sign-off.** A half-mosaic can be grossly SHIFTED while
+the field-average reads ~0 (brick-1182 visit-001: a clean ~20" rigid step across the
+y=0.5 seam). Always map the offset PER TILE
 (`measure_offset_grid`, `registration_failsafes.py`) and require per-tile peak
 contrast ≳ 5 everywhere.
 

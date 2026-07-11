@@ -15,11 +15,13 @@ nearest-neighbour matches (`match_to_catalog_sky` / `search_around_sky` +
 spacing ≲ 3").**
 
 Why: when the true shift exceeds the reference's NN spacing (~0.3"), NN pairs the
-WRONG star and the median **collapses toward ~0** (or a spurious value). This has
-**silently corrupted brick-1182 astrometry more than once** — both when *building*
-the offsets table (it zeroed a real 1.9" shift) and when *validating* it (it
-"confirmed 0.00 fine" on a mosaic that was 1.9" off). The method fabricates
-agreement. It is the single recurring cause of the 4" errors in programs 2221/1182.
+WRONG star and the median **collapses toward ~0** (or a spurious value). The method
+**fabricates false agreement** and has repeatedly fooled *validation* of the GC
+fields (a NN-median check "confirms 0.00 fine" on a frame that is really off) — a
+recurring failure mode behind the 2221/1182 astrometry errors. (The specific
+brick-1182 v001 ~20" error was an offsets-table CURATION collapse — v001 overwritten
+with v002's value — not a NN-median measurement; but it is the same class of silent
+false-agreement failure, so NN-median against a dense catalog is banned outright.)
 
 This is now **enforced in code** — `measure_offsets.assert_sparse_reference_for_nn_median`
 raises `DenseNNMedianAstrometryError` — and by a **grep-guard test**
