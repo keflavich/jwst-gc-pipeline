@@ -34,3 +34,6 @@ _*.txt
 _*.md
 TODO*.md
 NOTES*.md
+
+# figures/evidence graphics live in the Overleaf astrometry-paper project, not this repo
+*.png

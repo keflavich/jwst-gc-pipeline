@@ -1,5 +1,7 @@
 # Recovering faint blended + on-emission stars — investigation writeup (PR #57)
 
+> **Figures moved:** image files are no longer tracked in this repo; they live in the Overleaf astrometry-paper project (https://www.overleaf.com/project/6a521006b63a11a7e0d80fa0) under `figures/pr57/` (same filenames).
+
 Goal: recover real stars the PSF-photometry pipeline was dropping, benchmarked against
 Matt Hosek's UCLA Arches F212N NRCA4 catalog and a hand-selected Brick F182M dense clump
 (`jwst_cat_f182m_selected_stars.reg`). Each hypothesis below was tested with a cutout run
@@ -20,7 +22,7 @@ floor `min(noise_map)` already sits at ~0.27σ ("over-detect-everything"). daofi
 respond to threshold (right panel: count falls monotonically with a proper σ-scaled threshold),
 the pipeline just already sits at the bottom. **Threshold is not the limiter.**
 
-![H1](figs/fig1_threshold_not_limiter.png)
+> *Figure:* `figures/pr57/fig1_threshold_not_limiter.png` (Overleaf)
 
 ---
 
@@ -35,7 +37,7 @@ rejects it. Test: loosen the per-frame residual roundness to ±1.0 (+ optional c
 red, right). Completeness 0.490→0.564 on the clump, purity unchanged. **This is the shipped
 default change (±0.3 → ±1.0).**
 
-![H2](figs/fig2_roundness_arches.png)
+> *Figure:* `figures/pr57/fig2_roundness_arches.png` (Overleaf)
 
 ---
 
@@ -49,7 +51,7 @@ per-frame roundness — the extended emission is left in the residual, not subtr
 fraction is unchanged. **The per-frame roundness default is emission-safe.** (The *coadd-seed*
 loosening is more aggressive on emission and is kept a star-field opt-in.)
 
-![H3](figs/fig3_emission_w51.png)
+> *Figure:* `figures/pr57/fig3_emission_w51.png` (Overleaf)
 
 ---
 
@@ -65,7 +67,7 @@ collapses to 15/34, the worst. Raw find_peaks removes the shape cut, which is th
 between faint stars and emission peaks. **Rejected.** (Constrained "hybrid" variants that split only
 near a confirmed dao detection kept emission safe but recovered no *real* stars either.)
 
-![H4](figs/fig4_findpeaks_eats_emission.png)
+> *Figure:* `figures/pr57/fig4_findpeaks_eats_emission.png` (Overleaf)
 
 ---
 
@@ -88,7 +90,7 @@ the m6 residual is unchanged (emission preserved, no shredding). Left→middle: 
 green catalog points (orange = `low_fit_quality`). The remaining 6: 2 outside the cutout, 1 borderline,
 3 seen in only 2 frames.
 
-![H5/H7](figs/fig5_keeptier_brick.png)
+> *Figure:* `figures/pr57/fig5_keeptier_brick.png` (Overleaf)
 
 ---
 
@@ -113,7 +115,7 @@ cutout products (Arches `groupA_{baseline,bothloose}`, W51 `w51df187_{base,loose
 
 Measured on the Brick F182M tiered cutout (nrca; has `low_fit_quality`, `std_ra/dec`, `nmatch`).
 
-![caveats](figs/fig6_expansion_caveats.png)
+> *Figure:* `figures/pr57/fig6_expansion_caveats.png` (Overleaf)
 
 ### Negative consequences checked
 
