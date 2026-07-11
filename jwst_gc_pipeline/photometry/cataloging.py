@@ -1063,11 +1063,14 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
     #     is unreliable -> flagged low_fit_quality so photometry users can cut it
     #     while astrometry/completeness users keep it.  Default off (strong=0).
     # The position guard (if set) applies to BOTH tiers.
-    if nmatch_confirm > 0 and 'nmatch' in t.colnames:
+    if (nmatch_confirm > 0 or nmatch_confirm_strong > 0) and 'nmatch' in t.colnames:
         _nm = t['nmatch']
         _nm = np.asarray(_nm.filled(0) if hasattr(_nm, 'filled') else _nm, dtype=float)
         _fin = np.isfinite(_nm)
-        mf_normal = _fin & (_nm >= nmatch_confirm) & (qf <= nmatch_confirm_qfit_max)
+        # NORMAL tier only when explicitly enabled (nmatch_confirm>0); otherwise
+        # empty so nmatch_confirm==0 does NOT admit every source via `_nm >= 0`.
+        mf_normal = (_fin & (_nm >= nmatch_confirm) & (qf <= nmatch_confirm_qfit_max)
+                     if nmatch_confirm > 0 else np.zeros(len(t), bool))
         mf_strong = (_fin & (_nm >= nmatch_confirm_strong)
                      if nmatch_confirm_strong > 0 else np.zeros(len(t), bool))
         mf = mf_normal | mf_strong
@@ -1080,8 +1083,9 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
         _n_mf = int(np.sum(mf & ~keep))
         _n_strong = int(np.sum(mf_strong & ~mf_normal & mf & ~keep))
         keep = keep | mf
-        print(f"[{label}] multi-frame keep: +{_n_mf} (nmatch>={nmatch_confirm:g}, "
-              f"qfit<={nmatch_confirm_qfit_max:g}"
+        _normal_txt = (f"nmatch>={nmatch_confirm:g}, qfit<={nmatch_confirm_qfit_max:g}"
+                       if nmatch_confirm > 0 else "normal tier off")
+        print(f"[{label}] multi-frame keep: +{_n_mf} ({_normal_txt}"
               f"{(', +strong nmatch>=%g any-qfit=%d' % (nmatch_confirm_strong, _n_strong)) if nmatch_confirm_strong > 0 else ''}"
               f"{(', posscatter<=%gmas' % nmatch_confirm_maxpos_mas) if nmatch_confirm_maxpos_mas > 0 else ''})",
               flush=True)
@@ -1139,9 +1143,11 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
 
     # LOW-FIT-QUALITY flag: mark kept sources whose fit is poor (qfit above the
     # threshold) so downstream photometry can cut them while positions are kept.
-    # Threshold defaults to nmatch_confirm_qfit_max (the normal keep ceiling).
-    _lfq_thr = float(low_fit_quality_qfit) if low_fit_quality_qfit > 0 else float(nmatch_confirm_qfit_max)
-    t['low_fit_quality'] = np.asarray(qf, dtype=float) > _lfq_thr
+    # Only added when the STRONG tier is active or the user explicitly requests it,
+    # so a default run keeps its historical output schema (byte-identical).
+    if nmatch_confirm_strong > 0 or low_fit_quality_qfit > 0:
+        _lfq_thr = float(low_fit_quality_qfit) if low_fit_quality_qfit > 0 else float(nmatch_confirm_qfit_max)
+        t['low_fit_quality'] = np.asarray(qf, dtype=float) > _lfq_thr
 
     # overshoot drop is shared by both instrument paths (was duplicated).
     if drop_overshoot and 'model_overshoot' in t.colnames:
@@ -1702,23 +1708,6 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     resid_sharplo = float(mopt(options, 'manual_resid_sharplo'))
     resid_sharphi = float(mopt(options, 'manual_resid_sharphi'))
     first_snr = float(mopt(options, 'local_snr_threshold'))
-    # daofind detection-floor scale for the residual passes (m2 + m3..m6).  < 1
-    # lowers the threshold to detect fainter local maxima; m1 (raw data) stays at
-    # 1.0 to avoid flooding the first pass with noise.  Default 1.0 = no-op.
-    detect_scale = float(mopt(options, 'manual_detect_threshold_scale'))
-    # per-frame residual-pass (m2..m6) daofind shape cuts.  Companions sitting on a
-    # brighter neighbour's PSF wing are intrinsically LESS round, so the historical
-    # tight roundness (+-0.3) rejected real blended stars.  DEFAULT loosened to
-    # +-1.0 (2026-07-06): emission-safe regression (pillar/W51 F187N+F480M -- the
-    # extended emission stays in the residual, over-subtraction unchanged) + a free
-    # depth win on star fields (arches clump 2/10 -> 7/10, purity unchanged 0.885);
-    # purity is protected by the fit + nmatch confirmation, not the shape cut.  The
-    # COADD i2d-seed roundness (--manual-seed-round-max) stays TIGHT (0.5): loosening
-    # it too is a star-field opt-in (plants fake stars on nebulosity in emission fields).
-    resid_roundlo = float(mopt(options, 'manual_resid_roundlo'))
-    resid_roundhi = float(mopt(options, 'manual_resid_roundhi'))
-    resid_sharplo = float(mopt(options, 'manual_resid_sharplo'))
-    resid_sharphi = float(mopt(options, 'manual_resid_sharphi'))
     # PER-FRAME struct prune is DISABLED: the (struct_x,struct_y) values are
     # tuned on the deep i2d coadd; a single exposure has far higher structure
     # noise, so the same cut drops every detection (m2: 87->0).  The structure

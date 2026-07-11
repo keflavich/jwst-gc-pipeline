@@ -12,7 +12,9 @@ from astropy.visualization import simple_norm
 from astropy.stats import sigma_clipped_stats
 import astropy.units as u
 
-FIG = '/blue/adamginsburg/adamginsburg/repos/jwst-gc-pipeline-roundness/docs/pr57_recovery_investigation/figs'
+import os
+FIG = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'figs')
+os.makedirs(FIG, exist_ok=True)
 
 
 def load(cutdir, nrc, kind='data'):
@@ -127,7 +129,8 @@ def fig_brick():
     print('fig5 done')
 
 
-fig_roundness()
-fig_emission()
-fig_brick()
-print('ALL FIGS DONE')
+if __name__ == '__main__':
+    fig_roundness()
+    fig_emission()
+    fig_brick()
+    print('ALL FIGS DONE')

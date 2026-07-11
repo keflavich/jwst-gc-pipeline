@@ -10,7 +10,8 @@ from astropy.stats import sigma_clipped_stats
 import astropy.units as u
 
 B = '/orange/adamginsburg/jwst/brick/cutouts'
-FIG = '/blue/adamginsburg/adamginsburg/repos/jwst-gc-pipeline-roundness/docs/pr57_recovery_investigation/figs'
+import os
+FIG = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'figs'); os.makedirs(FIG, exist_ok=True)
 t = Table.read(glob.glob(f'{B}/f182m_kt_tiered/catalogs/f182m_nrca_*resbgsub_m6_dao_basic_vetted.fits')[0])
 sc = SkyCoord(t['skycoord'].ra, t['skycoord'].dec)
 lfq = np.asarray(t['low_fit_quality'], bool)
