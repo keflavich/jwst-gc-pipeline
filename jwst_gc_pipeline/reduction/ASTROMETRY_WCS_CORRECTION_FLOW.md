@@ -261,3 +261,46 @@ _Last updated 2026-07-03 (added module-lock policy + F410M exception). See also 
 docstring, the offsets-table builders (`_bench/build_sickle_gns_offsets.py`,
 `scripts/miri_reduction/` registration scripts), and `f115w-astrometry-*`
 analysis writeups in brick-jwst-2221._
+
+## Inter-detector DVA correction (`dva_correction.py`, opt-in)
+
+**What DVA is.** Velocity aberration: the spacecraft's ~30 km/s velocity
+displaces apparent star positions toward the velocity apex (up to ~20.5"). The
+bulk displacement is absorbed by the attitude (FGS guides on apparent
+positions); only the *differential* part across the FOV matters for the WCS —
+to first order a plate-scale factor `VA_SCALE` (|1−VA_SCALE| ≈ 1e-4, header
+keyword). `assign_wcs` corrects it per detector by scaling V2V3 about *each
+detector's own* reference point, which fixes the aberration WITHIN each
+detector but leaves the aberration of the detector *separations* in the
+delivered WCS. Residual = a per-detector rigid shift
+`−(1−VA_SCALE)×(ref_d − C)` for any exposure-common point C: ±9–13 mas at
+NIRCam module lever arms (the dominant part of the apparent "module A/B
+offset"), and **epoch-dependent** (VA swings ±1e-4 over the year → module
+separations move up to ~25 mas between epochs; a direct proper-motion hazard).
+Measured on the Brick by network self-calibration: fitted inter-detector scale
+= 9.7–9.9e-5 (2221, predicted 9.18e-5) and 1.05–1.06e-4 (1182, predicted
+1.00e-4); after removal, static SIAF detector placements are 1–2.5 mas
+(astrometry-paper `siaf_accuracy.tex`, `analysis/network_selfcal.py`).
+
+**The correction.** `dva_correction.apply_dva_correction(fn)` applies the
+per-detector rigid shift computed from the file's own header (`VA_SCALE`,
+`RA_REF/DEC_REF`, with C = the V1 boresight `RA_V1/DEC_V1` — common to the
+exposure by construction; the C-dependence is a common rigid shift absorbed by
+the reference tie). Both the GWCS and the FITS SIP header are updated (same
+mechanism as `fix_alignment`); idempotency via the `DVACORR` marker keyword
+(`DVASHRA`/`DVASHDE` record the applied shift).
+
+**Policy.**
+- Opt-in: `APPLY_DVA_CORRECTION=1` enables the hook in `fix_alignment`
+  (applied BEFORE the tie so offsets tables are measured on DVA-consistent
+  frames). Default off = byte-identical behavior.
+- Apply to `_cal`-derived working copies, not archives; regenerating from
+  `_cal` resets it (marker disappears with the overwrite) exactly like
+  `RAOFFSET`.
+- Do NOT "fix" the module offset with per-module offsets-table rows instead:
+  the module separation error is deterministic and epoch-dependent — a fitted
+  per-module shift goes stale as VA changes and injects reference noise (see
+  the module-lock section above).
+
+Shareable technical report on this issue (for STScI / upstream):
+`docs/reports/DVA_INTERDETECTOR_REPORT.md`.
