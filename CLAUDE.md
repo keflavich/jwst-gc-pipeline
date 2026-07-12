@@ -68,9 +68,25 @@ differs from the current table value; set `FORCE_REALIGN_ON_DISAGREE=1` to hard-
 The fix is to REGENERATE the working copy from `_cal` (destreak overwrite → RAOFFSET
 resets → current table applied), never to re-apply on top of the stale shift.
 
+### Stage astrometry checkpoints (in-pipeline failsafe ladder)
+
+Cataloging now re-verifies the astrometry at EVERY merge stage
+(`jwst_gc_pipeline/photometry/ASTROMETRY_CHECKPOINTS.md`): at m2 every exposure
+is re-measured against its visit consensus (2 mas tol) and the consensus is
+tied to VIRAC2/Gaia with multiple independent checks — a real misalignment
+CORRECTS the offsets table (with provenance), stale-tags the im0 mosaics
+(`*_im0_badastrom.fits`), and STOPS the run for regeneration; at m3–m6 the
+solution is FROZEN and any measured shift raises; at the m7 cross-band merge
+every filter must agree with the VIRAC2-Ks-nearest anchor to <5 mas with no
+significant 2″ cell >15 mas.  Do not disable (`ASTROM_CHECKPOINT=0`) or
+override (`ALLOW_LATE_STAGE_ASTROM_SHIFT`, `ALLOW_CROSSFILTER_ASTROM_FAIL`)
+without written justification.
+
 ### Reading list before any astrometry change
 - `jwst_gc_pipeline/reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md` — the full flow,
   the two authoring points, no-double-correction rule, epochs, module-lock policy.
+- `jwst_gc_pipeline/photometry/ASTROMETRY_CHECKPOINTS.md` — the stage checkpoint
+  ladder (visit consensus, frozen stages, cross-filter gate).
 - The `brick-1182-*` and `dense-nn-median-guard-enforced` memory notes.
 
 ---

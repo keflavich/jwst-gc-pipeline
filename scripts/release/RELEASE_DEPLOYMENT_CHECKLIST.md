@@ -1,21 +1,3 @@
-<<<<<<< Updated upstream
-
-## 1b. Astrometric frame + epoch declaration (BLOCKING)
-
-The release notes / README **must state the astrometric reference frame and the
-position epoch** of every catalog (e.g. "Gaia DR3 frame via Gaia+VIRAC2 refcat,
-positions at observation epoch 2022.655, not PM-propagated"), and whether
-per-star proper-motion propagation was applied. Catalog `meta` should carry the
-same (`REFFRAME`, `REF_EPOCH`). Downstream target lists (MSA plans, slit masks,
-TA reference sets) MUST copy that declaration forward.
-
-Why blocking: NIRSpec program 6927's MSA plan v11 was built from a source list
-on the deprecated crowdsource-F405N frame (~90 mas off Gaia) with no frame
-declaration; its Gaia-based TA candidates therefore sat (+47, +73) mas off the
-science targets — a systematic half-shutter slit miss that no acquisition step
-can remove. A one-line frame/epoch statement makes this class of error visible
-at plan time.
-=======
 # Release / deployment checklist (JWST-GC)
 
 Gate for publishing any mosaic + catalog. Every item is **blocking** unless marked
@@ -53,8 +35,9 @@ was junk while the bulk offset looked fine.
 - Map it **per tile / per visit**, never a single global number. A good half hides a
   broken half.
 
-**Tooling:** `verify_brick_astrometry.py` (per-visit v001/v002 + per-tile, VIRAC2 &
-Gaia, sweep-aware) and `scripts/reduction/astrometry_audit.py` (inter-module).
+**Tooling:** `scripts/reduction/run_astrometry_checkpoint.py` (visit-consensus
+per-exposure + reference multi-check, sweep-aware) and
+`scripts/reduction/astrometry_audit.py` (inter-module).
 **⚠ Gate gap:** the stock `registration_failsafes.py --scan` searches only ±2.5″ with
 no sweep, so **it cannot detect a >2.5″ overlap offset** (zero pairs → "can't verify",
 not FAIL). Until it is given a sweep / wide window, a passing `registration_failsafes`
@@ -62,9 +45,39 @@ is **not sufficient** — the swept per-visit/overlap check above must also pass
 
 ---
 
+## 0b. Stage astrometry checkpoints all green (BLOCKING)
+
+Every cataloging run now writes checkpoint records under
+`{basepath}/astrometry_checkpoints/` (see
+`jwst_gc_pipeline/photometry/ASTROMETRY_CHECKPOINTS.md`): m2 visit-consensus
+(per-exposure ≤ 2 mas + multi-check reference tie), m3–m6 frozen-solution, m7
+cross-filter (≤ 5 mas per filter, no significant 2″ cell > 15 mas). Before
+staging, confirm the `_latest` record of every band has `passed: true` **and**
+`all_verified: true` — a could-not-verify is not a pass — and that no
+checkpoint was run with `ASTROM_CHECKPOINT=0`, `ASTROM_CHECKPOINT_WARN_ONLY=1`,
+or the `ALLOW_*` overrides without a written justification.
+
+---
+
 ## 1. Absolute frame
 - Each mosaic ties to VIRAC2 (PM-propagated to obs epoch) `< ~30 mas` bulk, per-tile,
   high contrast; per-visit (not just whole-mosaic). VIRAC2 & Gaia agree.
+
+## 1b. Astrometric frame + epoch declaration (BLOCKING)
+
+The release notes / README **must state the astrometric reference frame and the
+position epoch** of every catalog (e.g. "Gaia DR3 frame via Gaia+VIRAC2 refcat,
+positions at observation epoch 2022.655, not PM-propagated"), and whether
+per-star proper-motion propagation was applied. Catalog `meta` should carry the
+same (`REFFRAME`, `REF_EPOCH`). Downstream target lists (MSA plans, slit masks,
+TA reference sets) MUST copy that declaration forward.
+
+Why blocking: NIRSpec program 6927's MSA plan v11 was built from a source list
+on the deprecated crowdsource-F405N frame (~90 mas off Gaia) with no frame
+declaration; its Gaia-based TA candidates therefore sat (+47, +73) mas off the
+science targets — a systematic half-shutter slit miss that no acquisition step
+can remove. A one-line frame/epoch statement makes this class of error visible
+at plan time.
 
 ## 2. Image ↔ catalog agreement
 - Released mosaic and its released catalog agree `< ~15 mas`, per tile — and both agree
@@ -85,4 +98,3 @@ is **not sufficient** — the swept per-visit/overlap check above must also pass
 ---
 *Add this same inter-frame overlap item to the per-observation QA issue template
 (`JWST-GC/data-qa`).*
->>>>>>> Stashed changes

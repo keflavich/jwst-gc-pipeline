@@ -123,6 +123,15 @@ pipeline TweakReg step. Do not re-enable TweakReg, or you will double-correct.
 one* place — per-exposure `fix_alignment`. Never add a post-resample mosaic
 corrector, and never edit `_cal.fits` or `_i2d.fits` in place.
 
+**Verification ladder (2026-07-12):** cataloging re-verifies this tie at every
+merge stage — visit-consensus per-exposure checks (2 mas), frozen-solution
+checks at m3–m6, and a cross-filter gate at the m7 merge.  A verified
+misalignment is corrected HERE (offsets table + regenerate from `_cal`; the im0
+mosaics are stale-tagged `*_im0_badastrom.fits`), never anywhere else.  See
+`../photometry/ASTROMETRY_CHECKPOINTS.md`.  `fix_alignment` stamps `APROV*`
+provenance cards (stage, method, applied shift, references, table) next to
+`RAOFFSET/DEOFFSET` at apply time.
+
 ---
 
 ## Tooling: use STScI tools; the one documented exception
