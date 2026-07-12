@@ -15,6 +15,7 @@ from photutils.psf import (extract_stars, EPSFBuilder)
 from astropy.modeling.fitting import LevMarLSQFitter
 from astropy import stats
 from astropy.table import Table, Column, MaskedColumn
+from astropy.table import vstack as table_vstack
 from astropy.wcs import WCS
 from astropy.coordinates import SkyCoord
 from astropy import coordinates
@@ -1951,9 +1952,9 @@ def _satstar_dedup_radius():
     return float(os.environ.get('SATSTAR_DEDUP_ARCSEC', 0.15)) * u.arcsec
 
 
-def load_rejected_satstar_positions(filtername, target='brick',
-                                    basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
-    """SkyCoord of gate-REJECTED satstar candidates for this band.
+def load_rejected_satstar_catalog(filtername, target='brick',
+                                  basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
+    """Table of gate-REJECTED satstar candidates for this band.
 
     The satstar channel (Phase A2, *_satstar_rejected.fits) records candidates
     that were seeded (DQ / peak / sub-floor) but rejected by the post-fit
@@ -1980,14 +1981,13 @@ def load_rejected_satstar_positions(filtername, target='brick',
             print(f"WARNING: unreadable rejected-satstar file {f}: {err}")
             continue
         if len(tt) and 'skycoord_fit' in tt.colnames:
-            parts.append(tt['skycoord_fit'])
+            parts.append(tt)
     if not parts:
         return None
-    from astropy.coordinates import concatenate as _sc_concat
-    sc = _sc_concat([SkyCoord(x) for x in parts]) if len(parts) > 1 else SkyCoord(parts[0])
-    print(f"load_rejected_satstar_positions: {len(sc)} gate-rejected candidate "
-          f"position(s) for {filtername} from {len(files)} file(s)")
-    return sc
+    out = table_vstack(parts, metadata_conflicts='silent')
+    print(f"load_rejected_satstar_catalog: {len(out)} gate-rejected candidate "
+          f"row(s) for {filtername} from {len(files)} file(s)")
+    return out
 
 
 def _dedup_satstar_catalog(tbl, radius=None, target=None):
@@ -2594,22 +2594,80 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
     # photometry is NOT modified.  No rejected files (pre-A2 products) -> all
     # False, unchanged behavior.
     _gate_rej = np.zeros(len(cat), dtype=bool)
+    _clip_corr = np.zeros(len(cat), dtype=bool)
+    _clip_corr_mag = np.full(len(cat), np.nan)
     try:
-        _rej_sc = load_rejected_satstar_positions(filtername, target=target,
-                                                  basepath=basepath)
+        _rej_tab = load_rejected_satstar_catalog(filtername, target=target,
+                                                 basepath=basepath)
     except Exception as _rej_err:
         print(f"WARNING: rejected-satstar load failed for {filtername}: "
               f"{type(_rej_err).__name__}: {_rej_err}")
-        _rej_sc = None
-    if _rej_sc is not None and 'skycoord' in cat.colnames and len(cat):
+        _rej_tab = None
+    if _rej_tab is not None and 'skycoord' in cat.colnames and len(cat):
+        _rej_sc = SkyCoord(_rej_tab['skycoord_fit'])
         _ri, _rsep, _ = SkyCoord(cat['skycoord']).match_to_catalog_sky(_rej_sc)
         _gate_rej = (_rsep.arcsec < 0.15) & ~np.asarray(cat['replaced_saturated'])
         print(f"satstar gate-taper flag: {int(_gate_rej.sum())} row(s) match a "
               f"gate-rejected candidate (<0.15\") and keep clipped daophot "
               f"photometry in {filtername}")
+        # GRAY-ZONE CORRECTION (PR #81 review decision): the rejected wing fit
+        # is still a per-star measurement.  Where the star was rejected by the
+        # IMPLIED-PEAK gate (not a garbage fit), the fit is sane (0<qfit<1),
+        # and adopting it would brighten the row by a BOUNDED 0.02-0.5 mag
+        # (the strip-suppression regime; an unsuppressed star's wing flux ~=
+        # its daophot flux, so it self-selects out below 0.02), adopt the wing
+        # flux with an uncertainty floored at half the adjustment.  Larger
+        # implied clips stay uncorrected (flag only): a 0.5+ mag adoption
+        # would trust exactly the fits the gate was built to distrust.
+        if 'flux' in cat.colnames and 'flux_fit' in _rej_tab.colnames:
+            _reason = (np.asarray(_rej_tab['reject_reason'], str)
+                       if 'reject_reason' in _rej_tab.colnames
+                       else np.full(len(_rej_tab), ''))
+            _rq = (np.asarray(_rej_tab['qfit'], float)
+                   if 'qfit' in _rej_tab.colnames
+                   else np.full(len(_rej_tab), np.nan))
+            _rflux = np.asarray(_rej_tab['flux_fit'], float)
+            _rferr = (np.asarray(_rej_tab['flux_err'], float)
+                      if 'flux_err' in _rej_tab.colnames
+                      else np.full(len(_rej_tab), np.nan))
+            _catflux = np.asarray(cat['flux'], float)
+            _mi = np.asarray(_ri)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                _dmag = 2.5 * np.log10(_rflux[_mi] / _catflux)
+            _ok = (_gate_rej
+                   & (_reason[_mi] == 'implied_peak_gate')
+                   & np.isfinite(_rq[_mi]) & (_rq[_mi] > 0) & (_rq[_mi] < 1)
+                   & np.isfinite(_rflux[_mi]) & (_rflux[_mi] > 0)
+                   & np.isfinite(_dmag) & (_dmag >= 0.02) & (_dmag <= 0.5))
+            if _ok.any():
+                _idx = np.where(_ok)[0]
+                _dflux = _rflux[_mi][_idx] - _catflux[_idx]
+                cat['flux'][_idx] = _rflux[_mi][_idx]
+                for _ec in ('dflux', 'flux_err', 'eflux'):
+                    if _ec in cat.colnames:
+                        _olde = np.asarray(cat[_ec], float)[_idx]
+                        _newe = np.hypot(
+                            np.where(np.isfinite(_rferr[_mi][_idx]),
+                                     _rferr[_mi][_idx], _olde),
+                            0.5 * np.abs(_dflux))
+                        cat[_ec][_idx] = _newe
+                        break
+                _clip_corr[_idx] = True
+                _clip_corr_mag[_idx] = _dmag[_idx]
+                print(f"satstar gray-zone clip correction: adopted the rejected "
+                      f"wing-fit flux for {len(_idx)} row(s) in {filtername} "
+                      f"(0.02-0.5 mag brighter; median "
+                      f"{np.median(_dmag[_idx]):.3f} mag; uncertainty floored "
+                      f"at half the adjustment)")
     if 'satstar_gate_rejected' in cat.colnames:
         cat.remove_column('satstar_gate_rejected')
     cat.add_column(_gate_rej, name='satstar_gate_rejected')
+    if 'satclip_corrected' in cat.colnames:
+        cat.remove_column('satclip_corrected')
+    cat.add_column(_clip_corr, name='satclip_corrected')
+    if 'satclip_corr_mag' in cat.colnames:
+        cat.remove_column('satclip_corr_mag')
+    cat.add_column(_clip_corr_mag, name='satclip_corr_mag')
     if 'flux_fit' in cat.colnames:
         cat.rename_column('flux_fit', 'flux')
     else:
