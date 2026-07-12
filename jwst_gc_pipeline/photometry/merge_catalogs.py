@@ -2699,9 +2699,26 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
               f"{type(_rej_err).__name__}: {_rej_err}")
         _rej_tab = None
     if _rej_tab is not None and 'skycoord' in cat.colnames and len(cat):
-        _rej_sc = SkyCoord(_rej_tab['skycoord_fit'])
-        _ri, _rsep, _ = SkyCoord(cat['skycoord']).match_to_catalog_sky(_rej_sc)
-        _gate_rej = (_rsep.arcsec < 0.15) & ~np.asarray(cat['replaced_saturated'])
+        # NaN-safe matching: a garbage rejected fit can carry a NaN position
+        # (often WHY it was rejected), and astropy's matcher raises on any NaN
+        # entry.  Match only the finite rows on BOTH sides and expand back;
+        # non-finite rows can never be a <0.15" match (sep = inf).
+        _rej_sc_all = SkyCoord(_rej_tab['skycoord_fit'])
+        _cat_sc_all = SkyCoord(cat['skycoord'])
+        _rej_fin = np.isfinite(_rej_sc_all.ra.deg) & np.isfinite(_rej_sc_all.dec.deg)
+        _cat_fin = np.isfinite(_cat_sc_all.ra.deg) & np.isfinite(_cat_sc_all.dec.deg)
+        if (~_rej_fin).any() or (~_cat_fin).any():
+            print(f"satstar gate-taper flag: excluded {int((~_rej_fin).sum())} "
+                  f"rejected-candidate + {int((~_cat_fin).sum())} catalog row(s) "
+                  f"with non-finite coordinates from the match ({filtername})")
+        _ri = np.zeros(len(cat), dtype=int)
+        _rsep_arcsec = np.full(len(cat), np.inf)
+        if _rej_fin.any() and _cat_fin.any():
+            _ri_f, _rsep_f, _ = _cat_sc_all[_cat_fin].match_to_catalog_sky(
+                _rej_sc_all[_rej_fin])
+            _ri[_cat_fin] = np.where(_rej_fin)[0][np.asarray(_ri_f)]
+            _rsep_arcsec[_cat_fin] = _rsep_f.arcsec
+        _gate_rej = (_rsep_arcsec < 0.15) & ~np.asarray(cat['replaced_saturated'])
         print(f"satstar gate-taper flag: {int(_gate_rej.sum())} row(s) match a "
               f"gate-rejected candidate (<0.15\") and keep clipped daophot "
               f"photometry in {filtername}")
