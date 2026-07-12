@@ -204,3 +204,35 @@ def test_gross_offset_on_truly_overlapping_fields_still_fails():
     assert pair["ok"] is False
     assert pair["off_mas"] == pytest.approx(6000.0, abs=250.0)
     assert pair["swept"] is True
+
+
+def test_stripey_interleave_is_could_not_verify_not_fail():
+    """Interleaved two-module mosaic: footprint bboxes overlap but NO tile has
+    both groups' stars (brick F405N nrca|nrcb false-FAIL case).  Must report
+    could_not_verify (owned by the visit-consensus + reference layers), never
+    a structural-offset FAIL."""
+    rng = np.random.default_rng(41)
+    n = 3000
+    ra = 266.54 + (rng.random(n) - 0.5) * 0.02
+    # A occupies dec stripes [0-20"], [40-60"]; B occupies [20-40"], [60-80"]
+    def _stripes(offsets):
+        dec = []
+        for lo in offsets:
+            dec.append(-28.70 + (lo + rng.random(n // len(offsets)) * 20.0) / 3600.0)
+        return np.concatenate(dec)
+    dec_a = _stripes([0.0, 40.0])
+    dec_b = _stripes([20.0, 60.0])
+    ga = SkyCoord(ra[:len(dec_a)] * u.deg, dec_a * u.deg)
+    gb = SkyCoord(ra[:len(dec_b)] * u.deg, dec_b * u.deg)
+    grid = overlap_offset_grid({"nrca": ga, "nrcb": gb}, tol_mas=30.0,
+                               nx=8, ny=8, maxsep=1 * u.arcsec,
+                               min_overlap_pairs=20)
+    pair = grid[0]
+    assert pair["overlap"] is True          # bboxes DO intersect
+    assert pair["could_not_verify"] is True  # but no mutual-coverage tile
+    assert pair["ok"] is True                # never a structural false FAIL
+    assert pair["n_total"] == 0
+    # and no raise in the assert wrapper
+    assert_overlaps_registered({"nrca": ga, "nrcb": gb}, tol_mas=30.0,
+                               per_tile=True, grid=(8, 8),
+                               maxsep=1 * u.arcsec, min_overlap_pairs=20)

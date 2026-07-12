@@ -197,23 +197,39 @@ def pairwise_overlap_offsets(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS,
 
 def overlap_offset_grid(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS, nx=12, ny=12,
                         maxsep=3.0 * u.arcsec, min_overlap_pairs=40,
-                        overlap_gate_arcsec=60.0, context=""):
+                        overlap_gate_arcsec=60.0, margin_factor=3.0, context=""):
     """Per-TILE reference-free overlap check — the localised version of
     :func:`pairwise_overlap_offsets`.
 
     A per-visit residual is SPATIALLY VARYING (brick-1182 visit-001 wandered
     14-103 mas across the field), so a single field-pooled offset per group pair
-    can average BELOW ``tol_mas`` while a thin seam strip is ~90 mas off. This runs
-    ``measure_offset_grid`` (with the offset-magnitude gate) on each overlapping
-    group pair, so a LOCAL misregistration in any tile fails even when the
-    field-average is small.
+    can average BELOW ``tol_mas`` while a thin seam strip is ~90 mas off.
+
+    MUTUAL-COVERAGE CELLS ONLY (2026-07-12): a cell is measurable only when
+    BOTH groups have >= ``min_overlap_pairs`` sources in it (b padded by
+    ``margin_factor * maxsep``).  Inside a footprint intersection the two
+    groups' coverage can be STRIPEY (an interleaved two-module mosaic: real
+    brick F405N nrca-vs-nrcb had ONE genuinely shared tile; every other tile
+    held A-stars with the nearest B-coverage 30-60" away, and the swept
+    histogram of those disjoint populations produced structural ~35-50"
+    false FAILs).  Cells without mutual coverage are reported in
+    ``n_no_coverage``, never measured, never failed.
+
+    Division of labor: this per-tile check owns the FINE (tens-of-mas seam)
+    regime; a GROSS (>margin) rigid offset empties the mutual-coverage cells
+    and is invisible here BY CONSTRUCTION — it is caught by the swept
+    per-exposure visit-consensus checkpoint (astrometry_checkpoint m2) and
+    the swept per-tile reference map, which do not depend on frame-vs-frame
+    coverage.  ``clean`` therefore additionally requires >= 1 measured cell;
+    an overlapping pair with ZERO mutual-coverage cells is reported
+    ``could_not_verify=True`` (ok stays True here — the other layers own it —
+    but the caller can and should surface it).
 
     Returns
     -------
     list[dict]
         Per compared pair: ``dict(a, b, overlap, worst_off_mas, worst_off_cell,
-        n_ok, n_total, clean, ok)``. ``ok`` is ``clean`` for overlapping pairs and
-        True for non-overlapping pairs.
+        n_ok, n_total, n_no_coverage, could_not_verify, clean, ok)``.
     """
     labels = list(groups)
     results = []
@@ -224,21 +240,61 @@ def overlap_offset_grid(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS, nx=12, ny=12,
         if bounds is None or min(n_a_in, n_b_in) < min_overlap_pairs:
             results.append(dict(a=la, b=lb, overlap=False, worst_off_mas=None,
                                 worst_off_cell=None, n_ok=0, n_total=0,
+                                n_no_coverage=0, could_not_verify=False,
                                 clean=True, ok=True))
             continue
-        # grid ONLY the intersection box -- tiles outside the shared footprint
-        # have no true pairs and can only produce structural noise peaks
-        g = measure_offset_grid(a[_in_bounds(a, bounds)], b[_in_bounds(b, bounds)],
-                                nx=nx, ny=ny, maxsep=maxsep,
-                                ra_bounds=(bounds[0], bounds[1]),
-                                dec_bounds=(bounds[2], bounds[3]),
-                                max_off_mas=tol_mas, min_pairs=min_overlap_pairs,
-                                context=f"{context} {la}|{lb}")
-        results.append(dict(a=la, b=lb, overlap=True,
-                            worst_off_mas=g["worst_off_mas"],
-                            worst_off_cell=g["worst_off_cell"],
-                            n_ok=g["n_ok"], n_total=g["n_total"],
-                            clean=bool(g["clean"]), ok=bool(g["clean"])))
+        a_in = a[_in_bounds(a, bounds)]
+        b_in = b[_in_bounds(b, bounds)]
+        ra_lo, ra_hi, dec_lo, dec_hi = bounds
+        re = np.linspace(ra_lo, ra_hi, nx + 1)
+        de = np.linspace(dec_lo, dec_hi, ny + 1)
+        maxsep_arcsec = maxsep.to(u.arcsec).value if hasattr(maxsep, "to") \
+            else float(maxsep)
+        dec_mid = 0.5 * (dec_lo + dec_hi)
+        marg_ra = margin_factor * maxsep_arcsec / 3600.0 \
+            / max(np.cos(np.radians(dec_mid)), 1e-6)
+        marg_dec = margin_factor * maxsep_arcsec / 3600.0
+        cells = []
+        n_no_coverage = 0
+        for i in range(nx):
+            for j in range(ny):
+                a_sel = ((a_in.ra.deg >= re[i]) & (a_in.ra.deg < re[i + 1])
+                         & (a_in.dec.deg >= de[j]) & (a_in.dec.deg < de[j + 1]))
+                if a_sel.sum() < min_overlap_pairs:
+                    continue
+                b_sel = ((b_in.ra.deg >= re[i] - marg_ra)
+                         & (b_in.ra.deg < re[i + 1] + marg_ra)
+                         & (b_in.dec.deg >= de[j] - marg_dec)
+                         & (b_in.dec.deg < de[j + 1] + marg_dec))
+                if b_sel.sum() < min_overlap_pairs:
+                    # no MUTUAL coverage in this cell (stripey interleave or a
+                    # gross offset -- the other, sweep-based layers own those)
+                    n_no_coverage += 1
+                    continue
+                m = measure_offset(a_in[a_sel], b_in[b_sel], maxsep=maxsep,
+                                   min_pairs=min_overlap_pairs, sweep=False,
+                                   context=f"{context} {la}|{lb} tile[{i},{j}]")
+                if m is None:
+                    n_no_coverage += 1
+                    continue
+                m.update(ix=i, iy=j,
+                         off_ok=bool(m["off"] <= tol_mas),
+                         contrast_ok=bool(m["ok"]))
+                m["ok"] = bool(m["ok"] and m["off"] <= tol_mas)
+                cells.append(m)
+        n_ok = sum(1 for c in cells if c["ok"])
+        worst = max(cells, key=lambda c: c["off"], default=None)
+        could_not_verify = not cells
+        clean = bool(cells) and n_ok == len(cells)
+        results.append(dict(
+            a=la, b=lb, overlap=True,
+            worst_off_mas=None if worst is None else float(worst["off"]),
+            worst_off_cell=None if worst is None else dict(
+                ix=worst["ix"], iy=worst["iy"], off_mas=worst["off"],
+                contrast=worst["contrast"]),
+            n_ok=n_ok, n_total=len(cells), n_no_coverage=n_no_coverage,
+            could_not_verify=could_not_verify,
+            clean=clean, ok=bool(clean or could_not_verify)))
     return results
 
 

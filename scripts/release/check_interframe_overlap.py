@@ -154,14 +154,26 @@ def check_filter(field, filt, refcat=None, verbose=True):
                               maxsep=3.0 * u.arcsec)
     bad = [r for r in res if r["overlap"] and not r["ok"]]
     overlapped = [r for r in res if r["overlap"]]
+    unverifiable = [r for r in res if r["overlap"] and r.get("could_not_verify")]
     if verbose:
         print(f"  {field} {filt}: {nframes} crf -> {len(pooled)} groups, "
-              f"{len(overlapped)} overlapping pairs, {len(bad)} FAIL (tol {TOL_MAS:.0f} mas, "
+              f"{len(overlapped)} overlapping pairs, {len(bad)} FAIL, "
+              f"{len(unverifiable)} no-mutual-coverage (tol {TOL_MAS:.0f} mas, "
               f"{GRID_N}x{GRID_N} tiles)", flush=True)
         for r in sorted(overlapped, key=lambda r: -(r["worst_off_mas"] or 0))[:8]:
-            tag = "FAIL" if not r["ok"] else "ok"
-            print(f"      {tag}: {r['a']} | {r['b']}  worst tile off={r['worst_off_mas']:.0f} mas "
-                  f"cell={r['worst_off_cell']} ({r['n_ok']}/{r['n_total']} tiles ok)", flush=True)
+            tag = ("FAIL" if not r["ok"]
+                   else ("no-mutual-coverage" if r.get("could_not_verify") else "ok"))
+            _w = r["worst_off_mas"]
+            print(f"      {tag}: {r['a']} | {r['b']}  worst tile off="
+                  f"{'n/a' if _w is None else f'{_w:.0f} mas'} "
+                  f"cell={r['worst_off_cell']} ({r['n_ok']}/{r['n_total']} tiles ok, "
+                  f"{r.get('n_no_coverage', 0)} cells without mutual coverage)",
+                  flush=True)
+        for r in unverifiable:
+            print(f"      NOTE: {r['a']} | {r['b']} footprints intersect but no "
+                  f"tile has BOTH groups' stars (stripey interleave or a gross "
+                  f"offset) -- covered by the visit-consensus checkpoint + "
+                  f"reference map, NOT by this frame-vs-frame gate.", flush=True)
 
     ext_fail = False
     if refcat:
