@@ -81,6 +81,10 @@ MANUAL_DEFAULTS = {
     'manual_crossband_seed_snr_min': 5.0,
     'manual_crossband_seed_qfit_max': 0.2,
     'manual_crossband_seed_max_sep_mas': 30.0,
+    # -- output/perf: build the display-only merged-cat MODEL i2d (a 192-frame
+    # resample) only on the FINAL phase by default; intermediates are never
+    # staged/read, so skipping them saves ~1 resample per intermediate phase.
+    'manual_keep_intermediate_model_i2d': False,
 }
 
 
