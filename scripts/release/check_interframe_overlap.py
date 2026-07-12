@@ -73,16 +73,25 @@ def _group_key(crf_path):
     visit = base.split("_")[0][-6:]        # e.g. 004001
     det = ""
     for tok in base.split("_"):
-        if tok.startswith("nrc"):
+        if tok.startswith("nrc") or tok.startswith("mirimage"):
             det = tok
             break
-    module = det[:4] if det else "det?"    # nrca / nrcb (SW) or nrcalong/nrcblong
+    if det.startswith("mirimage"):
+        module = "mirimage"
+    else:
+        module = det[:4] if det else "det?"  # nrca / nrcb (SW) or nrcalong/nrcblong
     return f"{visit}:{module}"
 
 
 def build_groups(field, filt):
-    pat = f"{BASE}/{field}/{filt}/pipeline/jw*_*_nrc*_destreak_o*_crf.fits"
-    frames = sorted(glob.glob(pat))
+    # NIRCam crf carry the _destreak token (working-copy lineage); MIRI skips
+    # destreak so its crf do NOT (jw..._mirimage_o001_crf.fits) -- glob both.
+    # Excluding MIRI silently PASSED it, and MIRI visit misregistration is a
+    # known failure (the F2550W doubled-star saga).
+    pats = (f"{BASE}/{field}/{filt}/pipeline/jw*_*_nrc*_destreak_o*_crf.fits",
+            f"{BASE}/{field}/{filt}/pipeline/jw*_*_nrc*_o*_crf.fits",
+            f"{BASE}/{field}/{filt}/pipeline/jw*_*_mirimage*_o*_crf.fits")
+    frames = sorted({fn for pat in pats for fn in glob.glob(pat)})
     groups = {}
     ndet = {}
     for fn in frames:
@@ -114,11 +123,29 @@ def _refcat(path):
 
 def check_filter(field, filt, refcat=None, verbose=True):
     pooled, ndet, nframes = build_groups(field, filt)
+    # FAIL-CLOSED on "found nothing": a gate that goes green because its glob
+    # matched zero files (renamed products, naming drift) is the silent
+    # false-agreement class this repo bans.  Distinguish it from a genuine
+    # single-group field (frames found, nothing to pairwise-check).
+    if nframes == 0:
+        if verbose:
+            print(f"  {field} {filt}: NO crf frames matched -- cannot verify "
+                  f"inter-frame registration (glob mismatch / missing products?)",
+                  flush=True)
+        return dict(field=field, filt=filt, PASS=False, could_not_verify=True,
+                    note="no crf frames matched")
+    if not pooled:
+        if verbose:
+            print(f"  {field} {filt}: {nframes} crf but detection produced NO "
+                  f"usable groups -- cannot verify", flush=True)
+        return dict(field=field, filt=filt, PASS=False, could_not_verify=True,
+                    note="no detections from any crf")
     if len(pooled) < 2:
         if verbose:
-            print(f"  {field} {filt}: only {len(pooled)} group(s) from {nframes} "
-                  f"crf -- nothing to overlap-check", flush=True)
-        return dict(field=field, filt=filt, PASS=True, note="insufficient groups")
+            print(f"  {field} {filt}: single exposure-group from {nframes} crf "
+                  f"-- nothing to overlap-check", flush=True)
+        return dict(field=field, filt=filt, PASS=True,
+                    note=f"single exposure-group ({nframes} crf)")
 
     # PER-TILE (local) reference-free check: a per-visit residual is spatially
     # varying, so a field-pooled single offset can average below tol while a thin
@@ -181,15 +208,27 @@ def main(argv=None):
         print("ERROR: give --filter or --scan", file=sys.stderr)
         return 2
     any_fail = False
+    any_noverify = False
     for f in filts:
         r = check_filter(args.field, f, refcat=args.refcat)
-        if not r.get("PASS"):
+        if r.get("could_not_verify"):
+            any_noverify = True
+        elif not r.get("PASS"):
             any_fail = True
     if any_fail:
         print(f"\nOVERLAP GATE: FAIL for {args.field} -- inter-frame misregistration "
               f"(> {TOL_MAS:.0f} mas). Do NOT stage; re-examine per-visit alignment.",
               flush=True)
-    return 1 if any_fail else 0
+        return 1
+    if any_noverify:
+        # exit 2 = could-not-verify: distinct from a measured FAIL, but still
+        # refused by stage_release (its rc != 0 branch) -- fail closed, never
+        # green-because-the-glob-matched-nothing.
+        print(f"\nOVERLAP GATE: COULD NOT VERIFY {args.field} -- at least one filter "
+              f"had no matchable crf frames / no detections. Fix the products or the "
+              f"glob; a gate that finds nothing is not a passing gate.", flush=True)
+        return 2
+    return 0
 
 
 if __name__ == "__main__":
