@@ -3204,6 +3204,12 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
         print(f"MANUAL PIPELINE: stop after {stop_after}; phases now {phases}",
               flush=True)
 
+    # The merged-catalog MODEL i2d is a display-only 192-frame resample; only the
+    # FINAL phase's is staged/read, so intermediate phases skip it by default
+    # (--manual-keep-intermediate-model-i2d restores writing it every phase).
+    _final_phase = phases[-1] if phases else None
+    _keep_all_model_i2d = getattr(options, 'manual_keep_intermediate_model_i2d', False)
+
     for phase in phases:
         # iter3 (m3) and iter4 (m4) fit the RAW frames; m4 produces the first
         # background map.  Background subtraction in the fit begins at iter5 (m5).
@@ -3897,7 +3903,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     outpaths = _L.build_mergedcat_residuals(
                         cut_bp, basepath, vetted_path, filt, proposal_id, field,
                         module, opts_phase, frame_cache.get((module, filt), []),
-                        merge_label, ['basic'], pupil=pupil, satstar_label=phase)
+                        merge_label, ['basic'], pupil=pupil, satstar_label=phase,
+                        write_model_i2d=(_keep_all_model_i2d or phase == _final_phase))
                     mc_i2d = outpaths.get('basic')
                     if mc_i2d and os.path.exists(mc_i2d):
                         # this phase's residual i2d is the detection image for the

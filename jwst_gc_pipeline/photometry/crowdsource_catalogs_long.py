@@ -2988,7 +2988,8 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                               proposal_id, field, module, options,
                               overlapping_frames, iteration_label, kinds,
                               pupil='clear', psf_shape=(21, 21),
-                              satstar_label=None, satstar_cover_thresh=10.0):
+                              satstar_label=None, satstar_cover_thresh=10.0,
+                              write_model_i2d=True):
     """Build residual i2d mosaics from the VETTED MERGED catalog (cutout path).
 
     The per-frame RAW residuals subtract every fitted source, including spurious
@@ -3420,16 +3421,23 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
             except (OSError, ValueError) as _e:
                 print(f"mergedcat: resid i2d pit cleanup skipped: {_e}", flush=True)
         # also mosaic the merged-catalog MODEL so the CARTA loaders can show
-        # data / model / residual / bg side by side
-        model_product = product_name.replace('_mergedcat_residual',
-                                             '_mergedcat_model')
-        try:
-            mpath = _resample_to_i2d(
-                written_model[kind], pipeline_dir, model_product,
-                crop_to_data=(_shared_wcs is None), output_wcs=_shared_wcs)
-            print(f"mergedcat: wrote {kind} model i2d {mpath}", flush=True)
-        except Exception as ex:
-            print(f"mergedcat: model i2d build failed ({ex})", flush=True)
+        # data / model / residual / bg side by side.  This is a full 192-frame
+        # resample (~20 min); it is display-only (no pipeline logic reads it and
+        # the release stages only the highest iteration), so intermediate phases
+        # skip it (write_model_i2d=False) -- see run_manual_pipeline.
+        if not write_model_i2d:
+            print(f"mergedcat: skipped {kind} model i2d (intermediate phase; "
+                  f"--manual-keep-intermediate-model-i2d to restore)", flush=True)
+        else:
+            model_product = product_name.replace('_mergedcat_residual',
+                                                 '_mergedcat_model')
+            try:
+                mpath = _resample_to_i2d(
+                    written_model[kind], pipeline_dir, model_product,
+                    crop_to_data=(_shared_wcs is None), output_wcs=_shared_wcs)
+                print(f"mergedcat: wrote {kind} model i2d {mpath}", flush=True)
+            except Exception as ex:
+                print(f"mergedcat: model i2d build failed ({ex})", flush=True)
     return outpaths
 
 
@@ -4235,6 +4243,17 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       default=False,
                       action='store_true',
                       help='After --each-exposure, resample all per-exposure residuals into a residual_i2d product by default; this parameter skips that step. Residual kinds are auto-determined based on enabled photometry types.')
+    parser.add_option('--manual-keep-intermediate-model-i2d',
+                      dest='manual_keep_intermediate_model_i2d',
+                      default=False,
+                      action='store_true',
+                      help=('By default the manual pipeline builds the merged-catalog '
+                            'MODEL i2d mosaic (a 192-frame resample, ~20 min) only on the '
+                            'FINAL phase -- intermediate model i2d are display-only, never '
+                            'staged (release ships the highest iteration) and read by no '
+                            'pipeline logic, so skipping them saves ~1 resample per '
+                            'intermediate phase (~5 per filter). Set this to restore the '
+                            'old behaviour of writing the model i2d every phase.'))
     parser.add_option('--bundle-size', dest='bundle_size',
                       default=1, type='int',
                       help='Number of consecutive per-exposure iterations each SLURM array task handles (default 1 = one exposure per task).')
