@@ -369,3 +369,23 @@ def test_replace_saturated_uses_detector_coords(monkeypatch, tmp_path):
     assert abs(cat['y'][1] - 1650.2) < 1e-6
     # match separation recorded for the replaced row
     assert np.isfinite(cat['satstar_match_sep'][0])
+
+
+def test_color_reliable_mask_one_band_repaired():
+    """Strip audit 2026-07-11: substituted-in-one-band + clipped-unrepaired-in-
+    the-other colors are spurious and must be flagged unreliable; repaired-in-
+    both and clean rows stay reliable."""
+    import numpy as np
+    from astropy.table import Table
+    from jwst_gc_pipeline.photometry.column_utils import color_reliable_mask
+    cat = Table({
+        # rows: 0 clean/clean, 1 repaired/repaired, 2 repaired/clipped-unrepaired,
+        #       3 clipped-unrepaired/repaired, 4 clipped/clipped (both unrepaired),
+        #       5 repaired/clean
+        'replaced_saturated_f405n': [0, 1, 1, 0, 0, 1],
+        'is_saturated_f405n':       [0, 1, 1, 1, 1, 1],
+        'replaced_saturated_f410m': [0, 1, 0, 1, 0, 0],
+        'is_saturated_f410m':       [0, 1, 1, 1, 1, 0],
+    })
+    ok = color_reliable_mask(cat, 'f405n', 'f410m')
+    assert ok.tolist() == [True, True, False, False, True, True]

@@ -221,8 +221,19 @@ def color_reliable_mask(cat, band1, band2):
     star-subtracted residual.  92-100% of such colors are >2 mag off the
     locus; they form the diagonal plumes on the CMD bright end.
 
-    A color is UNRELIABLE iff one band is ``forced_filled`` while the row is
-    ``replaced_saturated``/``is_saturated`` in the other (either direction).
+    A color is UNRELIABLE iff:
+
+    - one band is ``forced_filled`` while the row is
+      ``replaced_saturated``/``is_saturated`` in the other (either direction),
+      or
+    - ONE band was repaired by satstar substitution (``replaced_saturated``)
+      while the other is saturation-affected but NOT repaired
+      (``is_saturated`` without ``replaced_saturated``).  Brick strip audit
+      (2026-07-11): such one-band-repaired rows carry colors wrong by up to
+      several magnitudes (a substituted-medium/clipped-narrow pair, e.g.
+      F410M substituted 1490 rows vs F405N only 513); rows repaired in BOTH
+      bands are magnitude-flat through the suppression-strip windows.
+
     Ordinary fill-vs-detection and fill-vs-fill colors are kept: fills at
     unsaturated positions are genuine measurements/limits (5% bad, same as
     detections).  Bands are the lowercase merged-catalog suffixes ('f182m').
@@ -241,6 +252,16 @@ def color_reliable_mask(cat, band1, band2):
     def _sat(band):
         return _bool(f'replaced_saturated_{band}') | _bool(f'is_saturated_{band}')
 
+    def _repaired(band):
+        return _bool(f'replaced_saturated_{band}')
+
+    def _clipped_unrepaired(band):
+        return _bool(f'is_saturated_{band}') & ~_bool(f'replaced_saturated_{band}')
+
     bad = ((_bool(f'forced_filled_{band1}') & _sat(band2))
-           | (_bool(f'forced_filled_{band2}') & _sat(band1)))
+           | (_bool(f'forced_filled_{band2}') & _sat(band1))
+           # one-band-repaired: substituted in one band, saturation-clipped
+           # and unrepaired in the other -> spurious color (strip audit).
+           | (_repaired(band1) & _clipped_unrepaired(band2))
+           | (_repaired(band2) & _clipped_unrepaired(band1)))
     return ~bad
