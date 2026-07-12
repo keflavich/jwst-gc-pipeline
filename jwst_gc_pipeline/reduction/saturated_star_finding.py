@@ -4053,10 +4053,19 @@ def _wing_selfcal(data, err, sat_mask, psf_grid, radii, *, fwhm_pix=2.0,
                               + (np.asarray(sy) - y[i]) ** 2 < 40 ** 2):
             continue
         sel.append(i)
-    if len(sel) < min_stars:
+    if len(sel) < 2:
         print(f"wing-selfcal: only {len(sel)} isolated bright unsaturated "
-              f"star(s) (need {min_stars}); skipping", flush=True)
+              f"star(s) (need >=2 to measure); skipping", flush=True)
         return {}
+    if len(sel) < min_stars:
+        # Below the per-frame APPLICATION threshold, but still MEASURE: the
+        # per-star ratios are persisted and pooled across frames per
+        # (filter, detector) -- the pooled C(r) is the fallback calibration
+        # for frames like these (GC LW frames essentially never reach 8
+        # isolated calibrators, which left the LW bands uncalibrated).
+        print(f"wing-selfcal: only {len(sel)} isolated bright unsaturated "
+              f"star(s) (<{min_stars}): measuring for the cross-frame pool; "
+              f"per-frame application will be skipped", flush=True)
     sel = np.array(sel)[np.argsort(peak[np.array(sel)])[::-1]][:n_stars_max]
     localbkg = LocalBackground(25, 50)
 
@@ -4097,13 +4106,13 @@ def _wing_selfcal(data, err, sat_mask, psf_grid, radii, *, fwhm_pix=2.0,
             f = _fit(x[i], y[i], bad | cm, fs, True)
             if np.isfinite(f) and truths[i] > 0:
                 ratios.append(f / truths[i])
-        if len(ratios) >= min_stars:
+        if len(ratios) >= 2:
             ratios = np.array(ratios)
             out[r] = (float(np.median(ratios)), len(ratios),
                       float(_madstd(ratios)))
         else:
             print(f"wing-selfcal: r={r}px only {len(ratios)} usable masked "
-                  f"fit(s) (<{min_stars}); bucket dropped", flush=True)
+                  f"fit(s) (<2); bucket dropped", flush=True)
     if out:
         print("wing-selfcal: " + "; ".join(
             f"r={r}px ratio={v[0]:.3f}+/-{v[2]:.3f} (n={v[1]})"
@@ -4139,7 +4148,21 @@ def apply_wing_selfcal(base_tab, data_sub, err, sat_mask, psf_grid, *,
                         severity_floor=severity_floor)
     base_tab['flux_fit_raw'] = np.asarray(base_tab['flux_fit'], dtype=float)
     base_tab['wingcal_ratio'] = np.ones(len(base_tab))
-    if not cal:
+    # Publish the per-frame calibrator measurements (even sub-threshold ones)
+    # via the builtins side-channel; remove_saturated_stars persists them for
+    # the cross-frame per-(filter,detector) pool (the LW fallback).
+    if cal:
+        builtins.satstar_wingcal_measurements = table.Table(
+            rows=[(int(r), v[0], int(v[1]), v[2]) for r, v in sorted(cal.items())],
+            names=['rmask_px', 'ratio_median', 'n_stars', 'ratio_madstd'])
+    else:
+        builtins.satstar_wingcal_measurements = None
+    _n_frame_cal = max((v[1] for v in cal.values()), default=0)
+    if not cal or _n_frame_cal < 8:
+        if cal:
+            print(f"wing-selfcal: max bucket n={_n_frame_cal} < 8: measurements "
+                  f"persisted for pooling; per-frame application skipped",
+                  flush=True)
         return base_tab
     rs = np.array(sorted(cal))
     vs = np.array([cal[r][0] for r in rs])
@@ -4335,6 +4358,15 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
 
         satstar_table.write(satstar_catalog_filename, overwrite=overwrite)
         print(f"Saved saturated star catalog to {satstar_catalog_filename}", flush=True)
+
+        _wcm = getattr(builtins, 'satstar_wingcal_measurements', None)
+        if _wcm is not None and len(_wcm):
+            _wcm_fn = filename.replace(
+                ".fits", f'{file_suffix}_wingcal_calibrators.fits')
+            _wcm.meta.update(header)
+            _wcm.write(_wcm_fn, overwrite=overwrite)
+            print(f"Saved {len(_wcm)} wing-selfcal calibrator bucket(s) to "
+                  f"{_wcm_fn}", flush=True)
 
         _rejected = getattr(builtins, 'satstar_rejected', None)
         satstar_rejected_filename = filename.replace(
