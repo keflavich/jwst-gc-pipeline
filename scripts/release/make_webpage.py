@@ -26,10 +26,12 @@ from stage_release import field_release_dir
 GROUP_LABEL = {
     None: "JWST Galactic Center survey",
     "galactic_plane": "JWST Galactic Plane fields",
+    "globular_clusters": "JWST Globular Clusters",
 }
 GROUP_TITLE = {
     None: "Galactic Center",
     "galactic_plane": "Galactic Plane",
+    "globular_clusters": "Globular Clusters",
 }
 
 GLOBUS_APP = "https://app.globus.org/file-manager"

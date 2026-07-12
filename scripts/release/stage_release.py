@@ -169,6 +169,36 @@ FIELDS = {
             {"filter": "F470N", "src": "/orange/adamginsburg/jwst/ngc6334/F470N/pipeline/jw06778-o001_t001_nircam_clear-f470n-merged_i2d.fits"},
         ],
     },
+    # --- Globular clusters (Anderson programs), grouped under <version>/globular_clusters/ ---
+    # Public image-only; W2 filters (F150W2/F322W2) and few bands. m4 has two pointings.
+    "m4": {
+        "data_dir": Path("/orange/adamginsburg/jwst/m4"),
+        "no_auto_images": True, "skip_catalogs": True, "group": "globular_clusters",
+        "nircam": [
+            {"filter": "F150W2", "observation": "o002", "src": "/orange/adamginsburg/jwst/m4/F150W2/pipeline/jw01979-o002_t001_nircam_clear-f150w2-merged_i2d.fits"},
+            {"filter": "F322W2", "observation": "o002", "src": "/orange/adamginsburg/jwst/m4/F322W2/pipeline/jw01979-o002_t001_nircam_clear-f322w2-merged_i2d.fits"},
+            {"filter": "F150W2", "observation": "o003", "src": "/orange/adamginsburg/jwst/m4/F150W2/pipeline/jw01979-o003_t001_nircam_clear-f150w2-merged_i2d.fits"},
+            {"filter": "F322W2", "observation": "o003", "src": "/orange/adamginsburg/jwst/m4/F322W2/pipeline/jw01979-o003_t001_nircam_clear-f322w2-merged_i2d.fits"},
+        ],
+    },
+    "m92": {
+        "data_dir": Path("/orange/adamginsburg/jwst/m92"),
+        "no_auto_images": True, "skip_catalogs": True, "group": "globular_clusters",
+        "nircam": [
+            {"filter": "F090W", "src": "/orange/adamginsburg/jwst/m92/F090W/pipeline/jw01334-o001_t001_nircam_clear-f090w-merged_i2d.fits"},
+            {"filter": "F150W", "src": "/orange/adamginsburg/jwst/m92/F150W/pipeline/jw01334-o001_t001_nircam_clear-f150w-merged_i2d.fits"},
+            {"filter": "F277W", "src": "/orange/adamginsburg/jwst/m92/F277W/pipeline/jw01334-o001_t001_nircam_clear-f277w-merged_i2d.fits"},
+            {"filter": "F444W", "src": "/orange/adamginsburg/jwst/m92/F444W/pipeline/jw01334-o001_t001_nircam_clear-f444w-merged_i2d.fits"},
+        ],
+    },
+    "ngc6397": {
+        "data_dir": Path("/orange/adamginsburg/jwst/ngc6397"),
+        "no_auto_images": True, "skip_catalogs": True, "group": "globular_clusters",
+        "nircam": [
+            {"filter": "F150W2", "src": "/orange/adamginsburg/jwst/ngc6397/F150W2/pipeline/jw01979-o001_t001_nircam_clear-f150w2-merged_i2d.fits"},
+            {"filter": "F322W2", "src": "/orange/adamginsburg/jwst/ngc6397/F322W2/pipeline/jw01979-o001_t001_nircam_clear-f322w2-merged_i2d.fits"},
+        ],
+    },
 }
 
 
