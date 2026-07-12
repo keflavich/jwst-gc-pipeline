@@ -56,7 +56,7 @@ def test_overflagged_unsaturated_component_dropped():
     blob = _blob(data.shape, 50, 50)
     data[blob] = 500.0
     fd = _fitsdata(data, blob)
-    sat, src, coms = find_saturated_stars(fd, severity_floor=4000.0)
+    sat, src, coms, kinds = find_saturated_stars(fd, severity_floor=4000.0)
     assert len(coms) == 0, "over-flagged unsaturated component must be dropped"
 
 
@@ -68,7 +68,7 @@ def test_unrecoverable_core_kept_regardless_of_data():
     data[blob] = 100.0                       # garbage low core read
     core = _blob(data.shape, 50, 50, r=1)
     fd = _fitsdata(data, blob, var_nan_mask=core)
-    sat, src, coms = find_saturated_stars(fd, severity_floor=4000.0)
+    sat, src, coms, kinds = find_saturated_stars(fd, severity_floor=4000.0)
     assert len(coms) == 1, "NaN-variance core must survive the severity gate"
 
 
@@ -79,7 +79,7 @@ def test_bright_recoverable_core_kept():
     blob = _blob(data.shape, 50, 50)
     data[blob] = 6000.0
     fd = _fitsdata(data, blob)
-    sat, src, coms = find_saturated_stars(fd, severity_floor=4000.0)
+    sat, src, coms, kinds = find_saturated_stars(fd, severity_floor=4000.0)
     assert len(coms) == 1
 
 
@@ -90,7 +90,7 @@ def test_gate_off_by_default():
     blob = _blob(data.shape, 50, 50)
     data[blob] = 500.0
     fd = _fitsdata(data, blob)
-    sat, src, coms = find_saturated_stars(fd)
+    sat, src, coms, kinds = find_saturated_stars(fd)
     assert len(coms) == 1
 
 
