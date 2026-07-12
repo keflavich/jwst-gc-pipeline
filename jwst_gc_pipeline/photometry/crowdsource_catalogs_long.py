@@ -4245,7 +4245,7 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                       help='After --each-exposure, resample all per-exposure residuals into a residual_i2d product by default; this parameter skips that step. Residual kinds are auto-determined based on enabled photometry types.')
     parser.add_option('--manual-keep-intermediate-model-i2d',
                       dest='manual_keep_intermediate_model_i2d',
-                      default=False,
+                      default=MANUAL_DEFAULTS['manual_keep_intermediate_model_i2d'],
                       action='store_true',
                       help=('By default the manual pipeline builds the merged-catalog '
                             'MODEL i2d mosaic (a 192-frame resample, ~20 min) only on the '
