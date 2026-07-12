@@ -1951,6 +1951,45 @@ def _satstar_dedup_radius():
     return float(os.environ.get('SATSTAR_DEDUP_ARCSEC', 0.15)) * u.arcsec
 
 
+def load_rejected_satstar_positions(filtername, target='brick',
+                                    basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
+    """SkyCoord of gate-REJECTED satstar candidates for this band.
+
+    The satstar channel (Phase A2, *_satstar_rejected.fits) records candidates
+    that were seeded (DQ / peak / sub-floor) but rejected by the post-fit
+    gates; their catalog rows keep clipped daophot photometry (the strip
+    'gate-taper' population, individually 0.2-0.4 mag too faint).  The merge
+    flags matching rows so color users can exclude them.  Returns None when no
+    rejected files exist (pre-A2 products: behavior unchanged).
+    """
+    _all = sorted(glob.glob(
+        f'{basepath}/{filtername.upper()}/pipeline/*satstar_rejected.fits'))
+    _tok = re.compile(r'_m\d+_satstar_rejected\.fits$')
+    files = [f for f in _all if _tok.search(os.path.basename(f))]
+    # per-frame demo/adhoc tags (e.g. _stripDEMO_) lack the _m<N> token; accept
+    # any suffix as long as the file is a sibling of an accepted catalog.
+    if not files:
+        files = _all
+    if not files:
+        return None
+    parts = []
+    for f in files:
+        try:
+            tt = Table.read(f)
+        except Exception as err:
+            print(f"WARNING: unreadable rejected-satstar file {f}: {err}")
+            continue
+        if len(tt) and 'skycoord_fit' in tt.colnames:
+            parts.append(tt['skycoord_fit'])
+    if not parts:
+        return None
+    from astropy.coordinates import concatenate as _sc_concat
+    sc = _sc_concat([SkyCoord(x) for x in parts]) if len(parts) > 1 else SkyCoord(parts[0])
+    print(f"load_rejected_satstar_positions: {len(sc)} gate-rejected candidate "
+          f"position(s) for {filtername} from {len(files)} file(s)")
+    return sc
+
+
 def _dedup_satstar_catalog(tbl, radius=None, target=None):
     """Collapse repeated per-frame satstar fits of the same physical star into
     one row (the brightest), so downstream merging doesn't duplicate them.
@@ -2547,6 +2586,30 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
     if 'replaced_saturated' in cat.colnames:
         cat.remove_column('replaced_saturated')
     cat.add_column(replaced_sat_, name='replaced_saturated')
+
+    # GATE-TAPER FLAG (Phase A3): rows whose star was seeded into the satstar
+    # channel but REJECTED by the post-fit gates keep clipped daophot
+    # photometry (strip audit: individually 0.2-0.4 mag faint; the residual
+    # F410M 12-13.3 color wiggle).  Flag them so color users can exclude them;
+    # photometry is NOT modified.  No rejected files (pre-A2 products) -> all
+    # False, unchanged behavior.
+    _gate_rej = np.zeros(len(cat), dtype=bool)
+    try:
+        _rej_sc = load_rejected_satstar_positions(filtername, target=target,
+                                                  basepath=basepath)
+    except Exception as _rej_err:
+        print(f"WARNING: rejected-satstar load failed for {filtername}: "
+              f"{type(_rej_err).__name__}: {_rej_err}")
+        _rej_sc = None
+    if _rej_sc is not None and 'skycoord' in cat.colnames and len(cat):
+        _ri, _rsep, _ = SkyCoord(cat['skycoord']).match_to_catalog_sky(_rej_sc)
+        _gate_rej = (_rsep.arcsec < 0.15) & ~np.asarray(cat['replaced_saturated'])
+        print(f"satstar gate-taper flag: {int(_gate_rej.sum())} row(s) match a "
+              f"gate-rejected candidate (<0.15\") and keep clipped daophot "
+              f"photometry in {filtername}")
+    if 'satstar_gate_rejected' in cat.colnames:
+        cat.remove_column('satstar_gate_rejected')
+    cat.add_column(_gate_rej, name='satstar_gate_rejected')
     if 'flux_fit' in cat.colnames:
         cat.rename_column('flux_fit', 'flux')
     else:

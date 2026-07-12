@@ -256,7 +256,13 @@ def color_reliable_mask(cat, band1, band2):
         return _bool(f'replaced_saturated_{band}')
 
     def _clipped_unrepaired(band):
-        return _bool(f'is_saturated_{band}') & ~_bool(f'replaced_saturated_{band}')
+        # saturation-clipped daophot value that was never repaired: either the
+        # DQ-saturated veto/miss case, or a gate-rejected strip candidate whose
+        # gray-zone correction did NOT apply (satclip_corrected False; see
+        # merge_catalogs gray-zone clip correction, PR #83).
+        return ((_bool(f'is_saturated_{band}') | (_bool(f'satstar_gate_rejected_{band}')
+                                                  & ~_bool(f'satclip_corrected_{band}')))
+                & ~_bool(f'replaced_saturated_{band}'))
 
     bad = ((_bool(f'forced_filled_{band1}') & _sat(band2))
            | (_bool(f'forced_filled_{band2}') & _sat(band1))

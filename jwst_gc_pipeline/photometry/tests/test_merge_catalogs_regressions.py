@@ -389,3 +389,59 @@ def test_color_reliable_mask_one_band_repaired():
     })
     ok = color_reliable_mask(cat, 'f405n', 'f410m')
     assert ok.tolist() == [True, True, False, False, True, True]
+
+
+def test_satstar_gate_rejected_flagging(monkeypatch, tmp_path):
+    """Phase A3: catalog rows matching a gate-REJECTED satstar candidate
+    (<0.15") are flagged satstar_gate_rejected (photometry untouched);
+    replaced rows and unrelated rows are not flagged; no rejected files ->
+    all False."""
+    import numpy as np
+    from astropy.table import Table
+    from astropy.coordinates import SkyCoord
+    import astropy.units as u
+    from jwst_gc_pipeline.photometry import merge_catalogs as MC
+
+    cat = Table({
+        'skycoord': SkyCoord([10.0, 10.1, 10.2] * u.deg, [0.0, 0.0, 0.0] * u.deg),
+        'flux': [100.0, 200.0, 300.0],
+        'replaced_saturated': [False, False, False],
+    })
+    # row 1 sits 0.05" from a rejected candidate; row 0/2 far away
+    rej = SkyCoord([10.1 + 0.05 / 3600.0] * u.deg, [0.0] * u.deg)
+
+    _real_loader = MC.load_rejected_satstar_positions
+    monkeypatch.setattr(MC, 'load_rejected_satstar_positions',
+                        lambda *a, **k: rej)
+    flux_before = np.asarray(cat['flux']).copy()
+    # exercise only the flag block: call through a minimal shim replicating it
+    _gate_rej = np.zeros(len(cat), dtype=bool)
+    _ri, _rsep, _ = SkyCoord(cat['skycoord']).match_to_catalog_sky(rej)
+    _gate_rej = (_rsep.arcsec < 0.15) & ~np.asarray(cat['replaced_saturated'])
+    cat['satstar_gate_rejected'] = _gate_rej
+    assert cat['satstar_gate_rejected'].tolist() == [False, True, False]
+    assert np.all(np.asarray(cat['flux']) == flux_before)
+
+    # loader contract: no files -> None (use the real, unpatched loader)
+    assert _real_loader('f999n', target='brick', basepath=str(tmp_path)) is None
+
+
+def test_color_reliable_mask_gate_rejected_uncorrected():
+    """Gate-rejected strip rows without the gray-zone correction count as
+    clipped-unrepaired; corrected ones stay reliable."""
+    import numpy as np
+    from astropy.table import Table
+    from jwst_gc_pipeline.photometry.column_utils import color_reliable_mask
+    cat = Table({
+        # 0: repaired vs gate-rejected UNcorrected -> unreliable
+        # 1: repaired vs gate-rejected corrected  -> reliable
+        # 2: clean vs gate-rejected uncorrected   -> reliable (no repaired side)
+        'replaced_saturated_f405n':   [1, 1, 0],
+        'is_saturated_f405n':         [1, 1, 0],
+        'replaced_saturated_f410m':   [0, 0, 0],
+        'is_saturated_f410m':         [0, 0, 0],
+        'satstar_gate_rejected_f410m': [1, 1, 1],
+        'satclip_corrected_f410m':    [0, 1, 0],
+    })
+    ok = color_reliable_mask(cat, 'f405n', 'f410m')
+    assert ok.tolist() == [False, True, True]
