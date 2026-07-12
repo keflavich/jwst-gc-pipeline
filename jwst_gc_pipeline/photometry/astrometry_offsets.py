@@ -152,16 +152,34 @@ def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
 
 def measure_offset_grid(a, b, nx=6, ny=6, ra_bounds=None, dec_bounds=None,
                         maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
-                        min_contrast=None, context=""):
+                        min_contrast=None, max_off_mas=None, context=""):
     """Per-tile offset map — measure ``measure_offset`` in an ``nx`` x ``ny`` grid
     over the field.  A bulk offset ~0 can HIDE a half-mosaic that is untied
     (brick-1182 visit-001), so ALWAYS map per tile before signing off.
+
+    ``max_off_mas`` is the per-tile offset-MAGNITUDE ceiling.  A tile can have a
+    razor-sharp, high-contrast peak (contrast >> ``min_contrast``) that sits at a
+    real, non-zero offset — a locally MISREGISTERED tile that is perfectly
+    self-consistent.  Contrast alone (the pre-2026-07 behaviour) CANNOT see this:
+    it only asks "is there a coherent peak?", not "is the peak at ZERO?".  That
+    blind spot let a ~90 mas local seam residual in brick-1182 F200W (visit-001
+    side, where a single rigid per-visit shift left a field-dependent residual)
+    pass with contrast ~20 — and the drizzle doubled every star in the overlap.
+    When ``max_off_mas`` is set, a tile is ``ok`` only if it BOTH has a coherent
+    peak (contrast) AND that peak is within ``max_off_mas`` of zero.  Pass it
+    (e.g. 50) for any release/QC sign-off; leave it ``None`` only for pure
+    offset-mapping where you want the value, not a verdict.
+
+    Use a FINE grid for QC (``nx=ny`` >= ~16 so a thin overlap strip is not
+    diluted inside a coarse tile); a 4x4 grid hid the brick-1182 seam.
 
     Returns
     -------
     dict
         ``dict(cells=[...], n_ok, n_total, worst_off_mas, min_contrast_seen,
-        clean)``.  ``clean`` is True only if every covered cell has ok=True.
+        worst_off_cell, clean)``.  Each cell gets ``ok`` (contrast AND, if
+        ``max_off_mas`` set, magnitude) and ``off_ok``.  ``clean`` is True only
+        if every covered cell is ``ok``.
     """
     min_contrast = DEFAULT_MIN_CONTRAST if min_contrast is None else min_contrast
     ra = a.ra.deg
@@ -181,12 +199,19 @@ def measure_offset_grid(a, b, nx=6, ny=6, ra_bounds=None, dec_bounds=None,
                                  context=f"{context} tile[{i},{j}]")
             if res is None:
                 continue
-            res.update(ix=i, iy=j)
+            contrast_ok = bool(res["ok"])
+            off_ok = True if max_off_mas is None else (res["off"] <= max_off_mas)
+            res.update(ix=i, iy=j, contrast_ok=contrast_ok, off_ok=bool(off_ok),
+                       ok=bool(contrast_ok and off_ok))
             cells.append(res)
     covered = [c for c in cells]
     n_ok = sum(1 for c in covered if c["ok"])
+    worst = max(covered, key=lambda c: c["off"], default=None)
     return dict(cells=cells, n_ok=n_ok, n_total=len(covered),
                 worst_off_mas=max((c["off"] for c in covered), default=float("nan")),
+                worst_off_cell=(None if worst is None else dict(
+                    ix=worst["ix"], iy=worst["iy"], off_mas=worst["off"],
+                    contrast=worst["contrast"])),
                 min_contrast_seen=min((c["contrast"] for c in covered), default=float("nan")),
                 clean=bool(covered) and n_ok == len(covered))
 

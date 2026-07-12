@@ -818,6 +818,32 @@ def main(argv=None):
                   file=sys.stderr)
             return 2
 
+        # Reference-free inter-frame overlap gate (added 2026-07-12). The
+        # registration failsafe above matches the mosaic vs its OWN catalog -- both
+        # derive from the same _crf frames, so a per-visit residual is
+        # self-referential and cancels (brick-1182 F200W seam: ~90 mas visit-001
+        # residual doubled every star in the overlap, yet mosaic-vs-catalog read
+        # ~0). Only a reference-free frame-vs-frame check sees it.  (Applies to
+        # --images-only too: it reads the crf frames, not catalogs.)
+        overlap_gate = Path(__file__).with_name("check_interframe_overlap.py")
+        rc = subprocess.run([sys.executable, str(overlap_gate),
+                             "--field", args.field, "--scan"]).returncode
+        if rc == 1:
+            print(f"\nREFUSING TO STAGE '{args.field}': inter-frame OVERLAP gate FAILED "
+                  f"-- two overlapping visits/detectors are misregistered vs EACH OTHER "
+                  f"(>30 mas), so the drizzle overlap has doubled/smeared stars even though "
+                  f"each frame is fine vs a reference. Re-examine per-visit alignment (the "
+                  f"per-visit shift may be leaving a field-dependent residual). Override with "
+                  f"--allow-registration-fail AND ALLOW_REGISTRATION_FAIL=1 (dangerous).",
+                  file=sys.stderr)
+            return 2
+        if rc != 0:
+            print(f"\nREFUSING TO STAGE '{args.field}': inter-frame overlap gate could not "
+                  f"run (rc={rc}); cannot confirm frame-vs-frame registration. Fix it, or "
+                  f"override with --allow-registration-fail AND ALLOW_REGISTRATION_FAIL=1.",
+                  file=sys.stderr)
+            return 2
+
         # ---- SAME-RUN GATE: image <-> catalog provenance -------------------------------
         # When a release ships BOTH images and per-filter catalogs, they MUST come from
         # the same pipeline/cataloging run. We enforce it directly: each shipped science
