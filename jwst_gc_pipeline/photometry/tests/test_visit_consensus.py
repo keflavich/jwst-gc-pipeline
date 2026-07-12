@@ -176,3 +176,79 @@ def test_reference_tie_refuses_on_reference_disagreement():
                                 context="test-disagree", grid_nx=2, grid_ny=2)
     assert not tie["cross_reference"]["agree"]
     assert not tie["apply_ok"]
+
+
+# ---------------------------------------------------------------------------
+# mosaic visits (2026-07-12): a visit's exposures span DISJOINT pointing tiles
+# and two modules -- "no tie to the anchor" is geometry, not misalignment
+# ---------------------------------------------------------------------------
+
+def _tile_tables(ra_offset_arcsec=0.0, n_exp=2, exp0=1, n=300, seed=13,
+                 misaligned=None, **kwargs):
+    rng = np.random.default_rng(seed)
+    ra = RA0 + (rng.uniform(0, 60.0, n) + ra_offset_arcsec) / 3600.0 / COSD
+    dec = DEC0 + rng.uniform(0, 60.0, n) / 3600.0
+    misaligned = misaligned or {}
+    return [
+        _exposure_table(ra, dec, exposure=e,
+                        dra_mas=misaligned.get(e, (0, 0))[0],
+                        ddec_mas=misaligned.get(e, (0, 0))[1], **kwargs)
+        for e in range(exp0, exp0 + n_exp)
+    ]
+
+
+def test_mosaic_disjoint_tiles_build_components_not_failures():
+    # two disjoint tiles (200" apart), 2 exposures each: the old anchor-seeded
+    # build raised ConsensusBuildError; now = 2 components, all verified
+    tables = (_tile_tables(0.0, exp0=1, seed=21)
+              + _tile_tables(200.0, exp0=3, seed=22))
+    cons = build_visit_consensus(tables, context="test-mosaic")
+    assert cons["n_components"] == 2
+    assert cons["consensus_ok"]
+    for exp in cons["exposures"]:
+        assert exp["internal_tie"]
+        assert not exp["unverified"]
+        assert not exp["misaligned"]
+
+
+def test_mosaic_misalignment_detected_within_component():
+    # 3 exposures in the second tile: the component median isolates the one
+    # bad exposure.  (With only TWO exposures in a component the blame is
+    # physically ambiguous -- the median splits it +-off/2 and BOTH get
+    # flagged, which is the safe direction: over-flag, never hide.)
+    tables = (_tile_tables(0.0, exp0=1, seed=23)
+              + _tile_tables(200.0, n_exp=3, exp0=3, seed=24,
+                             misaligned={4: (7.0, 0.0)}))
+    cons = build_visit_consensus(tables, context="test-mosaic-bad")
+    flagged = [e for e in cons["exposures"] if e["misaligned"]]
+    assert len(flagged) == 1
+    assert flagged[0]["key"][1] == 4
+    assert flagged[0]["vs_consensus"]["off"] == pytest.approx(7.0, abs=1.5)
+
+
+def test_two_exposure_component_ambiguity_overflags_never_hides():
+    # n=2 component with one bad exposure: cannot attribute -> both read
+    # +-off/2 from the component frame and both are flagged (>2 mas).  The
+    # failure must NEVER be absorbed into a silent pass.
+    tables = _tile_tables(0.0, n_exp=2, exp0=1, seed=27,
+                          misaligned={2: (8.0, 0.0)})
+    cons = build_visit_consensus(tables, context="test-n2-ambiguity")
+    flagged = [e for e in cons["exposures"] if e["misaligned"]]
+    assert len(flagged) == 2
+    for e in flagged:
+        assert e["vs_consensus"]["off"] == pytest.approx(4.0, abs=1.5)
+
+
+def test_isolated_exposure_is_unverified_not_misaligned():
+    # 2 overlapping exposures at tile A + ONE exposure alone at a far tile:
+    # the loner has no >=2-exposure consensus coverage -> UNVERIFIED, never
+    # silently passed, never called misaligned
+    tables = (_tile_tables(0.0, exp0=1, seed=25)
+              + _tile_tables(300.0, n_exp=1, exp0=5, seed=26))
+    cons = build_visit_consensus(tables, context="test-island")
+    assert not cons["consensus_ok"]
+    lone = [e for e in cons["exposures"] if e["key"][1] == 5][0]
+    assert lone["unverified"]
+    assert not lone["misaligned"]
+    others = [e for e in cons["exposures"] if e["key"][1] != 5]
+    assert all(not e["unverified"] for e in others)

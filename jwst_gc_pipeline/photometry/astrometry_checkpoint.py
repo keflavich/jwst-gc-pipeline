@@ -369,6 +369,9 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
             rec = dict(key=list(exp["key"]), n_reliable=exp["n_reliable"],
                        raoffset_meta=exp["raoffset_meta"],
                        deoffset_meta=exp["deoffset_meta"],
+                       component=exp.get("component", 0),
+                       internal_tie=exp.get("internal_tie", True),
+                       unverified=exp.get("unverified", False),
                        misaligned=exp["misaligned"])
             if res is not None:
                 rec.update({k: res.get(k) for k in
@@ -376,6 +379,12 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                              "swept", "window_arcsec", "dra_err", "ddec_err",
                              "n_peak")})
             exp_records.append(rec)
+            if exp.get("unverified"):
+                unverified.append(
+                    f"{vctx}: exposure {exp['key']} has no measurable tie to the "
+                    f"visit consensus (isolated footprint / too few overlap "
+                    f"stars) -- internally UNVERIFIED; the reference tie is its "
+                    f"only check")
             if exp["misaligned"]:
                 msg = (f"{vctx}: exposure {exp['key']} is "
                        f"{res['off']:.2f} mas off the visit consensus "

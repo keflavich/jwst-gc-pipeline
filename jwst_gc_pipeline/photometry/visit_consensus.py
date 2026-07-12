@@ -121,33 +121,48 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
     """Build the per-(visit,filter) consensus catalog and measure every
     exposure's bulk offset against it.
 
-    Flow (all bulk offsets via the density-immune ``measure_offset`` + sweep):
+    Flow (all bulk offsets via the density-immune ``measure_offset`` + sweep).
+
+    MOSAIC-SAFE (2026-07-12): a real visit is usually a MOSAIC — its exposures
+    span several non-overlapping pointing tiles (vgroups) and two modules, so
+    "tie everything to one anchor" is impossible by GEOMETRY, not by
+    misalignment.  The consensus is therefore built per overlap COMPONENT:
 
     1. cut each exposure catalog to reliable stars;
-    2. anchor = the exposure with the most reliable stars;
-    3. measure every exposure's offset RELATIVE to the anchor (sweep on: a
-       grossly shifted exposure is found no matter how large the shift);
-    4. remove each exposure's measured relative offset, then associate stars
-       across exposures (nearest pair within ``match_radius`` — unambiguous
-       because the relative offsets have been removed);
-    5. consensus position = per-star median across >= ``min_exposures``
-       exposures, re-centred so the consensus frame is the VISIT MEAN frame
-       (not the anchor's) — each exposure votes equally;
-    6. re-measure every exposure against the consensus.
+    2. component seed = the largest not-yet-tied exposure; grow the component
+       by tying exposures to the UNION of the component's already-tied,
+       offset-removed stars (sweep on: a grossly shifted exposure is still
+       FOUND no matter how large the shift); repeat until no exposure ties,
+       then start the next component from the leftovers;
+    3. within each component: associate stars across its exposures (nearest
+       pair within ``match_radius`` — unambiguous because the relative offsets
+       were removed), consensus position = per-star mean over >=
+       ``min_exposures`` exposures, re-centred by the MEDIAN of the
+       component's per-exposure offsets (one bad exposure cannot drag it);
+    4. the visit consensus = the union of all component consensi.  Components
+       cannot be tied to EACH OTHER internally (no shared stars) — their
+       mutual consistency is exactly what the per-tile REFERENCE map in
+       ``measure_reference_tie`` checks;
+    5. re-measure every exposure against the consensus.  An exposure whose
+       footprint has no measurable consensus overlap is UNVERIFIED (a
+       could-not-verify, reported distinctly) — never silently passed, never
+       conflated with a measured misalignment.
 
     Returns
     -------
     dict with:
-      ``coords`` : SkyCoord — consensus positions (visit-mean frame)
+      ``coords`` : SkyCoord — consensus positions (component-mean frames)
       ``nexp`` : ndarray — exposures contributing per star
       ``scatter_mas`` : ndarray — per-star rms scatter of contributing positions
       ``exposures`` : list of per-exposure dicts:
           ``key`` (visit, exposure, module, filter), ``n_reliable``,
-          ``vs_consensus`` (measure_offset result: dra/ddec/off/contrast/ok/
-          swept/dra_err/ddec_err...), ``misaligned`` (off > tol AND
-          significant), ``raoffset_meta``/``deoffset_meta`` (the im0 alignment
-          baked into the catalog, arcsec, from the header)
-      ``consensus_ok`` : bool — consensus built AND every exposure measurable
+          ``component`` (int; -1 = untied island), ``internal_tie`` (bool),
+          ``vs_consensus`` (measure_offset result or None), ``unverified``
+          (bool — no measurable tie to the consensus), ``misaligned`` (off >
+          tol AND significant), ``raoffset_meta``/``deoffset_meta`` (the im0
+          alignment baked into the catalog, arcsec)
+      ``n_components`` : int
+      ``consensus_ok`` : bool — every exposure measurable vs the consensus
     """
     if len(exposure_tables) < min_exposures:
         raise ConsensusBuildError(
@@ -175,90 +190,128 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
             f"visit consensus ({context}): only {len(usable)} exposures have >= "
             f"{min_stars} reliable stars (of {len(entries)})")
 
-    anchor_pos = int(np.argmax([e["n_reliable"] for e in usable]))
-    anchor = usable[anchor_pos]
-
-    # 3. relative offsets to the anchor (swept — a 20" shifted exposure is FOUND)
-    rel = []
-    for e in usable:
-        if e is anchor:
-            res = dict(dra=0.0, ddec=0.0, off=0.0, ok=True, swept=False,
-                       npairs=e["n_reliable"], contrast=float("inf"),
-                       window_arcsec=0.0, dra_err=0.0, ddec_err=0.0,
-                       n_peak=e["n_reliable"])
-        else:
-            res = measure_offset(e["coords"], anchor["coords"], sweep=True,
-                                 context=f"{context} exp{e['key']} vs anchor")
-        if res is None or not res["ok"]:
-            raise ConsensusBuildError(
-                f"visit consensus ({context}): exposure {e['key']} has NO coherent "
-                f"tie to the anchor exposure (result={res}); cannot build a "
-                f"consensus that silently drops an exposure")
-        rel.append(res)
-
-    # 4. shift into the anchor frame, associate (nearest pair, unambiguous now)
-    dec_mid = float(np.median(anchor["coords"].dec.deg))
+    dec_mid = float(np.median(np.concatenate([e["coords"].dec.deg for e in usable])))
     cosd = max(np.cos(np.radians(dec_mid)), 1e-6)
-    shifted = []
-    for e, res in zip(usable, rel):
-        sc = e["coords"]
-        shifted.append(SkyCoord(
-            ra=sc.ra + (res["dra"] / 3.6e6 / cosd) * u.deg,
-            dec=sc.dec + (res["ddec"] / 3.6e6) * u.deg, frame="icrs"))
 
-    seed = shifted[anchor_pos]
-    n_seed = len(seed)
-    sum_ra = seed.ra.deg.copy()
-    sum_dec = seed.dec.deg.copy()
-    sum_ra2 = seed.ra.deg ** 2
-    sum_dec2 = seed.dec.deg ** 2
-    counts = np.ones(n_seed, dtype=int)
-    for i, (e, sc) in enumerate(zip(usable, shifted)):
-        if e is anchor:
-            continue
-        ia, ib, sep, _ = search_around_sky(seed, sc, match_radius)
-        if len(ia) == 0:
-            continue
-        order = np.lexsort((sep.arcsec, ia))
-        ia_o, ib_o = ia[order], ib[order]
-        first = np.concatenate(([True], ia_o[1:] != ia_o[:-1]))
-        ia_n, ib_n = ia_o[first], ib_o[first]
-        sum_ra[ia_n] += sc.ra.deg[ib_n]
-        sum_dec[ia_n] += sc.dec.deg[ib_n]
-        sum_ra2[ia_n] += sc.ra.deg[ib_n] ** 2
-        sum_dec2[ia_n] += sc.dec.deg[ib_n] ** 2
-        counts[ia_n] += 1
+    def _shift(sc, dra_mas, ddec_mas):
+        return SkyCoord(ra=sc.ra + (dra_mas / 3.6e6 / cosd) * u.deg,
+                        dec=sc.dec + (ddec_mas / 3.6e6) * u.deg, frame="icrs")
 
-    good = counts >= min_exposures
-    if good.sum() < min_stars:
+    # 2. component-wise union growth.  rel[i] = offset of exposure i RELATIVE
+    # to its component's union frame (None until tied); comp_id[i] = component.
+    rel = [None] * len(usable)
+    comp_id = np.full(len(usable), -1, dtype=int)
+    remaining = set(range(len(usable)))
+    n_components = 0
+    while remaining:
+        seed_i = max(remaining, key=lambda i: usable[i]["n_reliable"])
+        comp = n_components
+        comp_id[seed_i] = comp
+        rel[seed_i] = dict(dra=0.0, ddec=0.0, off=0.0, ok=True, swept=False,
+                           npairs=usable[seed_i]["n_reliable"],
+                           contrast=float("inf"), window_arcsec=0.0,
+                           dra_err=0.0, ddec_err=0.0,
+                           n_peak=usable[seed_i]["n_reliable"])
+        remaining.discard(seed_i)
+        union = usable[seed_i]["coords"]
+        grew = True
+        while grew and remaining:
+            grew = False
+            for i in sorted(remaining,
+                            key=lambda j: -usable[j]["n_reliable"]):
+                res = measure_offset(usable[i]["coords"], union, sweep=True,
+                                     context=f"{context} exp{usable[i]['key']} "
+                                             f"vs component {comp} union")
+                if res is None or not res["ok"]:
+                    continue
+                rel[i] = res
+                comp_id[i] = comp
+                remaining.discard(i)
+                shifted_i = _shift(usable[i]["coords"], res["dra"], res["ddec"])
+                union = SkyCoord(
+                    ra=np.concatenate([union.ra.deg, shifted_i.ra.deg]) * u.deg,
+                    dec=np.concatenate([union.dec.deg, shifted_i.dec.deg]) * u.deg,
+                    frame="icrs")
+                grew = True
+        n_components += 1
+
+    # 3. per-component association + consensus positions
+    all_ra, all_dec, all_scatter, all_nexp, all_mag = [], [], [], [], []
+    for comp in range(n_components):
+        members = [i for i in range(len(usable)) if comp_id[i] == comp]
+        # component-mean frame: MEDIAN of the member offsets, not mean -- one
+        # grossly misaligned exposure must not drag the frame toward itself
+        med_dra = float(np.median([rel[i]["dra"] for i in members]))
+        med_ddec = float(np.median([rel[i]["ddec"] for i in members]))
+        sum_ra = sum_dec = sum_ra2 = sum_dec2 = counts = flux0 = None
+        for i in members:
+            sc = _shift(usable[i]["coords"], rel[i]["dra"], rel[i]["ddec"])
+            if sum_ra is None:
+                sum_ra = sc.ra.deg.copy(); sum_dec = sc.dec.deg.copy()
+                sum_ra2 = sc.ra.deg ** 2; sum_dec2 = sc.dec.deg ** 2
+                counts = np.ones(len(sc), dtype=int)
+                flux0 = usable[i]["flux"].copy()
+                seed = sc
+                continue
+            ia, ib, sep, _ = search_around_sky(seed, sc, match_radius)
+            matched_b = np.zeros(len(sc), dtype=bool)
+            if len(ia):
+                order = np.lexsort((sep.arcsec, ia))
+                ia_o, ib_o = ia[order], ib[order]
+                first = np.concatenate(([True], ia_o[1:] != ia_o[:-1]))
+                ia_n, ib_n = ia_o[first], ib_o[first]
+                sum_ra[ia_n] += sc.ra.deg[ib_n]
+                sum_dec[ia_n] += sc.dec.deg[ib_n]
+                sum_ra2[ia_n] += sc.ra.deg[ib_n] ** 2
+                sum_dec2[ia_n] += sc.dec.deg[ib_n] ** 2
+                counts[ia_n] += 1
+                matched_b[ib_n] = True
+            # unmatched stars extend the seed (mosaic tiles: coverage grows)
+            new = ~matched_b
+            if new.any():
+                seed = SkyCoord(
+                    ra=np.concatenate([seed.ra.deg, sc.ra.deg[new]]) * u.deg,
+                    dec=np.concatenate([seed.dec.deg, sc.dec.deg[new]]) * u.deg,
+                    frame="icrs")
+                sum_ra = np.concatenate([sum_ra, sc.ra.deg[new]])
+                sum_dec = np.concatenate([sum_dec, sc.dec.deg[new]])
+                sum_ra2 = np.concatenate([sum_ra2, sc.ra.deg[new] ** 2])
+                sum_dec2 = np.concatenate([sum_dec2, sc.dec.deg[new] ** 2])
+                counts = np.concatenate([counts, np.ones(int(new.sum()), int)])
+                flux0 = np.concatenate([flux0, usable[i]["flux"][new]])
+        good = counts >= min_exposures
+        if not good.any():
+            continue
+        mean_ra = sum_ra[good] / counts[good]
+        mean_dec = sum_dec[good] / counts[good]
+        var_ra = np.maximum(sum_ra2[good] / counts[good] - mean_ra ** 2, 0.0)
+        var_dec = np.maximum(sum_dec2[good] / counts[good] - mean_dec ** 2, 0.0)
+        all_ra.append(mean_ra - med_dra / 3.6e6 / cosd)
+        all_dec.append(mean_dec - med_ddec / 3.6e6)
+        all_scatter.append(np.sqrt(var_ra * cosd ** 2 + var_dec) * 3.6e6)
+        all_nexp.append(counts[good])
+        with np.errstate(divide="ignore", invalid="ignore"):
+            all_mag.append(-2.5 * np.log10(np.where(flux0[good] > 0,
+                                                    flux0[good], np.nan)))
+
+    n_cons = int(sum(len(r) for r in all_ra))
+    if n_cons < min_stars:
         raise ConsensusBuildError(
-            f"visit consensus ({context}): only {int(good.sum())} stars matched in "
-            f">= {min_exposures} exposures (need >= {min_stars})")
-    mean_ra = sum_ra[good] / counts[good]
-    mean_dec = sum_dec[good] / counts[good]
-    var_ra = np.maximum(sum_ra2[good] / counts[good] - mean_ra ** 2, 0.0)
-    var_dec = np.maximum(sum_dec2[good] / counts[good] - mean_dec ** 2, 0.0)
-    scatter_mas = np.sqrt(var_ra * cosd ** 2 + var_dec) * 3.6e6
+            f"visit consensus ({context}): only {n_cons} stars matched in >= "
+            f"{min_exposures} exposures across {n_components} component(s) "
+            f"(need >= {min_stars})")
+    consensus = SkyCoord(ra=np.concatenate(all_ra) * u.deg,
+                         dec=np.concatenate(all_dec) * u.deg, frame="icrs")
+    scatter_mas = np.concatenate(all_scatter)
+    nexp = np.concatenate(all_nexp)
+    consensus_mag = np.concatenate(all_mag)
 
-    # 5. re-centre: anchor frame -> visit CONSENSUS frame.  MEDIAN of the
-    # per-exposure offsets, not mean: one grossly misaligned exposure must not
-    # drag the consensus frame toward itself (it would then read as "only"
-    # (n-1)/n of its true offset and dilute the correction).
-    mean_dra = float(np.median([r["dra"] for r in rel]))   # on-sky mas, exp->anchor
-    mean_ddec = float(np.median([r["ddec"] for r in rel]))
-    consensus = SkyCoord(
-        ra=(mean_ra - mean_dra / 3.6e6 / cosd) * u.deg,
-        dec=(mean_dec - mean_ddec / 3.6e6) * u.deg, frame="icrs")
-    # per-star instrumental magnitude (anchor flux; ORDERING is all the
-    # flux-matched reference check needs, so the zero point is irrelevant)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        consensus_mag = -2.5 * np.log10(np.where(anchor["flux"][good] > 0,
-                                                 anchor["flux"][good], np.nan))
-
-    # 6. every exposure re-measured against the consensus
+    # 5. every exposure re-measured against the consensus.  No measurable tie
+    # (an exposure whose footprint has no >=2-exposure consensus coverage) =
+    # UNVERIFIED -- reported, never conflated with a measured misalignment.
     exposures = []
     consensus_ok = True
-    for e in usable:
+    for pos, e in enumerate(usable):
         res = measure_offset(e["coords"], consensus, sweep=True,
                              context=f"{context} exp{e['key']} vs consensus")
         measurable = res is not None and res["ok"]
@@ -274,16 +327,21 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
                               and (not np.isfinite(err) or res["off"] > 3.0 * err
                                    or res["off"] > 10.0 * EXPOSURE_CONSENSUS_TOL_MAS))
         exposures.append(dict(
-            key=e["key"], n_reliable=e["n_reliable"], vs_consensus=res,
+            key=e["key"], n_reliable=e["n_reliable"],
+            component=int(comp_id[pos]),
+            internal_tie=bool(rel[pos] is not None and rel[pos]["npairs"] > 0
+                              and (comp_id == comp_id[pos]).sum() > 1),
+            vs_consensus=res, unverified=not measurable,
             misaligned=misaligned,
             raoffset_meta=float(e["raoffset_meta"] or 0.0),
             deoffset_meta=float(e["deoffset_meta"] or 0.0)))
 
     skipped = [e["key"] for i, e in enumerate(entries) if i not in usable_idx]
-    return dict(coords=consensus, mag=consensus_mag, nexp=counts[good],
+    anchor = usable[int(np.argmax([e["n_reliable"] for e in usable]))]
+    return dict(coords=consensus, mag=consensus_mag, nexp=nexp,
                 scatter_mas=scatter_mas, exposures=exposures,
                 consensus_ok=consensus_ok, anchor_key=anchor["key"],
-                skipped=skipped)
+                n_components=n_components, skipped=skipped)
 
 
 def _brightest_subset_for_spacing(coords, mag, target_spacing_arcsec):
