@@ -1439,11 +1439,23 @@ if __name__ == "__main__":
     skymatch_method = (options.skymatch_method or '').strip() or None
     print(options)
 
-    with open(os.path.expanduser('~/.mast_api_token'), 'r') as fh:
-        api_token = fh.read().strip()
-        os.environ['MAST_API_TOKEN'] = api_token.strip()
-    Mast.login(api_token.strip())
-    Observations.login(api_token)
+    # A MAST token is only needed for proprietary data; the GC programs are
+    # public, so a missing/expired token should not abort the run.  Try to log
+    # in if a token is present, but fall back to anonymous access on failure.
+    token_path = os.path.expanduser('~/.mast_api_token')
+    if os.path.exists(token_path):
+        with open(token_path, 'r') as fh:
+            api_token = fh.read().strip()
+        os.environ['MAST_API_TOKEN'] = api_token
+        try:
+            Mast.login(api_token)
+            Observations.login(api_token)
+        except Exception as exc:
+            print(f"MAST login failed ({exc}); continuing with anonymous access "
+                  "(sufficient for public data).")
+    else:
+        print("No ~/.mast_api_token found; continuing with anonymous MAST access "
+              "(sufficient for public data).")
 
 
     field_to_reg_mapping = {'2221': {'001': 'brick', '002': 'cloudc'},
