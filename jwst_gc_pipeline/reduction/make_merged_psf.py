@@ -6,10 +6,15 @@ from photutils.psf import GriddedPSFModel
 from astropy.io import fits
 from astropy.wcs import WCS
 import glob
-import webbpsf
+try:
+    import webbpsf
+    from webbpsf.utils import to_griddedpsfmodel
+except ImportError:
+    # webbpsf was renamed to stpsf; fall back to the new name
+    import stpsf as webbpsf
+    from stpsf.utils import to_griddedpsfmodel
 from astropy.nddata import NDData
 from tqdm.auto import tqdm
-from webbpsf.utils import to_griddedpsfmodel
 from astropy.convolution import convolve, Gaussian2DKernel
 
 def footprint_contains(x, y, shape):
@@ -162,8 +167,6 @@ def fix_psfs_with_bad_meta(filename):
     for fn in glob.glob("*.fits"):
         fix_psfs_with_bad_meta(fn)
     """
-    from webbpsf.utils import to_griddedpsfmodel
-
     fh = fits.open(filename, mode='update')
     if 'DET_YX0' in fh[0].header and 'OVERSAMP' in fh[0].header:
         if 'oversampling' in fh[0].header:

@@ -65,6 +65,12 @@ include-package-data = true
 
 [tool.setuptools_scm]
 write_to = "jwst_gc_pipeline/version.py"
+# Tags in this repo look like "v1.0-2026.06" (a date suffix after the semantic
+# version).  The default setuptools_scm tag_regex tries to swallow the whole
+# "1.0-2026.06" as the version, which is not PEP 440 parseable and aborts the
+# build/install.  Capture only the leading numeric version so installation works.
+tag_regex = "^(?:[\\w-]+-)?(?P<version>v?\\d+(?:\\.\\d+)*)"
+fallback_version = "1.0.dev0"
 
 [tool.pytest.ini_options]
 testpaths = [
