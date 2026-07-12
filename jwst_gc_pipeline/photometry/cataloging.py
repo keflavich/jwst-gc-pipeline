@@ -2861,6 +2861,182 @@ def _maybe_dedup_m8(m8_path, options, label='m8'):
         return None
 
 
+def _astrom_checkpoint_refcat(basepath):
+    """Locate + load the absolute reference catalog for the astrometry
+    checkpoints: env ``ASTROM_REFCAT`` first, else the target's
+    ``gaia_virac2_refcat*.fits`` seed refcat.  None (consensus-only checks)
+    when the target has no seed refcat."""
+    import glob as _glob
+    from jwst_gc_pipeline.photometry.visit_consensus import load_reference_catalog
+    path = os.environ.get('ASTROM_REFCAT')
+    if not path:
+        cands = sorted(_glob.glob(f"{basepath}/catalogs/gaia_virac2_refcat*.fits"))
+        path = cands[-1] if cands else None
+    if path and os.path.exists(path):
+        print(f"astrom checkpoint: reference catalog {path}", flush=True)
+        return load_reference_catalog(path)
+    print(f"astrom checkpoint: no reference catalog found under {basepath}/catalogs "
+          f"(set ASTROM_REFCAT to provide one); running consensus-only checks",
+          flush=True)
+    return None
+
+
+def _astrom_find_offsets_table(basepath, proposal_id):
+    """The offsets table fix_alignment would consume, in its preference order."""
+    import glob as _glob
+    for pat in (f"{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_*locked.csv",
+                f"{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_*_average.csv",
+                f"{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_*.csv"):
+        cands = sorted(_glob.glob(pat))
+        if cands:
+            return cands[0]
+    return None
+
+
+def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath,
+                                     proposal_id, options, refcat_cache,
+                                     context=""):
+    """Visit-consensus astrometry checkpoint after each per-filter merge.
+
+    m2 (the m12 merge): a measured misalignment (>2 mas per-exposure vs the
+    visit consensus, or a multi-check-verified consensus->reference offset)
+    means the im0 alignment is WRONG -- the offsets table is corrected (with
+    ``ASTROM_CHECKPOINT_APPLY=1``), the im0 ``_i2d`` mosaics are stale-tagged,
+    and the run STOPS (``AstrometryCorrectionRequiredError``): the catalogs
+    derive from the stale crf GWCS, so continuing would propagate the error.
+
+    m3..m6: the solution must be FROZEN -- any measured shift raises
+    ``AstrometryRegressionError`` (see astrometry_checkpoint).
+
+    Kill-switches: ``ASTROM_CHECKPOINT=0`` disables; ``ASTROM_CHECKPOINT_WARN_ONLY=1``
+    demotes blocking errors to loud warnings.  Cutout runs are skipped (partial
+    frames cannot form a visit consensus).
+    """
+    import glob as _glob
+    import re as _re
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        AstrometryCorrectionRequiredError, AstrometryRegressionError,
+        CORRECTION_STAGES, find_i2d_for_filter, mark_i2d_stale,
+        run_visit_checkpoint, update_offsets_table)
+
+    if os.environ.get('ASTROM_CHECKPOINT', '1') == '0':
+        return
+    if getattr(options, 'cutout_region', ''):
+        print(f"astrom checkpoint [{merge_label}] {filt}/{module}: SKIPPED "
+              f"(cutout run; partial frames cannot form a visit consensus)",
+              flush=True)
+        return
+
+    # per-frame catalogs of this (filter, stage); chunked frames vstacked
+    base = f"{cut_bp}/{filt.upper()}/{filt.lower()}_*visit*_vgroup*_exp*"
+    fns = sorted(set(
+        _glob.glob(f"{base}_{merge_label}_daophot_basic.fits")
+        + _glob.glob(f"{base}_{merge_label}_chunk*of*_daophot_basic.fits")))
+    if not fns:
+        print(f"astrom checkpoint [{merge_label}] {filt}/{module}: no per-frame "
+              f"catalogs found ({base}_{merge_label}_daophot_basic.fits); skipped",
+              flush=True)
+        return
+    _chunk_re = _re.compile(r'_chunk\d+of\d+')
+    groups = {}
+    for fn in fns:
+        groups.setdefault(_chunk_re.sub('', fn), []).append(fn)
+    from astropy.table import vstack as _vstack
+    tables = []
+    for key, chunk_fns in sorted(groups.items()):
+        subs = [Table.read(f) for f in sorted(chunk_fns)]
+        tables.append(subs[0] if len(subs) == 1
+                      else _vstack(subs, metadata_conflicts='silent'))
+
+    if 'refcat' not in refcat_cache:
+        refcat_cache['refcat'] = _astrom_checkpoint_refcat(basepath)
+    refcat = refcat_cache['refcat']
+
+    warn_only = os.environ.get('ASTROM_CHECKPOINT_WARN_ONLY', '') == '1'
+    try:
+        record = run_visit_checkpoint(
+            tables, merge_label, refcat=refcat, filtername=filt,
+            basepath=cut_bp, context=context or f"{filt}/{module}")
+    except AstrometryRegressionError:
+        if warn_only:
+            traceback.print_exc()
+            print(f"astrom checkpoint [{merge_label}] {filt}/{module}: REGRESSION "
+                  f"demoted to warning (ASTROM_CHECKPOINT_WARN_ONLY=1)", flush=True)
+            return
+        raise
+
+    corrections = record.get('corrections') or []
+    if not corrections:
+        print(f"astrom checkpoint [{merge_label}] {filt}/{module}: PASS "
+              f"(no correction implied)", flush=True)
+        return
+
+    # m2 measured a real misalignment: im0 is wrong.
+    assert merge_label in CORRECTION_STAGES
+    offsets_path = _astrom_find_offsets_table(basepath, proposal_id)
+    applied = False
+    if os.environ.get('ASTROM_CHECKPOINT_APPLY', '') == '1' and offsets_path:
+        update_offsets_table(offsets_path, corrections, merge_label)
+        renames = mark_i2d_stale(
+            find_i2d_for_filter(cut_bp, filt),
+            reason=f"{merge_label} checkpoint corrected {offsets_path}",
+            record_dir=os.path.join(cut_bp, 'astrometry_checkpoints'))
+        applied = True
+        print(f"astrom checkpoint [{merge_label}] {filt}/{module}: offsets table "
+              f"CORRECTED ({len(corrections)} corrections -> {offsets_path}); "
+              f"{len(renames)} stale im0 mosaic(s) tagged _im0_badastrom", flush=True)
+    msg = (f"astrom checkpoint [{merge_label}] {filt}/{module}: measured im0 "
+           f"misalignment ({len(corrections)} correction(s); "
+           f"record={record.get('record_path')}). "
+           + ("Offsets table corrected + im0 mosaics stale-tagged. " if applied else
+              f"NOT auto-applied (set ASTROM_CHECKPOINT_APPLY=1; "
+              f"offsets table={offsets_path}). ")
+           + "REGENERATE the affected frames from _cal (destreak -> fix_alignment "
+             "with the corrected table -> Image3), re-make the im0 mosaics, then "
+             "restart cataloging -- the current crf frames/catalogs are stale.")
+    if warn_only:
+        print(f"WARNING (ASTROM_CHECKPOINT_WARN_ONLY=1): {msg}", flush=True)
+        return
+    raise AstrometryCorrectionRequiredError(msg)
+
+
+def _run_crossfilter_astrom_checkpoint(vetted_paths_by_filter, cut_bp, basepath,
+                                       refcat_cache, context=""):
+    """Cross-filter astrometry agreement checkpoint before the m7 cross-band
+    merge (see astrometry_checkpoint.run_crossfilter_checkpoint): anchor =
+    filter nearest VIRAC2 Ks; <5 mas bulk agreement per filter; no significant
+    2" cell above 15 mas.  Blocking (``ALLOW_CROSSFILTER_ASTROM_FAIL=1`` or
+    ``ASTROM_CHECKPOINT_WARN_ONLY=1`` to demote)."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        CrossFilterAstrometryError, run_crossfilter_checkpoint)
+
+    if os.environ.get('ASTROM_CHECKPOINT', '1') == '0':
+        return
+    catalogs = {}
+    for filt, path in vetted_paths_by_filter.items():
+        if os.path.exists(path):
+            catalogs[filt] = Table.read(path)
+        else:
+            print(f"crossfilter astrom checkpoint: missing vetted catalog for "
+                  f"{filt} ({path}); filter not checked", flush=True)
+    if len(catalogs) < 2:
+        print("crossfilter astrom checkpoint: <2 vetted catalogs; skipped", flush=True)
+        return
+    if 'refcat' not in refcat_cache:
+        refcat_cache['refcat'] = _astrom_checkpoint_refcat(basepath)
+    try:
+        run_crossfilter_checkpoint(catalogs, refcat=refcat_cache['refcat'],
+                                   basepath=cut_bp, context=context)
+        print("crossfilter astrom checkpoint: PASS", flush=True)
+    except CrossFilterAstrometryError:
+        if os.environ.get('ASTROM_CHECKPOINT_WARN_ONLY', '') == '1':
+            traceback.print_exc()
+            print("crossfilter astrom checkpoint: FAILURE demoted to warning "
+                  "(ASTROM_CHECKPOINT_WARN_ONLY=1)", flush=True)
+            return
+        raise
+
+
 def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         target, field, basepath, crowdsource_default_kwargs,
                         bg_boxsizes):
@@ -2944,6 +3120,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 f'{_L._inst_token(filt)}_{pupil}-{filt.lower()}-{module}_data_i2d.fits')
 
     frame_cache = {}
+    astrom_refcat_cache = {}  # lazy single-load of the checkpoint reference catalog
     bg_for_next = {}      # (module, filt) -> smoothed-bg path for the next phase
     resid_i2d_for_next = {}  # (module, filt) -> mergedcat residual i2d (detection image)
     prev_merged_for = {}  # (module, filt) -> (SkyCoord, iter_found array) for provenance
@@ -3647,6 +3824,17 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     n_spatial_chunks=int(getattr(options, 'merge_spatial_chunks', 1) or 1),
                     merge_workers=max(1, int(getattr(options, 'parallel_workers', 1) or 1)))
 
+                # ---- ASTROMETRY CHECKPOINT (visit-consensus failsafe) ----
+                # m2: measure every exposure vs the visit consensus + the
+                # multi-check reference tie; a real misalignment STOPS the run
+                # (im0 must be corrected + regenerated first).  m3..m6: the
+                # solution must be frozen; any shift raises.  See
+                # astrometry_checkpoint.py / ASTROMETRY_CHECKPOINTS.md.
+                _run_astrometry_stage_checkpoint(
+                    merge_label, module, filt, cut_bp, basepath, proposal_id,
+                    options, astrom_refcat_cache,
+                    context=f"{target} {filt}/{module}")
+
                 # data i2d once (m12), for peak-SB in the vetting step.  Cutout
                 # runs resample the per-frame crops (globbed by label); full-frame
                 # runs resample the original overlapping frames passed explicitly.
@@ -3912,6 +4100,19 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
     if _do_crossband and not getattr(options, 'cutout_region', ''):
         ref_filter = _resolve_crossband_ref_filter(options, filternames)
         for module in modules:
+            # ---- CROSS-FILTER ASTROMETRY CHECKPOINT (blocking) ----
+            # Every filter must agree with the VIRAC2-Ks-nearest anchor to
+            # <5 mas bulk, with no significant 2" cell above 15 mas, BEFORE the
+            # cross-band merge pools their positions.
+            _xf_vetted = {}
+            for _cf in filternames:
+                _mp = _merged_path(last_phase, module, _cf, True)
+                _vp = _mp.replace('.fits', '_vetted.fits')
+                _xf_vetted[_cf] = _vp if os.path.exists(_vp) else _mp
+            _run_crossfilter_astrom_checkpoint(
+                _xf_vetted, cut_bp, basepath, astrom_refcat_cache,
+                context=f"{target} {module} [{last_phase}]")
+
             print(f"manual [{last_phase}]: CROSS-BAND MERGE (module={module}, "
                   f"ref_filter={ref_filter}, filters={list(filternames)})", flush=True)
             _merge_catalogs.merge_daophot(

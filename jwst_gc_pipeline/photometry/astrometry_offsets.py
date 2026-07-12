@@ -29,7 +29,8 @@ class NoCoherentTieError(RuntimeError):
 
 def _hist_peak(dra_arcsec, ddec_arcsec, maxsep_arcsec, bin_arcsec):
     """2-D histogram peak of a cloud of pair offsets.  Returns
-    (dra_mas, ddec_mas, off_mas, npairs, contrast)."""
+    (dra_mas, ddec_mas, off_mas, npairs, contrast, dra_err_mas, ddec_err_mas,
+    n_peak)."""
     n = len(dra_arcsec)
     m = maxsep_arcsec
     bins = np.arange(-m, m + bin_arcsec, bin_arcsec)
@@ -38,14 +39,21 @@ def _hist_peak(dra_arcsec, ddec_arcsec, maxsep_arcsec, bin_arcsec):
     bg = float(np.median(H[H > 0])) if (H > 0).any() else 0.0
     dra0 = (xe[i] + xe[i + 1]) / 2.0
     ddec0 = (ye[j] + ye[j + 1]) / 2.0
-    # refine on the pairs within one bin of the peak
+    # refine on the pairs within one bin of the peak; the robust scatter of those
+    # near-peak pairs gives an error bar on the peak position (MAD-based standard
+    # error -- an offset without an error bar cannot gate a threshold decision)
     near = (np.abs(dra_arcsec - dra0) < bin_arcsec) & (np.abs(ddec_arcsec - ddec0) < bin_arcsec)
-    if near.sum() >= 5:
+    n_peak = int(near.sum())
+    dra_err = ddec_err = float("nan")
+    if n_peak >= 5:
         dra0 = float(np.median(dra_arcsec[near]))
         ddec0 = float(np.median(ddec_arcsec[near]))
+        mad_scale = 1.4826 / np.sqrt(n_peak)
+        dra_err = float(np.median(np.abs(dra_arcsec[near] - dra0)) * mad_scale * 1000.0)
+        ddec_err = float(np.median(np.abs(ddec_arcsec[near] - ddec0)) * mad_scale * 1000.0)
     contrast = float(H.max() / bg) if bg else float("inf")
     return (dra0 * 1000.0, ddec0 * 1000.0, float(np.hypot(dra0, ddec0) * 1000.0),
-            int(n), contrast)
+            int(n), contrast, dra_err, ddec_err, n_peak)
 
 
 # Windows (arcsec) the sweep escalates through when a narrow window shows no
@@ -56,8 +64,27 @@ def _hist_peak(dra_arcsec, ddec_arcsec, maxsep_arcsec, bin_arcsec):
 DEFAULT_SWEEP_WINDOWS = (3.0, 10.0, 30.0, 60.0)
 
 
-def _measure_at_window(a, b, maxsep_arcsec, bin_arcsec, min_pairs):
+# All-pairs budget per window.  The sweep evaluates windows up to 60", where a
+# dense catalog pair (e.g. a merged catalog vs the full VIRAC2 refcat) produces
+# BILLIONS of pairs and kills the process.  Above this budget, ``a`` is
+# subsampled (deterministically) -- the histogram PEAK is a density estimate, so
+# a uniform subsample preserves both its location and its contrast statistics.
+MAX_PAIRS_PER_WINDOW = 3_000_000
+
+
+def _measure_at_window(a, b, maxsep_arcsec, bin_arcsec, min_pairs,
+                       max_pairs=MAX_PAIRS_PER_WINDOW):
     """Single-window histogram-peak offset.  Returns a result dict or None."""
+    n_a = len(a)
+    if n_a > 2000 and len(b) > 0:
+        # probe the pair density on a small subsample, then cap the total
+        rng = np.random.default_rng(1182)
+        probe = rng.choice(n_a, 1000, replace=False)
+        ia_p, _, _, _ = search_around_sky(a[probe], b, maxsep_arcsec * u.arcsec)
+        est_total = len(ia_p) * (n_a / 1000.0)
+        if est_total > max_pairs:
+            keep = max(int(n_a * max_pairs / est_total), 2000)
+            a = a[rng.choice(n_a, min(keep, n_a), replace=False)]
     ia, ib, _, _ = search_around_sky(a, b, maxsep_arcsec * u.arcsec)
     if len(ia) < min_pairs:
         return None
@@ -66,10 +93,11 @@ def _measure_at_window(a, b, maxsep_arcsec, bin_arcsec, min_pairs):
     ddec = (b[ib].dec - a[ia].dec).to(u.arcsec).value
     # keep ~150 bins across the window so the peak stays resolved as we widen
     bw = max(bin_arcsec, maxsep_arcsec / 150.0)
-    dra_mas, ddec_mas, off_mas, npairs, contrast = _hist_peak(
-        dra, ddec, maxsep_arcsec, bw)
+    (dra_mas, ddec_mas, off_mas, npairs, contrast,
+     dra_err_mas, ddec_err_mas, n_peak) = _hist_peak(dra, ddec, maxsep_arcsec, bw)
     return dict(dra=dra_mas, ddec=ddec_mas, off=off_mas, npairs=npairs,
-                contrast=contrast, window_arcsec=maxsep_arcsec)
+                contrast=contrast, window_arcsec=maxsep_arcsec,
+                dra_err=dra_err_mas, ddec_err=ddec_err_mas, n_peak=n_peak)
 
 
 def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
@@ -105,11 +133,14 @@ def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
     Returns
     -------
     dict or None
-        ``dict(dra, ddec, off, npairs, contrast, ok, window_arcsec, swept)`` (mas),
-        or None if too few pairs at every window.  ``ok`` is False when NO window
-        reaches ``min_contrast``.  ``window_arcsec`` is the window the reported peak
-        came from -- a value >> your expected offset is the tell that the tie was
-        only found after widening (investigate: the frame is grossly shifted).
+        ``dict(dra, ddec, off, npairs, contrast, ok, window_arcsec, swept,
+        dra_err, ddec_err, n_peak)`` (mas), or None if too few pairs at every
+        window.  ``ok`` is False when NO window reaches ``min_contrast``.
+        ``window_arcsec`` is the window the reported peak came from -- a value
+        >> your expected offset is the tell that the tie was only found after
+        widening (investigate: the frame is grossly shifted).  ``dra_err`` /
+        ``ddec_err`` are MAD-based standard errors of the peak position from
+        the ``n_peak`` near-peak pairs.
     """
     min_contrast = DEFAULT_MIN_CONTRAST if min_contrast is None else min_contrast
     maxsep_arcsec = maxsep.to(u.arcsec).value if hasattr(maxsep, "to") else float(maxsep)
@@ -220,3 +251,136 @@ def agree_across_references(a, ref_a, ref_b, tol_mas=100.0, label_a="refA",
     sep = float(np.hypot(ddra, dddec))
     out.update(ddra_mas=ddra, dddec_mas=dddec, sep_mas=sep, agree=sep <= tol_mas)
     return out
+
+
+class GlobalTieNotVerifiedError(RuntimeError):
+    """Raised when ``local_residual_map`` is called without a verified small global
+    tie.  Per-star matched-pair statistics are only meaningful AFTER the bulk
+    offset is known (via ``measure_offset``) to be much smaller than the match
+    radius -- otherwise the matching pairs the WRONG stars and the residual map
+    fabricates false agreement (the banned dense-NN failure mode)."""
+
+
+def local_residual_map(a, b, global_result, cell_arcsec=2.0,
+                       match_radius=0.3 * u.arcsec, min_stars=10,
+                       tol_mas=15.0, nsigma=3.0, context=""):
+    """Fine-scale (default 2"x2" cell) residual-offset map from matched pairs,
+    AFTER a verified global tie.  This is the sanctioned "histogram refinement"
+    class of measurement: the coarse offset is measured first with the
+    density-immune ``measure_offset``; only when that verified tie is much
+    smaller than the match radius do per-star pairings become unambiguous, and
+    the per-cell robust mean of the pair residuals (with a standard error) maps
+    local distortion/misregistration at scales ``measure_offset_grid`` cannot
+    reach (its histogram peak needs more pairs per cell than a 2" cell holds).
+
+    A cell is only FLAGGED when it is both large AND significant:
+    ``|mean| > tol_mas`` and ``|mean| > nsigma * sem`` and ``n >= min_stars``.
+    A 15 mas "offset" carried by one star is not a measurement.
+
+    Parameters
+    ----------
+    a, b : SkyCoord
+        Source lists.  Residuals are (b - a) per matched pair, minus the global
+        offset from ``global_result``.
+    global_result : dict
+        The ``measure_offset(a, b)`` result.  REQUIRED.  Must have ``ok=True``,
+        ``swept=False``, and ``off`` < match_radius/3, else
+        ``GlobalTieNotVerifiedError`` is raised.
+    cell_arcsec : float
+        Cell size of the residual map (arcsec).
+    match_radius : Quantity
+        Pair-search radius.  Keep small (default 0.3") -- ambiguity rises with
+        radius in a dense field.
+    min_stars : int
+        Minimum matched pairs in a cell for the cell to be measurable.
+    tol_mas : float
+        Local residual-offset tolerance (mas).
+    nsigma : float
+        Significance requirement: a cell is only flagged when its mean residual
+        exceeds ``nsigma`` times its standard error.
+
+    Returns
+    -------
+    dict
+        ``dict(cells=[...], n_cells, n_measured, n_flagged, worst_off_mas,
+        worst_sig_off_mas, clean)``.  Each cell:
+        ``dict(ra0, dec0, ix, iy, n, dra_mas, ddec_mas, dra_sem, ddec_sem,
+        off_mas, significant, flagged)``.  ``clean`` is True when no cell is
+        flagged AND at least one cell was measurable.
+    """
+    if global_result is None or not global_result.get("ok"):
+        raise GlobalTieNotVerifiedError(
+            f"local_residual_map({context}): no verified global tie -- run "
+            f"measure_offset first and fix the bulk registration before mapping "
+            f"local residuals.")
+    radius_arcsec = match_radius.to(u.arcsec).value if hasattr(match_radius, "to") \
+        else float(match_radius)
+    if global_result.get("swept"):
+        raise GlobalTieNotVerifiedError(
+            f"local_residual_map({context}): global tie was only found by window "
+            f"SWEEP (offset {global_result['off']:.0f} mas) -- the frame is grossly "
+            f"shifted; correct the bulk offset before mapping local residuals.")
+    if global_result["off"] > radius_arcsec * 1000.0 / 3.0:
+        raise GlobalTieNotVerifiedError(
+            f"local_residual_map({context}): global offset {global_result['off']:.1f} "
+            f"mas is not << match radius {radius_arcsec * 1000:.0f} mas; matched "
+            f"pairs would be ambiguous. Correct the bulk offset first.")
+
+    gdra_deg = (global_result["dra"] / 3.6e6)  # on-sky mas -> deg (Δα·cosδ)
+    gddec_deg = (global_result["ddec"] / 3.6e6)
+
+    ia, ib, sep, _ = search_around_sky(a, b, radius_arcsec * u.arcsec)
+    if len(ia) == 0:
+        return dict(cells=[], n_cells=0, n_measured=0, n_flagged=0,
+                    worst_off_mas=float("nan"), worst_sig_off_mas=float("nan"),
+                    clean=False)
+    # keep only the NEAREST b for each a (unambiguous association given the
+    # verified small tie), then require uniqueness of the b partner
+    order = np.lexsort((sep.arcsec, ia))
+    ia_o, ib_o = ia[order], ib[order]
+    first = np.concatenate(([True], ia_o[1:] != ia_o[:-1]))
+    ia_n, ib_n = ia_o[first], ib_o[first]
+    _, b_counts = np.unique(ib_n, return_counts=True)
+    b_multi = set(np.unique(ib_n)[b_counts > 1])
+    keep = np.array([bi not in b_multi for bi in ib_n])
+    ia_n, ib_n = ia_n[keep], ib_n[keep]
+
+    cosd = np.cos(np.radians(a[ia_n].dec.value))
+    dra = (b[ib_n].ra - a[ia_n].ra).to(u.arcsec).value * cosd * 1000.0 - global_result["dra"]
+    ddec = (b[ib_n].dec - a[ia_n].dec).to(u.arcsec).value * 1000.0 - global_result["ddec"]
+
+    ra_deg = a[ia_n].ra.deg
+    dec_deg = a[ia_n].dec.deg
+    dec_mid = float(np.median(dec_deg))
+    cell_deg_dec = cell_arcsec / 3600.0
+    cell_deg_ra = cell_arcsec / 3600.0 / max(np.cos(np.radians(dec_mid)), 1e-6)
+    r0, d0 = float(ra_deg.min()), float(dec_deg.min())
+    ix = np.floor((ra_deg - r0) / cell_deg_ra).astype(int)
+    iy = np.floor((dec_deg - d0) / cell_deg_dec).astype(int)
+
+    cells = []
+    for (cx, cy) in sorted(set(zip(ix.tolist(), iy.tolist()))):
+        sel = (ix == cx) & (iy == cy)
+        n = int(sel.sum())
+        if n < min_stars:
+            continue
+        cdra = float(np.median(dra[sel]))
+        cddec = float(np.median(ddec[sel]))
+        mad_scale = 1.4826 / np.sqrt(n)
+        dra_sem = float(np.median(np.abs(dra[sel] - cdra)) * mad_scale)
+        ddec_sem = float(np.median(np.abs(ddec[sel] - cddec)) * mad_scale)
+        off = float(np.hypot(cdra, cddec))
+        sem = float(np.hypot(dra_sem, ddec_sem))
+        significant = bool(sem > 0 and off > nsigma * sem)
+        cells.append(dict(
+            ra0=r0 + (cx + 0.5) * cell_deg_ra, dec0=d0 + (cy + 0.5) * cell_deg_dec,
+            ix=int(cx), iy=int(cy), n=n, dra_mas=cdra, ddec_mas=cddec,
+            dra_sem=dra_sem, ddec_sem=ddec_sem, off_mas=off,
+            significant=significant, flagged=bool(off > tol_mas and significant)))
+    flagged = [c for c in cells if c["flagged"]]
+    sig = [c for c in cells if c["significant"]]
+    return dict(cells=cells, n_cells=len(cells), n_measured=len(cells),
+                n_flagged=len(flagged),
+                worst_off_mas=max((c["off_mas"] for c in cells), default=float("nan")),
+                worst_sig_off_mas=max((c["off_mas"] for c in sig), default=float("nan")),
+                clean=bool(cells) and not flagged)

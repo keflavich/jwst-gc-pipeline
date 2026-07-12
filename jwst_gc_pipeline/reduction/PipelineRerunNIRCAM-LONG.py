@@ -1116,6 +1116,8 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
     if module is None:
         module = 'nrc' + mod.meta.instrument.module.lower()
 
+    _prov_tbl = None       # offsets table actually consumed (header provenance)
+    _prov_row_stage = ''   # checkpoint stage that last corrected the row, if any
     if (field == '004' and proposal_id == '1182') or (field in ('001', '002') and proposal_id == '2221'):
         # field 002 (Cloud C) added 2026-06-22: route through the per-exposure VIRAC2-locked
         # table (cloudc/offsets/Offsets_JWST_Brick2221_VIRAC2locked.csv, built by
@@ -1201,6 +1203,9 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
             raise ValueError(f"too many or too few matches for {fn} (match.sum() = {match.sum()}).  exposure={exposure}, thismodule={thismodule}, filtername={filtername}")
         rashift = float(row['dra (arcsec)'][0])*u.arcsec
         decshift = float(row['ddec (arcsec)'][0])*u.arcsec
+        _prov_tbl = locked_tbl if os.path.exists(locked_tbl) else tblfn
+        if 'prov_stage' in offsets_tbl.colnames:
+            _prov_row_stage = str(row['prov_stage'][0])
     elif (field == '002' and proposal_id == '2221'):
         visit = fn.split('_')[0][-3:]
         thismodule = fn.split("_")[-2].strip('1234')
@@ -1338,6 +1343,18 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
         align_fits[1].header.update(ww.to_fits()[0])
         align_fits[1].header['RAOFFSET'] = rashift.value
         align_fits[1].header['DEOFFSET'] = decshift.value
+        # provenance: WHY these RAOFFSET/DEOFFSET (which table, which checkpoint
+        # last corrected the row, when) -- see astrometry_checkpoint.py
+        from jwst_gc_pipeline.photometry.astrometry_checkpoint import provenance_header_cards
+        _cosd_prov = np.cos(np.radians(float(align_fits[1].header['CRVAL2'])))
+        for _k, _v, _c in provenance_header_cards(
+                stage=_prov_row_stage or 'fix_alignment',
+                dra_onsky_mas=rashift.value * _cosd_prov * 1000.0,
+                ddec_onsky_mas=decshift.value * 1000.0,
+                method='offsets-table (histogram-stacked tie)',
+                references=refnames.get(proposal_id, 'n/a'),
+                table_name=_prov_tbl or 'hardcoded/none'):
+            align_fits[1].header[_k] = (_v, _c)
         align_fits.writeto(fn, overwrite=True)
         assert 'RAOFFSET' in fits.getheader(fn, ext=1)
     check_wcs(fn)

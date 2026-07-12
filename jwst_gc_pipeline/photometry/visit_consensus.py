@@ -1,0 +1,425 @@
+"""Visit-consensus astrometry — per-exposure verification against the visit.
+
+The recurring astrometric corruption mode is a SINGLE exposure (or visit) sitting
+off from its neighbours while every field-average check reads ~0 (brick-1182
+v001 ~20", the 2221 offsets-table collapse, the CRDS module swap...).  The
+defense implemented here: after the first per-frame photometry pass (m1), build
+a MERGED consensus catalog per (visit, filter) from reliable stars across all of
+that visit's exposures, then re-measure each exposure's bulk offset against the
+visit consensus.  A per-exposure disagreement > ``EXPOSURE_CONSENSUS_TOL_MAS``
+means the im0 alignment of that exposure is wrong and must be replaced (see
+``astrometry_checkpoint``).
+
+The consensus is then tied to the absolute reference (VIRAC2/Gaia) with MULTIPLE
+independent checks (dense + sparse reference, cross-reference agreement,
+per-tile map) — never a single number, never NN-median (see CLAUDE.md rule #1).
+
+All offsets here are measured with the sanctioned, density-immune
+``astrometry_offsets.measure_offset`` (offset-histogram stacking with window
+sweep).  Source ASSOCIATION (building consensus positions) uses
+``search_around_sky`` nearest-pair matching, which is safe because it happens
+only AFTER each exposure's relative offset has been measured and removed.
+"""
+import numpy as np
+from astropy import units as u
+from astropy.coordinates import SkyCoord, search_around_sky
+from astropy.table import Table
+
+from .astrometry_offsets import (
+    measure_offset, measure_offset_grid, agree_across_references,
+    local_residual_map,
+)
+
+# An exposure whose bulk offset from the visit consensus exceeds this is
+# MISALIGNED: its im0 (first-pass) alignment must be replaced.
+EXPOSURE_CONSENSUS_TOL_MAS = 2.0
+
+# Two independent references (VIRAC2-full vs Gaia-only) must agree on the
+# consensus->reference offset to within this, or the tie is not trusted.
+REFERENCE_AGREE_TOL_MAS = 5.0
+
+# VIRAC2 is a Ks-selected survey; Ks pivot wavelength (um).  The JWST filter
+# closest to this is the most reliable absolute anchor for cross-filter checks.
+VIRAC2_KS_UM = 2.149
+
+# JWST filters whose bandpass overlaps the VIRAC2 J/H/Ks coverage — for these a
+# magnitude-windowed (flux-cut) matched check against VIRAC2 is meaningful.
+VIRAC2_OVERLAP_UM = (1.0, 2.5)
+
+
+class ConsensusBuildError(RuntimeError):
+    """Raised when a visit consensus cannot be built (too few exposures/stars,
+    or an exposure has no measurable tie to the anchor)."""
+
+
+def filter_wavelength_um(filtername):
+    """Approximate pivot wavelength (um) from a JWST filter name (F212N -> 2.12,
+    F410M -> 4.10, F770W -> 7.70)."""
+    name = str(filtername).strip().upper()
+    if not name.startswith("F") or len(name) < 4 or not name[1:4].isdigit():
+        raise ValueError(f"cannot parse wavelength from filter name {filtername!r}")
+    return int(name[1:4]) / 100.0
+
+
+def pick_reference_anchor_filter(filternames):
+    """The filter closest in wavelength to VIRAC2 Ks — the most reliable
+    absolute anchor for the cross-filter astrometry check."""
+    return min(filternames, key=lambda f: abs(filter_wavelength_um(f) - VIRAC2_KS_UM))
+
+
+def catalog_coords(tbl):
+    """SkyCoord from a per-frame or merged catalog (skycoord / skycoord_centroid)."""
+    colname = "skycoord" if "skycoord" in tbl.colnames else "skycoord_centroid"
+    return SkyCoord(tbl[colname]).icrs
+
+
+def select_reliable_stars(tbl, snr_min=10.0, qfit_max=0.1, require_unsaturated=True):
+    """Boolean mask of astrometrically reliable stars in a daophot-basic catalog.
+
+    Reliable = well-fit (qfit), well-detected (S/N), and not a replaced/forced
+    saturated fit (satstar centroids ride on spike/core morphology, not the PSF
+    peak).  Missing columns degrade gracefully (that cut is skipped) so the
+    selector works on early-iteration catalogs.
+    """
+    n = len(tbl)
+    keep = np.ones(n, dtype=bool)
+    if "qfit" in tbl.colnames:
+        qf = np.asarray(tbl["qfit"], dtype=float)
+        keep &= np.isfinite(qf) & (qf <= qfit_max)
+    if "flux_fit" in tbl.colnames and "flux_err" in tbl.colnames:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            snr = np.asarray(tbl["flux_fit"], dtype=float) / np.asarray(tbl["flux_err"], dtype=float)
+        keep &= np.isfinite(snr) & (snr >= snr_min)
+    if require_unsaturated and "replaced_saturated" in tbl.colnames:
+        rs = np.asarray(tbl["replaced_saturated"])
+        keep &= ~(rs.astype(bool))
+    return keep
+
+
+def _meta_lookup(tbl, *names, default=None):
+    for name in names:
+        for key in (name, name.upper(), name.lower(), name.capitalize()):
+            if key in tbl.meta:
+                return tbl.meta[key]
+    return default
+
+
+def exposure_key(tbl):
+    """(visit, exposure, module, filter) identity of a per-frame catalog."""
+    visit = _meta_lookup(tbl, "VISIT", "Visit", "visit")
+    exposure = _meta_lookup(tbl, "EXPOSURE", "exposure")
+    module = _meta_lookup(tbl, "MODULE", "module")
+    filtername = _meta_lookup(tbl, "FILTER", "filter")
+    if exposure is not None:
+        exposure = int(str(exposure)[-5:])
+    return (str(visit), exposure, str(module), str(filtername))
+
+
+def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
+                          match_radius=0.2 * u.arcsec, min_exposures=2,
+                          min_stars=50, context=""):
+    """Build the per-(visit,filter) consensus catalog and measure every
+    exposure's bulk offset against it.
+
+    Flow (all bulk offsets via the density-immune ``measure_offset`` + sweep):
+
+    1. cut each exposure catalog to reliable stars;
+    2. anchor = the exposure with the most reliable stars;
+    3. measure every exposure's offset RELATIVE to the anchor (sweep on: a
+       grossly shifted exposure is found no matter how large the shift);
+    4. remove each exposure's measured relative offset, then associate stars
+       across exposures (nearest pair within ``match_radius`` — unambiguous
+       because the relative offsets have been removed);
+    5. consensus position = per-star median across >= ``min_exposures``
+       exposures, re-centred so the consensus frame is the VISIT MEAN frame
+       (not the anchor's) — each exposure votes equally;
+    6. re-measure every exposure against the consensus.
+
+    Returns
+    -------
+    dict with:
+      ``coords`` : SkyCoord — consensus positions (visit-mean frame)
+      ``nexp`` : ndarray — exposures contributing per star
+      ``scatter_mas`` : ndarray — per-star rms scatter of contributing positions
+      ``exposures`` : list of per-exposure dicts:
+          ``key`` (visit, exposure, module, filter), ``n_reliable``,
+          ``vs_consensus`` (measure_offset result: dra/ddec/off/contrast/ok/
+          swept/dra_err/ddec_err...), ``misaligned`` (off > tol AND
+          significant), ``raoffset_meta``/``deoffset_meta`` (the im0 alignment
+          baked into the catalog, arcsec, from the header)
+      ``consensus_ok`` : bool — consensus built AND every exposure measurable
+    """
+    if len(exposure_tables) < min_exposures:
+        raise ConsensusBuildError(
+            f"visit consensus ({context}): need >= {min_exposures} exposures, "
+            f"got {len(exposure_tables)}")
+
+    entries = []
+    for tbl in exposure_tables:
+        keep = select_reliable_stars(tbl, snr_min=snr_min, qfit_max=qfit_max)
+        coords = catalog_coords(tbl)[keep]
+        if "flux_fit" in tbl.colnames:
+            flux = np.asarray(tbl["flux_fit"], dtype=float)[keep]
+        else:
+            flux = np.full(int(keep.sum()), np.nan)
+        entries.append(dict(
+            key=exposure_key(tbl), coords=coords, flux=flux,
+            n_reliable=int(keep.sum()),
+            raoffset_meta=_meta_lookup(tbl, "RAOFFSET", default=0.0),
+            deoffset_meta=_meta_lookup(tbl, "DEOFFSET", default=0.0)))
+
+    usable_idx = [i for i, e in enumerate(entries) if e["n_reliable"] >= min_stars]
+    usable = [entries[i] for i in usable_idx]
+    if len(usable) < min_exposures:
+        raise ConsensusBuildError(
+            f"visit consensus ({context}): only {len(usable)} exposures have >= "
+            f"{min_stars} reliable stars (of {len(entries)})")
+
+    anchor_pos = int(np.argmax([e["n_reliable"] for e in usable]))
+    anchor = usable[anchor_pos]
+
+    # 3. relative offsets to the anchor (swept — a 20" shifted exposure is FOUND)
+    rel = []
+    for e in usable:
+        if e is anchor:
+            res = dict(dra=0.0, ddec=0.0, off=0.0, ok=True, swept=False,
+                       npairs=e["n_reliable"], contrast=float("inf"),
+                       window_arcsec=0.0, dra_err=0.0, ddec_err=0.0,
+                       n_peak=e["n_reliable"])
+        else:
+            res = measure_offset(e["coords"], anchor["coords"], sweep=True,
+                                 context=f"{context} exp{e['key']} vs anchor")
+        if res is None or not res["ok"]:
+            raise ConsensusBuildError(
+                f"visit consensus ({context}): exposure {e['key']} has NO coherent "
+                f"tie to the anchor exposure (result={res}); cannot build a "
+                f"consensus that silently drops an exposure")
+        rel.append(res)
+
+    # 4. shift into the anchor frame, associate (nearest pair, unambiguous now)
+    dec_mid = float(np.median(anchor["coords"].dec.deg))
+    cosd = max(np.cos(np.radians(dec_mid)), 1e-6)
+    shifted = []
+    for e, res in zip(usable, rel):
+        sc = e["coords"]
+        shifted.append(SkyCoord(
+            ra=sc.ra + (res["dra"] / 3.6e6 / cosd) * u.deg,
+            dec=sc.dec + (res["ddec"] / 3.6e6) * u.deg, frame="icrs"))
+
+    seed = shifted[anchor_pos]
+    n_seed = len(seed)
+    sum_ra = seed.ra.deg.copy()
+    sum_dec = seed.dec.deg.copy()
+    sum_ra2 = seed.ra.deg ** 2
+    sum_dec2 = seed.dec.deg ** 2
+    counts = np.ones(n_seed, dtype=int)
+    for i, (e, sc) in enumerate(zip(usable, shifted)):
+        if e is anchor:
+            continue
+        ia, ib, sep, _ = search_around_sky(seed, sc, match_radius)
+        if len(ia) == 0:
+            continue
+        order = np.lexsort((sep.arcsec, ia))
+        ia_o, ib_o = ia[order], ib[order]
+        first = np.concatenate(([True], ia_o[1:] != ia_o[:-1]))
+        ia_n, ib_n = ia_o[first], ib_o[first]
+        sum_ra[ia_n] += sc.ra.deg[ib_n]
+        sum_dec[ia_n] += sc.dec.deg[ib_n]
+        sum_ra2[ia_n] += sc.ra.deg[ib_n] ** 2
+        sum_dec2[ia_n] += sc.dec.deg[ib_n] ** 2
+        counts[ia_n] += 1
+
+    good = counts >= min_exposures
+    if good.sum() < min_stars:
+        raise ConsensusBuildError(
+            f"visit consensus ({context}): only {int(good.sum())} stars matched in "
+            f">= {min_exposures} exposures (need >= {min_stars})")
+    mean_ra = sum_ra[good] / counts[good]
+    mean_dec = sum_dec[good] / counts[good]
+    var_ra = np.maximum(sum_ra2[good] / counts[good] - mean_ra ** 2, 0.0)
+    var_dec = np.maximum(sum_dec2[good] / counts[good] - mean_dec ** 2, 0.0)
+    scatter_mas = np.sqrt(var_ra * cosd ** 2 + var_dec) * 3.6e6
+
+    # 5. re-centre: anchor frame -> visit CONSENSUS frame.  MEDIAN of the
+    # per-exposure offsets, not mean: one grossly misaligned exposure must not
+    # drag the consensus frame toward itself (it would then read as "only"
+    # (n-1)/n of its true offset and dilute the correction).
+    mean_dra = float(np.median([r["dra"] for r in rel]))   # on-sky mas, exp->anchor
+    mean_ddec = float(np.median([r["ddec"] for r in rel]))
+    consensus = SkyCoord(
+        ra=(mean_ra - mean_dra / 3.6e6 / cosd) * u.deg,
+        dec=(mean_dec - mean_ddec / 3.6e6) * u.deg, frame="icrs")
+    # per-star instrumental magnitude (anchor flux; ORDERING is all the
+    # flux-matched reference check needs, so the zero point is irrelevant)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        consensus_mag = -2.5 * np.log10(np.where(anchor["flux"][good] > 0,
+                                                 anchor["flux"][good], np.nan))
+
+    # 6. every exposure re-measured against the consensus
+    exposures = []
+    consensus_ok = True
+    for e in usable:
+        res = measure_offset(e["coords"], consensus, sweep=True,
+                             context=f"{context} exp{e['key']} vs consensus")
+        measurable = res is not None and res["ok"]
+        if not measurable:
+            consensus_ok = False
+        misaligned = False
+        if measurable:
+            err = float(np.hypot(res.get("dra_err", 0.0) or 0.0,
+                                 res.get("ddec_err", 0.0) or 0.0))
+            # misaligned only when BOTH large and significant: an offset with an
+            # error bar bigger than itself is not a measured misalignment
+            misaligned = bool(res["off"] > EXPOSURE_CONSENSUS_TOL_MAS
+                              and (not np.isfinite(err) or res["off"] > 3.0 * err
+                                   or res["off"] > 10.0 * EXPOSURE_CONSENSUS_TOL_MAS))
+        exposures.append(dict(
+            key=e["key"], n_reliable=e["n_reliable"], vs_consensus=res,
+            misaligned=misaligned,
+            raoffset_meta=float(e["raoffset_meta"] or 0.0),
+            deoffset_meta=float(e["deoffset_meta"] or 0.0)))
+
+    skipped = [e["key"] for i, e in enumerate(entries) if i not in usable_idx]
+    return dict(coords=consensus, mag=consensus_mag, nexp=counts[good],
+                scatter_mas=scatter_mas, exposures=exposures,
+                consensus_ok=consensus_ok, anchor_key=anchor["key"],
+                skipped=skipped)
+
+
+def _brightest_subset_for_spacing(coords, mag, target_spacing_arcsec):
+    """Bright-magnitude cut so the subset's ESTIMATED mean source spacing
+    (sqrt(footprint area / N), uniform-density estimate) is >= the target.
+    Returns a boolean mask.  This is the "reasonable flux cut" that sparsifies
+    a dense catalog before source-by-source matching."""
+    finite = np.isfinite(mag)
+    if finite.sum() == 0:
+        return finite
+    ra = coords.ra.deg[finite]
+    dec = coords.dec.deg[finite]
+    cosd = max(np.cos(np.radians(np.median(dec))), 1e-6)
+    area_arcsec2 = max(
+        (ra.max() - ra.min()) * cosd * 3600.0 * (dec.max() - dec.min()) * 3600.0, 1.0)
+    n_max = max(int(area_arcsec2 / target_spacing_arcsec ** 2), 1)
+    idx_finite = np.where(finite)[0]
+    order = np.argsort(np.asarray(mag)[idx_finite])  # bright (small mag) first
+    keep = np.zeros(len(coords), dtype=bool)
+    keep[idx_finite[order[:n_max]]] = True
+    return keep
+
+
+def _magnitude_windowed_match(consensus_coords, consensus_mag, ref_coords, ref_mag,
+                              global_result, match_radius=0.3 * u.arcsec,
+                              min_pairs=30, sparsity_factor=3.0, context=""):
+    """Careful source-by-source check against the reference, sparsified by a
+    bright-flux cut (only meaningful when the JWST band overlaps VIRAC2's).
+
+    The flux cut removes most of the ambiguity that makes dense-NN matching
+    dangerous (both sides are cut until the estimated source spacing is >=
+    ``sparsity_factor`` x the match radius); the residual danger is removed by
+    the ``local_residual_map`` precondition — a verified, small global tie must
+    already exist, so a nearest pair within ``match_radius`` is the RIGHT star.
+    Returns the robust mean residual (mas) with a standard error, or None if
+    not enough pairs.
+    """
+    radius_arcsec = match_radius.to(u.arcsec).value if hasattr(match_radius, "to") \
+        else float(match_radius)
+    target_spacing = sparsity_factor * radius_arcsec
+    keep_c = _brightest_subset_for_spacing(consensus_coords, consensus_mag, target_spacing)
+    keep_r = _brightest_subset_for_spacing(ref_coords, ref_mag, target_spacing)
+    if keep_c.sum() < min_pairs or keep_r.sum() < min_pairs:
+        return None
+    lrm = local_residual_map(
+        consensus_coords[keep_c], ref_coords[keep_r], global_result,
+        cell_arcsec=1e9,  # single cell: this is the BULK flux-matched residual
+        match_radius=match_radius, min_stars=min_pairs, context=context)
+    if not lrm["cells"]:
+        return None
+    cell = max(lrm["cells"], key=lambda c: c["n"])
+    return dict(dra=cell["dra_mas"], ddec=cell["ddec_mas"],
+                dra_err=cell["dra_sem"], ddec_err=cell["ddec_sem"],
+                off=cell["off_mas"], n=cell["n"])
+
+
+def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
+                          filtername=None, consensus_mag=None, ref_mag=None,
+                          agree_tol_mas=REFERENCE_AGREE_TOL_MAS,
+                          grid_nx=6, grid_ny=6, context=""):
+    """Tie the visit consensus to the absolute reference with MULTIPLE
+    independent checks.  No single number signs off (CLAUDE.md).
+
+    Checks
+    ------
+    A. ``measure_offset`` vs the FULL (dense) reference, histogram + sweep.
+    B. ``measure_offset`` vs the SPARSE reference (Gaia-only subset).
+    C. cross-reference agreement (A vs B within ``agree_tol_mas``) — a spurious
+       peak is reference-dependent, a real tie is not.
+    D. per-tile map vs the full reference (``measure_offset_grid``) — a bulk
+       ~0 with a shifted half-mosaic FAILS here.
+    E. (when the band overlaps VIRAC2 and magnitudes are provided) a
+       flux-windowed source-by-source residual — an independent systematics
+       check on the histogram peak.
+
+    Returns
+    -------
+    dict with per-check results and:
+      ``dra_mas``/``ddec_mas``/``dra_err_mas``/``ddec_err_mas`` — the adopted
+      correction (from check A, on-sky mas, sign = correction to ADD to the
+      consensus to land on the reference);
+      ``apply_ok`` — True only when A is coherent, C agrees, and D is clean.
+      An offset must never be APPLIED on a single check.
+    """
+    res_a = measure_offset(consensus_coords, ref_coords_all, sweep=True,
+                           context=f"{context} vs full-ref")
+    res_b = measure_offset(consensus_coords, ref_coords_sparse, sweep=True,
+                           context=f"{context} vs sparse-ref")
+    agree = agree_across_references(consensus_coords, ref_coords_all,
+                                    ref_coords_sparse, tol_mas=agree_tol_mas,
+                                    label_a=f"{context}/full",
+                                    label_b=f"{context}/sparse")
+    grid = measure_offset_grid(consensus_coords, ref_coords_all,
+                               nx=grid_nx, ny=grid_ny,
+                               context=f"{context} per-tile")
+
+    fluxmatched = None
+    if (filtername is not None and consensus_mag is not None and ref_mag is not None
+            and res_a is not None and res_a.get("ok") and not res_a.get("swept")):
+        lam = filter_wavelength_um(filtername)
+        if VIRAC2_OVERLAP_UM[0] <= lam <= VIRAC2_OVERLAP_UM[1] and res_a["off"] < 100.0:
+            fluxmatched = _magnitude_windowed_match(
+                consensus_coords, np.asarray(consensus_mag, dtype=float),
+                ref_coords_all, np.asarray(ref_mag, dtype=float),
+                res_a, context=f"{context} flux-matched")
+
+    apply_ok = bool(res_a is not None and res_a.get("ok")
+                    and agree.get("agree") and grid.get("clean"))
+    out = dict(vs_full=res_a, vs_sparse=res_b, cross_reference=agree,
+               per_tile=grid, flux_matched=fluxmatched, apply_ok=apply_ok)
+    if res_a is not None:
+        out.update(dra_mas=res_a["dra"], ddec_mas=res_a["ddec"],
+                   dra_err_mas=res_a.get("dra_err", float("nan")),
+                   ddec_err_mas=res_a.get("ddec_err", float("nan")),
+                   off_mas=res_a["off"], swept=res_a.get("swept", False))
+    else:
+        out.update(dra_mas=float("nan"), ddec_mas=float("nan"),
+                   dra_err_mas=float("nan"), ddec_err_mas=float("nan"),
+                   off_mas=float("nan"), swept=False)
+    return out
+
+
+def load_reference_catalog(path):
+    """Load a gaia+virac2 seed refcat (build_gaia_virac2_refcat.py output) and
+    split it into the full (dense) and Gaia-only (sparse) SkyCoord sets."""
+    ref = Table.read(path)
+    if "skycoord" in ref.colnames:
+        coords = SkyCoord(ref["skycoord"]).icrs
+    else:
+        coords = SkyCoord(ra=np.asarray(ref["RA"], dtype=float) * u.deg,
+                          dec=np.asarray(ref["DEC"], dtype=float) * u.deg,
+                          frame="icrs")
+    source = np.asarray(ref["source"]).astype(str) if "source" in ref.colnames else None
+    if source is not None:
+        sparse = coords[np.char.startswith(np.char.upper(source), "GAIA")]
+    else:
+        sparse = coords
+    mag = np.asarray(ref["refmag"], dtype=float) if "refmag" in ref.colnames else None
+    return dict(all=coords, sparse=sparse, mag=mag, table=ref)
