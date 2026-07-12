@@ -39,19 +39,29 @@ import pylab as pl
 from astropy.visualization import simple_norm
 
 import os
+from jwst_gc_pipeline.paths import DATA_ROOT, BLUE_ROOT
+
+# Only point (WEBB|ST)PSF_PATH at the data tree if the caller hasn't already
+# configured it and the directory actually exists.  Otherwise let webbpsf/stpsf
+# use its own configured data location (clobbering it with a missing path
+# breaks PSF generation off-HiPerGator).
 try:
     import webbpsf
     from webbpsf.utils import to_griddedpsfmodel
-    os.environ['WEBBPSF_PATH'] = '/orange/adamginsburg/jwst/webbpsf-data/'
+    _psf_data = os.path.join(DATA_ROOT, 'webbpsf-data')
+    if 'WEBBPSF_PATH' not in os.environ and os.path.isdir(_psf_data):
+        os.environ['WEBBPSF_PATH'] = _psf_data
 except ImportError:
     import stpsf
     from stpsf.utils import to_griddedpsfmodel
-    os.environ['STPSF_PATH'] = '/orange/adamginsburg/jwst/stpsf-data/'
+    _psf_data = os.path.join(DATA_ROOT, 'stpsf-data')
+    if 'STPSF_PATH' not in os.environ and os.path.isdir(_psf_data):
+        os.environ['STPSF_PATH'] = _psf_data
 
 try:
     from paths import basepath
 except ImportError:
-    basepath = '/blue/adamginsburg/adamginsburg/jwst/brick/'
+    basepath = f'{BLUE_ROOT}/brick/'
 
 def get_fwhm(header, instrument_replacement='NIRCam'):
     """
