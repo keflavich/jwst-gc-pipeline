@@ -40,6 +40,17 @@ export TMPDIR="${SLURM_TMPDIR:-/blue/adamginsburg/adamginsburg/tmp}"
 export TMP="$TMPDIR" TEMP="$TMPDIR"
 mkdir -p "$TMPDIR"
 
+# Guard: these four travel together. Overriding SOME of them silently runs the
+# requested filters against the DEFAULT target's paths (2026-07-11: a brick
+# F466N submission without TARGET ran as target=sgrc/o012 and crashed).
+if [ -n "${PROPOSAL:-}${FIELD:-}${TARGET:-}${EACH_SUFFIX:-}${MODULES:-}" ]; then
+    for v in PROPOSAL FIELD TARGET EACH_SUFFIX MODULES; do
+        if [ -z "${!v:-}" ]; then
+            echo "FATAL: $v not set but other target env vars are -- set ALL of PROPOSAL/FIELD/TARGET/EACH_SUFFIX together." >&2
+            exit 64
+        fi
+    done
+fi
 PROPOSAL=${PROPOSAL:-4147}
 FIELD=${FIELD:-012}
 TARGET=${TARGET:-sgrc}

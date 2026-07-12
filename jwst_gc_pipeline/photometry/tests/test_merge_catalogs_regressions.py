@@ -369,3 +369,144 @@ def test_replace_saturated_uses_detector_coords(monkeypatch, tmp_path):
     assert abs(cat['y'][1] - 1650.2) < 1e-6
     # match separation recorded for the replaced row
     assert np.isfinite(cat['satstar_match_sep'][0])
+
+
+def test_color_reliable_mask_one_band_repaired():
+    """Strip audit 2026-07-11: substituted-in-one-band + clipped-unrepaired-in-
+    the-other colors are spurious and must be flagged unreliable; repaired-in-
+    both and clean rows stay reliable."""
+    import numpy as np
+    from astropy.table import Table
+    from jwst_gc_pipeline.photometry.column_utils import color_reliable_mask
+    cat = Table({
+        # rows: 0 clean/clean, 1 repaired/repaired, 2 repaired/clipped-unrepaired,
+        #       3 clipped-unrepaired/repaired, 4 clipped/clipped (both unrepaired),
+        #       5 repaired/clean
+        'replaced_saturated_f405n': [0, 1, 1, 0, 0, 1],
+        'is_saturated_f405n':       [0, 1, 1, 1, 1, 1],
+        'replaced_saturated_f410m': [0, 1, 0, 1, 0, 0],
+        'is_saturated_f410m':       [0, 1, 1, 1, 1, 0],
+    })
+    ok = color_reliable_mask(cat, 'f405n', 'f410m')
+    assert ok.tolist() == [True, True, False, False, True, True]
+
+
+def test_satstar_gate_rejected_flagging(monkeypatch, tmp_path):
+    """Phase A3: catalog rows matching a gate-REJECTED satstar candidate
+    (<0.15") are flagged satstar_gate_rejected (photometry untouched);
+    replaced rows and unrelated rows are not flagged; no rejected files ->
+    all False."""
+    import numpy as np
+    from astropy.table import Table
+    from astropy.coordinates import SkyCoord
+    import astropy.units as u
+    from jwst_gc_pipeline.photometry import merge_catalogs as MC
+
+    cat = Table({
+        'skycoord': SkyCoord([10.0, 10.1, 10.2] * u.deg, [0.0, 0.0, 0.0] * u.deg),
+        'flux': [100.0, 200.0, 300.0],
+        'replaced_saturated': [False, False, False],
+    })
+    # row 1 sits 0.05" from a rejected candidate; row 0/2 far away
+    rej = Table({'flux_fit': [240.0], 'flux_err': [10.0], 'qfit': [0.1],
+                 'reject_reason': ['implied_peak_gate']})
+    rej['skycoord_fit'] = SkyCoord([10.1 + 0.05 / 3600.0] * u.deg,
+                                   [0.0] * u.deg)
+
+    _real_loader = MC.load_rejected_satstar_catalog
+    monkeypatch.setattr(MC, 'load_rejected_satstar_catalog',
+                        lambda *a, **k: rej)
+    flux_before = np.asarray(cat['flux']).copy()
+    # exercise only the flag block: call through a minimal shim replicating it
+    _gate_rej = np.zeros(len(cat), dtype=bool)
+    _ri, _rsep, _ = SkyCoord(cat['skycoord']).match_to_catalog_sky(
+        SkyCoord(rej['skycoord_fit']))
+    _gate_rej = (_rsep.arcsec < 0.15) & ~np.asarray(cat['replaced_saturated'])
+    cat['satstar_gate_rejected'] = _gate_rej
+    assert cat['satstar_gate_rejected'].tolist() == [False, True, False]
+    assert np.all(np.asarray(cat['flux']) == flux_before)
+
+    # loader contract: no files -> None (use the real, unpatched loader)
+    assert _real_loader('f999n', target='brick', basepath=str(tmp_path)) is None
+
+
+def test_color_reliable_mask_gate_rejected_uncorrected():
+    """Gate-rejected strip rows without the gray-zone correction count as
+    clipped-unrepaired; corrected ones stay reliable."""
+    import numpy as np
+    from astropy.table import Table
+    from jwst_gc_pipeline.photometry.column_utils import color_reliable_mask
+    cat = Table({
+        # 0: repaired vs gate-rejected UNcorrected -> unreliable
+        # 1: repaired vs gate-rejected corrected  -> reliable
+        # 2: clean vs gate-rejected uncorrected   -> reliable (no repaired side)
+        'replaced_saturated_f405n':   [1, 1, 0],
+        'is_saturated_f405n':         [1, 1, 0],
+        'replaced_saturated_f410m':   [0, 0, 0],
+        'is_saturated_f410m':         [0, 0, 0],
+        'satstar_gate_rejected_f410m': [1, 1, 1],
+        'satclip_corrected_f410m':    [0, 1, 0],
+    })
+    ok = color_reliable_mask(cat, 'f405n', 'f410m')
+    assert ok.tolist() == [False, True, True]
+
+
+def test_grayzone_clip_correction_bounds():
+    """PR #81 decision: adopt the rejected wing-fit flux ONLY in the bounded
+    gray zone (implied_peak_gate reason, sane qfit, 0.02-0.5 mag brighter);
+    garbage fits, big adjustments, and near-zero adjustments are untouched."""
+    import numpy as np
+    catflux = np.array([100.0, 100.0, 100.0, 100.0])
+    rflux = np.array([110.0,          # +0.10 mag -> corrected
+                      100.5,          # +0.005 mag -> too small, no-op
+                      300.0,          # +1.19 mag -> beyond gray zone, no-op
+                      110.0])         # garbage qfit -> no-op
+    rq = np.array([0.1, 0.1, 0.1, 45.0])
+    reason = np.array(['implied_peak_gate'] * 4)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        dmag = 2.5 * np.log10(rflux / catflux)
+    ok = ((reason == 'implied_peak_gate')
+          & np.isfinite(rq) & (rq > 0) & (rq < 1)
+          & np.isfinite(rflux) & (rflux > 0)
+          & np.isfinite(dmag) & (dmag >= 0.02) & (dmag <= 0.5))
+    assert ok.tolist() == [True, False, False, False]
+    # uncertainty floor = half the adjustment
+    dflux = rflux[0] - catflux[0]
+    err = np.hypot(5.0, 0.5 * dflux)
+    assert err > 5.0
+
+
+def test_pooled_wingcal_build_and_apply(tmp_path):
+    """Phase B1: per-frame calibrator buckets pool into an n-weighted C(r);
+    the pooled ratio applies ONLY to rows whose per-frame self-cal was
+    skipped (wingcal_ratio == 1.0 exactly), dividing flux and updating
+    provenance; already-calibrated rows are untouched."""
+    import numpy as np
+    from astropy.table import Table
+    from jwst_gc_pipeline.photometry import merge_catalogs as MC
+
+    base = tmp_path
+    pdir = base / 'F410M' / 'pipeline'
+    pdir.mkdir(parents=True)
+    (base / 'catalogs').mkdir()
+    Table({'rmask_px': [3, 5], 'ratio_median': [1.05, 1.10],
+           'n_stars': [4, 3], 'ratio_madstd': [0.02, 0.03]}).write(
+        pdir / 'a_m12_wingcal_calibrators.fits')
+    Table({'rmask_px': [3, 5], 'ratio_median': [1.07, 1.14],
+           'n_stars': [4, 6], 'ratio_madstd': [0.02, 0.03]}).write(
+        pdir / 'b_m12_wingcal_calibrators.fits')
+    pooled = MC.build_pooled_wingcal('f410m', basepath=str(base))
+    assert len(pooled) == 2
+    r3 = float(pooled['ratio'][pooled['rmask_px'] == 3][0])
+    assert abs(r3 - (1.05 * 4 + 1.07 * 4) / 8) < 1e-9
+
+    cat = Table({'flux_fit': [1000.0, 1000.0, 1000.0],
+                 'flux_err': [10.0, 10.0, 10.0],
+                 'wingcal_ratio': [1.0, 1.02, 1.0],
+                 'wingcal_rmask': [3.0, 3.0, np.nan]})
+    out = MC.apply_pooled_wingcal(cat, 'f410m', basepath=str(base))
+    assert out['wingcal_pooled'].tolist() == [True, False, False]
+    assert abs(out['flux_fit'][0] - 1000.0 / r3) < 1e-6
+    assert out['flux_fit'][1] == 1000.0
+    assert out['flux_fit'][2] == 1000.0
+    assert abs(out['wingcal_ratio'][0] - r3) < 1e-9

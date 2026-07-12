@@ -147,6 +147,62 @@ FIELDS = {
         "proposal_prefix": "jw03523-o005_t001_nircam_clear",
         "group": "galactic_plane",
     },
+    # ngc6334: PRIVATE (shared only with H. Bouy, not public). Two programs
+    # (jw06778 + jw07213); F200W exists in both, we ship the 06778 version. Merged
+    # NIRCam mosaics listed explicitly (two prefixes -> no_auto_images); image-only.
+    "ngc6334": {
+        "data_dir": Path("/orange/adamginsburg/jwst/ngc6334"),
+        "no_auto_images": True,
+        "skip_catalogs": True,
+        "nircam": [
+            {"filter": "F090W", "src": "/orange/adamginsburg/jwst/ngc6334/F090W/pipeline/jw06778-o001_t001_nircam_clear-f090w-merged_i2d.fits"},
+            {"filter": "F115W", "src": "/orange/adamginsburg/jwst/ngc6334/F115W/pipeline/jw07213-o001_t001_nircam_clear-f115w-merged_i2d.fits"},
+            {"filter": "F162M", "src": "/orange/adamginsburg/jwst/ngc6334/F162M/pipeline/jw07213-o001_t001_nircam_clear-f162m-merged_i2d.fits"},
+            {"filter": "F182M", "src": "/orange/adamginsburg/jwst/ngc6334/F182M/pipeline/jw07213-o001_t001_nircam_clear-f182m-merged_i2d.fits"},
+            {"filter": "F187N", "src": "/orange/adamginsburg/jwst/ngc6334/F187N/pipeline/jw06778-o001_t001_nircam_clear-f187n-merged_i2d.fits"},
+            {"filter": "F200W", "src": "/orange/adamginsburg/jwst/ngc6334/F200W/pipeline/jw06778-o001_t001_nircam_clear-f200w-merged_i2d.fits"},
+            {"filter": "F277W", "src": "/orange/adamginsburg/jwst/ngc6334/F277W/pipeline/jw06778-o001_t001_nircam_clear-f277w-merged_i2d.fits"},
+            {"filter": "F335M", "src": "/orange/adamginsburg/jwst/ngc6334/F335M/pipeline/jw06778-o001_t001_nircam_clear-f335m-merged_i2d.fits"},
+            {"filter": "F356W", "src": "/orange/adamginsburg/jwst/ngc6334/F356W/pipeline/jw07213-o001_t001_nircam_clear-f356w-merged_i2d.fits"},
+            {"filter": "F405N", "src": "/orange/adamginsburg/jwst/ngc6334/F405N/pipeline/jw07213-o001_t001_nircam_clear-f405n-merged_i2d.fits"},
+            {"filter": "F444W", "src": "/orange/adamginsburg/jwst/ngc6334/F444W/pipeline/jw07213-o001_t001_nircam_clear-f444w-merged_i2d.fits"},
+            # F470N held out only to avoid the gate override: it is VERIFIED internally
+            # consistent (0.9 mas vs the pooled LW bands, all tiles OK, contrast 357); the
+            # per-cell gate false-fails it at its fine 20x20 grid because F470N is sparse
+            # (886 det). Re-add once the gate no longer false-fails sparse narrow bands.
+            # {"filter": "F470N", "src": "/orange/adamginsburg/jwst/ngc6334/F470N/pipeline/jw06778-o001_t001_nircam_clear-f470n-merged_i2d.fits"},
+        ],
+    },
+    # --- Globular clusters (Anderson programs), grouped under <version>/globular_clusters/ ---
+    # Public image-only; W2 filters (F150W2/F322W2) and few bands. m4 has two pointings.
+    "m4": {
+        "data_dir": Path("/orange/adamginsburg/jwst/m4"),
+        "no_auto_images": True, "skip_catalogs": True, "group": "globular_clusters",
+        "nircam": [
+            {"filter": "F150W2", "observation": "o002", "src": "/orange/adamginsburg/jwst/m4/F150W2/pipeline/jw01979-o002_t001_nircam_clear-f150w2-merged_i2d.fits"},
+            {"filter": "F322W2", "observation": "o002", "src": "/orange/adamginsburg/jwst/m4/F322W2/pipeline/jw01979-o002_t001_nircam_clear-f322w2-merged_i2d.fits"},
+            {"filter": "F150W2", "observation": "o003", "src": "/orange/adamginsburg/jwst/m4/F150W2/pipeline/jw01979-o003_t001_nircam_clear-f150w2-merged_i2d.fits"},
+            {"filter": "F322W2", "observation": "o003", "src": "/orange/adamginsburg/jwst/m4/F322W2/pipeline/jw01979-o003_t001_nircam_clear-f322w2-merged_i2d.fits"},
+        ],
+    },
+    "m92": {
+        "data_dir": Path("/orange/adamginsburg/jwst/m92"),
+        "no_auto_images": True, "skip_catalogs": True, "group": "globular_clusters",
+        "nircam": [
+            {"filter": "F090W", "src": "/orange/adamginsburg/jwst/m92/F090W/pipeline/jw01334-o001_t001_nircam_clear-f090w-merged_i2d.fits"},
+            {"filter": "F150W", "src": "/orange/adamginsburg/jwst/m92/F150W/pipeline/jw01334-o001_t001_nircam_clear-f150w-merged_i2d.fits"},
+            {"filter": "F277W", "src": "/orange/adamginsburg/jwst/m92/F277W/pipeline/jw01334-o001_t001_nircam_clear-f277w-merged_i2d.fits"},
+            {"filter": "F444W", "src": "/orange/adamginsburg/jwst/m92/F444W/pipeline/jw01334-o001_t001_nircam_clear-f444w-merged_i2d.fits"},
+        ],
+    },
+    "ngc6397": {
+        "data_dir": Path("/orange/adamginsburg/jwst/ngc6397"),
+        "no_auto_images": True, "skip_catalogs": True, "group": "globular_clusters",
+        "nircam": [
+            {"filter": "F150W2", "src": "/orange/adamginsburg/jwst/ngc6397/F150W2/pipeline/jw01979-o001_t001_nircam_clear-f150w2-merged_i2d.fits"},
+            {"filter": "F322W2", "src": "/orange/adamginsburg/jwst/ngc6397/F322W2/pipeline/jw01979-o001_t001_nircam_clear-f322w2-merged_i2d.fits"},
+        ],
+    },
 }
 
 
@@ -417,6 +473,68 @@ def discover_catalogs(field_cfg, field):
     return items
 
 
+SAME_RUN_TOL_MAS = 30.0   # a shipped image and its catalog from the SAME run agree within this
+
+
+def _detect_i2d(path, thr=50.0):
+    """Bright-source SkyCoords from a science mosaic (for the same-run tie check)."""
+    import numpy as np
+    from astropy.io import fits
+    from astropy.wcs import WCS
+    from astropy.stats import sigma_clipped_stats
+    from astropy.coordinates import SkyCoord
+    from photutils.detection import DAOStarFinder
+    with fits.open(path) as h:
+        sci = h["SCI"] if "SCI" in h else h[1]
+        w = WCS(sci.header)
+        d = sci.data.astype("float32")
+    _, med, std = sigma_clipped_stats(d, sigma=3.0)
+    t = DAOStarFinder(fwhm=2.5, threshold=thr * std)(d - med)
+    if t is None or len(t) == 0:
+        return None
+    return SkyCoord(w.pixel_to_world(t["xcentroid"], t["ycentroid"]))
+
+
+def check_image_catalog_match(items, tol_mas=SAME_RUN_TOL_MAS):
+    """SAME-RUN gate. Every shipped science image must agree astrometrically with the
+    shipped per-filter catalog of the same (filter, observation) to < ``tol_mas``.
+
+    A mismatch means the image and catalog were produced by DIFFERENT pipeline /
+    cataloging runs (different astrometric solutions) and must NOT be released together
+    -- they will disagree by construction and look like an astrometry bug (e.g. brick
+    2221 F182M: 07-08 catalog vs 07-11 image, ~10-15 mas apart). Uses the sanctioned
+    offset-histogram (NO NN-median). Returns a list of ((filter, obs), off_mas) failures.
+    """
+    import numpy as np
+    import astropy.units as u
+    from astropy.table import Table
+    from astropy.coordinates import SkyCoord
+    from jwst_gc_pipeline.photometry.astrometry_offsets import measure_offset
+    imgs = {(it["filter"], it.get("observation")): it for it in items
+            if it["category"] == "image" and it.get("kind") == "science" and it.get("filter")}
+    cats = {(it["filter"], it.get("observation")): it for it in items
+            if it.get("kind") == "catalog_per_filter_vetted" and it.get("filter")}
+    fails = []
+    for key in sorted(set(imgs) & set(cats), key=lambda k: (k[0], k[1] or "")):
+        det = _detect_i2d(imgs[key]["src"])
+        if det is None:
+            continue
+        t = Table.read(cats[key]["src"])
+        if "skycoord" not in t.colnames:
+            continue
+        csc = SkyCoord(t["skycoord"])
+        csc = csc[np.isfinite(csc.ra.deg)]
+        r = measure_offset(det, csc, maxsep=3.0 * u.arcsec, sweep=False)
+        off = None if r is None else r["off"]
+        ok = off is not None and off <= tol_mas
+        tag = "ok" if ok else "MISMATCH -> different runs"
+        print(f"  same-run {key[0]} {key[1] or ''}: image<->catalog "
+              + ("no tie" if off is None else f"{off:.1f} mas") + f"  {tag}", flush=True)
+        if not ok:
+            fails.append((key, off))
+    return fails
+
+
 def assign_dest(item, field):
     """Compute the destination path of an item relative to the field release dir."""
     src_name = Path(item["src"]).name
@@ -431,7 +549,7 @@ def assign_dest(item, field):
     return Path("catalogs") / src_name
 
 
-def build_manifest(field, version):
+def build_manifest(field, version, images_only=False):
     field_cfg = FIELDS[field]
     items = []
     # auto-discovered per-filter NIRCam mosaics (skip with no_auto_images, e.g.
@@ -440,9 +558,14 @@ def build_manifest(field, version):
         items += discover_images(field_cfg)
     items += discover_nircam(field_cfg)   # explicit NIRCam list (if any)
     items += discover_miri(field_cfg)
-    # catalogs: skip while cataloging is still in progress (skip_catalogs)
-    if not field_cfg.get("miri_only") and not field_cfg.get("skip_catalogs"):
+    # catalogs: skip while cataloging is still in progress (skip_catalogs), or for an
+    # explicit image-only release (--images-only): ship mosaics without catalogs.
+    if not field_cfg.get("miri_only") and not field_cfg.get("skip_catalogs") and not images_only:
         items += discover_catalogs(field_cfg, field)
+    if images_only:
+        # science mosaics only: drop the catalog-derived residual/model i2d, which encode
+        # the (uncertified) catalog fit, and any catalog products.
+        items = [it for it in items if it.get("kind") == "science"]
     for item in items:
         src = Path(item["src"])
         item["dest"] = str(assign_dest(item, field))
@@ -637,6 +760,9 @@ def main(argv=None):
                         help="grant all-authenticated-users read on the release path")
     parser.add_argument("--print-urls", action="store_true",
                         help="print HTTPS download URLs (requires --stage)")
+    parser.add_argument("--images-only", action="store_true",
+                        help="ship mosaics only, no catalogs (e.g. images are internally "
+                             "consistent but the catalog/absolute frame is not yet certified)")
     parser.add_argument("--allow-registration-fail", action="store_true",
                         help="stage even if the local-registration failsafe FAILs "
                              "(a band is locally misregistered). DANGEROUS -- only for "
@@ -644,7 +770,7 @@ def main(argv=None):
                              "in the environment. The default refuses to stage.")
     args = parser.parse_args(argv)
 
-    items = build_manifest(args.field, args.version)
+    items = build_manifest(args.field, args.version, images_only=args.images_only)
     if not items:
         print(f"No deliverables discovered for field '{args.field}'.", file=sys.stderr)
         return 1
@@ -673,7 +799,10 @@ def main(argv=None):
         return 2
     if not override:
         gate = Path(__file__).with_name("registration_failsafes.py")
-        rc = subprocess.run([sys.executable, str(gate), "--field", args.field, "--scan"]).returncode
+        gate_cmd = [sys.executable, str(gate), "--field", args.field, "--scan"]
+        if args.images_only:   # image-only: gate on cross-band image consistency, not own-catalog
+            gate_cmd.append("--images-only")
+        rc = subprocess.run(gate_cmd).returncode
         if rc == 1:
             print(f"\nREFUSING TO STAGE '{args.field}': local-registration failsafe FAILED "
                   f"-- a band's mosaic is locally misregistered vs the other bands / its own "
@@ -694,7 +823,8 @@ def main(argv=None):
         # derive from the same _crf frames, so a per-visit residual is
         # self-referential and cancels (brick-1182 F200W seam: ~90 mas visit-001
         # residual doubled every star in the overlap, yet mosaic-vs-catalog read
-        # ~0). Only a reference-free frame-vs-frame check sees it.
+        # ~0). Only a reference-free frame-vs-frame check sees it.  (Applies to
+        # --images-only too: it reads the crf frames, not catalogs.)
         overlap_gate = Path(__file__).with_name("check_interframe_overlap.py")
         rc = subprocess.run([sys.executable, str(overlap_gate),
                              "--field", args.field, "--scan"]).returncode
@@ -713,6 +843,26 @@ def main(argv=None):
                   f"override with --allow-registration-fail AND ALLOW_REGISTRATION_FAIL=1.",
                   file=sys.stderr)
             return 2
+
+        # ---- SAME-RUN GATE: image <-> catalog provenance -------------------------------
+        # When a release ships BOTH images and per-filter catalogs, they MUST come from
+        # the same pipeline/cataloging run. We enforce it directly: each shipped science
+        # image must agree with its shipped per-filter catalog to < SAME_RUN_TOL_MAS. A
+        # mismatch = different runs (different astrometric solutions) -> refuse. (Skipped
+        # for --images-only, which ships no catalogs.)
+        if not args.images_only:
+            print("\nSAME-RUN CHECK (shipped image <-> shipped catalog):")
+            fails = check_image_catalog_match(items)
+            if fails:
+                detail = "; ".join(f"{f}{('/' + o) if o else ''}: {v:.0f} mas"
+                                   for (f, o), v in fails)
+                print(f"\nREFUSING TO STAGE '{args.field}': image<->catalog SAME-RUN check "
+                      f"FAILED (> {SAME_RUN_TOL_MAS:.0f} mas): {detail}. The shipped image "
+                      f"and catalog are from DIFFERENT runs (different astrometric "
+                      f"solutions) and must not be released together. Rebuild both from one "
+                      f"run, or override with --allow-registration-fail AND "
+                      f"ALLOW_REGISTRATION_FAIL=1 (dangerous).", file=sys.stderr)
+                return 2
 
     mode = "copy" if args.copy else "symlink"
     field_dir = stage(items, args.field, args.version, args.release_root,

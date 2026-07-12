@@ -15,6 +15,7 @@ from photutils.psf import (extract_stars, EPSFBuilder)
 from astropy.modeling.fitting import LevMarLSQFitter
 from astropy import stats
 from astropy.table import Table, Column, MaskedColumn
+from astropy.table import vstack as table_vstack
 from astropy.wcs import WCS
 from astropy.coordinates import SkyCoord
 from astropy import coordinates
@@ -1801,7 +1802,8 @@ def load_satstar_catalog(filtername, target='brick',
         primary_matches = sorted(glob.glob(primary))
         if len(primary_matches) == 1:
             print(f"Using saturated star catalog {primary_matches[0]}")
-            return Table.read(primary_matches[0])
+            return apply_pooled_wingcal(Table.read(primary_matches[0]),
+                                        filtername, basepath=basepath)
 
     # Require an ITERATION TOKEN (_m12/_m3.../_m7) in the satstar filename.  The
     # current pipeline always writes one (..._crf[_resbgsub]_m<N>_satstar_catalog).
@@ -1890,6 +1892,11 @@ def load_satstar_catalog(filtername, target='brick',
     # the merged-cat residual subtracts it N times.  Collapse to one row per
     # physical star (keep the brightest as representative).
     deduped = _dedup_satstar_catalog(combined, target=target)
+    # Pooled wing-calibration fallback (Phase B1): rows whose per-frame
+    # self-cal was skipped (ratio exactly 1.0) get the cross-frame pooled
+    # C(r).  Applied post-dedup, pre-cache, so the cache holds calibrated
+    # fluxes with wingcal_pooled provenance.
+    deduped = apply_pooled_wingcal(deduped, filtername, basepath=basepath)
     # record how many per-exposure catalogs this cache was built from, so a
     # later read can detect (and rebuild) when more have since appeared.
     deduped.meta['NSATSRC'] = len(fallback)
@@ -1949,6 +1956,133 @@ def _satstar_dedup_radius():
     DQ-connected component per frame, so they are not split to begin with.
     """
     return float(os.environ.get('SATSTAR_DEDUP_ARCSEC', 0.15)) * u.arcsec
+
+
+def build_pooled_wingcal(filtername, basepath='/blue/adamginsburg/adamginsburg/jwst/brick/',
+                         write=True):
+    """Pool per-frame wing-selfcal calibrator measurements into a per-band
+    C(r) table (Phase B1).
+
+    GC LW frames essentially never reach the 8 isolated calibrators the
+    per-frame self-calibration requires (F405N 48/48 frames skipped, F410M
+    43/48), so their satstar fluxes carried the raw STPSF wing deficit
+    (wingcal_ratio == 1.0).  The per-frame measurements (persisted even when
+    sub-threshold, *_wingcal_calibrators.fits) are pooled here across all
+    frames of a band: per rmask bucket, the n-weighted mean ratio.  Same PSF
+    grid within a band+detector, so the per-frame-vs-static objection (H9,
+    epoch-specific grid defects) does not apply within the pool.
+    """
+    files = sorted(glob.glob(
+        f'{basepath}/{filtername.upper()}/pipeline/*_wingcal_calibrators.fits'))
+    if not files:
+        return None
+    rows = []
+    for f in files:
+        try:
+            tt = Table.read(f)
+        except Exception as err:
+            print(f"WARNING: unreadable wingcal-calibrator file {f}: {err}")
+            continue
+        for row in tt:
+            rows.append((int(row['rmask_px']), float(row['ratio_median']),
+                         int(row['n_stars'])))
+    if not rows:
+        return None
+    rs = sorted({r for r, _, _ in rows})
+    out_rows = []
+    for r in rs:
+        vals = np.array([(v, n) for rr, v, n in rows if rr == r])
+        med = float(np.average(vals[:, 0], weights=vals[:, 1]))
+        out_rows.append((r, med, int(vals[:, 1].sum()), len(vals)))
+    pooled = Table(rows=out_rows,
+                   names=['rmask_px', 'ratio', 'n_stars_total', 'n_frames'])
+    pooled.meta['band'] = filtername.lower()
+    if write:
+        outfn = f'{basepath}/catalogs/{filtername.lower()}_pooled_wingcal.ecsv'
+        pooled.write(outfn, format='ascii.ecsv', overwrite=True)
+        print(f"build_pooled_wingcal: {filtername} pooled C(r) from "
+              f"{len(files)} frame file(s) -> {outfn}")
+    return pooled
+
+
+def apply_pooled_wingcal(satstar_cat, filtername,
+                         basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
+    """Apply the pooled C(r) to satstar rows whose per-frame self-cal was
+    SKIPPED (wingcal_ratio == 1.0 exactly; real per-frame ratios are never
+    exactly 1).  Catalog-flux-only, like the per-frame calibration; adds
+    wingcal_pooled (bool) and updates wingcal_ratio.  No pooled table and no
+    calibrator files -> unchanged."""
+    if (satstar_cat is None or 'wingcal_ratio' not in satstar_cat.colnames
+            or 'wingcal_rmask' not in satstar_cat.colnames):
+        return satstar_cat
+    pooled_fn = f'{basepath}/catalogs/{filtername.lower()}_pooled_wingcal.ecsv'
+    if os.path.exists(pooled_fn):
+        pooled = Table.read(pooled_fn)
+    else:
+        pooled = build_pooled_wingcal(filtername, basepath=basepath, write=True)
+    satstar_cat['wingcal_pooled'] = np.zeros(len(satstar_cat), dtype=bool)
+    if pooled is None or len(pooled) == 0:
+        return satstar_cat
+    ratio_now = np.asarray(satstar_cat['wingcal_ratio'], float)
+    rmask = np.asarray(satstar_cat['wingcal_rmask'], float)
+    need = (ratio_now == 1.0) & np.isfinite(rmask)
+    if not need.any():
+        return satstar_cat
+    rs = np.asarray(pooled['rmask_px'], float)
+    vs = np.asarray(pooled['ratio'], float)
+    order = np.argsort(rs)
+    ratio = np.interp(np.clip(rmask[need], rs[order].min(), rs[order].max()),
+                      rs[order], vs[order])
+    if 'flux_fit' in satstar_cat.colnames:
+        satstar_cat['flux_fit'][need] = (
+            np.asarray(satstar_cat['flux_fit'], float)[need] / ratio)
+    if 'flux_err' in satstar_cat.colnames:
+        satstar_cat['flux_err'][need] = (
+            np.asarray(satstar_cat['flux_err'], float)[need] / ratio)
+    satstar_cat['wingcal_ratio'][need] = ratio
+    satstar_cat['wingcal_pooled'][need] = True
+    print(f"apply_pooled_wingcal: {int(need.sum())} satstar row(s) in "
+          f"{filtername} calibrated from the pooled C(r) "
+          f"(median ratio {np.median(ratio):.3f})")
+    return satstar_cat
+
+
+def load_rejected_satstar_catalog(filtername, target='brick',
+                                  basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
+    """Table of gate-REJECTED satstar candidates for this band.
+
+    The satstar channel (Phase A2, *_satstar_rejected.fits) records candidates
+    that were seeded (DQ / peak / sub-floor) but rejected by the post-fit
+    gates; their catalog rows keep clipped daophot photometry (the strip
+    'gate-taper' population, individually 0.2-0.4 mag too faint).  The merge
+    flags matching rows so color users can exclude them.  Returns None when no
+    rejected files exist (pre-A2 products: behavior unchanged).
+    """
+    _all = sorted(glob.glob(
+        f'{basepath}/{filtername.upper()}/pipeline/*satstar_rejected.fits'))
+    _tok = re.compile(r'_m\d+_satstar_rejected\.fits$')
+    files = [f for f in _all if _tok.search(os.path.basename(f))]
+    # per-frame demo/adhoc tags (e.g. _stripDEMO_) lack the _m<N> token; accept
+    # any suffix as long as the file is a sibling of an accepted catalog.
+    if not files:
+        files = _all
+    if not files:
+        return None
+    parts = []
+    for f in files:
+        try:
+            tt = Table.read(f)
+        except Exception as err:
+            print(f"WARNING: unreadable rejected-satstar file {f}: {err}")
+            continue
+        if len(tt) and 'skycoord_fit' in tt.colnames:
+            parts.append(tt)
+    if not parts:
+        return None
+    out = table_vstack(parts, metadata_conflicts='silent')
+    print(f"load_rejected_satstar_catalog: {len(out)} gate-rejected candidate "
+          f"row(s) for {filtername} from {len(files)} file(s)")
+    return out
 
 
 def _dedup_satstar_catalog(tbl, radius=None, target=None):
@@ -2547,6 +2681,88 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
     if 'replaced_saturated' in cat.colnames:
         cat.remove_column('replaced_saturated')
     cat.add_column(replaced_sat_, name='replaced_saturated')
+
+    # GATE-TAPER FLAG (Phase A3): rows whose star was seeded into the satstar
+    # channel but REJECTED by the post-fit gates keep clipped daophot
+    # photometry (strip audit: individually 0.2-0.4 mag faint; the residual
+    # F410M 12-13.3 color wiggle).  Flag them so color users can exclude them;
+    # photometry is NOT modified.  No rejected files (pre-A2 products) -> all
+    # False, unchanged behavior.
+    _gate_rej = np.zeros(len(cat), dtype=bool)
+    _clip_corr = np.zeros(len(cat), dtype=bool)
+    _clip_corr_mag = np.full(len(cat), np.nan)
+    try:
+        _rej_tab = load_rejected_satstar_catalog(filtername, target=target,
+                                                 basepath=basepath)
+    except Exception as _rej_err:
+        print(f"WARNING: rejected-satstar load failed for {filtername}: "
+              f"{type(_rej_err).__name__}: {_rej_err}")
+        _rej_tab = None
+    if _rej_tab is not None and 'skycoord' in cat.colnames and len(cat):
+        _rej_sc = SkyCoord(_rej_tab['skycoord_fit'])
+        _ri, _rsep, _ = SkyCoord(cat['skycoord']).match_to_catalog_sky(_rej_sc)
+        _gate_rej = (_rsep.arcsec < 0.15) & ~np.asarray(cat['replaced_saturated'])
+        print(f"satstar gate-taper flag: {int(_gate_rej.sum())} row(s) match a "
+              f"gate-rejected candidate (<0.15\") and keep clipped daophot "
+              f"photometry in {filtername}")
+        # GRAY-ZONE CORRECTION (PR #81 review decision): the rejected wing fit
+        # is still a per-star measurement.  Where the star was rejected by the
+        # IMPLIED-PEAK gate (not a garbage fit), the fit is sane (0<qfit<1),
+        # and adopting it would brighten the row by a BOUNDED 0.02-0.5 mag
+        # (the strip-suppression regime; an unsuppressed star's wing flux ~=
+        # its daophot flux, so it self-selects out below 0.02), adopt the wing
+        # flux with an uncertainty floored at half the adjustment.  Larger
+        # implied clips stay uncorrected (flag only): a 0.5+ mag adoption
+        # would trust exactly the fits the gate was built to distrust.
+        if 'flux' in cat.colnames and 'flux_fit' in _rej_tab.colnames:
+            _reason = (np.asarray(_rej_tab['reject_reason'], str)
+                       if 'reject_reason' in _rej_tab.colnames
+                       else np.full(len(_rej_tab), ''))
+            _rq = (np.asarray(_rej_tab['qfit'], float)
+                   if 'qfit' in _rej_tab.colnames
+                   else np.full(len(_rej_tab), np.nan))
+            _rflux = np.asarray(_rej_tab['flux_fit'], float)
+            _rferr = (np.asarray(_rej_tab['flux_err'], float)
+                      if 'flux_err' in _rej_tab.colnames
+                      else np.full(len(_rej_tab), np.nan))
+            _catflux = np.asarray(cat['flux'], float)
+            _mi = np.asarray(_ri)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                _dmag = 2.5 * np.log10(_rflux[_mi] / _catflux)
+            _ok = (_gate_rej
+                   & (_reason[_mi] == 'implied_peak_gate')
+                   & np.isfinite(_rq[_mi]) & (_rq[_mi] > 0) & (_rq[_mi] < 1)
+                   & np.isfinite(_rflux[_mi]) & (_rflux[_mi] > 0)
+                   & np.isfinite(_dmag) & (_dmag >= 0.02) & (_dmag <= 0.5))
+            if _ok.any():
+                _idx = np.where(_ok)[0]
+                _dflux = _rflux[_mi][_idx] - _catflux[_idx]
+                cat['flux'][_idx] = _rflux[_mi][_idx]
+                for _ec in ('dflux', 'flux_err', 'eflux'):
+                    if _ec in cat.colnames:
+                        _olde = np.asarray(cat[_ec], float)[_idx]
+                        _newe = np.hypot(
+                            np.where(np.isfinite(_rferr[_mi][_idx]),
+                                     _rferr[_mi][_idx], _olde),
+                            0.5 * np.abs(_dflux))
+                        cat[_ec][_idx] = _newe
+                        break
+                _clip_corr[_idx] = True
+                _clip_corr_mag[_idx] = _dmag[_idx]
+                print(f"satstar gray-zone clip correction: adopted the rejected "
+                      f"wing-fit flux for {len(_idx)} row(s) in {filtername} "
+                      f"(0.02-0.5 mag brighter; median "
+                      f"{np.median(_dmag[_idx]):.3f} mag; uncertainty floored "
+                      f"at half the adjustment)")
+    if 'satstar_gate_rejected' in cat.colnames:
+        cat.remove_column('satstar_gate_rejected')
+    cat.add_column(_gate_rej, name='satstar_gate_rejected')
+    if 'satclip_corrected' in cat.colnames:
+        cat.remove_column('satclip_corrected')
+    cat.add_column(_clip_corr, name='satclip_corrected')
+    if 'satclip_corr_mag' in cat.colnames:
+        cat.remove_column('satclip_corr_mag')
+    cat.add_column(_clip_corr_mag, name='satclip_corr_mag')
     if 'flux_fit' in cat.colnames:
         cat.rename_column('flux_fit', 'flux')
     else:
