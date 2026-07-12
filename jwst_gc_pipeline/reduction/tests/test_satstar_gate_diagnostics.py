@@ -111,3 +111,24 @@ def test_seed_kind_survives_dedup():
                     'satstar_implied_peak', 'satstar_observed_peak'):
         assert colname in out.colnames
     assert sorted(np.asarray(out['seed_kind'], dtype=str)) == ['dqsat', 'subfloor']
+
+
+def test_partner_seed_painted_and_classified():
+    """Phase A1: a partner-band position with local pixels above
+    partner_frac*floor is seeded with kind 'partner'; a partner position on
+    blank sky seeds nothing."""
+    data = np.full((100, 100), 5.0)
+    data[_blob(data.shape, 40, 60, r=2)] = 0.30 * FLOOR   # too faint for subfloor(0.35) but above partner frac (0.25)
+    sat, src, coms, kinds = find_saturated_stars(
+        _fitsdata(data), severity_floor=FLOOR,
+        partner_xy=[(40, 60), (80, 20)])
+    assert len(coms) == 1
+    assert kinds == ['partner']
+
+
+def test_partner_seed_none_is_noop():
+    data = np.full((80, 80), 5.0)
+    data[_blob(data.shape, 40, 40, r=2)] = 0.30 * FLOOR
+    sat, src, coms, kinds = find_saturated_stars(
+        _fitsdata(data), severity_floor=FLOOR)
+    assert len(coms) == 0

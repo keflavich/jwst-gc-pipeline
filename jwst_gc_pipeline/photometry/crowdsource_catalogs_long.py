@@ -1739,7 +1739,8 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
                                  oversub_clamp_percentile=10.0,
                                  file_suffix='',
                                  seed_gate_image=None, seed_gate_wcs=None,
-                                 deblend_with_zeroframe=False):
+                                 deblend_with_zeroframe=False,
+                                 partner_sky=None):
     """
     ``file_suffix`` is inserted into the satstar output filenames before
     the ``_satstar_catalog`` / ``_satstar_model`` / ``_satstar_residual``
@@ -1778,7 +1779,8 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
                            file_suffix=file_suffix,
                            seed_gate_image=seed_gate_image,
                            seed_gate_wcs=seed_gate_wcs,
-                           deblend_with_zeroframe=deblend_with_zeroframe)
+                           deblend_with_zeroframe=deblend_with_zeroframe,
+                           partner_sky=partner_sky)
     if os.path.exists(satstar_filename):
         return Table.read(satstar_filename)
     return None
@@ -3998,6 +4000,12 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--no-fit-satstar-outside-fov", dest="fit_satstar_outside_fov",
                     action='store_false',
                     help="Force-disable fitting of saturated stars outside the FOV.")
+    parser.add_option("--satstar-partner-seed", dest="satstar_partner_seed",
+                      action="store_true", default=False,
+                      help="Seed satstar fits at positions where the same star "
+                           "was accepted as a satstar in the near-degenerate "
+                           "PARTNER band (pair-consistent substitution, Phase "
+                           "A1). Default off = unchanged behavior.")
     parser.add_option("--deblend-satstars", dest="deblend_satstars",
                     default=False, action='store_true',
                     help=("ZEROFRAME-deblend merged saturated cores: in crowded GC "
