@@ -474,3 +474,39 @@ def test_grayzone_clip_correction_bounds():
     dflux = rflux[0] - catflux[0]
     err = np.hypot(5.0, 0.5 * dflux)
     assert err > 5.0
+
+
+def test_pooled_wingcal_build_and_apply(tmp_path):
+    """Phase B1: per-frame calibrator buckets pool into an n-weighted C(r);
+    the pooled ratio applies ONLY to rows whose per-frame self-cal was
+    skipped (wingcal_ratio == 1.0 exactly), dividing flux and updating
+    provenance; already-calibrated rows are untouched."""
+    import numpy as np
+    from astropy.table import Table
+    from jwst_gc_pipeline.photometry import merge_catalogs as MC
+
+    base = tmp_path
+    pdir = base / 'F410M' / 'pipeline'
+    pdir.mkdir(parents=True)
+    (base / 'catalogs').mkdir()
+    Table({'rmask_px': [3, 5], 'ratio_median': [1.05, 1.10],
+           'n_stars': [4, 3], 'ratio_madstd': [0.02, 0.03]}).write(
+        pdir / 'a_m12_wingcal_calibrators.fits')
+    Table({'rmask_px': [3, 5], 'ratio_median': [1.07, 1.14],
+           'n_stars': [4, 6], 'ratio_madstd': [0.02, 0.03]}).write(
+        pdir / 'b_m12_wingcal_calibrators.fits')
+    pooled = MC.build_pooled_wingcal('f410m', basepath=str(base))
+    assert len(pooled) == 2
+    r3 = float(pooled['ratio'][pooled['rmask_px'] == 3][0])
+    assert abs(r3 - (1.05 * 4 + 1.07 * 4) / 8) < 1e-9
+
+    cat = Table({'flux_fit': [1000.0, 1000.0, 1000.0],
+                 'flux_err': [10.0, 10.0, 10.0],
+                 'wingcal_ratio': [1.0, 1.02, 1.0],
+                 'wingcal_rmask': [3.0, 3.0, np.nan]})
+    out = MC.apply_pooled_wingcal(cat, 'f410m', basepath=str(base))
+    assert out['wingcal_pooled'].tolist() == [True, False, False]
+    assert abs(out['flux_fit'][0] - 1000.0 / r3) < 1e-6
+    assert out['flux_fit'][1] == 1000.0
+    assert out['flux_fit'][2] == 1000.0
+    assert abs(out['wingcal_ratio'][0] - r3) < 1e-9
