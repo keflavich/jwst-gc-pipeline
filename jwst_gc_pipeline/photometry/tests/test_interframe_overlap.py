@@ -236,3 +236,23 @@ def test_stripey_interleave_is_could_not_verify_not_fail():
     assert_overlaps_registered({"nrca": ga, "nrcb": gb}, tol_mas=30.0,
                                per_tile=True, grid=(8, 8),
                                maxsep=1 * u.arcsec, min_overlap_pairs=20)
+
+
+def test_unrelated_populations_in_shared_footprint_are_unmeasurable():
+    """Null test of the n_peak floor: two UNRELATED star lists on the same
+    footprint (the partial-coverage-cell regime) produce only low-N noise
+    peaks near the window edge -- those must be UNMEASURABLE cells, never
+    structural FAILs (3rd real-data round: fails piled at ~2.9" = 0.95*maxsep
+    with contrast 5-10)."""
+    ra1, dec1 = _field(seed=51, span=0.01)
+    ra2, dec2 = _field(seed=52, span=0.01)  # same footprint, different stars
+    groups = {"a": SkyCoord(ra1 * u.deg, dec1 * u.deg),
+              "b": SkyCoord(ra2 * u.deg, dec2 * u.deg)}
+    grid = overlap_offset_grid(groups, tol_mas=30.0, nx=4, ny=4,
+                               maxsep=3 * u.arcsec, min_overlap_pairs=40)
+    pair = grid[0]
+    assert pair["overlap"] is True
+    # every cell is either unmeasurable or (rarely) a genuine-looking clean 0;
+    # what is FORBIDDEN is a >tol FAIL fabricated from noise
+    bad = [] if pair["clean"] or pair["could_not_verify"] else [pair]
+    assert pair["ok"] is True, bad

@@ -274,7 +274,18 @@ def overlap_offset_grid(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS, nx=12, ny=12,
                 m = measure_offset(a_in[a_sel], b_in[b_sel], maxsep=maxsep,
                                    min_pairs=min_overlap_pairs, sweep=False,
                                    context=f"{context} {la}|{lb} tile[{i},{j}]")
-                if m is None:
+                # A tile VERDICT requires the peak to contain a substantial
+                # FRACTION of the cell's a-population.  Two mismatched
+                # populations sharing a cell yield a noise peak holding ~10%
+                # of the pairs-per-star budget (3rd real-data round: fails
+                # piled at ~0.95*maxsep with contrast 5-10); a REAL tie puts
+                # essentially every shared star in the peak (n_peak ~ the
+                # covered population).  An absolute floor alone is not enough:
+                # noise n_peak scales with density.  Below the floor the cell
+                # is UNMEASURABLE, not a verdict.
+                n_peak_floor = max(10, min_overlap_pairs // 4,
+                                   int(0.25 * int(a_sel.sum())))
+                if m is None or m.get("n_peak", 0) < n_peak_floor:
                     n_no_coverage += 1
                     continue
                 m.update(ix=i, iy=j,
