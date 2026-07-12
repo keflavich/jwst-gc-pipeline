@@ -409,3 +409,152 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
                 worst_off_mas=max((c["off_mas"] for c in cells), default=float("nan")),
                 worst_sig_off_mas=max((c["off_mas"] for c in sig), default=float("nan")),
                 clean=bool(cells) and not flagged)
+
+
+def residual_vs_magnitude(a, b, mag, global_result, match_radius=0.3 * u.arcsec,
+                          bin_mag=1.0, min_stars=30, tol_mas=5.0, nsigma=3.0,
+                          context=""):
+    """Positional residual (a vs b matched pairs) as a function of source
+    BRIGHTNESS, after a verified global tie.
+
+    A reference catalog for pointing (NIRSpec MSA/TA) must show NO systematic
+    position-vs-brightness trend: saturation-core centroid bias, wing-fit
+    substitution offsets, and detector nonlinearity all imprint exactly such a
+    trend, and a bulk tie (dominated by faint stars) cannot see it.  Same
+    sanctioned "histogram refinement" class as ``local_residual_map``: the
+    global tie must already be verified small, so a nearest pair within
+    ``match_radius`` is the right star; per-magnitude-bin robust means with
+    standard errors then expose any brightness systematics.
+
+    Parameters
+    ----------
+    a, b : SkyCoord
+        Source lists.  Residuals are (b - a) per matched pair minus the global
+        offset.  ``a`` is the catalog under test; ``mag`` aligns with ``a``.
+    mag : array
+        Magnitude (any consistent zero point; only the ORDERING/binning is
+        used) per ``a`` source.  Non-finite entries are excluded.
+    global_result : dict
+        The ``measure_offset(a, b)`` result; same preconditions as
+        ``local_residual_map`` (ok, not swept, off << match radius).
+    bin_mag : float
+        Magnitude bin width.
+    min_stars : int
+        Minimum matched pairs per bin for the bin to be measurable.
+    tol_mas : float
+        Bin-mean residual tolerance (mas).
+    nsigma : float
+        A bin is only flagged when its mean exceeds ``nsigma`` standard errors.
+
+    Returns
+    -------
+    dict
+        ``dict(bins=[...], n_bins, n_flagged, slope_dra_mas_per_mag,
+        slope_ddec_mas_per_mag, slope_err_dra, slope_err_ddec,
+        slope_significant, worst_off_mas, clean)``.  Each bin:
+        ``dict(mag_lo, mag_hi, mag_mid, n, dra_mas, ddec_mas, dra_sem,
+        ddec_sem, off_mas, significant, flagged)``.  ``clean`` requires no
+        flagged bin, no significant slope, and >= 2 measurable bins.
+    """
+    if global_result is None or not global_result.get("ok"):
+        raise GlobalTieNotVerifiedError(
+            f"residual_vs_magnitude({context}): no verified global tie -- run "
+            f"measure_offset first.")
+    radius_arcsec = match_radius.to(u.arcsec).value if hasattr(match_radius, "to") \
+        else float(match_radius)
+    if global_result.get("swept"):
+        raise GlobalTieNotVerifiedError(
+            f"residual_vs_magnitude({context}): global tie was only found by "
+            f"window SWEEP -- correct the bulk offset first.")
+    if global_result["off"] > radius_arcsec * 1000.0 / 3.0:
+        raise GlobalTieNotVerifiedError(
+            f"residual_vs_magnitude({context}): global offset "
+            f"{global_result['off']:.1f} mas is not << match radius; matched "
+            f"pairs would be ambiguous.")
+
+    mag = np.asarray(mag, dtype=float)
+    finite = np.isfinite(mag)
+    a_f = a[finite]
+    mag_f = mag[finite]
+    ia, ib, sep, _ = search_around_sky(a_f, b, radius_arcsec * u.arcsec)
+    empty = dict(bins=[], n_bins=0, n_flagged=0,
+                 slope_dra_mas_per_mag=float("nan"),
+                 slope_ddec_mas_per_mag=float("nan"),
+                 slope_err_dra=float("nan"), slope_err_ddec=float("nan"),
+                 slope_significant=False, worst_off_mas=float("nan"),
+                 clean=False)
+    if len(ia) == 0:
+        return empty
+    order = np.lexsort((sep.arcsec, ia))
+    ia_o, ib_o = ia[order], ib[order]
+    first = np.concatenate(([True], ia_o[1:] != ia_o[:-1]))
+    ia_n, ib_n = ia_o[first], ib_o[first]
+    _, b_counts = np.unique(ib_n, return_counts=True)
+    b_multi = set(np.unique(ib_n)[b_counts > 1])
+    keep = np.array([bi not in b_multi for bi in ib_n])
+    ia_n, ib_n = ia_n[keep], ib_n[keep]
+    if len(ia_n) < min_stars:
+        return empty
+
+    cosd = np.cos(np.radians(a_f[ia_n].dec.value))
+    dra = (b[ib_n].ra - a_f[ia_n].ra).to(u.arcsec).value * cosd * 1000.0 \
+        - global_result["dra"]
+    ddec = (b[ib_n].dec - a_f[ia_n].dec).to(u.arcsec).value * 1000.0 \
+        - global_result["ddec"]
+    m = mag_f[ia_n]
+
+    m0 = np.floor(m.min() / bin_mag) * bin_mag
+    nb = max(int(np.ceil((m.max() - m0) / bin_mag)), 1)
+    bins = []
+    for k in range(nb):
+        lo, hi = m0 + k * bin_mag, m0 + (k + 1) * bin_mag
+        sel = (m >= lo) & (m < hi)
+        n = int(sel.sum())
+        if n < min_stars:
+            continue
+        cdra = float(np.median(dra[sel]))
+        cddec = float(np.median(ddec[sel]))
+        mad_scale = 1.4826 / np.sqrt(n)
+        dra_sem = float(np.median(np.abs(dra[sel] - cdra)) * mad_scale)
+        ddec_sem = float(np.median(np.abs(ddec[sel] - cddec)) * mad_scale)
+        off = float(np.hypot(cdra, cddec))
+        sem = float(np.hypot(dra_sem, ddec_sem))
+        significant = bool(sem > 0 and off > nsigma * sem)
+        bins.append(dict(mag_lo=float(lo), mag_hi=float(hi),
+                         mag_mid=float(0.5 * (lo + hi)), n=n,
+                         dra_mas=cdra, ddec_mas=cddec,
+                         dra_sem=dra_sem, ddec_sem=ddec_sem, off_mas=off,
+                         significant=significant,
+                         flagged=bool(off > tol_mas and significant)))
+
+    # weighted linear slope across the measurable bins (a smooth mas/mag drift
+    # can stay under the per-bin tolerance while accumulating across the range)
+    slope = dict(dra=float("nan"), ddec=float("nan"),
+                 edra=float("nan"), eddec=float("nan"))
+    if len(bins) >= 2:
+        x = np.array([bb["mag_mid"] for bb in bins])
+        for comp, err in (("dra", "dra_sem"), ("ddec", "ddec_sem")):
+            y = np.array([bb[f"{comp}_mas"] for bb in bins])
+            w = 1.0 / np.maximum(np.array([bb[err] for bb in bins]), 1e-3) ** 2
+            xm = np.sum(w * x) / np.sum(w)
+            denom = np.sum(w * (x - xm) ** 2)
+            if denom > 0:
+                slope[comp] = float(np.sum(w * (x - xm) * y) / denom)
+                slope["e" + comp] = float(np.sqrt(1.0 / denom))
+    slope_sig = bool(
+        (np.isfinite(slope["dra"]) and slope["edra"] > 0
+         and abs(slope["dra"]) > nsigma * slope["edra"]
+         and abs(slope["dra"]) * bin_mag * len(bins) > tol_mas)
+        or (np.isfinite(slope["ddec"]) and slope["eddec"] > 0
+            and abs(slope["ddec"]) > nsigma * slope["eddec"]
+            and abs(slope["ddec"]) * bin_mag * len(bins) > tol_mas))
+
+    flagged = [bb for bb in bins if bb["flagged"]]
+    return dict(bins=bins, n_bins=len(bins), n_flagged=len(flagged),
+                slope_dra_mas_per_mag=slope["dra"],
+                slope_ddec_mas_per_mag=slope["ddec"],
+                slope_err_dra=slope["edra"], slope_err_ddec=slope["eddec"],
+                slope_significant=slope_sig,
+                worst_off_mas=max((bb["off_mas"] for bb in bins),
+                                  default=float("nan")),
+                clean=bool(len(bins) >= 2 and not flagged and not slope_sig))

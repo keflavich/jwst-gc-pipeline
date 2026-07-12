@@ -71,9 +71,55 @@ def main(argv=None):
     p.add_argument("--mark-stale", action="store_true",
                    help="with --apply: stale-tag the filter's im0 _i2d mosaics "
                         "(renamed *_im0_badastrom.fits)")
+    p.add_argument("--brightness", default=None, metavar="CATALOG",
+                   help="position-vs-brightness systematics check: measure the "
+                        "matched-pair residual vs the reference as a function "
+                        "of source magnitude (needs --refcat). A pointing "
+                        "reference must show NO trend (saturation-core bias / "
+                        "wing-fit substitution class). Exit 1 on a flagged bin "
+                        "or a significant slope.")
+    p.add_argument("--brightness-tol-mas", type=float, default=5.0)
     args = p.parse_args(argv)
 
     refcat = load_reference_catalog(args.refcat) if args.refcat else None
+
+    if args.brightness:
+        if refcat is None:
+            p.error("--brightness needs --refcat")
+        from astropy.coordinates import SkyCoord
+        import numpy as np
+        from jwst_gc_pipeline.photometry.astrometry_offsets import (
+            measure_offset, residual_vs_magnitude)
+        tbl = Table.read(args.brightness)
+        colname = "skycoord" if "skycoord" in tbl.colnames else "skycoord_centroid"
+        coords = SkyCoord(tbl[colname]).icrs
+        fluxcol = next((c for c in ("flux", "flux_fit") if c in tbl.colnames), None)
+        if fluxcol is None:
+            p.error(f"no flux/flux_fit column in {args.brightness}")
+        with np.errstate(divide="ignore", invalid="ignore"):
+            mag = -2.5 * np.log10(np.where(
+                np.asarray(tbl[fluxcol], float) > 0,
+                np.asarray(tbl[fluxcol], float), np.nan))
+        g = measure_offset(coords, refcat["all"], context="brightness/global")
+        if g is None or not g.get("ok"):
+            print(json.dumps(dict(passed=False,
+                                  error="no verified global tie to the "
+                                        "reference; fix the bulk registration "
+                                        "first", global_tie=g)))
+            return 1
+        r = residual_vs_magnitude(coords, refcat["all"], mag, g,
+                                  tol_mas=args.brightness_tol_mas,
+                                  context="brightness")
+        print(json.dumps(dict(
+            passed=r["clean"], n_bins=r["n_bins"], n_flagged=r["n_flagged"],
+            slope_dra_mas_per_mag=r["slope_dra_mas_per_mag"],
+            slope_ddec_mas_per_mag=r["slope_ddec_mas_per_mag"],
+            slope_significant=r["slope_significant"],
+            worst_off_mas=r["worst_off_mas"],
+            bins=[dict(mag=b["mag_mid"], n=b["n"], dra=round(b["dra_mas"], 2),
+                       ddec=round(b["ddec_mas"], 2), off=round(b["off_mas"], 2),
+                       flagged=b["flagged"]) for b in r["bins"]]), indent=2))
+        return 0 if r["clean"] else 1
 
     if args.crossfilter:
         catalogs = {}
