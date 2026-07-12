@@ -52,7 +52,7 @@ def test_subfloor_star_is_seeded():
     """DQ-clean star peaking at 0.6x floor: seeded with an amplitude mask."""
     data = np.full((100, 100), 5.0)
     data[_blob(data.shape, 50, 50, r=2)] = 0.6 * FLOOR
-    sat, src, coms = find_saturated_stars(_fitsdata(data),
+    sat, src, coms, kinds = find_saturated_stars(_fitsdata(data),
                                           severity_floor=FLOOR)
     assert len(coms) == 1, "sub-floor suppression-strip star must be seeded"
     # amplitude-derived mask: bright px + 2-px shoulder dilation, not ~0 px
@@ -63,7 +63,7 @@ def test_faint_star_below_frac_not_seeded():
     """Peak at 0.2x floor (below the 0.35 default fraction): not seeded."""
     data = np.full((100, 100), 5.0)
     data[_blob(data.shape, 50, 50, r=2)] = 0.2 * FLOOR
-    sat, src, coms = find_saturated_stars(_fitsdata(data),
+    sat, src, coms, kinds = find_saturated_stars(_fitsdata(data),
                                           severity_floor=FLOOR)
     assert len(coms) == 0
 
@@ -71,7 +71,7 @@ def test_faint_star_below_frac_not_seeded():
 def test_single_hot_pixel_not_seeded():
     data = np.full((100, 100), 5.0)
     data[50, 50] = 0.7 * FLOOR
-    sat, src, coms = find_saturated_stars(_fitsdata(data),
+    sat, src, coms, kinds = find_saturated_stars(_fitsdata(data),
                                           severity_floor=FLOOR)
     assert len(coms) == 0, "single hot pixel must not seed"
 
@@ -80,7 +80,7 @@ def test_extended_emission_not_seeded():
     """A >50-px region above frac*floor (bright emission): not seeded."""
     data = np.full((200, 200), 5.0)
     data[_blob(data.shape, 100, 100, r=8)] = 0.5 * FLOOR
-    sat, src, coms = find_saturated_stars(_fitsdata(data),
+    sat, src, coms, kinds = find_saturated_stars(_fitsdata(data),
                                           severity_floor=FLOOR)
     assert len(coms) == 0, "extended emission must not seed"
 
@@ -88,7 +88,7 @@ def test_extended_emission_not_seeded():
 def test_gate_off_when_floor_zero():
     data = np.full((100, 100), 5.0)
     data[_blob(data.shape, 50, 50, r=2)] = 3000.0
-    sat, src, coms = find_saturated_stars(_fitsdata(data), severity_floor=0.0)
+    sat, src, coms, kinds = find_saturated_stars(_fitsdata(data), severity_floor=0.0)
     assert len(coms) == 0
 
 
@@ -96,7 +96,7 @@ def test_subfloor_frac_env_override(monkeypatch):
     monkeypatch.setenv('SATSTAR_SUBFLOOR_SEED_FRAC', '0')
     data = np.full((100, 100), 5.0)
     data[_blob(data.shape, 50, 50, r=2)] = 0.6 * FLOOR
-    sat, src, coms = find_saturated_stars(_fitsdata(data),
+    sat, src, coms, kinds = find_saturated_stars(_fitsdata(data),
                                           severity_floor=FLOOR)
     assert len(coms) == 0, 'SATSTAR_SUBFLOOR_SEED_FRAC=0 must disable'
 

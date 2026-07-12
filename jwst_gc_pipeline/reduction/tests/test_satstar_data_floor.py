@@ -42,11 +42,11 @@ def test_floor_drops_spurious_keeps_bright():
     hdul = _frame(sci, dq, var)
 
     # no floor: both components survive
-    _, _, coms0 = find_saturated_stars(hdul, sat_data_floor=0.0)
+    _, _, coms0, _ = find_saturated_stars(hdul, sat_data_floor=0.0)
     assert len(coms0) == 2
 
     # floor 1000: spurious (127) dropped, bright (5000) kept
-    _, _, coms1 = find_saturated_stars(hdul, sat_data_floor=1000.0)
+    _, _, coms1, _ = find_saturated_stars(hdul, sat_data_floor=1000.0)
     assert len(coms1) == 1
     cy, cx = coms1[0]
     assert abs(cy - 15) < 2 and abs(cx - 15) < 2  # the bright one survived
@@ -61,7 +61,7 @@ def test_floor_keeps_unrecoverable_core():
     _blob(sci, 30, 30, 0.0); _blob(dq, 30, 30, SAT)
     var[29:32, 29:32] = np.nan
     hdul = _frame(sci, dq, var)
-    _, _, coms = find_saturated_stars(hdul, sat_data_floor=5000.0)
+    _, _, coms, _ = find_saturated_stars(hdul, sat_data_floor=5000.0)
     assert len(coms) == 1  # kept despite faint data, via unrecoverable exemption
 
 

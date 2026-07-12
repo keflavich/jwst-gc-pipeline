@@ -36,7 +36,7 @@ def _make_two_blob_frame(shape=(300, 300)):
 
 def test_large_component_preserves_genuine_core():
     hdul = _make_two_blob_frame()
-    saturated, sources, coms = find_saturated_stars(hdul, edge_npix=10000)
+    saturated, sources, coms, _kinds = find_saturated_stars(hdul, edge_npix=10000)
     # blob 1 is suppressed; its genuine NaN-variance core (~65,65) MUST survive
     # while its finite spurious-DQ emission corner IS removed.
     assert saturated[65, 65], "genuine saturated core was erased with the blob"
@@ -55,5 +55,5 @@ def test_small_saturated_star_unaffected():
                          fits.ImageHDU(sci, name='SCI'),
                          fits.ImageHDU(dq, name='DQ'),
                          fits.ImageHDU(var, name='VAR_POISSON')])
-    saturated, sources, coms = find_saturated_stars(hdul, edge_npix=10000)
+    saturated, sources, coms, _kinds = find_saturated_stars(hdul, edge_npix=10000)
     assert saturated[50, 50], "ordinary small saturated star must be kept"

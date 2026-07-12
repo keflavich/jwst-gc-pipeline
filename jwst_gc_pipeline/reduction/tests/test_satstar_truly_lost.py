@@ -35,7 +35,7 @@ def test_recovered_saturation_is_seeded_by_default():
     # a RECOVERED-saturated star (SATURATED, no DO_NOT_USE) must still be seeded
     dq = np.zeros((60, 60), np.uint32)
     _blob(dq, 30, 30, 6, SAT)
-    _, _, coms = find_saturated_stars(_frame(dq))
+    _, _, coms, _ = find_saturated_stars(_frame(dq))
     assert len(coms) == 1
     cy, cx = coms[0]
     assert abs(cy - 30) < 2 and abs(cx - 30) < 2
@@ -45,7 +45,7 @@ def test_truly_lost_core_seeded_by_default():
     dq = np.zeros((60, 60), np.uint32)
     _blob(dq, 30, 30, 6, SAT)
     _blob(dq, 30, 30, 3, SAT | DNU)
-    _, _, coms = find_saturated_stars(_frame(dq))
+    _, _, coms, _ = find_saturated_stars(_frame(dq))
     assert len(coms) == 1
 
 
@@ -56,7 +56,7 @@ def test_opt_in_restriction_drops_recovered(monkeypatch):
     dq = np.zeros((80, 80), np.uint32)
     _blob(dq, 15, 15, 3, SAT | DNU)     # truly-lost core
     _blob(dq, 55, 55, 6, SAT)            # recovered-only -> dropped under restriction
-    _, _, coms = find_saturated_stars(_frame(dq))
+    _, _, coms, _ = find_saturated_stars(_frame(dq))
     assert len(coms) == 1
     cy, cx = coms[0]
     assert abs(cy - 15) < 2 and abs(cx - 15) < 2
@@ -69,5 +69,5 @@ def test_opt_in_restriction_min_core(monkeypatch):
     _blob(dq, 30, 30, 8, SAT)                        # recovered blob
     for (y, x) in [(25, 25), (33, 34), (28, 36)]:
         dq[y, x] |= (SAT | DNU)                      # 1px fragments
-    _, _, coms = find_saturated_stars(_frame(dq))
+    _, _, coms, _ = find_saturated_stars(_frame(dq))
     assert len(coms) == 0

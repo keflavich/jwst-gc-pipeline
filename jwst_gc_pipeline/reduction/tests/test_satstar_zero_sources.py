@@ -22,7 +22,7 @@ def _hdul(dq):
 
 def test_no_saturated_pixels_returns_empty_no_crash():
     dq = np.zeros((64, 64), dtype=np.uint32)   # nothing flagged SATURATED
-    saturated, sources, coms = find_saturated_stars(_hdul(dq))
+    saturated, sources, coms, _kinds = find_saturated_stars(_hdul(dq))
     assert saturated.sum() == 0
     assert int(sources.max()) == 0
     assert list(coms) == []
@@ -32,6 +32,6 @@ def test_with_a_saturated_blob_still_labels_it():
     from jwst.datamodels import dqflags
     dq = np.zeros((64, 64), dtype=np.uint32)
     dq[30:35, 30:35] = dqflags.pixel['SATURATED']
-    saturated, sources, coms = find_saturated_stars(_hdul(dq))
+    saturated, sources, coms, _kinds = find_saturated_stars(_hdul(dq))
     assert int(sources.max()) == 1
     assert len(coms) == 1
