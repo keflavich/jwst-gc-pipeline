@@ -41,7 +41,7 @@ from astropy.wcs import WCS
 from photutils.detection import find_peaks
 
 from jwst_gc_pipeline.photometry.interframe_overlap import (
-    overlap_offset_grid, DEFAULT_OVERLAP_TOL_MAS)
+    overlap_offset_grid, pairwise_overlap_offsets, DEFAULT_OVERLAP_TOL_MAS)
 from jwst_gc_pipeline.photometry.astrometry_offsets import measure_offset_grid
 
 BASE = os.environ.get("JWST_BASE", "/orange/adamginsburg/jwst")
@@ -150,20 +150,79 @@ def check_filter(field, filt, refcat=None, verbose=True):
     # PER-TILE (local) reference-free check: a per-visit residual is spatially
     # varying, so a field-pooled single offset can average below tol while a thin
     # seam is ~90 mas off. Grid it.
+    # TWO-LAYER frame-vs-frame check, both reference-free:
+    #   fine  : per-tile grid on mutual-coverage cells (owns the 30-100 mas
+    #           seam regime; blind BY CONSTRUCTION to offsets > its cell
+    #           margin, which empty the mutual-coverage cells);
+    #   gross : field-pooled SWEPT histogram over the intersection populations
+    #           (owns the >margin regime -- the brick-1182 v001 ~20" class --
+    #           a gross rigid offset still overlaps in the strip, so the swept
+    #           peak recovers it with no reference catalog).
+    # A pair verifies only if a layer POSITIVELY measured it; a pair NEITHER
+    # layer can measure is could-not-verify -> exit 2 (fail closed: "a
+    # failsafe that cannot run is not a passing failsafe").
     res = overlap_offset_grid(pooled, tol_mas=TOL_MAS, nx=GRID_N, ny=GRID_N,
                               maxsep=3.0 * u.arcsec)
-    bad = [r for r in res if r["overlap"] and not r["ok"]]
-    overlapped = [r for r in res if r["overlap"]]
+    pw = {(r["a"], r["b"]): r for r in pairwise_overlap_offsets(
+        pooled, tol_mas=TOL_MAS, maxsep=3.0 * u.arcsec)}
+    GROSS_MAS = 3.0 * 3000.0  # beyond the grid's ~3*maxsep cell margin
+    bad, unverifiable, overlapped = [], [], []
+    for r in res:
+        if not r["overlap"]:
+            continue
+        overlapped.append(r)
+        p = pw.get((r["a"], r["b"])) or pw.get((r["b"], r["a"])) or {}
+        r["pairwise"] = {k: p.get(k) for k in
+                         ("off_mas", "dra_mas", "ddec_mas", "contrast",
+                          "n_peak", "measurable", "swept", "ok")}
+        if r.get("could_not_verify"):
+            # fine layer blind -> the gross layer must decide
+            if p.get("measurable"):
+                if not p["ok"]:
+                    r["fail_reason"] = (f"gross pairwise offset "
+                                        f"{p['off_mas']:.0f} mas (swept="
+                                        f"{p.get('swept')})")
+                    bad.append(r)
+            else:
+                unverifiable.append(r)
+        else:
+            if not r["ok"]:
+                r["fail_reason"] = "per-tile misregistration"
+                bad.append(r)
+            elif (p.get("measurable") and p.get("off_mas") is not None
+                    and p["off_mas"] > GROSS_MAS):
+                # tiles measured fine locally but the pooled swept peak sits
+                # beyond the grid's sight -- gross regime, fail
+                r["fail_reason"] = f"gross pairwise offset {p['off_mas']:.0f} mas"
+                bad.append(r)
     if verbose:
         print(f"  {field} {filt}: {nframes} crf -> {len(pooled)} groups, "
-              f"{len(overlapped)} overlapping pairs, {len(bad)} FAIL (tol {TOL_MAS:.0f} mas, "
-              f"{GRID_N}x{GRID_N} tiles)", flush=True)
+              f"{len(overlapped)} overlapping pairs, {len(bad)} FAIL, "
+              f"{len(unverifiable)} could-not-verify (tol {TOL_MAS:.0f} mas, "
+              f"{GRID_N}x{GRID_N} tiles + pooled swept)", flush=True)
         for r in sorted(overlapped, key=lambda r: -(r["worst_off_mas"] or 0))[:8]:
-            tag = "FAIL" if not r["ok"] else "ok"
-            print(f"      {tag}: {r['a']} | {r['b']}  worst tile off={r['worst_off_mas']:.0f} mas "
-                  f"cell={r['worst_off_cell']} ({r['n_ok']}/{r['n_total']} tiles ok)", flush=True)
+            tag = ("FAIL" if r in bad
+                   else ("could-not-verify" if r in unverifiable else "ok"))
+            _w = r["worst_off_mas"]
+            _p = r.get("pairwise", {})
+            print(f"      {tag}: {r['a']} | {r['b']}  worst tile off="
+                  f"{'n/a' if _w is None else f'{_w:.0f} mas'} "
+                  f"({r['n_ok']}/{r['n_total']} tiles ok, "
+                  f"{r.get('n_no_coverage', 0)} no-mutual-coverage cells; "
+                  f"pooled off={'n/a' if _p.get('off_mas') is None else f'{_p['off_mas']:.0f} mas'}"
+                  f"{' MEASURABLE' if _p.get('measurable') else ''}"
+                  f"{'; ' + r['fail_reason'] if r.get('fail_reason') else ''})",
+                  flush=True)
+        for r in unverifiable:
+            print(f"      COULD NOT VERIFY: {r['a']} | {r['b']} -- footprints "
+                  f"intersect but neither the per-tile grid (no mutual-coverage "
+                  f"cells) nor the pooled swept histogram (no measurable peak) "
+                  f"could measure the pair.  Fail-closed: requires the external "
+                  f"reference map (--refcat) or a fixed reduction to stage.",
+                  flush=True)
 
     ext_fail = False
+    ext_ran = False
     if refcat:
         rc, gaia = _refcat(refcat)
         allsrc = SkyCoord(np.concatenate([p.ra.deg for p in pooled.values()]) * u.deg,
@@ -174,6 +233,7 @@ def check_filter(field, filt, refcat=None, verbose=True):
             g = measure_offset_grid(allsrc, rr, nx=GRID_N, ny=GRID_N,
                                     maxsep=3.0 * u.arcsec, max_off_mas=GRID_MAX_OFF_MAS,
                                     context=f"{field}/{filt}/{rn}")
+            ext_ran = True
             if verbose:
                 wc = g.get("worst_off_cell")
                 print(f"      fine grid {GRID_N}x{GRID_N} vs {rn}: clean={g['clean']} "
@@ -183,7 +243,16 @@ def check_filter(field, filt, refcat=None, verbose=True):
             if not g["clean"]:
                 ext_fail = True
 
-    return dict(field=field, filt=filt, PASS=bool(not bad and not ext_fail),
+    # FAIL-CLOSED: a pair NEITHER frame-vs-frame layer could measure only
+    # passes when the external reference map ran AND is clean; otherwise the
+    # filter is could-not-verify (exit 2 -- refused by stage_release).
+    could_not_verify = bool(unverifiable) and not (ext_ran and not ext_fail)
+    if unverifiable and ext_ran and not ext_fail and verbose:
+        print(f"      could-not-verify pair(s) accepted via the CLEAN external "
+              f"reference map", flush=True)
+    return dict(field=field, filt=filt,
+                PASS=bool(not bad and not ext_fail and not could_not_verify),
+                could_not_verify=could_not_verify,
                 n_fail=len(bad), pairs=res)
 
 
