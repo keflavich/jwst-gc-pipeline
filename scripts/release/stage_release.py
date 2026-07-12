@@ -535,6 +535,54 @@ def check_image_catalog_match(items, tol_mas=SAME_RUN_TOL_MAS):
     return fails
 
 
+# Absolute-frame gate: a shipped catalog MUST be on the Gaia(DR3)=VIRAC2 frame, not a
+# deprecated crowdsource/VVV/2MASS frame (which is ~20-90 mas off Gaia and silently
+# propagated into the NIRSpec 6927 MSA plan). We enforce it astrometrically: the catalog
+# bulk offset vs the field's Gaia-tied refcat must be < FRAME_TOL_MAS. Per-field refcat =
+# the Gaia-tied seed used by the reduction (REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD).
+FRAME_TOL_MAS = 15.0
+FRAME_REFCAT = {
+    # field: the Gaia-tied refcat the reduction was (re)anchored to. Extend as confirmed.
+    "brick": "/orange/adamginsburg/jwst/brick/catalogs/gaia_virac2_refcat_epoch2022.70.fits",
+}
+
+
+def check_catalog_on_frame(items, field, tol_mas=FRAME_TOL_MAS):
+    """Every shipped per-filter catalog must lie on the field's Gaia-tied reference frame.
+    Measures the catalog's bulk offset vs the Gaia refcat (sanctioned offset-histogram);
+    a bulk > ``tol_mas`` means the catalog is on a WRONG frame (crowdsource/VVV/2MASS) and
+    must not ship. Returns list of ((filter,obs), off_mas) failures, or [] if no refcat is
+    mapped for the field (can't enforce -> caller warns)."""
+    refpath = FRAME_REFCAT.get(field)
+    if not refpath or not os.path.exists(refpath):
+        return None
+    import numpy as np
+    import astropy.units as u
+    from astropy.table import Table
+    from astropy.coordinates import SkyCoord
+    from jwst_gc_pipeline.photometry.astrometry_offsets import measure_offset
+    rt = Table.read(refpath)
+    rcol = "skycoord" if "skycoord" in rt.colnames else None
+    ref = SkyCoord(rt[rcol]) if rcol else SkyCoord(rt["ra"] * u.deg, rt["dec"] * u.deg)
+    ref = ref[np.isfinite(ref.ra.deg)]
+    fails = []
+    cats = [it for it in items if it.get("kind") == "catalog_per_filter_vetted" and it.get("filter")]
+    for it in cats:
+        t = Table.read(it["src"])
+        col = next((c for c in ("skycoord", "skycoord_ref") if c in t.colnames), None)
+        if col is None:
+            continue
+        sc = SkyCoord(t[col]); sc = sc[np.isfinite(sc.ra.deg)]
+        r = measure_offset(sc, ref, maxsep=3.0 * u.arcsec, sweep=False)
+        off = None if r is None else r["off"]
+        ok = off is not None and off <= tol_mas
+        print(f"  frame {it['filter']} {it.get('observation') or ''}: bulk vs Gaia-refcat "
+              + ("no tie" if off is None else f"{off:.1f} mas") + f"  {'ok' if ok else 'OFF-FRAME'}", flush=True)
+        if not ok:
+            fails.append(((it["filter"], it.get("observation")), off))
+    return fails
+
+
 def assign_dest(item, field):
     """Compute the destination path of an item relative to the field release dir."""
     src_name = Path(item["src"]).name
@@ -862,6 +910,27 @@ def main(argv=None):
                       f"solutions) and must not be released together. Rebuild both from one "
                       f"run, or override with --allow-registration-fail AND "
                       f"ALLOW_REGISTRATION_FAIL=1 (dangerous).", file=sys.stderr)
+                return 2
+
+        # ---- ABSOLUTE-FRAME GATE: catalogs on the Gaia(DR3)=VIRAC2 frame ----------------
+        # A catalog reduced against a deprecated crowdsource/VVV/2MASS refcat is ~20-90 mas
+        # off Gaia (the frame that hit the NIRSpec 6927 MSA plan). Enforce astrometrically:
+        # each shipped catalog's bulk offset vs the field's Gaia-tied refcat must be < tol.
+        if not args.images_only:
+            print("\nABSOLUTE-FRAME CHECK (shipped catalog <-> Gaia-tied refcat):")
+            frame_fails = check_catalog_on_frame(items, args.field)
+            if frame_fails is None:
+                print(f"  no Gaia refcat mapped for '{args.field}' in FRAME_REFCAT -- "
+                      f"cannot enforce the frame gate; add its refcat to enforce.")
+            elif frame_fails:
+                detail = "; ".join(f"{f}{('/' + o) if o else ''}: {v:.0f} mas"
+                                   for (f, o), v in frame_fails)
+                print(f"\nREFUSING TO STAGE '{args.field}': catalog(s) OFF the Gaia/VIRAC2 "
+                      f"frame (> {FRAME_TOL_MAS:.0f} mas): {detail}. A ~1-pixel bulk offset "
+                      f"means the catalog is on a deprecated crowdsource/VVV/2MASS frame, not "
+                      f"Gaia -- it must be re-anchored + re-reduced before release. Override "
+                      f"only with --allow-registration-fail AND ALLOW_REGISTRATION_FAIL=1.",
+                      file=sys.stderr)
                 return 2
 
     mode = "copy" if args.copy else "symlink"
