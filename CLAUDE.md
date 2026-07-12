@@ -87,14 +87,28 @@ exists only for deliberate, justified overrides, not for making a red gate go gr
 
 **⛔ Inter-frame overlap check is BLOCKING and not fully covered by the stock gate.**
 The #1 recurring corruption: two overlapping observations/visits/pointings sit
->1 pixel (usually >1″) apart, so the overlap region loses all its stars while the
-bulk offset still reads ~0. You MUST verify that wherever different frames overlap,
-their stars match `< 30 mas` — per pair, per tile, reference-free (JWST-internal)
-plus VIRAC2 & Gaia, with the **swept** estimator. `registration_failsafes.py`
-searches only ±2.5″ with no sweep, so it **cannot see a >2.5″ overlap offset**
-(zero pairs → "can't verify", not FAIL); a green `registration_failsafes` is
-therefore NOT sufficient — the swept per-visit/overlap check (`verify_brick_astrometry.py`)
-must also pass. See checklist item 0.
+>1 pixel (usually >1″) apart, so the overlap region loses all its stars (or doubles
+them) while the bulk offset still reads ~0. You MUST verify that wherever different
+frames overlap, their stars match `< 30 mas` — **per pair, PER TILE, reference-free
+(JWST-internal, frame-vs-frame)**, with the **swept** estimator.
+
+Two structural blind spots to respect:
+- `registration_failsafes.py` matches the mosaic vs its **own merged catalog** —
+  both derive from the same `_crf`, so a per-visit residual is self-referential and
+  **cancels** (both wrong the same way → agree → PASS). It also searches only ±2.5″
+  with no sweep, so it cannot see a >2.5″ overlap offset. A green
+  `registration_failsafes` is therefore NOT sufficient.
+- A **field-pooled** offset (one number per visit/mosaic) averages a spatially
+  varying residual away. The brick-1182 F200W seam (2026-07-12) was a ~90 mas
+  visit-001 residual confined to the y=0.5 strip that doubled every star there; the
+  whole-field peak read ~50 mas and a 4×4 grid diluted the strip. Map it PER TILE
+  (≥12×12) and gate on offset **magnitude**, not just contrast.
+
+The real gate: **`scripts/release/check_interframe_overlap.py --field <f> --scan`**
+(reference-free, per-tile, swept; wired BLOCKING into `stage_release.py`). It uses
+`jwst_gc_pipeline.photometry.interframe_overlap` (`assert_overlaps_registered`,
+`overlap_offset_grid`) and the offset-magnitude gate in
+`astrometry_offsets.measure_offset_grid(..., max_off_mas=…)`. See checklist item 0.
 
 ---
 
