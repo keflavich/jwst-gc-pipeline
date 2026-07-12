@@ -220,12 +220,21 @@ def scan_field(field, verbose=True, images_only=False):
         dets[b] = (s, f)
         if verbose:
             print(f"  detect {field} {b}: {0 if s is None else len(s)}", flush=True)
+    # SW and LW detect different stellar populations and have independent distortion
+    # solutions, so a SW-vs-LW cross-match yields chance pairs -> spurious offsets that
+    # false-FAIL an internally-consistent field (e.g. gc2211 F200W vs F277W ~89 mas is an
+    # artifact; the within-channel + inter-module audit is FLAGS none). Cross-band truth
+    # must therefore be pooled WITHIN channel only.
+    def channel(f):
+        return "SW" if int(f[1:4]) <= 212 else "LW"
+
     report, any_fail = {}, False
     for b in bands:
         d, fl = dets[b]
         if d is None:
             report[b] = {"error": "no detections"}; any_fail = True; continue
-        others = [dets[o][0] for o in bands if o != b and dets[o][0] is not None]
+        others = [dets[o][0] for o in bands
+                  if o != b and dets[o][0] is not None and channel(o) == channel(b)]
         checks = {}
         if others:
             tru = SkyCoord(np.concatenate([s.ra.deg for s in others]) * u.deg,
