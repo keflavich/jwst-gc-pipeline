@@ -159,3 +159,48 @@ def test_gross_overlap_offset_is_swept_and_flagged():
     assert pair["ok"] is False
     assert pair["off_mas"] == pytest.approx(6000.0, abs=200.0)
     assert pair["swept"] is True  # normalized to a python bool at the module boundary
+
+
+# ---------------------------------------------------------------------------
+# geometric overlap gate (2026-07-12): disjoint-but-adjacent groups must be
+# SKIPPED, not false-FAILed at their structural cross-field separation
+# ---------------------------------------------------------------------------
+
+def test_adjacent_disjoint_fields_are_not_overlapping():
+    """The NIRCam module-gap case that false-FAILed on real brick F405N data:
+    two star fields ~45" apart (edge to edge DISJOINT).  The old proximity
+    gate called them overlapping and measure_offset returned the structural
+    ~gap-scale separation as a 'coherent' offset -> guaranteed false FAIL.
+    The geometric footprint gate must skip them."""
+    ra1, dec1 = _field(seed=31, ra0=266.54, dec0=-28.70, span=0.01)
+    # adjacent field: shifted by ~0.0125 deg (45") in dec -> zero footprint overlap
+    ra2, dec2 = _field(seed=32, ra0=266.54, dec0=-28.6875, span=0.01)
+    groups = {"nrca": SkyCoord(ra1 * u.deg, dec1 * u.deg),
+              "nrcb": SkyCoord(ra2 * u.deg, dec2 * u.deg)}
+    res = pairwise_overlap_offsets(groups, tol_mas=30.0, maxsep=1 * u.arcsec)
+    assert res[0]["overlap"] is False
+    assert res[0]["ok"] is True
+    grid = overlap_offset_grid(groups, tol_mas=30.0, nx=8, ny=8,
+                               maxsep=1 * u.arcsec)
+    assert grid[0]["overlap"] is False
+    assert grid[0]["ok"] is True
+    # no raise in either mode
+    assert_overlaps_registered(groups, tol_mas=30.0, maxsep=1 * u.arcsec)
+    assert_overlaps_registered(groups, tol_mas=30.0, per_tile=True,
+                               grid=(8, 8), maxsep=1 * u.arcsec)
+
+
+def test_gross_offset_on_truly_overlapping_fields_still_fails():
+    """The footprint gate must NOT kill the brick-1182 detection: a 6" rigid
+    offset barely moves an arcminute footprint, so the intersection survives
+    and the swept histogram still finds the gross offset."""
+    ra, dec = _field(seed=33, span=0.02)
+    g1 = SkyCoord(ra * u.deg, dec * u.deg)
+    r2, d2 = _shift(ra, dec, 6000.0, 0.0)
+    g2 = SkyCoord(r2 * u.deg, d2 * u.deg)
+    res = pairwise_overlap_offsets({"a": g1, "b": g2}, tol_mas=30.0,
+                                   maxsep=2.5 * u.arcsec)
+    pair = [r for r in res if r["overlap"]][0]
+    assert pair["ok"] is False
+    assert pair["off_mas"] == pytest.approx(6000.0, abs=250.0)
+    assert pair["swept"] is True

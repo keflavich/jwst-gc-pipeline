@@ -73,6 +73,50 @@ def _n_close(a, b, sep_arcsec):
     return int((sep2d.to(u.arcsec).value <= sep_arcsec).sum())
 
 
+def _footprint_intersection(a, b, pad_arcsec=0.0):
+    """GEOMETRIC footprint-intersection gate (2026-07-12).
+
+    The original proximity gate ('any stars within 60"') called two ADJACENT
+    but DISJOINT groups "overlapping" -- the NIRCam module gap (~44"), or two
+    different fields sharing a directory.  ``measure_offset`` on two disjoint
+    star fields then produces a STRUCTURAL cross-correlation peak at their
+    geometric separation (real brick F405N run: every pair "offset" ~59.8",
+    contrast 8-31 -- pure geometry, zero misregistration), a guaranteed false
+    FAIL.  Footprints are the right discriminator: a genuinely gross (20"-
+    class) misregistration barely moves an arcminute-scale footprint, so the
+    intersection is preserved and the swept histogram still catches it --
+    while a module gap / different field has NO intersection and is correctly
+    skipped.
+
+    Returns ``(bounds, n_a, n_b)``: the intersection box as
+    ``(ra_lo, ra_hi, dec_lo, dec_hi)`` in deg (or None), and how many sources
+    of each group fall inside it (with ``pad_arcsec`` of margin).
+    """
+    if len(a) == 0 or len(b) == 0:
+        return None, 0, 0
+    dec_mid = float(np.median(np.concatenate([a.dec.deg, b.dec.deg])))
+    cosd = max(np.cos(np.radians(dec_mid)), 1e-6)
+    pad_ra = pad_arcsec / 3600.0 / cosd
+    pad_dec = pad_arcsec / 3600.0
+    ra_lo = max(a.ra.deg.min(), b.ra.deg.min()) - pad_ra
+    ra_hi = min(a.ra.deg.max(), b.ra.deg.max()) + pad_ra
+    dec_lo = max(a.dec.deg.min(), b.dec.deg.min()) - pad_dec
+    dec_hi = min(a.dec.deg.max(), b.dec.deg.max()) + pad_dec
+    if ra_lo >= ra_hi or dec_lo >= dec_hi:
+        return None, 0, 0
+    n_a = int(((a.ra.deg >= ra_lo) & (a.ra.deg <= ra_hi)
+               & (a.dec.deg >= dec_lo) & (a.dec.deg <= dec_hi)).sum())
+    n_b = int(((b.ra.deg >= ra_lo) & (b.ra.deg <= ra_hi)
+               & (b.dec.deg >= dec_lo) & (b.dec.deg <= dec_hi)).sum())
+    return (ra_lo, ra_hi, dec_lo, dec_hi), n_a, n_b
+
+
+def _in_bounds(coords, bounds):
+    ra_lo, ra_hi, dec_lo, dec_hi = bounds
+    return ((coords.ra.deg >= ra_lo) & (coords.ra.deg <= ra_hi)
+            & (coords.dec.deg >= dec_lo) & (coords.dec.deg <= dec_hi))
+
+
 def pairwise_overlap_offsets(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS,
                              maxsep=3.0 * u.arcsec, min_overlap_pairs=40,
                              overlap_gate_arcsec=60.0, sweep=True, context=""):
@@ -92,13 +136,15 @@ def pairwise_overlap_offsets(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS,
         Initial pair-search window for ``measure_offset`` (it sweeps wider on a
         weak tie, so a gross >window offset is still found).
     min_overlap_pairs : int
-        Minimum coherent pairs for a pair of groups to be considered overlapping
-        enough to measure.  Fewer -> reported ``overlap=False`` (not a FAIL).
+        Minimum sources of EACH group inside the footprint-intersection box
+        for the pair to be considered overlapping (and minimum pairs for the
+        measurement itself).  Fewer -> ``overlap=False`` (not a FAIL).
     overlap_gate_arcsec : float
-        Pre-gate: two groups are compared only if at least ``min_overlap_pairs``
-        of one group's sources fall within this radius of the other's (cheap NN
-        COUNT -- used only to decide whether to measure, never to measure the
-        offset).
+        DEPRECATED (2026-07-12), ignored.  The overlap gate is now GEOMETRIC
+        (footprint-intersection, ``_footprint_intersection``): the old
+        star-proximity gate called the disjoint NIRCam module gap
+        "overlapping" and produced guaranteed false FAILs at the structural
+        cross-field separation.  Kept only for call compatibility.
 
     Returns
     -------
@@ -112,14 +158,22 @@ def pairwise_overlap_offsets(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS,
     results = []
     for la, lb in itertools.combinations(labels, 2):
         a, b = groups[la], groups[lb]
-        n_close = _n_close(a, b, overlap_gate_arcsec)
-        if n_close < min_overlap_pairs:
+        # GEOMETRIC overlap gate: footprint-intersection box with enough
+        # sources of BOTH groups inside it.  A star-proximity gate here called
+        # the disjoint module gap "overlapping" and measure_offset then
+        # returned the structural cross-field separation as a false FAIL.
+        bounds, n_a_in, n_b_in = _footprint_intersection(a, b)
+        n_close = min(n_a_in, n_b_in)
+        if bounds is None or n_close < min_overlap_pairs:
             results.append(dict(a=la, b=lb, overlap=False, n_overlap=n_close,
                                 off_mas=None, dra_mas=None, ddec_mas=None,
                                 contrast=None, ok=True, swept=False,
                                 window_arcsec=None))
             continue
-        m = measure_offset(a, b, maxsep=maxsep, min_pairs=min_overlap_pairs,
+        # measure on the intersection populations only (sources far outside
+        # the shared footprint can only contribute noise pairs)
+        m = measure_offset(a[_in_bounds(a, bounds)], b[_in_bounds(b, bounds)],
+                           maxsep=maxsep, min_pairs=min_overlap_pairs,
                            sweep=sweep, context=f"{context} overlap {la}|{lb}")
         if m is None:
             results.append(dict(a=la, b=lb, overlap=False, n_overlap=n_close,
@@ -165,12 +219,19 @@ def overlap_offset_grid(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS, nx=12, ny=12,
     results = []
     for la, lb in itertools.combinations(labels, 2):
         a, b = groups[la], groups[lb]
-        if _n_close(a, b, overlap_gate_arcsec) < min_overlap_pairs:
+        # geometric footprint-intersection gate (see pairwise_overlap_offsets)
+        bounds, n_a_in, n_b_in = _footprint_intersection(a, b)
+        if bounds is None or min(n_a_in, n_b_in) < min_overlap_pairs:
             results.append(dict(a=la, b=lb, overlap=False, worst_off_mas=None,
                                 worst_off_cell=None, n_ok=0, n_total=0,
                                 clean=True, ok=True))
             continue
-        g = measure_offset_grid(a, b, nx=nx, ny=ny, maxsep=maxsep,
+        # grid ONLY the intersection box -- tiles outside the shared footprint
+        # have no true pairs and can only produce structural noise peaks
+        g = measure_offset_grid(a[_in_bounds(a, bounds)], b[_in_bounds(b, bounds)],
+                                nx=nx, ny=ny, maxsep=maxsep,
+                                ra_bounds=(bounds[0], bounds[1]),
+                                dec_bounds=(bounds[2], bounds[3]),
                                 max_off_mas=tol_mas, min_pairs=min_overlap_pairs,
                                 context=f"{context} {la}|{lb}")
         results.append(dict(a=la, b=lb, overlap=True,
