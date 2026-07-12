@@ -371,6 +371,26 @@ def test_replace_saturated_uses_detector_coords(monkeypatch, tmp_path):
     assert np.isfinite(cat['satstar_match_sep'][0])
 
 
+def test_color_reliable_mask_one_band_repaired():
+    """Strip audit 2026-07-11: substituted-in-one-band + clipped-unrepaired-in-
+    the-other colors are spurious and must be flagged unreliable; repaired-in-
+    both and clean rows stay reliable."""
+    import numpy as np
+    from astropy.table import Table
+    from jwst_gc_pipeline.photometry.column_utils import color_reliable_mask
+    cat = Table({
+        # rows: 0 clean/clean, 1 repaired/repaired, 2 repaired/clipped-unrepaired,
+        #       3 clipped-unrepaired/repaired, 4 clipped/clipped (both unrepaired),
+        #       5 repaired/clean
+        'replaced_saturated_f405n': [0, 1, 1, 0, 0, 1],
+        'is_saturated_f405n':       [0, 1, 1, 1, 1, 1],
+        'replaced_saturated_f410m': [0, 1, 0, 1, 0, 0],
+        'is_saturated_f410m':       [0, 1, 1, 1, 1, 0],
+    })
+    ok = color_reliable_mask(cat, 'f405n', 'f410m')
+    assert ok.tolist() == [True, True, False, False, True, True]
+
+
 def test_satstar_gate_rejected_flagging(monkeypatch, tmp_path):
     """Phase A3: catalog rows matching a gate-REJECTED satstar candidate
     (<0.15") are flagged satstar_gate_rejected (photometry untouched);
@@ -404,3 +424,24 @@ def test_satstar_gate_rejected_flagging(monkeypatch, tmp_path):
 
     # loader contract: no files -> None (use the real, unpatched loader)
     assert _real_loader('f999n', target='brick', basepath=str(tmp_path)) is None
+
+
+def test_color_reliable_mask_gate_rejected_uncorrected():
+    """Gate-rejected strip rows without the gray-zone correction count as
+    clipped-unrepaired; corrected ones stay reliable."""
+    import numpy as np
+    from astropy.table import Table
+    from jwst_gc_pipeline.photometry.column_utils import color_reliable_mask
+    cat = Table({
+        # 0: repaired vs gate-rejected UNcorrected -> unreliable
+        # 1: repaired vs gate-rejected corrected  -> reliable
+        # 2: clean vs gate-rejected uncorrected   -> reliable (no repaired side)
+        'replaced_saturated_f405n':   [1, 1, 0],
+        'is_saturated_f405n':         [1, 1, 0],
+        'replaced_saturated_f410m':   [0, 0, 0],
+        'is_saturated_f410m':         [0, 0, 0],
+        'satstar_gate_rejected_f410m': [1, 1, 1],
+        'satclip_corrected_f410m':    [0, 1, 0],
+    })
+    ok = color_reliable_mask(cat, 'f405n', 'f410m')
+    assert ok.tolist() == [False, True, True]
