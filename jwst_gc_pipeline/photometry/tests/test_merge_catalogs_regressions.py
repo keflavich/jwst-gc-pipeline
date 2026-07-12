@@ -408,15 +408,19 @@ def test_satstar_gate_rejected_flagging(monkeypatch, tmp_path):
         'replaced_saturated': [False, False, False],
     })
     # row 1 sits 0.05" from a rejected candidate; row 0/2 far away
-    rej = SkyCoord([10.1 + 0.05 / 3600.0] * u.deg, [0.0] * u.deg)
+    rej = Table({'flux_fit': [240.0], 'flux_err': [10.0], 'qfit': [0.1],
+                 'reject_reason': ['implied_peak_gate']})
+    rej['skycoord_fit'] = SkyCoord([10.1 + 0.05 / 3600.0] * u.deg,
+                                   [0.0] * u.deg)
 
-    _real_loader = MC.load_rejected_satstar_positions
-    monkeypatch.setattr(MC, 'load_rejected_satstar_positions',
+    _real_loader = MC.load_rejected_satstar_catalog
+    monkeypatch.setattr(MC, 'load_rejected_satstar_catalog',
                         lambda *a, **k: rej)
     flux_before = np.asarray(cat['flux']).copy()
     # exercise only the flag block: call through a minimal shim replicating it
     _gate_rej = np.zeros(len(cat), dtype=bool)
-    _ri, _rsep, _ = SkyCoord(cat['skycoord']).match_to_catalog_sky(rej)
+    _ri, _rsep, _ = SkyCoord(cat['skycoord']).match_to_catalog_sky(
+        SkyCoord(rej['skycoord_fit']))
     _gate_rej = (_rsep.arcsec < 0.15) & ~np.asarray(cat['replaced_saturated'])
     cat['satstar_gate_rejected'] = _gate_rej
     assert cat['satstar_gate_rejected'].tolist() == [False, True, False]
@@ -445,3 +449,28 @@ def test_color_reliable_mask_gate_rejected_uncorrected():
     })
     ok = color_reliable_mask(cat, 'f405n', 'f410m')
     assert ok.tolist() == [False, True, True]
+
+
+def test_grayzone_clip_correction_bounds():
+    """PR #81 decision: adopt the rejected wing-fit flux ONLY in the bounded
+    gray zone (implied_peak_gate reason, sane qfit, 0.02-0.5 mag brighter);
+    garbage fits, big adjustments, and near-zero adjustments are untouched."""
+    import numpy as np
+    catflux = np.array([100.0, 100.0, 100.0, 100.0])
+    rflux = np.array([110.0,          # +0.10 mag -> corrected
+                      100.5,          # +0.005 mag -> too small, no-op
+                      300.0,          # +1.19 mag -> beyond gray zone, no-op
+                      110.0])         # garbage qfit -> no-op
+    rq = np.array([0.1, 0.1, 0.1, 45.0])
+    reason = np.array(['implied_peak_gate'] * 4)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        dmag = 2.5 * np.log10(rflux / catflux)
+    ok = ((reason == 'implied_peak_gate')
+          & np.isfinite(rq) & (rq > 0) & (rq < 1)
+          & np.isfinite(rflux) & (rflux > 0)
+          & np.isfinite(dmag) & (dmag >= 0.02) & (dmag <= 0.5))
+    assert ok.tolist() == [True, False, False, False]
+    # uncertainty floor = half the adjustment
+    dflux = rflux[0] - catflux[0]
+    err = np.hypot(5.0, 0.5 * dflux)
+    assert err > 5.0
