@@ -1604,6 +1604,45 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     # export is respected.
     if 'SATSTAR_COMPONENT_OVERLAP_FRAC' not in os.environ:
         os.environ['SATSTAR_COMPONENT_OVERLAP_FRAC'] = '0.5' if _sat_ext_nircam else '0'
+    # PARTNER-BAND SEEDS (Phase A1, opt-in --satstar-partner-seed): positions
+    # accepted as satstars in the near-degenerate partner band; fixes
+    # one-band-repaired colors (asymmetric substitution).  Consolidated
+    # partner catalog preferred; per-frame accepted catalogs as fallback.
+    _partner_sky = None
+    if bool(getattr(options, 'satstar_partner_seed', False)):
+        import glob
+        from astropy.coordinates import SkyCoord
+        from jwst_gc_pipeline.photometry.saturation_continuity import DEGENERATE_PAIRS
+        _pmap = {}
+        for _a, _b in DEGENERATE_PAIRS:
+            _pmap[_a] = _b
+            _pmap[_b] = _a
+        _partner = _pmap.get(filtername.lower())
+        if _partner:
+            _pc = (f'{basepath}/catalogs/'
+                   f'{_partner}_consolidated_satstar_catalog.fits')
+            _pfiles = ([_pc] if os.path.exists(_pc) else
+                       sorted(glob.glob(f'{basepath}/{_partner.upper()}/'
+                                        f'pipeline/*_m*_satstar_catalog.fits')))
+            _parts = []
+            for _pf in _pfiles:
+                try:
+                    _pt = Table.read(_pf)
+                except Exception:
+                    continue
+                if len(_pt) and 'skycoord_fit' in _pt.colnames:
+                    _parts.append(SkyCoord(_pt['skycoord_fit']))
+            if _parts:
+                from astropy.coordinates import concatenate as _sc_concat
+                _partner_sky = (_sc_concat(_parts) if len(_parts) > 1
+                                else _parts[0])
+                print(f"[manual] partner-band satstar seeds: {len(_partner_sky)} "
+                      f"position(s) from {_partner} ({len(_pfiles)} file(s))",
+                      flush=True)
+            else:
+                print(f"[manual] partner-band satstar seeds: no {_partner} "
+                      f"satstar catalogs found yet (first pass?); seeding "
+                      f"skipped", flush=True)
     satstar_table = _L.load_or_make_satstar_catalog(
         filename, path_prefix=f'{basepath}/psfs',
         use_merged_psf_for_merged=(module == 'merged'),
@@ -1619,7 +1658,8 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         # ZEROFRAME deblend of merged saturated cores (gc2211 crowded GC fields).
         # Opt-in via --deblend-satstars; auto-degrades to legacy where the frame
         # has no sibling _ramp.fits ZEROFRAME.  See gc2211-zeroframe-satcore-deblend.
-        deblend_with_zeroframe=bool(getattr(options, 'deblend_satstars', False)))
+        deblend_with_zeroframe=bool(getattr(options, 'deblend_satstars', False)),
+        partner_sky=_partner_sky)
     ext_model = filename.replace('.fits', f'{satstar_file_suffix}_extended_satstar_model.fits')
     sat_model = filename.replace('.fits', f'{satstar_file_suffix}_satstar_model.fits')
     if os.path.exists(ext_model):

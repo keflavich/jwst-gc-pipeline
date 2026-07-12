@@ -42,6 +42,12 @@ mkdir -p "$TMPDIR"
 PROPOSAL=${PROPOSAL:-4147}
 FIELD=${FIELD:-012}
 TARGET=${TARGET:-sgrc}
+# MODULES must be set together with the target env (brick 2221 = merged;
+# a stray nrcb default produced per-module products the m7 merge cannot use).
+if [ -n "${PROPOSAL:-}${FIELD:-}${TARGET:-}${EACH_SUFFIX:-}" ] && [ -z "${MODULES:-}" ]; then
+    echo "FATAL: MODULES not set but other target env vars are -- set it (e.g. MODULES=merged for brick 2221)." >&2
+    exit 64
+fi
 MODULES=${MODULES:-nrcb}
 EACH_SUFFIX=${EACH_SUFFIX:-destreak_o012_crf}
 [ -n "${SLURM_JOB_ID:-}" ] && scontrol update JobId="$SLURM_JOB_ID" \

@@ -71,9 +71,9 @@ construction, so no sibling-file gathering is needed.
 The shift is applied with the same GWCS + FITS-header mechanism as
 ``fix_alignment`` and is idempotent (``DVACORR`` marker keyword).
 
-Opt-in: nothing calls this by default.  Enable in the reduction with
-``APPLY_DVA_CORRECTION=1`` (hook in ``fix_alignment``) or call
-:func:`apply_dva_correction` directly.  Apply BEFORE measuring offsets
+DEFAULT ON in ``fix_alignment`` (until the upstream fix for
+spacetelescope/jwst#9400 lands -- then set ``APPLY_DVA_CORRECTION=0`` and
+retire this).  Disable with ``APPLY_DVA_CORRECTION=0``.  Apply BEFORE measuring offsets
 tables so the tie sees DVA-consistent frames; applying after an existing
 tie only re-introduces a small common shift, which the next tie absorbs.
 """
