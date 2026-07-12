@@ -84,6 +84,24 @@ at plan time.
   with the reference (not just with each other; a shared offset passes item 2 but fails
   item 1).
 
+## ⛔ 2b. Same-run image↔catalog provenance (BLOCKING)
+
+**A release that ships BOTH images and per-filter catalogs MUST have them from the
+same pipeline / cataloging run.** A catalog built before (or after) an image re-drizzle
+sits on a *different* astrometric solution, so image and catalog disagree by
+construction — it looks like an astrometry bug but is a provenance mismatch.
+Concrete case: Brick 2221 F182M — the `..._m7_..._vetted` catalog (2026-07-08) vs the
+`...-f182m-merged_i2d` mosaic (2026-07-11) sat ~10–15 mas apart purely because the
+catalog predated the image re-drizzle. (Note `-merged_i2d` and `-merged_data_i2d` are
+the *same* mosaic under two names — comparing those is fine.)
+
+Enforced in `stage_release.py`: each shipped science image is matched to its shipped
+per-filter catalog of the same `(filter, observation)` with the swept offset-histogram;
+**BLOCK if any pair disagrees `> 30 mas`.** This is a direct astrometric proxy for
+"same run"; a run-id / build-stamp in the catalog `meta` would make it exact (follow-up).
+The absolute arbiter is always VIRAC2 — image↔catalog agreement is only meaningful
+*within one run*.
+
 ## 3. Inter-module (PM-grade)
 - NRCA↔NRCB residual mapped (reference-free overlap); flag `> 15 mas` (spurious PM).
 
