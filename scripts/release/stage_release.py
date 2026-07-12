@@ -166,7 +166,11 @@ FIELDS = {
             {"filter": "F356W", "src": "/orange/adamginsburg/jwst/ngc6334/F356W/pipeline/jw07213-o001_t001_nircam_clear-f356w-merged_i2d.fits"},
             {"filter": "F405N", "src": "/orange/adamginsburg/jwst/ngc6334/F405N/pipeline/jw07213-o001_t001_nircam_clear-f405n-merged_i2d.fits"},
             {"filter": "F444W", "src": "/orange/adamginsburg/jwst/ngc6334/F444W/pipeline/jw07213-o001_t001_nircam_clear-f444w-merged_i2d.fits"},
-            {"filter": "F470N", "src": "/orange/adamginsburg/jwst/ngc6334/F470N/pipeline/jw06778-o001_t001_nircam_clear-f470n-merged_i2d.fits"},
+            # F470N held out only to avoid the gate override: it is VERIFIED internally
+            # consistent (0.9 mas vs the pooled LW bands, all tiles OK, contrast 357); the
+            # per-cell gate false-fails it at its fine 20x20 grid because F470N is sparse
+            # (886 det). Re-add once the gate no longer false-fails sparse narrow bands.
+            # {"filter": "F470N", "src": "/orange/adamginsburg/jwst/ngc6334/F470N/pipeline/jw06778-o001_t001_nircam_clear-f470n-merged_i2d.fits"},
         ],
     },
     # --- Globular clusters (Anderson programs), grouped under <version>/globular_clusters/ ---
@@ -469,6 +473,68 @@ def discover_catalogs(field_cfg, field):
     return items
 
 
+SAME_RUN_TOL_MAS = 30.0   # a shipped image and its catalog from the SAME run agree within this
+
+
+def _detect_i2d(path, thr=50.0):
+    """Bright-source SkyCoords from a science mosaic (for the same-run tie check)."""
+    import numpy as np
+    from astropy.io import fits
+    from astropy.wcs import WCS
+    from astropy.stats import sigma_clipped_stats
+    from astropy.coordinates import SkyCoord
+    from photutils.detection import DAOStarFinder
+    with fits.open(path) as h:
+        sci = h["SCI"] if "SCI" in h else h[1]
+        w = WCS(sci.header)
+        d = sci.data.astype("float32")
+    _, med, std = sigma_clipped_stats(d, sigma=3.0)
+    t = DAOStarFinder(fwhm=2.5, threshold=thr * std)(d - med)
+    if t is None or len(t) == 0:
+        return None
+    return SkyCoord(w.pixel_to_world(t["xcentroid"], t["ycentroid"]))
+
+
+def check_image_catalog_match(items, tol_mas=SAME_RUN_TOL_MAS):
+    """SAME-RUN gate. Every shipped science image must agree astrometrically with the
+    shipped per-filter catalog of the same (filter, observation) to < ``tol_mas``.
+
+    A mismatch means the image and catalog were produced by DIFFERENT pipeline /
+    cataloging runs (different astrometric solutions) and must NOT be released together
+    -- they will disagree by construction and look like an astrometry bug (e.g. brick
+    2221 F182M: 07-08 catalog vs 07-11 image, ~10-15 mas apart). Uses the sanctioned
+    offset-histogram (NO NN-median). Returns a list of ((filter, obs), off_mas) failures.
+    """
+    import numpy as np
+    import astropy.units as u
+    from astropy.table import Table
+    from astropy.coordinates import SkyCoord
+    from jwst_gc_pipeline.photometry.astrometry_offsets import measure_offset
+    imgs = {(it["filter"], it.get("observation")): it for it in items
+            if it["category"] == "image" and it.get("kind") == "science" and it.get("filter")}
+    cats = {(it["filter"], it.get("observation")): it for it in items
+            if it.get("kind") == "catalog_per_filter_vetted" and it.get("filter")}
+    fails = []
+    for key in sorted(set(imgs) & set(cats), key=lambda k: (k[0], k[1] or "")):
+        det = _detect_i2d(imgs[key]["src"])
+        if det is None:
+            continue
+        t = Table.read(cats[key]["src"])
+        if "skycoord" not in t.colnames:
+            continue
+        csc = SkyCoord(t["skycoord"])
+        csc = csc[np.isfinite(csc.ra.deg)]
+        r = measure_offset(det, csc, maxsep=3.0 * u.arcsec, sweep=False)
+        off = None if r is None else r["off"]
+        ok = off is not None and off <= tol_mas
+        tag = "ok" if ok else "MISMATCH -> different runs"
+        print(f"  same-run {key[0]} {key[1] or ''}: image<->catalog "
+              + ("no tie" if off is None else f"{off:.1f} mas") + f"  {tag}", flush=True)
+        if not ok:
+            fails.append((key, off))
+    return fails
+
+
 def assign_dest(item, field):
     """Compute the destination path of an item relative to the field release dir."""
     src_name = Path(item["src"]).name
@@ -751,6 +817,26 @@ def main(argv=None):
                   f"--allow-registration-fail AND ALLOW_REGISTRATION_FAIL=1 (dangerous).",
                   file=sys.stderr)
             return 2
+
+        # ---- SAME-RUN GATE: image <-> catalog provenance -------------------------------
+        # When a release ships BOTH images and per-filter catalogs, they MUST come from
+        # the same pipeline/cataloging run. We enforce it directly: each shipped science
+        # image must agree with its shipped per-filter catalog to < SAME_RUN_TOL_MAS. A
+        # mismatch = different runs (different astrometric solutions) -> refuse. (Skipped
+        # for --images-only, which ships no catalogs.)
+        if not args.images_only:
+            print("\nSAME-RUN CHECK (shipped image <-> shipped catalog):")
+            fails = check_image_catalog_match(items)
+            if fails:
+                detail = "; ".join(f"{f}{('/' + o) if o else ''}: {v:.0f} mas"
+                                   for (f, o), v in fails)
+                print(f"\nREFUSING TO STAGE '{args.field}': image<->catalog SAME-RUN check "
+                      f"FAILED (> {SAME_RUN_TOL_MAS:.0f} mas): {detail}. The shipped image "
+                      f"and catalog are from DIFFERENT runs (different astrometric "
+                      f"solutions) and must not be released together. Rebuild both from one "
+                      f"run, or override with --allow-registration-fail AND "
+                      f"ALLOW_REGISTRATION_FAIL=1 (dangerous).", file=sys.stderr)
+                return 2
 
     mode = "copy" if args.copy else "symlink"
     field_dir = stage(items, args.field, args.version, args.release_root,
