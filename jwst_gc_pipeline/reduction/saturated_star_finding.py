@@ -359,7 +359,8 @@ def _resolve_satstar_severity_floor(filtername, explicit=None):
 
 def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
                          spike_merge_gap=0, spike_merge_ratio=3.0,
-                         sat_data_floor=0.0, severity_floor=0.0):
+                         sat_data_floor=0.0, severity_floor=0.0,
+                         partner_xy=None, partner_frac=0.25):
     """
     Identify candidate saturated stars from the DQ plane.
 
@@ -629,6 +630,44 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
                       f"(data > {_subfloor_frac:g} x {severity_floor:g}) "
                       f"-> nsources={nsource}", flush=True)
 
+    # PARTNER-BAND SEEDING (Phase A1, pair-consistent substitution): positions
+    # where the SAME star was accepted as a satstar in a near-degenerate
+    # partner band (e.g. F410M<->F405N, F182M<->F187N).  Asymmetric
+    # substitution leaves one-band-repaired colors wrong by magnitudes (strip
+    # audit 2026-07-11: F410M 1490 substituted vs F405N 513).  Seed an
+    # amplitude-derived blob at each partner position when local pixels exceed
+    # partner_frac*floor (lower than the sub-floor frac -- the partner
+    # detection is independent evidence of saturation); the post-fit
+    # implied-peak gate still arbitrates, so a star genuinely unsuppressed in
+    # THIS band is rejected and keeps its (correct) daophot photometry.
+    if (partner_xy is not None and len(partner_xy)
+            and severity_floor and severity_floor > 0):
+        sci_ps = np.asarray(fitsdata['SCI'].data, dtype=float)
+        _ny, _nx = sci_ps.shape
+        _thr = float(partner_frac) * float(severity_floor)
+        _pmask = np.zeros_like(saturated)
+        _n_seeded = 0
+        for _px, _py in partner_xy:
+            _ix, _iy = int(round(float(_px))), int(round(float(_py)))
+            if not (0 <= _iy < _ny and 0 <= _ix < _nx):
+                continue
+            _sl = (slice(max(_iy - 6, 0), min(_iy + 7, _ny)),
+                   slice(max(_ix - 6, 0), min(_ix + 7, _nx)))
+            _loc = (np.isfinite(sci_ps[_sl]) & (sci_ps[_sl] > _thr)
+                    & (~saturated[_sl]))
+            if _loc.any():
+                _pmask[_sl] |= _loc
+                _n_seeded += 1
+        if _pmask.any():
+            _addmask = binary_dilation(_pmask, iterations=2)
+            saturated = saturated | _addmask
+            _kind_img[_addmask & (_kind_img == 0)] = 4
+            sources, nsource = label(saturated)
+            print(f"Saturated starfinding: partner-band seeding added "
+                  f"{_n_seeded} pair-consistency seed(s) "
+                  f"(data > {partner_frac:g} x {severity_floor:g}) "
+                  f"-> nsources={nsource}", flush=True)
+
     if nsource == 0:
         # Nothing DQ-flagged and nothing seeded: empty result (the logic
         # below cannot take an empty label set).
@@ -675,7 +714,7 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
     coms = center_of_mass(saturated, labels=sources, index=np.arange(nsource)+1)
 
     # Resolve per-component seed provenance (min nonzero kind -> DQ wins).
-    _kind_names = {1: 'dqsat', 2: 'peak', 3: 'subfloor'}
+    _kind_names = {1: 'dqsat', 2: 'peak', 3: 'subfloor', 4: 'partner'}
     if nsource:
         _kmin = ndimage.minimum(
             np.where(_kind_img > 0, _kind_img, np.uint8(255)),
@@ -1588,7 +1627,7 @@ def flattop_satstar_model(model_image, data_bg_sub, plateau_frac=0.15,
     return np.maximum(out, 0)
 
 
-def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_prominence_robust=False, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, zeroframe_deblend=False, deblend_daophot_xy=None, deblend_confirm_xy=None, sat_data_floor=None, satstar_severity_floor=None, phantom_flux_floor=0.0, phantom_ssr_max=50.0, phantom_ratio_max=50.0):
+def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_prominence_robust=False, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, zeroframe_deblend=False, deblend_daophot_xy=None, deblend_confirm_xy=None, sat_data_floor=None, satstar_severity_floor=None, phantom_flux_floor=0.0, phantom_ssr_max=50.0, phantom_ratio_max=50.0, partner_sky=None):
     # ``flux_drops``: optional list of SkyCoord.  An out-of-field (forced) source
     # whose seed sky position matches a drop within ~1.0" is SKIPPED entirely
     # (not fit, not contributed): cross-frame reconciliation found no trustworthy
@@ -1736,10 +1775,20 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                                              explicit=sat_data_floor)
     _sev_floor = _resolve_satstar_severity_floor(header.get('FILTER', ''),
                                                  explicit=satstar_severity_floor)
+    _partner_xy = None
+    if partner_sky is not None and len(partner_sky):
+        try:
+            _pw = wcs.WCS(fitsdata['SCI'].header, relax=True)
+            _pxs, _pys = _pw.world_to_pixel(partner_sky)
+            _partner_xy = list(zip(np.atleast_1d(_pxs), np.atleast_1d(_pys)))
+        except Exception as _pex:
+            print(f"WARNING: partner-seed WCS conversion failed: "
+                  f"{type(_pex).__name__}: {_pex}", flush=True)
     saturated, sources, coms, _seed_kinds = find_saturated_stars(
         fitsdata, min_sep_from_edge=min_sep_from_edge, edge_npix=edge_npix,
         spike_merge_gap=_spike_gap, spike_merge_ratio=_spike_ratio,
-        sat_data_floor=_sat_floor, severity_floor=_sev_floor)
+        sat_data_floor=_sat_floor, severity_floor=_sev_floor,
+        partner_xy=_partner_xy)
 
     # Diagnostic flag image (uint8 bitmask), written by remove_saturated_stars:
     #   bit 0 (1) = partly saturated (DQ SATURATED but recoverable / nonlinear,
