@@ -64,15 +64,6 @@ class OverlapMisregistrationError(RuntimeError):
     (doubled/smeared stars) even if each frame is fine vs a reference."""
 
 
-def _n_close(a, b, sep_arcsec):
-    """Number of ``a`` sources with a ``b`` source within ``sep_arcsec`` — a cheap
-    'do these two frames overlap on the sky at all' gate."""
-    if len(a) == 0 or len(b) == 0:
-        return 0
-    idx, sep2d, _ = a.match_to_catalog_sky(b)
-    return int((sep2d.to(u.arcsec).value <= sep_arcsec).sum())
-
-
 def _footprint_intersection(a, b, pad_arcsec=0.0):
     """GEOMETRIC footprint-intersection gate (2026-07-12).
 
@@ -87,6 +78,13 @@ def _footprint_intersection(a, b, pad_arcsec=0.0):
     intersection is preserved and the swept histogram still catches it --
     while a module gap / different field has NO intersection and is correctly
     skipped.
+
+    The box is an axis-aligned RA/Dec bounding-box intersection — a
+    CONSERVATIVE PROXY for the true (possibly rotated / L-shaped) footprint
+    polygon.  Two tiles sharing only a bbox corner (not real sky) can get a
+    small spurious box; the "≥ min sources of BOTH groups inside" requirement
+    downstream is what makes that harmless (a corner box holds few sources of
+    either group → skipped).
 
     Returns ``(bounds, n_a, n_b)``: the intersection box as
     ``(ra_lo, ra_hi, dec_lo, dec_hi)`` in deg (or None), and how many sources
@@ -178,18 +176,24 @@ def pairwise_overlap_offsets(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS,
         if m is None:
             results.append(dict(a=la, b=lb, overlap=False, n_overlap=n_close,
                                 off_mas=None, dra_mas=None, ddec_mas=None,
-                                contrast=None, ok=True, swept=False,
-                                window_arcsec=None))
+                                contrast=None, n_peak=0, measurable=False,
+                                ok=True, swept=False, window_arcsec=None))
             continue
-        # A coherent tie (contrast ok) whose magnitude exceeds tol => misregistered.
-        # A low-contrast result means we could not measure it (report, don't pass
-        # silently): treat as NOT ok so it forces a look.
+        # A verdict needs BOTH a coherent peak (contrast) AND a peak holding a
+        # non-trivial fraction of the shared population (n_peak) -- a stripey
+        # interleave's structural peak clears the contrast floor but holds only
+        # a sliver of the stars.  Not measurable != passing: ok=False so it
+        # forces a look (the caller decides fail-closed semantics).
         coherent = bool(m["ok"])
+        n_peak_floor = max(30, int(0.05 * n_close))
+        measurable = coherent and m.get("n_peak", 0) >= n_peak_floor
         within = m["off"] <= tol_mas
-        ok = coherent and within
+        ok = measurable and within
         results.append(dict(a=la, b=lb, overlap=True, n_overlap=n_close,
                             off_mas=float(m["off"]), dra_mas=float(m["dra"]),
                             ddec_mas=float(m["ddec"]), contrast=float(m["contrast"]),
+                            n_peak=int(m.get("n_peak", 0)),
+                            measurable=bool(measurable),
                             ok=bool(ok), swept=bool(m.get("swept", False)),
                             window_arcsec=m.get("window_arcsec")))
     return results
