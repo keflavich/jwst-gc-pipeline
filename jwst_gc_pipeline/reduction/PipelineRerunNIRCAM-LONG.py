@@ -1130,7 +1130,10 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
         # table (cloudc/offsets/Offsets_JWST_Brick2221_VIRAC2locked.csv, built by
         # build_virac2_locked_perexp.py --region cloudc) instead of the old hardcoded per-visit
         # shifts below. Replaces the deprecated F405N-crowdsource frame (~90 mas off Gaia).
-        refname = refnames[proposal_id]
+        # Allow overriding the offsets-table reference frame per proposal via env
+        # (e.g. JWST_GC_REFNAME_1182=F405ref) when the canonical table for the
+        # default refname isn't available locally.  Defaults to the built-in map.
+        refname = os.environ.get(f'JWST_GC_REFNAME_{proposal_id}', refnames[proposal_id])
         exposure = int(fn.split("_")[-3])
         thismodule = fn.split("_")[-2]
         visit = fn.split("_")[0]
