@@ -26,14 +26,14 @@ def _coords(n=500, ra0=266.54, dec0=-28.70, seed=0):
 
 
 def test_zero_frames_is_could_not_verify_not_pass(monkeypatch):
-    monkeypatch.setattr(gate, "build_groups", lambda field, filt: ({}, {}, 0))
+    monkeypatch.setattr(gate, "build_groups", lambda field, filt, visits=None: ({}, {}, 0))
     r = gate.check_filter("x", "F200W", verbose=False)
     assert r["PASS"] is False
     assert r["could_not_verify"] is True
 
 
 def test_frames_but_no_detections_is_could_not_verify(monkeypatch):
-    monkeypatch.setattr(gate, "build_groups", lambda field, filt: ({}, {}, 12))
+    monkeypatch.setattr(gate, "build_groups", lambda field, filt, visits=None: ({}, {}, 12))
     r = gate.check_filter("x", "F200W", verbose=False)
     assert r["PASS"] is False
     assert r["could_not_verify"] is True
@@ -41,8 +41,8 @@ def test_frames_but_no_detections_is_could_not_verify(monkeypatch):
 
 def test_single_group_with_frames_is_a_genuine_pass(monkeypatch):
     monkeypatch.setattr(gate, "build_groups",
-                        lambda field, filt: ({"v001:nrca": _coords()},
-                                             {"v001:nrca": 500}, 4))
+                        lambda field, filt, visits=None: (
+                            {"v001:nrca": _coords()}, {"v001:nrca": 500}, 4))
     r = gate.check_filter("x", "F200W", verbose=False)
     assert r["PASS"] is True
     assert not r.get("could_not_verify")
@@ -50,7 +50,7 @@ def test_single_group_with_frames_is_a_genuine_pass(monkeypatch):
 
 def test_main_exit_2_on_could_not_verify(monkeypatch):
     monkeypatch.setattr(gate, "check_filter",
-                        lambda field, filt, refcat=None, verbose=True: dict(
+                        lambda field, filt, refcat=None, verbose=True, visits=None: dict(
                             field=field, filt=filt, PASS=False,
                             could_not_verify=True, note="no crf frames matched"))
     rc = gate.main(["--field", "x", "--filter", "F200W"])
@@ -63,7 +63,7 @@ def test_main_exit_1_on_measured_fail_beats_noverify(monkeypatch):
         dict(field="x", filt="F212N", PASS=False, could_not_verify=True),
     ])
     monkeypatch.setattr(gate, "check_filter",
-                        lambda field, filt, refcat=None, verbose=True: next(results))
+                        lambda field, filt, refcat=None, verbose=True, visits=None: next(results))
     monkeypatch.setattr(gate, "field_filters", lambda field: ["F200W", "F212N"])
     rc = gate.main(["--field", "x", "--scan"])
     assert rc == 1
@@ -95,9 +95,8 @@ def test_driver_catches_gross_offset_reference_free(monkeypatch):
     -- the pooled SWEPT layer must still FAIL it with NO reference catalog."""
     groups = _same_footprint_groups(off_arcsec=20.0)
     monkeypatch.setattr(gate, "build_groups",
-                        lambda field, filt: (groups,
-                                             {k: len(v) for k, v in groups.items()},
-                                             8))
+                        lambda field, filt, visits=None: (
+                            groups, {k: len(v) for k, v in groups.items()}, 8))
     r = gate.check_filter("x", "F200W", verbose=False)
     assert r["PASS"] is False
     assert not r.get("could_not_verify")   # it was MEASURED (gross), not skipped
@@ -107,9 +106,8 @@ def test_driver_catches_gross_offset_reference_free(monkeypatch):
 def test_driver_zero_offset_passes(monkeypatch):
     groups = _same_footprint_groups(off_arcsec=0.0)
     monkeypatch.setattr(gate, "build_groups",
-                        lambda field, filt: (groups,
-                                             {k: len(v) for k, v in groups.items()},
-                                             8))
+                        lambda field, filt, visits=None: (
+                            groups, {k: len(v) for k, v in groups.items()}, 8))
     r = gate.check_filter("x", "F200W", verbose=False)
     assert r["PASS"] is True
     assert not r.get("could_not_verify")
@@ -127,9 +125,29 @@ def test_driver_unmeasurable_pair_is_could_not_verify_without_refcat(monkeypatch
     groups = {"a": SkyCoord(ra1 * u.deg, dec1 * u.deg),
               "b": SkyCoord(ra2 * u.deg, dec2 * u.deg)}
     monkeypatch.setattr(gate, "build_groups",
-                        lambda field, filt: (groups, {"a": n, "b": n}, 8))
+                        lambda field, filt, visits=None: (groups, {"a": n, "b": n}, 8))
     r = gate.check_filter("x", "F200W", verbose=False)
     assert r["PASS"] is False
     assert r["could_not_verify"] is True
     rc = gate.main(["--field", "x", "--filter", "F200W"])
     assert rc == 2
+
+
+def test_visits_scoping_filters_stray_programs(monkeypatch, tmp_path):
+    """A shared target dir carries stray crf from other programs (brick dir
+    holds 2221 o002 = cloudc); --visits must exclude them from the verdict."""
+    import os
+    pdir = tmp_path / "brick" / "F405N" / "pipeline"
+    pdir.mkdir(parents=True)
+    names = ["jw02221001001_03101_00001_nrcblong_destreak_o001_crf.fits",
+             "jw02221001001_03101_00002_nrcalong_destreak_o001_crf.fits",
+             "jw02221002001_03101_00001_nrcblong_destreak_o002_crf.fits"]
+    for n in names:
+        (pdir / n).write_bytes(b"x")
+    monkeypatch.setattr(gate, "BASE", str(tmp_path))
+    monkeypatch.setattr(gate, "_detect", lambda path: None)  # count frames only
+    _, _, nframes_all = gate.build_groups("brick", "F405N")
+    _, _, nframes_scoped = gate.build_groups("brick", "F405N",
+                                             visits={"001001"})
+    assert nframes_all == 3
+    assert nframes_scoped == 2

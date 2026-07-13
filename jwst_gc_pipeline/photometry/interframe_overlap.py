@@ -48,9 +48,10 @@ import itertools
 
 import numpy as np
 from astropy import units as u
+from astropy.coordinates import SkyCoord, search_around_sky
 
 from jwst_gc_pipeline.photometry.astrometry_offsets import (
-    measure_offset, measure_offset_grid)
+    local_residual_map, measure_offset, measure_offset_grid)
 
 
 # Overlapping same-instrument frames should co-register to well under a NIRCam
@@ -113,6 +114,35 @@ def _in_bounds(coords, bounds):
     ra_lo, ra_hi, dec_lo, dec_hi = bounds
     return ((coords.ra.deg >= ra_lo) & (coords.ra.deg <= ra_hi)
             & (coords.dec.deg >= dec_lo) & (coords.dec.deg <= dec_hi))
+
+
+def _confirm_tie(a, b, cand_dra_mas, cand_ddec_mas, min_pairs, n_close):
+    """Confirm a candidate pooled offset at NARROW window.
+
+    A swept wide-window candidate can be a structural/chance peak: at a 60"
+    window the histogram bin is ~0.4" fat, so n_peak counts thousands of
+    chance pairs and contrast ~5 can be noise (real-data null test: unrelated
+    populations produced a 628 mas 'tie' with n_peak 4505).  A REAL tie
+    reproduces when the candidate shift is removed and the histogram is
+    re-run at a 0.3" window with 0.02" bins: the true pairs collapse into a
+    tight coherent peak near zero holding a real fraction of the population;
+    a noise candidate dissolves.  Returns the confirming narrow-window
+    result, or None."""
+    dec_mid = float(np.median(a.dec.deg))
+    cosd = max(np.cos(np.radians(dec_mid)), 1e-6)
+    a_shift = SkyCoord(ra=a.ra + (cand_dra_mas / 3.6e6 / cosd) * u.deg,
+                       dec=a.dec + (cand_ddec_mas / 3.6e6) * u.deg,
+                       frame="icrs")
+    m2 = measure_offset(a_shift, b, maxsep=0.3 * u.arcsec, bin_arcsec=0.02,
+                        min_pairs=min_pairs, sweep=False)
+    if m2 is None or not m2["ok"]:
+        return None
+    if m2["off"] > 100.0:   # candidate did not land near zero -> not confirmed
+        return None
+    n_peak_floor = max(30, int(0.05 * n_close))
+    if m2.get("n_peak", 0) < n_peak_floor:
+        return None
+    return m2
 
 
 def pairwise_overlap_offsets(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS,
@@ -185,8 +215,13 @@ def pairwise_overlap_offsets(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS,
         # a sliver of the stars.  Not measurable != passing: ok=False so it
         # forces a look (the caller decides fail-closed semantics).
         coherent = bool(m["ok"])
-        n_peak_floor = max(30, int(0.05 * n_close))
-        measurable = coherent and m.get("n_peak", 0) >= n_peak_floor
+        conf = (_confirm_tie(a[_in_bounds(a, bounds)], b[_in_bounds(b, bounds)],
+                             m["dra"], m["ddec"], min_overlap_pairs, n_close)
+                if coherent else None)
+        if conf is not None:
+            m = dict(m, dra=m["dra"] + conf["dra"], ddec=m["ddec"] + conf["ddec"])
+            m["off"] = float(np.hypot(m["dra"], m["ddec"]))
+        measurable = conf is not None
         within = m["off"] <= tol_mas
         ok = measurable and within
         results.append(dict(a=la, b=lb, overlap=True, n_overlap=n_close,
@@ -201,117 +236,139 @@ def pairwise_overlap_offsets(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS,
 
 def overlap_offset_grid(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS, nx=12, ny=12,
                         maxsep=3.0 * u.arcsec, min_overlap_pairs=40,
-                        overlap_gate_arcsec=60.0, margin_factor=3.0, context=""):
+                        overlap_gate_arcsec=60.0, margin_factor=3.0,
+                        match_radius=0.3 * u.arcsec, nsigma=3.0, context=""):
     """Per-TILE reference-free overlap check — the localised version of
     :func:`pairwise_overlap_offsets`.
 
-    A per-visit residual is SPATIALLY VARYING (brick-1182 visit-001 wandered
-    14-103 mas across the field), so a single field-pooled offset per group pair
-    can average BELOW ``tol_mas`` while a thin seam strip is ~90 mas off.
+    MATCHED-PAIR fine layer (2026-07-13, v8 redesign): per-tile HISTOGRAM
+    verdicts are statistically unsound at fine scale — a 40-250-star tile's
+    noise peak can clear any contrast/population floor and land anywhere in
+    the window (real-data ladder: ~59.8" -> ~2.9" -> ~1.5" false tiles as the
+    floors tightened).  Once the POOLED swept tie of the pair is verified
+    small, ``local_residual_map`` is the correct fine instrument: residuals
+    come from real matched pairs, cells carry standard errors, and a cell is
+    only flagged when its offset is BOTH above tolerance AND significant —
+    the noise-peak failure mode does not exist.
 
-    MUTUAL-COVERAGE CELLS ONLY (2026-07-12): a cell is measurable only when
-    BOTH groups have >= ``min_overlap_pairs`` sources in it (b padded by
-    ``margin_factor * maxsep``).  Inside a footprint intersection the two
-    groups' coverage can be STRIPEY (an interleaved two-module mosaic: real
-    brick F405N nrca-vs-nrcb had ONE genuinely shared tile; every other tile
-    held A-stars with the nearest B-coverage 30-60" away, and the swept
-    histogram of those disjoint populations produced structural ~35-50"
-    false FAILs).  Cells without mutual coverage are reported in
-    ``n_no_coverage``, never measured, never failed.
-
-    Division of labor: this per-tile check owns the FINE (tens-of-mas seam)
-    regime; a GROSS (>margin) rigid offset empties the mutual-coverage cells
-    and is invisible here BY CONSTRUCTION — it is caught by the swept
-    per-exposure visit-consensus checkpoint (astrometry_checkpoint m2) and
-    the swept per-tile reference map, which do not depend on frame-vs-frame
-    coverage.  ``clean`` therefore additionally requires >= 1 measured cell;
-    an overlapping pair with ZERO mutual-coverage cells is reported
-    ``could_not_verify=True`` (ok stays True here — the other layers own it —
-    but the caller can and should surface it).
+    Pair pipeline:
+      1. geometric footprint-intersection gate (skip disjoint pairs);
+      2. POOLED swept histogram on the intersection populations (measurability
+         = contrast + n_peak population-fraction floor):
+         - not measurable -> could_not_verify (caller/release path owns it);
+         - measurable and off > tol_mas -> FAIL (bulk misregistration —
+           the brick-1182 v001 gross class and the 51 mas inter-visit class);
+         - measurable, small -> 3. ``local_residual_map`` over the
+           intersection at the grid's cell scale: any significant cell above
+           ``tol_mas`` -> FAIL (the 30-100 mas seam class).
 
     Returns
     -------
     list[dict]
-        Per compared pair: ``dict(a, b, overlap, worst_off_mas, worst_off_cell,
-        n_ok, n_total, n_no_coverage, could_not_verify, clean, ok)``.
+        Per compared pair: ``dict(a, b, overlap, pooled_off_mas, pooled,
+        worst_off_mas, worst_off_cell, n_ok, n_total, n_no_coverage,
+        could_not_verify, clean, ok, fail_reason)``.
     """
     labels = list(groups)
     results = []
     for la, lb in itertools.combinations(labels, 2):
         a, b = groups[la], groups[lb]
-        # geometric footprint-intersection gate (see pairwise_overlap_offsets)
         bounds, n_a_in, n_b_in = _footprint_intersection(a, b)
         if bounds is None or min(n_a_in, n_b_in) < min_overlap_pairs:
-            results.append(dict(a=la, b=lb, overlap=False, worst_off_mas=None,
+            results.append(dict(a=la, b=lb, overlap=False, pooled_off_mas=None,
+                                pooled=None, worst_off_mas=None,
                                 worst_off_cell=None, n_ok=0, n_total=0,
                                 n_no_coverage=0, could_not_verify=False,
-                                clean=True, ok=True))
+                                clean=True, ok=True, fail_reason=None))
             continue
         a_in = a[_in_bounds(a, bounds)]
         b_in = b[_in_bounds(b, bounds)]
-        ra_lo, ra_hi, dec_lo, dec_hi = bounds
-        re = np.linspace(ra_lo, ra_hi, nx + 1)
-        de = np.linspace(dec_lo, dec_hi, ny + 1)
-        maxsep_arcsec = maxsep.to(u.arcsec).value if hasattr(maxsep, "to") \
-            else float(maxsep)
-        dec_mid = 0.5 * (dec_lo + dec_hi)
-        marg_ra = margin_factor * maxsep_arcsec / 3600.0 \
-            / max(np.cos(np.radians(dec_mid)), 1e-6)
-        marg_dec = margin_factor * maxsep_arcsec / 3600.0
-        cells = []
-        n_no_coverage = 0
-        for i in range(nx):
-            for j in range(ny):
-                a_sel = ((a_in.ra.deg >= re[i]) & (a_in.ra.deg < re[i + 1])
-                         & (a_in.dec.deg >= de[j]) & (a_in.dec.deg < de[j + 1]))
-                if a_sel.sum() < min_overlap_pairs:
-                    continue
-                b_sel = ((b_in.ra.deg >= re[i] - marg_ra)
-                         & (b_in.ra.deg < re[i + 1] + marg_ra)
-                         & (b_in.dec.deg >= de[j] - marg_dec)
-                         & (b_in.dec.deg < de[j + 1] + marg_dec))
-                if b_sel.sum() < min_overlap_pairs:
-                    # no MUTUAL coverage in this cell (stripey interleave or a
-                    # gross offset -- the other, sweep-based layers own those)
-                    n_no_coverage += 1
-                    continue
-                m = measure_offset(a_in[a_sel], b_in[b_sel], maxsep=maxsep,
-                                   min_pairs=min_overlap_pairs, sweep=False,
-                                   context=f"{context} {la}|{lb} tile[{i},{j}]")
-                # A tile VERDICT requires the peak to contain a substantial
-                # FRACTION of the cell's a-population.  Two mismatched
-                # populations sharing a cell yield a noise peak holding ~10%
-                # of the pairs-per-star budget (3rd real-data round: fails
-                # piled at ~0.95*maxsep with contrast 5-10); a REAL tie puts
-                # essentially every shared star in the peak (n_peak ~ the
-                # covered population).  An absolute floor alone is not enough:
-                # noise n_peak scales with density.  Below the floor the cell
-                # is UNMEASURABLE, not a verdict.
-                n_peak_floor = max(10, min_overlap_pairs // 4,
-                                   int(0.25 * int(a_sel.sum())))
-                if m is None or m.get("n_peak", 0) < n_peak_floor:
-                    n_no_coverage += 1
-                    continue
-                m.update(ix=i, iy=j,
-                         off_ok=bool(m["off"] <= tol_mas),
-                         contrast_ok=bool(m["ok"]))
-                m["ok"] = bool(m["ok"] and m["off"] <= tol_mas)
-                cells.append(m)
-        n_ok = sum(1 for c in cells if c["ok"])
-        worst = max(cells, key=lambda c: c["off"], default=None)
-        could_not_verify = not cells
-        clean = bool(cells) and n_ok == len(cells)
-        results.append(dict(
-            a=la, b=lb, overlap=True,
-            worst_off_mas=None if worst is None else float(worst["off"]),
-            worst_off_cell=None if worst is None else dict(
-                ix=worst["ix"], iy=worst["iy"], off_mas=worst["off"],
-                contrast=worst["contrast"]),
-            n_ok=n_ok, n_total=len(cells), n_no_coverage=n_no_coverage,
-            could_not_verify=could_not_verify,
-            clean=clean, ok=bool(clean or could_not_verify)))
-    return results
+        base = dict(a=la, b=lb, overlap=True, worst_off_mas=None,
+                    worst_off_cell=None, n_ok=0, n_total=0, n_no_coverage=0,
+                    could_not_verify=False, clean=False, ok=False,
+                    fail_reason=None)
 
+        # 2. pooled swept tie with measurability floor
+        m = measure_offset(a_in, b_in, maxsep=maxsep,
+                           min_pairs=min_overlap_pairs, sweep=True,
+                           context=f"{context} {la}|{lb} pooled")
+        n_close = min(n_a_in, n_b_in)
+        conf = None
+        if m is not None and m["ok"]:
+            conf = _confirm_tie(a_in, b_in, m["dra"], m["ddec"],
+                                min_overlap_pairs, n_close)
+            if conf is not None:
+                # refine the pooled offset with the narrow-window confirmation
+                m = dict(m, dra=m["dra"] + conf["dra"],
+                         ddec=m["ddec"] + conf["ddec"])
+                m["off"] = float(np.hypot(m["dra"], m["ddec"]))
+        measurable = conf is not None
+        base["pooled"] = None if m is None else {
+            k: m.get(k) for k in ("dra", "ddec", "off", "contrast", "n_peak",
+                                  "swept", "window_arcsec")}
+        base["pooled_off_mas"] = None if m is None else float(m["off"])
+        if not measurable:
+            base.update(could_not_verify=True, ok=True)
+            results.append(base)
+            continue
+        if m["off"] > tol_mas:
+            base.update(ok=False, clean=False,
+                        fail_reason=f"pooled offset {m['off']:.0f} mas"
+                                    + (" (swept -- GROSS)" if m.get("swept")
+                                       else ""))
+            results.append(base)
+            continue
+
+        # 3. matched-pair fine map at the grid cell scale
+        radius_arcsec = match_radius.to(u.arcsec).value \
+            if hasattr(match_radius, "to") else float(match_radius)
+        # CHANCE-ASSOCIATION GUARD: matched-pair residuals are only meaningful
+        # when the nearest matches ARE the counterparts.  Real registered
+        # frames match at ~the (verified-small) tie distance; two populations
+        # WITHOUT true counterparts match by chance at ~0.7*radius.  Gate on
+        # the median nearest separation; beyond radius/3 the fine layer cannot
+        # measure this pair (could_not_verify, owned by the reference map).
+        _ia, _ib, _sep, _ = search_around_sky(a_in, b_in,
+                                              radius_arcsec * u.arcsec)
+        if len(_ia) == 0:
+            base.update(could_not_verify=True, ok=True)
+            results.append(base)
+            continue
+        _order = np.lexsort((_sep.arcsec, _ia))
+        _first = np.concatenate(([True], _ia[_order][1:] != _ia[_order][:-1]))
+        _med_sep_mas = float(np.median(_sep.arcsec[_order][_first]) * 1000.0)
+        if _med_sep_mas > radius_arcsec * 1000.0 / 3.0:
+            base.update(could_not_verify=True, ok=True,
+                        fail_reason=None)
+            results.append(base)
+            continue
+        ra_lo, ra_hi, dec_lo, dec_hi = bounds
+        dec_mid = 0.5 * (dec_lo + dec_hi)
+        cosd = max(np.cos(np.radians(dec_mid)), 1e-6)
+        extent = max((ra_hi - ra_lo) * cosd, dec_hi - dec_lo) * 3600.0
+        cell_arcsec = max(extent / max(nx, ny), 2.0)
+        lrm = local_residual_map(a_in, b_in, m, cell_arcsec=cell_arcsec,
+                                 match_radius=match_radius,
+                                 min_stars=max(10, min_overlap_pairs // 4),
+                                 tol_mas=tol_mas, nsigma=nsigma,
+                                 context=f"{context} {la}|{lb} fine")
+        flagged = [c for c in lrm["cells"] if c["flagged"]]
+        worst = max(lrm["cells"], key=lambda c: c["off_mas"], default=None)
+        base.update(
+            worst_off_mas=None if worst is None else float(worst["off_mas"]),
+            worst_off_cell=None if worst is None else dict(
+                ix=worst["ix"], iy=worst["iy"], off_mas=worst["off_mas"],
+                n=worst["n"], sem=float(np.hypot(worst["dra_sem"],
+                                                 worst["ddec_sem"]))),
+            n_ok=lrm["n_measured"] - len(flagged), n_total=lrm["n_measured"],
+            n_no_coverage=0,
+            could_not_verify=not lrm["cells"],
+            clean=bool(lrm["cells"]) and not flagged,
+            ok=bool((lrm["cells"] and not flagged) or not lrm["cells"]),
+            fail_reason=(f"{len(flagged)} significant fine cell(s) > "
+                         f"{tol_mas:.0f} mas" if flagged else None))
+        results.append(base)
+    return results
 
 def assert_overlaps_registered(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS,
                                raise_on_fail=True, per_tile=False, grid=(12, 12),
