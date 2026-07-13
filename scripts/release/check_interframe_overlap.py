@@ -193,7 +193,8 @@ def check_filter(field, filt, refcat=None, verbose=True, visits=None):
                 unverifiable.append(r)
         else:
             if not r["ok"]:
-                r["fail_reason"] = "per-tile misregistration"
+                r["fail_reason"] = (r.get("fail_reason")
+                                    or "per-tile misregistration")
                 bad.append(r)
             elif (p.get("measurable") and p.get("off_mas") is not None
                     and p["off_mas"] > GROSS_MAS):
