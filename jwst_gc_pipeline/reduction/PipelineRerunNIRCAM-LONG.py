@@ -1144,6 +1144,27 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
         locked_tbl = f'{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_VIRAC2locked.csv'
         if os.path.exists(locked_tbl):
             offsets_tbl = Table.read(locked_tbl)
+            # GENERATION GUARD: the VIRAC2locked shift is solved on a specific reduction
+            # generation of the per-frame catalogs. If the table predates the crf being
+            # aligned it was NOT rebuilt after the last re-drizzle, so it can be a
+            # generation stale -- the assign_wcs/distortion frame drifts ~30-48 mas
+            # between Brick runs (2026-07 root-cause of the uniform ~69 mas VIRAC2 offset).
+            # Rebuild it (build_virac2_locked_perexp / relock_exposures now reproject the
+            # stable detector x/y through the LIVE crf WCS, so a rebuild self-corrects).
+            try:
+                _t_tbl = os.path.getmtime(locked_tbl); _t_crf = os.path.getmtime(fn)
+            except OSError:
+                _t_tbl = _t_crf = None
+            if _t_tbl is not None and _t_tbl < _t_crf - 1.0:
+                import datetime as _dt
+                _gmsg = (f"[genlock] STALE OFFSETS TABLE {os.path.basename(locked_tbl)} "
+                         f"({_dt.datetime.fromtimestamp(_t_tbl):%Y-%m-%d %H:%M}) predates crf "
+                         f"{os.path.basename(fn)} ({_dt.datetime.fromtimestamp(_t_crf):%Y-%m-%d %H:%M}); "
+                         f"the tie may be a reduction generation behind. Rebuild VIRAC2locked "
+                         f"after the re-drizzle.")
+                if os.environ.get('GENLOCK_STRICT'):
+                    raise RuntimeError(_gmsg)
+                print("WARNING: " + _gmsg, flush=True)
             # One-time collapse check: the ad-hoc VIRAC2locked curation once overwrote
             # brick-1182 visit-001's offset with visit-002's (both ~+1.9" for a visit
             # truly ~20" off). Warn if distinct visits share a value here so it can't
