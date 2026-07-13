@@ -1122,6 +1122,7 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
 
     _prov_tbl = None       # offsets table actually consumed (header provenance)
     _prov_row_stage = ''   # checkpoint stage that last corrected the row, if any
+    _frame_gen = None      # this frame's WCS-generation stamp (set in the locked branch)
     if (field == '004' and proposal_id == '1182') or (field in ('001', '002') and proposal_id == '2221'):
         # field 002 (Cloud C) added 2026-06-22: route through the per-exposure VIRAC2-locked
         # table (cloudc/offsets/Offsets_JWST_Brick2221_VIRAC2locked.csv, built by
@@ -1144,27 +1145,46 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
         locked_tbl = f'{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_VIRAC2locked.csv'
         if os.path.exists(locked_tbl):
             offsets_tbl = Table.read(locked_tbl)
-            # GENERATION GUARD: the VIRAC2locked shift is solved on a specific reduction
-            # generation of the per-frame catalogs. If the table predates the crf being
-            # aligned it was NOT rebuilt after the last re-drizzle, so it can be a
-            # generation stale -- the assign_wcs/distortion frame drifts ~30-48 mas
-            # between Brick runs (2026-07 root-cause of the uniform ~69 mas VIRAC2 offset).
-            # Rebuild it (build_virac2_locked_perexp / relock_exposures now reproject the
-            # stable detector x/y through the LIVE crf WCS, so a rebuild self-corrects).
+            # GENERATION GUARD (layered, 2026-07-13).  A correction is only
+            # valid on the WCS GENERATION it was solved against (the frame
+            # drifted ~30-48 mas between Brick runs; ~69 mas VIRAC2 offset
+            # root cause).  Verification layers, strongest first:
+            #   1. per-row BASE STAMPS (base_calver / base_crds_ctx /
+            #      base_dvacorr, written by the tie builders from the crf they
+            #      solved on): compared against THIS frame's generation keys.
+            #      A mismatch is deterministic evidence of a stale tie ->
+            #      hard-fail (override: GENLOCK_ALLOW_MISMATCH=1).
+            #   2. mtime fallback (columns absent): WEAK -- the standard chain
+            #      regenerates destreak fresh, so crf mtime > table mtime on
+            #      EVERY run including correct ones; warn-only, and
+            #      GENLOCK_STRICT applies only to this fallback.
+            _frame_gen = None
             try:
-                _t_tbl = os.path.getmtime(locked_tbl); _t_crf = os.path.getmtime(fn)
-            except OSError:
-                _t_tbl = _t_crf = None
-            if _t_tbl is not None and _t_tbl < _t_crf - 1.0:
-                import datetime as _dt
-                _gmsg = (f"[genlock] STALE OFFSETS TABLE {os.path.basename(locked_tbl)} "
-                         f"({_dt.datetime.fromtimestamp(_t_tbl):%Y-%m-%d %H:%M}) predates crf "
-                         f"{os.path.basename(fn)} ({_dt.datetime.fromtimestamp(_t_crf):%Y-%m-%d %H:%M}); "
-                         f"the tie may be a reduction generation behind. Rebuild VIRAC2locked "
-                         f"after the re-drizzle.")
-                if os.environ.get('GENLOCK_STRICT'):
-                    raise RuntimeError(_gmsg)
-                print("WARNING: " + _gmsg, flush=True)
+                from jwst_gc_pipeline.astrometry_utils import generation_stamp
+                with fits.open(fn) as _gfh:
+                    _hdr0 = dict(_gfh[0].header)
+                    _hdr0.update({k: v for k, v in _gfh[1].header.items()
+                                  if k in ('DVACORR',)})
+                    _frame_gen = generation_stamp(_hdr0)
+            except (OSError, KeyError, IndexError) as _gex:
+                print(f"[genlock] could not read generation keys from {fn}: {_gex}")
+            _has_stamps = all(f'base_{k}' in offsets_tbl.colnames
+                              for k in ('calver', 'crds_ctx', 'dvacorr'))
+            if not _has_stamps:
+                try:
+                    _t_tbl = os.path.getmtime(locked_tbl); _t_crf = os.path.getmtime(fn)
+                except OSError:
+                    _t_tbl = _t_crf = None
+                if _t_tbl is not None and _t_tbl < _t_crf - 1.0:
+                    import datetime as _dt
+                    _gmsg = (f"[genlock] offsets table {os.path.basename(locked_tbl)} has no "
+                             f"base_* generation stamps and predates crf "
+                             f"{os.path.basename(fn)}; the tie may be a reduction "
+                             f"generation behind (mtime is a WEAK proxy -- rebuild the "
+                             f"table with the stamping builders for a real check).")
+                    if os.environ.get('GENLOCK_STRICT'):
+                        raise RuntimeError(_gmsg)
+                    print("WARNING: " + _gmsg, flush=True)
             # One-time collapse check: the ad-hoc VIRAC2locked curation once overwrote
             # brick-1182 visit-001's offset with visit-002's (both ~+1.9" for a visit
             # truly ~20" off). Warn if distinct visits share a value here so it can't
@@ -1198,6 +1218,21 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
                                  f"(visit={visit}, exposure={exposure}, filter={filtername}); "
                                  f"expected exactly 1 row in {locked_tbl}")
             row = offsets_tbl[match]
+            if _has_stamps and _frame_gen is not None:
+                _mismatch = {k: (str(row[f'base_{k}'][0]), _frame_gen[k])
+                             for k in ('calver', 'crds_ctx', 'dvacorr')
+                             if str(row[f'base_{k}'][0]) not in ('', 'nan')
+                             and str(row[f'base_{k}'][0]) != _frame_gen[k]}
+                if _mismatch:
+                    _gmsg = (f"[genlock] GENERATION MISMATCH for {fn}: the tie row was "
+                             f"solved on {_mismatch} (base vs frame). Applying it would "
+                             f"stack a stale correction on a moved frame. Rebuild the "
+                             f"VIRAC2locked table on THIS generation "
+                             f"(GENLOCK_ALLOW_MISMATCH=1 to override).")
+                    if os.environ.get('GENLOCK_ALLOW_MISMATCH') == '1':
+                        print("WARNING (override): " + _gmsg, flush=True)
+                    else:
+                        raise RuntimeError(_gmsg)
             rashift = float(row['dra (arcsec)'][0]) * u.arcsec
             decshift = float(row['ddec (arcsec)'][0]) * u.arcsec
             print(f"MODULE-LOCKED per-visit offset for {fn}: ({rashift}, {decshift})")
@@ -1361,6 +1396,28 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
         fa.meta.wcs = ww
         fa.save(fn, overwrite=True)
 
+        # BASE -> TARGET proof (2026-07-13): record the fiducial-pixel sky
+        # coordinate BEFORE the correction (the coordinate the offset applies
+        # to) and AFTER it (the coordinate it must produce), then VERIFY
+        # target == base + coordinate-shift.  With these stamped, any later
+        # reader can re-derive and re-check the correction no matter when --
+        # and a correction can never be silently applied to the wrong base.
+        _base_ra, _base_dec = float(wcsobj.pixel_to_world(1024, 1024).ra.deg), \
+            float(wcsobj.pixel_to_world(1024, 1024).dec.deg)
+        _tgt_ra, _tgt_dec = float(ww.pixel_to_world(1024, 1024).ra.deg), \
+            float(ww.pixel_to_world(1024, 1024).dec.deg)
+        _exp_ra = _base_ra + rashift.to(u.deg).value   # COORDINATE convention
+        _exp_dec = _base_dec + decshift.to(u.deg).value
+        _cosd = np.cos(np.radians(_base_dec))
+        _resid_mas = float(np.hypot((_tgt_ra - _exp_ra) * _cosd,
+                                    _tgt_dec - _exp_dec) * 3.6e6)
+        if _resid_mas > 0.5:
+            raise RuntimeError(
+                f"astrometric apply verification FAILED for {fn}: fiducial moved to "
+                f"({_tgt_ra:.8f},{_tgt_dec:.8f}) but base+shift predicts "
+                f"({_exp_ra:.8f},{_exp_dec:.8f}) -- residual {_resid_mas:.2f} mas. "
+                f"The offset convention or the WCS apply path is wrong; NOT writing.")
+
         # FITS header
         align_fits = fits.open(fn)
         align_fits[1].header['OLCRVAL1'] = align_fits[1].header['CRVAL1']
@@ -1368,6 +1425,19 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
         align_fits[1].header.update(ww.to_fits()[0])
         align_fits[1].header['RAOFFSET'] = rashift.value
         align_fits[1].header['DEOFFSET'] = decshift.value
+        # correction provenance: base/target fiducials + convention + the
+        # generation this frame carried when corrected (audit at any time:
+        # recompute pixel_to_world(1024,1024) and compare to ATGTRA/ATGTDE)
+        align_fits[1].header['ABASERA'] = (_base_ra, '[deg] fiducial(1024,1024) BEFORE correction')
+        align_fits[1].header['ABASEDE'] = (_base_dec, '[deg] fiducial dec BEFORE correction')
+        align_fits[1].header['ATGTRA'] = (_tgt_ra, '[deg] fiducial AFTER correction (verify me)')
+        align_fits[1].header['ATGTDE'] = (_tgt_dec, '[deg] fiducial dec AFTER correction')
+        align_fits[1].header['AOFFCONV'] = ('coordinate', 'RAOFFSET is dra_coordinate (on-sky = *cos(dec))')
+        align_fits[1].header['AVERMAS'] = (_resid_mas, '[mas] base+shift vs target residual (proof)')
+        if _frame_gen is not None:
+            align_fits[1].header['AGENCAL'] = (_frame_gen.get('cal_ver', ''), 'CAL_VER at correction')
+            align_fits[1].header['AGENCTX'] = (_frame_gen.get('crds_ctx', ''), 'CRDS_CTX at correction')
+            align_fits[1].header['AGENDVA'] = (_frame_gen.get('dvacorr', ''), 'DVACORR at correction')
         # provenance: WHY these RAOFFSET/DEOFFSET (which table, which checkpoint
         # last corrected the row, when) -- see astrometry_checkpoint.py
         from jwst_gc_pipeline.photometry.astrometry_checkpoint import provenance_header_cards

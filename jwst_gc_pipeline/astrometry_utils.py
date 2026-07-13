@@ -106,3 +106,52 @@ def prop(ra, dec, pmra, pmde, dt):
     pmra = np.where(np.isfinite(pmra), pmra, 0.)
     pmde = np.where(np.isfinite(pmde), pmde, 0.)
     return ra + (pmra * dt / 3.6e6) / np.cos(np.radians(dec)), dec + (pmde * dt / 3.6e6)
+
+
+# --------------------------------------------------------------------------
+# Correction provenance (2026-07-13): make an astrometric correction safe to
+# apply NO MATTER WHEN by recording, with every correction,
+#   (a) the BASE coordinate it was solved against,
+#   (b) the offset itself (in the labelled coordinate convention), and
+#   (c) the TARGET coordinate it must produce,
+# and by verifying (a) before applying and (c) after.  A correction that
+# cannot verify its base refuses to apply (a generation-stale table can then
+# never be silently stacked on the wrong frame -- the failure mode behind the
+# ~69 mas VIRAC2 offset and the brick-1182 v001 20" incident).
+
+# Header keys that define a frame's WCS GENERATION: if any of these differ
+# between the solve and the apply, the astrometric frame may have moved.
+GENERATION_KEYS = ("CAL_VER", "CRDS_CTX", "DVACORR")
+
+
+def wcs_fiducial(header, wcs=None, x=1024.0, y=1024.0):
+    """Sky coordinate of a fiducial detector pixel through ``header``'s WCS,
+    with any baked ``RAOFFSET``/``DEOFFSET`` removed -- i.e. the frame's
+    SIAF-generation fiducial.  This is the per-frame BASE coordinate a
+    correction is solved against and verified against at apply time.
+
+    Returns ``(ra_deg, dec_deg)``.
+    """
+    from astropy.wcs import WCS
+    w = wcs if wcs is not None else WCS(header)
+    sky = w.pixel_to_world(float(x), float(y))
+    ra0 = float(header.get("RAOFFSET", 0.0)) / 3600.0    # coordinate degrees
+    de0 = float(header.get("DEOFFSET", 0.0)) / 3600.0
+    return float(sky.ra.deg - ra0), float(sky.dec.deg - de0)
+
+
+def generation_stamp(header):
+    """The WCS-generation identity of a frame: which pipeline/reference/DVA
+    state produced its astrometric frame.  Solvers record it with each
+    correction; ``fix_alignment`` refuses (or warns) when the frame it is
+    about to correct carries a different stamp."""
+    return {k.lower(): str(header.get(k, "")) for k in GENERATION_KEYS}
+
+
+def base_mismatch_mas(base_ra, base_dec, now_ra, now_dec):
+    """On-sky distance (mas) between a recorded base fiducial and the frame's
+    current fiducial.  > a few mas means the frame is NOT the generation the
+    correction was solved on."""
+    cosd = np.cos(np.radians(0.5 * (float(base_dec) + float(now_dec))))
+    return float(np.hypot((float(now_ra) - float(base_ra)) * cosd,
+                          float(now_dec) - float(base_dec)) * 3.6e6)

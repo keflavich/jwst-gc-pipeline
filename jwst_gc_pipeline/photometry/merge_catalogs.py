@@ -280,6 +280,17 @@ def shift_individual_catalog(tbl, offsets_table, verbose=True):
     skycoord = SkyCoord(ra=skycoord.ra - raoffset + dra, dec=skycoord.dec - decoffset + ddec, frame=skycoord.frame)
     tbl[skycoord_colname] = skycoord
 
+    # CORRECTION PROVENANCE (2026-07-13): tag in the CATALOG what was applied,
+    # what base it removed, and the convention -- so any later reader can
+    # re-derive/verify the table-space tie without the pipeline (mirrors the
+    # ABASE*/ATGT*/AOFFCONV cards fix_alignment writes into the FITS frames).
+    tbl.meta['APLBASRA'] = float(raoffset.to(u.arcsec).value)   # removed baked RAOFFSET (arcsec, coordinate)
+    tbl.meta['APLBASDE'] = float(decoffset.to(u.arcsec).value)
+    tbl.meta['APLDRA'] = float(dra.to(u.arcsec).value)          # applied table dra (arcsec, coordinate)
+    tbl.meta['APLDDEC'] = float(ddec.to(u.arcsec).value)
+    tbl.meta['APLCONV'] = 'coordinate'                          # on-sky effect = *cos(dec)
+    tbl.meta['APLROW'] = f"Visit={visit} Exposure={exposure} Module={thismodule} Filter={filtername}"
+
     print(f"Shifted table from {raoffset:0.4f},{decoffset:0.4f} to {dra:0.4f},{ddec:0.4f}, a difference of {dra-raoffset:0.4f},{ddec-decoffset:0.4f}")
 
     return tbl
