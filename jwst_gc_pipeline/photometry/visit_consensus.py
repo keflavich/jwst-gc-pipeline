@@ -115,6 +115,49 @@ def exposure_key(tbl):
     return (str(visit), exposure, str(module), str(filtername))
 
 
+# A pooled reference (component union / parity half / final consensus) spans
+# the whole visit mosaic -- multi-million stars for a 192-exposure filter --
+# but an exposure can only pair with reference stars inside its own footprint
+# plus the largest sweep window.  Cropping the reference to that bounding box
+# before measure_offset is geometrically LOSSLESS for the offset histogram
+# (pairs outside it cannot exist at any sweep window) and keeps every KD tree
+# O(local density) instead of O(mosaic): without it each measure rebuilt
+# multi-million-point trees 8x (4 windows x probe+main) and F182M m2 spent
+# ~15 min per exposure (2026-07-13).
+_CROP_PAD_ARCSEC = 70.0   # > max(DEFAULT_SWEEP_WINDOWS) = 60"
+
+
+def _crop_to_footprint(ref, target, pad_arcsec=_CROP_PAD_ARCSEC):
+    pad = pad_arcsec / 3600.0
+    tdec = target.dec.deg
+    dec_lo, dec_hi = float(tdec.min()) - pad, float(tdec.max()) + pad
+    cosd = max(np.cos(np.radians(np.clip((dec_lo + dec_hi) / 2.0, -89.9, 89.9))),
+               1e-3)
+    tra = target.ra.deg
+    ra_lo, ra_hi = float(tra.min()) - pad / cosd, float(tra.max()) + pad / cosd
+    if ra_hi - ra_lo > 180.0:
+        # footprint straddles the RA wrap: the box test is invalid there
+        return ref
+    sel = ((ref.dec.deg >= dec_lo) & (ref.dec.deg <= dec_hi)
+           & (ref.ra.deg >= ra_lo) & (ref.ra.deg <= ra_hi))
+    n = int(sel.sum())
+    if n == len(ref) or n < 100:
+        # no/negligible boxed overlap: keep the full reference so the caller's
+        # too-few-pairs / unverified semantics are exactly as before
+        return ref
+    return ref[sel]
+
+
+def _cap_stars(sc, n_max=500_000, seed=1182):
+    """Deterministic uniform subsample.  The offset histogram peak is a
+    density estimate: a uniform subsample preserves its location and its
+    contrast statistics (same argument as MAX_PAIRS_PER_WINDOW)."""
+    if len(sc) <= n_max:
+        return sc
+    rng = np.random.default_rng(seed)
+    return sc[np.sort(rng.choice(len(sc), n_max, replace=False))]
+
+
 def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
                           match_radius=0.2 * u.arcsec, min_exposures=2,
                           min_stars=50, context=""):
@@ -233,7 +276,9 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
                 grew = False
                 for i in sorted(remaining,
                                 key=lambda j: -usable[j]["n_reliable"]):
-                    res = measure_offset(usable[i]["coords"], union, sweep=True,
+                    res = measure_offset(usable[i]["coords"],
+                                         _crop_to_footprint(union, usable[i]["coords"]),
+                                         sweep=True,
                                          context=f"{context} exp{usable[i]['key']} "
                                                  f"vs component {comp} union")
                     if res is None or not res["ok"]:
@@ -265,13 +310,18 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
         half_bridge = None
         if 0 in halves and 1 in halves:
             # correction to move the ODD half onto the EVEN half's frame
-            half_bridge = measure_offset(halves[1], halves[0], sweep=True,
+            # (both halves cover the full mosaic; capped uniform subsamples
+            # keep this single measure cheap without moving the peak)
+            half_bridge = measure_offset(_cap_stars(halves[1]),
+                                         _cap_stars(halves[0]), sweep=True,
                                          context=f"{context} half1 vs half0")
         for i, e in enumerate(usable):
             other = halves.get(1 - parity[i])
             if other is None:
                 continue
-            res = measure_offset(e["coords"], other, sweep=True,
+            res = measure_offset(e["coords"],
+                                 _crop_to_footprint(other, e["coords"]),
+                                 sweep=True,
                                  context=f"{context} exp{e['key']} vs half"
                                          f"{1 - parity[i]}")
             if res is None or not res["ok"]:
@@ -363,7 +413,9 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
     exposures = []
     consensus_ok = True
     for pos, e in enumerate(usable):
-        res = measure_offset(e["coords"], consensus, sweep=True,
+        res = measure_offset(e["coords"],
+                             _crop_to_footprint(consensus, e["coords"]),
+                             sweep=True,
                              context=f"{context} exp{e['key']} vs consensus")
         measurable = res is not None and res["ok"]
         if not measurable:
