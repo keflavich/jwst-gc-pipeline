@@ -296,6 +296,16 @@ def overlap_offset_grid(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS, nx=12, ny=12,
                 if m is None or m.get("n_peak", 0) < n_peak_floor:
                     n_no_coverage += 1
                     continue
+                # Fine-tile verdicts are only trusted in the regime this layer
+                # OWNS (<= 0.5*maxsep): rare dense-cell noise peaks still clear
+                # every floor while sitting at ~0.95*maxsep (v7 real-data run:
+                # 3/85 tiles at ~2.9" on a pair whose pooled offset was 9 mas).
+                # A REAL local offset beyond this cap is per-exposure-gross and
+                # is owned by the swept visit-consensus checkpoint + the pooled
+                # swept layer, not by a 3"-window tile.
+                if m["off"] > 0.5 * maxsep_arcsec * 1000.0:
+                    n_no_coverage += 1
+                    continue
                 m.update(ix=i, iy=j,
                          off_ok=bool(m["off"] <= tol_mas),
                          contrast_ok=bool(m["ok"]))
