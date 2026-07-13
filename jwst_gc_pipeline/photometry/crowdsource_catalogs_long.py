@@ -1949,6 +1949,21 @@ def save_photutils_results(result, ww, filename,
         result.meta['RAOFFSET'] = im1[1].header['RAOFFSET']
         result.meta['DEOFFSET'] = im1[1].header['DEOFFSET']
 
+    # WCS-GENERATION + correction-provenance stamps (2026-07-13): carry the
+    # frame's generation identity and the applied-correction audit trail into
+    # the catalog, so a tie solved on this catalog can verify it targets the
+    # same generation (and a stale catalog is detectable WITHOUT re-reading
+    # the crf).  See astrometry_utils.generation_stamp / fix_alignment ABASE*.
+    for _hk, _mk in (('CAL_VER', 'WCSGCAL'), ('CRDS_CTX', 'WCSGCTX'),
+                     ('DVACORR', 'WCSGDVA'), ('ABASERA', 'ABASERA'),
+                     ('ABASEDE', 'ABASEDE'), ('ATGTRA', 'ATGTRA'),
+                     ('ATGTDE', 'ATGTDE'), ('AOFFCONV', 'AOFFCONV'),
+                     ('APROVTB', 'APROVTB'), ('APROVDT', 'APROVDT')):
+        for _ext in (0, 1):
+            if _hk in im1[_ext].header:
+                result.meta[_mk] = im1[_ext].header[_hk]
+                break
+
     if 'x_err' in result.colnames:
         result['dra'] = result['x_err'] * pixscale
         result['ddec'] = result['y_err'] * pixscale
