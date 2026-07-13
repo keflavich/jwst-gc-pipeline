@@ -116,3 +116,14 @@ The absolute arbiter is always VIRAC2 — image↔catalog agreement is only mean
 ---
 *Add this same inter-frame overlap item to the per-observation QA issue template
 (`JWST-GC/data-qa`).*
+
+## 0c. Position-vs-brightness systematics (BLOCKING for pointing-reference catalogs)
+
+A catalog used as a pointing (NIRSpec MSA/TA) reference must show **no
+systematic variation of position with source brightness** — saturation-core
+centroid bias, satstar wing-fit substitution, and nonlinearity all imprint
+exactly such a trend, and the bulk reference tie (dominated by faint stars)
+cannot see it.  Run
+`scripts/reduction/run_astrometry_checkpoint.py --brightness <catalog> --refcat <refcat>`:
+no magnitude bin's mean residual above tolerance (default 5 mas, significance-
+gated), no significant mas/mag slope.
