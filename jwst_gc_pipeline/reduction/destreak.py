@@ -6,7 +6,9 @@ from astropy.wcs import WCS
 import scipy
 import scipy.ndimage
 
-basepath = '/orange/adamginsburg/jwst/brick/'
+from jwst_gc_pipeline.paths import DATA_ROOT
+
+basepath = f'{DATA_ROOT}/brick/'
 
 # these were created in notebooks/MedianFilterBackground.ipynb
 background_mapping = { '2221':
@@ -163,6 +165,12 @@ def add_background_map(data, hdu, background_mapping=background_mapping,
     if verbose:
         print(f'Background filename: {bgfile}')
 
+    if not os.path.exists(bgfile):
+        print(f"WARNING: background map {bgfile} does not exist; skipping the "
+              "background-map add-back for this frame.  (Stage the medfilt map "
+              "under {basepath}/images/ to enable it.)")
+        return data
+
     ww = WCS(hdu[ext].header)
 
     bg = fits.getdata(bgfile)
@@ -195,7 +203,7 @@ def add_background_map(data, hdu, background_mapping=background_mapping,
 
 
 def destreak(frame, percentile=10, median_filter_size=256, overwrite=True, write=True,
-             background_folder='/orange/adamginsburg/jwst/brick/images/',
+             background_folder=f'{DATA_ROOT}/brick/images/',
              background_mapping=background_mapping,
              use_background_map=False
              ):
@@ -227,7 +235,7 @@ def destreak(frame, percentile=10, median_filter_size=256, overwrite=True, write
     obsid = hdu[0].header['OBSERVTN'].strip()
     if use_background_map and not (proposal_id not in background_mapping or obsid not in background_mapping[proposal_id]):
         regionname = background_mapping[proposal_id][obsid]['regionname']
-        basepath = f'/orange/adamginsburg/jwst/{regionname}/'
+        basepath = f'{DATA_ROOT}/{regionname}/'
         bgmap_path=f'{basepath}/images/'
         data = add_background_map(data, hdu, background_mapping=background_mapping, bgmap_path=bgmap_path)
 
