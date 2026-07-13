@@ -102,6 +102,32 @@ def main(argv=None):
         print("nothing to do")
         return 0
 
+    # AGGREGATE exposure-level corrections over detectors: the brick locked
+    # tables key (Visit, Exposure) without Module, so per-detector corrections
+    # for one exposure would otherwise be applied CUMULATIVELY to one row.
+    # The detector-mean is the expressible (pointing-jitter) component; the
+    # ~5 mas RMS per-detector residual measured on cycle-1 F115W is a
+    # DVA/SIAF-class systematic owned upstream, never by per-module table rows
+    # (module-lock policy).
+    agg = defaultdict(list)
+    passthrough = []
+    for c in corrections:
+        if c.get("exposure") is not None:
+            agg[(c["filtername"], str(c["visit"]), int(c["exposure"]))].append(c)
+        else:
+            passthrough.append(c)
+    corrections = list(passthrough)
+    for (filt, visit, exp), group in sorted(agg.items()):
+        corrections.append(dict(
+            filtername=filt, visit=visit, exposure=exp, module=None,
+            dra_onsky_mas=float(np.mean([g["dra_onsky_mas"] for g in group])),
+            ddec_onsky_mas=float(np.mean([g["ddec_onsky_mas"] for g in group])),
+            dec_deg=float(np.mean([g["dec_deg"] for g in group])),
+            source=f"{group[0].get('source', '')} (mean of {len(group)} detectors)"))
+    print(f"detector aggregation: {len(passthrough)} visit-level + "
+          f"{len(corrections) - len(passthrough)} exposure-level "
+          f"(from {sum(len(g) for g in agg.values())} per-detector)")
+
     kept = []
     for c in corrections:
         mag = float(np.hypot(c["dra_onsky_mas"], c["ddec_onsky_mas"]))
