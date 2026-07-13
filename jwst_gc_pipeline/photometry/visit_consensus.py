@@ -197,43 +197,94 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
         return SkyCoord(ra=sc.ra + (dra_mas / 3.6e6 / cosd) * u.deg,
                         dec=sc.dec + (ddec_mas / 3.6e6) * u.deg, frame="icrs")
 
-    # 2. component-wise union growth.  rel[i] = offset of exposure i RELATIVE
-    # to its component's union frame (None until tied); comp_id[i] = component.
+    # 2. relative tie.  TWO paths:
+    #    - small visits (<= 16 usable exposures): component-wise UNION GROWTH
+    #      (robust when a tile holds only 2-3 exposures -- a pooled half could
+    #      be dominated by a single bad exposure there; O(n^2) is cheap at
+    #      this size);
+    #    - large visits: PARITY-HALVES (2026-07-13) -- the growth loop is
+    #      O(n^2) measure_offset calls each rebuilding a KD tree on a growing
+    #      multi-million-star union (a 192-exposure brick filter spent 9+
+    #      hours there).  Split the exposures into two fixed pooled halves
+    #      (alternating by size rank so both cover the mosaic), measure each
+    #      exposure ONCE against the opposite half (KD tree cached on the two
+    #      fixed objects), bridge the half-frames with one half-vs-half
+    #      measurement.  A bad exposure is a small minority of its half's
+    #      local stars at this size, so the histogram peak stays clean.
+    #      Untied exposures are ISLANDS (component -1), reference-tie only.
     rel = [None] * len(usable)
     comp_id = np.full(len(usable), -1, dtype=int)
-    remaining = set(range(len(usable)))
-    n_components = 0
-    while remaining:
-        seed_i = max(remaining, key=lambda i: usable[i]["n_reliable"])
-        comp = n_components
-        comp_id[seed_i] = comp
-        rel[seed_i] = dict(dra=0.0, ddec=0.0, off=0.0, ok=True, swept=False,
-                           npairs=usable[seed_i]["n_reliable"],
-                           contrast=float("inf"), window_arcsec=0.0,
-                           dra_err=0.0, ddec_err=0.0,
-                           n_peak=usable[seed_i]["n_reliable"])
-        remaining.discard(seed_i)
-        union = usable[seed_i]["coords"]
-        grew = True
-        while grew and remaining:
-            grew = False
-            for i in sorted(remaining,
-                            key=lambda j: -usable[j]["n_reliable"]):
-                res = measure_offset(usable[i]["coords"], union, sweep=True,
-                                     context=f"{context} exp{usable[i]['key']} "
-                                             f"vs component {comp} union")
-                if res is None or not res["ok"]:
-                    continue
-                rel[i] = res
-                comp_id[i] = comp
-                remaining.discard(i)
-                shifted_i = _shift(usable[i]["coords"], res["dra"], res["ddec"])
-                union = SkyCoord(
-                    ra=np.concatenate([union.ra.deg, shifted_i.ra.deg]) * u.deg,
-                    dec=np.concatenate([union.dec.deg, shifted_i.dec.deg]) * u.deg,
+    if len(usable) <= 16:
+        remaining = set(range(len(usable)))
+        n_components = 0
+        while remaining:
+            seed_i = max(remaining, key=lambda i: usable[i]["n_reliable"])
+            comp = n_components
+            comp_id[seed_i] = comp
+            rel[seed_i] = dict(dra=0.0, ddec=0.0, off=0.0, ok=True, swept=False,
+                               npairs=usable[seed_i]["n_reliable"],
+                               contrast=float("inf"), window_arcsec=0.0,
+                               dra_err=0.0, ddec_err=0.0,
+                               n_peak=usable[seed_i]["n_reliable"])
+            remaining.discard(seed_i)
+            union = usable[seed_i]["coords"]
+            grew = True
+            while grew and remaining:
+                grew = False
+                for i in sorted(remaining,
+                                key=lambda j: -usable[j]["n_reliable"]):
+                    res = measure_offset(usable[i]["coords"], union, sweep=True,
+                                         context=f"{context} exp{usable[i]['key']} "
+                                                 f"vs component {comp} union")
+                    if res is None or not res["ok"]:
+                        continue
+                    rel[i] = res
+                    comp_id[i] = comp
+                    remaining.discard(i)
+                    shifted_i = _shift(usable[i]["coords"], res["dra"], res["ddec"])
+                    union = SkyCoord(
+                        ra=np.concatenate([union.ra.deg, shifted_i.ra.deg]) * u.deg,
+                        dec=np.concatenate([union.dec.deg, shifted_i.dec.deg]) * u.deg,
+                        frame="icrs")
+                    grew = True
+            n_components += 1
+    else:
+        order = np.argsort([-e["n_reliable"] for e in usable])
+        parity = np.zeros(len(usable), dtype=int)
+        parity[order[1::2]] = 1
+        halves = {}
+        for par in (0, 1):
+            sel = [i for i in range(len(usable)) if parity[i] == par]
+            if sel:
+                halves[par] = SkyCoord(
+                    ra=np.concatenate([usable[i]["coords"].ra.deg
+                                       for i in sel]) * u.deg,
+                    dec=np.concatenate([usable[i]["coords"].dec.deg
+                                        for i in sel]) * u.deg,
                     frame="icrs")
-                grew = True
-        n_components += 1
+        half_bridge = None
+        if 0 in halves and 1 in halves:
+            # correction to move the ODD half onto the EVEN half's frame
+            half_bridge = measure_offset(halves[1], halves[0], sweep=True,
+                                         context=f"{context} half1 vs half0")
+        for i, e in enumerate(usable):
+            other = halves.get(1 - parity[i])
+            if other is None:
+                continue
+            res = measure_offset(e["coords"], other, sweep=True,
+                                 context=f"{context} exp{e['key']} vs half"
+                                         f"{1 - parity[i]}")
+            if res is None or not res["ok"]:
+                continue
+            if parity[i] == 0:
+                if half_bridge is None or not half_bridge.get("ok"):
+                    continue
+                res = dict(res, dra=res["dra"] + half_bridge["dra"],
+                           ddec=res["ddec"] + half_bridge["ddec"])
+                res["off"] = float(np.hypot(res["dra"], res["ddec"]))
+            rel[i] = res
+            comp_id[i] = 0
+        n_components = 1 if (comp_id == 0).any() else 0
 
     # 3. per-component association + consensus positions
     all_ra, all_dec, all_scatter, all_nexp, all_mag = [], [], [], [], []
