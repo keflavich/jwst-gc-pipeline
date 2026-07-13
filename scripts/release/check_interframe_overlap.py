@@ -83,7 +83,7 @@ def _group_key(crf_path):
     return f"{visit}:{module}"
 
 
-def build_groups(field, filt):
+def build_groups(field, filt, visits=None):
     # NIRCam crf carry the _destreak token (working-copy lineage); MIRI skips
     # destreak so its crf do NOT (jw..._mirimage_o001_crf.fits) -- glob both.
     # Excluding MIRI silently PASSED it, and MIRI visit misregistration is a
@@ -92,6 +92,12 @@ def build_groups(field, filt):
             f"{BASE}/{field}/{filt}/pipeline/jw*_*_nrc*_o*_crf.fits",
             f"{BASE}/{field}/{filt}/pipeline/jw*_*_mirimage*_o*_crf.fits")
     frames = sorted({fn for pat in pats for fn in glob.glob(pat)})
+    if visits:
+        # scope to the release's own observations: shared target directories
+        # carry stray crf from OTHER programs/obs (brick dir holds 2221 o002 =
+        # cloudc frames) that must not pollute the field verdict
+        frames = [fn for fn in frames
+                  if os.path.basename(fn).split("_")[0][-6:] in visits]
     groups = {}
     ndet = {}
     for fn in frames:
@@ -121,8 +127,8 @@ def _refcat(path):
     return rc, gaia
 
 
-def check_filter(field, filt, refcat=None, verbose=True):
-    pooled, ndet, nframes = build_groups(field, filt)
+def check_filter(field, filt, refcat=None, verbose=True, visits=None):
+    pooled, ndet, nframes = build_groups(field, filt, visits=visits)
     # FAIL-CLOSED on "found nothing": a gate that goes green because its glob
     # matched zero files (renamed products, naming drift) is the silent
     # false-agreement class this repo bans.  Distinguish it from a genuine
@@ -270,6 +276,10 @@ def main(argv=None):
     ap.add_argument("--scan", action="store_true", help="every filter of the field")
     ap.add_argument("--refcat", default=None,
                     help="optional external refcat for the fine-grid absolute cross-check")
+    ap.add_argument("--visits", default=None,
+                    help="csv of obs+visit tokens (e.g. 004001,004002,001001) to "
+                         "scope the check to; stray crf from other programs in a "
+                         "shared target dir are excluded")
     args = ap.parse_args(argv)
 
     filts = field_filters(args.field) if args.scan else [args.filter]
@@ -279,7 +289,8 @@ def main(argv=None):
     any_fail = False
     any_noverify = False
     for f in filts:
-        r = check_filter(args.field, f, refcat=args.refcat)
+        r = check_filter(args.field, f, refcat=args.refcat,
+                         visits=(set(args.visits.split(",")) if args.visits else None))
         if r.get("could_not_verify"):
             any_noverify = True
         elif not r.get("PASS"):

@@ -287,8 +287,12 @@ def overlap_offset_grid(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS, nx=12, ny=12,
                 # covered population).  An absolute floor alone is not enough:
                 # noise n_peak scales with density.  Below the floor the cell
                 # is UNMEASURABLE, not a verdict.
+                # 0.5: a real tie puts essentially every shared star in the
+                # peak; 0.25 still let dense-cell noise peaks (n_peak 10-30 of
+                # 40-250 stars) through as ~0.95*maxsep verdicts on real brick
+                # LW data (v6 run: 2.9" worst tiles on well-registered pairs).
                 n_peak_floor = max(10, min_overlap_pairs // 4,
-                                   int(0.25 * int(a_sel.sum())))
+                                   int(0.5 * int(a_sel.sum())))
                 if m is None or m.get("n_peak", 0) < n_peak_floor:
                     n_no_coverage += 1
                     continue
