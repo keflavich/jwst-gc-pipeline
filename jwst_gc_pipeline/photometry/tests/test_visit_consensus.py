@@ -252,3 +252,15 @@ def test_isolated_exposure_is_unverified_not_misaligned():
     assert not lone["misaligned"]
     others = [e for e in cons["exposures"] if e["key"][1] != 5]
     assert all(not e["unverified"] for e in others)
+
+
+def test_large_visit_parity_halves_detects_misalignment():
+    """>16 exposures triggers the O(n) parity-halves tie (the 9-hour
+    union-growth fix); a single misaligned exposure must still be isolated."""
+    tables = _visit_tables(n_exp=20, misaligned={7: (8.0, 0.0)})
+    cons = build_visit_consensus(tables, context="test-parity")
+    assert cons["n_components"] == 1
+    flagged = [e for e in cons["exposures"] if e["misaligned"]]
+    assert len(flagged) == 1
+    assert flagged[0]["key"][1] == 7
+    assert flagged[0]["vs_consensus"]["off"] == pytest.approx(8.0, abs=2.0)
