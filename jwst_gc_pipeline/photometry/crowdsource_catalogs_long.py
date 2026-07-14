@@ -2049,6 +2049,9 @@ def get_psf_model(filtername, proposal_id, field,
         # Default the webbpsf cache to the centralized shared store so freshly
         # downloaded grids are reused across targets/fields, not re-downloaded.
         _psf_outdir = psf_cache_dir or central_psf_dir(jwst_root)
+        # psf_grid(save=True) writes into _psf_outdir but doesn't create it;
+        # ensure it exists so a fresh tree doesn't fail after building the grid.
+        os.makedirs(_psf_outdir, exist_ok=True)
         if instrument == 'MIRI':
             # MIRI imaging: single detector (MIRIM); no module split.
             _cache_detector = 'MIRIM'
