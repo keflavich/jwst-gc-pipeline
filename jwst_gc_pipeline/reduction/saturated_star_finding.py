@@ -68,8 +68,8 @@ def get_psf(header, path_prefix='.', use_merged_psf_for_merged=False, fov_pixels
     psfgen.filter = filtername
     obsdate = header['DATE-OBS']
 
-    with open(os.path.expanduser('~/.mast_api_token'), 'r') as fh:
-        api_token = fh.read().strip()
+    _token_path = os.path.expanduser('~/.mast_api_token')
+    api_token = open(_token_path).read().strip() if os.path.exists(_token_path) else None
 
     npsf = 16
     oversample = 2
@@ -113,8 +113,14 @@ def get_psf(header, path_prefix='.', use_merged_psf_for_merged=False, fov_pixels
 
         print(f"Attempting to load PSF for {obsdate}")
         try:
-            Mast.login(api_token.strip())
-            os.environ['MAST_API_TOKEN'] = api_token.strip()
+            try:
+                if api_token:
+                    Mast.login(api_token.strip())
+                    os.environ['MAST_API_TOKEN'] = api_token.strip()
+            except Exception as ex:
+                # login is only a precaution; the OPD fetch below is public and
+                # the grid is built locally by poppy.  Don't abort on a bad token.
+                print(f"MAST login skipped ({type(ex).__name__}: {ex}); OPD fetch is public.", flush=True)
 
             psfgen.load_wss_opd_by_date(f'{obsdate}T00:00:00')
         except (urllib3.exceptions.ReadTimeoutError,
