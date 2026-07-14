@@ -322,3 +322,24 @@ def test_cap_stars_deterministic_and_preserves_peak():
     res = measure_offset(small, capped1)
     assert res["ok"]
     assert res["ddec"] == pytest.approx(0.0, abs=1.0)
+
+
+def test_kdtree_reference_identical_to_plain_path():
+    """measure_offset against a KDTreeReference must reproduce the plain
+    (astropy search_around_sky) path exactly: same deterministic subsample
+    RNG, exact within-radius pair sets, same histogram."""
+    from jwst_gc_pipeline.photometry.astrometry_offsets import (
+        KDTreeReference, measure_offset)
+    rng = np.random.default_rng(11)
+    ra = 266.5 + rng.uniform(0, 0.08, 60000)
+    dec = -28.7 + rng.uniform(0, 0.08, 60000)
+    ref_sc = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs")
+    tgt = SkyCoord(ra=(ra[:15000] + 25.0 / 3.6e6 / np.cos(np.radians(-28.7))) * u.deg,
+                   dec=(dec[:15000] - 8.0 / 3.6e6) * u.deg, frame="icrs")
+    plain = measure_offset(tgt, ref_sc)
+    tree = measure_offset(tgt, KDTreeReference(ref_sc))
+    assert tree["ok"] and plain["ok"]
+    for k in ("dra", "ddec", "off", "npairs", "contrast", "n_peak",
+              "window_arcsec"):
+        assert tree[k] == pytest.approx(plain[k], rel=1e-9), k
+    assert tree["off"] == pytest.approx(np.hypot(25.0, 8.0), abs=2.0)

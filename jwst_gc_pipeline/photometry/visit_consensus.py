@@ -25,9 +25,11 @@ from astropy import units as u
 from astropy.coordinates import SkyCoord, search_around_sky
 from astropy.table import Table
 
+from scipy.spatial import cKDTree
+
 from .astrometry_offsets import (
     measure_offset, measure_offset_grid, agree_across_references,
-    local_residual_map,
+    local_residual_map, KDTreeReference, _unit_xyz, _chord,
 )
 
 # An exposure whose bulk offset from the visit consensus exceeds this is
@@ -301,27 +303,28 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
         for par in (0, 1):
             sel = [i for i in range(len(usable)) if parity[i] == par]
             if sel:
-                halves[par] = SkyCoord(
+                # KDTreeReference: the half's KD tree is built ONCE and reused
+                # for every exposure measured against it (the per-call astropy
+                # rebuild on a multi-million-star half dominated the runtime)
+                halves[par] = KDTreeReference(SkyCoord(
                     ra=np.concatenate([usable[i]["coords"].ra.deg
                                        for i in sel]) * u.deg,
                     dec=np.concatenate([usable[i]["coords"].dec.deg
                                         for i in sel]) * u.deg,
-                    frame="icrs")
+                    frame="icrs"))
         half_bridge = None
         if 0 in halves and 1 in halves:
             # correction to move the ODD half onto the EVEN half's frame
             # (both halves cover the full mosaic; capped uniform subsamples
             # keep this single measure cheap without moving the peak)
-            half_bridge = measure_offset(_cap_stars(halves[1]),
-                                         _cap_stars(halves[0]), sweep=True,
+            half_bridge = measure_offset(_cap_stars(halves[1].coords),
+                                         _cap_stars(halves[0].coords), sweep=True,
                                          context=f"{context} half1 vs half0")
         for i, e in enumerate(usable):
             other = halves.get(1 - parity[i])
             if other is None:
                 continue
-            res = measure_offset(e["coords"],
-                                 _crop_to_footprint(other, e["coords"]),
-                                 sweep=True,
+            res = measure_offset(e["coords"], other, sweep=True,
                                  context=f"{context} exp{e['key']} vs half"
                                          f"{1 - parity[i]}")
             if res is None or not res["ok"]:
@@ -354,13 +357,20 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
                 flux0 = usable[i]["flux"].copy()
                 seed = sc
                 continue
-            ia, ib, sep, _ = search_around_sky(seed, sc, match_radius)
+            # nearest sc star within match_radius for each seed star.  scipy
+            # tree on the SMALL member catalog + parallel query of the (large,
+            # growing) seed: astropy search_around_sky rebuilt a tree on the
+            # multi-million-star seed for every member (~minutes each).
+            radius_arcsec = match_radius.to(u.arcsec).value
+            sc_tree = cKDTree(_unit_xyz(sc))
+            dist, idx = sc_tree.query(_unit_xyz(seed), k=1,
+                                      distance_upper_bound=_chord(radius_arcsec),
+                                      workers=-1)
+            found = idx < len(sc)
             matched_b = np.zeros(len(sc), dtype=bool)
-            if len(ia):
-                order = np.lexsort((sep.arcsec, ia))
-                ia_o, ib_o = ia[order], ib[order]
-                first = np.concatenate(([True], ia_o[1:] != ia_o[:-1]))
-                ia_n, ib_n = ia_o[first], ib_o[first]
+            if found.any():
+                ia_n = np.nonzero(found)[0]
+                ib_n = idx[found]
                 sum_ra[ia_n] += sc.ra.deg[ib_n]
                 sum_dec[ia_n] += sc.dec.deg[ib_n]
                 sum_ra2[ia_n] += sc.ra.deg[ib_n] ** 2
@@ -412,10 +422,9 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
     # UNVERIFIED -- reported, never conflated with a measured misalignment.
     exposures = []
     consensus_ok = True
+    consensus_ref = KDTreeReference(consensus)
     for pos, e in enumerate(usable):
-        res = measure_offset(e["coords"],
-                             _crop_to_footprint(consensus, e["coords"]),
-                             sweep=True,
+        res = measure_offset(e["coords"], consensus_ref, sweep=True,
                              context=f"{context} exp{e['key']} vs consensus")
         measurable = res is not None and res["ok"]
         if not measurable:
