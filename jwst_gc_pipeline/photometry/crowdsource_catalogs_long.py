@@ -2091,28 +2091,40 @@ def get_psf_model(filtername, proposal_id, field,
                     break
 
         if grid is None:
-            with open(os.path.expanduser('~/.mast_api_token'), 'r') as fh:
-                api_token = fh.read().strip()
             from astroquery.mast import Mast
 
-            for ii in range(10):
-                try:
-                    Mast.login(api_token.strip())
-                    break
-                except (requests.exceptions.ReadTimeout,
-                        requests.exceptions.ConnectionError,
-                        urllib3.exceptions.ReadTimeoutError,
-                        urllib3.exceptions.ProtocolError,
-                        ConnectionError,
-                        TimeoutError) as ex:
-                    # Transient MAST hiccup (incl. RemoteDisconnected wrapped
-                    # in ConnectionError; this killed brick 34252892 + cloudc
-                    # 34252893 mid-run on 2026-06-10 after 3-7h of work).
-                    backoff = min(30, 2 ** ii)
-                    print(f"Attempt {ii} to log in to MAST: {type(ex).__name__}: {ex}; sleeping {backoff}s",
-                          flush=True)
-                    time.sleep(backoff)
-            os.environ['MAST_API_TOKEN'] = api_token.strip()
+            # A MAST token is only a precaution here; the wavefront OPD fetched by
+            # load_wss_opd_by_date is public and the PSF grid is built locally by
+            # poppy.  So a missing/expired ~/.mast_api_token must not abort.
+            token_path = os.path.expanduser('~/.mast_api_token')
+            if os.path.exists(token_path):
+                with open(token_path, 'r') as fh:
+                    api_token = fh.read().strip()
+                os.environ['MAST_API_TOKEN'] = api_token
+                for ii in range(10):
+                    try:
+                        Mast.login(api_token)
+                        break
+                    except (requests.exceptions.ReadTimeout,
+                            requests.exceptions.ConnectionError,
+                            urllib3.exceptions.ReadTimeoutError,
+                            urllib3.exceptions.ProtocolError,
+                            ConnectionError,
+                            TimeoutError) as ex:
+                        # Transient MAST hiccup (incl. RemoteDisconnected wrapped
+                        # in ConnectionError; this killed brick 34252892 + cloudc
+                        # 34252893 mid-run on 2026-06-10 after 3-7h of work).
+                        backoff = min(30, 2 ** ii)
+                        print(f"Attempt {ii} to log in to MAST: {type(ex).__name__}: {ex}; sleeping {backoff}s",
+                              flush=True)
+                        time.sleep(backoff)
+                    except Exception as ex:
+                        print(f"MAST login failed ({type(ex).__name__}: {ex}); continuing without it "
+                              "(OPD fetch is public, PSF built locally).", flush=True)
+                        break
+            else:
+                print("No ~/.mast_api_token found; continuing without MAST login "
+                      "(OPD fetch is public, PSF built locally).", flush=True)
 
             has_downloaded = False
             ntries = 0
@@ -4519,13 +4531,14 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
             )
         modules = filtered_modules
 
+    from jwst_gc_pipeline.paths import DATA_ROOT, BLUE_ROOT
     if field_to_reg_mapping[field] in ('sickle', 'cloudef', 'sgrc', 'sgrb2', 'arches', 'quintuplet', 'sgra', 'gc2211', 'wd1', 'wd2', 'w51',
                                        # globular clusters (Anderson co-I) live on /orange
                                        'm92', 'ngc6397', 'm4',
                                        'ngc6334'):  # NGC 6334 (Cat's Paw SFR)
-        basepath = f'/orange/adamginsburg/jwst/{field_to_reg_mapping[field]}/'
+        basepath = f'{DATA_ROOT}/{field_to_reg_mapping[field]}/'
     else:
-        basepath = f'/blue/adamginsburg/adamginsburg/jwst/{field_to_reg_mapping[field]}/'
+        basepath = f'{BLUE_ROOT}/{field_to_reg_mapping[field]}/'
 
     pl.close('all')
 
