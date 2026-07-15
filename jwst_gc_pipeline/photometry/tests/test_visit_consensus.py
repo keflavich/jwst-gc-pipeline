@@ -264,3 +264,82 @@ def test_large_visit_parity_halves_detects_misalignment():
     assert len(flagged) == 1
     assert flagged[0]["key"][1] == 7
     assert flagged[0]["vs_consensus"]["off"] == pytest.approx(8.0, abs=2.0)
+
+
+def test_footprint_crop_is_lossless_for_the_measured_offset():
+    """_crop_to_footprint removes only reference stars no sweep window could
+    pair with the target; the measured offset must be unchanged."""
+    from jwst_gc_pipeline.photometry.visit_consensus import _crop_to_footprint
+    from jwst_gc_pipeline.photometry.astrometry_offsets import measure_offset
+    rng = np.random.default_rng(7)
+    # wide mosaic-scale reference; target covers a small corner of it
+    ref = SkyCoord(ra=(266.5 + rng.uniform(0, 0.2, 40000)) * u.deg,
+                   dec=(-28.7 + rng.uniform(0, 0.2, 40000)) * u.deg,
+                   frame="icrs")
+    sel = (ref.ra.deg < 266.55) & (ref.dec.deg < -28.65)
+    # target = that corner's stars shifted by a known 12 mas
+    tgt = SkyCoord(ra=(ref.ra.deg[sel] - 12.0 / 3.6e6 / np.cos(np.radians(-28.7))) * u.deg,
+                   dec=ref.dec.deg[sel] * u.deg, frame="icrs")
+    cropped = _crop_to_footprint(ref, tgt)
+    assert len(cropped) < len(ref)
+    full = measure_offset(tgt, ref)
+    fast = measure_offset(tgt, cropped)
+    assert fast["ok"]
+    assert fast["dra"] == pytest.approx(full["dra"], abs=0.5)
+    assert fast["ddec"] == pytest.approx(full["ddec"], abs=0.5)
+    assert fast["off"] == pytest.approx(12.0, abs=2.0)
+
+
+def test_footprint_crop_falls_back_on_wrap_and_no_overlap():
+    from jwst_gc_pipeline.photometry.visit_consensus import _crop_to_footprint
+    rng = np.random.default_rng(8)
+    ref = SkyCoord(ra=rng.uniform(100, 100.1, 500) * u.deg,
+                   dec=rng.uniform(0, 0.1, 500) * u.deg, frame="icrs")
+    # RA-wrap-straddling target: box test invalid -> full reference returned
+    wrap = SkyCoord(ra=np.array([359.99, 0.01]) * u.deg,
+                    dec=np.array([0.0, 0.0]) * u.deg, frame="icrs")
+    assert len(_crop_to_footprint(ref, wrap)) == len(ref)
+    # disjoint target: <100 boxed stars -> full reference (caller's
+    # too-few-pairs/unverified path must behave exactly as uncropped)
+    far = SkyCoord(ra=np.array([200.0, 200.01]) * u.deg,
+                   dec=np.array([50.0, 50.01]) * u.deg, frame="icrs")
+    assert len(_crop_to_footprint(ref, far)) == len(ref)
+
+
+def test_cap_stars_deterministic_and_preserves_peak():
+    from jwst_gc_pipeline.photometry.visit_consensus import _cap_stars
+    from jwst_gc_pipeline.photometry.astrometry_offsets import measure_offset
+    rng = np.random.default_rng(9)
+    ra = 266.5 + rng.uniform(0, 0.05, 30000)
+    dec = -28.7 + rng.uniform(0, 0.05, 30000)
+    big = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs")
+    small = SkyCoord(ra=(ra[:8000] + 10.0 / 3.6e6) * u.deg,
+                     dec=dec[:8000] * u.deg, frame="icrs")
+    capped1 = _cap_stars(big, n_max=10000)
+    capped2 = _cap_stars(big, n_max=10000)
+    assert len(capped1) == 10000
+    assert np.array_equal(capped1.ra.deg, capped2.ra.deg)
+    res = measure_offset(small, capped1)
+    assert res["ok"]
+    assert res["ddec"] == pytest.approx(0.0, abs=1.0)
+
+
+def test_kdtree_reference_identical_to_plain_path():
+    """measure_offset against a KDTreeReference must reproduce the plain
+    (astropy search_around_sky) path exactly: same deterministic subsample
+    RNG, exact within-radius pair sets, same histogram."""
+    from jwst_gc_pipeline.photometry.astrometry_offsets import (
+        KDTreeReference, measure_offset)
+    rng = np.random.default_rng(11)
+    ra = 266.5 + rng.uniform(0, 0.08, 60000)
+    dec = -28.7 + rng.uniform(0, 0.08, 60000)
+    ref_sc = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs")
+    tgt = SkyCoord(ra=(ra[:15000] + 25.0 / 3.6e6 / np.cos(np.radians(-28.7))) * u.deg,
+                   dec=(dec[:15000] - 8.0 / 3.6e6) * u.deg, frame="icrs")
+    plain = measure_offset(tgt, ref_sc)
+    tree = measure_offset(tgt, KDTreeReference(ref_sc))
+    assert tree["ok"] and plain["ok"]
+    for k in ("dra", "ddec", "off", "npairs", "contrast", "n_peak",
+              "window_arcsec"):
+        assert tree[k] == pytest.approx(plain[k], rel=1e-9), k
+    assert tree["off"] == pytest.approx(np.hypot(25.0, 8.0), abs=2.0)

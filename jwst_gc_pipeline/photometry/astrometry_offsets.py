@@ -15,11 +15,72 @@ Do NOT write ad-hoc NN-median matching.  Call ``measure_offset`` here.
 import numpy as np
 from astropy import units as u
 from astropy.coordinates import SkyCoord, search_around_sky
+from scipy.spatial import cKDTree
 
 
 # Contrast (peak / median of the pair-offset histogram) below this = NO coherent
 # tie (scattered pairs), i.e. the two frames are NOT registered at this scale.
 DEFAULT_MIN_CONTRAST = 5.0
+
+
+def _unit_xyz(coords):
+    """(N, 3) unit-sphere cartesian positions of a SkyCoord."""
+    ra = np.radians(np.asarray(coords.ra.deg, dtype=float))
+    dec = np.radians(np.asarray(coords.dec.deg, dtype=float))
+    return np.column_stack([np.cos(dec) * np.cos(ra),
+                            np.cos(dec) * np.sin(ra),
+                            np.sin(dec)])
+
+
+def _chord(sep_arcsec):
+    """Unit-sphere chord length equivalent to an angular separation."""
+    return 2.0 * np.sin(np.radians(sep_arcsec / 3600.0) / 2.0)
+
+
+class KDTreeReference:
+    """A large fixed reference catalog with its KD tree built ONCE.
+
+    ``measure_offset``'s plain path (astropy ``search_around_sky``) rebuilds
+    KD trees on BOTH source lists on every call — 8x per swept measure
+    (4 windows x probe+main).  Against a multi-million-star pooled reference
+    measured many times (visit-consensus ties: one call per exposure of a
+    192-exposure visit) the rebuilds dominate the runtime by orders of
+    magnitude.  Wrap the reference once and pass the wrapper as ``b``:
+
+        ref = KDTreeReference(consensus_coords)
+        for exp in exposures:
+            measure_offset(exp_coords, ref, ...)
+
+    Queries run parallel (``workers=-1``).  Results are identical to the
+    plain path (same deterministic probe/subsample RNG, exact within-radius
+    pair sets, same histogram)."""
+
+    def __init__(self, coords):
+        self.coords = coords
+        self.ra_deg = np.asarray(coords.ra.deg, dtype=float)
+        self.dec_deg = np.asarray(coords.dec.deg, dtype=float)
+        self._tree = cKDTree(_unit_xyz(coords))
+
+    def __len__(self):
+        return len(self.ra_deg)
+
+    def count_within_xyz(self, xyz, sep_arcsec):
+        return int(np.sum(self._tree.query_ball_point(
+            xyz, _chord(sep_arcsec), workers=-1, return_length=True)))
+
+    def pairs_within_xyz(self, xyz, sep_arcsec):
+        """(ia, ib) index pairs with separation < sep_arcsec (ia into xyz,
+        ib into the wrapped reference)."""
+        lists = self._tree.query_ball_point(xyz, _chord(sep_arcsec), workers=-1)
+        counts = np.fromiter((len(lst) for lst in lists), dtype=np.int64,
+                             count=len(lists))
+        ia = np.repeat(np.arange(len(lists)), counts)
+        if counts.any():
+            ib = np.concatenate([np.asarray(lst, dtype=np.int64)
+                                 for lst in lists if lst])
+        else:
+            ib = np.zeros(0, dtype=np.int64)
+        return ia, ib
 
 
 class NoCoherentTieError(RuntimeError):
@@ -72,9 +133,50 @@ DEFAULT_SWEEP_WINDOWS = (3.0, 10.0, 30.0, 60.0)
 MAX_PAIRS_PER_WINDOW = 3_000_000
 
 
+def _measure_at_window_tree(a, ref, maxsep_arcsec, bin_arcsec, min_pairs,
+                            max_pairs=MAX_PAIRS_PER_WINDOW):
+    """``_measure_at_window`` against a prebuilt ``KDTreeReference`` — no tree
+    rebuilds, parallel queries, numerically identical result (same RNG)."""
+    n_a = len(a)
+    a_xyz = _unit_xyz(a)
+    a_ra = np.asarray(a.ra.deg, dtype=float)
+    a_dec = np.asarray(a.dec.deg, dtype=float)
+    if n_a > 2000 and len(ref) > 0:
+        rng = np.random.default_rng(1182)
+        probe = rng.choice(n_a, 1000, replace=False)
+        est_total = ref.count_within_xyz(a_xyz[probe], maxsep_arcsec) * (n_a / 1000.0)
+        if est_total > max_pairs:
+            keep = int(n_a * max_pairs / est_total)
+            # points floor, but never let the floor blow the total-pair budget
+            # by more than ~2x: a 60" window in an ultra-dense field has >1e5
+            # neighbours PER point, where a hard 2000-point floor (the plain
+            # path's) materializes >4e8 pairs and dominates the runtime
+            per_point = max(est_total / n_a, 1.0)
+            keep = max(keep, min(2000, int(2 * max_pairs / per_point)), 30)
+            sel = rng.choice(n_a, min(keep, n_a), replace=False)
+            a_xyz, a_ra, a_dec = a_xyz[sel], a_ra[sel], a_dec[sel]
+    ia, ib = ref.pairs_within_xyz(a_xyz, maxsep_arcsec)
+    if len(ia) < min_pairs:
+        return None
+    cosd = np.cos(np.radians(a_dec[ia]))
+    ddeg = ref.ra_deg[ib] - a_ra[ia]
+    ddeg = (ddeg + 180.0) % 360.0 - 180.0   # RA-wrap-safe difference
+    dra = ddeg * 3600.0 * cosd
+    ddec = (ref.dec_deg[ib] - a_dec[ia]) * 3600.0
+    bw = max(bin_arcsec, maxsep_arcsec / 150.0)
+    (dra_mas, ddec_mas, off_mas, npairs, contrast,
+     dra_err_mas, ddec_err_mas, n_peak) = _hist_peak(dra, ddec, maxsep_arcsec, bw)
+    return dict(dra=dra_mas, ddec=ddec_mas, off=off_mas, npairs=npairs,
+                contrast=contrast, window_arcsec=maxsep_arcsec,
+                dra_err=dra_err_mas, ddec_err=ddec_err_mas, n_peak=n_peak)
+
+
 def _measure_at_window(a, b, maxsep_arcsec, bin_arcsec, min_pairs,
                        max_pairs=MAX_PAIRS_PER_WINDOW):
     """Single-window histogram-peak offset.  Returns a result dict or None."""
+    if isinstance(b, KDTreeReference):
+        return _measure_at_window_tree(a, b, maxsep_arcsec, bin_arcsec,
+                                       min_pairs, max_pairs)
     n_a = len(a)
     if n_a > 2000 and len(b) > 0:
         # probe the pair density on a small subsample, then cap the total
