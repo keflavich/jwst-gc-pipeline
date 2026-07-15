@@ -399,7 +399,6 @@ The iteration tokens (`_m1.._m7`, `_dao_basic`) are disjoint from the legacy
 `iter2/iter3/iter4`, `_daoiterative` products, so the two paths coexist in one
 tree without collision.
 
-<<<<<<< HEAD
 ## Flags (defaults)
 
 The `--manual-*` flag names are retained for back-compatibility; the path they
@@ -419,8 +418,6 @@ control is the default.
 | `--manual-group-min-sep-fwhm` | 2.0 | grouping radius in FWHM (use ~3.0 for blends) |
 | `--group` / `--max-group-size` | off / — | enable joint fitting; cap group size |
 
-=======
->>>>>>> main
 ## Known limitations
 
 - The monolith runs as a single long in-process job; for large runs use the
