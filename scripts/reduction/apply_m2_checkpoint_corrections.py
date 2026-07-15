@@ -51,17 +51,27 @@ def load_corrections(records_dir):
 
 
 def extend_table_to_per_exposure(table_path, exposures_by_filter):
-    """Replicate per-visit rows into per-exposure rows (one per exposure seen
-    in the checkpoint records) so single-exposure corrections are expressible.
-    Filters without exposure-level corrections keep their per-visit row."""
+    """Replicate per-visit rows into per-exposure rows so single-exposure
+    corrections are expressible.  Filters without exposure-level corrections
+    keep their per-visit row.
+
+    The exposure UNIVERSE is the union of exposures seen across ALL filters
+    in the records, not just the filter's own correction-carrying exposures:
+    an exposure whose residual sat under the correction floor has NO
+    correction, but fix_alignment still requires exactly one row for it
+    (2026-07-15: F182M exposures 10/11 were dropped this way and every 2221
+    V12 reduction died with match=0).  A bulk-only exposure inherits the
+    per-visit row's value verbatim; the visit-level correction is applied to
+    every row of the visit afterwards, which is exactly right for it."""
     tbl = Table.read(table_path)
     if "Exposure" in tbl.colnames:
         return tbl, False
     rows = []
     extended = False
+    universe = sorted({e for exps in exposures_by_filter.values() for e in exps})
     for row in tbl:
         filt = str(row["Filter"])
-        exps = sorted(exposures_by_filter.get(filt, []))
+        exps = universe if exposures_by_filter.get(filt) else []
         if exps:
             extended = True
             for e in exps:
