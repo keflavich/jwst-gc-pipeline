@@ -582,8 +582,18 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
                                     label_b=f"{context}/sparse")
     sep_mas = agree.get("sep_mas", float("nan"))
     # gross agreement re-uses the same measured peaks (no re-measure): a real tie
-    # or a mild sparse-Gaia offset both pass; only a spurious peak (>gross) fails.
-    cross_gross_ok = bool(np.isfinite(sep_mas) and sep_mas <= gross_tol_mas)
+    # or a mild sparse-Gaia offset both pass; only a MEASURED spurious split
+    # (finite, > gross) fails.  Critically, an UNMEASURABLE sparse tie (sep_mas
+    # nan -- too few Gaia stars to form a coherent peak) must NOT block: that is
+    # the extreme-sparse inner-GC regime (arches/quintuplet/sgra) where Gaia is
+    # untenable and this whole policy applies most.  Gating on nan would re-block
+    # exactly the VIRAC tie this is meant to keep; only a finite gross split can
+    # block.  (Residual risk when Gaia is unmeasurable: a spurious VIRAC peak
+    # then leans entirely on check D per-tile + the sweep, since the gross-Gaia
+    # backstop -- added because per-tile alone missed brick-1182 v001 at a narrow
+    # window -- cannot fire without a measurable Gaia peak.  brick-1182 v001
+    # itself is unaffected: Gaia WAS measurable there, sep ~700 mas, finite.)
+    cross_gross_ok = bool((not np.isfinite(sep_mas)) or sep_mas <= gross_tol_mas)
     grid = measure_offset_grid(consensus_coords, ref_coords_all,
                                nx=grid_nx, ny=grid_ny,
                                context=f"{context} per-tile")

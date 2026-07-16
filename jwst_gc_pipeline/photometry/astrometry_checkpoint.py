@@ -525,7 +525,7 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
     if anchor_tie is not None:
         if not anchor_tie["vs_full"] or not anchor_tie["vs_full"].get("ok"):
             failures.append(f"anchor {anchor_filter}: no coherent tie to the reference")
-        elif not anchor_tie.get("cross_reference_gross_ok", True):
+        elif not anchor_tie.get("cross_reference_gross_ok", False):  # fail-closed default
             # Only a GROSS dense-vs-sparse split (spurious/window-limited VIRAC
             # peak) blocks. A fine ~5-10 mas Gaia-sparse split does NOT: in the GC
             # Gaia is the frame, not the reference catalog, and is too sparse to

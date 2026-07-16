@@ -197,6 +197,27 @@ def test_gross_sparse_disagreement_still_blocks():
     assert not tie["apply_ok"]
 
 
+def test_unmeasurable_sparse_does_not_block():
+    """Extreme-sparse GC regime (arches/quintuplet/sgra): too few Gaia stars to
+    form a coherent sparse peak -> sep_mas is nan.  An UNMEASURABLE cross-check
+    must NOT block a coherent VIRAC tie -- gating on nan would re-block exactly
+    the tie this policy keeps.  Only a FINITE gross split can block."""
+    ra, dec = _field()
+    cons = SkyCoord(ra=(ra - 10.0 / 3.6e6 / COSD) * u.deg, dec=dec * u.deg,
+                    frame="icrs")
+    ref_all, _ = _reference_sets(ra, dec)
+    # 3 Gaia stars -> far below min_pairs -> measure_offset returns None ->
+    # agree_across_references -> sep_mas = nan
+    ref_sparse_tiny = SkyCoord(ra=ra[:3] * u.deg, dec=dec[:3] * u.deg, frame="icrs")
+    tie = measure_reference_tie(cons, ref_all, ref_sparse_tiny,
+                                context="test-unmeasurable-sparse",
+                                grid_nx=2, grid_ny=2)
+    assert not np.isfinite(tie["cross_reference"]["sep_mas"])  # sparse unmeasurable
+    assert tie["cross_reference_gross_ok"]   # nan does NOT block
+    assert tie["vs_full"]["ok"]
+    assert tie["apply_ok"]                    # VIRAC-coherent tie still applies
+
+
 # ---------------------------------------------------------------------------
 # mosaic visits (2026-07-12): a visit's exposures span DISJOINT pointing tiles
 # and two modules -- "no tie to the anchor" is geometry, not misalignment
