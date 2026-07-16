@@ -31,14 +31,37 @@ NN match with a median/mean. Do not disable either.
 ### The ONLY sanctioned ways to measure an astrometric offset
 
 1. **Offset-HISTOGRAM stacking** — histogram ALL pairwise offsets within a window,
-   take the peak. Density-immune; correct no matter how large the shift.
-   Use `jwst_gc_pipeline.photometry.astrometry_offsets.measure_offset(a, b)` (the
-   public, guarded helper) or `scripts/reduction/astrometry_audit.py::xcorr`.
+   take the peak. Density-immune to NN-collapse; correct no matter how large the
+   shift. Use `jwst_gc_pipeline.photometry.astrometry_offsets.measure_offset(a, b)`
+   (the public, guarded helper) or `scripts/reduction/astrometry_audit.py::xcorr`.
+   Use it for DETECTION and for LARGE offsets.
 2. **A SPARSE reference** — the Gaia-only subset (`source == b'GaiaDR3'`, medNN
    ~5.7"), never the full dense catalog.
 
+### ⚠ Histogram-stacking is density-immune to NN-collapse but NOT to a dense-reference bias
+
+The offset-histogram peak is unbiased only when the NON-matching pair background is
+uniform. Against a **DENSE** reference (full VIRAC2), two catalogs tracing the SAME
+clustered stellar field make a correlated, non-uniform wrong-pair background that
+**pulls the peak by several mas** — a *different* failure from NN-collapse but the
+same result: density fools the estimator. Measured on brick (2026-07-16): histogram
+vs dense VIRAC2 read **~9–10 mas with a ±6.5 mas RA term whose SIGN FLIPS between
+filters** (an artifact — a real field offset cannot flip sign per filter), while the
+**same-star** tie was ~0 in RA / ~−5 mas in Dec. Against SPARSE Gaia the histogram
+was clean (matched same-star). The "common-mode ~(±6.5) mas" once blamed on
+assign_wcs drift was largely this artifact. (Memory: `histogram-vs-samestar-offset-bias`.)
+
+**So for the PRECISE bulk value against a dense reference:** do NOT use the histogram
+peak. Use it only to DETECT the tie is small, then refine **same-star** — a matched-pair
+residual via `local_residual_map` (single giant cell), which REFUSES unless a verified
+small global tie already exists (nearest pair = the RIGHT star; the sanctioned path,
+NOT ad-hoc dense NN-median). `measure_reference_tie` now does this automatically and
+reports `bulk_source` (`"same-star"` / `"histogram"`); cycle-N table corrections must
+come from the same-star bulk, never the raw histogram against dense VIRAC.
+
 Do **not** hand-roll `match_to_catalog_sky(...).median()` in an ad-hoc script.
-Import `measure_offset` instead.
+Import `measure_offset` (detection/large) or use `local_residual_map` after a verified
+tie (precise bulk); never a raw NN-median against the dense catalog.
 
 ### ⛔ GC RULE — Gaia is the FRAME, never the reference CATALOG; it must not BLOCK
 

@@ -29,12 +29,26 @@ from scipy.spatial import cKDTree
 
 from .astrometry_offsets import (
     measure_offset, measure_offset_grid, agree_across_references,
-    local_residual_map, KDTreeReference, _unit_xyz, _chord,
+    local_residual_map, GlobalTieNotVerifiedError, KDTreeReference,
+    _unit_xyz, _chord,
 )
 
 # An exposure whose bulk offset from the visit consensus exceeds this is
 # MISALIGNED: its im0 (first-pass) alignment must be replaced.
 EXPOSURE_CONSENSUS_TOL_MAS = 2.0
+
+# Same-star bulk refinement (memory: histogram-vs-samestar-offset-bias): the
+# all-pairs offset HISTOGRAM (check A) is biased by several mas against a DENSE
+# reference -- two catalogs tracing the same clustered field make a non-uniform
+# wrong-pair background that pulls the peak (brick F212N: histogram 9.3 mas / dra
+# -6.2 vs same-star 5.7 / dra ~0; the bias sign even flips between filters). Once
+# check A has VERIFIED the tie is small, the reported bulk is refined with a
+# single-cell same-star (matched-pair) residual -- the sanctioned local_residual_map
+# pattern (nearest pair is the RIGHT star only after a verified small global tie),
+# NOT ad-hoc dense NN-median. Falls back to the histogram when the tie is large
+# (gross-misalignment detection must stay density-immune).
+SAMESTAR_MATCH_RADIUS = 0.3 * u.arcsec
+SAMESTAR_MIN_PAIRS = 30
 
 # GC reference-frame policy (memory: gc-gaia-frame-not-catalog, user directive
 # 2026-07-16): in the Galactic Center, Gaia DR3 defines the absolute FRAME but its
@@ -546,7 +560,13 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
     Checks
     ------
     A. ``measure_offset`` vs the FULL (dense VIRAC2) reference, histogram + sweep.
-       THIS is the reference tie.
+       DETECTS the tie and handles large offsets, but its peak is biased several
+       mas against a dense reference, so the reported bulk is refined same-star
+       (see below).
+    A'. same-star bulk: once A verifies a small tie, a single-cell
+       ``local_residual_map`` matched-pair residual gives the UNBIASED bulk offset
+       (the reported ``dra_mas``/``ddec_mas``). Falls back to A for a large/unverified
+       tie. ``bulk_source`` records which was used.
     B. ``measure_offset`` vs the SPARSE reference (Gaia-only subset) — diagnostic.
     C. cross-reference agreement (A vs B).  A GROSS split (> ``gross_tol_mas``)
        means A is a spurious/window-limited peak (reference-dependent) and DOES
@@ -563,8 +583,10 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
     -------
     dict with per-check results and:
       ``dra_mas``/``ddec_mas``/``dra_err_mas``/``ddec_err_mas`` — the adopted
-      correction (from check A, on-sky mas, sign = correction to ADD to the
-      consensus to land on the reference);
+      correction (same-star refined when the tie is small, else check-A histogram;
+      on-sky mas, sign = correction to ADD to the consensus to land on the
+      reference); ``bulk_source`` = ``"same-star"`` or ``"histogram"``;
+      ``same_star`` = the refined matched-pair result (or None);
       ``apply_ok`` — True when A is coherent, D is clean, and the sparse cross-
       check does not GROSSLY disagree (C within ``gross_tol_mas``).  The fine
       cross-reference agreement (``cross_reference['agree']``, ``agree_tol_mas``)
@@ -608,6 +630,42 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
                 ref_coords_all, np.asarray(ref_mag, dtype=float),
                 res_a, context=f"{context} flux-matched")
 
+    # --- same-star bulk refinement (fixes the histogram's dense-reference bias) ---
+    # Check A (histogram) DETECTS the tie + handles large offsets/sweep, but its
+    # peak is biased several mas against dense VIRAC. Once A verifies the tie is
+    # small (not swept), refine the reported bulk with a single-cell same-star
+    # residual via local_residual_map -- which itself REFUSES unless the global tie
+    # is verified small (so pairs are unambiguous; the sanctioned refinement, not
+    # dense NN-median). A large/unverified tie keeps the histogram value.
+    same_star = None
+    if res_a is not None and res_a.get("ok") and not res_a.get("swept"):
+        try:
+            lrm = local_residual_map(
+                consensus_coords, ref_coords_all, res_a, cell_arcsec=1e9,
+                match_radius=SAMESTAR_MATCH_RADIUS, min_stars=SAMESTAR_MIN_PAIRS,
+                context=f"{context} same-star bulk")
+            if lrm.get("cells"):
+                c = max(lrm["cells"], key=lambda cc: cc["n"])
+                # local_residual_map returns the matched-pair residual AFTER
+                # removing res_a's (biased) global offset, so the same-star TOTAL
+                # = histogram offset + residual (the histogram bias cancels: the
+                # residual carries the correction back to the true same-star tie).
+                sdra = res_a["dra"] + c["dra_mas"]
+                sddec = res_a["ddec"] + c["ddec_mas"]
+                same_star = dict(dra=sdra, ddec=sddec,
+                                 off=float(np.hypot(sdra, sddec)),
+                                 dra_err=c["dra_sem"], ddec_err=c["ddec_sem"],
+                                 n=c["n"], residual_dra=c["dra_mas"],
+                                 residual_ddec=c["ddec_mas"])
+        except GlobalTieNotVerifiedError:
+            same_star = None   # tie too large to refine -> keep the histogram value
+
+    # The reported bulk (the correction to ADD) is the same-star refinement when
+    # available, else the histogram. Check A stays in `vs_full` for detection.
+    bulk = same_star if same_star is not None else res_a
+    bulk_source = ("same-star" if same_star is not None
+                   else "histogram" if res_a is not None else "none")
+
     # apply_ok gates on the VIRAC (dense) tie + per-tile cleanliness + a GROSS
     # sparse cross-check only.  Gaia sparseness must never block a good VIRAC tie.
     apply_ok = bool(res_a is not None and res_a.get("ok")
@@ -615,12 +673,14 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
     out = dict(vs_full=res_a, vs_sparse=res_b, cross_reference=agree,
                cross_reference_gross_ok=cross_gross_ok,
                cross_reference_gross_tol_mas=gross_tol_mas,
-               per_tile=grid, flux_matched=fluxmatched, apply_ok=apply_ok)
-    if res_a is not None:
-        out.update(dra_mas=res_a["dra"], ddec_mas=res_a["ddec"],
-                   dra_err_mas=res_a.get("dra_err", float("nan")),
-                   ddec_err_mas=res_a.get("ddec_err", float("nan")),
-                   off_mas=res_a["off"], swept=res_a.get("swept", False))
+               per_tile=grid, flux_matched=fluxmatched, same_star=same_star,
+               bulk_source=bulk_source, apply_ok=apply_ok)
+    if bulk is not None:
+        out.update(dra_mas=bulk["dra"], ddec_mas=bulk["ddec"],
+                   dra_err_mas=bulk.get("dra_err", float("nan")),
+                   ddec_err_mas=bulk.get("ddec_err", float("nan")),
+                   off_mas=bulk["off"],
+                   swept=(res_a.get("swept", False) if res_a is not None else False))
     else:
         out.update(dra_mas=float("nan"), ddec_mas=float("nan"),
                    dra_err_mas=float("nan"), ddec_err_mas=float("nan"),
