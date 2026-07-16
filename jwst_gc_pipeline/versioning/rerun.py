@@ -35,6 +35,7 @@ import argparse
 import glob
 import json
 import os
+import warnings
 
 from . import prov_sidecar
 
@@ -253,15 +254,27 @@ def _load_records_json(path):
 
 
 def _scan_sidecars(directory):
-    """Return ``{stage: record}`` from every ``*.prov.json`` under ``directory``."""
+    """Return ``{stage: record}`` from every ``*.prov.json`` under ``directory``.
+
+    One product per stage is expected per field.  A multi-filter/multi-module
+    field tree can hold several products per stage; this collapses to one
+    (last-wins) and WARNS on each collision so the ambiguity is never silent.
+    """
     out = {}
     for path in sorted(glob.glob(os.path.join(directory, '**', '*' + prov_sidecar.SIDECAR_SUFFIX),
                                  recursive=True)):
         with open(path) as fh:
             rec = json.load(fh)
         stage = rec.get('stage')
-        if stage:
-            out[stage] = rec  # last wins; one product per stage expected per field
+        if not stage:
+            continue
+        if stage in out:
+            warnings.warn(
+                f'--scan: multiple provenance sidecars for stage {stage!r}; '
+                f'keeping the last ({os.path.basename(path)}) and ignoring the '
+                f'earlier one. Scan a per-product subtree to disambiguate.',
+                stacklevel=2)
+        out[stage] = rec
     return out
 
 

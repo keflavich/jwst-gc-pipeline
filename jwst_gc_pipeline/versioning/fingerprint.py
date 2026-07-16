@@ -80,8 +80,12 @@ def _array_bytes(arr):
     import numpy as np
     arr = np.ascontiguousarray(arr)
     # Normalise byte order so the same values hash identically across machines.
-    if arr.dtype.byteorder not in ('<', '|', '='):
+    # '|' = not-applicable (1-byte); '<' = already little-endian.  Everything
+    # else -- '>' (big) AND '=' (native, which is big-endian on a BE host) -- is
+    # converted to explicit little-endian so the "platform-stable" claim holds.
+    if arr.dtype.byteorder not in ('<', '|'):
         arr = arr.astype(arr.dtype.newbyteorder('<'), copy=False)
+        arr = np.ascontiguousarray(arr)
     return arr.dtype.str, arr.shape, arr.tobytes(order='C')
 
 
@@ -185,8 +189,12 @@ def table_hash(source, exclude_cols=()):
 def facet_hashes(fits_path, exts=DEFAULT_DATA_EXTS):
     """Return ``{'data','wcs','meta'}`` facet hashes for a FITS product.
 
-    The WCS/meta facets are taken from the header that actually carries the WCS
-    (the first extension with WCS keywords, else the primary header).
+    * ``wcs``  is taken from the header that actually carries the WCS (the first
+      extension with WCS keywords, else the primary header).
+    * ``meta`` is hashed over EVERY HDU header (each tagged by index), so a
+      non-WCS metadata change living in an extension header (e.g. ``BUNIT`` or an
+      exposure keyword on the SCI HDU) is captured -- not just primary-header
+      changes.
     """
     from astropy.io import fits
     with fits.open(fits_path, memmap=True) as hdul:
@@ -197,10 +205,13 @@ def facet_hashes(fits_path, exts=DEFAULT_DATA_EXTS):
                 break
         if wcs_hdr is None:
             wcs_hdr = hdul[0].header
+        meta_chunks = []
+        for i, hdu in enumerate(hdul):
+            meta_chunks += [f'HDU{i}', meta_hash(hdu.header)]
         return {
             'data': data_hash(hdul, exts=exts),
             'wcs': wcs_hash(wcs_hdr),
-            'meta': meta_hash(hdul[0].header),
+            'meta': _hexdigest(meta_chunks),
         }
 
 
@@ -267,9 +278,17 @@ def _blob_hash(repo_dir, relpath):
             ['git', '-C', repo_dir, 'hash-object', path],
             stderr=subprocess.DEVNULL, text=True).strip()
     except (subprocess.SubprocessError, OSError):
-        # Fall back to a direct content hash if git is unavailable.
+        # Fall back to REPLICATING git's blob object id so the value matches
+        # ``git hash-object`` from a run where git WAS available (otherwise a
+        # git-vs-no-git split across the recording and comparing runs would
+        # mismatch code_hash and force a spurious REFIT).  git's default object
+        # id is sha1 over ``b'blob <len>\0' + content``.
         with open(path, 'rb') as fh:
-            return hashlib.sha256(fh.read()).hexdigest()
+            content = fh.read()
+        h = hashlib.sha1()
+        h.update(b'blob %d\0' % len(content))
+        h.update(content)
+        return h.hexdigest()
 
 
 def code_hash(stage, repo_dir=None):

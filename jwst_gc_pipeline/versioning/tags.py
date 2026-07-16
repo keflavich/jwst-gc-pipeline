@@ -97,15 +97,22 @@ def _git(args, repo_dir):
 
 
 def _is_dirty(repo_dir):
-    """True iff the working tree has uncommitted tracked changes."""
-    try:
-        return subprocess.call(
-            ['git', '-C', repo_dir, 'diff', '--quiet'],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) != 0
-    except (subprocess.SubprocessError, OSError):
-        # If git cannot be run we cannot prove the tree is clean; treat as dirty
+    """True iff the tree differs from HEAD in ANY way that could change output.
+
+    ``git status --porcelain`` catches all three cases a ``git diff --quiet``
+    misses: STAGED edits (index != HEAD), unstaged edits, AND untracked files.
+    This matters because the run guard's whole promise is that a release tag
+    implies unmodified code -- a staged edit to a stage source file on a tagged
+    HEAD must NOT resolve to the release tag. (The fingerprint layer already
+    hashes working-tree content via ``git hash-object``; this closes the same
+    gap in the guard itself.)
+    """
+    out = _git(['status', '--porcelain'], repo_dir)
+    if out is None:
+        # git could not be run -> cannot prove the tree is clean; treat as dirty
         # (fail-closed for the run guard).
         return True
+    return out.strip() != ''
 
 
 def _exact_release_tag(repo_dir):

@@ -74,10 +74,38 @@ def test_dirty_tree_is_never_production(tmp_path):
     tags.get_pipeline_tag.cache_clear()
     repo = _init_repo(tmp_path)
     _git(repo, 'tag', '2026-07-16_PR104')
-    (tmp_path / 'f.txt').write_text('one\ntwo\n')  # dirty
+    (tmp_path / 'f.txt').write_text('one\ntwo\n')  # unstaged edit
     tags.get_pipeline_tag.cache_clear()
     tag = tags.get_pipeline_tag(repo)
     assert tag.endswith('-dirty') and tags.is_dev_tag(tag)
+    with pytest.raises(tags.UntaggedPipelineError):
+        tags.assert_runnable_version('imaging', allow_dev=False, repo_dir=repo)
+
+
+def test_staged_edit_on_tagged_head_is_not_production(tmp_path):
+    # The gap the review caught: a STAGED edit (git add, not committed) on a
+    # tagged HEAD must not resolve to the release tag.
+    tags.get_pipeline_tag.cache_clear()
+    repo = _init_repo(tmp_path)
+    _git(repo, 'tag', '2026-07-16_PR104')
+    (tmp_path / 'f.txt').write_text('one\nstaged\n')
+    _git(repo, 'add', 'f.txt')            # staged, index != HEAD
+    tags.get_pipeline_tag.cache_clear()
+    tag = tags.get_pipeline_tag(repo)
+    assert tags.is_dev_tag(tag) and tag.endswith('-dirty')
+    with pytest.raises(tags.UntaggedPipelineError):
+        tags.assert_runnable_version('imaging', allow_dev=False, repo_dir=repo)
+
+
+def test_untracked_file_on_tagged_head_is_not_production(tmp_path):
+    # An untracked new file on a tagged HEAD must also read as dirty.
+    tags.get_pipeline_tag.cache_clear()
+    repo = _init_repo(tmp_path)
+    _git(repo, 'tag', '2026-07-16_PR104')
+    (tmp_path / 'newfile.py').write_text('x = 1\n')  # untracked
+    tags.get_pipeline_tag.cache_clear()
+    tag = tags.get_pipeline_tag(repo)
+    assert tags.is_dev_tag(tag) and tag.endswith('-dirty')
     with pytest.raises(tags.UntaggedPipelineError):
         tags.assert_runnable_version('imaging', allow_dev=False, repo_dir=repo)
 

@@ -122,3 +122,37 @@ def test_params_hash_ignores_volatile():
 def test_code_hash_unknown_stage():
     with pytest.raises(KeyError):
         fp.code_hash('nonesuch', repo_dir='/tmp')
+
+
+def test_facet_meta_detects_extension_header_change(tmp_path):
+    # A non-WCS metadata change in the SCI (extension) header must move meta.
+    a = str(tmp_path / 'a_i2d.fits')
+    b = str(tmp_path / 'b_i2d.fits')
+    ha = _sci_hdulist(np.zeros((2, 2)))
+    hb = _sci_hdulist(np.zeros((2, 2)))
+    ha['SCI'].header['BUNIT'] = 'MJy/sr'
+    hb['SCI'].header['BUNIT'] = 'DN/s'
+    ha.writeto(a)
+    hb.writeto(b)
+    fa, fb = fp.facet_hashes(a), fp.facet_hashes(b)
+    assert fa['data'] == fb['data']   # pixels identical
+    assert fa['wcs'] == fb['wcs']     # WCS identical
+    assert fa['meta'] != fb['meta']   # extension-header meta caught
+
+
+def test_blob_fallback_replicates_git_object_id(tmp_path):
+    import hashlib
+    import subprocess
+    content = b'print(1)\n'
+    p = tmp_path / 'x.py'
+    p.write_bytes(content)
+    repo = str(tmp_path)
+    subprocess.check_call(['git', '-C', repo, 'init', '-q'],
+                          stdout=subprocess.DEVNULL)
+    git_id = subprocess.check_output(
+        ['git', '-C', repo, 'hash-object', str(p)], text=True).strip()
+    # The fallback framing used in fingerprint._blob_hash must match git exactly.
+    h = hashlib.sha1()
+    h.update(b'blob %d\0' % len(content))
+    h.update(content)
+    assert h.hexdigest() == git_id
