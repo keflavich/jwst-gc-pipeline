@@ -225,13 +225,8 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
         progress_bar=False,
         **extra,
     )
-    # Non-finite pixels (NaN/inf from resample edges / coverage gaps) crash the
-    # LevMar objective with NonFiniteValueError; fold them into the mask and
-    # sanitize the error array so the fit only sees finite values.
-    _nonfinite = ~np.isfinite(data)
-    _mask = _nonfinite if mask is None else (np.asarray(mask, bool) | _nonfinite)
-    result = phot(data, mask=_mask, init_params=init_params,
-                  error=np.where(bad | ~np.isfinite(err), 1e10, err))
+    result = phot(data, mask=mask, init_params=init_params,
+                  error=np.where(bad, 1e10, err))
 
     # --- post-fit dedup (1.0 px, qfit tiebreak) ---
     xfit = np.asarray(result['x_fit'], dtype=float)
@@ -418,8 +413,8 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
         seed['x_init'] = xseed[over]
         seed['y_init'] = yseed[over]
         forced = forced_psf_photometry(data, dao_psf_model, seed,
-                                       error=np.where(bad | ~np.isfinite(err), 1e10, err),
-                                       mask=_mask, fit_shape=(5, 5),
+                                       error=np.where(bad, 1e10, err),
+                                       mask=mask, fit_shape=(5, 5),
                                        nonnegative=True)
         if 'forced_refit' not in res.colnames:
             res['forced_refit'] = np.zeros(len(res), dtype=bool)
