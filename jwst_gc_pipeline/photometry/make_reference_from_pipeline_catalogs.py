@@ -6,8 +6,13 @@ but this script can be used for other targets/proposals/fields (e.g. brick-2221,
 brick-1182, sgrb2-5365) by changing CLI options.
 
 Outputs (named by the bootstrap reference; see BOOTSTRAPPED_REFCAT_FILENAMES):
-- {basepath}/catalogs/nircam_bootstrapped_to_{vvv,gns}_refcat.ecsv
-- {basepath}/catalogs/nircam_bootstrapped_to_{vvv,gns}_refcat.fits
+- {basepath}/catalogs/nircam_bootstrapped_to_{virac,vvv,gns}_refcat.ecsv
+- {basepath}/catalogs/nircam_bootstrapped_to_{virac,vvv,gns}_refcat.fits
+
+ASTROMETRIC FRAME: the primary NIR anchor is VIRAC2 (II/387, Gaia-DR3-tied ~5-7 mas;
+--reference-survey=virac, DEFAULT). VVV-DR4 (II/376) is 2MASS-tied (~24 mas off Gaia) and
+is DEPRECATED as a GC anchor -- kept only behind --reference-survey=vvv. VIRAC2 PMs are
+propagated from the 2014.0 reference epoch to --ref-epoch (the JWST obs epoch).
 
 NOTE: this script does NOT (any longer) emit
 pipeline_based_nircam-{filter}_reference_astrometric_catalog.{ecsv,fits}.  Older
@@ -45,7 +50,14 @@ from jwst_gc_pipeline.catalog_utils import catalog_skycoord
 
 DEFAULT_GNS_CATALOG_PATH = Path("/orange/adamginsburg/jwst/brick/catalogs/GALACTICNUCLEUS_2021_merged.fits")
 DEFAULT_GNS_CATALOG = "J/A+A/653/A133/central"
+# VIRAC2 (Smith+2025, VizieR II/387) is the Gaia-DR3-tied (~5-7 mas) dense NIR reference.
+# Its reference epoch is 2014.0; PMs (pmRA/pmDE) MUST be propagated to the JWST obs epoch
+# before matching, else a bulk ~tens-of-mas offset is introduced. This SUPERSEDES VVV-DR4
+# (II/376/vvv4), which is 2MASS-tied (~24 mas off Gaia) and has no usable PM -> DO NOT use
+# VVV as a GC astrometric anchor. See gc-astrometry-audit-methodology.
+VIRAC2_EPOCH = 2014.0
 BOOTSTRAPPED_REFCAT_FILENAMES = {
+    "virac": "nircam_bootstrapped_to_virac_refcat",
     "vvv": "nircam_bootstrapped_to_vvv_refcat",
     "gns": "nircam_bootstrapped_to_gns_refcat",
 }
@@ -108,9 +120,29 @@ def parse_args() -> argparse.Namespace:
         help="CRDS cache path to use when generating catalogs. Defaults to {basepath}/crds.",
     )
     parser.add_argument(
+        "--reference-survey",
+        default="virac",
+        choices=["virac", "vvv"],
+        help="Primary NIR astrometric anchor survey. 'virac' (default) = VIRAC2 II/387, "
+             "Gaia-DR3-tied ~5mas, PM-propagated to obs epoch. 'vvv' = VVV-DR4 II/376, "
+             "2MASS-tied ~24mas off Gaia (DEPRECATED, GC anchor should be virac).",
+    )
+    parser.add_argument(
+        "--virac-catalog",
+        default="II/387/catalog",
+        help="Vizier catalog identifier for VIRAC2 (Smith+2025, Gaia-tied).",
+    )
+    parser.add_argument(
+        "--ref-epoch",
+        type=float,
+        default=None,
+        help="JWST observation epoch (decimal year) to propagate VIRAC2 PMs to before "
+             "matching. Required for --reference-survey=virac (VIRAC2 ref epoch is 2014.0).",
+    )
+    parser.add_argument(
         "--vvv-catalog",
         default="II/376/vvv4",
-        help="Vizier catalog identifier for VVV data.",
+        help="Vizier catalog identifier for VVV data (DEPRECATED; use --reference-survey=virac).",
     )
     parser.add_argument(
         "--gaia-catalog",
@@ -392,6 +424,125 @@ def fetch_vvv_catalog(
     vvv["skycoord"] = SkyCoord(vvv["RAJ2000"], vvv["DEJ2000"], frame="fk5")
     vvv.write(cache_path, overwrite=True)
     return vvv
+
+
+def fetch_virac2_catalog(
+    center: SkyCoord,
+    width: u.Quantity,
+    height: u.Quantity,
+    virac_catalog: str,
+    cache_path: Path,
+    refresh_cache: bool,
+    obs_epoch: float,
+) -> Table:
+    """Fetch VIRAC2 (VizieR II/387, Smith+2025) as a Gaia-DR3-tied (~5-7 mas) dense NIR
+    anchor. VIRAC2 reference epoch is 2014.0; PMs (pmRA/pmDE, mas/yr) are propagated to
+    ``obs_epoch`` so positions match the JWST catalog. Returns a table with RAJ2000/DEJ2000
+    at obs_epoch, Ks_refmag, and an icrs ``skycoord`` (same schema as fetch_vvv_catalog)."""
+    if obs_epoch is None:
+        raise ValueError(
+            "--ref-epoch (JWST obs epoch, decimal year) is REQUIRED for VIRAC2: its PMs must "
+            "be propagated from the 2014.0 reference epoch to the observation epoch.")
+    virac = query_vizier_with_cache(
+        center=center, width=width, height=height,
+        catalog=virac_catalog, cache_path=cache_path, refresh_cache=refresh_cache,
+    )
+    for col in ("RAJ2000", "DEJ2000"):
+        if col not in virac.colnames:
+            raise ValueError(f"VIRAC2 catalog {virac_catalog} missing required column {col}.")
+
+    ks_candidates = ["Ksmag", "Ksmag3", "Ks3mag", "Kmag"]
+    available = [name for name in ks_candidates if name in virac.colnames]
+    if not available:
+        raise ValueError(
+            f"VIRAC2 catalog {virac_catalog} missing all supported Ks columns. "
+            f"Tried {ks_candidates}; available: {virac.colnames}.")
+    ks_stack = np.vstack([np.asarray(virac[name], dtype=float) for name in available])
+    has_any_ks = np.isfinite(ks_stack).any(axis=0)
+    ks_refmag = np.full(ks_stack.shape[1], np.nan, dtype=float)
+    if np.any(has_any_ks):
+        ks_refmag[has_any_ks] = np.nanmedian(ks_stack[:, has_any_ks], axis=0)
+    virac["Ks_refmag"] = ks_refmag
+
+    ra = np.asarray(virac["RAJ2000"], dtype=float)
+    de = np.asarray(virac["DEJ2000"], dtype=float)
+    # propagate PM 2014.0 -> obs_epoch (pmRA is *cos(dec) convention in II/387)
+    dt = obs_epoch - VIRAC2_EPOCH
+    if "pmRA" in virac.colnames and "pmDE" in virac.colnames:
+        pmra = np.asarray(virac["pmRA"], dtype=float)
+        pmde = np.asarray(virac["pmDE"], dtype=float)
+        pmra = np.where(np.isfinite(pmra), pmra, 0.0)
+        pmde = np.where(np.isfinite(pmde), pmde, 0.0)
+        ra = ra + (pmra * dt / 3.6e6) / np.cos(np.radians(de))
+        de = de + pmde * dt / 3.6e6
+        virac["RAJ2000"] = ra
+        virac["DEJ2000"] = de
+    else:
+        print(f"WARNING: VIRAC2 {virac_catalog} has no pmRA/pmDE; positions left at "
+              f"epoch {VIRAC2_EPOCH} (bulk offset vs obs epoch {obs_epoch} expected).")
+
+    finite = np.isfinite(ra) & np.isfinite(de) & np.isfinite(virac["Ks_refmag"])
+    virac = virac[finite]
+    virac["skycoord"] = SkyCoord(virac["RAJ2000"], virac["DEJ2000"], unit=u.deg, frame="icrs")
+    # VIRAC2 is DENSE (~sub-arcsec spacing in the GC); the NN-median bootstrap below is only
+    # valid on a SPARSE reference (assert_sparse_reference_for_nn_median needs medNN >= ~3").
+    # Thin to a bright subset with a GUARANTEED minimum pairwise separation. Bright VIRAC2
+    # stars carry the best Gaia tie, so this loses nothing for the anchor.
+    virac = _thin_to_sparse(virac, min_sep_arcsec=3.5)
+    virac.meta["VIRAC2_EPOCH"] = VIRAC2_EPOCH
+    virac.meta["PROPAGATED_TO_EPOCH"] = obs_epoch
+    virac.meta["SPARSE_THINNED"] = "brightest-Ks per 3.5arcsec cell (NN-median bootstrap)"
+    virac.write(cache_path, overwrite=True)
+    return virac
+
+
+def _thin_to_sparse(table: Table, min_sep_arcsec: float = 3.5) -> Table:
+    """Greedy brightest-first thinning with a GUARANTEED minimum pairwise separation:
+    accept a source only if no already-kept (brighter) source lies within
+    ``min_sep_arcsec``. This bounds the *pairwise separation* (not merely one-per-cell, which
+    lets adjacent-cell survivors touch across a shared edge), so the returned subset has
+    medNN >= min_sep and passes ``assert_sparse_reference_for_nn_median``. Uses a grid hash
+    (cell = min_sep) for O(N): a candidate can only conflict with kept stars in its own or the
+    8 neighbouring cells. Requires 'RAJ2000','DEJ2000','Ks_refmag'."""
+    ra = np.asarray(table["RAJ2000"], dtype=float)
+    de = np.asarray(table["DEJ2000"], dtype=float)
+    ks = np.asarray(table["Ks_refmag"], dtype=float)
+    min_sep = min_sep_arcsec / 3600.0
+    cosd = np.cos(np.radians(np.nanmedian(de)))
+    xproj = ra * cosd  # tangent-plane x (small field); y = de
+    ix = np.floor(xproj / min_sep).astype(np.int64)
+    iy = np.floor(de / min_sep).astype(np.int64)
+    order = np.argsort(ks, kind="stable")  # brightest (smallest Ks) first
+    kept_by_cell: dict[tuple[int, int], list[int]] = {}
+    keep_idx = []
+    for i in order:
+        cx, cy = ix[i], iy[i]
+        conflict = False
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for j in kept_by_cell.get((cx + dx, cy + dy), ()):
+                    if (xproj[i] - xproj[j]) ** 2 + (de[i] - de[j]) ** 2 < min_sep ** 2:
+                        conflict = True
+                        break
+                if conflict:
+                    break
+            if conflict:
+                break
+        if not conflict:
+            keep_idx.append(i)
+            kept_by_cell.setdefault((cx, cy), []).append(i)
+    keep_idx.sort()
+    out = table[np.array(keep_idx, dtype=int)]
+    # sanity: achieved medNN must clear the guard threshold this thinning exists to satisfy
+    if len(out) > 3:
+        sc = SkyCoord(out["RAJ2000"], out["DEJ2000"], unit=u.deg, frame="icrs")
+        _, sep2, _ = sc.match_to_catalog_sky(sc, nthneighbor=2)
+        med_nn = float(np.nanmedian(sep2.to(u.arcsec).value))
+        if med_nn < min_sep_arcsec:
+            raise AssertionError(
+                f"_thin_to_sparse: achieved medNN {med_nn:.2f}\" < min_sep {min_sep_arcsec}\" "
+                f"(n={len(out)}); thinning failed.")
+    return out
 
 
 def fetch_gaia_catalog(
@@ -925,16 +1076,35 @@ def main() -> None:
     center, width, height = compute_query_footprint(merged["skycoord"])
     cache_stem = f"{args.target}_p{args.proposal_id}_f{args.field}_{args.filter.lower()}"
     vvv_cache_path = cache_dir / f"vvv_{cache_stem}.fits"
+    virac_cache_path = cache_dir / f"virac2_{cache_stem}.fits"
     gaia_cache_path = cache_dir / f"gaia_{cache_stem}.fits"
 
-    vvv = fetch_vvv_catalog(
-        center=center,
-        width=width,
-        height=height,
-        vvv_catalog=args.vvv_catalog,
-        cache_path=vvv_cache_path,
-        refresh_cache=args.refresh_cache,
-    )
+    # Primary NIR anchor: VIRAC2 (Gaia-tied, default) or VVV (deprecated, 2MASS-tied).
+    if args.reference_survey == "virac":
+        primary_name = "virac"
+        primary_ref = fetch_virac2_catalog(
+            center=center,
+            width=width,
+            height=height,
+            virac_catalog=args.virac_catalog,
+            cache_path=virac_cache_path,
+            refresh_cache=args.refresh_cache,
+            obs_epoch=args.ref_epoch,
+        )
+        primary_cache_path = virac_cache_path
+        primary_input_label = f"{args.virac_catalog}@{args.ref_epoch}"
+    else:
+        primary_name = "vvv"
+        primary_ref = fetch_vvv_catalog(
+            center=center,
+            width=width,
+            height=height,
+            vvv_catalog=args.vvv_catalog,
+            cache_path=vvv_cache_path,
+            refresh_cache=args.refresh_cache,
+        )
+        primary_cache_path = vvv_cache_path
+        primary_input_label = args.vvv_catalog
     gaia = fetch_gaia_catalog(
         center=center,
         width=width,
@@ -959,11 +1129,11 @@ def main() -> None:
 
     bootstrap_specs = [
         {
-            "name": "vvv",
-            "reference": vvv,
+            "name": primary_name,
+            "reference": primary_ref,
             "reference_mag_column": "Ks_refmag",
-            "cache_path": vvv_cache_path,
-            "input_label": args.vvv_catalog,
+            "cache_path": primary_cache_path,
+            "input_label": primary_input_label,
         },
     ]
     if gns is not None:
@@ -992,6 +1162,15 @@ def main() -> None:
         out_ecsv = output_dir / f"{outfile_stem}.ecsv"
         out_fits = output_dir / f"{outfile_stem}.fits"
         corrected.meta["SOURCE_F210M_CATALOG"] = str(catalog_files[0])
+        corrected.meta["REFERENCE_SURVEY"] = args.reference_survey
+        corrected.meta["ASTROM_FRAME"] = ("Gaia-DR3 (VIRAC2-tied, ~5-7mas)"
+                                          if primary_name == "virac"
+                                          else "VVV-DR4/2MASS (~24mas off Gaia) -- DEPRECATED")
+        if primary_name == "virac":
+            corrected.meta["VIRAC_CATALOG"] = args.virac_catalog
+            corrected.meta["VIRAC2_EPOCH"] = VIRAC2_EPOCH
+            corrected.meta["REF_OBS_EPOCH"] = args.ref_epoch
+            corrected.meta["VIRAC_CACHE"] = str(virac_cache_path)
         corrected.meta["VVV_CATALOG"] = args.vvv_catalog
         corrected.meta["GNS_CATALOG"] = args.gns_catalog
         corrected.meta["GAIA_CATALOG"] = args.gaia_catalog
