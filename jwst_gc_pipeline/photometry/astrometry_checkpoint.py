@@ -561,8 +561,9 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                             dec_deg=dec_mid,
                             source=f"{stage} consensus->reference"))
                         print(f"ASTROM CHECKPOINT [{stage}] CORRECT: {vctx} "
-                              f"consensus is {off:.2f} mas off the reference "
-                              f"(all independent checks agree)", flush=True)
+                              f"consensus is {off:.2f} mas off VIRAC2 "
+                              f"(coherent dense tie, per-tile clean, no gross "
+                              f"sparse-Gaia split)", flush=True)
                     else:
                         # FROZEN stage: regression = the tie MOVED since the
                         # m2 freeze (> STAGE_STABILITY_TOL_MAS), not a nonzero
@@ -593,10 +594,15 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                                 f"LATE stage (solution was supposed to be frozen; "
                                 f"no m2 baseline record found)")
                 else:
+                    # apply_ok is False only for a genuinely bad VIRAC tie now:
+                    # no coherent dense peak, per-tile not clean, or a GROSS
+                    # sparse split (spurious peak). A fine ~5-10 mas Gaia-sparse
+                    # split no longer lands here (gc-gaia-frame-not-catalog).
                     unverified.append(
                         f"{vctx}: consensus->reference offset {off:.2f} mas but the "
-                        f"independent checks DISAGREE "
-                        f"(cross-ref agree={ref_tie['cross_reference'].get('agree')}, "
+                        f"VIRAC tie is not trustworthy "
+                        f"(cross-ref sep={ref_tie['cross_reference'].get('sep_mas'):.1f} mas, "
+                        f"gross_ok={ref_tie.get('cross_reference_gross_ok')}, "
                         f"per-tile clean={ref_tie['per_tile'].get('clean')}, "
                         f"swept={ref_tie.get('swept')}) -- NOT applying; investigate")
 
@@ -682,10 +688,16 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
     if anchor_tie is not None:
         if not anchor_tie["vs_full"] or not anchor_tie["vs_full"].get("ok"):
             failures.append(f"anchor {anchor_filter}: no coherent tie to the reference")
-        elif not anchor_tie["cross_reference"].get("agree"):
+        elif not anchor_tie.get("cross_reference_gross_ok", False):  # fail-closed default
+            # Only a GROSS dense-vs-sparse split (spurious/window-limited VIRAC
+            # peak) blocks. A fine ~5-10 mas Gaia-sparse split does NOT: in the GC
+            # Gaia is the frame, not the reference catalog, and is too sparse to
+            # tie a dense field (memory: gc-gaia-frame-not-catalog).
             failures.append(
-                f"anchor {anchor_filter}: dense vs sparse reference DISAGREE "
-                f"({anchor_tie['cross_reference'].get('sep_mas'):.1f} mas)")
+                f"anchor {anchor_filter}: dense vs sparse reference GROSSLY DISAGREE "
+                f"({anchor_tie['cross_reference'].get('sep_mas'):.1f} mas > "
+                f"{anchor_tie.get('cross_reference_gross_tol_mas')} mas) -- "
+                f"VIRAC tie likely a spurious/window-limited peak")
         elif not anchor_tie["per_tile"].get("clean"):
             failures.append(f"anchor {anchor_filter}: per-tile reference map not clean")
 

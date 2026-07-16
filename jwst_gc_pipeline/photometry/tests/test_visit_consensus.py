@@ -165,17 +165,57 @@ def test_reference_tie_measures_and_signs_off():
     assert tie["apply_ok"]
 
 
-def test_reference_tie_refuses_on_reference_disagreement():
+def test_fine_sparse_gaia_disagreement_does_not_block():
+    """GC policy (gc-gaia-frame-not-catalog): a fine (~30 mas) sparse-Gaia split
+    is the sparse-noise regime, NOT a catalog conflict -- it is RECORDED (fine
+    cross_reference agree=False) but must NOT block a coherent VIRAC tie."""
     ra, dec = _field()
     cons = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs")
     ref_all, _ = _reference_sets(ra, dec)
-    # sparse reference shifted 30 mas -> the two references DISAGREE -> no sign-off
+    # sparse reference shifted 30 mas -> below the gross tol (100 mas)
     ref_sparse_bad = SkyCoord(ra=(ra[::10] + 30.0 / 3.6e6 / COSD) * u.deg,
                               dec=dec[::10] * u.deg, frame="icrs")
     tie = measure_reference_tie(cons, ref_all, ref_sparse_bad,
-                                context="test-disagree", grid_nx=2, grid_ny=2)
-    assert not tie["cross_reference"]["agree"]
+                                context="test-fine-disagree", grid_nx=2, grid_ny=2)
+    assert not tie["cross_reference"]["agree"]   # fine check flags it (diagnostic)
+    assert tie["cross_reference_gross_ok"]        # gross check is fine
+    assert tie["apply_ok"]                        # ... so the VIRAC tie still applies
+
+
+def test_gross_sparse_disagreement_still_blocks():
+    """A GROSS sparse split (spurious/window-limited VIRAC peak, the brick-1182
+    v001 ~700 mas tell) MUST still block -- the gross cross-check is retained."""
+    ra, dec = _field()
+    cons = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs")
+    ref_all, _ = _reference_sets(ra, dec)
+    # sparse reference shifted 300 mas -> above the gross tol (100 mas)
+    ref_sparse_bad = SkyCoord(ra=(ra[::10] + 300.0 / 3.6e6 / COSD) * u.deg,
+                              dec=dec[::10] * u.deg, frame="icrs")
+    tie = measure_reference_tie(cons, ref_all, ref_sparse_bad,
+                                context="test-gross-disagree", grid_nx=2, grid_ny=2)
+    assert not tie["cross_reference_gross_ok"]
     assert not tie["apply_ok"]
+
+
+def test_unmeasurable_sparse_does_not_block():
+    """Extreme-sparse GC regime (arches/quintuplet/sgra): too few Gaia stars to
+    form a coherent sparse peak -> sep_mas is nan.  An UNMEASURABLE cross-check
+    must NOT block a coherent VIRAC tie -- gating on nan would re-block exactly
+    the tie this policy keeps.  Only a FINITE gross split can block."""
+    ra, dec = _field()
+    cons = SkyCoord(ra=(ra - 10.0 / 3.6e6 / COSD) * u.deg, dec=dec * u.deg,
+                    frame="icrs")
+    ref_all, _ = _reference_sets(ra, dec)
+    # 3 Gaia stars -> far below min_pairs -> measure_offset returns None ->
+    # agree_across_references -> sep_mas = nan
+    ref_sparse_tiny = SkyCoord(ra=ra[:3] * u.deg, dec=dec[:3] * u.deg, frame="icrs")
+    tie = measure_reference_tie(cons, ref_all, ref_sparse_tiny,
+                                context="test-unmeasurable-sparse",
+                                grid_nx=2, grid_ny=2)
+    assert not np.isfinite(tie["cross_reference"]["sep_mas"])  # sparse unmeasurable
+    assert tie["cross_reference_gross_ok"]   # nan does NOT block
+    assert tie["vs_full"]["ok"]
+    assert tie["apply_ok"]                    # VIRAC-coherent tie still applies
 
 
 # ---------------------------------------------------------------------------

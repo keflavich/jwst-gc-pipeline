@@ -48,19 +48,28 @@ cross-filter" = the m7 cross-band merge.
 
 ## The reference tie (`measure_reference_tie`) — no single number signs off
 
-* A: `measure_offset` vs the full (dense) refcat, sweep on;
-* B: vs the sparse Gaia-only subset;
-* C: `agree_across_references` (A vs B within 5 mas) — a spurious peak is
-  reference-dependent, a real tie is not;
+* A: `measure_offset` vs the full (dense **VIRAC2**) refcat, sweep on — **this is
+  the reference tie**;
+* B: vs the sparse Gaia-only subset — a **diagnostic** cross-check, not the catalog;
+* C: `agree_across_references` (A vs B).  In the GC **Gaia is the frame, never the
+  reference catalog, and is too sparse to BLOCK** (memory: `gc-gaia-frame-not-catalog`;
+  Gaia↔VIRAC2 agree ~2.3 mas over the Brick, so a fine ~5–10 mas split is a JWST-side
+  population effect, not a catalog conflict).  Two tolerances:
+  * **fine** (`REFERENCE_AGREE_TOL_MAS`, 5 mas) — recorded as `cross_reference.agree`
+    for diagnostics; **does NOT gate**;
+  * **gross** (`REFERENCE_CROSSCHECK_GROSS_MAS`, ~100 mas) — `cross_reference_gross_ok`;
+    the only cross-check that gates `apply_ok`, catching a spurious/window-limited
+    VIRAC peak (brick-1182 v001 ~700 mas tell);
 * D: per-tile map (`measure_offset_grid`) must be clean;
 * E (bands overlapping VIRAC2, 1.0–2.5 µm): flux-cut source-by-source residual
   (both catalogs bright-cut until the estimated spacing ≥ 3× the match radius,
   then `local_residual_map` — which itself REFUSES to run without a verified
   small global tie).
 
-A correction is applied **only** when A is coherent AND C agrees AND D is
-clean (`apply_ok`).  Anything else is recorded as *could-not-verify* — loud,
-audited, never silently green.
+A correction is applied **only** when A is coherent AND the gross cross-check
+passes AND D is clean (`apply_ok`).  The fine sparse-Gaia agreement is reported but
+does NOT block.  Anything else is recorded as *could-not-verify* — loud, audited,
+never silently green.
 
 ## Corrections & provenance
 
