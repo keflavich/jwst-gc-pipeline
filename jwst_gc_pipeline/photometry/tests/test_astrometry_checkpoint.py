@@ -17,7 +17,8 @@ from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
 from jwst_gc_pipeline.photometry.astrometry_offsets import (
     GlobalTieNotVerifiedError, local_residual_map, measure_offset,
 )
-from .test_visit_consensus import RA0, DEC0, COSD, _field, _visit_tables
+from .test_visit_consensus import (
+    RA0, DEC0, COSD, _exposure_table, _field, _reference_sets, _visit_tables)
 
 DEC_TEST = DEC0
 
@@ -277,6 +278,92 @@ def test_unbuildable_consensus_is_unverified_not_fatal(tmp_path):
     assert record["passed"]           # no MEASURED shift
     assert not record["all_verified"]  # but explicitly not verified
     assert record["unverified"]
+
+
+# ---------------------------------------------------------------------------
+# frozen-stage consensus->reference DELTA gate (regression = MOVEMENT since the
+# m2 freeze, not a nonzero absolute residual).  Reproduces the bug this branch
+# fixes: brick V12 F182M m2 10.09 mas PASS -> m3 10.31 mas false REGRESSION.
+# ---------------------------------------------------------------------------
+
+# These target the frozen-stage DELTA control flow (baseline read -> delta vs
+# the m2 freeze -> raise/STABLE), not the consensus/reference numerics (already
+# covered by test_visit_consensus and the dense reference-tie tests).  The heavy
+# build_visit_consensus + measure_reference_tie are monkeypatched to controlled
+# values so the branch runs in milliseconds instead of minutes.
+import jwst_gc_pipeline.photometry.astrometry_checkpoint as _ac
+
+
+def _tiny_visit_table():
+    """One minimal per-frame catalog that groups to (visit '001', F212N); its
+    content is irrelevant -- build_visit_consensus is monkeypatched."""
+    ra, dec = _field(n=5)
+    return _exposure_table(ra, dec, exposure=1)
+
+
+def _patch_consensus_and_tie(monkeypatch, dra_now, ddec_now, apply_ok=True):
+    coords = SkyCoord(ra=[RA0, RA0] * u.deg, dec=[DEC0, DEC0] * u.deg, frame="icrs")
+
+    def _fake_consensus(tables, context="", **kw):
+        return dict(coords=coords, mag=None, exposures=[],
+                    anchor_key=("001", 1, "nrcb1", "F212N"),
+                    scatter_mas=np.array([1.0]), consensus_ok=True, skipped=[])
+
+    def _fake_tie(cons_coords, ref_all, ref_sparse, **kw):
+        return dict(off_mas=float(np.hypot(dra_now, ddec_now)), apply_ok=apply_ok,
+                    dra_mas=float(dra_now), ddec_mas=float(ddec_now),
+                    cross_reference={"agree": True, "sep_mas": 0.0},
+                    cross_reference_gross_ok=True, per_tile={"clean": True},
+                    swept=False,
+                    vs_full={"dra": float(dra_now), "ddec": float(ddec_now)})
+
+    monkeypatch.setattr(_ac, "build_visit_consensus", _fake_consensus)
+    monkeypatch.setattr(_ac, "measure_reference_tie", _fake_tie)
+
+
+def _write_m2_baseline(record_dir, dra, ddec, visit="001", filt="F212N"):
+    rec = dict(visits=[dict(visit=visit,
+                            reference_tie=dict(vs_full=dict(dra=dra, ddec=ddec)))])
+    with open(os.path.join(record_dir, f"checkpoint_m2_{filt}_latest.json"), "w") as fh:
+        json.dump(rec, fh)
+
+
+_DUMMY_REFCAT = dict(all=None, sparse=None, mag=None)  # measure_reference_tie is patched
+
+
+def test_frozen_stage_stable_tie_no_regression(tmp_path, monkeypatch):
+    """m2 froze a 10 mas reference tie; m3 re-measures the SAME (10, 0) tie ->
+    delta 0 <= tol -> STABLE, no raise, passed.  (The exact brick F182M case:
+    m2 ~10 mas PASS must NOT become an m3 false regression.)"""
+    _write_m2_baseline(str(tmp_path), 10.0, 0.0)
+    _patch_consensus_and_tie(monkeypatch, dra_now=10.0, ddec_now=0.0)
+    rec = run_visit_checkpoint([_tiny_visit_table()], "m3", refcat=_DUMMY_REFCAT,
+                               filtername="F212N", record_dir=str(tmp_path),
+                               context="test")
+    assert rec["passed"]
+    assert rec["failures"] == []
+
+
+def test_frozen_stage_moved_tie_raises(tmp_path, monkeypatch):
+    """m2 froze the tie at (10, 0); the solution then MOVED to (20, 0) ->
+    delta 10 > tol -> AstrometryRegressionError (the real regression)."""
+    _write_m2_baseline(str(tmp_path), 10.0, 0.0)
+    _patch_consensus_and_tie(monkeypatch, dra_now=20.0, ddec_now=0.0)
+    with pytest.raises(AstrometryRegressionError):
+        run_visit_checkpoint([_tiny_visit_table()], "m3", refcat=_DUMMY_REFCAT,
+                             filtername="F212N", record_dir=str(tmp_path),
+                             context="test")
+
+
+def test_frozen_stage_no_m2_baseline_raises(tmp_path, monkeypatch):
+    """A frozen stage with an apply_ok tie but NO m2 baseline record (fail
+    closed): cannot prove the solution didn't move -> raise."""
+    _patch_consensus_and_tie(monkeypatch, dra_now=10.0, ddec_now=0.0)
+    # record_dir has no checkpoint_m2_F212N_latest.json
+    with pytest.raises(AstrometryRegressionError):
+        run_visit_checkpoint([_tiny_visit_table()], "m4", refcat=_DUMMY_REFCAT,
+                             filtername="F212N", record_dir=str(tmp_path),
+                             context="test")
 
 
 # ---------------------------------------------------------------------------
