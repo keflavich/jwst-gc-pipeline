@@ -35,22 +35,6 @@ from photutils.background import LocalBackground
 from photutils.detection import DAOStarFinder
 from astropy.modeling.fitting import LevMarLSQFitter
 
-
-class _FiniteLevMarFitter(LevMarLSQFitter):
-    """LevMarLSQFitter that always filters non-finite points before fitting.
-
-    A fresh (re-)reduction can leave NaN/inf in a source's fit cutout (resample
-    edges, coverage gaps).  The astropy objective then raises NonFiniteValueError
-    and photutils drops the whole frame -- which aborts the entire filter.
-    Forcing ``filter_non_finite=True`` strips those points so the fit proceeds on
-    the finite pixels instead of failing.
-    """
-
-    def __call__(self, *args, **kwargs):
-        kwargs.setdefault('filter_non_finite', True)
-        return super().__call__(*args, **kwargs)
-
-
 from jwst_gc_pipeline.photometry.naming import (
     _iteration_token, _bgsub_token,
     residual_to_smoothed_bg_i2d, smoothed_bg_to_detection_i2d, vetted_to_i2dseed)
@@ -235,7 +219,7 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
         localbkg_estimator=LocalBackground(localbkg_inner, localbkg_outer),
         grouper=grouper if getattr(options, 'group', False) else None,
         psf_model=dao_psf_model,
-        fitter=_FiniteLevMarFitter(),
+        fitter=LevMarLSQFitter(),
         fit_shape=(5, 5),
         aperture_radius=aperture_radius_pix,
         progress_bar=False,
