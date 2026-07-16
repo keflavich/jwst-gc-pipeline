@@ -94,7 +94,7 @@ fov_regname = {'brick': 'regions_/nircam_brick_fov.reg',
                'wd2': 'regions_/nircam_wd2_fov.reg',
                }
 
-refnames = {'2221': 'F405ref',
+refnames = {'2221': 'THIS_IS_A_BUG_IF_YOU_USE_THIS', # <--- we aren't using F405ref, which was the previous one, and I want hard-failures if this gets encountered
             # 1182 obs 004 = brick.  refnames[proposal_id] is used by
             # fix_alignment() to build the per-exposure offsets-table filename
             # offsets/Offsets_JWST_Brick1182_<refname>_average.csv.
@@ -1297,6 +1297,8 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
             decshift = float(row['ddec (arcsec)'][0]) * u.arcsec
             print(f"MODULE-LOCKED per-visit offset for {fn}: ({rashift}, {decshift})")
         elif use_average:
+            if 'bug' in refname.lower():
+                raise ValueError("This is a disallowed reference file")
             tblfn = f'{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_{refname}_average.csv'
             print(f"Using average offset table {tblfn}")
             offsets_tbl = Table.read(tblfn)
@@ -1309,6 +1311,8 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
             row = offsets_tbl[match]
             print(f'Running manual align for merged for {filtername} {row["Module"][0]}.')
         else:
+            if 'bug' in refname.lower():
+                raise ValueError("This is a disallowed reference file")
             tblfn = f'{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_{refname}.csv'
             print(f"Using offset table {tblfn}")
             offsets_tbl = Table.read(tblfn)
