@@ -1113,27 +1113,18 @@ def _apply_consensus_offsets_table(fn, basepath, proposal_id, filtername, field)
         print(f"[consensus] no table {tblfn} yet; leaving "
               f"{os.path.basename(fn)} at frame (0,0)")
         return 0 * u.arcsec, 0 * u.arcsec
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        lookup_consensus_offset)
     tbl = Table.read(tblfn)
     visit = fn.split('_')[0]
     exposure = int(fn.split('_')[-3])
     thismodule = fn.split('_')[-2]
-    match = (tbl['Visit'] == visit) & (tbl['Filter'] == filtername)
-    if 'Exposure' in tbl.colnames and match.sum() > 1:
-        match = match & (tbl['Exposure'] == exposure)
-    if 'Module' in tbl.colnames and match.sum() > 1:
-        variants = {thismodule, thismodule.strip('1234'),
-                    thismodule.replace('long', '')}
-        match = match & np.array([str(m) in variants for m in tbl['Module']])
-    n = int(match.sum())
-    if n == 0:
-        return 0 * u.arcsec, 0 * u.arcsec
-    if n > 1:
-        raise ValueError(
-            f"consensus offset match={n} for {fn} (visit={visit} exp={exposure} "
-            f"mod={thismodule} filt={filtername}); expected <=1 row in {tblfn}")
-    row = tbl[match]
-    return (float(row['dra (arcsec)'][0]) * u.arcsec,
-            float(row['ddec (arcsec)'][0]) * u.arcsec)
+    try:
+        dra, ddec = lookup_consensus_offset(
+            tbl, visit, exposure, thismodule, filtername)
+    except ValueError as ex:
+        raise ValueError(f"{ex} in {tblfn} (frame {fn})") from ex
+    return dra * u.arcsec, ddec * u.arcsec
 
 
 def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, filtername=None,
