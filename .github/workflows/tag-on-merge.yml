@@ -1,0 +1,45 @@
+name: tag-on-merge
+
+# Create a release tag YYYY-MM-DD_PR<n> on every merged pull request, so that
+# the pipeline (which refuses to run untagged -- see
+# jwst_gc_pipeline/versioning/tags.assert_runnable_version) always has an exact
+# tag to stamp into product provenance (GCTAG).
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    # Only merged PRs (not merely closed) get a tag.
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # tag the actual merge commit
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+
+      - name: Create and push release tag
+        env:
+          PR: ${{ github.event.pull_request.number }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+          DATE=$(git show -s --format=%cs "$MERGE_SHA")   # committer date, YYYY-MM-DD
+          TAG="${DATE}_PR${PR}"
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "tag ${TAG} already exists; nothing to do"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" "${MERGE_SHA}" -m "PR #${PR}: ${TITLE}"
+          git push origin "refs/tags/${TAG}"
+          echo "created ${TAG} on ${MERGE_SHA}"
