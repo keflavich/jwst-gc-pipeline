@@ -265,6 +265,78 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
     return tbl
 
 
+def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
+                                      stage="m2", out_path=None,
+                                      base_stamp_for=None):
+    """Create a per-exposure consensus offsets table for a field that has none.
+
+    ``update_offsets_table`` can only *edit* existing rows, so a field whose m2
+    checkpoint measured per-exposure misalignment but that has no offsets table
+    (sgrc, cloudef, ... -- everything outside the brick/cloudc VIRAC2locked
+    pathway) has nowhere to record the fix, and the auto-apply path is a no-op.
+    This seeds one from the checkpoint's per-exposure consensus corrections: each
+    listed exposure gets a row whose ``dra (arcsec)``/``ddec (arcsec)`` shift it
+    ONTO the dense internal consensus (removing the raw guide-star per-exposure
+    jitter).  Exposures not in ``corrections`` were within tolerance and get no
+    row (fix_alignment then applies 0 to them).
+
+    Written in the ``dra (arcsec)`` Δα-coordinate convention that
+    ``fix_alignment`` reads, keyed (Visit, Filter, Exposure, Module), at
+    ``{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_consensus.csv``.
+    ``corrections`` uses the SAME dict schema as ``update_offsets_table``.
+    Optional ``base_stamp_for`` maps (visit_tok, filter, exposure, module) ->
+    ``{'calver':..,'crds_ctx':..,'dvacorr':..}`` so the genlock guard can
+    hard-verify the tie; absent, genlock falls back to the mtime-weak
+    (warn-only) path.  Returns the written path; raises OffsetsTableUpdateError
+    on empty input or failed validation."""
+    from ..reduction.validate_offsets_table import (
+        CollapsedOffsetsTableError, assert_offsets_table_sane)
+
+    if not corrections:
+        raise OffsetsTableUpdateError(
+            "seed_offsets_table_from_consensus: no corrections to seed from")
+    out_path = out_path or os.path.join(
+        basepath, "offsets",
+        f"Offsets_JWST_Brick{proposal_id}_consensus.csv")
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    now = _utcnow_iso()
+    rows = []
+    for corr in corrections:
+        visit = int(str(corr["visit"])[-3:])
+        visit_tok = f"jw0{proposal_id}{field}{visit:03d}"
+        cosd = max(np.cos(np.radians(float(corr["dec_deg"]))), 1e-6)
+        exposure = int(corr["exposure"]) if corr.get("exposure") is not None else 0
+        module = str(corr.get("module") or "nrcb")
+        row = {
+            "Filter": corr["filtername"],
+            "Module": module,
+            "Visit": visit_tok,
+            "Exposure": exposure,
+            "dra (arcsec)": (float(corr["dra_onsky_mas"]) / 1000.0) / cosd,
+            "ddec (arcsec)": float(corr["ddec_onsky_mas"]) / 1000.0,
+            "prov_stage": str(stage),
+            "prov_date": now,
+            "prov_dra_added_mas": float(corr["dra_onsky_mas"]),
+            "prov_ddec_added_mas": float(corr["ddec_onsky_mas"]),
+            "prov_source": str(corr.get("source", "m2 visit-consensus seed"))[:64],
+        }
+        if base_stamp_for is not None:
+            stamp = base_stamp_for.get(
+                (visit_tok, corr["filtername"], exposure, module)) or {}
+            for k in ("calver", "crds_ctx", "dvacorr"):
+                row[f"base_{k}"] = str(stamp.get(k, ""))
+        rows.append(row)
+    tbl = Table(rows)
+    try:
+        assert_offsets_table_sane(tbl, context=os.path.basename(out_path),
+                                  raise_on_issue=True)
+    except CollapsedOffsetsTableError as ex:
+        raise OffsetsTableUpdateError(
+            f"seeded offsets table failed validation; NOT writing:\n{ex}") from ex
+    tbl.write(out_path, overwrite=True)
+    return out_path
+
+
 # ---------------------------------------------------------------------------
 # provenance header stamping (used by fix_alignment at re-apply time)
 # ---------------------------------------------------------------------------

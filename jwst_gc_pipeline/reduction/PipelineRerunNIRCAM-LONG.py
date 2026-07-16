@@ -122,7 +122,14 @@ refnames = {'2221': 'F405ref',
             '5365': 'VIRAC2',
             '6151': 'Gaia',  # w51: switched 2026-06-10 (was UKIDSS)
             '2092': 'VVV',
-            '4147': 'VVV',
+            # sgrc: re-anchored 2026-07-16 to Gaia DR3 + VIRAC2 (same GC
+            # reference-frame policy as sgrb2/brick/cloudc).  Was 'VVV', which
+            # (a) pointed tweakreg/realign at the raw VVV frame
+            # (nircam_bootstrapped_to_vvv_refcat.fits, II/376/vvv4 -- no PM,
+            # ~tens of mas off Gaia) and (b) armed the VVV realign gate on what
+            # is now a VIRAC2-frame field.  'VIRAC2' turns that gate off and
+            # names the per-exposure consensus offsets table fix_alignment reads.
+            '4147': 'VIRAC2',
             # 2045 = arches (field 001) + quintuplet (field 003); both <0.25 deg
             # from Sgr A* so use GNS (GALACTICNUCLEUS). Gaia is untenable in
             # crowded/extincted inner GC, but VVV is fine; GNS dense + tight at this radius.
@@ -190,7 +197,13 @@ REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD = {
         '005': 'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
     },
     '4147': {
-        '012': 'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
+        # obs 012 = Sgr C.  Re-anchored 2026-07-16 to the Gaia-tied seed (Gaia
+        # DR3 + VIRAC2 fill, PM-propagated to obs epoch 2023.725).  Replaces the
+        # F212N self-bootstrap tied to raw VVV (II/376/vvv4, no PM, ~tens of mas
+        # off Gaia) -- Sgr C is inside the VIRAC2 bulge footprint (same region as
+        # sgrb2), so it follows the GC policy.  Built by
+        # build_gaia_virac2_refcat_byquery.py (ra=266.171 dec=-29.442).
+        '012': 'catalogs/gaia_virac2_refcat_epoch2023.72.fits',
     },
     '2045': {
         # field 001 = arches, field 003 = quintuplet. Both within 0.25 deg
@@ -1081,6 +1094,48 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
 _VALIDATED_OFFSETS_TABLES = set()
 
 
+def _apply_consensus_offsets_table(fn, basepath, proposal_id, filtername, field):
+    """Return (rashift, decshift) astropy Quantities for THIS exposure from the
+    per-exposure consensus offsets table seeded by the m2 astrometry checkpoint
+    (``seed_offsets_table_from_consensus``).
+
+    The table lives at ``{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_consensus.csv``
+    and is keyed (Visit, Filter, Exposure, Module) with ``dra (arcsec)`` /
+    ``ddec (arcsec)`` in the Δα-coordinate convention ``fix_alignment`` applies.
+
+    Returns (0,0) arcsec when the table does not exist yet (the FIRST reduction
+    pass, before cataloging has measured the consensus) so the frame stays at the
+    tweakreg/assign_wcs frame and the checkpoint can measure the raw scatter, and
+    (0,0) when this exposure has no row (it was already within consensus
+    tolerance, so no shift is needed)."""
+    tblfn = f'{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_consensus.csv'
+    if not os.path.exists(tblfn):
+        print(f"[consensus] no table {tblfn} yet; leaving "
+              f"{os.path.basename(fn)} at frame (0,0)")
+        return 0 * u.arcsec, 0 * u.arcsec
+    tbl = Table.read(tblfn)
+    visit = fn.split('_')[0]
+    exposure = int(fn.split('_')[-3])
+    thismodule = fn.split('_')[-2]
+    match = (tbl['Visit'] == visit) & (tbl['Filter'] == filtername)
+    if 'Exposure' in tbl.colnames and match.sum() > 1:
+        match = match & (tbl['Exposure'] == exposure)
+    if 'Module' in tbl.colnames and match.sum() > 1:
+        variants = {thismodule, thismodule.strip('1234'),
+                    thismodule.replace('long', '')}
+        match = match & np.array([str(m) in variants for m in tbl['Module']])
+    n = int(match.sum())
+    if n == 0:
+        return 0 * u.arcsec, 0 * u.arcsec
+    if n > 1:
+        raise ValueError(
+            f"consensus offset match={n} for {fn} (visit={visit} exp={exposure} "
+            f"mod={thismodule} filt={filtername}); expected <=1 row in {tblfn}")
+    row = tbl[match]
+    return (float(row['dra (arcsec)'][0]) * u.arcsec,
+            float(row['ddec (arcsec)'][0]) * u.arcsec)
+
+
 def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, filtername=None,
                   use_average=True):
     if os.path.exists(fn):
@@ -1353,6 +1408,25 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
         decshift = (_cddec / 1000.0) * u.arcsec
         if _key not in _gaia_tie:
             print(f"WARNING: no Gaia tie for {_key}; leaving {fn} at raw frame (0,0)")
+    elif str(proposal_id) == '4147':
+        # sgrc: per-exposure CONSENSUS re-tie (2026-07-16).  tweakreg is skipped
+        # in this pipeline, so sgrc had NO per-exposure alignment (fell through to
+        # the else -> rashift=0) and its exposures scattered ~2-8 mas around the
+        # visit consensus (m2 astrometry checkpoint flagged 39 exposures > 2 mas
+        # in F115W/nrcb alone).  The consensus offsets table -- seeded by the m2
+        # checkpoint (seed_offsets_table_from_consensus) and refined by
+        # update_offsets_table on later iterations -- shifts each exposure ONTO
+        # the dense INTERNAL consensus, removing the raw guide-star jitter WITHOUT
+        # injecting per-exposure reference noise.  The consensus->VIRAC2 bulk is
+        # set by the '012' gaia_virac2 refcat (Fix A) + realign_to_catalog.  On
+        # the FIRST reduction pass the table does not exist yet, so the helper
+        # returns (0,0) and the checkpoint gets to measure the raw scatter.
+        # Keyed (Visit, Filter, Exposure, Module); dra/ddec are arcsec Δα
+        # coordinate (same convention as the brick VIRAC2locked table).
+        rashift, decshift = _apply_consensus_offsets_table(
+            fn, basepath, str(proposal_id), filtername, field)
+        _prov_tbl = f'Offsets_JWST_Brick{proposal_id}_consensus.csv'
+        _prov_row_stage = 'm2-consensus'
     else:
         rashift = 0*u.arcsec
         decshift = 0*u.arcsec

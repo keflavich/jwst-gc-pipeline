@@ -3015,20 +3015,40 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     assert merge_label in CORRECTION_STAGES
     offsets_path = _astrom_find_offsets_table(basepath, proposal_id)
     applied = False
-    if os.environ.get('ASTROM_CHECKPOINT_APPLY', '') == '1' and offsets_path:
-        update_offsets_table(offsets_path, corrections, merge_label)
+    seeded = False
+    if os.environ.get('ASTROM_CHECKPOINT_APPLY', '') == '1':
+        if offsets_path is None:
+            # No offsets table yet -- a tweakreg/fix_alignment field outside the
+            # brick/cloudc VIRAC2locked pathway (sgrc, cloudef, ...).  update_
+            # offsets_table can only EDIT existing rows, so with nothing to edit
+            # the auto-apply used to be a silent no-op.  Seed a per-exposure
+            # consensus table from the measured corrections; fix_alignment applies
+            # it on the re-reduce (needs a matching per-field branch, e.g. 4147).
+            from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+                seed_offsets_table_from_consensus)
+            offsets_path = seed_offsets_table_from_consensus(
+                basepath, str(proposal_id), str(getattr(options, 'field', '')),
+                corrections, stage=merge_label)
+            seeded = True
+            print(f"astrom checkpoint [{merge_label}] {filt}/{module}: SEEDED new "
+                  f"consensus offsets table ({len(corrections)} rows) -> "
+                  f"{offsets_path}", flush=True)
+        else:
+            update_offsets_table(offsets_path, corrections, merge_label)
         renames = mark_i2d_stale(
             find_i2d_for_filter(cut_bp, filt),
-            reason=f"{merge_label} checkpoint corrected {offsets_path}",
+            reason=f"{merge_label} checkpoint {'seeded' if seeded else 'corrected'} {offsets_path}",
             record_dir=os.path.join(cut_bp, 'astrometry_checkpoints'))
         applied = True
         print(f"astrom checkpoint [{merge_label}] {filt}/{module}: offsets table "
-              f"CORRECTED ({len(corrections)} corrections -> {offsets_path}); "
-              f"{len(renames)} stale im0 mosaic(s) tagged _im0_badastrom", flush=True)
+              f"{'SEEDED' if seeded else 'CORRECTED'} ({len(corrections)} corrections -> "
+              f"{offsets_path}); {len(renames)} stale im0 mosaic(s) tagged "
+              f"_im0_badastrom", flush=True)
     msg = (f"astrom checkpoint [{merge_label}] {filt}/{module}: measured im0 "
            f"misalignment ({len(corrections)} correction(s); "
            f"record={record.get('record_path')}). "
-           + ("Offsets table corrected + im0 mosaics stale-tagged. " if applied else
+           + (f"Offsets table {'seeded' if seeded else 'corrected'} + im0 mosaics "
+              f"stale-tagged. " if applied else
               f"NOT auto-applied (set ASTROM_CHECKPOINT_APPLY=1; "
               f"offsets table={offsets_path}). ")
            + "REGENERATE the affected frames from _cal (destreak -> fix_alignment "
