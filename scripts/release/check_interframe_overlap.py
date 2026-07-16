@@ -234,20 +234,27 @@ def check_filter(field, filt, refcat=None, verbose=True, visits=None):
         rc, gaia = _refcat(refcat)
         allsrc = SkyCoord(np.concatenate([p.ra.deg for p in pooled.values()]) * u.deg,
                           np.concatenate([p.dec.deg for p in pooled.values()]) * u.deg)
-        for rn, rr in (("VIRAC2", rc), ("Gaia", gaia)):
+        # GC reference-frame policy (gc-gaia-frame-not-catalog): VIRAC2 is the GC
+        # reference catalog and the ONLY absolute frame that GATES here. Gaia is
+        # the FRAME but far too sparse (~1.8k over the Brick vs ~113k VIRAC2) to
+        # per-tile a dense field -- on a fine grid its cells are star-starved and
+        # false-fail, so it is measured as a DIAGNOSTIC only and never sets
+        # ext_fail. A real absolute-frame problem shows up against dense VIRAC2.
+        for rn, rr, gates in (("VIRAC2", rc, True), ("Gaia", gaia, False)):
             if rr is None:
                 continue
             g = measure_offset_grid(allsrc, rr, nx=GRID_N, ny=GRID_N,
                                     maxsep=3.0 * u.arcsec, max_off_mas=GRID_MAX_OFF_MAS,
                                     context=f"{field}/{filt}/{rn}")
-            ext_ran = True
+            if gates:
+                ext_ran = True
             if verbose:
-                wc = g.get("worst_off_cell")
+                tag = "" if gates else " [diagnostic, non-gating: Gaia too sparse]"
                 print(f"      fine grid {GRID_N}x{GRID_N} vs {rn}: clean={g['clean']} "
                       f"worst_off={g['worst_off_mas']:.0f} mas "
-                      f"(max {GRID_MAX_OFF_MAS:.0f}) n_ok={g['n_ok']}/{g['n_total']}",
-                      flush=True)
-            if not g["clean"]:
+                      f"(max {GRID_MAX_OFF_MAS:.0f}) n_ok={g['n_ok']}/{g['n_total']}"
+                      f"{tag}", flush=True)
+            if gates and not g["clean"]:
                 ext_fail = True
 
     # FAIL-CLOSED: a pair NEITHER frame-vs-frame layer could measure only

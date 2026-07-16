@@ -36,9 +36,28 @@ from .astrometry_offsets import (
 # MISALIGNED: its im0 (first-pass) alignment must be replaced.
 EXPOSURE_CONSENSUS_TOL_MAS = 2.0
 
-# Two independent references (VIRAC2-full vs Gaia-only) must agree on the
-# consensus->reference offset to within this, or the tie is not trusted.
+# GC reference-frame policy (memory: gc-gaia-frame-not-catalog, user directive
+# 2026-07-16): in the Galactic Center, Gaia DR3 defines the absolute FRAME but its
+# CATALOG is NEVER the reference catalog -- it is far too sparse (Brick footprint:
+# ~1.8k Gaia vs ~113k VIRAC2). VIRAC2 (density-immune histogram tie) is the correct
+# GC reference catalog. A direct Gaia<->VIRAC2 crossmatch over the whole Brick
+# footprint (same physical stars, no JWST) shows the two frames AGREE to ~2.3 mas
+# globally, with only ~5-10 mas spatially-varying local wander and ~40 mas per-star
+# VIRAC precision scatter. Therefore the sparse-Gaia cross-check must NOT block a
+# VIRAC-coherent tie at the ~5-10 mas level -- that "disagreement" is JWST-side
+# (population/crowding-dependent peak against few bright Gaia stars), not a catalog
+# conflict.
+#
+# REFERENCE_AGREE_TOL_MAS: the FINE cross-reference tolerance, kept as a recorded
+# DIAGNOSTIC only (reported, never gates apply_ok).
 REFERENCE_AGREE_TOL_MAS = 5.0
+# REFERENCE_CROSSCHECK_GROSS_MAS: the GROSS cross-reference tolerance that DOES gate
+# apply_ok. It exists solely to catch a spurious/window-limited VIRAC peak (a real
+# rigid tie is reference-independent; a window-limited artifact is not -- brick-1182
+# v001 read VIRAC 2.7" vs Gaia 2.0", ~700 mas apart, the tell the true offset was
+# ~20" outside the window). It must sit far above the ~5-10 mas sparse-Gaia noise
+# regime so Gaia sparseness can never block a good VIRAC tie.
+REFERENCE_CROSSCHECK_GROSS_MAS = 100.0
 
 # VIRAC2 is a Ks-selected survey; Ks pivot wavelength (um).  The JWST filter
 # closest to this is the most reliable absolute anchor for cross-filter checks.
@@ -513,16 +532,27 @@ def _magnitude_windowed_match(consensus_coords, consensus_mag, ref_coords, ref_m
 def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
                           filtername=None, consensus_mag=None, ref_mag=None,
                           agree_tol_mas=REFERENCE_AGREE_TOL_MAS,
+                          gross_tol_mas=REFERENCE_CROSSCHECK_GROSS_MAS,
                           grid_nx=6, grid_ny=6, context=""):
     """Tie the visit consensus to the absolute reference with MULTIPLE
     independent checks.  No single number signs off (CLAUDE.md).
 
+    The reference catalog is VIRAC2-full (check A, density-immune histogram).
+    Gaia-only (check B/C) is a SPARSE cross-check, NOT the reference catalog: in
+    the Galactic Center Gaia defines the FRAME but is far too sparse to tie a
+    dense JWST field, so it may never BLOCK a coherent VIRAC tie (memory:
+    gc-gaia-frame-not-catalog).  See the ``REFERENCE_CROSSCHECK_GROSS_MAS`` note.
+
     Checks
     ------
-    A. ``measure_offset`` vs the FULL (dense) reference, histogram + sweep.
-    B. ``measure_offset`` vs the SPARSE reference (Gaia-only subset).
-    C. cross-reference agreement (A vs B within ``agree_tol_mas``) — a spurious
-       peak is reference-dependent, a real tie is not.
+    A. ``measure_offset`` vs the FULL (dense VIRAC2) reference, histogram + sweep.
+       THIS is the reference tie.
+    B. ``measure_offset`` vs the SPARSE reference (Gaia-only subset) — diagnostic.
+    C. cross-reference agreement (A vs B).  A GROSS split (> ``gross_tol_mas``)
+       means A is a spurious/window-limited peak (reference-dependent) and DOES
+       block.  A fine split (~5-10 mas, the sparse-Gaia noise regime) is recorded
+       but does NOT block — that is a JWST-side population effect, not a catalog
+       conflict (Gaia<->VIRAC2 agree ~2.3 mas over the Brick footprint).
     D. per-tile map vs the full reference (``measure_offset_grid``) — a bulk
        ~0 with a shifted half-mosaic FAILS here.
     E. (when the band overlaps VIRAC2 and magnitudes are provided) a
@@ -535,17 +565,25 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
       ``dra_mas``/``ddec_mas``/``dra_err_mas``/``ddec_err_mas`` — the adopted
       correction (from check A, on-sky mas, sign = correction to ADD to the
       consensus to land on the reference);
-      ``apply_ok`` — True only when A is coherent, C agrees, and D is clean.
+      ``apply_ok`` — True when A is coherent, D is clean, and the sparse cross-
+      check does not GROSSLY disagree (C within ``gross_tol_mas``).  The fine
+      cross-reference agreement (``cross_reference['agree']``, ``agree_tol_mas``)
+      is reported for diagnostics but does NOT gate apply_ok.
       An offset must never be APPLIED on a single check.
     """
     res_a = measure_offset(consensus_coords, ref_coords_all, sweep=True,
                            context=f"{context} vs full-ref")
     res_b = measure_offset(consensus_coords, ref_coords_sparse, sweep=True,
                            context=f"{context} vs sparse-ref")
+    # fine cross-check (diagnostic) + gross cross-check (the only one that gates)
     agree = agree_across_references(consensus_coords, ref_coords_all,
                                     ref_coords_sparse, tol_mas=agree_tol_mas,
                                     label_a=f"{context}/full",
                                     label_b=f"{context}/sparse")
+    sep_mas = agree.get("sep_mas", float("nan"))
+    # gross agreement re-uses the same measured peaks (no re-measure): a real tie
+    # or a mild sparse-Gaia offset both pass; only a spurious peak (>gross) fails.
+    cross_gross_ok = bool(np.isfinite(sep_mas) and sep_mas <= gross_tol_mas)
     grid = measure_offset_grid(consensus_coords, ref_coords_all,
                                nx=grid_nx, ny=grid_ny,
                                context=f"{context} per-tile")
@@ -560,9 +598,13 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
                 ref_coords_all, np.asarray(ref_mag, dtype=float),
                 res_a, context=f"{context} flux-matched")
 
+    # apply_ok gates on the VIRAC (dense) tie + per-tile cleanliness + a GROSS
+    # sparse cross-check only.  Gaia sparseness must never block a good VIRAC tie.
     apply_ok = bool(res_a is not None and res_a.get("ok")
-                    and agree.get("agree") and grid.get("clean"))
+                    and grid.get("clean") and cross_gross_ok)
     out = dict(vs_full=res_a, vs_sparse=res_b, cross_reference=agree,
+               cross_reference_gross_ok=cross_gross_ok,
+               cross_reference_gross_tol_mas=gross_tol_mas,
                per_tile=grid, flux_matched=fluxmatched, apply_ok=apply_ok)
     if res_a is not None:
         out.update(dra_mas=res_a["dra"], ddec_mas=res_a["ddec"],

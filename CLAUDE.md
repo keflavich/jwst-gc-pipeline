@@ -40,6 +40,26 @@ NN match with a median/mean. Do not disable either.
 Do **not** hand-roll `match_to_catalog_sky(...).median()` in an ad-hoc script.
 Import `measure_offset` instead.
 
+### ⛔ GC RULE — Gaia is the FRAME, never the reference CATALOG; it must not BLOCK
+
+In the Galactic Center, **Gaia DR3 defines the absolute FRAME (ICRS)** but the Gaia
+**catalog is NEVER the reference catalog** — it is far too sparse (Brick footprint:
+~1.8k Gaia vs ~113k VIRAC2). **VIRAC2 is the correct GC reference catalog**, measured
+with the density-immune offset-histogram tie above. A JWST→Gaia-sparse tie may be
+used as a *diagnostic cross-check* but **must never BLOCK** a coherent VIRAC tie, a
+correction, or a release gate.
+
+Why: a direct Gaia↔VIRAC2 crossmatch over the whole Brick footprint (same physical
+stars, no JWST, epoch 2022.70) shows the two frames **agree to ~2.3 mas** globally,
+with only ~5–10 mas spatially-varying local wander and ~40 mas per-star VIRAC
+precision. So a JWST→VIRAC vs JWST→Gaia "disagreement" at the ~5–10 mas level is a
+**JWST-side** population/crowding effect (few bright Gaia stars → noisy sparse peak),
+NOT a catalog conflict. The sparse-Gaia cross-check retains ONLY a GROSS gate
+(`REFERENCE_CROSSCHECK_GROSS_MAS`, ~100 mas) to catch a spurious/window-limited
+VIRAC peak (the brick-1182 v001 ~700 mas tell) — never a fine ~5–10 mas gate.
+(Memory: `gc-gaia-frame-not-catalog`. NOTE this refines item 2 above: Gaia-sparse is
+a legitimate *measurement* cross-check, but is NOT a blocker and is NOT the catalog.)
+
 ### A bulk offset ≈ 0 does NOT mean "clean"
 
 A field-average / whole-mosaic offset can read ~0 while HALF the mosaic is offset
