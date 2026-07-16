@@ -50,28 +50,78 @@ def load_corrections(records_dir):
     return records, corrections
 
 
-def extend_table_to_per_exposure(table_path, exposures_by_filter):
+def _table_visit_number(visit_value):
+    """Visit NUMBER (int) from an offsets-table ``Visit`` cell.  The table uses
+    the full JWST visit id ``jw{prop:05d}{obs:03d}{visit:03d}`` (e.g.
+    ``jw01182004002`` -> visit 2); the m2-record key uses the bare number
+    (``'2'``).  A bare-number table cell is accepted too."""
+    s = str(visit_value).strip()
+    tail = s[-3:] if s.lower().startswith("jw") and len(s) >= 3 else s
+    return int(tail)
+
+
+def load_exposure_universe(records_dir):
+    """The TRUE per-(visit, filter) exposure set of the reduction, read from the
+    m2 records' full exposure enumeration -- NOT from the corrections.
+
+    Every m2 record enumerates every exposure the checkpoint measured
+    (``visits[].exposures[].key`` = ``[visit, exposure, detector, filter]``),
+    whether or not it produced a correction.  Sourcing the extension universe
+    from here (rather than from correction-carrying exposures) closes the
+    match=0 gap the corrections-only universe leaves open: an exposure that is
+    sub-floor in EVERY filter carries no correction anywhere, so it is absent
+    from the corrections but still present as a real frame -- fix_alignment
+    would then find 0 rows for it and raise (the exact 2026-07-15 F182M
+    exp 10/11 crash).
+
+    Keyed by ``(visit_number, filter)`` -- 1182 tiles the mosaic across two
+    visits (v001/v002) whose exposure numbers overlap, so a per-filter union
+    would over-generate phantom rows for the wrong visit.  Returns
+    ``{(visit_int, filter): sorted list of exposure ints}``."""
+    universe = defaultdict(set)
+    records = sorted(glob.glob(os.path.join(records_dir,
+                                            "checkpoint_m2_*_latest.json")))
+    for path in records:
+        with open(path) as fh:
+            rec = json.load(fh)
+        for v in rec.get("visits", []):
+            for e in v.get("exposures", []):
+                key = e.get("key")
+                if not key or len(key) < 4:
+                    continue
+                vnum, exp, filt = int(key[0]), int(key[1]), str(key[3])
+                universe[(vnum, filt)].add(exp)
+    return {k: sorted(exps) for k, exps in universe.items()}
+
+
+def extend_table_to_per_exposure(table_path, universe_by_visit_filter,
+                                 extend_filters):
     """Replicate per-visit rows into per-exposure rows so single-exposure
     corrections are expressible.  Filters without exposure-level corrections
-    keep their per-visit row.
+    (not in ``extend_filters``) keep their single per-visit row.
 
-    The exposure UNIVERSE is the union of exposures seen across ALL filters
-    in the records, not just the filter's own correction-carrying exposures:
-    an exposure whose residual sat under the correction floor has NO
-    correction, but fix_alignment still requires exactly one row for it
-    (2026-07-15: F182M exposures 10/11 were dropped this way and every 2221
-    V12 reduction died with match=0).  A bulk-only exposure inherits the
-    per-visit row's value verbatim; the visit-level correction is applied to
-    every row of the visit afterwards, which is exactly right for it."""
+    ``universe_by_visit_filter`` (``{(visit_int, filter): [exposure ints]}``,
+    from ``load_exposure_universe``) is the reduction's TRUE frame set, so an
+    extended filter gets a row for every real exposure it has -- including those
+    whose residual sat under the correction floor and carry no correction
+    (fix_alignment still requires exactly one row per real frame; 2026-07-15:
+    F182M exposures 10/11 were dropped this way and every 2221 V12 reduction
+    died with match=0).  The universe is applied PER (visit, filter), never a
+    global or per-filter union, so a filter is never given rows for exposure
+    numbers a visit lacks (phantom rows) -- 1182's two visits share exposure
+    numbers.  A bulk-only exposure inherits the per-visit row's value verbatim;
+    the visit-level correction is applied to every row of the visit afterwards,
+    which is exactly right for it."""
     tbl = Table.read(table_path)
     if "Exposure" in tbl.colnames:
         return tbl, False
     rows = []
     extended = False
-    universe = sorted({e for exps in exposures_by_filter.values() for e in exps})
     for row in tbl:
         filt = str(row["Filter"])
-        exps = universe if exposures_by_filter.get(filt) else []
+        vnum = _table_visit_number(row["Visit"])
+        exps = (universe_by_visit_filter.get((vnum, filt), [])
+                if filt in extend_filters else [])
         if exps:
             extended = True
             for e in exps:
@@ -111,6 +161,12 @@ def main(argv=None):
     if not corrections:
         print("nothing to do")
         return 0
+    # true per-(visit, filter) frame set (all measured exposures) = extension universe
+    universe_by_visit_filter = load_exposure_universe(args.records_dir)
+    if universe_by_visit_filter:
+        print("exposure universe per (visit, filter) from records: "
+              + ", ".join(f"v{vnum}/{f}:{len(e)}"
+                          for (vnum, f), e in sorted(universe_by_visit_filter.items())))
 
     kept = []
     for c in corrections:
@@ -160,11 +216,13 @@ def main(argv=None):
 
         if not args.apply:
             continue
-        exp_by_filter = defaultdict(set)
-        for c in corrs:
-            if c.get("exposure") is not None:
-                exp_by_filter[c["filtername"]].add(int(c["exposure"]))
-        tbl, extended = extend_table_to_per_exposure(tp, exp_by_filter)
+        # a filter needs per-exposure rows iff it carries an exposure-level
+        # correction; the exposures it then gets are its TRUE frame set from the
+        # records (universe_by_filter), not just the corrected ones.
+        extend_filters = {c["filtername"] for c in corrs
+                          if c.get("exposure") is not None}
+        tbl, extended = extend_table_to_per_exposure(
+            tp, universe_by_visit_filter, extend_filters)
         if extended:
             backup = tp + ".pre_perexp_extension"
             os.replace(tp, backup)
