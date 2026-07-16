@@ -3011,6 +3011,29 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
               f"(no correction implied)", flush=True)
         return
 
+    # Actionability floor: per-detector residuals of ~2.4-3.3 mas (measured,
+    # brick-1182 F115W V12 cycle-3, 2026-07-15) are SIAF/DVA-class systematics
+    # that the module-locked offsets tables cannot express -- applying their
+    # detector MEANS is exactly what the previous cycle already did, so a
+    # correct-and-stop here loops forever without converging. Corrections are
+    # ALWAYS measured and recorded; only the stop/apply decision honours the
+    # floor. Default keeps the strict 2 mas behaviour; raise deliberately via
+    # ASTROM_M2_CORRECTION_FLOOR_MAS (with written justification) when the
+    # residual class is known table-inexpressible.
+    floor_mas = float(os.environ.get('ASTROM_M2_CORRECTION_FLOOR_MAS', '0') or 0)
+    if floor_mas > 0:
+        actionable = [c for c in corrections
+                      if np.hypot(c.get('dra_onsky_mas', 0.0),
+                                  c.get('ddec_onsky_mas', 0.0)) >= floor_mas]
+        if not actionable:
+            print(f"astrom checkpoint [{merge_label}] {filt}/{module}: PASS with "
+                  f"{len(corrections)} sub-floor residual(s) "
+                  f"(< {floor_mas} mas; ASTROM_M2_CORRECTION_FLOOR_MAS) -- "
+                  f"recorded in {record.get('record_path')}, not actionable in "
+                  f"the module-locked offsets table", flush=True)
+            return
+        corrections = actionable
+
     # m2 measured a real misalignment: im0 is wrong.
     assert merge_label in CORRECTION_STAGES
     offsets_path = _astrom_find_offsets_table(basepath, proposal_id)

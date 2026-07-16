@@ -426,6 +426,25 @@ def _group_by_visit_filter(tables):
     return groups
 
 
+def _m2_reference_tie_baseline(record_dir, filtername, visit):
+    """(dra_mas, ddec_mas) of the m2-frozen consensus->reference tie for this
+    (filter, visit), from the latest m2 record; None when unavailable."""
+    if not record_dir:
+        return None
+    path = os.path.join(record_dir, f"checkpoint_m2_{filtername}_latest.json")
+    if not os.path.exists(path):
+        return None
+    with open(path) as fh:
+        rec = json.load(fh)
+    for v in rec.get("visits", []):
+        if str(v.get("visit")) != str(visit):
+            continue
+        vf = (v.get("reference_tie") or {}).get("vs_full") or {}
+        if "dra" in vf and "ddec" in vf:
+            return float(vf["dra"]), float(vf["ddec"])
+    return None
+
+
 def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                          basepath=None, record_dir=None, context="",
                          consensus_kwargs=None):
@@ -545,9 +564,34 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                               f"consensus is {off:.2f} mas off the reference "
                               f"(all independent checks agree)", flush=True)
                     else:
-                        failures.append(
-                            f"{vctx}: consensus->reference offset {off:.2f} mas at a "
-                            f"LATE stage (solution was supposed to be frozen)")
+                        # FROZEN stage: regression = the tie MOVED since the
+                        # m2 freeze (> STAGE_STABILITY_TOL_MAS), not a nonzero
+                        # absolute residual -- m2 legitimately PASSes with an
+                        # unactionable (could-not-verify / sub-floor) residual,
+                        # which every later stage necessarily re-measures
+                        # (brick V12 F182M: m2 10.09 mas PASS, m3 10.31 mas ->
+                        # false REGRESSION, 2026-07-16).
+                        base = _m2_reference_tie_baseline(record_dir, filt, visit)
+                        if base is not None:
+                            delta = float(np.hypot(ref_tie["dra_mas"] - base[0],
+                                                   ref_tie["ddec_mas"] - base[1]))
+                            if delta > STAGE_STABILITY_TOL_MAS:
+                                failures.append(
+                                    f"{vctx}: consensus->reference MOVED "
+                                    f"{delta:.2f} mas since the m2 freeze "
+                                    f"(m2=({base[0]:+.2f},{base[1]:+.2f}), now="
+                                    f"({ref_tie['dra_mas']:+.2f},"
+                                    f"{ref_tie['ddec_mas']:+.2f}) mas)")
+                            else:
+                                print(f"ASTROM CHECKPOINT [{stage}] STABLE: {vctx} "
+                                      f"tie unchanged since m2 (delta "
+                                      f"{delta:.2f} mas <= "
+                                      f"{STAGE_STABILITY_TOL_MAS})", flush=True)
+                        else:
+                            failures.append(
+                                f"{vctx}: consensus->reference offset {off:.2f} mas at a "
+                                f"LATE stage (solution was supposed to be frozen; "
+                                f"no m2 baseline record found)")
                 else:
                     unverified.append(
                         f"{vctx}: consensus->reference offset {off:.2f} mas but the "
