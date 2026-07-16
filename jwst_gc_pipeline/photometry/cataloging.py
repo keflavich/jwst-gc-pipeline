@@ -214,30 +214,6 @@ def _manual_phot_pass(*, data, mask, err, bad, dao_psf_model, init_params,
     # aborts the whole filter (run_manual_pipeline treats any frame error as
     # fatal).  Carry init_params' columns plus the standard PSFPhotometry output
     # schema so save_photutils_results writes a valid (0-row) catalog.
-    # Drop seeds whose center lands on non-finite or masked data.  photutils fits
-    # sources in groups; a source with an entirely non-finite cutout makes the
-    # (filter_non_finite) fitter raise "All input data or weights are non-finite"
-    # and aborts the whole frame.  Such seeds sit in dither coverage gaps and are
-    # unfittable; removing them lets the rest of the frame fit normally.  If this
-    # empties the seed, the n_seed==0 branch below emits a valid empty catalog.
-    if init_params is not None and len(init_params) > 0:
-        _xc = ('x_init' if 'x_init' in init_params.colnames
-               else ('x_fit' if 'x_fit' in init_params.colnames else 'x'))
-        _yc = ('y_init' if 'y_init' in init_params.colnames
-               else ('y_fit' if 'y_fit' in init_params.colnames else 'y'))
-        _bad_seed = ~np.isfinite(data)
-        if mask is not None:
-            _bad_seed = _bad_seed | np.asarray(mask, bool)
-        _sx = np.clip(np.round(np.asarray(init_params[_xc], float)).astype(int),
-                      0, data.shape[1] - 1)
-        _sy = np.clip(np.round(np.asarray(init_params[_yc], float)).astype(int),
-                      0, data.shape[0] - 1)
-        _seed_ok = ~_bad_seed[_sy, _sx]
-        if not _seed_ok.all():
-            print(f"[{label}] dropping {int((~_seed_ok).sum())}/{len(init_params)} "
-                  f"seed(s) centered on non-finite/masked data", flush=True)
-            init_params = init_params[_seed_ok]
-
     n_seed = 0 if init_params is None else len(init_params)
     if n_seed == 0:
         print(f"[{label}] empty seed (0 sources): skipping PSF fit, emitting "
