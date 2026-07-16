@@ -165,6 +165,38 @@ def test_reference_tie_measures_and_signs_off():
     assert tie["apply_ok"]
 
 
+def test_reference_tie_bulk_is_samestar_refined():
+    """A small, verified tie -> the reported bulk comes from the SAME-STAR
+    refinement (not the histogram peak, biased against a dense reference; memory
+    histogram-vs-samestar-offset-bias). Total = histogram + matched-pair residual."""
+    ra, dec = _field()
+    cons = SkyCoord(ra=(ra - 10.0 / 3.6e6 / COSD) * u.deg, dec=dec * u.deg,
+                    frame="icrs")
+    ref_all, ref_sparse = _reference_sets(ra, dec)
+    tie = measure_reference_tie(cons, ref_all, ref_sparse, context="ss",
+                                grid_nx=2, grid_ny=2)
+    assert tie["bulk_source"] == "same-star"
+    assert tie["same_star"] is not None
+    # reported bulk == the same-star total (histogram offset + residual)
+    assert tie["dra_mas"] == pytest.approx(tie["same_star"]["dra"], abs=1e-9)
+    assert tie["dra_mas"] == pytest.approx(10.0, abs=2.0)
+
+
+def test_reference_tie_large_offset_keeps_histogram():
+    """A gross offset (found only by the window SWEEP) cannot be same-star
+    refined (pairs ambiguous) -> the bulk falls back to the histogram value."""
+    ra, dec = _field()
+    cons = SkyCoord(ra=(ra - 20.0 / 3600.0 / COSD) * u.deg, dec=dec * u.deg,
+                    frame="icrs")   # 20" -> res_a swept
+    ref_all, ref_sparse = _reference_sets(ra, dec)
+    tie = measure_reference_tie(cons, ref_all, ref_sparse, context="big",
+                                grid_nx=2, grid_ny=2)
+    assert tie["vs_full"]["swept"]
+    assert tie["same_star"] is None
+    assert tie["bulk_source"] == "histogram"
+    assert tie["off_mas"] > 15000.0   # ~20" kept, not collapsed
+
+
 def test_fine_sparse_gaia_disagreement_does_not_block():
     """GC policy (gc-gaia-frame-not-catalog): a fine (~30 mas) sparse-Gaia split
     is the sparse-noise regime, NOT a catalog conflict -- it is RECORDED (fine
