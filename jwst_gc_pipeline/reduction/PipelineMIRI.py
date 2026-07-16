@@ -84,15 +84,16 @@ REFERENCE_ASTROMETRIC_CATALOG_CANDIDATES_BY_FIELD = {
     # for 003, so 003 must point at the brick's NIRCam refcat (f405n-based),
     # NOT the sickle f210m catalog (which does not exist under brick/).
     '3958': {
+        # Repointed 2026-07-16: GNS/VVV bootstraps (2MASS-tied) -> Gaia-DR3+VIRAC2 seed
+        # (epoch 2024.64, same frame as 3958/007 NIRCam). CAVEAT: MIRI is thermal-IR;
+        # VIRAC2 is NIR Ks -- bright stars overlap but verify the MIRI-only tie.
         '001': (
             'catalogs/pipeline_based_nircam-f210m_reference_astrometric_catalog.fits',
-            'catalogs/nircam_bootstrapped_to_gns_refcat.fits',
-            'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
+            'catalogs/gaia_virac2_refcat_epoch2024.64.fits',
         ),
         '002': (
             'catalogs/pipeline_based_nircam-f210m_reference_astrometric_catalog.fits',
-            'catalogs/nircam_bootstrapped_to_gns_refcat.fits',
-            'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
+            'catalogs/gaia_virac2_refcat_epoch2024.64.fits',
         ),
         # obs 003 == brick field: align to the brick NIRCam absolute refcat.
         # NOTE 2026-06-16: the previous crowdsource_based_nircam-f405n_reference_

@@ -111,17 +111,20 @@ refnames = {'2221': 'F405ref',
             # share ONE frame and realign_to_catalog ~= 0.  See
             # ASTROMETRY_WCS_CORRECTION_FLOW.md.
             '1182': 'VIRAC2',
-            # sickle: GNS-anchored (nircam_bootstrapped_to_gns_refcat.fits), NOT
-            # VVV.  refnames gates VVV realignment (see ~line 1089) and names the
-            # offsets table; 'VVV' here wrongly triggered VVV realignment on a
-            # GNS-frame field.
-            '3958': 'GNS',
+            # sickle. Repointed 2026-07-16 to the Gaia-DR3+VIRAC2 seed
+            # (gaia_virac2_refcat_epoch2024.64.fits); token flipped GNS -> VIRAC2 so the
+            # offsets-table name + realignment gate match the new frame.
+            '3958': 'VIRAC2',
             # sgrb2: re-anchored 2026-06-18 to Gaia DR3 + VIRAC2
             # (gaia_virac2_refcat_epoch2024.68.fits).  Token left as 'VVV' after
             # that switch, so VVV realignment kept firing on a VIRAC2-frame field.
             '5365': 'VIRAC2',
             '6151': 'Gaia',  # w51: switched 2026-06-10 (was UKIDSS)
-            '2092': 'VVV',
+            # 2026-07-16: GC fields below repointed VVV/GNS -> VIRAC2-GaiaDR3 seed;
+            # tokens flipped to 'VIRAC2' so refname (offsets-table name + realign gate) is
+            # consistent with the new anchor. No Offsets_JWST_Brick{prop}_VIRAC2_average.csv
+            # exists for these tweakreg fields (rashift falls through to 0), same as before.
+            '2092': 'VIRAC2',
             # sgrc: re-anchored 2026-07-16 to Gaia DR3 + VIRAC2 (same GC
             # reference-frame policy as sgrb2/brick/cloudc).  Was 'VVV', which
             # (a) pointed tweakreg/realign at the raw VVV frame
@@ -130,13 +133,9 @@ refnames = {'2221': 'F405ref',
             # is now a VIRAC2-frame field.  'VIRAC2' turns that gate off and
             # names the per-exposure consensus offsets table fix_alignment reads.
             '4147': 'VIRAC2',
-            # 2045 = arches (field 001) + quintuplet (field 003); both <0.25 deg
-            # from Sgr A* so use GNS (GALACTICNUCLEUS). Gaia is untenable in
-            # crowded/extincted inner GC, but VVV is fine; GNS dense + tight at this radius.
-            '2045': 'GNS',
-            # 1939 = sgra, the inner GC field: GNS
-            '1939': 'GNS',
-            '2211': 'GNS',
+            '2045': 'VIRAC2',
+            '1939': 'VIRAC2',
+            '2211': 'VIRAC2',
             # Westerlund 1 (Guarcello prop 1905) + Westerlund 2 (Guarcello prop 3523).
             # Both clusters are outside the deep Galactic Center, so Gaia DR3 is
             # the correct astrometric reference (NOT GNS, NOT VVV).
@@ -177,7 +176,10 @@ REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD = {
         '002': 'catalogs/gaia_refcat.fits',
     },
     '3958': {
-        '007': 'catalogs/nircam_bootstrapped_to_gns_refcat.fits',
+        # sickle (GC field). Repointed 2026-07-16 GNS-bootstrap (2MASS-tied) -> Gaia-DR3+
+        # VIRAC2 seed, PM-propagated to obs epoch 2024.64. NOTE: sickle is MIRI+NIRCam;
+        # VIRAC2 is NIR so the NIRCam tie is clean; verify MIRI-only bands separately.
+        '007': 'catalogs/gaia_virac2_refcat_epoch2024.64.fits',
     },
     '5365': {
         # Sgr B2 (GC field). Switched 2026-06-18 from the VVV-tied crowdsource F405N
@@ -191,10 +193,11 @@ REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD = {
         '001': 'catalogs/gaia_refcat.fits',
     },
     '2092': {
-        # cloudef pointings: 002 (Cloud E) + 005 (Cloud F). Both outside
-        # the GNS 0.25-deg cutoff so VVV is the right reference.
-        '002': 'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
-        '005': 'catalogs/nircam_bootstrapped_to_vvv_refcat.fits',
+        # cloudef 002 (Cloud E) + 005 (Cloud F). Repointed 2026-07-16 VVV-bootstrap
+        # (2MASS-tied, measured ~80-160 mas off Gaia) -> Gaia-DR3+VIRAC2 seed, PM-propagated
+        # to obs epoch 2023.21. VIRAC2 covers these (outside GNS but inside VIRAC footprint).
+        '002': 'catalogs/gaia_virac2_refcat_epoch2023.21.fits',
+        '005': 'catalogs/gaia_virac2_refcat_epoch2023.21.fits',
     },
     '4147': {
         # obs 012 = Sgr C.  Re-anchored 2026-07-16 to the Gaia-tied seed (Gaia
@@ -206,28 +209,30 @@ REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD = {
         '012': 'catalogs/gaia_virac2_refcat_epoch2023.72.fits',
     },
     '2045': {
-        # field 001 = arches, field 003 = quintuplet. Both within 0.25 deg
-        # of Sgr A*; use GNS bootstrap (Gaia is unusable here; VVV is also fine).
-        '001': 'catalogs/nircam_bootstrapped_to_gns_refcat.fits',
-        '003': 'catalogs/nircam_bootstrapped_to_gns_refcat.fits',
+        # arches (001) + quintuplet (003). Repointed 2026-07-16 GNS-bootstrap (2MASS-tied)
+        # -> Gaia-DR3+VIRAC2 seed. VIRAC2 (deep NIR, Gaia-tied) IS usable in the inner GC
+        # (the "Gaia unusable" note applied to Gaia-alone; VIRAC2 supplies the density).
+        # Different obs epochs: arches 2023.64, quintuplet 2024.62.
+        '001': 'catalogs/gaia_virac2_refcat_epoch2023.64.fits',
+        '003': 'catalogs/gaia_virac2_refcat_epoch2024.62.fits',
     },
     '1939': {
-        # sgra: inner GC, use GNS bootstrap.
-        '001': 'catalogs/nircam_bootstrapped_to_gns_refcat.fits',
+        # sgra: inner GC. Repointed 2026-07-16 GNS-bootstrap -> Gaia-DR3+VIRAC2 seed
+        # (epoch 2022.72). VIRAC2 supplies density where Gaia-alone is too sparse.
+        '001': 'catalogs/gaia_virac2_refcat_epoch2022.72.fits',
     },
     '2211': {
-        # gc2211 wide-band frames saturate every bright star, so Gaia
-        # has no usable matches.   VVV may also have trouble.  Use the GALACTICNUCLEUS catalog
-        # (Nogueras-Lara 2021, Ks<17) which goes ~5 mag deeper and covers
-        # the GC at high stellar density.
-        '023': 'catalogs/nircam_bootstrapped_to_gns_refcat.fits',
-        '046': 'catalogs/nircam_bootstrapped_to_gns_refcat.fits',
-        '049': 'catalogs/nircam_bootstrapped_to_gns_refcat.fits',
-        '050': 'catalogs/nircam_bootstrapped_to_gns_refcat.fits',
-        # obs 028 (the F150W obs) does not overlap the F200W footprint that
-        # the standard bootstrap uses, so use a raw GNS refcat tailored to
-        # obs 028's FOV instead.
-        '028': 'catalogs/gns_refcat_obs028.fits',
+        # gc2211. Repointed 2026-07-16 GNS-bootstrap -> Gaia-DR3+VIRAC2 seed (epoch 2023.71).
+        # The wide-band saturation that made Gaia-alone unusable is handled by VIRAC2's deep
+        # NIR density (Ks, Gaia-tied) -- same depth argument as GNS but on the Gaia frame.
+        '023': 'catalogs/gaia_virac2_refcat_epoch2023.71.fits',
+        '046': 'catalogs/gaia_virac2_refcat_epoch2023.71.fits',
+        '049': 'catalogs/gaia_virac2_refcat_epoch2023.71.fits',
+        '050': 'catalogs/gaia_virac2_refcat_epoch2023.71.fits',
+        # obs 028 (F150W, different/offset FOV) is SOUTH of the main gc2211 seed footprint
+        # (obs028 Dec -29.19..-29.10 vs main seed -29.05..-28.81), so it needs its OWN seed.
+        # Dedicated Gaia-DR3+VIRAC2 seed at the obs028 center (266.365,-29.144, r=0.10).
+        '028': 'catalogs/gaia_virac2_refcat_epoch2023.71_o028.fits',
     },
     # Westerlund 1 / Westerlund 2 main pointings: Gaia DR3 is the
     # astrometric reference (outside GC, no GNS/VVV needed).
@@ -325,7 +330,18 @@ def get_existing_reference_astrometric_catalog_path(basepath, proposal_id, field
     path = f"{basepath}/{REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD[proposal_id][field]}"
     if os.path.exists(path):
         return path
-    return None
+    # FAIL LOUD: this field IS wired to a specific reference catalog but the file is
+    # missing.  Silently returning None here makes Image3 run first-pass WITHOUT
+    # abs_refcat realignment -> the field ships OFF-FRAME with no error (the exact
+    # quiet-off-frame-release failure the VIRAC2 repoint is meant to prevent).  The
+    # gaia_virac2_refcat_epoch<obs> seeds live outside the repo, so a typo/missing build
+    # must abort, not degrade.
+    raise FileNotFoundError(
+        f"Configured reference astrometric catalog is MISSING: {path} "
+        f"(proposal_id={proposal_id} field={field}). Build the seed "
+        f"(build_gaia_virac2_refcat_byquery.py) or fix the wiring in "
+        f"REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD before reducing -- refusing to run "
+        f"first-pass off-frame.")
 
 
 def _module_group(module):
@@ -790,22 +806,21 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
             reftbl.meta['name'] = f'VVV Reference Catalog {filtername}'
             assert 'skycoord' in reftbl.colnames
         else:
-            abs_refcat = get_reference_astrometric_catalog_path(basepath, proposal_id, field, filtername=filtername)
-            # The absolute reference catalog is only needed for the (derived)
-            # refcat-realignment that sets the mosaic's absolute zero point; the
-            # mosaic itself is produced by image3 regardless.  If it is missing
-            # (e.g. being rebuilt), degrade gracefully: skip refcat realign
-            # rather than crashing the whole reduction.
-            try:
+            # Use the existence-checked getter: it returns None only when the field is
+            # NOT configured for an absolute refcat (legitimate skip), and RAISES
+            # FileNotFoundError when the field IS wired to a refcat whose file is missing.
+            # That prevents this merged-mosaic path from silently producing an OFF-FRAME
+            # _i2d (the release deliverable) on a typo'd / not-yet-built seed.
+            abs_refcat = get_existing_reference_astrometric_catalog_path(basepath, proposal_id, field, filtername=filtername)
+            if abs_refcat is not None:
                 reftbl = Table.read(abs_refcat)
-                # For non-F410M, try aligning to F410M instead of VVV?
                 reftblversion = reftbl.meta['VERSION']
                 reftbl.meta['name'] = 'Reference Astrometric Catalog'
                 reftbl.meta['filename'] = abs_refcat
-            except FileNotFoundError:
-                print(f"WARNING: reference astrometric catalog {abs_refcat} is "
-                      f"missing; skipping refcat realignment (mosaic still "
-                      f"produced; absolute zero point unset).", flush=True)
+            else:
+                print(f"No absolute reference catalog configured for proposal_id="
+                      f"{proposal_id} field={field}; skipping refcat realignment (mosaic "
+                      f"still produced; absolute zero point unset).", flush=True)
                 reftbl = None
                 reftblversion = None
 
@@ -834,22 +849,21 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
             reftbl = Table.read(abs_refcat)
             reftbl.meta['name'] = f'VVV Reference Catalog {filtername}'
             assert 'skycoord' in reftbl.colnames
-            abs_refcat = get_reference_astrometric_catalog_path(basepath, proposal_id, field, filtername=filtername)
-            # The absolute reference catalog is only needed for the (derived)
-            # refcat-realignment that sets the mosaic's absolute zero point; the
-            # mosaic itself is produced by image3 regardless.  If it is missing
-            # (e.g. being rebuilt), degrade gracefully: skip refcat realign
-            # rather than crashing the whole reduction.
-            try:
+            # Use the existence-checked getter: it returns None only when the field is
+            # NOT configured for an absolute refcat (legitimate skip), and RAISES
+            # FileNotFoundError when the field IS wired to a refcat whose file is missing.
+            # That prevents this merged-mosaic path from silently producing an OFF-FRAME
+            # _i2d (the release deliverable) on a typo'd / not-yet-built seed.
+            abs_refcat = get_existing_reference_astrometric_catalog_path(basepath, proposal_id, field, filtername=filtername)
+            if abs_refcat is not None:
                 reftbl = Table.read(abs_refcat)
-                # For non-F410M, try aligning to F410M instead of VVV?
                 reftblversion = reftbl.meta['VERSION']
                 reftbl.meta['name'] = 'Reference Astrometric Catalog'
                 reftbl.meta['filename'] = abs_refcat
-            except FileNotFoundError:
-                print(f"WARNING: reference astrometric catalog {abs_refcat} is "
-                      f"missing; skipping refcat realignment (mosaic still "
-                      f"produced; absolute zero point unset).", flush=True)
+            else:
+                print(f"No absolute reference catalog configured for proposal_id="
+                      f"{proposal_id} field={field}; skipping refcat realignment (mosaic "
+                      f"still produced; absolute zero point unset).", flush=True)
                 reftbl = None
                 reftblversion = None
 
