@@ -82,11 +82,21 @@ def _current_facets(product_path, is_catalog=None):
     no image WCS, meta over the primary header), so a recomputed catalog facet
     matches its recorded sidecar when nothing changed.
     """
-    if not is_catalog:
+    if is_catalog is not True:  # a known image, or unknown type: try image first
         try:
             return _fp.facet_hashes(product_path)
-        except (OSError, ValueError, KeyError):
-            pass  # fall through to the catalog path
+        except (OSError, ValueError, KeyError) as exc:
+            if is_catalog is False:
+                # A KNOWN image whose facets can't be read (transiently
+                # unreadable _i2d).  Do NOT fall through to table_hash -- that
+                # returns None and silently drops the parent, so a stage that
+                # should REFIT reads SKIP/REPROJECT (under-invalidation).  Surface
+                # it as "parent unreadable" (None) instead of mis-typing it.
+                warnings.warn(f'--field: imaging parent facets unreadable for '
+                              f'{product_path}: {exc}; treating as unknown '
+                              f'(will not mask a changed frame).', stacklevel=2)
+                return None
+            # unknown type -> fall through to the catalog path
     from astropy.io import fits
     try:
         data = _fp.table_hash(product_path,
