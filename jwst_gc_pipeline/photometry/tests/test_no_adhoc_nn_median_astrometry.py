@@ -52,6 +52,11 @@ ALLOWLIST = {
     # reference-catalog builders (guarded internally / sparse Gaia tie)
     "jwst_gc_pipeline/reduction/build_gaia_virac2_refcat.py",
     "jwst_gc_pipeline/reduction/build_gaia_virac2_refcat_byquery.py",
+    # post-verified-tie FINE refinement only: coord_shift's match+median runs on positions
+    # already coarse-tied to <SEARCH of VIRAC2 by the swept, guarded measure_offset (nearest
+    # pair is the TRUE counterpart), with sep<SEARCH, n>=15, CLIP_MAS clip -- NOT a dense-NN-
+    # median tie. The coarse absolute tie uses measure_offset, never NN.
+    "jwst_gc_pipeline/reduction/build_virac2_offsets.py",
     "jwst_gc_pipeline/reduction/align_to_catalogs.py",  # guarded realign_to_catalog
     "jwst_gc_pipeline/photometry/generate_offsets_table.py",  # guarded voff()
     "jwst_gc_pipeline/photometry/make_reference_from_pipeline_catalogs.py",  # guarded bootstrap
