@@ -21,6 +21,9 @@ GCPIPEV_KEY = 'GCPIPEV'
 # VerifyWarning (comment truncated) on every write.  The value is never affected.
 _GCPIPEV_COMMENT = 'gc-pipeline commit'
 
+GCTAG_KEY = 'GCTAG'
+_GCTAG_COMMENT = 'gc-pipeline tag'
+
 
 @functools.lru_cache(maxsize=1)
 def get_pipeline_commit():
@@ -63,13 +66,35 @@ def get_pipeline_commit():
     return 'unknown'
 
 
+@functools.lru_cache(maxsize=1)
+def get_pipeline_tag():
+    """Return the human-facing pipeline TAG for ``GCTAG`` (cached).
+
+    A release tag ``YYYY-MM-DD_PR<n>`` on a clean, exactly-tagged HEAD, else the
+    dev tag ``..._<commit>[-dirty]`` (see ``versioning.tags``).  Lazy import +
+    fail-soft: if resolution raises for any reason, fall back to the raw commit
+    so the stamp is never missing and never breaks a write.
+    """
+    try:
+        from jwst_gc_pipeline.versioning.tags import get_pipeline_tag as _tag
+        return _tag()
+    except (ImportError, OSError, ValueError):
+        return get_pipeline_commit()
+
+
 def stamp_header(header):
-    """Set ``GCPIPEV`` on a FITS ``header`` in place (idempotent overwrite)."""
+    """Set ``GCPIPEV`` (commit) and ``GCTAG`` (tag) on ``header`` in place.
+
+    Idempotent overwrite; best-effort -- a header that rejects a card must never
+    break the write (provenance is best-effort, the data is not).
+    """
     try:
         header[GCPIPEV_KEY] = (get_pipeline_commit(), _GCPIPEV_COMMENT)
     except (ValueError, TypeError):
-        # A header that rejects the card (exotic / read-only) must never break
-        # the write; provenance is best-effort, the data is not.
+        pass
+    try:
+        header[GCTAG_KEY] = (get_pipeline_tag(), _GCTAG_COMMENT)
+    except (ValueError, TypeError):
         pass
 
 
