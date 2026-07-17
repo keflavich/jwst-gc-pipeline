@@ -56,11 +56,14 @@ def test_data_facet_invariant_only_coords_change():
     t = _catalog()
     coord_cols = {'ra', 'dec', 'skycoord'}
     before = {c: np.array(t[c]) for c in t.colnames if c not in coord_cols}
+    ra0, dec0 = np.array(t['ra']), np.array(t['dec'])
     B.apply_rigid_offset_to_catalog(t, 250.0, -175.0)
     for c, arr in before.items():
         assert np.array_equal(np.array(t[c]), arr), f"non-coord column {c} changed"
-    # and the coordinate columns DID move
-    assert not np.allclose(t['ra'], _catalog()['ra'])
+    # and the coordinate columns DID move (tight atol; rtol on RA~266 would
+    # otherwise swallow a sub-arcsec shift)
+    assert not np.allclose(t['ra'], ra0, rtol=0, atol=1e-9)
+    assert not np.allclose(t['dec'], dec0, rtol=0, atol=1e-9)
 
 
 def test_reversible():
