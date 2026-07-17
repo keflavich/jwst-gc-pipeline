@@ -110,6 +110,22 @@ GC_ALLOW_DEV=1 python -m jwst_gc_pipeline...      # or pass allow_dev=True
 A dev run is permitted but warns and stamps the dev tag. **The pipeline runs
 only on tagged versions** — this is the mechanism that enforces it.
 
+The guard is called at exactly two points — the `__main__`/`main()` CLI entries
+of `PipelineRerunNIRCAM-LONG.py` (imaging) and `crowdsource_catalogs_long.py`
+(cataloging). It is **not** called inside `run_manual_pipeline`, the cutout
+sub-runs, or any importable helper, so importing these modules (tests, notebooks,
+programmatic callers) never trips it.
+
+#### ⚠️ Rollout (do this in the same change that merges the guard)
+
+The moment the guard is live, **every SLURM reduce/catalog job hard-blocks at
+entry** unless it runs on a tagged, clean checkout **or** exports
+`GC_ALLOW_DEV=1`. Update the submission scripts in lockstep:
+`scripts/reduction/submit_*.sbatch` (and any hand-launched command) must either
+run from a checkout at a release tag, or pass `--export=...,GC_ALLOW_DEV=1` /
+`export GC_ALLOW_DEV=1` for a deliberate dev run. Landing the guard without this
+fails the whole queue at entry.
+
 ---
 
 ## 4. The decision matrix (the instruction set)
@@ -223,7 +239,14 @@ plan = rerun.plan_from_records(recorded_map, current_map)   # cascaded
   **Still deferred:** the `imaging`-frame upstream facet for cataloging stages
   (pooling the per-exposure `_crf` sidecars) — the mechanism (`pool_facets` over
   the crf sidecars) is in place; only the crf-path threading at the m12 stamp
-  site remains.
+  site remains. **Consequence until it lands:** through the *pure sidecar* path
+  (`decide_stage` on recorded records), a re-reduced frame with identical
+  code/params but changed pixels does **not** yet force a downstream `REFIT` —
+  the recorded `inputs.upstream` omits `imaging`. This is a temporary
+  UNDER-invalidation. `plan --field` (PR4) does **not** have this gap: it
+  recomputes the imaging parent's facets from disk, so it catches a changed
+  frame. Prefer `plan --field` for a real re-run decision until the crf threading
+  closes the sidecar path.
 * **PR4 — `plan` field locator.** (this PR, WIP.) `rerun plan --field/--proposal`
   locates each stage's product(s) by the naming conventions, reads the recorded
   sidecar, recomputes the current facets + code/params/env from disk, runs the
