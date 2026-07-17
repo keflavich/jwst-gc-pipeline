@@ -67,7 +67,7 @@ def _get_catalog_pixel_coordinates(cat, ww):
 # the `_i2d.fits` mosaic is the deliverable. See ASTROMETRY_WCS_CORRECTION_FLOW.md.
 
 
-def retrieve_vvv(
+def retrieve_vvv_is_deprecated(
     basepath = '/orange/adamginsburg/jwst/brick/',
     filtername = 'f212n',
     proposal_id='2221',
