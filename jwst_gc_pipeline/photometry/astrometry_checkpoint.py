@@ -265,63 +265,92 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
     return tbl
 
 
+BULK_EXPOSURE = -1     # sentinel Exposure for the per-visit consensus->reference row
+BULK_MODULE = "all"    # sentinel Module for the per-visit bulk row
+
+
 def lookup_consensus_offset(tbl, visit, exposure, module, filtername):
-    """Return ``(dra_arcsec, ddec_arcsec)`` for ONE exposure from a per-exposure
-    consensus offsets table, or ``(0.0, 0.0)`` when that exposure has no row (it
-    was within consensus tolerance).
+    """Return ``(dra_arcsec, ddec_arcsec)`` to apply to ONE exposure: the SUM of
+    its per-exposure jitter row and the per-visit BULK (consensus->reference) row.
 
-    The consensus table is SPARSE -- ``seed_offsets_table_from_consensus`` writes
-    a row ONLY for exposures that exceeded tolerance, and always writes both an
-    ``Exposure`` and a ``Module`` column.  So the Exposure/Module narrowing is
-    UNCONDITIONAL: a lone Visit/Filter row belongs to some OTHER exposure of the
-    visit, not necessarily this one, and applying it here would spuriously shift
-    an already-aligned frame.  (This differs from the brick VIRAC2locked block,
-    where a single Visit/Filter row IS a per-visit bulk meant for every exposure
-    -- there the ``sum()>1`` guard is correct; here it is not.)
+    The consensus table carries two kinds of row for a (visit, filter):
 
-    Raises ValueError if >1 row matches (a malformed/duplicate table)."""
-    match = (tbl["Visit"] == visit) & (tbl["Filter"] == filtername)
-    if "Exposure" in tbl.colnames:
-        match = match & (tbl["Exposure"] == int(exposure))
-    if "Module" in tbl.colnames:
-        variants = {str(module), str(module).strip("1234"),
-                    str(module).replace("long", "")}
-        match = match & np.array([str(m) in variants for m in tbl["Module"]])
-    n = int(match.sum())
-    if n == 0:
-        return 0.0, 0.0
-    if n > 1:
+    * per-exposure JITTER rows (``Exposure``>=1, real ``Module``) -- SPARSE, only
+      exposures that exceeded the 2 mas consensus tolerance get one.  Narrowing by
+      Exposure+Module is UNCONDITIONAL: a lone jitter row belongs to some OTHER
+      exposure, and applying it here would spuriously shift an already-aligned
+      frame.  (Differs from the brick VIRAC2locked block, where a single row IS a
+      per-visit bulk for every exposure and the ``sum()>1`` guard is correct.)
+    * the per-visit BULK row (``Exposure``==BULK_EXPOSURE, ``Module``==BULK_MODULE)
+      -- the ``consensus->reference`` tie (whole visit onto VIRAC2).  It applies
+      to EVERY exposure of the visit/filter identically (one shift, no per-exposure
+      reference noise -- the same policy as brick's per-visit bulk).
+
+    Each frame therefore gets jitter (tie to the internal consensus) + bulk (tie
+    that consensus to the absolute reference) = a direct tie to the reference.
+    Exposures with neither row return ``(0.0, 0.0)``.  Raises ValueError if a
+    jitter or bulk match is ambiguous (>1 row)."""
+    vf = (tbl["Visit"] == visit) & (tbl["Filter"] == filtername)
+    dra = ddec = 0.0
+
+    # per-visit bulk (consensus->reference), applied to every exposure
+    bulk = vf & (tbl["Exposure"] == BULK_EXPOSURE) & (tbl["Module"] == BULK_MODULE)
+    nb = int(bulk.sum())
+    if nb > 1:
+        raise ValueError(f"consensus BULK match={nb} for visit={visit} "
+                         f"filt={filtername}; expected <=1 row")
+    if nb == 1:
+        r = tbl[bulk]
+        dra += float(r["dra (arcsec)"][0]); ddec += float(r["ddec (arcsec)"][0])
+
+    # per-exposure jitter (exclude the bulk sentinel from the module variants)
+    variants = {str(module), str(module).strip("1234"), str(module).replace("long", "")}
+    jit = (vf & (tbl["Exposure"] == int(exposure))
+           & np.array([str(m) in variants for m in tbl["Module"]]))
+    nj = int(jit.sum())
+    if nj > 1:
         raise ValueError(
-            f"consensus offset match={n} for visit={visit} exp={exposure} "
+            f"consensus jitter match={nj} for visit={visit} exp={exposure} "
             f"mod={module} filt={filtername}; expected <=1 row")
-    row = tbl[match]
-    return float(row["dra (arcsec)"][0]), float(row["ddec (arcsec)"][0])
+    if nj == 1:
+        r = tbl[jit]
+        dra += float(r["dra (arcsec)"][0]); ddec += float(r["ddec (arcsec)"][0])
+
+    return dra, ddec
 
 
 def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
                                       stage="m2", out_path=None,
                                       base_stamp_for=None):
-    """Create a per-exposure consensus offsets table for a field that has none.
+    """Create OR merge a per-exposure consensus offsets table (UPSERT).
 
-    ``update_offsets_table`` can only *edit* existing rows, so a field whose m2
-    checkpoint measured per-exposure misalignment but that has no offsets table
-    (sgrc, cloudef, ... -- everything outside the brick/cloudc VIRAC2locked
-    pathway) has nowhere to record the fix, and the auto-apply path is a no-op.
-    This seeds one from the checkpoint's per-exposure consensus corrections: each
-    listed exposure gets a row whose ``dra (arcsec)``/``ddec (arcsec)`` shift it
-    ONTO the dense internal consensus (removing the raw guide-star per-exposure
-    jitter).  Exposures not in ``corrections`` were within tolerance and get no
-    row (fix_alignment then applies 0 to them).
+    ``update_offsets_table`` can only *edit* existing rows -- a correction that
+    matches no row hard-fails there.  For a field whose m2 checkpoint measured
+    per-exposure misalignment but that has no brick/cloudc VIRAC2locked table
+    (sgrc, cloudef, ...) that means: (1) the FIRST iteration has nowhere to
+    record the fix, and (2) LATER iterations flag a slightly different set of
+    exposures (as the applied tie removes the bulk jitter, exposures churn across
+    the 2 mas line), so a newly-flagged exposure hard-fails update_offsets_table.
+    Both break the re-tie loop.  This function UPSERTS instead:
 
-    Written in the ``dra (arcsec)`` Δα-coordinate convention that
-    ``fix_alignment`` reads, keyed (Visit, Filter, Exposure, Module), at
+      * no table yet  -> create it from the corrections (the seed);
+      * table exists  -> for each correction ADD its on-sky shift to the matching
+        (visit, filter, exposure, module) row (cumulative -- the correction is
+        the RESIDUAL after the previous tie), or INSERT a new row when that
+        exposure was not previously flagged.
+
+    Each row's ``dra (arcsec)``/``ddec (arcsec)`` shift its exposure ONTO the
+    dense internal consensus (removing the raw guide-star per-exposure jitter);
+    exposures never flagged simply have no row (fix_alignment applies 0).
+
+    Written in the ``dra (arcsec)`` Δα-coordinate convention ``fix_alignment``
+    reads, keyed (Visit, Filter, Exposure, Module), at
     ``{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_consensus.csv``.
     ``corrections`` uses the SAME dict schema as ``update_offsets_table``.
     Optional ``base_stamp_for`` maps (visit_tok, filter, exposure, module) ->
-    ``{'calver':..,'crds_ctx':..,'dvacorr':..}`` so the genlock guard can
-    hard-verify the tie; absent, genlock falls back to the mtime-weak
-    (warn-only) path.  Returns the written path; raises OffsetsTableUpdateError
-    on empty input or failed validation."""
+    ``{'calver':..,'crds_ctx':..,'dvacorr':..}`` for the genlock guard.  Returns
+    the written path; raises OffsetsTableUpdateError on empty input or a table
+    that fails the sparse-consensus sanity checks."""
     if not corrections:
         raise OffsetsTableUpdateError(
             "seed_offsets_table_from_consensus: no corrections to seed from")
@@ -330,33 +359,71 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
         f"Offsets_JWST_Brick{proposal_id}_consensus.csv")
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     now = _utcnow_iso()
-    rows = []
+
+    # index any existing rows by key so corrections ADD-or-INSERT (upsert)
+    existed = os.path.exists(out_path)
+    bykey = {}
+    if existed:
+        for r in Table.read(out_path):
+            key = (str(r["Visit"]), str(r["Filter"]), int(r["Exposure"]),
+                   str(r["Module"]))
+            bykey[key] = {c: r[c] for c in r.colnames}
+
     for corr in corrections:
         visit = int(str(corr["visit"])[-3:])
         visit_tok = f"jw0{proposal_id}{field}{visit:03d}"
         cosd = max(np.cos(np.radians(float(corr["dec_deg"]))), 1e-6)
-        exposure = int(corr["exposure"]) if corr.get("exposure") is not None else 0
-        module = str(corr.get("module") or "nrcb")
-        row = {
-            "Filter": corr["filtername"],
-            "Module": module,
-            "Visit": visit_tok,
-            "Exposure": exposure,
-            "dra (arcsec)": (float(corr["dra_onsky_mas"]) / 1000.0) / cosd,
-            "ddec (arcsec)": float(corr["ddec_onsky_mas"]) / 1000.0,
-            "prov_stage": str(stage),
-            "prov_date": now,
-            "prov_dra_added_mas": float(corr["dra_onsky_mas"]),
-            "prov_ddec_added_mas": float(corr["ddec_onsky_mas"]),
-            "prov_source": str(corr.get("source", "m2 visit-consensus seed"))[:64],
-        }
-        if base_stamp_for is not None:
-            stamp = base_stamp_for.get(
-                (visit_tok, corr["filtername"], exposure, module)) or {}
-            for k in ("calver", "crds_ctx", "dvacorr"):
-                row[f"base_{k}"] = str(stamp.get(k, ""))
-        rows.append(row)
-    tbl = Table(rows)
+        # A consensus->reference correction is the per-VISIT bulk tie (whole
+        # visit onto VIRAC2) -- it carries exposure=None AND module=None.  Store
+        # it under the sentinel (BULK_EXPOSURE, BULK_MODULE) row so fix_alignment
+        # applies it to EVERY exposure of the visit/filter (lookup_consensus_
+        # offset sums bulk + per-exposure jitter).  Writing it to a real
+        # exposure/module would either miss most frames or double-shift one.
+        is_bulk = corr.get("exposure") is None and corr.get("module") is None
+        exposure = BULK_EXPOSURE if is_bulk else int(corr["exposure"])
+        module = BULK_MODULE if is_bulk else str(corr["module"])
+        dra_add = (float(corr["dra_onsky_mas"]) / 1000.0) / cosd
+        ddec_add = float(corr["ddec_onsky_mas"]) / 1000.0
+        key = (visit_tok, corr["filtername"], exposure, module)
+        if key in bykey:
+            row = bykey[key]
+            row["dra (arcsec)"] = float(row["dra (arcsec)"]) + dra_add
+            row["ddec (arcsec)"] = float(row["ddec (arcsec)"]) + ddec_add
+            row["prov_dra_added_mas"] = (float(row.get("prov_dra_added_mas", 0.0))
+                                         + float(corr["dra_onsky_mas"]))
+            row["prov_ddec_added_mas"] = (float(row.get("prov_ddec_added_mas", 0.0))
+                                          + float(corr["ddec_onsky_mas"]))
+            row["prov_stage"] = str(stage)
+            row["prov_date"] = now
+            row["prov_source"] = str(corr.get("source", "m2 visit-consensus"))[:64]
+            # REFRESH the genlock base stamp on upsert: the cumulative row's shift
+            # is applied to THIS iteration's crf generation, so the base must track
+            # it.  Keeping the first iteration's stamp would make the genlock guard
+            # compare a later shift against a stale base if a jwst/CRDS bump landed
+            # mid-loop (safe only while the generation is constant across the loop).
+            if base_stamp_for is not None:
+                stamp = base_stamp_for.get(
+                    (visit_tok, corr["filtername"], exposure, module)) or {}
+                for k in ("calver", "crds_ctx", "dvacorr"):
+                    row[f"base_{k}"] = str(stamp.get(k, ""))
+        else:
+            row = {
+                "Filter": corr["filtername"], "Module": module, "Visit": visit_tok,
+                "Exposure": exposure,
+                "dra (arcsec)": dra_add, "ddec (arcsec)": ddec_add,
+                "prov_stage": str(stage), "prov_date": now,
+                "prov_dra_added_mas": float(corr["dra_onsky_mas"]),
+                "prov_ddec_added_mas": float(corr["ddec_onsky_mas"]),
+                "prov_source": str(corr.get("source", "m2 visit-consensus seed"))[:64],
+            }
+            if base_stamp_for is not None:
+                stamp = base_stamp_for.get(
+                    (visit_tok, corr["filtername"], exposure, module)) or {}
+                for k in ("calver", "crds_ctx", "dvacorr"):
+                    row[f"base_{k}"] = str(stamp.get(k, ""))
+            bykey[key] = row
+
+    rows = list(bykey.values())
     # NB: the visit-collapse guard (assert_offsets_table_sane / flag_collapsed_
     # visits) does NOT apply here.  It compares per-visit MEDIAN offsets against a
     # 20 mas tol to catch the brick-1182 curation signature (a visit's real ~arcsec
@@ -364,22 +431,28 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
     # any two visits agree within 20 mas by construction -- flagging that would be
     # a category error.  A sparse per-exposure consensus table has two failure
     # modes worth guarding instead:
-    keys = [(r["Visit"], r["Filter"], r["Exposure"], r["Module"]) for r in rows]
+    keys = [(str(r["Visit"]), str(r["Filter"]), int(r["Exposure"]), str(r["Module"]))
+            for r in rows]
     dups = sorted({k for k in keys if keys.count(k) > 1})
     if dups:
         # duplicate (visit,filter,exposure,module) -> lookup_consensus_offset
         # would raise; refuse to write an ambiguous table.
         raise OffsetsTableUpdateError(
-            f"seeded consensus table {os.path.basename(out_path)} has duplicate "
+            f"consensus table {os.path.basename(out_path)} has duplicate "
             f"(visit,filter,exposure,module) rows: {dups}")
     big = [(k, r["dra (arcsec)"], r["ddec (arcsec)"]) for k, r in zip(keys, rows)
-           if abs(r["dra (arcsec)"]) > 0.5 or abs(r["ddec (arcsec)"]) > 0.5]
+           if abs(float(r["dra (arcsec)"])) > 0.5 or abs(float(r["ddec (arcsec)"])) > 0.5]
     if big:
         # a consensus (internal-jitter) fix is mas-scale; > 0.5" means the
         # upstream per-exposure measurement is wrong -- do NOT bake it in.
         raise OffsetsTableUpdateError(
-            f"seeded consensus table {os.path.basename(out_path)} has |offset| > "
+            f"consensus table {os.path.basename(out_path)} has |offset| > "
             f"0.5\" (mas-scale expected): {big}")
+    tbl = Table(rows)
+    if existed:
+        # keep a backup of the pre-merge table (mirrors update_offsets_table)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        os.replace(out_path, f"{out_path}.pre_{stage}_{stamp}")
     tbl.write(out_path, overwrite=True)
     return out_path
 
