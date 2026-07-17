@@ -3403,8 +3403,10 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
             # (scripts/reduction/m8_merge_partials.py); a full m8 dedups here.
             if not _m8_partial:
                 _maybe_dedup_m8(_m8, options, label='m8')
-            _stamp_catalog_provenance(_m8, 'm8', options,
-                                      parent_paths={'m7': _xb})
+            _all_crf = [f for _v in frame_cache.values() for f in _v]
+            _stamp_catalog_provenance(
+                _m8, 'm8', options,
+                parent_paths={'m7': _xb, 'imaging': _all_crf})
         print(f"MANUAL PIPELINE DONE: m8-only forced fill, phases=[m8]", flush=True)
         return
 
@@ -4041,10 +4043,15 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         _ifound[_m] = np.asarray(_pif)[np.asarray(_idx)][_m]
                     merged['iter_found'] = _ifound
                     merged.write(merged_path, overwrite=True)
-                    _stamp_catalog_provenance(
-                        merged_path, phase, options,
-                        parent_paths={_prev_phase: _prev_merged} if _prev_merged
-                        else None)
+                    # upstream = the imaging frames (per-exposure crf sidecars,
+                    # pooled) + the previous phase's merged catalog (the seed).
+                    # A re-reduced frame (changed crf data facet) thus forces a
+                    # REFIT through the pure-sidecar cascade too.
+                    _parents = {'imaging': frame_cache.get((module, filt), [])}
+                    if _prev_merged:
+                        _parents[_prev_phase] = _prev_merged
+                    _stamp_catalog_provenance(merged_path, phase, options,
+                                              parent_paths=_parents)
                     prev_merged_for[(module, filt)] = (_msc, _ifound)
 
                     d_i2d, ww_i2d = None, None
@@ -4287,8 +4294,12 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
             # unions all bands), so upstream['m6'] pools those sidecars.
             _m6_parents = [_merged_path('m6', module, _f, True)
                            for _f in filternames]
-            _stamp_catalog_provenance(_xb, 'm7', options,
-                                      parent_paths={'m6': _m6_parents})
+            _m7_crf = []
+            for _f in filternames:
+                _m7_crf.extend(frame_cache.get((module, _f), []))
+            _stamp_catalog_provenance(
+                _xb, 'm7', options,
+                parent_paths={'imaging': _m7_crf, 'm6': _m6_parents})
 
             # ----------------------------------------------------------------
             # m8: forced cross-band fill.  Force-fit every band at the merged
@@ -4327,8 +4338,9 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         frame_arg_builder_for=_builder_for,
                         nsigma=float(getattr(options, 'forced_fill_nsigma', 3.0)))
                     _maybe_dedup_m8(_m8, options, label=last_phase)
-                    _stamp_catalog_provenance(_m8, 'm8', options,
-                                              parent_paths={'m7': _xb})
+                    _stamp_catalog_provenance(
+                        _m8, 'm8', options,
+                        parent_paths={'m7': _xb, 'imaging': _m7_crf})
                 except Exception as _m8ex:
                     print(f"manual [{last_phase}]: m8 forced fill FAILED "
                           f"(module={module}): {_m8ex}", flush=True)

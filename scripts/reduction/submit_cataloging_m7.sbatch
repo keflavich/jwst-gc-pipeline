@@ -33,6 +33,14 @@
 
 source ~/.bash_profile 2>/dev/null
 export CRDS_PATH=/orange/adamginsburg/jwst/crds
+# Run guard (jwst_gc_pipeline.versioning.tags.assert_runnable_version): the
+# imaging/cataloging entry points HARD-BLOCK an untagged or dirty tree.  The live
+# reduction runs from the working tree (a development run), so permit it by
+# default -- it stamps a dev tag, so its products can never masquerade as a
+# release.  A RELEASE run should check out a release tag: a tagged, clean tree
+# passes as production regardless of this flag.  Set GC_ALLOW_DEV=0 to force the
+# block (e.g. to guarantee a run is on a tagged checkout).
+export GC_ALLOW_DEV="${GC_ALLOW_DEV:-1}"
 export CRDS_SERVER_URL=https://jwst-crds.stsci.edu
 # Scratch on node-local SLURM_TMPDIR, never /tmp (fills node root fs).
 export TMPDIR="${SLURM_TMPDIR:-/blue/adamginsburg/adamginsburg/tmp}"

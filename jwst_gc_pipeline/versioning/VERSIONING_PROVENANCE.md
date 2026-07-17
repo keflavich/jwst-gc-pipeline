@@ -118,13 +118,14 @@ programmatic callers) never trips it.
 
 #### ⚠️ Rollout (do this in the same change that merges the guard)
 
-The moment the guard is live, **every SLURM reduce/catalog job hard-blocks at
-entry** unless it runs on a tagged, clean checkout **or** exports
-`GC_ALLOW_DEV=1`. Update the submission scripts in lockstep:
-`scripts/reduction/submit_*.sbatch` (and any hand-launched command) must either
-run from a checkout at a release tag, or pass `--export=...,GC_ALLOW_DEV=1` /
-`export GC_ALLOW_DEV=1` for a deliberate dev run. Landing the guard without this
-fails the whole queue at entry.
+Once the guard is live, **every SLURM reduce/catalog job hard-blocks at entry**
+unless it runs on a tagged, clean checkout **or** permits a dev run. The
+submission scripts are wired for this: `scripts/reduction/submit_reduction.sbatch`
+and `submit_cataloging*.sbatch` now `export GC_ALLOW_DEV="${GC_ALLOW_DEV:-1}"`, so
+the live working-tree queue keeps running (stamping dev tags) while a **release**
+run — a checkout at a release tag, clean — passes as production regardless of the
+flag. Set `GC_ALLOW_DEV=0` to force the block (e.g. to guarantee a run is on a
+tagged checkout). A hand-launched command must do the same.
 
 ---
 
@@ -236,17 +237,13 @@ plan = rerun.plan_from_records(recorded_map, current_map)   # cascaded
   so the rerun cascade is now driven entirely by on-disk sidecars: m3←m12,
   m4←m3, …, m7←pool(all filters' m6), m8←m7. A CI grep-guard
   (`test_stage_entries_guarded.py`) fails if an entry stops calling the guard.
-  **Still deferred:** the `imaging`-frame upstream facet for cataloging stages
-  (pooling the per-exposure `_crf` sidecars) — the mechanism (`pool_facets` over
-  the crf sidecars) is in place; only the crf-path threading at the m12 stamp
-  site remains. **Consequence until it lands:** through the *pure sidecar* path
-  (`decide_stage` on recorded records), a re-reduced frame with identical
-  code/params but changed pixels does **not** yet force a downstream `REFIT` —
-  the recorded `inputs.upstream` omits `imaging`. This is a temporary
-  UNDER-invalidation. `plan --field` (PR4) does **not** have this gap: it
-  recomputes the imaging parent's facets from disk, so it catches a changed
-  frame. Prefer `plan --field` for a real re-run decision until the crf threading
-  closes the sidecar path.
+  The `imaging`-frame upstream facet is **now threaded** at every cataloging
+  stamp site: `_stamp_catalog_provenance` records `inputs.upstream['imaging']` =
+  `pool_facets` over the per-exposure `_crf` sidecars for that (module, filter)
+  — the per-band catalogs pool their own frames, m7/m8 pool across all filters.
+  So a re-reduced frame (changed crf `data` facet) now forces a downstream
+  `REFIT` through the **pure sidecar** path too, not only through `plan --field`.
+  (Fail-soft: if a crf sidecar is absent, that parent is simply omitted.)
 * **PR4 — `plan` field locator.** (this PR, WIP.) `rerun plan --field/--proposal`
   locates each stage's product(s) by the naming conventions, reads the recorded
   sidecar, recomputes the current facets + code/params/env from disk, runs the
