@@ -45,7 +45,7 @@ from jwst.associations.lib.rules_level3_base import DMS_Level3_Base
 from jwst.tweakreg.utils import adjust_wcs
 from jwst.datamodels import ImageModel
 
-from jwst_gc_pipeline.reduction.align_to_catalogs import merge_a_plus_b, retrieve_vvv
+from jwst_gc_pipeline.reduction.align_to_catalogs import merge_a_plus_b
 
 import crds
 import jwst
