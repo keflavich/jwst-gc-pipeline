@@ -40,7 +40,6 @@ from astropy import log
 from astropy.coordinates import SkyCoord
 from astropy import units as u
 from .filtering import get_filtername, get_fwhm
-import functools
 import requests
 import urllib3
 import builtins
@@ -148,14 +147,6 @@ def get_psf(header, path_prefix='.', use_merged_psf_for_merged=False, fov_pixels
             # which is untenable with this approach.  It's a huge project.
 
     return big_grid
-
-
-def debug_wrap(function):
-    @functools.wraps(function)
-    def wrapper(*args, **kwargs):
-        print(function.__name__, flush=True)
-        return function(*args, **kwargs)
-    return wrapper
 
 
 def _merge_spike_satellites(saturated, sources, nsource, gap, ratio):

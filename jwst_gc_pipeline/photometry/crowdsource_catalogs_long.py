@@ -1165,10 +1165,6 @@ def _combine_seed_and_satstars(seed_catalog, satstar_table):
     return vstack([seed_table, satstar_table], metadata_conflicts='silent')
 
 
-def _augment_seed_catalog_with_detections(seed_catalog, detection_catalog, match_radius_pix=1.0):
-    raise RuntimeError('Use _augment_seed_catalog_with_detections_sky for seeded augmentation')
-
-
 def _augment_seed_catalog_with_detections_sky(seed_catalog, detection_catalog, ww,
                                               match_radius_pix=1.0,
                                               preferred_seed_skycoord_col=None,

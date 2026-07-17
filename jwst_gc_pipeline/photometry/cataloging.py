@@ -2098,43 +2098,6 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
 # ---------------------------------------------------------------------------
 # Cross-band stringent seed (step 18; multifilter only)
 # ---------------------------------------------------------------------------
-def _dedup_skycoords(coords, radius_mas):
-    """Collapse same-star duplicates in a SkyCoord set: union-find clusters of
-    sources within ``radius_mas`` of each other, return a boolean keep-mask with
-    exactly ONE survivor (the lowest original index) per cluster.
-
-    Used to dedup the cross-band union seed: the per-filter catalogs are tightly
-    co-aligned (sickle F187N<->F480M cross-filter offset median 5 mas, 90pct 25
-    mas), so a star detected in N filters lands N times within ~25 mas in the
-    union.  Seeding the m7 fit with N co-located positions forces a degenerate
-    N-source group at sub-pixel separation that splits the star's flux before the
-    1.0 px post-fit dedup removes the duplicates -- the fit is already degraded.
-    Deduping the SEED first gives one clean seed per star.  ``radius_mas`` must
-    stay below the finest blend limit (F187N FWHM ~64 mas) so a pair resolvable
-    even in the SW filters is never merged (default 30 mas <= 0.5 FWHM)."""
-    n = len(coords)
-    if n < 2:
-        return np.ones(n, dtype=bool)
-    i1, i2, _, _ = coords.search_around_sky(coords, radius_mas * u.mas)
-    parent = np.arange(n)
-
-    def find(a):
-        while parent[a] != a:
-            parent[a] = parent[parent[a]]
-            a = parent[a]
-        return a
-
-    for a, b in zip(np.asarray(i1), np.asarray(i2)):
-        if a < b:
-            ra, rb = find(int(a)), find(int(b))
-            if ra != rb:
-                parent[max(ra, rb)] = min(ra, rb)  # keep lowest index as root
-    roots = np.array([find(i) for i in range(n)])
-    keep = np.zeros(n, dtype=bool)
-    keep[np.unique(roots)] = True
-    return keep
-
-
 def _build_crossband_seed(cut_bp, modules, filternames, options, *,
                           max_sep_mas=MANUAL_DEFAULTS['manual_crossband_seed_max_sep_mas'],
                           min_filters=MANUAL_DEFAULTS['manual_crossband_seed_min_filters'],

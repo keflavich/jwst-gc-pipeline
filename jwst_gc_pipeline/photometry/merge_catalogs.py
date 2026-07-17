@@ -161,14 +161,6 @@ def getmtime(x):
     return datetime.datetime.fromtimestamp(os.path.getmtime(x)).strftime('%Y-%m-%d %H:%M:%S')
 
 
-def tryint(x):
-    # int(x) can only raise ValueError/TypeError on non-numeric input.
-    try:
-        return int(x)
-    except (ValueError, TypeError):
-        return -1
-
-
 def sanity_check_individual_table(tbl):
     wl = filtername = tbl.meta['filter']
     print(f"SANITY CHECK {wl}")
