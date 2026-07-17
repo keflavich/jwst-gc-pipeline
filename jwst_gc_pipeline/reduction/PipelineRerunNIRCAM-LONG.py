@@ -47,7 +47,7 @@ from jwst.datamodels import ImageModel
 
 from jwst_gc_pipeline.reduction.destreak import destreak
 
-from jwst_gc_pipeline.reduction.align_to_catalogs import merge_a_plus_b, retrieve_vvv
+from jwst_gc_pipeline.reduction.align_to_catalogs import merge_a_plus_b
 from jwst_gc_pipeline.reduction.saturated_star_finding import remove_saturated_stars
 
 import crds
@@ -795,60 +795,40 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
             json.dump(asn_data, fh)
 
         # don't use VVV at all; the catalog does not play nicely with JWST pipe catalogs
-        if False: #filtername.lower() == 'f405n':
-            # for the VVV cat, use the merged version: no need for independent versions
-            abs_refcat = vvvdr2fn = (f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername}-merged_vvvcat.ecsv')
-            print(f"Loaded VVV catalog {vvvdr2fn}")
-            retrieve_vvv(basepath=basepath, filtername=filtername, proposal_id=proposal_id, fov_regname=fov_regname[regionname], module='merged', fieldnumber=field)
-            tweakreg_parameters['abs_refcat'] = vvvdr2fn
-            tweakreg_parameters['abs_searchrad'] = 1
+        # Use the existence-checked getter: it returns None only when the field is
+        # NOT configured for an absolute refcat (legitimate skip), and RAISES
+        # FileNotFoundError when the field IS wired to a refcat whose file is missing.
+        # That prevents this merged-mosaic path from silently producing an OFF-FRAME
+        # _i2d (the release deliverable) on a typo'd / not-yet-built seed.
+        abs_refcat = get_existing_reference_astrometric_catalog_path(basepath, proposal_id, field, filtername=filtername)
+        if abs_refcat is not None:
             reftbl = Table.read(abs_refcat)
-            reftbl.meta['name'] = f'VVV Reference Catalog {filtername}'
-            assert 'skycoord' in reftbl.colnames
+            reftblversion = reftbl.meta['VERSION']
+            reftbl.meta['name'] = 'Reference Astrometric Catalog'
+            reftbl.meta['filename'] = abs_refcat
         else:
-            # Use the existence-checked getter: it returns None only when the field is
-            # NOT configured for an absolute refcat (legitimate skip), and RAISES
-            # FileNotFoundError when the field IS wired to a refcat whose file is missing.
-            # That prevents this merged-mosaic path from silently producing an OFF-FRAME
-            # _i2d (the release deliverable) on a typo'd / not-yet-built seed.
-            abs_refcat = get_existing_reference_astrometric_catalog_path(basepath, proposal_id, field, filtername=filtername)
-            if abs_refcat is not None:
-                reftbl = Table.read(abs_refcat)
-                reftblversion = reftbl.meta['VERSION']
-                reftbl.meta['name'] = 'Reference Astrometric Catalog'
-                reftbl.meta['filename'] = abs_refcat
-            else:
-                print(f"No absolute reference catalog configured for proposal_id="
-                      f"{proposal_id} field={field}; skipping refcat realignment (mosaic "
-                      f"still produced; absolute zero point unset).", flush=True)
-                reftbl = None
-                reftblversion = None
+            print(f"No absolute reference catalog configured for proposal_id="
+                  f"{proposal_id} field={field}; skipping refcat realignment (mosaic "
+                  f"still produced; absolute zero point unset).", flush=True)
+            reftbl = None
+            reftblversion = None
 
-            # truncate to top 10,000 sources
-            # more recent versions are already truncated to only very high quality matches
-            # reftbl[:10000].write(f'{basepath}/catalogs/crowdsource_based_nircam-f405n_reference_astrometric_catalog_truncated10000.ecsv', overwrite=True)
-            # abs_refcat = f'{basepath}/catalogs/crowdsource_based_nircam-f405n_reference_astrometric_catalog_truncated10000.ecsv'
+        # truncate to top 10,000 sources
+        # more recent versions are already truncated to only very high quality matches
+        # reftbl[:10000].write(f'{basepath}/catalogs/crowdsource_based_nircam-f405n_reference_astrometric_catalog_truncated10000.ecsv', overwrite=True)
+        # abs_refcat = f'{basepath}/catalogs/crowdsource_based_nircam-f405n_reference_astrometric_catalog_truncated10000.ecsv'
 
-            tweakreg_parameters['abs_searchrad'] = 0.4
-            # try forcing searchrad to be tighter to avoid bad crossmatches
-            # (the raw data are very well-aligned to begin with, though CARTA
-            # can't display them b/c they are using SIP)
-            tweakreg_parameters['searchrad'] = 0.05
-            print(f"Reference catalog is {abs_refcat} with version {reftblversion}")
+        tweakreg_parameters['abs_searchrad'] = 0.4
+        # try forcing searchrad to be tighter to avoid bad crossmatches
+        # (the raw data are very well-aligned to begin with, though CARTA
+        # can't display them b/c they are using SIP)
+        tweakreg_parameters['searchrad'] = 0.05
+        print(f"Reference catalog is {abs_refcat} with version {reftblversion}")
 
         tweakreg_parameters.update({'abs_refcat': abs_refcat})
         tweakreg_parameters.update({'skip': True})
 
         if regionname in ('brick', 'cloudc'):
-            # for the VVV cat, use the merged version: no need for independent versions
-            abs_refcat = vvvdr2fn = (f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername}-merged_vvvcat.ecsv')
-            print(f"Loaded VVV catalog {vvvdr2fn}")
-            retrieve_vvv(basepath=basepath, filtername=filtername, proposal_id=proposal_id, fov_regname=fov_regname[regionname], module='merged', fieldnumber=field)
-            tweakreg_parameters['abs_refcat'] = vvvdr2fn
-            tweakreg_parameters['abs_searchrad'] = 1
-            reftbl = Table.read(abs_refcat)
-            reftbl.meta['name'] = f'VVV Reference Catalog {filtername}'
-            assert 'skycoord' in reftbl.colnames
             # Use the existence-checked getter: it returns None only when the field is
             # NOT configured for an absolute refcat (legitimate skip), and RAISES
             # FileNotFoundError when the field IS wired to a refcat whose file is missing.
@@ -1038,33 +1018,24 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         # don't re-fit to VVV - it's not accurate enough with the JWST-derived
         # catalogs.  We needed to use our own much more extensive cataloging to
         # beat down the noise enough to make this approach viable
-        if False: # filtername.lower() == 'f405n':
-            vvvdr2fn = (f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{field}_t001_nircam_clear-{filtername}-{module}_vvvcat.ecsv')
-            print(f"Loaded VVV catalog {vvvdr2fn}")
-            retrieve_vvv(basepath=basepath, filtername=filtername, proposal_id=proposal_id, fov_regname=fov_regname[regionname], module=module, fieldnumber=field)
-            tweakreg_parameters['abs_refcat'] = abs_refcat = vvvdr2fn
-            tweakreg_parameters['abs_searchrad'] = 1
+        abs_refcat = get_existing_reference_astrometric_catalog_path(basepath, proposal_id, field, filtername=filtername)
+        reftbl = None
+        if abs_refcat is not None:
             reftbl = Table.read(abs_refcat)
             assert 'skycoord' in reftbl.colnames
+            reftblversion = reftbl.meta.get('VERSION', 'unknown')
+
+            # truncate to top 10,000 sources for speed when this is ECSV
+            if abs_refcat.endswith('.ecsv'):
+                abs_refcat_truncated = abs_refcat.replace('.ecsv', '_truncated10000.ecsv')
+                reftbl[:10000].write(abs_refcat_truncated, overwrite=True)
+                abs_refcat = abs_refcat_truncated
+
+            tweakreg_parameters['abs_searchrad'] = 0.4
+            tweakreg_parameters['searchrad'] = 0.05
+            print(f"Reference catalog is {abs_refcat} with version {reftblversion}")
         else:
-            abs_refcat = get_existing_reference_astrometric_catalog_path(basepath, proposal_id, field, filtername=filtername)
-            reftbl = None
-            if abs_refcat is not None:
-                reftbl = Table.read(abs_refcat)
-                assert 'skycoord' in reftbl.colnames
-                reftblversion = reftbl.meta.get('VERSION', 'unknown')
-
-                # truncate to top 10,000 sources for speed when this is ECSV
-                if abs_refcat.endswith('.ecsv'):
-                    abs_refcat_truncated = abs_refcat.replace('.ecsv', '_truncated10000.ecsv')
-                    reftbl[:10000].write(abs_refcat_truncated, overwrite=True)
-                    abs_refcat = abs_refcat_truncated
-
-                tweakreg_parameters['abs_searchrad'] = 0.4
-                tweakreg_parameters['searchrad'] = 0.05
-                print(f"Reference catalog is {abs_refcat} with version {reftblversion}")
-            else:
-                print(f"No configured reference catalog found for proposal_id={proposal_id} field={field} in {basepath}. Running first-pass without abs_refcat realignment.")
+            print(f"No configured reference catalog found for proposal_id={proposal_id} field={field} in {basepath}. Running first-pass without abs_refcat realignment.")
 
         if abs_refcat is not None:
             tweakreg_parameters.update({'abs_refcat': abs_refcat,})
