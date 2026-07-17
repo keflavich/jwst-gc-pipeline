@@ -178,13 +178,23 @@ explicit.
 ## 5. Using the tool
 
 ```bash
-# Compare two provenance-record maps (what-if / from live sidecars):
+# Plan a REAL field from disk: scan its stamped products, recompute the current
+# facets (code from the repo, live jwst/CRDS env, parents' facets from disk),
+# and print which stages to re-reduce / refit / reproject / skip:
+python -m jwst_gc_pipeline.versioning.rerun plan --field /path/to/field/catalogs \
+    [--wcs-change-mode posthoc] [--no-live-env] [--json]
+
+# Compare two provenance-record maps (what-if):
 python -m jwst_gc_pipeline.versioning.rerun plan \
     --records recorded.json --current current.json [--wcs-change-mode posthoc] [--json]
 
 # Report the recorded provenance state under a field's product tree:
 python -m jwst_gc_pipeline.versioning.rerun plan --scan /path/to/field/catalogs
 ```
+
+`--field` is the operator entry point: point it at a per-module/-filter subtree
+(one product per stage) and it emits the ready-to-run plan, each stage annotated
+with its action hint; a BLOCKED stage short-circuits the plan with a banner.
 
 Output is one line per stage: `stage  VERDICT  reasons`. `--json` for tooling.
 

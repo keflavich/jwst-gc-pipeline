@@ -278,7 +278,53 @@ def _scan_sidecars(directory):
     return out
 
 
+# One-line action hint per verdict (printed in the human plan).
+ACTION_HINT = {
+    SKIP: 'reuse existing product',
+    RESTAMP: 're-stamp header only',
+    REPROJECT: 'refresh RA/Dec (reproject_xy_to_world); no PSF fit',
+    REFIT: 're-run this cataloging stage (seeds downstream)',
+    RE_REDUCE: 're-run imaging (parent jwst pipeline), then re-plan',
+    BLOCKED: 'ILLEGAL bulk shift at a frozen stage -- investigate',
+    NO_PROVENANCE: 'no sidecar -- must run to establish provenance',
+}
+
+
+def _print_plan(decisions):
+    """Human-readable plan; a BLOCKED stage short-circuits with a banner."""
+    width = max((len(d.stage) for d in decisions), default=7)
+    for d in decisions:
+        if d.verdict == BLOCKED:
+            print('=' * 72)
+            print(f'  PLAN BLOCKED at stage {d.stage}: {"; ".join(d.reasons)}')
+            print('  Downstream verdicts below are NOT actionable until this is '
+                  'resolved.')
+            print('=' * 72)
+            break
+    for d in decisions:
+        cond = ' [conditional]' if d.conditional else ''
+        hint = ACTION_HINT.get(d.verdict, '')
+        print(f'{d.stage:<{width}}  {d.verdict:<13}{cond}  {hint}')
+        if d.reasons:
+            print(f'{"":<{width}}    - ' + '\n'.join(
+                f'{"":<{width}}      {r}' for r in d.reasons).lstrip())
+
+
 def _cmd_plan(args):
+    if args.field:
+        from . import fieldplan
+        decisions, products = fieldplan.plan_field(
+            args.field, wcs_change_mode=args.wcs_change_mode,
+            repo_dir=args.repo_dir, use_live_env=not args.no_live_env)
+        if not products:
+            raise SystemExit(f'plan --field: no *.prov.json products under '
+                             f'{args.field!r} (has the field been stamped?)')
+        if args.json:
+            print(json.dumps([d.as_dict() for d in decisions], indent=2))
+        else:
+            _print_plan(decisions)
+        return
+
     if args.records and args.current:
         recorded = _load_records_json(args.records)
         current = _load_records_json(args.current)
@@ -289,7 +335,8 @@ def _cmd_plan(args):
         current = recorded
     else:
         raise SystemExit(
-            'plan: provide --records R --current C (compare two record maps), '
+            'plan: provide --field DIR (plan a real field from disk), '
+            '--records R --current C (compare two record maps), '
             'or --scan DIR (report recorded provenance state).')
 
     decisions = plan_from_records(recorded, current,
@@ -297,11 +344,7 @@ def _cmd_plan(args):
     if args.json:
         print(json.dumps([d.as_dict() for d in decisions], indent=2))
         return
-    width = max((len(d.stage) for d in decisions), default=7)
-    for d in decisions:
-        cond = ' [conditional]' if d.conditional else ''
-        print(f'{d.stage:<{width}}  {d.verdict:<12}{cond}  '
-              f'{"; ".join(d.reasons)}')
+    _print_plan(decisions)
 
 
 def build_parser():
@@ -310,6 +353,13 @@ def build_parser():
         description='Decide which pipeline stages need re-running.')
     sub = p.add_subparsers(dest='cmd', required=True)
     pl = sub.add_parser('plan', help='produce a per-stage rerun/skip plan')
+    pl.add_argument('--field', help='plan a real field: directory tree to scan '
+                    'for stamped products, recompute current facets from disk')
+    pl.add_argument('--repo-dir', help='repo to fingerprint code against '
+                    '(default: the installed package repo)')
+    pl.add_argument('--no-live-env', action='store_true',
+                    help='do not read the live jwst/CRDS env (imaging env '
+                         'comparison falls back to the recorded env)')
     pl.add_argument('--records', help='JSON of recorded provenance {stage: record}')
     pl.add_argument('--current', help='JSON of current provenance {stage: record}')
     pl.add_argument('--scan', help='directory to scan for *.prov.json sidecars')
