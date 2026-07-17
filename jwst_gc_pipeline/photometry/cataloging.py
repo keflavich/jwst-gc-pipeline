@@ -3088,6 +3088,29 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     raise AstrometryCorrectionRequiredError(msg)
 
 
+def _stamp_catalog_provenance(path, stage, options):
+    """Best-effort provenance sidecar for a merged/combined catalog product.
+
+    Records the pipeline tag, stage, code + params fingerprints, and the output
+    facet hashes next to ``path`` (``<path>.prov.json``) and mirrors the compact
+    keys into the FITS.  FAIL-SOFT: provenance must never break cataloging, so
+    every failure mode (missing package, bad file, unknown stage) is swallowed.
+    Upstream-facet threading (for the full rerun cascade) is a later PR.
+    """
+    try:
+        from jwst_gc_pipeline.versioning import stamping as _vstamp
+        from jwst_gc_pipeline.versioning import fingerprint as _vfp
+    except ImportError:
+        return
+    params = None
+    if options is not None:
+        try:
+            params = _vfp.params_hash(options, stage)
+        except (TypeError, ValueError):
+            params = None
+    _vstamp.try_stamp_catalog(path, stage, params=params)
+
+
 def _run_crossfilter_astrom_checkpoint(vetted_paths_by_filter, cut_bp, basepath,
                                        refcat_cache, context=""):
     """Cross-filter astrometry agreement checkpoint before the m7 cross-band
@@ -3374,6 +3397,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
             # (scripts/reduction/m8_merge_partials.py); a full m8 dedups here.
             if not _m8_partial:
                 _maybe_dedup_m8(_m8, options, label='m8')
+            _stamp_catalog_provenance(_m8, 'm8', options)
         print(f"MANUAL PIPELINE DONE: m8-only forced fill, phases=[m8]", flush=True)
         return
 
@@ -3999,6 +4023,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         _ifound[_m] = np.asarray(_pif)[np.asarray(_idx)][_m]
                     merged['iter_found'] = _ifound
                     merged.write(merged_path, overwrite=True)
+                    _stamp_catalog_provenance(merged_path, phase, options)
                     prev_merged_for[(module, filt)] = (_msc, _ifound)
 
                     d_i2d, ww_i2d = None, None
@@ -4235,6 +4260,9 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 print(f"manual [{last_phase}]: independent-detection annotation "
                       f"failed ({_aex}); merged catalog written without provenance "
                       f"flags", flush=True)
+            # provenance sidecar for the m7 cross-band catalog (after annotate,
+            # which mutates the file); stamp as stage 'm7'.
+            _stamp_catalog_provenance(_xb, 'm7', options)
 
             # ----------------------------------------------------------------
             # m8: forced cross-band fill.  Force-fit every band at the merged
@@ -4273,6 +4301,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         frame_arg_builder_for=_builder_for,
                         nsigma=float(getattr(options, 'forced_fill_nsigma', 3.0)))
                     _maybe_dedup_m8(_m8, options, label=last_phase)
+                    _stamp_catalog_provenance(_m8, 'm8', options)
                 except Exception as _m8ex:
                     print(f"manual [{last_phase}]: m8 forced fill FAILED "
                           f"(module={module}): {_m8ex}", flush=True)

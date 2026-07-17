@@ -21,6 +21,9 @@ Sub-modules:
   * ``fingerprint`` -- per-facet content hashes (data/wcs/meta) + code/params
                        fingerprints.
   * ``prov_sidecar``-- read/write the ``<product>.prov.json`` provenance record.
+  * ``stamping``    -- emit the sidecar + mirrored FITS keys at a stage write
+                       (``stamp_product`` / ``stamp_catalog`` and their
+                       fail-soft ``try_stamp_*`` variants).
   * ``rerun``       -- the per-stage rerun-skip decision engine + ``plan`` CLI.
 """
 

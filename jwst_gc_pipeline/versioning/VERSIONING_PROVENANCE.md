@@ -194,15 +194,27 @@ plan = rerun.plan_from_records(recorded_map, current_map)   # cascaded
 
 ---
 
-## 7. Rollout (remaining PRs)
+## 7. Rollout
 
-* **PR2 — stamping.** Extend `provenance.py` to also stamp `GCTAG` (+ imaging
-  `env`); write a `.prov.json` sidecar at every stage's final write
-  (imaging `_i2d`/`_crf`; each merged m-stage catalog). Compute `facet_hashes`
-  on write.
+* **PR1 — tooling + doc.** (merged, `2026-07-16_PR109`.) tags / fingerprint /
+  prov_sidecar / rerun engine + `plan` CLI + tag-on-merge CI.
+* **PR2 — stamping.** (this PR.) `provenance.py` now also stamps `GCTAG` on
+  every FITS write. `versioning/stamping.py` writes a `.prov.json` sidecar at
+  each stage's final write and mirrors `GCSTAGE`/`GCDATAH`/`GCWCSH`/`GCMETAH`
+  (16-hex prefixes) into the FITS. Wired **fail-soft** at:
+  - imaging `_i2d` (per-module + merged) and per-exposure `_crf`
+    (`PipelineRerunNIRCAM-LONG.py`, `_stamp_imaging_product`);
+  - each merged per-band catalog (m12/m3–m6) and the m7/m8 combined catalogs
+    (`cataloging.py`, `_stamp_catalog_provenance`).
+  `env` (jwst/CRDS/DVA) is auto-read from the product header; `code`/`params`
+  are recorded. **Upstream-facet threading is deferred** (the recorded
+  `inputs.upstream` is empty for now), so these sidecars already drive the
+  byte-identity gate (compare a stage's `data`/`wcs` facet across runs) but the
+  full cross-stage cascade wiring lands with PR3/PR4.
 * **PR3 — guard wiring.** Call `assert_runnable_version` at the imaging and
-  cataloging entry points; add a CI grep-guard that fails if a stage entry lacks
-  the call.
+  cataloging entry points; thread `upstream` facets from parent sidecars into
+  each record; add a CI grep-guard that fails if a stage entry lacks the call.
 * **PR4 — `plan` field locator.** Teach `rerun plan --field/--proposal` the
   product-naming conventions so it recomputes current facets from disk and emits
-  a ready-to-run plan (which stages to submit, which to reproject-only).
+  a ready-to-run plan (which stages to submit, which to reproject-only), with a
+  BLOCKED stage short-circuiting the printed plan.

@@ -71,6 +71,22 @@ def print(*args, **kwargs):
 
 print(jwst.__version__)
 
+
+def _stamp_imaging_product(path):
+    """Best-effort provenance sidecar for an imaging product (_i2d / _crf).
+
+    Records the pipeline tag, stage='imaging', code hash, and the output facet
+    hashes (data/wcs/meta) next to ``path``, with env (jwst version / CRDS
+    context / DVACORR) auto-read from the product header.  FAIL-SOFT: imaging
+    provenance must never break a reduction, so all failures are swallowed.
+    """
+    try:
+        from jwst_gc_pipeline.versioning import stamping as _vstamp
+    except ImportError:
+        return
+    _vstamp.try_stamp_product(path, 'imaging')
+
+
 # see 'destreak410.ipynb' for tests of this
 medfilt_size = {'F410M': 15, 'F405N': 256, 'F466N': 55,
                 'F182M': 55, 'F187N': 512, 'F212N': 512,
@@ -949,6 +965,8 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
             check_wcs(member['expname'])
             check_wcs(member['expname'].replace('destreak', 'i2d'))
         check_wcs(asn_data['products'][0]['name'] + "_i2d.fits")
+        _stamp_imaging_product(os.path.join(
+            output_dir, asn_data['products'][0]['name'] + "_i2d.fits"))
 
         # NOTE (2026-07-11): retired the post-Image3 realign_to_vvv / realign_to_catalog
         # step -- the mosaic tie comes from per-exposure fix_alignment; this rigid CRVAL
@@ -1053,6 +1071,8 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         for member in asn_data['products'][0]['members']:
             check_wcs(member['expname'])
         check_wcs(asn_data['products'][0]['name'] + "_i2d.fits")
+        _stamp_imaging_product(os.path.join(
+            output_dir, asn_data['products'][0]['name'] + "_i2d.fits"))
 
         vvv_region_file = f"{basepath}/{fov_regname[regionname]}" if regionname in fov_regname else None
         # Only run VVV realignment for targets whose refnames is 'VVV'.  Gaia /
@@ -1512,6 +1532,10 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
             align_fits[1].header[_k] = (_v, _c)
         align_fits.writeto(fn, overwrite=True)
         assert 'RAOFFSET' in fits.getheader(fn, ext=1)
+        # provenance: the per-exposure aligned crf is what cataloging re-fits, so
+        # its data/wcs facets gate the cataloging-skip decision.  Stamp only on
+        # the apply branch (RAOFFSET freshly baked); fail-soft.
+        _stamp_imaging_product(fn)
     check_wcs(fn)
 
 
