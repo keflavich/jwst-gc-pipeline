@@ -49,6 +49,20 @@ def test_offset_magnitude_and_direction():
     assert np.allclose(ddec, 150.0, atol=0.5)
 
 
+def test_data_facet_invariant_only_coords_change():
+    # The whole point of the REPROJECT path: every NON-coordinate column
+    # (x_fit/y_fit/flux) is byte-identical after the update -- only sky columns
+    # move.  This is what keeps the data facet unchanged.
+    t = _catalog()
+    coord_cols = {'ra', 'dec', 'skycoord'}
+    before = {c: np.array(t[c]) for c in t.colnames if c not in coord_cols}
+    B.apply_rigid_offset_to_catalog(t, 250.0, -175.0)
+    for c, arr in before.items():
+        assert np.array_equal(np.array(t[c]), arr), f"non-coord column {c} changed"
+    # and the coordinate columns DID move
+    assert not np.allclose(t['ra'], _catalog()['ra'])
+
+
 def test_reversible():
     t = _catalog()
     ra0, dec0 = np.array(t['ra']), np.array(t['dec'])

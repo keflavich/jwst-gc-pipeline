@@ -111,9 +111,14 @@ class NonUniformResidualError(RuntimeError):
 
 
 def measure_bulk_offset(cat_coords, ref_coords, *, uniformity_tol_mas=15.0,
-                        min_contrast=None, nx=6, ny=6, maxsep=3.0 * u.arcsec,
+                        min_contrast=None, nx=12, ny=12, maxsep=3.0 * u.arcsec,
                         context=""):
     """Measure the field's bulk residual AND gate on spatial uniformity.
+
+    The per-tile grid defaults to **12x12** (not coarser): a confined residual
+    seam dilutes inside a large tile and passes a coarse gate -- the brick-1182
+    F200W lesson (a ~90 mas strip a 4x4 grid averaged to ~50 mas whole-field).
+    CLAUDE.md's release gate mandates >=12x12 and gating on per-tile magnitude.
 
     Returns ``dict(dra, ddec, off, contrast, ok, window_arcsec, swept, grid)``
     (mas) -- the sanctioned ``measure_offset`` global tie plus the per-tile map.
