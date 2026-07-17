@@ -322,6 +322,10 @@ def _cmd_plan(args):
         if args.json:
             print(json.dumps([d.as_dict() for d in decisions], indent=2))
         else:
+            print('NOTE: params are compared against each product\'s RECORDED '
+                  'params, not your live CLI options. If you changed cataloging '
+                  'options since these products were built, this plan can '
+                  'under-report REFIT -- re-run the stage to be sure.')
             _print_plan(decisions)
         return
 

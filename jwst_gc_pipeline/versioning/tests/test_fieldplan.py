@@ -92,6 +92,21 @@ def test_wcs_only_reseed_blocks_frozen_stage(tmp_path):
     assert by['m4'].verdict == rerun.BLOCKED
 
 
+def test_unreadable_image_parent_returns_none_not_table(tmp_path):
+    import pytest
+    # A known image (is_catalog=False) that can't be read must NOT fall through
+    # to the table path (which would mis-type it); it returns None + warns.
+    bad = str(tmp_path / 'broken_i2d.fits')
+    with open(bad, 'wb') as fh:
+        fh.write(b'not a fits file')
+    with pytest.warns(UserWarning):
+        assert fieldplan._current_facets(bad, is_catalog=False) is None
+    # a valid image still yields facets
+    good = _i2d(str(tmp_path / 'ok_i2d.fits'))
+    f = fieldplan._current_facets(good, is_catalog=False)
+    assert f and f['data']
+
+
 def test_wcs_only_posthoc_is_reproject(tmp_path):
     i2d = _i2d(str(tmp_path / 'img_i2d.fits'))
     stamping.stamp_product(i2d, 'imaging')
