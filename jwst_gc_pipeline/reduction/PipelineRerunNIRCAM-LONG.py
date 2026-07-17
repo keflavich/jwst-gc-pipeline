@@ -1422,16 +1422,22 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
         # in this pipeline, so sgrc had NO per-exposure alignment (fell through to
         # the else -> rashift=0) and its exposures scattered ~2-8 mas around the
         # visit consensus (m2 astrometry checkpoint flagged 39 exposures > 2 mas
-        # in F115W/nrcb alone).  The consensus offsets table -- seeded by the m2
-        # checkpoint (seed_offsets_table_from_consensus) and refined by
-        # update_offsets_table on later iterations -- shifts each exposure ONTO
-        # the dense INTERNAL consensus, removing the raw guide-star jitter WITHOUT
-        # injecting per-exposure reference noise.  The consensus->VIRAC2 bulk is
-        # set by the '012' gaia_virac2 refcat (Fix A) + realign_to_catalog.  On
-        # the FIRST reduction pass the table does not exist yet, so the helper
-        # returns (0,0) and the checkpoint gets to measure the raw scatter.
-        # Keyed (Visit, Filter, Exposure, Module); dra/ddec are arcsec Δα
-        # coordinate (same convention as the brick VIRAC2locked table).
+        # in F115W/nrcb alone).  The consensus offsets table -- seeded AND upserted
+        # by the m2 checkpoint (seed_offsets_table_from_consensus; update_offsets
+        # _table is NOT used for consensus tables) -- carries two row kinds, both
+        # summed by lookup_consensus_offset:
+        #   * per-exposure JITTER (real Exposure/Module): tie each exposure onto
+        #     the dense INTERNAL consensus (removes raw guide-star jitter);
+        #   * the per-visit BULK sentinel row (Exposure=-1, Module='all'): the
+        #     consensus->VIRAC2 tie, applied identically to every exposure.
+        # This offsets table is now the SINGLE place sgrc is tied to VIRAC2 --
+        # the post-Image3 realign_to_catalog is RETIRED (see ~line 973/1090), so
+        # there is no second live tie and no double-correction.  The '012'
+        # gaia_virac2 refcat (Fix A) is the reference the checkpoint measures the
+        # bulk AGAINST; it does not itself shift the frames.  On the FIRST
+        # reduction pass the table does not exist yet, so the helper returns
+        # (0,0) and the checkpoint measures the raw scatter.  dra/ddec are arcsec
+        # Δα coordinate (same convention as the brick VIRAC2locked table).
         rashift, decshift = _apply_consensus_offsets_table(
             fn, basepath, str(proposal_id), filtername, field)
         _prov_tbl = f'Offsets_JWST_Brick{proposal_id}_consensus.csv'

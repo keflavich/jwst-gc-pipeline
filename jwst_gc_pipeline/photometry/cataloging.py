@@ -3040,22 +3040,27 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     applied = False
     seeded = False
     if os.environ.get('ASTROM_CHECKPOINT_APPLY', '') == '1':
-        if offsets_path is None:
-            # No offsets table yet -- a tweakreg/fix_alignment field outside the
-            # brick/cloudc VIRAC2locked pathway (sgrc, cloudef, ...).  update_
-            # offsets_table can only EDIT existing rows, so with nothing to edit
-            # the auto-apply used to be a silent no-op.  Seed a per-exposure
-            # consensus table from the measured corrections; fix_alignment applies
-            # it on the re-reduce (needs a matching per-field branch, e.g. 4147).
+        # A tweakreg/fix_alignment field outside the brick/cloudc VIRAC2locked
+        # pathway (sgrc, cloudef, ...) uses a per-exposure CONSENSUS table.
+        # update_offsets_table can only EDIT existing rows -- it hard-fails on a
+        # correction with no matching row -- so it cannot (a) create the first
+        # table (silent no-op) nor (b) absorb a newly-flagged exposure on later
+        # iterations (the set of >tol exposures churns across the 2 mas line as
+        # the applied tie removes the bulk jitter).  Route consensus tables (and
+        # the no-table seed case) through the UPSERT helper instead; only the
+        # brick/cloudc module-locked tables use the strict update.
+        _is_consensus = offsets_path is None or str(offsets_path).endswith(
+            '_consensus.csv')
+        if _is_consensus:
             from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
                 seed_offsets_table_from_consensus)
+            seeded = offsets_path is None
             offsets_path = seed_offsets_table_from_consensus(
                 basepath, str(proposal_id), str(getattr(options, 'field', '')),
                 corrections, stage=merge_label)
-            seeded = True
-            print(f"astrom checkpoint [{merge_label}] {filt}/{module}: SEEDED new "
-                  f"consensus offsets table ({len(corrections)} rows) -> "
-                  f"{offsets_path}", flush=True)
+            print(f"astrom checkpoint [{merge_label}] {filt}/{module}: "
+                  f"{'SEEDED' if seeded else 'UPSERTED'} consensus offsets table "
+                  f"({len(corrections)} corrections) -> {offsets_path}", flush=True)
         else:
             update_offsets_table(offsets_path, corrections, merge_label)
         renames = mark_i2d_stale(
