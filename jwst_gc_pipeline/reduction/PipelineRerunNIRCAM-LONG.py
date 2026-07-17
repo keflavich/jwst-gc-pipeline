@@ -1625,6 +1625,13 @@ if __name__ == "__main__":
                       metavar="skymatch_method")
     (options, args) = parser.parse_args()
 
+    # Production run guard: refuse to run the imaging stage on an untagged or
+    # dirty tree (so every product carries a real release tag) unless GC_ALLOW_DEV
+    # is set for a development run.  See jwst_gc_pipeline/versioning/tags.py.
+    from jwst_gc_pipeline.versioning.tags import assert_runnable_version
+    _run_tag = assert_runnable_version('imaging')
+    print(f"imaging: running under pipeline tag {_run_tag}")
+
     filternames = options.filternames.split(",")
     modules = options.modules.split(",")
     fields = options.field.split(",")

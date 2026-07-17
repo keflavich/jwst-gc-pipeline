@@ -211,10 +211,22 @@ plan = rerun.plan_from_records(recorded_map, current_map)   # cascaded
   `inputs.upstream` is empty for now), so these sidecars already drive the
   byte-identity gate (compare a stage's `data`/`wcs` facet across runs) but the
   full cross-stage cascade wiring lands with PR3/PR4.
-* **PR3 — guard wiring.** Call `assert_runnable_version` at the imaging and
-  cataloging entry points; thread `upstream` facets from parent sidecars into
-  each record; add a CI grep-guard that fails if a stage entry lacks the call.
-* **PR4 — `plan` field locator.** Teach `rerun plan --field/--proposal` the
-  product-naming conventions so it recomputes current facets from disk and emits
-  a ready-to-run plan (which stages to submit, which to reproject-only), with a
-  BLOCKED stage short-circuiting the printed plan.
+* **PR3 — guard wiring + upstream threading.** (this PR, WIP.)
+  `assert_runnable_version` is called at the imaging and cataloging CLI entry
+  points (right after option parsing), so a production run on an untagged/dirty
+  tree hard-blocks unless `GC_ALLOW_DEV=1`. `versioning/upstream.py`
+  (`STAGE_PARENTS`, `pool_facets`, `upstream_from_sidecars`) reads a stage's
+  parent-product sidecars and records their output facets as `inputs.upstream`,
+  so the rerun cascade is now driven entirely by on-disk sidecars: m3←m12,
+  m4←m3, …, m7←pool(all filters' m6), m8←m7. A CI grep-guard
+  (`test_stage_entries_guarded.py`) fails if an entry stops calling the guard.
+  **Still deferred:** the `imaging`-frame upstream facet for cataloging stages
+  (pooling the per-exposure `_crf` sidecars) — the mechanism (`pool_facets` over
+  the crf sidecars) is in place; only the crf-path threading at the m12 stamp
+  site remains.
+* **PR4 — `plan` field locator.** (this PR, WIP.) `rerun plan --field/--proposal`
+  locates each stage's product(s) by the naming conventions, reads the recorded
+  sidecar, recomputes the current facets + code/params/env from disk, runs the
+  decision engine, and prints a ready-to-run plan (which stages to submit, which
+  to reproject-only, which to skip), with a BLOCKED stage short-circuiting the
+  printed plan.
