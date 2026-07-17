@@ -110,6 +110,23 @@ GC_ALLOW_DEV=1 python -m jwst_gc_pipeline...      # or pass allow_dev=True
 A dev run is permitted but warns and stamps the dev tag. **The pipeline runs
 only on tagged versions** — this is the mechanism that enforces it.
 
+The guard is called at exactly two points — the `__main__`/`main()` CLI entries
+of `PipelineRerunNIRCAM-LONG.py` (imaging) and `crowdsource_catalogs_long.py`
+(cataloging). It is **not** called inside `run_manual_pipeline`, the cutout
+sub-runs, or any importable helper, so importing these modules (tests, notebooks,
+programmatic callers) never trips it.
+
+#### ⚠️ Rollout (do this in the same change that merges the guard)
+
+Once the guard is live, **every SLURM reduce/catalog job hard-blocks at entry**
+unless it runs on a tagged, clean checkout **or** permits a dev run. The
+submission scripts are wired for this: `scripts/reduction/submit_reduction.sbatch`
+and `submit_cataloging*.sbatch` now `export GC_ALLOW_DEV="${GC_ALLOW_DEV:-1}"`, so
+the live working-tree queue keeps running (stamping dev tags) while a **release**
+run — a checkout at a release tag, clean — passes as production regardless of the
+flag. Set `GC_ALLOW_DEV=0` to force the block (e.g. to guarantee a run is on a
+tagged checkout). A hand-launched command must do the same.
+
 ---
 
 ## 4. The decision matrix (the instruction set)
@@ -211,10 +228,25 @@ plan = rerun.plan_from_records(recorded_map, current_map)   # cascaded
   `inputs.upstream` is empty for now), so these sidecars already drive the
   byte-identity gate (compare a stage's `data`/`wcs` facet across runs) but the
   full cross-stage cascade wiring lands with PR3/PR4.
-* **PR3 — guard wiring.** Call `assert_runnable_version` at the imaging and
-  cataloging entry points; thread `upstream` facets from parent sidecars into
-  each record; add a CI grep-guard that fails if a stage entry lacks the call.
-* **PR4 — `plan` field locator.** Teach `rerun plan --field/--proposal` the
-  product-naming conventions so it recomputes current facets from disk and emits
-  a ready-to-run plan (which stages to submit, which to reproject-only), with a
-  BLOCKED stage short-circuiting the printed plan.
+* **PR3 — guard wiring + upstream threading.** (this PR, WIP.)
+  `assert_runnable_version` is called at the imaging and cataloging CLI entry
+  points (right after option parsing), so a production run on an untagged/dirty
+  tree hard-blocks unless `GC_ALLOW_DEV=1`. `versioning/upstream.py`
+  (`STAGE_PARENTS`, `pool_facets`, `upstream_from_sidecars`) reads a stage's
+  parent-product sidecars and records their output facets as `inputs.upstream`,
+  so the rerun cascade is now driven entirely by on-disk sidecars: m3←m12,
+  m4←m3, …, m7←pool(all filters' m6), m8←m7. A CI grep-guard
+  (`test_stage_entries_guarded.py`) fails if an entry stops calling the guard.
+  The `imaging`-frame upstream facet is **now threaded** at every cataloging
+  stamp site: `_stamp_catalog_provenance` records `inputs.upstream['imaging']` =
+  `pool_facets` over the per-exposure `_crf` sidecars for that (module, filter)
+  — the per-band catalogs pool their own frames, m7/m8 pool across all filters.
+  So a re-reduced frame (changed crf `data` facet) now forces a downstream
+  `REFIT` through the **pure sidecar** path too, not only through `plan --field`.
+  (Fail-soft: if a crf sidecar is absent, that parent is simply omitted.)
+* **PR4 — `plan` field locator.** (this PR, WIP.) `rerun plan --field/--proposal`
+  locates each stage's product(s) by the naming conventions, reads the recorded
+  sidecar, recomputes the current facets + code/params/env from disk, runs the
+  decision engine, and prints a ready-to-run plan (which stages to submit, which
+  to reproject-only, which to skip), with a BLOCKED stage short-circuiting the
+  printed plan.

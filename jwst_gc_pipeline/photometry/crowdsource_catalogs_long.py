@@ -4320,6 +4320,13 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'frames.'))
     (options, args) = parser.parse_args()
 
+    # Production run guard: refuse to run cataloging on an untagged or dirty tree
+    # (so every catalog carries a real release tag) unless GC_ALLOW_DEV is set for
+    # a development run.  See jwst_gc_pipeline/versioning/tags.py.
+    from jwst_gc_pipeline.versioning.tags import assert_runnable_version
+    _run_tag = assert_runnable_version('cataloging')
+    print(f"cataloging: running under pipeline tag {_run_tag}")
+
     # Deprecate mosaic-mode photometry (2026-05-25).  Reasons:
     # * mosaic-mode skips satstar fitting (the per-frame DQ_SATURATED gate is
     #   only meaningful in the original cal files, not in the drizzled
