@@ -34,12 +34,18 @@ catalog** and **no footprint/coverage tracking** exist yet. **Program 10678 is
 greenfield** — onboard via the `FIELDS` dict in `stage_release.py`.
 
 **Filter reality (decisive for the two-color choice):**
-- **F212N** — present CMZ-wide (sgra, sgrb2, sgrc, brick, cloudc): the reliable
-  short-wave anchor.
-- **F480M** — only sgrc, sgrb2, sickle. **Not** in brick/cloudc/gc2211.
-- **F405N** — the CMZ-wide long-narrow band.
-- ⇒ A literal *F212N–F480M* pair only covers part of the CMZ. Use a **per-field
-  long-band policy** (below).
+- **F212N** — the CMZ-wide short-wave anchor (blue).
+- **F480M** — the **CMZ-wide long band with program 10678** (red). The go-forward
+  two-color pair is **F212N + F480M**.
+- **F405N** — a **legacy** per-field long-narrow band, present in the older
+  programs (2221/1182/5365/4147) but not the go-forward CMZ set. Use it only as a
+  fallback for a legacy field that predates F480M coverage.
+- ⇒ Two-color = F212N (blue) + F480M (red), with F405N a legacy per-region
+  fallback (§1.2).
+
+> Note: a data survey of the *current* disk (pre-10678) shows F405N common and
+> F480M sparse — that is the legacy set, not the go-forward one. Key the design on
+> 10678's filters (F212N + F480M), not the legacy on-disk mix.
 
 ---
 
@@ -69,20 +75,17 @@ per-field i2d ──► mono HiPS: HiPS/F212N   (incremental, real flux, fits ti
                     Aladin Lite pane on the release webpage
 ```
 
-### 1.2 The two long-band policy (F480M vs F405N)
+### 1.2 Long-band policy (F480M primary, F405N legacy fallback)
 
-Maintain **two** long-band mono HiPS and a coverage MOC per band:
-- `HiPS/F480M` where F480M exists (sgrc, sgrb2, sickle, +10678 if it observes it),
-- `HiPS/F405N` CMZ-wide.
+The red channel is **F480M** — CMZ-wide with 10678. For **legacy** fields that
+predate F480M coverage, fall back to F405N in those regions only. Concretely:
+- `HiPS/F480M` — the primary long-band mono HiPS (grows CMZ-wide as 10678 lands),
+- `HiPS/F405N` — a legacy mono HiPS covering only the pre-10678 fields.
 
-The color layer picks, per sky region, the best available long band (prefer F480M,
-fall back to F405N), recorded in a **per-band coverage MOC** (§1.4) so the
-provenance of every colored region is explicit. This keeps a single seamless
-CMZ-wide color mosaic without pretending F480M is everywhere.
-
-(Alternative if a *uniform* long band is required for science-grade color: use
-F405N everywhere — universal — and offer F480M as a separate overlay HiPS where
-available. Decision for the author; see §4.)
+The color layer uses F480M where present, F405N only to fill legacy gaps, with the
+choice recorded in a per-band coverage MOC (§1.4) so every colored region's
+long-band provenance is explicit. As 10678 completes, the F405N fallback shrinks
+to nothing and the mosaic is uniformly F212N+F480M.
 
 ### 1.3 Tooling: two viable substrates
 
@@ -95,12 +98,15 @@ available. Decision for the author; see §4.)
 | Allsky / low orders | yes | not written |
 | Dep | Java (`Hipsgen.jar`, one jar) | pure Python (already in use) |
 
-**Recommendation:** adopt **Hipsgen.jar** for the CMZ-wide growing mono+color
-HiPS + MOC (it is purpose-built for exactly this: a survey that grows). Keep the
-existing `reproject.hips` PNG path for per-target press-image RGBs. Wrap Hipsgen in
-a thin python driver so invocation matches the repo's style.
-
-If a Java dependency is unwanted, §1.5 gives the pure-Python incremental fallback.
+**Recommendation: pure-Python (`reproject.hips`) — no Java.** The apparent reason
+to reach for Hipsgen (native incremental) is not actually needed: because
+`reproject.hips` writes a **correct all-order pyramid per field**, folding a new
+field into the master is a **per-order tile combine** with **no pyramid
+re-derivation** — so it is incremental *and* avoids the HEALPix nested-child
+orientation math (exactly the bug class the repo's HiPS-orientation QA already
+polices). §1.5 is therefore the primary path, not a fallback. Keep the Java
+Hipsgen driver only for the one thing pure-Python can't do — the progressive
+**catalog** HiPS (§2.4) — and as an optional alternative image builder.
 
 ### 1.4 Coverage MOC — also the footprint tracker the release lacks
 
@@ -112,14 +118,16 @@ i2d valid-data footprint. The union MOC per filter = the survey coverage map. Th
 - is published as a `.fits`/`.moc` for Aladin overlay + machine-readable coverage,
 - lets the webpage show "what's covered so far" as 10678 rolls in.
 
-### 1.5 Pure-Python incremental fallback (if not adopting Hipsgen.jar)
+### 1.5 Pure-Python incremental merge (the primary path)
 
-`reproject_to_hips` per NEW field into a staging tree, then a `hips_merge` step:
-for each `(Norder, Npix)` tile present in both the master and the new field,
-combine (non-NaN priority / max / alpha-blend), write back; then regenerate
-ancestor tiles bottom-up for the touched pixels only (and the Allsky). This is
-scriptable (tiles are independent HEALPix PNGs) but re-implements what Hipsgen does
-natively — hence the recommendation above.
+`reproject_to_hips` each NEW field into a scratch tree, then merge **per order**:
+for each `(Norder, Npix)` tile the field produced, copy it in if the master lacks
+it, else combine the two (nan-aware mean/priority) and write back. **No ancestor
+regeneration is needed** — reproject.hips already emitted a correct tile at every
+order for that field, so the coarse tiles combine directly the same way the deep
+ones do. That is what makes this both incremental (only overlapping master tiles
+change) and safe (no hand-rolled HEALPix nested-child orientation). FITS (numeric)
+tiles keep the combine lossless; the color layer is derived on top (§1.1).
 
 ### 1.6 Rollout / steps
 
@@ -212,14 +220,17 @@ fields/tags they were built from. An incremental HiPS/catalog update records whi
 field/tag was folded in and when — so a growing CMZ product stays fully traceable
 (and a re-released field triggers exactly the tiles/partitions it touches).
 
-## 4. Decisions for the author
+## 4. Decisions
 
-1. **Long band for the seamless color**: per-region best-available (F480M→F405N,
-   §1.2) — or uniform F405N with F480M as an optional overlay?
-2. **Hipsgen.jar (Java, native incremental + MOC + color) vs pure-Python
-   incremental** (§1.3/1.5) for the survey substrate.
-3. **HATS now or later**: ship HATS from the first CMZ-wide release, or start with
-   flat Parquet + HiPS-cat and add HATS when catalog size/cross-match demand it?
-4. Where the new tooling lives: `jwst_scripts` (with the existing HiPS/RGB code) vs
-   this repo's `scripts/release/` (with the staging/gate machinery). Recommend the
-   HiPS build in `jwst_scripts`, the release-integration + catalog assembly here.
+Resolved:
+- **Long band** → **F480M** (CMZ-wide with 10678), F405N legacy per-region
+  fallback (§1.2).
+- **Substrate** → **pure-Python** `reproject.hips` + per-order incremental merge;
+  Java Hipsgen kept only for the catalog HiPS (§1.3/1.5).
+
+Open for the author:
+1. **HATS now or later**: ship HATS from the first CMZ-wide release, or start with
+   flat Parquet + catalog HiPS and add HATS when catalog size/cross-match demand it?
+2. Where the tooling lives: implemented in **this repo** (`jwst_gc_pipeline/cmz/`)
+   so it sits with the release/gate machinery and the versioning provenance; the
+   per-target press-image RGBs stay in `jwst_scripts`.
