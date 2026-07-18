@@ -3,16 +3,22 @@
 Growing two-color HiPS + shareable giant catalog. Implements
 `scripts/release/CMZ_HIPS_AND_CATALOG_SHARING_PLAN.md`.
 
+**Pure-Python is the default path.** The two-color pair is **F212N (blue) + F480M
+(red)** — both CMZ-wide with program 10678; **F405N is a legacy per-field
+fallback** where a field predates F480M coverage.
+
 ## Layers (complementary, not alternatives)
 
 | Need | Module | Tool | Dep |
 |---|---|---|---|
 | CMZ-wide catalog (one table) | `catalog_assembly` | astropy | — |
-| growing color mosaic | `hips` | `reproject.hips` + Pillow | `reproject`, `Pillow` |
-| — native incremental / RGB / Allsky | `hipsgen` | CDS `Hipsgen.jar` | Java + jar |
+| growing color mosaic (**incremental, pure-Python**) | `hips` | `reproject.hips` + Pillow | `reproject`, `Pillow` |
 | WHERE data is (footprint) | `coverage_moc` | `mocpy` | `mocpy` |
-| VIEW catalog in Aladin | `hipsgen.build_catalog_hips` | `Hipsgen-cat.jar` | Java + jar |
 | ANALYSE / cross-match at scale | `hats_export` | `hats-import` + LSDB | `hats-import` |
+| VIEW catalog in Aladin | `hipsgen.build_catalog_hips` | `Hipsgen-cat.jar` (only piece with no pure-Python equivalent) | Java + jar |
+
+`hipsgen.py` (Java) is **optional** — used for the progressive catalog HiPS, or as
+an alternative image builder if you specifically want CDS Hipsgen.
 
 ## End-to-end (as program 10678 rolls in)
 
@@ -27,35 +33,35 @@ python -m jwst_gc_pipeline.cmz.catalog_assembly --spec fields.json --out cmz_cat
 python -m jwst_gc_pipeline.cmz.coverage_moc --i2d '.../ *-f212n-merged_i2d.fits' \
        --out cmz_f212n_coverage.fits
 
-# 3a. Two-color HiPS (pure-python; no Java) from two mono HiPS
+# 3. Two-color HiPS (pure-Python, incremental) — B=F212N, R=F480M
 python - <<'PY'
 from jwst_gc_pipeline.cmz import hips
-hips.build_mono_hips(['.../brick-f212n-merged_i2d.fits', '.../sgrc-f212n-...fits'],
-                     'HiPS/F212N')                 # blue substrate (F212N)
-hips.build_mono_hips(['.../sgrc-f480m-...fits'],    'HiPS/LONG')  # F480M/F405N
-hips.derive_two_color_hips('HiPS/F212N', 'HiPS/LONG', 'HiPS/CMZ_color')
+# Grow each mono HiPS one field at a time (only overlapping master tiles rewrite):
+hips.add_field_to_mono_hips('HiPS/F212N', ['.../brick-f212n-merged_i2d.fits'], 'brick')
+hips.add_field_to_mono_hips('HiPS/F212N', ['.../sgrc-f212n-merged_i2d.fits'],  'sgrc')
+hips.add_field_to_mono_hips('HiPS/F480M', ['.../sgrc-f480m-merged_i2d.fits'],  'sgrc')
+# (for a legacy field lacking F480M, add its F405N to a separate HiPS/F405N and
+#  point the red channel there for that region)
+hips.derive_two_color_hips('HiPS/F212N', 'HiPS/F480M', 'HiPS/CMZ_color')
 PY
 
-# 3b. OR native-incremental image HiPS + RGB via CDS Hipsgen (Java)
-export HIPSGEN_JAR=/path/Hipsgen.jar
-python - <<'PY'
-from jwst_gc_pipeline.cmz import hipsgen
-hipsgen.build_mono_hips('fits_in/F212N', 'HiPS/F212N')   # re-run to grow
-PY
-
-# 4. Catalog HiPS for Aladin (Java) + HATS for LSDB
-export HIPSGENCAT_JAR=/path/Hipsgen-cat.jar
+# 4. HATS for LSDB (scalable) — analysis/cross-match
 python -m jwst_gc_pipeline.cmz.hats_export --parquet cmz_catalog.parquet \
        --out hats/ --name cmz_jwst
+# Catalog HiPS for Aladin (the one Java piece; no pure-Python generator exists):
+#   export HIPSGENCAT_JAR=/path/Hipsgen-cat.jar
+#   python -c "from jwst_gc_pipeline.cmz import hipsgen; \
+#              hipsgen.build_catalog_hips('cmz_catalog.fits','HiPS/cmz_cat')"
 ```
 
-## Incremental note
+## Incremental (pure-Python)
 
-`hips.build_mono_hips` (reproject.hips) rebuilds from the member list —
-`MemberRegistry` tracks members so you re-run with the full set. **Native
-incremental** tiling (rewrite only affected tiles) is CDS Hipsgen (`hipsgen.py`);
-the plan recommends it for the survey substrate. Two-color derivation
-(`derive_two_color_hips`) is per-tile over the shared tiles — cheap to re-derive.
+`add_field_to_mono_hips` builds the new field's HiPS in scratch and
+`merge_hips_trees` folds it into the master **per order** (nan-aware combine).
+reproject.hips already writes a correct all-order pyramid per field, so the merge
+does **no** pyramid re-derivation (hence no HEALPix orientation math) and rewrites
+only the master tiles the field overlaps. `derive_two_color_hips` is per-tile over
+the shared tiles — cheap to re-derive at any stretch.
 
 ## Provenance
 

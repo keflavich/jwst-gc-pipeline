@@ -1,14 +1,17 @@
-"""Thin driver for CDS Hipsgen.jar (image HiPS) and Hipsgen-cat.jar (catalog HiPS).
+"""OPTIONAL Java drivers for CDS Hipsgen.jar / Hipsgen-cat.jar.
 
-The recommended substrate for a GROWING survey: Hipsgen builds a mono HiPS from
-FITS mosaics with NATIVE incremental tiling (re-run over an index that includes
-new files; only affected tiles + their ancestors rewrite), plus RGB HiPS from
-2-3 mono HiPS, a coverage MOC, and Allsky previews.  Hipsgen-cat builds a
-progressive catalog HiPS that Aladin renders zoom-by-zoom.
+The primary, pure-Python path is ``cmz.hips`` (incremental mono HiPS + two-color
+derivation) — prefer it. This module is a convenience for two things pure-Python
+does not yet cover, when Java is available:
+  * ``build_catalog_hips`` — a progressive CATALOG HiPS (Hipsgen-cat) for Aladin
+    (there is no pure-Python catalog-HiPS generator; the pure-Python catalog path
+    is HATS via ``cmz.hats_export`` for analysis + a flat catalog for download);
+  * ``build_mono_hips``/``build_rgb_hips`` — an alternative image-HiPS builder if
+    you specifically want CDS Hipsgen's tiling/Allsky.
 
-Both are Java tools.  Point ``HIPSGEN_JAR`` / ``HIPSGENCAT_JAR`` at the jars (or
+Both are Java tools. Point ``HIPSGEN_JAR`` / ``HIPSGENCAT_JAR`` at the jars (or
 pass ``jar=``); :func:`_java` checks java + jar and raises a clear error if
-absent.  This module shells out; it does not reimplement HiPS.
+absent. This module shells out; it does not reimplement HiPS.
 """
 import os
 import shutil

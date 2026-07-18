@@ -80,6 +80,30 @@ def test_derive_only_shared_tiles(tmp_path):
     assert not os.path.exists(H.tile_path(out, 0, 0, 'png'))
 
 
+def test_merge_hips_trees_incremental(tmp_path):
+    # master has tile 0; field has tile 0 (overlap) + tile 1 (new)
+    master = str(tmp_path / 'master')
+    field = str(tmp_path / 'field')
+    _write_mono_tile(master, 0, 0, [[1.0, np.nan]])
+    _write_mono_tile(field, 0, 0, [[np.nan, 3.0]])   # complementary overlap
+    _write_mono_tile(field, 0, 1, [[7.0, 7.0]])       # new tile
+    stats = H.merge_hips_trees(master, field, combine='nanmean')
+    assert stats['added'] == 1 and stats['merged'] == 1
+    # overlap tile: nan-aware combine fills both pixels
+    merged = H._load_tile_array(H.tile_path(master, 0, 0, 'fits'))
+    assert np.allclose(merged, [[1.0, 3.0]], equal_nan=False)
+    # new tile copied in verbatim
+    assert np.allclose(H._load_tile_array(H.tile_path(master, 0, 1, 'fits')),
+                       [[7.0, 7.0]])
+
+
+def test_combine_tiles_methods():
+    a = np.array([[1.0, np.nan]])
+    b = np.array([[3.0, 5.0]])
+    assert np.allclose(H._combine_tiles([a, b], 'nanmean'), [[2.0, 5.0]])
+    assert np.allclose(H._combine_tiles([a, b], 'first'), [[1.0, 5.0]])
+
+
 def test_member_registry(tmp_path):
     reg = H.MemberRegistry(str(tmp_path / 'reg.json'))
     reg.add('/data/brick_f212n_i2d.fits', 'brick', tag='t1').save()
