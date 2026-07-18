@@ -1183,7 +1183,14 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
     _prov_tbl = None       # offsets table actually consumed (header provenance)
     _prov_row_stage = ''   # checkpoint stage that last corrected the row, if any
     _frame_gen = None      # this frame's WCS-generation stamp (set in the locked branch)
-    if (field == '004' and proposal_id == '1182') or (field in ('001', '002') and proposal_id == '2221'):
+    if ((field == '004' and proposal_id == '1182') or (field in ('001', '002') and proposal_id == '2221')
+            or (field in ('002', '005') and str(proposal_id) == '2092')):
+        # cloudef (2092 obs 002=Cloud E, 005=Cloud F) added 2026-07-18: route through the
+        # per-exposure VIRAC2-locked table (cloudef/offsets/Offsets_JWST_Brick2092_VIRAC2locked.csv,
+        # built by jwst_gc_pipeline.reduction.build_virac2_offsets --region cloudef). Supersedes the
+        # legacy hardcoded 2092 visit-shift block below (now unreachable for 002/005), which only
+        # carried the visit002->visit001 internal tie and NO absolute VIRAC2 tie -> field ~150-200 mas
+        # + ~7.5" (Cloud F obs005) off the Gaia/VIRAC2 frame.
         # field 002 (Cloud C) added 2026-06-22: route through the per-exposure VIRAC2-locked
         # table (cloudc/offsets/Offsets_JWST_Brick2221_VIRAC2locked.csv, built by
         # build_virac2_locked_perexp.py --region cloudc) instead of the old hardcoded per-visit
