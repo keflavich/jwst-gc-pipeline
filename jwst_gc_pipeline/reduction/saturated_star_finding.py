@@ -856,6 +856,159 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
     return recovered, rim_mask, deep_core_mask, R
 
 
+def ramp_slope_map(ramp_sci, ramp_groupdq=None, *, ceiling=None,
+                   min_good_groups=2):
+    """Per-pixel count RATE (DN/group) from a least-squares fit over each pixel's
+    PRE-SATURATION ramp groups, detected from the DATA (not GROUPDQ).
+
+    The calibrated frame (MJy/sr) is proportional to the ramp-fit SLOPE, not the
+    single first read (group-0): ``cal / slope`` is flat to ~4% and crowding-
+    immune, whereas ``cal / group0`` drifts with brightness (reset pedestal +
+    residual nonlinearity) and blows up under crowding / deep ramps (group-0
+    rails).  So a saturated-star pixel's true pre-saturation flux is recovered
+    from its SLOPE, fit over the groups BEFORE it hit the well.
+
+    Saturation is detected from the ramp DATA, because the ``_ramp.fits``
+    GROUPDQ broadcasts the SATURATED flag to EVERY group of a flagged pixel (it
+    is not a per-group onset), and the 2-D crf SATURATED mask is any-group
+    over-inclusive.  A pixel's usable groups are the leading run whose DN is
+    below the pile-up ``ceiling``; the first group at/above the ceiling and all
+    after it are dropped.  (Optional ``ramp_groupdq`` is used ONLY to drop
+    JUMP_DET groups -- cosmic rays -- not for saturation.)
+
+    Parameters
+    ----------
+    ramp_sci : (ngroups, ny, nx) float array
+        One integration of the Detector1 ``_ramp.fits`` SCI (DN).
+    ramp_groupdq : (ngroups, ny, nx) int array or None
+        Matching GROUPDQ; if given, JUMP_DET groups are excluded from the fit.
+    ceiling : float or None
+        Pile-up DN above which a group is saturated.  If None, estimated as
+        0.9 x the 99.9th percentile of the bright (>1000 DN) ramp samples.
+    min_good_groups : int
+        Minimum leading good groups to fit a slope; fewer -> NaN (deep core).
+
+    Returns
+    -------
+    slope : (ny, nx) float array
+        DN/group; NaN where fewer than ``min_good_groups`` usable groups.
+    n_good : (ny, nx) int array
+        Count of leading usable groups per pixel.
+    """
+    ramp_sci = np.asarray(ramp_sci, dtype=float)
+    ng = ramp_sci.shape[0]
+    if ceiling is None:
+        bright = ramp_sci[np.isfinite(ramp_sci) & (ramp_sci > 1000)]
+        ceiling = (0.9 * np.nanpercentile(bright, 99.9)
+                   if bright.size >= 100 else 48000.0)
+    below = np.isfinite(ramp_sci) & (ramp_sci < ceiling)
+    if ramp_groupdq is not None:
+        below &= (np.asarray(ramp_groupdq, dtype=int)
+                  & dqflags.group['JUMP_DET']) == 0
+    # leading run of usable groups (stop at the first saturated/jumped group)
+    lead = np.cumprod(below, axis=0).astype(bool)
+    n_good = lead.sum(axis=0)
+    t = np.arange(ng, dtype=float)[:, None, None]
+    w = lead.astype(float)
+    sw = w.sum(axis=0)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        tbar = (w * t).sum(axis=0) / sw
+        sbar = (w * ramp_sci).sum(axis=0) / sw
+        num = (w * (t - tbar) * (ramp_sci - sbar)).sum(axis=0)
+        den = (w * (t - tbar) ** 2).sum(axis=0)
+        slope = num / den
+    slope[(n_good < min_good_groups) | ~np.isfinite(den) | (den <= 0)] = np.nan
+    return slope, n_good
+
+
+def _local_ratio_map(num, den, valid, *, block=64, min_per_block=25):
+    """Smooth per-pixel ``median(num/den)`` calibration, estimated LOCALLY on a
+    coarse block grid (block-median of the valid ratio) then bilinearly
+    interpolated to full resolution.  Local calibration is what makes the
+    recovery crowding-immune -- a frame-global ratio is polluted by bright
+    diffuse emission + source confusion (gc2211).  Blocks with too few valid
+    pixels inherit the global median.
+    """
+    ny, nx = num.shape
+    r = np.where(valid, num / np.where(den == 0, np.nan, den), np.nan)
+    gmed = np.nanmedian(r) if np.isfinite(r).any() else np.nan
+    nby, nbx = (ny + block - 1) // block, (nx + block - 1) // block
+    grid = np.full((nby, nbx), gmed, dtype=float)
+    for by in range(nby):
+        for bx in range(nbx):
+            blk = r[by * block:(by + 1) * block, bx * block:(bx + 1) * block]
+            fin = blk[np.isfinite(blk)]
+            if fin.size >= min_per_block:
+                grid[by, bx] = np.median(fin)
+    # bilinear upsample the block grid to full res (block centers)
+    ys = (np.arange(ny) - block / 2 + 0.5) / block
+    xs = (np.arange(nx) - block / 2 + 0.5) / block
+    ys = np.clip(ys, 0, nby - 1)
+    xs = np.clip(xs, 0, nbx - 1)
+    y0 = np.floor(ys).astype(int); x0 = np.floor(xs).astype(int)
+    y1 = np.minimum(y0 + 1, nby - 1); x1 = np.minimum(x0 + 1, nbx - 1)
+    fy = (ys - y0)[:, None]; fx = (xs - x0)[None, :]
+    top = grid[y0][:, x0] * (1 - fx) + grid[y0][:, x1] * fx
+    bot = grid[y1][:, x0] * (1 - fx) + grid[y1][:, x1] * fx
+    return top * (1 - fy) + bot * fy
+
+
+def ramp_recover_saturated(data, dq, ramp_sci, ramp_groupdq=None, *,
+                           slope_min=20.0, sat_dilate=3, infl_tol=0.10,
+                           cal_block=64):
+    """Recover the saturated-star RIM from the per-pixel ramp SLOPE, LOCALLY
+    calibrated to cal units -- the crowding-immune successor to
+    ``zeroframe_recover_saturated`` (which uses only group-0 + a frame-global R).
+
+    For each DQ-SATURATED pixel that kept >=2 unsaturated ramp groups, the true
+    pre-saturation rate is ``slope`` (``ramp_slope_map``); ``cal ~ K*slope`` with
+    ``K = photom*flat*gain`` smooth on the sky, so the de-saturated value is
+    ``slope * K_local`` where ``K_local`` is the block-local median of
+    ``cal/slope`` over UNSATURATED pixels (``slope > slope_min``).  Deep-core
+    pixels that saturate before two groups (no measurable slope) are returned in
+    ``deep_core_mask`` for the model-replace / group-0 fallback.
+
+    Returns
+    -------
+    recovered : (ny, nx) float array
+        Copy of ``data`` with slope-recoverable rim pixels replaced by
+        ``slope * K_local``.
+    rim_mask : (ny, nx) bool array
+        Pixels rewritten (DQ-saturated-with-slope, plus charge-migration buffer
+        pixels that are BRIGHT and INFLATED above ``slope*K_local``).
+    deep_core_mask : (ny, nx) bool array
+        Saturated pixels with < 2 unsaturated groups (unrecoverable from data).
+    K : float
+        Global-median ``cal/slope`` used (for logging; the applied map is local).
+    """
+    shp = np.shape(data)
+    if ramp_sci is None or np.shape(ramp_sci)[-2:] != shp:
+        return data, np.zeros(shp, bool), np.zeros(shp, bool), np.nan
+    sat = ((dq & dqflags.pixel['SATURATED']) != 0) if dq is not None \
+        else np.zeros(shp, bool)
+    if not sat.any():
+        return data, np.zeros(shp, bool), np.zeros(shp, bool), np.nan
+    slope, n_good = ramp_slope_map(ramp_sci, ramp_groupdq)
+    has_slope = np.isfinite(slope)
+    valid = (~sat & np.isfinite(data) & has_slope & (slope > slope_min)
+             & (data > 0))
+    if int(valid.sum()) < 50:
+        return data, np.zeros(shp, bool), np.zeros(shp, bool), np.nan
+    Kmap = _local_ratio_map(np.where(valid, data, np.nan),
+                            np.where(valid, slope, np.nan), valid,
+                            block=int(cal_block))
+    Kglobal = float(np.nanmedian(data[valid] / slope[valid]))
+    recov = slope * Kmap
+    sat_buf = binary_dilation(sat, iterations=int(sat_dilate)) if sat_dilate else sat
+    rim_mask = ((sat & has_slope)
+                | (sat_buf & ~sat & has_slope & np.isfinite(data)
+                   & (slope > slope_min) & (data > recov * (1.0 + infl_tol))))
+    recovered = np.array(data, dtype=float, copy=True)
+    recovered[rim_mask] = recov[rim_mask]
+    deep_core_mask = sat & ~has_slope
+    return recovered, rim_mask, deep_core_mask, Kglobal
+
+
 def _refine_coms_by_data(coms, data, sources, shift_warn_thresh_pix=3.0,
                          unrecoverable=None):
     """Refine DQ_SATURATED-mask centroids using the cluster bounding-box
