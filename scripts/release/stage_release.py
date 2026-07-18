@@ -583,6 +583,61 @@ def check_catalog_on_frame(items, field, tol_mas=FRAME_TOL_MAS):
     return fails
 
 
+# Photometric-continuity gate: the released merged catalog must be photometrically
+# CONTINUOUS across the saturation boundary, and its near-degenerate colors
+# (F405N-F410M, F182M-F187N) must be magnitude-flat. A jump/drift >= this floor
+# means saturated-star or sub-floor-strip photometry is on a different flux scale
+# than normal photometry (the CMD breaks at the boundary) -- the exact defect class
+# of the 2026-07 satstar campaign. Certifiers: photometry/saturation_continuity.py.
+CONTINUITY_TOL_MAG = 0.10
+# (A, B) with A = the earlier-saturating band, B = its later-saturating reference.
+CONTINUITY_PAIRS = [("f182m", "f187n"), ("f410m", "f405n")]
+
+
+def check_photometric_continuity(items, tol=CONTINUITY_TOL_MAG):
+    """Certify the shipped combined merged table: saturation continuity over
+    CONTINUITY_PAIRS + degenerate-pair flatness (DEGENERATE_PAIRS), both against
+    ``tol``. Only pairs whose mag_vega_ columns exist in the table are tested.
+    Returns a list of failure strings ([] = pass), or None when no combined
+    merged table is shipped (caller warns; cannot enforce)."""
+    import numpy as np
+    from astropy.table import Table
+    from jwst_gc_pipeline.photometry.saturation_continuity import (
+        DEGENERATE_PAIRS, degenerate_pair_flatness, saturation_continuity)
+    srcs = [it["src"] for it in items
+            if it.get("kind") == "catalog_full" and it["src"].endswith(".fits")]
+    if not srcs:
+        return None
+    fails = []
+    for src in srcs:
+        cat = Table.read(src)
+        have = {c[len("mag_vega_"):] for c in cat.colnames
+                if c.startswith("mag_vega_")}
+        name = Path(src).name
+        for a, b in CONTINUITY_PAIRS:
+            if a not in have or b not in have:
+                continue
+            r = saturation_continuity(cat, a, b)
+            ok = not (np.isfinite(r["metric"]) and r["metric"] >= tol)
+            print(f"  continuity {a}-{b} [{name}]: "
+                  + (f"{r['metric']:.3f} mag ({r['kind']})" if np.isfinite(r["metric"])
+                     else "n/a") + ("  ok" if ok else "  FAIL"), flush=True)
+            if not ok:
+                fails.append(f"{a}-{b} continuity {r['metric']:.3f} mag [{name}]")
+        for a, b in DEGENERATE_PAIRS:
+            if a not in have or b not in have:
+                continue
+            r = degenerate_pair_flatness(cat, a, b)
+            ok = not (np.isfinite(r["metric"]) and r["metric"] >= tol)
+            print(f"  degenerate-pair {a}-{b} [{name}]: "
+                  + (f"drift {r['metric']:.3f} mag vs plateau {r['plateau']:+.3f}"
+                     if np.isfinite(r["metric"]) else "n/a")
+                  + ("  ok" if ok else "  FAIL"), flush=True)
+            if not ok:
+                fails.append(f"{a}-{b} degenerate-pair drift {r['metric']:.3f} mag [{name}]")
+    return fails
+
+
 def assign_dest(item, field):
     """Compute the destination path of an item relative to the field release dir."""
     src_name = Path(item["src"]).name
@@ -930,6 +985,29 @@ def main(argv=None):
                       f"means the catalog is on a deprecated crowdsource/VVV/2MASS frame, not "
                       f"Gaia -- it must be re-anchored + re-reduced before release. Override "
                       f"only with --allow-registration-fail AND ALLOW_REGISTRATION_FAIL=1.",
+                      file=sys.stderr)
+                return 2
+
+        # ---- PHOTOMETRIC-CONTINUITY GATE: saturated-star flux scale ---------------------
+        # The astrometric gates above cannot see a catalog whose saturated-star or
+        # sub-floor-strip photometry sits on a different FLUX scale (detached CMD
+        # clouds, degenerate-color drift -- the 2026-07 satstar failure class). Enforce
+        # the executable certifiers on the shipped combined merged table. Same
+        # hard-to-reach override as the astrometry gates.
+        if not args.images_only:
+            print("\nPHOTOMETRIC-CONTINUITY CHECK (saturation boundary + degenerate pairs):")
+            cont_fails = check_photometric_continuity(items)
+            if cont_fails is None:
+                print("  no combined merged table shipped -- cannot enforce the "
+                      "continuity gate.")
+            elif cont_fails:
+                detail = "; ".join(cont_fails)
+                print(f"\nREFUSING TO STAGE '{args.field}': photometric-continuity "
+                      f"certification FAILED (>= {CONTINUITY_TOL_MAG:.2f} mag): {detail}. "
+                      f"Saturated-star / sub-floor photometry is on a different flux scale "
+                      f"than normal photometry -- the CMD breaks at the saturation "
+                      f"boundary. Re-catalog with the satstar channel fixes, or override "
+                      f"with --allow-registration-fail AND ALLOW_REGISTRATION_FAIL=1.",
                       file=sys.stderr)
                 return 2
 
