@@ -1379,6 +1379,12 @@ def _load_ramp_cube(crf_path):
     try:
         gdq = fits.getdata(ramp, extname='GROUPDQ')
         gdq = gdq[0] if gdq.ndim == 4 else gdq
+        # GROUPDQ is used only to drop JUMP_DET groups; if it doesn't match SCI
+        # (corrupt / unusual / nints-mismatched file) drop it rather than let a
+        # broadcast error propagate -- SCI alone is sufficient (saturation is
+        # read from the data).
+        if gdq is None or np.shape(gdq) != np.shape(sci):
+            gdq = None
     except (OSError, KeyError, ValueError):
         gdq = None
     return np.asarray(sci, dtype=float), (None if gdq is None
@@ -1721,37 +1727,48 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
                     # deep core (railed at group-0) chains to the group-0 recovery
                     # then model.
                     if getattr(options, 'satstar_ramp_recover', False):
-                        _rc = _load_ramp_cube(filename)
-                        if _rc is not None and _rc[0].shape[-2:] == data.shape:
-                            from jwst_gc_pipeline.reduction.saturated_star_finding import (
-                                ramp_recover_saturated, zeroframe_recover_saturated)
-                            _dataf = np.asarray(data, dtype=float)
-                            _rec, _rim, _deep, _K = ramp_recover_saturated(
-                                _dataf, dqarr, _rc[0], _rc[1])
-                            if np.isfinite(_K):
-                                _recovered = _rim.copy()
-                                nan_replaced_data = np.where(
-                                    _rim, _rec, nan_replaced_data)
-                                _ng0 = 0
-                                _g0 = _load_ramp_group0(filename)
-                                if (_g0 is not None and _g0.shape == data.shape
-                                        and _deep.any()):
-                                    _r2, _rim2, _d2, _R2 = zeroframe_recover_saturated(
-                                        _dataf, dqarr, _g0)
-                                    if np.isfinite(_R2):
-                                        _dc = _deep & _rim2
-                                        nan_replaced_data = np.where(
-                                            _dc, _r2, nan_replaced_data)
-                                        _recovered = _recovered | _dc
-                                        _ng0 = int(_dc.sum())
-                                nan_replaced_data = np.where(
-                                    was_sat & ~_recovered, finite_model,
-                                    nan_replaced_data)
-                                _zf_done = True
-                                print(f"[manual] ramp-slope rim recovery: K={_K:.3f} "
-                                      f"slope_rim={int(_rim.sum())} "
-                                      f"deepcore={int(_deep.sum())} "
-                                      f"g0_fallback={_ng0}", flush=True)
+                        # FAIL-SOFT: provenance/recovery must NEVER break a science
+                        # reduction.  Any error here (odd ramp file, shape quirk)
+                        # degrades to the zeroframe/model path, never propagates.
+                        try:
+                            _rc = _load_ramp_cube(filename)
+                            if _rc is not None and _rc[0].shape[-2:] == data.shape:
+                                from jwst_gc_pipeline.reduction.saturated_star_finding import (
+                                    ramp_recover_saturated, zeroframe_recover_saturated)
+                                _dataf = np.asarray(data, dtype=float)
+                                _zdil = int(getattr(options, 'satstar_zeroframe_dilate', 3))
+                                _rec, _rim, _deep, _K = ramp_recover_saturated(
+                                    _dataf, dqarr, _rc[0], _rc[1], sat_dilate=_zdil)
+                                if np.isfinite(_K):
+                                    _recovered = _rim.copy()
+                                    nan_replaced_data = np.where(
+                                        _rim, _rec, nan_replaced_data)
+                                    _ng0 = 0
+                                    _g0 = _load_ramp_group0(filename)
+                                    if (_g0 is not None and _g0.shape == data.shape
+                                            and _deep.any()):
+                                        _r2, _rim2, _d2, _R2 = zeroframe_recover_saturated(
+                                            _dataf, dqarr, _g0, sat_dilate=_zdil)
+                                        if np.isfinite(_R2):
+                                            _dc = _deep & _rim2
+                                            nan_replaced_data = np.where(
+                                                _dc, _r2, nan_replaced_data)
+                                            _recovered = _recovered | _dc
+                                            _ng0 = int(_dc.sum())
+                                    nan_replaced_data = np.where(
+                                        was_sat & ~_recovered, finite_model,
+                                        nan_replaced_data)
+                                    _zf_done = True
+                                    print(f"[manual] ramp-slope rim recovery: K={_K:.3f} "
+                                          f"slope_rim={int(_rim.sum())} "
+                                          f"deepcore={int(_deep.sum())} "
+                                          f"g0_fallback={_ng0}", flush=True)
+                        except (OSError, ValueError, KeyError, IndexError,
+                                TypeError) as _rr_ex:
+                            print(f"[manual] ramp-slope recovery skipped "
+                                  f"({type(_rr_ex).__name__}: {_rr_ex}); "
+                                  f"falling back to zeroframe/model", flush=True)
+                            _zf_done = False
                     if (not _zf_done) and getattr(options, 'satstar_zeroframe_recover', False):
                         _g0 = _load_ramp_group0(filename)
                         if _g0 is not None and _g0.shape == data.shape:

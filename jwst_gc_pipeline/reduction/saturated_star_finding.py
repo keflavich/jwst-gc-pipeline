@@ -955,7 +955,7 @@ def _local_ratio_map(num, den, valid, *, block=64, min_per_block=25):
 
 def ramp_recover_saturated(data, dq, ramp_sci, ramp_groupdq=None, *,
                            slope_min=20.0, sat_dilate=3, infl_tol=0.10,
-                           cal_block=64):
+                           cal_block=64, ceiling=None):
     """Recover the saturated-star RIM from the per-pixel ramp SLOPE, LOCALLY
     calibrated to cal units -- the crowding-immune successor to
     ``zeroframe_recover_saturated`` (which uses only group-0 + a frame-global R).
@@ -988,7 +988,7 @@ def ramp_recover_saturated(data, dq, ramp_sci, ramp_groupdq=None, *,
         else np.zeros(shp, bool)
     if not sat.any():
         return data, np.zeros(shp, bool), np.zeros(shp, bool), np.nan
-    slope, n_good = ramp_slope_map(ramp_sci, ramp_groupdq)
+    slope, n_good = ramp_slope_map(ramp_sci, ramp_groupdq, ceiling=ceiling)
     has_slope = np.isfinite(slope)
     valid = (~sat & np.isfinite(data) & has_slope & (slope > slope_min)
              & (data > 0))
@@ -1000,12 +1000,20 @@ def ramp_recover_saturated(data, dq, ramp_sci, ramp_groupdq=None, *,
     Kglobal = float(np.nanmedian(data[valid] / slope[valid]))
     recov = slope * Kmap
     sat_buf = binary_dilation(sat, iterations=int(sat_dilate)) if sat_dilate else sat
-    rim_mask = ((sat & has_slope)
+    # A genuinely-saturated pixel that hit the well in <=ngroups cannot have a
+    # true rate below slope_min, so a sub-slope_min / non-positive-recovery
+    # "saturated" pixel is MISFLAGGED (the SATURATED mask is any-group
+    # over-inclusive) -- gate it out of the rim so a small/negative slope can
+    # never inject negative flux into the science array; route it to deep_core
+    # for the group-0 / model fallback instead.
+    sat_recoverable = sat & has_slope & (slope > slope_min) & (recov > 0)
+    rim_mask = (sat_recoverable
                 | (sat_buf & ~sat & has_slope & np.isfinite(data)
-                   & (slope > slope_min) & (data > recov * (1.0 + infl_tol))))
+                   & (slope > slope_min) & (recov > 0)
+                   & (data > recov * (1.0 + infl_tol))))
     recovered = np.array(data, dtype=float, copy=True)
     recovered[rim_mask] = recov[rim_mask]
-    deep_core_mask = sat & ~has_slope
+    deep_core_mask = sat & ~sat_recoverable
     return recovered, rim_mask, deep_core_mask, Kglobal
 
 
