@@ -98,17 +98,23 @@ def load_field_catalog(path, field, program='', obsid='', tag=None,
 
 
 def _dedup_cross_field(table, radius_arcsec, coverage_cols, field_col='cmz_field'):
-    """Keep-mask that collapses cross-FIELD duplicate sources.
+    """Collapse cross-FIELD duplicate sources; keep + record the dropped fields.
 
     Only pairs from DIFFERENT fields within ``radius_arcsec`` are merged (a close
     pair within one field is a real blend the per-field pipeline already
     resolved).  Within each cross-field cluster, keep the source with the most
-    finite coverage bands; ties broken by lowest row index (deterministic).
+    finite coverage bands (ties broken by lowest row index, deterministic).
+
+    Returns ``(keep, also_in)``: ``keep`` is the boolean survivor mask; ``also_in``
+    is a per-row string listing the OTHER fields the kept source was also detected
+    in (comma-joined, sorted) -- so an overlap-region source stays recoverable
+    (which fields saw it) instead of the duplicate detection being silently lost.
     """
     n = len(table)
     keep = np.ones(n, dtype=bool)
+    also_in = np.array([''] * n, dtype=object)
     if n < 2 or radius_arcsec <= 0:
-        return keep
+        return keep, also_in
     sc = _skycoord(table)
     fields = np.asarray(table[field_col])
     cover = _coverage_count(table, coverage_cols)
@@ -130,33 +136,44 @@ def _dedup_cross_field(table, radius_arcsec, coverage_cols, field_col='cmz_field
                 parent[max(ra_, rb_)] = min(ra_, rb_)
                 linked = True
     if not linked:
-        return keep
+        return keep, also_in
     roots = np.array([find(i) for i in range(n)])
     for root in np.unique(roots):
         members = np.where(roots == root)[0]
         if members.size < 2:
             continue
-        # winner: max coverage, tiebreak lowest index
-        best = members[np.lexsort((members, -cover[members]))][0]
+        best = members[np.lexsort((members, -cover[members]))][0]  # max cover, low idx
+        other = sorted({str(fields[m]) for m in members if m != best})
+        also_in[best] = ','.join(other)
         for m in members:
             if m != best:
                 keep[m] = False
-    return keep
+    return keep, also_in
 
 
 def assemble(field_tables, dedup_radius_arcsec=0.2, coverage_cols=None):
     """Assemble per-field tables into one CMZ-wide catalog.
 
-    Returns the combined ``Table`` with a ``cmz_n_bands`` coverage column and the
-    cross-field duplicates removed.  ``field_tables`` are the outputs of
-    :func:`load_field_catalog` (or any tables carrying ``cmz_field`` + RA/Dec).
+    Returns the combined ``Table`` with cross-field duplicates removed and two new
+    columns: ``cmz_n_bands`` (finite-band coverage) and ``cmz_also_in`` (other
+    fields an overlap source was also detected in).  ``field_tables`` are the
+    outputs of :func:`load_field_catalog` (or any tables carrying ``cmz_field`` +
+    RA/Dec).
+
+    ``coverage_cols`` names the photometry columns whose finiteness defines "a
+    band measured this source" (it drives both the coverage count and the
+    keep-the-better-detection dedup rule).  **For production, pass it explicitly**
+    -- the auto-detect fallback (:func:`_coverage_cols`) is a loose
+    name-heuristic (``'flux'``/``'mag'`` substring, crude error-column exclusion)
+    that can miss or over-include columns in an unfamiliar schema.
     """
     if not field_tables:
         raise ValueError('no field tables to assemble')
     combined = vstack(list(field_tables), join_type='outer',
                       metadata_conflicts='silent')
     cov = _coverage_cols(combined, coverage_cols)
-    keep = _dedup_cross_field(combined, dedup_radius_arcsec, cov)
+    keep, also_in = _dedup_cross_field(combined, dedup_radius_arcsec, cov)
+    combined['cmz_also_in'] = also_in.astype(str)   # other fields that saw it
     combined = combined[keep]
     combined['cmz_n_bands'] = _coverage_count(combined, cov)
     # FITS-safe (<=8 char) meta keywords
@@ -202,6 +219,13 @@ def write_outputs(table, out_stem, formats=('fits', 'ecsv', 'parquet')):
             path = out_stem + '.ecsv'
             table.write(path, format='ascii.ecsv', overwrite=True)
         elif fmt == 'parquet':
+            try:
+                import pyarrow  # noqa: F401
+            except ImportError:
+                import warnings
+                warnings.warn("parquet output skipped: 'pyarrow' not installed "
+                              "(pip install pyarrow). FITS/ECSV still written.")
+                continue
             path = out_stem + '.parquet'
             # SkyCoord/mixin columns don't serialize to parquet; drop to a plain
             # table of the storable columns first.
