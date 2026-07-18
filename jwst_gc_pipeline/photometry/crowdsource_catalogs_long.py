@@ -4234,6 +4234,18 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                            'leaving deep negative spike residuals. Default 10. Lower '
                            '(e.g. 1-2) for single-detector LW filters over bright '
                            'background (F335M).')
+    parser.add_option("--satstar-ramp-recover", dest="satstar_ramp_recover",
+                      default=False, action='store_true',
+                      help=('Recover the saturated-star rim from the per-pixel ramp '
+                            'SLOPE (sibling _ramp.fits, all groups), LOCALLY '
+                            'calibrated to cal units.  cal is proportional to the '
+                            'ramp-fit slope, not group-0, so this is flat-to-~4%% and '
+                            'crowding-immune where --satstar-zeroframe-recover (group-0 '
+                            'self-cal) drifts/blows up under crowding or deep ramps.  '
+                            'Recovers pixels group-0 calls deep-core + yields physical '
+                            'rim profiles.  Deep core (railed at group-0) falls back to '
+                            'group-0 recovery then model.  No-op where no _ramp.fits '
+                            'exists.  Preferred over zeroframe when set.'))
     parser.add_option("--satstar-zeroframe-recover", dest="satstar_zeroframe_recover",
                       default=False, action='store_true',
                       help=('Recover the charge-migration-INFLATED rim of the most-'
