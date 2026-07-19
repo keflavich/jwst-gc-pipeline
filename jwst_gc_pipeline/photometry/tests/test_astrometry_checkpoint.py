@@ -321,9 +321,17 @@ def _patch_consensus_and_tie(monkeypatch, dra_now, ddec_now, apply_ok=True):
     monkeypatch.setattr(_ac, "measure_reference_tie", _fake_tie)
 
 
-def _write_m2_baseline(record_dir, dra, ddec, visit="001", filt="F212N"):
-    rec = dict(visits=[dict(visit=visit,
-                            reference_tie=dict(vs_full=dict(dra=dra, ddec=ddec)))])
+def _write_m2_baseline(record_dir, dra, ddec, visit="001", filt="F212N",
+                       vs_full=None):
+    """Write an m2 record.  ``(dra, ddec)`` is the REPORTED bulk
+    (``reference_tie.dra_mas/ddec_mas``) -- the same-star tie the frozen-stage
+    delta gate must compare against.  ``vs_full`` (default = same as the bulk)
+    is the histogram check A; set it DIFFERENT to model the post-same-star record
+    where histogram != same-star (the false-regression bug)."""
+    vf = vs_full if vs_full is not None else (dra, ddec)
+    rec = dict(visits=[dict(visit=visit, reference_tie=dict(
+        dra_mas=dra, ddec_mas=ddec,
+        vs_full=dict(dra=vf[0], ddec=vf[1])))])
     with open(os.path.join(record_dir, f"checkpoint_m2_{filt}_latest.json"), "w") as fh:
         json.dump(rec, fh)
 
@@ -362,6 +370,37 @@ def test_frozen_stage_no_m2_baseline_raises(tmp_path, monkeypatch):
     # record_dir has no checkpoint_m2_F212N_latest.json
     with pytest.raises(AstrometryRegressionError):
         run_visit_checkpoint([_tiny_visit_table()], "m4", refcat=_DUMMY_REFCAT,
+                             filtername="F212N", record_dir=str(tmp_path),
+                             context="test")
+
+
+def test_frozen_baseline_reads_samestar_not_histogram(tmp_path, monkeypatch):
+    """The baseline must compare the SAME estimator the m3 tie uses (same-star
+    reported bulk), NOT the histogram vs_full.  m2 recorded reported bulk
+    (+1,-6) [same-star] with vs_full (+6.7,-7.5) [histogram]; m3 re-measures the
+    same (+1,-6) same-star tie.  Reading vs_full would compute a spurious ~5.9
+    mas 'movement' (the histogram-vs-same-star method difference) and RAISE --
+    the exact brick F182M m3 false regression (2026-07-19).  With the fix, the
+    stable tie is STABLE."""
+    _write_m2_baseline(str(tmp_path), 1.0, -6.0, vs_full=(6.7, -7.5))
+    _patch_consensus_and_tie(monkeypatch, dra_now=1.0, ddec_now=-6.0)
+    rec = run_visit_checkpoint([_tiny_visit_table()], "m3", refcat=_DUMMY_REFCAT,
+                               filtername="F212N", record_dir=str(tmp_path),
+                               context="test")
+    assert rec["passed"]
+    assert rec["failures"] == []
+
+
+def test_frozen_baseline_legacy_vs_full_fallback(tmp_path, monkeypatch):
+    """A legacy m2 record with only vs_full (no reported-bulk field) still reads
+    a baseline (backward compatible)."""
+    rec_path = os.path.join(str(tmp_path), "checkpoint_m2_F212N_latest.json")
+    with open(rec_path, "w") as fh:
+        json.dump(dict(visits=[dict(visit="001",
+                  reference_tie=dict(vs_full=dict(dra=10.0, ddec=0.0)))]), fh)
+    _patch_consensus_and_tie(monkeypatch, dra_now=20.0, ddec_now=0.0)  # moved 10
+    with pytest.raises(AstrometryRegressionError):
+        run_visit_checkpoint([_tiny_visit_table()], "m3", refcat=_DUMMY_REFCAT,
                              filtername="F212N", record_dir=str(tmp_path),
                              context="test")
 

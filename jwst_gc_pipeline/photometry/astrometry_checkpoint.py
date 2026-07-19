@@ -501,7 +501,19 @@ def _group_by_visit_filter(tables):
 
 def _m2_reference_tie_baseline(record_dir, filtername, visit):
     """(dra_mas, ddec_mas) of the m2-frozen consensus->reference tie for this
-    (filter, visit), from the latest m2 record; None when unavailable."""
+    (filter, visit), from the latest m2 record; None when unavailable.
+
+    Reads the REPORTED bulk (``reference_tie['dra_mas']/['ddec_mas']``) -- the
+    SAME quantity the frozen-stage (m3+) delta gate compares against
+    (``ref_tie['dra_mas']``).  That reported bulk is the same-star refined offset
+    when available; comparing the current same-star tie against ``vs_full`` (the
+    histogram check A) instead would compute a spurious ~several-mas "movement"
+    equal to the histogram-vs-same-star method difference -- a FALSE regression at
+    every frozen stage (observed: brick F182M m3 "MOVED 5.86 mas", m2 vs_full
+    (+6.70,-7.54) [histogram] vs m3 same-star (+1.11,-5.77), 2026-07-19).  Falls
+    back to ``vs_full`` only for legacy records that predate the reported-bulk
+    field.
+    """
     if not record_dir:
         return None
     path = os.path.join(record_dir, f"checkpoint_m2_{filtername}_latest.json")
@@ -512,7 +524,12 @@ def _m2_reference_tie_baseline(record_dir, filtername, visit):
     for v in rec.get("visits", []):
         if str(v.get("visit")) != str(visit):
             continue
-        vf = (v.get("reference_tie") or {}).get("vs_full") or {}
+        rt = v.get("reference_tie") or {}
+        dra, ddec = rt.get("dra_mas"), rt.get("ddec_mas")
+        if dra is not None and ddec is not None \
+                and np.isfinite(dra) and np.isfinite(ddec):
+            return float(dra), float(ddec)
+        vf = rt.get("vs_full") or {}   # legacy record without the reported bulk
         if "dra" in vf and "ddec" in vf:
             return float(vf["dra"]), float(vf["ddec"])
     return None
