@@ -1736,7 +1736,7 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
                                  file_suffix='',
                                  seed_gate_image=None, seed_gate_wcs=None,
                                  deblend_with_zeroframe=False,
-                                 partner_sky=None):
+                                 partner_sky=None, ramp_cube=None):
     """
     ``file_suffix`` is inserted into the satstar output filenames before
     the ``_satstar_catalog`` / ``_satstar_model`` / ``_satstar_residual``
@@ -1776,7 +1776,7 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
                            seed_gate_image=seed_gate_image,
                            seed_gate_wcs=seed_gate_wcs,
                            deblend_with_zeroframe=deblend_with_zeroframe,
-                           partner_sky=partner_sky)
+                           partner_sky=partner_sky, ramp_cube=ramp_cube)
     if os.path.exists(satstar_filename):
         return Table.read(satstar_filename)
     return None

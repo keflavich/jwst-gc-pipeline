@@ -1695,6 +1695,26 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
                 print(f"[manual] partner-band satstar seeds: no {_partner} "
                       f"satstar catalogs found yet (first pass?); seeding "
                       f"skipped", flush=True)
+    # Ramp-SLOPE fit-anchor cube for the satstar fit: de-inflates the charge-
+    # migration-inflated rim in the DATA the satstar PSF is fit to (and its
+    # residual is built from), so the fit is anchored on real profile pixels and
+    # the +ring collapses -- the crowding-immune successor to the group-0
+    # zeroframe fit-anchor inside get_saturated_stars.  Built here because only
+    # cataloging has the original (pre-cutout) filename + the cutout offset to
+    # crop the full-frame _ramp.fits to match the (cutout) data.  Fail-soft.
+    _ramp_cube = None
+    if getattr(options, 'satstar_ramp_recover', False):
+        try:
+            _rcc = _load_ramp_cube(_orig_filename)
+            if _rcc is not None:
+                _ramp_cube = (
+                    _crop_to_cutout(_rcc[0], cutout_active, cy0, cx0, data.shape),
+                    _crop_to_cutout(_rcc[1], cutout_active, cy0, cx0, data.shape))
+        except (OSError, ValueError, KeyError, IndexError, TypeError) as _rc_ex:
+            print(f"[manual] ramp-cube load failed ({type(_rc_ex).__name__}: "
+                  f"{_rc_ex}); satstar fit-anchor falls back to zeroframe/none",
+                  flush=True)
+            _ramp_cube = None
     satstar_table = _L.load_or_make_satstar_catalog(
         filename, path_prefix=f'{basepath}/psfs',
         use_merged_psf_for_merged=(module == 'merged'),
@@ -1706,6 +1726,7 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         oversub_clamp_percentile=float(getattr(
             options, 'satstar_oversub_clamp_percentile', 10.0)),
         file_suffix=satstar_file_suffix,
+        ramp_cube=_ramp_cube,
         seed_gate_image=_seed_gate_image, seed_gate_wcs=_seed_gate_wcs,
         # ZEROFRAME deblend of merged saturated cores (gc2211 crowded GC fields).
         # Opt-in via --deblend-satstars; auto-degrades to legacy where the frame

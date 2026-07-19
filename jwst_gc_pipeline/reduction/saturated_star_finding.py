@@ -1779,7 +1779,7 @@ def flattop_satstar_model(model_image, data_bg_sub, plateau_frac=0.15,
     return np.maximum(out, 0)
 
 
-def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_prominence_robust=False, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, zeroframe_deblend=False, deblend_daophot_xy=None, deblend_confirm_xy=None, sat_data_floor=None, satstar_severity_floor=None, phantom_flux_floor=0.0, phantom_ssr_max=50.0, phantom_ratio_max=50.0, partner_sky=None):
+def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_prominence_robust=False, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, zeroframe_deblend=False, deblend_daophot_xy=None, deblend_confirm_xy=None, sat_data_floor=None, satstar_severity_floor=None, phantom_flux_floor=0.0, phantom_ssr_max=50.0, phantom_ratio_max=50.0, partner_sky=None, ramp_cube=None):
     # ``flux_drops``: optional list of SkyCoord.  An out-of-field (forced) source
     # whose seed sky position matches a drop within ~1.0" is SKIPPED entirely
     # (not fit, not contributed): cross-frame reconciliation found no trustworthy
@@ -2146,18 +2146,33 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # fit mask below.  No zeroframe (or no usable R) -> zf_deep_core = None,
     # behaviour unchanged.
     zf_deep_core = None
-    if zeroframe is not None:
-        _dqarr_zf = (fitsdata['DQ'].data
-                     if 'DQ' in [h.name for h in fitsdata] else None)
+    _dqarr_zf = (fitsdata['DQ'].data
+                 if 'DQ' in [h.name for h in fitsdata] else None)
+    # De-inflate the charge-migration-inflated saturated RIM in the DATA that the
+    # satstar PSF is fit to (and that the residual is built from), so the fit is
+    # anchored on real profile pixels and the +ring collapses.  PREFER the
+    # per-pixel ramp SLOPE (``ramp_cube``, crowding-immune) over the group-0
+    # ``zeroframe`` self-cal when a shape-matching ramp cube is supplied; else
+    # fall back to the group-0 path (unchanged behaviour).
+    _anch = None
+    if (ramp_cube is not None and ramp_cube[0] is not None
+            and np.shape(ramp_cube[0])[-2:] == data.shape):
+        _rec, _rim, _deep, _K = ramp_recover_saturated(
+            data, _dqarr_zf, ramp_cube[0], ramp_cube[1])
+        if np.isfinite(_K) and _rim.any():
+            _anch = ('RAMP-SLOPE', _rec, _rim, _deep, _K)
+    if _anch is None and zeroframe is not None:
         _rec, _rim, _deep, _R = zeroframe_recover_saturated(
             data, _dqarr_zf, zeroframe)
         if np.isfinite(_R) and _rim.any():
-            print(f"satstar ZEROFRAME fit-anchor: recovered {int(_rim.sum())} "
-                  f"rim/core pixels from group-0 (R={_R:.4g}); "
-                  f"{int(_deep.sum())} deep-core pixels remain masked",
-                  flush=True)
-            data = _rec
-            zf_deep_core = _deep
+            _anch = ('ZEROFRAME(g0)', _rec, _rim, _deep, _R)
+    if _anch is not None:
+        _lbl, _rec, _rim, _deep, _scale = _anch
+        print(f"satstar {_lbl} fit-anchor: recovered {int(_rim.sum())} "
+              f"rim/core pixels (scale={_scale:.4g}); "
+              f"{int(_deep.sum())} deep-core pixels remain masked", flush=True)
+        data = _rec
+        zf_deep_core = _deep
 
     # Working copy of the data that gets per-source PSF models subtracted
     # after each accepted fit, so subsequent fits see a cleaner field.
