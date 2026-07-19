@@ -18,7 +18,12 @@ Scope and caveats (why this is OPT-IN, unlike the DVA correction):
 
 Enable with STATIC_PLACEMENT_CORRECTION=1 in the environment.  Applied (like
 the DVA correction) BEFORE the reference tie so the tie absorbs any
-common-mode part.  Idempotent via the SPLACORR marker.
+common-mode part.  Idempotent via the SPLACORR marker, with a SPLAPEND
+pending flag making a mid-write crash fail loud instead of double-shifting.
+
+WARNING: enabling this on an already-processed field invalidates any
+consensus/VIRAC2locked offsets table solved against the uncorrected frame
+(the corrections would stack); rebuild the offsets tables after enabling.
 """
 import copy
 
@@ -27,6 +32,7 @@ import astropy.units as u
 from astropy.io import fits
 
 MARKER = 'SPLACORR'
+PENDING = 'SPLAPEND'
 
 # Measured mean placement error per detector, SKY frame, mas (dRA*, dDec):
 # the "mean" column of the siaf_accuracy placement table (five-solve average).
@@ -81,7 +87,23 @@ def apply_placement_correction(fn, verbose=True):
             print(f"placement correction skipped for {fn}: detector {det} "
                   f"not in the solved set")
         return None
+    if hdr.get(PENDING) and MARKER not in hdr:
+        # A previous run died between the GWCS write and the marker write:
+        # the GWCS shift state is ambiguous, and guessing risks the silent
+        # 1-2.5 mas double-correction this guard exists to prevent.
+        raise RuntimeError(
+            f"{fn}: pending placement-correction marker without completion "
+            f"marker -- a previous apply crashed mid-write. Re-fetch or "
+            f"re-reduce this file; refusing to guess the GWCS state.")
     dra, ddec = shift
+
+    # Crash-safety protocol (review #129 item 1): set a PENDING flag in a
+    # cheap in-place header update BEFORE the GWCS rewrite; clear it in the
+    # same write that sets the completion marker.  A crash between the two
+    # writes then fails LOUD on re-run (above) instead of double-shifting.
+    with fits.open(fn, mode='update') as hdul:
+        hdul['SCI'].header[PENDING] = (True,
+                                       'placement-field apply in progress')
 
     from jwst.datamodels import ImageModel
     from jwst.tweakreg.utils import adjust_wcs
@@ -98,8 +120,12 @@ def apply_placement_correction(fn, verbose=True):
         h[MARKER] = (True, 'static SIAF placement-field shift applied')
         h['SPLASHRA'] = (dra, '[deg] placement-field RA coord shift')
         h['SPLASHDE'] = (ddec, '[deg] placement-field Dec shift')
+        h[PENDING] = (False, 'placement-field apply completed')
         hdul.writeto(fn, overwrite=True)
     if verbose:
         print(f"placement correction applied to {fn} ({det}): "
               f"({dra * 3.6e6:+.2f}, {ddec * 3.6e6:+.2f}) mas coord")
+        print("NOTE: consensus/VIRAC2locked offsets tables solved against the "
+              "UNcorrected frame are invalidated by this shift -- rebuild them "
+              "for this field before use.")
     return dra, ddec

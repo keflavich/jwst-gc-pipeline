@@ -37,3 +37,20 @@ def test_amplitudes_are_small():
     for det in PLACEMENT_MAS:
         dra, ddec = placement_shift_deg(det, 0.0)
         assert abs(dra) * 3.6e6 < 5 and abs(ddec) * 3.6e6 < 5
+
+
+def test_pending_without_marker_fails_loud(tmp_path):
+    # a crash between the GWCS write and the marker write must abort re-runs,
+    # not silently double-shift
+    import pytest
+    from jwst_gc_pipeline.reduction.static_placement_correction import (
+        PENDING, apply_placement_correction)
+    fn = tmp_path / 'crashed.fits'
+    ph = fits.PrimaryHDU()
+    sci = fits.ImageHDU(np.zeros((4, 4)), name='SCI')
+    sci.header['DETECTOR'] = 'NRCA1'
+    sci.header['CRVAL2'] = -28.7
+    sci.header[PENDING] = True
+    fits.HDUList([ph, sci]).writeto(fn)
+    with pytest.raises(RuntimeError, match='pending'):
+        apply_placement_correction(str(fn), verbose=False)
