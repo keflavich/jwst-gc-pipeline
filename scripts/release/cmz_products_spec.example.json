@@ -1,0 +1,23 @@
+{
+  "_comment": "Template for build_cmz_products.py. EDIT the paths per field (they vary by reduction dir). catalog = the field's combined cross-band resbgsub_m7 catalog; f212n_i2d = the F212N merged mosaic; long_i2d = F480M (10678-era) or F405N (legacy) merged mosaic with long_band set accordingly. hats=false until hats-import is installed.",
+  "version": "v1.2-2026.08",
+  "out_dir": "/orange/adamginsburg/jwst/releases/v1.2-2026.08/cmz",
+  "dedup_radius_arcsec": 0.2,
+  "hats": false,
+  "fields": [
+    {
+      "field": "brick", "program": "2221", "obsid": "001",
+      "catalog": "/orange/adamginsburg/jwst/brick/catalogs/basic_merged_indivexp_photometry_tables_merged_resbgsub_m7.fits",
+      "f212n_i2d": "/orange/adamginsburg/jwst/brick/F212N/pipeline/jw02221-o001_t001_nircam_clear-f212n-merged_i2d.fits",
+      "long_i2d": "/orange/adamginsburg/jwst/brick/F405N/pipeline/jw02221-o001_t001_nircam_clear-f405n-merged_i2d.fits",
+      "long_band": "F405N"
+    },
+    {
+      "field": "sgrc", "program": "4147", "obsid": "012",
+      "catalog": "/orange/adamginsburg/jwst/sgrc/catalogs/basic_merged_indivexp_photometry_tables_merged_resbgsub_m7.fits",
+      "f212n_i2d": "/orange/adamginsburg/jwst/sgrc/F212N/pipeline/jw04147-o012_t001_nircam_clear-f212n-merged_i2d.fits",
+      "long_i2d": "/orange/adamginsburg/jwst/sgrc/F480M/pipeline/jw04147-o012_t001_nircam_clear-f480m-merged_i2d.fits",
+      "long_band": "F480M"
+    }
+  ]
+}
