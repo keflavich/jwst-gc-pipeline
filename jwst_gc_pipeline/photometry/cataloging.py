@@ -1391,6 +1391,19 @@ def _load_ramp_cube(crf_path):
                                           else np.asarray(gdq, dtype=int))
 
 
+def _crop_to_cutout(arr, cutout_active, cy0, cx0, shape2d):
+    """Crop a FULL-FRAME ramp array to the cutout footprint so it matches the
+    (already-cropped) ``data``.  ``arr`` is 2-D (group-0) or 3-D (ngroups,ny,nx);
+    the last two axes are cropped to ``[cy0:cy0+ny, cx0:cx0+nx]``.  Returns
+    ``arr`` unchanged for a full-frame run.  The sibling ``_ramp.fits`` is
+    full-frame even on a cutout run (only the crf is cropped), so this is what
+    makes ramp recovery fire on cutouts instead of silently shape-mismatching."""
+    if arr is None or not cutout_active:
+        return arr
+    ny, nx = shape2d
+    return arr[..., int(cy0):int(cy0) + ny, int(cx0):int(cx0) + nx]
+
+
 def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
                                   filename, proposal_id, *, exposurenumber,
                                   visit_id, vgroup_id, bg_boxsizes, use_webbpsf,
@@ -1430,6 +1443,7 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     cutout_label = ''
     out_basepath = basepath
     cx0, cy0 = 0, 0
+    _orig_filename = filename   # pre-cutout crf: its sibling _ramp.fits is full-frame
     if getattr(options, 'cutout_region', ''):
         cutout_label, filename, out_basepath, cx0, cy0 = _L._prepare_cutout_input(
             filename, basepath, filtername, options)
@@ -1731,20 +1745,26 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
                         # reduction.  Any error here (odd ramp file, shape quirk)
                         # degrades to the zeroframe/model path, never propagates.
                         try:
-                            _rc = _load_ramp_cube(filename)
-                            if _rc is not None and _rc[0].shape[-2:] == data.shape:
+                            _rc = _load_ramp_cube(_orig_filename)
+                            _rsci = _crop_to_cutout(None if _rc is None else _rc[0],
+                                                    cutout_active, cy0, cx0, data.shape)
+                            _rgdq = _crop_to_cutout(None if _rc is None else _rc[1],
+                                                    cutout_active, cy0, cx0, data.shape)
+                            if _rsci is not None and _rsci.shape[-2:] == data.shape:
                                 from jwst_gc_pipeline.reduction.saturated_star_finding import (
                                     ramp_recover_saturated, zeroframe_recover_saturated)
                                 _dataf = np.asarray(data, dtype=float)
                                 _zdil = int(getattr(options, 'satstar_zeroframe_dilate', 3))
                                 _rec, _rim, _deep, _K = ramp_recover_saturated(
-                                    _dataf, dqarr, _rc[0], _rc[1], sat_dilate=_zdil)
+                                    _dataf, dqarr, _rsci, _rgdq, sat_dilate=_zdil)
                                 if np.isfinite(_K):
                                     _recovered = _rim.copy()
                                     nan_replaced_data = np.where(
                                         _rim, _rec, nan_replaced_data)
                                     _ng0 = 0
-                                    _g0 = _load_ramp_group0(filename)
+                                    _g0 = _crop_to_cutout(
+                                        _load_ramp_group0(_orig_filename),
+                                        cutout_active, cy0, cx0, data.shape)
                                     if (_g0 is not None and _g0.shape == data.shape
                                             and _deep.any()):
                                         _r2, _rim2, _d2, _R2 = zeroframe_recover_saturated(
@@ -1770,7 +1790,8 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
                                   f"falling back to zeroframe/model", flush=True)
                             _zf_done = False
                     if (not _zf_done) and getattr(options, 'satstar_zeroframe_recover', False):
-                        _g0 = _load_ramp_group0(filename)
+                        _g0 = _crop_to_cutout(_load_ramp_group0(_orig_filename),
+                                              cutout_active, cy0, cx0, data.shape)
                         if _g0 is not None and _g0.shape == data.shape:
                             from jwst_gc_pipeline.reduction.saturated_star_finding import (
                                 zeroframe_recover_saturated)
