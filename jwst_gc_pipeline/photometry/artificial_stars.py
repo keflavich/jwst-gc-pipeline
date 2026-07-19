@@ -58,6 +58,21 @@ from scipy import ndimage
 from scipy.spatial import cKDTree
 
 # Pipeline building blocks (the m1 detection path + PSFPhotometry shim).
+from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
+
+# Detection parameters SINGLE-SOURCED from production (review #130 item 1):
+# m1/m2 S/N and the m2 shape bounds come from MANUAL_DEFAULTS; the m1 daofind
+# shape bounds mirror the literals in cataloging.py (m1 recipe,
+# 'sharplo=0.30, sharphi=1.40' / crowdsource daofind_roundlo/hi defaults) and
+# are pinned against drift by test_artificial_stars_params_match_production.
+M1_SNR = MANUAL_DEFAULTS['local_snr_threshold']
+M2_SNR = MANUAL_DEFAULTS['manual_iter2_local_snr']
+M1_ROUNDLO, M1_ROUNDHI, M1_SHARPLO, M1_SHARPHI = -1.0, 1.0, 0.30, 1.40
+M2_ROUNDLO = MANUAL_DEFAULTS['manual_resid_roundlo']
+M2_ROUNDHI = MANUAL_DEFAULTS['manual_resid_roundhi']
+M2_SHARPLO = MANUAL_DEFAULTS['manual_resid_sharplo']
+M2_SHARPHI = MANUAL_DEFAULTS['manual_resid_sharphi']
+
 from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
     compute_local_noise_map, annotate_and_filter_by_local_snr,
     _bad_dq_bitmask)
@@ -151,7 +166,7 @@ def draw_positions(rng, ny, nx, n_stars, valid_mask,
                    max_tries=200):
     """Uniform positions on valid pixels with a minimum mutual separation."""
     xs, ys = [], []
-    tree_pts = []
+    tree, tree_n, buffer = None, 0, []   # amortized: rebuild every 64 accepts
     tries = 0
     while len(xs) < n_stars and tries < max_tries * n_stars:
         tries += 1
@@ -159,13 +174,19 @@ def draw_positions(rng, ny, nx, n_stars, valid_mask,
         y = rng.uniform(edge, ny - 1 - edge)
         if not valid_mask[int(round(y)), int(round(x))]:
             continue
-        if tree_pts:
-            tree = cKDTree(tree_pts)
-            if tree.query([x, y], k=1)[0] < min_sep:
-                continue
+        if tree is not None and tree.query([x, y], k=1)[0] < min_sep:
+            continue
+        if buffer and np.hypot(np.array(buffer)[:, 0] - x,
+                               np.array(buffer)[:, 1] - y).min() < min_sep:
+            continue
         xs.append(x)
         ys.append(y)
-        tree_pts.append([x, y])
+        buffer.append([x, y])
+        if len(buffer) >= 64:
+            pts = ([] if tree is None else tree.data.tolist()) + buffer
+            tree = cKDTree(pts)
+            tree_n = len(pts)
+            buffer = []
     return np.array(xs), np.array(ys)
 
 
@@ -259,8 +280,9 @@ def detect_and_fit(data, err, dq, grid, fwhm_pix, instrument='NIRCAM',
 
     # --- pass 1: m1 parameters (S/N >= 5, wide shape bounds) ---
     det1 = _daofind_snr(data, badmask, fwhm_pix,
-                        roundlo=-1.0, roundhi=1.0, sharplo=0.30, sharphi=1.40,
-                        snr_threshold=5.0, label=f'{label} m1')
+                        roundlo=M1_ROUNDLO, roundhi=M1_ROUNDHI,
+                        sharplo=M1_SHARPLO, sharphi=M1_SHARPHI,
+                        snr_threshold=M1_SNR, label=f'{label} m1')
 
     aperture_radius_pix = 2.0 * fwhm_pix
     localbkg_inner = max(6, int(round(aperture_radius_pix + 0.5 * fwhm_pix)))
@@ -293,8 +315,9 @@ def detect_and_fit(data, err, dq, grid, fwhm_pix, instrument='NIRCAM',
     model = _make_model_image(phot1, data.shape, psf_shape=(psf_npix, psf_npix))
     residual = data - model
     det2 = _daofind_snr(residual, badmask, fwhm_pix,
-                        roundlo=-1.0, roundhi=1.0, sharplo=0.50, sharphi=1.00,
-                        snr_threshold=3.0, label=f'{label} m2')
+                        roundlo=M2_ROUNDLO, roundhi=M2_ROUNDHI,
+                        sharplo=M2_SHARPLO, sharphi=M2_SHARPHI,
+                        snr_threshold=M2_SNR, label=f'{label} m2')
 
     if len(det2):
         x2, y2 = _det_xy(det2)
