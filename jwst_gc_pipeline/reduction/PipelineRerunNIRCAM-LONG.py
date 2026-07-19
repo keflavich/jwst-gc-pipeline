@@ -1151,6 +1151,15 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
         from jwst_gc_pipeline.reduction.dva_correction import apply_dva_correction
         apply_dva_correction(fn)
 
+    if os.environ.get('STATIC_PLACEMENT_CORRECTION', '0') == '1':
+        # Static per-detector SIAF placement field measured by the network
+        # self-calibration (1-2.5 mas, SW detectors only).  OPT-IN: the field
+        # was measured in sky coordinates on GC pointings and is only valid at
+        # GC-survey-like position angles (see static_placement_correction.py).
+        from jwst_gc_pipeline.reduction.static_placement_correction import (
+            apply_placement_correction)
+        apply_placement_correction(fn)
+
     mod = ImageModel(fn)
     if proposal_id is None:
         proposal_id = os.path.basename(fn)[3:7]

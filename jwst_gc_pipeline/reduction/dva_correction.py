@@ -88,6 +88,7 @@ __all__ = ['interdetector_dva_shift_deg', 'apply_dva_correction',
 
 # Header keyword written after application (idempotency marker).
 DVA_MARKER = 'DVACORR'
+DVA_PENDING = 'DVAPEND'
 
 
 def interdetector_dva_shift_deg(va_scale, ra_ref, dec_ref, ra_v1, dec_v1):
@@ -158,8 +159,19 @@ def apply_dva_correction(fn, verbose=True):
             why = 'already applied' if DVA_MARKER in hdr else 'keywords absent/trivial'
             print(f"DVA correction skipped for {fn}: {why}")
         return None
+    if hdr.get(DVA_PENDING) and DVA_MARKER not in hdr:
+        # A previous run died between the GWCS write and the marker write:
+        # GWCS shift state ambiguous; fail loud rather than risk a silent
+        # double correction (review of PR #129, applies here identically).
+        raise RuntimeError(
+            f"{fn}: pending DVA marker without completion marker -- a "
+            f"previous apply crashed mid-write. Re-fetch or re-reduce; "
+            f"refusing to guess the GWCS state.")
     dra, ddec = interdetector_dva_shift_deg(
         hdr['VA_SCALE'], hdr['RA_REF'], hdr['DEC_REF'], hdr['RA_V1'], hdr['DEC_V1'])
+
+    with fits.open(fn, mode='update') as hdul:
+        hdul['SCI'].header[DVA_PENDING] = (True, 'DVA apply in progress')
 
     # GWCS (ASDF) side -- same mechanism as fix_alignment.
     from jwst.datamodels import ImageModel
@@ -178,6 +190,7 @@ def apply_dva_correction(fn, verbose=True):
         h['OLCRVAL2'] = h['CRVAL2']
         h.update(ww.to_fits()[0])
         h[DVA_MARKER] = (True, 'inter-detector DVA shift applied')
+        h[DVA_PENDING] = (False, 'DVA apply completed')
         h['DVASHRA'] = (dra, '[deg] DVA inter-detector RA coord shift')
         h['DVASHDE'] = (ddec, '[deg] DVA inter-detector Dec shift')
         hdul.writeto(fn, overwrite=True)
