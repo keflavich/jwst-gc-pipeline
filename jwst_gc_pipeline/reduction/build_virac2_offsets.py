@@ -149,7 +149,7 @@ def coarse_from_i2d(filt, rc, ref):
           f"contrast={contrast:.0f} npairs={n} "
           f"i2dfine=({(fine[0]*1000 if fine else 0):+.1f},{(fine[1]*1000 if fine else 0):+.1f})mas "
           f"({len(sc)} i2d srcs)", flush=True)
-    return dra, ddec
+    return dra, ddec, contrast, swept
 
 # region -> proposal/field/basepath + {filt: (subdir, obs-epoch, mtag)}
 REGION = {
@@ -410,7 +410,7 @@ def _gather(filt, base, sub, mtag, dets):
     return byve, byv, coarse
 
 
-def _solve(byve, byv, coarse, c_ra, c_dec, ref, prop, field, filt, modlabel=None):
+def _solve(byve, byv, coarse, c_ra, c_dec, ref, prop, field, filt, modlabel=None, i2d_contrast=None):
     """Per-visit bulk tie (consensus vs VIRAC2, seeded by the merged i2d coarse) + per-exposure
     relative shift vs that consensus.  modlabel=None -> module-LOCKED (one shift/exposure over all
     detectors, no Module column).  modlabel set -> that module's own tie, written with a Module
@@ -435,14 +435,34 @@ def _solve(byve, byv, coarse, c_ra, c_dec, ref, prop, field, filt, modlabel=None
         vx = coarse_xcorr(SkyCoord(cc_ra * u.deg, cc_dec * u.deg), ref, maxsep=COARSE_MAXSEP_VISIT)
         if vx[0] is not None:
             vcontrast = vx[3]
+            _large = np.hypot(vx[0], vx[1]) > SEARCH.to(u.arcsec).value
+            # CANCELLATION GUARD (2026-07-19, cloudef obs005 F480M).  The per-visit coarse is
+            # measured ON TOP of the i2d seed, so it reports the RESIDUAL per-visit shift.  A
+            # LARGE override that would nearly CANCEL a confidently-measured GROSS i2d seed
+            # (bringing |seed+override| well below |seed|) is the spurious-peak signature: the
+            # mosaic seed already includes this visit, so its true residual is small.  F480M
+            # (LW, sparse) found a marginal contrast-10.8 override (+1.59,+7.43)" that cancelled
+            # the contrast-432 seed (-1.81,-7.37)" back to Cloud E's (-0.22,+0.06)".  Only let a
+            # cancelling override win if it is at least as confident as the seed it overturns.
+            _seed_mag = np.hypot(c_ra, c_dec)
+            _cand_mag = np.hypot(c_ra + vx[0], c_dec + vx[1])
+            _cancels_gross_seed = (_seed_mag > SEARCH.to(u.arcsec).value
+                                   and _cand_mag < 0.5 * _seed_mag)
+            _override_trusted = (i2d_contrast is None or not _cancels_gross_seed
+                                 or vcontrast >= i2d_contrast)
             # only apply a MEANINGFUL per-visit correction (> the fine-NN radius); small
             # residuals are left to the fine step to avoid double counting.
-            if vcontrast >= COARSE_MIN_PEAK_RATIO and np.hypot(vx[0], vx[1]) > SEARCH.to(u.arcsec).value:
+            if vcontrast >= COARSE_MIN_PEAK_RATIO and _large and _override_trusted:
                 cc_ra = cc_ra + vx[0] / 3600.0; cc_dec = cc_dec + vx[1] / 3600.0
                 cv_ra = c_ra + vx[0]; cv_dec = c_dec + vx[1]
                 print(f"  {tag}visit{vis}: PER-VISIT coarse ADD ({vx[0]:+.3f},{vx[1]:+.3f})\" "
                       f"contrast={vcontrast:.1f} window={vx[4]:g}\" npairs={vx[2]}"
                       f"{' [SWEPT/gross]' if vx[5] else ''}  (visit differs from mosaic seed)",
+                      flush=True)
+            elif vcontrast >= COARSE_MIN_PEAK_RATIO and _large and not _override_trusted:
+                print(f"  {tag}visit{vis}: REJECTED per-visit override ({vx[0]:+.3f},{vx[1]:+.3f})\" "
+                      f"contrast={vcontrast:.1f} -- would cancel GROSS i2d seed "
+                      f"({c_ra:+.3f},{c_dec:+.3f})\" contrast={i2d_contrast:.0f}; trusting seed",
                       flush=True)
         res = coord_shift(cc_ra, cc_dec, ref)
         if res is None:
@@ -486,10 +506,11 @@ def lock_filter(filt, rc, per_module=False):
     if i2d_coarse is None:
         raise SystemExit(f"[FAIL] {filt}: could not measure a clean i2d coarse tie; "
                          f"refusing to write a lock table (would re-perpetuate ~0).")
-    c_ra, c_dec = i2d_coarse
+    c_ra, c_dec, i2d_contrast, _i2d_swept = i2d_coarse
     if not per_module:
         byve, byv, coarse = _gather(filt, base, sub, mtag, dets)
-        return _solve(byve, byv, coarse, c_ra, c_dec, ref, prop, field, filt, modlabel=None)
+        return _solve(byve, byv, coarse, c_ra, c_dec, ref, prop, field, filt, modlabel=None,
+                      i2d_contrast=i2d_contrast)
     # PER-MODULE: solve a separate tie for each physical module (A=nrca*, B=nrcb*/LW
     # nrcalong/nrcblong).  A single module-locked shift cannot remove a real A/B offset
     # (the ~20 mas Dec-28.71 seam / NRCB distortion residual); two independent ties do.
@@ -500,7 +521,8 @@ def lock_filter(filt, rc, per_module=False):
     for modlabel, gdets in sorted(groups.items()):
         print(f"  --- module '{modlabel}': {gdets} ---", flush=True)
         byve, byv, coarse = _gather(filt, base, sub, mtag, gdets)
-        rows.extend(_solve(byve, byv, coarse, c_ra, c_dec, ref, prop, field, filt, modlabel=modlabel))
+        rows.extend(_solve(byve, byv, coarse, c_ra, c_dec, ref, prop, field, filt, modlabel=modlabel,
+                           i2d_contrast=i2d_contrast))
     return rows
 
 
