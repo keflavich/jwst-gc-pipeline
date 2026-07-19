@@ -649,7 +649,7 @@ def main(filtername, Observations=None, regionname='brick',
         # (line ~375) to 'jw0{prop}-o{field}_t001_miri_{filt}', outlier_detection
         # names the CR-flagged products after the PRODUCT, not the exposure:
         #   jw03958-o001_t001_miri_f770w_<N>_o{field}_crf.fits
-        # The per-frame photometry (crowdsource_catalogs_long.get_filenames) globs
+        # The per-frame photometry (catalog_long.get_filenames) globs
         # PER-EXPOSURE crf:  jw0{prop}{field}{visit}*{module}*o{field}_crf.fits
         # i.e. jw03958001001_*_mirimage_o001_crf.fits .  Those two never matched,
         # so a corrected re-reduction's crf silently never reached cataloging

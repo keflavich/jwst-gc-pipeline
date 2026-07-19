@@ -1,6 +1,6 @@
 """LEGACY crowdsource / "iter2"-"iter3" per-exposure photometry -- BENCHMARKS ONLY.
 
-Sequestered out of ``crowdsource_catalogs_long.py``; the active CLI ``main`` and
+Sequestered out of ``catalog_long.py``; the active CLI ``main`` and
 the shared helpers stay there.  Superseded by the manual-iteration pipeline
 (``cataloging.do_photometry_step_manual`` / ``run_manual_pipeline``).  Reached
 only via ``--legacy-iterations``; do not wire into active reductions.
@@ -13,24 +13,24 @@ host module) are deliberately NOT kept in sync with
 benchmarking.  Do not "fix" them to match.
 
 Implementation note: this module reuses the shared helpers, constants and
-third-party imports that live in ``crowdsource_catalogs_long`` by importing that
+third-party imports that live in ``catalog_long`` by importing that
 module and copying its public module namespace in below, so the relocated code
 resolves every name exactly as it did before the move.  Tests that stub those
-helpers must patch THIS module (e.g. ``legacy.crowdsource_step.get_psf_model``),
+helpers must patch THIS module (e.g. ``legacy.photometry_step.get_psf_model``),
 not the host module.
 """
-import jwst_gc_pipeline.photometry.crowdsource_catalogs_long as _host
+import jwst_gc_pipeline.photometry.catalog_long as _host
 import pylab as pl
 
 # Reproduce the exact module namespace the relocated code had while it lived in
-# crowdsource_catalogs_long (shared helpers + that module's imports), so every
+# catalog_long (shared helpers + that module's imports), so every
 # bare-name reference below resolves unchanged.
 globals().update({_k: _v for _k, _v in vars(_host).items()
                   if not _k.startswith('__')})
 
 
 # ===========================================================================
-# Relocated legacy code follows (verbatim move from crowdsource_catalogs_long).
+# Relocated legacy code follows (verbatim move from catalog_long).
 # ===========================================================================
 _PAR_IMAGE = None
 _PAR_ERR = None

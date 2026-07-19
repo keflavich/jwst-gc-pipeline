@@ -1,6 +1,6 @@
 """PSF-fitting wrappers, accelerators, and post-fit deduplication.
 
-Factored out of ``crowdsource_catalogs_long.py`` (2026-06-09 restructure) so the
+Factored out of ``catalog_long.py`` (2026-06-09 restructure) so the
 new ``cataloging.py`` manual-iteration path and the legacy path share one
 implementation.  Contents:
 
@@ -12,7 +12,7 @@ implementation.  Contents:
 * ``_dedup_close_sources`` (greedy spatial deduplication)
 
 The legacy parallel-chunked workers (``_parallel_psfphotometry`` etc.),
-``_FakePhot``, and ``WrappedPSFModel`` remain in ``crowdsource_catalogs_long.py``
+``_FakePhot``, and ``WrappedPSFModel`` remain in ``catalog_long.py``
 for now (tangled with crowdsource / the iterative chunked logic); they import
 the helpers here.
 """

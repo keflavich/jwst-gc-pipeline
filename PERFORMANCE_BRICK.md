@@ -70,7 +70,7 @@ SW is ~4–5× LW because SW has 8 detectors/exposure (vs 2 LW) → 192 vs 48 fr
 ## 2. Satstar "cataloging"
 
 Saturated-star models (`*_satstar_model.fits`) are built per-frame by
-`remove_saturated_stars` (`crowdsource_catalogs_long.py:1711`) during the first
+`remove_saturated_stars` (`catalog_long.py:1711`) during the first
 cataloging pass, then **cached on disk and reused** across later phases and across
 re-catalog reruns. In the reference run they were reused from a prior build, so
 satstar contributed ~0. The per-frame `Satstar-artifact filter` gate in the

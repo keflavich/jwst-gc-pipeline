@@ -2,7 +2,7 @@
 
 The 2026-07-09 consolidation moved ~30 duplicated optparse ``default=``
 literals into ``manual_defaults.MANUAL_DEFAULTS``.  This test scans the
-crowdsource_catalogs_long SOURCE (no import -- that module pulls in
+catalog_long SOURCE (no import -- that module pulls in
 jwst/stpsf and takes a minute) and fails if any option whose dest is a
 MANUAL_DEFAULTS key regains a literal default, or references a key the dict
 does not define.
@@ -13,7 +13,7 @@ import re
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS, mopt
 
 SRC = os.path.join(os.path.dirname(__file__), '..', 'jwst_gc_pipeline',
-                   'photometry', 'crowdsource_catalogs_long.py')
+                   'photometry', 'catalog_long.py')
 
 
 def test_mopt_fallback_and_unknown_key():

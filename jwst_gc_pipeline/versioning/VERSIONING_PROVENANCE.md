@@ -111,7 +111,7 @@ A dev run is permitted but warns and stamps the dev tag. **The pipeline runs
 only on tagged versions** — this is the mechanism that enforces it.
 
 The guard is called at exactly two points — the `__main__`/`main()` CLI entries
-of `PipelineRerunNIRCAM-LONG.py` (imaging) and `crowdsource_catalogs_long.py`
+of `PipelineRerunNIRCAM-LONG.py` (imaging) and `catalog_long.py`
 (cataloging). It is **not** called inside `run_manual_pipeline`, the cutout
 sub-runs, or any importable helper, so importing these modules (tests, notebooks,
 programmatic callers) never trips it.

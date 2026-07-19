@@ -10,7 +10,7 @@ import os
 import numpy as np
 import pytest
 
-from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
+from jwst_gc_pipeline.photometry.catalog_long import (
     _resolve_render_psf_shape)
 
 
@@ -93,7 +93,7 @@ def test_none_fwhm_returns_default():
 
 
 # ---- satstar render cap (fix #2: peaked re-render eats the MIRI pedestal) ----
-from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
+from jwst_gc_pipeline.photometry.catalog_long import (
     _cap_render_to_pedestal)
 
 

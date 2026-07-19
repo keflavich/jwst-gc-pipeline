@@ -1,5 +1,5 @@
 """Regression tests for the long-wavelength cataloging code
-(crowdsource_catalogs_long.py).
+(catalog_long.py).
 
 Each test pins a specific bug / defensive path documented by a comment block
 in the module.  These complement the existing
@@ -8,30 +8,30 @@ in the module.  These complement the existing
 
 Covered regressions
 --------------------
-* ``overlap_slices`` monkeypatch (crowdsource_catalogs_long.py:54-91).
+* ``overlap_slices`` monkeypatch (catalog_long.py:54-91).
   photutils.make_model_image passes ``small_array_shape`` as an ndarray;
   an out-of-frame source with ``e_max == 0`` then triggers
   ``ValueError: truth value of an array ... is ambiguous`` inside
   astropy's overlap_slices.  The patch coerces the shape to a tuple.
 
-* ``_strip_chunk`` (crowdsource_catalogs_long.py:693-707).  ``_chunkXXofYY``
+* ``_strip_chunk`` (catalog_long.py:693-707).  ``_chunkXXofYY``
   suffixes must be stripped so semantic checks like ``is_iter3`` still fire
   when image-chunking is on.
 
 * ``_resolve_seed_skycoords`` per-filter snap precedence
-  (crowdsource_catalogs_long.py:1180-1188).  When a ``preferred_skycoord_col``
+  (catalog_long.py:1180-1188).  When a ``preferred_skycoord_col``
   (e.g. ``skycoord_f480m``) is requested it must win over plain ra/dec
   columns; otherwise the iter3 per-filter seed snap is silently ignored
   (sickle F480M source 55, 2026-06-03).
 
 * ``_filter_near_saturation`` Star B regression
-  (crowdsource_catalogs_long.py:1456-1507 + threshold note ~4657).  The
+  (catalog_long.py:1456-1507 + threshold note ~4657).  The
   saturation-proximity radius was cut 5.0 -> 1.0 px so that a real star
   ~2.24 px from a saturated neighbour survives while a fit whose centre
   sits on the saturated pixel is still dropped.
 
 * ``forced_psf_photometry`` closed-form flux solve
-  (crowdsource_catalogs_long.py:199-296).  The linear least-squares flux
+  (catalog_long.py:199-296).  The linear least-squares flux
   must equal the injected flux for a noise-free single source.
 """
 import types
@@ -43,9 +43,9 @@ from astropy.table import Table
 from astropy.wcs import WCS
 import astropy.units as u
 
-from jwst_gc_pipeline.photometry import crowdsource_catalogs_long as L
+from jwst_gc_pipeline.photometry import catalog_long as L
 # The Phase-6-extracted helpers were sequestered into the legacy module.
-from jwst_gc_pipeline.photometry.legacy import crowdsource_step as CS
+from jwst_gc_pipeline.photometry.legacy import photometry_step as CS
 
 
 def _make_wcs():
@@ -309,7 +309,7 @@ class TestForcedPsfPhotometry:
 
 
 # ---------------------------------------------------------------------------
-# resolve_max_group_size (crowdsource_catalogs_long.py:449-477)
+# resolve_max_group_size (catalog_long.py:449-477)
 # 0 is REJECTED as ambiguous (used to mean "no cap", reads like "no grouping");
 # 'unlimited' -> None; positive int passes through.
 # ---------------------------------------------------------------------------
@@ -342,7 +342,7 @@ class TestResolveMaxGroupSize:
 
 
 # ---------------------------------------------------------------------------
-# normalize_vgroup_id (crowdsource_catalogs_long.py:888-903)
+# normalize_vgroup_id (catalog_long.py:888-903)
 # Returns (token, int_id); token is always '_vgroup<value>', int extracted from
 # the first run of digits (None if none).  Idempotent on an already-prefixed id.
 # ---------------------------------------------------------------------------

@@ -3,7 +3,7 @@
 # Cataloging SLURM submitter (refactored jwst_gc_pipeline).
 #
 # Runs the ACTIVE per-exposure manual photometry pipeline
-# (crowdsource_catalogs_long.py --each-exposure: m-phases m12/m3..m7).
+# (catalog_long.py --each-exposure: m-phases m12/m3..m7).
 # This is module-importable, so it is run via `python -m` (unlike the
 # reduction entry point). Array over filters: one task per filter.
 #
@@ -121,7 +121,7 @@ unset SLURM_ARRAY_TASK_ID SLURM_ARRAY_JOB_ID
 
 echo "CATALOG start: $TARGET $PROPOSAL/$FIELD filter=$FILT modules=$MODULES"
 PYTHON=${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/python}
-"$PYTHON" -m jwst_gc_pipeline.photometry.crowdsource_catalogs_long \
+"$PYTHON" -m jwst_gc_pipeline.photometry.catalog_long \
     --filternames="$FILT" \
     --modules="$MODULES" \
     --each-exposure \

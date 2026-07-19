@@ -57,7 +57,7 @@ PY=${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/pytho
     JobName="${TARGET}-catalog-m8p-${FILT}" 2>/dev/null || true
 
 echo "NODE=$(hostname) nproc=$(nproc) FILT=$FILT SUFFIX=$SUFFIX start=$(date -u +%FT%TZ)"
-"$PY" -m jwst_gc_pipeline.photometry.crowdsource_catalogs_long \
+"$PY" -m jwst_gc_pipeline.photometry.catalog_long \
     --filternames="$FILT" --modules="$MODULES" \
     --proposal_id="$PROPOSAL" --field="$FIELD" --target="$TARGET" \
     --each-suffix="$SUFFIX" --each-exposure --daophot --skip-crowdsource \

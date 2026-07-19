@@ -6,7 +6,7 @@ seed/satstar tables) emit source positions under different column names
 dependency-light helpers pick the first available convention so callers don't
 re-implement the candidate list.
 
-Factored out of ``crowdsource_catalogs_long.py`` (bloat refactor); that module
+Factored out of ``catalog_long.py`` (bloat refactor); that module
 imports these names so there is a single source of truth and ``_L.<name>``
 access keeps working unchanged.  Covered by test_seed_skycoord_resolution.py and
 test_crowdsource_long_regressions.py.

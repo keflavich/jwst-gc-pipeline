@@ -3,7 +3,7 @@
 Generated 2026-06-17, executing in worktree `refactor-bloat` (branch `worktree-refactor-bloat`,
 based on origin/main @ 318b902).
 
-Codebase ~23k LOC. Four worst offenders: `crowdsource_catalogs_long.py` (6379),
+Codebase ~23k LOC. Four worst offenders: `catalog_long.py` (6379),
 `merge_catalogs.py` (2196), `saturated_star_finding.py` (2035), `cataloging.py` (2010).
 
 Goals:
@@ -67,7 +67,7 @@ Tier 1 (WCS): CLOSED — deliberate design, see the flow doc.
   divergence this creates. Drop the FITS splat IF no plain-astropy/CARTA consumer reads it.
 
 Tier 2 (mechanical, low risk):
-- `crowdsource_catalogs_long.py:678-690` `_shift_gwcs` → `gwcs.WCS.__getitem__` slicing.
+- `catalog_long.py:678-690` `_shift_gwcs` → `gwcs.WCS.__getitem__` slicing.
 - `reduction/destreak.py:128-172` `add_background_map` → `reproject.reproject_interp`.
 - `reduction/make_merged_psf.py:132-190` custom PSF-grid FITS IO → `GriddedPSFModel.read/.write`;
   eliminates `fix_psfs_with_bad_meta`.
@@ -111,7 +111,7 @@ Per-instrument param struct + MIRI-only hooks + agnostic core.
 ## Phase 6 — Split mega-functions  [STATUS: partial — safe extraction done]
 - [x] Extracted the pure table column-convention resolvers (`_get_source_xy`,
   `_best_available_xy`, `_has_any_xy_columns`, `_column_to_float_array`,
-  `_skycoord_radec_arrays`, `_XY_COLUMN_CANDIDATES`) from crowdsource_catalogs_long.py into
+  `_skycoord_radec_arrays`, `_XY_COLUMN_CANDIDATES`) from catalog_long.py into
   new `photometry/column_utils.py`; the monolith re-imports them (so `_L.<name>` access from
   cataloging.py is unchanged). Behavior-neutral pure move; covered by existing tests.
 - [x] First two extracted modules done: naming.py + column_utils.py.
@@ -153,22 +153,22 @@ is genuinely shared and stays active.
 
 ## Sequestration — move legacy crowdsource/iter2 entrypoint to photometry/legacy/  [STATUS: DONE]
 - [x] Created `photometry/legacy/__init__.py` + LEGACY banner on do_photometry_step.
-- [x] Moved the legacy entrypoint into `legacy/crowdsource_step.py` (2548 lines): do_photometry_step
+- [x] Moved the legacy entrypoint into `legacy/photometry_step.py` (2548 lines): do_photometry_step
   + M3-M6 helpers + the parallel cluster + _run_cutout_pipeline/_build_cutout_union_seed +
   save_crowdsource_results. The legacy module imports the host and copies its public namespace in
   (`globals().update(vars(_host))`) so every shared-helper reference resolves verbatim; the one
   mutable global write (`_SUPPRESS_DIAGNOSTICS`) targets `_host` so the host's
   catalog_zoom_diagnostic sees it.
-- [x] Host `crowdsource_catalogs_long.py` 6365 → 3850 lines (−2515). Active CLI `main` stays;
-  its two legacy call sites lazily `from ...legacy.crowdsource_step import ...` (no import cycle).
+- [x] Host `catalog_long.py` 6365 → 3850 lines (−2515). Active CLI `main` stays;
+  its two legacy call sites lazily `from ...legacy.photometry_step import ...` (no import cycle).
 - [x] Tests repointed: integration test alias L → legacy module; the 4 moved-helper test classes
   → `CS` (legacy), host-helper tests keep `L` (host).
 - [x] Full photometry suite: 116 passed.
 - [ ] FOLLOW-UP (optional, cleaner): the legacy module relies on namespace injection rather than
   explicit imports; could be tidied to explicit `from host import (...)` later. And the shared
-  helpers still physically live in crowdsource_catalogs_long (fine — active path imports them).
+  helpers still physically live in catalog_long (fine — active path imports them).
 
-NEXT (one focused mechanical step, manifest below → `legacy/crowdsource_step.py`):
+NEXT (one focused mechanical step, manifest below → `legacy/photometry_step.py`):
 - **MOVE** (legacy-only, verified no active callers): `do_photometry_step` (lines 4645-6362),
   `_run_cutout_pipeline` + `_build_cutout_union_seed` (legacy --cutout path), `save_crowdsource_results`,
   the Phase-6 helpers (`_output_suffix_tokens`/`_SuffixTokens`, `_first_pass_daofinder`, `_make_grouper`,
@@ -176,7 +176,7 @@ NEXT (one focused mechanical step, manifest below → `legacy/crowdsource_step.p
   (`_parallel_psfphotometry`, `_parallel_iterative_psfphotometry`, `_FakePhot`, `_render_model_from_table`,
   `_chunk_init_by_group`, `_kdtree_group_ids`, `_par_worker_init/_fit`, `_PAR_*` globals).
   Check `_seed_table_chunk_subset` (legacy-only unless cataloging chunked path uses it).
-- **KEEP** in crowdsource_catalogs_long (shared, used by active path / `_L.*` / mosaicking):
+- **KEEP** in catalog_long (shared, used by active path / `_L.*` / mosaicking):
   get_psf_model, get_uncertainty, load_data, load_or_make_satstar_catalog, load_outside_fov_satstar_pixels,
   save_photutils_results, save_residual_datamodel, _resolve_seed_skycoords, _combine_seed_and_satstars,
   _augment_seed_catalog_with_detections_sky, _filter_near_saturation, _filter_satstar_artifacts,
@@ -185,12 +185,12 @@ NEXT (one focused mechanical step, manifest below → `legacy/crowdsource_step.p
   build_mergedcat_residuals/build_filtered_iter2_residual_bg/_flag_likely_extended_iter4, get_filenames,
   resolve_max_group_size, CappedSourceGrouper, normalize_vgroup_id, CutoutNoOverlap, FWHM_TABLE,
   REGIONS_DIR, _SUPPRESS_DIAGNOSTICS, _noop_savefig, custom `print`, dqflags, and `main`.
-- legacy/crowdsource_step.py imports the KEEP surface from crowdsource_catalogs_long; `main`'s legacy
+- legacy/photometry_step.py imports the KEEP surface from catalog_long; `main`'s legacy
   branch (call at 4359) + the `_run_cutout_pipeline` call (4293) do a LAZY
-  `from ...legacy.crowdsource_step import do_photometry_step, _run_cutout_pipeline` (avoid import cycle).
+  `from ...legacy.photometry_step import do_photometry_step, _run_cutout_pipeline` (avoid import cycle).
 - Update test imports (test_do_photometry_step_integration.py, test_crowdsource_long_regressions.py
   for the moved helpers) to the new module path.
-- VALIDATE: full photometry suite (the 3 characterization tests now exercise legacy/crowdsource_step).
+- VALIDATE: full photometry suite (the 3 characterization tests now exercise legacy/photometry_step).
 
 ---
 

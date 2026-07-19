@@ -298,7 +298,7 @@ these flag sets would remove the footgun of setting them individually.)*
 
 ## 7. Flags & environment reference
 
-### CLI options (`crowdsource_catalogs_long.py`)
+### CLI options (`catalog_long.py`)
 
 | flag | dest | default | purpose |
 |---|---|---|---|
@@ -340,7 +340,7 @@ these flag sets would remove the footgun of setting them individually.)*
 | `reduction/satstar_deblend.py` | ZEROFRAME core deblending (crowded fields) |
 | `reduction/PipelineRerunNIRCAM-LONG.py` / `PipelineMIRI.py` | Detector1 → `_ramp.fits` (ZEROFRAME/GROUPDQ); MIRI edge trim |
 | `photometry/cataloging.py` | per-frame satstar+daophot integration, `miri_tuning` schedule, artifact/coincidence gates |
-| `photometry/crowdsource_catalogs_long.py` | CLI options, manual m12→m8 pipeline |
+| `photometry/catalog_long.py` | CLI options, manual m12→m8 pipeline |
 | `photometry/merge_catalogs.py` | satstar catalog consolidation, dedup, `replaced_saturated` merge |
 
 *See also `PERFORMANCE_BRICK.md` (satstar models are cached/reused) and

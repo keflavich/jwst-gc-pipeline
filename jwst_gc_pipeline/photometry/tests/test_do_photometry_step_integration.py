@@ -15,7 +15,7 @@ logic (blocks A-D, G-J, L', M, P, Q, R of the contract) runs unmodified:
   - save_residual_datamodel -> no-op (avoids JWST datamodel construction)
   - pl.savefig            -> no-op (avoids diagnostic PNG writes)
 
-Importing crowdsource_catalogs_long pulls webbpsf -> slow cold import.
+Importing catalog_long pulls webbpsf -> slow cold import.
 """
 import types
 
@@ -30,7 +30,7 @@ from astropy.wcs import WCS
 
 # do_photometry_step now lives in the sequestered legacy module; patch the names
 # it resolves THERE (the legacy module injects the host's shared-helper namespace).
-from jwst_gc_pipeline.photometry.legacy import crowdsource_step as L
+from jwst_gc_pipeline.photometry.legacy import photometry_step as L
 
 SHAPE = (200, 200)
 FWHM_PIX = 2.165  # F405N, from fwhm_table.ecsv

@@ -6,7 +6,7 @@ tables collide and the second cataloging run overwrites the first (6778 clobbere
 ``_j{proposal}`` token for those proposals while leaving every other target's
 tokens (and the existing prop-2211 multi-obs case) unchanged.
 """
-from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import obs_token
+from jwst_gc_pipeline.photometry.catalog_long import obs_token
 
 
 def test_ngc6334_proposals_get_distinct_proposal_token():

@@ -71,7 +71,7 @@ EXTRA_ARGS=${EXTRA_ARGS:-}
 PIPE_ROOT=${PIPE_ROOT:-}
 [ -n "$PIPE_ROOT" ] && export PYTHONPATH="$PIPE_ROOT:$PYTHONPATH"
 
-# crowdsource_catalogs_long takes a comma-separated filter list.
+# catalog_long takes a comma-separated filter list.
 FILT_CSV=$(echo "$FILTERS" | tr ' ' ',')
 REF_ARG=""
 [ -n "$CROSSBAND_REF" ] && REF_ARG="--manual-crossband-ref-filter=$CROSSBAND_REF"
@@ -80,7 +80,7 @@ scontrol update JobId="${SLURM_JOB_ID:-0}" Name="cat_${TARGET}_m7" 2>/dev/null |
 
 echo "CATALOG m7 start: $TARGET $PROPOSAL/$FIELD filters=$FILT_CSV modules=$MODULES"
 PYTHON=${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/python}
-"$PYTHON" -m jwst_gc_pipeline.photometry.crowdsource_catalogs_long \
+"$PYTHON" -m jwst_gc_pipeline.photometry.catalog_long \
     --filternames="$FILT_CSV" \
     --modules="$MODULES" \
     --each-exposure \

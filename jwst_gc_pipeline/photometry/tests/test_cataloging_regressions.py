@@ -10,7 +10,7 @@ Phase-4 untangle (splitting the two keep-logics) can't change behavior:
   extended emission has bad qfit but high prominence -> kept; a flat-emission
   bump has low/NaN prominence -> dropped, including off-i2d sources).
 
-Importing cataloging pulls crowdsource_catalogs_long (webbpsf) -> slow cold.
+Importing cataloging pulls catalog_long (webbpsf) -> slow cold.
 """
 import numpy as np
 import pytest

@@ -36,7 +36,7 @@ already on disk or trivially derived.
 
 ## Design — additive control-flow gates (science code untouched)
 
-New `optparse` options on `crowdsource_catalogs_long.py`:
+New `optparse` options on `catalog_long.py`:
 
 - `--manual-stop-after-phase PH` — run only phases `[start..PH]` (with
   `--manual-start-phase` → exactly one phase per job).
@@ -84,7 +84,7 @@ monolithically and via the per-frame path; assert the final per-filter vetted
 catalogs + cross-band table are **bit-identical** (same rows, same flux columns).
 
 ## Status
-- [x] options + reconstructors + gates in cataloging.py / crowdsource_catalogs_long.py
+- [x] options + reconstructors + gates in cataloging.py / catalog_long.py
 - [x] satstar persist + reconstruct (`_satstar_reconciled_m12.fits`)
 - [x] completion markers + finalize completeness check (hard-crash on miss)
 - [x] `submit_cataloging_perframe_phase.sbatch` + `submit_cataloging_perframe.sh`
