@@ -325,6 +325,47 @@ def footer():
             "</footer>")
 
 
+def render_cmz_explorer(hips_url, cat_hips_url=None, moc_url=None,
+                        target="Galactic Center"):
+    """Standalone Aladin Lite page: CMZ color HiPS + catalog HiPS + coverage MOC.
+
+    ``*_url`` are relative to the site root (the products live in the release
+    tree).  Aladin Lite v3 loads from the CDS CDN; the HiPS/catalog/MOC are served
+    from the same host as the page.
+    """
+    js_cat = (f"aladin.addCatalog(A.catalogHiPS('{cat_hips_url}', "
+              f"{{onClick:'showTable', name:'CMZ catalog'}}));"
+              if cat_hips_url else "")
+    js_moc = (f"fetch('{moc_url}').then(r=>r.arrayBuffer()).then(b=>"
+              f"aladin.addMOC(A.MOCFromURL('{moc_url}', "
+              f"{{opacity:0.12, color:'#38bdf8', lineWidth:1}})));"
+              if moc_url else "")
+    out = [page_head("JWST-GC — CMZ explorer")]
+    out.append("<header><h1>CMZ explorer</h1>"
+               "<div class=muted>Two-color HiPS (B=F212N, R=F480M, G=0.5·(R+B)) "
+               "with the source catalog and coverage overlaid · "
+               "<a href='index.html'>← all fields</a></div></header><main>")
+    out.append("<div id='aladin-lite-div' style='width:100%;height:75vh;"
+               "border-radius:8px;overflow:hidden'></div>")
+    out.append("<script src='https://aladin.cds.unistra.fr/AladinLite/api/v3/"
+               "latest/aladin.js' charset='utf-8'></script>")
+    out.append(
+        "<script>A.init.then(() => {"
+        f"const aladin = A.aladin('#aladin-lite-div', {{cooFrame:'galactic', "
+        f"fov:1.0, target:'{target}', showCooGrid:false}});"
+        f"aladin.setImageSurvey(aladin.createImageSurvey('cmz-color',"
+        f"'CMZ two-color','{hips_url}','galactic',9,{{imgFormat:'png'}}));"
+        f"{js_cat}{js_moc}"
+        "});</script>")
+    out.append("<p class=muted>Products: "
+               f"<a href='{hips_url}'>color HiPS</a>"
+               + (f" · <a href='{cat_hips_url}'>catalog HiPS</a>" if cat_hips_url else "")
+               + (f" · <a href='{moc_url}'>coverage MOC</a>" if moc_url else "")
+               + ".</p>")
+    out.append("</main>" + footer() + "</body></html>")
+    return "".join(out)
+
+
 def render_help():
     out = [page_head("JWST-GC — how to download")]
     out.append("<header><h1>Downloading the data</h1>"
@@ -428,6 +469,15 @@ def main(argv=None):
     parser.add_argument("--release-root",
                         default="/orange/adamginsburg/jwst/releases")
     parser.add_argument("--out", default="/orange/adamginsburg/jwst/releases/site")
+    parser.add_argument("--cmz-hips",
+                        help="site-relative URL of the CMZ two-color HiPS "
+                             "(e.g. cmz/hips/CMZ_color). If given, writes "
+                             "cmz_explorer.html with an Aladin Lite pane and links "
+                             "it from the index.")
+    parser.add_argument("--cmz-cat-hips",
+                        help="site-relative URL of the catalog HiPS (optional)")
+    parser.add_argument("--cmz-moc",
+                        help="site-relative URL of the coverage MOC .fits (optional)")
     args = parser.parse_args(argv)
 
     out_dir = Path(args.out)
@@ -489,7 +539,22 @@ def main(argv=None):
                 })
         print(f"wrote {field}.html ({len(versions)} version(s): {', '.join(versions)})")
 
-    (out_dir / "index.html").write_text(render_index(fields_info))
+    cmz_explorer_link = None
+    if args.cmz_hips:
+        (out_dir / "cmz_explorer.html").write_text(render_cmz_explorer(
+            args.cmz_hips, cat_hips_url=args.cmz_cat_hips, moc_url=args.cmz_moc))
+        cmz_explorer_link = "cmz_explorer.html"
+        print("wrote cmz_explorer.html (Aladin Lite pane)")
+
+    index_html = render_index(fields_info)
+    if cmz_explorer_link:
+        # surface the explorer at the top of the index (additive; no-op otherwise)
+        index_html = index_html.replace(
+            "<main>",
+            "<main><p class=muted style='font-size:1.1em'>🔭 "
+            f"<a href='{cmz_explorer_link}'>Open the CMZ explorer</a> "
+            "(interactive two-color HiPS + catalog).</p>", 1)
+    (out_dir / "index.html").write_text(index_html)
     (out_dir / "download_help.html").write_text(render_help())
     # .txt extension so the web server serves it as text (a .py 500s under CGI)
     (out_dir / "get_globus_token_helper.txt").write_text(TOKEN_HELPER)

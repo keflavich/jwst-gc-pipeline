@@ -64,6 +64,13 @@ overlaps (+ their ancestor tiles). Color (2-band + interpolated green) is then a
 per-tile combine of the mono HiPS — cheap to re-derive, and re-derivable at
 different stretches without recomputing the substrate.
 
+> **MUST: a single GLOBAL stretch, never per-tile.** The asinh normalization
+> limits (vmin/vmax per band) are computed once over the whole survey (from a
+> coarse HiPS order) and applied to every tile. A per-tile stretch makes each tile
+> self-normalize, which **seams** the mosaic at tile boundaries. This is a hard
+> requirement, not an optimization — `hips.derive_two_color_hips` computes global
+> limits by default; do not replace them with per-tile percentiles.
+
 ```
 per-field i2d ──► mono HiPS: HiPS/F212N   (incremental, real flux, fits tiles)
                   mono HiPS: HiPS/LONG     (F480M where present, else F405N)
@@ -231,6 +238,45 @@ Resolved:
 Open for the author:
 1. **HATS now or later**: ship HATS from the first CMZ-wide release, or start with
    flat Parquet + catalog HiPS and add HATS when catalog size/cross-match demand it?
-2. Where the tooling lives: implemented in **this repo** (`jwst_gc_pipeline/cmz/`)
-   so it sits with the release/gate machinery and the versioning provenance; the
-   per-target press-image RGBs stay in `jwst_scripts`.
+   (Implemented as a spec flag `"hats": true|false` so it toggles per release —
+   default off until `hats-import` is installed.)
+2. Where the tooling lives: implemented in **this repo** (`jwst_gc_pipeline/cmz/`
+   + `scripts/release/build_cmz_products.py`) so it sits with the release/gate
+   machinery and the versioning provenance; the per-target press-image RGBs stay
+   in `jwst_scripts`.
+
+## 5. Building the products + onboarding 10678
+
+Everything above is wired: `scripts/release/build_cmz_products.py` reads a JSON
+spec and runs catalog / MOC / HiPS / HATS (each fail-soft on a missing optional
+dep). Template: `scripts/release/cmz_products_spec.example.json`.
+
+```bash
+# dry-run first (logs the plan, builds nothing)
+python scripts/release/build_cmz_products.py --spec cmz_spec.json --dry-run
+# then build (or a subset with --only catalog,moc,hips,hats)
+python scripts/release/build_cmz_products.py --spec cmz_spec.json
+# publish: point the webpage at the products
+python scripts/release/make_webpage.py --cmz-hips cmz/hips/CMZ_color \
+    --cmz-cat-hips cmz/hips/cmz_cat --cmz-moc cmz/cmz_f212n_coverage.fits
+```
+
+**Onboarding 10678** (greenfield — no repo references today):
+1. Add its fields to `stage_release.py`'s `FIELDS` dict (per-obs entries, like
+   gc2211's multi-pointing template) and, importantly, a per-field Gaia refcat in
+   `FRAME_REFCAT` — **currently only `brick` is mapped**, so the absolute-frame
+   release gate can't yet enforce on the other CMZ fields; fill this in as each
+   field onboards.
+2. Add a spec entry per 10678 field/observation: its combined `resbgsub_m7`
+   catalog, its `f212n_i2d`, and its `f480m_i2d` (`long_band: "F480M"`).
+3. Re-run `build_cmz_products.py` — the HiPS step folds the new field in
+   incrementally (only its overlapping tiles rewrite); the catalog + MOC
+   re-assemble from the current member set.
+
+### Deps + backfill (author-run; not auto-run)
+
+The catalog + two-color HiPS run in the stock env (astropy/reproject/Pillow/
+pyarrow). The optional layers need `pip install mocpy hats-import lsdb` (and, for
+the Aladin **catalog** HiPS, Java + `Hipsgen-cat.jar`). The first backfill over the
+real multi-GB CMZ mosaics is a compute job — submit it, don't run it on a login
+node: `scripts/release/submit_cmz_build.sbatch`.
