@@ -142,9 +142,17 @@ def build_hats(spec, out_dir, catalog_stem, dry_run=False):
         _log(f"HATS step needs {parquet} (pyarrow); skipping")
         return None
     out = os.path.join(out_dir, 'hats')
-    _log(f"HATS export {parquet} -> {out}/cmz_jwst")
+    # The assembled catalog's reference coordinate is skycoord_ref -> parquet
+    # 'skycoord_ref_ra'.  The CMZ is crowded, so partition deep (order 12).  On a
+    # login/compute node use a threaded Dask client (the process Nanny fails).
+    ra_col = spec.get('hats_ra_col', 'skycoord_ref_ra')
+    dec_col = spec.get('hats_dec_col', 'skycoord_ref_dec')
+    _log(f"HATS export {parquet} -> {out}/cmz_jwst (ra={ra_col})")
     if not dry_run:
-        HE.to_hats(parquet, out, 'cmz_jwst', ra_col='ra', dec_col='dec')
+        HE.to_hats(parquet, out, 'cmz_jwst', ra_col=ra_col, dec_col=dec_col,
+                   highest_order=spec.get('hats_highest_order', 12),
+                   pixel_threshold=spec.get('hats_pixel_threshold', 1_000_000),
+                   threaded=spec.get('hats_threaded', True))
     return out
 
 
