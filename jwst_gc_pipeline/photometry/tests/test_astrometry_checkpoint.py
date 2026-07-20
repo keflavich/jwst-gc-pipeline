@@ -406,6 +406,97 @@ def test_frozen_baseline_legacy_vs_full_fallback(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# frozen-stage PER-EXPOSURE DELTA gate (regression = a single exposure MOVED
+# since the m2 freeze, NOT a nonzero absolute vs-consensus offset).  Reproduces
+# brick F115W m3 (2026-07-20): 14 exposures 2.0-3.0 mas off consensus falsely
+# raised because the frozen gate re-checked ABSOLUTE magnitude -- that magnitude
+# is intrinsic per-exposure centroid scatter (the SAME 2-3 mas at m2), so the
+# bluest/sparsest filter could never pass a frozen stage.
+# ---------------------------------------------------------------------------
+
+def _exp(key, dra, ddec, misaligned):
+    return dict(key=key, n_reliable=50, raoffset_meta=0.0, deoffset_meta=0.0,
+                component=0, internal_tie=True, unverified=False,
+                misaligned=misaligned,
+                vs_consensus=dict(dra=dra, ddec=ddec,
+                                  off=float(np.hypot(dra, ddec)),
+                                  dra_err=0.05, ddec_err=0.05, swept=False,
+                                  npairs=200, contrast=50.0, ok=True,
+                                  window_arcsec=3.0, n_peak=100))
+
+
+def _patch_consensus_exposures(monkeypatch, exposures):
+    coords = SkyCoord(ra=[RA0, RA0] * u.deg, dec=[DEC0, DEC0] * u.deg, frame="icrs")
+
+    def _fake_consensus(tables, context="", **kw):
+        return dict(coords=coords, mag=None, exposures=exposures,
+                    anchor_key=("001", 1, "nrcb1", "F212N"),
+                    scatter_mas=np.array([1.0]), consensus_ok=True, skipped=[])
+
+    monkeypatch.setattr(_ac, "build_visit_consensus", _fake_consensus)
+
+
+def _write_m2_exposure_baseline(record_dir, exp_offsets, visit="001",
+                                filt="F212N"):
+    """exp_offsets: list of (key_tuple, dra, ddec) recorded per-exposure at m2."""
+    exps = [dict(key=list(k), dra=dra, ddec=ddec) for k, dra, ddec in exp_offsets]
+    rec = dict(visits=[dict(visit=visit, exposures=exps)])
+    with open(os.path.join(record_dir, f"checkpoint_m2_{filt}_latest.json"),
+              "w") as fh:
+        json.dump(rec, fh)
+
+
+_K = ("001", 8, "nrca2", "F212N")
+
+
+def test_frozen_perexposure_intrinsic_scatter_no_regression(tmp_path, monkeypatch):
+    """m2 recorded the exposure 2.5 mas off consensus (intrinsic scatter,
+    misaligned); m3 re-measures ~the same (2.6, 0.1) -> delta 0.14 <= tol ->
+    STABLE, no raise.  The exact brick F115W m3 case: absolute >2 mas that never
+    moved must not be a frozen-stage regression."""
+    _write_m2_exposure_baseline(str(tmp_path), [(_K, 2.5, 0.0)])
+    _patch_consensus_exposures(monkeypatch, [_exp(_K, 2.6, 0.1, misaligned=True)])
+    rec = run_visit_checkpoint([_tiny_visit_table()], "m3", refcat=None,
+                               filtername="F212N", record_dir=str(tmp_path),
+                               context="test")
+    assert rec["passed"]
+    assert rec["failures"] == []
+
+
+def test_frozen_perexposure_moved_raises(tmp_path, monkeypatch):
+    """m2 froze the exposure at (0, 0) (aligned); it then MOVED to (5, 0) ->
+    delta 5 > tol -> AstrometryRegressionError (a real per-exposure regression)."""
+    _write_m2_exposure_baseline(str(tmp_path), [(_K, 0.0, 0.0)])
+    _patch_consensus_exposures(monkeypatch, [_exp(_K, 5.0, 0.0, misaligned=True)])
+    with pytest.raises(AstrometryRegressionError):
+        run_visit_checkpoint([_tiny_visit_table()], "m3", refcat=None,
+                             filtername="F212N", record_dir=str(tmp_path),
+                             context="test")
+
+
+def test_frozen_perexposure_no_m2_baseline_raises(tmp_path, monkeypatch):
+    """A misaligned exposure at a frozen stage with NO m2 per-exposure baseline
+    (new/renamed frame): cannot prove it didn't move -> fail closed -> raise."""
+    # record dir has no checkpoint_m2_F212N_latest.json
+    _patch_consensus_exposures(monkeypatch, [_exp(_K, 3.0, 0.0, misaligned=True)])
+    with pytest.raises(AstrometryRegressionError):
+        run_visit_checkpoint([_tiny_visit_table()], "m4", refcat=None,
+                             filtername="F212N", record_dir=str(tmp_path),
+                             context="test")
+
+
+def test_m2_perexposure_scatter_still_corrects_not_raises(tmp_path, monkeypatch):
+    """At m2 (correcting) the same 2.6 mas misaligned exposure is a CORRECTION,
+    never a raise -- the frozen delta gate only governs m3+."""
+    _patch_consensus_exposures(monkeypatch, [_exp(_K, 2.6, 0.1, misaligned=True)])
+    rec = run_visit_checkpoint([_tiny_visit_table()], "m2", refcat=None,
+                               filtername="F212N", record_dir=str(tmp_path),
+                               context="test")
+    assert rec["failures"] == []
+    assert len(rec["corrections"]) == 1
+
+
+# ---------------------------------------------------------------------------
 # cross-filter checkpoint
 # ---------------------------------------------------------------------------
 
