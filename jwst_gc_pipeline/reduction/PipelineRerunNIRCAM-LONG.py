@@ -1184,7 +1184,16 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
     _prov_row_stage = ''   # checkpoint stage that last corrected the row, if any
     _frame_gen = None      # this frame's WCS-generation stamp (set in the locked branch)
     if ((field == '004' and proposal_id == '1182') or (field in ('001', '002') and proposal_id == '2221')
-            or (field in ('002', '005') and str(proposal_id) == '2092')):
+            or (field in ('002', '005') and str(proposal_id) == '2092')
+            # GC off-frame fields routed through VIRAC2locked tables 2026-07-19 (built by
+            # build_virac2_offsets --region <field>). TweakRegStep is hard-skipped and the
+            # post-Image3 realign is retired, so WITHOUT a locked table these ungated fields get
+            # zero absolute tie and ship at raw pointing (measured 54mas-22" off VIRAC2).
+            or (field == '001' and str(proposal_id) == '5365')        # sgrb2
+            or (field == '012' and str(proposal_id) == '4147')        # sgrc
+            or (field == '003' and str(proposal_id) == '2045')        # quintuplet (NOT arches=001, on-frame)
+            or (field == '001' and str(proposal_id) == '1939')        # sgra
+            or (field in ('023', '028', '046', '049', '050') and str(proposal_id) == '2211')):  # gc2211
         # cloudef (2092 obs 002=Cloud E, 005=Cloud F) added 2026-07-18: route through the
         # per-exposure VIRAC2-locked table (cloudef/offsets/Offsets_JWST_Brick2092_VIRAC2locked.csv,
         # built by jwst_gc_pipeline.reduction.build_virac2_offsets --region cloudef). Supersedes the
