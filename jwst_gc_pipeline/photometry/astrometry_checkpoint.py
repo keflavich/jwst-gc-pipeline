@@ -535,6 +535,42 @@ def _m2_reference_tie_baseline(record_dir, filtername, visit):
     return None
 
 
+def _m2_exposure_baseline(record_dir, filtername, visit):
+    """Map exposure-key tuple -> (dra_mas, ddec_mas) of the m2 per-exposure
+    vs-consensus offset, from the latest m2 record; ``{}`` when unavailable.
+
+    The frozen-stage per-exposure gate is a MOVEMENT check (mirror of
+    ``_m2_reference_tie_baseline`` for the consensus->reference tie): an exposure
+    fails only when its vs-consensus offset MOVED since the m2 freeze, not when
+    its absolute vs-consensus offset merely exceeds ``EXPOSURE_CONSENSUS_TOL_MAS``.
+    That absolute magnitude is intrinsic per-exposure centroid scatter -- already
+    present and tolerated at the m2 (correcting) stage -- so re-checking it
+    absolutely at every frozen stage re-trips on noise that never moved (observed:
+    brick F115W m3, 14 exposures 2.0-3.0 mas off consensus reading the SAME
+    2.0-3.3 mas at m2; the bluest/sparsest filter's intrinsic scatter sits in the
+    dead-zone between the m2 correction floor (4 mas) and this 2 mas tol, so it
+    could NEVER pass a frozen stage, 2026-07-20).
+    """
+    out = {}
+    if not record_dir:
+        return out
+    path = os.path.join(record_dir, f"checkpoint_m2_{filtername}_latest.json")
+    if not os.path.exists(path):
+        return out
+    with open(path) as fh:
+        rec = json.load(fh)
+    for v in rec.get("visits", []):
+        if str(v.get("visit")) != str(visit):
+            continue
+        for e in v.get("exposures", []) or []:
+            key = tuple(e.get("key", []) or [])
+            dra, ddec = e.get("dra"), e.get("ddec")
+            if key and dra is not None and ddec is not None \
+                    and np.isfinite(dra) and np.isfinite(ddec):
+                out[key] = (float(dra), float(ddec))
+    return out
+
+
 def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                          basepath=None, record_dir=None, context="",
                          consensus_kwargs=None):
@@ -591,6 +627,12 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
             continue
 
         # ---- per-exposure vs consensus ------------------------------------
+        # At a frozen stage the per-exposure gate is a MOVEMENT check vs the m2
+        # baseline (see _m2_exposure_baseline), NOT an absolute vs-consensus
+        # magnitude check -- the latter re-trips on intrinsic per-exposure
+        # scatter that m2 already tolerated.
+        exp_baseline = ({} if correcting
+                        else _m2_exposure_baseline(record_dir, filt, visit))
         exp_records = []
         for exp in cons["exposures"]:
             res = exp["vs_consensus"]
@@ -629,7 +671,34 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                         source=f"{stage} visit-consensus"))
                     print(f"ASTROM CHECKPOINT [{stage}] CORRECT: {msg}", flush=True)
                 else:
-                    failures.append(msg)
+                    # FROZEN stage: flag only a MOVEMENT since the m2 freeze, not
+                    # a nonzero absolute offset (intrinsic per-exposure scatter
+                    # that m2 already tolerated -- else the bluest filters can
+                    # never pass; brick F115W m3, 2026-07-20).
+                    base = exp_baseline.get(tuple(exp["key"]))
+                    if base is not None:
+                        delta = float(np.hypot(res["dra"] - base[0],
+                                               res["ddec"] - base[1]))
+                        if delta > STAGE_STABILITY_TOL_MAS:
+                            failures.append(
+                                f"{vctx}: exposure {exp['key']} MOVED "
+                                f"{delta:.2f} mas since the m2 freeze "
+                                f"(m2=({base[0]:+.2f},{base[1]:+.2f}), now="
+                                f"({res['dra']:+.2f},{res['ddec']:+.2f}) mas)")
+                        else:
+                            print(f"ASTROM CHECKPOINT [{stage}] STABLE: {vctx} "
+                                  f"exposure {exp['key']} unchanged since m2 "
+                                  f"(delta {delta:.2f} mas <= "
+                                  f"{STAGE_STABILITY_TOL_MAS}; absolute "
+                                  f"{res['off']:.2f} mas is intrinsic scatter)",
+                                  flush=True)
+                    else:
+                        # No m2 baseline for this exposure (new/renamed frame at
+                        # a frozen stage): the solution was supposed to be frozen
+                        # -- fall back to the absolute-offset failure.
+                        failures.append(
+                            msg + " [no m2 per-exposure baseline: frozen-stage "
+                            "exposure absent from the m2 record]")
 
         # ---- consensus vs absolute reference ------------------------------
         ref_tie = None
