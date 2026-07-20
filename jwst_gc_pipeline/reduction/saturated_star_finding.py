@@ -752,7 +752,43 @@ def accept_satstar_fit(*, result_is_none, fluxerr, snr, flux, qfit,
     return bool((not np.isfinite(ssr_ratio)) or (ssr_ratio < ssr_ratio_max_keep))
 
 
-def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, deblend_daophot_xy=None, deblend_confirm_xy=None):
+def nircam_phantom_reject(*, qfit, model_peak, coadd_localpk,
+                          qfit_min=0.5, oversub_ratio=1.5):
+    """Decide whether a NIRCam in-FOV saturated-star fit is a diffraction-spike
+    phantom that must be rejected.
+
+    Pure predicate (factored out of ``get_saturated_stars`` so the keep-logic is
+    unit-testable -- see tests/test_nircam_phantom_gate.py).  A phantom is a PSF
+    fit onto a bright star's diffraction spike (or any position with no real
+    stellar core): it fits BADLY and over-subtracts the data, gouging a deep
+    negative pit in the residual mosaic.
+
+    Rejection requires BOTH:
+      * ``qfit > qfit_min`` -- EVERY real saturated star has qfit <= ~0.17
+        regardless of brightness (measured on sickle F335M: flux>1e6 -> max
+        qfit 0.17), so a sane ``qfit_min`` (>=0.5) makes real stars EXEMPT; only
+        spike/no-core phantoms reach qfit ~1.2.
+      * ``model_peak > oversub_ratio * coadd_localpk`` -- the over-subtraction
+        trigger, measured against the DEEP COADD (the over-subtraction is a
+        mosaic artifact; per-frame the fit looks fine).  A correctly-fit faint
+        saturated star has model_peak ~= its coadd peak, so this is FALSE and it
+        is kept even with an elevated qfit.
+
+    Fail-safe: returns False (KEEP) on any non-finite input or when the gate is
+    disabled (qfit_min<=0 or oversub_ratio<=0) -- a real star is never deleted
+    on an inability to measure.
+    """
+    if not (qfit_min and qfit_min > 0 and oversub_ratio and oversub_ratio > 0):
+        return False
+    if not (np.isfinite(qfit) and qfit > qfit_min):
+        return False
+    if not (np.isfinite(model_peak) and np.isfinite(coadd_localpk)
+            and coadd_localpk > 0):
+        return False
+    return bool(model_peak > oversub_ratio * coadd_localpk)
+
+
+def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, nircam_phantom_qfit_min=0.5, nircam_phantom_oversub_ratio=1.5, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, deblend_daophot_xy=None, deblend_confirm_xy=None):
     # ``flux_drops``: optional list of SkyCoord.  An out-of-field (forced) source
     # whose seed sky position matches a drop within ~1.0" is SKIPPED entirely
     # (not fit, not contributed): cross-frame reconciliation found no trustworthy
@@ -2541,6 +2577,60 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                           f"conc{seed_conc_min}/oversub{seed_oversub_ratio}/"
                           f"fake(model>{seed_fake_model_min:.0f}&localpk<{seed_fake_localpk_max:.0f}))",
                           flush=True)
+            except Exception:
+                pass
+
+        # POST-FIT phantom gate (NIRCam, in-FOV): a PSF fit onto a bright star's
+        # DIFFRACTION SPIKE (or any position with no real stellar core) fits
+        # BADLY -- qfit >> the <=0.17 of every real saturated star (flux>1e6) --
+        # AND over-subtracts: its model peak exceeds the local DEEP-COADD data,
+        # gouging a deep negative pit in the residual mosaic.  Sickle F335M off-
+        # FOV-spike phantoms: qfit~1.2, model peak ~6000 on coadd localpk ~3200.
+        # BOTH conditions are required so a real star is never deleted:
+        #   * qfit > nircam_phantom_qfit_min EXEMPTS every real saturated star
+        #     (their qfit<=0.17 regardless of brightness; only spike/no-core
+        #     phantoms reach qfit>0.5), and
+        #   * model_peak > ratio * coadd_localpk is the over-subtraction trigger;
+        #     a correctly-fit faint saturated star has model ~= its coadd peak so
+        #     this is FALSE and it is kept even with an elevated qfit.
+        # The coadd is the reference (NOT the per-frame data): the over-
+        # subtraction is a MOSAIC artifact -- per-frame the fit looks fine (it
+        # passes the sidelobe gate), but the consistent per-frame models sum to
+        # model>data against the dither-averaged coadd.  No-op when no coadd is
+        # supplied (seed_gate_image is None) or for forced/off-FOV sources.
+        if (not _is_miri and not forced_source and accept_source
+                and seed_gate_image is not None and seed_gate_wcs is not None
+                and nircam_phantom_qfit_min and nircam_phantom_qfit_min > 0
+                and nircam_phantom_oversub_ratio and nircam_phantom_oversub_ratio > 0
+                and len(result) and np.isfinite(qfit)
+                and qfit > nircam_phantom_qfit_min):
+            try:
+                _xc = float(np.atleast_1d(result['xcentroid'])[0])
+                _yc = float(np.atleast_1d(result['ycentroid'])[0])
+                _sky = ww.pixel_to_world(_xc, _yc)
+                _cx, _cy = seed_gate_wcs.world_to_pixel(_sky)
+                _ix, _iy = int(round(float(_cx))), int(round(float(_cy)))
+                _gny, _gnx = seed_gate_image.shape
+                _lr = 6
+                _lpk = np.nan
+                if _lr < _ix < _gnx - _lr and _lr < _iy < _gny - _lr:
+                    _lwin = seed_gate_image[_iy - _lr:_iy + _lr + 1,
+                                            _ix - _lr:_ix + _lr + 1]
+                    _lfin = np.isfinite(_lwin) & (_lwin != 0)
+                    if _lfin.any():
+                        _lpk = float(np.nanmax(_lwin[_lfin]))
+                _mpk = (float(np.nanmax(model_image))
+                        if np.isfinite(model_image).any() else np.nan)
+                if nircam_phantom_reject(
+                        qfit=float(qfit), model_peak=_mpk, coadd_localpk=_lpk,
+                        qfit_min=nircam_phantom_qfit_min,
+                        oversub_ratio=nircam_phantom_oversub_ratio):
+                    accept_source = False
+                    print(f"Post-fit phantom gate (NIRCam): rejecting source "
+                          f"{ii+1} -- bad-qfit over-subtractor (qfit={qfit:.2f} > "
+                          f"{nircam_phantom_qfit_min}; model peak {_mpk:.0f} > "
+                          f"{nircam_phantom_oversub_ratio}x coadd localpk "
+                          f"{_lpk:.0f})", flush=True)
             except Exception:
                 pass
 

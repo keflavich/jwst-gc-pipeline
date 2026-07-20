@@ -1620,6 +1620,8 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
                                  flux_overrides=None,
                                  flux_drops=None,
                                  oversub_clamp_percentile=10.0,
+                                 nircam_phantom_qfit_min=0.5,
+                                 nircam_phantom_oversub_ratio=1.5,
                                  file_suffix='',
                                  seed_gate_image=None, seed_gate_wcs=None,
                                  deblend_with_zeroframe=False):
@@ -1658,6 +1660,8 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
                            flux_overrides=flux_overrides,
                            flux_drops=flux_drops,
                            oversub_clamp_percentile=oversub_clamp_percentile,
+                           nircam_phantom_qfit_min=nircam_phantom_qfit_min,
+                           nircam_phantom_oversub_ratio=nircam_phantom_oversub_ratio,
                            file_suffix=file_suffix,
                            seed_gate_image=seed_gate_image,
                            seed_gate_wcs=seed_gate_wcs,
@@ -3468,6 +3472,23 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                            'leaving deep negative spike residuals. Default 10. Lower '
                            '(e.g. 1-2) for single-detector LW filters over bright '
                            'background (F335M).')
+    parser.add_option('--nircam-phantom-qfit-min',
+                      dest='nircam_phantom_qfit_min',
+                      default=0.5, type='float',
+                      help='NIRCam in-FOV satstar phantom gate: a replaced-'
+                           'saturated fit with qfit > this AND model peak > '
+                           'oversub-ratio x deep-coadd local peak is rejected as a '
+                           'diffraction-spike phantom. Real saturated stars have '
+                           'qfit<=0.17 (any brightness) so are EXEMPT. Default 0.5. '
+                           'Set 0 to disable the gate.')
+    parser.add_option('--nircam-phantom-oversub-ratio',
+                      dest='nircam_phantom_oversub_ratio',
+                      default=1.5, type='float',
+                      help='NIRCam phantom gate over-subtraction trigger: model '
+                           'peak must exceed this multiple of the deep-coadd local '
+                           '(6px) peak at the fit position for a bad-qfit fit to be '
+                           'dropped. Default 1.5. A correctly-fit faint saturated '
+                           'star has model ~= coadd peak so is kept.')
     parser.add_option('--skip-mosaic-each-exposure-residuals',
                       dest='skip_mosaic_each_exposure_residuals',
                       default=False,

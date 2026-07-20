@@ -951,7 +951,11 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     # is the legacy non-manual path); both must plumb the coadd.  NIRCam: the
     # gate is MIRI-only inside get_saturated_stars, so this is a no-op there.
     _seed_gate_image = _seed_gate_wcs = None
-    if module == 'mirimage':
+    # Deep-coadd reference for the satstar gates: MIRI uses it for the
+    # prominence/faint-core phantom gate; NIRCam uses it for the post-fit
+    # qfit-gated over-subtraction (diffraction-spike phantom) gate.  Load it
+    # for both whenever the filter's data_i2d exists (no-op gate otherwise).
+    if module in ('mirimage', 'nrca', 'nrcb', 'nrcalong', 'nrcblong'):
         _di2d_path = (f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-'
                       f'o{field}_t001_{_L._inst_token(filtername)}_{pupil}-'
                       f'{filtername.lower()}-{module}_data_i2d.fits')
@@ -977,6 +981,10 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         flux_drops=satstar_flux_drops,
         oversub_clamp_percentile=float(getattr(
             options, 'satstar_oversub_clamp_percentile', 10.0)),
+        nircam_phantom_qfit_min=float(getattr(
+            options, 'nircam_phantom_qfit_min', 0.5)),
+        nircam_phantom_oversub_ratio=float(getattr(
+            options, 'nircam_phantom_oversub_ratio', 1.5)),
         file_suffix=satstar_file_suffix,
         seed_gate_image=_seed_gate_image, seed_gate_wcs=_seed_gate_wcs,
         # ZEROFRAME deblend of merged saturated cores (gc2211 crowded GC fields).
