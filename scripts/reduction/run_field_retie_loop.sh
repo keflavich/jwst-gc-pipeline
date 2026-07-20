@@ -40,6 +40,13 @@ PIPE_ROOT=${PIPE_ROOT:-}
 MAXITER=${MAXITER:-3}
 QOS=${QOS:-astronomy-dept-b}
 BASE=${BASE:-/orange/adamginsburg/jwst/${TARGET}}
+# Actionability floor for the m2 checkpoint (see cataloging.py ~L3064): per-detector
+# residuals of a few mas are SIAF/DVA-class systematics the module-locked/consensus
+# offsets table cannot express, so correcting on their detector means never converges.
+# Setting this ABOVE the residual scatter lets the loop stop on a sub-floor PASS while
+# still measuring+recording every residual. Default 0 = strict 2 mas (unchanged).
+ASTROM_M2_CORRECTION_FLOOR_MAS=${ASTROM_M2_CORRECTION_FLOOR_MAS:-0}
+export ASTROM_M2_CORRECTION_FLOOR_MAS
 CONSENSUS_TBL="${BASE}/offsets/Offsets_JWST_Brick${PROPOSAL}_consensus.csv"
 
 read -r -a _FA <<< "$FILTERS"
@@ -78,6 +85,7 @@ for ((it=1; it<=MAXITER; it++)); do
     chain_out=$(PROPOSAL=$PROPOSAL FIELD=$FIELD TARGET=$TARGET MODULES=$MODULES \
         EACH_SUFFIX=$EACH_SUFFIX FILTERS="$FILTERS" MAX_GROUP_SIZE=$MAX_GROUP_SIZE \
         PHASES="m12" PIPE_ROOT=$PIPE_ROOT \
+        ASTROM_M2_CORRECTION_FLOOR_MAS=$ASTROM_M2_CORRECTION_FLOOR_MAS \
         bash "$HERE/submit_cataloging_perframe.sh")
     echo "$chain_out"
     fin_jid=$(echo "$chain_out" | grep -oE 'finalize[^0-9]*[0-9]+' | grep -oE '[0-9]+' | tail -1)
