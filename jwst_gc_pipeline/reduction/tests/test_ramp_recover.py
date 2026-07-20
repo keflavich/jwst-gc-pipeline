@@ -171,6 +171,12 @@ def test_kband_clamp_bounds_inflated_local_K():
                                                    k_band=4.0)
     rec_u, rim_u, _, Kg_u = ramp_recover_saturated(cal, dq, ramp, cal_block=block,
                                                    k_band=0.0)  # clamp disabled
+    # k_band<=0 disables the clamp -> identical to the unclamped path (a negative
+    # must NOT invert the band and dump everything to deep_core)
+    rec_n, rim_n, deep_n, _ = ramp_recover_saturated(cal, dq, ramp, cal_block=block,
+                                                     k_band=-4.0)
+    assert np.array_equal(rim_n, rim_u) and rim_n.sum() > 0
+    assert np.allclose(rec_n[rim_n], rec_u[rim_u], rtol=1e-6)
     assert Kg_c == pytest.approx(K, rel=0.2)          # global median ~ K, not 6K
     ring = rim_c & rim_u & np.isfinite(slope) & (slope > 20)
     assert ring.sum() > 0

@@ -1015,12 +1015,12 @@ def ramp_recover_saturated(data, dq, ramp_sci, ramp_groupdq=None, *,
     # K = photom*flat*gain varies <~10% across a detector, so bound K_local to a
     # generous multiplicative band around the field-global median; anything
     # beyond ``k_band`` is contamination.  ``k_band<=0`` disables the clamp.
-    if k_band and np.isfinite(Kglobal) and Kglobal > 0:
+    if k_band > 0 and np.isfinite(Kglobal) and Kglobal > 0:
         klo, khi = Kglobal / float(k_band), Kglobal * float(k_band)
         n_clamped = int(np.count_nonzero(np.isfinite(Kmap)
                                          & ((Kmap < klo) | (Kmap > khi))))
         if n_clamped:
-            log.info(f"ramp K-band clamp: {n_clamped} block(s) outside "
+            log.info(f"ramp K-band clamp: {n_clamped} pixel(s) outside "
                      f"[{klo:.4g}, {khi:.4g}] (Kglobal={Kglobal:.4g}) clipped")
         Kmap = np.clip(Kmap, klo, khi)
     recov = slope * Kmap
