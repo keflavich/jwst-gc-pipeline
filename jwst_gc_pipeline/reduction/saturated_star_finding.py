@@ -925,6 +925,61 @@ def is_small_radius_emission_phantom(prom_small, core_small, *,
     return False
 
 
+def miri_coarse_background(data, dq=None, box=128, sat_dilate=8, filter_size=3):
+    """Step-zero coarse, smooth, all-POSITIVE background for bright-emission MIRI.
+
+    MIRI fields with near-uniform extended emission (Sgr B2 F2550W 25um dust)
+    make the satstar fitter absorb the local emission pedestal as PSF amplitude
+    -> bright PHANTOM satstar models (data flat ~1200 but model peak ~1e6) that
+    leave deep negative residual pits.  Removing a coarse emission map up front
+    drops the unsaturated "wings" the fit reads from ~1100 to ~0 on a pure
+    emission knot (so it fits ~0 flux) while a real star -- far brighter than
+    the box-median -- survives.
+
+    Saturated pixels (DQ SATURATED, dilated) are masked BEFORE estimating the
+    map so a star's own bright core/wings don't pull the local background up and
+    self-subtract (the "local structure centered on a saturated star" trap).
+
+    The returned map is forced all-POSITIVE (shifted up if its min is negative)
+    so subtracting it never ADDS flux via a negative dip.
+
+    Parameters
+    ----------
+    data : ndarray
+        Frame SCI image.
+    dq : ndarray, optional
+        DQ plane; SATURATED pixels are masked (dilated by ``sat_dilate``).
+    box : int
+        Background2D box_size (px).  Must exceed the PSF wing scale so real
+        stars are NOT absorbed, yet resolve the emission structure.  Default
+        128 (F2550W: emission wing 1077 -> ~7; box 64 starts eating star wings).
+    sat_dilate : int
+        Dilation iterations on the saturated mask before background estimation.
+    filter_size : int
+        Background2D median filter_size (box grid).
+
+    Returns
+    -------
+    bg : ndarray
+        All-positive coarse background, same shape as ``data``.
+    """
+    mask = None
+    if dq is not None:
+        sat = (dq & dqflags.pixel['SATURATED']) > 0
+        if sat.any():
+            mask = binary_dilation(sat, iterations=int(sat_dilate))
+    bkg = Background2D(np.asarray(data, dtype=float), box_size=int(box),
+                       filter_size=int(filter_size),
+                       bkg_estimator=MedianBackground(), mask=mask,
+                       exclude_percentile=95)
+    bg = np.asarray(bkg.background, dtype=float)
+    bg = np.where(np.isfinite(bg), bg, 0.0)
+    bmin = float(np.nanmin(bg))
+    if bmin < 0:
+        bg = bg - bmin
+    return bg
+
+
 def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, deblend_daophot_xy=None, deblend_confirm_xy=None):
     # ``flux_drops``: optional list of SkyCoord.  An out-of-field (forced) source
     # whose seed sky position matches a drop within ~1.0" is SKIPPED entirely
@@ -1012,6 +1067,19 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # nan_to_num data to avoid fitting NaNs
     data[np.isnan(fitsdata['VAR_POISSON'].data)] = 0
     dq = fitsdata['DQ'].data
+    # STEP-ZERO coarse emission subtraction (MIRI bright-emission fields).  Remove
+    # a coarse, smooth, all-positive emission map (saturated stars masked, not
+    # fit) from the frame BEFORE satstar fitting, so the unsaturated wings the
+    # fit reads drop to ~0 on a pure emission knot -> ~0 phantom flux, while real
+    # stars (far above the box-median) survive.  Gated by MIRI_STEP0_COARSE_BG_BOX
+    # (px; 0 = off, default off so no change outside this opt-in).
+    _step0_box = int(os.environ.get('MIRI_STEP0_COARSE_BG_BOX', 0))
+    if _step0_box > 0 and header['INSTRUME'].lower() == 'miri':
+        _step0_bg = miri_coarse_background(data, dq=dq, box=_step0_box)
+        data = data - _step0_bg
+        print(f"MIRI step-zero: subtracted coarse emission bg "
+              f"(box={_step0_box}px, range [{_step0_bg.min():.0f},{_step0_bg.max():.0f}])",
+              flush=True)
     full_model_image = np.zeros_like(data, dtype=float)
 
     # MIRI: fold saturated diffraction-spike satellites into the core so a
@@ -2828,6 +2896,54 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # accumulation happened before the accept check, so a rejected
             # bad fit still corrupted the cumulative satstar model.
             full_model_image[y0:y1, x0:x1] += model_image
+            # BRIGHTNESS-SCALED MODEL FOOTPRINT (MIRI).  The model is rendered
+            # only over the small +-pad FIT cutout, so a BRIGHT star's PSF wings
+            # are truncated at the box -> a hard SQUARE edge in the model/residual
+            # (user-reported, sgrb2).  The FIT stays in the small box (stable),
+            # but the bright star should be SUBTRACTED with a footprint big enough
+            # to contain its wings.  Re-render the accepted model out to where its
+            # wing falls below a noise floor (radius grows with brightness, capped
+            # at the PSF grid FOV) and add ONLY the region exterior to the cutout
+            # (interior already added above -> no double count).  Gated by
+            # MIRI_SATSTAR_RENDER_FOOTPRINT (default 1).
+            if (_is_miri and not forced_source
+                    and int(os.environ.get('MIRI_SATSTAR_RENDER_FOOTPRINT', 1))):
+                try:
+                    _wfloor = float(os.environ.get('MIRI_SATSTAR_WING_FLOOR', 5.0))
+                    _psf0 = float(_psf_for_model(np.array([0.0]),
+                                                 np.array([0.0]))[0])
+                    _maxhalf = int(min(512,
+                        min(_psf_for_model.data.shape[-2:])
+                        // (2 * int(max(1, getattr(_psf_for_model,
+                                                   'oversampling', [1])[0])))))
+                    for _xf, _yf, _fl in zip(result['x_fit'], result['y_fit'],
+                                             result['flux_fit']):
+                        if not np.isfinite(_fl):
+                            continue
+                        _peak = _psf0 * float(_fl)
+                        # ~r^-3 diffraction wing reaches _wfloor at this radius
+                        _rh = (int(pad * (max(1.0, _peak / _wfloor)) ** (1.0 / 3.0))
+                               if _peak > _wfloor else pad)
+                        _rh = int(np.clip(_rh, pad, _maxhalf))
+                        if _rh <= pad:
+                            continue
+                        _gcx = x0 + float(_xf)
+                        _gcy = y0 + float(_yf)
+                        _Y0 = int(max(0, _gcy - _rh)); _Y1 = int(min(data.shape[0], _gcy + _rh))
+                        _X0 = int(max(0, _gcx - _rh)); _X1 = int(min(data.shape[1], _gcx + _rh))
+                        _yb, _xb = np.mgrid[_Y0:_Y1, _X0:_X1]
+                        _wing = np.maximum(_psf_for_model(_xb - _gcx, _yb - _gcy)
+                                           * float(_fl), 0)
+                        _ext = np.ones(_wing.shape, dtype=bool)
+                        _iy0 = max(_Y0, y0); _iy1 = min(_Y1, y1)
+                        _ix0 = max(_X0, x0); _ix1 = min(_X1, x1)
+                        if _iy1 > _iy0 and _ix1 > _ix0:
+                            _ext[_iy0 - _Y0:_iy1 - _Y0, _ix0 - _X0:_ix1 - _X0] = False
+                        full_model_image[_Y0:_Y1, _X0:_X1][_ext] += _wing[_ext]
+                        data_working[_Y0:_Y1, _X0:_X1][_ext] -= _wing[_ext]
+                except (ValueError, TypeError, IndexError) as _wex:
+                    print(f"satstar wing-render skipped src {ii+1}: {_wex}",
+                          flush=True)
             # mark pixels this accepted fit actually used (unmasked in its window)
             try:
                 flag_img[y0:y1, x0:x1][~mask] |= 4
