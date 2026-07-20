@@ -130,8 +130,11 @@ def coarse_from_i2d(filt, rc, ref):
     sc = detect_i2d_sources(i2d)
     # ONE call: coarse_xcorr -> measure_offset sweeps the window internally (narrow->wide,
     # density-immune) and flags `swept` when the tie only appeared after widening (the
-    # gross-shift tell -- e.g. cloudef obs005 F162M is really ~7.5" off).
-    dra, ddec, n, contrast, window, swept = coarse_xcorr(sc, ref, maxsep=COARSE_MAXSEP)
+    # gross-shift tell -- e.g. cloudef obs005 F162M is really ~7.5" off).  GROSS fields
+    # (sgra ~15", gc2211 ~22") set a larger per-region coarse_maxsep (default 5" only sweeps
+    # to ~10").
+    cmaxsep = rc.get('coarse_maxsep', COARSE_MAXSEP)
+    dra, ddec, n, contrast, window, swept = coarse_xcorr(sc, ref, maxsep=cmaxsep)
     if dra is None:
         print(f"  [coarse] {filt}: no coherent i2d tie at any window -> refusing", flush=True)
         return None
@@ -169,6 +172,49 @@ REGION = {
     'cloudef5': dict(proposal='2092', field='005', basepath='/orange/adamginsburg/jwst/cloudef',
                      filts={'f162m': ('F162M', 2023.21, '_m3'), 'f210m': ('F210M', 2023.21, '_m3'),
                             'f360m': ('F360M', 2023.21, '_m3'), 'f480m': ('F480M', 2023.21, '_m3')}),
+    # GC off-frame fields added 2026-07-19 (VIRAC2 repoint; were VVV/GNS-tied). NIRCam only
+    # (MIRI F770W/F1280W/F2550W excluded -- separate pipeline). Epoch from the gaia_virac2 refcat.
+    'sgrb2': dict(proposal='5365', field='001', basepath='/orange/adamginsburg/jwst/sgrb2',
+                  filts={'f150w': ('F150W', 2024.68, '_m3'), 'f182m': ('F182M', 2024.68, '_m3'),
+                         'f187n': ('F187N', 2024.68, '_m3'), 'f210m': ('F210M', 2024.68, '_m3'),
+                         'f212n': ('F212N', 2024.68, '_m3'), 'f300m': ('F300M', 2024.68, '_m3'),
+                         'f360m': ('F360M', 2024.68, '_m3'), 'f405n': ('F405N', 2024.68, '_m3'),
+                         'f410m': ('F410M', 2024.68, '_m3'), 'f466n': ('F466N', 2024.68, '_m3'),
+                         'f480m': ('F480M', 2024.68, '_m3')}),
+    'sgrc': dict(proposal='4147', field='012', basepath='/orange/adamginsburg/jwst/sgrc',
+                 filts={'f115w': ('F115W', 2023.72, '_m3'), 'f162m': ('F162M', 2023.72, '_m3'),
+                        'f182m': ('F182M', 2023.72, '_m3'), 'f212n': ('F212N', 2023.72, '_m3'),
+                        'f360m': ('F360M', 2023.72, '_m3'), 'f405n': ('F405N', 2023.72, '_m3'),
+                        'f470n': ('F470N', 2023.72, '_m3'), 'f480m': ('F480M', 2023.72, '_m3')}),
+    'quintuplet': dict(proposal='2045', field='003', basepath='/orange/adamginsburg/jwst/quintuplet',
+                       filts={'f212n': ('F212N', 2024.62, '_m3'), 'f323n': ('F323N', 2024.62, '_m3')}),
+    # sgra GROSS ~15" off -> larger coarse window (default 5" sweeps only to ~10").
+    'sgra': dict(proposal='1939', field='001', basepath='/orange/adamginsburg/jwst/sgra',
+                 coarse_maxsep=20 * u.arcsec,
+                 filts={'f115w': ('F115W', 2022.72, '_m3'), 'f212n': ('F212N', 2022.72, '_m3'),
+                        'f405n': ('F405N', 2022.72, '_m3')}),
+    # gc2211: 5 separate obs pointings (023/028/046/049/050) -> one region key each (like cloudef2/5).
+    # Per-obs EPOCHS differ (2023.7 -> 2025.3); GROSS ~22" off -> coarse_maxsep 30".
+    'gc2211_023': dict(proposal='2211', field='023', basepath='/orange/adamginsburg/jwst/gc2211',
+                       coarse_maxsep=30 * u.arcsec,
+                       filts={'f150w': ('F150W', 2023.71, '_m3'), 'f200w': ('F200W', 2023.71, '_m3'),
+                              'f277w': ('F277W', 2023.71, '_m3')}),
+    'gc2211_028': dict(proposal='2211', field='028', basepath='/orange/adamginsburg/jwst/gc2211',
+                       coarse_maxsep=30 * u.arcsec,
+                       filts={'f150w': ('F150W', 2023.70, '_m3'), 'f200w': ('F200W', 2023.70, '_m3'),
+                              'f277w': ('F277W', 2023.70, '_m3')}),
+    'gc2211_046': dict(proposal='2211', field='046', basepath='/orange/adamginsburg/jwst/gc2211',
+                       coarse_maxsep=30 * u.arcsec,
+                       filts={'f150w': ('F150W', 2024.32, '_m3'), 'f200w': ('F200W', 2024.32, '_m3'),
+                              'f277w': ('F277W', 2024.32, '_m3')}),
+    'gc2211_049': dict(proposal='2211', field='049', basepath='/orange/adamginsburg/jwst/gc2211',
+                       coarse_maxsep=30 * u.arcsec,
+                       filts={'f150w': ('F150W', 2024.63, '_m3'), 'f200w': ('F200W', 2024.63, '_m3'),
+                              'f277w': ('F277W', 2024.63, '_m3')}),
+    'gc2211_050': dict(proposal='2211', field='050', basepath='/orange/adamginsburg/jwst/gc2211',
+                       coarse_maxsep=30 * u.arcsec,
+                       filts={'f150w': ('F150W', 2025.30, '_m3'), 'f200w': ('F200W', 2025.30, '_m3'),
+                              'f277w': ('F277W', 2025.30, '_m3')}),
 }
 # NIRCam SW (nrca1-4/nrcb1-4) vs LW (nrcalong/nrcblong) split at ~2.4um: F070W..F212N are
 # SW, F250M+ are LW.  Classify by filter number so any GC field's bands map to the right

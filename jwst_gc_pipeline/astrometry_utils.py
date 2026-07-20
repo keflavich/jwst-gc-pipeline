@@ -60,11 +60,22 @@ def _resolve_existing_path(path):
     cand = path.replace('//', '/')
     if os.path.exists(cand):
         return cand
+    basevariants = [cand]
     for a, b in (('/blue/adamginsburg/adamginsburg/jwst/', '/orange/adamginsburg/jwst/'),
                  ('/orange/adamginsburg/jwst/', '/blue/adamginsburg/adamginsburg/jwst/')):
         alt = cand.replace(a, b)
         if os.path.exists(alt):
             return alt
+        basevariants.append(alt)
+    # crf STAGE-SUFFIX fallback: a per-frame cat records the crf name from the reduction that
+    # BUILT it (e.g. the old '_align_o<obs>_crf'); a later re-reduction writes the crf under a
+    # different stage tag ('_destreak_o<obs>_crf').  The detector x/y we reproject are
+    # generation-invariant, so the sibling-suffix crf of the SAME frame is the correct WCS.
+    for base in basevariants:
+        for a, b in (('_align_o', '_destreak_o'), ('_destreak_o', '_align_o')):
+            alt = base.replace(a, b)
+            if alt != base and os.path.exists(alt):
+                return alt
     raise FileNotFoundError(f"crf not found for reprojection: {path!r}")
 
 
