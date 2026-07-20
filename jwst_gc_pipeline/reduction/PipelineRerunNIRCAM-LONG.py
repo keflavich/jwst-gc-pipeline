@@ -1145,6 +1145,16 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
             # (build_virac2_locked_perexp.py), only the per-visit bulk touches VIRAC2.
             if match.sum() > 1 and 'Exposure' in offsets_tbl.colnames:
                 match = match & (offsets_tbl['Exposure'] == exposure)
+            # Per-MODULE narrowing (default OFF: filters lock NRCA==NRCB together, per the
+            # <1 mas CRDS inter-module policy). Documented exception: F410M. Our reprocessing
+            # (CAL_VER 1.14.1.dev43 + CRDS jwst_1253.pmap) applies FILTER-SPECIFIC distortion
+            # (0249 F410M/NRCALONG vs 0300 NRCBLONG); these leave NRCALONG ~40 mas inconsistent
+            # with NRCBLONG, which a single per-filter shift cannot correct (2026-07-02 audit vs
+            # VIRAC2). Such filters carry per-module rows (a 'Module' column); narrow to this
+            # module. Filters with a single row still lock both modules identically.
+            if match.sum() > 1 and 'Module' in offsets_tbl.colnames:
+                match = match & ((offsets_tbl['Module'] == thismodule)
+                                 | (offsets_tbl['Module'] == thismodule.strip('1234')))
             if match.sum() != 1:
                 raise ValueError(f"module-locked offset match={match.sum()} for {fn} "
                                  f"(visit={visit}, exposure={exposure}, filter={filtername}); "
