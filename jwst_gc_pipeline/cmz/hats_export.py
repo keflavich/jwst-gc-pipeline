@@ -25,18 +25,25 @@ def _require_hats_import():
 
 def to_hats(parquet_path, out_dir, catalog_name, ra_col='ra', dec_col='dec',
             lowest_order=0, highest_order=7, pixel_threshold=1_000_000,
-            overwrite=True):
+            overwrite=True, client=None, threaded=False, **import_kwargs):
     """Convert a flat Parquet catalog to a HATS catalog directory.
 
-    Parameters mirror ``hats_import.catalog.arguments.ImportArguments``.  Returns
-    ``out_dir/catalog_name``.  Run this on the ``.parquet`` written by
-    ``catalog_assembly.write_outputs`` (its coordinate columns are flat floats;
-    for a ``skycoord`` mixin catalog the parquet writer expands it to
-    ``skycoord_ra``/``skycoord_dec``).
+    Parameters mirror ``hats_import.catalog.arguments.ImportArguments`` (verified
+    against hats-import 0.10.x, which has no ``overwrite`` kwarg -- so ``overwrite``
+    here clears an existing output dir first).  Extra ``import_kwargs`` pass through
+    to ``ImportArguments`` (e.g. ``dask_n_workers``).  Returns
+    ``out_dir/catalog_name``.  Run on the ``.parquet`` from
+    ``catalog_assembly.write_outputs``; a ``skycoord`` mixin is expanded to
+    ``<name>_ra``/``<name>_dec`` there (e.g. ``skycoord_ref_ra``).
     """
     _require_hats_import()
     from hats_import.catalog.arguments import ImportArguments
-    from hats_import.pipeline import pipeline
+    from hats_import.pipeline import pipeline, pipeline_with_client
+
+    dest = os.path.join(out_dir, catalog_name)
+    if overwrite and os.path.isdir(dest):
+        import shutil
+        shutil.rmtree(dest)
 
     args = ImportArguments(
         output_artifact_name=catalog_name,
@@ -48,10 +55,20 @@ def to_hats(parquet_path, out_dir, catalog_name, ra_col='ra', dec_col='dec',
         lowest_healpix_order=lowest_order,
         highest_healpix_order=highest_order,
         pixel_threshold=pixel_threshold,
-        overwrite=overwrite,
+        **import_kwargs,
     )
-    pipeline(args)
-    return os.path.join(out_dir, catalog_name)
+    # A process-based Dask Nanny won't start on many login/compute nodes; a
+    # THREADED client (processes=False, no Nanny) is the robust default there.
+    if client is not None:
+        pipeline_with_client(args, client)
+    elif threaded:
+        from dask.distributed import Client
+        with Client(n_workers=1, threads_per_worker=4, processes=False,
+                    dashboard_address=None) as _c:
+            pipeline_with_client(args, _c)
+    else:
+        pipeline(args)
+    return dest
 
 
 def build_parser():
@@ -62,16 +79,24 @@ def build_parser():
     p.add_argument('--parquet', required=True, help='flat parquet catalog')
     p.add_argument('--out', required=True, help='output directory (HATS root)')
     p.add_argument('--name', required=True, help='catalog name')
-    p.add_argument('--ra-col', default='ra')
-    p.add_argument('--dec-col', default='dec')
-    p.add_argument('--highest-order', type=int, default=7)
+    # The CMZ catalog's coordinate is skycoord_ref -> parquet 'skycoord_ref_ra'.
+    p.add_argument('--ra-col', default='skycoord_ref_ra')
+    p.add_argument('--dec-col', default='skycoord_ref_dec')
+    # The CMZ is extremely crowded (a single order-7 pixel can hold >600k
+    # sources), so partitions must subdivide deep; 12 keeps them under threshold.
+    p.add_argument('--highest-order', type=int, default=12)
+    p.add_argument('--pixel-threshold', type=int, default=1_000_000)
+    p.add_argument('--threaded', action='store_true',
+                   help='use a threaded Dask client (no process Nanny) -- needed '
+                        'on login/compute nodes where the Nanny fails to start')
     return p
 
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
     out = to_hats(args.parquet, args.out, args.name, ra_col=args.ra_col,
-                  dec_col=args.dec_col, highest_order=args.highest_order)
+                  dec_col=args.dec_col, highest_order=args.highest_order,
+                  pixel_threshold=args.pixel_threshold, threaded=args.threaded)
     print(f"HATS catalog written -> {out}")
 
 
