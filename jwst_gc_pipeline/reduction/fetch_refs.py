@@ -13,9 +13,16 @@ from astropy.coordinates import SkyCoord
 from astropy.table import Table
 from astroquery.vizier import Vizier
 
+from jwst_gc_pipeline.paths import DATA_ROOT
+
 warnings.simplefilter('ignore')
-OUT = '/orange/adamginsburg/jwst/brick/astrometry_diag/refcache'
-os.makedirs(OUT, exist_ok=True)
+OUT = f'{DATA_ROOT}/brick/astrometry_diag/refcache'
+# Don't fail at import time if the tree isn't writable (e.g. importing this
+# module on a system without the data root); create lazily in fetch()/__main__.
+try:
+    os.makedirs(OUT, exist_ok=True)
+except OSError:
+    pass
 CTR = SkyCoord(266.5378, -28.7029, unit='deg')
 W, H = 11 * u.arcmin, 11 * u.arcmin   # cover full mosaic + margin
 

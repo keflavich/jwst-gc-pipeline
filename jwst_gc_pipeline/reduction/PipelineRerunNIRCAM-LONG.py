@@ -26,9 +26,12 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 import datetime
 
-# do this before importing webb
-os.environ["CRDS_PATH"] = "/orange/adamginsburg/jwst/crds/"
-os.environ["CRDS_SERVER_URL"] = "https://jwst-crds.stsci.edu"
+from jwst_gc_pipeline.paths import DATA_ROOT
+
+# do this before importing webb.  Respect a pre-set CRDS_PATH (e.g. a local
+# cache) instead of forcing the HiPerGator location.
+os.environ.setdefault("CRDS_PATH", os.path.join(DATA_ROOT, "crds"))
+os.environ.setdefault("CRDS_SERVER_URL", "https://jwst-crds.stsci.edu")
 
 from jwst.pipeline import calwebb_image3
 from jwst.pipeline import Detector1Pipeline, Image2Pipeline
@@ -480,7 +483,7 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
 
     wavelength = int(filtername[1:4])
 
-    basepath = f'/orange/adamginsburg/jwst/{regionname}/'
+    basepath = f'{DATA_ROOT}/{regionname}/'
     fwhm_tbl = Table.read(f'{basepath}/reduction/fwhm_table.ecsv')
     row = fwhm_tbl[fwhm_tbl['Filter'] == filtername]
     if module == 'merged':
@@ -535,7 +538,7 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
 
     # Files created in this notebook will be saved
     # in a subdirectory of the base directory called `Stage3`
-    output_dir = f'/orange/adamginsburg/jwst/{regionname}/{filtername}/pipeline/'
+    output_dir = f'{DATA_ROOT}/{regionname}/{filtername}/pipeline/'
     if not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
     os.chdir(output_dir)
@@ -678,7 +681,7 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         else:
             raise ValueError(f"Mismatch: Did not find any NIRCam asn files for module {module} for field {field} in {output_dir}")
 
-        crds_dir = os.getenv("CRDS_PATH") or f'/orange/adamginsburg/jwst/{regionname}/crds'
+        crds_dir = os.getenv("CRDS_PATH") or f'{DATA_ROOT}/{regionname}/crds'
         mapping = crds.rmap.load_mapping(f'{crds_dir}/mappings/jwst/jwst_nircam_pars-tweakregstep_0003.rmap')
         print(f"Mapping: {mapping.todict()['selections']}")
         print(f"Filtername: {filtername}")
@@ -1176,7 +1179,7 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
     if field is None:
         field = mod.meta.observation.observation_number
     if basepath is None:
-        basepath = f'/orange/adamginsburg/jwst/{field}'
+        basepath = f'{DATA_ROOT}/{field}'
     if module is None:
         module = 'nrc' + mod.meta.instrument.module.lower()
 
@@ -1188,7 +1191,10 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
         # table (cloudc/offsets/Offsets_JWST_Brick2221_VIRAC2locked.csv, built by
         # build_virac2_locked_perexp.py --region cloudc) instead of the old hardcoded per-visit
         # shifts below. Replaces the deprecated F405N-crowdsource frame (~90 mas off Gaia).
-        refname = refnames[proposal_id]
+        # Allow overriding the offsets-table reference frame per proposal via env
+        # (e.g. JWST_GC_REFNAME_1182=F405ref) when the canonical table for the
+        # default refname isn't available locally.  Defaults to the built-in map.
+        refname = os.environ.get(f'JWST_GC_REFNAME_{proposal_id}', refnames[proposal_id])
         exposure = int(fn.split("_")[-3])
         thismodule = fn.split("_")[-2]
         visit = fn.split("_")[0]
@@ -1627,11 +1633,23 @@ if __name__ == "__main__":
     skymatch_method = (options.skymatch_method or '').strip() or None
     print(options)
 
-    with open(os.path.expanduser('~/.mast_api_token'), 'r') as fh:
-        api_token = fh.read().strip()
-        os.environ['MAST_API_TOKEN'] = api_token.strip()
-    Mast.login(api_token.strip())
-    Observations.login(api_token)
+    # A MAST token is only needed for proprietary data; the GC programs are
+    # public, so a missing/expired token should not abort the run.  Try to log
+    # in if a token is present, but fall back to anonymous access on failure.
+    token_path = os.path.expanduser('~/.mast_api_token')
+    if os.path.exists(token_path):
+        with open(token_path, 'r') as fh:
+            api_token = fh.read().strip()
+        os.environ['MAST_API_TOKEN'] = api_token
+        try:
+            Mast.login(api_token)
+            Observations.login(api_token)
+        except Exception as exc:
+            print(f"MAST login failed ({exc}); continuing with anonymous access "
+                  "(sufficient for public data).")
+    else:
+        print("No ~/.mast_api_token found; continuing with anonymous MAST access "
+              "(sufficient for public data).")
 
 
     field_to_reg_mapping = {'2221': {'001': 'brick', '002': 'cloudc'},
@@ -1676,7 +1694,7 @@ if __name__ == "__main__":
     if proposal_id == '2221':
         print("Running notebooks")
         from run_notebook import run_notebook
-        basepath = '/orange/adamginsburg/jwst/brick/'
+        basepath = f'{DATA_ROOT}/brick/'
         if 'merge' in modules:
             run_notebook(f'{basepath}/notebooks/BrA_Separation_nrca.ipynb')
             run_notebook(f'{basepath}/notebooks/BrA_Separation_nrcb.ipynb')
