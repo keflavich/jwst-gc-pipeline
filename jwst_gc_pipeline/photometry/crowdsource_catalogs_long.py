@@ -4557,6 +4557,16 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     else:
         basepath = f'/blue/adamginsburg/adamginsburg/jwst/{field_to_reg_mapping[field]}/'
 
+    # Non-destructive experimental runs: redirect the WHOLE basepath to a scratch
+    # tree (pre-populated with symlinks to the real input crf/cal/i2d frames) so a
+    # full-frame run writes its outputs there and never overwrites released
+    # products.  Off by default (empty env) -> normal in-place behaviour.  The
+    # caller stages inputs into the override dir (see stage_scratch_basepath.sh).
+    _bp_override = os.environ.get('GC_BASEPATH_OVERRIDE', '').strip()
+    if _bp_override:
+        basepath = _bp_override.rstrip('/') + '/'
+        print(f"GC_BASEPATH_OVERRIDE active: basepath -> {basepath}", flush=True)
+
     pl.close('all')
 
     if options.finalize_only:
