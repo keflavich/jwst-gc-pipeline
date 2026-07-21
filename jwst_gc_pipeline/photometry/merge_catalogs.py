@@ -408,8 +408,7 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
         if basecrds is None:
             basecrds = crds
         else:
-            matches, sep, _ = crds.match_to_catalog_sky(basecrds, nthneighbor=1)
-            reverse_matches, reverse_sep, _ = basecrds.match_to_catalog_sky(crds, nthneighbor=1)
+            _, sep, _ = crds.match_to_catalog_sky(basecrds, nthneighbor=1)
 
             # add new sources to the cat iff their separation from an existing source in the catalog is >min
             keep = sep > min_offset
@@ -417,7 +416,6 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
             newcrds = crds[keep]
             basecrds = SkyCoord([basecrds, newcrds])
             print(f"Added {len(newcrds)} new sources in exposure {tbl.meta['exposure']} {tbl.meta['MODULE'] if 'MODULE' in tbl.meta else ''} [total={len(basecrds)}]")
-            # f" ({mutual_matches.sum()} mutual matches ({(~mutual_matches).sum()} not), {(sep > max_offset).sum()} above {max_offset}, keeping {keep.sum()}), ", flush=True)
         print(f"Iteration {ii}: There are a total of {len(basecrds)} sources in the base coordinate list [method={'daophot' if dao else 'crowdsource'}]")
 
     # do one loop of re-matching
@@ -432,8 +430,26 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
         assert_sparse_reference_for_nn_median(
             basecrds, max_offset,
             context="combine_singleframe(realign=True) frame-to-frame base catalog")
-    print("Starting re-matching", flush=True)
+    # The re-matching loop is only *applied* when ``realign=True``; on the
+    # production ``realign=False`` path it exists solely for the per-exposure
+    # offset diagnostic print, yet it still ran the expensive mutual
+    # match_to_catalog_sky pass and opened every exposure's FITS header.
+    # Skip it unless realigning (or MERGE_REMATCH_DIAGNOSTICS=1 explicitly
+    # requests the diagnostic); the per-exposure offsets are then recorded
+    # as NaN ("not measured") in newtbl.meta['offsets'].
+    rematch = realign or os.environ.get('MERGE_REMATCH_DIAGNOSTICS', '') == '1'
+    if not rematch:
+        print("Skipping re-matching diagnostics (realign=False; set "
+              "MERGE_REMATCH_DIAGNOSTICS=1 to enable)", flush=True)
+    else:
+        print("Starting re-matching", flush=True)
     for ii, tbl in enumerate(tbls):
+        if not rematch:
+            tbl.meta['ra_offset'] = np.nan
+            tbl.meta['dec_offset'] = np.nan
+            tbl.meta['dra_offset'] = np.nan
+            tbl.meta['ddec_offset'] = np.nan
+            continue
         crds = tbl[skycoord_colname]
         if len(crds) == 0:   # empty exposure -> nothing to re-match
             tbl.meta['ra_offset'] = np.nan
@@ -442,10 +458,9 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
             tbl.meta['ddec_offset'] = np.nan
             continue
 
-        match_inds, sep, _ = crds.match_to_catalog_sky(basecrds, nthneighbor=1)
+        match_inds, _, _ = crds.match_to_catalog_sky(basecrds, nthneighbor=1)
         reverse_match_inds, reverse_sep, _ = basecrds.match_to_catalog_sky(crds, nthneighbor=1)
         mutual_reverse_matches = (match_inds[reverse_match_inds] == np.arange(len(reverse_match_inds)))
-        mutual_matches = (reverse_match_inds[match_inds] == np.arange(len(match_inds)))
 
         # do one iteration of bulk offset measurement
         radiff = (crds.ra[reverse_match_inds[mutual_reverse_matches]] - basecrds[mutual_reverse_matches].ra).to(u.arcsec)
@@ -473,7 +488,7 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
                 dra_header = 0.0
                 ddec_header = 0.0
 
-        print(f"Exposure {tbl.meta['exposure']} {tbl.meta['MODULE' if 'MODULE' in tbl.meta else '']} was offset by {medsep_ra.to(u.marcsec):10.3f}+/-{dmedsep_ra.to(u.marcsec):7.3f},"
+        print(f"Exposure {tbl.meta['exposure']} {tbl.meta['MODULE'] if 'MODULE' in tbl.meta else ''} was offset by {medsep_ra.to(u.marcsec):10.3f}+/-{dmedsep_ra.to(u.marcsec):7.3f},"
               f" {medsep_dec.to(u.marcsec):10.3f}+/-{dmedsep_dec.to(u.marcsec):7.3f} based on {oksep.sum()} matches.  dra={dra_header:7.5g} ddec={ddec_header:7.5g}")
 
         # for tbl0, should be nan (all self-match)
@@ -492,14 +507,14 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
             if basecrds is None:
                 basecrds = crds
             else:
-                matches, sep, _ = crds.match_to_catalog_sky(basecrds, nthneighbor=1)
-                
+                _, sep, _ = crds.match_to_catalog_sky(basecrds, nthneighbor=1)
+
                 # add new sources to the cat iff their separation from an existing source in the catalog is >min
                 keep = (sep > min_offset)
 
                 newcrds = crds[keep]
                 basecrds = SkyCoord([basecrds, newcrds])
-                print(f"Added {len(newcrds)} new sources in exposure {tbl.meta['exposure']} {tbl.meta['MODULE' if 'MODULE' in tbl.meta else '']}")
+                print(f"Added {len(newcrds)} new sources in exposure {tbl.meta['exposure']} {tbl.meta['MODULE'] if 'MODULE' in tbl.meta else ''}")
 
     print(f"There are a total of {len(basecrds)} sources in the base coordinate list after rematching")
 
@@ -646,10 +661,17 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     flux_err_avg = nanaverage(arr_fluxerr, weights=weights_with_fallback, axis=1)
     std_flux_err_avg = nanaverage((arr_fluxerr - flux_err_avg[:, None])**2, weights=weights_with_fallback, axis=1)**0.5
     # flux_err_prop uses original inverse-variance weights only, since it
-    # is the formal propagated uncertainty 1/sqrt(sum(1/sigma^2)); rows
-    # with no inverse-variance contribution legitimately have NaN here.
-    flux_err_prop = (np.nansum(arr_fluxerr**2 * weights, axis=1)
-                     / np.nansum(weights, axis=1))**0.5
+    # is the formal propagated uncertainty 1/sqrt(sum(1/sigma^2)) over the
+    # kept (unclipped) frames; rows with no inverse-variance contribution
+    # legitimately have NaN here.
+    # (2026-07-21 fix: the previous expression
+    #  sqrt(nansum(sigma^2 * w) / nansum(w)) with w = keepmask/sigma^2 has
+    #  numerator == N_good, so it evaluated to sqrt(N_good / sum(w)) --
+    #  sqrt(N_good) LARGER than the inverse-variance propagated error.)
+    _sum_w = np.nansum(weights, axis=1)
+    with np.errstate(divide='ignore'):
+        flux_err_prop = np.where(_sum_w > 0, 1.0 / np.sqrt(_sum_w), np.nan)
+    del _sum_w
     print(f"Phase 1: flux averages done in {time.time()-_t0:.1f}s", flush=True)
 
     # free phase-1 big arrays (keep weights / keepmask -- needed in Phase 2)
@@ -670,7 +692,8 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     newtbl[f'{flux_error_colname}_avg'] = flux_err_avg
     newtbl[f'std_{flux_error_colname}_avg'] = std_flux_err_avg
     newtbl[f'{flux_error_colname}_prop'] = flux_err_prop
-    newtbl.meta[f'{flux_error_colname}_prop'] = 'propagated uncertainty on flux = 1/sum(weights)'
+    newtbl.meta[f'{flux_error_colname}_prop'] = ('propagated uncertainty on flux = 1/sqrt(sum(1/sigma^2))'
+                                                 ' over kept (unclipped) frames')
 
     # Phase 2: stream the remaining columns one at a time.
     # ra/dec are skipped because their summaries are already in newtbl
@@ -860,6 +883,34 @@ def combine_singleframe_chunked(tbls, n_chunks=8, halo=2.0 * u.arcsec,
     print(f"combine_singleframe_chunked: stitched {len(results)} tiles "
           f"-> {len(merged)} merged sources", flush=True)
     return merged
+
+
+def _oksep_sep_cols(colnames):
+    """Non-wide ``sep_*`` columns actually present in a merged table.
+
+    The oksep quality cut used to iterate the module-global brick
+    ``filternames`` list, which silently produced NO cut (all-True) for any
+    target with a different filter set.  Wide (``w``-band) filters are
+    excluded, matching the original brick behaviour.
+    """
+    return [c for c in colnames
+            if c.startswith('sep_') and 'w' not in c[len('sep_'):]]
+
+
+def _qualcuts_oksep_suffix(target):
+    """Filename suffix for the oksep quality-cut table.
+
+    The historical literal ``_qualcuts_oksep2221`` is kept for targets that
+    include proposal 2221 (brick, cloudc): ``scripts/release/stage_release.py``
+    and ``jwst_gc_pipeline/plotting/make_all_cmds_m7.py`` glob that exact
+    name.  Every other target gets its own proposal token(s) instead of the
+    misleading hardcoded "2221" the old code stamped on every target.
+    """
+    props = sorted(obs_filters.get(target, {}).keys())
+    if '2221' in props:
+        return '_qualcuts_oksep2221'
+    token = '-'.join(props) if props else str(target)
+    return f'_qualcuts_oksep{token}'
 
 
 def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
@@ -1181,14 +1232,15 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
             print(f"Saving merged version with qualcuts: {tablename}_qualcuts.fits with len={len(basetable)}")
             basetable.write(f"{tablename}_qualcuts.fits", overwrite=True)
 
-        sep_cols = [f'sep_{filtername}' for filtername in filternames if 'w' not in filtername and f'sep_{filtername}' in basetable.colnames]
+        sep_cols = _oksep_sep_cols(basetable.colnames)
         if len(sep_cols) >= 2:
             oksep = (np.array([basetable[colname] < 0.1*u.arcsec for colname in sep_cols]).sum(axis=0) > 1)
         else:
             oksep = np.ones(len(basetable), dtype=bool)
             print("Skipping oksep cut: insufficient sep_* columns for this target")
-        print(f"Writing {tablename}_qualcuts_oksep2221.fits")
-        basetable[oksep].write(f"{tablename}_qualcuts_oksep2221.fits", overwrite=True)
+        oksep_fn = f"{tablename}{_qualcuts_oksep_suffix(target)}.fits"
+        print(f"Writing {oksep_fn}")
+        basetable[oksep].write(oksep_fn, overwrite=True)
 
 
 def merge_individual_frames(module='merged', suffix="", desat=False, filtername='f410m',
@@ -2568,10 +2620,13 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
         if cat_fluxerr_col is not None:
             cat[cat_fluxerr_col][idx_cat] = satstar_cat[flux_err_colname][idx_sat]
         cat['skycoord'][idx_cat] = satstar_cat['skycoord_fit'][idx_sat]
-        if 'x' in cat.colnames:
-            # the merged, individual field catalogs don't have these
+        # the merged, individual field catalogs don't have these; guard each
+        # write on the column(s) actually present (a catalog can carry x/y
+        # without dx/dy -- writing cat['dx'] then raised KeyError)
+        if 'x' in cat.colnames and 'y' in cat.colnames:
             cat['x'][idx_cat] = satstar_cat[_sat_xcol][idx_sat]
             cat['y'][idx_cat] = satstar_cat[_sat_ycol][idx_sat]
+        if 'dx' in cat.colnames and 'dy' in cat.colnames:
             cat['dx'][idx_cat] = satstar_cat[xerr_colname][idx_sat]
             cat['dy'][idx_cat] = satstar_cat[yerr_colname][idx_sat]
 
@@ -2622,8 +2677,9 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
         if 'x_fit' in satstar_cat.colnames and 'x_fit' in cat.colnames:
             cat['x_fit'][idx_cat] = satstar_cat[_sat_xcol][idx_sat]
             cat['y_fit'][idx_cat] = satstar_cat[_sat_ycol][idx_sat]
-            cat['x_err'][idx_cat] = satstar_cat[xerr_colname][idx_sat]
-            cat['y_err'][idx_cat] = satstar_cat[yerr_colname][idx_sat]
+            if 'x_err' in cat.colnames and 'y_err' in cat.colnames:
+                cat['x_err'][idx_cat] = satstar_cat[xerr_colname][idx_sat]
+                cat['y_err'][idx_cat] = satstar_cat[yerr_colname][idx_sat]
 
         if 'mag_ab' in cat.colnames:
             cat['mag_ab'][idx_cat] = abmag[idx_sat]
