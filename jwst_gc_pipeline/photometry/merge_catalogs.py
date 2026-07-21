@@ -8,18 +8,9 @@ import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from astropy.io import fits
 import glob
-from photutils.background import MMMBackground, MADStdBackgroundRMS
-from photutils.aperture import CircularAperture, CircularAnnulus
-from photutils.detection import DAOStarFinder, IRAFStarFinder, find_peaks
-from photutils.psf import (extract_stars, EPSFBuilder)
-from astropy.modeling.fitting import LevMarLSQFitter
-from astropy import stats
 from astropy.table import Table, Column, MaskedColumn
 from astropy.table import vstack as table_vstack
-from astropy.wcs import WCS
 from astropy.coordinates import SkyCoord
-from astropy import coordinates
-from astropy.visualization import simple_norm
 from astropy import wcs
 from astropy import table
 from astropy import units as u
@@ -27,16 +18,12 @@ from astroquery.svo_fps import SvoFps
 from astropy.stats import sigma_clip, mad_std
 import dask
 import dask.array
-import yaml # DEBUG 2025-12-11
-import yaml.representer # DEBUG 2025-12-11
+# yaml is production code here: meta values are sanitized via YAML round-trip
+# before the FITS/ECSV writes (see merge_catalogs()).
+import yaml
+import yaml.representer
 
 from tqdm.auto import tqdm
-
-import pylab as pl
-pl.rcParams['figure.facecolor'] = 'w'
-pl.rcParams['image.origin'] = 'lower'
-pl.rcParams['figure.figsize'] = (10, 8)
-pl.rcParams['figure.dpi'] = 100
 
 # https://en.wikipedia.org/wiki/AB_magnitude
 ABMAG_OFFSET = 8.90
@@ -46,14 +33,13 @@ ABMAG_OFFSET = 8.90
 # flags-based bgsub token is imported as ``_bgsub_token`` (this module calls it
 # with explicit booleans, matching the producer-side names).
 from jwst_gc_pipeline.photometry.naming import (
-    MIRI_FILTERS, _inst_token, _svo_filter_id,
+    _inst_token, _svo_filter_id,
     _bgsub_token_from_flags as _bgsub_token,
 )
 from jwst_gc_pipeline.photometry.measure_offsets import (
-    assert_sparse_reference_for_nn_median, DenseNNMedianAstrometryError)
+    assert_sparse_reference_for_nn_median)
 
 filternames = filternames_narrow = ['f410m', 'f212n', 'f466n', 'f405n', 'f187n', 'f182m']
-all_filternames = ['f410m', 'f212n', 'f466n', 'f405n', 'f187n', 'f182m', 'f444w', 'f356w', 'f200w', 'f115w']
 obs_filters = {'brick': {'2221': filternames + ['f2550w'],
                          '1182': ['f444w', 'f356w', 'f200w', 'f115w'],
                          },
@@ -98,14 +84,6 @@ obs_filters = {'brick': {'2221': filternames + ['f2550w'],
                'ngc6334': {'7213': ['f115w', 'f162m', 'f182m', 'f200w', 'f356w', 'f405n', 'f444w', 'f470n'],
                            '6778': ['f090w', 'f187n', 'f200w', 'f277w', 'f335m', 'f470n']},
                }
-
-# Using the 'brick' keyword here makes it work for now, need to figure out how to
-# refactor it in cases where there are more filters available for other targets!
-filter_to_project = {vv: key for target_filters in obs_filters.values() for key, val in target_filters.items() for vv in val}
-# need to refactor this somehow for cloudc
-# project_obsnum = {'2221': '001',
-#                   '1182': '004',
-#                  }
 
 project_obsnum = {'brick': {'2221': '001',
                             '1182': '004',
@@ -162,21 +140,16 @@ def getmtime(x):
 
 
 def sanity_check_individual_table(tbl):
-    wl = filtername = tbl.meta['filter']
+    wl = tbl.meta['filter']
     print(f"SANITY CHECK {wl}")
 
     tbl = tbl.copy()
     tbl.sort('flux_jy')
     finite_fluxes = tbl['flux_jy'] > 0
 
-    jfilts = SvoFps.get_filter_list('JWST')
-    jfilts.add_index('filterID')
-    zeropoint = u.Quantity(jfilts.loc[_svo_filter_id(filtername)]['ZeroPoint'], u.Jy)
-
     flux_jy = tbl['flux_jy'][finite_fluxes].quantity
     abmag_tbl = tbl['mag_ab'][finite_fluxes].quantity
 
-    vegamag = -2.5 * np.log10(flux_jy / zeropoint) * u.mag
     abmag = (-2.5 * np.log10(flux_jy / u.Jy) + ABMAG_OFFSET) * u.mag
 
     print(f'Units of abmag columns are: abmag={abmag.unit}, abmag_tbl={abmag_tbl.unit}')
@@ -388,7 +361,8 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     basecrds = None   # set by the first NON-EMPTY frame
     for ii, tbl in enumerate(tbls):
         crds = tbl[skycoord_colname]
-        # corner case: some fits resulted in flagged x, y that propagate through.  A parallel edit to crowdsource_catalogs_long.py removes these at the source, but I'm adding a catch here too
+        # corner case: some fits resulted in flagged x, y that propagate
+        # through; drop rows with non-finite coordinates.
         bad = np.isnan(crds.ra) | np.isnan(crds.dec)
         if np.any(bad):
             tbl = tbl[~bad]
@@ -929,48 +903,23 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
     basetable['skycoord_ref'] = basecrds
     basetable['skycoord_ref_filtername'] = reffiltercol
 
-    # flag_near_saturated(basetable, filtername=ref_filter)
-    # # replace_saturated adds more rows
-    # replace_saturated(basetable, filtername=ref_filter)
-    # print(f"filter {basetable.meta['filter']} has {len(basetable)} rows")
-
     meta = {}
 
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
-        # for colname in basetable.colnames:
-        #     basetable.rename_column(colname, colname+"_"+basetable.meta['filter'])
-
         for tbl in tqdm(tbls, desc='Table Loop'):
             t0 = time.time()
             wl = tbl.meta['filter']
             flag_near_saturated(tbl, filtername=wl, target=target, basepath=basepath)
             # replace_saturated adds more rows
             replace_saturated(tbl, filtername=wl, target=target, basepath=basepath)
-            # DEBUG print(f"DEBUG: tbl['replaced_saturated'].sum(): {tbl['replaced_saturated'].sum()}")
 
             crds = tbl['skycoord']
             matches, sep, _ = basecrds.match_to_catalog_sky(crds, nthneighbor=1)
             reverse_matches, reverse_sep, _ = crds.match_to_catalog_sky(basecrds, nthneighbor=1)
 
             mutual_matches = (reverse_matches[matches] == np.arange(len(matches)))
-            # limit to one-to-one nearest neighbor matches
-            # matches = matches[mutual_matches]
-            # sep = sep[mutual_matches]
-
             print(f"filter {wl} has {len(tbl)} rows.  {mutual_matches.sum()} of {len(tbl)} are mutual.  Matching took {time.time()-t0:0.1f} seconds", flush=True)
-
-            # removed Jan 21, 2023 because this *should* be handled by the pipeline now
-            # # do one iteration of bulk offset measurement
-            # radiff = (crds.ra[matches]-basecrds.ra).to(u.arcsec)
-            # decdiff = (crds.dec[matches]-basecrds.dec).to(u.arcsec)
-            # oksep = sep < max_offset
-            # medsep_ra, medsep_dec = np.median(radiff[oksep]), np.median(decdiff[oksep])
-            # tbl.meta[f'ra_offset_from_{ref_filter}'] = medsep_ra
-            # tbl.meta[f'dec_offset_from_{ref_filter}'] = medsep_dec
-            # newcrds = SkyCoord(crds.ra - medsep_ra, crds.dec - medsep_dec, frame=crds.frame)
-            # tbl['skycoord'] = newcrds
-            # matches, sep, _ = basecrds.match_to_catalog_sky(newcrds, nthneighbor=1)
 
             basetable.add_column(name=f"sep_{wl}", col=sep)
             basetable.add_column(name=f"id_{wl}", col=matches)
@@ -1006,11 +955,6 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
             print(f"Basetable has length {len(basetable)} and ncols={len(basetable.colnames)} after stack")
             print(f"merging tables step: max flux for {wl} in merged table is {basetable['flux_'+wl].max()}"
                   f" {np.nanmax(np.array(basetable['flux_jy_'+wl]))} {np.nanmin(np.array(basetable['mag_ab_'+wl]))}")
-            # DEBUG
-            # DEBUG if hasattr(basetable[f'{cn}_{wl}'], 'mask'):
-            # DEBUG     print(f"Table has mask sum for column {cn} {basetable[cn+'_'+wl].mask.sum()}")
-            # DEBUG if 'replaced_saturated_f410m' in basetable.colnames:
-            # DEBUG     print(f"'replaced_saturated_f410m' has {basetable['replaced_saturated_f410m'].sum()}")
             # There can be more stars in replaced_saturated_f410m than there were stars replaced because
             # there can be multiple stars in the merged coordinate list whose closest match is a saturated
             # star.  i.e., there could be two coordinates that both see the same F410M flux.
@@ -1061,40 +1005,7 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
             basetable.add_column(basetable['flux_jy_f187n'] - basetable['flux_jy_182m187'], name='flux_jy_187m182')
             basetable.add_column(-2.5*np.log10(basetable['flux_jy_187m182']) + ABMAG_OFFSET, name='mag_ab_187m182')
             basetable.add_column(-2.5*np.log10(basetable['flux_jy_187m182'] / zeropoint187), name='mag_vega_187m182')
-        """ # this adds to the file size too much
-        # Add some important colors
 
-        colors=[('f410m', 'f466n'),
-                ('f405n', 'f410m'),
-                ('f405n', 'f466n'),
-                ('f187n', 'f182m', ),
-                ('f182m', 'f410m'),
-                ('f182m', 'f212n', ),
-                ('f187n', 'f405n'),
-                ('f187n', 'f212n'),
-                #('f212n', '410m405'), no emag defined
-                ('f212n', 'f410m'),
-                #('182m187', '410m405'), no emag defined
-                ('f356w', 'f444w'),
-                ('f356w', 'f410m'),
-                ('f410m', 'f444w'),
-                ('f405n', 'f444w'),
-                ('f444w', 'f466n'),
-                ('f200w', 'f356w'),
-                ('f200w', 'f212n'),
-                ('f182m', 'f200w'),
-                ('f115w', 'f182m'),
-                ('f115w', 'f212n'),
-                ('f115w', 'f200w'),
-            ]
-        for c1, c2 in colors:
-            if f'mag_ab_{c1}' in basetable.colnames and f'mag_ab_{c2}' in basetable.colnames:
-                basetable.add_column(basetable[f'mag_ab_{c1}']-basetable[f'mag_ab_{c2}'], name=f'color_{c1}-{c2}')
-                basetable.add_column((basetable[f'emag_ab_{c1}']**2 + basetable[f'emag_ab_{c2}']**2)**0.5, name=f'ecolor_{c1}-{c2}')
-        """
-
-        # DEBUG for colname in basetable.colnames:
-        # DEBUG     print(f"colname {colname} has mask: {hasattr(basetable[colname], 'mask')}")
         basetable.meta = meta
         if '212PXDG' not in meta:
             print("WARNING: 212PXDG not present in metadata for this target")
@@ -1118,11 +1029,12 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
                     else:
                         fixed = arr.astype(bool)
                 basetable.replace_column(colname, Column(fixed, name=colname))
-        # DO NOT USE FITS in production, it drops critical metadata
-        # I wish I had noted *what* metadata it drops, though, since I still seem to be using
-        # it in production code down the line...
-        # OH, I think the FITS file turns "True" into "False"?
-        # Yes, specifically: it DROPS masked data types, converting "masked" into "True"?
+        # NOTE: prefer the .ecsv written below for downstream use -- ECSV
+        # preserves mixin-column and meta fidelity better than FITS.  FITS is
+        # known to mishandle masked columns (a masked bool can round-trip as
+        # plain True/False; see the saturated-flag coercion above); a
+        # historical concern about further dropped metadata was never pinned
+        # down, specifics unrecorded.
         basetable.write(f"{tablename}.fits", overwrite=True)
         print(f"Done writing table {tablename}.fits in {time.time()-t0:0.1f} seconds", flush=True)
 
@@ -1148,12 +1060,7 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
             import astropy
             print("astropy version: ", astropy.__version__)
             # https://github.com/astropy/astropy/pull/18677 ?
-            # DEBUG
             print("YAML RepresenterError: trying again after removing masks")
-            # for colname in basetable.colnames:
-            #     print("DEBUG Column: ", colname, type(basetable[colname]), hasattr(basetable[colname], 'mask'))
-            # for key in basetable.meta:
-            #     print("DEBUG Meta: ", key, type(basetable.meta[key]), basetable.meta[key])
             raise
         print(f"Done writing table {tablename}.ecsv in {time.time()-t0:0.1f} seconds", flush=True)
 
@@ -1402,9 +1309,10 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
         minimal_table.meta[f'fn{ii}'] = os.path.basename(fn)
 
     # Ensure saturated stars are represented in indivexp merged products too.
-    # Skippable (do_replace_saturated=False) for cutout runs, whose basepath
-    # lacks the target-level resources replace_saturated needs (reduction/
-    # fwhm_table.ecsv, full satstar catalogs).
+    # Skippable (do_replace_saturated=False) for cutout runs whose basepath
+    # lacks full satstar catalogs.  (replace_saturated no longer needs
+    # reduction/fwhm_table.ecsv -- that read was dead compute and was removed
+    # -- so fwhm_basepath no longer constrains where this can run.)
     if do_replace_saturated:
         replace_saturated(minimal_table, filtername=filtername, target=target,
                           fwhm_basepath=fwhm_basepath, basepath=basepath)
@@ -1479,10 +1387,14 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
                   for filn in filternames
                   for x in glob.glob(f"{basepath}/{filn.upper()}/{filn.lower()}*{module}{desat}{bgsub}{fitpsf}{blur_}_crowdsource{suffix}.fits")
                   ]
-        if target == 'brick' and len(catfns) != 10:
-            raise ValueError(f"len(catfns) = {len(catfns)}.  catfns: {catfns}")
-        elif target == 'cloudc' and len(catfns) != 6:
-            raise ValueError(f"len(catfns) = {len(catfns)}.  catfns: {catfns}")
+        # Historical per-target catalog counts (brick=10, cloudc=6) predate
+        # later filter additions; warn loudly rather than hard-fail on this
+        # legacy (non-indivexp) path.
+        _expected_ncat = {'brick': 10, 'cloudc': 6}.get(target)
+        if _expected_ncat is not None and len(catfns) != _expected_ncat:
+            print(f"WARNING: expected {_expected_ncat} catalogs for "
+                  f"target={target} but found {len(catfns)}.  catfns: {catfns}",
+                  flush=True)
 
     for catfn in catfns:
         print(catfn, getmtime(catfn))
@@ -1501,12 +1413,9 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
 
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
-        # wcses = [wcs.WCS(fits.getheader(fn.replace("_crowdsource", "_crowdsource_skymodel"))) for fn in catfns]
-        # imgs = [fits.getdata(fn, ext=('SCI', 1)) for fn in imgfns]
         wcses = [wcs.WCS(fits.getheader(fn, ext=('SCI', 1))) for fn in imgfns]
 
     for tbl, ww in zip(tbls, wcses):
-        # Now done in the original catalog making step tbl['y'],tbl['x'] = tbl['x'],tbl['y']
         if 'skycoord' not in tbl.colnames:
             crds = ww.pixel_to_world(tbl['x'], tbl['y'])
             tbl.add_column(crds, name='skycoord')
@@ -1518,8 +1427,6 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
         # The 'flux' is the sum of pixels whose values are each in MJy/sr.
         # To get to the correct flux, we need to multiply by the pixel area in steradians to get to megaJanskys, which can be summed
         # That's it.  There's no need to account for the FWHM.  We only needed that if tbl['flux'] was the _peak_, but it's not.
-        #flux_jy = (tbl['flux'] * u.MJy/u.sr * (2*np.pi / (8*np.log(2))) * tbl['fwhm']**2 * tbl.meta['pixelscale_deg2']).to(u.Jy)
-        #eflux_jy = (tbl['dflux'] * u.MJy/u.sr * (2*np.pi / (8*np.log(2))) * tbl['fwhm']**2 * tbl.meta['pixelscale_deg2']).to(u.Jy)
         flux_jy = (tbl['flux'] * u.MJy/u.sr * tbl.meta['pixelscale_deg2']).to(u.Jy)
         eflux_jy = (tbl['dflux'] * u.MJy/u.sr * tbl.meta['pixelscale_deg2']).to(u.Jy)
         with np.errstate(all='ignore'):
@@ -1606,7 +1513,7 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
         filternames = [filn for obsid in obs_filters[target] for filn in obs_filters[target][obsid]]
     print(f"Merging daophot {daophot_type}, {detector}, {module}, {desat}, {bgsub}, {epsf_}, {blur_}. filters {filternames}")
 
-    # Use _project_for_target_filter rather than the global filter_to_project
+    # Use _project_for_target_filter (not a global filter->project dict)
     # so a filter shared across targets (e.g. f187n in both brick/2221 and
     # sgrb2/5365) resolves to the project matching this run's ``target``.
     # Map daophot_type -> per-filter merge filename token written by
@@ -1768,11 +1675,11 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
 def _project_for_target_filter(target, filtername):
     """Return the project_id under which ``target`` observes ``filtername``.
 
-    ``filter_to_project`` is a global dict that collapses filter->project
-    across all targets, so for a filter observed by multiple targets (e.g.
-    f187n appears under both brick/2221 and sgrb2/5365) it picks whichever
-    target was iterated last and breaks lookups for the other targets.
-    This helper resolves the correct project for the target in hand.
+    A global dict collapsing filter->project across all targets (the removed
+    ``filter_to_project``) breaks for a filter observed by multiple targets
+    (e.g. f187n appears under both brick/2221 and sgrb2/5365): it picks
+    whichever target was iterated last.  This helper resolves the correct
+    project for the target in hand.
     """
     target_filters = obs_filters[target]
     filt_l = filtername.lower()
@@ -1930,7 +1837,8 @@ _SATSTAR_DEDUP_ALG = 'fp3'
 # in replace_saturated (mutual-nearest only; see the second-pass block there).
 # Satstar positions scatter ~0.08-0.15" from the true position, so the tight
 # per-filter radii miss most pairings.  Env SATSTAR_REPLACE_RADIUS_ARCSEC
-# overrides; set 0 to disable the second pass.
+# overrides (read at CALL time, not import time, so setting it after import
+# works); set 0 to disable the second pass.
 def _satstar_replace_radius():
     _env = os.environ.get('SATSTAR_REPLACE_RADIUS_ARCSEC')
     # 0.5": wide-band saturated blobs scatter worse than SW (brick f356w
@@ -1941,9 +1849,6 @@ def _satstar_replace_radius():
     except ValueError:
         val = 0.5
     return (val * u.arcsec) if val > 0 else None
-
-
-SATSTAR_REPLACE_RADIUS = _satstar_replace_radius()
 
 
 def _satstar_dedup_radius():
@@ -2321,7 +2226,6 @@ def flag_near_saturated(cat, filtername, radius=None, target='brick',
         idx_cat = valid_cat_inds[idx_cat_sub]
     else:
         idx_cat = np.array([], dtype=int)
-        idx_sat = np.array([], dtype=int)
 
     near_sat = np.zeros(len(cat), dtype='bool')
     near_sat[idx_cat] = True
@@ -2348,8 +2252,9 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
                       fwhm_basepath=None,
                       basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
     # ``basepath`` locates the satstar catalogs (the cutout's own, for cutout
-    # runs); ``fwhm_basepath`` (default = basepath) locates the target-level
-    # reduction/fwhm_table.ecsv, which the cutout tree doesn't contain.
+    # runs).  ``fwhm_basepath`` is unused (the fwhm_table.ecsv read it located
+    # was dead compute and has been removed); retained for signature
+    # compatibility with existing callers.
     satstar_cat = load_satstar_catalog(filtername, target=target, basepath=basepath)
     if satstar_cat is None:
         print(f"No saturated star catalog found for {filtername}; skipping replacement")
@@ -2417,9 +2322,6 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
                   'f2550w': 0.5*u.arcsec,
                   }[filtername]
 
-    fwhm_tbl = Table.read(f'{fwhm_basepath or basepath}/reduction/fwhm_table.ecsv')
-    fwhm = u.Quantity(fwhm_tbl[fwhm_tbl['Filter'] == filtername.upper()]['PSF FWHM (arcsec)'], u.arcsec)
-
     filtername_meta = cat.meta.get('filter', filtername)
     zeropoint = u.Quantity(jfilts.loc[_svo_filter_id(filtername_meta)]['ZeroPoint'], u.Jy)
 
@@ -2462,12 +2364,12 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
         # bright rows, 62% with their correct satstar fit 0.05-0.15" away)
         # while the correct satstar row was appended as a near-duplicate.
         # Satstars unmatched at the tight radius get one more chance at
-        # SATSTAR_REPLACE_RADIUS, but only as a MUTUAL nearest-neighbour pair
-        # (each is the other's closest) -- crowding-safe where the plain
+        # _satstar_replace_radius(), but only as a MUTUAL nearest-neighbour
+        # pair (each is the other's closest) -- crowding-safe where the plain
         # radius bump would mis-pair neighbours.  The faint-replacement guard
         # below still vetoes any pairing whose satstar flux is below the
         # daophot flux (a clipped row is always fainter than its satstar fit).
-        _wide = SATSTAR_REPLACE_RADIUS
+        _wide = _satstar_replace_radius()
         _unmatched_sat = np.setdiff1d(np.arange(len(satstar_cat)), idx_sat)
         if _wide is not None and len(_unmatched_sat) and len(valid_cat_inds):
             _catc = cat_coords[catfinite]
@@ -2654,8 +2556,6 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
             if colname not in cat.colnames:
                 satstar_toadd.remove_column(colname)
 
-        #print("cat colnames: ",cat.colnames)
-        #print("satstar toadd_colnames: ",satstar_toadd.colnames)
         for row in satstar_toadd:
             cat.add_row(dict(row))
 
@@ -2787,7 +2687,6 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
         cat.rename_column('flux_fit', 'flux')
     else:
         print(f"Catalog did not have flux_fit.  colnames={cat.colnames}.  (this is expected for crowdsource)")
-    # DEBUG print(f"DEBUG: cat['replaced_saturated'].sum(): {cat['replaced_saturated'].sum()}")
 
 
 def main():
@@ -2954,10 +2853,6 @@ def main():
                                             print(f"Finished merge_individual_frames {suffix} {progid} {filtername} {method}")
                                             if os.getenv('SLURM_ARRAY_TASK_ID') is not None:
                                                 singlefield_done = True
-                                            #except Exception as ex:
-                                            #    print(f"Exception: {ex}, {type(ex)}, {str(ex)}")
-                                            #    exc_type, exc_obj, exc_tb = sys.exc_info()
-                                            #    print(f"Exception occurred on line {exc_tb.tb_lineno}")
 
                             else:
                                 index += 1

@@ -4,14 +4,11 @@ import tracemalloc
 import resource
 import glob
 import time
-import json
 import re
-import inspect
 import numpy
 import regions
 import numpy as np
 from pathlib import Path
-from functools import cache
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
 from astropy.convolution import convolve, convolve_fft, Gaussian2DKernel, interpolate_replace_nans
 from astropy.table import Table, vstack
@@ -19,7 +16,6 @@ from astropy.coordinates import SkyCoord
 from astropy.visualization import simple_norm
 from astropy.modeling.fitting import LevMarLSQFitter
 from astropy import wcs
-from astropy import table
 from astropy import stats
 from astropy import units as u
 from astropy.nddata import NDData
@@ -35,17 +31,17 @@ from jwst.datamodels import ImageModel
 from jwst.associations import asn_from_list
 from jwst.associations.lib.rules_level3_base import DMS_Level3_Base
 from jwst.resample import ResampleStep
-from photutils.detection import DAOStarFinder, IRAFStarFinder
-from photutils.psf import extract_stars, EPSFStars, EPSFBuilder
-# EPSFModel was deprecated in photutils 2.0 in favour of ImagePSF
-try:
-    from photutils.psf import ImagePSF as EPSFModel
-except ImportError:
-    from photutils.psf import EPSFModel
+# --- imports kept for legacy/crowdsource_step.py namespace inheritance ---
+# legacy/crowdsource_step.py does globals().update(vars(this_module)), so names
+# below may have no in-module use here yet still be load-bearing for the frozen
+# legacy path.  Verify legacy/*.py before removing anything from this block.
+from photutils.detection import DAOStarFinder
+from photutils.psf import extract_stars, EPSFBuilder
 # PSFPhotometry, IterativePSFPhotometry, SourceGrouper present since photutils 1.9
-from photutils.psf import PSFPhotometry, IterativePSFPhotometry, SourceGrouper, GriddedPSFModel
+from photutils.psf import PSFPhotometry, IterativePSFPhotometry, SourceGrouper
 # LocalBackground present since photutils 1.9
-from photutils.background import MMMBackground, MADStdBackgroundRMS, MedianBackground, Background2D, LocalBackground
+from photutils.background import MMMBackground, MedianBackground, Background2D, LocalBackground
+# --- end legacy-kept imports ---
 
 import warnings
 from astropy.utils.exceptions import AstropyWarning, AstropyDeprecationWarning
@@ -92,21 +88,11 @@ _photutils_datasets_images.overlap_slices = _overlap_slices_tuple_shape
 warnings.simplefilter('ignore', category=AstropyDeprecationWarning)
 
 
-# ---------------------------------------------------------------------------
-# Photutils 2.x <-> 3.x compatibility shims.
-#
-# In photutils 3.0 several keyword arguments were renamed:
-#   * PSFPhotometry / IterativePSFPhotometry: ``localbkg_estimator`` ->
-#     ``local_bkg_estimator``
-#   * make_model_image / make_residual_image: ``include_localbkg`` ->
-#     ``include_local_bkg``
-# Both old names are retained as deprecation-warning aliases until 4.0,
-# but the deprecation warnings flood the per-frame logs.  These small
-# wrappers detect the installed version once and dispatch to the right
-# kwarg, so the same source works on 2.3.0 and 3.0+.
-# ---------------------------------------------------------------------------
-# photutils-compat shims + PSF-fit helpers factored into photometry/psf_fitting.py
-# (2026-06-09 restructure).  Imported here so existing references keep working.
+# photutils 2.x<->3.x compat shims (kwarg renames) + PSF-fit helpers
+# (CachingGriddedPSFModel, forced_psf_photometry, ...) live in
+# photometry/psf_fitting.py (2026-06-09 restructure); see that module's
+# docstring for design notes.  Imported here so existing references keep
+# working (including the legacy namespace copy).
 from jwst_gc_pipeline.photometry.psf_fitting import (
     _PHOTUTILS_GE_3, _LOCAL_BKG_KW, _INCLUDE_LOCAL_BKG_KW,
     _make_psfphotometry, _make_iterative_psfphotometry,
@@ -115,48 +101,12 @@ from jwst_gc_pipeline.photometry.psf_fitting import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Forced photometry & caching PSF model (experimental low-level fits)
-#
-# Two related accelerators for the per-source fit step:
-#
-# 1.  ``CachingGriddedPSFModel`` -- subclass of ``GriddedPSFModel`` that
-#     memoizes the rendered PSF stamp on (x_0, y_0, stamp pixel grid).
-#     Drop-in replacement for ``GriddedPSFModel`` in any photutils call;
-#     accelerates LM fits where the inner finite-difference Jacobian
-#     perturbs ONLY the flux parameter (a frequent late-iteration case)
-#     or where (x_0, y_0) are pinned via ``xy_bounds``.
-#
-# 2.  ``forced_psf_photometry()`` -- standalone closed-form linear flux
-#     solve at fixed (x_0, y_0).  Bypasses photutils' LM entirely:
-#         f = sum(d*p*w) / sum(p^2*w),   sigma_f = 1 / sqrt(sum(p^2*w))
-#     ~80x faster than the full LM path on iter2/iter3 chains where
-#     positions come from a union seed catalog.
-# ---------------------------------------------------------------------------
-# CachingGriddedPSFModel and forced_psf_photometry are imported from
-# photometry/psf_fitting.py (see the import near the top of this module).
+# Used only by the parallel-chunked PSFPhotometry machinery, which lives in
+# legacy/crowdsource_step.py (_par_worker_init/_par_worker_fit, lines ~35-75)
+# and reaches this binding via the namespace copy.
+import multiprocessing as _mp_par  # noqa: E402
 
 
-# ---------------------------------------------------------------------------
-# Parallel-chunked PSFPhotometry (experimental; off unless --parallel-workers>1)
-#
-# The serial PSFPhotometry call ends up spending most wall-time in
-# per-source LevMar + LocalBackground (annulus sigma-clip).  Sources whose
-# PSFs do not overlap can be fit independently, so we can split the
-# init_params table into chunks of mutually-non-touching groups and run
-# one PSFPhotometry per chunk in a forked worker.  Forked workers inherit
-# the SCI image, error array, mask, and PSF model read-only via
-# copy-on-write (Linux); only the small init_params chunk is pickled.
-#
-# Bit-exact agreement with the serial path was verified in
-# brick2221/analysis/bench_psf_parallel.py for the non-LocalBackground
-# case; LocalBackground is per-source and deterministic, so agreement
-# should carry over.  We still keep the serial path as the default and
-# only activate parallel when the caller passes --parallel-workers > 1.
-# ---------------------------------------------------------------------------
-import multiprocessing as _mp_par  # noqa: E402 -- kept near user
-
-# Module-level state populated by _par_worker_init; only read in workers.
 def resolve_max_group_size(raw):
     """Resolve the --max-group-size option to either None (unlimited, no cap) or
     a positive int (the cap).  The value 0 is REJECTED as ambiguous: it used to
@@ -164,9 +114,11 @@ def resolve_max_group_size(raw):
     ('unlimited' or a positive integer).  Raises SystemExit on an invalid value.
     """
     if raw is None:
+        # The CLI defaults --max-group-size to 'unlimited', so None can only
+        # arrive from a programmatic caller that skipped the option parser.
         raise SystemExit(
-            "--max-group-size must be set explicitly to 'unlimited' or a positive "
-            "integer (it has no implicit default; 0 is not allowed).")
+            "max_group_size=None: pass 'unlimited' or a positive integer "
+            "explicitly (0 is not allowed).")
     s = str(raw).strip().lower()
     if s in ('unlimited', 'inf', 'infinite', 'nocap', 'none'):
         return None
@@ -422,7 +374,9 @@ def _crop_to_slices(a, ny, nx, yslc, xslc):
 
 def _prepare_cutout_input(filename, basepath, filtername, options):
     """Write a cropped *datamodel* copy of ``filename`` for a
-    ``--cutout-region`` run.  Returns ``(label, cutout_filename, out_basepath)``.
+    ``--cutout-region`` run.  Returns
+    ``(label, cutout_filename, out_basepath, x0, y0)`` where ``(x0, y0)`` is
+    the cutout origin in parent-image pixel coordinates.
 
     The cutout keeps a VALID GWCS -- the parent i2d's GWCS shifted by the
     cutout origin -- in the ASDF extension, plus a matching FITS WCS in the
@@ -562,8 +516,8 @@ def _crop_datamodel_to_finite(filename, pad=4):
 # _make_model_image is imported from photometry/psf_fitting.py.
 
 import crowdsource
-from crowdsource import crowdsource_base
-from crowdsource.crowdsource_base import fit_im, psfmod
+# fit_im is used only by legacy/crowdsource_step.py via the namespace copy.
+from crowdsource.crowdsource_base import fit_im
 
 from jwst_gc_pipeline.reduction.saturated_star_finding import (
     remove_saturated_stars, correct_dq_first_group_saturation)
@@ -598,11 +552,10 @@ _BAD_DQ_FLAGS_NIRCAM = ('DO_NOT_USE', 'SATURATED')
 _BAD_DQ_FLAGS_MIRI = ('DO_NOT_USE', 'SATURATED', 'NON_SCIENCE', 'PERSISTENCE')
 
 def _bad_dq_bitmask(instrument):
-    from jwst.datamodels import dqflags as _dq
     flags = _BAD_DQ_FLAGS_MIRI if str(instrument).upper() == 'MIRI' else _BAD_DQ_FLAGS_NIRCAM
     bm = 0
     for f in flags:
-        bm |= int(_dq.pixel[f])
+        bm |= int(dqflags.pixel[f])
     return bm
 
 
@@ -652,18 +605,7 @@ class WrappedPSFModel(crowdsource.psf.SimplePSF):
         # explicitly broadcast
         col = np.atleast_1d(col)
         row = np.atleast_1d(row)
-        #rows = rows[:, :, None] + row[None, None, :]
-        #cols = cols[:, :, None] + col[None, None, :]
 
-        # photutils seems to use column, row notation
-        # only works with photutils <= 1.6.0 - but is wrong there
-        #stamps = self.psfgridmodel.evaluate(cols, rows, 1, col, row)
-        # it returns something in (nstamps, row, col) shape
-        # pretty sure that ought to be (col, row, nstamps) for crowdsource
-
-        # andrew saydjari's version here:
-        # it returns something in (nstamps, row, col) shape
-        #
         # NOTE: this loop CANNOT be batched into a single
         # ``self.psfgridmodel.evaluate(...)`` call with vector
         # ``x_0``/``y_0``.  ``photutils.psf.GriddedPSFModel.evaluate``
@@ -678,17 +620,12 @@ class WrappedPSFModel(crowdsource.psf.SimplePSF):
         # iter3 pipeline no longer runs (daophot path is preferred).
         stamps = []
         for i in range(len(col)):
-            # the +0.5 is required to actually center the PSF (empirically)
-            #stamps.append(self.psfgridmodel.evaluate(cols+col[i]+0.5, rows+row[i]+0.5, 1, col[i], row[i]))
-            # the above may have been true when we were using (incorrectly) offset PSFs
             stamps.append(self.psfgridmodel.evaluate(cols+col[i], rows+row[i], 1, col[i], row[i]))
 
         stamps = np.array(stamps)
 
         # for oversampled stamps, they may not be normalized
         stamps /= stamps.sum(axis=(1,2))[:,None,None]
-        # this is evidently an incorrect transpose
-        #stamps = np.transpose(stamps, axes=(0,2,1))
 
         if deriv:
             dpsfdrow, dpsfdcol = np.gradient(stamps, axis=(1, 2))
@@ -703,17 +640,6 @@ class WrappedPSFModel(crowdsource.psf.SimplePSF):
             ret = (ret, dpsfdcol, dpsfdrow)
 
         return ret
-
-    def render_model(self, col, row, stampsz=None):
-        """
-        this function likely does nothing?
-        """
-        if stampsz is not None:
-            self.stampsz = stampsz
-
-        rows, cols = np.indices(self.stampsz, dtype=float) - (np.array(self.stampsz)-1)[:, None, None] / 2.
-
-        return self.psfgridmodel.evaluate(cols, rows, 1, col, row).T.squeeze()
 
 
 def write_via_local_scratch(final_path, write_fn):
@@ -757,22 +683,11 @@ def write_via_local_scratch(final_path, write_fn):
             pass
 
 
-def save_epsf(epsf, filename, overwrite=True):
-    header = {}
-    header['OVERSAMP'] = list(epsf.oversampling)
-    hdu = fits.PrimaryHDU(data=epsf.data, header=header)
-    hdu.writeto(filename, overwrite=overwrite)
-
-
-def read_epsf(filename):
-    fh = fits.open(filename)
-    hdu = fh[0]
-    return EPSFModel(data=hdu.data, oversampling=hdu.header['OVERSAMP'])
-
-
 # Set True for --cutout-region runs: diagnostic PNGs are disabled (the fixed
 # zoom regions rarely intersect a small cutout and the plots aren't useful at
 # that scale).  Only affects cutout runs; full-frame diagnostics are unchanged.
+# Flipped on the host module by legacy/crowdsource_step.py (do_photometry_step,
+# ~line 895) when a cutout region is in use.
 _SUPPRESS_DIAGNOSTICS = False
 
 
@@ -845,7 +760,7 @@ def catalog_zoom_diagnostic(data, modsky, zoomcut, stars):
                 )
         neg = stars['flux'] < 0
     elif 'qfit' in stars.colnames:
-        # guesses, no tests don
+        # heuristic quality cuts for the daophot-style columns
         qgood = ((stars['qfit'] < 0.4) &
                  (stars['cfit'] < 0.1) &
                  (stars['flags'] == 0))
@@ -1252,7 +1167,6 @@ def _protect_mask(x, y, protect_xy, protect_radius_pix):
     would otherwise be culled as a wing artifact."""
     if protect_xy is None or len(protect_xy) == 0 or protect_radius_pix <= 0:
         return np.zeros(len(x), dtype=bool)
-    from scipy.spatial import cKDTree
     pts = np.column_stack([np.asarray(x, dtype=float), np.asarray(y, dtype=float)])
     finite = np.isfinite(pts[:, 0]) & np.isfinite(pts[:, 1])
     prot = np.zeros(len(x), dtype=bool)
@@ -1792,12 +1706,14 @@ def load_outside_fov_satstar_pixels(basepath, ww, data_shape=None,
     so the satstar fitter doesn't waste time on unfittable forced sources
     (which return NaN flux and stall the pipeline).
 
-    A second region file ``saturated_stars_outside_fov_locked.reg`` (same
-    point-region format) takes precedence when present — it contains
-    REFINED celestial positions verified in one or two reference filters
-    and is used as-is, with no position grid search.  Returned tuple's
-    ``locked`` flag is True when the locked file was used; callers should
-    set ``forced_grid_search_radius=0`` in that case.
+    Source-file precedence (highest first): the Spitzer/external-catalog
+    prior ``saturated_stars_outside_fov_spitzer.reg`` (NOT locked -- the
+    forced-fit grid search still refines its positions on the diffraction
+    spikes), then the hand-verified ``saturated_stars_outside_fov_locked.reg``
+    (used as-is, no position search), then the original coarse
+    ``saturated_stars_outside_fov.reg``.  Returned tuple's ``locked`` flag is
+    True only when the locked file was used; callers should set
+    ``forced_grid_search_radius=0`` in that case.
 
     Returns
     -------
@@ -1989,7 +1905,8 @@ def save_photutils_results(result, ww, filename,
     # ``merge_catalogs.py`` glob that expects just ``{module}``.
     # The original iter1 convention used only ``{module}`` and that's
     # what every other filename slot in this file (and the seed-catalog
-    # inference at line ~1931) still uses.  Restored.
+    # inference in legacy/crowdsource_step.py, ~line 1085) still uses.
+    # Restored.
     tblfilename = f"{basepath}/{filtername}/{filtername.lower()}_{module}{obs_}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}{iter_}_daophot_{basic_or_iterative}.fits"
 
     long_keys = [k for k in result.meta if len(k) > 8]
@@ -2187,10 +2104,6 @@ def get_psf_model(filtername, proposal_id, field,
             if isinstance(grid, list):
                 grid = grid[0]
 
-            #yy, xx = np.indices([31,31], dtype=float)
-            #grid.x_0 = grid.y_0 = 15.5
-            #psf_model = crowdsource.psf.SimplePSF(stamp=grid(xx,yy))
-
             # bigger PSF probably needed
             yy, xx = np.indices([61, 61], dtype=float)
             grid.x_0 = grid.y_0 = 30
@@ -2206,12 +2119,6 @@ def get_psf_model(filtername, proposal_id, field,
             proposal_id, field, oversample=oversample, blur=blur)
         grid = psfgrid = to_griddedpsfmodel(_psf_grid_path)
 
-        # if isinstance(grid, list):
-        #     print(f"Grid is a list: {grid}")
-        #     psf_model = WrappedPSFModel(grid[0])
-        #     dao_psf_model = grid[0]
-        # else:
-
         psf_model = WrappedPSFModel(grid, stampsz=stampsz)
         dao_psf_model = grid
 
@@ -2225,31 +2132,12 @@ def get_uncertainty(err, data, dq=None, wht=None):
 
     # crowdsource uses inverse-sigma, not inverse-variance
     weight = err**-1
-    #maxweight = np.percentile(weight[np.isfinite(weight)], 95)
-    #minweight = np.percentile(weight[np.isfinite(weight)], 5)
-    #badweight =  np.percentile(weight[np.isfinite(weight)], 1)
-    #weight[err < 1e-5] = 0
-    #weight[(err == 0) | (wht == 0)] = np.nanmedian(weight)
-    #weight[np.isnan(weight)] = 0
     bad = np.isnan(weight) | (data == 0) | np.isnan(data) | (weight == 0) | (err == 0)
-    #if dq is not None:
-    #    # only 0 is OK
-    #    bad |= (dq != 0)
     if wht is not None:
         bad |= (wht == 0)
 
-    #weight[weight > maxweight] = maxweight
-    #weight[weight < minweight] = minweight
-    # it seems that crowdsource doesn't like zero weights
-    # may have caused broked f466n? weight[bad] = badweight
-    #weight[bad] = minweight
     # crowdsource explicitly handles weight=0, so this _should_ work.
     weight[bad] = 0
-
-    # Expand bad pixel zones for dq
-    #bad_for_dq = ndimage.binary_dilation(bad, iterations=2)
-    #dq[bad_for_dq] = 2 | 2**30 | 2**31
-    #print(f"Total bad pixels = {bad.sum()}, total bad for dq={bad_for_dq.sum()}")
 
     return dq, weight, bad
 
@@ -2522,8 +2410,6 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
 
 def save_residual_datamodel(input_filename, output_filename, data, clear_dq=False):
     """
-    TODO: profile this code, it seems to take a minute or more even for cutouts
-
     ``clear_dq`` (2026-06-20): for the MODEL image, reset DQ to GOOD and make
     ERR/variance finite.  The model is a SYNTHETIC rendered image -- every pixel
     is a valid model value, even where the DATA was DQ-SATURATED (the bright
@@ -4908,38 +4794,6 @@ def get_filenames(basepath, filtername, proposal_id, field, each_suffix, module,
         raise ValueError(f"No matches found to any of {glstr_list}")
     else:
         return sorted(set(fglob))
-
-
-def get_filename(basepath, filtername, proposal_id, field, module, options, pupil='clear'):
-    desat = '_unsatstar' if options.desaturated else ''
-    bgsub = '_bgsub' if options.bgsub else ''
-    #epsf_ = "_epsf" if options.epsf else ""
-    #blur_ = "_blur" if options.blur else ""
-    inst_token = _inst_token(filtername)
-
-    filename = f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}_i2d.fits'
-    if os.path.exists(filename):
-        return filename
-
-    # 2026-07-11: dropped the two *_realigned-to-refcat.fits fallbacks (realign retired).
-    # The plain _i2d.fits above is returned first anyway; realigned files are no longer produced.
-    candidate_patterns = [
-        f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}_i2d{desat}.fits',
-        f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t*_{inst_token}_*{filtername.lower()}*{module}*i2d*.fits',
-        f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}_t*_{inst_token}_*{filtername.lower()}*i2d*.fits',
-        f'{basepath}/mastDownload/JWST/**/jw0{proposal_id}-o{field}_t*_{inst_token}_*{filtername.lower()}*{module}*i2d*.fits',
-        f'{basepath}/mastDownload/JWST/**/jw0{proposal_id}-o{field}_t*_{inst_token}_*{filtername.lower()}*i2d*.fits',
-    ]
-
-    for glstr in candidate_patterns:
-        fglob = glob.glob(glstr, recursive=True)
-        if len(fglob) == 1:
-            return fglob[0]
-        if len(fglob) > 1:
-            return sorted(fglob)[-1]
-
-    raise ValueError(f"No input file found for filter={filtername} proposal={proposal_id} field={field} module={module} in {basepath}")
-
 
 
 if __name__ == "__main__":

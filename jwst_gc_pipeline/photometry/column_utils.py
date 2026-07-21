@@ -15,28 +15,25 @@ import numpy as np
 from astropy.coordinates import SkyCoord
 
 # Source x/y column conventions, in preference order for "first available".
+# This single tuple is the canonical ordering used by _get_source_xy,
+# _best_available_xy, and _has_any_xy_columns: fitted positions first, then
+# DAOStarFinder centroids (photutils 2.x ``xcentroid`` / >=3.0
+# ``x_centroid``), then init/plain columns.
 _XY_COLUMN_CANDIDATES = (
+    ('x_fit', 'y_fit'),
     ('xcentroid', 'ycentroid'),
     ('x_centroid', 'y_centroid'),   # photutils >=3.0
-    ('x_fit', 'y_fit'),
     ('x_init', 'y_init'),
     ('x', 'y'),
 )
 
 
 def _get_source_xy(tbl):
-    """Return source x/y columns using the first available coordinate convention."""
-    if 'x_fit' in tbl.colnames and 'y_fit' in tbl.colnames:
-        return np.asarray(tbl['x_fit']), np.asarray(tbl['y_fit'])
-    if 'xcentroid' in tbl.colnames and 'ycentroid' in tbl.colnames:
-        return np.asarray(tbl['xcentroid']), np.asarray(tbl['ycentroid'])
-    # photutils >=3.0 emits ``x_centroid``/``y_centroid``
-    if 'x_centroid' in tbl.colnames and 'y_centroid' in tbl.colnames:
-        return np.asarray(tbl['x_centroid']), np.asarray(tbl['y_centroid'])
-    if 'x_init' in tbl.colnames and 'y_init' in tbl.colnames:
-        return np.asarray(tbl['x_init']), np.asarray(tbl['y_init'])
-    if 'x' in tbl.colnames and 'y' in tbl.colnames:
-        return np.asarray(tbl['x']), np.asarray(tbl['y'])
+    """Return source x/y columns using the first available coordinate
+    convention (``_XY_COLUMN_CANDIDATES`` order)."""
+    for xname, yname in _XY_COLUMN_CANDIDATES:
+        if xname in tbl.colnames and yname in tbl.colnames:
+            return np.asarray(tbl[xname]), np.asarray(tbl[yname])
     raise KeyError(f"No recognized x/y coordinate columns in {tbl.colnames}")
 
 
@@ -48,15 +45,9 @@ def _column_to_float_array(tbl, colname):
 
 
 def _best_available_xy(tbl):
-    # photutils >=3.0 emits ``x_centroid``/``y_centroid`` from DAOStarFinder;
-    # 2.x emits ``xcentroid``/``ycentroid``.  Accept both.
-    candidates = [
-        ('xcentroid', 'ycentroid'),
-        ('x_centroid', 'y_centroid'),
-        ('x_fit', 'y_fit'),
-        ('x_init', 'y_init'),
-        ('x', 'y'),
-    ]
+    # Pick the candidate pair (canonical _XY_COLUMN_CANDIDATES order) with the
+    # most finite values; ties go to the earlier candidate.
+    candidates = _XY_COLUMN_CANDIDATES
     best_pair = None
     best_score = -1
     best_x = None
@@ -79,10 +70,7 @@ def _best_available_xy(tbl):
 def _has_any_xy_columns(tbl):
     return any(
         xname in tbl.colnames and yname in tbl.colnames
-        for xname, yname in (('xcentroid', 'ycentroid'),
-                             ('x_centroid', 'y_centroid'),
-                             ('x_fit', 'y_fit'),
-                             ('x_init', 'y_init'), ('x', 'y'))
+        for xname, yname in _XY_COLUMN_CANDIDATES
     )
 
 

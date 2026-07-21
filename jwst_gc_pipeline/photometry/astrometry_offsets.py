@@ -51,9 +51,13 @@ class KDTreeReference:
         for exp in exposures:
             measure_offset(exp_coords, ref, ...)
 
-    Queries run parallel (``workers=-1``).  Results are identical to the
-    plain path (same deterministic probe/subsample RNG, exact within-radius
-    pair sets, same histogram)."""
+    Queries run parallel (``workers=-1``).  Results match the plain path
+    (same deterministic probe/subsample RNG, exact within-radius pair sets,
+    same histogram) EXCEPT in the dense-subsample regime: when the pair
+    budget forces subsampling, the plain path keeps a hard 2000-point floor
+    while the tree path relaxes that floor to respect the total-pair budget
+    (see ``_measure_at_window_tree``), so the subsample -- and hence the
+    histogram -- can differ there."""
 
     def __init__(self, coords):
         self.coords = coords
@@ -136,7 +140,10 @@ MAX_PAIRS_PER_WINDOW = 3_000_000
 def _measure_at_window_tree(a, ref, maxsep_arcsec, bin_arcsec, min_pairs,
                             max_pairs=MAX_PAIRS_PER_WINDOW):
     """``_measure_at_window`` against a prebuilt ``KDTreeReference`` — no tree
-    rebuilds, parallel queries, numerically identical result (same RNG)."""
+    rebuilds, parallel queries.  Same deterministic RNG as the plain path,
+    but NOT guaranteed numerically identical when the pair budget forces
+    subsampling: the plain path keeps a hard 2000-point floor whereas this
+    path relaxes the floor so the total-pair budget is not blown by >~2x."""
     n_a = len(a)
     a_xyz = _unit_xyz(a)
     a_ra = np.asarray(a.ra.deg, dtype=float)
@@ -337,16 +344,15 @@ def measure_offset_grid(a, b, nx=6, ny=6, ra_bounds=None, dec_bounds=None,
             res.update(ix=i, iy=j, contrast_ok=contrast_ok, off_ok=bool(off_ok),
                        ok=bool(contrast_ok and off_ok))
             cells.append(res)
-    covered = [c for c in cells]
-    n_ok = sum(1 for c in covered if c["ok"])
-    worst = max(covered, key=lambda c: c["off"], default=None)
-    return dict(cells=cells, n_ok=n_ok, n_total=len(covered),
-                worst_off_mas=max((c["off"] for c in covered), default=float("nan")),
+    n_ok = sum(1 for c in cells if c["ok"])
+    worst = max(cells, key=lambda c: c["off"], default=None)
+    return dict(cells=cells, n_ok=n_ok, n_total=len(cells),
+                worst_off_mas=max((c["off"] for c in cells), default=float("nan")),
                 worst_off_cell=(None if worst is None else dict(
                     ix=worst["ix"], iy=worst["iy"], off_mas=worst["off"],
                     contrast=worst["contrast"])),
-                min_contrast_seen=min((c["contrast"] for c in covered), default=float("nan")),
-                clean=bool(covered) and n_ok == len(covered))
+                min_contrast_seen=min((c["contrast"] for c in cells), default=float("nan")),
+                clean=bool(cells) and n_ok == len(cells))
 
 
 def agree_across_references(a, ref_a, ref_b, tol_mas=100.0, label_a="refA",

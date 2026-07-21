@@ -137,9 +137,10 @@ def splice_reused_rows(prev_table, fit_table, reusable, prev_index, seed_order,
     seed_order : array
         Row order to emit (identity ``range(n_seed)`` unless the caller reordered).
     phase_label : optional
-        If given and the table has an ``iter_detected`` / phase column, the reused
-        rows keep their ORIGINAL detection provenance (they were not re-detected);
-        this hook exists for callers that stamp a phase column.
+        Reserved hook for callers that stamp a phase column; currently UNUSED
+        (reused rows already keep their original detection provenance because
+        their columns are copied verbatim).  Retained so external callers that
+        pass it keep working.
 
     Returns
     -------
@@ -149,17 +150,6 @@ def splice_reused_rows(prev_table, fit_table, reusable, prev_index, seed_order,
 
     n = len(reusable)
     reused_rows = prev_table[prev_index[reusable]] if reusable.any() else prev_table[:0]
-    # map each seed position -> its source row
-    out_rows = [None] * n
-    ri = 0
-    fi = 0
-    for k in range(n):
-        if reusable[k]:
-            out_rows[k] = reused_rows[ri]
-            ri += 1
-        else:
-            out_rows[k] = fit_table[fi]
-            fi += 1
     # Build via row indices to avoid per-row Table overhead where possible.
     # (Columns must be compatible; the caller guarantees both come from the same
     # PSFPhotometry schema.)
