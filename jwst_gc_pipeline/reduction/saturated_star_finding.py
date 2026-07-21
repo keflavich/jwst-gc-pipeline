@@ -44,6 +44,24 @@ import requests
 import urllib3
 import builtins
 
+
+# Per-source satstar diagnostics fire once per saturated source per frame per
+# phase (~10 lines/source: center, mask_buffer/bkg, model-param bounds, pixel
+# counts, accept/skip).  Across ~240 frames x 6 filters x 5 merge stages these
+# dominated the run log (>1 GB, and starved NFS reads).  They are silenced by
+# default; the per-frame SUMMARY prints below carry the signal.  Set
+# SATSTAR_LOG_VERBOSE=1 to restore the per-source detail when debugging one
+# frame.
+_SATSTAR_LOG_VERBOSE = os.environ.get("SATSTAR_LOG_VERBOSE", "0").strip().lower() \
+    not in ("", "0", "false", "no", "off")
+
+
+def _vprint(*args, **kwargs):
+    """print() gated on SATSTAR_LOG_VERBOSE (default silent)."""
+    if _SATSTAR_LOG_VERBOSE:
+        print(*args, **kwargs)
+
+
 def get_psf(header, path_prefix='.', use_merged_psf_for_merged=False, fov_pixels=None):
     if header['INSTRUME'].lower() == 'nircam':
         psfgen = stpsf.NIRCam()
@@ -2355,7 +2373,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             continue
         ycen = int(round(yf))
         xcen = int(round(xf))
-        print(f"Source {ii+1}: center at (x, y) = ({xcen}, {ycen}), forced={forced_source}")
+        _vprint(f"Source {ii+1}: center at (x, y) = ({xcen}, {ycen}), forced={forced_source}")
 
         if forced_source:
             # Cross-frame reconciliation may have flagged this off-field star as
@@ -2505,10 +2523,10 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # are already bgsub'd so a zero-background assumption is appropriate.
         if forced_source:
             localbkg_estimator = None
-            print(f"  forced source: no local-bkg (source is off-edge)  "
+            _vprint(f"  forced source: no local-bkg (source is off-edge)  "
                   f"(sat_area=forced)", flush=True)
         else:
-            print(f"  mask_buffer={effective_buffer}  bkg=({bkg_inner},{bkg_outer})"
+            _vprint(f"  mask_buffer={effective_buffer}  bkg=({bkg_inner},{bkg_outer})"
                   f"  (sat_area={src_sat_area})", flush=True)
             localbkg_estimator = LocalBackground(bkg_inner, bkg_outer)
 
@@ -2995,7 +3013,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                     # ``_bounds`` could leave a fitter completely unbounded
                     # and corrupt every subsequent forced photometry result.
                     param.bounds = bounds
-                    print(f"Set {pname}.bounds = {bounds}")
+                    _vprint(f"Set {pname}.bounds = {bounds}")
 
             result = psfphot(cutout_fit, init_params=init_params, mask=mask,
                              error=err_cutout_eff)
@@ -3581,8 +3599,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         threshold = np.nanpercentile(cutout, 99)
         threshold_image[model_image>threshold]=1
         num_pixels_above_threshold = np.nansum(threshold_image)
-        print(np.nanmax(model_image), flush=True)
-        print(f"Number of pixels above threshold ({threshold}): {num_pixels_above_threshold}", flush=True)
+        _vprint(np.nanmax(model_image), flush=True)
+        _vprint(f"Number of pixels above threshold ({threshold}): {num_pixels_above_threshold}", flush=True)
 
         if len(result) > 0:
             flux = result['flux_fit'][0]
@@ -4053,10 +4071,10 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # brightest fits first and gets clean data).
             data_working[y0:y1, x0:x1] -= model_image
             if forced_source:
-                print(f"Accepting forced outside-FOV source {ii+1} with flux={flux}, fluxerr={fluxerr}, snr={snr}, "
+                _vprint(f"Accepting forced outside-FOV source {ii+1} with flux={flux}, fluxerr={fluxerr}, snr={snr}, "
                       f"sidelobe_resid_sigma={sidelobe_resid_sigma:.2f}, ssr_ratio={ssr_ratio:.3f}", flush=True)
             else:
-                print(f"Accepting source {ii+1} with flux={flux}, fluxerr={fluxerr}, snr={snr}, "
+                _vprint(f"Accepting source {ii+1} with flux={flux}, fluxerr={fluxerr}, snr={snr}, "
                       f"sidelobe_resid_sigma={sidelobe_resid_sigma:.2f}, ssr_ratio={ssr_ratio:.3f}", flush=True)
             result['wingcal_rmask'] = _wingcal_rmask
             if index == 0:
@@ -4066,7 +4084,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
 
             index += 1
         else:
-            print(f"Skipping source {ii+1}: "
+            _vprint(f"Skipping source {ii+1}: "
                   f"snr={snr}, fluxerr={fluxerr}, qfit={qfit}, "
                   f"sidelobe_resid_sigma={sidelobe_resid_sigma:.2f}, "
                   f"ssr_ratio={ssr_ratio:.3f}", flush=True)
@@ -4074,6 +4092,11 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 _rej = result.copy()
                 _rej['reject_reason'] = _reject_reason or 'unspecified'
                 _rejected_rows.append(_rej)
+
+    # Per-frame summary (retains the accept/skip signal the now-silenced
+    # per-source _vprint lines carried; SATSTAR_LOG_VERBOSE=1 restores detail).
+    print(f"Satstar summary: {index}/{nsource} sources accepted, "
+          f"{len(_rejected_rows)} rejected", flush=True)
 
     # NOTE: a pass-2 leave-one-out refit was attempted on 2026-05-14 but
     # produced catastrophically low fluxes for the brightest sources
