@@ -120,6 +120,27 @@ def test_nonoverlapping_groups_are_not_a_failure():
     assert_overlaps_registered(groups, tol_mas=30.0, maxsep=1 * u.arcsec)
 
 
+def test_result_schema_is_uniform_including_nonoverlap():
+    """Every result dict must carry the SAME keys: the non-overlap early-exit
+    used to omit n_peak/measurable, so consumers indexing r["measurable"]
+    KeyErrored on any non-overlapping pair."""
+    ra1, dec1 = _field(seed=5, ra0=266.54, dec0=-28.70)
+    ra2, dec2 = _field(seed=6, ra0=266.60, dec0=-28.60)  # disjoint
+    ra3, dec3 = _field(seed=7, ra0=266.54, dec0=-28.70)  # overlaps p1
+    groups = {"p1": SkyCoord(ra1 * u.deg, dec1 * u.deg),
+              "p2": SkyCoord(ra2 * u.deg, dec2 * u.deg),
+              "p3": SkyCoord(ra3 * u.deg, dec3 * u.deg)}
+    res = pairwise_overlap_offsets(groups, tol_mas=30.0, maxsep=1 * u.arcsec)
+    assert len(res) == 3
+    keysets = [set(r) for r in res]
+    assert all(k == keysets[0] for k in keysets), keysets
+    for r in res:
+        assert "measurable" in r and "n_peak" in r
+        if not r["overlap"]:
+            assert r["measurable"] is False
+            assert r["n_peak"] == 0
+
+
 def test_per_tile_catches_a_local_seam_that_field_pooling_hides():
     """The brick-1182 seam exactly: two visits overlap over the whole field but a
     THIN dec-band of one is offset ~90 mas. The field-pooled single offset averages

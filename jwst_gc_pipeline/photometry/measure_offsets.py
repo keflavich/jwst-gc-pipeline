@@ -1,15 +1,8 @@
 
 import numpy as np
-import warnings
-from astropy.table import Table
-from astropy.io import fits
-from astropy.wcs import WCS
 from astropy import units as u
 from astropy import stats
-import regions
-from astroquery.vizier import Vizier
 from astropy.coordinates import SkyCoord
-import glob
 import os
 
 
@@ -112,15 +105,6 @@ def measure_offsets(reference_coordinates, skycrds_cat, refflux, skyflux, total_
     med_dra = 100*u.arcsec
     med_ddec = 100*u.arcsec
 
-    idx, sep, _ = reference_coordinates.match_to_catalog_sky(skycrds_cat[sel], nthneighbor=1)
-    reverse_idx, reverse_sep, _ = skycrds_cat[sel].match_to_catalog_sky(reference_coordinates, nthneighbor=1)
-    reverse_mutual_matches = (idx[reverse_idx] == np.arange(len(reverse_idx))) & (reverse_sep < max_offset)
-    mutual_matches = (reverse_idx[idx] == np.arange(len(idx))) & (sep < max_offset)
-    # print(f"Matched {mutual_matches.sum()} mutually of {(sep < max_offset).sum()} total")
-
-    dra = -(skycrds_cat[sel][idx[mutual_matches]].ra - reference_coordinates[reverse_idx[reverse_mutual_matches]].ra).to(u.arcsec)
-    ddec = -(skycrds_cat[sel][idx[mutual_matches]].dec - reference_coordinates[reverse_idx[reverse_mutual_matches]].dec).to(u.arcsec)
-
     success = False
 
     iteration = 0
@@ -137,7 +121,12 @@ def measure_offsets(reference_coordinates, skycrds_cat, refflux, skyflux, total_
         if keep.sum() < 5:
             print(f"Only {keep.sum()} sources matched - this is too few to be useful")
             print(f"{filtername:5s}, {ab:3s}, {expno:5s}, {keep.sum():6d}, {iteration:5d}", flush=True)
-            return 0, 0, 0, 0, 0, 0, [0], [0], [0], 0
+            # same types as the normal-path return: Quantities for the offsets/
+            # scatters, boolean arrays for keep/skykeep/reject, int iteration
+            zero = 0 * u.arcsec
+            return (zero, zero, zero, zero, zero, zero,
+                    np.asarray(keep, dtype=bool), np.asarray(skykeep, dtype=bool),
+                    np.zeros(int(keep.sum()), dtype=bool), iteration)
 
         # ratio = skyflux[idx[keep]] / refflux[keep]
         # magnitude-style
@@ -193,8 +182,15 @@ def measure_offsets(reference_coordinates, skycrds_cat, refflux, skyflux, total_
 
         iteration += 1
         if iteration > 50:
-            break # there is at least one case in which we converged to an oscillator
-            raise ValueError("Iteration is not converging")
+            # There is at least one known case in which the loop converges to an
+            # oscillator rather than a fixed point; accept the current solution
+            # (loudly) instead of raising.
+            print(f"WARNING: measure_offsets did not converge after {iteration} "
+                  f"iterations (likely oscillating); accepting current solution "
+                  f"med_dra={med_dra}, med_ddec={med_ddec} "
+                  f"(filter={filtername!r}, ab={ab!r}, expno={expno!r})",
+                  flush=True)
+            break
 
     if verbose and success:
         print(f"{filtername:5s}, {ab:3s}, {expno:5s}, {total_dra.value:8.3f}, {total_ddec.value:8.3f}, {med_dra.value:8.3f}, {med_ddec.value:8.3f}, {std_dra.value:8.3f}, {std_ddec.value:8.3f}, {keep.sum():6d}, {reject.sum():7d}, {iteration:5d}", flush=True)

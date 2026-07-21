@@ -22,7 +22,7 @@ only AFTER each exposure's relative offset has been measured and removed.
 """
 import numpy as np
 from astropy import units as u
-from astropy.coordinates import SkyCoord, search_around_sky
+from astropy.coordinates import SkyCoord
 from astropy.table import Table
 
 from scipy.spatial import cKDTree
@@ -380,12 +380,18 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
         # grossly misaligned exposure must not drag the frame toward itself
         med_dra = float(np.median([rel[i]["dra"] for i in members]))
         med_ddec = float(np.median([rel[i]["ddec"] for i in members]))
-        sum_ra = sum_dec = sum_ra2 = sum_dec2 = counts = flux0 = None
+        # Per-star position sums are accumulated as DELTAS from the seed star's
+        # position (small degrees), NOT raw ~266 deg coordinates: sum(x^2)/n -
+        # mean^2 on raw GC coordinates cancels catastrophically in float64 and
+        # fabricated a ~10-15 mas noise floor in scatter_mas.
+        ref_ra = ref_dec = None
+        sum_dra = sum_ddec = sum_dra2 = sum_ddec2 = counts = flux0 = None
         for i in members:
             sc = _shift(usable[i]["coords"], rel[i]["dra"], rel[i]["ddec"])
-            if sum_ra is None:
-                sum_ra = sc.ra.deg.copy(); sum_dec = sc.dec.deg.copy()
-                sum_ra2 = sc.ra.deg ** 2; sum_dec2 = sc.dec.deg ** 2
+            if ref_ra is None:
+                ref_ra = sc.ra.deg.copy(); ref_dec = sc.dec.deg.copy()
+                sum_dra = np.zeros(len(sc)); sum_ddec = np.zeros(len(sc))
+                sum_dra2 = np.zeros(len(sc)); sum_ddec2 = np.zeros(len(sc))
                 counts = np.ones(len(sc), dtype=int)
                 flux0 = usable[i]["flux"].copy()
                 seed = sc
@@ -396,40 +402,48 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
             # multi-million-star seed for every member (~minutes each).
             radius_arcsec = match_radius.to(u.arcsec).value
             sc_tree = cKDTree(_unit_xyz(sc))
-            dist, idx = sc_tree.query(_unit_xyz(seed), k=1,
-                                      distance_upper_bound=_chord(radius_arcsec),
-                                      workers=-1)
+            _, idx = sc_tree.query(_unit_xyz(seed), k=1,
+                                   distance_upper_bound=_chord(radius_arcsec),
+                                   workers=-1)
             found = idx < len(sc)
             matched_b = np.zeros(len(sc), dtype=bool)
             if found.any():
                 ia_n = np.nonzero(found)[0]
                 ib_n = idx[found]
-                sum_ra[ia_n] += sc.ra.deg[ib_n]
-                sum_dec[ia_n] += sc.dec.deg[ib_n]
-                sum_ra2[ia_n] += sc.ra.deg[ib_n] ** 2
-                sum_dec2[ia_n] += sc.dec.deg[ib_n] ** 2
+                dra_n = sc.ra.deg[ib_n] - ref_ra[ia_n]
+                ddec_n = sc.dec.deg[ib_n] - ref_dec[ia_n]
+                sum_dra[ia_n] += dra_n
+                sum_ddec[ia_n] += ddec_n
+                sum_dra2[ia_n] += dra_n ** 2
+                sum_ddec2[ia_n] += ddec_n ** 2
                 counts[ia_n] += 1
                 matched_b[ib_n] = True
-            # unmatched stars extend the seed (mosaic tiles: coverage grows)
+            # unmatched stars extend the seed (mosaic tiles: coverage grows);
+            # each becomes its own delta reference (delta 0 on first sighting)
             new = ~matched_b
             if new.any():
                 seed = SkyCoord(
                     ra=np.concatenate([seed.ra.deg, sc.ra.deg[new]]) * u.deg,
                     dec=np.concatenate([seed.dec.deg, sc.dec.deg[new]]) * u.deg,
                     frame="icrs")
-                sum_ra = np.concatenate([sum_ra, sc.ra.deg[new]])
-                sum_dec = np.concatenate([sum_dec, sc.dec.deg[new]])
-                sum_ra2 = np.concatenate([sum_ra2, sc.ra.deg[new] ** 2])
-                sum_dec2 = np.concatenate([sum_dec2, sc.dec.deg[new] ** 2])
-                counts = np.concatenate([counts, np.ones(int(new.sum()), int)])
+                n_new = int(new.sum())
+                ref_ra = np.concatenate([ref_ra, sc.ra.deg[new]])
+                ref_dec = np.concatenate([ref_dec, sc.dec.deg[new]])
+                sum_dra = np.concatenate([sum_dra, np.zeros(n_new)])
+                sum_ddec = np.concatenate([sum_ddec, np.zeros(n_new)])
+                sum_dra2 = np.concatenate([sum_dra2, np.zeros(n_new)])
+                sum_ddec2 = np.concatenate([sum_ddec2, np.zeros(n_new)])
+                counts = np.concatenate([counts, np.ones(n_new, int)])
                 flux0 = np.concatenate([flux0, usable[i]["flux"][new]])
         good = counts >= min_exposures
         if not good.any():
             continue
-        mean_ra = sum_ra[good] / counts[good]
-        mean_dec = sum_dec[good] / counts[good]
-        var_ra = np.maximum(sum_ra2[good] / counts[good] - mean_ra ** 2, 0.0)
-        var_dec = np.maximum(sum_dec2[good] / counts[good] - mean_dec ** 2, 0.0)
+        mean_dra_deg = sum_dra[good] / counts[good]
+        mean_ddec_deg = sum_ddec[good] / counts[good]
+        mean_ra = ref_ra[good] + mean_dra_deg
+        mean_dec = ref_dec[good] + mean_ddec_deg
+        var_ra = np.maximum(sum_dra2[good] / counts[good] - mean_dra_deg ** 2, 0.0)
+        var_dec = np.maximum(sum_ddec2[good] / counts[good] - mean_ddec_deg ** 2, 0.0)
         all_ra.append(mean_ra - med_dra / 3.6e6 / cosd)
         all_dec.append(mean_dec - med_ddec / 3.6e6)
         all_scatter.append(np.sqrt(var_ra * cosd ** 2 + var_dec) * 3.6e6)
