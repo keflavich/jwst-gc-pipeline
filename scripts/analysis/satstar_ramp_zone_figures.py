@@ -37,9 +37,11 @@ try:
     from jwst.datamodels import dqflags
     PSAT = dqflags.pixel['SATURATED']
     PDNU = dqflags.pixel['DO_NOT_USE']
-    PJUMP = dqflags.group['JUMP_DET']
+    POUT = dqflags.pixel['OUTLIER']       # resample/median outlier rejection
+    PJMP = dqflags.pixel['JUMP_DET']      # ramp jump-detection (pixel-level summary)
+    PJUMP = dqflags.group['JUMP_DET']     # ramp jump-detection (group-level)
 except (ImportError, KeyError):
-    PSAT, PDNU, PJUMP = 2, 1, 4
+    PSAT, PDNU, POUT, PJMP, PJUMP = 2, 1, 2**21, 4, 4
 
 DATE = '2026-07-21'
 BASE = '/orange/adamginsburg/jwst/brick'
@@ -54,7 +56,8 @@ C_DEEP = '#d62728'   # unrecoverable deep core - red
 C_RAMP = '#2ca02c'   # ramp-slope recoverable - green
 C_G0 = '#1f77b4'     # group-0 recoverable - blue
 C_CM = '#ff7f0e'     # charge-migration shoulder - orange
-C_DNU = '#ff0000'    # DO_NOT_USE (bad pixel / cosmic ray) marker - bright red
+C_REJ = '#00e5ff'    # jump/outlier-rejected REAL bright-star signal - cyan
+C_BAD = '#ff0000'    # genuine bad pixel (dead/hot/RC) - red
 
 
 def load():
@@ -86,17 +89,27 @@ def zones(cal, dq, rsci, rgdq):
     # Z4 charge-migration shoulder: NOT DQ-sat, but the buffer pixels the recovery
     # de-inflates (rewritten rim outside the SAT mask)
     z_cm = rim & ~sat
-    # DO_NOT_USE pixels (bad pixels + CR/outlier rejections; NaN in cal) that are
-    # NOT in any recovery zone -- these are exactly the "white" pixels in the
-    # grayscale (transparent NaN).  Marked with red x's so they read as bad data,
-    # not as unexplained recovery gaps.
+    # DO_NOT_USE pixels (NaN in cal) NOT in any recovery zone are the "white"
+    # pixels in the grayscale.  They split into two physically-different classes
+    # that must NOT share a label:
+    #   REJECTED SIGNAL -- flagged OUTLIER and/or JUMP_DET: overwhelmingly REAL
+    #     bright-star PSF-wing / diffraction-spike pixels whose steep but smooth
+    #     ramps trip the jump step and whose sharp undersampled structure fails
+    #     the resample-median outlier test, so genuine signal is set to NaN.
+    #     These trace the diffraction spikes of bright stars -- they are neither
+    #     cosmic rays nor bad detector pixels (verified: smooth monotonic ramps).
+    #   BAD PIXEL -- the remainder (DEAD/HOT/RC/reference/no-linearity etc.):
+    #     genuine detector defects or non-science pixels.
     any_zone = z_deep | z_ramp | z_g0 | z_cm
     dnu = ((dq & PDNU) != 0) & ~any_zone
+    z_reject = dnu & (((dq & POUT) != 0) | ((dq & PJMP) != 0))
+    z_bad = dnu & ~z_reject
     # inflation actually removed at those pixels: original data / de-inflated value
     with np.errstate(invalid='ignore', divide='ignore'):
         data_over_recov_cm = np.where(recovered > 0, cal / recovered, np.nan)[z_cm]
     return dict(slope=slope, n_good=n_good, recovered=recovered, K=K,
-                ceiling=ceiling, sat=sat, rim=rim, dnu=dnu, any_zone=any_zone,
+                ceiling=ceiling, sat=sat, rim=rim, z_reject=z_reject, z_bad=z_bad,
+                any_zone=any_zone,
                 z_deep=z_deep, z_ramp=z_ramp, z_g0=z_g0, z_cm=z_cm, ng=ng,
                 data_over_recov_cm=data_over_recov_cm)
 
@@ -192,10 +205,14 @@ def fig_cutouts(cal, z, stars, half=26):
             rgba = matplotlib.colors.to_rgba(col)
             over[m] = (rgba[0], rgba[1], rgba[2], 0.55)
             ax.imshow(over, origin='lower')
-        # red x on every DO_NOT_USE pixel not covered by a recovery zone
-        dys, dxs = np.where(z['dnu'][sl])
-        if len(dys):
-            ax.plot(dxs, dys, 'x', color=C_DNU, ms=4.0, mew=0.8, ls='none')
+        # cyan + on jump/outlier-REJECTED real bright-star signal; red x on
+        # genuine bad pixels -- the two "white" classes labelled separately
+        rys, rxs = np.where(z['z_reject'][sl])
+        if len(rys):
+            ax.plot(rxs, rys, '+', color=C_REJ, ms=5.0, mew=0.9, ls='none')
+        bys, bxs = np.where(z['z_bad'][sl])
+        if len(bys):
+            ax.plot(bxs, bys, 'x', color=C_BAD, ms=4.0, mew=0.9, ls='none')
         ndeep = z['z_deep'][sl].sum(); nramp = z['z_ramp'][sl].sum()
         ng0 = z['z_g0'][sl].sum(); ncm = z['z_cm'][sl].sum()
         ax.set_title(f'({cx},{cy})  deep={ndeep} ramp={nramp}\n'
@@ -206,8 +223,10 @@ def fig_cutouts(cal, z, stars, half=26):
                Patch(color=C_RAMP, label='ramp-slope recoverable ($\\geq2$ pre-sat reads)'),
                Patch(color=C_G0, label='group-0 recoverable (1 usable read)'),
                Patch(color=C_CM, label='charge-migration shoulder (de-inflated)'),
-               Line2D([0], [0], color=C_DNU, marker='x', ls='none', mew=1.2,
-                      label='DO\\_NOT\\_USE (bad pixel / cosmic ray)')]
+               Line2D([0], [0], color=C_REJ, marker='+', ls='none', mew=1.4,
+                      label='jump/outlier-rejected (real bright-star PSF signal)'),
+                      Line2D([0], [0], color=C_BAD, marker='x', ls='none', mew=1.4,
+                      label='bad pixel (dead/hot/RC)')]
     fig.legend(handles=handles, loc='lower center', ncol=2, fontsize=9,
                frameon=False, bbox_to_anchor=(0.5, -0.04))
     fig.suptitle('Saturated-star recovery zones — brick F200W nrca1 '
