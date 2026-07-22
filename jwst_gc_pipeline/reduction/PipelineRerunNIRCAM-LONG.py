@@ -481,6 +481,17 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
     wavelength = int(filtername[1:4])
 
     basepath = f'/orange/adamginsburg/jwst/{regionname}/'
+    # Non-destructive experimental reduction: same GC_BASEPATH_OVERRIDE redirect as
+    # the cataloging driver (jwst_gc_pipeline.scratch_basepath).  With a scratch
+    # tree staged (stage_scratch_basepath.sh, MODE=reduce) with symlinks to the
+    # real _cal inputs, a re-reduction (e.g. a consensus retie loop) writes
+    # crf/mosaics into scratch and never overwrites released products.  output_dir
+    # below derives from basepath, so it follows the redirect too.  Empty -> normal.
+    from jwst_gc_pipeline.scratch_basepath import apply_basepath_override
+    _bp0 = basepath
+    basepath = apply_basepath_override(basepath)
+    if basepath != _bp0:
+        print(f"GC_BASEPATH_OVERRIDE active (reduction): basepath -> {basepath}", flush=True)
     fwhm_tbl = Table.read(f'{basepath}/reduction/fwhm_table.ecsv')
     row = fwhm_tbl[fwhm_tbl['Filter'] == filtername]
     if module == 'merged':
@@ -535,7 +546,7 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
 
     # Files created in this notebook will be saved
     # in a subdirectory of the base directory called `Stage3`
-    output_dir = f'/orange/adamginsburg/jwst/{regionname}/{filtername}/pipeline/'
+    output_dir = f'{basepath}{filtername}/pipeline/'
     if not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
     os.chdir(output_dir)
