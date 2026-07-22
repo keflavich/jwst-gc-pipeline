@@ -1,6 +1,6 @@
 """Per-field astrometry audit for JWST-GC mosaics.
 
-Three checks, run per field on the released ``i2d`` mosaics:
+Four checks; the first three run per field on the released ``i2d`` mosaics:
 
 1. **Inter-module** (NRCA vs NRCB) — the proper-motion killer.  Reference-FREE: match
    detections in the per-module ``-nrca``/``-nrcb`` (or ``-nrcalong``/``-nrcblong``)
@@ -15,12 +15,31 @@ Three checks, run per field on the released ``i2d`` mosaics:
 3. **Absolute frame** (optional) — bulk offset of each mosaic vs a reference catalogue
    (VIRAC2 or Gaia, PM-propagated to the observation epoch), same xcorr method.
 
+4. **Cross-obs frame consistency** (``--cross-check FIELD[:obs] ...``) — reference-FREE:
+   cross-correlate this field's densest merged mosaic against each overlapping
+   observation's same-channel mosaic (cross-FILTER within a channel is fine; the
+   offset-histogram is positional).  Checks 1-3 tie each field to VIRAC *independently*,
+   so two fields can each pass (<absolute threshold) yet disagree with EACH OTHER by more
+   -- a PM-killer this check exists to catch.
+
 Bulk offsets always use the pair-histogram peak (``xcorr``) so a >search-radius shift is
 recovered; inter-module uses a tight direct match because after alignment the residual is
 small.  Emits a JSON summary and a printed table; flags anything above the thresholds.
 
+Relation to the in-pipeline m2 astrometry checkpoint
+(``photometry/cataloging.py::_run_astrometry_stage_checkpoint``): the two guards are
+complementary and catch the SAME class of defect at different granularities/times.
+The checkpoint runs DURING cataloging, PER EXPOSURE, against the im0 consensus, and
+HARD-STOPS a run whose frames are misaligned (it is what flagged gc2211 o046's ~3.3"
+per-exposure offset -- frames never aligned, empty offsets table -- so o046 never got a
+cross-band m7 and was never tied).  This audit runs AFTER the fact, PER MOSAIC, ACROSS
+observations, and would have flagged the same o046 as ~116 mas off arches even though its
+own per-field vs-VIRAC audit was clean.  Run both: the checkpoint gates production, this
+audit gates cross-obs/PM readiness.
+
 Usage:
     python -m data_qa.astrometry_audit --field sgrb2 [--refcat PATH] [--out result.json]
+    python -m data_qa.astrometry_audit --field arches --cross-check gc2211:046
 """
 from __future__ import annotations
 
