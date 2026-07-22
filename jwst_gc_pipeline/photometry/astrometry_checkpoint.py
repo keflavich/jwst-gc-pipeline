@@ -303,8 +303,12 @@ def lookup_consensus_offset(tbl, visit, exposure, module, filtername):
         r = tbl[bulk]
         dra += float(r["dra (arcsec)"][0]); ddec += float(r["ddec (arcsec)"][0])
 
-    # per-exposure jitter (exclude the bulk sentinel from the module variants)
-    variants = {str(module), str(module).strip("1234"), str(module).replace("long", "")}
+    # per-exposure jitter (exclude the bulk sentinel from the module variants).
+    # _module_variants gives the SAME semantics as shift_individual_catalog
+    # (including the 'long' family variant for LW modules) -- a previous inline
+    # set here omitted the 'long' variants and could miss e.g. an 'nrcalong'
+    # row when looking up module 'nrca'.
+    variants = _module_variants(module)
     jit = (vf & (tbl["Exposure"] == int(exposure))
            & np.array([str(m) in variants for m in tbl["Module"]]))
     nj = int(jit.sum())

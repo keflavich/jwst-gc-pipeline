@@ -9,15 +9,12 @@ from astroquery.svo_fps import SvoFps
 from astropy import wcs
 from astropy.io import fits
 import numpy as np
-import sys
 
 from astropy import stats
 
-try:
-    from measure_offsets import measure_offsets
-except ImportError:
-    sys.path.append('/blue/adamginsburg/adamginsburg/jwst/brick/offsets')
-    from measure_offsets import measure_offsets
+# Package-relative import: NEVER fall back to an unguarded copy elsewhere on
+# disk -- the guarded module carries assert_sparse_reference_for_nn_median.
+from .measure_offsets import measure_offsets
 
 
 def main(return_method=None, return_filter=None):
@@ -47,6 +44,11 @@ def main(return_method=None, return_filter=None):
             elif 'qfit' in tbl.colnames:
                 flux_colname = 'flux_fit'
                 sel = ((tbl['qfit'] < 0.1) & (tbl['cfit'] < 0.1) & (tbl[flux_colname] > 0)) & (np.isfinite(tbl['skycoord'].ra) & np.isfinite(tbl['skycoord'].dec))
+            else:
+                raise ValueError(
+                    f"Catalog {tblfilename} has neither a 'qf' (crowdsource) nor a "
+                    f"'qfit' (DAOphot) quality column; cannot build a quality "
+                    f"selection.  Columns present: {tbl.colnames}")
 
             print(f"QFs are good for {sel.sum()} out of {len(tbl)} catalog entries")
             print(f"Making the reference catalog from {sel.sum()} out of {len(tbl)} catalog entries")

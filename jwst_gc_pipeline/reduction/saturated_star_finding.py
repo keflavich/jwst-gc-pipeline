@@ -44,6 +44,24 @@ import requests
 import urllib3
 import builtins
 
+
+# Per-source satstar diagnostics fire once per saturated source per frame per
+# phase (~10 lines/source: center, mask_buffer/bkg, model-param bounds, pixel
+# counts, accept/skip).  Across ~240 frames x 6 filters x 5 merge stages these
+# dominated the run log (>1 GB, and starved NFS reads).  They are silenced by
+# default; the per-frame SUMMARY prints below carry the signal.  Set
+# SATSTAR_LOG_VERBOSE=1 to restore the per-source detail when debugging one
+# frame.
+_SATSTAR_LOG_VERBOSE = os.environ.get("SATSTAR_LOG_VERBOSE", "0").strip().lower() \
+    not in ("", "0", "false", "no", "off")
+
+
+def _vprint(*args, **kwargs):
+    """print() gated on SATSTAR_LOG_VERBOSE (default silent)."""
+    if _SATSTAR_LOG_VERBOSE:
+        print(*args, **kwargs)
+
+
 def get_psf(header, path_prefix='.', use_merged_psf_for_merged=False, fov_pixels=None):
     if header['INSTRUME'].lower() == 'nircam':
         psfgen = stpsf.NIRCam()
@@ -955,7 +973,7 @@ def _local_ratio_map(num, den, valid, *, block=64, min_per_block=25):
 
 def ramp_recover_saturated(data, dq, ramp_sci, ramp_groupdq=None, *,
                            slope_min=20.0, sat_dilate=3, infl_tol=0.10,
-                           cal_block=64, ceiling=None):
+                           cal_block=64, ceiling=None, k_band=4.0):
     """Recover the saturated-star RIM from the per-pixel ramp SLOPE, LOCALLY
     calibrated to cal units -- the crowding-immune successor to
     ``zeroframe_recover_saturated`` (which uses only group-0 + a frame-global R).
@@ -967,6 +985,14 @@ def ramp_recover_saturated(data, dq, ramp_sci, ramp_groupdq=None, *,
     ``cal/slope`` over UNSATURATED pixels (``slope > slope_min``).  Deep-core
     pixels that saturate before two groups (no measurable slope) are returned in
     ``deep_core_mask`` for the model-replace / group-0 fallback.
+
+    ``k_band`` bounds the block-local ``K_local`` to a multiplicative band
+    ``[Kglobal/k_band, Kglobal*k_band]`` around the field-global median: the true
+    calibration (photom*flat*gain) varies <~10% across a detector, so a local
+    block whose ``cal/slope`` deviates several-fold is crowding contamination and
+    would over-brighten the recovered rim (measured to dig a negative core crater
+    on gc2211).  Default 4.0 is generous (leaves real gain variation untouched);
+    ``k_band<=0`` disables the clamp.
 
     Returns
     -------
@@ -998,6 +1024,23 @@ def ramp_recover_saturated(data, dq, ramp_sci, ramp_groupdq=None, *,
                             np.where(valid, slope, np.nan), valid,
                             block=int(cal_block))
     Kglobal = float(np.nanmedian(data[valid] / slope[valid]))
+    # CROWDING CLAMP (image-level A/B 2026-07-19): the block-local cal/slope
+    # ``Kmap`` can be inflated where a bright neighbour's cal lands in a block
+    # with only modest slope -- crowding, not real gain variation.  An inflated
+    # K_local over-brightens the recovered rim -> the satstar fit picks up too
+    # much flux -> the subtracted model digs a negative core crater (measured on
+    # gc2211: a -3.2M crater where the baseline was ~0).  The true calibration
+    # K = photom*flat*gain varies <~10% across a detector, so bound K_local to a
+    # generous multiplicative band around the field-global median; anything
+    # beyond ``k_band`` is contamination.  ``k_band<=0`` disables the clamp.
+    if k_band > 0 and np.isfinite(Kglobal) and Kglobal > 0:
+        klo, khi = Kglobal / float(k_band), Kglobal * float(k_band)
+        n_clamped = int(np.count_nonzero(np.isfinite(Kmap)
+                                         & ((Kmap < klo) | (Kmap > khi))))
+        if n_clamped:
+            log.info(f"ramp K-band clamp: {n_clamped} pixel(s) outside "
+                     f"[{klo:.4g}, {khi:.4g}] (Kglobal={Kglobal:.4g}) clipped")
+        Kmap = np.clip(Kmap, klo, khi)
     recov = slope * Kmap
     sat_buf = binary_dilation(sat, iterations=int(sat_dilate)) if sat_dilate else sat
     # A genuinely-saturated pixel that hit the well in <=ngroups cannot have a
@@ -1958,7 +2001,17 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     # the unsaturated wings -- much more reliable as a star-centre
     # estimate (the saturated mask should be centred on the star
     # centroid).  Added 2026-05-28.
-    coms = _refine_coms_by_data(coms, data, sources, unrecoverable=_unrecoverable)
+    # For the extended-emission NIRCam POSITION LOCK, keep the RAW mask
+    # center-of-mass: it is stable cross-frame (~0.13" spread on the W51 darkfil
+    # blob), whereas _refine_coms_by_data recentres on THIS frame's saturation
+    # extent (eroded-core / unrecoverable sub-cluster), which varies frame-to-frame
+    # as the saturated area does (370->659 px) and so wanders ~0.6" -- defeating the
+    # lock (the whole point is one shared subtraction position across frames).  The
+    # refine's asymmetric-spike benefit is irrelevant here: the locked flux-only
+    # fit needs a CONSISTENT seed, not a per-frame-accurate one.  Other paths keep
+    # the refine.
+    if not int(os.environ.get('NIRCAM_SATSTAR_LOCK_POS', 0)):
+        coms = _refine_coms_by_data(coms, data, sources, unrecoverable=_unrecoverable)
 
     # Precompute sat_area per labeled component so we can order in-FOV
     # source_records brightest-first for iterative-subtraction fitting
@@ -2355,7 +2408,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             continue
         ycen = int(round(yf))
         xcen = int(round(xf))
-        print(f"Source {ii+1}: center at (x, y) = ({xcen}, {ycen}), forced={forced_source}")
+        _vprint(f"Source {ii+1}: center at (x, y) = ({xcen}, {ycen}), forced={forced_source}")
 
         if forced_source:
             # Cross-frame reconciliation may have flagged this off-field star as
@@ -2505,10 +2558,10 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # are already bgsub'd so a zero-background assumption is appropriate.
         if forced_source:
             localbkg_estimator = None
-            print(f"  forced source: no local-bkg (source is off-edge)  "
+            _vprint(f"  forced source: no local-bkg (source is off-edge)  "
                   f"(sat_area=forced)", flush=True)
         else:
-            print(f"  mask_buffer={effective_buffer}  bkg=({bkg_inner},{bkg_outer})"
+            _vprint(f"  mask_buffer={effective_buffer}  bkg=({bkg_inner},{bkg_outer})"
                   f"  (sat_area={src_sat_area})", flush=True)
             localbkg_estimator = LocalBackground(bkg_inner, bkg_outer)
 
@@ -2947,12 +3000,32 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # set 0 to restore the legacy hard lock).
             _miri_bounded = (_is_miri
                              and int(os.environ.get('MIRI_SATSTAR_BOUNDED_FIT', 1)))
-            if _is_miri and not _miri_bounded:
-                # legacy hard lock (MIRI_SATSTAR_BOUNDED_FIT=0)
+            # NIRCam extended-emission POSITION LOCK (user 2026-07-08): the ROOT
+            # cause of the residual crater is CROSS-FRAME position inconsistency.
+            # Every frame has one stable DQ-component seed (~0.13" spread), but the
+            # bounded PSF fit slides each frame's satstar to a slightly different
+            # place (the asymmetric NaN-masked core has multiple local optima -> the
+            # per-frame fits split into 2 clusters ~0.25" apart).  Each frame's
+            # satstar MODEL is subtracted into ``data_for_residual`` at ITS position,
+            # so the coadded mergedcat residual has a 2-peak oversubtraction crater
+            # -- and this lives in the per-frame subtracted model, so no catalog /
+            # consolidation dedup can remove it.  LOCK the position to the stable
+            # data-refined seed and fit FLUX ONLY: every frame then subtracts at the
+            # same (per-frame-stable) seed -> the coadd is one clean PSF.  A full
+            # lock (not a tight BOUND) keeps flux_err finite -- the NaN-flux_err /
+            # tossed-fit failure was from near-singular 2D position covariance under
+            # a tight bound, not from a 1D flux-only fit.  Gated by
+            # NIRCAM_SATSTAR_LOCK_POS (driver sets it for extended-emission NIRCam);
+            # supersedes the bound.  Off -> unchanged.
+            _nc_lock = (not _is_miri
+                        and int(os.environ.get('NIRCAM_SATSTAR_LOCK_POS', 0)))
+            if (_is_miri and not _miri_bounded) or _nc_lock:
+                # hard lock: fit flux only at the seed (MIRI legacy / NIRCam ext)
                 model.x_0.fixed = True
                 model.y_0.fixed = True
-                print(f"MIRI: locked satstar position to seed "
-                      f"(x={xcen}, y={ycen}); fitting flux only")
+                print(f"{'MIRI' if _is_miri else 'NIRCam-ext'}: locked satstar "
+                      f"position to seed (x={xcen}, y={ycen}); fitting flux only",
+                      flush=True)
             else:
                 # bounded position fit (>=1.5 FWHM keeps covariance
                 # non-singular; tighter pegs x_0/y_0 -> NaN flux_err -> good fits
@@ -2995,7 +3068,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                     # ``_bounds`` could leave a fitter completely unbounded
                     # and corrupt every subsequent forced photometry result.
                     param.bounds = bounds
-                    print(f"Set {pname}.bounds = {bounds}")
+                    _vprint(f"Set {pname}.bounds = {bounds}")
 
             result = psfphot(cutout_fit, init_params=init_params, mask=mask,
                              error=err_cutout_eff)
@@ -3348,6 +3421,48 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                     and not (0 < float(result['qfit'][0]) < 1e3)):
                 result['qfit'][0] = 1.0
 
+        # NIRCAM extended-emission RECOVERED-CORE flux cap (user 2026-07-10).  A
+        # DQ-SATURATED core that is actually frame0-RECOVERED (finite data, NOT
+        # truly-lost / DO_NOT_USE) is NOT clipped, so its data IS the true surface
+        # brightness -- a point-source model must not exceed it.  An extended blob
+        # (or a mildly-saturated real star) seeded as a satstar extrapolates a huge
+        # flux from its broad wings with the core masked from the fit (W51 darkfil:
+        # model peak 20351 vs recovered data 4441 = 4.8x) -> over-subtraction
+        # crater.  Cap the model peak to the recovered-core data (leaves a small
+        # POSITIVE residual).  No fake/real discrimination is needed: on a recovered
+        # core the data is the truth for BOTH a fake blob and a real faint star
+        # (investigation found NO clean discriminator -- a real eye-star was also
+        # recovered with model/data 6x).  CRUCIAL gate: only when the core is
+        # MOSTLY recovered (truly-lost fraction < _max_lost); a real DEEPLY-
+        # saturated star has a clipped (truly-lost) core whose recovered ring sits
+        # far below its true peak, so capping to it would grossly UNDER-subtract --
+        # those are left uncapped to reconstruct normally.  Gated for ext-NIRCam
+        # (NIRCAM_SATSTAR_RECOVERED_CAP); off elsewhere -> byte-identical.
+        if (not _is_miri and int(os.environ.get('NIRCAM_SATSTAR_RECOVERED_CAP', 0))
+                and len(result) and np.isfinite(float(result['flux_fit'][0]))):
+            _unrec_cut = _unrecoverable[y0:y1, x0:x1]
+            _nsat = int(satmask_combined.sum())
+            _lostf = (int((satmask_combined & _unrec_cut).sum()) / _nsat
+                      if _nsat else 1.0)
+            _max_lost = float(os.environ.get('NIRCAM_SATSTAR_RECOVERED_MAXLOST', 0.2))
+            _rec_core = (satmask_combined & (~_unrec_cut)
+                         & np.isfinite(cutout) & (cutout > 0))
+            if _lostf < _max_lost and int(_rec_core.sum()) >= 3:
+                _xf2 = float(result['x_fit'][0]); _yf2 = float(result['y_fit'][0])
+                _yy2, _xx2 = np.mgrid[0:cutout.shape[0], 0:cutout.shape[1]]
+                _psf2 = np.clip(_infov_psf(_xx2 - _xf2, _yy2 - _yf2), 0, None)
+                _ppk = float(np.nanmax(_psf2)) if np.isfinite(_psf2).any() else np.nan
+                if np.isfinite(_ppk) and _ppk > 0:
+                    _drec = float(np.nanmax(cutout[_rec_core]))
+                    _cap = _drec / _ppk
+                    _fc = float(result['flux_fit'][0])
+                    if np.isfinite(_fc) and _fc > _cap:
+                        result['flux_fit'][0] = _cap
+                        print(f"  [nircam recovered-core cap] flux {_fc:.2e} -> "
+                              f"{_cap:.2e} (model peak {_fc*_ppk:.0f} -> {_drec:.0f} "
+                              f"vs recovered core {_drec:.0f}; lost {_lostf*100:.0f}%, "
+                              f"{int(_rec_core.sum())} rec px)", flush=True)
+
         # FORCED-SOURCE COADD-CORE CAP (2026-06-19).  The forced / outside-FOV
         # LSQ (and the cross-frame reconcile that OVERRIDES the discordant frames
         # to the "reference" flux) is amplitude-UNCONSTRAINED when only a faint
@@ -3581,8 +3696,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         threshold = np.nanpercentile(cutout, 99)
         threshold_image[model_image>threshold]=1
         num_pixels_above_threshold = np.nansum(threshold_image)
-        print(np.nanmax(model_image), flush=True)
-        print(f"Number of pixels above threshold ({threshold}): {num_pixels_above_threshold}", flush=True)
+        _vprint(np.nanmax(model_image), flush=True)
+        _vprint(f"Number of pixels above threshold ({threshold}): {num_pixels_above_threshold}", flush=True)
 
         if len(result) > 0:
             flux = result['flux_fit'][0]
@@ -4053,10 +4168,10 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # brightest fits first and gets clean data).
             data_working[y0:y1, x0:x1] -= model_image
             if forced_source:
-                print(f"Accepting forced outside-FOV source {ii+1} with flux={flux}, fluxerr={fluxerr}, snr={snr}, "
+                _vprint(f"Accepting forced outside-FOV source {ii+1} with flux={flux}, fluxerr={fluxerr}, snr={snr}, "
                       f"sidelobe_resid_sigma={sidelobe_resid_sigma:.2f}, ssr_ratio={ssr_ratio:.3f}", flush=True)
             else:
-                print(f"Accepting source {ii+1} with flux={flux}, fluxerr={fluxerr}, snr={snr}, "
+                _vprint(f"Accepting source {ii+1} with flux={flux}, fluxerr={fluxerr}, snr={snr}, "
                       f"sidelobe_resid_sigma={sidelobe_resid_sigma:.2f}, ssr_ratio={ssr_ratio:.3f}", flush=True)
             result['wingcal_rmask'] = _wingcal_rmask
             if index == 0:
@@ -4066,7 +4181,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
 
             index += 1
         else:
-            print(f"Skipping source {ii+1}: "
+            _vprint(f"Skipping source {ii+1}: "
                   f"snr={snr}, fluxerr={fluxerr}, qfit={qfit}, "
                   f"sidelobe_resid_sigma={sidelobe_resid_sigma:.2f}, "
                   f"ssr_ratio={ssr_ratio:.3f}", flush=True)
@@ -4074,6 +4189,11 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 _rej = result.copy()
                 _rej['reject_reason'] = _reject_reason or 'unspecified'
                 _rejected_rows.append(_rej)
+
+    # Per-frame summary (retains the accept/skip signal the now-silenced
+    # per-source _vprint lines carried; SATSTAR_LOG_VERBOSE=1 restores detail).
+    print(f"Satstar summary: {index}/{nsource} sources accepted, "
+          f"{len(_rejected_rows)} rejected", flush=True)
 
     # NOTE: a pass-2 leave-one-out refit was attempted on 2026-05-14 but
     # produced catastrophically low fluxes for the brightest sources
