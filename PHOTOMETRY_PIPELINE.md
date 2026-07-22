@@ -10,7 +10,7 @@
   (publication-style, no code). KEEP THE TWO IN SYNC: when the algorithm changes,
   update BOTH and bump the stamp in BOTH. PIPELINE_METHODS.md = "what & why"; this
   file = "how & where".  All numbers below are the actual deployed defaults; each
-  is cited to cataloging.py / crowdsource_catalogs_long.py / saturated_star_finding.py.
+  is cited to cataloging.py / catalog_long.py / saturated_star_finding.py.
 -->
 
 This is **the** PSF-photometry pipeline (`jwst_gc_pipeline.photometry.cataloging`),
@@ -35,7 +35,7 @@ overshoot check and a strict ban on negative-peak sources.
 Single filter (cutout):
 
 ```
-python -m jwst_gc_pipeline.photometry.crowdsource_catalogs_long \
+python -m jwst_gc_pipeline.photometry.catalog_long \
     --filternames=F480M --modules=nrcb \
     --proposal_id=3958 --field=007 --target=sickle \
     --each-suffix=destreak_o007_crf --each-exposure --daophot --skip-crowdsource \

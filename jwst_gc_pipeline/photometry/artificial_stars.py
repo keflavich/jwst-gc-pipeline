@@ -73,7 +73,7 @@ M2_ROUNDHI = MANUAL_DEFAULTS['manual_resid_roundhi']
 M2_SHARPLO = MANUAL_DEFAULTS['manual_resid_sharplo']
 M2_SHARPHI = MANUAL_DEFAULTS['manual_resid_sharphi']
 
-from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
+from jwst_gc_pipeline.photometry.catalog_long import (
     compute_local_noise_map, annotate_and_filter_by_local_snr,
     _bad_dq_bitmask)
 from jwst_gc_pipeline.photometry.psf_fitting import (

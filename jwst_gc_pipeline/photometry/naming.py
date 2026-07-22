@@ -5,7 +5,7 @@ filenames (iteration label, background-subtraction mode, spatial seed chunk) so
 that products from different iterations and modes never collide and can be
 glob-matched exactly.
 
-Factored out of ``crowdsource_catalogs_long.py`` (2026-06-09 restructure); the
+Factored out of ``catalog_long.py`` (2026-06-09 restructure); the
 old module now imports these names from here so there is a single source of
 truth.  Pure string/regex helpers with no astronomy dependencies.
 """
@@ -17,7 +17,7 @@ _CHUNK_TOKEN_RE = re.compile(r'_chunk\d+of\d+')
 
 # Single source of truth for which JWST filters are MIRI vs NIRCam.  Lives here
 # (a heavy-import-free module) so merge_catalogs.py can import it without pulling
-# in crowdsource_catalogs_long.py's webbpsf chain.
+# in catalog_long.py's webbpsf chain.
 MIRI_FILTERS = frozenset(['f560w', 'f770w', 'f1000w', 'f1130w', 'f1280w',
                           'f1500w', 'f1800w', 'f2100w', 'f2550w'])
 

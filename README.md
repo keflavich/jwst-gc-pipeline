@@ -30,7 +30,7 @@ modeling, paper figures) remains in `brick2221`.
   - `run_notebook.py` — utilities
 
 - `jwst_gc_pipeline.photometry` — catalog-level processing
-  - `crowdsource_catalogs_long.py` (also handles short) — crowdsource
+  - `catalog_long.py` (also handles short) — crowdsource
     photometry extraction and the PSF-photometry driver / `main()`
   - `cataloging.py` — the PSF-photometry pipeline (Hosek-style iterative
     detect/fit/reseed); the default path. See `PHOTOMETRY_PIPELINE.md`.
@@ -54,12 +54,12 @@ documented in [`PHOTOMETRY_PIPELINE.md`](PHOTOMETRY_PIPELINE.md). Pass
    tweakwcs. Uses `destreak.destreak`,
    `align_to_catalogs.realign_to_catalog`, and
    `saturated_star_finding.iteratively_remove_saturated_stars` internally.
-2. `crowdsource_catalogs_long.py` — extract long-wavelength catalogs.
+2. `catalog_long.py` — extract long-wavelength catalogs.
 3. `make_reftable.py` — build the F410M-based reference table for
    short-wavelength alignment (called from `merge_catalogs`).
 4. `PipelineRerunNIRCAM-SHORT.py` — run pipeline on short-wave data using
    that reference catalog.
-5. `crowdsource_catalogs_long.py` — extract short-wave catalogs (the same
+5. `catalog_long.py` — extract short-wave catalogs (the same
    module handles both).
 6. `merge_catalogs.py` — merge multi-wavelength catalogs.
 

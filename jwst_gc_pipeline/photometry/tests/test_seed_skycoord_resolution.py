@@ -29,7 +29,7 @@ from astropy.table import Table, vstack
 from astropy.wcs import WCS
 import astropy.units as u
 
-from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
+from jwst_gc_pipeline.photometry.catalog_long import (
     _resolve_seed_skycoords,
     _augment_seed_catalog_with_detections_sky,
     _combine_seed_and_satstars,

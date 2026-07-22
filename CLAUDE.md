@@ -180,7 +180,7 @@ active `main` working tree (it is the live reduction environment).
 ## Other conventions
 - SLURM: use `--account=astronomy-dept --qos=astronomy-dept-b`. The default
   `adamginsburg` QOS caps cpu=10 and will hang a 16-cpu task.
-- New photometry code goes in new modules, not the `crowdsource_catalogs_long.py`
+- New photometry code goes in new modules, not the `catalog_long.py`
   monolith.
 - No bare `try/except`; catch specific exceptions only.
 

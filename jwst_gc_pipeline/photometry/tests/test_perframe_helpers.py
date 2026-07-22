@@ -13,7 +13,7 @@ These tests pin the round-trips that make that safe:
 * the frame-shard predicate (index %% N == I) partitions every frame exactly once
   for any N -> any NSHARDS gives full coverage with no double-fit.
 
-Importing cataloging pulls crowdsource_catalogs_long (webbpsf) -> slow cold.
+Importing cataloging pulls catalog_long (webbpsf) -> slow cold.
 """
 import os
 

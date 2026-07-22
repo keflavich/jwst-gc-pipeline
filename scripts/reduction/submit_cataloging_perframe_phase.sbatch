@@ -55,7 +55,7 @@ EXTRA_ARGS=${EXTRA_ARGS:-}
 PIPE_ROOT=${PIPE_ROOT:-}
 [ -n "$PIPE_ROOT" ] && export PYTHONPATH="$PIPE_ROOT:$PYTHONPATH"
 
-# crowdsource_catalogs_long wants a comma-separated filter list.
+# catalog_long wants a comma-separated filter list.
 FILT_CSV=$(echo "$FILTERS" | tr ' ' ',')
 PARALLEL_WORKERS=${PARALLEL_WORKERS:-${SLURM_CPUS_PER_TASK:-1}}
 REF_ARG=""
@@ -81,7 +81,7 @@ unset SLURM_ARRAY_TASK_ID SLURM_ARRAY_JOB_ID
 
 echo "PERFRAME $MODE: $TARGET $PROPOSAL/$FIELD phase=$PHASE filters=$FILT_CSV modules=$MODULES ${MODE_ARGS}"
 PYTHON=${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/python}
-"$PYTHON" -m jwst_gc_pipeline.photometry.crowdsource_catalogs_long \
+"$PYTHON" -m jwst_gc_pipeline.photometry.catalog_long \
     --filternames="$FILT_CSV" \
     --modules="$MODULES" \
     --each-exposure \

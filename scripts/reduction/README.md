@@ -22,7 +22,7 @@ Defaults: proposal 4147, field 012, modules `nrca,nrcb,merged`, `-s`
 
 ## 2. Cataloging
 
-Runs the active per-exposure manual pipeline (`crowdsource_catalogs_long.py
+Runs the active per-exposure manual pipeline (`catalog_long.py
 --each-exposure`; phases m12→m3..m6, then m7 cross-band when >1 filter, then m8).
 **m8** is the forced cross-band fill: right after the m7 cross-band merge it
 force-fits every band at the merged position of sources that are non-saturated

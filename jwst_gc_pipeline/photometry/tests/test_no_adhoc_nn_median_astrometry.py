@@ -62,10 +62,10 @@ ALLOWLIST = {
     "jwst_gc_pipeline/photometry/make_reference_from_pipeline_catalogs.py",  # guarded bootstrap
     # cross-band source association for catalog merging / dedup (NOT astrometry)
     "jwst_gc_pipeline/photometry/merge_catalogs.py",
-    "jwst_gc_pipeline/photometry/crowdsource_catalogs_long.py",
+    "jwst_gc_pipeline/photometry/catalog_long.py",
     "jwst_gc_pipeline/photometry/dedup_catalog.py",
     "jwst_gc_pipeline/photometry/cataloging.py",
-    "jwst_gc_pipeline/photometry/legacy/crowdsource_step.py",
+    "jwst_gc_pipeline/photometry/legacy/photometry_step.py",
     "scripts/reduction/combine_brick_allband.py",  # cross-band merge
     # PR #57 diagnostic: nearest-neighbour SEPARATION histogram (median only for the
     # figure-title label + a caveat plot) -- NOT an astrometric correction.

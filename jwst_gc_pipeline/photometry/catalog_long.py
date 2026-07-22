@@ -1,4 +1,4 @@
-print("Starting crowdsource_catalogs_long", flush=True)
+print("Starting catalog_long", flush=True)
 import sys
 import tracemalloc
 import resource
@@ -4672,7 +4672,7 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
             return
         if _cutout_run:
             # Legacy crowdsource cutout path, sequestered to photometry/legacy/.
-            from jwst_gc_pipeline.photometry.legacy.crowdsource_step import _run_cutout_pipeline
+            from jwst_gc_pipeline.photometry.legacy.photometry_step import _run_cutout_pipeline
             _run_cutout_pipeline(options, modules, filternames, nvisits, proposal_id,
                                  target, field, basepath, crowdsource_default_kwargs,
                                  bg_boxsizes)
@@ -4740,7 +4740,7 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                                 continue
                             try:
                                 # Legacy crowdsource path, sequestered to photometry/legacy/.
-                                from jwst_gc_pipeline.photometry.legacy.crowdsource_step import do_photometry_step
+                                from jwst_gc_pipeline.photometry.legacy.photometry_step import do_photometry_step
                                 do_photometry_step(options, filtername, file_module, file_detector,
                                                    field, basepath, filename, proposal_id,
                                                    crowdsource_default_kwargs, exposurenumber=int(exposure_id),

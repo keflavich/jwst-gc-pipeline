@@ -13,7 +13,7 @@ _PKG = os.path.dirname(os.path.abspath(jwst_gc_pipeline.__file__))
 # (relative path under the package, human label) for each guarded stage entry.
 STAGE_ENTRY_FILES = [
     ('reduction/PipelineRerunNIRCAM-LONG.py', 'imaging'),
-    ('photometry/crowdsource_catalogs_long.py', 'cataloging'),
+    ('photometry/catalog_long.py', 'cataloging'),
 ]
 
 

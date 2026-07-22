@@ -113,7 +113,7 @@ class TestModelResidualBackgroundZeroed:
 
     def test_save_residual_datamodel_zeros_meta_background(self, tmp_path):
         from stdatamodels.jwst.datamodels import ImageModel
-        from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
+        from jwst_gc_pipeline.photometry.catalog_long import (
             save_residual_datamodel)
         # input frame carries a sky background level with subtracted=False
         m = ImageModel((16, 16))

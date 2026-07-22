@@ -388,7 +388,7 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     basecrds = None   # set by the first NON-EMPTY frame
     for ii, tbl in enumerate(tbls):
         crds = tbl[skycoord_colname]
-        # corner case: some fits resulted in flagged x, y that propagate through.  A parallel edit to crowdsource_catalogs_long.py removes these at the source, but I'm adding a catch here too
+        # corner case: some fits resulted in flagged x, y that propagate through.  A parallel edit to catalog_long.py removes these at the source, but I'm adding a catch here too
         bad = np.isnan(crds.ra) | np.isnan(crds.dec)
         if np.any(bad):
             tbl = tbl[~bad]
@@ -1218,7 +1218,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     # iter_token is inserted *between* the {blur_} block and the
     # {method_suffix} so the per-frame filename
     # ``..._{blur_}{iter_token}_{method_suffix}{suffix}.fits``
-    # matches what crowdsource_catalogs_long.py writes for iter2/iter3.
+    # matches what catalog_long.py writes for iter2/iter3.
     if iteration_label in (None, ''):
         iter_token = ''
     elif str(iteration_label).startswith('_'):
@@ -1261,7 +1261,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
         raise ValueError(f"Method must be dao or crowdsource but was {method}")
 
     # Glob both the un-chunked per-frame catalogs and the chunked variants
-    # produced by --n-seed-chunks > 1 in crowdsource_catalogs_long.py.  The
+    # produced by --n-seed-chunks > 1 in catalog_long.py.  The
     # chunked filename inserts a ``_chunkXXofYY`` token between the iter
     # token and ``_{method_suffix}``; chunks for the same frame share the
     # rest of the path.
@@ -1277,7 +1277,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     #   - other targets: no token (single-obs basepath).
     # ngc6334 collision case: proposals 7213 + 6778 share this target and the
     # filters F200W/F470N; their per-frame catalog tables carry a ``_j{proposal}``
-    # token (see obs_token() in crowdsource_catalogs_long) so the two proposals no
+    # token (see obs_token() in catalog_long) so the two proposals no
     # longer overwrite each other.  The two proposals image DIFFERENT, non-
     # overlapping fields, so we do NOT pool them into one catalog -- the combine's
     # cross-frame stitch drops the smaller field.  Instead each proposal's run
@@ -1619,7 +1619,7 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
     # Per-obs token for gc2211 (prop 2211): the per-filter vetted inputs AND the
     # cross-band output catalog are per-obs (each gc2211 obs is a distinct target).
     # Empty for other targets.  MUST match _vtok/_combsuf in cataloging.py and
-    # obs_token() in crowdsource_catalogs_long.
+    # obs_token() in catalog_long.
     _obssuf = f'_o{field}' if (target == 'gc2211' and field not in (None, '')) else ''
     vetted_tok = f'{_obssuf}_vetted' if vetted else ''
 

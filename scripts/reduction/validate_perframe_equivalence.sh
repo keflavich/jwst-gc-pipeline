@@ -40,7 +40,7 @@ read -r -a _FA <<< "$FILTERS"
 PHASES="m12 m3 m4 m5 m6"; [ "${#_FA[@]}" -gt 1 ] && PHASES="$PHASES m7"
 
 base() {
-    "$PY" -m jwst_gc_pipeline.photometry.crowdsource_catalogs_long \
+    "$PY" -m jwst_gc_pipeline.photometry.catalog_long \
         --filternames="$FILT_CSV" --modules="$MODULES" --each-exposure \
         --proposal_id="$PROPOSAL" --field="$FIELD" --target="$TARGET" \
         --each-suffix="$EACH_SUFFIX" --cutout-region="$CUTOUT" "$@"

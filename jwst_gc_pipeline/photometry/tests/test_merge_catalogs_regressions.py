@@ -183,7 +183,7 @@ def test_combine_singleframe_keeps_sources_with_nan_fluxerr(_sci_fits):
 ])
 def test_bgsub_token(bgsub, resbgsub, expected):
     """merge_catalogs filename token must match the producer's convention
-    (crowdsource_catalogs_long._bgsub_token) so the merge globs find the
+    (catalog_long._bgsub_token) so the merge globs find the
     _resbgsub catalogs; _bgsub must not be a substring of _resbgsub."""
     assert MC._bgsub_token(bgsub, resbgsub) == expected
     assert '_bgsub' not in '_resbgsub'

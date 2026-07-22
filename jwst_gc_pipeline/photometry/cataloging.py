@@ -3,7 +3,7 @@ restructure (2026-06-09).
 
 Motivation
 ----------
-The legacy ``crowdsource_catalogs_long.do_photometry_step`` uses photutils
+The legacy ``catalog_long.do_photometry_step`` uses photutils
 ``IterativePSFPhotometry`` for iter2+, which is numerically unstable for
 isolated bright stars: with free position + LevMar + internal maxiters
 re-detection the fit can walk the centroid and settle on a ~2x inflated-flux
@@ -50,8 +50,8 @@ from jwst_gc_pipeline.photometry.psf_fitting import (
 # canonical implementation).  Importing the legacy module at load time is fine:
 # it does NOT import this module at top level (only lazily in its dispatch
 # branch), so there is no import cycle.
-from jwst_gc_pipeline.photometry import crowdsource_catalogs_long as _L
-from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
+from jwst_gc_pipeline.photometry import catalog_long as _L
+from jwst_gc_pipeline.photometry.catalog_long import (
     SeededFinder,
     _combine_seed_and_satstars,
     _augment_seed_catalog_with_detections_sky,

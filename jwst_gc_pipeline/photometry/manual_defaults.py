@@ -1,14 +1,14 @@
 """Single source of truth for manual-pipeline tunable defaults.
 
 Historically each knob's default lived in TWO places: the optparse
-``default=`` in ``crowdsource_catalogs_long.make_parser`` and a literal
+``default=`` in ``catalog_long.make_parser`` and a literal
 ``getattr(options, name, <default>)`` fallback in ``cataloging.py`` (the
 fallback fires when ``run_manual_pipeline`` is driven by a hand-built
 options object, e.g. tests or ``opts_phase`` clones).  Editing one copy
 silently left the other stale.  Both sides now read this dict.
 
 This module must stay import-light (no package imports): it is imported by
-both ``crowdsource_catalogs_long`` and ``cataloging``, which import each
+both ``catalog_long`` and ``cataloging``, which import each
 other's helpers.
 """
 

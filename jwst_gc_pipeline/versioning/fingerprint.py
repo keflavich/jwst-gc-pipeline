@@ -224,7 +224,7 @@ def facet_hashes(fits_path, exts=DEFAULT_DATA_EXTS):
 # cross-band/forced-fill files so a change scoped there does not disturb m12..m6.
 _CATALOG_BASE = [
     'jwst_gc_pipeline/photometry/cataloging.py',
-    'jwst_gc_pipeline/photometry/crowdsource_catalogs_long.py',
+    'jwst_gc_pipeline/photometry/catalog_long.py',
     'jwst_gc_pipeline/photometry/merge_catalogs.py',
     'jwst_gc_pipeline/photometry/naming.py',
     'jwst_gc_pipeline/photometry/incremental_refit.py',
