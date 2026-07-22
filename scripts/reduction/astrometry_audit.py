@@ -1,6 +1,6 @@
 """Per-field astrometry audit for JWST-GC mosaics.
 
-Three checks, run per field on the released ``i2d`` mosaics:
+Four checks; the first three run per field on the released ``i2d`` mosaics:
 
 1. **Inter-module** (NRCA vs NRCB) — the proper-motion killer.  Reference-FREE: match
    detections in the per-module ``-nrca``/``-nrcb`` (or ``-nrcalong``/``-nrcblong``)
@@ -15,12 +15,31 @@ Three checks, run per field on the released ``i2d`` mosaics:
 3. **Absolute frame** (optional) — bulk offset of each mosaic vs a reference catalogue
    (VIRAC2 or Gaia, PM-propagated to the observation epoch), same xcorr method.
 
+4. **Cross-obs frame consistency** (``--cross-check FIELD[:obs] ...``) — reference-FREE:
+   cross-correlate this field's densest merged mosaic against each overlapping
+   observation's same-channel mosaic (cross-FILTER within a channel is fine; the
+   offset-histogram is positional).  Checks 1-3 tie each field to VIRAC *independently*,
+   so two fields can each pass (<absolute threshold) yet disagree with EACH OTHER by more
+   -- a PM-killer this check exists to catch.
+
 Bulk offsets always use the pair-histogram peak (``xcorr``) so a >search-radius shift is
 recovered; inter-module uses a tight direct match because after alignment the residual is
 small.  Emits a JSON summary and a printed table; flags anything above the thresholds.
 
+Relation to the in-pipeline m2 astrometry checkpoint
+(``photometry/cataloging.py::_run_astrometry_stage_checkpoint``): the two guards are
+complementary and catch the SAME class of defect at different granularities/times.
+The checkpoint runs DURING cataloging, PER EXPOSURE, against the im0 consensus, and
+HARD-STOPS a run whose frames are misaligned (it is what flagged gc2211 o046's ~3.3"
+per-exposure offset -- frames never aligned, empty offsets table -- so o046 never got a
+cross-band m7 and was never tied).  This audit runs AFTER the fact, PER MOSAIC, ACROSS
+observations, and would have flagged the same o046 as ~116 mas off arches even though its
+own per-field vs-VIRAC audit was clean.  Run both: the checkpoint gates production, this
+audit gates cross-obs/PM readiness.
+
 Usage:
     python -m data_qa.astrometry_audit --field sgrb2 [--refcat PATH] [--out result.json]
+    python -m data_qa.astrometry_audit --field arches --cross-check gc2211:046
 """
 from __future__ import annotations
 
@@ -41,7 +60,7 @@ from astropy.wcs import WCS
 
 BASE = "/orange/adamginsburg/jwst"
 # flag thresholds (mas)
-THRESH = dict(intermodule=15.0, perfilter=30.0, absolute=75.0)
+THRESH = dict(intermodule=15.0, perfilter=30.0, absolute=75.0, crossobs=30.0)
 XMAXSEP = 2.5 * u.arcsec   # pair-histogram search radius (recovers offsets up to this)
 XBIN = 0.05               # arcsec histogram bin
 MIN_PEAK_RATIO = 4.0      # peak/background below this -> bulk tie ambiguous
@@ -162,6 +181,99 @@ def epoch_of(path):
     return None
 
 
+def channel(filt):
+    """SW (<=2.12um) vs LW channel from a filter name like 'F212N'."""
+    return "SW" if int(filt[1:4]) <= 212 else "LW"
+
+
+def _merged_mosaics(spec):
+    """{filter: path} of a field's (or 'field:obs') merged science i2d mosaics.
+
+    ``spec`` is a field name (``arches``) or ``field:obs`` (``gc2211:046``).  The
+    optional obs token restricts to that observation's mosaics -- needed for
+    multi-obs fields (gc2211 has obs 023/028/046/049/050 in one field dir).
+    """
+    field, _, obs = spec.partition(":")
+    obs = obs.lstrip("o")
+    out = {}
+    for pat in (f"{BASE}/{field}/*/pipeline/*_i2d.fits",
+                f"{BASE}/{field}/images-merged/*_i2d.fits"):
+        for p in glob.glob(pat):
+            low = os.path.basename(p).lower()
+            if any(s in low for s in ("resbgsub", "_model_", "_residual_", "starless")):
+                continue
+            m = FILT_RE.search(low)
+            if not m or m.group(2) != "merged":
+                continue
+            if obs and f"o{obs}" not in low.replace("-", "").replace("_", ""):
+                continue
+            out.setdefault(m.group(1).upper(), p)   # first hit per filter
+    return out
+
+
+def cross_obs_consistency(base_spec, peer_specs, thr=50.0):
+    """Flag relative astrometric offsets between overlapping observations.
+
+    The per-field audit ties each field to VIRAC independently; two fields can
+    each pass (<absolute threshold) yet disagree with EACH OTHER by more than
+    that -- a PM-killer for any cross-epoch/overlap science.  (This is exactly
+    how gc2211 o046 slipped through: never tied, ~108 mas off arches, but each
+    field's own vs-VIRAC audit was clean.)
+
+    For each channel (SW, LW) we cross-correlate ``base_spec``'s densest merged
+    mosaic against each peer's same-channel merged mosaic.  Cross-FILTER within a
+    channel is fine (same stars; the offset-histogram is positional), so
+    arches F212N vs gc2211 F200W is a valid SW pair.  Flags off > crossobs
+    threshold with a confident peak.
+    """
+    base = _merged_mosaics(base_spec)
+    if not base:
+        return dict(base=base_spec, error="no merged mosaics")
+    base_det = {f: detect(p)[0] for f, p in base.items()}
+    res = dict(base=base_spec, peers={}, flags=[])
+    for peer in peer_specs:
+        pm = _merged_mosaics(peer)
+        pairs = {}
+        for chan in ("SW", "LW"):
+            bf = [f for f in base if channel(f) == chan and base_det.get(f) is not None]
+            pf = [f for f in pm if channel(f) == chan]
+            if not bf or not pf:
+                continue
+            # densest available filter in each field's channel
+            bfilt = max(bf, key=lambda f: len(base_det[f]))
+            pfilt = pf[0]
+            pdet = detect(pm[pfilt])[0]
+            if pdet is None:
+                continue
+            r = xcorr(base_det[bfilt], pdet)
+            if not r:
+                continue
+            r.update(base_filter=bfilt, peer_filter=pfilt)
+            pairs[chan] = r
+            if r["off"] > THRESH["crossobs"] and r["peak_ratio"] >= MIN_PEAK_RATIO:
+                res["flags"].append(
+                    f"crossobs {base_spec}({bfilt}) vs {peer}({pfilt}) {chan}: "
+                    f"{r['off']:.0f} mas (>{THRESH['crossobs']:.0f})")
+        res["peers"][peer] = pairs
+    return res
+
+
+def print_cross_report(r):
+    print(f"\n===== CROSS-OBS  base={r['base']} =====")
+    if r.get("error"):
+        print("  ERROR:", r["error"]); return
+    for peer, pairs in r["peers"].items():
+        if not pairs:
+            print(f"  vs {peer}: no overlapping channel/mosaics"); continue
+        for chan, d in pairs.items():
+            flag = "  *** RELATIVE-FRAME OFFSET ***" if (
+                d["off"] > THRESH["crossobs"] and d["peak_ratio"] >= MIN_PEAK_RATIO) else ""
+            print(f"  vs {peer} {chan} ({d['base_filter']} vs {d['peer_filter']}): "
+                  f"({d['dra']:+.0f},{d['ddec']:+.0f}) |{d['off']:.0f} mas| "
+                  f"peak/bg={d['peak_ratio']:.0f} n={d['npairs']}{flag}")
+    print("  FLAGS:", "; ".join(r["flags"]) if r["flags"] else "none")
+
+
 def audit_field(field, refcat=None, thr=50.0):
     mosaics = find_mosaics(field)
     if not mosaics:
@@ -205,8 +317,7 @@ def audit_field(field, refcat=None, thr=50.0):
     # -- uniform ~18 mas across all filters -- disproves).  Compare each filter to the
     # densest filter of its OWN channel; require many pairs before flagging.  Cross-
     # channel agreement is assessed by the absolute check instead.
-    def channel(f):
-        return "SW" if int(f[1:4]) <= 212 else "LW"
+    # (channel() is defined at module scope.)
 
     merged = {f: det.get((f, "merged")) for f in mosaics if det.get((f, "merged")) is not None}
     res["anchor"] = {}
@@ -274,14 +385,24 @@ def main(argv=None):
     ap.add_argument("--refcat", default=None, help="VIRAC2/Gaia reference catalogue path")
     ap.add_argument("--thr", type=float, default=50.0, help="detection threshold (sigma)")
     ap.add_argument("--out", default=None, help="write JSON result here")
+    ap.add_argument("--cross-check", nargs="+", default=None, metavar="FIELD[:obs]",
+                    help="also check --field's frame against these overlapping "
+                         "observations (field name or field:obs, e.g. gc2211:046). "
+                         "Flags relative offsets that per-field vs-VIRAC audits miss.")
     args = ap.parse_args(argv)
     r = audit_field(args.field, refcat=args.refcat, thr=args.thr)
     print_report(r)
+    cross = None
+    if args.cross_check:
+        cross = cross_obs_consistency(args.field, args.cross_check, thr=args.thr)
+        print_cross_report(cross)
+        r["flags"] = list(r.get("flags", [])) + cross.get("flags", [])
     if args.out:
         with open(args.out, "w") as fh:
-            json.dump(r, fh, indent=2)
+            json.dump(dict(field_audit=r, cross_obs=cross), fh, indent=2)
         print(f"\nwrote {args.out}")
-    return 0
+    # non-zero exit if anything flagged (field or cross-obs) -> CI/campaign gate
+    return 1 if r.get("flags") else 0
 
 
 if __name__ == "__main__":
