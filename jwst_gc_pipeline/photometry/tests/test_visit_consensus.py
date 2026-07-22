@@ -111,6 +111,19 @@ def test_consensus_positions_recover_truth():
     assert np.median(sep.mas) < 1.5
 
 
+def test_scatter_reads_true_noise_not_float_cancellation():
+    """Per-star scatter was computed as sum(x^2)/n - mean^2 on RAW ~266 deg
+    coordinates: catastrophic float64 cancellation fabricated a ~10-15 mas
+    scatter floor.  On synthetic 3 mas centroid noise the reported scatter_mas
+    must read ~3-4 mas (RA+Dec combined, /n variance), never ~15."""
+    cons = build_visit_consensus(_visit_tables(noise_mas=3.0),
+                                 context="test-scatter")
+    med = float(np.median(cons["scatter_mas"]))
+    # 4 exposures, sigma=3 mas per coordinate, biased /n variance:
+    # E[scatter] ~ sqrt(2 * 9 * 3/4) ~ 3.7 mas.  The cancellation bug read >10.
+    assert 2.0 < med < 6.0, f"median scatter {med} mas; expected ~3.7 mas"
+
+
 def test_too_few_exposures_raises():
     with pytest.raises(ConsensusBuildError):
         build_visit_consensus(_visit_tables(n_exp=1), context="test-single")

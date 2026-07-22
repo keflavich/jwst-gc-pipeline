@@ -280,7 +280,10 @@ def main(argv=None):
     else:
         raise SystemExit('provide --dra-mas/--ddec-mas, or --measure --reference.')
 
-    utc = datetime.datetime.utcnow().isoformat(timespec='seconds') + 'Z'
+    # datetime.utcnow() is deprecated; .replace(tzinfo=None) keeps the naive
+    # "...Z" output format byte-identical to the previous behavior
+    utc = (datetime.datetime.now(datetime.timezone.utc)
+           .replace(tzinfo=None).isoformat(timespec='seconds') + 'Z')
     results = apply_offset_to_field(
         args.catalogs, dra, ddec, utc=utc, method=method, reference=ref,
         backup=not args.no_backup, dry_run=args.dry_run,

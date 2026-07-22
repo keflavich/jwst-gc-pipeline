@@ -193,10 +193,12 @@ def pairwise_overlap_offsets(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS,
         bounds, n_a_in, n_b_in = _footprint_intersection(a, b)
         n_close = min(n_a_in, n_b_in)
         if bounds is None or n_close < min_overlap_pairs:
+            # same schema as every other result dict (n_peak/measurable
+            # included): consumers index r["measurable"] unconditionally
             results.append(dict(a=la, b=lb, overlap=False, n_overlap=n_close,
                                 off_mas=None, dra_mas=None, ddec_mas=None,
-                                contrast=None, ok=True, swept=False,
-                                window_arcsec=None))
+                                contrast=None, n_peak=0, measurable=False,
+                                ok=True, swept=False, window_arcsec=None))
             continue
         # measure on the intersection populations only (sources far outside
         # the shared footprint can only contribute noise pairs)
