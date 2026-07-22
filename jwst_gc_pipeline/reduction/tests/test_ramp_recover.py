@@ -139,6 +139,64 @@ def test_misflagged_low_slope_sat_pixel_not_made_negative():
     assert deep[20, 20]
 
 
+def test_kband_clamp_bounds_inflated_local_K():
+    """Crowding clamp: a block whose local cal/slope is inflated far above the
+    field-global K (a bright neighbour's cal over a modest slope) must NOT
+    over-brighten the recovered rim.  With the clamp the recovered rim is bounded
+    at ~Kglobal*k_band*slope; with the clamp disabled (k_band=0) it runs away to
+    the full inflated ~6*Kglobal*slope."""
+    rng = np.random.default_rng(7)
+    ny = nx = 96
+    ng = 7
+    K = 0.17
+    block = 32
+    rates = rng.uniform(200, 4000, size=(ny, nx))
+    ramp = np.minimum(rates[None] * np.arange(ng)[:, None, None], CEIL)
+    cal = K * rates                                  # field-global cal = K*slope
+    # inflate ONE 32x32 block's cal/slope ~6x (crowding contamination); it stays
+    # a minority of the frame so Kglobal (median over all valid) is still ~K
+    cal[0:block, 0:block] = 6.0 * K * rates[0:block, 0:block]
+    dq = np.zeros((ny, nx), int)
+    # a saturated star inside the inflated block, railing partway (measurable slope)
+    cy = cx = 16
+    yy, xx = np.mgrid[0:ny, 0:nx]
+    r = np.hypot(yy - cy, xx - cx)
+    ramp[:, r < 8] = np.minimum(
+        (55000.0 * np.exp(-(r[r < 8] ** 2) / 10.0))[None] * np.arange(ng)[:, None], CEIL)
+    dq[r < 4] |= PSAT
+    cal[r < 4] = np.nan
+    slope, _ = ramp_slope_map(ramp, ceiling=CEIL)
+
+    rec_c, rim_c, _, Kg_c = ramp_recover_saturated(cal, dq, ramp, cal_block=block,
+                                                   k_band=4.0)
+    rec_u, rim_u, _, Kg_u = ramp_recover_saturated(cal, dq, ramp, cal_block=block,
+                                                   k_band=0.0)  # clamp disabled
+    # k_band<=0 disables the clamp -> identical to the unclamped path (a negative
+    # must NOT invert the band and dump everything to deep_core)
+    rec_n, rim_n, deep_n, _ = ramp_recover_saturated(cal, dq, ramp, cal_block=block,
+                                                     k_band=-4.0)
+    assert np.array_equal(rim_n, rim_u) and rim_n.sum() > 0
+    assert np.allclose(rec_n[rim_n], rec_u[rim_u], rtol=1e-6)
+    assert Kg_c == pytest.approx(K, rel=0.2)          # global median ~ K, not 6K
+    ring = rim_c & rim_u & np.isfinite(slope) & (slope > 20)
+    assert ring.sum() > 0
+    # clamp caps recovered rim at ~Kglobal*k_band*slope; unclamped runs to ~6*K*slope
+    cap = Kg_c * 4.0 * slope[ring]
+    assert np.all(rec_c[ring] <= cap * 1.05)
+    # clamp materially reduces the over-bright rim vs disabled
+    assert np.nanmedian(rec_c[ring]) < 0.8 * np.nanmedian(rec_u[ring])
+    # a normal (uninflated) saturated star elsewhere is untouched by the clamp
+    ramp2 = ramp.copy(); cal2 = K * rates.copy(); dq2 = np.zeros((ny, nx), int)
+    r2 = np.hypot(yy - 70, xx - 70)
+    ramp2[:, r2 < 8] = np.minimum(
+        (55000.0 * np.exp(-(r2[r2 < 8] ** 2) / 10.0))[None] * np.arange(ng)[:, None], CEIL)
+    dq2[r2 < 4] |= PSAT; cal2[r2 < 4] = np.nan
+    a, rim_a, _, _ = ramp_recover_saturated(cal2, dq2, ramp2, cal_block=block, k_band=4.0)
+    b, rim_b, _, _ = ramp_recover_saturated(cal2, dq2, ramp2, cal_block=block, k_band=0.0)
+    common = rim_a & rim_b
+    assert np.allclose(a[common], b[common], rtol=1e-6)
+
+
 def test_recovery_holds_under_noise_and_pedestal():
     """cal = K*slope must be recovered to a few % even with a reset pedestal +
     read noise on the ramp (not the noise-free cal==K*slope idealisation)."""

@@ -973,7 +973,7 @@ def _local_ratio_map(num, den, valid, *, block=64, min_per_block=25):
 
 def ramp_recover_saturated(data, dq, ramp_sci, ramp_groupdq=None, *,
                            slope_min=20.0, sat_dilate=3, infl_tol=0.10,
-                           cal_block=64, ceiling=None):
+                           cal_block=64, ceiling=None, k_band=4.0):
     """Recover the saturated-star RIM from the per-pixel ramp SLOPE, LOCALLY
     calibrated to cal units -- the crowding-immune successor to
     ``zeroframe_recover_saturated`` (which uses only group-0 + a frame-global R).
@@ -985,6 +985,14 @@ def ramp_recover_saturated(data, dq, ramp_sci, ramp_groupdq=None, *,
     ``cal/slope`` over UNSATURATED pixels (``slope > slope_min``).  Deep-core
     pixels that saturate before two groups (no measurable slope) are returned in
     ``deep_core_mask`` for the model-replace / group-0 fallback.
+
+    ``k_band`` bounds the block-local ``K_local`` to a multiplicative band
+    ``[Kglobal/k_band, Kglobal*k_band]`` around the field-global median: the true
+    calibration (photom*flat*gain) varies <~10% across a detector, so a local
+    block whose ``cal/slope`` deviates several-fold is crowding contamination and
+    would over-brighten the recovered rim (measured to dig a negative core crater
+    on gc2211).  Default 4.0 is generous (leaves real gain variation untouched);
+    ``k_band<=0`` disables the clamp.
 
     Returns
     -------
@@ -1016,6 +1024,23 @@ def ramp_recover_saturated(data, dq, ramp_sci, ramp_groupdq=None, *,
                             np.where(valid, slope, np.nan), valid,
                             block=int(cal_block))
     Kglobal = float(np.nanmedian(data[valid] / slope[valid]))
+    # CROWDING CLAMP (image-level A/B 2026-07-19): the block-local cal/slope
+    # ``Kmap`` can be inflated where a bright neighbour's cal lands in a block
+    # with only modest slope -- crowding, not real gain variation.  An inflated
+    # K_local over-brightens the recovered rim -> the satstar fit picks up too
+    # much flux -> the subtracted model digs a negative core crater (measured on
+    # gc2211: a -3.2M crater where the baseline was ~0).  The true calibration
+    # K = photom*flat*gain varies <~10% across a detector, so bound K_local to a
+    # generous multiplicative band around the field-global median; anything
+    # beyond ``k_band`` is contamination.  ``k_band<=0`` disables the clamp.
+    if k_band > 0 and np.isfinite(Kglobal) and Kglobal > 0:
+        klo, khi = Kglobal / float(k_band), Kglobal * float(k_band)
+        n_clamped = int(np.count_nonzero(np.isfinite(Kmap)
+                                         & ((Kmap < klo) | (Kmap > khi))))
+        if n_clamped:
+            log.info(f"ramp K-band clamp: {n_clamped} pixel(s) outside "
+                     f"[{klo:.4g}, {khi:.4g}] (Kglobal={Kglobal:.4g}) clipped")
+        Kmap = np.clip(Kmap, klo, khi)
     recov = slope * Kmap
     sat_buf = binary_dilation(sat, iterations=int(sat_dilate)) if sat_dilate else sat
     # A genuinely-saturated pixel that hit the well in <=ngroups cannot have a
