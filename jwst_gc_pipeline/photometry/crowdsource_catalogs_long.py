@@ -1075,9 +1075,15 @@ def _predict_output_tokens(options, visit_id=None, vgroup_id=None,
                            exposure_id=None, iteration_label=None):
     """Reproduce the per-exposure tokens used when writing catalog outputs.
 
-    Kept in sync with save_photutils_results / save_crowdsource_results /
-    do_photometry_step so --skip-if-done and --list-missing-tasks can check
-    whether the expected output already exists without running photometry.
+    Kept in sync with the actual writers so --skip-if-done and
+    --list-missing-tasks can check whether the expected output already exists
+    without running photometry:
+
+    - daophot: ``save_photutils_results`` in this module (the ``tblfilename``
+      f-string).
+    - crowdsource: ``legacy/crowdsource_step.py::save_crowdsource_results``
+      (its ``tblfilename`` f-string), called from ``do_photometry_step``'s
+      weighted-fit loop.
     """
     visitid_ = f'_visit{int(visit_id):03d}' if visit_id not in (None, '') else ''
     vgroupid_, _ = normalize_vgroup_id(vgroup_id)
@@ -1111,10 +1117,15 @@ def _predict_tblfilename(basepath, filtername, module, options,
                 f'{filtername.lower()}_{module}{obs_}{visitid_}{vgroupid_}{exposure_}'
                 f'{desat}{bgsub}{epsf_}{blur_}{group_}{iter_}'
                 f'_daophot_{basic_or_iterative}.fits')
+    # Crowdsource writer = legacy/crowdsource_step.py::save_crowdsource_results.
+    # It writes NO obs token, and its ``{fpsf}`` slot is always '' on the live
+    # path (the refit_psf loop is pinned to refit_psf=False), so neither token
+    # appears here.  Including ``{obs_}`` (as this used to) made the prediction
+    # never match the writer for multi-obs proposals.
     return (f'{basepath}/{filtername}/'
-            f'{filtername.lower()}_{module}{obs_}{visitid_}{vgroupid_}{exposure_}'
+            f'{filtername.lower()}_{module}{visitid_}{vgroupid_}{exposure_}'
             f'{desat}{bgsub}{blur_}{iter_}'
-            f'_crowdsource_unweighted.fits')
+            f'_crowdsource_{basic_or_iterative}.fits')
 
 
 def _expected_output_exists(basepath, filtername, module, options,
@@ -1123,14 +1134,19 @@ def _expected_output_exists(basepath, filtername, module, options,
     """Main output sentinel for --skip-if-done / --list-missing-tasks.
 
     daophot-iterative is the final step when --daophot is set (or basic when
-    --basic-only); crowdsource_unweighted is the final step otherwise.
+    --basic-only); crowdsource nsky0 is the final step otherwise.
     """
     if options.daophot:
         method = 'daophot'
         basic_or_iterative = 'basic' if options.basic_only else 'iterative'
     else:
         method = 'crowdsource'
-        basic_or_iterative = 'unweighted'
+        # The live legacy loop (legacy/crowdsource_step.py::do_photometry_step)
+        # runs a single weighted fit with nsky=0 and writes suffix 'nsky0'.
+        # The 'unweighted' save there is disabled (``if False:``), so the old
+        # '_crowdsource_unweighted' sentinel never existed on disk and
+        # --skip-if-done never matched in crowdsource mode.
+        basic_or_iterative = 'nsky0'
     path = _predict_tblfilename(basepath, filtername, module, options,
                                 visit_id, vgroup_id, exposure_id,
                                 iteration_label=iteration_label,
@@ -1375,8 +1391,15 @@ def _filter_near_saturation(phot_obj, dq, *, max_sat_dist_pix,
             s_dist = np.full(len(sub), np.inf, dtype=float)
             if np.any(s_in):
                 s_dist[s_in] = sat_dist_map[s_iy[s_in], s_ix[s_in]]
-            sub_keep = s_dist > float(max_sat_dist_pix)
-            if sub_keep.sum() < len(sub):
+            sub_drop = s_dist <= float(max_sat_dist_pix)
+            if sub_drop.any() and protect_xy is not None and protect_radius_pix > 0:
+                # Apply the SAME protect exemption as the top-level drop above:
+                # a protected star kept in ``phot_obj.results`` must also stay
+                # in the per-iteration snapshots, otherwise make_model_image()
+                # omits it (model loses the star, residual keeps it).
+                sub_drop &= ~_protect_mask(sx, sy, protect_xy, protect_radius_pix)
+            sub_keep = ~sub_drop
+            if sub_drop.any():
                 fr.results = sub[sub_keep]
                 if (fr.init_params is not None
                         and len(fr.init_params) == len(sub_keep)):
@@ -1507,6 +1530,12 @@ def _filter_satstar_artifacts(phot_obj, satstar_model, err, *,
             s_safe = np.where(s_sat > 0, s_sat, np.nan)
             s_ratio = np.where(s_in_gate, s_dao / s_safe, np.inf)
             sub_drop = s_in_gate & np.isfinite(s_ratio) & (s_ratio < ratio_cut)
+            if sub_drop.any() and protect_xy is not None and protect_radius_pix > 0:
+                # Apply the SAME protect exemption as the top-level drop above:
+                # a protected star kept in ``phot_obj.results`` must also stay
+                # in the per-iteration snapshots, otherwise make_model_image()
+                # omits it (model loses the star, residual keeps it).
+                sub_drop &= ~_protect_mask(sx, sy, protect_xy, protect_radius_pix)
             if sub_drop.any():
                 sub_keep = ~sub_drop
                 fr.results = sub[sub_keep]
@@ -1621,12 +1650,15 @@ def build_hybrid_saturated_artifact_mask(shape, satstar_table, core_radius_pix=1
     for xval, yval, fluxval in zip(xvals, yvals, fluxvals):
         if not (np.isfinite(xval) and np.isfinite(yval)):
             continue
+        # flux_term >= 0 (log10 of a value clipped to >= 1), so the old
+        # ``max(core_radius_pix, core_radius_pix + flux_term)`` always resolved
+        # to the second term, and the separate core-disk OR was a no-op (the
+        # core disk is a subset of the halo disk).  Behavior identical.
         flux_term = flux_scale_pix * np.log10(max(float(fluxval), 1.0))
-        core_radius = max(float(core_radius_pix), core_radius_pix + flux_term)
+        core_radius = float(core_radius_pix) + flux_term
         halo_radius = max(core_radius + 2.0, halo_radius_pix + flux_term)
         distance2 = (xx - xval) ** 2 + (yy - yval) ** 2
         mask |= distance2 <= halo_radius ** 2
-        mask |= distance2 <= core_radius ** 2
 
     return mask
 
@@ -1934,7 +1966,11 @@ def save_photutils_results(result, ww, filename,
     result.meta['filter'] = filtername
     result.meta['module'] = module
     result.meta['detector'] = detector
-    result.meta['pixscale'] = pixscale.to(u.deg).value
+    # PIXSCALE is in ARCSEC.  (The FITS 8-char truncation loop below folds
+    # 'pixscale_as' -> 'pixscale', so the two keys are aliases and the arcsec
+    # value is what lands in the header; this line used to store DEGREES and
+    # rely on that silent clobber to end up correct.)
+    result.meta['pixscale'] = pixscale.to(u.arcsec).value
     result.meta['pixscale_as'] = pixscale.to(u.arcsec).value
     result.meta['proposal_id'] = options.proposal_id
 
@@ -2023,6 +2059,41 @@ def load_data(filename):
     return fh, im1, data, wht, err, instrument, telescope, obsdate
 
 
+def stpsf_detector_for_module(module, filtername, instrument):
+    """Map a pipeline ``module`` token to the stpsf/WebbPSF detector name.
+
+    Returns None for the all-detectors path (e.g. module='merged'), where the
+    caller must use ``psf_grid(all_detectors=True)`` instead of setting a
+    single detector.
+
+    Single source of truth for BOTH the PSF-grid cache lookup and the
+    MAST/Poppy download branch in :func:`get_psf_model`.  The download branch
+    used to fall through to ``module.upper()`` for LW per-frame modules,
+    producing 'NRCALONG'/'NRCBLONG' — not valid stpsf detector names (stpsf
+    calls the LW detectors NRCA5/NRCB5) — so a cold cache raised instead of
+    building the grid.
+    """
+    if instrument == 'MIRI':
+        # MIRI imaging: single detector (MIRIM); no module split.
+        return 'MIRIM'
+    if module in ('nrca', 'nrcb'):
+        if 'F4' in filtername.upper() or 'F3' in filtername.upper():
+            return f'{module.upper()}5'
+        return f'{module.upper()}1'
+    if module.lower() in ('nrcalong', 'nrcblong'):
+        # Per-frame path passes the physical DETECTOR as ``module``
+        # (cataloging sets file_module=file_detector), so LW frames arrive
+        # here as 'nrcblong'.  WebbPSF/stpsf names its LW grid by detector
+        # 'NRCB5', so map long->5; otherwise the lookup builds
+        # nircam_nrcblong_* and misses the cached nircam_nrcb5_* grid,
+        # forcing a full MAST/Poppy rebuild on every frame.
+        return f'{module.lower()[:4].upper()}5'
+    if 'nrc' in module:
+        # SW physical detectors (nrca1..nrcb4) map directly.
+        return module.upper()
+    return None  # all_detectors path (e.g. module='merged')
+
+
 def get_psf_model(filtername, proposal_id, field,
                   module,
                   use_webbpsf=False,
@@ -2060,26 +2131,8 @@ def get_psf_model(filtername, proposal_id, field,
         # Default the webbpsf cache to the centralized shared store so freshly
         # downloaded grids are reused across targets/fields, not re-downloaded.
         _psf_outdir = psf_cache_dir or central_psf_dir(jwst_root)
-        if instrument == 'MIRI':
-            # MIRI imaging: single detector (MIRIM); no module split.
-            _cache_detector = 'MIRIM'
-        elif module in ('nrca', 'nrcb'):
-            if 'F4' in filtername.upper() or 'F3' in filtername.upper():
-                _cache_detector = f'{module.upper()}5'
-            else:
-                _cache_detector = f'{module.upper()}1'
-        elif module.lower() in ('nrcalong', 'nrcblong'):
-            # Per-frame path passes the physical DETECTOR as ``module``
-            # (cataloging sets file_module=file_detector), so LW frames arrive
-            # here as 'nrcblong'.  WebbPSF names its LW grid by detector
-            # 'NRCB5', so map long->5; otherwise the lookup builds
-            # nircam_nrcblong_* and misses the cached nircam_nrcb5_* grid,
-            # forcing a full MAST/Poppy rebuild on every frame.
-            _cache_detector = f'{module.lower()[:4].upper()}5'
-        elif 'nrc' in module:
-            _cache_detector = module.upper()
-        else:
-            _cache_detector = None  # all_detectors path — handled below
+        # None means the all_detectors path — handled below.
+        _cache_detector = stpsf_detector_for_module(module, filtername, instrument)
 
         grid = None
         if _cache_detector is not None:
@@ -2122,7 +2175,15 @@ def get_psf_model(filtername, proposal_id, field,
                     backoff = min(30, 2 ** ii)
                     print(f"Attempt {ii} to log in to MAST: {type(ex).__name__}: {ex}; sleeping {backoff}s",
                           flush=True)
+                    _last_login_ex = ex
                     time.sleep(backoff)
+            else:
+                # All 10 attempts failed (no break).  Previously execution fell
+                # through and proceeded unauthenticated, deferring the failure
+                # to a confusing MAST download error much later.
+                raise RuntimeError(
+                    f"MAST login failed after 10 attempts; last error: "
+                    f"{type(_last_login_ex).__name__}: {_last_login_ex}") from _last_login_ex
             os.environ['MAST_API_TOKEN'] = api_token.strip()
 
             has_downloaded = False
@@ -2137,20 +2198,14 @@ def get_psf_model(filtername, proposal_id, field,
                         nrc = webbpsf.NIRCam()
                     nrc.load_wss_opd_by_date(f'{obsdate}T00:00:00')
                     nrc.filter = filtername
-                    if instrument == 'MIRI':
-                        # MIRI imaging only has the MIRIM detector for imaging filters.
-                        nrc.detector = 'MIRIM'
-                        grid = nrc.psf_grid(num_psfs=16, all_detectors=False, verbose=True, save=True,
-                                           fov_pixels=101, oversample=_psf_oversample, outdir=_psf_outdir)
-                    elif module in ('nrca', 'nrcb'):
-                        if 'F4' in filtername.upper() or 'F3' in filtername.upper():
-                            nrc.detector = f'{module.upper()}5'
-                        else:
-                            nrc.detector = f'{module.upper()}1'
-                        grid = nrc.psf_grid(num_psfs=16, all_detectors=False, verbose=True, save=True,
-                                           fov_pixels=101, oversample=_psf_oversample, outdir=_psf_outdir)
-                    elif 'nrc' in module:
-                        nrc.detector = module.upper()
+                    # Same module->detector mapping as the cache lookup above
+                    # (stpsf_detector_for_module).  This branch used to set
+                    # nrc.detector = module.upper() for LW per-frame modules,
+                    # yielding invalid 'NRCALONG'/'NRCBLONG' detector names
+                    # that raised on every cold-cache build.
+                    _dl_detector = stpsf_detector_for_module(module, filtername, instrument)
+                    if _dl_detector is not None:
+                        nrc.detector = _dl_detector
                         grid = nrc.psf_grid(num_psfs=16, all_detectors=False, verbose=True, save=True,
                                            fov_pixels=101, oversample=_psf_oversample, outdir=_psf_outdir)
                     else:
@@ -2158,14 +2213,26 @@ def get_psf_model(filtername, proposal_id, field,
                                            fov_pixels=101, oversample=_psf_oversample, outdir=_psf_outdir)
                     has_downloaded = True
                 except (urllib3.exceptions.ReadTimeoutError, requests.exceptions.ReadTimeout, requests.HTTPError) as ex:
-                    print(f"Failed to build PSF: {ex}", flush=True)
+                    # Transient network failure: retry with backoff.  This
+                    # branch used to neither count against ntries nor sleep,
+                    # so a persistent timeout became an infinite hot-loop.
+                    print(f"Failed to build PSF (attempt {ntries}): {type(ex).__name__}: {ex}", flush=True)
+                    if ntries > 10:
+                        raise ValueError(
+                            f"Failed to download PSF after {ntries} attempts; "
+                            f"last error: {type(ex).__name__}: {ex}") from ex
+                    time.sleep(min(2 ** ntries, 30))
                 except Exception as ex:
-                    print(ex, flush=True)
+                    # psf_grid/load_wss_opd_by_date failure modes span stpsf,
+                    # astroquery, and file I/O and are not enumerable here;
+                    # cap the retries and chain the real error on exhaustion.
+                    print(f"Failed to build PSF (attempt {ntries}): {type(ex).__name__}: {ex}", flush=True)
                     if ntries > 10:
                         # avoid infinite loops
-                        raise ValueError("Failed to download PSF, probably because of an error listed above")
-                    else:
-                        continue
+                        raise ValueError(
+                            f"Failed to download PSF after {ntries} attempts; "
+                            f"last error: {type(ex).__name__}: {ex}") from ex
+                    time.sleep(min(2 ** ntries, 30))
 
         if use_grid:
             # 2026-04-24: stpsf's to_griddedpsfmodel sometimes returns
@@ -4691,10 +4758,20 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
             if options.each_exposure:
                 for visitid in range(1, nvisits[proposal_id][target] + 1):
                     visitid = f'{visitid:03d}'
+                    # allow_empty: a target's configured nvisits can exceed the
+                    # visits actually present for a given filter/obs; without it
+                    # get_filenames raises ValueError on a zero-frame visit and
+                    # the len()>0 guard below is unreachable.
                     filenames = get_filenames(basepath, filtername, proposal_id,
                                               field, visitid=visitid,
                                               each_suffix=options.each_suffix,
-                                              module=module, pupil='clear')
+                                              module=module, pupil='clear',
+                                              allow_empty=True)
+                    if len(filenames) == 0:
+                        print(f"WARNING: zero frames found for filter={filtername} "
+                              f"module={module} proposal={proposal_id} field={field} "
+                              f"visitid={visitid} (each_suffix={options.each_suffix}); "
+                              f"skipping this visit.", flush=True)
                     if len(filenames) > 0:
                         print(f"Looping over filenames {filenames} for filter={filtername} proposal={proposal_id} field={field} visitid={visitid}")
                         # jw02221001001_07101_00024_nrcblong_destreak_o001_crf.fits
