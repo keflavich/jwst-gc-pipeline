@@ -2329,6 +2329,29 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
     return out
 
 
+def _dedup_combined_vetted(comb, min_sep_deg=0.11 / 3600.0):
+    """Spatially dedup the vstacked per-obs vetted catalogs (brighter wins).
+
+    Two former call-site bugs fixed here (2026-07-21):
+    * the Euclidean radius test ran on raw RA/Dec degrees, so the RA radius
+      lacked the cos(dec) foreshortening (~12% too small at the GC); dedup
+      in a local tangent-ish frame (RA scaled by cos of the median dec);
+    * a catalog without a ``flux`` column passed ``flux=None``, which crashes
+      in ``_dedup_close_sources`` (``np.isfinite(None)``); rank uniformly
+      with a finite array instead.
+    """
+    from astropy.coordinates import SkyCoord as _SC
+    csc = _SC(comb['skycoord'])
+    cosd = np.cos(np.deg2rad(np.nanmedian(np.asarray(csc.dec.deg, dtype=float))))
+    keep = _dedup_close_sources(
+        xy=np.column_stack([np.asarray(csc.ra.deg, dtype=float) * cosd,
+                            np.asarray(csc.dec.deg, dtype=float)]),
+        flux=(np.asarray(comb['flux'], dtype=float) if 'flux' in comb.colnames
+              else np.ones(len(comb), dtype=float)),
+        min_sep_pix=min_sep_deg, quality=None)[0]
+    return comb[keep]
+
+
 def annotate_independent_detection(merged_path, cut_bp, filternames, options, *,
                                    radius_mas=30.0):
     """Add ``independently_detected_<filt>`` to the cross-band merged catalog.
@@ -2362,29 +2385,34 @@ def annotate_independent_detection(merged_path, cut_bp, filternames, options, *,
     _obssuf = _L.obs_token(getattr(options, 'proposal_id', None),
                            getattr(options, 'field', None))
     nfilt_indep = np.zeros(len(t), dtype='i4')
-    for module in (getattr(options, 'modules', '') or 'merged').split(','):
-        for filt in filternames:
-            f = filt.lower()
-            col = f'independently_detected_{f}'
-            # ngc6334 proposals tag the per-proposal merged catalog after the
-            # module (see merge_individual_frames); others keep the end token.
-            _jtok = (f'_j{getattr(options, "proposal_id", None)}'
-                     if str(getattr(options, 'proposal_id', None)) in ('7213', '6778') else '')
-            _endsuf = '' if _jtok else _obssuf
+    # ngc6334 proposals tag the per-proposal merged catalog after the
+    # module (see merge_individual_frames); others keep the end token.
+    _jtok = (f'_j{getattr(options, "proposal_id", None)}'
+             if str(getattr(options, 'proposal_id', None)) in ('7213', '6778') else '')
+    _endsuf = '' if _jtok else _obssuf
+    _modules = (getattr(options, 'modules', '') or 'merged').split(',')
+    # Per-filter independence is OR-ed across modules and counted ONCE per
+    # filter.  (The previous module-outer loop added ``indep`` to
+    # ``nfilt_indep`` once PER MODULE -- double-counting a filter for
+    # multi-module runs -- while ``t[col]`` kept only the LAST module's
+    # flags, so the flag and the count disagreed.)
+    for filt in filternames:
+        f = filt.lower()
+        col = f'independently_detected_{f}'
+        indep = np.zeros(len(t), dtype=bool)
+        for module in _modules:
             p = (f'{cut_bp}/catalogs/{f}_{module}{_jtok}_indivexp_merged'
                  f'{desat}{bgsub}{blur_}_m6_dao_basic{_endsuf}_vetted.fits')
             if not os.path.exists(p):
-                t[col] = np.zeros(len(t), dtype=bool)
                 continue
             m6 = Table.read(p)
             if 'skycoord' not in m6.colnames or len(m6) == 0:
-                t[col] = np.zeros(len(t), dtype=bool)
                 continue
             sc6 = m6['skycoord'] if isinstance(m6['skycoord'], SkyCoord) else SkyCoord(m6['skycoord'])
             _, sep, _ = ref.match_to_catalog_sky(sc6)
-            indep = np.asarray(sep < radius_mas * u.mas)
-            t[col] = indep
-            nfilt_indep += indep.astype('i4')
+            indep |= np.asarray(sep < radius_mas * u.mas)
+        t[col] = indep
+        nfilt_indep += indep.astype('i4')
     t['n_filt_independent'] = nfilt_indep
     t.write(merged_path, overwrite=True)
     print(f"[provenance] {os.path.basename(merged_path)}: wrote "
@@ -4188,7 +4216,6 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         try:
                             import glob as _glob
                             from astropy.table import vstack as _vstack
-                            from astropy.coordinates import SkyCoord as _SkyCoord
                             # JOINT run ('-' in field): one vetting pass against
                             # the joint (both-obs) coadd is authoritative -- do
                             # NOT vstack stale per-obs `_o001_vetted`/`_o002_vetted`
@@ -4213,13 +4240,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                                 _comb = _tabs[0] if len(_tabs) == 1 else _vstack(
                                     _tabs, metadata_conflicts='silent')
                                 if len(_tabs) > 1 and 'skycoord' in _comb.colnames:
-                                    _csc = _SkyCoord(_comb['skycoord'])
-                                    _keepc = _dedup_close_sources(
-                                        xy=np.column_stack([_csc.ra.deg, _csc.dec.deg]),
-                                        flux=(np.asarray(_comb['flux'], dtype=float)
-                                              if 'flux' in _comb.colnames else None),
-                                        min_sep_pix=0.11 / 3600.0, quality=None)[0]
-                                    _comb = _comb[_keepc]
+                                    _comb = _dedup_combined_vetted(_comb)
                                 _comb.write(combined_vetted_path, overwrite=True)
                                 print(f"manual [{phase}]: combined {len(_sibs)} per-obs "
                                       f"vetted -> {os.path.basename(combined_vetted_path)} "
@@ -4253,9 +4274,23 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             print(f"manual [{phase}]: vetted combine failed: {_cex}",
                                   flush=True)
                 except Exception as ex:
-                    print(f"manual [{phase}]: vetting failed ({ex}); using unvetted "
-                          f"merged catalog as seed", flush=True)
-                    vetted_path = merged_path
+                    # Any failure in the off-FOV cleanup / provenance /
+                    # vetting / per-obs-combine block above lands here.
+                    # Downgrading to the unvetted merged catalog silently
+                    # corrupts every later phase (no-silent-corruption rule),
+                    # so the fallback is OPT-IN: set the environment variable
+                    # CATALOG_ALLOW_UNVETTED_FALLBACK=1 to restore the old
+                    # limp-through behaviour; otherwise the failure re-raises
+                    # and the run stops.
+                    print(f"manual [{phase}]: vetting failed ({ex}); full "
+                          f"traceback:\n{traceback.format_exc()}", flush=True)
+                    if os.environ.get('CATALOG_ALLOW_UNVETTED_FALLBACK', '') == '1':
+                        print(f"manual [{phase}]: CATALOG_ALLOW_UNVETTED_FALLBACK=1 "
+                              f"set -- using unvetted merged catalog as seed",
+                              flush=True)
+                        vetted_path = merged_path
+                    else:
+                        raise
 
                 # build vetted mergedcat residual i2d, smooth -> bg for next phase
                 try:

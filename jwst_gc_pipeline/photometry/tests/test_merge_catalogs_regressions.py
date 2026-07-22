@@ -510,3 +510,168 @@ def test_pooled_wingcal_build_and_apply(tmp_path):
     assert out['flux_fit'][1] == 1000.0
     assert out['flux_fit'][2] == 1000.0
     assert abs(out['wingcal_ratio'][0] - r3) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# combine_singleframe: flux_err_prop must be the inverse-variance propagated
+# error 1/sqrt(sum(1/sigma^2)) (2026-07-21 fix: it was sqrt(N_good) too big).
+# ---------------------------------------------------------------------------
+def test_flux_err_prop_is_inverse_variance(_sci_fits):
+    """With w = keepmask/sigma^2 the old expression
+    sqrt(nansum(sigma^2 * w) / nansum(w)) has numerator == N_good, so it
+    returned sqrt(N_good / sum(w)) -- sqrt(N_good) LARGER than the documented
+    propagated uncertainty.  Hand-computed sigmas pin the correct value."""
+    n_frame = 3
+    base_ra = 266.5 + np.arange(2) * (1.0 / 3600.0)
+    base_dec = np.full(2, -28.8)
+    # per-source, per-frame sigma; source 1 has one NaN flux_err frame
+    sig = np.array([[10.0, 20.0, 40.0],
+                    [10.0, np.nan, 40.0]])
+    tbls = []
+    for f in range(n_frame):
+        sc = SkyCoord(ra=base_ra * u.deg, dec=base_dec * u.deg, frame='icrs')
+        tbls.append(_make_crowdsource_frame(
+            sc, flux=[1000.0, 1000.0], dflux=sig[:, f],
+            qf=[1.0, 1.0], fracflux=[0.9, 0.9],
+            exposure=f + 1, filename=_sci_fits))
+
+    out = MC.combine_singleframe(tbls, nanaverage=MC.nanaverage_numpy)
+    assert len(out) == 2
+
+    expected = [1.0 / np.sqrt(1 / 100 + 1 / 400 + 1 / 1600),   # 8.72872...
+                1.0 / np.sqrt(1 / 100 + 1 / 1600)]             # 9.70143...
+    np.testing.assert_allclose(np.asarray(out['dflux_prop'], dtype=float),
+                               expected, rtol=1e-5)
+    # and the meta text must document the corrected formula
+    assert '1/sqrt' in out.meta['dflux_prop']
+
+
+# ---------------------------------------------------------------------------
+# combine_singleframe: MODULE-absent meta must not KeyError in the rematch
+# diagnostic print (the conditional was INSIDE the subscript: meta['']).
+# ---------------------------------------------------------------------------
+def test_combine_singleframe_rematch_without_module_meta(_sci_fits, monkeypatch):
+    monkeypatch.setenv('MERGE_REMATCH_DIAGNOSTICS', '1')
+    rng = np.random.default_rng(7)
+    n_src, n_frame = 4, 2
+    base_ra = 266.5 + np.arange(n_src) * (1.0 / 3600.0)
+    base_dec = np.full(n_src, -28.8)
+    tbls = []
+    for f in range(n_frame):
+        ra = base_ra + rng.normal(scale=1e-6, size=n_src)
+        dec = base_dec + rng.normal(scale=1e-6, size=n_src)
+        sc = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame='icrs')
+        t = _make_crowdsource_frame(sc, np.full(n_src, 1000.0),
+                                    np.full(n_src, 10.0), np.full(n_src, 1.0),
+                                    np.full(n_src, 0.9),
+                                    exposure=f + 1, filename=_sci_fits)
+        del t.meta['MODULE']    # the regression trigger: KeyError('')
+        tbls.append(t)
+    out = MC.combine_singleframe(tbls, nanaverage=MC.nanaverage_numpy)
+    assert len(out) == n_src
+
+
+# ---------------------------------------------------------------------------
+# combine_singleframe: the realign=False production path must NOT run the
+# re-matching diagnostic (mutual match + per-exposure FITS open).
+# ---------------------------------------------------------------------------
+def test_combine_singleframe_default_skips_rematch_diagnostics(monkeypatch):
+    """FILENAME points nowhere: if the rematch loop ran, the fits.open would
+    raise.  The per-exposure offsets are recorded as NaN (not measured)."""
+    monkeypatch.delenv('MERGE_REMATCH_DIAGNOSTICS', raising=False)
+    rng = np.random.default_rng(8)
+    n_src, n_frame = 3, 2
+    base_ra = 266.5 + np.arange(n_src) * (1.0 / 3600.0)
+    base_dec = np.full(n_src, -28.8)
+    tbls = []
+    for f in range(n_frame):
+        ra = base_ra + rng.normal(scale=1e-6, size=n_src)
+        dec = base_dec + rng.normal(scale=1e-6, size=n_src)
+        sc = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame='icrs')
+        tbls.append(_make_crowdsource_frame(
+            sc, np.full(n_src, 1000.0), np.full(n_src, 10.0),
+            np.full(n_src, 1.0), np.full(n_src, 0.9),
+            exposure=f + 1, filename='/nonexistent/path/does_not_exist.fits'))
+    out = MC.combine_singleframe(tbls, nanaverage=MC.nanaverage_numpy)
+    assert len(out) == n_src
+    offs = out.meta['offsets']
+    assert len(offs) == n_frame
+    for ra_off, dec_off in offs.values():
+        assert np.isnan(float(ra_off)) and np.isnan(float(dec_off))
+
+
+# ---------------------------------------------------------------------------
+# replace_saturated: a crowdsource-style catalog with x/y but WITHOUT dx/dy
+# must not KeyError (the dx/dy write was guarded only on 'x').
+# ---------------------------------------------------------------------------
+def test_replace_saturated_without_dxdy_columns(monkeypatch, tmp_path):
+    import numpy as np
+    from astropy.table import Table
+    from astropy.coordinates import SkyCoord
+    import astropy.units as u
+    from jwst_gc_pipeline.photometry import merge_catalogs as M
+
+    ra0, dec0 = 266.5, -28.7
+    satstar = Table({
+        'skycoord_fit': SkyCoord([ra0, ra0 + 0.01]*u.deg, [dec0, dec0]*u.deg),
+        'flux_fit': [5000.0, 7000.0],
+        'flux_err': [10.0, 10.0],
+        'x_fit': [81.2, 80.9],
+        'y_fit': [81.0, 81.4],
+        'x_err': [0.01, 0.01],
+        'y_err': [0.01, 0.01],
+        'xcentroid': [512.3, 1400.7],
+        'ycentroid': [300.1, 1650.2],
+    })
+    monkeypatch.setattr(M, 'load_satstar_catalog', lambda *a, **k: satstar)
+
+    class _FakeSvo:
+        @staticmethod
+        def get_filter_list(_):
+            t = Table({'filterID': ['JWST/NIRCam.F182M'], 'ZeroPoint': [850.0]})
+            t.add_index('filterID')
+            return t
+    monkeypatch.setattr(M, 'SvoFps', _FakeSvo)
+
+    (tmp_path / 'reduction').mkdir()
+    Table({'Filter': ['F182M'], 'PSF FWHM (arcsec)': [0.06]}).write(
+        tmp_path / 'reduction' / 'fwhm_table.ecsv', format='ascii.ecsv')
+
+    # x/y present but NO dx/dy: the old code raised KeyError('dx')
+    cat = Table({
+        'skycoord': SkyCoord([ra0]*u.deg, [dec0]*u.deg),
+        'flux': [1000.0],
+        'dflux': [5.0],
+        'x': [512.0], 'y': [300.0],
+    })
+    M.replace_saturated(cat, 'f182m', basepath=str(tmp_path) + '/',
+                        fwhm_basepath=str(tmp_path))
+
+    assert bool(cat['replaced_saturated'][0])
+    assert abs(cat['x'][0] - 512.3) < 1e-6
+    assert abs(cat['y'][0] - 300.1) < 1e-6
+    assert len(cat) == 2                       # unmatched satstar appended
+    assert 'dx' not in cat.colnames
+
+
+# ---------------------------------------------------------------------------
+# oksep quality-cut helpers: per-target filename token + actual sep_* columns.
+# ---------------------------------------------------------------------------
+def test_qualcuts_oksep_suffix_per_target():
+    # targets with proposal 2221 keep the historical literal name that
+    # stage_release.py / make_all_cmds_m7.py glob
+    assert MC._qualcuts_oksep_suffix('brick') == '_qualcuts_oksep2221'
+    assert MC._qualcuts_oksep_suffix('cloudc') == '_qualcuts_oksep2221'
+    # other targets get their own proposal token(s), not a hardcoded "2221"
+    assert MC._qualcuts_oksep_suffix('sgrc') == '_qualcuts_oksep4147'
+    assert MC._qualcuts_oksep_suffix('ngc6334') == '_qualcuts_oksep6778-7213'
+    # unknown target: fall back to the target name
+    assert MC._qualcuts_oksep_suffix('nosuchtarget') == '_qualcuts_oksepnosuchtarget'
+
+
+def test_oksep_sep_cols_from_actual_columns():
+    cols = ['sep_f405n', 'sep_f410m', 'sep_f480m', 'sep_f200w', 'sep_f150w2',
+            'flux_f405n', 'satstar_match_sep_f405n']
+    # narrow/medium bands present in the TABLE are used (f480m was invisible
+    # to the old brick-filternames iteration); wide (w) bands stay excluded
+    assert MC._oksep_sep_cols(cols) == ['sep_f405n', 'sep_f410m', 'sep_f480m']

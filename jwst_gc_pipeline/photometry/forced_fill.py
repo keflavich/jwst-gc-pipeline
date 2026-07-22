@@ -25,6 +25,7 @@ This runs after the m7 cross-band merge for every multifilter run (see
 ``run_manual_pipeline``), producing ``..._merged_resbgsub_m8.fits``.
 """
 import os
+import traceback
 import numpy as np
 from astropy.table import Table
 from astropy.coordinates import SkyCoord
@@ -200,12 +201,18 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
     dec = ref.dec.deg[tgt_idx]
 
     for filename in frames:
+        # A dropped frame here silently weakens the inverse-variance combine
+        # (no-silent-frame-drops rule): catch only the exceptions frame prep
+        # can legitimately raise (filename-token parsing -> ValueError /
+        # IndexError; missing or unreadable frame products / headers ->
+        # OSError (incl. FileNotFoundError) / KeyError), ALWAYS print the
+        # full traceback, and let anything else propagate.
         try:
             kw = frame_arg_builder(filename)
             ctx = prepare_frame(**kw)
-        except Exception as ex:
-            if verbose:
-                print(f"  [m8 {filt}] prep failed {os.path.basename(filename)}: {ex}", flush=True)
+        except (OSError, KeyError, ValueError, IndexError) as ex:
+            print(f"  [m8 {filt}] prep failed {os.path.basename(filename)}: {ex}\n"
+                  f"{traceback.format_exc()}", flush=True)
             continue
         ny, nx = ctx.nan_replaced_data.shape
         xpix, ypix = ctx.ww.all_world2pix(ra, dec, 0)
@@ -256,11 +263,12 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
         tbl[f'flux_{filt}'][ridx[fitted]] = flux[fitted]
     if f'flux_jy_{filt}' in tbl.colnames:
         tbl[f'flux_jy_{filt}'][ridx[fitted]] = fjy[fitted]
+    # magnitudes AND emag only for positive flux (a flux<=0 row keeps mag NaN,
+    # so writing its emag would leave an absurd error on a NaN magnitude)
+    posfit = fitted & (flux > 0)
     if f'emag_ab_{filt}' in tbl.colnames:
         with np.errstate(divide='ignore', invalid='ignore'):
-            tbl[f'emag_ab_{filt}'][ridx[fitted]] = 1.0857 * (ferr[fitted] / flux[fitted])
-    # magnitudes only for positive flux
-    posfit = fitted & (flux > 0)
+            tbl[f'emag_ab_{filt}'][ridx[posfit]] = 1.0857 * (ferr[posfit] / flux[posfit])
     if f'mag_ab_{filt}' in tbl.colnames:
         tbl[f'mag_ab_{filt}'][ridx[posfit]] = -2.5 * np.log10(fjy[posfit]) + ABMAG_OFFSET
     if vega_zp is not None and f'mag_vega_{filt}' in tbl.colnames:

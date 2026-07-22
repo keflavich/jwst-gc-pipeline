@@ -28,7 +28,9 @@ class _MockPSF:
         return flux * g / (2 * np.pi * SIG ** 2)
 
 
-def _build():
+def _build(neg_target=False):
+    """``neg_target=True`` adds a THIRD phantom row sitting on a strong
+    NEGATIVE blob (an over-subtraction hole), so its forced flux fits < 0."""
     rng = np.random.default_rng(0)
     ww = WCS(naxis=2)
     ww.wcs.crpix = [50, 50]
@@ -38,12 +40,14 @@ def _build():
 
     NY = NX = 120
     cjy, zp, atrue = 3.0e-8, 1.5e-7, 500.0
-    inj = [(35.0, 60.0), (80.0, 25.0)]
+    inj = [(35.0, 60.0, atrue), (80.0, 25.0, atrue)]
+    if neg_target:
+        inj = inj + [(60.0, 95.0, -800.0)]
     image = rng.normal(0, 1.0, (NY, NX)).astype('float32')
     psf = _MockPSF()
     yy, xx = np.mgrid[0:NY, 0:NX]
-    for px, py in inj:
-        image += psf.evaluate(xx, yy, atrue, px, py)
+    for px, py, amp in inj:
+        image += psf.evaluate(xx, yy, amp, px, py)
 
     ndet = 25
     dflux = rng.uniform(200, 5000, ndet)
@@ -52,15 +56,17 @@ def _build():
     dra, ddec = ww.all_pix2world(rng.uniform(5, 115, ndet), rng.uniform(5, 115, ndet), 0)
     pra, pdec = ww.all_pix2world([p[0] for p in inj], [p[1] for p in inj], 0)
 
-    n = ndet + 2
+    nph = len(inj)
+    n = ndet + nph
+    nanph = [np.nan] * nph
     tbl = Table()
     tbl['skycoord_ref'] = SkyCoord(np.r_[dra, pra] * u.deg, np.r_[ddec, pdec] * u.deg)
-    tbl['flux_f405n'] = np.r_[dflux, [np.nan, np.nan]]
-    tbl['flux_jy_f405n'] = np.r_[dfjy, [np.nan, np.nan]]
-    tbl['mag_ab_f405n'] = np.r_[-2.5 * np.log10(dfjy) + 8.90, [np.nan, np.nan]]
-    tbl['mag_vega_f405n'] = np.r_[dmagv, [np.nan, np.nan]]
-    tbl['emag_ab_f405n'] = np.r_[np.full(ndet, 0.02), [np.nan, np.nan]]
-    tbl['mask_f405n'] = np.array([False] * ndet + [True, True])
+    tbl['flux_f405n'] = np.r_[dflux, nanph]
+    tbl['flux_jy_f405n'] = np.r_[dfjy, nanph]
+    tbl['mag_ab_f405n'] = np.r_[-2.5 * np.log10(dfjy) + 8.90, nanph]
+    tbl['mag_vega_f405n'] = np.r_[dmagv, nanph]
+    tbl['emag_ab_f405n'] = np.r_[np.full(ndet, 0.02), nanph]
+    tbl['mask_f405n'] = np.array([False] * ndet + [True] * nph)
     tbl['is_saturated_f405n'] = np.zeros(n, bool)
     tbl['near_saturated_f405n_f405n'] = np.zeros(n, bool)
 
@@ -91,6 +97,60 @@ def test_forced_fill_recovers_phantom():
         assert tbl['forced_snr_f405n'][i] > 3
     # already-detected rows untouched
     assert np.allclose(tbl['flux_f405n'][:ndet], dflux0)
+
+
+def test_forced_fill_negative_flux_no_emag():
+    """Regression (2026-07-21): rows whose forced flux fits <= 0 keep NaN
+    magnitudes -- but ``emag_ab`` used to be written for them anyway, leaving
+    an absurd (negative) error attached to a NaN magnitude.  emag must be
+    written only for flux > 0 rows."""
+    tbl, prepare_frame, ndet, cjy, zp, atrue = _build(neg_target=True)
+    ineg = ndet + 2  # the phantom sitting on the negative blob
+
+    ff.forced_fill_band(tbl, 'f405n', ['frame1'], prepare_frame=prepare_frame,
+                        frame_arg_builder=lambda fn: {}, nsigma=3.0,
+                        fit_shape=(5, 5), verbose=False)
+
+    assert bool(tbl['forced_filled_f405n'][ineg])          # it was fitted...
+    assert tbl['flux_f405n'][ineg] < 0                     # ...to negative flux
+    assert bool(tbl['mask_f405n'][ineg])                   # still a non-detection
+    assert np.isnan(tbl['mag_ab_f405n'][ineg])             # mag stays NaN
+    assert np.isnan(tbl['emag_ab_f405n'][ineg])            # emag must too
+    # the positive-flux phantoms still get their emag
+    assert np.isfinite(tbl['emag_ab_f405n'][ndet])
+    assert np.isfinite(tbl['emag_ab_f405n'][ndet + 1])
+
+
+def test_forced_fill_prep_failure_handling(capsys):
+    """Frame-prep failures must not be silent (no-silent-frame-drops): an
+    expected failure (missing file and friends) prints the FULL traceback and
+    skips the frame; an unexpected exception PROPAGATES."""
+    import pytest
+    tbl, _, ndet, *_ = _build()
+
+    def prep_missing(**kw):
+        raise FileNotFoundError("no such frame product")
+
+    nrec = ff.forced_fill_band(tbl, 'f405n', ['frameX'],
+                               prepare_frame=prep_missing,
+                               frame_arg_builder=lambda fn: {}, nsigma=3.0,
+                               fit_shape=(5, 5), verbose=False)
+    assert nrec == 0
+    out = capsys.readouterr().out
+    assert 'prep failed' in out
+    assert 'Traceback' in out            # full traceback, even verbose=False
+    assert 'no such frame product' in out
+
+    tbl2, *_ = _build()
+
+    def prep_broken(**kw):
+        raise RuntimeError("programming error, must not be swallowed")
+
+    with pytest.raises(RuntimeError, match="must not be swallowed"):
+        ff.forced_fill_band(tbl2, 'f405n', ['frameX'],
+                            prepare_frame=prep_broken,
+                            frame_arg_builder=lambda fn: {}, nsigma=3.0,
+                            fit_shape=(5, 5), verbose=False)
 
 
 if __name__ == '__main__':
