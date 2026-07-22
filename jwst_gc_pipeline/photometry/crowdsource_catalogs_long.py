@@ -4510,6 +4510,17 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     else:
         basepath = f'/blue/adamginsburg/adamginsburg/jwst/{field_to_reg_mapping[field]}/'
 
+    # Non-destructive experimental runs: redirect the WHOLE basepath to a scratch
+    # tree staged (stage_scratch_basepath.sh) with symlinks/copies of the real
+    # INPUT frames only, so a full-frame run writes its outputs there and never
+    # overwrites released products.  Off by default (empty env).  One process only
+    # ever resolves one (target, filter) basepath, so a process-global env is safe.
+    from jwst_gc_pipeline.scratch_basepath import apply_basepath_override
+    _bp0 = basepath
+    basepath = apply_basepath_override(basepath)
+    if basepath != _bp0:
+        print(f"GC_BASEPATH_OVERRIDE active: basepath -> {basepath}", flush=True)
+
     pl.close('all')
 
     if options.finalize_only:
