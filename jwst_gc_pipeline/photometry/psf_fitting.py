@@ -11,10 +11,11 @@ implementation.  Contents:
 * ``_make_model_image`` (version-safe make_model_image)
 * ``_dedup_close_sources`` (greedy spatial deduplication)
 
-The legacy parallel-chunked workers (``_parallel_psfphotometry`` etc.),
-``_FakePhot``, and ``WrappedPSFModel`` remain in ``crowdsource_catalogs_long.py``
-for now (tangled with crowdsource / the iterative chunked logic); they import
-the helpers here.
+The legacy parallel-chunked workers (``_parallel_psfphotometry``,
+``_FakePhot``, ...) now live in ``legacy/crowdsource_step.py``;
+``WrappedPSFModel`` (the crowdsource fit_im wrapper) remains in
+``crowdsource_catalogs_long.py``.  Both reach the helpers here via imports /
+the legacy namespace copy.
 """
 import numpy as np
 from astropy.table import Table
@@ -304,6 +305,11 @@ def _dedup_close_sources(xy, flux, min_sep_pix, quality=None,
     flux_agreement_frac : float, optional
         Relative flux tolerance below which cluster members are treated as
         duplicates of the same source.
+    is_saturated : array of bool, shape (N,), optional
+        Marks saturated-star entries.  Saturated entries are dedup-eligible
+        even with NaN flux and win the cluster tiebreak regardless of flux
+        (they seed clusters first), so a saturated star always survives over
+        nearby NaN-flux or fainter duplicates.  Default (None) = all False.
 
     Returns
     -------

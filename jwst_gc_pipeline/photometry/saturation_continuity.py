@@ -20,7 +20,7 @@ forced_filled):
   Fallback when no transition bin exists (weakly-saturating bands): C2 =
   max |median(color|SAT) - locus(mag_B)| over SAT bins with n >= 10
   brightward of boundary+1, where locus = robust linear fit of median UNFLG
-  color over mag_B in [boundary+0.5, boundary+3.5].
+  color over mag_B in [boundary+0.5, boundary+3.0].
 
 PASS: metric < 0.05 mag (goal) / < 0.10 mag (certification floor).
 A discontinuity means saturation-handled photometry is on a different flux

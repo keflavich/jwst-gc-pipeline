@@ -1,32 +1,28 @@
-"""Manual-iteration PSF photometry (Hosek-style), the start of the photometry
-restructure (2026-06-09).
+"""Manual-iteration PSF photometry (Hosek-style) -- the PRODUCTION cataloging
+path (``run_manual_pipeline``, phases m1..m8).
 
-Motivation
-----------
-The legacy ``crowdsource_catalogs_long.do_photometry_step`` uses photutils
-``IterativePSFPhotometry`` for iter2+, which is numerically unstable for
+Motivation (2026-06-09 restructure)
+-----------------------------------
+The legacy ``IterativePSFPhotometry``-based path is numerically unstable for
 isolated bright stars: with free position + LevMar + internal maxiters
 re-detection the fit can walk the centroid and settle on a ~2x inflated-flux
 minimum whose *model peak exceeds the data peak* (physically impossible for a
 single positive PSF; qfit does NOT catch it).  See
 ``NOTES_star_vs_extended_emission.md`` (C/D case) and ``PSFPhotometryPlan2026-06-09.md``.
 
-This module replaces the iterative fitter with **manual iterations of
-single-pass** ``PSFPhotometry``, making each daofind -> fit -> residual ->
-reseed cycle explicit, and adds a physical model/data-peak overshoot QC.
+This module uses **manual iterations of single-pass** ``PSFPhotometry``,
+making each daofind -> fit -> residual -> reseed cycle explicit, and adds a
+physical model/data-peak overshoot QC.
 
-Recipe (cutout-first):
-  per-frame iter1 -> iter2 (no merge between)
-  -> merge + extended-emission filter + smoothed-bg map
-  -> iter3 (bg-subtracted) -> merge + recompute bg
-  -> iter4 -> cross-band stringent seed (multifilter) -> iter5
+Pipeline phases: per-frame m1 -> m2 (no merge between) -> merge +
+extended-emission filter + smoothed-bg map -> m3 (bg-subtracted) -> merge +
+recompute bg -> m4..m6 -> m7 cross-band merge (multifilter) -> m8 forced fill
+(``forced_fill.py``; standalone, restartable via ``--manual-start-phase=m8``).
+Output filenames carry iteration labels ``m1..m8`` so products never collide
+with legacy ``iter2/iter3/iter4`` ones.
 
-Built alongside the legacy path (gated by ``--manual-iterations``); the old
-code is untouched and will be deprecated only if this proves out.
-
-This module is BASIC-only (single-pass ``PSFPhotometry``); all output filenames
-carry iteration labels ``m1..m5`` so products never collide with the legacy
-``iter2/iter3/iter4`` ones.
+The superseded legacy path is FROZEN in ``legacy/crowdsource_step.py``
+(BENCHMARKS ONLY; reached via ``--legacy-iterations``).
 """
 import numpy as np
 from astropy.table import Table
@@ -45,11 +41,12 @@ from jwst_gc_pipeline.photometry.psf_fitting import (
 )
 
 # Seed-building, local-stats, and satstar-filter helpers still live in the
-# legacy module (factoring of seeds.py / image_stats.py / satstar_filters.py is
-# deferred to a follow-up; these are imported here so cataloging.py uses the one
-# canonical implementation).  Importing the legacy module at load time is fine:
-# it does NOT import this module at top level (only lazily in its dispatch
-# branch), so there is no import cycle.
+# crowdsource_catalogs_long host module (column-convention helpers were
+# factored into column_utils.py; a fuller split into seeds.py / image_stats.py
+# / satstar_filters.py was never done).  These are imported here so
+# cataloging.py uses the one canonical implementation.  Importing the host
+# module at load time is fine: it does NOT import this module at top level
+# (only lazily in its dispatch branch), so there is no import cycle.
 from jwst_gc_pipeline.photometry import crowdsource_catalogs_long as _L
 from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
     SeededFinder,
@@ -1256,9 +1253,14 @@ def _filter_extended_emission(catalog, data_i2d_image=None, ww_i2d=None, *,
                   flush=True)
 
     n_keep = int(np.sum(keep))
+    # Only report the struct-prune numbers when that gate is active (the manual
+    # path always calls with struct_x=struct_y=0, which would print a
+    # meaningless "dropped 0 @ x=0,y=0" every time).
+    _struct_msg = (f", struct-prune dropped {n_struct} @x={struct_x},y={struct_y}"
+                   if (struct_x or struct_y) else "")
     print(f"[{label}] extended-emission filter: {n} -> {n_keep} "
           f"(qfit<={qfit_max}, flags in {keep_flags}, peakSB>{peak_over_bkg}x bkg, "
-          f"snr>={local_snr_min}, struct-prune dropped {n_struct} @x={struct_x},y={struct_y})",
+          f"snr>={local_snr_min}{_struct_msg})",
           flush=True)
     return t[keep]
 
