@@ -82,10 +82,14 @@ finalize**, chained with `--dependency=afterok`:
   reusing on-disk m6 products via `--manual-start-phase m7`, run only after the
   array finishes OK (4 cpu — m7 is I/O/table-stack bound, not cpu-parallel).
 
-Same science as the monolith **except** the standalone m7 job does not re-apply
-the out-of-FOV saturated-star flux pins computed at m12 (those live in memory in
-a monolithic run); this affects only off-FOV bright-star photometry in the final
-cross-band catalog. For full off-FOV-satstar fidelity, run the monolithic job.
+Same science as the monolith. (Earlier templates warned the standalone m7 dropped
+the out-of-FOV satstar flux pins; that caveat is obsolete — off-FOV satstars now
+use the Spitzer-prior `_spitzer.reg` + model<=data clamp, loaded fresh each phase
+in both the monolith and the finalize, so the in-memory m12 `satstar_overrides`
+dict is vestigial. See `cataloging.py` `run_manual_pipeline` start_phase note.)
+Pass `DEBLEND_SATSTARS=1` to plumb the ZEROFRAME satstar deblend through **both**
+stages (the m7 finalize honors it too) so a re-made satstar catalog at m7 matches
+m12 — required for crowded GC fields (gc2211/arches/quintuplet/sgra).
 
 ### Stream 3 — per-frame fan-out (finest split)
 
@@ -118,7 +122,8 @@ Verify equivalence on a small cutout before trusting it at scale:
 locally and diffs the final catalogs. Unit tests:
 `jwst_gc_pipeline/photometry/tests/test_perframe_helpers.py`.
 
-Same off-FOV-satstar fidelity caveat as Stream 2's standalone finalize.
+Off-FOV satstars: same Spitzer-prior path as Stream 2 (no fidelity gap); pass
+`DEBLEND_SATSTARS=1` to carry the ZEROFRAME deblend through every per-frame stage.
 
 ## Overriding the target
 

@@ -70,6 +70,14 @@ elif [ "$MODE" = "finalize" ]; then
     MODE_ARGS="--manual-finalize-only"
     scontrol update JobId="${SLURM_JOB_ID:-0}" \
         Name="pf_${TARGET}_${PHASE}_fin" 2>/dev/null || true
+    # Lustre metadata coherence lag: the finalize launches (afterok) the instant
+    # the last fan-out shard exits, but the per-frame completion markers those
+    # shards just wrote may not yet be visible on the finalize node's MDT view.
+    # The marker check then HARD-CRASHES on a "missing" marker that in fact exists
+    # (verified: flagged frames' markers present minutes later).  Settle first so
+    # the directory listing is coherent before the strict all-markers verify.
+    echo "finalize: sleeping 180s for Lustre marker-metadata coherence before verify."
+    sleep 180
 else
     echo "MODE must be 'fanout' or 'finalize' (got '$MODE')"; exit 1
 fi
@@ -81,21 +89,41 @@ unset SLURM_ARRAY_TASK_ID SLURM_ARRAY_JOB_ID
 
 echo "PERFRAME $MODE: $TARGET $PROPOSAL/$FIELD phase=$PHASE filters=$FILT_CSV modules=$MODULES ${MODE_ARGS}"
 PYTHON=${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/python}
-"$PYTHON" -m jwst_gc_pipeline.photometry.crowdsource_catalogs_long \
-    --filternames="$FILT_CSV" \
-    --modules="$MODULES" \
-    --each-exposure \
-    --proposal_id="$PROPOSAL" \
-    --field="$FIELD" \
-    --target="$TARGET" \
-    --each-suffix="$EACH_SUFFIX" \
-    --max-group-size="$MAX_GROUP_SIZE" \
-    --parallel-workers="$PARALLEL_WORKERS" \
-    --manual-start-phase="$PHASE" \
-    --manual-stop-after-phase="$PHASE" \
-    $MODE_ARGS \
-    $REF_ARG \
-    $EXTRA_ARGS
+
+# Destagger imports: a large fan-out array launches dozens of tasks at once, all
+# scanning the shared conda env's package metadata simultaneously.  That races in
+# importlib_metadata (observed: MetadataNotFound from photutils' optional-deps /
+# tqdm import) and kills the odd task ~30 s in.  A short random sleep spreads the
+# import storm; a one-shot retry rescues any task that still loses the race.  Both
+# are pure environment hardening -- they do not touch the science.
+sleep $(( (RANDOM % 25) + 1 ))
+
+run_pipeline() {
+    "$PYTHON" -m jwst_gc_pipeline.photometry.crowdsource_catalogs_long \
+        --filternames="$FILT_CSV" \
+        --modules="$MODULES" \
+        --each-exposure \
+        --proposal_id="$PROPOSAL" \
+        --field="$FIELD" \
+        --target="$TARGET" \
+        --each-suffix="$EACH_SUFFIX" \
+        --max-group-size="$MAX_GROUP_SIZE" \
+        --parallel-workers="$PARALLEL_WORKERS" \
+        --manual-start-phase="$PHASE" \
+        --manual-stop-after-phase="$PHASE" \
+        $MODE_ARGS \
+        $REF_ARG \
+        $EXTRA_ARGS
+}
+
+run_pipeline
 rc=$?
+# rc=1 within the first moments is almost always the import race; retry once.
+if [ $rc -ne 0 ]; then
+    echo "PERFRAME $MODE: rc=$rc on first attempt; sleeping then retrying once."
+    sleep $(( (RANDOM % 30) + 10 ))
+    run_pipeline
+    rc=$?
+fi
 echo "PERFRAME $MODE done: phase=$PHASE rc=$rc"
 exit $rc

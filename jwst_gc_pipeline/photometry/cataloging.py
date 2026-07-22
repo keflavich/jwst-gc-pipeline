@@ -3476,8 +3476,12 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
             _prev_resbgsub = _prev in ('m5', 'm6', 'm7')
             for module in modules:
                 for filt in filternames:
+                    # Use _prev_label (m12 -> m2) so the on-disk token matches how
+                    # the m12 phase wrote its products (merge_label='m2'); passing
+                    # raw _prev='m12' looks for a nonexistent *_m12_* bg and crashes
+                    # any per-frame job that starts at m3.
                     _bg = _reconstruct_smoothed_bg_path(
-                        cut_bp, proposal_id, field, module, filt, _prev, options, pupil)
+                        cut_bp, proposal_id, field, module, filt, _prev_label, options, pupil)
                     if not os.path.exists(_bg):
                         raise FileNotFoundError(
                             f"--manual-start-phase={start_phase}: required {_prev} "
@@ -3486,7 +3490,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     bg_for_next[(module, filt)] = _bg
                     # mergedcat residual i2d (detection image for m4..m6 seed)
                     _ri = _reconstruct_resid_i2d_path(
-                        cut_bp, proposal_id, field, module, filt, _prev, options, pupil)
+                        cut_bp, proposal_id, field, module, filt, _prev_label, options, pupil)
                     if os.path.exists(_ri):
                         resid_i2d_for_next[(module, filt)] = _ri
                     # iter_found provenance from the prior merged catalog

@@ -10,11 +10,12 @@
 # Typically submitted by submit_cataloging_chain.sh with an afterok dependency
 # on the per-filter array, but can be run standalone once m6 is complete.
 #
-# KNOWN FIDELITY CAVEAT: a standalone m7 job does NOT re-apply the out-of-FOV
-# saturated-star flux pins computed at m12 (they live in memory within the
-# monolithic run).  This affects only off-FOV bright-star photometry in the
-# final cross-band catalog; in-FOV science is unaffected.  For full fidelity on
-# off-FOV satstars, run the monolithic multifilter job instead.
+# FIDELITY: functionally identical to a monolithic run.  Off-FOV saturated stars
+# are handled by the Spitzer-prior (_spitzer.reg) + model<=data clamp, which load
+# fresh every phase in BOTH the monolith and this finalize (the old in-memory m12
+# satstar_overrides dict is vestigial for off-FOV) -- see cataloging.py
+# run_manual_pipeline start_phase note.  The ZEROFRAME satstar deblend is plumbed
+# via DEBLEND_SATSTARS below so a re-made satstar catalog at m7 matches m12.
 # ---------------------------------------------------------------------------
 # renamed to "<target>-catalog-m7" at runtime (target is not always the GC)
 #SBATCH --job-name=catalog_m7
@@ -68,6 +69,16 @@ PARALLEL_WORKERS=${PARALLEL_WORKERS:-${SLURM_CPUS_PER_TASK:-1}}
 CROSSBAND_REF=${CROSSBAND_REF:-}
 EXTRA_ARGS=${EXTRA_ARGS:-}
 
+# ZEROFRAME satstar deblend MUST match the per-filter (m12..m6) array stage: the
+# m7 partial-start re-scans frames, and load_or_make_satstar_catalog re-makes a
+# frame's satstar catalog when off-FOV pixels force overwrite -- a re-make WITHOUT
+# this flag would drop the m12 deblend and diverge from a monolithic run.  Mirror
+# submit_cataloging.sbatch so the finalize is functionally identical to the
+# monolith.  Auto-degrades to legacy where a frame has no sibling _ramp.fits.
+DEBLEND_SATSTARS=${DEBLEND_SATSTARS:-}
+DEBLEND_ARG=""
+[ -n "$DEBLEND_SATSTARS" ] && DEBLEND_ARG="--deblend-satstars"
+
 PIPE_ROOT=${PIPE_ROOT:-}
 [ -n "$PIPE_ROOT" ] && export PYTHONPATH="$PIPE_ROOT:$PYTHONPATH"
 
@@ -91,6 +102,7 @@ PYTHON=${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/p
     --max-group-size="$MAX_GROUP_SIZE" \
     --parallel-workers="$PARALLEL_WORKERS" \
     --manual-start-phase=m7 \
+    $DEBLEND_ARG \
     $REF_ARG \
     $EXTRA_ARGS
 rc=$?
