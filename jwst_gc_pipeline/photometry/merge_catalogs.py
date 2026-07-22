@@ -2191,13 +2191,34 @@ def _dedup_satstar_catalog(tbl, radius=None, target=None):
     _use_anchor = bool(int(os.environ.get('SATSTAR_FP_USE_ANCHOR',
                                           1 if _ext_anchor_default else 0)))
 
-    def _same_component(a, b):
+    # BIG-CORE fallback merge params.  The bbox-centre anchor is only stable when
+    # the DQ saturated EXTENT is stable; a bright core embedded in nebulosity
+    # varies 370->659 px frame-to-frame, so its anchor wanders 0.24-0.33" -- past
+    # comp_as -- and the ONE star survives as 2-3 rows -> each force-catalogued
+    # and rendered -> the model over-subtracts Nx into a crater.  Once the per-
+    # frame satstar position is LOCKED (NIRCAM_SATSTAR_LOCK_POS) the per-frame
+    # FLUXES become consistent (W51 darkfil blob: 6.0/6.6/6.9e5, ratio 1.16), so a
+    # big-core + close + flux-consistent trio is recognisably one fragmented star.
+    # Real crowded-cluster stars have SMALL cores (r < _big_core_as), so they never
+    # trigger this and are preserved (their anchors are also genuinely distinct).
+    _big_core_as = float(os.environ.get('SATSTAR_FP_BIGCORE_ARCSEC', 0.5))
+    _big_merge_sep = float(os.environ.get('SATSTAR_FP_BIGCORE_MERGE_ARCSEC', 0.35))
+
+    def _same_component(a, b, sep_as):
+        _flux_ok = (max(fl[a], fl[b]) / max(min(fl[a], fl[b]), 1e-9) <= frmax)
         if _use_anchor and has_anchor[a] and has_anchor[b]:
             dra = (anc_ra[a] - anc_ra[b]) * np.cos(np.radians(anc_dec[a]))
             dsep = np.hypot(dra, anc_dec[a] - anc_dec[b]) * 3600.0
-            return dsep <= comp_as
+            if dsep <= comp_as:
+                return True
+            # anchor says DISTINCT, but the anchor is unreliable for a big variable
+            # core: override ONLY when both cores are large AND close AND flux-
+            # consistent (one fragmented saturated star).  Small-core real clusters
+            # fail the size gate and stay separate.
+            return (rsat_as[a] >= _big_core_as and rsat_as[b] >= _big_core_as
+                    and sep_as <= _big_merge_sep and _flux_ok)
         # flux-consistency (default / anchor-missing)
-        return max(fl[a], fl[b]) / max(min(fl[a], fl[b]), 1e-9) <= frmax
+        return _flux_ok
 
     # --- big-footprint inconsistent reject (fix 2, OFF by default) ---
     # Superseded by the component-identity merge above (flux-inconsistency cannot
@@ -2243,7 +2264,7 @@ def _dedup_satstar_catalog(tbl, radius=None, target=None):
         for (b, s) in nbrs[i]:              # absorb same-position dups + same-component nbrs
             if suppressed[b]:
                 continue
-            if s <= base_as or (s <= R_i and _same_component(i, b)):
+            if s <= base_as or (s <= R_i and _same_component(i, b, s)):
                 suppressed[b] = True
         suppressed[i] = True
     kept = fin_idx[kept_local]

@@ -98,6 +98,29 @@ def test_anchor_default_on_for_extended_targets():
     assert len(_dedup_satstar_catalog(t.copy(), target='brick')) > 1
 
 
+def test_bigcore_anchor_override_merges_fragmented_star(monkeypatch):
+    # W51 darkfil blob1 after the position lock: ONE bright saturated star kept as
+    # 3 rows with LARGE cores (sat_area 370/413/617 -> r 0.68-0.88"), fit ~0.2-0.3"
+    # apart, flux CONSISTENT (6.0/6.6/6.9e5, ratio 1.16), but the bbox anchors
+    # WANDER 0.24-0.33" (> comp_as) because the saturated extent varies frame-to-
+    # frame.  The anchor says "distinct", but big-core + close + flux-consistent
+    # overrides -> collapse to ONE (else the 3 render as 3 PSFs -> model crater).
+    monkeypatch.setenv('SATSTAR_FP_USE_ANCHOR', '1')
+    # real blob1: fit positions 0.18-0.28" apart, anchors 0.24-0.33" apart
+    t = _tbl([0.0, 0.18, 0.28], [6.9e5, 6.6e5, 6.0e5], sat_area=[370, 413, 617],
+             anchor_dec_arcsec=[0.0, 0.24, 0.33])
+    assert len(_dedup_satstar_catalog(t, target='w51')) == 1
+
+
+def test_bigcore_override_needs_flux_consistency(monkeypatch):
+    # Two big cores, anchors apart, but FLUX-INCONSISTENT (ratio 4) -> the big-core
+    # override must NOT fire (genuinely different stars) -> stay 2.
+    monkeypatch.setenv('SATSTAR_FP_USE_ANCHOR', '1')
+    t = _tbl([0.0, 0.25], [6.9e5, 1.7e5], sat_area=[617, 413],
+             anchor_dec_arcsec=[0.0, 0.30])
+    assert len(_dedup_satstar_catalog(t, target='w51')) == 2
+
+
 def test_backward_compat_without_sat_area():
     # no sat_area column -> base-radius behaviour: 0.1" dup absorbed, 0.5" kept
     t = _tbl([0.0, 0.1, 0.5], [300e3, 250e3, 200e3], sat_area=None)
