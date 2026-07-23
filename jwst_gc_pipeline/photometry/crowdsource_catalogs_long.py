@@ -2071,6 +2071,59 @@ def get_psf_model(filtername, proposal_id, field,
                         grid = grid[0]
                     break
 
+        # All-detectors path (module='merged'): stpsf_detector_for_module
+        # returns None, so the per-detector cache lookup above is skipped.
+        # Without this branch we fall through to MAST + nrc.psf_grid(
+        # all_detectors=True, save=True), which rebuilds AND overwrites every
+        # channel grid already sitting on disk -- ~7-8 h/run on brick, repeated
+        # once per (module, filter) merged-residual phase.  Downstream only ever
+        # uses grid[0] (see the isinstance(grid, list) collapses below), so load
+        # the channel's per-detector grids from disk in webbpsf ``detector_list``
+        # order (NRCA1..NRCA4,NRCB1..NRCB4 for SW; NRCA5,NRCB5 for LW) and hand
+        # back the list; grid[0] is then the same grid the rebuild would have
+        # produced.  Consistent with the single-detector cache policy above,
+        # which likewise loads whatever grid is on disk regardless of obsdate.
+        if grid is None and _cache_detector is None and instrument != 'MIRI':
+            # LW = NIRCam long channel.  Almost all LW filters are F3xx/F4xx, but
+            # F250M and F277W are LW too (no '3'/'4') -- name them explicitly so
+            # they map to the 5-detectors, not the SW set (a misclassification
+            # would only fail safe -> rebuild, but be correct anyway).
+            _fu = filtername.upper()
+            _is_lw = (_fu in ('F250M', 'F277W')
+                      or (len(_fu) > 1 and _fu[1] in '34'))
+            _channel_dets = (['NRCA5', 'NRCB5'] if _is_lw else
+                             ['NRCA1', 'NRCA2', 'NRCA3', 'NRCA4',
+                              'NRCB1', 'NRCB2', 'NRCB3', 'NRCB4'])
+            _samp_candidates = [_psf_oversample, 4, 2, 1]
+            _cached_files = []
+            for _det in _channel_dets:
+                _hit = None
+                _seen = set()
+                for _samp in _samp_candidates:
+                    if _samp in _seen:
+                        continue
+                    _seen.add(_samp)
+                    _fn = os.path.join(_psf_outdir,
+                        f'{inst_token}_{_det.lower()}_{filtername.lower()}'
+                        f'_fovp101_samp{_samp}_npsf16.fits')
+                    if os.path.exists(_fn):
+                        _hit = _fn
+                        break
+                if _hit is None:
+                    # A required per-detector grid is missing -> let the rebuild
+                    # below regenerate the whole channel (and populate the cache).
+                    _cached_files = None
+                    break
+                _cached_files.append(_hit)
+            if _cached_files:
+                print(f"Loading {len(_cached_files)} cached PSF grids for the "
+                      f"merged/all-detectors path (skipping MAST/Poppy rebuild): "
+                      f"{_cached_files}", flush=True)
+                grid = []
+                for _fn in _cached_files:
+                    _g = to_griddedpsfmodel(_fn)
+                    grid.append(_g[0] if isinstance(_g, list) else _g)
+
         if grid is None:
             with open(os.path.expanduser('~/.mast_api_token'), 'r') as fh:
                 api_token = fh.read().strip()
