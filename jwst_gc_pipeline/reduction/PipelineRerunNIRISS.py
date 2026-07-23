@@ -342,9 +342,15 @@ def main(filtername, Observations=None, regionname='sgrc',
                                                   'jwst_niriss_pars-tweakregstep_*.rmap')))
     mapping = crds.rmap.load_mapping(tweakreg_rmaps[-1])
     print(f"tweakreg pars rmap: {os.path.basename(tweakreg_rmaps[-1])}")
+    # NIRISS pars-tweakregstep selection keys are 5-tuples
+    # (EXP_TYPE, filter-wheel, pupil-wheel, USEAFTER-date, asdf-filename); the
+    # reference filename is the LAST element (MIRI's were 4-tuples with the file
+    # at [3], which is why a blind [3] here grabbed the date string).  There are
+    # multiple USEAFTER variants per filter -- take the latest.
     filter_match = [x for x in mapping.todict()['selections'] if filtername.upper() in x]
+    filter_match = sorted(filter_match, key=lambda x: x[-2])
     if filter_match:
-        tweakreg_asdf_filename = filter_match[0][3]
+        tweakreg_asdf_filename = filter_match[-1][-1]
         tweakreg_asdf = asdf.open(f'https://jwst-crds.stsci.edu/unchecked_get/references/jwst/{tweakreg_asdf_filename}')
         tweakreg_parameters = tweakreg_asdf.tree['parameters']
     else:
