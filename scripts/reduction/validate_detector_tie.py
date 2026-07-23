@@ -225,7 +225,14 @@ def main():
           f"{cons['n_components']} component(s) "
           f"({time.time() - t0:.0f}s)", flush=True)
 
-    # 2. per-detector ties (reuse the consensus-build per-frame histograms)
+    # 2. VIRAC2 bulk BEFORE (also feeds the tie cross-check as visit_bulk,
+    # so the reference frames are only measured once)
+    virac_before = measure_virac_bulk(frames, refcat, f"{args.label} before")
+    visit_bulk = ((virac_before["dra"], virac_before["ddec"])
+                  if virac_before else None)
+
+    # 3. per-detector NETWORK ties (the consensus-build per-frame histograms
+    # ride along as the self-cancellation diagnostic)
     hist_by_label = {}
     for e in cons["exposures"]:
         det = str(e["key"][2]).lower()
@@ -236,15 +243,19 @@ def main():
          sc, hist_by_label.get(label))
         for label, sc in frames.items())
     ties = measure_visit_detector_ties(frames_by_det, cons["coords"],
-                                       refcat=refcat, context=args.label)
+                                       refcat=refcat, visit_bulk=visit_bulk,
+                                       context=args.label)
     for det, rec in sorted(ties.items()):
+        diag = rec.get("vs_consensus_diag")
+        diag_s = (f" consdiag=({diag['dra_mas']:+.2f},{diag['ddec_mas']:+.2f})"
+                  if diag else "")
         print(f"[{args.label}] tie {det}: "
               f"({rec['dra_mas']:+.2f},{rec['ddec_mas']:+.2f}) mas "
               f"sem={rec['sem_mas']:.2f} n={rec['n_pairs']} "
-              f"apply={rec['apply']} "
+              f"nmeas={rec['n_measurements']} apply={rec['apply']}{diag_s} "
               f"{'' if rec['apply'] else rec['refuse_reason']}", flush=True)
 
-    # 3. seams before/after
+    # 4. seams before/after
     pairs = classify_pairs(frames)
     print(f"[{args.label}] pairs: AB={len(pairs['AB'])} "
           f"xdet={len(pairs['xdet'])} same={len(pairs['same'])}", flush=True)
@@ -259,15 +270,13 @@ def main():
             shifted[label] = sc
     seam_after, _ = measure_seams(shifted, pairs, f"{args.label} after")
 
-    # 4. VIRAC2 bulk before/after
-    virac_before = measure_virac_bulk(frames, refcat, f"{args.label} before")
+    # 5. VIRAC2 bulk after (before was measured above)
     virac_after = measure_virac_bulk(shifted, refcat, f"{args.label} after")
 
     out = dict(
         label=args.label, n_frames=len(frames),
         consensus_stars=int(len(cons["coords"])),
-        ties={d: {k: v for k, v in r.items() if k != "frame_ties"}
-              for d, r in ties.items()},
+        ties=ties,
         seam_before=seam_before, seam_after=seam_after,
         virac_before=virac_before, virac_after=virac_after,
         runtime_s=round(time.time() - t0, 1))

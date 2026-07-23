@@ -51,39 +51,62 @@ The existing machinery cannot express this term:
   comment: "SIAF/DVA-class systematics that the module-locked offsets tables
   cannot express").
 
-The fix: measure the term at the (visit, **detector**) level, pooling ALL of a
-detector's exposures, so n_stars is 10⁴–10⁵ and the sem is ~0.1 mas — a
-significant, stable measurement of a 2–5 mas term — and write it as ONE
-per-detector offsets-table row.
+The fix: measure the term at the (visit, **detector**) level from the
+**cross-detector overlap network** — thousands of same-star pairs per
+detector, sem ≲0.3 mas on a 2–5 mas term — and write it as ONE per-detector
+offsets-table row.
 
 ## 2. Measurement (`detector_tie.py`)
 
-Per (visit, filter, detector):
+### ⚠ Why NOT "detector vs the visit consensus" (measured self-cancellation)
 
-1. Pool the reliable stars (`select_reliable_stars`) of every exposure of that
-   detector, **as-is** (no per-frame offset removal — each frame's
-   vs-consensus offset *contains* the detector term we are measuring;
-   per-exposure guide-star jitter is common to all detectors of an exposure,
-   so its pooled mean is a common-mode term absorbed by the visit bulk tie and
-   cancels in the detector *differentials* that matter).
-2. `measure_offset(pooled, consensus, sweep=True)` — the sanctioned,
-   density-immune histogram detection (CLAUDE.md rule #1).  The consensus is
-   the **visit-wide** consensus built from ALL detectors
-   (`build_visit_consensus`), so each detector is measured against the same
-   internal frame.
-3. Same-star refinement: `local_residual_map` with a single giant cell
-   (the sanctioned matched-pair path — legal only after step 2 verified the
-   tie small and un-swept; this removes the dense-reference histogram bias,
-   memory `histogram-vs-samestar-offset-bias`).  The adopted tie =
-   histogram + matched-pair residual, with `n_pairs` and a MAD-based `sem`.
+The first-draft measurement — each detector's pooled stars against the
+ALL-detector visit consensus — **self-cancels**.  NIRCam dithers are small
+compared to a detector, so an interior star is observed by the *same*
+detector in every exposure: its consensus position is built almost entirely
+from that detector's own measurements and carries the detector's placement
+error with it.  Measured on brick F212N (2026-07-23, the validation harness):
+every per-detector vs-consensus offset read **0.3–0.9 mas** (sem ~0.15) while
+the seam terms are 2.7–5.4 mas — a ~15–20 % diluted echo carried only by the
+seam-strip stars.  Same self-referential trap class as
+`registration_failsafes` matching a mosaic against its own catalog (CLAUDE.md
+release-gate blind spots) and the brick F182M 15 mas self-cancellation.  The
+vs-consensus quantity is retained ONLY as a recorded diagnostic
+(`vs_consensus_diag`): it must stay well below the network tie, or the
+grouping is wrong.
+
+### The network measurement
+
+Per (visit, filter):
+
+1. **Overlap pairs.** Every overlapping frame pair from DIFFERENT detectors
+   (footprint-box intersection via the `interframe_overlap` geometry gate —
+   a module gap / disjoint tiles produce no box, so no structural false
+   peak; ≥25 stars of both frames in the box; capped at 40 pairs per
+   detector pair, deterministic subsample).
+2. **Per-pair same-star offset** (the sanctioned two-step, CLAUDE.md
+   rule #1): `measure_offset(a, b, sweep=True)` histogram detection, then
+   giant-cell `local_residual_map` matched-pair refinement (legal only after
+   the verified small, un-swept histogram tie — removes the histogram bias,
+   memory `histogram-vs-samestar-offset-bias`).  A swept or >90 mas pair is
+   SKIPPED: gross misalignment is the per-exposure consensus machinery's
+   job, not a placement trim.
+3. **Network solve** (`solve_detector_network`): model `D_ab = p_b − p_a`,
+   weighted least squares (weights 1/sem², sem floor 0.05 mas) per connected
+   component; per-detector sems from the pseudo-inverse covariance scaled by
+   the reduced χ² (never deflated below 1).  **Gauge: the per-component,
+   per-axis MEDIAN of `p` is zero** — robust (one bad detector cannot drag
+   the gauge, mirroring the consensus median re-centering) and
+   bulk-preserving (the corrections have ~zero net effect on the visit's
+   absolute tie).  The correction for detector *d* is `−p_d`.
 4. VIRAC2 **cross-check** (never Gaia, never blocking — GC rule
-   `gc-gaia-frame-not-catalog`): the pooled detector stars are also same-star
-   tied to VIRAC2 (when a refcat is available and the global visit tie is
-   verified).  The check is GROSS-only: the detector's (tie vs consensus) and
-   (tie vs VIRAC2, minus the visit-bulk VIRAC2 offset) must agree within
+   `gc-gaia-frame-not-catalog`): each applying detector's frames are
+   same-star tied to VIRAC2 per frame (pair-weighted), minus the visit-bulk
+   VIRAC2 tie, giving an independent detector-DIFFERENTIAL estimate.  The
+   check is GROSS-only: it must agree with the network tie within
    `DETECTOR_REF_GROSS_TOL_MAS` (15 mas — far above VIRAC2's ~5–10 mas local
    wander so the reference's own systematics can never veto the internal
-   measurement; it exists to catch a spurious peak / wrong-detector pooling).
+   measurement; it exists to catch a spurious solve / wrong grouping).
    Disagreement ⇒ REFUSE (leave uncorrected, loud warning), never "use the
    VIRAC2 number instead".
 
@@ -91,16 +114,18 @@ Per (visit, filter, detector):
 
 A detector tie is only emitted when ALL of:
 
-* `n_pairs >= DETECTOR_TIE_MIN_PAIRS` (**50**): below ~50 same-star pairs the
-  sem of a ~5 mas-scatter population is ≳0.7 mas and a 2 mas term is barely
-  3σ; 50 is also the existing `min_stars` of the consensus builder.
-* `sem <= DETECTOR_TIE_MAX_SEM_MAS` (**1.0 mas**): the term being corrected is
-  2–5 mas; a 1 mas sem keeps every applied correction ≥2σ and the applied
-  noise ≤¼ of the smallest real term.  (In practice pooled detectors have
-  10⁴–10⁵ pairs and sem ~0.1 mas; the floor only triggers on pathological
-  inputs.)
-* histogram `ok` (contrast ≥ 5) and NOT `swept` — a swept detector is grossly
-  misplaced, which is the per-exposure machinery's job, not a placement trim.
+* **connectivity**: the detector appears in ≥1 usable overlap measurement
+  (an isolated detector, or one whose every pair was swept/gross, is
+  REFUSED — never guessed);
+* `n_pairs >= DETECTOR_TIE_MIN_PAIRS` (**50**, summed over its network
+  measurements): below ~50 same-star pairs the sem of a ~5 mas-scatter
+  population is ≳0.7 mas and a 2 mas term is barely 3σ; 50 is also the
+  existing `min_stars` of the consensus builder;
+* `sem <= DETECTOR_TIE_MAX_SEM_MAS` (**1.0 mas**, χ²-scaled network sem):
+  the term being corrected is 2–5 mas; a 1 mas sem keeps every applied
+  correction ≥2σ and the applied noise ≤¼ of the smallest real term.  (In
+  practice a brick-class detector has 10³–10⁴ pairs across ≥60 overlap
+  measurements and sem ≲0.3 mas; the floor triggers on pathological inputs.)
 * significance + floor: `|tie| >= DETECTOR_TIE_APPLY_MIN_MAS` (**1.0 mas**)
   and `|tie| >= 3*sem` — sub-mas placements are below the SIAF static floor
   (1–2.5 mas) and below what re-drizzling can use.
@@ -135,8 +160,8 @@ The consensus offsets table (`Offsets_JWST_Brick<pid>_consensus.csv`, keyed
 
 | row kind | Exposure | Module | applies to | measures |
 |---|---|---|---|---|
-| per-exposure jitter | ≥1 | detector | that frame | frame → consensus (residual AFTER the detector row) |
-| **per-detector tie** | **−1 (BULK_EXPOSURE)** | **detector token** | every exposure of that detector | detector → consensus (this design) |
+| per-exposure jitter | ≥1 | detector | that frame | frame → consensus (guide-star jitter; placement-free by self-cancellation) |
+| **per-detector tie** | **−1 (BULK_EXPOSURE)** | **detector token** | every exposure of that detector | detector placement, cross-detector network (this design) |
 | per-visit bulk | −1 | `all` | every exposure | consensus → VIRAC2 |
 
 `lookup_consensus_offset` sums **jitter + detector + bulk** for a frame.  The
@@ -157,12 +182,18 @@ stop/regenerate flow.
   cannot express it) and at apply time (`fix_alignment`'s module narrowing
   prefers an exact detector match; an unresolvable detector+family double
   match still hard-fails with `match.sum() != 1`).
-* **Detector row vs per-exposure jitter rows:** when the detector tie is
-  enabled, the m2 checkpoint subtracts each frame's detector tie from its
-  vs-consensus offset BEFORE the 2 mas misalignment decision, so jitter rows
-  are authored as residuals after the detector row.  The sum
-  (jitter + detector) equals the frame's measured total — one correction,
-  split into a stable term and a per-frame term.
+* **Detector row vs per-exposure jitter rows:** the two are COMPLEMENTARY by
+  the self-cancellation above — the frame-vs-consensus offset (the jitter
+  measurement) does NOT contain the placement term, and the network tie
+  contains no per-frame jitter (it is a per-detector combination over
+  exposures with a median gauge).  They must NOT be residualized against
+  each other: subtracting the tie from the frame offset would fabricate an
+  opposite-sign jitter row that cancels the detector row.  When a detector
+  row is applied in a cycle, its frames' jitter corrections are **DEFERRED**
+  (recorded `jitter_deferred`, loud log line): the run stops/regenerates
+  anyway, and the next m2 pass re-measures jitter on the corrected frames —
+  the normal retie-loop convergence, with no geometry-dependent
+  double-counting possible.
 * **Detector row vs `STATIC_PLACEMENT_CORRECTION` /
   `APPLY_DVA_CORRECTION`:** self-consistent by construction — the tie is
   measured at m2 on the frames AS THEY ARE, so whatever placement/DVA
@@ -184,11 +215,12 @@ stop/regenerate flow.
 `ASTROMETRY_WCS_CORRECTION_FLOW.md` forbids per-module offsets-table splits
 because a per-module tweak "injects VIRAC2 noise and breaks the lock".  This
 design does not violate that rule's substance: the per-detector term is
-solved against the **dense INTERNAL consensus** (10⁴–10⁵ same-star pairs,
-sem ~0.1 mas) — VIRAC2 appears only as a gross cross-check and only the
-per-visit bulk row touches VIRAC2, the same argument that admitted the
-per-exposure jitter rows.  What was actually banned — fitting each module
-independently to VIRAC2 — remains banned.
+solved from the **INTERNAL cross-detector overlap network** (10³–10⁴
+same-star pairs per detector, sem ≲0.3 mas, median-gauge = zero net shift) —
+VIRAC2 appears only as a gross cross-check and only the per-visit bulk row
+touches VIRAC2, the same argument that admitted the per-exposure jitter
+rows.  What was actually banned — fitting each module independently to
+VIRAC2 — remains banned.
 
 ## 4. Gating & flow
 
@@ -208,15 +240,16 @@ independently to VIRAC2 — remains banned.
 
 `scripts/reduction/validate_detector_tie.py` re-uses the GDC experiment's
 cached per-frame m1 catalogs (brick F212N + F182M, visit 001, 192 frames
-each): builds the all-detector visit consensus, measures the per-detector
-ties, applies them **in-memory**, and re-measures (a) every cross-module
-detector-pair seam (same-star, per overlapping frame pair — the stage-A
-methodology) and (b) the visit-consensus → VIRAC2 same-star bulk, before vs
-after.  Acceptance: the headline seam terms (F212N nrca3–nrcb4 Dec −5.4 mas)
-collapse toward the ~1 mas same-detector control floor, and the VIRAC2 bulk
-moves by ≪ its own sem (the correction is internal — it must not drag the
-absolute frame).  Results table in the PR body and below the module
-docstring.
+each): builds the all-detector visit consensus (for the self-cancellation
+diagnostic), measures the per-detector network ties, applies them
+**in-memory**, and re-measures (a) every cross-module detector-pair seam
+(same-star, per overlapping frame pair — the stage-A methodology, sign
+convention matched) and (b) the per-frame same-star VIRAC2 tie,
+pair-weighted over frames, before vs after.  Acceptance: the headline seam
+terms (F212N nrca3–nrcb4 Dec −5.4 mas) collapse toward the ~1 mas
+same-detector control floor, and the VIRAC2 bulk moves by ≲ the applied
+median-gauge residual (~sub-mas — the correction is internal and must not
+drag the absolute frame).  Results table in the PR body.
 
 ## 6. Rollout
 

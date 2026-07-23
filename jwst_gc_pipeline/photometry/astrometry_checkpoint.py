@@ -696,9 +696,11 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
         # a frozen (m3+) stage.
         det_ties = None
         if correcting and per_detector_tie_enabled():
-            # per-frame histograms vs the consensus were already measured by
-            # build_visit_consensus -- reuse them (the tie only ADDS the
-            # per-frame same-star refinement + the per-detector combination)
+            # The tie is solved from the CROSS-DETECTOR overlap network (the
+            # vs-consensus measurement self-cancels the placement term --
+            # detector_tie.py module docstring).  The per-frame vs-consensus
+            # histograms from build_visit_consensus ride along only as the
+            # recorded self-cancellation diagnostic.
             hist_by_key = {tuple(e["key"]): e["vs_consensus"]
                            for e in cons["exposures"]}
             frames_by_det = group_frames_by_detector(
@@ -717,8 +719,9 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                     print(f"ASTROM CHECKPOINT [{stage}] DETECTOR TIE: {vctx} "
                           f"{det} = ({trec['dra_mas']:+.2f},"
                           f"{trec['ddec_mas']:+.2f}) mas "
-                          f"(n={trec['n_pairs']}, sem={trec['sem_mas']:.2f}, "
-                          f"contrast={trec['contrast']:.0f})", flush=True)
+                          f"(n={trec['n_pairs']} pairs in "
+                          f"{trec['n_measurements']} overlap measurements, "
+                          f"sem={trec['sem_mas']:.2f})", flush=True)
                 elif trec.get("refuse_reason") and not str(
                         trec["refuse_reason"]).startswith("|tie|"):
                     # quality refusal (floor/contrast/sweep/gross split):
@@ -740,27 +743,20 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
         exp_records = []
         for exp in cons["exposures"]:
             res = exp["vs_consensus"]
-            # Detector-tie residualization (DETECTOR_TIE_DESIGN.md §3): when a
-            # detector row is being emitted for this frame's detector, the
-            # per-exposure jitter decision AND correction use the frame offset
-            # MINUS the detector tie -- jitter rows are authored as residuals
-            # after the detector row, so the applied sum (jitter + detector +
-            # bulk) never double-counts.
-            eff = res
+            # Detector-row/jitter-row interplay (DETECTOR_TIE_DESIGN.md §3):
+            # the vs-consensus offset SELF-CANCELS the placement term (the
+            # consensus of a detector's interior is built from that detector's
+            # own measurements), so it must NOT be residualized against the
+            # network tie -- subtracting the tie would fabricate an
+            # opposite-sign jitter row that cancels the detector row.  When a
+            # detector row is being applied this cycle, its frames' jitter
+            # corrections are DEFERRED instead: the run stops/regenerates
+            # anyway, and the next m2 pass re-measures jitter on the
+            # corrected frames (the normal retie-loop convergence).
             misaligned = exp["misaligned"]
             det_rec = (det_ties.get(str(exp["key"][2]).lower())
                        if det_ties else None)
-            if det_rec is not None and det_rec.get("apply") and res is not None:
-                eff = dict(res, dra=res["dra"] - det_rec["dra_mas"],
-                           ddec=res["ddec"] - det_rec["ddec_mas"])
-                eff["off"] = float(np.hypot(eff["dra"], eff["ddec"]))
-                err = float(np.hypot(res.get("dra_err", 0.0) or 0.0,
-                                     res.get("ddec_err", 0.0) or 0.0))
-                # same large-AND-significant rule as build_visit_consensus
-                misaligned = bool(
-                    eff["off"] > EXPOSURE_CONSENSUS_TOL_MAS
-                    and (not np.isfinite(err) or eff["off"] > 3.0 * err
-                         or eff["off"] > 10.0 * EXPOSURE_CONSENSUS_TOL_MAS))
+            det_applied = bool(det_rec is not None and det_rec.get("apply"))
             rec = dict(key=list(exp["key"]), n_reliable=exp["n_reliable"],
                        raoffset_meta=exp["raoffset_meta"],
                        deoffset_meta=exp["deoffset_meta"],
@@ -773,11 +769,10 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                             ("dra", "ddec", "off", "npairs", "contrast", "ok",
                              "swept", "window_arcsec", "dra_err", "ddec_err",
                              "n_peak")})
-            if det_rec is not None and det_rec.get("apply"):
+            if det_applied:
                 rec.update(det_tie_dra=det_rec["dra_mas"],
                            det_tie_ddec=det_rec["ddec_mas"],
-                           resid_dra=(None if res is None else eff["dra"]),
-                           resid_ddec=(None if res is None else eff["ddec"]))
+                           jitter_deferred=bool(misaligned))
             exp_records.append(rec)
             if exp.get("unverified"):
                 unverified.append(
@@ -787,17 +782,21 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                     f"only check")
             if misaligned:
                 msg = (f"{vctx}: exposure {exp['key']} is "
-                       f"{eff['off']:.2f} mas off the visit consensus"
-                       + ("" if eff is res else " (after detector tie)")
-                       + f" (dra={eff['dra']:.2f}±{res.get('dra_err', float('nan')):.2f}, "
-                       f"ddec={eff['ddec']:.2f}±{res.get('ddec_err', float('nan')):.2f}, "
+                       f"{res['off']:.2f} mas off the visit consensus "
+                       f"(dra={res['dra']:.2f}±{res.get('dra_err', float('nan')):.2f}, "
+                       f"ddec={res['ddec']:.2f}±{res.get('ddec_err', float('nan')):.2f}, "
                        f"swept={res.get('swept')})")
-                if correcting:
+                if correcting and det_applied:
+                    print(f"ASTROM CHECKPOINT [{stage}] DEFER JITTER: {msg} -- "
+                          f"detector {exp['key'][2]} receives a per-detector "
+                          f"tie row this cycle; its jitter is re-measured on "
+                          f"the regenerated frames next m2 pass", flush=True)
+                elif correcting:
                     dec_mid = float(np.median(cons["coords"].dec.deg))
                     corrections.append(dict(
                         visit=exp["key"][0], exposure=exp["key"][1],
                         module=exp["key"][2], filtername=filt,
-                        dra_onsky_mas=eff["dra"], ddec_onsky_mas=eff["ddec"],
+                        dra_onsky_mas=res["dra"], ddec_onsky_mas=res["ddec"],
                         dec_deg=dec_mid,
                         source=f"{stage} visit-consensus"))
                     print(f"ASTROM CHECKPOINT [{stage}] CORRECT: {msg}", flush=True)

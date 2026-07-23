@@ -2,18 +2,18 @@
 
 Synthetic multi-detector visits only -- no data dependencies.  Behaviors under
 test (the ones that could silently corrupt astrometry if wrong):
-  * injected per-detector shifts are measured and recovered (differentially --
-    the consensus zero point is internal);
-  * the refusal floor (n_pairs / significance / apply floor) leaves a detector
-    UNCORRECTED rather than guessing;
+  * injected per-detector shifts are recovered by the cross-detector overlap
+    NETWORK solve (differentially -- the gauge is internal);
+  * the refusal floor (connectivity / n_pairs / significance / apply floor)
+    leaves a detector UNCORRECTED rather than guessing;
   * offsets-table round trip: detector rows (Exposure=-1, Module=<detector>)
     seed + lookup, summed with bulk and jitter rows, exact-detector REPLACES
     module-family (never sums);
   * update_offsets_table guards: no Module column -> refuse; family+detector
     rows -> the correction lands on the exact row only;
-  * run_visit_checkpoint integration: default OFF; when ON, the per-exposure
-    jitter corrections are residuals AFTER the detector tie (no double
-    correction).
+  * run_visit_checkpoint integration: default OFF; when ON, jitter
+    corrections for detectors receiving a tie row are DEFERRED (no double
+    correction in either direction).
 """
 import numpy as np
 import pytest
@@ -22,16 +22,15 @@ from astropy.coordinates import SkyCoord
 from astropy.table import Table
 
 from jwst_gc_pipeline.photometry.detector_tie import (
-    DETECTOR_TIE_MIN_PAIRS, detector_tie_corrections,
-    group_frames_by_detector, measure_detector_tie,
-    measure_visit_detector_ties, per_detector_tie_enabled,
+    detector_tie_corrections, group_frames_by_detector,
+    measure_cross_detector_pairs, measure_visit_detector_ties,
+    per_detector_tie_enabled, solve_detector_network,
 )
 from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
     BULK_EXPOSURE, BULK_MODULE, OffsetsTableUpdateError,
     lookup_consensus_offset, run_visit_checkpoint,
     seed_offsets_table_from_consensus, update_offsets_table,
 )
-from jwst_gc_pipeline.photometry.visit_consensus import build_visit_consensus
 
 RA0, DEC0 = 266.5, -28.7
 COSD = np.cos(np.radians(DEC0))
@@ -84,21 +83,20 @@ SHIFTS = {"nrca3": (+3.0, -5.0), "nrcb4": (-2.5, +2.5), "nrcb1": (0.0, 0.0)}
 
 def _measure_ties(refcat=None, det_shifts=SHIFTS, **kwargs):
     tables = _detector_visit(det_shifts)
-    cons = build_visit_consensus(tables, context="dettie-test")
     from jwst_gc_pipeline.photometry.visit_consensus import (
         catalog_coords, exposure_key, select_reliable_stars)
     frames = group_frames_by_detector(
         (exposure_key(t), catalog_coords(t)[select_reliable_stars(t)], None)
         for t in tables)
     assert set(frames) == set(det_shifts)
-    return measure_visit_detector_ties(frames, cons["coords"], refcat=refcat,
+    return measure_visit_detector_ties(frames, refcat=refcat,
                                        context="dettie-test", **kwargs)
 
 
 def test_injected_detector_shifts_recovered():
     ties = _measure_ties()
-    # the consensus zero point is internal -> assert the DIFFERENTIALS.
-    # measured tie = (consensus - detector) = -shift + common zero point.
+    # the gauge is internal (per-component median) -> assert DIFFERENTIALS.
+    # correction c_d = -(shift_d - gauge), so c_a - c_b = -(shift_a - shift_b)
     for da, db in (("nrca3", "nrcb4"), ("nrca3", "nrcb1"), ("nrcb4", "nrcb1")):
         ddra = ties[da]["dra_mas"] - ties[db]["dra_mas"]
         dddec = ties[da]["ddec_mas"] - ties[db]["ddec_mas"]
@@ -106,16 +104,22 @@ def test_injected_detector_shifts_recovered():
         exp_ddec = -(SHIFTS[da][1] - SHIFTS[db][1])
         assert ddra == pytest.approx(exp_dra, abs=0.7), (da, db)
         assert dddec == pytest.approx(exp_ddec, abs=0.7), (da, db)
+    # median gauge with the unshifted detector at the median: absolute values
+    assert ties["nrca3"]["dra_mas"] == pytest.approx(-3.0, abs=0.7)
+    assert ties["nrca3"]["ddec_mas"] == pytest.approx(5.0, abs=0.7)
     # the shifted detectors are significant, well-measured, applying
     for det in ("nrca3", "nrcb4"):
         assert ties[det]["apply"], ties[det]
-        assert ties[det]["n_pairs"] >= DETECTOR_TIE_MIN_PAIRS
+        assert ties[det]["n_pairs"] >= 50
         assert ties[det]["sem_mas"] < 1.0
+    # the unshifted detector is refused as no-correction-needed
+    assert not ties["nrcb1"]["apply"]
 
 
 def test_reference_gross_crosscheck_passes_on_consistent_refcat():
     """A VIRAC2-like refcat offset by a pure visit bulk must not veto the
-    internal ties (the cross-check compares detector DIFFERENTIALS)."""
+    internal ties (the cross-check compares detector DIFFERENTIALS, and its
+    sign convention must match the network correction sense)."""
     ra, dec = _field()
     ref = SkyCoord(ra=(ra + 10.0 / 3.6e6 / COSD) * u.deg,
                    dec=(dec - 4.0 / 3.6e6) * u.deg, frame="icrs")
@@ -126,21 +130,43 @@ def test_reference_gross_crosscheck_passes_on_consistent_refcat():
         assert ties[det]["vs_reference"]["split_mas"] < 5.0
 
 
-def test_floor_refusal_too_few_stars():
-    """A detector below the combined-pair floor is REFUSED (left
-    uncorrected), never guessed."""
-    tables = _detector_visit(SHIFTS)
-    cons = build_visit_consensus(tables, context="dettie-floor")
-    # one frame with 40 stars drawn FROM the consensus field (so a coherent
-    # peak exists) -> n_pairs ~40 < 50 floor
+def test_gross_reference_split_refuses():
+    """A refcat whose implied detector differential grossly disagrees with
+    the network tie (here: a fake reference constructed by shifting the
+    nrca3 REGION by 30 mas) must REFUSE the tie, not apply it and not adopt
+    the reference value."""
     ra, dec = _field()
-    tiny = SkyCoord(ra=ra[:40] * u.deg, dec=dec[:40] * u.deg, frame="icrs")
-    rec = measure_detector_tie([(tiny, None)], cons["coords"], context="tiny")
-    assert not rec["measurable"]
-    assert rec["refuse_reason"]
-    ties = measure_visit_detector_ties({"nrca1": [(tiny, None)]},
-                                       cons["coords"])
-    assert not ties["nrca1"]["apply"]
+    # reference = truth, except nrca3's stars are ALSO where the (shifted)
+    # detector put them -> the reference "agrees" with the displaced
+    # detector, faking a ~-shift differential opposite to the network tie
+    ref = SkyCoord(ra=(ra + SHIFTS["nrca3"][0] * 6 / 3.6e6 / COSD) * u.deg,
+                   dec=(dec + SHIFTS["nrca3"][1] * 6 / 3.6e6) * u.deg,
+                   frame="icrs")
+    ties = _measure_ties(refcat=dict(all=ref, sparse=None),
+                         visit_bulk=(0.0, 0.0), ref_gross_tol_mas=5.0)
+    a3 = ties["nrca3"]
+    assert not a3["apply"]
+    assert "split" in str(a3["refuse_reason"])
+
+
+def test_floor_refusal_isolated_detector():
+    """A detector with no cross-detector overlap (disjoint footprint) is
+    REFUSED (left uncorrected), never guessed."""
+    tables = _detector_visit(SHIFTS)
+    from jwst_gc_pipeline.photometry.visit_consensus import (
+        catalog_coords, exposure_key, select_reliable_stars)
+    frames = group_frames_by_detector(
+        (exposure_key(t), catalog_coords(t)[select_reliable_stars(t)], None)
+        for t in tables)
+    # far-away isolated detector: no footprint intersection with anything
+    ra, dec = _field(seed=99)
+    frames["nrcb3"] = [(SkyCoord(ra=(ra + 1.0) * u.deg, dec=dec * u.deg,
+                                 frame="icrs"), None)]
+    ties = measure_visit_detector_ties(frames, context="dettie-island")
+    assert not ties["nrcb3"]["apply"]
+    assert "overlap" in str(ties["nrcb3"]["refuse_reason"])
+    # the connected detectors still solve
+    assert ties["nrca3"]["apply"]
 
 
 def test_subfloor_tie_not_applied():
@@ -151,6 +177,46 @@ def test_subfloor_tie_not_applied():
     assert not ties["nrca1"]["apply"]
     assert "apply floor" in str(ties["nrca1"]["refuse_reason"]) \
         or "not significant" in str(ties["nrca1"]["refuse_reason"])
+
+
+def test_network_solve_median_gauge_and_sem():
+    """Exact synthetic network: D_ab = p_b - p_a recovered, median gauge,
+    finite sems, pair counts accumulated."""
+    p = {"nrca1": (2.0, -1.0), "nrca2": (0.0, 0.0), "nrcb1": (-4.0, 3.0)}
+    meas = []
+    for (a, pa), (b, pb) in [(("nrca1", p["nrca1"]), ("nrca2", p["nrca2"])),
+                             (("nrca1", p["nrca1"]), ("nrcb1", p["nrcb1"])),
+                             (("nrca2", p["nrca2"]), ("nrcb1", p["nrcb1"]))]:
+        meas.append(dict(det_a=a, det_b=b,
+                         dra_mas=pb[0] - pa[0], ddec_mas=pb[1] - pa[1],
+                         dra_sem=0.1, ddec_sem=0.1, n=100, contrast=50.0))
+    sol = solve_detector_network(meas)
+    # gauge: median of p is (0, 0) here -> corrections are exactly -p
+    for d, (px, py) in p.items():
+        assert sol[d]["dra_mas"] == pytest.approx(-px, abs=1e-6), d
+        assert sol[d]["ddec_mas"] == pytest.approx(-py, abs=1e-6), d
+        assert np.isfinite(sol[d]["sem_mas"])
+        assert sol[d]["n_pairs"] == 200
+        assert sol[d]["n_measurements"] == 2
+    assert solve_detector_network([]) == {}
+
+
+def test_cross_detector_pairs_skip_same_detector_and_gross():
+    """Pairs are cross-detector only, and a grossly shifted pair (found only
+    by sweep) is skipped rather than entering the solve."""
+    tables = _detector_visit({"nrca1": (0.0, 0.0), "nrcb1": (500.0, 0.0)},
+                             n_exp=2)
+    from jwst_gc_pipeline.photometry.visit_consensus import (
+        catalog_coords, exposure_key, select_reliable_stars)
+    frames = group_frames_by_detector(
+        (exposure_key(t), catalog_coords(t)[select_reliable_stars(t)], None)
+        for t in tables)
+    meas = measure_cross_detector_pairs(frames, context="gross")
+    assert all({m["det_a"], m["det_b"]} == {"nrca1", "nrcb1"} for m in meas)
+    # 500 mas > PAIR_MAX_OFF_MAS -> every cross pair rejected
+    assert meas == []
+    ties = measure_visit_detector_ties(frames, context="gross")
+    assert not ties["nrca1"]["apply"] and not ties["nrcb1"]["apply"]
 
 
 def test_detector_tie_corrections_schema():
@@ -314,9 +380,10 @@ def test_checkpoint_default_off(monkeypatch):
 
 
 def test_checkpoint_detector_tie_no_double_correction(monkeypatch):
-    """Flag ON: ONE detector row absorbs the 6 mas placement; the per-exposure
-    jitter corrections become residuals (~0 -> none emitted).  The applied sum
-    per frame (jitter + detector) equals the frame's measured offset once."""
+    """Flag ON: ONE detector row absorbs the 6 mas placement (median gauge
+    puts the clean detectors at zero); the per-exposure jitter corrections
+    for that detector's frames are DEFERRED (re-measured next m2 pass on the
+    regenerated frames), so the placement is corrected exactly once."""
     monkeypatch.setenv(ENV, "1")
     tables = _detector_visit({"nrca3": (6.0, 0.0), "nrcb1": (0.0, 0.0),
                               "nrcb2": (0.0, 0.0)})
@@ -328,10 +395,14 @@ def test_checkpoint_detector_tie_no_double_correction(monkeypatch):
     assert det_corr[0]["module"] == "nrca3"
     assert det_corr[0]["dra_onsky_mas"] == pytest.approx(-6.0, abs=1.0)
     assert det_corr[0]["ddec_onsky_mas"] == pytest.approx(0.0, abs=1.0)
-    # jitter corrections are residuals AFTER the detector row: the injected
-    # shift is purely a detector term, so no frame should still exceed 2 mas
+    # jitter for the corrected detector's frames is DEFERRED, never emitted
+    # alongside the detector row (no double correction in either direction)
     jitter = [c for c in record["corrections"] if c.get("exposure") is not None]
     assert not jitter, jitter
+    deferred = [e for e in record["visits"][0]["exposures"]
+                if e.get("jitter_deferred")]
+    assert len(deferred) == 4
+    assert all(e["key"][2] == "nrca3" for e in deferred)
     ties = record["visits"][0]["detector_ties"]
     assert ties["nrca3"]["apply"]
     assert not ties["nrcb1"]["apply"]
