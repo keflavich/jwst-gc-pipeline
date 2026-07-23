@@ -3132,6 +3132,35 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     # m2 measured a real misalignment: im0 is wrong.
     assert merge_label in CORRECTION_STAGES
     offsets_path = _astrom_find_offsets_table(basepath, proposal_id)
+
+    # Per-DETECTOR tie corrections (module set, exposure None; detector_tie.py,
+    # opt-in via ASTROM_M2_PER_DETECTOR_TIE) can only be CARRIED by the
+    # per-exposure consensus table (Exposure=-1/Module=<detector> rows).  A
+    # module-locked table field (brick/cloudc VIRAC2locked) has no row kind for
+    # them until its builder is extended (DETECTOR_TIE_DESIGN.md rollout step
+    # 4) -- update_offsets_table would refuse.  Drop them here with a loud
+    # warning (record-only: they stay in the checkpoint record), and if
+    # NOTHING else was measured, PASS rather than stop a run demanding a
+    # regeneration that would change nothing.
+    _is_consensus = offsets_path is None or str(offsets_path).endswith(
+        '_consensus.csv')
+    if not _is_consensus:
+        _det_corrs = [c for c in corrections
+                      if c.get('module') is not None and c.get('exposure') is None]
+        if _det_corrs:
+            corrections = [c for c in corrections if c not in _det_corrs]
+            print(f"astrom checkpoint [{merge_label}] {filt}/{module}: WARNING -- "
+                  f"{len(_det_corrs)} per-detector tie correction(s) are NOT "
+                  f"expressible in the module-locked table {offsets_path}; "
+                  f"recorded in {record.get('record_path')} only.  Extend the "
+                  f"locked-table builder with per-detector rows to apply them "
+                  f"(DETECTOR_TIE_DESIGN.md).", flush=True)
+        if not corrections:
+            print(f"astrom checkpoint [{merge_label}] {filt}/{module}: PASS "
+                  f"(only table-inexpressible per-detector ties measured; "
+                  f"record-only)", flush=True)
+            return
+
     applied = False
     seeded = False
     if os.environ.get('ASTROM_CHECKPOINT_APPLY', '') == '1':
@@ -3144,8 +3173,8 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
         # the applied tie removes the bulk jitter).  Route consensus tables (and
         # the no-table seed case) through the UPSERT helper instead; only the
         # brick/cloudc module-locked tables use the strict update.
-        _is_consensus = offsets_path is None or str(offsets_path).endswith(
-            '_consensus.csv')
+        # (_is_consensus computed above, where per-detector corrections are
+        # routed/dropped.)
         if _is_consensus:
             from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
                 seed_offsets_table_from_consensus)

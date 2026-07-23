@@ -106,6 +106,7 @@ audit the full ladder from these records.
 | `ASTROM_CHECKPOINT=0` | disable all checkpoints (emergencies only) |
 | `ASTROM_CHECKPOINT_WARN_ONLY=1` | demote blocking failures to loud warnings |
 | `ASTROM_CHECKPOINT_APPLY=1` | at m2, auto-apply corrections to the offsets table + stale-tag im0 |
+| `ASTROM_M2_PER_DETECTOR_TIE=1` | at m2 ONLY, also measure the per-(visit, detector) static placement tie (pooled detector stars vs the all-detector consensus; `detector_tie.py`, `DETECTOR_TIE_DESIGN.md`) and emit per-detector offsets-table rows (Exposure=−1, Module=detector).  Default OFF |
 | `ASTROM_REFCAT=<path>` | reference catalog override (default: `{basepath}/catalogs/gaia_virac2_refcat*.fits`) |
 | `ALLOW_LATE_STAGE_ASTROM_SHIFT=1` | override the m3+ frozen-solution gate |
 | `ALLOW_CROSSFILTER_ASTROM_FAIL=1` | override the cross-filter gate |

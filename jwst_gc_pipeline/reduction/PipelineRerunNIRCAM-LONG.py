@@ -1284,6 +1284,16 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
             if match.sum() > 1 and 'Module' in offsets_tbl.colnames:
                 match = match & ((offsets_tbl['Module'] == thismodule)
                                  | (offsets_tbl['Module'] == thismodule.strip('1234')))
+                # Exact-detector preference (DETECTOR_TIE_DESIGN.md): a
+                # detector-level row (Module == this frame's detector token)
+                # REPLACES a module-family row for this frame -- it never adds.
+                # When both row kinds match, narrow to the exact row; any
+                # residual ambiguity still hard-fails at match.sum() != 1 below
+                # (never a silent double-application).
+                if match.sum() > 1:
+                    exact = match & (offsets_tbl['Module'] == thismodule)
+                    if exact.sum() == 1:
+                        match = exact
             if match.sum() != 1:
                 raise ValueError(f"module-locked offset match={match.sum()} for {fn} "
                                  f"(visit={visit}, exposure={exposure}, filter={filtername}); "

@@ -477,6 +477,13 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
     b_multi = set(np.unique(ib_n)[b_counts > 1])
     keep = np.array([bi not in b_multi for bi in ib_n])
     ia_n, ib_n = ia_n[keep], ib_n[keep]
+    if len(ia_n) == 0:
+        # every candidate pair was ambiguous (e.g. `a` contains duplicated
+        # stars, so each b partner is claimed multiple times) -- same
+        # no-measurable-pairs outcome as len(ia) == 0 above, NOT a crash
+        return dict(cells=[], n_cells=0, n_measured=0, n_flagged=0,
+                    worst_off_mas=float("nan"), worst_sig_off_mas=float("nan"),
+                    clean=False)
 
     cosd = np.cos(np.radians(a[ia_n].dec.value))
     dra = (b[ib_n].ra - a[ia_n].ra).to(u.arcsec).value * cosd * 1000.0 - global_result["dra"]

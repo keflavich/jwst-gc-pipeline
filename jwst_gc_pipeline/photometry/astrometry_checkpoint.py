@@ -43,10 +43,14 @@ from astropy.table import Table
 
 from .visit_consensus import (
     EXPOSURE_CONSENSUS_TOL_MAS, ConsensusBuildError, build_visit_consensus,
-    catalog_coords, load_reference_catalog, measure_reference_tie,
-    pick_reference_anchor_filter, select_reliable_stars,
+    catalog_coords, exposure_key, load_reference_catalog,
+    measure_reference_tie, pick_reference_anchor_filter, select_reliable_stars,
 )
 from .astrometry_offsets import measure_offset, local_residual_map
+from .detector_tie import (
+    detector_tie_corrections, group_frames_by_detector,
+    measure_visit_detector_ties, per_detector_tie_enabled,
+)
 
 # Stages at which a measured shift is EXPECTED to be possible and is CORRECTED
 # (the first checkpoint after the first per-frame photometry).  At every later
@@ -222,9 +226,27 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
                 f"per-exposure rows first")
         if corr.get("exposure") is not None and "Exposure" in tbl.colnames:
             match &= tbl["Exposure"] == int(corr["exposure"])
+        if corr.get("module") is not None and "Module" not in tbl.colnames:
+            # a module/detector-scoped correction on a table with no Module
+            # column would silently smear onto EVERY detector of the visit --
+            # the exact double/mis-correction class this ladder exists to
+            # prevent.  Refuse; the table must first be extended with
+            # module-level rows (mirrors the per-exposure refusal above).
+            raise OffsetsTableUpdateError(
+                f"correction for module {corr['module']} of visit "
+                f"{corr['visit']} cannot be applied to {offsets_path} (no "
+                f"Module column) -- extend the table with per-module/"
+                f"per-detector rows first")
         if corr.get("module") is not None and "Module" in tbl.colnames:
             variants = _module_variants(corr["module"])
             match &= np.array([str(m) in variants for m in tbl["Module"]])
+            # per-detector REPLACES module-family for that detector: when the
+            # exact detector token has its own row(s), narrow to those so the
+            # correction lands on the detector row, never additionally on the
+            # family row (DETECTOR_TIE_DESIGN.md, no-double-correction rules)
+            exact = match & (tbl["Module"] == str(corr["module"]))
+            if exact.any():
+                match = exact
         if match.sum() == 0:
             raise OffsetsTableUpdateError(
                 f"correction {corr} matches NO row in {offsets_path} -- refusing "
@@ -271,9 +293,10 @@ BULK_MODULE = "all"    # sentinel Module for the per-visit bulk row
 
 def lookup_consensus_offset(tbl, visit, exposure, module, filtername):
     """Return ``(dra_arcsec, ddec_arcsec)`` to apply to ONE exposure: the SUM of
-    its per-exposure jitter row and the per-visit BULK (consensus->reference) row.
+    its per-exposure jitter row, its per-DETECTOR tie row, and the per-visit
+    BULK (consensus->reference) row.
 
-    The consensus table carries two kinds of row for a (visit, filter):
+    The consensus table carries three kinds of row for a (visit, filter):
 
     * per-exposure JITTER rows (``Exposure``>=1, real ``Module``) -- SPARSE, only
       exposures that exceeded the 2 mas consensus tolerance get one.  Narrowing by
@@ -281,15 +304,23 @@ def lookup_consensus_offset(tbl, visit, exposure, module, filtername):
       exposure, and applying it here would spuriously shift an already-aligned
       frame.  (Differs from the brick VIRAC2locked block, where a single row IS a
       per-visit bulk for every exposure and the ``sum()>1`` guard is correct.)
+      When the per-detector tie is enabled these rows are authored as residuals
+      AFTER the detector row, so the sum never double-counts.
+    * per-DETECTOR tie rows (``Exposure``==BULK_EXPOSURE, ``Module``==a real
+      detector token, e.g. ``nrca3``/``nrcalong``) -- the SIAF-class static
+      detector placement measured against the internal visit consensus
+      (``detector_tie.py``, DETECTOR_TIE_DESIGN.md).  Applies to EVERY exposure
+      of that (visit, filter, detector).  An exact-detector row REPLACES a
+      module-family row for that detector's frames (exact-preference below);
+      ambiguity beyond that raises.
     * the per-visit BULK row (``Exposure``==BULK_EXPOSURE, ``Module``==BULK_MODULE)
       -- the ``consensus->reference`` tie (whole visit onto VIRAC2).  It applies
       to EVERY exposure of the visit/filter identically (one shift, no per-exposure
       reference noise -- the same policy as brick's per-visit bulk).
 
-    Each frame therefore gets jitter (tie to the internal consensus) + bulk (tie
-    that consensus to the absolute reference) = a direct tie to the reference.
-    Exposures with neither row return ``(0.0, 0.0)``.  Raises ValueError if a
-    jitter or bulk match is ambiguous (>1 row)."""
+    Each frame therefore gets jitter + detector + bulk = a direct tie to the
+    reference.  Exposures with no row return ``(0.0, 0.0)``.  Raises ValueError
+    if any of the three matches is ambiguous (>1 row)."""
     vf = (tbl["Visit"] == visit) & (tbl["Filter"] == filtername)
     dra = ddec = 0.0
 
@@ -301,6 +332,28 @@ def lookup_consensus_offset(tbl, visit, exposure, module, filtername):
                          f"filt={filtername}; expected <=1 row")
     if nb == 1:
         r = tbl[bulk]
+        dra += float(r["dra (arcsec)"][0]); ddec += float(r["ddec (arcsec)"][0])
+
+    # per-detector tie row (Exposure sentinel, real Module), applied to every
+    # exposure of this detector.  Exact-detector preference implements the
+    # "detector row REPLACES family row" rule; a residual double match raises.
+    det_variants = _module_variants(module)
+    det = (vf & (tbl["Exposure"] == BULK_EXPOSURE)
+           & (tbl["Module"] != BULK_MODULE)
+           & np.array([str(m) in det_variants for m in tbl["Module"]]))
+    nd = int(det.sum())
+    if nd > 1:
+        exact = det & (tbl["Module"] == str(module))
+        if int(exact.sum()) == 1:
+            det = exact
+            nd = 1
+        else:
+            raise ValueError(
+                f"consensus DETECTOR-tie match={nd} for visit={visit} "
+                f"mod={module} filt={filtername}; expected <=1 row (or one "
+                f"exact-detector row)")
+    if nd == 1:
+        r = tbl[det]
         dra += float(r["dra (arcsec)"][0]); ddec += float(r["ddec (arcsec)"][0])
 
     # per-exposure jitter (exclude the bulk sentinel from the module variants).
@@ -377,15 +430,20 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
         visit = int(str(corr["visit"])[-3:])
         visit_tok = f"jw0{proposal_id}{field}{visit:03d}"
         cosd = max(np.cos(np.radians(float(corr["dec_deg"]))), 1e-6)
-        # A consensus->reference correction is the per-VISIT bulk tie (whole
-        # visit onto VIRAC2) -- it carries exposure=None AND module=None.  Store
-        # it under the sentinel (BULK_EXPOSURE, BULK_MODULE) row so fix_alignment
-        # applies it to EVERY exposure of the visit/filter (lookup_consensus_
-        # offset sums bulk + per-exposure jitter).  Writing it to a real
-        # exposure/module would either miss most frames or double-shift one.
-        is_bulk = corr.get("exposure") is None and corr.get("module") is None
-        exposure = BULK_EXPOSURE if is_bulk else int(corr["exposure"])
-        module = BULK_MODULE if is_bulk else str(corr["module"])
+        # Row-kind routing by the correction's (exposure, module) scope:
+        #   * exposure=None, module=None -> the per-VISIT bulk tie (whole visit
+        #     onto VIRAC2): sentinel (BULK_EXPOSURE, BULK_MODULE) row, applied
+        #     to EVERY exposure (lookup_consensus_offset sums all row kinds).
+        #     Writing it to a real exposure/module would either miss most
+        #     frames or double-shift one.
+        #   * exposure=None, module=<detector> -> a per-DETECTOR tie row
+        #     (detector_tie.py): (BULK_EXPOSURE, detector) -- applied to every
+        #     exposure of that detector.
+        #   * exposure=int, module=<detector> -> a per-exposure jitter row.
+        exposure = (BULK_EXPOSURE if corr.get("exposure") is None
+                    else int(corr["exposure"]))
+        module = (BULK_MODULE if corr.get("module") is None
+                  else str(corr["module"]))
         dra_add = (float(corr["dra_onsky_mas"]) / 1000.0) / cosd
         ddec_add = float(corr["ddec_onsky_mas"]) / 1000.0
         key = (visit_tok, corr["filtername"], exposure, module)
@@ -630,6 +688,48 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
             unverified.append(f"{vctx}: consensus build failed: {ex}")
             continue
 
+        # ---- per-detector tie (opt-in; correcting stages ONLY) -------------
+        # SIAF-class static detector placements (2.7-5.4 mas A/B seam terms)
+        # measured against the internal visit consensus with pooled
+        # per-detector stars -- see detector_tie.py / DETECTOR_TIE_DESIGN.md.
+        # Default OFF (ASTROM_M2_PER_DETECTOR_TIE=1 to enable); never runs at
+        # a frozen (m3+) stage.
+        det_ties = None
+        if correcting and per_detector_tie_enabled():
+            # per-frame histograms vs the consensus were already measured by
+            # build_visit_consensus -- reuse them (the tie only ADDS the
+            # per-frame same-star refinement + the per-detector combination)
+            hist_by_key = {tuple(e["key"]): e["vs_consensus"]
+                           for e in cons["exposures"]}
+            frames_by_det = group_frames_by_detector(
+                (exposure_key(t),
+                 catalog_coords(t)[select_reliable_stars(t)],
+                 hist_by_key.get(exposure_key(t)))
+                for t in tables)
+            det_ties = measure_visit_detector_ties(
+                frames_by_det, cons["coords"], refcat=refcat, context=vctx)
+            dec_mid = float(np.median(cons["coords"].dec.deg))
+            det_corrs = detector_tie_corrections(det_ties, visit, filt,
+                                                 dec_mid, stage=stage)
+            corrections.extend(det_corrs)
+            for det, trec in sorted(det_ties.items()):
+                if trec.get("apply"):
+                    print(f"ASTROM CHECKPOINT [{stage}] DETECTOR TIE: {vctx} "
+                          f"{det} = ({trec['dra_mas']:+.2f},"
+                          f"{trec['ddec_mas']:+.2f}) mas "
+                          f"(n={trec['n_pairs']}, sem={trec['sem_mas']:.2f}, "
+                          f"contrast={trec['contrast']:.0f})", flush=True)
+                elif trec.get("refuse_reason") and not str(
+                        trec["refuse_reason"]).startswith("|tie|"):
+                    # quality refusal (floor/contrast/sweep/gross split):
+                    # detector left UNCORRECTED -- loud, audited, never guessed.
+                    # "|tie| ..." refusals (below apply floor / not significant)
+                    # are the normal no-correction-needed case: recorded only.
+                    unverified.append(
+                        f"{vctx}: detector {det} tie REFUSED "
+                        f"({trec['refuse_reason']}) -- detector left "
+                        f"uncorrected")
+
         # ---- per-exposure vs consensus ------------------------------------
         # At a frozen stage the per-exposure gate is a MOVEMENT check vs the m2
         # baseline (see _m2_exposure_baseline), NOT an absolute vs-consensus
@@ -640,18 +740,44 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
         exp_records = []
         for exp in cons["exposures"]:
             res = exp["vs_consensus"]
+            # Detector-tie residualization (DETECTOR_TIE_DESIGN.md §3): when a
+            # detector row is being emitted for this frame's detector, the
+            # per-exposure jitter decision AND correction use the frame offset
+            # MINUS the detector tie -- jitter rows are authored as residuals
+            # after the detector row, so the applied sum (jitter + detector +
+            # bulk) never double-counts.
+            eff = res
+            misaligned = exp["misaligned"]
+            det_rec = (det_ties.get(str(exp["key"][2]).lower())
+                       if det_ties else None)
+            if det_rec is not None and det_rec.get("apply") and res is not None:
+                eff = dict(res, dra=res["dra"] - det_rec["dra_mas"],
+                           ddec=res["ddec"] - det_rec["ddec_mas"])
+                eff["off"] = float(np.hypot(eff["dra"], eff["ddec"]))
+                err = float(np.hypot(res.get("dra_err", 0.0) or 0.0,
+                                     res.get("ddec_err", 0.0) or 0.0))
+                # same large-AND-significant rule as build_visit_consensus
+                misaligned = bool(
+                    eff["off"] > EXPOSURE_CONSENSUS_TOL_MAS
+                    and (not np.isfinite(err) or eff["off"] > 3.0 * err
+                         or eff["off"] > 10.0 * EXPOSURE_CONSENSUS_TOL_MAS))
             rec = dict(key=list(exp["key"]), n_reliable=exp["n_reliable"],
                        raoffset_meta=exp["raoffset_meta"],
                        deoffset_meta=exp["deoffset_meta"],
                        component=exp.get("component", 0),
                        internal_tie=exp.get("internal_tie", True),
                        unverified=exp.get("unverified", False),
-                       misaligned=exp["misaligned"])
+                       misaligned=misaligned)
             if res is not None:
                 rec.update({k: res.get(k) for k in
                             ("dra", "ddec", "off", "npairs", "contrast", "ok",
                              "swept", "window_arcsec", "dra_err", "ddec_err",
                              "n_peak")})
+            if det_rec is not None and det_rec.get("apply"):
+                rec.update(det_tie_dra=det_rec["dra_mas"],
+                           det_tie_ddec=det_rec["ddec_mas"],
+                           resid_dra=(None if res is None else eff["dra"]),
+                           resid_ddec=(None if res is None else eff["ddec"]))
             exp_records.append(rec)
             if exp.get("unverified"):
                 unverified.append(
@@ -659,18 +785,19 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                     f"visit consensus (isolated footprint / too few overlap "
                     f"stars) -- internally UNVERIFIED; the reference tie is its "
                     f"only check")
-            if exp["misaligned"]:
+            if misaligned:
                 msg = (f"{vctx}: exposure {exp['key']} is "
-                       f"{res['off']:.2f} mas off the visit consensus "
-                       f"(dra={res['dra']:.2f}±{res.get('dra_err', float('nan')):.2f}, "
-                       f"ddec={res['ddec']:.2f}±{res.get('ddec_err', float('nan')):.2f}, "
+                       f"{eff['off']:.2f} mas off the visit consensus"
+                       + ("" if eff is res else " (after detector tie)")
+                       + f" (dra={eff['dra']:.2f}±{res.get('dra_err', float('nan')):.2f}, "
+                       f"ddec={eff['ddec']:.2f}±{res.get('ddec_err', float('nan')):.2f}, "
                        f"swept={res.get('swept')})")
                 if correcting:
                     dec_mid = float(np.median(cons["coords"].dec.deg))
                     corrections.append(dict(
                         visit=exp["key"][0], exposure=exp["key"][1],
                         module=exp["key"][2], filtername=filt,
-                        dra_onsky_mas=res["dra"], ddec_onsky_mas=res["ddec"],
+                        dra_onsky_mas=eff["dra"], ddec_onsky_mas=eff["ddec"],
                         dec_deg=dec_mid,
                         source=f"{stage} visit-consensus"))
                     print(f"ASTROM CHECKPOINT [{stage}] CORRECT: {msg}", flush=True)
@@ -779,6 +906,8 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                 consensus_ok=cons["consensus_ok"],
                 skipped=[list(k) for k in cons["skipped"]]),
             exposures=exp_records,
+            detector_ties=(None if det_ties is None else
+                           {d: _jsonable(t) for d, t in det_ties.items()}),
             reference_tie=_jsonable(ref_tie)))
 
     passed = not failures
