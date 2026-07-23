@@ -1502,12 +1502,21 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
         # target == base + coordinate-shift.  With these stamped, any later
         # reader can re-derive and re-check the correction no matter when --
         # and a correction can never be silently applied to the wrong base.
-        _base_ra, _base_dec = float(wcsobj.pixel_to_world(1024, 1024).ra.deg), \
-            float(wcsobj.pixel_to_world(1024, 1024).dec.deg)
-        _tgt_ra, _tgt_dec = float(ww.pixel_to_world(1024, 1024).ra.deg), \
-            float(ww.pixel_to_world(1024, 1024).dec.deg)
+        # Fiducial = ARRAY CENTER, not a hardcoded (1024,1024): subarray frames
+        # (e.g. sickle SUB640, 640x640) have no pixel 1024 -> the GWCS returns
+        # NaN outside its bounding box and the header write below rejects it.
+        _fy, _fx = fa.data.shape[0] / 2.0, fa.data.shape[1] / 2.0
+        _base_ra, _base_dec = float(wcsobj.pixel_to_world(_fx, _fy).ra.deg), \
+            float(wcsobj.pixel_to_world(_fx, _fy).dec.deg)
+        _tgt_ra, _tgt_dec = float(ww.pixel_to_world(_fx, _fy).ra.deg), \
+            float(ww.pixel_to_world(_fx, _fy).dec.deg)
         _exp_ra = _base_ra + rashift.to(u.deg).value   # COORDINATE convention
         _exp_dec = _base_dec + decshift.to(u.deg).value
+        if not np.isfinite([_base_ra, _base_dec, _tgt_ra, _tgt_dec]).all():
+            raise RuntimeError(
+                f"astrometric apply for {fn}: fiducial pixel ({_fx},{_fy}) maps to a "
+                f"non-finite sky coordinate (base={_base_ra},{_base_dec}). The WCS "
+                f"bounding box likely excludes the array center; NOT writing.")
         _cosd = np.cos(np.radians(_base_dec))
         _resid_mas = float(np.hypot((_tgt_ra - _exp_ra) * _cosd,
                                     _tgt_dec - _exp_dec) * 3.6e6)
@@ -1528,7 +1537,7 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
         # correction provenance: base/target fiducials + convention + the
         # generation this frame carried when corrected (audit at any time:
         # recompute pixel_to_world(1024,1024) and compare to ATGTRA/ATGTDE)
-        align_fits[1].header['ABASERA'] = (_base_ra, '[deg] fiducial(1024,1024) BEFORE correction')
+        align_fits[1].header['ABASERA'] = (_base_ra, '[deg] fiducial(array-center) BEFORE correction')
         align_fits[1].header['ABASEDE'] = (_base_dec, '[deg] fiducial dec BEFORE correction')
         align_fits[1].header['ATGTRA'] = (_tgt_ra, '[deg] fiducial AFTER correction (verify me)')
         align_fits[1].header['ATGTDE'] = (_tgt_dec, '[deg] fiducial dec AFTER correction')
@@ -1564,14 +1573,15 @@ def check_wcs(fn):
         print(f"Checking WCS of {fn}")
         fa = ImageModel(fn)
         wcsobj = fa.meta.wcs
+        _fy, _fx = fa.data.shape[0] / 2.0, fa.data.shape[1] / 2.0   # array center (subarray-safe)
         print(f"fa['meta']['wcs'] crval={wcsobj.to_fits()[0]['CRVAL1']}, {wcsobj.to_fits()[0]['CRVAL2']}, {wcsobj.forward_transform.param_sets[-1]}")
-        new_1024 = wcsobj.pixel_to_world(1024, 1024)
-        print(f"new pixel_to_world(1024,1024) = {new_1024}")
+        new_1024 = wcsobj.pixel_to_world(_fx, _fy)
+        print(f"new pixel_to_world({_fx},{_fy}) = {new_1024}")
         if 'oldwcs' in fa.meta:
             oldwcsobj = fa.meta.oldwcs
             print(f"fa['meta']['oldwcs'] crval={oldwcsobj.to_fits()[0]['CRVAL1']}, {oldwcsobj.to_fits()[0]['CRVAL2']}, {oldwcsobj.forward_transform.param_sets[-1]}")
-            old_1024 = oldwcsobj.pixel_to_world(1024, 1024)
-            print(f"old pixel_to_world(1024,1024) = {old_1024}, sep from new GWCS={old_1024.separation(new_1024).to(u.arcsec)}")
+            old_1024 = oldwcsobj.pixel_to_world(_fx, _fy)
+            print(f"old pixel_to_world({_fx},{_fy}) = {old_1024}, sep from new GWCS={old_1024.separation(new_1024).to(u.arcsec)}")
         fa.close()
 
 
@@ -1583,8 +1593,8 @@ def check_wcs(fn):
         if 'RAOFFSET' in fh[1].header:
             print("RA, DE offset: ", fh[1].header['RAOFFSET'], fh[1].header['DEOFFSET'])
         ww = WCS(fh[1].header)
-        fits_1024 = ww.pixel_to_world(1024, 1024)
-        print(f"FITS pixel_to_world(1024,1024) = {fits_1024}, sep from new GWCS={fits_1024.separation(new_1024).to(u.arcsec)}")
+        fits_1024 = ww.pixel_to_world(_fx, _fy)
+        print(f"FITS pixel_to_world({_fx},{_fy}) = {fits_1024}, sep from new GWCS={fits_1024.separation(new_1024).to(u.arcsec)}")
         fh.close()
     else:
         print(f"COULD NOT CHECK WCS FOR {fn}: does not exist")
