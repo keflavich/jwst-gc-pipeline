@@ -3057,10 +3057,24 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
 
     written = {k: [] for k in kinds}
     written_model = {k: [] for k in kinds}
-    for orig in overlapping_frames:
+
+    # Per-frame renders are independent (each reads its own raw residual/model,
+    # projects the shared merged catalog, writes its own products), so they fan
+    # out across threads.  The heavy work -- _render_model_from_table (full-frame
+    # PSF convolution over ~1e5 sources), world_to_pixel, scipy binary_dilation
+    # -- is numpy/scipy and releases the GIL, so threads give real speedup without
+    # pickling the PSF grid + merged catalog.  The jwst datamodel WRITES are
+    # serialized under _save_lock (fast vs the render; jwst DataModel save is not
+    # guaranteed thread-safe).  Gated on --parallel-workers (default 1 = the
+    # original serial behavior, byte-identical).
+    import threading as _threading
+    _save_lock = _threading.Lock()
+
+    def _render_frame(orig):
+        _result = {}
         origin = _cutout_origin(orig, options)
         if origin is None:
-            continue
+            return _result
         x0, y0 = origin
         # the per-frame satstar model sits next to the FITTER INPUT (the cutout
         # crop for cutout runs, the original frame full-frame), same pixel grid
@@ -3315,9 +3329,27 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                 mc_model_display = mc_model_display + satstar_sm
             out_resid = f'{stem}_mergedcat_residual.fits'
             out_model = f'{stem}_mergedcat_model.fits'
-            save_residual_datamodel(raw_resid, out_resid, mc_resid)
-            save_residual_datamodel(raw_model, out_model, mc_model_display,
-                                    clear_dq=True)
+            with _save_lock:
+                save_residual_datamodel(raw_resid, out_resid, mc_resid)
+                save_residual_datamodel(raw_model, out_model, mc_model_display,
+                                        clear_dq=True)
+            _result[kind] = (out_resid, out_model)
+        return _result
+
+    _mc_workers = max(1, int(getattr(options, 'parallel_workers', 1) or 1))
+    if _mc_workers > 1 and len(overlapping_frames) > 1:
+        from concurrent.futures import ThreadPoolExecutor as _TPE
+        _n = min(_mc_workers, len(overlapping_frames))
+        print(f"mergedcat: rendering {len(overlapping_frames)} frames across "
+              f"{_n} threads", flush=True)
+        with _TPE(max_workers=_n) as _ex:
+            _frame_results = list(_ex.map(_render_frame, overlapping_frames))
+    else:
+        _frame_results = [_render_frame(orig) for orig in overlapping_frames]
+    # Accumulate in frame order so the resample input lists are deterministic
+    # (identical to the pre-parallel serial append order).
+    for _res in _frame_results:
+        for kind, (out_resid, out_model) in _res.items():
             written[kind].append(out_resid)
             written_model[kind].append(out_model)
     # mosaic each kind's merged-catalog residuals
