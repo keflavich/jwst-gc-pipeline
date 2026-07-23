@@ -1536,7 +1536,7 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
         align_fits[1].header['DEOFFSET'] = decshift.value
         # correction provenance: base/target fiducials + convention + the
         # generation this frame carried when corrected (audit at any time:
-        # recompute pixel_to_world(1024,1024) and compare to ATGTRA/ATGTDE)
+        # recompute pixel_to_world(array-center = data.shape//2) and compare to ATGTRA/ATGTDE)
         align_fits[1].header['ABASERA'] = (_base_ra, '[deg] fiducial(array-center) BEFORE correction')
         align_fits[1].header['ABASEDE'] = (_base_dec, '[deg] fiducial dec BEFORE correction')
         align_fits[1].header['ATGTRA'] = (_tgt_ra, '[deg] fiducial AFTER correction (verify me)')
@@ -1575,13 +1575,13 @@ def check_wcs(fn):
         wcsobj = fa.meta.wcs
         _fy, _fx = fa.data.shape[0] / 2.0, fa.data.shape[1] / 2.0   # array center (subarray-safe)
         print(f"fa['meta']['wcs'] crval={wcsobj.to_fits()[0]['CRVAL1']}, {wcsobj.to_fits()[0]['CRVAL2']}, {wcsobj.forward_transform.param_sets[-1]}")
-        new_1024 = wcsobj.pixel_to_world(_fx, _fy)
-        print(f"new pixel_to_world({_fx},{_fy}) = {new_1024}")
+        new_center = wcsobj.pixel_to_world(_fx, _fy)
+        print(f"new pixel_to_world({_fx},{_fy}) = {new_center}")
         if 'oldwcs' in fa.meta:
             oldwcsobj = fa.meta.oldwcs
             print(f"fa['meta']['oldwcs'] crval={oldwcsobj.to_fits()[0]['CRVAL1']}, {oldwcsobj.to_fits()[0]['CRVAL2']}, {oldwcsobj.forward_transform.param_sets[-1]}")
-            old_1024 = oldwcsobj.pixel_to_world(_fx, _fy)
-            print(f"old pixel_to_world({_fx},{_fy}) = {old_1024}, sep from new GWCS={old_1024.separation(new_1024).to(u.arcsec)}")
+            old_center = oldwcsobj.pixel_to_world(_fx, _fy)
+            print(f"old pixel_to_world({_fx},{_fy}) = {old_center}, sep from new GWCS={old_center.separation(new_center).to(u.arcsec)}")
         fa.close()
 
 
@@ -1593,8 +1593,8 @@ def check_wcs(fn):
         if 'RAOFFSET' in fh[1].header:
             print("RA, DE offset: ", fh[1].header['RAOFFSET'], fh[1].header['DEOFFSET'])
         ww = WCS(fh[1].header)
-        fits_1024 = ww.pixel_to_world(_fx, _fy)
-        print(f"FITS pixel_to_world({_fx},{_fy}) = {fits_1024}, sep from new GWCS={fits_1024.separation(new_1024).to(u.arcsec)}")
+        fits_center = ww.pixel_to_world(_fx, _fy)
+        print(f"FITS pixel_to_world({_fx},{_fy}) = {fits_center}, sep from new GWCS={fits_center.separation(new_center).to(u.arcsec)}")
         fh.close()
     else:
         print(f"COULD NOT CHECK WCS FOR {fn}: does not exist")
