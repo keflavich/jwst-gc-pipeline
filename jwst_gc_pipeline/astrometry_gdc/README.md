@@ -105,6 +105,15 @@ adds `skycoord_gdc_ra`/`skycoord_gdc_dec` (deg) + provenance meta
 (`GDCFILE`, `GDCVERS`, `GDCAFFX/Y`, `GDCRMS`, ...); it never overwrites
 existing skycoord columns.
 
+## Experiment results (2026-07-23)
+
+**Run — see `GDC_EXPERIMENT_REPORT.md` in this directory.**  Outcome: no
+measurable improvement on any relative or absolute metric (arches+brick,
+F212N+F182M, 480 frames); the Hosek/L2 agreement is slightly degraded; the
+brick A/B seam terms are inter-detector affine placement, untouchable by a
+distortion swap.  Recommendation: keep this package as an opt-in diagnostic,
+do not adopt for production.
+
 ## Intended experiment
 
 1. **Brick module-overlap**: build GDC-corrected sky positions for the m1
