@@ -26,7 +26,16 @@ from astropy.coordinates import SkyCoord
 
 from .stdgdc import STDGDC, detector_filter_from_header
 
-__all__ = ['GDCSkySolution', 'load_frame_wcs', 'gdc_sky']
+__all__ = ['GDCSkySolution', 'load_frame_wcs', 'gdc_sky',
+           'MAX_SANE_CORRECTION_PIX']
+
+# Real STDGDC corrections are < ~10 px; the library marks UNMEASURED border
+# pixels with 0 (e.g. NRCB4/F212N: the y=2047 row and the x=2047 column above
+# y~1535), which reads as a ~2048 px "correction" and, unmasked, poisons the
+# affine anchor for the whole frame (measured: affine rms 11.9" instead of
+# 0.8 mas).  Any |corrected - raw| above this is treated as an invalid map
+# sample.
+MAX_SANE_CORRECTION_PIX = 50.0
 
 
 def load_frame_wcs(cal_file, prefer_gwcs=True):
@@ -91,33 +100,83 @@ class GDCSkySolution:
         eta = dlat.to_value(u.arcsec)
 
         xc, yc = gdc.forward(gxx.ravel(), gyy.ravel())
-        if not (np.all(np.isfinite(xc)) and np.all(np.isfinite(yc))):
-            raise ValueError("GDC forward map returned non-finite values on "
-                             "the anchor grid (grid outside the detector?)")
+        valid = self._forward_valid(gxx.ravel(), gyy.ravel(), xc, yc)
+        self.n_anchor_invalid = int((~valid).sum())
+        if self.n_anchor_invalid:
+            import warnings
+            warnings.warn(
+                f"GDC forward map invalid/unmeasured at "
+                f"{self.n_anchor_invalid}/{valid.size} anchor grid points "
+                f"(library border holes, e.g. NRCB4/F212N); fitting the "
+                f"affine on the valid points only", UserWarning, stacklevel=2)
+        if valid.sum() < 64:
+            raise ValueError(
+                f"GDC forward map valid at only {int(valid.sum())} of "
+                f"{valid.size} anchor grid points -- map unusable")
 
-        # 6-parameter affine: [xi, eta] = A @ [xc, yc] + b, least squares.
+        # 6-parameter affine: [xi, eta] = A @ [xc, yc] + b, least squares,
+        # on the VALID map samples only.
         design = np.column_stack([np.ones_like(xc), xc, yc])
-        self.coef_x, *_ = np.linalg.lstsq(design, xi, rcond=None)
-        self.coef_y, *_ = np.linalg.lstsq(design, eta, rcond=None)
+        self.coef_x, *_ = np.linalg.lstsq(design[valid], xi[valid], rcond=None)
+        self.coef_y, *_ = np.linalg.lstsq(design[valid], eta[valid], rcond=None)
 
         fit_xi = design @ self.coef_x
         fit_eta = design @ self.coef_y
         # Residual field = affine-anchored GDC minus the original (CRDS) WCS:
         # the distortion delta map.  Mean is 0 by construction (intercept).
-        self.delta_xi_mas = (fit_xi - xi).reshape(gxx.shape) * 1000.0
-        self.delta_eta_mas = (fit_eta - eta).reshape(gxx.shape) * 1000.0
-        self.affine_rms_mas = float(np.sqrt(np.mean(
-            (fit_xi - xi) ** 2 + (fit_eta - eta) ** 2)) * 1000.0)
+        # Invalid map samples are NaN in the delta map.
+        dxi = np.where(valid, fit_xi - xi, np.nan)
+        deta = np.where(valid, fit_eta - eta, np.nan)
+        self.delta_xi_mas = dxi.reshape(gxx.shape) * 1000.0
+        self.delta_eta_mas = deta.reshape(gxx.shape) * 1000.0
+        self.affine_rms_mas = float(np.sqrt(np.nanmean(
+            dxi ** 2 + deta ** 2)) * 1000.0)
+
+    @staticmethod
+    def _forward_valid(x, y, xc, yc):
+        """True where the GDC forward map sample is finite and sane.
+
+        The STDGDC library stores unmeasured border pixels as 0, which shows
+        up as a ~2000 px 'correction'; bilinear interpolation smears garbage
+        into their neighbourhood, so anything beyond
+        ``MAX_SANE_CORRECTION_PIX`` is invalid.
+        """
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+        return (np.isfinite(xc) & np.isfinite(yc)
+                & (np.abs(xc - x) < MAX_SANE_CORRECTION_PIX)
+                & (np.abs(yc - y) < MAX_SANE_CORRECTION_PIX))
 
     def _tangent(self, x, y):
-        xc, yc = self.gdc.forward(np.asarray(x, float), np.asarray(y, float))
+        x = np.asarray(x, float)
+        y = np.asarray(y, float)
+        xc, yc = self.gdc.forward(x, y)
+        valid = self._forward_valid(x, y, xc, yc)
         xi = self.coef_x[0] + self.coef_x[1] * xc + self.coef_x[2] * yc
         eta = self.coef_y[0] + self.coef_y[1] * xc + self.coef_y[2] * yc
-        return xi, eta
+        return xi, eta, valid
 
     def gdc_sky(self, x, y):
-        """GDC-corrected, affine-anchored SkyCoord for raw 0-based (x, y)."""
-        xi, eta = self._tangent(x, y)
+        """GDC-corrected, affine-anchored SkyCoord for raw 0-based (x, y).
+
+        Stars falling on an invalid/unmeasured region of the GDC map (library
+        border holes) FALL BACK to the frame's original WCS position (i.e. a
+        zero distortion delta); their count is stored on
+        ``self.n_star_fallback`` after each call.
+        """
+        xi, eta, valid = self._tangent(x, y)
+        self.n_star_fallback = int(np.sum(~valid))
+        if self.n_star_fallback:
+            x = np.asarray(x, float)
+            y = np.asarray(y, float)
+            inv = ~valid
+            sky_orig = SkyCoord(
+                self.wcs.pixel_to_world(x[inv], y[inv])).icrs
+            oxi, oeta = self.center.spherical_offsets_to(sky_orig)
+            xi = np.array(xi, dtype=float, copy=True)
+            eta = np.array(eta, dtype=float, copy=True)
+            xi[inv] = oxi.to_value(u.arcsec)
+            eta[inv] = oeta.to_value(u.arcsec)
         return self.center.spherical_offsets_by(xi * u.arcsec, eta * u.arcsec)
 
     def delta_map(self):

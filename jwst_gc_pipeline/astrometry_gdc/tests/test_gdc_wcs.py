@@ -102,3 +102,54 @@ def test_provenance_fields(solution):
     assert len(prov['gdc_affine_x']) == 3
     assert len(prov['gdc_affine_y']) == 3
     assert prov['gdc_affine_rms_mas'] == solution.affine_rms_mas
+
+
+def synthetic_gdc_with_hole(amp=0.5):
+    """Like the real NRCB4/F212N library file: a border region stored as 0
+    (unmeasured), which reads as a huge negative 'correction'."""
+    gdc = synthetic_gdc(amp=amp)
+    xgc = gdc.xgc.copy()
+    ygc = gdc.ygc.copy()
+    # last row + upper half of the last column, as in NRCB4/F212N
+    xgc[-1, :] = 0.0
+    ygc[-1, :] = 0.0
+    xgc[N // 2:, -1] = 0.0
+    ygc[N // 2:, -1] = 0.0
+    return STDGDC(xgc, ygc, np.zeros_like(xgc))
+
+
+def test_border_hole_masked_from_affine_anchor():
+    """Unmeasured (zero-stored) map regions must not poison the affine
+    anchor: the solution on a holed map must match the clean-map solution to
+    well under a mas (the real NRCB4/F212N hole gave an 11.9 ARCSEC affine
+    rms before masking)."""
+    with pytest.warns(UserWarning, match='invalid/unmeasured'):
+        holed = GDCSkySolution(synthetic_wcs(), synthetic_gdc_with_hole(),
+                               grid_n=16, shape=(N, N))
+    clean = GDCSkySolution(synthetic_wcs(), synthetic_gdc(), grid_n=16,
+                           shape=(N, N))
+    assert holed.n_anchor_invalid > 0
+    assert holed.affine_rms_mas < clean.affine_rms_mas * 1.5
+    # interior stars: consistent with the clean-map solution.  Dropping the
+    # border anchor points legitimately perturbs the affine by a small
+    # fraction of the (here exaggerated, 15 mas) distortion amplitude, so the
+    # bound is a few mas -- vs the ~10 ARCSEC scale of the unmasked poisoning.
+    x = np.linspace(5, N - 20, 20)
+    y = np.linspace(5, N - 20, 20)
+    sep = holed.gdc_sky(x, y).separation(clean.gdc_sky(x, y))
+    assert sep.to_value(u.mas).max() < 3.0
+
+
+def test_star_on_hole_falls_back_to_original_wcs():
+    """A star inside the unmeasured region gets the frame's original WCS
+    position (zero delta), not garbage."""
+    with pytest.warns(UserWarning, match='invalid/unmeasured'):
+        sol = GDCSkySolution(synthetic_wcs(), synthetic_gdc_with_hole(),
+                             grid_n=16, shape=(N, N))
+    w = synthetic_wcs()
+    x = np.array([N - 1.0, 20.0])   # first star on the zeroed last column
+    y = np.array([N - 10.0, 20.0])
+    sky = sol.gdc_sky(x, y)
+    assert sol.n_star_fallback == 1
+    orig = SkyCoord(w.pixel_to_world(x[0], y[0])).icrs
+    assert sky[0].separation(orig).to_value(u.mas) < 1e-6
