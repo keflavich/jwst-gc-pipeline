@@ -70,6 +70,14 @@ elif [ "$MODE" = "finalize" ]; then
     MODE_ARGS="--manual-finalize-only"
     scontrol update JobId="${SLURM_JOB_ID:-0}" \
         Name="pf_${TARGET}_${PHASE}_fin" 2>/dev/null || true
+    # Lustre metadata coherence lag: the finalize launches (afterok) the instant
+    # the last fan-out shard exits, but the per-frame completion markers those
+    # shards just wrote may not yet be visible on the finalize node's MDT view.
+    # The marker check then HARD-CRASHES on a "missing" marker that in fact exists
+    # (verified: flagged frames' markers present minutes later).  Settle first so
+    # the directory listing is coherent before the strict all-markers verify.
+    echo "finalize: sleeping 180s for Lustre marker-metadata coherence before verify."
+    sleep 180
 else
     echo "MODE must be 'fanout' or 'finalize' (got '$MODE')"; exit 1
 fi
@@ -81,21 +89,66 @@ unset SLURM_ARRAY_TASK_ID SLURM_ARRAY_JOB_ID
 
 echo "PERFRAME $MODE: $TARGET $PROPOSAL/$FIELD phase=$PHASE filters=$FILT_CSV modules=$MODULES ${MODE_ARGS}"
 PYTHON=${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/python}
-"$PYTHON" -m jwst_gc_pipeline.photometry.crowdsource_catalogs_long \
-    --filternames="$FILT_CSV" \
-    --modules="$MODULES" \
-    --each-exposure \
-    --proposal_id="$PROPOSAL" \
-    --field="$FIELD" \
-    --target="$TARGET" \
-    --each-suffix="$EACH_SUFFIX" \
-    --max-group-size="$MAX_GROUP_SIZE" \
-    --parallel-workers="$PARALLEL_WORKERS" \
-    --manual-start-phase="$PHASE" \
-    --manual-stop-after-phase="$PHASE" \
-    $MODE_ARGS \
-    $REF_ARG \
-    $EXTRA_ARGS
+
+# Destagger imports: a large fan-out array launches dozens of tasks at once, all
+# scanning the shared conda env's package metadata simultaneously.  That races in
+# importlib_metadata (observed: MetadataNotFound from photutils' optional-deps /
+# tqdm import) and kills the odd task ~30 s in.  A short random sleep spreads the
+# import storm; a one-shot retry rescues any task that still loses the race.  Both
+# are pure environment hardening -- they do not touch the science.
+sleep $(( (RANDOM % 25) + 1 ))
+
+# Node-local copy of the run's output so the retry gate below can inspect the
+# failure (also still streamed to the normal SLURM log via tee).
+RUNLOG="${SLURM_TMPDIR:-/tmp}/pf_${TARGET}_${PHASE}_${MODE}_$$.log"
+
+run_pipeline() {
+    "$PYTHON" -m jwst_gc_pipeline.photometry.crowdsource_catalogs_long \
+        --filternames="$FILT_CSV" \
+        --modules="$MODULES" \
+        --each-exposure \
+        --proposal_id="$PROPOSAL" \
+        --field="$FIELD" \
+        --target="$TARGET" \
+        --each-suffix="$EACH_SUFFIX" \
+        --max-group-size="$MAX_GROUP_SIZE" \
+        --parallel-workers="$PARALLEL_WORKERS" \
+        --manual-start-phase="$PHASE" \
+        --manual-stop-after-phase="$PHASE" \
+        $MODE_ARGS \
+        $REF_ARG \
+        $EXTRA_ARGS 2>&1 | tee "$RUNLOG"
+    return "${PIPESTATUS[0]}"
+}
+
+# Retry ONCE, and ONLY for the import race described above -- a genuine science
+# failure (missing marker, bad data, code bug) must fail fast, not run twice.
+# The race presents as a startup-import traceback (importlib_metadata /
+# optional-deps discovery), so gate the retry on that signature in the log tail;
+# if the log is unreadable, fall back to timing (the race kills a task during
+# startup imports, ~30 s in -- never hours into the science).
+IMPORT_RACE_RE='ModuleNotFoundError|ImportError|PackageNotFoundError|MetadataNotFound|bad magic number|marshal data too short'
+
+start_s=$SECONDS
+run_pipeline
 rc=$?
+if [ $rc -ne 0 ]; then
+    elapsed=$(( SECONDS - start_s ))
+    race=0
+    if [ -s "$RUNLOG" ]; then
+        tail -n 100 "$RUNLOG" | grep -qE "$IMPORT_RACE_RE" && race=1
+    elif [ "$elapsed" -le 120 ]; then
+        race=1
+    fi
+    if [ "$race" -eq 1 ]; then
+        echo "PERFRAME $MODE: rc=$rc matches import-race signature (elapsed=${elapsed}s); retrying once."
+        sleep $(( (RANDOM % 30) + 10 ))
+        run_pipeline
+        rc=$?
+    else
+        echo "PERFRAME $MODE: rc=$rc is not the import race (elapsed=${elapsed}s); NOT retrying."
+    fi
+fi
+rm -f "$RUNLOG"
 echo "PERFRAME $MODE done: phase=$PHASE rc=$rc"
 exit $rc

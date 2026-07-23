@@ -3360,9 +3360,11 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
     # (bg_for_next); reconstruct it from the previous phase's on-disk smoothed-bg
     # i2d.  m7's cross-band seed reads the previous VETTED catalogs from disk, and
     # frames re-scan because the start phase becomes phases[0].  satstar overrides
-    # from m12's reconcile are not reconstructed, but the off-FOV path now uses
-    # the Spitzer-prior _spitzer.reg + the model<=data clamp, which load fresh
-    # each phase, so off-FOV handling is unaffected.
+    # /drops from m12's reconcile ARE reconstructed from the persisted
+    # *_satstar_reconciled_m12.fits (see the start_phase block below); the off-FOV
+    # path also uses the Spitzer-prior _spitzer.reg + the model<=data clamp, which
+    # load fresh each phase (believed to make the pins vestigial for off-FOV
+    # stars, unverified).
     # --- per-frame fan-out controls (option C) ---------------------------------
     # These let one phase run as N independent per-exposure SLURM tasks
     # (--manual-skip-finalize) followed by a single barrier job
@@ -3521,8 +3523,12 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
             _prev_resbgsub = _prev in ('m5', 'm6', 'm7')
             for module in modules:
                 for filt in filternames:
+                    # Use _prev_label (m12 -> m2) so the on-disk token matches how
+                    # the m12 phase wrote its products (merge_label='m2'); passing
+                    # raw _prev='m12' looks for a nonexistent *_m12_* bg and crashes
+                    # any per-frame job that starts at m3.
                     _bg = _reconstruct_smoothed_bg_path(
-                        cut_bp, proposal_id, field, module, filt, _prev, options, pupil)
+                        cut_bp, proposal_id, field, module, filt, _prev_label, options, pupil)
                     if not os.path.exists(_bg):
                         raise FileNotFoundError(
                             f"--manual-start-phase={start_phase}: required {_prev} "
@@ -3531,7 +3537,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     bg_for_next[(module, filt)] = _bg
                     # mergedcat residual i2d (detection image for m4..m6 seed)
                     _ri = _reconstruct_resid_i2d_path(
-                        cut_bp, proposal_id, field, module, filt, _prev, options, pupil)
+                        cut_bp, proposal_id, field, module, filt, _prev_label, options, pupil)
                     if os.path.exists(_ri):
                         resid_i2d_for_next[(module, filt)] = _ri
                     # iter_found provenance from the prior merged catalog
