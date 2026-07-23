@@ -333,7 +333,7 @@ the PR #154 discussion:
 - vector fields: <https://gist.githubusercontent.com/keflavich/888700b865b93770b99fe2712db75682/raw/gdc_delta_vecfield_f212n.png>
 - summary: <https://gist.githubusercontent.com/keflavich/888700b865b93770b99fe2712db75682/raw/gdc_delta_summary_f212n.png>
 
-| panel | median |delta| (mas) | p95 | max | invalid cells | affine rms (mas) |
+| panel | median \|delta\| (mas) | p95 | max | invalid cells | affine rms (mas) |
 |---|---|---|---|---|---|
 | brick F212N nrca1 | 0.79 | 1.74 | 3.65 | 0 | 0.98 |
 | brick F212N nrca2 | 0.62 | 1.35 | 3.35 | 0 | 0.78 |

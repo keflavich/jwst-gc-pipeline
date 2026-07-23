@@ -186,7 +186,7 @@ def main(argv=None):
     os.makedirs(args.outdir, exist_ok=True)
     results = collect(default_frames(), grid_n=args.grid_n)
 
-    print('| panel | median |delta| (mas) | p95 | max | invalid cells | '
+    print('| panel | median \\|delta\\| (mas) | p95 | max | invalid cells | '
           'affine rms (mas) |')
     print('|---|---|---|---|---|---|')
     for r in results:
