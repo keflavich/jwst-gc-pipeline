@@ -3117,8 +3117,16 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     # residual class is known table-inexpressible.
     floor_mas = float(os.environ.get('ASTROM_M2_CORRECTION_FLOOR_MAS', '0') or 0)
     if floor_mas > 0:
+        # Per-detector tie corrections (module set, exposure None) are EXEMPT
+        # from the actionability floor: the floor exists because SIAF-class
+        # per-detector residuals were inexpressible in the tables -- the
+        # detector rows (ASTROM_M2_PER_DETECTOR_TIE, detector_tie.py) are
+        # exactly the expression of that class, already gated by their own
+        # refusal ladder (n/sem/significance).
         actionable = [c for c in corrections
-                      if np.hypot(c.get('dra_onsky_mas', 0.0),
+                      if (c.get('module') is not None
+                          and c.get('exposure') is None)
+                      or np.hypot(c.get('dra_onsky_mas', 0.0),
                                   c.get('ddec_onsky_mas', 0.0)) >= floor_mas]
         if not actionable:
             print(f"astrom checkpoint [{merge_label}] {filt}/{module}: PASS with "
