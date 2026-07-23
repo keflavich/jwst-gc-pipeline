@@ -3001,6 +3001,27 @@ def _render_model_from_table(table, psf_model, shape, psf_shape):
     return img
 
 
+def _run_frame_renders(overlapping_frames, render_fn, n_threads):
+    """Apply ``render_fn`` to each frame, serial or across ``n_threads``.
+
+    Returns results in the SAME order as ``overlapping_frames`` in both modes, so
+    the caller's downstream accumulation is deterministic and byte-identical
+    regardless of thread count.  ``render_fn`` must be a pure function of its
+    frame plus shared read-only state (no cross-frame mutation).  Exceptions from
+    any frame propagate (via ``ThreadPoolExecutor.map`` iteration in the threaded
+    path, or directly in the serial path) -- no frame is silently dropped.
+
+    Split out from ``build_mergedcat_residuals`` so the serial-vs-parallel
+    equivalence of the dispatch is unit-testable (test_mergedcat_render_dispatch).
+    """
+    if n_threads > 1 and len(overlapping_frames) > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        n = min(int(n_threads), len(overlapping_frames))
+        with ThreadPoolExecutor(max_workers=n) as ex:
+            return list(ex.map(render_fn, overlapping_frames))
+    return [render_fn(orig) for orig in overlapping_frames]
+
+
 def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                               proposal_id, field, module, options,
                               overlapping_frames, iteration_label, kinds,
@@ -3110,10 +3131,36 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
 
     written = {k: [] for k in kinds}
     written_model = {k: [] for k in kinds}
-    for orig in overlapping_frames:
+
+    # Per-frame renders are independent (each reads its own raw residual/model,
+    # projects the shared read-only merged catalog + PSF grid, writes its own
+    # products keyed by a per-frame ``stem``), so they can fan out across threads.
+    # Threads (not processes) avoid pickling the PSF grid + merged catalog; the
+    # jwst datamodel WRITES are serialized under _save_lock (jwst DataModel save
+    # is not guaranteed thread-safe).  The speedup is PARTIAL: _render_model_from_table
+    # is a Python per-source loop (GIL-held); the gain comes from overlapping the
+    # fits I/O, world_to_pixel, scipy binary_dilation and the datamodel reads --
+    # expect a few x, not linear in thread count.
+    #
+    # Gated on the SEPARATE, opt-in ``--mergedcat-render-threads`` (default 1 =
+    # serial, byte-identical).  NOT --parallel-workers: every production sbatch
+    # sets that from $SLURM_CPUS_PER_TASK, so reusing it would silently enable the
+    # threaded path on live jobs before byte-identity is validated.
+    #
+    # Frame ``stem``s must be unique across overlapping_frames (per-detector
+    # naming guarantees this); if two frames shared a stem they would write the
+    # same out_resid/out_model and, threaded, the last writer would be
+    # nondeterministic.  Assert it so a naming regression fails loudly, serial or
+    # threaded.
+    _render_threads = max(1, int(getattr(options, 'mergedcat_render_threads', 1) or 1))
+    import threading as _threading
+    _save_lock = _threading.Lock()
+
+    def _render_frame(orig):
+        _result = {}
         origin = _cutout_origin(orig, options)
         if origin is None:
-            continue
+            return _result
         x0, y0 = origin
         # the per-frame satstar model sits next to the FITTER INPUT (the cutout
         # crop for cutout runs, the original frame full-frame), same pixel grid
@@ -3368,11 +3415,36 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                 mc_model_display = mc_model_display + satstar_sm
             out_resid = f'{stem}_mergedcat_residual.fits'
             out_model = f'{stem}_mergedcat_model.fits'
-            save_residual_datamodel(raw_resid, out_resid, mc_resid)
-            save_residual_datamodel(raw_model, out_model, mc_model_display,
-                                    clear_dq=True)
+            with _save_lock:
+                save_residual_datamodel(raw_resid, out_resid, mc_resid)
+                save_residual_datamodel(raw_model, out_model, mc_model_display,
+                                        clear_dq=True)
+            _result[kind] = (out_resid, out_model)
+        return _result
+
+    if _render_threads > 1 and len(overlapping_frames) > 1:
+        print(f"mergedcat: rendering {len(overlapping_frames)} frames across "
+              f"{min(_render_threads, len(overlapping_frames))} threads "
+              f"(--mergedcat-render-threads)", flush=True)
+    _frame_results = _run_frame_renders(overlapping_frames, _render_frame,
+                                        _render_threads)
+    # Accumulate in frame order so the resample input lists are deterministic
+    # (identical to the pre-parallel serial append order).
+    for _res in _frame_results:
+        for kind, (out_resid, out_model) in _res.items():
             written[kind].append(out_resid)
             written_model[kind].append(out_model)
+    # Per-frame stems must be unique: a collision means two frames wrote the same
+    # product (one render lost -> a hole in the mosaic), and under threading the
+    # surviving writer would be nondeterministic.  Fail loudly (serial or threaded).
+    for kind in kinds:
+        if len(set(written[kind])) != len(written[kind]):
+            _dupes = sorted({p for p in written[kind]
+                             if written[kind].count(p) > 1})
+            raise ValueError(
+                f"mergedcat: {kind} produced duplicate per-frame output paths "
+                f"(non-unique frame stems -> lost renders / mosaic holes): "
+                f"{_dupes}")
     # mosaic each kind's merged-catalog residuals
     outpaths = {}
     bgsub_tok = _bgsub_token(options)
@@ -4336,6 +4408,17 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             '> 1.  Larger = fewer fork events but coarser '
                             'load-balance; ~100 is reasonable for nrca1-class '
                             'frames.'))
+    parser.add_option('--mergedcat-render-threads', dest='mergedcat_render_threads',
+                      default=1, type='int',
+                      help=('EXPERIMENTAL: render the per-frame merged-catalog '
+                            'residual/model images (build_mergedcat_residuals) '
+                            'across N threads.  Default 1 = serial, byte-identical '
+                            'to the pre-parallel path.  Deliberately a SEPARATE '
+                            'knob from --parallel-workers (which every production '
+                            'sbatch sets from $SLURM_CPUS_PER_TASK) so merging '
+                            'does not silently enable the threaded render on live '
+                            'jobs -- validate byte-identity against the serial '
+                            'path before raising it.'))
     (options, args) = parser.parse_args()
 
     # Production run guard: refuse to run cataloging on an untagged or dirty tree
