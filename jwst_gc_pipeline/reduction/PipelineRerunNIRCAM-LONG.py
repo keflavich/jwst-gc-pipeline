@@ -1453,6 +1453,24 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
             fn, basepath, str(proposal_id), filtername, field)
         _prov_tbl = f'Offsets_JWST_Brick{proposal_id}_consensus.csv'
         _prov_row_stage = 'm2-consensus'
+    elif str(proposal_id) == '6151':
+        # w51: per-exposure CONSENSUS re-tie (2026-07-22).  Same class as sgrc
+        # (4147) above -- tweakreg is skipped and W51 runs do_destreak=False
+        # (EXTENDED_EMISSION_FIELDS), so its exposures had NO per-exposure tie
+        # (fell through to the else -> rashift=0) and scattered ~3-19 mas around
+        # the visit consensus (the m2 checkpoint flagged 16 F480M/merged exposures).
+        # The consensus offsets table is seeded + upserted by the m2 checkpoint
+        # (seed_offsets_table_from_consensus); lookup_consensus_offset sums the
+        # per-exposure JITTER rows and the per-visit BULK sentinel (the
+        # consensus->Gaia tie -- W51's reference is gaia_refcat.fits, outside the
+        # VVV/VIRAC2 footprint).  On the FIRST reduction pass the table does not
+        # exist yet, so the helper returns (0,0) and the checkpoint measures the
+        # raw scatter.  dra/ddec are arcsec Δα coordinate (same convention as the
+        # brick VIRAC2locked / sgrc consensus tables).
+        rashift, decshift = _apply_consensus_offsets_table(
+            fn, basepath, str(proposal_id), filtername, field)
+        _prov_tbl = f'Offsets_JWST_Brick{proposal_id}_consensus.csv'
+        _prov_row_stage = 'm2-consensus'
     else:
         rashift = 0*u.arcsec
         decshift = 0*u.arcsec

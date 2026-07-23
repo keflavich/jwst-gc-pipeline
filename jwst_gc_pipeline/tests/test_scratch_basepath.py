@@ -67,10 +67,17 @@ def _build_real(real: Path):
 
 
 def _underscore_free_root():
-    # The staging guard rejects underscores in the path (they break the
-    # downstream filename.split('_') detector parse).  tempfile.mkdtemp's default
-    # /tmp/tmpXXXX name is underscore-free.
-    return tempfile.mkdtemp()
+    # The staging guard rejects underscores anywhere in the path (they break the
+    # downstream filename.split('_') detector parse).  tempfile.mkdtemp draws its
+    # random suffix from [a-z0-9_], so the name CAN contain '_' (observed on CI:
+    # /tmp/tmpr5j_n6me -> staging exits 2).  Retry until the full path is
+    # underscore-free; skip if the temp parent itself is unavoidably underscored.
+    for _ in range(50):
+        d = tempfile.mkdtemp()
+        if '_' not in d:
+            return d
+        shutil.rmtree(d, ignore_errors=True)
+    pytest.skip("no underscore-free temp dir available (TMPDIR path contains '_')")
 
 
 @pytest.mark.parametrize('mode', ['reduce', 'catalog'])

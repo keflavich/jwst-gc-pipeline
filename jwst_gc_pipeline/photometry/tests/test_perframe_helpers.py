@@ -15,7 +15,9 @@ These tests pin the round-trips that make that safe:
 
 Importing cataloging pulls crowdsource_catalogs_long (webbpsf) -> slow cold.
 """
+import inspect
 import os
+import re
 
 import numpy as np
 import pytest
@@ -69,6 +71,47 @@ class TestResidI2dPathDerivation:
         assert bg.endswith('_mergedcat_residual_smoothed_bg_i2d.fits')
         assert resid.endswith('_mergedcat_residual_i2d.fits')
         assert resid == bg.replace('_smoothed_bg_i2d.fits', '_i2d.fits')
+
+
+class TestStartPhasePrevLabel:
+    """Regression for the _prev vs _prev_label crash (--manual-start-phase).
+
+    The m12 phase writes every product under merge_label='m2'
+    (``merge_label = 'm2' if phase == 'm12' else phase``), so a job starting at
+    m3 must reconstruct the previous phase's smoothed-bg / residual-i2d under
+    the *m2* token.  Passing raw ``_prev='m12'`` builds a ``*_m12_*`` path that
+    no phase ever writes -> FileNotFoundError for every per-frame job that
+    starts at m3.
+    """
+
+    def _path_for(self, label):
+        opts = type('O', (), dict(desaturated=False, bgsub=False, group=False))()
+        return C._reconstruct_smoothed_bg_path(
+            cut_bp='/x', proposal_id='2221', field='001', module='nrcb',
+            filt='F405N', label=label, options=opts, pupil='clear')
+
+    def test_label_token_embedded_verbatim(self):
+        # the label lands verbatim in the filename: the m2-labeled path (what
+        # m12 writes) and the m12-labeled path (what nothing writes) differ
+        assert '_m2_' in self._path_for('m2')
+        assert '_m12_' in self._path_for('m12')
+        assert self._path_for('m2') != self._path_for('m12')
+
+    def test_start_phase_reconstruction_passes_prev_label(self):
+        # call-site guard: inside run_manual_pipeline's start-phase block, the
+        # path reconstructors must receive the mapped _prev_label, never raw
+        # _prev (note: r'_prev\b' cannot match inside '_prev_label')
+        src = inspect.getsource(C.run_manual_pipeline)
+        assert "_prev_label = 'm2' if _prev == 'm12' else _prev" in src
+        calls = re.findall(
+            r'_reconstruct_(?:smoothed_bg|resid_i2d)_path\(([^)]*)\)', src)
+        assert calls, "expected reconstruct-path calls in run_manual_pipeline"
+        prev_calls = [c for c in calls if '_prev' in c]
+        assert prev_calls, "expected _prev_label-based reconstruct-path calls"
+        for args in prev_calls:
+            assert not re.search(r'_prev\b(?!_label)', args), (
+                f"raw _prev passed to a reconstruct-path helper "
+                f"(must be _prev_label): ({args})")
 
 
 class TestPrevMergedReconstruction:
