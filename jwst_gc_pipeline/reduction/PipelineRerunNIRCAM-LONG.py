@@ -898,7 +898,19 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         # common diffuse structure is preserved; match_down=False matches up.
         # subtract=True is essential (else the matched levels are only recorded,
         # not applied -- see PipelineMIRI.py).
-        image3_steps = {'tweakreg': tweakreg_parameters}
+        # outlier_detection at defaults (snr='5.0 4.0', scale='1.2 0.7') over-flags
+        # real signal in these crowded/nebulous fields: the blot (inverse-drizzle)
+        # smears undersampled PSF spikes, so the blotted median underestimates the
+        # peak and the |sci-blot| test (sign-symmetric) rejects the bright PSF
+        # halos/diffraction spikes of bright stars AND the dark gaps between them.
+        # Raising snr/scale (matching the MIRI treatment in PipelineMIRI.py) cut the
+        # over-rejection ~70% with ZERO newly-added flags on brick o004 F200W (the
+        # tweaked flag set is a strict subset of the default). See keflavich/
+        # jwst-gc-pipeline#161. <1% of the flagged pixels are genuine ramp jumps and
+        # JumpStep already rejects CRs independently, so CR sensitivity is retained.
+        image3_steps = {'tweakreg': tweakreg_parameters,
+                        'outlier_detection': {'snr': '7.0 5.0',
+                                              'scale': '2.0 1.5'}}
         if skymatch_method:
             image3_steps['skymatch'] = {'save_results': True,
                                         'subtract': True,
