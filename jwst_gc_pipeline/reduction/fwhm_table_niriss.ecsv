@@ -1,0 +1,23 @@
+# %ECSV 1.0
+# ---
+# datatype:
+# - {name: Filter, datatype: string}
+# - {name: Wavelength, datatype: float64}
+# - {name: PSF FWHM (arcsec), datatype: float64}
+# - {name: PSF FWHM (pixel), datatype: float64}
+# meta: !!omap
+# - {comment: 'NIRISS imaging PSF FWHM. Pixel column at the NIRISS native scale 0.0656 arcsec/pix (pixel = arcsec / 0.0656). Arcsec FWHM are diffraction-limited (6.5 m aperture), consistent with the NIRCam table values at matching wavelengths.'}
+# schema: astropy-2.0
+Filter Wavelength "PSF FWHM (arcsec)" "PSF FWHM (pixel)"
+F090W 0.900 0.033 0.503
+F115W 1.154 0.040 0.610
+F140M 1.404 0.048 0.732
+F150W 1.501 0.050 0.762
+F158M 1.584 0.052 0.793
+F200W 1.989 0.066 1.006
+F277W 2.776 0.092 1.402
+F356W 3.568 0.115 1.753
+F380M 3.826 0.124 1.890
+F430M 4.286 0.140 2.134
+F444W 4.408 0.145 2.210
+F480M 4.874 0.162 2.470
