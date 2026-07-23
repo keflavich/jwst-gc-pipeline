@@ -2084,7 +2084,13 @@ def get_psf_model(filtername, proposal_id, field,
         # produced.  Consistent with the single-detector cache policy above,
         # which likewise loads whatever grid is on disk regardless of obsdate.
         if grid is None and _cache_detector is None and instrument != 'MIRI':
-            _is_lw = ('F3' in filtername.upper() or 'F4' in filtername.upper())
+            # LW = NIRCam long channel.  Almost all LW filters are F3xx/F4xx, but
+            # F250M and F277W are LW too (no '3'/'4') -- name them explicitly so
+            # they map to the 5-detectors, not the SW set (a misclassification
+            # would only fail safe -> rebuild, but be correct anyway).
+            _fu = filtername.upper()
+            _is_lw = (_fu in ('F250M', 'F277W')
+                      or (len(_fu) > 1 and _fu[1] in '34'))
             _channel_dets = (['NRCA5', 'NRCB5'] if _is_lw else
                              ['NRCA1', 'NRCA2', 'NRCA3', 'NRCA4',
                               'NRCB1', 'NRCB2', 'NRCB3', 'NRCB4'])

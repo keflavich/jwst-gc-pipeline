@@ -71,6 +71,21 @@ def test_merged_sw_loads_from_cache_grid0_is_nrca1(tmp_path, _trap_mast):
     assert grid.path == 'nircam_nrca1_f200w_fovp101_samp2_npsf16.fits'
 
 
+def test_merged_lw_nonf34_filters_classified_lw(tmp_path, _trap_mast):
+    # F250M and F277W are LW but contain neither '3' nor '4'; they must still
+    # map to the 5-detectors, not the SW set.
+    for filt in ('F250M', 'F277W'):
+        psfdir = str(tmp_path / filt)
+        os.makedirs(psfdir)
+        _write_grid(psfdir, 'NRCA5', filt)
+        _write_grid(psfdir, 'NRCB5', filt)
+        grid, _model = ccl.get_psf_model(
+            filt, '1182', '004', module='merged', use_webbpsf=True,
+            use_grid=True, instrument='NIRCam', psf_cache_dir=psfdir)
+        assert isinstance(grid, _FakeGrid)
+        assert grid.path == f'nircam_nrca5_{filt.lower()}_fovp101_samp2_npsf16.fits'
+
+
 def test_merged_incomplete_cache_falls_through_to_rebuild(tmp_path, _trap_mast):
     # Only one of the two LW detectors cached -> the merged loader must NOT
     # partially load; it falls through to the (trapped) rebuild.
