@@ -460,6 +460,12 @@ def main(filtername, Observations=None, regionname='sgrc',
         steps={'tweakreg': tweakreg_parameters,
                'skymatch': skymatch_params,
                'outlier_detection': outlier_params,
+               # Skip the Image3 SourceCatalogStep: on a deep, crowded NIRISS GC
+               # mosaic its aperture/deblend catalog took ~10 h (F200W) while the
+               # products we actually use (mosaic + crf) are done at resample in
+               # minutes.  Real photometry is the separate cataloging pipeline;
+               # this _cat.ecsv is throwaway.
+               'source_catalog': {'skip': True},
         },
         output_dir=output_dir,
         save_results=True)
