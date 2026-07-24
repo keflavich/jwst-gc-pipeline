@@ -75,7 +75,15 @@ def get_fwhm(header, instrument_replacement='NIRCam'):
     #filtername = header['FILTER']
     filtername = get_filtername(header)
 
-    fwhm_tbl = Table.read(f'{basepath}/reduction/fwhm_table.ecsv')
+    # NIRISS has its own FWHM table (0.0656 arcsec/pix native scale, incl F158M
+    # which is absent from the shared NIRCam-scale table).  Read it from the
+    # package so it does not depend on a per-target reduction/ tree.
+    if str(instrument).upper() == 'NIRISS':
+        from pathlib import Path as _Path
+        _fwhm_table = _Path(__file__).resolve().parent / 'fwhm_table_niriss.ecsv'
+    else:
+        _fwhm_table = f'{basepath}/reduction/fwhm_table.ecsv'
+    fwhm_tbl = Table.read(_fwhm_table)
     row = fwhm_tbl[fwhm_tbl['Filter'] == filtername]
     fwhm = fwhm_arcsec = float(row['PSF FWHM (arcsec)'][0])
     fwhm_pix = float(row['PSF FWHM (pixel)'][0])
@@ -102,18 +110,24 @@ def get_filtername(header):
 
     filtername = header['FILTER']
     if 'PUPIL' in header:
-        # only for NIRCAM
+        # NIRCam: pupil-wheel narrow-bands (PUPIL=F162M/F323N/...) paired with a
+        # wide FILTER, or CLEAR.  NIRISS: pupil-wheel filters (F356W/F480M) have
+        # FILTER=<real>, PUPIL=CLEARP (the NIRISS "clear" pupil); filter-wheel
+        # filters (F158M/F200W) have FILTER=CLEAR, PUPIL=<real>.  Treat BOTH
+        # 'CLEAR' and 'CLEARP' as the empty slot.
         filtername2 = header['PUPIL']
-        if filtername == 'CLEAR':
+        _clears = ('CLEAR', 'CLEARP')
+        if filtername in _clears:
             filtername = filtername2
-        elif filtername2 == 'CLEAR':
-            # do nothing here
+        elif filtername2 in _clears:
+            # do nothing here (the real filter is in the filter wheel)
             pass
-        elif filtername2 != 'CLEAR':
-            # filtername is real, but so is filtername2
+        else:
+            # filtername is real, but so is filtername2 (NIRCam narrow+wide):
+            # the pupil-wheel entry wins (historical behavior).
             filtername = filtername2
 
-    assert filtername != 'CLEAR'
+    assert filtername not in ('CLEAR', 'CLEARP'), filtername
 
     return filtername
 
