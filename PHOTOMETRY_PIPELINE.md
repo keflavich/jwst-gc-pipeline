@@ -1,5 +1,6 @@
 # Photometry pipeline
 
+(most of this is written by AI but Adam is editing in some comments to explain what... frankly is nonsensical)
 <!--
   DOC SYNC — last reviewed 2026-07-07 (expanded: per-iteration step-by-step,
   explicit saturated-star finding + daofind parameters, simplified all-defaults
@@ -12,23 +13,6 @@
   file = "how & where".  All numbers below are the actual deployed defaults; each
   is cited to cataloging.py / crowdsource_catalogs_long.py / saturated_star_finding.py.
 -->
-
-This is **the** PSF-photometry pipeline (`jwst_gc_pipeline.photometry.cataloging`),
-the default path as of 2026-06-09. It implements the recipe in
-`PSFPhotometryPlan2026-06-09.md`. The previous `IterativePSFPhotometry` path is
-retained only as an explicit opt-out (`--legacy-iterations`). For the
-science-method narrative (publication style, no code), see
-[`PIPELINE_METHODS.md`](PIPELINE_METHODS.md).
-
-## Why this replaced `IterativePSFPhotometry`
-
-photutils `IterativePSFPhotometry` (free position + LevMar + internal
-re-detection) is numerically unstable for isolated bright stars: the centroid
-walks and settles on an inflated-flux minimum whose **model peak exceeds the
-data peak** (impossible for a single positive PSF; `qfit` does not catch it).
-This pipeline makes every `daofind → fit → residual → reseed` step explicit,
-uses single-pass BASIC `PSFPhotometry`, and adds a physical model/data-peak
-overshoot check and a strict ban on negative-peak sources.
 
 ## How to run
 
@@ -43,34 +27,34 @@ python -m jwst_gc_pipeline.photometry.crowdsource_catalogs_long \
     --cutout-region=/path/to/region.reg --cutout-label=my_cutout
 ```
 
-Multi-filter (adds the cross-band m7 + m8); one module token serves a SW and a
-LW filter (e.g. `nrcb` → `nrcblong` for F480M and `nrcb1..4` for F210M):
+Multi-filter (adds the cross-band m7 + m8 steps); one module name serves a SW and a
+LW filter (e.g. `nrcb` → `nrcblong` for F480M and `nrcb1..4` for F210M), but usually you should use `modules=merge` because reducing individual frames independently makes no sense:
 
 ```
     --filternames=F480M,F210M --modules=nrcb ...
 ```
 
-`--cutout-region` accepts a DS9 `.reg` file or an `'ra,dec,size_arcsec'` string;
+`--cutout-region` accepts a DS9 `.reg` file or an `'ra,dec,size_arcsec'` string; it is intended for faster runs for development testing.
 `--cutout-label` names the output tree under `<basepath>/cutouts/<label>/`.
-Full-frame is the same command without `--cutout-region`/`--cutout-label`. To use
-the old `IterativePSFPhotometry` path instead, pass `--legacy-iterations`.
+Full-frame is the same command without `--cutout-region`/`--cutout-label` ('frame' here means a single H2RG detector module, like NRCA1 or NRCAlong). 
 
-**Monolithic in-process run (the simple path).** Each phase detects on the
-*previous* phase's merged residual mosaic, so the phases are strictly sequential.
+**Monolithic in-process run (simpler, but may wait in queue longer).** Each phase detects on the
+*previous* phase's merged residual mosaic, so the phases are sequential.
 The simplest way to run is one process that executes every phase in order —
-full-frame or cutout, as a single (non-array) job. With `SLURM_ARRAY_TASK_ID`
-set the run aborts and tells you to drop `--array`. Full-frame outputs land under
+full-frame or cutout, as a single (non-array) job. Full-frame outputs land under
 `<basepath>/<FILTER>/pipeline/` and `<basepath>/catalogs/`; cutout runs are
-namespaced under `<basepath>/cutouts/<label>/`.
+ under `<basepath>/cutouts/<label>/`.
 
-**Distributed per-frame fan-out (recommended at scale).** The same pipeline can
-be sharded below the filter boundary: for each phase, many tiny per-frame worker
-jobs fit a frame shard, then one finalize-barrier job merges/vets/builds the
-residual + background (and, for the final phase, the cross-band catalogs) —
-chained `afterok`, phase after phase. Controlled by `--manual-frame-shard=I/N`,
+**Distributed per-frame fan-out (recommended at scale).** (edited by Adam to *slightly* de-slopify.  Mop up after the AI?) The same pipeline can
+run individual images on separate nodes/processes for a single filter: for each phase, many per-frame worker
+jobs run in parallel, then one finalize-barrier job merges/vets/builds the
+residual + background (and, for the final phase, the cross-band catalogs).
+These are chained together with slurm using `afterok`. 
+The AI tool likes the word 'shard' for this, so each subprocess is a 'shard'.
+Controlled by `--manual-frame-shard=I/N`,
 `--manual-skip-finalize` (worker), `--manual-finalize-only` (barrier),
-`--manual-start-phase`, `--manual-stop-after-phase`; all default off, so a
-monolithic run is unchanged. Fan-out and finalize run the **same** per-frame fit
+`--manual-start-phase`, `--manual-stop-after-phase`; all default off such that monolithic is the default.
+Fan-out and finalize run the **same** per-frame fit
 and per-phase barrier code as the monolith, so they produce the **same** science
 output. See [`scripts/reduction/README.md`](scripts/reduction/README.md) for the
 submitters and `scripts/reduction/validate_perframe_equivalence.sh`, which diffs
@@ -93,12 +77,12 @@ Every phase, for every frame, runs the same skeleton
 1. **Load the frame** (cal/crf), build its WCS, DQ plane, source mask, and
    per-filter FWHM (from `reduction/fwhm_table.ecsv`).
 2. **Find and subtract saturated stars** → the satstar model (see below). This
-   model is subtracted from the fit frame so bright cores/wings don't corrupt the
-   point-source fits, and (for display) added back into the model mosaic.
-3. **Build the detection seed** = `daofind` on this phase's detection co-add,
-   filtered by local S/N, round/sharp, unioned with the previous phase's vetted
+   model is subtracted from the fit frame so bright stars' wings don't corrupt the
+   fits, and (for display) added back into the model mosaic.
+3. **Build the detection seed** = `daofind` on this phase's detection co-add image.
+   The DAOfind catalog is filtered by local S/N, round/sharp, and is unioned with the previous phase's vetted
    catalog (see "daofind parameters" below).
-4. **Fit** every seed with single-pass BASIC `PSFPhotometry` on the fit frame.
+4. **Fit** every seed with single-pass BASIC `PSFPhotometry` on the fit frame using STPSF PSFs.
 5. **Post-fit QC**: model/data-peak overshoot check (→ forced refit),
    non-positive-flux ban, near-saturation/satstar-wing rejection, dedup.
 6. **Render** the per-frame model + residual.
@@ -438,3 +422,24 @@ control is the default.
   is used as a pseudo-zeroframe fallback.
 </content>
 </invoke>
+
+
+## History Notes
+
+This is **the** PSF-photometry pipeline (`jwst_gc_pipeline.photometry.cataloging`),
+the default path as of 2026-06-09. It implements the recipe in
+`PSFPhotometryPlan2026-06-09.md`. The previous `IterativePSFPhotometry` path is
+retained only as an explicit opt-out (`--legacy-iterations`). For the
+science-method narrative (publication style, no code), see
+[`PIPELINE_METHODS.md`](PIPELINE_METHODS.md).
+
+## Why this replaced `IterativePSFPhotometry`
+
+photutils `IterativePSFPhotometry` (free position + LevMar + internal
+re-detection) is numerically unstable for isolated bright stars: the centroid
+walks and settles on an inflated-flux minimum whose **model peak exceeds the
+data peak** (impossible for a single positive PSF; `qfit` does not catch it).
+This pipeline makes every `daofind → fit → residual → reseed` step explicit,
+uses single-pass BASIC `PSFPhotometry`, and adds a physical model/data-peak
+overshoot check and a strict ban on negative-peak sources.
+
