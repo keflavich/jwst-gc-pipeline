@@ -9,6 +9,7 @@ Factored out of ``crowdsource_catalogs_long.py`` (2026-06-09 restructure); the
 old module now imports these names from here so there is a single source of
 truth.  Pure string/regex helpers with no astronomy dependencies.
 """
+import os
 import re
 
 # Match _chunkXXofYY (any width) when stripping the chunk suffix from an
@@ -21,20 +22,49 @@ _CHUNK_TOKEN_RE = re.compile(r'_chunk\d+of\d+')
 MIRI_FILTERS = frozenset(['f560w', 'f770w', 'f1000w', 'f1130w', 'f1280w',
                           'f1500w', 'f1800w', 'f2100w', 'f2550w'])
 
+# Canonical instrument names as used downstream (PSF branch, SVO filterID,
+# filename token = lowercased).
+_CANONICAL_INSTRUMENT = {'nircam': 'NIRCam', 'niriss': 'NIRISS', 'miri': 'MIRI'}
 
-def _instrument_from_filter(filtername):
-    """Return 'MIRI' or 'NIRCam' based on filter name (no header read needed)."""
+
+def _instrument_override():
+    """Process-global instrument override.
+
+    NIRISS shares filter names with NIRCam (F158M/F200W/F356W/F480M), so the
+    instrument CANNOT be derived from the filter name.  A single reduction/
+    cataloging process only ever handles ONE instrument, so -- exactly like
+    ``GC_BASEPATH_OVERRIDE`` (jwst_gc_pipeline.scratch_basepath) -- a process-wide
+    env override is safe and avoids threading an ``instrument`` argument through
+    every ``_inst_token`` / ``_svo_filter_id`` / ``_instrument_from_filter`` call
+    site.  Set ``GC_INSTRUMENT_OVERRIDE=niriss`` (via ``--instrument niriss``) to
+    force the NIRISS branch.  Empty/unset -> filter-name heuristic (historical
+    NIRCam/MIRI behavior)."""
+    val = os.environ.get('GC_INSTRUMENT_OVERRIDE', '').strip().lower()
+    return _CANONICAL_INSTRUMENT.get(val) if val else None
+
+
+def _instrument_from_filter(filtername, instrument=None):
+    """Return 'MIRI', 'NIRCam', or 'NIRISS'.
+
+    Precedence: explicit ``instrument`` arg > ``GC_INSTRUMENT_OVERRIDE`` env >
+    filter-name heuristic (MIRI filter set -> MIRI, else NIRCam).  NIRISS can only
+    arrive via the arg or the env (its filter names are shared with NIRCam)."""
+    if instrument is not None:
+        return _CANONICAL_INSTRUMENT.get(str(instrument).lower(), instrument)
+    override = _instrument_override()
+    if override is not None:
+        return override
     return 'MIRI' if str(filtername).lower() in MIRI_FILTERS else 'NIRCam'
 
 
-def _inst_token(filtername):
+def _inst_token(filtername, instrument=None):
     """Lowercased instrument token used in JWST i2d filename conventions."""
-    return _instrument_from_filter(filtername).lower()
+    return _instrument_from_filter(filtername, instrument=instrument).lower()
 
 
-def _svo_filter_id(filtername):
-    """SVO FPS filterID (e.g. 'JWST/NIRCam.F480M', 'JWST/MIRI.F770W')."""
-    return f'JWST/{_instrument_from_filter(filtername)}.{filtername.upper()}'
+def _svo_filter_id(filtername, instrument=None):
+    """SVO FPS filterID (e.g. 'JWST/NIRCam.F480M', 'JWST/NIRISS.F200W')."""
+    return f'JWST/{_instrument_from_filter(filtername, instrument=instrument)}.{filtername.upper()}'
 
 
 def _chunk_token(chunk_index, n_seed_chunks):

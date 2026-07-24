@@ -1412,7 +1412,7 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     iteration-label seed inference and diagnostics; the manual path builds its
     own seeds and (for cutouts) PNG diagnostics are suppressed anyway.
     """
-    fwhm_tbl = Table.read(_L.FWHM_TABLE)
+    fwhm_tbl = Table.read(_L.fwhm_table_path())
     row = fwhm_tbl[fwhm_tbl['Filter'] == filtername]
     fwhm_pix = float(row['PSF FWHM (pixel)'][0])
     aperture_radius_pix = 2.0 * fwhm_pix
@@ -2763,7 +2763,10 @@ def _clean_offfov_dups_and_offfield(merged, filt, data_i2d_path, basepath, *,
             px = float(ww.proj_plane_pixel_scales()[0].to('arcsec').value)
             fw = 0.16
             try:
-                _ft = Table.read(f'{basepath}/reduction/fwhm_table.ecsv')
+                _ftname = ('fwhm_table_niriss.ecsv'
+                           if _L._instrument_override() == 'NIRISS'
+                           else 'fwhm_table.ecsv')
+                _ft = Table.read(f'{basepath}/reduction/{_ftname}')
                 _row = _ft[_ft['Filter'] == filt.upper()]
                 if len(_row):
                     fw = float(_row['PSF FWHM (arcsec)'][0])
