@@ -2379,6 +2379,7 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
                   'f322w2': 0.1*u.arcsec,   # wide LW
                   'f115w': 0.05*u.arcsec,
                   'f150w': 0.05*u.arcsec,
+                  'f158m': 0.05*u.arcsec,   # NIRISS SW (1.58 um)
                   'f162m': 0.05*u.arcsec,
                   'f182m': 0.05*u.arcsec,
                   'f187n': 0.05*u.arcsec,
