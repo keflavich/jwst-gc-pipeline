@@ -1554,8 +1554,10 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
         align_fits[1].header['DEOFFSET'] = decshift.value
         # correction provenance: base/target fiducials + convention + the
         # generation this frame carried when corrected (audit at any time:
-        # recompute pixel_to_world(array-center = data.shape//2) and compare to ATGTRA/ATGTDE)
-        align_fits[1].header['ABASERA'] = (_base_ra, '[deg] fiducial(array-center) BEFORE correction')
+        # recompute pixel_to_world(ABASEPX,ABASEPY) and compare to ATGTRA/ATGTDE)
+        align_fits[1].header['ABASEPX'] = (_fx, 'fiducial pixel x (array center) for ABASE/ATGT')
+        align_fits[1].header['ABASEPY'] = (_fy, 'fiducial pixel y (array center) for ABASE/ATGT')
+        align_fits[1].header['ABASERA'] = (_base_ra, f'[deg] fiducial({_fx},{_fy}) BEFORE correction')
         align_fits[1].header['ABASEDE'] = (_base_dec, '[deg] fiducial dec BEFORE correction')
         align_fits[1].header['ATGTRA'] = (_tgt_ra, '[deg] fiducial AFTER correction (verify me)')
         align_fits[1].header['ATGTDE'] = (_tgt_dec, '[deg] fiducial dec AFTER correction')
