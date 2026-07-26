@@ -1664,7 +1664,9 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
         wcses = [wcs.WCS(fits.getheader(fn, ext=('SCI', 1))) if fn is not None else None
                  for fn in imgfns]
 
-    fwhm_tbl = Table.read(f'{basepath}/reduction/fwhm_table.ecsv')
+    from jwst_gc_pipeline.photometry.naming import _instrument_override as _iov
+    _ftname = ('fwhm_table_niriss.ecsv' if _iov() == 'NIRISS' else 'fwhm_table.ecsv')
+    fwhm_tbl = Table.read(f'{basepath}/reduction/{_ftname}')
 
     for ii, tbl in enumerate(tbls):
         ww = wcses[ii] if ii < len(wcses) else None

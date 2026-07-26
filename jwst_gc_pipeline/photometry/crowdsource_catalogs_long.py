@@ -2486,7 +2486,7 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
         # step so the infilled mosaic is cropped too.
         _crop_datamodel_to_finite(output_filename)
 
-    fwhm_tbl = Table.read(FWHM_TABLE)
+    fwhm_tbl = Table.read(fwhm_table_path())
     row = fwhm_tbl[fwhm_tbl['Filter'] == filtername]
     fwhm_pix = float(row['PSF FWHM (pixel)'][0])
     with ImageModel(output_filename) as model:
