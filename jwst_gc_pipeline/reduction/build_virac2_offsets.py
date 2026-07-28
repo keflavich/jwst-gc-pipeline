@@ -180,6 +180,27 @@ REGION = {
                         'f182m': ('F182M', 2023.72, '_m3'), 'f212n': ('F212N', 2023.72, '_m3'),
                         'f360m': ('F360M', 2023.72, '_m3'), 'f405n': ('F405N', 2023.72, '_m3'),
                         'f470n': ('F470N', 2023.72, '_m3'), 'f480m': ('F480M', 2023.72, '_m3')}),
+    # sgrb2 (5365/001) and quintuplet (2045/003).  Both had VIRAC2locked tables
+    # authored outside the builder and, like sgrc, with NO Module column.  The m2
+    # checkpoint emits corrections keyed (visit, exposure, module), and
+    # update_offsets_table skips the module narrowing when that column is absent
+    # -- so all 8 detectors' corrections for one exposure land on the SAME row and
+    # SUM into an N-fold over-correction.  Registering them here lets both tables be
+    # rebuilt with --per-module so corrections map 1:1.
+    # Epochs from EXPSTART of the obs' own NIRCam frames: sgrb2 60560.715 ->
+    # 2024.685, quintuplet 60535.756 -> 2024.617.  (sgrb2's MIRI bands F770W/
+    # F1280W/F2550W are deliberately absent: this builder ties NIRCam detectors.)
+    'sgrb2': dict(proposal='5365', field='001', basepath='/orange/adamginsburg/jwst/sgrb2',
+                  filts={'f150w': ('F150W', 2024.685, '_m3'), 'f182m': ('F182M', 2024.685, '_m3'),
+                         'f187n': ('F187N', 2024.685, '_m3'), 'f210m': ('F210M', 2024.685, '_m3'),
+                         'f212n': ('F212N', 2024.685, '_m3'), 'f300m': ('F300M', 2024.685, '_m3'),
+                         'f360m': ('F360M', 2024.685, '_m3'), 'f405n': ('F405N', 2024.685, '_m3'),
+                         'f410m': ('F410M', 2024.685, '_m3'), 'f466n': ('F466N', 2024.685, '_m3'),
+                         'f480m': ('F480M', 2024.685, '_m3')}),
+    'quintuplet': dict(proposal='2045', field='003',
+                       basepath='/orange/adamginsburg/jwst/quintuplet',
+                       filts={'f212n': ('F212N', 2024.617, '_m3'),
+                              'f323n': ('F323N', 2024.617, '_m3')}),
 }
 # NIRCam SW (nrca1-4/nrcb1-4) vs LW (nrcalong/nrcblong) split at ~2.4um: F070W..F212N are
 # SW, F250M+ are LW.  Classify by filter number so any GC field's bands map to the right
