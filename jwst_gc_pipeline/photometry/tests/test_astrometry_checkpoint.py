@@ -190,12 +190,11 @@ def test_update_offsets_table_refuses_perexposure_on_pervisit_table(tmp_path):
             dec_deg=DEC_TEST)], "m2")
 
 
-def test_update_offsets_table_refuses_visit_collapse(tmp_path, monkeypatch):
+def test_update_offsets_table_refuses_visit_collapse(tmp_path):
     # a correction that lands two visits on the SAME value is the brick-1182
-    # collapse signature -- must refuse to write.  This one is ~17" wide, so
-    # lift the magnitude ceiling to keep the COLLAPSE guard the thing under
-    # test rather than the size gate.
-    monkeypatch.setenv("ASTROM_MAX_CORRECTION_ARCSEC", "100")
+    # collapse signature -- must refuse to write.  ~17" wide, but it is a BULK
+    # tie (exposure=None, module=None) so the magnitude gate lets it through and
+    # the COLLAPSE guard is what fires.
     path = _offsets_csv(tmp_path)
     with pytest.raises(OffsetsTableUpdateError, match="(?i)collaps"):
         update_offsets_table(path, [dict(
@@ -243,8 +242,8 @@ def test_update_offsets_table_allows_correction_just_under_ceiling(tmp_path):
 
 
 def test_update_offsets_table_ceiling_override(tmp_path, monkeypatch):
-    # the deliberate gross re-authoring path (brick-1182 v001 was really ~20"
-    # off) stays available, but only via an explicit env override
+    # a deliberate gross re-authoring at PER-EXPOSURE granularity stays
+    # available, but only via an explicit env override
     monkeypatch.setenv("ASTROM_MAX_CORRECTION_ARCSEC", "30")
     path = _offsets_csv(tmp_path)
     out = update_offsets_table(path, [dict(
@@ -254,6 +253,45 @@ def test_update_offsets_table_ceiling_override(tmp_path, monkeypatch):
     row = out[(np.array([str(v) for v in out["Visit"]]) == "jw01182004001")
               & (out["Exposure"] == 1)][0]
     assert row["ddec"] == pytest.approx(0.5 + 20.0, abs=1e-9)
+
+
+@pytest.mark.parametrize("ddec_arcsec", [4.0, 13.0, 17.0])
+def test_update_offsets_table_allows_gross_guide_star_bulk_tie(tmp_path, ddec_arcsec):
+    # Early-Cycle visits that acquired the WRONG GUIDE STAR are really offset by
+    # arcseconds (~4", ~13", ~17" cases all exist).  Correcting that is the job,
+    # so a per-VISIT BULK tie (exposure=None, module=None) must NOT be blocked by
+    # the mas-scale per-exposure ceiling.
+    path = _offsets_csv(tmp_path)
+    out = update_offsets_table(path, [dict(
+        visit="jw01182004001", exposure=None, module=None, filtername="F212N",
+        dra_onsky_mas=0.0, ddec_onsky_mas=ddec_arcsec * 1000.0,
+        dec_deg=DEC_TEST)], "m2")
+    rows = out[np.array([str(v) for v in out["Visit"]]) == "jw01182004001"]
+    # applied to EVERY exposure of the visit
+    for row in rows:
+        assert row["ddec"] == pytest.approx(0.5 + ddec_arcsec, abs=1e-9)
+
+
+def test_update_offsets_table_refuses_absurd_bulk_tie(tmp_path):
+    # ...but a bulk tie beyond the measure_offset sweep ceiling (60") cannot have
+    # come from a real swept peak
+    path = _offsets_csv(tmp_path)
+    with pytest.raises(OffsetsTableUpdateError, match="exceed"):
+        update_offsets_table(path, [dict(
+            visit="jw01182004001", exposure=None, module=None,
+            filtername="F212N", dra_onsky_mas=0.0, ddec_onsky_mas=102339.0,
+            dec_deg=DEC_TEST)], "m2")
+
+
+def test_update_offsets_table_perexposure_ceiling_unaffected_by_bulk_limit(tmp_path):
+    # the loose BULK limit must not leak onto per-exposure corrections: cloudef's
+    # +102" runaway was written to a per-EXPOSURE row, and stays blocked
+    path = _offsets_csv(tmp_path)
+    with pytest.raises(OffsetsTableUpdateError, match="exceed"):
+        update_offsets_table(path, [dict(
+            visit="jw01182004001", exposure=1, module="nrcb1",
+            filtername="F212N", dra_onsky_mas=0.0, ddec_onsky_mas=4000.0,
+            dec_deg=DEC_TEST)], "m2")
 
 
 # ---------------------------------------------------------------------------

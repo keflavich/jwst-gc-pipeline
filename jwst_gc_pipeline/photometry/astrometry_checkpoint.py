@@ -116,35 +116,64 @@ def _env_flag(name):
 # value -- they are gated here, on the CORRECTION.
 MAX_CORRECTION_ARCSEC = 0.5
 
+# The per-VISIT BULK tie (consensus -> reference; exposure=None AND module=None)
+# is a DIFFERENT quantity from per-exposure jitter and is legitimately large.
+# Early-Cycle JWST visits that acquired the wrong guide star are really offset by
+# arcseconds -- brick-1182 visit-001 by ~17-20", and ~4" / ~13" cases exist across
+# the programme.  Correcting those IS the job, so the bulk tie is bounded only
+# well above any real guide-star failure, at the sweep ceiling of measure_offset
+# (60"): past that the "measurement" cannot even have come from a swept peak.
+MAX_BULK_CORRECTION_ARCSEC = 60.0
+
+
+def _is_bulk_correction(corr):
+    """A per-visit bulk consensus->reference tie carries no exposure AND no
+    module (see BULK_EXPOSURE / BULK_MODULE); anything else is per-exposure."""
+    return corr.get("exposure") is None and corr.get("module") is None
+
 
 def _assert_correction_magnitudes(corrections, offsets_path):
-    """Refuse corrections larger than ``MAX_CORRECTION_ARCSEC``.
+    """Bound each correction by its KIND.
 
-    A genuine gross fix does exist (brick-1182 visit-001 was really ~20" off),
-    but it is a deliberate, reviewed re-authoring of the table -- not something
-    an automated checkpoint should ever apply on its own.  Raise the limit via
-    ``ASTROM_MAX_CORRECTION_ARCSEC`` for that case, with justification.
+    Per-exposure jitter is mas-scale by construction, so it is held to
+    ``MAX_CORRECTION_ARCSEC``.  That is the gate cloudef needed: its +102"
+    runaway was written to a per-EXPOSURE row (F162M exposure 8).
+
+    A per-visit BULK tie is held to the much looser
+    ``MAX_BULK_CORRECTION_ARCSEC``, because a wrong-guide-star visit really is
+    arcseconds off and auto-correcting it is legitimate.
+
+    Both limits can be overridden with ``ASTROM_MAX_CORRECTION_ARCSEC`` /
+    ``ASTROM_MAX_BULK_CORRECTION_ARCSEC`` when a deliberate re-authoring needs
+    to go further.
     """
     limit = float(os.environ.get("ASTROM_MAX_CORRECTION_ARCSEC", "")
                   or MAX_CORRECTION_ARCSEC)
+    bulk_limit = float(os.environ.get("ASTROM_MAX_BULK_CORRECTION_ARCSEC", "")
+                       or MAX_BULK_CORRECTION_ARCSEC)
     big = []
     for corr in corrections:
         dra_as = float(corr["dra_onsky_mas"]) / 1000.0
         ddec_as = float(corr["ddec_onsky_mas"]) / 1000.0
-        if abs(dra_as) > limit or abs(ddec_as) > limit:
+        is_bulk = _is_bulk_correction(corr)
+        lim = bulk_limit if is_bulk else limit
+        if abs(dra_as) > lim or abs(ddec_as) > lim:
             big.append((corr.get("visit"), corr.get("filtername"),
-                        corr.get("exposure"), corr.get("module"),
-                        round(dra_as, 4), round(ddec_as, 4)))
+                        "BULK" if is_bulk else corr.get("exposure"),
+                        corr.get("module"), round(dra_as, 4), round(ddec_as, 4),
+                        f"limit={lim}\""))
     if big:
         raise OffsetsTableUpdateError(
-            f"{len(big)} correction(s) exceed {limit}\" and will NOT be applied "
-            f"to {os.path.basename(offsets_path)} -- a tie correction is "
-            f"mas-scale; this size means the upstream measurement is wrong "
-            f"(window-limited/spurious peak), not that the frame is that far "
-            f"off.  (visit, filter, exposure, module, dra\", ddec\"): {big}.  "
-            f"If this really is a gross re-pointing fix, re-author the table "
-            f"deliberately or raise ASTROM_MAX_CORRECTION_ARCSEC with "
-            f"written justification.")
+            f"{len(big)} correction(s) exceed their magnitude limit and will "
+            f"NOT be applied to {os.path.basename(offsets_path)}.  A "
+            f"per-exposure tie correction is mas-scale (limit {limit}\"); a "
+            f"per-visit BULK tie may be arcseconds (limit {bulk_limit}\") but "
+            f"not this large.  A correction over its limit means the upstream "
+            f"measurement is wrong -- a window-limited or spurious peak -- not "
+            f"that the frame is really that far off.  (visit, filter, exposure, "
+            f"module, dra\", ddec\", limit): {big}.  For a deliberate gross "
+            f"re-authoring, raise ASTROM_MAX_CORRECTION_ARCSEC / "
+            f"ASTROM_MAX_BULK_CORRECTION_ARCSEC with written justification.")
 
 
 # ---------------------------------------------------------------------------
