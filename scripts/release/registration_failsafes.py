@@ -26,6 +26,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import sys
 
 import numpy as np
@@ -69,9 +70,53 @@ def detect(path, thr=30.0):
     return SkyCoord(w.pixel_to_world(t["xcentroid"], t["ycentroid"])), np.asarray(t["flux"], float)
 
 
+# Precise merged-mosaic filename parser.  A permissive `jw*-o*...` glob matches
+# EVERY proposal/observation; a shared target directory can hold a stray mosaic
+# from another observation (the same class of contamination that fed the overlap
+# gate stale 2221 o002 = cloudc crf).  We enumerate with a tight character-class
+# glob (no `*` in the proposal/observation) and validate each name with this
+# regex, which also yields the proposal-observation key so a cross-observation
+# ambiguity can be caught rather than silently resolved by `g[0]`.
+_MOSAIC_RE = re.compile(
+    r"^jw(?P<prop>\d{5})-o(?P<obs>\d{3})_t001_nircam_clear-"
+    r"(?P<filt>f\d{3,4}[wmn])-(?P<module>merged|nrca|nrcb|nrcalong|nrcblong)"
+    r"_i2d\.fits$")
+
+
+class AmbiguousMosaicError(RuntimeError):
+    """Raised when >1 observation's mosaic matches a single (field, filter,
+    module) -- a shared target dir holding a stray mosaic from another
+    observation/program.  Fail closed: refuse rather than silently pick one."""
+
+
+def _mosaic_candidates(field, filt, module):
+    """All on-disk mosaics for (field, filt, module) as (obs_key, path),
+    name-validated.  ``obs_key`` = ``"<proposal>-<observation>"``."""
+    # tight glob: 5-digit proposal, 3-digit observation -- no `*` in either
+    pat = (f"{BASE}/{field}/{filt}/pipeline/"
+           f"jw[0-9][0-9][0-9][0-9][0-9]-o[0-9][0-9][0-9]_t001_nircam_clear-"
+           f"{filt.lower()}-{module}_i2d.fits")
+    out = []
+    for p in sorted(glob.glob(pat)):
+        m = _MOSAIC_RE.match(os.path.basename(p))
+        if m and m.group("filt") == filt.lower() and m.group("module") == module:
+            out.append((f"{m.group('prop')}-{m.group('obs')}", p))
+    return out
+
+
 def mosaic(field, filt, module="merged"):
-    g = glob.glob(f"{BASE}/{field}/{filt}/pipeline/jw*-o*_t001_nircam_clear-{filt.lower()}-{module}_i2d.fits")
-    return g[0] if g else None
+    cands = _mosaic_candidates(field, filt, module)
+    if not cands:
+        return None
+    obs_keys = {k for k, _ in cands}
+    if len(obs_keys) > 1:
+        raise AmbiguousMosaicError(
+            f"{field} {filt} {module}: {len(obs_keys)} observations' mosaics "
+            f"present ({', '.join(sorted(obs_keys))}) -- a stray mosaic from "
+            f"another observation is misfiled in this directory. Remove it or "
+            f"scope the release; refusing to silently pick one.\n  "
+            + "\n  ".join(p for _, p in cands))
+    return cands[0][1]
 
 
 def catalog_sc(field, filt):
@@ -214,14 +259,19 @@ def plot_all(results, out):
 
 
 def field_bands(field):
-    """Filters with a merged mosaic on disk for this field."""
+    """Filters with a merged mosaic on disk for this field.  Enumerates with a
+    tight character-class glob (no `*` in proposal/observation) and validates
+    each name with ``_MOSAIC_RE``; the mosaic's parsed filter must match its
+    ``<field>/<FILT>/pipeline`` directory."""
     out = []
-    for p in glob.glob(f"{BASE}/{field}/*/pipeline/jw*-o*_t001_nircam_clear-*-merged_i2d.fits"):
-        b = os.path.basename(p)
-        try:
-            filt = b.split("clear-")[1].split("-merged")[0].upper()
-        except IndexError:
+    pat = (f"{BASE}/{field}/*/pipeline/"
+           f"jw[0-9][0-9][0-9][0-9][0-9]-o[0-9][0-9][0-9]_t001_nircam_clear-"
+           f"*-merged_i2d.fits")
+    for p in glob.glob(pat):
+        m = _MOSAIC_RE.match(os.path.basename(p))
+        if m is None or m.group("module") != "merged":
             continue
+        filt = m.group("filt").upper()
         d = os.path.basename(os.path.dirname(os.path.dirname(p)))   # <field>/<FILT>/pipeline
         if d.upper() == filt:
             out.append(filt)
