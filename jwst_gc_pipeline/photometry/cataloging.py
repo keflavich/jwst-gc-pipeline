@@ -3149,17 +3149,31 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     if not fns:
         # A frozen stage with no inputs is not a pass -- it is the gate silently
         # ceasing to exist, which is how the `_group_` duplication survived so
-        # long.  Say so loudly; ASTROM_CHECKPOINT_WARN_ONLY can still demote it.
+        # long.  But "no per-frame catalogs" is only a REGRESSION when this stage
+        # actually ran for this filter: sgrc/niriss F200W legitimately stops at
+        # resbgsub_m6 and has no m7 products at all, and hard-stopping it would
+        # be a false failure whose only escape is the global warn-only switch.
+        # The merged product for THIS stage is the discriminator -- if the merge
+        # produced output but no per-frame catalog matched, the inputs are wrong;
+        # if there is no merge either, the stage simply did not run here.
+        merged = _glob.glob(f"{cut_bp}/catalogs/{filt.lower()}_{module}_"
+                            f"indivexp_merged*_{merge_label}_dao_basic.fits")
         msg = (f"astrom checkpoint [{merge_label}] {filt}/{module}: NO per-frame "
                f"catalogs matched ({base}_{merge_label}_daophot_basic.fits) -- "
                f"the stage checkpoint cannot run")
-        if (merge_label not in ("m1", "m12", "m2")
+        if (merge_label not in ("m1", "m12", "m2") and merged
+                and os.environ.get('ASTROM_ALLOW_MISSING_PERFRAME', '') != '1'
                 and os.environ.get('ASTROM_CHECKPOINT_WARN_ONLY', '') != '1'):
             raise AstrometryRegressionError(
-                msg + ".  A FROZEN stage with no inputs is a silently disabled "
-                      "gate, not a pass.  Set ASTROM_CHECKPOINT_WARN_ONLY=1 to "
-                      "demote if this is genuinely a filter with no per-frame "
-                      "products.")
+                msg + f".  The {merge_label} merge DID run for this filter "
+                      f"({os.path.basename(merged[0])}), so its per-frame inputs "
+                      f"are missing or misnamed -- a FROZEN stage with no inputs "
+                      f"is a silently disabled gate, not a pass.  Set "
+                      f"ASTROM_ALLOW_MISSING_PERFRAME=1 to demote just this "
+                      f"check (ASTROM_CHECKPOINT_WARN_ONLY=1 demotes every "
+                      f"checkpoint in the run).")
+        if not merged and merge_label not in ("m1", "m12", "m2"):
+            msg += f" (no {merge_label} merge for this filter either)"
         print(msg + "; skipped", flush=True)
         return
     fns = _drop_module_level_duplicates(fns, filt, merge_label, module)

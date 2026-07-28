@@ -13,11 +13,16 @@ once already:
 So the accept-list is tested at each stage against all four real name shapes.
 """
 import os
+import types
 
 import pytest
 
+from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+    AstrometryRegressionError,
+)
 from jwst_gc_pipeline.photometry.cataloging import (
     _drop_module_level_duplicates, _perframe_catalog_re,
+    _run_astrometry_stage_checkpoint,
 )
 
 
@@ -92,3 +97,52 @@ def test_bare_module_dropped_only_for_its_own_module():
            *[_name(det=f"nrcb{i}", filt="f212n") for i in (1, 2, 3, 4)]]
     kept = _drop_module_level_duplicates(fns, "f212n", "m2", "nrcb")
     assert any("_nrca_visit" in os.path.basename(f) for f in kept)
+
+
+# ---------------------------------------------------------------------------
+# a frozen stage with no per-frame inputs
+# ---------------------------------------------------------------------------
+
+def _layout(tmp_path, stage, *, perframe, merged, filt="f200w", module="nis"):
+    (tmp_path / filt.upper()).mkdir(parents=True, exist_ok=True)
+    (tmp_path / "catalogs").mkdir(parents=True, exist_ok=True)
+    if perframe:
+        (tmp_path / filt.upper() /
+         _name(det="nrcb1", seg="resbgsub", label=stage, filt=filt)).touch()
+    if merged:
+        (tmp_path / "catalogs" /
+         f"{filt}_{module}_indivexp_merged_resbgsub_{stage}_dao_basic.fits").touch()
+
+
+def _run(tmp_path, stage, module="nis", filt="f200w"):
+    return _run_astrometry_stage_checkpoint(
+        stage, module, filt, str(tmp_path), str(tmp_path), "4147",
+        types.SimpleNamespace(cutout_region=""), {}, context="test")
+
+
+def test_frozen_stage_missing_inputs_raises_when_the_merge_ran(tmp_path):
+    """The merge produced output but nothing matched -> the gate's inputs are
+    broken.  That is the case worth failing on."""
+    _layout(tmp_path, "m5", perframe=False, merged=True)
+    with pytest.raises(AstrometryRegressionError, match="(?i)silently disabled"):
+        _run(tmp_path, "m5")
+
+
+def test_frozen_stage_without_the_stage_at_all_is_skipped(tmp_path):
+    """sgrc/niriss F200W legitimately stops at resbgsub_m6 and has no m7
+    products.  Hard-stopping it would be a false failure."""
+    _layout(tmp_path, "m7", perframe=False, merged=False)
+    _run(tmp_path, "m7")        # must not raise
+
+
+def test_frozen_stage_missing_inputs_has_a_narrow_escape(tmp_path, monkeypatch):
+    """...and the escape is scoped to this check, not every checkpoint."""
+    monkeypatch.setenv("ASTROM_ALLOW_MISSING_PERFRAME", "1")
+    _layout(tmp_path, "m5", perframe=False, merged=True)
+    _run(tmp_path, "m5")        # must not raise
+
+
+def test_m2_missing_inputs_does_not_raise(tmp_path):
+    """m2 is the CORRECTING stage, not a frozen one -- unchanged behaviour."""
+    _layout(tmp_path, "m2", perframe=False, merged=True)
+    _run(tmp_path, "m2")        # must not raise
