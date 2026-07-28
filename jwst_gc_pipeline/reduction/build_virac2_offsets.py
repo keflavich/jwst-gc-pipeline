@@ -242,6 +242,19 @@ CROSSTIE = {
 }
 
 
+def _empty_like(col, n):
+    """A length-``n`` fill for a column missing from the other table.
+
+    ``np.nan`` is wrong for string columns: vstack then reports
+    ``The 'Module' columns have incompatible types: ['float64', 'str160']``.
+    Use an empty string for str/bytes columns, NaN for everything numeric.
+    """
+    kind = getattr(getattr(col, 'dtype', None), 'kind', 'f')
+    if kind in ('U', 'S', 'O'):
+        return np.full(n, '', dtype=col.dtype)
+    return np.full(n, np.nan)
+
+
 def _region_key(rc):
     for rk, rv in REGION.items():
         if rv is rc:
@@ -590,12 +603,33 @@ if __name__ == '__main__':
                              for r in old])
         if keepmask.any():
             old = old[keepmask]
+            # A HALF-per-module table is worse than either whole: update_offsets_
+            # table narrows on Module as soon as the column exists, so corrections
+            # for the filters that were NOT rebuilt would match only the filled
+            # rows and hard-fail with "matches NO row".  Refuse rather than write
+            # it.  (Rebuilding every filter of the field in one command takes the
+            # keepmask.any() == False path below and rewrites cleanly.)
+            if ('Module' in t.colnames) != ('Module' in old.colnames):
+                have, lack = (('new', 'existing') if 'Module' in t.colnames
+                              else ('existing', 'new'))
+                raise SystemExit(
+                    f"REFUSING to merge: the {have} rows have a Module column and "
+                    f"the {lack} rows do not, so {os.path.basename(path)} would be "
+                    f"half per-module.  update_offsets_table narrows on Module "
+                    f"once the column exists, so the un-rebuilt filters "
+                    f"({sorted(set(str(x) for x in old['Filter']))}) would then "
+                    f"match no row.  Rebuild ALL filters of this field in ONE "
+                    f"command:\n"
+                    f"  python -m jwst_gc_pipeline.reduction.build_virac2_offsets "
+                    f"--region <key> --per-module")
+            # dtype-aware fill: `np.nan` into a string column makes vstack raise
+            # TableMergeError ('float64' vs 'str160').
             for c in t.colnames:
                 if c not in old.colnames:
-                    old[c] = np.nan
+                    old[c] = _empty_like(t[c], len(old))
             for c in old.colnames:
                 if c not in t.colnames:
-                    t[c] = np.nan
+                    t[c] = _empty_like(old[c], len(t))
             t = vstack([old, t])
     t.write(path, overwrite=True)
     print(f"\nwrote {path}: {len(t)} rows (replaced {sorted(new_filts)} for prefixes {sorted(new_visit_prefixes)})", flush=True)
