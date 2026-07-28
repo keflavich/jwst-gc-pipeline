@@ -180,6 +180,27 @@ REGION = {
                         'f182m': ('F182M', 2023.72, '_m3'), 'f212n': ('F212N', 2023.72, '_m3'),
                         'f360m': ('F360M', 2023.72, '_m3'), 'f405n': ('F405N', 2023.72, '_m3'),
                         'f470n': ('F470N', 2023.72, '_m3'), 'f480m': ('F480M', 2023.72, '_m3')}),
+    # sgrb2 (5365/001) and quintuplet (2045/003).  Both had VIRAC2locked tables
+    # authored outside the builder and, like sgrc, with NO Module column.  The m2
+    # checkpoint emits corrections keyed (visit, exposure, module), and
+    # update_offsets_table skips the module narrowing when that column is absent
+    # -- so all 8 detectors' corrections for one exposure land on the SAME row and
+    # SUM into an N-fold over-correction.  Registering them here lets both tables be
+    # rebuilt with --per-module so corrections map 1:1.
+    # Epochs from EXPSTART of the obs' own NIRCam frames: sgrb2 60560.715 ->
+    # 2024.685, quintuplet 60535.756 -> 2024.617.  (sgrb2's MIRI bands F770W/
+    # F1280W/F2550W are deliberately absent: this builder ties NIRCam detectors.)
+    'sgrb2': dict(proposal='5365', field='001', basepath='/orange/adamginsburg/jwst/sgrb2',
+                  filts={'f150w': ('F150W', 2024.685, '_m3'), 'f182m': ('F182M', 2024.685, '_m3'),
+                         'f187n': ('F187N', 2024.685, '_m3'), 'f210m': ('F210M', 2024.685, '_m3'),
+                         'f212n': ('F212N', 2024.685, '_m3'), 'f300m': ('F300M', 2024.685, '_m3'),
+                         'f360m': ('F360M', 2024.685, '_m3'), 'f405n': ('F405N', 2024.685, '_m3'),
+                         'f410m': ('F410M', 2024.685, '_m3'), 'f466n': ('F466N', 2024.685, '_m3'),
+                         'f480m': ('F480M', 2024.685, '_m3')}),
+    'quintuplet': dict(proposal='2045', field='003',
+                       basepath='/orange/adamginsburg/jwst/quintuplet',
+                       filts={'f212n': ('F212N', 2024.617, '_m3'),
+                              'f323n': ('F323N', 2024.617, '_m3')}),
 }
 # NIRCam SW (nrca1-4/nrcb1-4) vs LW (nrcalong/nrcblong) split at ~2.4um: F070W..F212N are
 # SW, F250M+ are LW.  Classify by filter number so any GC field's bands map to the right
@@ -219,6 +240,19 @@ CROSSTIE = {
                      'f444w': (+0.02084, -0.00090),
                  }),
 }
+
+
+def _empty_like(col, n):
+    """A length-``n`` fill for a column missing from the other table.
+
+    ``np.nan`` is wrong for string columns: vstack then reports
+    ``The 'Module' columns have incompatible types: ['float64', 'str160']``.
+    Use an empty string for str/bytes columns, NaN for everything numeric.
+    """
+    kind = getattr(getattr(col, 'dtype', None), 'kind', 'f')
+    if kind in ('U', 'S', 'O'):
+        return np.full(n, '', dtype=col.dtype)
+    return np.full(n, np.nan)
 
 
 def _region_key(rc):
@@ -569,12 +603,52 @@ if __name__ == '__main__':
                              for r in old])
         if keepmask.any():
             old = old[keepmask]
+            # A HALF-per-module table is worse than either whole: update_offsets_
+            # table narrows on Module as soon as the column exists, so corrections
+            # for the filters that were NOT rebuilt would match only the filled
+            # rows and hard-fail with "matches NO row".  Refuse rather than write
+            # it.  (Rebuilding every filter of the field in one command takes the
+            # keepmask.any() == False path below and rewrites cleanly.)
+            if ('Module' in t.colnames) != ('Module' in old.colnames):
+                have, lack = (('new', 'existing') if 'Module' in t.colnames
+                              else ('existing', 'new'))
+                # The table is per-PROPOSAL, so the blocking rows may belong to a
+                # different FIELD entirely (cloudef2 2092/002 and cloudef5
+                # 2092/005 share Offsets_JWST_Brick2092_VIRAC2locked.csv).  In
+                # that case "rebuild all filters of this region" is not a remedy
+                # -- a region is one field -- so name the prefixes that are
+                # actually blocking and every region that writes this table.
+                blocking = sorted(set(str(v)[:11] for v in old['Visit']))
+                # siblings share this exact FILE, i.e. proposal AND basepath --
+                # arches and quintuplet are both 2045 but sit under different
+                # basepaths, so they do NOT share a table.
+                siblings = sorted(k for k, v in REGION.items()
+                                  if v['proposal'] == rc['proposal']
+                                  and v['basepath'] == rc['basepath'])
+                raise SystemExit(
+                    f"REFUSING to merge: the {have} rows have a Module column and "
+                    f"the {lack} rows do not, so {os.path.basename(path)} would be "
+                    f"half per-module.  update_offsets_table narrows on Module "
+                    f"once the column exists, so the rows that keep the other "
+                    f"convention would then match no row.\n"
+                    f"  blocking visit prefixes: {blocking}\n"
+                    f"  filters:                 "
+                    f"{sorted(set(str(x) for x in old['Filter']))}\n"
+                    f"This table is per-PROPOSAL ({rc['proposal']}), written by "
+                    f"region(s): {siblings}.  Rebuild ALL filters of EVERY one of "
+                    f"them, in one command each, before any of them is used:\n"
+                    + "".join(
+                        f"  python -m jwst_gc_pipeline.reduction."
+                        f"build_virac2_offsets --region {k} --per-module\n"
+                        for k in siblings))
+            # dtype-aware fill: `np.nan` into a string column makes vstack raise
+            # TableMergeError ('float64' vs 'str160').
             for c in t.colnames:
                 if c not in old.colnames:
-                    old[c] = np.nan
+                    old[c] = _empty_like(t[c], len(old))
             for c in old.colnames:
                 if c not in t.colnames:
-                    t[c] = np.nan
+                    t[c] = _empty_like(old[c], len(t))
             t = vstack([old, t])
     t.write(path, overwrite=True)
     print(f"\nwrote {path}: {len(t)} rows (replaced {sorted(new_filts)} for prefixes {sorted(new_visit_prefixes)})", flush=True)
