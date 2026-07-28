@@ -612,16 +612,35 @@ if __name__ == '__main__':
             if ('Module' in t.colnames) != ('Module' in old.colnames):
                 have, lack = (('new', 'existing') if 'Module' in t.colnames
                               else ('existing', 'new'))
+                # The table is per-PROPOSAL, so the blocking rows may belong to a
+                # different FIELD entirely (cloudef2 2092/002 and cloudef5
+                # 2092/005 share Offsets_JWST_Brick2092_VIRAC2locked.csv).  In
+                # that case "rebuild all filters of this region" is not a remedy
+                # -- a region is one field -- so name the prefixes that are
+                # actually blocking and every region that writes this table.
+                blocking = sorted(set(str(v)[:11] for v in old['Visit']))
+                # siblings share this exact FILE, i.e. proposal AND basepath --
+                # arches and quintuplet are both 2045 but sit under different
+                # basepaths, so they do NOT share a table.
+                siblings = sorted(k for k, v in REGION.items()
+                                  if v['proposal'] == rc['proposal']
+                                  and v['basepath'] == rc['basepath'])
                 raise SystemExit(
                     f"REFUSING to merge: the {have} rows have a Module column and "
                     f"the {lack} rows do not, so {os.path.basename(path)} would be "
                     f"half per-module.  update_offsets_table narrows on Module "
-                    f"once the column exists, so the un-rebuilt filters "
-                    f"({sorted(set(str(x) for x in old['Filter']))}) would then "
-                    f"match no row.  Rebuild ALL filters of this field in ONE "
-                    f"command:\n"
-                    f"  python -m jwst_gc_pipeline.reduction.build_virac2_offsets "
-                    f"--region <key> --per-module")
+                    f"once the column exists, so the rows that keep the other "
+                    f"convention would then match no row.\n"
+                    f"  blocking visit prefixes: {blocking}\n"
+                    f"  filters:                 "
+                    f"{sorted(set(str(x) for x in old['Filter']))}\n"
+                    f"This table is per-PROPOSAL ({rc['proposal']}), written by "
+                    f"region(s): {siblings}.  Rebuild ALL filters of EVERY one of "
+                    f"them, in one command each, before any of them is used:\n"
+                    + "".join(
+                        f"  python -m jwst_gc_pipeline.reduction."
+                        f"build_virac2_offsets --region {k} --per-module\n"
+                        for k in siblings))
             # dtype-aware fill: `np.nan` into a string column makes vstack raise
             # TableMergeError ('float64' vs 'str160').
             for c in t.colnames:
