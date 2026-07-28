@@ -26,14 +26,14 @@ def _coords(n=500, ra0=266.54, dec0=-28.70, seed=0):
 
 
 def test_zero_frames_is_could_not_verify_not_pass(monkeypatch):
-    monkeypatch.setattr(gate, "build_groups", lambda field, filt, visits=None: ({}, {}, 0))
+    monkeypatch.setattr(gate, "build_groups", lambda field, filt, observations=None: ({}, {}, 0))
     r = gate.check_filter("x", "F200W", verbose=False)
     assert r["PASS"] is False
     assert r["could_not_verify"] is True
 
 
 def test_frames_but_no_detections_is_could_not_verify(monkeypatch):
-    monkeypatch.setattr(gate, "build_groups", lambda field, filt, visits=None: ({}, {}, 12))
+    monkeypatch.setattr(gate, "build_groups", lambda field, filt, observations=None: ({}, {}, 12))
     r = gate.check_filter("x", "F200W", verbose=False)
     assert r["PASS"] is False
     assert r["could_not_verify"] is True
@@ -41,7 +41,7 @@ def test_frames_but_no_detections_is_could_not_verify(monkeypatch):
 
 def test_single_group_with_frames_is_a_genuine_pass(monkeypatch):
     monkeypatch.setattr(gate, "build_groups",
-                        lambda field, filt, visits=None: (
+                        lambda field, filt, observations=None: (
                             {"v001:nrca": _coords()}, {"v001:nrca": 500}, 4))
     r = gate.check_filter("x", "F200W", verbose=False)
     assert r["PASS"] is True
@@ -50,7 +50,7 @@ def test_single_group_with_frames_is_a_genuine_pass(monkeypatch):
 
 def test_main_exit_2_on_could_not_verify(monkeypatch):
     monkeypatch.setattr(gate, "check_filter",
-                        lambda field, filt, refcat=None, verbose=True, visits=None: dict(
+                        lambda field, filt, refcat=None, verbose=True, observations=None: dict(
                             field=field, filt=filt, PASS=False,
                             could_not_verify=True, note="no crf frames matched"))
     rc = gate.main(["--field", "x", "--filter", "F200W"])
@@ -63,7 +63,7 @@ def test_main_exit_1_on_measured_fail_beats_noverify(monkeypatch):
         dict(field="x", filt="F212N", PASS=False, could_not_verify=True),
     ])
     monkeypatch.setattr(gate, "check_filter",
-                        lambda field, filt, refcat=None, verbose=True, visits=None: next(results))
+                        lambda field, filt, refcat=None, verbose=True, observations=None: next(results))
     monkeypatch.setattr(gate, "field_filters", lambda field: ["F200W", "F212N"])
     rc = gate.main(["--field", "x", "--scan"])
     assert rc == 1
@@ -95,7 +95,7 @@ def test_driver_catches_gross_offset_reference_free(monkeypatch):
     -- the pooled SWEPT layer must still FAIL it with NO reference catalog."""
     groups = _same_footprint_groups(off_arcsec=20.0)
     monkeypatch.setattr(gate, "build_groups",
-                        lambda field, filt, visits=None: (
+                        lambda field, filt, observations=None: (
                             groups, {k: len(v) for k, v in groups.items()}, 8))
     r = gate.check_filter("x", "F200W", verbose=False)
     assert r["PASS"] is False
@@ -106,7 +106,7 @@ def test_driver_catches_gross_offset_reference_free(monkeypatch):
 def test_driver_zero_offset_passes(monkeypatch):
     groups = _same_footprint_groups(off_arcsec=0.0)
     monkeypatch.setattr(gate, "build_groups",
-                        lambda field, filt, visits=None: (
+                        lambda field, filt, observations=None: (
                             groups, {k: len(v) for k, v in groups.items()}, 8))
     r = gate.check_filter("x", "F200W", verbose=False)
     assert r["PASS"] is True
@@ -125,7 +125,7 @@ def test_driver_unmeasurable_pair_is_could_not_verify_without_refcat(monkeypatch
     groups = {"a": SkyCoord(ra1 * u.deg, dec1 * u.deg),
               "b": SkyCoord(ra2 * u.deg, dec2 * u.deg)}
     monkeypatch.setattr(gate, "build_groups",
-                        lambda field, filt, visits=None: (groups, {"a": n, "b": n}, 8))
+                        lambda field, filt, observations=None: (groups, {"a": n, "b": n}, 8))
     r = gate.check_filter("x", "F200W", verbose=False)
     assert r["PASS"] is False
     assert r["could_not_verify"] is True
@@ -133,10 +133,28 @@ def test_driver_unmeasurable_pair_is_could_not_verify_without_refcat(monkeypatch
     assert rc == 2
 
 
-def test_visits_scoping_filters_stray_programs(monkeypatch, tmp_path):
-    """A shared target dir carries stray crf from other programs (brick dir
-    holds 2221 o002 = cloudc); --visits must exclude them from the verdict."""
-    import os
+def test_parse_crf_extracts_proposal_observation_module():
+    """The precise crf parser yields (proposal, observation, visit, module) and
+    a proposal-aware obs_key -- so 1182-o004 and 2221-o001 never collide, and a
+    permissive `o*` wildcard is not needed to enumerate frames."""
+    p = gate._parse_crf(
+        "jw02221001001_03101_00002_nrcalong_destreak_o001_crf.fits")
+    assert (p["prop"], p["obs"], p["visit"], p["module"], p["obs_key"]) == (
+        "02221", "001", "001", "nrca", "02221-001")
+    # MIRI: no _destreak lineage token
+    p = gate._parse_crf("jw02221001001_03201_00001_mirimage_o001_crf.fits")
+    assert p["module"] == "mirimage" and p["obs_key"] == "02221-001"
+    # non-crf / malformed names are rejected (fail-closed, not mis-parsed)
+    assert gate._parse_crf("jw02221-o001_t001_nircam_clear-f405n-merged_i2d.fits") is None
+    assert gate._parse_crf("random_file.fits") is None
+
+
+def test_observation_scoping_filters_stray_programs(monkeypatch, tmp_path):
+    """A shared target dir carries stray crf from other programs/observations
+    (the brick dir holds 2221 o002 = cloudc); scoping must exclude them.  The
+    DEFAULT (observations=None) derives the released observations from the merged
+    mosaics on disk, so the stray o002 (which has no released brick mosaic) is
+    dropped with no explicit argument."""
     pdir = tmp_path / "brick" / "F405N" / "pipeline"
     pdir.mkdir(parents=True)
     names = ["jw02221001001_03101_00001_nrcblong_destreak_o001_crf.fits",
@@ -144,10 +162,17 @@ def test_visits_scoping_filters_stray_programs(monkeypatch, tmp_path):
              "jw02221002001_03101_00001_nrcblong_destreak_o002_crf.fits"]
     for n in names:
         (pdir / n).write_bytes(b"x")
+    # the released brick mosaic is o001 only -> default scope excludes o002
+    (pdir / "jw02221-o001_t001_nircam_clear-f405n-merged_i2d.fits").write_bytes(b"x")
     monkeypatch.setattr(gate, "BASE", str(tmp_path))
     monkeypatch.setattr(gate, "_detect", lambda path: None)  # count frames only
-    _, _, nframes_all = gate.build_groups("brick", "F405N")
+    # explicit empty set = scoping disabled -> every well-formed crf
+    _, _, nframes_all = gate.build_groups("brick", "F405N", observations=set())
+    # default (None) -> auto-derived from the o001 mosaic present
+    _, _, nframes_default = gate.build_groups("brick", "F405N")
+    # explicit proposal-aware scope
     _, _, nframes_scoped = gate.build_groups("brick", "F405N",
-                                             visits={"001001"})
+                                             observations={"02221-001"})
     assert nframes_all == 3
+    assert nframes_default == 2
     assert nframes_scoped == 2

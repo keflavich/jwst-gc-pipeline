@@ -23,12 +23,16 @@ Usage::
 
     python check_interframe_overlap.py --field brick --filter F200W
     python check_interframe_overlap.py --field brick --scan           # all filters
+    # scope to specific released observations (default: auto-derived from the
+    # field's merged mosaics, so stray crf from other programs are excluded):
+    python check_interframe_overlap.py --field brick --scan --observations 02221-001,01182-004
     # optional external absolute cross-check (fine grid vs VIRAC2/Gaia):
     python check_interframe_overlap.py --field brick --filter F200W --refcat <path>
 """
 import argparse
 import glob
 import os
+import re
 import sys
 
 import numpy as np
@@ -66,38 +70,87 @@ def _detect(path, nsigma=8.0, box=5):
     return SkyCoord(sky.ra, sky.dec)
 
 
+# Precise per-exposure crf filename parser.  JWST products are named
+#   jw<PPPPP><OOO><VVV>_<GGSAA>_<EEEEE>_<detector>[_<lineage>...]_o<OOO>_crf.fits
+# (PPPPP=proposal, OOO=observation, VVV=visit; the trailing _oOOO_ repeats the
+# observation).  We anchor on that exact structure rather than a permissive
+# `jw*_*_nrc*_o*` glob: a wildcard `o*` matches EVERY observation, so a shared
+# target directory (the brick dir also holds 2221 o002 = cloudc crf) leaks stray
+# frames from other observations/programs into the verdict.  The regex both
+# validates a name and yields (proposal, observation, visit, module) exactly.
+_CRF_RE = re.compile(
+    r"^jw(?P<prop>\d{5})(?P<obs>\d{3})(?P<visit>\d{3})_\d+_\d+_"
+    r"(?P<det>mirimage|nrc[ab](?:long|[1-4])?)"
+    r"(?:_[a-z0-9]+)*?_o(?P<obs2>\d{3})_crf\.fits$")
+
+
+def _parse_crf(name):
+    """Parse a per-exposure crf basename into its identifying fields, or None
+    if it is not a well-formed crf name.  ``module`` collapses the detector to
+    the physical NIRCam module (nrca/nrcb) or ``mirimage``; SW and LW share a
+    module label but never share a filter, so the per-filter check keeps them
+    apart.  ``obs_key`` = ``"<proposal>-<observation>"`` is the release-scoping
+    key (proposal-aware, so 1182-o004 and 2221-o001 never collide)."""
+    m = _CRF_RE.match(os.path.basename(name))
+    if m is None:
+        return None
+    det = m.group("det")
+    module = "mirimage" if det == "mirimage" else det[:4]
+    return dict(prop=m.group("prop"), obs=m.group("obs"), visit=m.group("visit"),
+                det=det, module=module,
+                obs_key=f"{m.group('prop')}-{m.group('obs')}")
+
+
 def _group_key(crf_path):
-    """Group per-exposure crf by (visit, module).  Filename like
-    jw01182004001_04101_00001_nrca3_destreak_o004_crf.fits -> ('004001','nrca')."""
-    base = os.path.basename(crf_path)
-    visit = base.split("_")[0][-6:]        # e.g. 004001
-    det = ""
-    for tok in base.split("_"):
-        if tok.startswith("nrc") or tok.startswith("mirimage"):
-            det = tok
-            break
-    if det.startswith("mirimage"):
-        module = "mirimage"
-    else:
-        module = det[:4] if det else "det?"  # nrca / nrcb (SW) or nrcalong/nrcblong
-    return f"{visit}:{module}"
+    """Group per-exposure crf by (obs+visit, module).  Filename like
+    jw01182004001_04101_00001_nrca3_destreak_o004_crf.fits -> '004001:nrca'."""
+    p = _parse_crf(crf_path)
+    if p is None:
+        return "det?:det?"
+    return f"{p['obs']}{p['visit']}:{p['module']}"
 
 
-def build_groups(field, filt, visits=None):
-    # NIRCam crf carry the _destreak token (working-copy lineage); MIRI skips
-    # destreak so its crf do NOT (jw..._mirimage_o001_crf.fits) -- glob both.
-    # Excluding MIRI silently PASSED it, and MIRI visit misregistration is a
-    # known failure (the F2550W doubled-star saga).
-    pats = (f"{BASE}/{field}/{filt}/pipeline/jw*_*_nrc*_destreak_o*_crf.fits",
-            f"{BASE}/{field}/{filt}/pipeline/jw*_*_nrc*_o*_crf.fits",
-            f"{BASE}/{field}/{filt}/pipeline/jw*_*_mirimage*_o*_crf.fits")
-    frames = sorted({fn for pat in pats for fn in glob.glob(pat)})
-    if visits:
-        # scope to the release's own observations: shared target directories
-        # carry stray crf from OTHER programs/obs (brick dir holds 2221 o002 =
-        # cloudc frames) that must not pollute the field verdict
-        frames = [fn for fn in frames
-                  if os.path.basename(fn).split("_")[0][-6:] in visits]
+def _field_observations(field):
+    """The set of ``"<proposal>-<observation>"`` keys actually RELEASED for a
+    field, derived from the merged science mosaics present on disk.  The gate
+    checks exactly the per-exposure frames that built those mosaics; any crf
+    whose observation has no released mosaic (a stray from another program in a
+    shared target directory) is out of scope by construction."""
+    obs = set()
+    for p in glob.glob(f"{BASE}/{field}/*/pipeline/"
+                       "jw*-o*_t001_nircam_clear-*-merged_i2d.fits"):
+        m = re.match(r"^jw(?P<prop>\d{5})-o(?P<obs>\d{3})_t001_",
+                     os.path.basename(p))
+        if m:
+            obs.add(f"{m.group('prop')}-{m.group('obs')}")
+    return obs
+
+
+def build_groups(field, filt, observations=None):
+    """Detect on each per-exposure crf and pool by (obs+visit, module).
+
+    ``observations``: iterable of ``"<proposal>-<observation>"`` keys to scope
+    to.  Defaults (None) to the field's RELEASED observations
+    (``_field_observations``) so a stray crf from another program/observation in
+    a shared target dir cannot pollute the verdict.  Pass an explicit set to
+    override; pass an empty set to disable scoping (accept every well-formed
+    crf).
+    """
+    if observations is None:
+        observations = _field_observations(field)
+    observations = set(observations) if observations else None
+    # Enumerate broadly, then let the precise _parse_crf regex decide -- a name
+    # that is not a well-formed crf, or belongs to an out-of-scope observation,
+    # is dropped.  MIRI crf carry no _destreak token; the parser covers them
+    # (excluding MIRI once silently PASSED the F2550W doubled-star saga).
+    frames = []
+    for fn in sorted(glob.glob(f"{BASE}/{field}/{filt}/pipeline/jw*_crf.fits")):
+        p = _parse_crf(fn)
+        if p is None:
+            continue
+        if observations is not None and p["obs_key"] not in observations:
+            continue
+        frames.append(fn)
     groups = {}
     ndet = {}
     for fn in frames:
@@ -127,8 +180,8 @@ def _refcat(path):
     return rc, gaia
 
 
-def check_filter(field, filt, refcat=None, verbose=True, visits=None):
-    pooled, ndet, nframes = build_groups(field, filt, visits=visits)
+def check_filter(field, filt, refcat=None, verbose=True, observations=None):
+    pooled, ndet, nframes = build_groups(field, filt, observations=observations)
     # FAIL-CLOSED on "found nothing": a gate that goes green because its glob
     # matched zero files (renamed products, naming drift) is the silent
     # false-agreement class this repo bans.  Distinguish it from a genuine
@@ -284,10 +337,12 @@ def main(argv=None):
     ap.add_argument("--scan", action="store_true", help="every filter of the field")
     ap.add_argument("--refcat", default=None,
                     help="optional external refcat for the fine-grid absolute cross-check")
-    ap.add_argument("--visits", default=None,
-                    help="csv of obs+visit tokens (e.g. 004001,004002,001001) to "
-                         "scope the check to; stray crf from other programs in a "
-                         "shared target dir are excluded")
+    ap.add_argument("--observations", default=None,
+                    help="csv of <proposal>-<observation> keys (e.g. "
+                         "02221-001,01182-004) to scope the check to; stray crf "
+                         "from other programs/observations in a shared target dir "
+                         "are excluded.  Default: the field's released "
+                         "observations (derived from the merged mosaics on disk).")
     args = ap.parse_args(argv)
 
     filts = field_filters(args.field) if args.scan else [args.filter]
@@ -298,7 +353,8 @@ def main(argv=None):
     any_noverify = False
     for f in filts:
         r = check_filter(args.field, f, refcat=args.refcat,
-                         visits=(set(args.visits.split(",")) if args.visits else None))
+                         observations=(set(args.observations.split(","))
+                                       if args.observations else None))
         if r.get("could_not_verify"):
             any_noverify = True
         elif not r.get("PASS"):

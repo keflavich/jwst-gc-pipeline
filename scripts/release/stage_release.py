@@ -547,6 +547,26 @@ FRAME_REFCAT = {
 }
 
 
+def _release_observations(field_cfg):
+    """The set of ``"<proposal>-<observation>"`` keys this field's release
+    covers, from ``proposal_prefix`` (e.g. ``jw01182-o004_t001_...`` ->
+    ``01182-004``).  A field spanning multiple programs/observations (brick =
+    1182 o004 + 2221 o001) lists several prefixes; the union scopes the
+    reference-free overlap gate so stray crf from other observations in a shared
+    target directory are excluded.  Returns an empty set when the prefixes carry
+    no ``-oNNN`` token (e.g. gc2211's bare ``jw02211`` + ``observations`` list),
+    leaving the gate to self-derive from the mosaics on disk."""
+    prefixes = field_cfg.get("proposal_prefix", [])
+    if isinstance(prefixes, str):
+        prefixes = [prefixes]
+    obs = set()
+    for pref in prefixes:
+        m = re.match(r"^jw(?P<prop>\d{5})-o(?P<obs>\d{3})", pref)
+        if m:
+            obs.add(f"{m.group('prop')}-{m.group('obs')}")
+    return obs
+
+
 def check_catalog_on_frame(items, field, tol_mas=FRAME_TOL_MAS):
     """Every shipped per-filter catalog must lie on the field's Gaia-tied reference frame.
     Measures the catalog's bulk offset vs the Gaia refcat (sanctioned offset-histogram);
@@ -929,8 +949,17 @@ def main(argv=None):
         # ~0). Only a reference-free frame-vs-frame check sees it.  (Applies to
         # --images-only too: it reads the crf frames, not catalogs.)
         overlap_gate = Path(__file__).with_name("check_interframe_overlap.py")
-        rc = subprocess.run([sys.executable, str(overlap_gate),
-                             "--field", args.field, "--scan"]).returncode
+        overlap_cmd = [sys.executable, str(overlap_gate),
+                       "--field", args.field, "--scan"]
+        # Scope the reference-free gate to THIS release's observations so stray
+        # crf from other programs in a shared target dir (the brick dir also
+        # holds 2221 o002 = cloudc frames) cannot pollute the frame-vs-frame
+        # verdict.  Derived from proposal_prefix (proposal-aware); the gate also
+        # self-derives from the released mosaics when this is not passed.
+        rel_obs = _release_observations(FIELDS[args.field])
+        if rel_obs:
+            overlap_cmd += ["--observations", ",".join(sorted(rel_obs))]
+        rc = subprocess.run(overlap_cmd).returncode
         if rc == 1:
             print(f"\nREFUSING TO STAGE '{args.field}': inter-frame OVERLAP gate FAILED "
                   f"-- two overlapping visits/detectors are misregistered vs EACH OTHER "
