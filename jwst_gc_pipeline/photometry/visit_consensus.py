@@ -20,6 +20,8 @@ sweep).  Source ASSOCIATION (building consensus positions) uses
 ``search_around_sky`` nearest-pair matching, which is safe because it happens
 only AFTER each exposure's relative offset has been measured and removed.
 """
+from collections import Counter
+
 import numpy as np
 from astropy import units as u
 from astropy.coordinates import SkyCoord
@@ -140,14 +142,29 @@ def _meta_lookup(tbl, *names, default=None):
 
 
 def exposure_key(tbl):
-    """(visit, exposure, module, filter) identity of a per-frame catalog."""
+    """(visit, exposure, module, filter, vgroup) identity of a per-frame catalog.
+
+    VGROUP is part of the identity: a visit can dither across several visit
+    groups (different sky tiles), and the exposure number restarts within each.
+    Without it, cloudc F182M/nrcb1 collapses 16 catalogs onto 8 keys -- two
+    physically disjoint pointings merged into one "exposure", then summed onto a
+    single offsets-table row.  gc2211 (6 vgroups), sgrb2 F187N and sickle are
+    affected the same way.
+
+    Appended LAST so the positional unpacking of the first three elements
+    (``key[0..2]`` -> visit/exposure/module, astrometry_checkpoint) is unchanged.
+    Note this changes the tuple's shape, so per-exposure baselines recorded by an
+    OLDER m2 run will not match and the frozen-stage movement check simply finds
+    no baseline (degrades to "unverified", never to a false pass).
+    """
     visit = _meta_lookup(tbl, "VISIT", "Visit", "visit")
     exposure = _meta_lookup(tbl, "EXPOSURE", "exposure")
     module = _meta_lookup(tbl, "MODULE", "module")
     filtername = _meta_lookup(tbl, "FILTER", "filter")
+    vgroup = _meta_lookup(tbl, "VGROUP", "Vgroup", "vgroup")
     if exposure is not None:
         exposure = int(str(exposure)[-5:])
-    return (str(visit), exposure, str(module), str(filtername))
+    return (str(visit), exposure, str(module), str(filtername), str(vgroup))
 
 
 # A pooled reference (component union / parity half / final consensus) spans
@@ -260,6 +277,22 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
             n_reliable=int(keep.sum()),
             raoffset_meta=_meta_lookup(tbl, "RAOFFSET", default=0.0),
             deoffset_meta=_meta_lookup(tbl, "DEOFFSET", default=0.0)))
+
+    # Two catalogs sharing an identity are two measurements of the SAME exposure
+    # blended into one consensus entry.  That is never legitimate, and it is how
+    # the arches/sgrc m2 corrections were fabricated: the duplicated exposures
+    # straddled the consensus and read 20-45 mas off, so the checkpoint
+    # "corrected" a bookkeeping artifact into the offsets table.  Fail loudly
+    # rather than silently averaging -- a silent merge is indistinguishable from
+    # a real misalignment downstream.
+    dupes = {k: n for k, n in Counter(e["key"] for e in entries).items() if n > 1}
+    if dupes:
+        raise ConsensusBuildError(
+            f"visit consensus ({context}): {len(dupes)} exposure identity/ies "
+            f"ingested more than once -- duplicate per-frame catalogs for the "
+            f"same (visit, exposure, module, filter, vgroup): "
+            f"{sorted(dupes.items())[:8]}.  Check for grouped-fit (`_group_`) "
+            f"or stale module-level variants alongside the per-detector ones.")
 
     usable_idx = [i for i, e in enumerate(entries) if e["n_reliable"] >= min_stars]
     usable = [entries[i] for i in usable_idx]

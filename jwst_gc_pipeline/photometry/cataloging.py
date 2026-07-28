@@ -59,6 +59,7 @@ from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
 )
 
 import os
+import re
 import types
 import traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -3031,6 +3032,41 @@ def _astrom_find_offsets_table(basepath, proposal_id):
     return None
 
 
+_DETECTOR_TOKEN_RE = re.compile(r'_(nrc[ab](?:[1-4]|long)?)_visit')
+
+
+def _drop_module_level_duplicates(fns, filt, merge_label, module):
+    """Drop stale MODULE-level per-frame catalogs when per-DETECTOR ones exist.
+
+    Some fields carry both ``<filt>_nrcb_visit...`` (one catalog covering the
+    whole module, left over from an older run) and ``<filt>_nrcb1..4_visit...``.
+    The glob matches both, so the module-level file is ingested as if it were a
+    9th detector covering the same sky -- sgrb2 F212N read +69/-110 mas for it,
+    and cloudef F162M still has 24 such files next to 80 per detector.
+
+    A module-level catalog is only dropped when that module also has real
+    per-detector catalogs; a genuinely module-level field (NIRCam LW is named
+    ``nrcalong``/``nrcblong``, not ``nrca``/``nrcb``) is left alone.
+    """
+    bare, per_det = {}, set()
+    for fn in fns:
+        m = _DETECTOR_TOKEN_RE.search(fn)
+        if not m:
+            continue
+        det = m.group(1)
+        if det in ('nrca', 'nrcb'):
+            bare.setdefault(det, []).append(fn)
+        else:
+            per_det.add(det[:4])
+    drop = {fn for det, group in bare.items() if det in per_det for fn in group}
+    if drop:
+        print(f"astrom checkpoint [{merge_label}] {filt}/{module}: dropping "
+              f"{len(drop)} stale MODULE-level per-frame catalog(s) "
+              f"({sorted({_DETECTOR_TOKEN_RE.search(f).group(1) for f in drop})}) "
+              f"superseded by per-detector catalogs", flush=True)
+    return [fn for fn in fns if fn not in drop]
+
+
 def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath,
                                      proposal_id, options, refcat_cache,
                                      context=""):
@@ -3065,8 +3101,16 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
               flush=True)
         return
 
-    # per-frame catalogs of this (filter, stage); chunked frames vstacked
-    base = f"{cut_bp}/{filt.upper()}/{filt.lower()}_*visit*_vgroup*_exp*"
+    # per-frame catalogs of this (filter, stage); chunked frames vstacked.
+    # NB the exposure number is pinned to exactly 5 digits.  A trailing `_exp*`
+    # also matches `_exp00001_group_<stage>_daophot_basic.fits`, so the
+    # grouped-fit variant of every exposure was ingested ALONGSIDE the plain one
+    # -- arches F212N pulled 96 plain + 48 grouped tables of the same exposures.
+    # The two variants of one exposure sit ~45 mas apart and straddle the
+    # blended consensus, so every duplicated detector read 20-25 mas off and the
+    # checkpoint "corrected" pure bookkeeping (all 141 arches corrections were
+    # nrca -- exactly the duplicated detectors; nrcb, unduplicated, read 2-8 mas).
+    base = f"{cut_bp}/{filt.upper()}/{filt.lower()}_*visit*_vgroup*_exp[0-9][0-9][0-9][0-9][0-9]"
     fns = sorted(set(
         _glob.glob(f"{base}_{merge_label}_daophot_basic.fits")
         + _glob.glob(f"{base}_{merge_label}_chunk*of*_daophot_basic.fits")))
@@ -3075,6 +3119,7 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
               f"catalogs found ({base}_{merge_label}_daophot_basic.fits); skipped",
               flush=True)
         return
+    fns = _drop_module_level_duplicates(fns, filt, merge_label, module)
     _chunk_re = _re.compile(r'_chunk\d+of\d+')
     groups = {}
     for fn in fns:
