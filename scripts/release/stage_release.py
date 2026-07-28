@@ -1053,6 +1053,15 @@ def main(argv=None):
         rel_obs = _release_observations(FIELDS[args.field])
         if rel_obs:
             overlap_cmd += ["--observations", ",".join(sorted(rel_obs))]
+        # Pass the field's Gaia/VIRAC2 refcat so the gate can resolve pairs its
+        # reference-free layer cannot measure -- a sparse / thin inter-module
+        # overlap (2221 nrca-long|nrcb-long) has 0 mutual-coverage tiles, so the
+        # frame-vs-frame pooled histogram is unreliable there; the same-star
+        # residual map vs VIRAC2 is the authoritative arbiter (fail-closed still
+        # applies if the refcat is missing).
+        overlap_refcat = FRAME_REFCAT.get(args.field)
+        if overlap_refcat and os.path.exists(overlap_refcat):
+            overlap_cmd += ["--refcat", overlap_refcat]
         rc = subprocess.run(overlap_cmd).returncode
         if rc == 1:
             print(f"\nREFUSING TO STAGE '{args.field}': inter-frame OVERLAP gate FAILED "
