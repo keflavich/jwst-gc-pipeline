@@ -42,7 +42,8 @@ from astropy import units as u
 from astropy.table import Table
 
 from .visit_consensus import (
-    EXPOSURE_CONSENSUS_TOL_MAS, ConsensusBuildError, build_visit_consensus,
+    EXPOSURE_CONSENSUS_TOL_MAS, ConsensusBuildError, DuplicateExposureError,
+    build_visit_consensus,
     catalog_coords, load_reference_catalog, measure_reference_tie,
     pick_reference_anchor_filter, select_reliable_stars,
 )
@@ -308,6 +309,48 @@ def _assert_module_granularity(corrections, tbl, offsets_path):
             f"Offending keys: {sorted(clashes.items())[:4]}")
 
 
+def _assert_vgroup_granularity(corrections, tbl, offsets_path):
+    """Refuse per-vgroup corrections a Vgroup-less table cannot express.
+
+    A visit can dither across several visit groups, and the exposure number
+    restarts in each, so ``(visit, exposure)`` is ambiguous.  The consensus key
+    is vgroup-aware (see ``visit_consensus.exposure_key``) and therefore emits a
+    SEPARATE correction per vgroup -- but the offsets tables carry no ``Vgroup``
+    column and ``update_offsets_table`` matches on
+    ``(visit, filter, exposure[, module])``, so both corrections would land on
+    the same row and be summed.
+
+    That is the same accumulation hazard as the Module-less case, and making the
+    key vgroup-aware makes it MORE reachable, not less: previously the two
+    vgroups were (wrongly) blended into one consensus entry and produced one
+    correction.  cloudc has 2 visit groups, gc2211 has 6.
+
+    Refuse, mirroring the existing per-exposure-on-a-per-visit-table refusal.
+    The durable fix is to extend the builder and tables to carry vgroup.
+    """
+    if "Vgroup" in tbl.colnames:
+        return
+    per_key = {}
+    for corr in corrections:
+        vg = corr.get("vgroup")
+        if vg is None or str(vg) in ("", "None"):
+            continue
+        key = (str(corr.get("visit")), str(corr.get("filtername")),
+               corr.get("exposure"), str(corr.get("module")))
+        per_key.setdefault(key, set()).add(str(vg))
+    clashes = {k: sorted(v) for k, v in per_key.items() if len(v) > 1}
+    if clashes:
+        raise OffsetsTableUpdateError(
+            f"{os.path.basename(offsets_path)} has no Vgroup column, but "
+            f"{len(clashes)} (visit, filter, exposure, module) key(s) carry "
+            f"corrections from MORE THAN ONE visit group -- they would all "
+            f"match the same row and be summed.  The exposure number restarts "
+            f"per vgroup, so the table cannot tell these exposures apart; "
+            f"extend the builder and table to carry Vgroup, or pool the "
+            f"vgroups into a single correction first.  "
+            f"Offending keys: {sorted(clashes.items())[:4]}")
+
+
 def _module_variants(module):
     """Match semantics of shift_individual_catalog: a detector-level module
     matches its own row or the module-family row."""
@@ -354,7 +397,10 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
     _assert_correction_magnitudes(corrections, offsets_path)
 
     tbl = Table.read(offsets_path)
+    # both granularity checks: a correction set must map 1:1 onto the table's
+    # rows in EVERY dimension it is keyed by, or legal-sized corrections sum.
     _assert_module_granularity(corrections, tbl, offsets_path)
+    _assert_vgroup_granularity(corrections, tbl, offsets_path)
     # both column conventions exist: 'dra'/'ddec' (generate_offsets_table) and
     # 'dra (arcsec)'/'ddec (arcsec)' (the VIRAC2locked tables fix_alignment reads)
     dra_col = "dra (arcsec)" if "dra (arcsec)" in tbl.colnames else "dra"
@@ -813,9 +859,18 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
         vctx = f"{context} {filt} visit {visit} [{stage}]"
         try:
             cons = build_visit_consensus(tables, context=vctx, **consensus_kwargs)
+        except DuplicateExposureError as ex:
+            # malformed INPUTS, not a sparse field.  Recording this as merely
+            # "unverified" would let a duplicated exposure silently delete the
+            # gate for this visit/filter -- the same shape as the defect that
+            # motivated the check.  Fail.
+            visits.append(dict(visit=visit, filtername=filt, consensus=None,
+                               error=str(ex), error_kind="duplicate_exposure"))
+            failures.append(f"{vctx}: duplicate exposure identity: {ex}")
+            continue
         except ConsensusBuildError as ex:
             visits.append(dict(visit=visit, filtername=filt, consensus=None,
-                               error=str(ex)))
+                               error=str(ex), error_kind="consensus_build"))
             unverified.append(f"{vctx}: consensus build failed: {ex}")
             continue
 
@@ -859,6 +914,12 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                     corrections.append(dict(
                         visit=exp["key"][0], exposure=exp["key"][1],
                         module=exp["key"][2], filtername=filt,
+                        # vgroup (key[4]) is carried so the WRITE path can tell
+                        # two same-numbered exposures in different visit groups
+                        # apart.  The offsets tables have no Vgroup column, so
+                        # they cannot express the distinction -- update_offsets_
+                        # table refuses rather than summing both onto one row.
+                        vgroup=(exp["key"][4] if len(exp["key"]) > 4 else None),
                         dra_onsky_mas=res["dra"], ddec_onsky_mas=res["ddec"],
                         dec_deg=dec_mid,
                         source=f"{stage} visit-consensus"))

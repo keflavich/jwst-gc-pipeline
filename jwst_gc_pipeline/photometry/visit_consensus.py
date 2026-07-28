@@ -84,6 +84,18 @@ VIRAC2_KS_UM = 2.149
 VIRAC2_OVERLAP_UM = (1.0, 2.5)
 
 
+class DuplicateExposureError(RuntimeError):
+    """Two per-frame catalogs claim the SAME exposure identity.
+
+    Distinct from a plain ``ConsensusBuildError``: that means "this visit is too
+    sparse / too broken to verify", which a caller may reasonably record as
+    unverified and move on.  This means the INPUT SET is malformed -- the
+    checkpoint would be measuring a blend of two catalogs of one exposure -- and
+    must not be downgraded to "could not verify", or the gate quietly stops
+    existing (the same failure shape as the `_group_` glob leak itself).
+    """
+
+
 class ConsensusBuildError(RuntimeError):
     """Raised when a visit consensus cannot be built (too few exposures/stars,
     or an exposure has no measurable tie to the anchor)."""
@@ -287,7 +299,7 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
     # a real misalignment downstream.
     dupes = {k: n for k, n in Counter(e["key"] for e in entries).items() if n > 1}
     if dupes:
-        raise ConsensusBuildError(
+        raise DuplicateExposureError(
             f"visit consensus ({context}): {len(dupes)} exposure identity/ies "
             f"ingested more than once -- duplicate per-frame catalogs for the "
             f"same (visit, exposure, module, filter, vgroup): "

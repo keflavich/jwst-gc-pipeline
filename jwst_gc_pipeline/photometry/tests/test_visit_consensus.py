@@ -14,7 +14,8 @@ from astropy.coordinates import SkyCoord
 from astropy.table import Table
 
 from jwst_gc_pipeline.photometry.visit_consensus import (
-    ConsensusBuildError, build_visit_consensus, filter_wavelength_um,
+    ConsensusBuildError, DuplicateExposureError, build_visit_consensus,
+    exposure_key, filter_wavelength_um,
     measure_reference_tie, pick_reference_anchor_filter, select_reliable_stars,
 )
 
@@ -32,7 +33,8 @@ def _field(n=400, extent_arcsec=90.0, rng=None):
 
 def _exposure_table(ra, dec, visit="001", exposure=1, module="nrcb1",
                     filtername="F212N", dra_mas=0.0, ddec_mas=0.0,
-                    noise_mas=1.0, rng=None, raoffset=0.1, deoffset=-0.05):
+                    noise_mas=1.0, rng=None, raoffset=0.1, deoffset=-0.05,
+                    vgroup=None):
     """Synthetic per-frame catalog: true positions + centroid noise + an
     optional rigid offset (an im0 alignment error)."""
     rng = rng or np.random.default_rng(RNG_SEED + exposure)
@@ -46,7 +48,42 @@ def _exposure_table(ra, dec, visit="001", exposure=1, module="nrcb1",
     tbl["qfit"] = rng.uniform(0.01, 0.05, n)
     tbl.meta.update(VISIT=visit, EXPOSURE=f"{exposure:05d}", MODULE=module,
                     FILTER=filtername, RAOFFSET=raoffset, DEOFFSET=deoffset)
+    if vgroup is not None:
+        tbl.meta["VGROUP"] = vgroup
     return tbl
+
+
+def test_exposure_key_distinguishes_visit_groups():
+    """A visit can dither across several vgroups and the exposure number
+    RESTARTS in each, so (visit, exposure, module, filter) is ambiguous:
+    cloudc F182M/nrcb1 collapsed 16 catalogs onto 8 keys that way."""
+    ra, dec = _field(n=50)
+    a = _exposure_table(ra, dec, exposure=1, vgroup="06201")
+    b = _exposure_table(ra, dec, exposure=1, vgroup="12201")
+    ka, kb = exposure_key(a), exposure_key(b)
+    assert ka != kb
+    # ...while the positional unpacking astrometry_checkpoint relies on
+    # (key[0..2] -> visit/exposure/module) is unchanged
+    assert ka[:3] == kb[:3] == ("001", 1, "nrcb1")
+    assert ka[4] == "06201" and kb[4] == "12201"
+
+
+def test_duplicate_exposure_identity_raises():
+    """Two catalogs of ONE exposure must not be silently blended into the
+    consensus -- that is what fabricated the arches/sgrc corrections."""
+    tables = _visit_tables(n_exp=4)
+    tables.append(tables[0].copy())          # same identity, second measurement
+    with pytest.raises(DuplicateExposureError, match="(?i)more than once"):
+        build_visit_consensus(tables, context="dup-test")
+
+
+def test_distinct_vgroups_are_not_duplicates():
+    """The same exposure number in two vgroups is legitimate, not a duplicate."""
+    ra, dec = _field(n=400)
+    tables = ([_exposure_table(ra, dec, exposure=e, vgroup="06201") for e in (1, 2)]
+              + [_exposure_table(ra, dec, exposure=e, vgroup="12201") for e in (1, 2)])
+    cons = build_visit_consensus(tables, context="vgroup-test")
+    assert len({tuple(e["key"]) for e in cons["exposures"]}) == 4
 
 
 def _visit_tables(n_exp=4, misaligned=None, **kwargs):

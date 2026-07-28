@@ -190,6 +190,33 @@ def test_update_offsets_table_refuses_perexposure_on_pervisit_table(tmp_path):
             dec_deg=DEC_TEST)], "m2")
 
 
+def test_update_offsets_table_refuses_multi_vgroup_on_vgroupless_table(tmp_path):
+    # the consensus key is vgroup-aware, so two same-numbered exposures in
+    # different visit groups emit SEPARATE corrections -- but no offsets table
+    # has a Vgroup column, so both would match one row and be summed
+    path = _offsets_csv(tmp_path)
+    before = open(path).read()
+    corr = [dict(visit="jw01182004001", exposure=1, module="nrcb1",
+                 filtername="F212N", vgroup=vg, dra_onsky_mas=0.0,
+                 ddec_onsky_mas=100.0, dec_deg=DEC_TEST)
+            for vg in ("06201", "12201")]
+    with pytest.raises(OffsetsTableUpdateError, match="(?i)more than one visit group"):
+        update_offsets_table(path, corr, "m2")
+    assert open(path).read() == before
+
+
+def test_update_offsets_table_single_vgroup_ok(tmp_path):
+    # one vgroup per (visit, filter, exposure, module) maps 1:1 -> allowed
+    path = _offsets_csv(tmp_path)
+    out = update_offsets_table(path, [dict(
+        visit="jw01182004001", exposure=1, module="nrcb1", filtername="F212N",
+        vgroup="06201", dra_onsky_mas=0.0, ddec_onsky_mas=100.0,
+        dec_deg=DEC_TEST)], "m2")
+    row = out[(np.array([str(v) for v in out["Visit"]]) == "jw01182004001")
+              & (out["Exposure"] == 1)][0]
+    assert row["ddec"] == pytest.approx(0.5 + 0.1, abs=1e-9)
+
+
 def test_update_offsets_table_refuses_visit_collapse(tmp_path):
     # a correction that lands two visits on the SAME value is the brick-1182
     # collapse signature -- must refuse to write.  ~17" wide, but it is a BULK

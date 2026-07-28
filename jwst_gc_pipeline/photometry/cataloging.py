@@ -3034,6 +3034,22 @@ def _astrom_find_offsets_table(basepath, proposal_id):
 
 _DETECTOR_TOKEN_RE = re.compile(r'_(nrc[ab](?:[1-4]|long)?)_visit')
 
+# What may legitimately sit between the 5-digit exposure number and the stage
+# label in a per-frame catalog name.  Empty is the plain per-frame fit;
+# `resbgsub` is the residual-background-subtracted variant used from m5 on.
+# `group` (and `resbgsub_group`) is the grouped-fit variant -- a SECOND
+# measurement of the same exposure, which must never be ingested alongside the
+# plain one.  Anything new lands here deliberately rather than by `*`.
+_PERFRAME_SEGMENTS = ("", "resbgsub")
+
+
+def _perframe_catalog_re(merge_label):
+    """Match a canonical per-frame catalog basename for ``merge_label``."""
+    seg = "|".join(f"{s}_" for s in _PERFRAME_SEGMENTS if s)
+    return re.compile(
+        r'_exp\d{5}_(?:' + seg + r')?' + re.escape(str(merge_label))
+        + r'(?:_chunk\d+of\d+)?_daophot_basic\.fits$')
+
 
 def _drop_module_level_duplicates(fns, filt, merge_label, module):
     """Drop stale MODULE-level per-frame catalogs when per-DETECTOR ones exist.
@@ -3056,7 +3072,10 @@ def _drop_module_level_duplicates(fns, filt, merge_label, module):
         det = m.group(1)
         if det in ('nrca', 'nrcb'):
             bare.setdefault(det, []).append(fn)
-        else:
+        elif det[4:] in '1234':
+            # only a NUMBERED detector supersedes its bare module.  `nrcalong`
+            # must not, or a bare `nrca` would be dropped on the strength of an
+            # LW catalog with no SW per-detector catalog behind it.
             per_det.add(det[:4])
     drop = {fn for det, group in bare.items() if det in per_det for fn in group}
     if drop:
@@ -3102,22 +3121,46 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
         return
 
     # per-frame catalogs of this (filter, stage); chunked frames vstacked.
-    # NB the exposure number is pinned to exactly 5 digits.  A trailing `_exp*`
-    # also matches `_exp00001_group_<stage>_daophot_basic.fits`, so the
-    # grouped-fit variant of every exposure was ingested ALONGSIDE the plain one
-    # -- arches F212N pulled 96 plain + 48 grouped tables of the same exposures.
-    # The two variants of one exposure sit ~45 mas apart and straddle the
-    # blended consensus, so every duplicated detector read 20-25 mas off and the
-    # checkpoint "corrected" pure bookkeeping (all 141 arches corrections were
-    # nrca -- exactly the duplicated detectors; nrcb, unduplicated, read 2-8 mas).
-    base = f"{cut_bp}/{filt.upper()}/{filt.lower()}_*visit*_vgroup*_exp[0-9][0-9][0-9][0-9][0-9]"
+    # Glob permissively, then ACCEPT-LIST what may sit between the exposure
+    # number and the stage label -- `_exp*` alone also swallows the grouped-fit
+    # variant (`_exp00001_group_m2_...`), so arches F212N pulled 96 plain + 48
+    # grouped tables of the same exposures.  The two variants of one exposure sit
+    # ~45 mas apart and straddle the blended consensus, so every duplicated
+    # detector read 20-25 mas off and the checkpoint "corrected" pure
+    # bookkeeping (all 141 arches corrections were nrca -- exactly the
+    # duplicated detectors; nrcb, unduplicated, read 2-8 mas).
+    #
+    # Pinning `_exp[0-9]{5}` is NOT sufficient on its own: the resbgsub stages
+    # are named `_exp00001_resbgsub_m5_...`, so a pinned glob matches NOTHING at
+    # m5/m6/m7 and every frozen-stage gate silently becomes a no-op.  Hence the
+    # explicit allow-list (empty or `resbgsub`), which also rejects the
+    # `resbgsub_group` combination.
+    base = f"{cut_bp}/{filt.upper()}/{filt.lower()}_*visit*_vgroup*_exp*"
     fns = sorted(set(
         _glob.glob(f"{base}_{merge_label}_daophot_basic.fits")
         + _glob.glob(f"{base}_{merge_label}_chunk*of*_daophot_basic.fits")))
+    accept = _perframe_catalog_re(merge_label)
+    rejected = [f for f in fns if not accept.search(os.path.basename(f))]
+    fns = [f for f in fns if accept.search(os.path.basename(f))]
+    if rejected:
+        print(f"astrom checkpoint [{merge_label}] {filt}/{module}: ignoring "
+              f"{len(rejected)} non-canonical per-frame catalog(s) (e.g. "
+              f"{os.path.basename(rejected[0])})", flush=True)
     if not fns:
-        print(f"astrom checkpoint [{merge_label}] {filt}/{module}: no per-frame "
-              f"catalogs found ({base}_{merge_label}_daophot_basic.fits); skipped",
-              flush=True)
+        # A frozen stage with no inputs is not a pass -- it is the gate silently
+        # ceasing to exist, which is how the `_group_` duplication survived so
+        # long.  Say so loudly; ASTROM_CHECKPOINT_WARN_ONLY can still demote it.
+        msg = (f"astrom checkpoint [{merge_label}] {filt}/{module}: NO per-frame "
+               f"catalogs matched ({base}_{merge_label}_daophot_basic.fits) -- "
+               f"the stage checkpoint cannot run")
+        if (merge_label not in ("m1", "m12", "m2")
+                and os.environ.get('ASTROM_CHECKPOINT_WARN_ONLY', '') != '1'):
+            raise AstrometryRegressionError(
+                msg + ".  A FROZEN stage with no inputs is a silently disabled "
+                      "gate, not a pass.  Set ASTROM_CHECKPOINT_WARN_ONLY=1 to "
+                      "demote if this is genuinely a filter with no per-frame "
+                      "products.")
+        print(msg + "; skipped", flush=True)
         return
     fns = _drop_module_level_duplicates(fns, filt, merge_label, module)
     _chunk_re = _re.compile(r'_chunk\d+of\d+')
