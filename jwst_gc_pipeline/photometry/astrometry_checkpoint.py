@@ -126,6 +126,28 @@ MAX_CORRECTION_ARCSEC = 0.5
 MAX_BULK_CORRECTION_ARCSEC = 60.0
 
 
+def _positive_env_float(name, default):
+    """Read a positive float from the environment, else ``default``.
+
+    A blank/whitespace value means "unset" (mirrors ``_env_flag`` above, which
+    strips).  A non-positive or unparseable value is a configuration error, not
+    a licence to refuse every correction: ``ASTROM_MAX_CORRECTION_ARCSEC=0``
+    would otherwise make a 1 mas correction raise.
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return float(default)
+    try:
+        val = float(raw)
+    except ValueError:
+        raise OffsetsTableUpdateError(
+            f"{name}={raw!r} is not a number (expected arcsec, e.g. 30)")
+    if not (val > 0) or not np.isfinite(val):
+        raise OffsetsTableUpdateError(
+            f"{name}={raw!r} must be a positive, finite number of arcsec")
+    return val
+
+
 def _is_bulk_correction(corr):
     """A per-visit bulk consensus->reference tie carries no exposure AND no
     module (see BULK_EXPOSURE / BULK_MODULE); anything else is per-exposure."""
@@ -147,21 +169,37 @@ def _assert_correction_magnitudes(corrections, offsets_path):
     ``ASTROM_MAX_BULK_CORRECTION_ARCSEC`` when a deliberate re-authoring needs
     to go further.
     """
-    limit = float(os.environ.get("ASTROM_MAX_CORRECTION_ARCSEC", "")
-                  or MAX_CORRECTION_ARCSEC)
-    bulk_limit = float(os.environ.get("ASTROM_MAX_BULK_CORRECTION_ARCSEC", "")
-                       or MAX_BULK_CORRECTION_ARCSEC)
-    big = []
+    limit = _positive_env_float("ASTROM_MAX_CORRECTION_ARCSEC",
+                                MAX_CORRECTION_ARCSEC)
+    bulk_limit = _positive_env_float("ASTROM_MAX_BULK_CORRECTION_ARCSEC",
+                                     MAX_BULK_CORRECTION_ARCSEC)
+    big, nonfinite = [], []
     for corr in corrections:
         dra_as = float(corr["dra_onsky_mas"]) / 1000.0
         ddec_as = float(corr["ddec_onsky_mas"]) / 1000.0
         is_bulk = _is_bulk_correction(corr)
+        ident = (corr.get("visit"), corr.get("filtername"),
+                 "BULK" if is_bulk else corr.get("exposure"), corr.get("module"))
+        # NaN must be caught EXPLICITLY: abs(nan) > limit is False, so a
+        # non-finite correction would sail through the ceiling and poison the
+        # row -- and assert_offsets_table_sane cannot catch it either, since its
+        # collapse comparisons against NaN are all False.  That is the very
+        # failure class this gate exists to stop.  (inf is caught by the
+        # magnitude test, but check it here too rather than rely on that.)
+        if not (np.isfinite(dra_as) and np.isfinite(ddec_as)):
+            nonfinite.append(ident + (dra_as, ddec_as))
+            continue
         lim = bulk_limit if is_bulk else limit
         if abs(dra_as) > lim or abs(ddec_as) > lim:
-            big.append((corr.get("visit"), corr.get("filtername"),
-                        "BULK" if is_bulk else corr.get("exposure"),
-                        corr.get("module"), round(dra_as, 4), round(ddec_as, 4),
-                        f"limit={lim}\""))
+            big.append(ident + (round(dra_as, 4), round(ddec_as, 4),
+                                f"limit={lim}\""))
+    if nonfinite:
+        raise OffsetsTableUpdateError(
+            f"{len(nonfinite)} non-finite correction(s) will NOT be applied to "
+            f"{os.path.basename(offsets_path)} -- a NaN/inf offset is a failed "
+            f"upstream measurement, and writing it silently destroys the row "
+            f"(no downstream guard compares true against NaN).  "
+            f"(visit, filter, exposure, module, dra\", ddec\"): {nonfinite}")
     if big:
         raise OffsetsTableUpdateError(
             f"{len(big)} correction(s) exceed their magnitude limit and will "
@@ -229,6 +267,47 @@ def find_i2d_for_filter(basepath, filtername, extra_globs=()):
 # offsets-table correction (the ONLY authoring channel for the tie)
 # ---------------------------------------------------------------------------
 
+def _assert_module_granularity(corrections, tbl, offsets_path):
+    """Refuse per-module corrections a Module-less table cannot express.
+
+    Corrections are keyed ``(visit, exposure, module)``, but the apply loop
+    skips the module narrowing when the table has no ``Module`` column (sgrc's
+    and cloudef's VIRAC2locked tables have none; cloudc's does -- it was built
+    ``--per-module``).  Every detector's correction for one exposure then lands
+    on the SAME row, additively: 8 detectors x +0.4" each -> +3.2" on the row,
+    with every individual correction legal under the magnitude ceiling.
+
+    That is the mechanism behind the cloudef runaway -- jw02092002001 exp 8
+    F162M went 7302 -> 51166 -> 73111 mas of accumulated prov across successive
+    writes on a Module-less table.  The magnitude ceiling alone cannot see it,
+    because the over-correction is a SUM of legal parts.
+
+    Mirrors the existing "per-exposure correction on a per-visit table"
+    refusal: the fix is to rebuild the table with ``--per-module`` so the
+    corrections match its rows 1:1.
+    """
+    if "Module" in tbl.colnames:
+        return
+    per_key = {}
+    for corr in corrections:
+        if corr.get("module") is None:
+            continue        # bulk tie: module-independent by construction
+        key = (str(corr.get("visit")), str(corr.get("filtername")),
+               corr.get("exposure"))
+        per_key.setdefault(key, set()).add(str(corr["module"]))
+    clashes = {k: sorted(v) for k, v in per_key.items() if len(v) > 1}
+    if clashes:
+        raise OffsetsTableUpdateError(
+            f"{os.path.basename(offsets_path)} has no Module column, but "
+            f"{len(clashes)} (visit, filter, exposure) key(s) carry corrections "
+            f"for MORE THAN ONE module -- they would all match the same row and "
+            f"be summed into an N-fold over-correction (this is how cloudef ran "
+            f"away).  Rebuild the table per-module "
+            f"(build_virac2_offsets --per-module) so corrections map 1:1, or "
+            f"pool the modules into a single correction first.  "
+            f"Offending keys: {sorted(clashes.items())[:4]}")
+
+
 def _module_variants(module):
     """Match semantics of shift_individual_catalog: a detector-level module
     matches its own row or the module-family row."""
@@ -265,11 +344,17 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
     from ..reduction.validate_offsets_table import (
         CollapsedOffsetsTableError, assert_offsets_table_sane)
 
+    # materialise first: the checks below iterate `corrections` before the apply
+    # loop does, and a generator would be consumed by them -- leaving the update
+    # a silent no-op that still writes a table and a backup.
+    corrections = list(corrections)
+
     # magnitude ceiling FIRST: fail before touching the table at all, so a
     # spurious measurement cannot be half-applied or leave a backup behind.
     _assert_correction_magnitudes(corrections, offsets_path)
 
     tbl = Table.read(offsets_path)
+    _assert_module_granularity(corrections, tbl, offsets_path)
     # both column conventions exist: 'dra'/'ddec' (generate_offsets_table) and
     # 'dra (arcsec)'/'ddec (arcsec)' (the VIRAC2locked tables fix_alignment reads)
     dra_col = "dra (arcsec)" if "dra (arcsec)" in tbl.colnames else "dra"
@@ -323,6 +408,27 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
             np.asarray(tbl["prov_ddec_added_mas"][idx], dtype=float)
             + float(corr["ddec_onsky_mas"]))
         tbl["prov_source"][idx] = str(corr.get("source", "astrometry_checkpoint"))[:64]
+
+    # CUMULATIVE drift bound.  The per-correction ceiling cannot see creep that
+    # accumulates across successive calls -- five legal 0.4" corrections over
+    # five re-tie iterations is 2" of silent drift, and cloudef reached 105" this
+    # way.  The prov_* columns already accumulate, so the check is nearly free.
+    # Bounded at the BULK limit: a row may legitimately carry a whole-visit
+    # guide-star fix of arcseconds, but never more than a swept peak could mean.
+    drift_limit = _positive_env_float("ASTROM_MAX_BULK_CORRECTION_ARCSEC",
+                                      MAX_BULK_CORRECTION_ARCSEC)
+    drift = np.hypot(np.asarray(tbl["prov_dra_added_mas"], dtype=float),
+                     np.asarray(tbl["prov_ddec_added_mas"], dtype=float)) / 1000.0
+    over = np.where(drift > drift_limit)[0]
+    if len(over):
+        worst = [(str(tbl["Visit"][i]), str(tbl["Filter"][i]),
+                  round(float(drift[i]), 3)) for i in over[:6]]
+        raise OffsetsTableUpdateError(
+            f"{len(over)} row(s) of {os.path.basename(offsets_path)} have "
+            f"accumulated more than {drift_limit}\" of correction across all "
+            f"writes (prov_dra/ddec_added_mas) -- runaway feedback, not a "
+            f"measurement.  NOT writing.  (visit, filter, |accumulated|\"): "
+            f"{worst}")
 
     # collapsed-visit / sanity validation BEFORE anything is written.  A table
     # WE just corrected must not carry the collapse signature -- raise, don't warn
