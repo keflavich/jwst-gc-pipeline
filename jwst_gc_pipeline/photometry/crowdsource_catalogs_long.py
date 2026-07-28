@@ -212,7 +212,7 @@ class CappedSourceGrouper:
 # restructure).  Imported here so existing references keep working unchanged.
 from jwst_gc_pipeline.photometry.naming import (
     _CHUNK_TOKEN_RE, _chunk_token, _strip_chunk, _iteration_token, _bgsub_token,
-    MIRI_FILTERS, _instrument_from_filter, _inst_token,
+    MIRI_FILTERS, _instrument_from_filter, _inst_token, _instrument_override,
     residual_to_smoothed_bg_i2d, residual_to_model_i2d, residual_to_infilled_i2d,
 )
 from jwst_gc_pipeline.photometry.psf_paths import (
@@ -538,7 +538,19 @@ import datetime
 print("Done with imports", flush=True)
 
 FWHM_TABLE = Path(__file__).resolve().parents[1] / 'reduction' / 'fwhm_table.ecsv'
+# NIRISS has its own PSF-FWHM table (0.0656 arcsec/pix native scale); the shared
+# fwhm_table.ecsv pixel column is NIRCam-scale and would give a wrong aperture
+# radius / grouper separation for NIRISS.
+FWHM_TABLE_NIRISS = Path(__file__).resolve().parents[1] / 'reduction' / 'fwhm_table_niriss.ecsv'
 REGIONS_DIR = Path(__file__).resolve().parents[2] / 'regions_'
+
+
+def fwhm_table_path(instrument=None):
+    """Package FWHM table for the given instrument (NIRISS -> the NIRISS-scale
+    table; else the shared NIRCam/MIRI table).  Reads the process-global
+    instrument override when ``instrument`` is not passed."""
+    inst = _instrument_from_filter('', instrument=instrument) if instrument else _instrument_override()
+    return FWHM_TABLE_NIRISS if inst == 'NIRISS' else FWHM_TABLE
 
 # MIRI_FILTERS / _instrument_from_filter / _inst_token are imported from
 # photometry/naming.py (see top-of-file import) so there is one source of truth.
@@ -1993,6 +2005,11 @@ def stpsf_detector_for_module(module, filtername, instrument):
     if instrument == 'MIRI':
         # MIRI imaging: single detector (MIRIM); no module split.
         return 'MIRIM'
+    if instrument == 'NIRISS':
+        # NIRISS imaging: single detector (NIS); no module split.  Returning the
+        # detector (not None) lets the PSF-grid cache key
+        # niriss_nis_{filter}_fovp101_... hit instead of rebuilding every frame.
+        return 'NIS'
     if module in ('nrca', 'nrcb'):
         if 'F4' in filtername.upper() or 'F3' in filtername.upper():
             return f'{module.upper()}5'
@@ -2164,6 +2181,8 @@ def get_psf_model(filtername, proposal_id, field,
                     print(f"Attempting to download WebbPSF data ({instrument})", flush=True)
                     if instrument == 'MIRI':
                         nrc = webbpsf.MIRI()
+                    elif instrument == 'NIRISS':
+                        nrc = webbpsf.NIRISS()
                     else:
                         nrc = webbpsf.NIRCam()
                     nrc.load_wss_opd_by_date(f'{obsdate}T00:00:00')
@@ -2467,7 +2486,7 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
         # step so the infilled mosaic is cropped too.
         _crop_datamodel_to_finite(output_filename)
 
-    fwhm_tbl = Table.read(FWHM_TABLE)
+    fwhm_tbl = Table.read(fwhm_table_path())
     row = fwhm_tbl[fwhm_tbl['Filter'] == filtername]
     fwhm_pix = float(row['PSF FWHM (pixel)'][0])
     with ImageModel(output_filename) as model:
@@ -4126,6 +4145,14 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     parser.add_option("--target", dest="target",
                     default='brick',
                     help="target", metavar="target")
+    parser.add_option("--instrument", dest="instrument",
+                    default='',
+                    help="Instrument override (nircam/niriss/miri). NIRISS shares "
+                    "filter names with NIRCam so it cannot be inferred from the "
+                    "filter; pass --instrument niriss for NIRISS runs. Empty = "
+                    "auto (filter-name heuristic). Sets GC_INSTRUMENT_OVERRIDE and "
+                    "redirects the per-filter tree to <target>/niriss/<FILTER>/.",
+                    metavar="instrument")
     parser.add_option("--field", dest="field",
                     default=None,
                     help="Explicit field (e.g. '023' for proposal 2211 obs 023). "
@@ -4421,6 +4448,14 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             'path before raising it.'))
     (options, args) = parser.parse_args()
 
+    # Instrument override (NIRISS): filter names are shared with NIRCam, so the
+    # instrument must be stated explicitly.  Set the process-global env override
+    # (consulted by naming._instrument_from_filter/_inst_token/_svo_filter_id and
+    # the fwhm_table_path / basepath selection) BEFORE any of those run.
+    if getattr(options, 'instrument', ''):
+        os.environ['GC_INSTRUMENT_OVERRIDE'] = options.instrument.strip().lower()
+        print(f"cataloging: instrument override -> {os.environ['GC_INSTRUMENT_OVERRIDE']}")
+
     # Production run guard: refuse to run cataloging on an untagged or dirty tree
     # (so every catalog carries a real release tag) unless GC_ALLOW_DEV is set for
     # a development run.  See jwst_gc_pipeline/versioning/tags.py.
@@ -4645,6 +4680,19 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
         basepath = f'/orange/adamginsburg/jwst/{field_to_reg_mapping[field]}/'
     else:
         basepath = f'/blue/adamginsburg/adamginsburg/jwst/{field_to_reg_mapping[field]}/'
+
+    # NIRISS: reduced products live under <target>/niriss/<FILTER>/ (namespaced so
+    # NIRISS F480M/F356W do not collide with the NIRCam <target>/<FILTER> trees).
+    # Append the 'niriss/' level so every downstream {basepath}/<FILTER>/pipeline
+    # glob, per-frame catalog write, {basepath}/catalogs (refcat), {basepath}/
+    # offsets (m2 checkpoint), {basepath}/reduction (fwhm) and {basepath}/regions_
+    # resolve there.  The support trees (reduction/regions_/catalogs/offsets/psfs)
+    # are staged under <target>/niriss/ by scripts/reduction/stage_niriss_basepath.sh
+    # (symlinks to the shared <target>/ trees for read-only inputs; real dirs for
+    # niriss-specific outputs).
+    if _instrument_override() == 'NIRISS':
+        basepath = f'{basepath}niriss/'
+        print(f"NIRISS instrument override: basepath -> {basepath}", flush=True)
 
     # Non-destructive experimental runs: redirect the WHOLE basepath to a scratch
     # tree staged (stage_scratch_basepath.sh) with symlinks/copies of the real

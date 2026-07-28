@@ -69,6 +69,11 @@ def get_psf(header, path_prefix='.', use_merged_psf_for_merged=False, fov_pixels
     elif header['INSTRUME'].lower() == 'miri':
         psfgen = stpsf.MIRI()
         fwhm, fwhm_pix = get_fwhm(header, instrument_replacement='MIRI')
+    elif header['INSTRUME'].lower() == 'niriss':
+        psfgen = stpsf.NIRISS()
+        fwhm, fwhm_pix = get_fwhm(header, instrument_replacement='NIRISS')
+    else:
+        raise ValueError(f"get_psf: unsupported INSTRUME={header['INSTRUME']!r}")
     instrument = header['INSTRUME']
     filtername = get_filtername(header)
     try:
@@ -2343,6 +2348,11 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     elif header['INSTRUME'].lower() == 'miri':
         psfgen = stpsf.MIRI()
         fwhm, fwhm_pix = get_fwhm(header, instrument_replacement='MIRI')
+    elif header['INSTRUME'].lower() == 'niriss':
+        psfgen = stpsf.NIRISS()
+        fwhm, fwhm_pix = get_fwhm(header, instrument_replacement='NIRISS')
+    else:
+        raise ValueError(f"unsupported INSTRUME={header['INSTRUME']!r}")
 
     # The accept gates below (sidelobe_resid_sigma, ssr_ratio, qfit) were tuned
     # on NIRCam, where IPC makes the STPSF first-sidelobe brighter than the

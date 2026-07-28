@@ -85,6 +85,25 @@ obs_filters = {'brick': {'2221': filternames + ['f2550w'],
                            '6778': ['f090w', 'f187n', 'f200w', 'f277w', 'f335m', 'f470n']},
                }
 
+# NIRISS filter sets, keyed by target.  NIRISS shares filter names with NIRCam,
+# so its filters cannot live in the shared ``obs_filters`` map (a NIRCam sgrc
+# cross-band merge must NOT pull in the NIRISS f200w/f356w/f158m catalogs, which
+# live under <target>/niriss/).  Selected at runtime by _obs_filters_for() when
+# the process instrument override is NIRISS.
+obs_filters_niriss = {
+    # Sgr C 4147 obs 012 NIRISS imaging.
+    'sgrc': {'4147': ['f158m', 'f200w', 'f356w', 'f480m']},
+}
+
+
+def _obs_filters_for(target):
+    """``_obs_filters_for(target)`` (the {obsid: [filters]} dict), with the NIRISS
+    filter set substituted when the process instrument override is NIRISS."""
+    from jwst_gc_pipeline.photometry.naming import _instrument_override
+    if _instrument_override() == 'NIRISS' and target in obs_filters_niriss:
+        return obs_filters_niriss[target]
+    return obs_filters.get(target)
+
 project_obsnum = {'brick': {'2221': '001',
                             '1182': '004',
                             },
@@ -1245,7 +1264,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     # ``glob_obs_`` fully determines which frames are pooled, so we glob it ONCE
     # per (module, visit, exposure) -- the old per-progid loop globbed the SAME
     # pattern once per obs_filters entry and deduped, which was purely redundant.
-    ngc6334_multiprop = any(str(p) in ('7213', '6778') for p in obs_filters[target])
+    ngc6334_multiprop = any(str(p) in ('7213', '6778') for p in _obs_filters_for(target))
     if ngc6334_multiprop:
         glob_obs_ = out_obs_ = f'_j{progid}'
     elif field not in (None, ''):
@@ -1396,8 +1415,8 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
     print()
     print(f'Starting merge crowdsource module: {module} suffix: {suffix} target: {target} iter: {iteration_label}', flush=True)
     imgfns = [x
-              for obsid in obs_filters[target]
-              for filn in obs_filters[target][obsid]
+              for obsid in _obs_filters_for(target)
+              for filn in _obs_filters_for(target)[obsid]
               for x in glob.glob(f"{basepath}/{filn.upper()}/pipeline/"
                                  f"jw0{obsid}-o{project_obsnum[target][obsid]}_t001_{_inst_token(filn)}*{filn.lower()}*{module}_i2d.fits")
               if f'{module}_' in x or f'{module}1_' in x
@@ -1418,7 +1437,7 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
     jfilts = SvoFps.get_filter_list('JWST')
     jfilts.add_index('filterID')
 
-    filternames = [filn for obsid in obs_filters[target] for filn in obs_filters[target][obsid]]
+    filternames = [filn for obsid in _obs_filters_for(target) for filn in _obs_filters_for(target)[obsid]]
     print(f"Merging filters {filternames}", flush=True)
     if indivexp:
         catfns = [x
@@ -1539,7 +1558,7 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
     ``vetted`` (manual path): read the ``_vetted`` per-filter merged catalogs
     (the quality-cut science catalogs) instead of the raw merged ones.
     ``filternames_override``: restrict to this explicit filter list instead of
-    the full ``obs_filters[target]`` set -- REQUIRED for the manual NIRCam path,
+    the full ``_obs_filters_for(target)`` set -- REQUIRED for the manual NIRCam path,
     whose target (e.g. sickle) registers MIRI filters in the same obs_filters
     entry that must NOT enter the NIRCam cross-band merge.
     """
@@ -1562,7 +1581,7 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
     if filternames_override is not None:
         filternames = [f.lower() for f in filternames_override]
     else:
-        filternames = [filn for obsid in obs_filters[target] for filn in obs_filters[target][obsid]]
+        filternames = [filn for obsid in _obs_filters_for(target) for filn in _obs_filters_for(target)[obsid]]
     print(f"Merging daophot {daophot_type}, {detector}, {module}, {desat}, {bgsub}, {epsf_}, {blur_}. filters {filternames}")
 
     # Use _project_for_target_filter (not a global filter->project dict)
@@ -1645,7 +1664,9 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
         wcses = [wcs.WCS(fits.getheader(fn, ext=('SCI', 1))) if fn is not None else None
                  for fn in imgfns]
 
-    fwhm_tbl = Table.read(f'{basepath}/reduction/fwhm_table.ecsv')
+    from jwst_gc_pipeline.photometry.naming import _instrument_override as _iov
+    _ftname = ('fwhm_table_niriss.ecsv' if _iov() == 'NIRISS' else 'fwhm_table.ecsv')
+    fwhm_tbl = Table.read(f'{basepath}/reduction/{_ftname}')
 
     for ii, tbl in enumerate(tbls):
         ww = wcses[ii] if ii < len(wcses) else None
@@ -1733,7 +1754,7 @@ def _project_for_target_filter(target, filtername):
     whichever target was iterated last.  This helper resolves the correct
     project for the target in hand.
     """
-    target_filters = obs_filters[target]
+    target_filters = _obs_filters_for(target)
     filt_l = filtername.lower()
     for proj, filts in target_filters.items():
         if filt_l in filts:
@@ -2360,6 +2381,7 @@ def replace_saturated(cat, filtername, radius=None, target='brick',
                   'f322w2': 0.1*u.arcsec,   # wide LW
                   'f115w': 0.05*u.arcsec,
                   'f150w': 0.05*u.arcsec,
+                  'f158m': 0.05*u.arcsec,   # NIRISS SW (1.58 um)
                   'f162m': 0.05*u.arcsec,
                   'f182m': 0.05*u.arcsec,
                   'f187n': 0.05*u.arcsec,
@@ -2872,8 +2894,8 @@ def main():
 
                             if options.merge_singlefields:
                                 singlefield_done = False
-                                for progid in obs_filters[target]:
-                                    for filtername in (obs_filters[target][progid]):
+                                for progid in _obs_filters_for(target):
+                                    for filtername in (_obs_filters_for(target)[progid]):
                                         if singlefield_done:
                                             # skip ahead to merge-all-indiv step
                                             continue

@@ -1412,7 +1412,7 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     iteration-label seed inference and diagnostics; the manual path builds its
     own seeds and (for cutouts) PNG diagnostics are suppressed anyway.
     """
-    fwhm_tbl = Table.read(_L.FWHM_TABLE)
+    fwhm_tbl = Table.read(_L.fwhm_table_path())
     row = fwhm_tbl[fwhm_tbl['Filter'] == filtername]
     fwhm_pix = float(row['PSF FWHM (pixel)'][0])
     aperture_radius_pix = 2.0 * fwhm_pix
@@ -2130,7 +2130,7 @@ def _build_source_masked_bg(mc_i2d_path, vetted_catalog_path, filtername, *,
     fov = np.isfinite(d)
 
     # FWHM in i2d pixels
-    ftab = Table.read(_L.FWHM_TABLE)
+    ftab = Table.read(_L.fwhm_table_path())
     fwhm_as = float(ftab[ftab['Filter'] == filtername]['PSF FWHM (arcsec)'][0])
     pixscale_as = float(np.sqrt(np.abs(np.linalg.det(w.pixel_scale_matrix))) * 3600.0)
     fwhm_px = fwhm_as / pixscale_as
@@ -2512,7 +2512,7 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
     """
     from astropy.coordinates import SkyCoord
 
-    ftab = Table.read(_L.FWHM_TABLE)
+    ftab = Table.read(_L.fwhm_table_path())
     fwhm_pix = float(ftab[ftab['Filter'] == filtername]['PSF FWHM (pixel)'][0])
 
     with fits.open(detection_i2d_path) as dh:
@@ -2763,7 +2763,10 @@ def _clean_offfov_dups_and_offfield(merged, filt, data_i2d_path, basepath, *,
             px = float(ww.proj_plane_pixel_scales()[0].to('arcsec').value)
             fw = 0.16
             try:
-                _ft = Table.read(f'{basepath}/reduction/fwhm_table.ecsv')
+                _ftname = ('fwhm_table_niriss.ecsv'
+                           if _L._instrument_override() == 'NIRISS'
+                           else 'fwhm_table.ecsv')
+                _ft = Table.read(f'{basepath}/reduction/{_ftname}')
                 _row = _ft[_ft['Filter'] == filt.upper()]
                 if len(_row):
                     fw = float(_row['PSF FWHM (arcsec)'][0])
@@ -4142,7 +4145,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     _prev = prev_merged_for.get((module, filt))
                     if _prev is not None and len(merged):
                         _psc, _pif = _prev
-                        _ftab = Table.read(_L.FWHM_TABLE)
+                        _ftab = Table.read(_L.fwhm_table_path())
                         _fw = float(_ftab[_ftab['Filter'] == filt]['PSF FWHM (arcsec)'][0])
                         _idx, _sep, _ = _msc.match_to_catalog_sky(_psc)
                         _m = _sep.arcsec < 0.5 * _fw   # within ~0.5 FWHM = same source
@@ -4457,7 +4460,6 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 except Exception as _m8ex:
                     print(f"manual [{last_phase}]: m8 forced fill FAILED "
                           f"(module={module}): {_m8ex}", flush=True)
-                    import traceback
                     traceback.print_exc()
     elif _do_crossband:
         print(f"manual [{last_phase}]: cross-band merge SKIPPED for cutout run "
