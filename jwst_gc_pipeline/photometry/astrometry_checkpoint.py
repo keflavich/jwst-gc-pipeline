@@ -101,6 +101,52 @@ def _env_flag(name):
     return os.environ.get(name, "").strip() == "1"
 
 
+# A per-exposure/per-visit tie correction is mas-scale by construction: it
+# removes guide-star jitter and the consensus->reference residual, not a gross
+# pointing error.  Anything larger is an upstream measurement failure (a
+# window-limited or spurious offset-histogram peak) and must never be baked
+# into the table: cloudef accumulated a +102" ddec correction this way on
+# 2026-07-28, compounding across re-tie iterations (13.5" -> 19.2" -> 27.1" in
+# dra) until the table was unusable, with no guard firing.
+#
+# seed_offsets_table_from_consensus already gates the RESULTING consensus row
+# at this limit (a consensus table holds nothing but jitter, so its absolute
+# value is bounded).  The curated VIRAC2locked tables carry legitimate
+# arcsec-scale BULK offsets in their rows, so they cannot be gated on absolute
+# value -- they are gated here, on the CORRECTION.
+MAX_CORRECTION_ARCSEC = 0.5
+
+
+def _assert_correction_magnitudes(corrections, offsets_path):
+    """Refuse corrections larger than ``MAX_CORRECTION_ARCSEC``.
+
+    A genuine gross fix does exist (brick-1182 visit-001 was really ~20" off),
+    but it is a deliberate, reviewed re-authoring of the table -- not something
+    an automated checkpoint should ever apply on its own.  Raise the limit via
+    ``ASTROM_MAX_CORRECTION_ARCSEC`` for that case, with justification.
+    """
+    limit = float(os.environ.get("ASTROM_MAX_CORRECTION_ARCSEC", "")
+                  or MAX_CORRECTION_ARCSEC)
+    big = []
+    for corr in corrections:
+        dra_as = float(corr["dra_onsky_mas"]) / 1000.0
+        ddec_as = float(corr["ddec_onsky_mas"]) / 1000.0
+        if abs(dra_as) > limit or abs(ddec_as) > limit:
+            big.append((corr.get("visit"), corr.get("filtername"),
+                        corr.get("exposure"), corr.get("module"),
+                        round(dra_as, 4), round(ddec_as, 4)))
+    if big:
+        raise OffsetsTableUpdateError(
+            f"{len(big)} correction(s) exceed {limit}\" and will NOT be applied "
+            f"to {os.path.basename(offsets_path)} -- a tie correction is "
+            f"mas-scale; this size means the upstream measurement is wrong "
+            f"(window-limited/spurious peak), not that the frame is that far "
+            f"off.  (visit, filter, exposure, module, dra\", ddec\"): {big}.  "
+            f"If this really is a gross re-pointing fix, re-author the table "
+            f"deliberately or raise ASTROM_MAX_CORRECTION_ARCSEC with "
+            f"written justification.")
+
+
 # ---------------------------------------------------------------------------
 # im0 invalidation: stale-tagging merged mosaics
 # ---------------------------------------------------------------------------
@@ -189,6 +235,10 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
     """
     from ..reduction.validate_offsets_table import (
         CollapsedOffsetsTableError, assert_offsets_table_sane)
+
+    # magnitude ceiling FIRST: fail before touching the table at all, so a
+    # spurious measurement cannot be half-applied or leave a backup behind.
+    _assert_correction_magnitudes(corrections, offsets_path)
 
     tbl = Table.read(offsets_path)
     # both column conventions exist: 'dra'/'ddec' (generate_offsets_table) and
@@ -358,6 +408,10 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
     if not corrections:
         raise OffsetsTableUpdateError(
             "seed_offsets_table_from_consensus: no corrections to seed from")
+    # The resulting-row check below bounds the ACCUMULATED value; this bounds
+    # each individual correction, so a large shift cannot slip through by
+    # partially cancelling an existing row.
+    _assert_correction_magnitudes(corrections, out_path or "consensus table")
     out_path = out_path or os.path.join(
         basepath, "offsets",
         f"Offsets_JWST_Brick{proposal_id}_consensus.csv")

@@ -190,16 +190,70 @@ def test_update_offsets_table_refuses_perexposure_on_pervisit_table(tmp_path):
             dec_deg=DEC_TEST)], "m2")
 
 
-def test_update_offsets_table_refuses_visit_collapse(tmp_path):
+def test_update_offsets_table_refuses_visit_collapse(tmp_path, monkeypatch):
     # a correction that lands two visits on the SAME value is the brick-1182
-    # collapse signature -- must refuse to write
+    # collapse signature -- must refuse to write.  This one is ~17" wide, so
+    # lift the magnitude ceiling to keep the COLLAPSE guard the thing under
+    # test rather than the size gate.
+    monkeypatch.setenv("ASTROM_MAX_CORRECTION_ARCSEC", "100")
     path = _offsets_csv(tmp_path)
-    with pytest.raises(OffsetsTableUpdateError):
+    with pytest.raises(OffsetsTableUpdateError, match="(?i)collaps"):
         update_offsets_table(path, [dict(
             visit="jw01182004001", exposure=None, module=None,
             filtername="F212N",
             dra_onsky_mas=(1.9 - (-17.5)) * 1000.0 * COSD,
             ddec_onsky_mas=0.0, dec_deg=DEC_TEST)], "m2")
+
+
+def test_update_offsets_table_refuses_oversized_correction(tmp_path):
+    # cloudef 2026-07-28: a +102" ddec correction was applied and then
+    # compounded across re-tie iterations.  A tie correction is mas-scale.
+    path = _offsets_csv(tmp_path)
+    with pytest.raises(OffsetsTableUpdateError, match="exceed"):
+        update_offsets_table(path, [dict(
+            visit="jw01182004001", exposure=1, module="nrcb1",
+            filtername="F212N", dra_onsky_mas=24003.4,
+            ddec_onsky_mas=102339.0, dec_deg=DEC_TEST)], "m2")
+
+
+def test_update_offsets_table_oversized_correction_leaves_table_untouched(tmp_path):
+    # fail BEFORE writing: no mutation, and no backup file left behind
+    path = _offsets_csv(tmp_path)
+    before = open(path).read()
+    with pytest.raises(OffsetsTableUpdateError):
+        update_offsets_table(path, [dict(
+            visit="jw01182004001", exposure=1, module="nrcb1",
+            filtername="F212N", dra_onsky_mas=0.0, ddec_onsky_mas=600.0,
+            dec_deg=DEC_TEST)], "m2")
+    assert open(path).read() == before
+    assert [f for f in os.listdir(tmp_path) if ".pre_m2_" in f] == []
+
+
+def test_update_offsets_table_allows_correction_just_under_ceiling(tmp_path):
+    # 0.4" < 0.5" ceiling -> applies normally (the gate must not be so tight
+    # that a legitimate large-but-plausible tie is blocked)
+    path = _offsets_csv(tmp_path)
+    out = update_offsets_table(path, [dict(
+        visit="jw01182004001", exposure=1, module="nrcb1",
+        filtername="F212N", dra_onsky_mas=0.0, ddec_onsky_mas=400.0,
+        dec_deg=DEC_TEST)], "m2")
+    row = out[(np.array([str(v) for v in out["Visit"]]) == "jw01182004001")
+              & (out["Exposure"] == 1)][0]
+    assert row["ddec"] == pytest.approx(0.5 + 0.4, abs=1e-9)
+
+
+def test_update_offsets_table_ceiling_override(tmp_path, monkeypatch):
+    # the deliberate gross re-authoring path (brick-1182 v001 was really ~20"
+    # off) stays available, but only via an explicit env override
+    monkeypatch.setenv("ASTROM_MAX_CORRECTION_ARCSEC", "30")
+    path = _offsets_csv(tmp_path)
+    out = update_offsets_table(path, [dict(
+        visit="jw01182004001", exposure=1, module="nrcb1",
+        filtername="F212N", dra_onsky_mas=0.0, ddec_onsky_mas=20000.0,
+        dec_deg=DEC_TEST)], "m2")
+    row = out[(np.array([str(v) for v in out["Visit"]]) == "jw01182004001")
+              & (out["Exposure"] == 1)][0]
+    assert row["ddec"] == pytest.approx(0.5 + 20.0, abs=1e-9)
 
 
 # ---------------------------------------------------------------------------
