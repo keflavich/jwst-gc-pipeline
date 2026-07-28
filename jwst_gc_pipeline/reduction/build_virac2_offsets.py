@@ -169,6 +169,17 @@ REGION = {
     'cloudef5': dict(proposal='2092', field='005', basepath='/orange/adamginsburg/jwst/cloudef',
                      filts={'f162m': ('F162M', 2023.21, '_m3'), 'f210m': ('F210M', 2023.21, '_m3'),
                             'f360m': ('F360M', 2023.21, '_m3'), 'f480m': ('F480M', 2023.21, '_m3')}),
+    # sgrc (4147/012).  The VIRAC2locked table was previously authored without a
+    # REGION entry and covered only 7 of the 8 reduced bands -- F115W had NO row, so
+    # the m2 checkpoint's F115W corrections matched nothing and update_offsets_table
+    # hard-failed the whole re-tie (2026-07-27).  Registering the field here makes
+    # F115W buildable by the sanctioned path instead of hand-authored.
+    # Epoch 2023.72 matches catalogs/gaia_virac2_refcat_epoch2023.72.fits.
+    'sgrc': dict(proposal='4147', field='012', basepath='/orange/adamginsburg/jwst/sgrc',
+                 filts={'f115w': ('F115W', 2023.72, '_m3'), 'f162m': ('F162M', 2023.72, '_m3'),
+                        'f182m': ('F182M', 2023.72, '_m3'), 'f212n': ('F212N', 2023.72, '_m3'),
+                        'f360m': ('F360M', 2023.72, '_m3'), 'f405n': ('F405N', 2023.72, '_m3'),
+                        'f470n': ('F470N', 2023.72, '_m3'), 'f480m': ('F480M', 2023.72, '_m3')}),
 }
 # NIRCam SW (nrca1-4/nrcb1-4) vs LW (nrcalong/nrcblong) split at ~2.4um: F070W..F212N are
 # SW, F250M+ are LW.  Classify by filter number so any GC field's bands map to the right
