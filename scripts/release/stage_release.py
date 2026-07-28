@@ -929,8 +929,18 @@ def main(argv=None):
         # ~0). Only a reference-free frame-vs-frame check sees it.  (Applies to
         # --images-only too: it reads the crf frames, not catalogs.)
         overlap_gate = Path(__file__).with_name("check_interframe_overlap.py")
-        rc = subprocess.run([sys.executable, str(overlap_gate),
-                             "--field", args.field, "--scan"]).returncode
+        overlap_cmd = [sys.executable, str(overlap_gate),
+                       "--field", args.field, "--scan"]
+        # Pass the field's Gaia/VIRAC2 refcat so the gate can resolve pairs its
+        # reference-free layer cannot measure -- a sparse / thin inter-module
+        # overlap (2221 nrca-long|nrcb-long) has 0 mutual-coverage tiles, so the
+        # frame-vs-frame pooled histogram is unreliable there; the same-star
+        # residual map vs VIRAC2 is the authoritative arbiter (fail-closed still
+        # applies if the refcat is missing).
+        overlap_refcat = FRAME_REFCAT.get(args.field)
+        if overlap_refcat and os.path.exists(overlap_refcat):
+            overlap_cmd += ["--refcat", overlap_refcat]
+        rc = subprocess.run(overlap_cmd).returncode
         if rc == 1:
             print(f"\nREFUSING TO STAGE '{args.field}': inter-frame OVERLAP gate FAILED "
                   f"-- two overlapping visits/detectors are misregistered vs EACH OTHER "

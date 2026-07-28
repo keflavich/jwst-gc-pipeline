@@ -42,7 +42,8 @@ from photutils.detection import find_peaks
 
 from jwst_gc_pipeline.photometry.interframe_overlap import (
     overlap_offset_grid, pairwise_overlap_offsets, DEFAULT_OVERLAP_TOL_MAS)
-from jwst_gc_pipeline.photometry.astrometry_offsets import measure_offset_grid
+from jwst_gc_pipeline.photometry.astrometry_offsets import (
+    measure_offset_grid, measure_offset, local_residual_map)
 
 BASE = os.environ.get("JWST_BASE", "/orange/adamginsburg/jwst")
 TOL_MAS = float(os.environ.get("OVERLAP_TOL_MAS", DEFAULT_OVERLAP_TOL_MAS))
@@ -127,6 +128,44 @@ def _refcat(path):
     return rc, gaia
 
 
+def _val_mas(x):
+    try:
+        return float(x.to(u.mas).value)
+    except AttributeError:
+        return float(x)
+
+
+def _samestar_ref_grid(allsrc, ref, max_off_mas, cell_arcsec=30.0, min_stars=20):
+    """Absolute cross-check of ``allsrc`` vs a reference catalog by the SAME-STAR
+    residual map -- density-immune -- NOT a per-cell offset histogram.
+
+    ``measure_offset_grid`` (per-cell histogram) is fooled by the dense-field
+    wrong-pair bias in sparse cells: on brick F405N it read a 58" worst cell
+    while the same-star tie of the identical data is 3 mas.  Here we (1) get the
+    density-immune global tie, (2) fail if it is gross / window-swept (the field
+    really is off the reference), else (3) map per-cell SAME-STAR residuals with
+    ``local_residual_map`` (real matched pairs, per-cell standard errors -- the
+    noise-peak failure mode does not exist).  Returns the same keys the caller
+    prints: ``clean, worst_off_mas, n_ok, n_total``."""
+    g = measure_offset(allsrc, ref, maxsep=3.0 * u.arcsec)
+    if g is None:
+        return dict(clean=False, worst_off_mas=float("nan"), n_ok=0, n_total=0)
+    goff = float(np.hypot(_val_mas(g["dra"]), _val_mas(g["ddec"])))
+    if g.get("swept") or goff > max_off_mas:
+        # a gross or window-swept global tie == a genuine absolute-frame offset
+        # (brick-1182 v001 ~20" class); reference cross-check is DIRTY.
+        return dict(clean=False, worst_off_mas=goff, n_ok=0, n_total=1)
+    lr = local_residual_map(allsrc, ref, g, cell_arcsec=cell_arcsec,
+                            match_radius=0.3 * u.arcsec, min_stars=min_stars,
+                            tol_mas=max_off_mas)
+    n_meas = int(lr.get("n_measured", 0))
+    n_flag = int(lr.get("n_flagged", 0))
+    worst = lr.get("worst_off_mas")
+    return dict(clean=bool(lr.get("clean")),
+                worst_off_mas=float(worst) if worst is not None else 0.0,
+                n_ok=n_meas - n_flag, n_total=n_meas)
+
+
 def check_filter(field, filt, refcat=None, verbose=True, visits=None):
     pooled, ndet, nframes = build_groups(field, filt, visits=visits)
     # FAIL-CLOSED on "found nothing": a gate that goes green because its glob
@@ -181,17 +220,29 @@ def check_filter(field, filt, refcat=None, verbose=True, visits=None):
         r["pairwise"] = {k: p.get(k) for k in
                          ("off_mas", "dra_mas", "ddec_mas", "contrast",
                           "n_peak", "measurable", "swept", "ok")}
-        if r.get("could_not_verify"):
-            # fine layer blind -> the gross layer must decide
-            if p.get("measurable"):
-                if not p["ok"]:
-                    r["fail_reason"] = (f"gross pairwise offset "
-                                        f"{p['off_mas']:.0f} mas (swept="
-                                        f"{p.get('swept')})")
-                    bad.append(r)
-            else:
+        # Authoritative discriminant: did ANY mutual-coverage TILE get measured?
+        # n_total == 0 -> a sparse / thin overlap where NEITHER the per-tile
+        # same-star layer NOR the pooled frame-vs-frame histogram is trustworthy
+        # (against a dense clustered field the wrong-pair bias yields a
+        # _confirm_tie-CONFIRMED but SPURIOUS pooled peak: brick F405N
+        # nrca-long|nrcb-long read 55 mas pooled over 0 tiles, yet same-star vs
+        # VIRAC = 3 mas).  Defer EVERY such flagged pair to the external
+        # SAME-STAR reference below; never hard-fail on the pooled number alone.
+        # A genuine gross offset (brick-1182 v001 ~20") is deferred too and is
+        # then caught by the reference (really off) or fail-closed if no --refcat.
+        n_tiles_measured = int(r.get("n_total", 0) or 0)
+        if n_tiles_measured == 0:
+            if r.get("could_not_verify") or not r.get("ok", True):
+                if p.get("measurable") and not p.get("ok", True):
+                    r["fail_reason"] = (
+                        f"gross pairwise offset {p['off_mas']:.0f} mas "
+                        f"(swept={p.get('swept')}) over a 0-tile overlap -- "
+                        f"pooled histogram not authoritative; deferred to reference")
                 unverifiable.append(r)
+            # ok + 0 tiles = clean non-overlap: nothing to check.
         else:
+            # Real mutual coverage measured -> the reference-free verdict IS
+            # authoritative (this is the brick-1182 F200W dense-seam regime).
             if not r["ok"]:
                 r["fail_reason"] = (r.get("fail_reason")
                                     or "per-tile misregistration")
@@ -243,14 +294,12 @@ def check_filter(field, filt, refcat=None, verbose=True, visits=None):
         for rn, rr, gates in (("VIRAC2", rc, True), ("Gaia", gaia, False)):
             if rr is None:
                 continue
-            g = measure_offset_grid(allsrc, rr, nx=GRID_N, ny=GRID_N,
-                                    maxsep=3.0 * u.arcsec, max_off_mas=GRID_MAX_OFF_MAS,
-                                    context=f"{field}/{filt}/{rn}")
+            g = _samestar_ref_grid(allsrc, rr, max_off_mas=GRID_MAX_OFF_MAS)
             if gates:
                 ext_ran = True
             if verbose:
                 tag = "" if gates else " [diagnostic, non-gating: Gaia too sparse]"
-                print(f"      fine grid {GRID_N}x{GRID_N} vs {rn}: clean={g['clean']} "
+                print(f"      same-star residual map vs {rn}: clean={g['clean']} "
                       f"worst_off={g['worst_off_mas']:.0f} mas "
                       f"(max {GRID_MAX_OFF_MAS:.0f}) n_ok={g['n_ok']}/{g['n_total']}"
                       f"{tag}", flush=True)
