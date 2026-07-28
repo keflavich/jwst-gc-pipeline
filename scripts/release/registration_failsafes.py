@@ -86,7 +86,7 @@ def catalog_sc(field, filt):
     return None
 
 
-def per_cell(det, flux, truth, label, bright_pct=None):
+def per_cell(det, flux, truth, label, bright_pct=None, fail_min_ratio=MIN_PEAK_RATIO):
     """Per-cell registration offset by pair-separation HISTOGRAM cross-correlation.
 
     For every det-truth pair within MX, bin by the detection's spatial cell and by the
@@ -96,7 +96,14 @@ def per_cell(det, flux, truth, label, bright_pct=None):
 
     A cell is VERIFIED only if it has >=MIN_PAIRS and peak/background >=MIN_PEAK_RATIO;
     otherwise it is UNVERIFIED (reported, never a fail).  A verified cell FAILs if its
-    peak offset exceeds OFF_MAX.  Field FAIL = any verified cell fails.
+    peak offset exceeds OFF_MAX *and* its contrast >= ``fail_min_ratio``.  Field FAIL =
+    any cell fails.
+
+    ``fail_min_ratio`` (default ``MIN_PEAK_RATIO`` -> the historic strict behaviour) is
+    raised to ``FAIL_MIN_RATIO`` ONLY for the own-catalog check, where a floor-level
+    peak in a dense bright-star cell is wrong-pair noise, not a seam.  The cross-band
+    and per-module checks keep the strict floor, so a real seam that own-catalog's
+    relaxed bar might miss is still caught by them (defense in depth).
     """
     if det is None or truth is None or len(det) < 200 or len(truth) < 200:
         return dict(label=label, error="missing detections/truth")
@@ -140,16 +147,17 @@ def per_cell(det, flux, truth, label, bright_pct=None):
     # doubles stars into a sharp high-contrast peak; a bright-star-crowded, sparse
     # cell yields a floor-level peak (ratio ~ MIN_PEAK_RATIO) at a spurious offset.
     # Sub-FAIL_MIN_RATIO high-offset cells stay verified-but-not-failed (reported).
-    fail = verified & (off > OFF_MAX) & (ratio >= FAIL_MIN_RATIO)
-    # High offset but sub-FAIL_MIN_RATIO contrast: NOT a fail, but reported so a real
+    fail = verified & (off > OFF_MAX) & (ratio >= fail_min_ratio)
+    # High offset but sub-fail_min_ratio contrast: NOT a fail, but reported so a real
     # low-contrast issue is never silently hidden by the margin.
-    unconfident = verified & (off > OFF_MAX) & (ratio < FAIL_MIN_RATIO)
+    unconfident = verified & (off > OFF_MAX) & (ratio < fail_min_ratio)
     worst = [dict(ra=float((xe[i] + xe[i + 1]) / 2), dec=float((ye[j] + ye[j + 1]) / 2),
                   offset_mas=round(float(off[i, j]), 0), peak_bg=round(float(ratio[i, j]), 1),
                   npairs=int(npair[i, j]))
              for i, j in sorted(zip(*np.where(fail)), key=lambda c: -off[c])][:8]
     unconfident_cells = [dict(ra=float((xe[i] + xe[i + 1]) / 2), dec=float((ye[j] + ye[j + 1]) / 2),
-                              offset_mas=round(float(off[i, j]), 0), peak_bg=round(float(ratio[i, j]), 1))
+                              offset_mas=round(float(off[i, j]), 0), peak_bg=round(float(ratio[i, j]), 1),
+                              npairs=int(npair[i, j]))
                          for i, j in sorted(zip(*np.where(unconfident)), key=lambda c: -off[c])][:8]
     return dict(label=label, verified_cells=int(verified.sum()),
                 unverified_cells=int((npair >= MIN_PAIRS).sum() - verified.sum()),
@@ -266,14 +274,18 @@ def scan_field(field, verbose=True, images_only=False):
         if not images_only:
             cat = catalog_sc(field, b)
             if cat is not None:
-                r = per_cell(d, fl, cat, f"{b} vs own-catalog"); r.pop("_g", None)
+                r = per_cell(d, fl, cat, f"{b} vs own-catalog",
+                             fail_min_ratio=FAIL_MIN_RATIO); r.pop("_g", None)
                 checks["own_catalog"] = r
         bad = any((not c.get("PASS", True)) for c in checks.values())
         report[b] = checks
         any_fail = any_fail or bad
         if verbose:
-            tags = " ".join(f"{k}={'PASS' if v.get('PASS') else 'FAIL:'+str(v.get('n_fail'))}"
-                            for k, v in checks.items())
+            def _tag(k, v):
+                s = f"{k}={'PASS' if v.get('PASS') else 'FAIL:'+str(v.get('n_fail'))}"
+                nu = v.get("n_unconfident_highoff") or 0
+                return s + (f"(unconf={nu})" if nu else "")   # high-off, sub-margin cells
+            tags = " ".join(_tag(k, v) for k, v in checks.items())
             print(f"  {field} {b}: {'FAIL' if bad else 'ok'}  {tags}", flush=True)
     return dict(field=field, bands=bands, PASS=bool(not any_fail), report=report)
 
@@ -302,7 +314,11 @@ def main(argv=None):
         return 0 if res.get("PASS") else 1   # exit 1 = FAIL -> gate blocks staging
 
     det, flux, truths = build_truths(args.field, args.filter, args.xband)
-    results = [per_cell(det, flux, t, f"{args.filter} vs {name}") for name, t in truths.items()]
+    # own-catalog gets the relaxed fail bar; per-module / cross-band stay strict.
+    results = [per_cell(det, flux, t, f"{args.filter} vs {name}",
+                        fail_min_ratio=(FAIL_MIN_RATIO if name == "own-catalog"
+                                        else MIN_PEAK_RATIO))
+               for name, t in truths.items()]
     if args.plot:
         plot_all(results, args.plot)
     any_fail = False
