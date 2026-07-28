@@ -192,14 +192,208 @@ def test_update_offsets_table_refuses_perexposure_on_pervisit_table(tmp_path):
 
 def test_update_offsets_table_refuses_visit_collapse(tmp_path):
     # a correction that lands two visits on the SAME value is the brick-1182
-    # collapse signature -- must refuse to write
+    # collapse signature -- must refuse to write.  ~17" wide, but it is a BULK
+    # tie (exposure=None, module=None) so the magnitude gate lets it through and
+    # the COLLAPSE guard is what fires.
     path = _offsets_csv(tmp_path)
-    with pytest.raises(OffsetsTableUpdateError):
+    with pytest.raises(OffsetsTableUpdateError, match="(?i)collaps"):
         update_offsets_table(path, [dict(
             visit="jw01182004001", exposure=None, module=None,
             filtername="F212N",
             dra_onsky_mas=(1.9 - (-17.5)) * 1000.0 * COSD,
             ddec_onsky_mas=0.0, dec_deg=DEC_TEST)], "m2")
+
+
+def test_update_offsets_table_refuses_oversized_correction(tmp_path):
+    # cloudef 2026-07-28: a +102" ddec correction was applied and then
+    # compounded across re-tie iterations.  A tie correction is mas-scale.
+    path = _offsets_csv(tmp_path)
+    with pytest.raises(OffsetsTableUpdateError, match="exceed"):
+        update_offsets_table(path, [dict(
+            visit="jw01182004001", exposure=1, module="nrcb1",
+            filtername="F212N", dra_onsky_mas=24003.4,
+            ddec_onsky_mas=102339.0, dec_deg=DEC_TEST)], "m2")
+
+
+def test_update_offsets_table_oversized_correction_leaves_table_untouched(tmp_path):
+    # fail BEFORE writing: no mutation, and no backup file left behind
+    path = _offsets_csv(tmp_path)
+    before = open(path).read()
+    with pytest.raises(OffsetsTableUpdateError):
+        update_offsets_table(path, [dict(
+            visit="jw01182004001", exposure=1, module="nrcb1",
+            filtername="F212N", dra_onsky_mas=0.0, ddec_onsky_mas=600.0,
+            dec_deg=DEC_TEST)], "m2")
+    assert open(path).read() == before
+    assert [f for f in os.listdir(tmp_path) if ".pre_m2_" in f] == []
+
+
+def test_update_offsets_table_allows_correction_just_under_ceiling(tmp_path):
+    # 0.4" < 0.5" ceiling -> applies normally (the gate must not be so tight
+    # that a legitimate large-but-plausible tie is blocked)
+    path = _offsets_csv(tmp_path)
+    out = update_offsets_table(path, [dict(
+        visit="jw01182004001", exposure=1, module="nrcb1",
+        filtername="F212N", dra_onsky_mas=0.0, ddec_onsky_mas=400.0,
+        dec_deg=DEC_TEST)], "m2")
+    row = out[(np.array([str(v) for v in out["Visit"]]) == "jw01182004001")
+              & (out["Exposure"] == 1)][0]
+    assert row["ddec"] == pytest.approx(0.5 + 0.4, abs=1e-9)
+
+
+def test_update_offsets_table_ceiling_override(tmp_path, monkeypatch):
+    # a deliberate gross re-authoring at PER-EXPOSURE granularity stays
+    # available, but only via an explicit env override
+    monkeypatch.setenv("ASTROM_MAX_CORRECTION_ARCSEC", "30")
+    path = _offsets_csv(tmp_path)
+    out = update_offsets_table(path, [dict(
+        visit="jw01182004001", exposure=1, module="nrcb1",
+        filtername="F212N", dra_onsky_mas=0.0, ddec_onsky_mas=20000.0,
+        dec_deg=DEC_TEST)], "m2")
+    row = out[(np.array([str(v) for v in out["Visit"]]) == "jw01182004001")
+              & (out["Exposure"] == 1)][0]
+    assert row["ddec"] == pytest.approx(0.5 + 20.0, abs=1e-9)
+
+
+@pytest.mark.parametrize("ddec_arcsec", [4.0, 13.0, 17.0])
+def test_update_offsets_table_allows_gross_guide_star_bulk_tie(tmp_path, ddec_arcsec):
+    # Early-Cycle visits that acquired the WRONG GUIDE STAR are really offset by
+    # arcseconds (~4", ~13", ~17" cases all exist).  Correcting that is the job,
+    # so a per-VISIT BULK tie (exposure=None, module=None) must NOT be blocked by
+    # the mas-scale per-exposure ceiling.
+    path = _offsets_csv(tmp_path)
+    out = update_offsets_table(path, [dict(
+        visit="jw01182004001", exposure=None, module=None, filtername="F212N",
+        dra_onsky_mas=0.0, ddec_onsky_mas=ddec_arcsec * 1000.0,
+        dec_deg=DEC_TEST)], "m2")
+    rows = out[np.array([str(v) for v in out["Visit"]]) == "jw01182004001"]
+    # applied to EVERY exposure of the visit
+    for row in rows:
+        assert row["ddec"] == pytest.approx(0.5 + ddec_arcsec, abs=1e-9)
+
+
+def test_update_offsets_table_refuses_absurd_bulk_tie(tmp_path):
+    # ...but a bulk tie beyond the measure_offset sweep ceiling (60") cannot have
+    # come from a real swept peak
+    path = _offsets_csv(tmp_path)
+    with pytest.raises(OffsetsTableUpdateError, match="exceed"):
+        update_offsets_table(path, [dict(
+            visit="jw01182004001", exposure=None, module=None,
+            filtername="F212N", dra_onsky_mas=0.0, ddec_onsky_mas=102339.0,
+            dec_deg=DEC_TEST)], "m2")
+
+
+@pytest.mark.parametrize("dra,ddec", [
+    (float("nan"), float("nan")), (float("nan"), 0.0), (0.0, float("inf"))])
+def test_update_offsets_table_refuses_nonfinite_correction(tmp_path, dra, ddec):
+    # abs(nan) > limit is False, so a NaN would sail through a naive ceiling and
+    # poison the row -- and assert_offsets_table_sane cannot catch it either
+    # (its collapse comparisons against NaN are all False)
+    path = _offsets_csv(tmp_path)
+    before = open(path).read()
+    with pytest.raises(OffsetsTableUpdateError, match="(?i)non-finite|exceed"):
+        update_offsets_table(path, [dict(
+            visit="jw01182004001", exposure=1, module="nrcb1",
+            filtername="F212N", dra_onsky_mas=dra, ddec_onsky_mas=ddec,
+            dec_deg=DEC_TEST)], "m2")
+    assert open(path).read() == before
+
+
+def _module_less_csv(tmp_path):
+    """sgrc/cloudef shape: per-exposure rows, NO Module column."""
+    rows = [dict(Visit="jw04147012001", Exposure=e, Filter="F115W",
+                 **{"dra (arcsec)": 0.0, "ddec (arcsec)": 0.0}) for e in (1, 2)]
+    path = str(tmp_path / "Offsets_JWST_Brick4147_VIRAC2locked.csv")
+    Table(rows).write(path, overwrite=True)
+    return path
+
+
+def test_update_offsets_table_refuses_multimodule_on_moduleless_table(tmp_path):
+    # 8 detectors x +0.4" each is legal per-correction but sums to +3.2" on one
+    # row -- the cloudef mechanism, invisible to the magnitude ceiling
+    path = _module_less_csv(tmp_path)
+    before = open(path).read()
+    corr = [dict(visit="jw04147012001", exposure=1, module=m,
+                 filtername="F115W", dra_onsky_mas=0.0, ddec_onsky_mas=400.0,
+                 dec_deg=DEC_TEST)
+            for m in ("nrca1", "nrca2", "nrca3", "nrca4",
+                      "nrcb1", "nrcb2", "nrcb3", "nrcb4")]
+    with pytest.raises(OffsetsTableUpdateError, match="(?i)more than one module"):
+        update_offsets_table(path, corr, "m2")
+    assert open(path).read() == before
+
+
+def test_update_offsets_table_single_module_on_moduleless_table_ok(tmp_path):
+    # one module per (visit, filter, exposure) maps 1:1 -> still allowed
+    path = _module_less_csv(tmp_path)
+    out = update_offsets_table(path, [dict(
+        visit="jw04147012001", exposure=1, module="nrcb1", filtername="F115W",
+        dra_onsky_mas=0.0, ddec_onsky_mas=400.0, dec_deg=DEC_TEST)], "m2")
+    assert out[out["Exposure"] == 1][0]["ddec (arcsec)"] == pytest.approx(0.4)
+
+
+def test_update_offsets_table_refuses_cumulative_drift(tmp_path, monkeypatch):
+    # Legal-sized corrections applied repeatedly must not creep without bound:
+    # each +0.4" is under the 0.5" per-correction ceiling, so only the
+    # cumulative prov_* bound can catch the runaway.  Lower that bound rather
+    # than looping 150x to reach the 60" default.
+    monkeypatch.setenv("ASTROM_MAX_BULK_CORRECTION_ARCSEC", "2")
+    path = _module_less_csv(tmp_path)
+    corr = [dict(visit="jw04147012001", exposure=1, module="nrcb1",
+                 filtername="F115W", dra_onsky_mas=0.0, ddec_onsky_mas=400.0,
+                 dec_deg=DEC_TEST)]
+    applied = 0
+    for _ in range(20):             # 0.4" each -> trips once past 2"
+        try:
+            update_offsets_table(path, corr, "m2", backup=False)
+            applied += 1
+        except OffsetsTableUpdateError as ex:
+            assert "accumulated" in str(ex)
+            break
+    else:
+        pytest.fail("cumulative drift was never bounded")
+    # tripped only AFTER the bound was genuinely exceeded, not before
+    assert applied == 5, f"expected 5 applies (5 x 0.4\" = 2.0\"), got {applied}"
+
+
+def test_update_offsets_table_rejects_bad_env_limit(tmp_path, monkeypatch):
+    # a 0/negative/garbage ceiling must be a clear config error, not a gate that
+    # silently refuses every correction
+    path = _offsets_csv(tmp_path)
+    corr = [dict(visit="jw01182004001", exposure=1, module="nrcb1",
+                 filtername="F212N", dra_onsky_mas=1.0, ddec_onsky_mas=0.0,
+                 dec_deg=DEC_TEST)]
+    for bad in ("0", "-1", "abc"):
+        monkeypatch.setenv("ASTROM_MAX_CORRECTION_ARCSEC", bad)
+        with pytest.raises(OffsetsTableUpdateError, match="(?i)positive|not a number"):
+            update_offsets_table(path, corr, "m2")
+    # whitespace means UNSET, not an error
+    monkeypatch.setenv("ASTROM_MAX_CORRECTION_ARCSEC", "   ")
+    update_offsets_table(path, corr, "m2")
+
+
+def test_update_offsets_table_accepts_generator(tmp_path):
+    # the checks iterate corrections before the apply loop; a generator would be
+    # consumed by them and the update would silently write an unchanged table
+    path = _offsets_csv(tmp_path)
+    corr = (dict(visit="jw01182004001", exposure=1, module="nrcb1",
+                 filtername="F212N", dra_onsky_mas=0.0, ddec_onsky_mas=100.0,
+                 dec_deg=DEC_TEST) for _ in range(1))
+    out = update_offsets_table(path, corr, "m2")
+    row = out[(np.array([str(v) for v in out["Visit"]]) == "jw01182004001")
+              & (out["Exposure"] == 1)][0]
+    assert row["ddec"] == pytest.approx(0.5 + 0.1, abs=1e-9)
+
+
+def test_update_offsets_table_perexposure_ceiling_unaffected_by_bulk_limit(tmp_path):
+    # the loose BULK limit must not leak onto per-exposure corrections: cloudef's
+    # +102" runaway was written to a per-EXPOSURE row, and stays blocked
+    path = _offsets_csv(tmp_path)
+    with pytest.raises(OffsetsTableUpdateError, match="exceed"):
+        update_offsets_table(path, [dict(
+            visit="jw01182004001", exposure=1, module="nrcb1",
+            filtername="F212N", dra_onsky_mas=0.0, ddec_onsky_mas=4000.0,
+            dec_deg=DEC_TEST)], "m2")
 
 
 # ---------------------------------------------------------------------------
