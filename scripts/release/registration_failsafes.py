@@ -47,6 +47,16 @@ MX = 2.5 * u.arcsec              # pair-separation search radius (recovers offse
 XBIN = 0.04                      # arcsec, offset-histogram bin
 MIN_PAIRS = 80                   # pairs needed in a cell to attempt a peak
 MIN_PEAK_RATIO = 5.0             # peak/background below this -> cell UNVERIFIED (not a fail)
+FAIL_MIN_RATIO = 10.0            # a FAIL needs peak/background >= this -- CONFIDENT contrast,
+                                 # not just the verify floor. A real localized seam doubles
+                                 # stars into a SHARP secondary peak (the clean brick cells
+                                 # verify at median contrast ~18); a floor-level peak
+                                 # (ratio ~ MIN_PEAK_RATIO) at a large offset is dense-field
+                                 # wrong-pair noise in a crowded, few-detection cell, not a
+                                 # seam (brick F405N: 7 bright-star cells at 80 mas / peak_bg
+                                 # 5-8 were a FALSE own_catalog FAIL; the same-star m7 check
+                                 # of those regions read <=22 mas, 2026-07). Coverage is
+                                 # unchanged (no detections removed); only the fail bar rises.
 OFF_MAX = 60.0                   # a VERIFIED cell whose peak offset exceeds this (mas) -> FAIL
 
 
@@ -126,15 +136,27 @@ def per_cell(det, flux, truth, label, bright_pct=None):
         off[i0, j0] = np.hypot(dcen, ecen)
 
     verified = np.isfinite(ratio) & (ratio >= MIN_PEAK_RATIO) & (npair >= MIN_PAIRS)
-    fail = verified & (off > OFF_MAX)
+    # A FAIL requires a large offset AND confident contrast. A real localized seam
+    # doubles stars into a sharp high-contrast peak; a bright-star-crowded, sparse
+    # cell yields a floor-level peak (ratio ~ MIN_PEAK_RATIO) at a spurious offset.
+    # Sub-FAIL_MIN_RATIO high-offset cells stay verified-but-not-failed (reported).
+    fail = verified & (off > OFF_MAX) & (ratio >= FAIL_MIN_RATIO)
+    # High offset but sub-FAIL_MIN_RATIO contrast: NOT a fail, but reported so a real
+    # low-contrast issue is never silently hidden by the margin.
+    unconfident = verified & (off > OFF_MAX) & (ratio < FAIL_MIN_RATIO)
     worst = [dict(ra=float((xe[i] + xe[i + 1]) / 2), dec=float((ye[j] + ye[j + 1]) / 2),
                   offset_mas=round(float(off[i, j]), 0), peak_bg=round(float(ratio[i, j]), 1),
                   npairs=int(npair[i, j]))
              for i, j in sorted(zip(*np.where(fail)), key=lambda c: -off[c])][:8]
+    unconfident_cells = [dict(ra=float((xe[i] + xe[i + 1]) / 2), dec=float((ye[j] + ye[j + 1]) / 2),
+                              offset_mas=round(float(off[i, j]), 0), peak_bg=round(float(ratio[i, j]), 1))
+                         for i, j in sorted(zip(*np.where(unconfident)), key=lambda c: -off[c])][:8]
     return dict(label=label, verified_cells=int(verified.sum()),
                 unverified_cells=int((npair >= MIN_PAIRS).sum() - verified.sum()),
                 median_verified_offset_mas=round(float(np.nanmedian(off[verified])), 1) if verified.any() else None,
                 n_fail=int(fail.sum()), PASS=bool(fail.sum() == 0), worst=worst,
+                n_unconfident_highoff=int(unconfident.sum()),
+                unconfident_highoff_cells=unconfident_cells,
                 _g=(off, verified, (xe, ye)))
 
 
