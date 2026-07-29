@@ -5,11 +5,15 @@ extension) and a fitted ``RA---TAN-SIP`` approximation of it (SCI header).
 Building an ``astropy.wcs.WCS`` from a per-exposure SCI header therefore silently
 substitutes the approximation for the truth:
 
-* forward, the fit residual -- 5-8 mas, position-dependent and different per
-  detector *and* per filter, on every frame written before the tight-fit change;
-* inverse, a *separate* fitted polynomial that is up to 176 millipixels off and
-  **raises ``NoConvergence``** off-footprint (the failure that aborted the whole
-  W51 m8 forced fill).
+* the fit residual -- 5-8 mas, position-dependent and different per detector
+  *and* per filter, on every frame written before the tight-fit change.  (In
+  pixels that same residual is up to ~165 millipixels; SIP's own forward->inverse
+  round trip closes to 0.000 mpix, so it is one error seen in two units, not
+  two.)
+* off-footprint, the iterative SIP inverse either **raises ``NoConvergence``**
+  (the failure that aborted the whole W51 m8 forced fill) or, with
+  ``quiet=True``, returns **finite garbage with no warning** -- which propagates
+  into a catalog instead of stopping the run.  The GWCS returns ``NaN``.
 
 Read the GWCS instead::
 

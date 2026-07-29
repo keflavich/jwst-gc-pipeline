@@ -3314,6 +3314,9 @@ def _stamp_catalog_provenance(path, stage, options, parent_paths=None):
     (missing package, bad file, unknown stage, unreadable parent sidecar) is
     swallowed.
     """
+    # WCS-source card first: it must not depend on the versioning package being
+    # importable, because it is what identifies a catalog as GWCS- or SIP-built.
+    _stamp_wcs_source(path)
     try:
         from jwst_gc_pipeline.versioning import stamping as _vstamp
         from jwst_gc_pipeline.versioning import fingerprint as _vfp
@@ -3333,6 +3336,29 @@ def _stamp_catalog_provenance(path, stage, options, parent_paths=None):
         except (OSError, ValueError, KeyError):
             upstream = None
     _vstamp.try_stamp_catalog(path, stage, params=params, upstream=upstream)
+
+
+def _stamp_wcs_source(path):
+    """Record whether this product's positions came from GWCSes or from SIP.
+
+    Catalogs built before the GWCS-first change carry NO ``WCSSRC`` card, so its
+    presence-and-value is what makes a catalog self-identifying across that
+    change.  Without it the only discriminator is the build date, which is
+    exactly what should not be relied on at staging time -- positions moved by
+    up to ~5-8 mas (position-dependent, per detector and per filter).
+
+    FAIL-SOFT, like the sidecar stamping above: provenance never breaks
+    cataloging.
+    """
+    from astropy.io import fits as _fits
+
+    from jwst_gc_pipeline.frame_wcs import wcs_provenance_cards
+    try:
+        with _fits.open(path, mode='update') as _h:
+            for _k, _v, _c in wcs_provenance_cards():
+                _h[0].header[_k] = (_v, _c)
+    except (OSError, KeyError, IndexError, ValueError):
+        return
 
 
 def _run_crossfilter_astrom_checkpoint(vetted_paths_by_filter, cut_bp, basepath,

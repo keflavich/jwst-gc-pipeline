@@ -14,21 +14,42 @@ Every JWST detector-frame product carries two WCS representations:
 SIP cannot represent the JWST distortion; it can only fit it.  Both directions
 of the fit carry error:
 
-* **forward** (``all_pix2world``): the fit residual.  With the tight fit this
-  package now writes it is ~0.00 mas; on every frame written before that fix it
-  is 5-8 mas, position-dependent and different per detector *and* per filter --
-  i.e. exactly the shape of error the astrometric gates are looking for
-  (2 mas m2 consensus, 5 mas m7 cross-filter, 30 mas overlap).
-* **inverse** (``all_world2pix``): SIP's inverse is a *separate* fitted
-  polynomial (``AP_*``/``BP_*``) refined by an iterative solver.  Measured on a
-  brick ``_crf``: up to 176 millipixels of error, and it **raises
-  ``NoConvergence``** for positions outside the frame -- the failure that
-  aborted the whole W51 m8 fill (#187).
+**1. The fit residual.**  ``all_pix2world`` through the SIP header differs from
+the GWCS by, on a brick F182M nrca1 ``_crf`` (20k random pixels), a median of
+0.82 mas and a max of 5.1 mas -- equivalently 26 and 165 **millipixels** at the
+31.2 mas/px SW plate scale.  Those are the *same* number in two units, not two
+separate defects: SIP's own forward->inverse round trip closes to 0.000
+millipixels, so the ``AP_*``/``BP_*`` inverse fit and its solver add nothing
+measurable.  There is one error -- the degree of the polynomial -- and it shows
+up in whichever direction you look.
 
-The GWCS has neither problem.  Measured on the same frames: inverse exact to
-<1 millipixel, and out-of-footprint positions return ``NaN`` (bounding box)
-rather than raising.  It is also no slower -- 50k transforms took 11 ms
-(GWCS) vs 7 ms (SIP) forward, and 14 ms vs 14 ms inverse.
+It is position-dependent and a different surface per detector *and* per filter,
+so no bulk tie removes it; that is exactly the shape of error the astrometric
+gates look for (2 mas m2 consensus, 5 mas m7 cross-filter, 30 mas overlap).
+With the tight fit this package now writes, the residual is ~0.00 mas; on every
+frame written before that fix it is 5-8 mas.
+
+**2. Off-footprint behaviour -- genuinely independent, and worse than a crash.**
+SIP's inverse is solved iteratively and diverges outside the frame.  What
+happens then depends on the call path, and none of the three is safe:
+
+===========================================  ==========================================
+call                                         result for a point ~2 deg off-frame
+===========================================  ==========================================
+``all_world2pix(ra, dec, 0)``                raises ``NoConvergence`` (the W51 m8 abort)
+``all_world2pix(ra, dec, 0, quiet=True)``    returns ``[-5438745, -123680]`` -- **finite
+                                             garbage, with no warning at all**
+``world_to_pixel(skycoord)``                 same finite garbage, with a warning
+===========================================  ==========================================
+
+The silent finite value is the dangerous one: it propagates into a catalog
+instead of stopping the run.  The GWCS returns ``NaN`` on all paths -- the
+correct sentinel, which the callers' in-bounds tests already drop.
+
+**Cost.**  Not a wash in the way you might guess: forward, GWCS is ~1.3x slower
+(50k transforms, best of 7: 8.4 ms vs 6.4 ms); inverse, GWCS is ~1.1x *faster*
+(14.0 ms vs 15.7 ms), because the analytic inverse beats SIP's iterative solve.
+Absolute numbers vary with machine load; the directions are stable.
 
 So: **read the GWCS wherever it exists.**  The SIP header is for display and
 for external tools.
@@ -59,7 +80,8 @@ import numpy as np
 from astropy.io import fits
 from astropy import wcs as astropy_wcs
 
-__all__ = ['FrameWCS', 'frame_wcs', 'gwcs_from_file', 'has_gwcs']
+__all__ = ['FrameWCS', 'frame_wcs', 'gwcs_from_file', 'has_gwcs',
+           'wcs_provenance_cards', 'MissingGwcsWarning', 'SlicedFrameWCSWarning']
 
 #: Set to '0' to fall back to the FITS/SIP WCS everywhere (debugging only --
 #: it reinstates the 5-8 mas forward error and the NoConvergence failure mode).
@@ -68,6 +90,42 @@ _USE_GWCS = os.environ.get('FRAME_WCS_USE_GWCS', '1') != '0'
 
 class MissingGwcsWarning(UserWarning):
     """A detector-frame product had no GWCS, so the SIP approximation was used."""
+
+
+class SlicedFrameWCSWarning(UserWarning):
+    """A FrameWCS was sliced, degrading it to the FITS/SIP approximation."""
+
+
+#: Run-level tally of how frame WCSes actually resolved, so a product can record
+#: whether it was built by reading GWCSes or fell back to SIP anywhere.  See
+#: :func:`wcs_provenance_cards`.
+_RESOLUTION_TALLY = {'gwcs': 0, 'sip': 0}
+
+
+def wcs_provenance_cards():
+    """FITS cards recording how this process resolved its frame WCSes.
+
+    A catalog built before the GWCS-first change carries **no** ``WCSSRC`` card
+    at all, so the card's presence-and-value is what makes a product
+    self-identifying across the change (the alternative -- inferring it from the
+    build date -- is exactly what we do not want at staging time).
+
+    ``('WCSSRC', 'GWCS'|'FITS-SIP'|'MIXED'|'NONE')`` plus the fallback count.
+    """
+    n_g, n_s = _RESOLUTION_TALLY['gwcs'], _RESOLUTION_TALLY['sip']
+    if n_g and n_s:
+        src = 'MIXED'
+    elif n_g:
+        src = 'GWCS'
+    elif n_s:
+        src = 'FITS-SIP'
+    else:
+        src = 'NONE'
+    return [
+        ('WCSSRC', src, 'frame WCS source used to build this product'),
+        ('WCSNGW', n_g, 'frames whose GWCS was read'),
+        ('WCSNSIP', n_s, 'frames that fell back to the SIP approximation'),
+    ]
 
 
 def _sip_wcs_from_header(header):
@@ -85,18 +143,33 @@ def _sip_wcs_from_header(header):
 _GWCS_CACHE = {}
 
 
-def _bbox_center(gw):
-    """Mid-point of ``gw``'s bounding box, or None if it has none."""
+def _bbox_intervals(gw):
+    """``gw``'s bounding box as [(lo, hi), (lo, hi)], or None."""
     bb = getattr(gw, 'bounding_box', None)
     if bb is None:
         return None
     try:
-        intervals = [tuple(iv) for iv in bb]
-    except TypeError:
+        intervals = [(float(lo), float(hi)) for lo, hi in bb]
+    except (TypeError, ValueError):
         return None
-    if len(intervals) != 2:
+    return intervals if len(intervals) == 2 else None
+
+
+def _bbox_center(gw):
+    """Mid-point of ``gw``'s bounding box, or None if it has none."""
+    intervals = _bbox_intervals(gw)
+    if intervals is None:
         return None
-    return tuple(0.5 * (float(lo) + float(hi)) for lo, hi in intervals)
+    return tuple(0.5 * (lo + hi) for lo, hi in intervals)
+
+
+def _bbox_center_and_extent(gw):
+    """``(nx, ny)`` implied by ``gw``'s bounding box, or None."""
+    intervals = _bbox_intervals(gw)
+    if intervals is None:
+        return None
+    (x0, x1), (y0, y1) = intervals
+    return (x1 - x0), (y1 - y0)
 
 
 def gwcs_from_file(filename, use_cache=True):
@@ -223,8 +296,45 @@ class FrameWCS:
                         filename=self.filename)
 
     def __getitem__(self, item):
-        # astropy slicing cannot carry a GWCS; degrade explicitly.
+        # astropy slicing cannot carry a GWCS, so a sliced FrameWCS silently
+        # becomes a SIP WCS again.  Warn rather than leave "only used for
+        # display" enforced by convention alone.
+        warnings.warn(
+            f"slicing a FrameWCS{' (' + os.path.basename(self.filename) + ')' if self.filename else ''} "
+            f"returns a plain FITS/SIP WCS -- astropy's slicing machinery "
+            f"cannot carry a GWCS. Positions from the slice carry the SIP fit "
+            f"residual. Use it for display/cutout bookkeeping only; for "
+            f"astrometry slice the pixel coordinates instead and transform "
+            f"with the unsliced FrameWCS.", SlicedFrameWCSWarning, stacklevel=2)
         return self._fits[item]
+
+    def calc_footprint(self, header=None, undistort=True, axes=None, center=True):
+        """Sky corners from the **GWCS**, so the footprint and the transforms
+        agree.
+
+        Delegating this to the FITS WCS would leave a FrameWCS whose
+        ``pixel_to_world`` and whose ``calc_footprint`` come from *different*
+        representations, differing by the SIP fit residual -- harmless for
+        footprint-intersection gating, but it looks exactly like a bug to
+        whoever eventually compares a footprint corner against a transformed
+        corner.  Falls back to the FITS WCS when the array extent is unknown.
+        """
+        if axes is not None:
+            nx, ny = float(axes[0]), float(axes[1])
+        else:
+            bb = _bbox_center_and_extent(self._gwcs)
+            if bb is None:
+                return self._fits.calc_footprint(header=header,
+                                                 undistort=undistort,
+                                                 axes=axes, center=center)
+            nx, ny = bb
+        # astropy's convention: corners of the array, `center` selects whether
+        # they are pixel centres (0..n-1) or outer edges (-0.5..n-0.5).
+        lo, hix, hiy = (0.0, nx - 1.0, ny - 1.0) if center else (-0.5, nx - 0.5, ny - 0.5)
+        xs = np.array([lo, lo, hix, hix])
+        ys = np.array([lo, hiy, hiy, lo])
+        ra, dec = self._gwcs(xs, ys)
+        return np.column_stack([ra, dec])
 
     # -- pixel -> world ---------------------------------------------------
     def pixel_to_world(self, *args, **kwargs):
@@ -322,6 +432,7 @@ def frame_wcs(source, ext='SCI', *, require_gwcs=False, warn_missing=True):
         gw = gwcs_from_file(filename)
 
     if gw is None:
+        _RESOLUTION_TALLY['sip'] += 1
         msg = (f"no GWCS available for {filename or 'this HDUList'}; falling "
                f"back to the FITS/SIP approximation. SIP is a fitted "
                f"approximation of the true distortion -- positions carry its "
@@ -333,4 +444,5 @@ def frame_wcs(source, ext='SCI', *, require_gwcs=False, warn_missing=True):
             warnings.warn(msg, MissingGwcsWarning)
         return sip
 
+    _RESOLUTION_TALLY['gwcs'] += 1
     return FrameWCS(gw, sip, filename=filename)

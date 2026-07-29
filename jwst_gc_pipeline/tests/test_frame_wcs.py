@@ -7,7 +7,8 @@ from astropy.io import fits
 from astropy.coordinates import SkyCoord
 from astropy import units as u
 
-from jwst_gc_pipeline.frame_wcs import (FrameWCS, MissingGwcsWarning, frame_wcs)
+from jwst_gc_pipeline.frame_wcs import (FrameWCS, MissingGwcsWarning,
+                                        SlicedFrameWCSWarning, frame_wcs)
 from jwst_gc_pipeline.reduction.fits_wcs_sync import sip_header_from_gwcs
 from jwst_gc_pipeline.reduction.tests.test_fits_wcs_sync import _distorted_gwcs
 
@@ -103,8 +104,9 @@ def test_transforms_use_the_gwcs_not_the_sip_header(frame):
 
 
 def test_inverse_is_exact_and_returns_nan_off_footprint(frame):
-    """SIP's inverse is a separate fit that can miss by >0.1 px and raises
-    NoConvergence off-frame (the #187 m8 abort). The GWCS inverse does neither."""
+    """Off-footprint, SIP either raises NoConvergence (the #187 m8 abort) or --
+    with quiet=True -- returns finite garbage silently. The GWCS returns NaN,
+    which the callers' in-bounds tests already drop."""
     g, ww = frame
     x, y = _xy()
     ra, dec = g(x, y)
@@ -158,14 +160,66 @@ def test_world_to_pixel_skycoord(frame):
 
 
 def test_non_transform_attributes_delegate_to_the_fits_wcs(frame):
-    """`.wcs.crval`, pixel scales, footprint, to_header, slicing must keep working."""
+    """`.wcs.crval`, pixel scales, to_header must keep working."""
     _, ww = frame
     assert len(ww.wcs.crval) == 2
     assert ww.proj_plane_pixel_area() > 0
-    assert ww.calc_footprint(axes=SHAPE[::-1]).shape == (4, 2)
     assert 'CTYPE1' in ww.to_header(relax=True)
+
+
+def test_footprint_comes_from_the_gwcs_like_the_transforms(frame):
+    """A FrameWCS whose transforms and whose footprint came from DIFFERENT
+    representations would disagree by the SIP residual -- harmless for
+    footprint gating, but it looks exactly like a bug to whoever compares a
+    footprint corner against a transformed corner."""
+    g, ww = frame
+    ny, nx = SHAPE
+    corners = ww.calc_footprint(axes=(nx, ny))
+    assert corners.shape == (4, 2)
+
+    # every footprint corner must equal pixel_to_world of that same corner
+    xs = np.array([0.0, 0.0, nx - 1.0, nx - 1.0])
+    ys = np.array([0.0, ny - 1.0, ny - 1.0, 0.0])
+    ra_t, dec_t = g(xs, ys)
+    sep = np.hypot((corners[:, 0] - ra_t) * np.cos(np.radians(dec_t)),
+                   corners[:, 1] - dec_t) * 3.6e6
+    assert sep.max() < 1e-6, sep
+
+    # and it must actually differ from the SIP footprint, or the test is vacuous
+    sip_corners = ww.fits_wcs.calc_footprint(axes=(nx, ny))
+    dsip = np.hypot((corners[:, 0] - sip_corners[:, 0]) * np.cos(np.radians(dec_t)),
+                    corners[:, 1] - sip_corners[:, 1]) * 3.6e6
+    assert dsip.max() > 0.1, dsip
+
+
+def test_slicing_warns_before_degrading_to_sip(frame):
+    """Slicing silently returned a SIP WCS; 'display only' was enforced by
+    convention rather than by the code."""
     from astropy import wcs as awcs
-    assert isinstance(ww[0:10, 0:10], awcs.WCS)   # slicing degrades, documented
+    _, ww = frame
+    with pytest.warns(SlicedFrameWCSWarning):
+        sliced = ww[0:10, 0:10]
+    assert isinstance(sliced, awcs.WCS) and not isinstance(sliced, FrameWCS)
+
+
+def test_wcs_provenance_cards_distinguish_gwcs_from_sip(tmp_path, monkeypatch):
+    """A catalog must be self-identifying as GWCS- or SIP-built; before this
+    change the only discriminator was the build date."""
+    import jwst_gc_pipeline.frame_wcs as fw
+
+    monkeypatch.setattr(fw, '_RESOLUTION_TALLY', {'gwcs': 0, 'sip': 0})
+    assert dict((k, v) for k, v, _ in fw.wcs_provenance_cards())['WCSSRC'] == 'NONE'
+
+    fw._RESOLUTION_TALLY['gwcs'] = 12
+    cards = dict((k, v) for k, v, _ in fw.wcs_provenance_cards())
+    assert cards['WCSSRC'] == 'GWCS' and cards['WCSNGW'] == 12 and cards['WCSNSIP'] == 0
+
+    fw._RESOLUTION_TALLY['sip'] = 3
+    cards = dict((k, v) for k, v, _ in fw.wcs_provenance_cards())
+    assert cards['WCSSRC'] == 'MIXED' and cards['WCSNSIP'] == 3
+
+    fw._RESOLUTION_TALLY['gwcs'] = 0
+    assert dict((k, v) for k, v, _ in fw.wcs_provenance_cards())['WCSSRC'] == 'FITS-SIP'
 
 
 def test_missing_gwcs_falls_back_with_a_warning(tmp_path):
