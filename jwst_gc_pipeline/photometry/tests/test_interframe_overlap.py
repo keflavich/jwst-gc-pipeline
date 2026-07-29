@@ -277,3 +277,126 @@ def test_unrelated_populations_in_shared_footprint_are_unmeasurable():
     # what is FORBIDDEN is a >tol FAIL fabricated from noise
     bad = [] if pair["clean"] or pair["could_not_verify"] else [pair]
     assert pair["ok"] is True, bad
+
+
+# ---------------------------------------------------------------------------
+# (3) dense-overlap SAME-STAR fallback (samestar_overlap_offset) + its
+#     anti-collapse guard.  For a huge dense overlap (brick SW modules: ~2.4M
+#     detections, ~46k true counterparts) the pooled histogram peak is defeated
+#     by the wrong-pair background and reads "not measurable", yet the true tie
+#     is ~11 mas -- the matched-pair median recovers it, but ONLY when the tie
+#     is certified small (matches genuinely tight), so a gross offset can never
+#     be laundered into a false ~0.
+# ---------------------------------------------------------------------------
+from jwst_gc_pipeline.photometry import interframe_overlap as _ifo
+from jwst_gc_pipeline.photometry.interframe_overlap import samestar_overlap_offset
+
+
+def test_samestar_recovers_small_dense_offset():
+    ra, dec = _field(n=6000, seed=20)
+    a = SkyCoord(ra * u.deg, dec * u.deg)
+    r2, d2 = _shift(ra, dec, 12.0, -5.0)   # 13 mas true tie
+    b = SkyCoord(r2 * u.deg, d2 * u.deg)
+    ss = samestar_overlap_offset(a, b, min_pairs=200)
+    assert ss is not None
+    assert ss["n_pairs"] > 2000
+    assert abs(ss["dra_mas"] - 12.0) < 2.0
+    assert abs(ss["ddec_mas"] + 5.0) < 2.0
+    assert abs(ss["off_mas"] - 13.0) < 2.0
+
+
+def test_samestar_refuses_gross_offset_no_collapse():
+    """A 2" rigid offset has NO true counterpart within the 0.3" radius -- the
+    guard must REFUSE (return None), never collapse to a false ~0 tie."""
+    ra, dec = _field(n=6000, seed=21)
+    a = SkyCoord(ra * u.deg, dec * u.deg)
+    r2, d2 = _shift(ra, dec, 2000.0, 0.0)  # 2 arcsec -- gross
+    b = SkyCoord(r2 * u.deg, d2 * u.deg)
+    assert samestar_overlap_offset(a, b, min_pairs=200) is None
+
+
+def test_samestar_refuses_unrelated_populations():
+    ra1, dec1 = _field(n=6000, seed=22)
+    ra2, dec2 = _field(n=6000, seed=23)  # independent stars, same footprint
+    a = SkyCoord(ra1 * u.deg, dec1 * u.deg)
+    b = SkyCoord(ra2 * u.deg, dec2 * u.deg)
+    assert samestar_overlap_offset(a, b, min_pairs=200) is None
+
+
+def test_grid_samestar_fallback_rescues_when_histogram_not_measurable(monkeypatch):
+    """Force the histogram layer to read 'not measurable' (as it does on the
+    real 2.4M-detection SW overlap); a small dense tie must then be rescued by
+    the same-star fallback (could_not_verify=False, ok=True)."""
+    monkeypatch.setattr(_ifo, "measure_offset",
+                        lambda *a, **k: dict(dra=0.0, ddec=0.0, off=0.0,
+                                             contrast=1.0, n_peak=0, ok=False,
+                                             swept=False, window_arcsec=None))
+    ra, dec = _field(n=6000, seed=24)
+    a = SkyCoord(ra * u.deg, dec * u.deg)
+    r2, d2 = _shift(ra, dec, 10.0, -6.0)   # 12 mas
+    b = SkyCoord(r2 * u.deg, d2 * u.deg)
+    res = overlap_offset_grid({"a": a, "b": b}, tol_mas=30.0, maxsep=1 * u.arcsec)
+    r = res[0]
+    assert r["could_not_verify"] is False
+    assert r["ok"] is True
+    assert r["pooled"].get("samestar") is True
+    assert r["pooled_off_mas"] < 30.0
+    # A pooled-only pass MUST be distinguishable from a per-cell-verified one, so
+    # the release gate can require external-refcat corroboration (PR #184 arbiter)
+    # for it rather than trusting a field-wide median that cannot see a localized
+    # sub-region seam.
+    assert r["samestar_only"] is True
+    assert r.get("n_pairs", 0) > 0
+
+
+def test_per_cell_pass_is_not_flagged_samestar_only():
+    """A pair whose per-cell coverage layer measures it (the normal path) must NOT
+    carry the samestar_only marker -- the flag distinguishes ONLY pooled-only passes."""
+    ra, dec = _field(n=6000, seed=27)
+    a = SkyCoord(ra * u.deg, dec * u.deg)
+    r2, d2 = _shift(ra, dec, 5.0, -3.0)
+    b = SkyCoord(r2 * u.deg, d2 * u.deg)
+    res = overlap_offset_grid({"a": a, "b": b}, tol_mas=30.0, nx=8, ny=8,
+                              maxsep=1 * u.arcsec)
+    r = res[0]
+    assert r["ok"] is True
+    assert r["samestar_only"] is False
+
+
+def test_grid_samestar_fallback_runs_despite_gross_unconfirmed_peak(monkeypatch):
+    """Real brick F182M: the dense histogram returns a SPURIOUS coherent peak
+    (ok=True, ~140 mas) that fails narrow-window confirmation (not measurable).
+    The fallback must NOT be gated off by that bias peak -- the same-star
+    anti-collapse guard, not the histogram, decides -- so a true ~12 mas tie is
+    still recovered and PASSES."""
+    monkeypatch.setattr(_ifo, "measure_offset",
+                        lambda *a, **k: dict(dra=100.0, ddec=100.0, off=141.0,
+                                             contrast=6.0, n_peak=50, ok=True,
+                                             swept=True, window_arcsec=3.0))
+    ra, dec = _field(n=6000, seed=26)
+    a = SkyCoord(ra * u.deg, dec * u.deg)
+    r2, d2 = _shift(ra, dec, 10.0, -6.0)   # true tie 12 mas
+    b = SkyCoord(r2 * u.deg, d2 * u.deg)
+    res = overlap_offset_grid({"a": a, "b": b}, tol_mas=30.0, maxsep=1 * u.arcsec)
+    r = res[0]
+    assert r["could_not_verify"] is False
+    assert r["ok"] is True
+    assert r["pooled"].get("samestar") is True
+
+
+def test_grid_samestar_fallback_fails_a_real_seam(monkeypatch):
+    """Same forced-not-measurable path, but a 45 mas dense tie (> 30 tol) must
+    FAIL via the same-star fallback -- the rescue is NOT a blanket pass."""
+    monkeypatch.setattr(_ifo, "measure_offset",
+                        lambda *a, **k: dict(dra=0.0, ddec=0.0, off=0.0,
+                                             contrast=1.0, n_peak=0, ok=False,
+                                             swept=False, window_arcsec=None))
+    ra, dec = _field(n=6000, seed=25)
+    a = SkyCoord(ra * u.deg, dec * u.deg)
+    r2, d2 = _shift(ra, dec, 45.0, 0.0)    # 45 mas -- a real seam
+    b = SkyCoord(r2 * u.deg, d2 * u.deg)
+    res = overlap_offset_grid({"a": a, "b": b}, tol_mas=30.0, maxsep=1 * u.arcsec)
+    r = res[0]
+    assert r["could_not_verify"] is False
+    assert r["ok"] is False
+    assert r["fail_reason"] and "same-star" in r["fail_reason"]

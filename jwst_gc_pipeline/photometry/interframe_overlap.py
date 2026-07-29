@@ -145,6 +145,63 @@ def _confirm_tie(a, b, cand_dra_mas, cand_ddec_mas, min_pairs, n_close):
     return m2
 
 
+def samestar_overlap_offset(a, b, match_radius=0.3 * u.arcsec, min_pairs=200,
+                            chance_frac=1.0 / 3.0, context=""):
+    """Reference-free SAME-STAR mutual offset for a DENSE overlap.
+
+    The offset-HISTOGRAM (``measure_offset``) is density-immune to
+    nearest-neighbour collapse but its peak is defeated by the wrong-pair
+    background of a VERY dense, VERY overlapping population -- the brick SW
+    module overlaps pool ~2.4M detections per module and share ~46k true
+    counterparts, yet the pooled histogram peak holds too small a fraction to
+    clear the contrast/n_peak floor, so the pair reads ``not measurable`` even
+    though the true tie is ~11 mas.  Once the tie is known to be SMALL, the
+    matched-pair (same-star) median IS the sanctioned precise instrument
+    (CLAUDE.md; the single-cell case of :func:`local_residual_map`).
+
+    DENSITY-IMMUNE anti-COLLAPSE guard (this is what makes same-star safe here,
+    and is why a raw dense NN-median is otherwise banned): mutual-NN pairs the
+    RIGHT star only when the true offset is already smaller than the match
+    radius.  We CERTIFY that intrinsically from the matches themselves -- the
+    median nearest-neighbour separation must be ``< match_radius * chance_frac``
+    (radius/3).  If the true offset exceeded the radius there would be no true
+    counterparts; matches would be chance associations spread to ~0.7*radius
+    (>> radius/3) and this guard REFUSES -- so a gross rigid offset (the
+    brick-1182 v001 ~20" class) can NEVER be laundered into a false ~0 tie.  A
+    gross offset is independently caught by the swept histogram upstream; this
+    fallback only ever runs when that found no coherent above-tolerance peak.
+
+    Returns ``None`` when the tie cannot be certified small (too few matches, or
+    matches at chance level), else
+    ``dict(off_mas, dra_mas, ddec_mas, n_pairs, med_sep_mas)``.
+    """
+    radius_arcsec = (match_radius.to(u.arcsec).value
+                     if hasattr(match_radius, "to") else float(match_radius))
+    ia, ib, sep, _ = search_around_sky(a, b, match_radius)
+    if len(ia) < min_pairs:
+        return None
+    # nearest b per a-source (same lexsort/first pattern local_residual_map and
+    # the fine-grid chance guard use): keeps each a's closest counterpart
+    order = np.lexsort((sep.arcsec, ia))
+    first = np.concatenate(([True], ia[order][1:] != ia[order][:-1]))
+    ia_m = ia[order][first]
+    ib_m = ib[order][first]
+    sep_m = sep.arcsec[order][first]
+    if len(ia_m) < min_pairs:
+        return None
+    med_sep_mas = float(np.median(sep_m) * 1000.0)
+    # CHANCE-ASSOCIATION / anti-collapse gate: matches must be genuinely tight
+    if med_sep_mas > radius_arcsec * 1000.0 * chance_frac:
+        return None
+    am = a[ia_m]
+    bm = b[ib_m]
+    cosd = max(np.cos(np.radians(float(np.median(am.dec.deg)))), 1e-6)
+    dra = float(np.median((bm.ra.deg - am.ra.deg)) * 3.6e6 * cosd)
+    ddec = float(np.median((bm.dec.deg - am.dec.deg)) * 3.6e6)
+    return dict(off_mas=float(np.hypot(dra, ddec)), dra_mas=dra, ddec_mas=ddec,
+                n_pairs=int(len(ia_m)), med_sep_mas=med_sep_mas)
+
+
 def pairwise_overlap_offsets(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS,
                              maxsep=3.0 * u.arcsec, min_overlap_pairs=40,
                              overlap_gate_arcsec=60.0, sweep=True, context=""):
@@ -288,7 +345,7 @@ def overlap_offset_grid(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS, nx=12, ny=12,
         base = dict(a=la, b=lb, overlap=True, worst_off_mas=None,
                     worst_off_cell=None, n_ok=0, n_total=0, n_no_coverage=0,
                     could_not_verify=False, clean=False, ok=False,
-                    fail_reason=None)
+                    fail_reason=None, samestar_only=False)
 
         # 2. pooled swept tie with measurability floor
         m = measure_offset(a_in, b_in, maxsep=maxsep,
@@ -310,6 +367,52 @@ def overlap_offset_grid(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS, nx=12, ny=12,
                                   "swept", "window_arcsec")}
         base["pooled_off_mas"] = None if m is None else float(m["off"])
         if not measurable:
+            # DENSE-OVERLAP SAME-STAR FALLBACK: the histogram peak is defeated by
+            # the wrong-pair background of a huge dense overlap (brick SW modules:
+            # ~2.4M detections, ~46k true counterparts) -- it returns a spurious
+            # low-quality peak (e.g. 140 mas) that fails narrow-window
+            # confirmation, yet the true tie is ~11 mas.  The matched-pair median
+            # is exact once the tie is certified small, and
+            # samestar_overlap_offset certifies that INTRINSICALLY: it REFUSES
+            # unless the matches are genuinely tight (median NN sep < radius/3 ~
+            # 100 mas), which a gross offset cannot produce.  So the anti-collapse
+            # guard -- NOT the (here-unreliable) histogram peak -- is what keeps a
+            # real gross offset from being laundered: an offset >~100 mas refuses
+            # (escalates to could-not-verify), 30-100 mas is returned and FAILS,
+            # <30 passes.  Nothing in the fail band is masked.
+            ss = samestar_overlap_offset(
+                a_in, b_in, match_radius=match_radius,
+                min_pairs=max(200, min_overlap_pairs),
+                context=f"{context} {la}|{lb} samestar")
+            if ss is not None:
+                within = ss["off_mas"] <= tol_mas
+                base["pooled_off_mas"] = ss["off_mas"]
+                base["pooled"] = dict(
+                    dra=ss["dra_mas"], ddec=ss["ddec_mas"],
+                    off=ss["off_mas"], contrast=None,
+                    n_peak=ss["n_pairs"], swept=False,
+                    window_arcsec=None, samestar=True)
+                # A POOLED-ONLY pass: the per-cell coverage grid was unmeasurable
+                # (that is why we are here), so this pair has NO spatial bookkeeping
+                # -- one field-wide median stands in for the whole overlap. Mark it
+                # ``samestar_only`` so a caller can tell it apart from a pass backed
+                # by the per-cell layer: a pooled median cannot see a localized-gross
+                # seam confined to a sub-region (a per-detector misregistration is a
+                # fraction of the overlap, and at this density its displaced sources
+                # drop out of the matched sample rather than biasing the median). The
+                # release gate should treat a ``samestar_only`` pass as weaker and
+                # seek external-refcat corroboration (issue #174 / PR #184 arbiter)
+                # rather than as an equal to a per-cell-verified clean pass.
+                base.update(
+                    worst_off_mas=ss["off_mas"], n_ok=1 if within else 0,
+                    n_total=1, n_pairs=int(ss["n_pairs"]), samestar_only=True,
+                    could_not_verify=False,
+                    clean=bool(within), ok=bool(within),
+                    fail_reason=(None if within else
+                                 f"same-star offset {ss['off_mas']:.0f} mas "
+                                 f"(n={ss['n_pairs']}, dense-overlap fallback)"))
+                results.append(base)
+                continue
             base.update(could_not_verify=True, ok=True)
             results.append(base)
             continue
