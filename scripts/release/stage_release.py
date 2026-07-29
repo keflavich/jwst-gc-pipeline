@@ -547,6 +547,57 @@ FRAME_REFCAT = {
 }
 
 
+def _obs_keys_from_name(name):
+    """``"<proposal>-<observation>"`` key(s) from a product/prefix basename
+    ``jwPPPPP-oOOO[-MMM]...`` (a combined ``-oOOO-MMM`` encodes both)."""
+    m = re.match(r"^jw(?P<prop>\d{5})-o(?P<obs>\d{3})(?:-(?P<obs2>\d{3}))?", name)
+    if m is None:
+        return set()
+    keys = {f"{m.group('prop')}-{m.group('obs')}"}
+    if m.group("obs2"):
+        keys.add(f"{m.group('prop')}-{m.group('obs2')}")
+    return keys
+
+
+def _release_observations(field_cfg):
+    """Every ``"<proposal>-<observation>"`` key this field's release covers,
+    across ALL instruments -- so the reference-free overlap gate's scope is not
+    silently NIRCam-only.  Sources:
+
+    - ``proposal_prefix`` entries carrying ``-oNNN`` (brick = 1182 o004 +
+      2221 o001);
+    - a bare ``jwPPPPP`` proposal_prefix combined with the ``observations`` list
+      (gc2211 = ``jw02211`` + ``["o023","o050"]`` -> 02211-023, 02211-050);
+    - explicit per-instrument mosaic lists (``miri`` / ``nircam`` config keys),
+      whose ``src`` basenames carry the MIRI observations that ``proposal_prefix``
+      (a NIRCam prefix) omits -- e.g. sgrb2 MIRI o002/o998, sickle MIRI o001/o002.
+
+    The gate INTERSECTS this per filter directory, so listing a MIRI observation
+    here can never re-admit a stray NIRCam crf that shares its proposal-obs key
+    (brick MIRI F2550W and the cloudc NIRCam strays are both 2221 o002)."""
+    prefixes = field_cfg.get("proposal_prefix", [])
+    if isinstance(prefixes, str):
+        prefixes = [prefixes]
+    obs = set()
+    bare_props = []
+    for pref in prefixes:
+        keys = _obs_keys_from_name(pref)
+        if keys:
+            obs |= keys
+        else:
+            mb = re.match(r"^jw(\d{5})$", pref)
+            if mb:
+                bare_props.append(mb.group(1))
+    for o in field_cfg.get("observations", []):
+        mo = re.match(r"^o?(\d{3})$", str(o))
+        if mo:
+            obs |= {f"{bp}-{mo.group(1)}" for bp in bare_props}
+    for key in ("miri", "nircam"):
+        for entry in field_cfg.get(key, []):
+            obs |= _obs_keys_from_name(os.path.basename(str(entry.get("src", ""))))
+    return obs
+
+
 def check_catalog_on_frame(items, field, tol_mas=FRAME_TOL_MAS):
     """Every shipped per-filter catalog must lie on the field's Gaia-tied reference frame.
     Measures the catalog's bulk offset vs the Gaia refcat (sanctioned offset-histogram);
@@ -929,8 +980,17 @@ def main(argv=None):
         # ~0). Only a reference-free frame-vs-frame check sees it.  (Applies to
         # --images-only too: it reads the crf frames, not catalogs.)
         overlap_gate = Path(__file__).with_name("check_interframe_overlap.py")
-        rc = subprocess.run([sys.executable, str(overlap_gate),
-                             "--field", args.field, "--scan"]).returncode
+        overlap_cmd = [sys.executable, str(overlap_gate),
+                       "--field", args.field, "--scan"]
+        # Scope the reference-free gate to THIS release's observations so stray
+        # crf from other programs in a shared target dir (the brick dir also
+        # holds 2221 o002 = cloudc frames) cannot pollute the frame-vs-frame
+        # verdict.  Derived from proposal_prefix (proposal-aware); the gate also
+        # self-derives from the released mosaics when this is not passed.
+        rel_obs = _release_observations(FIELDS[args.field])
+        if rel_obs:
+            overlap_cmd += ["--observations", ",".join(sorted(rel_obs))]
+        rc = subprocess.run(overlap_cmd).returncode
         if rc == 1:
             print(f"\nREFUSING TO STAGE '{args.field}': inter-frame OVERLAP gate FAILED "
                   f"-- two overlapping visits/detectors are misregistered vs EACH OTHER "
