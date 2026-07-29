@@ -44,8 +44,8 @@ from astropy.table import Table
 from .visit_consensus import (
     EXPOSURE_CONSENSUS_TOL_MAS, ConsensusBuildError, DuplicateExposureError,
     build_visit_consensus,
-    catalog_coords, load_reference_catalog, measure_reference_tie,
-    pick_reference_anchor_filter, select_reliable_stars,
+    catalog_coords, detect_module_antisymmetry, load_reference_catalog,
+    measure_reference_tie, pick_reference_anchor_filter, select_reliable_stars,
 )
 from .astrometry_offsets import measure_offset, local_residual_map
 
@@ -881,6 +881,28 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
         # scatter that m2 already tolerated.
         exp_baseline = ({} if correcting
                         else _m2_exposure_baseline(record_dir, filt, visit))
+        # issue #158 backstop: an ALIAS reads antisymmetric across the modules of
+        # an exposure, where real jitter is common-mode.  Never emit corrections
+        # from an antisymmetric set -- they are the footprint geometry, not a
+        # misalignment (and they are above the appliable ceiling anyway, so this
+        # costs no capability; it replaces an opaque stop with a diagnosis).
+        antisym = detect_module_antisymmetry(cons["exposures"])
+        if antisym["detected"]:
+            ex = antisym["examples"][0]
+            unverified.append(
+                f"{vctx}: MODULE-ANTISYMMETRIC offsets on "
+                f"{antisym['n_antisymmetric']}/{antisym['n_pairs_tested']} "
+                f"exposure(s) -- module {ex['module_a']} reads "
+                f"({ex['dra_a_mas']:+.0f},{ex['ddec_a_mas']:+.0f}) mas and module "
+                f"{ex['module_b']} reads ({ex['dra_b_mas']:+.0f},"
+                f"{ex['ddec_b_mas']:+.0f}) mas, i.e. equal and OPPOSITE at "
+                f"{ex['separation_mas'] / 1000.0:.1f}\" apart.  Real per-exposure "
+                f"jitter is common-mode across an exposure's detectors, so this "
+                f"is a wide-sweep/footprint-geometry ALIAS, not a misalignment "
+                f"(issue #158).  NOT correcting; the affected exposures are "
+                f"UNVERIFIED and the visit consensus for this filter should be "
+                f"rebuilt/investigated")
+        antisym_keys = antisym["keys"]
         exp_records = []
         for exp in cons["exposures"]:
             res = exp["vs_consensus"]
@@ -890,20 +912,43 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                        component=exp.get("component", 0),
                        internal_tie=exp.get("internal_tie", True),
                        unverified=exp.get("unverified", False),
+                       alias_suspect=bool(tuple(exp["key"]) in antisym_keys),
+                       gross_diagnostic=_jsonable(exp.get("gross_diagnostic")),
                        misaligned=exp["misaligned"])
             if res is not None:
                 rec.update({k: res.get(k) for k in
                             ("dra", "ddec", "off", "npairs", "contrast", "ok",
                              "swept", "window_arcsec", "dra_err", "ddec_err",
-                             "n_peak")})
+                             "n_peak", "window_edge_fraction",
+                             "window_consistent", "alias_rejected")})
             exp_records.append(rec)
             if exp.get("unverified"):
+                gd = exp.get("gross_diagnostic")
+                extra = ""
+                if gd is not None:
+                    extra = (f"  Wide-sweep diagnostic: peak {gd['off'] / 1000.0:.1f}\" "
+                             f"at the {gd['window_arcsec']:.0f}\" window "
+                             f"(contrast {gd['contrast']:.1f}, off/window="
+                             f"{gd.get('window_edge_fraction', float('nan')):.2f}, "
+                             f"reproduced at an independent window: "
+                             f"{gd.get('window_consistent')}) -- recorded, NOT "
+                             f"applied; a per-exposure tie is mas-scale, so a gross "
+                             f"frame belongs to the per-visit bulk path.")
                 unverified.append(
                     f"{vctx}: exposure {exp['key']} has no measurable tie to the "
                     f"visit consensus (isolated footprint / too few overlap "
                     f"stars) -- internally UNVERIFIED; the reference tie is its "
-                    f"only check")
-            if exp["misaligned"]:
+                    f"only check.{extra}")
+            if exp["misaligned"] and tuple(exp["key"]) in antisym_keys:
+                # antisymmetric alias: recorded above at the visit level, never
+                # corrected, never a late-stage regression (the number it would
+                # be compared against is not a measurement of anything).
+                print(f"ASTROM CHECKPOINT [{stage}] ALIAS (not correcting): "
+                      f"{vctx} exposure {exp['key']} "
+                      f"({res['dra']:+.0f},{res['ddec']:+.0f}) mas is "
+                      f"module-antisymmetric -- see the MODULE-ANTISYMMETRIC "
+                      f"note above (issue #158)", flush=True)
+            elif exp["misaligned"]:
                 msg = (f"{vctx}: exposure {exp['key']} is "
                        f"{res['off']:.2f} mas off the visit consensus "
                        f"(dra={res['dra']:.2f}±{res.get('dra_err', float('nan')):.2f}, "
@@ -1028,6 +1073,13 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                 if len(cons["scatter_mas"]) else float("nan"),
                 consensus_ok=cons["consensus_ok"],
                 skipped=[list(k) for k in cons["skipped"]]),
+            module_antisymmetry=dict(
+                detected=antisym["detected"],
+                n_pairs_tested=antisym["n_pairs_tested"],
+                n_antisymmetric=antisym["n_antisymmetric"],
+                min_mas=antisym["min_mas"],
+                keys=[list(k) for k in sorted(antisym["keys"])],
+                examples=[_jsonable(x) for x in antisym["examples"]]),
             exposures=exp_records,
             reference_tie=_jsonable(ref_tie)))
 

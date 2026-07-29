@@ -137,6 +137,93 @@ DEFAULT_SWEEP_WINDOWS = (3.0, 10.0, 30.0, 60.0)
 MAX_PAIRS_PER_WINDOW = 3_000_000
 
 
+# --- window-edge alias (issue #158) -----------------------------------------
+# The pair-offset histogram of two ADJACENT but non-overlapping footprints has
+# no true peak, but it is NOT flat: the number of pairs at lag (dRA, ddec) is
+# the cross-correlation of the two footprints, which grows monotonically toward
+# the lag that slides one footprint onto the other.  Inside a finite search
+# window that ridge is truncated at the window EDGE, and the histogram's arg-max
+# lands on it.  The resulting "peak" is sharp (its bin sits on a real ridge, so
+# n_peak and the MAD error bar both look excellent) and it clears the contrast
+# floor -- but it is pure geometry, and it MOVES when the window moves.
+#
+# Measured on W51 nrcblong-vs-nrcalong (issue #158, 2026-07-28), the same
+# exposure pair at windows 55/60/66/70/80/90/100":
+#     off = 54.8 / 59.8 / 64.7 / 67.2 / 75.9 / 89.0 / 99.5"
+# i.e. off ~ the window, every time, with contrast 6-9 throughout.  A REAL tie
+# does not do that: it reports the SAME offset at every window that can contain
+# it (W51 F480M reads (+20.6, -1.7) mas identically at 1/3/10/30/60").
+#
+# Two cheap, independent tells follow:
+#   * ``window_edge_fraction`` = off / window.  ~1 means the peak is riding the
+#     window edge.  Recorded on every result as a diagnostic.
+#   * ``window_consistent``: re-measure at INDEPENDENT wider windows and require
+#     the peak to REPRODUCE.  This is the gate (see ``confirm_peak_windows``).
+WINDOW_EDGE_FRACTION = 0.85
+
+# Confirmation probes are placed so the candidate peak sits WELL INSIDE the
+# probe window (a probe barely wider than the peak would put it back on the
+# edge and confirm the artifact).  1.4x and 2.2x of the measured offset.
+CONFIRM_WINDOW_FACTORS = (1.4, 2.2)
+
+# Never probe past this: beyond it the pair count explodes and no per-frame or
+# per-visit tie could mean anything anyway.
+CONFIRM_MAX_WINDOW_ARCSEC = 300.0
+
+# Floor on the peak-agreement tolerance between two windows (mas).  The bin
+# widens with the window (``bw = window/150``), so two windows can only be
+# expected to agree to a few of the COARSER bin widths.
+CONFIRM_MIN_TOL_MAS = 100.0
+
+
+def _window_bin_arcsec(window_arcsec, bin_arcsec):
+    """The histogram bin ``_measure_at_window`` uses at this window."""
+    return max(bin_arcsec, window_arcsec / 150.0)
+
+
+def confirm_peak_windows(a, b, best, bin_arcsec=0.02, min_pairs=30,
+                         factors=CONFIRM_WINDOW_FACTORS,
+                         max_window_arcsec=CONFIRM_MAX_WINDOW_ARCSEC):
+    """Re-measure ``best``'s peak at INDEPENDENT wider windows; does it survive?
+
+    A real rigid offset is a property of the two source lists, so it reads the
+    same at every window large enough to contain it.  A window-edge artifact
+    (see ``WINDOW_EDGE_FRACTION``) is a property of the WINDOW, so it slides to
+    the new edge as soon as the window changes.
+
+    Returns ``dict(consistent, probes, tol_mas, n_probes)``.  ``consistent`` is
+    True when at least one probe reproduced the peak, False when every probe
+    that produced a result disagreed, and None when no probe could be run (no
+    pairs, or the probe window would exceed ``max_window_arcsec``) -- an
+    UNDETERMINED result must never be read as a pass or as a failure.
+    """
+    off_arcsec = float(best["off"]) / 1000.0
+    base_w = float(best["window_arcsec"])
+    probes = []
+    for f in factors:
+        w = max(float(f) * off_arcsec, base_w * 1.25)
+        if w > max_window_arcsec or abs(w - base_w) < 0.1 * base_w:
+            continue
+        res = _measure_at_window(a, b, w, bin_arcsec, min_pairs)
+        if res is None:
+            probes.append(dict(window_arcsec=w, dra=None, ddec=None))
+            continue
+        tol = max(CONFIRM_MIN_TOL_MAS,
+                  3000.0 * max(_window_bin_arcsec(w, bin_arcsec),
+                               _window_bin_arcsec(base_w, bin_arcsec)))
+        sep = float(np.hypot(res["dra"] - best["dra"], res["ddec"] - best["ddec"]))
+        probes.append(dict(window_arcsec=w, dra=res["dra"], ddec=res["ddec"],
+                           off=res["off"], contrast=res["contrast"],
+                           npairs=res["npairs"], sep_mas=sep, tol_mas=tol,
+                           agrees=bool(sep <= tol)))
+    measured = [p for p in probes if p.get("dra") is not None]
+    if not measured:
+        # UNDETERMINED -- no probe could be run.  Not a pass, not a failure.
+        return dict(consistent=None, probes=probes, n_probes=0)
+    return dict(consistent=any(p["agrees"] for p in measured),
+                probes=probes, n_probes=len(measured))
+
+
 def _measure_at_window_tree(a, ref, maxsep_arcsec, bin_arcsec, min_pairs,
                             max_pairs=MAX_PAIRS_PER_WINDOW):
     """``_measure_at_window`` against a prebuilt ``KDTreeReference`` — no tree
@@ -211,7 +298,7 @@ def _measure_at_window(a, b, maxsep_arcsec, bin_arcsec, min_pairs,
 
 def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
                    min_contrast=None, raise_on_low_contrast=False, context="",
-                   sweep=True, sweep_windows=None):
+                   sweep=True, sweep_windows=None, confirm_windows=False):
     """Bulk on-sky offset to move ``a`` onto ``b`` (mas), via offset-histogram
     stacking of all pairs within ``maxsep``.  Density-immune; the sanctioned
     replacement for NN-median.
@@ -238,18 +325,33 @@ def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
         contrast threshold at a fixed narrow window is NOT trustworthy without it.
     sweep_windows : iterable of float or None
         Windows (arcsec) to escalate through (default ``DEFAULT_SWEEP_WINDOWS``).
+    confirm_windows : bool
+        Require a SWEPT peak to reproduce at independent, wider windows before
+        it is trusted (``confirm_peak_windows``).  A window-edge alias -- a peak
+        that is a property of the search window rather than of the two source
+        lists -- is rejected here (``ok`` False, ``alias_rejected`` True); see
+        ``WINDOW_EDGE_FRACTION`` and issue #158.  Costs one or two extra
+        measurements, and ONLY on a swept result, so the common (small, un-swept)
+        tie is numerically and computationally untouched.  Off by default: the
+        per-visit BULK reference tie legitimately reports a large swept offset
+        that only the widest window can contain, and must keep doing so.
 
     Returns
     -------
     dict or None
         ``dict(dra, ddec, off, npairs, contrast, ok, window_arcsec, swept,
-        dra_err, ddec_err, n_peak)`` (mas), or None if too few pairs at every
-        window.  ``ok`` is False when NO window reaches ``min_contrast``.
+        dra_err, ddec_err, n_peak, window_edge_fraction, windows)`` (mas), or
+        None if too few pairs at every window.  ``ok`` is False when NO window
+        reaches ``min_contrast`` (or, with ``confirm_windows``, when a swept peak
+        failed confirmation).
         ``window_arcsec`` is the window the reported peak came from -- a value
         >> your expected offset is the tell that the tie was only found after
         widening (investigate: the frame is grossly shifted).  ``dra_err`` /
         ``ddec_err`` are MAD-based standard errors of the peak position from
-        the ``n_peak`` near-peak pairs.
+        the ``n_peak`` near-peak pairs.  ``window_edge_fraction`` is
+        ``off / window`` -- near 1 the peak is riding the window edge and is
+        probably geometry, not a tie.  ``windows`` records every evaluated
+        window so a record can be audited after the fact.
     """
     min_contrast = DEFAULT_MIN_CONTRAST if min_contrast is None else min_contrast
     maxsep_arcsec = maxsep.to(u.arcsec).value if hasattr(maxsep, "to") else float(maxsep)
@@ -267,10 +369,15 @@ def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
     # (that noise peak is what made v001's 20" offset read as ~1.6"). Only a window
     # that actually CONTAINS the offset produces the real, dominant peak.
     best = None
+    evaluated = []
     for w in windows:
         res = _measure_at_window(a, b, w, bin_arcsec, min_pairs)
         if res is None:
+            evaluated.append(dict(window_arcsec=w, dra=None, ddec=None))
             continue
+        evaluated.append(dict(window_arcsec=w, dra=res["dra"], ddec=res["ddec"],
+                              off=res["off"], contrast=res["contrast"],
+                              npairs=res["npairs"], n_peak=res["n_peak"]))
         if best is None or res["contrast"] > best["contrast"]:
             best = res
 
@@ -281,7 +388,32 @@ def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
     # could not have contained it and the sweep is what found it. A True here on a
     # tie you expected to be small means the frame is grossly shifted -- investigate.
     best["swept"] = (best["off"] / 1000.0) > maxsep_arcsec
+    best["windows"] = evaluated
+    best["window_edge_fraction"] = (
+        float(best["off"] / 1000.0 / best["window_arcsec"])
+        if best["window_arcsec"] > 0 else 0.0)
+    # A swept peak must REPRODUCE at an independent window or it is geometry,
+    # not a tie (issue #158).  Only a measured DISAGREEMENT rejects: an
+    # undetermined confirmation (no probe could run) leaves the result as it was.
+    best["window_consistent"] = None
+    best["alias_rejected"] = False
+    if confirm_windows and best["ok"] and best["swept"]:
+        conf = confirm_peak_windows(a, b, best, bin_arcsec=bin_arcsec,
+                                    min_pairs=min_pairs)
+        best["window_confirmation"] = conf
+        best["window_consistent"] = conf["consistent"]
+        if conf["consistent"] is False:
+            best["ok"] = False
+            best["alias_rejected"] = True
     if not best["ok"] and raise_on_low_contrast:
+        if best["alias_rejected"]:
+            raise NoCoherentTieError(
+                f"No trustworthy astrometric tie ({context or 'unspecified'}): the "
+                f"only peak ({best['off'] / 1000.0:.1f}\" at the {best['window_arcsec']:.0f}\" "
+                f"window, contrast {best['contrast']:.1f}) did NOT reproduce at an "
+                f"independent window -- it rode the window edge "
+                f"(off/window = {best['window_edge_fraction']:.2f}), so it is the "
+                f"footprint geometry, not a tie (issue #158).")
         raise NoCoherentTieError(
             f"No coherent astrometric tie ({context or 'unspecified'}) at any window "
             f"up to {windows[-1]:.0f}\": best contrast {best['contrast']:.1f} < "
