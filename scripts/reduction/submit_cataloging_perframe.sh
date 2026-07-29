@@ -77,14 +77,14 @@ SB="$HERE/submit_cataloging_perframe_phase.sbatch"
 for ph in $PHASES; do
     dep_arg=""; [ -n "$prev_dep" ] && dep_arg="--dependency=$prev_dep"
     A=$(sbatch --parsable $dep_arg \
-        --job-name="${TARGET}-${FIELD}-${ph}-fanout" \
+        --job-name="${TARGET}${PROPOSAL}-o${FIELD}-${ph}-fanout" \
         --array=0-$((NSHARDS-1)) \
         --cpus-per-task="$FANOUT_CPUS" --mem="$FANOUT_MEM" --time="$FANOUT_TIME" \
         --export="$COMMON,PHASE=$ph,MODE=fanout,PARALLEL_WORKERS=$FANOUT_CPUS" \
         "$SB")
     echo "  $ph fan-out array : $A  (0-$((NSHARDS-1)))${dep_arg:+  [$dep_arg]}"
     B=$(sbatch --parsable --dependency=afterok:"$A" \
-        --job-name="${TARGET}-${FIELD}-${ph}-finalize" \
+        --job-name="${TARGET}${PROPOSAL}-o${FIELD}-${ph}-finalize" \
         --cpus-per-task="$FINALIZE_CPUS" --mem="$FINALIZE_MEM" --time="$FINALIZE_TIME" \
         --export="$COMMON,PHASE=$ph,MODE=finalize,PARALLEL_WORKERS=$FINALIZE_CPUS" \
         "$SB")
