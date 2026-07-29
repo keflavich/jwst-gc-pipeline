@@ -24,9 +24,10 @@ of this integration, must not) — a distinct and larger lever.**
 > term the way the pre-treasury report 09 does — bin same-star residuals by
 > detector position, which averages the centroid noise down while the static
 > distortion pattern survives — and recovers the report-09 result **through
-> this package's own `GDCSkySolution`**: STDGDC is ~2× flatter.  The verdict is
-> revised from "no measurable improvement" to "real but sub-noise-floor
-> improvement"; see §7.
+> this package's own `GDCSkySolution`**: STDGDC is ~2× flatter, and this holds
+> on **16/16 brick SW detectors × both covered filters** (median GDC/CRDS floor
+> 0.43).  The verdict is revised from "no measurable improvement" to "real but
+> sub-noise-floor improvement"; see §7.
 
 ## 1. Setup
 
@@ -294,6 +295,41 @@ is simply an order of magnitude below the per-exposure noise floor, so it
 neither helps nor hurts single-exposure repeatability and only shows up as a
 reduced position-dependent systematic in the field-averaged solution.
 
+### F, generalized — all 8 SW detectors × 2 filters (brick)
+
+The arches result is a single detector/filter.  Running the same diagnostic
+per detector on the brick mosaic (24 dithers/detector, vgroup 05101 F212N /
+07101 F182M) tests whether it holds across the SW focal plane and to a second
+covered filter.  Binned floor (iso > 3 px), CRDS → **GDC** (mas):
+
+| det | F212N CRDS→GDC | ratio | worst cell | F182M CRDS→GDC | ratio | worst cell |
+|---|---|---:|---|---|---:|---|
+| nrca1 | 0.425 → **0.186** | 0.44 | 1.12 → 0.49 | 0.479 → **0.176** | 0.37 | 1.16 → 0.44 |
+| nrca2 | 0.423 → **0.170** | 0.40 | 1.16 → 0.51 | 0.441 → **0.145** | 0.33 | 1.02 → 0.32 |
+| nrca3 | 0.275 → **0.133** | 0.48 | 0.81 → 0.30 | 0.261 → **0.129** | 0.49 | 0.95 → 0.30 |
+| nrca4 | 0.372 → **0.115** | 0.31 | 1.05 → 0.24 | 0.380 → **0.090** | 0.24 | 0.95 → 0.19 |
+| nrcb1 | 0.268 → **0.142** | 0.53 | 1.32 → 0.60 | 0.290 → **0.128** | 0.44 | 1.23 → 0.39 |
+| nrcb2 | 0.316 → **0.179** | 0.57 | 0.74 → 0.39 | 0.306 → **0.226** | 0.74 | 0.82 → 0.52 |
+| nrcb3 | 0.324 → **0.173** | 0.54 | 0.78 → 0.45 | 0.330 → **0.140** | 0.42 | 0.86 → 0.35 |
+| nrcb4 | 0.377 → **0.126** | 0.33 | 0.97 → 0.54 | 0.367 → **0.124** | 0.34 | 0.97 → 0.29 |
+
+**16/16 detectors flatter; median GDC/CRDS floor 0.43 (range 0.24–0.74).**  The
+worst-cell distortion drops from ~0.7–1.3 mas (CRDS) to ~0.2–0.6 mas across the
+focal plane.  On the deeper brick frames the per-detection scatter also improves
+modestly on every detector (e.g. F182M nrca1 0.898 → 0.707 mas) — here the
+worst-cell distortion is a larger fraction of the brick noise floor, so a sliver
+of the gain surfaces even in raw scatter.  The improvement is a robust property
+of the STDGDC field, not an arches-specific coincidence, and it holds for both
+SW filters the library covers.  Regenerate by looping
+`distortion_floor_diagnostic` over the 8 SW detectors (vgroup 05101 F212N /
+07101 F182M):
+
+    for det in nrca1 nrca2 nrca3 nrca4 nrcb1 nrcb2 nrcb3 nrcb4; do
+      python -m jwst_gc_pipeline.astrometry_gdc.distortion_floor_diagnostic \
+        --catalog-glob "/orange/adamginsburg/jwst/brick/F212N/f212n_${det}_visit001_vgroup05101_exp*_m1_daophot_basic.fits" \
+        --crf-glob     "/orange/adamginsburg/jwst/brick/F212N/pipeline/jw02221001001_05101_*_${det}_destreak_o001_crf.fits"
+    done
+
 ## 7. Overall verdict
 
 Per metric, GDC vs CRDS:
@@ -306,7 +342,7 @@ Per metric, GDC vs CRDS:
 | C: absolute VIRAC2/Gaia tie | bulk offset | no (distortion cancels in bulk) | <= 0.15 mas bulk |
 | D: Hosek L2 agreement | our-vs-external floor | apparent −0.3 mas | 1.9-mas floor ≫ signal; anchoring ≠ peppar (see note) |
 | E: v1 vs v2 | library sensitivity | n/a | 0.1 mas |
-| **F: coherent distortion floor** | **binned same-star residual** | **YES, ~2×** | **0.113 → 0.051 mas; worst 0.275 → 0.150** |
+| **F: coherent distortion floor** | **binned same-star residual** | **YES, ~2×** | **arches 0.113 → 0.051 mas (worst 0.275 → 0.150); brick 16/16 SW det × 2 filt flatter, median ratio 0.43** |
 
 The CRDS SW distortion is already good to ~1 mas per exposure; STDGDC removes a
 coherent ~0.1–0.3 mas position-dependent residual on top of that (Measurement

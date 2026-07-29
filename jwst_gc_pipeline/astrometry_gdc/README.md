@@ -113,7 +113,8 @@ STDGDC is **~2× flatter** than CRDS on the coherent distortion floor —
 0.113 → 0.051 mas binned same-star residual, worst detector cell 0.275 → 0.150
 mas, on isolated bright arches F212N NRCA4 stars (Measurement F,
 `distortion_floor_diagnostic.py`; reproduces pre-treasury report 09 through
-this package's own `GDCSkySolution`).  The gain is a coherent ~0.1–0.3 mas
+this package's own `GDCSkySolution`).  Confirmed across the SW focal plane:
+**16/16 brick detectors × F212N+F182M flatter, median GDC/CRDS floor 0.43**.  The gain is a coherent ~0.1–0.3 mas
 position-dependent term that sits **below** the ~1 mas per-exposure centroid
 noise, so it is invisible to the per-star / bulk metrics (A–E: consensus
 scatter, frame-pair offsets, VIRAC2/Gaia bulk, Hosek median separation all read
