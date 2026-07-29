@@ -442,15 +442,26 @@ def module_key(det):
 
 
 def _gather(filt, base, sub, mtag, dets):
-    """Collect per-(visit,exp) and per-visit SIAF positions + legacy coarse for a det set."""
+    """Collect per-(visit,vgroup,exp) and per-visit SIAF positions + legacy coarse.
+
+    Keyed by VGROUP as well as exposure: a visit can dither across several visit
+    groups (physically disjoint sky tiles) and the exposure number RESTARTS in
+    each, so ``(visit, exposure)`` is ambiguous.  Keying on it alone averaged two
+    disjoint pointings into one row -- cloudc has 2 visit groups in every filter,
+    sgrb2 F187N has 2, gc2211 has 6.
+
+    The per-VISIT consensus (``byv``) deliberately still pools all vgroups: it is
+    a superset of stars, and each exposure only matches the tile it overlaps.
+    """
     from collections import defaultdict
     byve = defaultdict(lambda: [[], []]); byv = defaultdict(list); coarse = defaultdict(lambda: [[], []])
     for det in dets:
         for f in glob.glob(f'{base}/{sub}/{filt}_{det}_visit*_vgroup*_exp*{mtag}_daophot_basic.fits'):
             b = os.path.basename(f)
             vis = b.split('_visit')[1][:3]; exp = int(re.search(r'_exp(\d+)', b).group(1))
+            vgr = re.search(r'_vgroup(\d+)', b).group(1)
             ra, dec, ra0, de0 = load_siaf(f)
-            byve[(vis, exp)][0].append(ra); byve[(vis, exp)][1].append(dec)
+            byve[(vis, vgr, exp)][0].append(ra); byve[(vis, vgr, exp)][1].append(dec)
             byv[vis].append((ra, dec)); coarse[vis][0].append(ra0); coarse[vis][1].append(de0)
     return byve, byv, coarse
 
@@ -499,19 +510,22 @@ def _solve(byve, byv, coarse, c_ra, c_dec, ref, prop, field, filt, modlabel=None
               f"{c_dec_legacy:+.4f}] pervisit({cv_ra:+.4f},{cv_dec:+.4f}) + fine({res[0]*1000:+.1f},{res[1]*1000:+.1f})mas "
               f"=> BULK ({bulk_ra:.4f},{bulk_dec:.4f})\" SEM {res[2]:.2f}/{res[3]:.2f}mas "
               f"n={res[4]}; consensus={len(consensus)}", flush=True)
-        for exp in sorted(e for (v, e) in byve if v == vis):
-            ra = np.concatenate(byve[(vis, exp)][0]); dec = np.concatenate(byve[(vis, exp)][1])
+        for vgr, exp in sorted((g, e) for (v, g, e) in byve if v == vis):
+            ra = np.concatenate(byve[(vis, vgr, exp)][0])
+            dec = np.concatenate(byve[(vis, vgr, exp)][1])
             rel = coord_shift(ra, dec, consensus)
             if rel is None:
-                print(f"    {tag}exp{exp}: relative failed"); continue
+                print(f"    {tag}vgroup{vgr} exp{exp}: relative failed"); continue
             tot_ra = bulk_ra + rel[0]; tot_dec = bulk_dec + rel[1]
-            row = dict(Visit=f'jw0{prop}{field}{vis}', Exposure=int(exp), Filter=filt.upper(),
+            row = dict(Visit=f'jw0{prop}{field}{vis}', Vgroup=str(vgr),
+                       Exposure=int(exp), Filter=filt.upper(),
                        dra=tot_ra, ddec=tot_dec, nmatch=rel[4],
                        rel_ra_mas=rel[0] * 1000, rel_dec_mas=rel[1] * 1000)
             if modlabel is not None:
                 row['Module'] = modlabel
             rows.append(row)
-            print(f"    {tag}exp{exp:>2}: rel({rel[0]*1000:+.2f},{rel[1]*1000:+.2f})mas n={rel[4]}"
+            print(f"    {tag}vgroup{vgr} exp{exp:>2}: rel({rel[0]*1000:+.2f},"
+                  f"{rel[1]*1000:+.2f})mas n={rel[4]}"
                   f"  -> total({tot_ra:.4f},{tot_dec:.4f})\"", flush=True)
     return rows
 

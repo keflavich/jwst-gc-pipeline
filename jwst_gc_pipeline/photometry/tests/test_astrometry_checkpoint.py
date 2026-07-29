@@ -800,3 +800,87 @@ def test_provenance_header_cards_shape():
     assert d["APROVDR"] == 12.5
     assert d["APROVTB"] == "Offsets_test.csv"
     assert all(len(k) <= 8 for k in keys)
+
+
+# ---------------------------------------------------------------------------
+# Vgroup: exposure numbers restart per visit group
+# ---------------------------------------------------------------------------
+
+def _vgroup_csv(tmp_path):
+    """Two visit groups of ONE visit, each with exposure 1 -- cloudc's shape."""
+    rows = [dict(Filter="F212N", Module="nrcb1", Visit="jw02221002001",
+                 Vgroup=vg, Exposure=1, dra=0.0, ddec=0.0)
+            for vg in ("06201", "12201")]
+    path = str(tmp_path / "Offsets_JWST_Brick2221_TEST.csv")
+    Table(rows).write(path, overwrite=True)
+    return path
+
+
+def test_update_offsets_table_narrows_on_vgroup(tmp_path):
+    """With a Vgroup column the two groups are separate rows, so each
+    correction lands on its own instead of both summing onto one."""
+    path = _vgroup_csv(tmp_path)
+    corr = [dict(visit="jw02221002001", exposure=1, module="nrcb1",
+                 filtername="F212N", vgroup=vg, dra_onsky_mas=0.0,
+                 ddec_onsky_mas=mas, dec_deg=DEC_TEST)
+            for vg, mas in (("06201", 100.0), ("12201", -50.0))]
+    out = update_offsets_table(path, corr, "m2")
+    # NB a CSV round-trip makes astropy infer int64 for a digit column, so the
+    # zero-padded "06201" comes back as 6201 -- which is exactly why matching
+    # goes through same_vgroup rather than str comparison.
+    by = {int(str(r["Vgroup"])): r for r in out}
+    assert by[6201]["ddec"] == pytest.approx(0.1, abs=1e-9)
+    assert by[12201]["ddec"] == pytest.approx(-0.05, abs=1e-9)
+
+
+def test_same_vgroup_survives_csv_int_coercion():
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import same_vgroup
+    assert same_vgroup(6201, "06201")        # the CSV round-trip case
+    assert same_vgroup("06201", "6201")
+    assert same_vgroup("06201", "06201")
+    assert not same_vgroup("06201", "12201")
+    assert not same_vgroup(6201, 12201)
+
+
+def test_vgroup_table_accepts_what_a_vgroupless_one_refuses(tmp_path):
+    """The refusal added in #169 is lifted once the table can express it."""
+    corr = [dict(visit="jw02221002001", exposure=1, module="nrcb1",
+                 filtername="F212N", vgroup=vg, dra_onsky_mas=0.0,
+                 ddec_onsky_mas=10.0, dec_deg=DEC_TEST)
+            for vg in ("06201", "12201")]
+    # Vgroup-less: still refused
+    old = _offsets_csv(tmp_path)
+    with pytest.raises(OffsetsTableUpdateError, match="(?i)more than one visit group"):
+        update_offsets_table(old, corr, "m2")
+    # Vgroup-carrying: applied
+    new = _vgroup_csv(tmp_path)
+    out = update_offsets_table(new, corr, "m2")
+    assert all(r["ddec"] == pytest.approx(0.01, abs=1e-9) for r in out)
+
+
+def test_lookup_consensus_offset_disambiguates_vgroups(tmp_path):
+    """Without narrowing, two groups sharing exposure 1 raise 'match=2'."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        lookup_consensus_offset)
+    t = Table([dict(Filter="F212N", Module="nrcb1", Visit="jw02221002001",
+                    Vgroup=vg, Exposure=1,
+                    **{"dra (arcsec)": d, "ddec (arcsec)": 0.0})
+               for vg, d in (("06201", 0.01), ("12201", 0.02))])
+    assert lookup_consensus_offset(t, "jw02221002001", 1, "nrcb1", "F212N",
+                                   vgroup="06201")[0] == pytest.approx(0.01)
+    assert lookup_consensus_offset(t, "jw02221002001", 1, "nrcb1", "F212N",
+                                   vgroup="12201")[0] == pytest.approx(0.02)
+    with pytest.raises(ValueError, match="match=2"):
+        lookup_consensus_offset(t, "jw02221002001", 1, "nrcb1", "F212N")
+
+
+def test_vgroup_key_normalises_csv_roundtrip_forms():
+    """A CSV round-trip mangles this column two ways; both must key the same as
+    the value that was written."""
+    import numpy.ma as ma
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import vgroup_key
+    assert vgroup_key("06201") == vgroup_key(6201) == vgroup_key("6201")
+    # the BULK rows' empty cell comes back MASKED, str() == '--'
+    assert vgroup_key(ma.masked) == ""
+    assert vgroup_key("--") == vgroup_key("") == vgroup_key(None) == ""
+    assert vgroup_key("06201") != vgroup_key("12201")
