@@ -67,9 +67,15 @@ obs_filters = {'brick': {'2221': filternames + ['f2550w'],
                # W51 (Goddard prop 6151 NIRCam obs 001).  In disk -- use Gaia DR3
                # as astrometric ref.  Filter list per user 2026-06-13: F140M
                # F162M F182M F187N F210M F335M F360M F405N F410M F480M.
+               # f444w added 2026-07-28 (issue #160): it was reduced onto the
+               # same align_o001_crf path as the other LW filters but was absent
+               # here, so every cataloging submission -- whose filter list comes
+               # from this map -- silently skipped it, leaving F444W the only W51
+               # LW filter with no catalog.  Nothing errored; it was never asked
+               # for.  Use filter_coverage.py to catch this class of gap.
                'w51': {'6151': ['f140m', 'f162m', 'f182m', 'f187n', 'f210m',
-                                'f335m', 'f360m', 'f405n', 'f410m', 'f480m',
-                                'f770w', 'f1280w', 'f2100w']},
+                                'f335m', 'f360m', 'f405n', 'f410m', 'f444w',
+                                'f480m', 'f770w', 'f1280w', 'f2100w']},
                # Globular clusters (Jay Anderson co-I; added 2026-07-01)
                'm92': {'1334': ['f090w', 'f150w', 'f277w', 'f444w']},
                'ngc6397': {'1979': ['f150w2', 'f322w2']},
