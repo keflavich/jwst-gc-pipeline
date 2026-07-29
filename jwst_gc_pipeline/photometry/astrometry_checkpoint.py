@@ -35,6 +35,7 @@ ladder.  Nothing here ever edits ``_cal.fits`` or pokes a mosaic GWCS.
 import glob
 import json
 import os
+import re
 from datetime import datetime, timezone
 
 import numpy as np
@@ -382,6 +383,40 @@ def same_vgroup(a, b):
     return sa == sb
 
 
+#: A JWST visit token is ``jw`` + proposal(5) + observation(3) + visit(3).
+#: ``fix_alignment`` / ``_apply_consensus_offsets_table`` derive a frame's key as
+#: ``os.path.basename(fn).split('_')[0]``, which always has this shape, so a table
+#: row whose ``Visit`` does not can never be matched by anything.
+VISIT_TOKEN_RE = re.compile(r"^jw\d{11}$")
+
+
+def assert_visit_token(token, context):
+    """Refuse a ``Visit`` value no frame filename can ever equal.
+
+    The reachable failure is a JOINT multi-observation run: cataloging is invoked
+    with ``--field 002-998`` (sgrb2 MIRI obs 002 + the obs 998 "redo" combined),
+    and ``seed_offsets_table_from_consensus`` interpolates that straight into
+    ``jw0{proposal}{field}{visit:03d}`` -> ``jw05365002-998001``.  Every frame of
+    that run keys as ``jw05365002001`` or ``jw05365998001``, so NOTHING matches:
+    ``lookup_consensus_offset`` returns ``(0.0, 0.0)`` for every exposure and the
+    re-tie loop re-measures the identical residual forever while reporting that it
+    wrote corrections.  A silent zero is exactly the failure mode this checkpoint
+    exists to eliminate, so the malformed token is refused at BOTH ends: when it
+    would be written, and if an already-written table is read back.
+    """
+    tok = str(token)
+    if VISIT_TOKEN_RE.match(tok):
+        return tok
+    raise OffsetsTableUpdateError(
+        f"{context}: visit token {tok!r} is not a JWST visit id "
+        f"(jw<5-digit proposal><3-digit obs><3-digit visit>), so no frame "
+        f"filename can ever match it and every lookup would silently return "
+        f"(0, 0).  A JOINT multi-observation run (field like '002-998') produces "
+        f"exactly this; a consensus table is per-observation, so seed/apply one "
+        f"observation at a time (--field 002, then --field 998) or give the "
+        f"corrections their real per-frame observation.")
+
+
 def _finite_float(value, default=0.0):
     """``float(value)`` for a table cell that may be missing or masked."""
     if value is None or isinstance(value, np.ma.core.MaskedConstant):
@@ -607,6 +642,19 @@ def lookup_consensus_offset(tbl, visit, exposure, module, filtername, vgroup=Non
     that consensus to the absolute reference) = a direct tie to the reference.
     Exposures with neither row return ``(0.0, 0.0)``.  Raises ValueError if a
     jitter or bulk match is ambiguous (>1 row)."""
+    # A row nothing can ever match is indistinguishable, at this call, from an
+    # exposure that legitimately needed no correction -- both are (0, 0).  Refuse
+    # the table instead of returning the zero (see assert_visit_token).
+    bad = sorted({str(v) for v in tbl["Visit"] if not VISIT_TOKEN_RE.match(str(v))})
+    if bad:
+        raise OffsetsTableUpdateError(
+            f"consensus table carries {len(bad)} Visit token(s) {bad[:4]} that are "
+            f"not JWST visit ids (jw<5-digit proposal><3-digit obs><3-digit "
+            f"visit>), so no frame filename can ever match them and every lookup "
+            f"against them silently returns (0, 0).  A JOINT multi-observation "
+            f"cataloging run (field like '002-998') writes exactly this; re-seed "
+            f"one observation at a time.")
+
     vf = (tbl["Visit"] == visit) & (tbl["Filter"] == filtername)
     dra = ddec = 0.0
 
@@ -714,7 +762,9 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
     prepared = []
     for corr in corrections:
         visit = int(str(corr["visit"])[-3:])
-        visit_tok = f"jw0{proposal_id}{field}{visit:03d}"
+        visit_tok = assert_visit_token(
+            f"jw0{proposal_id}{field}{visit:03d}",
+            f"seed_offsets_table_from_consensus({os.path.basename(out_path)})")
         # A consensus->reference correction is the per-VISIT bulk tie (whole
         # visit onto VIRAC2) -- it carries exposure=None AND module=None.  Store
         # it under the sentinel (BULK_EXPOSURE, BULK_MODULE) row so fix_alignment

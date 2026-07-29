@@ -232,3 +232,40 @@ def test_lookup_still_applies_a_row_whose_vgroup_is_empty(tmp_path):
     # a row that NAMES a different group is still excluded
     assert lookup_consensus_offset(t, "jw04147012001", 2, "nrcb3", "F115W",
                                    vgroup="07101") == (0.0, 0.0)
+
+
+# ---------------------------------------------------------------------------
+# Joint multi-observation runs: a Visit token no frame can ever match
+# ---------------------------------------------------------------------------
+
+def test_seed_refuses_a_joint_multiobs_field(tmp_path):
+    """Cataloging a JOINT run (sgrb2 MIRI obs 002 + the 998 'redo', --field
+    002-998) interpolated that straight into the visit token, producing
+    'jw05365002-998001'.  Every frame keys as jw05365002001 / jw05365998001, so
+    NOTHING matched and every lookup returned (0, 0) forever while the checkpoint
+    reported that it had written corrections."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        OffsetsTableUpdateError)
+    import pytest
+    with pytest.raises(OffsetsTableUpdateError, match="002-998"):
+        seed_offsets_table_from_consensus(
+            str(tmp_path), "5365", "002-998",
+            [_corr("1", 1, "nrca1", 0.0, 5.0, filt="F770W")])
+
+
+def test_lookup_refuses_an_already_written_unmatchable_table():
+    """The read side too -- an unmatchable row is indistinguishable here from an
+    exposure that legitimately needed no correction; both are (0, 0)."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        OffsetsTableUpdateError)
+    import pytest
+    t = Table([dict(Visit="jw05365002-998001", Filter="F770W", Module="nrca1",
+                    Exposure=1, **{"dra (arcsec)": 0.01, "ddec (arcsec)": 0.0})])
+    with pytest.raises(OffsetsTableUpdateError, match="(?i)not JWST visit ids"):
+        lookup_consensus_offset(t, "jw05365002001", 1, "nrca1", "F770W")
+
+
+def test_seed_accepts_a_normal_single_observation_field(tmp_path):
+    p = seed_offsets_table_from_consensus(
+        str(tmp_path), "5365", "002", [_corr("1", 1, "nrca1", 0.0, 5.0)])
+    assert Table.read(p)["Visit"][0] == "jw05365002001"
