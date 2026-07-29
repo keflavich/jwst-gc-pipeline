@@ -1193,9 +1193,10 @@ def _apply_consensus_offsets_table(fn, basepath, proposal_id, filtername, field)
     visit = fn.split('_')[0]
     exposure = int(fn.split('_')[-3])
     thismodule = fn.split('_')[-2]
+    vgroup = fn.split('_')[1]      # exposure numbers restart per visit group
     try:
         dra, ddec = lookup_consensus_offset(
-            tbl, visit, exposure, thismodule, filtername)
+            tbl, visit, exposure, thismodule, filtername, vgroup=vgroup)
     except ValueError as ex:
         raise ValueError(f"{ex} in {tblfn} (frame {fn})") from ex
     return dra * u.arcsec, ddec * u.arcsec
@@ -1261,6 +1262,9 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
         exposure = int(fn.split("_")[-3])
         thismodule = fn.split("_")[-2]
         visit = fn.split("_")[0]
+        # jw<prop><obs><visit>_<VGROUP>_<exposure>_<detector>_...: the exposure
+        # number restarts per visit group, so the group is part of the identity.
+        vgroup = fn.split("_")[1]
         # MODULE-LOCKED per-VISIT offsets (preferred). The NIRCam detectors are SIAF-locked
         # to <0.01 px within an exposure, and the SIAF/assign_wcs solution already carries the
         # correct per-exposure dithers + per-detector geometry; the only uncorrected term is the
@@ -1342,9 +1346,29 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
             if match.sum() > 1 and 'Module' in offsets_tbl.colnames:
                 match = match & ((offsets_tbl['Module'] == thismodule)
                                  | (offsets_tbl['Module'] == thismodule.strip('1234')))
+            # Per-VGROUP narrowing.  A visit can dither across several visit groups
+            # (physically disjoint sky tiles) and the exposure number RESTARTS in
+            # each, so (visit, exposure) alone is ambiguous -- cloudc has 2 groups
+            # in every filter, gc2211 has 6.  Tables built before Vgroup existed
+            # have no such column and are matched exactly as before.
+            #
+            # UNCONDITIONAL (unlike the Exposure/Module narrowing above): a lone
+            # surviving row is exactly the dangerous case.  If the table happens to
+            # carry a row for the OTHER group's exposure N and none for this one,
+            # `match.sum() == 1` and a `> 1` guard would silently apply a DIFFERENT
+            # pointing's shift.  Narrow always and let the != 1 check below raise.
+            # A row with an EMPTY Vgroup cell predates the column (or was preserved
+            # by the builder's field-safe merge) and still applies -- see
+            # vgroup_row_matches.
+            if 'Vgroup' in offsets_tbl.colnames:
+                from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+                    vgroup_row_matches)
+                match = match & np.array([vgroup_row_matches(g, vgroup)
+                                          for g in offsets_tbl['Vgroup']])
             if match.sum() != 1:
                 raise ValueError(f"module-locked offset match={match.sum()} for {fn} "
-                                 f"(visit={visit}, exposure={exposure}, filter={filtername}); "
+                                 f"(visit={visit}, exposure={exposure}, "
+                                 f"vgroup={vgroup}, filter={filtername}); "
                                  f"expected exactly 1 row in {locked_tbl}")
             row = offsets_tbl[match]
             if _has_stamps and _frame_gen is not None:
