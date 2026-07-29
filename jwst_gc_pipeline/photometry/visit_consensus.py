@@ -20,6 +20,7 @@ sweep).  Source ASSOCIATION (building consensus positions) uses
 ``search_around_sky`` nearest-pair matching, which is safe because it happens
 only AFTER each exposure's relative offset has been measured and removed.
 """
+import os
 from collections import Counter
 
 import numpy as np
@@ -37,7 +38,15 @@ from .astrometry_offsets import (
 
 # An exposure whose bulk offset from the visit consensus exceeds this is
 # MISALIGNED: its im0 (first-pass) alignment must be replaced.
-EXPOSURE_CONSENSUS_TOL_MAS = 2.0
+#
+# 2 mas was too tight: a normal, well-aligned NIRCam exposure carries a few-mas
+# per-exposure residual against the visit consensus (e.g. W51 nrcb4 sits ~3-5 mas
+# off on every clean medium/narrow band), so the m2 checkpoint HALTED cleanly
+# aligned filters (F140M/F162M/F182M/F187N/F210M) as if they needed a re-tie --
+# well inside the field's ~17 mas absolute (Gaia) tie and not worth a correction.
+# Default raised to 6 mas (still << module-scale gross misalignments); override
+# with the EXPOSURE_CONSENSUS_TOL_MAS env var for a stricter/looser policy.
+EXPOSURE_CONSENSUS_TOL_MAS = float(os.environ.get('EXPOSURE_CONSENSUS_TOL_MAS', 6.0))
 
 # Same-star bulk refinement (memory: histogram-vs-samestar-offset-bias): the
 # all-pairs offset HISTOGRAM (check A) is biased by several mas against a DENSE
