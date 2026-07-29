@@ -62,6 +62,20 @@ def _vprint(*args, **kwargs):
         print(*args, **kwargs)
 
 
+def _has_plausible_pixel_scale(ww, max_arcsec=10.0):
+    """True if ``ww`` has a celestial pixel scale small enough to be a real
+    JWST image (default: < 10"/px).  Works for CD-matrix and PC+CDELT headers
+    alike; False for an unset/identity WCS (1 deg/px = 3600"/px) or a WCS with
+    no celestial axes."""
+    from astropy.wcs.utils import proj_plane_pixel_scales
+    cel = ww.celestial
+    if cel.naxis != 2:
+        return False
+    scales = np.abs(proj_plane_pixel_scales(cel)) * 3600.0
+    return bool(np.all(np.isfinite(scales)) and np.all(scales < max_arcsec)
+                and np.all(scales > 0))
+
+
 def get_psf(header, path_prefix='.', use_merged_psf_for_merged=False, fov_pixels=None):
     if header['INSTRUME'].lower() == 'nircam':
         psfgen = stpsf.NIRCam()
@@ -83,10 +97,18 @@ def get_psf(header, path_prefix='.', use_merged_psf_for_merged=False, fov_pixels
     detector = header['DETECTOR']
 
     ww = wcs.WCS(header)
-    try:
-        assert ww.wcs.cdelt[1] != 1, "This is not a valid WCS!!! CDELT is wrong!! how did this HAPPEN!?!?  (might happen if fitting a non-i2d file)"
-    except AssertionError as ex:
-        print(ex)
+    # Sanity-check the PIXEL SCALE, not CDELT.  Reading ``ww.wcs.cdelt`` alone
+    # is wrong for any header written in CD-matrix form (every JWST cal/crf
+    # SCI header, and any astropy ``to_header()`` round-trip of one): wcslib
+    # normalises those to PC * CDELT=1, so a perfectly good 0.063"/px WCS
+    # reports cdelt == 1 and this check cried wolf on every frame -- the
+    # "This is not a valid WCS!!! CDELT is wrong!!" spam seen throughout
+    # cutout runs (issue #159).  ``proj_plane_pixel_scales`` reads the full
+    # CD/PC+CDELT matrix, so it is representation-agnostic and still catches a
+    # genuinely unset (1 deg/px) WCS.
+    if not _has_plausible_pixel_scale(ww):
+        print("This is not a valid WCS!!! pixel scale is wrong!! how did this "
+              "HAPPEN!?!?  (might happen if fitting a non-i2d file)")
         print("ignoring WCS failure so check that stuff is right...")
 
     psfgen.filter = filtername
