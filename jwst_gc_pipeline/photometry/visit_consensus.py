@@ -47,11 +47,14 @@ EXPOSURE_CONSENSUS_TOL_MAS = 2.0
 # below both the NIRCam module separation (~174") and the W51 module-adjacency
 # ridge (~56") that produced the issue-158 alias.
 #
-# This does NOT weaken gross-frame detection: when the bounded measurement finds
-# no trustworthy tie, the exposure is re-measured over the FULL sweep purely as
-# a DIAGNOSTIC (recorded as ``gross_diagnostic``, reported loudly, never turned
-# into a per-exposure correction).  An exposure that really is arcseconds off
-# belongs to the per-visit BULK path, which still sweeps to 60".
+# This does NOT weaken gross-frame detection.  When the bounded measurement finds
+# no trustworthy tie the exposure is re-measured over the FULL sweep, and that
+# result is adopted IF its peak reproduces at an independent window: a real 20"
+# misalignment (brick-1182 v001 class) is therefore still found and flagged
+# exactly as before, for the correction ceiling to rule on.  What the bound
+# removes is the OTHER case -- a wide peak that does not reproduce, which stays a
+# recorded ``gross_diagnostic`` and a loud could-not-verify instead of becoming a
+# per-exposure correction.
 PER_EXPOSURE_SWEEP_WINDOWS = (3.0, 10.0)
 
 # --- module antisymmetry (issue #158 backstop) ------------------------------
@@ -566,13 +569,19 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
         measurable = res is not None and res["ok"]
         gross = None
         if not measurable:
-            # DIAGNOSTIC only: the wide sweep still runs so a genuinely gross
-            # frame is SEEN and reported -- it is just never silently turned
-            # into a mas-scale per-exposure correction.
+            # The bounded window found nothing trustworthy.  Fall back to the FULL
+            # sweep so a genuinely gross frame is still FOUND -- but only adopt it
+            # when the peak REPRODUCES at an independent window.  That split is the
+            # whole point: a real 20" misalignment confirms (and is then flagged
+            # exactly as before, for the correction ceiling to rule on), while a
+            # window-edge alias does not and stays a recorded could-not-verify.
             gross = measure_offset(e["coords"], consensus_ref, sweep=True,
                                    confirm_windows=True,
                                    context=f"{context} exp{e['key']} vs consensus "
-                                           f"(gross diagnostic)")
+                                           f"(gross)")
+            if gross is not None and gross["ok"]:
+                res = gross
+                measurable = True
         if not measurable:
             consensus_ok = False
         misaligned = False

@@ -199,3 +199,26 @@ def test_per_exposure_sweep_is_bounded_below_module_geometry():
     nrcalong<->nrcblong separation ~174")."""
     assert max(PER_EXPOSURE_SWEEP_WINDOWS) <= 15.0
     assert min(PER_EXPOSURE_SWEEP_WINDOWS) >= 1.0
+
+
+def test_bounded_sweep_still_finds_a_confirmed_gross_offset():
+    """The bound must not cost gross-frame DETECTION.  An offset outside
+    ``PER_EXPOSURE_SWEEP_WINDOWS`` whose peak reproduces at an independent window
+    is still found by the fallback; only an UNCONFIRMED wide peak is dropped.
+
+    (The end-to-end version of this is
+    ``test_visit_consensus.test_huge_misalignment_found_by_sweep``, which drives
+    the same split through ``build_visit_consensus``.)"""
+    rng = np.random.RandomState(5)
+    ra = 266.4 + rng.rand(1200) * 0.05
+    dec = -28.9 + rng.rand(1200) * 0.05
+    a = SkyCoord(ra * u.deg, dec * u.deg)
+    cosd = np.cos(np.radians(dec))
+    b = SkyCoord((ra + 20.0 / 3600.0 / cosd) * u.deg, (dec + 4.0 / 3600.0) * u.deg)
+    bounded = measure_offset(a, b, sweep=True,
+                             sweep_windows=PER_EXPOSURE_SWEEP_WINDOWS,
+                             confirm_windows=True)
+    assert bounded is None or not bounded["ok"], bounded   # out of the bound
+    wide = measure_offset(a, b, sweep=True, confirm_windows=True)
+    assert wide["ok"] and wide["window_consistent"] is True, wide
+    assert abs(wide["dra"] - 20000) < 400 and abs(wide["ddec"] - 4000) < 400, wide
