@@ -115,6 +115,26 @@ def test_stale_high_order_sip_coefficients_are_stripped():
     assert not orphans, f"orphan SIP terms above A_ORDER={order}: {orphans}"
 
 
+def test_mixed_cd_and_pc_cdelt_cannot_survive():
+    """A header must not end up with BOTH linear representations: astropy then
+    silently ignores CDELT, so the header reads differently from what was
+    written.  (Same defect class as #181, at the fitting level.)"""
+    g = _distorted_gwcs()
+    hdr = fits.Header()
+    for k, v in (('PC1_1', 1.0), ('PC1_2', 0.0), ('PC2_1', 0.0), ('PC2_2', 1.0),
+                 ('CDELT1', -8.6e-6), ('CDELT2', 8.6e-6),
+                 ('CD1_1', -8.6e-6), ('CD2_2', 8.6e-6)):
+        hdr[k] = v
+
+    sync_header_to_gwcs(hdr, g, SHAPE)
+
+    has_cd = any(k.startswith('CD1_') or k.startswith('CD2_') for k in hdr)
+    has_pc = any(k.startswith('PC') for k in hdr) or 'CDELT1' in hdr
+    assert has_cd != has_pc, (
+        f"header carries both linear representations: "
+        f"{sorted(k for k in hdr if k.startswith(('CD', 'PC')))}")
+
+
 def test_strip_sip_keywords_leaves_the_linear_wcs_alone():
     hdr = fits.Header({'CRVAL1': 266.5, 'CRPIX1': 100.0, 'CD1_1': -1e-5,
                        'A_ORDER': 3, 'A_2_0': 1e-7, 'BP_1_1': 2e-7})

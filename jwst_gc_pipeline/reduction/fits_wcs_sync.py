@@ -81,6 +81,14 @@ _FALLBACK_PIX_ERRORS = (0.01, 0.02, 0.05, 0.1)
 
 _SIP_KEY_RE = re.compile(r'^(A|B|AP|BP)_(\d+_\d+|ORDER)$')
 
+#: The two mutually-exclusive FITS linear-WCS representations.  A header that
+#: ends up with both is invalid, and astropy resolves it silently ("cdelt will
+#: be ignored since cd is present") -- so whichever set the new fit does not
+#: write must be deleted, not left behind.
+_LINEAR_WCS_KEYS = ('CD1_1', 'CD1_2', 'CD2_1', 'CD2_2',
+                    'PC1_1', 'PC1_2', 'PC2_1', 'PC2_2',
+                    'CDELT1', 'CDELT2')
+
 
 class FitsGwcsMismatchError(RuntimeError):
     """The FITS/SIP header does not reproduce the GWCS to the required tolerance."""
@@ -180,6 +188,13 @@ def sync_header_to_gwcs(header, gwcs_obj, shape, *, max_pix_error=None,
     sip = sip_header_from_gwcs(gwcs_obj, max_pix_error=max_pix_error,
                                npoints=npoints)
     strip_sip_keywords(header)
+    # Drop whichever linear representation the new fit does NOT write, so the
+    # header never carries CD *and* PC/CDELT at once (astropy then silently
+    # ignores CDELT, giving a header that reads differently from what was
+    # intended).  Same defect class as #181, one level up.
+    for key in _LINEAR_WCS_KEYS:
+        if key in header and key not in sip:
+            del header[key]
     header.update(sip)
     max_mas, med_mas = fits_gwcs_discrepancy_mas(header, gwcs_obj, shape)
     if max_mas > tol:
