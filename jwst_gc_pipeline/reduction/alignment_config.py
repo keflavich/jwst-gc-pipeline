@@ -187,11 +187,17 @@ ALIGNMENT_CONFIG = (
     # -- Galactic Centre: m2-checkpoint consensus tables --
     FieldAlignment(
         proposal='4147', fields=None,
-        reference_frame=VIRAC2, source=TABLE_CONSENSUS,
+        reference_frame=VIRAC2, source=TABLE_LOCKED,
         reference_filter='F212N',
-        notes=('sgrc. Per-exposure consensus re-tie (2026-07-16); tweakreg is '
-               'skipped, so without this the exposures scatter ~2-8 mas around '
-               'the visit consensus.'),
+        notes=('sgrc. Per-exposure re-tie; tweakreg is skipped, so without this '
+               'the exposures scatter ~2-8 mas around the visit consensus. '
+               'DECLARED LOCKED, not consensus: sgrc has a build_virac2_offsets '
+               'REGION entry, so its authored table is '
+               'Offsets_JWST_Brick4147_VIRAC2locked.csv (96 rows, 8 filters, '
+               'builder-shaped) -- and that is the only table on disk. The old '
+               'TABLE_CONSENSUS declaration pointed the reducer at a '
+               '_consensus.csv the checkpoint never wrote, which is why sgrc '
+               'frames came out of a full reduce at RAOFFSET=0.0.'),
     ),
     FieldAlignment(
         proposal='6151', fields=None,
@@ -212,16 +218,23 @@ ALIGNMENT_CONFIG = (
     ),
     FieldAlignment(
         proposal='2045', fields=('003',),
-        reference_frame=VIRAC2, source=TABLE_CONSENSUS,
+        reference_frame=VIRAC2, source=TABLE_LOCKED,
         reference_filter='F212N',
-        notes='quintuplet. Same 2045 gap as arches above.',
+        notes=('quintuplet. Same 2045 dispatch gap as arches, but a DIFFERENT '
+               'table: quintuplet has a build_virac2_offsets REGION entry and a '
+               '24-row builder-shaped VIRAC2locked table on disk (visit '
+               'jw02045003001, F212N+F323N), whereas arches has neither and only '
+               'a checkpoint-written consensus table. Same proposal, two sources '
+               '-- which is why these are separate per-observation entries.'),
     ),
     FieldAlignment(
         proposal='5365', fields=None,
-        reference_frame=VIRAC2, source=TABLE_CONSENSUS,
+        reference_frame=VIRAC2, source=TABLE_LOCKED,
         reference_filter='F212N',
-        notes=('sgrb2. Absent from the old dispatch -> unaligned. 14 filters, so '
-               'the reference band matters most here.'),
+        notes=('sgrb2. Absent from the old dispatch -> unaligned, while its '
+               'builder-written VIRAC2locked table holds 264 real rows across 11 '
+               'filters (median |offset| ~126 mas) that nothing read. 14 filter '
+               'directories, so the reference band matters most here.'),
     ),
     FieldAlignment(
         proposal='2211', fields=None,
@@ -236,11 +249,13 @@ ALIGNMENT_CONFIG = (
     ),
     FieldAlignment(
         proposal='2092', fields=('005',),
-        reference_frame=VIRAC2, source=TABLE_CONSENSUS,
+        reference_frame=VIRAC2, source=TABLE_LOCKED,
         reference_filter='F210M',
         notes=('cloudef obs005. Only obs002 had a branch in the old dispatch, so '
-               'obs005 fell through to the else. No F212N in this program, so the '
-               'consensus is defined on F210M.'),
+               'obs005 fell through to the else -- even though the shared 2092 '
+               'VIRAC2locked table already carries 32 jw02092005001 rows across '
+               'all four filters. No F212N in this program, so the reference band '
+               'is F210M.'),
     ),
 
     # -- Recorded bulk offsets (pure bulk, no jitter term) --

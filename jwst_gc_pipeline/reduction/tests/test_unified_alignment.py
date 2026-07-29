@@ -163,30 +163,30 @@ def test_locked_ambiguous_match_still_raises(tmp_path):
 
 def test_consensus_matches_legacy_and_splits_bulk_from_jitter(tmp_path):
     bp = str(tmp_path)
-    _write_consensus(bp, '4147', rows=[
+    _write_consensus(bp, '6151', rows=[
         # per-visit BULK sentinel (consensus -> VIRAC2)
-        ('jw04147012001', 'F115W', -1, 'all', 0.0300, -0.0120),
+        ('jw06151001001', 'F115W', -1, 'all', 0.0300, -0.0120),
         # sparse per-exposure JITTER
-        ('jw04147012001', 'F115W', 4, 'nrcb3', 0.0025, -0.0031),
+        ('jw06151001001', 'F115W', 4, 'nrcb3', 0.0025, -0.0031),
     ])
-    fn = 'jw04147012001_06101_00004_nrcb3_destreak.fits'
-    leg, uni = _both(fn, '4147', '012', 'F115W', 'nrcb', bp)
+    fn = 'jw06151001001_06101_00004_nrcb3_destreak.fits'
+    leg, uni = _both(fn, '6151', '001', 'F115W', 'nrcb', bp)
     _assert_same(leg, uni)
     assert uni.bulk_ra == pytest.approx(0.0300)
     assert uni.jitter_ra == pytest.approx(0.0025)
     assert uni.total_ra == pytest.approx(0.0325)
     assert uni.source == ac.TABLE_CONSENSUS
-    assert uni.reference_frame == ac.VIRAC2
+    assert uni.reference_frame == ac.GAIA
 
 
 def test_consensus_exposure_without_jitter_row_gets_bulk_only(tmp_path):
     bp = str(tmp_path)
-    _write_consensus(bp, '4147', rows=[
-        ('jw04147012001', 'F115W', -1, 'all', 0.0300, -0.0120),
-        ('jw04147012001', 'F115W', 4, 'nrcb3', 0.0025, -0.0031),
+    _write_consensus(bp, '6151', rows=[
+        ('jw06151001001', 'F115W', -1, 'all', 0.0300, -0.0120),
+        ('jw06151001001', 'F115W', 4, 'nrcb3', 0.0025, -0.0031),
     ])
-    fn = 'jw04147012001_06101_00009_nrcb3_destreak.fits'
-    leg, uni = _both(fn, '4147', '012', 'F115W', 'nrcb', bp)
+    fn = 'jw06151001001_06101_00009_nrcb3_destreak.fits'
+    leg, uni = _both(fn, '6151', '001', 'F115W', 'nrcb', bp)
     _assert_same(leg, uni)
     assert uni.jitter_ra == pytest.approx(0.0)
     assert uni.total_ra == pytest.approx(0.0300)
@@ -196,8 +196,8 @@ def test_consensus_missing_table_leaves_frame_untied(tmp_path):
     """First reduction pass: no table yet, so the frame stays at the raw frame
     and the checkpoint gets to measure the raw scatter."""
     bp = str(tmp_path)
-    fn = 'jw04147012001_06101_00004_nrcb3_destreak.fits'
-    leg, uni = _both(fn, '4147', '012', 'F115W', 'nrcb', bp)
+    fn = 'jw06151001001_06101_00004_nrcb3_destreak.fits'
+    leg, uni = _both(fn, '6151', '001', 'F115W', 'nrcb', bp)
     _assert_same(leg, uni)
     assert uni.total_ra == 0.0 and uni.total_dec == 0.0
     # but it IS configured -- distinct from a field with no alignment at all
@@ -220,21 +220,34 @@ def test_w51_consensus_reference_frame_is_gaia_not_virac(tmp_path):
 # the failure this refactor exists to expose
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize('proposal,field,target,ref_filter', [
-    ('2045', '001', 'arches', 'F212N'),
-    ('2045', '003', 'quintuplet', 'F212N'),
-    ('5365', '001', 'sgrb2', 'F212N'),
-    ('2092', '005', 'cloudef obs005', 'F210M'),
+@pytest.mark.parametrize('proposal,field,target,source,ref_filter', [
+    ('2045', '001', 'arches', ac.TABLE_CONSENSUS, 'F212N'),
+    ('2045', '003', 'quintuplet', ac.TABLE_LOCKED, 'F212N'),
+    ('5365', '001', 'sgrb2', ac.TABLE_LOCKED, 'F212N'),
+    ('2092', '005', 'cloudef obs005', ac.TABLE_LOCKED, 'F210M'),
 ])
-def test_campaign_fields_are_now_tied(proposal, field, target, ref_filter):
+def test_campaign_fields_are_now_tied(proposal, field, target, source, ref_filter):
     """These four fell through the old ``else`` and got (0,0) with no trace, so
     their m2 corrections went into a table nothing read and their re-tie loops
-    could never converge.  They are now on the consensus path."""
+    could never converge.
+
+    Each is declared against the table its own BUILDER writes -- arches has no
+    build_virac2_offsets REGION entry and only a checkpoint-written consensus
+    table, while quintuplet/sgrb2/cloudef have REGION entries and builder-shaped
+    VIRAC2locked tables.  Declaring all four 'consensus' would have pointed the
+    reducer at files that do not exist for three of them."""
     cfg = ac.resolve(proposal, field)
     assert cfg is not None, f"{target} still has no alignment source"
-    assert cfg.source == ac.TABLE_CONSENSUS
+    assert cfg.source == source
     assert cfg.reference_frame == ac.VIRAC2
     assert cfg.reference_filter == ref_filter
+
+
+def test_two_observations_of_one_proposal_can_use_different_tables():
+    """2045 is the case that forces per-observation entries: arches (001) is
+    consensus-driven, quintuplet (003) locked."""
+    assert ac.resolve('2045', '001').source == ac.TABLE_CONSENSUS
+    assert ac.resolve('2045', '003').source == ac.TABLE_LOCKED
 
 
 def test_gc2211_is_tied():
@@ -265,26 +278,48 @@ def test_corrections_now_reach_the_frames(tmp_path):
     assert uni.total_ra != 0.0, "this is the RAOFFSET=0.0 regression"
 
 
-def test_recorded_bulk_field_still_gets_consensus_jitter(tmp_path):
-    """A hand-measured bulk must not exclude a field from the re-tie loop.  The
-    bulk stays fixed at the recorded constant and only the per-exposure term
-    comes from the checkpoint's table."""
+def test_recorded_bulk_field_still_gets_consensus_corrections(tmp_path):
+    """A hand-measured bulk must not exclude a field from the re-tie loop.
+
+    The checkpoint records RESIDUALS on top of whatever tie is already applied,
+    so its BULK sentinel is the REMAINING consensus->reference offset, not a
+    second copy of the recorded constant: the two SUM.  Dropping the sentinel
+    would leave the field with no path to VIRAC2 at all and would make the
+    checkpoint re-add the same residual forever."""
     bp = str(tmp_path)
     _write_consensus(bp, '2092', rows=[
-        # the sentinel is deliberately IGNORED here -- bulk comes from config,
-        # and adding this too would double-count the field-level tie
-        ('jw02092002002', 'F480M', -1, 'all', 0.9999, 0.9999),
+        ('jw02092002002', 'F480M', -1, 'all', -0.150, 0.075),
         ('jw02092002002', 'F480M', 3, 'nrcb3', 0.0031, -0.0022),
     ])
     fn = 'jw02092002002_02101_00003_nrcb3_destreak.fits'
     uni = ua.resolve_shift(fn, '2092', '002', 'F480M', 'nrcb', bp)
-    assert uni.bulk_ra == pytest.approx(0.098)     # the recorded constant
-    assert uni.jitter_ra == pytest.approx(0.0031)  # from the consensus table
-    assert uni.total_ra == pytest.approx(0.098 + 0.0031)
+    assert uni.bulk_ra == pytest.approx(0.098 - 0.150)   # constant + residual tie
+    assert uni.jitter_ra == pytest.approx(0.0031)
+    assert uni.total_ra == pytest.approx(0.098 - 0.150 + 0.0031)
     assert 'consensus' in uni.prov_table and 'alignment_config' in uni.prov_table
 
 
-def test_consensus_jitter_is_inert_before_the_checkpoint_runs(tmp_path):
+def test_recorded_bulk_reader_agrees_with_lookup_consensus_offset(tmp_path):
+    """The reduction-side reader and the checkpoint-side reader must not
+    disagree about the same frame in the same table."""
+    from astropy.table import Table as _T
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        lookup_consensus_offset)
+    bp = str(tmp_path)
+    path = _write_consensus(bp, '2092', rows=[
+        ('jw02092002002', 'F480M', -1, 'all', -0.150, 0.075),
+        ('jw02092002002', 'F480M', 3, 'nrcb3', 0.0031, -0.0022),
+    ])
+    fn = 'jw02092002002_02101_00003_nrcb3_destreak.fits'
+    uni = ua.resolve_shift(fn, '2092', '002', 'F480M', 'nrcb', bp)
+    chk = lookup_consensus_offset(_T.read(path), 'jw02092002002', 3, 'nrcb3', 'F480M')
+    # the reducer applies the recorded constant PLUS everything the checkpoint
+    # recorded; the checkpoint's own view is the table part alone
+    assert uni.total_ra - 0.098 == pytest.approx(chk[0])
+    assert uni.total_dec - (-0.171) == pytest.approx(chk[1])
+
+
+def test_consensus_correction_is_inert_before_the_checkpoint_runs(tmp_path):
     """No consensus table yet -> the recorded bulk applies unchanged."""
     bp = str(tmp_path)
     fn = 'jw02092002002_02101_00003_nrcb3_destreak.fits'
@@ -310,12 +345,12 @@ def test_configured_zero_is_distinguishable_from_unconfigured(tmp_path):
     """A genuine zero tie and 'this field is tied to nothing' must not look the
     same -- conflating them is how a field can silently never converge."""
     bp = str(tmp_path)
-    _write_consensus(bp, '4147', rows=[
-        ('jw04147012001', 'F115W', -1, 'all', 0.0, 0.0),
+    _write_consensus(bp, '6151', rows=[
+        ('jw06151001001', 'F115W', -1, 'all', 0.0, 0.0),
     ])
     tied = ua.resolve_shift(
-        'jw04147012001_06101_00004_nrcb3_destreak.fits',
-        '4147', '012', 'F115W', 'nrcb', bp)
+        'jw06151001001_06101_00004_nrcb3_destreak.fits',
+        '6151', '001', 'F115W', 'nrcb', bp)
     untied = ua.resolve_shift(
         'jw09999001001_02101_00001_nrcb3_destreak.fits',
         '9999', '001', 'F212N', 'nrcb', bp)
@@ -341,9 +376,9 @@ def test_dead_2221_002_branch_is_unreachable():
 
 def test_bulk_plus_jitter_equals_total_everywhere(tmp_path):
     bp = str(tmp_path)
-    _write_consensus(bp, '4147', rows=[
-        ('jw04147012001', 'F115W', -1, 'all', 0.0300, -0.0120),
-        ('jw04147012001', 'F115W', 4, 'nrcb3', 0.0025, -0.0031),
+    _write_consensus(bp, '6151', rows=[
+        ('jw06151001001', 'F115W', -1, 'all', 0.0300, -0.0120),
+        ('jw06151001001', 'F115W', 4, 'nrcb3', 0.0025, -0.0031),
     ])
     _write_locked(bp, '2221',
                   rows=[('jw02221001001', 'F212N', 1, 'nrcb3', 0.10, -0.20),
@@ -351,7 +386,7 @@ def test_bulk_plus_jitter_equals_total_everywhere(tmp_path):
                   colnames=('Visit', 'Filter', 'Exposure', 'Module',
                             'dra (arcsec)', 'ddec (arcsec)'))
     cases = [
-        ('jw04147012001_06101_00004_nrcb3_destreak.fits', '4147', '012', 'F115W'),
+        ('jw06151001001_06101_00004_nrcb3_destreak.fits', '6151', '001', 'F115W'),
         ('jw02221001001_02101_00001_nrcb3_destreak.fits', '2221', '001', 'F212N'),
         ('jw03958007001_02101_00001_nrcalong_destreak.fits', '3958', '007', 'F187N'),
         ('jw02092002002_02101_00003_nrcb3_destreak.fits', '2092', '002', 'F480M'),
@@ -382,7 +417,7 @@ def test_field_specific_entry_wins_over_proposal_wide():
     """2092's two observations resolve independently: obs002 keeps its recorded
     bulk, obs005 is on the consensus path.  Neither inherits the other's tie."""
     assert ac.resolve('2092', '002').source == ac.RECORDED_BULK
-    assert ac.resolve('2092', '005').source == ac.TABLE_CONSENSUS
+    assert ac.resolve('2092', '005').source == ac.TABLE_LOCKED
     assert ac.resolve('2092', '002').recorded_bulk
     assert not ac.resolve('2092', '005').recorded_bulk
 
@@ -557,3 +592,49 @@ def test_ambiguous_consensus_row_names_the_table_and_frame(tmp_path):
     fn = 'jw06151001001_02101_00003_nrcb3_destreak.fits'
     with pytest.raises(ValueError, match='table=.*consensus.csv'):
         ua.resolve_shift(fn, '6151', '001', 'F480M', 'nrcb', bp)
+
+
+# reader / writer agreement
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize('proposal,field,expect', [
+    ('2045', '001', 'consensus'),   # arches: no REGION entry, consensus table
+    ('2045', '003', 'locked'),      # quintuplet: REGION entry, locked table
+    ('5365', '001', 'locked'),      # sgrb2
+    ('4147', '012', 'locked'),      # sgrc -- the field the mismatch broke
+    ('2092', '005', 'locked'),      # cloudef obs005
+    ('2092', '002', 'consensus'),   # cloudef obs002: constant bulk + table jitter
+    ('1182', '004', 'locked'),
+    ('6151', '001', 'consensus'),   # w51: no table yet, checkpoint seeds one
+    ('1334', '001', 'none'),        # halo cluster: whole tie is a constant
+    ('9999', '001', 'none'),        # unconfigured
+])
+def test_checkpoint_writes_where_the_reducer_reads(proposal, field, expect):
+    """The channel the m2 checkpoint writes to must be the one fix_alignment
+    reads from, for every configured field.
+
+    Before this, the checkpoint picked its table by globbing filenames
+    (``*locked.csv`` first), independently of what the reducer was configured to
+    read.  On sgrc that meant corrections were written to VIRAC2locked while the
+    reducer looked for a _consensus.csv that never existed -- so a full reduction
+    came out at RAOFFSET=0.0 and the re-tie loop re-measured the same residual
+    forever.  Both sides now resolve through alignment_config.
+    """
+    from jwst_gc_pipeline.photometry.cataloging import _astrom_offsets_channel
+    assert _astrom_offsets_channel(proposal, field) == expect
+
+
+def test_offsets_table_path_follows_the_declared_channel(tmp_path):
+    """The path handed to the writer is the one the declared source names -- not
+    whatever table happens to sit on disk."""
+    from jwst_gc_pipeline.photometry.cataloging import _astrom_find_offsets_table
+    bp = str(tmp_path)
+    # a locked table on disk for a CONSENSUS-declared field must NOT be returned
+    _write_locked(bp, '6151',
+                  rows=[('jw06151001001', 'F480M', 0.1, 0.2)],
+                  colnames=('Visit', 'Filter', 'dra (arcsec)', 'ddec (arcsec)'))
+    assert _astrom_find_offsets_table(bp, '6151', '001') is None
+    # ... and once the consensus table exists, that is what comes back
+    path = _write_consensus(bp, '6151',
+                            rows=[('jw06151001001', 'F480M', -1, 'all', 0.0, 0.0)])
+    assert _astrom_find_offsets_table(bp, '6151', '001') == path

@@ -183,13 +183,17 @@ def _shift_from_recorded_bulk(fn, cfg, basepath, proposal_id, filtername, module
               f"frame (0,0)")
 
     # A recorded (hand-measured) bulk does not stop this field from running the
-    # m2 re-tie loop: the bulk stays fixed and only the small per-exposure term
-    # is re-solved.  Inert until the checkpoint has written a consensus table.
+    # m2 re-tie loop.  The recorded constant is the STARTING bulk; the
+    # checkpoint's sentinel is the residual consensus->reference tie measured on
+    # top of it, so the two SUM into the field's bulk, and the per-exposure rows
+    # remain the jitter.  Inert until the checkpoint has written a table.
     jit_ra = jit_dec = 0.0
     prov_table = 'alignment_config.py'
     if cfg.consensus_jitter:
-        jit_ra, jit_dec, tbl_name = _consensus_jitter(
+        sent_ra, sent_dec, jit_ra, jit_dec, tbl_name = _consensus_correction(
             fn, basepath, proposal_id, filtername, module)
+        dra += sent_ra
+        ddec += sent_dec
         if tbl_name:
             prov_table = f'alignment_config.py + {tbl_name}'
 
@@ -200,21 +204,32 @@ def _shift_from_recorded_bulk(fn, cfg, basepath, proposal_id, filtername, module
                           prov_table=prov_table)
 
 
-def _consensus_jitter(fn, basepath, proposal_id, filtername, module):
-    """Per-exposure JITTER from the consensus table, ignoring its BULK sentinel.
+def _consensus_correction(fn, basepath, proposal_id, filtername, module):
+    """The checkpoint's correction for this exposure: BULK sentinel + JITTER row.
 
-    Returns ``(dra, ddec, table_basename)``; zeros and ``''`` when no table
-    exists yet.  The sentinel is deliberately excluded: for these fields the
-    bulk comes from the recorded constant, and adding the sentinel too would
-    double-count the field-level tie.
+    Returns ``(sentinel_ra, sentinel_dec, jitter_ra, jitter_dec, table_basename)``;
+    zeros and ``''`` when no table exists yet.
+
+    The sentinel is INCLUDED, not skipped.  The checkpoint records corrections as
+    RESIDUALS measured on frames that already carry whatever tie was applied last
+    (``seed_offsets_table_from_consensus``: "the correction is the RESIDUAL after
+    the previous tie").  So on a field whose bulk is a recorded constant, the
+    sentinel is the *remaining* consensus->reference offset measured on top of
+    that constant -- not a second copy of it.  Dropping it would leave the field
+    with ``reference_frame=VIRAC2`` in the config and no path to VIRAC2 in the
+    applied shift, and would make the checkpoint re-measure and re-add the same
+    residual on every iteration: the exact non-convergence this whole change
+    exists to remove, one level up.  It would also make this reader and
+    ``lookup_consensus_offset`` disagree about the same frame in the same table.
     """
     tblfn = (f'{basepath}/offsets/'
              f'Offsets_JWST_Brick{proposal_id}_consensus.csv')
     if not os.path.exists(tblfn):
-        return 0.0, 0.0, ''
-    bulk_ra, bulk_dec, total_ra, total_dec, _ = _read_consensus(
+        return 0.0, 0.0, 0.0, 0.0, ''
+    sent_ra, sent_dec, total_ra, total_dec, _ = _read_consensus(
         tblfn, fn, filtername)
-    return total_ra - bulk_ra, total_dec - bulk_dec, os.path.basename(tblfn)
+    return (sent_ra, sent_dec, total_ra - sent_ra, total_dec - sent_dec,
+            os.path.basename(tblfn))
 
 
 def _read_consensus(tblfn, fn, filtername):
