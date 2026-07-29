@@ -19,7 +19,7 @@ def main():
     t = np.load(f"{OUTDIR}/terms_{FRAME}.npz")
     fl = t["flag"].astype(bool)
     sig = t["sig_oth"]
-    ok = np.isfinite(sig) & (sig > 0) & np.isfinite(t["t2"])
+    ok = np.isfinite(sig) & (sig > 0) & np.isfinite(t["t2"]) & (t["n_oth"] >= 5)
     z_ee = np.abs(t["t2"]) / sig
     total = np.abs(t["sci"] - t["blot"])
 
@@ -72,7 +72,8 @@ def main():
     if os.path.exists(dpath):
         dd = np.load(dpath)
         fld = dd["flag"].astype(bool)
-        m = fld & np.isfinite(dd["sig_within"]) & np.isfinite(dd["sig_across"])
+        m = (fld & np.isfinite(dd["sig_within"]) & np.isfinite(dd["sig_across"])
+             & (dd["n_ok"] >= 12))
         bins = np.logspace(-2, 1.2, 60)
         d.hist(dd["sig_within"][m], bins=bins, histtype="step", color="tab:blue",
                label=f"within one dither point (median {np.nanmedian(dd['sig_within'][m]):.2f})")
