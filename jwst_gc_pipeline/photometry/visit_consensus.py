@@ -20,6 +20,7 @@ sweep).  Source ASSOCIATION (building consensus positions) uses
 ``search_around_sky`` nearest-pair matching, which is safe because it happens
 only AFTER each exposure's relative offset has been measured and removed.
 """
+import os
 from collections import Counter
 
 import numpy as np
@@ -37,7 +38,17 @@ from .astrometry_offsets import (
 
 # An exposure whose bulk offset from the visit consensus exceeds this is
 # MISALIGNED: its im0 (first-pass) alignment must be replaced.
-EXPOSURE_CONSENSUS_TOL_MAS = 2.0
+#
+# The DEFAULT stays 2 mas: for the crowded Galactic Center fields 2 mas is a
+# HARD upper limit and must NOT be relaxed (user directive 2026-07-29).  This is
+# only made overridable via the EXPOSURE_CONSENSUS_TOL_MAS env var for the
+# sparser, less crowded disk fields where a normal well-aligned exposure carries
+# a larger per-exposure residual than 2 mas -- e.g. W51 (prop 6151), whose nrcb4
+# exposures sit ~3-5 mas off the visit consensus on every clean medium/narrow
+# band (well inside the field's ~17 mas absolute Gaia tie), tripped the m2
+# checkpoint on cleanly aligned filters at 2 mas.  W51 opts into 6 mas by
+# EXPORTING EXPOSURE_CONSENSUS_TOL_MAS=6 at submit time; unset -> 2 mas.
+EXPOSURE_CONSENSUS_TOL_MAS = float(os.environ.get('EXPOSURE_CONSENSUS_TOL_MAS', 2.0))
 
 # Same-star bulk refinement (memory: histogram-vs-samestar-offset-bias): the
 # all-pairs offset HISTOGRAM (check A) is biased by several mas against a DENSE

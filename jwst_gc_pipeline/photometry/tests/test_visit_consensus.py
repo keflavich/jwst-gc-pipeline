@@ -350,15 +350,19 @@ def test_mosaic_misalignment_detected_within_component():
 
 def test_two_exposure_component_ambiguity_overflags_never_hides():
     # n=2 component with one bad exposure: cannot attribute -> both read
-    # +-off/2 from the component frame and both are flagged (>2 mas).  The
-    # failure must NEVER be absorbed into a silent pass.
+    # +-off/2 from the component frame and both are flagged (> the tolerance).
+    # The failure must NEVER be absorbed into a silent pass.  Inject 3x the
+    # tolerance so each split (+-1.5x tol) stays clear of the threshold
+    # regardless of the EXPOSURE_CONSENSUS_TOL_MAS value.
+    from jwst_gc_pipeline.photometry.visit_consensus import EXPOSURE_CONSENSUS_TOL_MAS as TOL
+    inj = 3.0 * TOL
     tables = _tile_tables(0.0, n_exp=2, exp0=1, seed=27,
-                          misaligned={2: (8.0, 0.0)})
+                          misaligned={2: (inj, 0.0)})
     cons = build_visit_consensus(tables, context="test-n2-ambiguity")
     flagged = [e for e in cons["exposures"] if e["misaligned"]]
     assert len(flagged) == 2
     for e in flagged:
-        assert e["vs_consensus"]["off"] == pytest.approx(4.0, abs=1.5)
+        assert e["vs_consensus"]["off"] == pytest.approx(inj / 2.0, abs=1.5)
 
 
 def test_isolated_exposure_is_unverified_not_misaligned():
