@@ -21,6 +21,16 @@ Per cell: fraction of bright detections that have a truth-set match ("agreement"
 median offset.  Agreement ~1 where registered; it COLLAPSES in a misregistered band.
 FAIL if any covered cell drops below FRAC_FLOOR (or << field median) or offset > OFF_MAX.
 Non-zero exit on FAIL so it can gate a chain.
+
+A high-offset cell FAILs by any of three INDEPENDENT axes (see ``per_cell``):
+  ratio  : peak/background contrast >= FAIL_MIN_RATIO -- the historic, density-COUPLED
+           discriminant, kept transitionally.
+  sig    : Poisson significance of the peak over the EXPECTED wrong-pair background,
+           >= FAIL_MIN_SIG -- density-FLAT, so the bar means the same thing in a sparse
+           and a crowded cell.
+  contig : the cell is part of a vector-coherent 4-connected patch of >=MIN_SEAM_CELLS
+           high-offset cells -- amplitude-free, so it still works where every contrast
+           statistic is at the floor.
 """
 import argparse
 import glob
@@ -35,6 +45,7 @@ from astropy.io import fits
 from astropy.stats import sigma_clipped_stats
 from astropy.table import Table
 from astropy.wcs import WCS
+from scipy.ndimage import label as ndlabel
 from scipy.stats import binned_statistic_2d
 import matplotlib
 matplotlib.use("Agg")
@@ -58,6 +69,45 @@ FAIL_MIN_RATIO = 10.0            # a FAIL needs peak/background >= this -- CONFI
                                  # of those regions read <=22 mas, 2026-07). Coverage is
                                  # unchanged (no detections removed); only the fail bar rises.
 OFF_MAX = 60.0                   # a VERIFIED cell whose peak offset exceeds this (mas) -> FAIL
+FAIL_MIN_SIG = 55.0              # density-FLAT companion to FAIL_MIN_RATIO: Poisson significance
+                                 # of the peak over the EXPECTED wrong-pair background,
+                                 # (H.max()-lam)/sqrt(lam).  See ``_peak_stats`` for why lam is
+                                 # the MEAN over the search disk and not median(H[H>0]): the
+                                 # latter is pinned at exactly 1 count in every cell of every
+                                 # real field measured (brick F405N, 372 verified cells), which
+                                 # makes the published ratio a bare PEAK-COUNT threshold and
+                                 # makes (H.max()-bg)/sqrt(bg) identically ratio-1 -- a
+                                 # relabelling, not a new statistic.  With the mean background
+                                 # the statistic is genuinely density-flat: peak counts ~ n,
+                                 # lam ~ n^2, so sig ~ n/sqrt(n^2) = const while ratio ~ n.
+                                 # CALIBRATION (brick, 2026-07; full table in the PR for #170):
+                                 #   7 F405N artifact cells (m7 truth <=22 mas, must NOT fail):
+                                 #      sig 32.6-49.3   (ratio 5-8)
+                                 #   injected +90 mas seams (must fail), per-cell medians:
+                                 #      full-field 78.1, half-field 75.4, 10%-band 60.7
+                                 # 55 is the log-midpoint of the artifact ceiling (49.3) and the
+                                 # HARDEST seam's median (60.7).  At 55: 0/7 artifact cells fail
+                                 # and 290 / 130 / 28 seam cells fail.  The two populations do
+                                 # OVERLAP at the low end (both start at sig ~32), so this bar
+                                 # buys a field-level verdict, not a per-cell one.
+MIN_SEAM_CELLS = 3               # contiguity axis: >=this many 4-connected, vector-COHERENT
+                                 # high-offset cells is SEAM-SHAPED regardless of contrast; a
+                                 # scattered singleton is wrong-pair noise regardless of
+                                 # contrast.  Amplitude-free, so it is the one check that still
+                                 # works in the crowdedest cells where every contrast statistic
+                                 # is at the floor.  3, not the 2 proposed in #170: two of the
+                                 # seven brick F405N artifact cells ARE 4-adjacent ((12,13) and
+                                 # (13,13)) and -- measured, 2026-07 -- all seven share the same
+                                 # peak vector (+80, 0) mas, so vector coherence does NOT reject
+                                 # that pair.  A 2-cell bar would therefore re-create exactly
+                                 # the false FAIL this thread is about; 3 does not.  The
+                                 # injected 90 mas seam labels as ONE 371-cell component, so the
+                                 # bar has ~100x headroom on the seam side.
+SEAM_OFF_TOL = 40.0              # mas (== one XBIN); cells in a contiguous component must agree
+                                 # in their peak offset VECTOR to within this to count toward
+                                 # the same seam.  A seam is one rigid displacement shared by
+                                 # neighbouring cells; this drops the cells of a component that
+                                 # peak somewhere unrelated.
 
 
 def detect(path, thr=30.0):
@@ -86,7 +136,74 @@ def catalog_sc(field, filt):
     return None
 
 
-def per_cell(det, flux, truth, label, bright_pct=None, fail_min_ratio=MIN_PEAK_RATIO):
+def _offset_hist_bins():
+    """(bin edges, number of bins inside the |sep| < MX search disk) for the offset
+    histogram.  Chance pairs are uniform over that disk, so the disk bin count is the
+    denominator of the expected per-bin background."""
+    r = MX.to(u.arcsec).value * 1000
+    hb = np.arange(-r, r + XBIN * 1000, XBIN * 1000)
+    c = (hb[:-1] + hb[1:]) / 2
+    bx, by = np.meshgrid(c, c, indexing="ij")
+    return hb, int((np.hypot(bx, by) <= r).sum())
+
+
+HB, N_BG_BINS = _offset_hist_bins()
+
+
+def _peak_stats(H, npairs, n_bg_bins=N_BG_BINS):
+    """(peak, ratio, sig) for one cell's offset histogram.
+
+    ``ratio`` = H.max()/median(H[H>0]) is the historic discriminant.  MEASURED CAVEAT
+    (brick F405N, 2026-07): median(H[H>0]) is exactly 1 in every verified cell, because
+    the (2*MX/XBIN)^2 offset bins vastly outnumber the ~1e2-1e3 pairs in a cell, so every
+    occupied bin holds one count except the peak.  The "ratio" is therefore a bare
+    PEAK-COUNT threshold, and the naive Poisson significance (H.max()-bg)/sqrt(bg)
+    evaluates to exactly ratio-1 -- a relabelling with no new information.
+
+    ``sig`` therefore uses the EXPECTED background: chance pairs are uniform in the
+    (dRA, dDec) plane inside the |sep| < MX search disk, so their expected count per bin
+    is lam = npairs / n_bg_bins -- a fractional number that keeps scaling with density
+    where the median saturates at 1.  That restores the density-flat property:
+    peak ~ n, lam ~ n^2, so sig ~ n/sqrt(n^2) = const while ratio ~ n.
+    """
+    peak = float(H.max())
+    bg = np.median(H[H > 0]) if (H > 0).any() else 0.0
+    ratio = peak / bg if bg > 0 else np.inf
+    lam = npairs / float(n_bg_bins) if n_bg_bins else 0.0
+    sig = (peak - lam) / np.sqrt(lam) if lam > 0 else np.inf
+    return peak, ratio, sig
+
+
+def _seam_components(highoff, offx, offy, min_cells=MIN_SEAM_CELLS, off_tol=SEAM_OFF_TOL):
+    """Cells belonging to a vector-COHERENT contiguous patch of >=``min_cells`` cells.
+
+    Contiguity is the density-INDEPENDENT axis: it uses only the geometry of which cells
+    are high-offset, not the peak amplitude, so it still discriminates in the crowdedest
+    cells where every contrast statistic is at the floor.  A seam is one rigid
+    displacement shared by neighbouring cells, so only the members within ``off_tol`` of
+    the component's median offset VECTOR count, and the component fires only if
+    ``min_cells`` of them survive.  Requiring a MAJORITY rather than every member matters
+    on real data: an injected field-wide 90 mas seam labels as a single 371-cell
+    component in which a handful of cells peak elsewhere, and an all-members rule discards
+    the entire seam because of them.
+    """
+    out = np.zeros_like(highoff, dtype=bool)
+    if not highoff.any():
+        return out
+    lab, n = ndlabel(highoff)                     # 4-connectivity (default structure)
+    for c in range(1, n + 1):
+        m = lab == c
+        if m.sum() < min_cells:
+            continue
+        mx, my = np.nanmedian(offx[m]), np.nanmedian(offy[m])
+        coh = m & (np.hypot(offx - mx, offy - my) <= off_tol)
+        if coh.sum() >= min_cells:
+            out |= coh
+    return out
+
+
+def per_cell(det, flux, truth, label, bright_pct=None, fail_min_ratio=MIN_PEAK_RATIO,
+             fail_min_sig=FAIL_MIN_SIG):
     """Per-cell registration offset by pair-separation HISTOGRAM cross-correlation.
 
     For every det-truth pair within MX, bin by the detection's spatial cell and by the
@@ -95,15 +212,28 @@ def per_cell(det, flux, truth, label, bright_pct=None, fail_min_ratio=MIN_PEAK_R
     nearest-neighbour, which just measures the chance-NN distance in a dense field).
 
     A cell is VERIFIED only if it has >=MIN_PAIRS and peak/background >=MIN_PEAK_RATIO;
-    otherwise it is UNVERIFIED (reported, never a fail).  A verified cell FAILs if its
-    peak offset exceeds OFF_MAX *and* its contrast >= ``fail_min_ratio``.  Field FAIL =
-    any cell fails.
+    otherwise it is UNVERIFIED (reported, never a fail).  Field FAIL = any cell fails.
 
-    ``fail_min_ratio`` (default ``MIN_PEAK_RATIO`` -> the historic strict behaviour) is
-    raised to ``FAIL_MIN_RATIO`` ONLY for the own-catalog check, where a floor-level
-    peak in a dense bright-star cell is wrong-pair noise, not a seam.  The cross-band
-    and per-module checks keep the strict floor, so a real seam that own-catalog's
-    relaxed bar might miss is still caught by them (defense in depth).
+    A verified cell whose peak offset exceeds OFF_MAX FAILs by ANY of three independent
+    paths (a cell need satisfy only one):
+
+      ratio  : contrast >= ``fail_min_ratio``.  TRANSITIONAL -- the historic
+               density-COUPLED discriminant, kept so this change can only add
+               sensitivity, never remove it.  ``fail_min_ratio`` (default
+               ``MIN_PEAK_RATIO`` -> historic strict behaviour) is raised to
+               ``FAIL_MIN_RATIO`` ONLY for own-catalog, where a floor-level peak in a
+               dense bright-star cell is wrong-pair noise, not a seam.
+      sig    : Poisson significance (peak-lam)/sqrt(lam) >= ``fail_min_sig``, with lam
+               the EXPECTED wrong-pair count per bin (``_peak_stats``).  This is the
+               density-FLAT statistic: unlike the ratio it does not degrade as the
+               wrong-pair background rises, so the bar means the same thing in a sparse
+               and a crowded cell.  See FAIL_MIN_SIG for the calibration.
+      contig : the cell belongs to a vector-coherent contiguous patch of
+               >=MIN_SEAM_CELLS high-offset cells.  Amplitude-free, so it is the only
+               path that still works where every contrast statistic is at the floor.
+
+    Both statistics are reported per cell (``peak_bg`` and ``peak_sig``) and the fail
+    paths are broken out in ``n_fail_by_path`` so the two can be compared on real data.
     """
     if det is None or truth is None or len(det) < 200 or len(truth) < 200:
         return dict(label=label, error="missing detections/truth")
@@ -118,10 +248,11 @@ def per_cell(det, flux, truth, label, bright_pct=None, fail_min_ratio=MIN_PEAK_R
     ye = np.linspace(det.dec.deg.min(), det.dec.deg.max(), GRID + 1)
     ci = np.clip(np.digitize(pra, xe) - 1, 0, GRID - 1)
     cj = np.clip(np.digitize(pde, ye) - 1, 0, GRID - 1)
-    hb = np.arange(-MX.to(u.arcsec).value * 1000, MX.to(u.arcsec).value * 1000 + XBIN * 1000, XBIN * 1000)
-
-    off = np.full((GRID, GRID), np.nan)      # peak offset (mas)
-    ratio = np.full((GRID, GRID), np.nan)    # peak/background
+    off = np.full((GRID, GRID), np.nan)      # peak offset magnitude (mas)
+    offx = np.full((GRID, GRID), np.nan)     # peak dRA*cos  (mas), signed
+    offy = np.full((GRID, GRID), np.nan)     # peak dDec     (mas), signed
+    ratio = np.full((GRID, GRID), np.nan)    # peak/median(H[H>0])   (density-coupled)
+    sig = np.full((GRID, GRID), np.nan)      # (peak-lam)/sqrt(lam)  (density-flat)
     npair = np.zeros((GRID, GRID), int)
     order = np.lexsort((cj, ci))
     ci, cj, dra, dde = ci[order], cj[order], dra[order], dde[order]
@@ -132,40 +263,48 @@ def per_cell(det, flux, truth, label, bright_pct=None, fail_min_ratio=MIN_PEAK_R
         npair[k // GRID, k % GRID] = e - s
         if e - s < MIN_PAIRS:
             continue
-        H, xb, yb = np.histogram2d(dra[s:e], dde[s:e], bins=[hb, hb])
-        bg = np.median(H[H > 0]) if (H > 0).any() else 0.0
+        H, xb, yb = np.histogram2d(dra[s:e], dde[s:e], bins=[HB, HB])
         pi, pj = np.unravel_index(H.argmax(), H.shape)
         i0, j0 = k // GRID, k % GRID
-        ratio[i0, j0] = H.max() / bg if bg > 0 else np.inf
+        _, ratio[i0, j0], sig[i0, j0] = _peak_stats(H, e - s)
         # refine the peak to sub-bin with the local centroid
         dcen = (xb[pi] + xb[pi + 1]) / 2
         ecen = (yb[pj] + yb[pj + 1]) / 2
+        offx[i0, j0], offy[i0, j0] = dcen, ecen
         off[i0, j0] = np.hypot(dcen, ecen)
 
     verified = np.isfinite(ratio) & (ratio >= MIN_PEAK_RATIO) & (npair >= MIN_PAIRS)
-    # A FAIL requires a large offset AND confident contrast. A real localized seam
-    # doubles stars into a sharp high-contrast peak; a bright-star-crowded, sparse
-    # cell yields a floor-level peak (ratio ~ MIN_PEAK_RATIO) at a spurious offset.
-    # Sub-FAIL_MIN_RATIO high-offset cells stay verified-but-not-failed (reported).
-    fail = verified & (off > OFF_MAX) & (ratio >= fail_min_ratio)
-    # High offset but sub-fail_min_ratio contrast: NOT a fail, but reported so a real
+    highoff = verified & (off > OFF_MAX)
+    # Three INDEPENDENT fail paths (OR'd) -- see the docstring. Each is a different
+    # projection of "is this a seam or wrong-pair noise?", and each is weakest in a
+    # different regime, so the union is strictly more sensitive than any one.
+    fail_ratio = highoff & (ratio >= fail_min_ratio)          # transitional, density-coupled
+    fail_sig = highoff & (np.nan_to_num(sig, nan=0.0, posinf=1e30) >= fail_min_sig)
+    fail_contig = _seam_components(highoff, offx, offy)       # amplitude-free
+    fail = fail_ratio | fail_sig | fail_contig
+    # High offset but no fail path triggered: NOT a fail, but reported so a real
     # low-contrast issue is never silently hidden by the margin.
-    unconfident = verified & (off > OFF_MAX) & (ratio < fail_min_ratio)
-    worst = [dict(ra=float((xe[i] + xe[i + 1]) / 2), dec=float((ye[j] + ye[j + 1]) / 2),
-                  offset_mas=round(float(off[i, j]), 0), peak_bg=round(float(ratio[i, j]), 1),
-                  npairs=int(npair[i, j]))
-             for i, j in sorted(zip(*np.where(fail)), key=lambda c: -off[c])][:8]
-    unconfident_cells = [dict(ra=float((xe[i] + xe[i + 1]) / 2), dec=float((ye[j] + ye[j + 1]) / 2),
-                              offset_mas=round(float(off[i, j]), 0), peak_bg=round(float(ratio[i, j]), 1),
-                              npairs=int(npair[i, j]))
-                         for i, j in sorted(zip(*np.where(unconfident)), key=lambda c: -off[c])][:8]
+    unconfident = highoff & ~fail
+
+    def _cells(mask):
+        return [dict(ra=float((xe[i] + xe[i + 1]) / 2), dec=float((ye[j] + ye[j + 1]) / 2),
+                     offset_mas=round(float(off[i, j]), 0),
+                     peak_bg=round(float(ratio[i, j]), 1),
+                     peak_sig=round(float(sig[i, j]), 1),
+                     npairs=int(npair[i, j]),
+                     paths=[n for n, m in (("ratio", fail_ratio), ("sig", fail_sig),
+                                           ("contig", fail_contig)) if m[i, j]])
+                for i, j in sorted(zip(*np.where(mask)), key=lambda c: -off[c])][:8]
+
     return dict(label=label, verified_cells=int(verified.sum()),
                 unverified_cells=int((npair >= MIN_PAIRS).sum() - verified.sum()),
                 median_verified_offset_mas=round(float(np.nanmedian(off[verified])), 1) if verified.any() else None,
-                n_fail=int(fail.sum()), PASS=bool(fail.sum() == 0), worst=worst,
+                n_fail=int(fail.sum()), PASS=bool(fail.sum() == 0), worst=_cells(fail),
+                n_fail_by_path=dict(ratio=int(fail_ratio.sum()), sig=int(fail_sig.sum()),
+                                    contig=int(fail_contig.sum())),
                 n_unconfident_highoff=int(unconfident.sum()),
-                unconfident_highoff_cells=unconfident_cells,
-                _g=(off, verified, (xe, ye)))
+                unconfident_highoff_cells=_cells(unconfident),
+                _g=(off, verified, (xe, ye), ratio, sig, npair, offx, offy))
 
 
 def build_truths(field, filt, xband):
@@ -203,7 +342,7 @@ def plot_all(results, out):
     for ax, r in zip(axes, results):
         if "_g" not in r:
             ax.set_title(f"{r['label']}: {r.get('error','')}"); continue
-        off, verified, (xe, ye) = r["_g"]
+        off, verified, (xe, ye) = r["_g"][:3]
         shown = np.where(verified, off, np.nan)
         im = ax.pcolormesh(xe, ye, shown.T, cmap="inferno", vmin=0, vmax=max(OFF_MAX * 2, 100))
         ax.invert_xaxis(); plt.colorbar(im, ax=ax, label="verified peak offset [mas]")
@@ -283,6 +422,9 @@ def scan_field(field, verbose=True, images_only=False):
         if verbose:
             def _tag(k, v):
                 s = f"{k}={'PASS' if v.get('PASS') else 'FAIL:'+str(v.get('n_fail'))}"
+                if not v.get("PASS", True):
+                    p = v.get("n_fail_by_path") or {}
+                    s += "[" + ",".join(f"{n}:{c}" for n, c in p.items() if c) + "]"
                 nu = v.get("n_unconfident_highoff") or 0
                 return s + (f"(unconf={nu})" if nu else "")   # high-off, sub-margin cells
             tags = " ".join(_tag(k, v) for k, v in checks.items())
