@@ -220,22 +220,74 @@ def test_w51_consensus_reference_frame_is_gaia_not_virac(tmp_path):
 # the failure this refactor exists to expose
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize('proposal,field,target', [
-    ('2045', '001', 'arches'),
-    ('2045', '003', 'quintuplet'),
-    ('5365', '001', 'sgrb2'),
-    ('2092', '005', 'cloudef obs005'),
+@pytest.mark.parametrize('proposal,field,target,ref_filter', [
+    ('2045', '001', 'arches', 'F212N'),
+    ('2045', '003', 'quintuplet', 'F212N'),
+    ('5365', '001', 'sgrb2', 'F212N'),
+    ('2092', '005', 'cloudef obs005', 'F210M'),
 ])
-def test_unconfigured_fields_are_reported_not_silent(tmp_path, capsys,
-                                                     proposal, field, target):
-    """These fields fell through the old ``else`` and got (0,0) with no trace.
+def test_campaign_fields_are_now_tied(proposal, field, target, ref_filter):
+    """These four fell through the old ``else`` and got (0,0) with no trace, so
+    their m2 corrections went into a table nothing read and their re-tie loops
+    could never converge.  They are now on the consensus path."""
+    cfg = ac.resolve(proposal, field)
+    assert cfg is not None, f"{target} still has no alignment source"
+    assert cfg.source == ac.TABLE_CONSENSUS
+    assert cfg.reference_frame == ac.VIRAC2
+    assert cfg.reference_filter == ref_filter
 
-    The shift stays 0 here (PR A changes no numbers), but it now says so, and
-    ``configured=False`` makes the state machine-checkable instead of
-    indistinguishable from a genuine zero tie.
-    """
-    fn = f'jw0{proposal}{field}001_02101_00001_nrcb3_destreak_o{field}_crf.fits'
-    uni = ua.resolve_shift(fn, proposal, field, 'F212N', 'nrcb', str(tmp_path))
+
+def test_corrections_now_reach_the_frames(tmp_path):
+    """The shape of the arches failure end to end: a correction sitting in the
+    consensus table must now produce a non-zero shift on the frame."""
+    bp = str(tmp_path)
+    _write_consensus(bp, '2045', rows=[
+        ('jw02045001001', 'F212N', -1, 'all', 0.0210, -0.0080),
+        ('jw02045001001', 'F212N', 12, 'nrcb3', 0.0043, -0.0019),
+    ])
+    fn = 'jw02045001001_02101_00012_nrcb3_destreak.fits'
+    uni = ua.resolve_shift(fn, '2045', '001', 'F212N', 'nrcb', bp)
+    assert uni.configured
+    assert uni.bulk_ra == pytest.approx(0.0210)
+    assert uni.jitter_ra == pytest.approx(0.0043)
+    assert uni.total_ra == pytest.approx(0.0253)
+    assert uni.total_ra != 0.0, "this is the RAOFFSET=0.0 regression"
+
+
+def test_recorded_bulk_field_still_gets_consensus_jitter(tmp_path):
+    """A hand-measured bulk must not exclude a field from the re-tie loop.  The
+    bulk stays fixed at the recorded constant and only the per-exposure term
+    comes from the checkpoint's table."""
+    bp = str(tmp_path)
+    _write_consensus(bp, '2092', rows=[
+        # the sentinel is deliberately IGNORED here -- bulk comes from config,
+        # and adding this too would double-count the field-level tie
+        ('jw02092002002', 'F480M', -1, 'all', 0.9999, 0.9999),
+        ('jw02092002002', 'F480M', 3, 'nrcb3', 0.0031, -0.0022),
+    ])
+    fn = 'jw02092002002_02101_00003_nrcb3_destreak.fits'
+    uni = ua.resolve_shift(fn, '2092', '002', 'F480M', 'nrcb', bp)
+    assert uni.bulk_ra == pytest.approx(0.098)     # the recorded constant
+    assert uni.jitter_ra == pytest.approx(0.0031)  # from the consensus table
+    assert uni.total_ra == pytest.approx(0.098 + 0.0031)
+    assert 'consensus' in uni.prov_table and 'alignment_config' in uni.prov_table
+
+
+def test_consensus_jitter_is_inert_before_the_checkpoint_runs(tmp_path):
+    """No consensus table yet -> the recorded bulk applies unchanged."""
+    bp = str(tmp_path)
+    fn = 'jw02092002002_02101_00003_nrcb3_destreak.fits'
+    uni = ua.resolve_shift(fn, '2092', '002', 'F480M', 'nrcb', bp)
+    assert uni.bulk_ra == pytest.approx(0.098)
+    assert uni.jitter_ra == 0.0
+    assert uni.total_ra == pytest.approx(0.098)
+
+
+def test_a_genuinely_unknown_field_is_still_reported_not_silent(tmp_path, capsys):
+    """The loud-unconfigured path must survive: a proposal nobody has configured
+    still gets (0,0), but says so and stays machine-checkable via `configured`."""
+    fn = 'jw09999001001_02101_00001_nrcb3_destreak.fits'
+    uni = ua.resolve_shift(fn, '9999', '001', 'F212N', 'nrcb', str(tmp_path))
     assert uni.total_ra == 0.0 and uni.total_dec == 0.0
     assert not uni.configured
     out = capsys.readouterr().out
@@ -254,8 +306,8 @@ def test_configured_zero_is_distinguishable_from_unconfigured(tmp_path):
         'jw04147012001_06101_00004_nrcb3_destreak.fits',
         '4147', '012', 'F115W', 'nrcb', bp)
     untied = ua.resolve_shift(
-        'jw02045001001_02101_00001_nrcb3_destreak.fits',
-        '2045', '001', 'F212N', 'nrcb', bp)
+        'jw09999001001_02101_00001_nrcb3_destreak.fits',
+        '9999', '001', 'F212N', 'nrcb', bp)
     assert tied.total_ra == untied.total_ra == 0.0
     assert tied.configured and not untied.configured
 
@@ -316,10 +368,12 @@ def test_every_config_entry_is_well_formed():
 
 
 def test_field_specific_entry_wins_over_proposal_wide():
-    """2092 has an obs-002-specific entry; a proposal-wide entry must not
-    shadow it, and obs 005 must not inherit obs 002's shift."""
+    """2092's two observations resolve independently: obs002 keeps its recorded
+    bulk, obs005 is on the consensus path.  Neither inherits the other's tie."""
     assert ac.resolve('2092', '002').source == ac.RECORDED_BULK
-    assert ac.resolve('2092', '005') is None
+    assert ac.resolve('2092', '005').source == ac.TABLE_CONSENSUS
+    assert ac.resolve('2092', '002').recorded_bulk
+    assert not ac.resolve('2092', '005').recorded_bulk
 
 
 # ---------------------------------------------------------------------------

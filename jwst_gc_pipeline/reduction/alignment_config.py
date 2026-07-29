@@ -137,6 +137,18 @@ class FieldAlignment:
     #: ``RECORDED_BULK`` only: print a warning when an exposure has no entry
     #: (it is then left at the raw frame).
     warn_on_missing: bool = False
+    #: Read per-exposure JITTER rows from the consensus table even when the BULK
+    #: comes from somewhere else (a recorded constant).  This is what lets a
+    #: field with a hand-measured bulk still run the m2 re-tie loop: bulk stays
+    #: fixed and only the small per-exposure term is re-solved each iteration.
+    #: Implied for ``TABLE_CONSENSUS`` (its table carries both row kinds).
+    consensus_jitter: bool = False
+    #: Band whose visit consensus defines this field's internal frame.  The
+    #: consensus catalog is dense and already tied to the reference, so it is a
+    #: valid frame for every band of the field; the choice is about which band
+    #: gives the best-measured consensus.  Usually F212N / F210M / F200W -- bright,
+    #: uncrowded enough to centroid well, and present in most GC programs.
+    reference_filter: Optional[str] = None
     #: Free-text provenance -- why these numbers, measured when/how.
     notes: str = ''
 
@@ -176,6 +188,7 @@ ALIGNMENT_CONFIG = (
     FieldAlignment(
         proposal='4147', fields=None,
         reference_frame=VIRAC2, source=TABLE_CONSENSUS,
+        reference_filter='F212N',
         notes=('sgrc. Per-exposure consensus re-tie (2026-07-16); tweakreg is '
                'skipped, so without this the exposures scatter ~2-8 mas around '
                'the visit consensus.'),
@@ -183,15 +196,47 @@ ALIGNMENT_CONFIG = (
     FieldAlignment(
         proposal='6151', fields=None,
         reference_frame=GAIA, source=TABLE_CONSENSUS,
+        reference_filter='F200W',
         notes=('w51. Same class as sgrc; outside the VVV/VIRAC2 footprint, so the '
                'bulk sentinel ties the consensus to gaia_refcat.fits.'),
+    ),
+    FieldAlignment(
+        proposal='2045', fields=('001',),
+        reference_frame=VIRAC2, source=TABLE_CONSENSUS,
+        reference_filter='F212N',
+        notes=('arches. Had NO alignment source at all: 2045 was absent from the '
+               'old dispatch, so every frame fell to the else and got (0,0) while '
+               'the m2 checkpoint wrote an 86-row consensus table nothing read. '
+               'The re-tie loop returned 86 corrections on three consecutive '
+               'iterations because the corrections never reached the frames.'),
+    ),
+    FieldAlignment(
+        proposal='2045', fields=('003',),
+        reference_frame=VIRAC2, source=TABLE_CONSENSUS,
+        reference_filter='F212N',
+        notes='quintuplet. Same 2045 gap as arches above.',
+    ),
+    FieldAlignment(
+        proposal='5365', fields=None,
+        reference_frame=VIRAC2, source=TABLE_CONSENSUS,
+        reference_filter='F212N',
+        notes=('sgrb2. Absent from the old dispatch -> unaligned. 14 filters, so '
+               'the reference band matters most here.'),
+    ),
+    FieldAlignment(
+        proposal='2092', fields=('005',),
+        reference_frame=VIRAC2, source=TABLE_CONSENSUS,
+        reference_filter='F210M',
+        notes=('cloudef obs005. Only obs002 had a branch in the old dispatch, so '
+               'obs005 fell through to the else. No F212N in this program, so the '
+               'consensus is defined on F210M.'),
     ),
 
     # -- Recorded bulk offsets (pure bulk, no jitter term) --
     FieldAlignment(
         proposal='2092', fields=('002',),
         reference_frame=VIRAC2, source=RECORDED_BULK,
-        visit_key='suffix3',
+        visit_key='suffix3', consensus_jitter=True, reference_filter='F210M',
         recorded_bulk={
             ('002', ANY): BulkEntry(0.098, -0.171),
         },
@@ -205,6 +250,7 @@ ALIGNMENT_CONFIG = (
         proposal='3958', fields=('007',),
         reference_frame=GNS, source=RECORDED_BULK,
         visit_key='full', dec_ref_deg=-28.805,
+        consensus_jitter=True, reference_filter='F210M',
         recorded_bulk={
             (ANY, 'F187N'): BulkEntry(-89.7, -34.2, onsky_mas=True),
             (ANY, 'F210M'): BulkEntry(-88.5, -34.5, onsky_mas=True),

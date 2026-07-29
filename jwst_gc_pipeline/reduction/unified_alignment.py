@@ -162,7 +162,8 @@ def resolve_shift(fn, proposal_id, field, filtername, module, basepath,
         return AlignmentShift(configured=False, table_present=False)
 
     if cfg.source == RECORDED_BULK:
-        return _shift_from_recorded_bulk(fn, cfg, filtername)
+        return _shift_from_recorded_bulk(fn, cfg, basepath, proposal_id,
+                                         filtername, module)
     if cfg.source == TABLE_CONSENSUS:
         return _shift_from_consensus(fn, cfg, basepath, proposal_id, filtername,
                                      module)
@@ -173,53 +174,76 @@ def resolve_shift(fn, proposal_id, field, filtername, module, basepath,
                      f"{proposal_id} field {field}")
 
 
-def _shift_from_recorded_bulk(fn, cfg, filtername):
+def _shift_from_recorded_bulk(fn, cfg, basepath, proposal_id, filtername, module):
     visit = _cfgmod.visit_key_for(cfg, fn)
     dra, ddec, found = _cfgmod.lookup_recorded_bulk(cfg, visit, filtername)
     if not found and cfg.warn_on_missing:
         print(f"WARNING: no recorded bulk tie for ({visit}, "
               f"{str(filtername).upper()}); leaving {os.path.basename(fn)} at raw "
               f"frame (0,0)")
+
+    # A recorded (hand-measured) bulk does not stop this field from running the
+    # m2 re-tie loop: the bulk stays fixed and only the small per-exposure term
+    # is re-solved.  Inert until the checkpoint has written a consensus table.
+    jit_ra = jit_dec = 0.0
+    prov_table = 'alignment_config.py'
+    if cfg.consensus_jitter:
+        jit_ra, jit_dec, tbl_name = _consensus_jitter(
+            fn, basepath, proposal_id, filtername, module)
+        if tbl_name:
+            prov_table = f'alignment_config.py + {tbl_name}'
+
     return AlignmentShift(bulk_ra=dra, bulk_dec=ddec,
+                          jitter_ra=jit_ra, jitter_dec=jit_dec,
                           source=RECORDED_BULK,
                           reference_frame=cfg.reference_frame,
-                          prov_table='alignment_config.py')
+                          prov_table=prov_table)
 
 
-def _shift_from_consensus(fn, cfg, basepath, proposal_id, filtername, module):
-    """Consensus table: BULK sentinel row + sparse per-exposure JITTER rows."""
+def _consensus_jitter(fn, basepath, proposal_id, filtername, module):
+    """Per-exposure JITTER from the consensus table, ignoring its BULK sentinel.
+
+    Returns ``(dra, ddec, table_basename)``; zeros and ``''`` when no table
+    exists yet.  The sentinel is deliberately excluded: for these fields the
+    bulk comes from the recorded constant, and adding the sentinel too would
+    double-count the field-level tie.
+    """
+    tblfn = (f'{basepath}/offsets/'
+             f'Offsets_JWST_Brick{proposal_id}_consensus.csv')
+    if not os.path.exists(tblfn):
+        return 0.0, 0.0, ''
+    bulk_ra, bulk_dec, total_ra, total_dec, _ = _read_consensus(
+        tblfn, fn, filtername)
+    return total_ra - bulk_ra, total_dec - bulk_dec, os.path.basename(tblfn)
+
+
+def _read_consensus(tblfn, fn, filtername):
+    """Split a consensus table row set into its BULK and TOTAL parts.
+
+    Returns ``(bulk_ra, bulk_dec, total_ra, total_dec, prov_stage)``.  TOTAL
+    comes from the shared ``lookup_consensus_offset`` so this stays bit-identical
+    to what the checkpoint itself computes; BULK is the per-visit sentinel row,
+    read directly.  Callers derive jitter as ``total - bulk``.
+    """
     from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
         BULK_EXPOSURE, BULK_MODULE, lookup_consensus_offset,
     )
 
-    tblfn = (f'{basepath}/offsets/'
-             f'Offsets_JWST_Brick{proposal_id}_consensus.csv')
-    if not os.path.exists(tblfn):
-        print(f"[consensus] no table {tblfn} yet; leaving "
-              f"{os.path.basename(fn)} at frame (0,0)")
-        return AlignmentShift(source=TABLE_CONSENSUS,
-                              reference_frame=cfg.reference_frame,
-                              prov_table=os.path.basename(tblfn),
-                              table_present=False, prov_stage='NO_TABLE')
-
     tbl = Table.read(tblfn)
-    visit = os.path.basename(fn).split('_')[0]
-    exposure = int(os.path.basename(fn).split('_')[-3])
-    thismodule = os.path.basename(fn).split('_')[-2]
+    base = os.path.basename(fn)
+    visit = base.split('_')[0]
+    exposure = int(base.split('_')[-3])
+    thismodule = base.split('_')[-2]
     # exposure numbers restart per visit group, so the group is part of the
     # identity -- narrowing the jitter lookup by it (#183)
-    vgroup = os.path.basename(fn).split('_')[1]
+    vgroup = base.split('_')[1]
 
-    # TOTAL comes from the shared helper so this path stays bit-identical to
-    # what the checkpoint itself computes.
     try:
         total_ra, total_dec = lookup_consensus_offset(
             tbl, visit, exposure, thismodule, filtername, vgroup=vgroup)
     except ValueError as ex:
-        raise ValueError(
-            f"{ex} [table={tblfn}, frame={os.path.basename(fn)}]") from ex
+        raise ValueError(f"{ex} [table={tblfn}, frame={base}]") from ex
 
-    # BULK is the per-visit sentinel row, read directly.
     bulk_ra = bulk_dec = 0.0
     sel = ((tbl['Visit'] == visit) & (tbl['Filter'] == filtername)
            & (tbl['Exposure'] == BULK_EXPOSURE) & (tbl['Module'] == BULK_MODULE))
@@ -235,6 +259,23 @@ def _shift_from_consensus(fn, cfg, basepath, proposal_id, filtername, module):
     prov_stage = ''
     if 'prov_stage' in tbl.colnames and nb == 1:
         prov_stage = str(tbl[sel]['prov_stage'][0])
+    return bulk_ra, bulk_dec, total_ra, total_dec, prov_stage
+
+
+def _shift_from_consensus(fn, cfg, basepath, proposal_id, filtername, module):
+    """Consensus table: BULK sentinel row + sparse per-exposure JITTER rows."""
+    tblfn = (f'{basepath}/offsets/'
+             f'Offsets_JWST_Brick{proposal_id}_consensus.csv')
+    if not os.path.exists(tblfn):
+        print(f"[consensus] no table {tblfn} yet; leaving "
+              f"{os.path.basename(fn)} at frame (0,0)")
+        return AlignmentShift(source=TABLE_CONSENSUS,
+                              reference_frame=cfg.reference_frame,
+                              prov_table=os.path.basename(tblfn),
+                              table_present=False, prov_stage='NO_TABLE')
+
+    bulk_ra, bulk_dec, total_ra, total_dec, prov_stage = _read_consensus(
+        tblfn, fn, filtername)
 
     return AlignmentShift(
         bulk_ra=bulk_ra, bulk_dec=bulk_dec,
