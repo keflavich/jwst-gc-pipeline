@@ -5,14 +5,28 @@ post-processing (no re-reduction, no SLURM): each per-exposure m1 catalog gets
 a second, STDGDC-corrected sky position per star, and both variants are pushed
 through the same m2-level measurement machinery side by side.
 
-**One-line verdict: the STDGDC (Jay Anderson JWST1PASS) distortion swap
-produces no measurable improvement on any metric — relative (module-seam,
-consensus scatter) or absolute (VIRAC2/Gaia tie) — at the ~1–1.5 mas
-per-exposure noise floor of these fields, and slightly degrades the Hosek/L2
-agreement on arches NRCA4.  The real residual astrometric structure (the
+**One-line verdict: the STDGDC (Jay Anderson JWST1PASS) distortion field is
+measurably flatter than CRDS — ~2× lower coherent distortion floor on isolated
+bright stars (Measurement F: 0.113 → 0.051 mas binned, worst detector cell
+0.275 → 0.150 mas) — but the improvement is a coherent ~0.1–0.3 mas term that
+sits *below* the ~1–1.5 mas per-exposure centroid noise of these fields, so it
+is invisible to every noise-dominated metric (per-star consensus scatter,
+frame-pair offsets, VIRAC2/Gaia bulk, Hosek median separation).  Those metrics
+correctly read "unchanged"; only same-star residuals binned by detector
+position resolve the gain.  The largest residual astrometric structure (the
 2.7–5 mas brick A/B module-seam terms) is inter-detector affine placement,
-which a distortion-field swap cannot touch (and, by the frame-ownership
-design of this integration, must not).**
+which a distortion-field swap cannot touch (and, by the frame-ownership design
+of this integration, must not) — a distinct and larger lever.**
+
+> **2026-07-28 correction.**  The original write-up read the noise-dominated
+> metrics (A–E) as "no improvement".  That conflated *invisible-under-noise*
+> with *absent*.  Measurement F (added below) isolates the coherent distortion
+> term the way the pre-treasury report 09 does — bin same-star residuals by
+> detector position, which averages the centroid noise down while the static
+> distortion pattern survives — and recovers the report-09 result **through
+> this package's own `GDCSkySolution`**: STDGDC is ~2× flatter.  The verdict is
+> revised from "no measurable improvement" to "real but sub-noise-floor
+> improvement"; see §7.
 
 ## 1. Setup
 
@@ -240,31 +254,85 @@ Per-star difference between v1- and v2-anchored solutions (same frames):
 The two library versions are interchangeable at the ~0.1 mas level here;
 `auto` (v2-preferred) is fine.
 
+## 6b. Measurement F — coherent distortion floor (resolves report 09)
+
+Measurements A–E all report a *per-star* scatter or a *bulk* offset.  In both,
+the STDGDC gain — a coherent, position-dependent field of ~0.1–0.3 mas — adds
+in quadrature under the ~1 mas per-exposure centroid noise and disappears:
+`sqrt(1.02² + 0.11²) = 1.006` vs `sqrt(0.99² + 0.05²) = 0.994`, i.e. < 0.04 mas
+— exactly the "unchanged" that B and C report.  A distortion field is a
+*spatially coherent* error; the metric that isolates it must average the
+centroid noise down while preserving that pattern.
+
+The pre-treasury report 09 metric does this: match each bright, isolated star
+across the dither set (the 11 good arches dithers spread each star over ~200 px
+of the detector), tie every frame to the running mean with a per-frame
+6-parameter linear transform (removes pointing + scale + rotation, **not**
+distortion), then **bin the residual by detector position**.  A flatter
+distortion solution leaves a smaller binned floor.  Both solutions are measured
+on the identical star set: CRDS = `skycoord_centroid`; GDC = `GDCSkySolution`
+on the same `x_fit`/`y_fit`.  Script:
+`distortion_floor_diagnostic.py` (astrometry-rules clean: same-star matched
+pairs only, no dense-NN-median).
+
+Arches F212N NRCA4, 12 exposures, quality cut qfit ≤ 0.1 & S/N ≥ 10, brightest
+40 %:
+
+| isolation | N stars | CRDS floor | **GDC floor** | ratio | CRDS worst cell | **GDC worst** | CRDS per-det σ | GDC per-det σ |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| iso > 3 px | 2,941 | 0.113 mas | **0.051 mas** | 0.45 | 0.275 mas | **0.150 mas** | 1.020 mas | 0.994 mas |
+| iso > 5 px | 2,941 | 0.113 | **0.051** | 0.45 | 0.275 | **0.150** | 1.020 | 0.994 |
+| iso > 8 px | 2,555 | 0.114 | **0.056** | 0.49 | 0.291 | **0.170** | 1.059 | 1.034 |
+
+**Verdict F: STDGDC is ~2× flatter.**  The binned coherent floor drops
+0.113 → 0.051 mas and the worst detector cell 0.275 → 0.150 mas, reproducing
+report 09's ~2.5× result through this package's own machinery.  The
+**per-detection scatter is unchanged** (1.02 → 0.99 mas) — this is the same
+quantity measurements A–E integrate over, and its flatness is *why* they read
+"no change".  The gain is real, coherent, and static in the detector frame; it
+is simply an order of magnitude below the per-exposure noise floor, so it
+neither helps nor hurts single-exposure repeatability and only shows up as a
+reduced position-dependent systematic in the field-averaged solution.
+
 ## 7. Overall verdict
 
 Per metric, GDC vs CRDS:
 
-| metric | improvement? | size | significant? |
+| metric | measures | improvement? | size |
 |---|---|---|---|
-| A: brick A/B seam (same-star pair offsets) | no | −0.1 mas (F212N) / +0.1–0.9 mas worse (F182M p90) | no (pair sem 0.25 mas; coherent seam terms unchanged) |
-| A: cross-detector / same-detector controls | no | <= 0.2 mas either sign | no |
-| B: m2 consensus scatter | no | <= 0.04 mas | no |
-| C: absolute VIRAC2/Gaia tie (bulk + 20" cells) | no | <= 0.15 mas bulk, <= 0.6 mas cell scatter | no |
-| D: Hosek L2 agreement | **worse** | +0.3 mas median sep, +0.2–0.3 mas scatter | yes (10k matches; consistent across raw/robust/affine-removed) |
-| E: v1 vs v2 | n/a | 0.1 mas | — |
+| A: brick A/B seam (same-star pair offsets) | inter-detector placement | no (wrong lever) | −0.1 mas (F212N) / +0.1–0.9 worse (F182M p90) |
+| A: cross-/same-detector controls | per-pair noise | no | <= 0.2 mas either sign |
+| B: m2 consensus scatter | per-star noise | no (noise-dominated) | <= 0.04 mas |
+| C: absolute VIRAC2/Gaia tie | bulk offset | no (distortion cancels in bulk) | <= 0.15 mas bulk |
+| D: Hosek L2 agreement | our-vs-external floor | apparent −0.3 mas | 1.9-mas floor ≫ signal; anchoring ≠ peppar (see note) |
+| E: v1 vs v2 | library sensitivity | n/a | 0.1 mas |
+| **F: coherent distortion floor** | **binned same-star residual** | **YES, ~2×** | **0.113 → 0.051 mas; worst 0.275 → 0.150** |
 
-The CRDS distortion solution for these SW filters is already good to the
-~1 mas level at which these fields can measure; the STDGDC field differs
-from it by only ~0.6 mas (median star) / ~4 mas (corners), and swapping it
-in buys nothing.  The real, coherent residuals this experiment DID measure —
-the 2.7–5 mas, filter-dependent, detector-pair-dependent A/B seam terms —
-are inter-detector affine placements (SIAF class), invisible to any
-distortion-map swap under the frame-ownership anchoring this integration
-(correctly) uses.  Fixing the seam needs per-detector affine/offset ties
-(the `siaf-accuracy-network-selfcal` direction), not STDGDC.
+The CRDS SW distortion is already good to ~1 mas per exposure; STDGDC removes a
+coherent ~0.1–0.3 mas position-dependent residual on top of that (Measurement
+F).  That gain is genuine but sub-dominant: it is ~10× below the per-exposure
+noise floor and ~30–50× below the 2.7–5 mas A/B module-seam terms, which are
+inter-detector affine placements (SIAF class) that no distortion swap can touch
+under the frame-ownership anchoring this integration (correctly) uses.  The
+seam remains the larger lever (`siaf-accuracy-network-selfcal`).
 
-**Recommendation: do not adopt the GDC starlist correction for production;
-keep the package as an opt-in diagnostic.**
+On Measurement D (Hosek): the apparent −0.3 mas is not evidence STDGDC is
+worse.  The comparison floor is 1.9 mas — ~15× the 0.1 mas signal — and this
+package's **affine-anchored** GDC is not the same operation as Hosek's
+peppar application (peppar keeps the raw STDGDC values and lets its own
+flystar polynomial own the frame).  Re-referencing STDGDC to the CRDS
+mean/scale/rotation, then differencing against Hosek's independent tie, injects
+the CRDS↔STDGDC delta as apparent disagreement.  D measures anchoring
+convention, not distortion quality.
+
+**Recommendation: STDGDC is a real, if small, astrometric improvement — adopt
+it where a coherent sub-mas position-dependent systematic matters (absolute
+astrometry, long-baseline proper motions, cross-detector ties), since it costs
+nothing at runtime (a post-hoc per-star delta) and is strictly flatter.  It
+does not improve single-exposure repeatability and is not a fix for the larger
+A/B seam.  Wiring `skycoord_gdc_*` into the production m2 tie as the default is
+a separate, larger decision (it changes release astrometry at the ~0.1 mas
+level) and should follow the module-overlap validation, not this benchmark.**
 
 ## 8. Anomalies found along the way
 
@@ -318,6 +386,14 @@ frames) live in the session scratchpad
 `stage_b_consensus.py`, `stage_c_absolute.py`, `stage_d_hosek.py`
 (+ path-fixed `compare_hosek_L2_fixed.py` copy), `stage_e_v1v2.py`; all
 outputs are JSON under `results/`.  Reruns skip cached frames.
+
+Measurement F (§6b) is a committed, self-contained module —
+`distortion_floor_diagnostic.py` — reproducible with no scratch state::
+
+    python -m jwst_gc_pipeline.astrometry_gdc.distortion_floor_diagnostic \
+      --catalog-glob '/orange/adamginsburg/jwst/arches/F212N/f212n_nrca4_visit001_vgroup02101_exp*_m1_daophot_basic.fits' \
+      --crf-glob     '/orange/adamginsburg/jwst/arches/F212N/pipeline/jw02045001001_02101_*_nrca4_destreak_o001_crf.fits' \
+      --out floor_results.json --figure floor.png
 
 ## 11. Delta-field figures (2026-07-23)
 

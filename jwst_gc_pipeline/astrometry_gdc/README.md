@@ -105,14 +105,29 @@ adds `skycoord_gdc_ra`/`skycoord_gdc_dec` (deg) + provenance meta
 (`GDCFILE`, `GDCVERS`, `GDCAFFX/Y`, `GDCRMS`, ...); it never overwrites
 existing skycoord columns.
 
-## Experiment results (2026-07-23)
+## Experiment results (2026-07-23, corrected 2026-07-28)
 
-**Run — see `GDC_EXPERIMENT_REPORT.md` in this directory.**  Outcome: no
-measurable improvement on any relative or absolute metric (arches+brick,
-F212N+F182M, 480 frames); the Hosek/L2 agreement is slightly degraded; the
-brick A/B seam terms are inter-detector affine placement, untouchable by a
-distortion swap.  Recommendation: keep this package as an opt-in diagnostic,
-do not adopt for production.
+**Run — see `GDC_EXPERIMENT_REPORT.md` in this directory.**
+
+STDGDC is **~2× flatter** than CRDS on the coherent distortion floor —
+0.113 → 0.051 mas binned same-star residual, worst detector cell 0.275 → 0.150
+mas, on isolated bright arches F212N NRCA4 stars (Measurement F,
+`distortion_floor_diagnostic.py`; reproduces pre-treasury report 09 through
+this package's own `GDCSkySolution`).  The gain is a coherent ~0.1–0.3 mas
+position-dependent term that sits **below** the ~1 mas per-exposure centroid
+noise, so it is invisible to the per-star / bulk metrics (A–E: consensus
+scatter, frame-pair offsets, VIRAC2/Gaia bulk, Hosek median separation all read
+"unchanged" — per-detection scatter is 1.02 → 0.99 mas).  The apparent Hosek
+degradation is an anchoring-convention artifact, not a distortion regression
+(§7).  The larger 2.7–5 mas brick A/B seam is inter-detector affine placement,
+untouchable by a distortion swap (separate SIAF-class lever).
+
+**Recommendation:** a real, if small, improvement — adopt where a coherent
+sub-mas position-dependent systematic matters (absolute astrometry, long-baseline
+PM, cross-detector ties); it costs nothing at runtime and is strictly flatter.
+Wiring `skycoord_gdc_*` into the production m2 tie as the default is a separate,
+larger decision (changes release astrometry at ~0.1 mas) pending the
+module-overlap validation.
 
 ## Intended experiment
 
