@@ -53,6 +53,24 @@ def _exposure_table(ra, dec, visit="001", exposure=1, module="nrcb1",
     return tbl
 
 
+def test_reliable_star_with_nonfinite_coord_does_not_crash_consensus():
+    """A reliable (good snr/qfit) star can carry a non-finite RA/Dec -- e.g. a
+    saturated-core replacement / recovered row whose position solve failed.  Such
+    a row must be dropped, not fed into the parity-halves cKDTree (which raises
+    "data must be finite") -- the brick F410M zeroframe-recovery m3 checkpoint
+    crash (2026-07-29).  Use >16 exposures to exercise the KD-tree path."""
+    ra, dec = _field(n=300)
+    tables = [_exposure_table(ra, dec, exposure=e) for e in range(1, 19)]
+    # inject a NaN coordinate into one reliable star of one exposure
+    bad = tables[5]["skycoord"]
+    tables[5]["skycoord"] = SkyCoord(
+        ra=np.concatenate([[np.nan], bad.ra.deg[1:]]) * u.deg,
+        dec=np.concatenate([[np.nan], bad.dec.deg[1:]]) * u.deg, frame="icrs")
+    cons = build_visit_consensus(tables, context="test-nan-coord")
+    assert np.all(np.isfinite(cons["coords"].ra.deg))
+    assert np.all(np.isfinite(cons["coords"].dec.deg))
+
+
 def test_exposure_key_distinguishes_visit_groups():
     """A visit can dither across several vgroups and the exposure number
     RESTARTS in each, so (visit, exposure, module, filter) is ambiguous:
