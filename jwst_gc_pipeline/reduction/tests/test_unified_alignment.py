@@ -237,6 +237,17 @@ def test_campaign_fields_are_now_tied(proposal, field, target, ref_filter):
     assert cfg.reference_filter == ref_filter
 
 
+def test_gc2211_is_tied():
+    """gc2211 had an m2-written VIRAC2locked table with arcsecond-scale ties and
+    no dispatch entry, so nothing read it.  One proposal-wide entry covers all
+    five observations because they are separated by Visit, not by field."""
+    for field in ('023', '028', '046', '049', '050'):
+        cfg = ac.resolve('2211', field)
+        assert cfg is not None, f"gc2211 o{field} still has no alignment source"
+        assert cfg.source == ac.TABLE_LOCKED
+        assert cfg.reference_frame == ac.VIRAC2
+
+
 def test_corrections_now_reach_the_frames(tmp_path):
     """The shape of the arches failure end to end: a correction sitting in the
     consensus table must now produce a non-zero shift on the frame."""

@@ -224,6 +224,17 @@ ALIGNMENT_CONFIG = (
                'the reference band matters most here.'),
     ),
     FieldAlignment(
+        proposal='2211', fields=None,
+        reference_frame=VIRAC2, source=TABLE_LOCKED,
+        reference_filter='F200W',
+        notes=('gc2211. Absent from the old dispatch -> unaligned, so its '
+               'Offsets_JWST_Brick2211_VIRAC2locked.csv (per-exposure, m2-written, '
+               'arcsecond-scale ties) was read by nothing. Five observations '
+               '(023/028/046/049/050) that all reduce to visit001 and reuse vgroup '
+               'ids, so the table separates them by Visit -- one proposal-wide entry '
+               'covers all five. Rebuild is pending --per-module + Vgroup.'),
+    ),
+    FieldAlignment(
         proposal='2092', fields=('005',),
         reference_frame=VIRAC2, source=TABLE_CONSENSUS,
         reference_filter='F210M',
