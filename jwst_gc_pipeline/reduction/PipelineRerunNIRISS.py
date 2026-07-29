@@ -570,7 +570,15 @@ def fix_alignment(fn, proposal_id=None, regionname='sgrc', field=None, basepath=
         align_fits = fits.open(fn)
         align_fits[1].header['OLCRVAL1'] = align_fits[1].header['CRVAL1']
         align_fits[1].header['OLCRVAL2'] = align_fits[1].header['CRVAL2']
-        align_fits[1].header.update(ww.to_fits()[0])
+        # See fits_wcs_sync: gwcs's to_fits() default (0.25 px) writes a SIP
+        # fit several mas off the GWCS and merges over the delivered one.
+        from jwst_gc_pipeline.reduction.fits_wcs_sync import sync_header_to_gwcs
+        _sip_max, _sip_med = sync_header_to_gwcs(
+            align_fits[1].header, ww, fa.data.shape, label=os.path.basename(fn))
+        print(f"FITS/SIP header synced to GWCS: max {_sip_max:.4f} mas, "
+              f"median {_sip_med:.4f} mas")
+        align_fits[1].header['SIPGWMAX'] = (
+            _sip_max, '[mas] max FITS/SIP vs GWCS disagreement')
         align_fits[1].header['RAOFFSET'] = rashift.value
         align_fits[1].header['DEOFFSET'] = decshift.value
         align_fits.writeto(fn, overwrite=True)

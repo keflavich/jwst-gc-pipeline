@@ -154,6 +154,71 @@ provenance cards (stage, method, applied shift, references, table) next to
 
 ---
 
+## ⛔ The GWCS is authoritative; the FITS/SIP header is a fitted approximation
+
+Every detector-frame product carries **two** WCS representations:
+
+| representation | where | status |
+|---|---|---|
+| **GWCS** (ASDF extension, `model.meta.wcs`) | `_cal`, `_destreak`, `_align`, `_crf` | **authoritative** — the full SIAF distortion + velocity aberration + projection chain |
+| FITS `RA---TAN-SIP` (SCI header) | same files | a *fitted low-order polynomial approximation* of the GWCS, for plain-`astropy.wcs` consumers (DS9/CARTA, `reproject`) |
+
+SIP cannot represent the JWST distortion exactly — only fit it. **Read the GWCS
+for anything astrometric.** The SIP header exists for display and for external
+tools, and its fidelity is a property of how it was fitted.
+
+### The 0.25 px default trap (found 2026-07-29)
+
+`gwcs.WCS.to_fits()` / `to_fits_sip()` default to `max_pix_error=0.25` **pixels**.
+STScI's `jwst.assign_wcs.util.update_fits_wcsinfo` uses `0.01`. Every place the
+pipeline re-stamped a corrected GWCS with a bare `header.update(ww.to_fits()[0])`
+therefore *replaced the delivered fit with one an order of magnitude worse*:
+
+| product | `A_ORDER` | median | max FITS-vs-GWCS |
+|---|---|---|---|
+| brick F182M nrca1 `_cal` (MAST, 0.01 px) | 4 | 0.17 mas | 0.49 mas |
+| brick F182M nrca1 `_destreak`/`_crf` | 3 | 0.83 mas | **5.5 mas** |
+| brick F410M nrcalong `_crf` | 3 | 0.63 mas | **6.6 mas** |
+| sickle F770W `_align`/`_crf` (MIRI) | 3 | 1.22 mas | **8.4 mas** |
+| same GWCS refit at `max_pix_error=0.01` | 4–5 | 0.000 mas | 0.000 mas |
+
+That 5–8 mas is *position-dependent* and differs per detector **and per filter**,
+so it is not removed by a bulk tie: it injects spurious structure exactly where
+the astrometric gates look (2 mas m2 per-exposure consensus, 5 mas m7
+cross-filter, 30 mas inter-frame overlap).
+
+Two further defects of the bare update, both now fixed:
+
+1. `Header.update` **merges**. A degree-3 fit written over a delivered degree-4
+   header leaves orphan `A_0_4`/`A_4_0`/`A_2_2` cards that contradict the
+   written `A_ORDER=3`. Present on every `_destreak.fits` in the archive.
+2. Nothing ever *checked* that the written FITS WCS reproduced the GWCS.
+   `check_wcs` compared only the array **centre**, which agrees by construction
+   — the distortion residual lives at the corners.
+
+### The rule
+
+- Any FITS WCS header written for a frame goes through
+  **`jwst_gc_pipeline.reduction.fits_wcs_sync.sync_header_to_gwcs`**: it strips
+  stale SIP coefficients, fits at `max_pix_error=0.01`, then **measures** the
+  result against the GWCS over the whole array and raises
+  `FitsGwcsMismatchError` above `FITS_GWCS_TOL_MAS` (0.5 mas). The achieved
+  value is stamped as `SIPGWMAX`.
+- Never call `ww.to_fits()` / `to_fits_sip()` with default arguments to write a
+  header. (Reading `to_fits()[0]['CRVAL1']` for a log line is fine.)
+- `astropy.wcs.WCS(header)` on a detector-frame product must always pass
+  `relax=True` — a header whose CTYPE lost the `-SIP` suffix still carries the
+  `A_*`/`B_*` terms, and without `relax` the distortion is silently dropped.
+- Audit existing products with
+  `python scripts/release/audit_fits_gwcs_agreement.py --field <field>`.
+  Frames written before this fix read 5–8 mas and need regeneration *if*
+  anything downstream reads their FITS header rather than their GWCS.
+
+`i2d` mosaics are exempt: `resample` produces a rectified plain `RA---TAN` grid
+with no SIP, so their FITS WCS is exact.
+
+---
+
 ## Offsets-table provenance (how each `offsets/Offsets_*.csv` is built)
 
 `fix_alignment` reads a per-frame offsets table

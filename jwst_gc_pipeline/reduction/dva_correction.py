@@ -78,10 +78,13 @@ tables so the tie sees DVA-consistent frames; applying after an existing
 tie only re-introduces a small common shift, which the next tie absorbs.
 """
 import copy
+import os
 
 import numpy as np
 from astropy import units as u
 from astropy.io import fits
+
+from jwst_gc_pipeline.reduction.fits_wcs_sync import sync_header_to_gwcs
 
 __all__ = ['interdetector_dva_shift_deg', 'apply_dva_correction',
            'dva_shift_needed']
@@ -188,7 +191,12 @@ def apply_dva_correction(fn, verbose=True):
         h = hdul['SCI'].header
         h['OLCRVAL1'] = h['CRVAL1']
         h['OLCRVAL2'] = h['CRVAL2']
-        h.update(ww.to_fits()[0])
+        # Verified tight SIP fit, not gwcs's 0.25 px default -- see
+        # jwst_gc_pipeline.reduction.fits_wcs_sync.  (A DVA shift is itself a
+        # few mas; writing it through a 5 mas-error SIP fit defeats the point.)
+        _sip_max, _sip_med = sync_header_to_gwcs(h, ww, fa.data.shape,
+                                                 label=os.path.basename(fn))
+        h['SIPGWMAX'] = (_sip_max, '[mas] max FITS/SIP vs GWCS disagreement')
         h[DVA_MARKER] = (True, 'inter-detector DVA shift applied')
         h[DVA_PENDING] = (False, 'DVA apply completed')
         h['DVASHRA'] = (dra, '[deg] DVA inter-detector RA coord shift')
