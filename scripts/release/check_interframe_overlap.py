@@ -81,7 +81,23 @@ def _detect(path, nsigma=8.0, box=5):
 _CRF_RE = re.compile(
     r"^jw(?P<prop>\d{5})(?P<obs>\d{3})(?P<visit>\d{3})_\d+_\d+_"
     r"(?P<det>mirimage|nrc[ab](?:long|[1-4])?)"
-    r"(?:_[a-z0-9]+)*?_o(?P<obs2>\d{3})_crf\.fits$")
+    r"(?P<lineage>(?:_[a-z0-9]+)*?)_o(?P<obs2>\d{3})_crf\.fits$")
+
+#: Lineage tokens of the RETIRED post-resample realignment path
+#: (``realign_to_vvv`` / ``sync_gwcs_to_fits_wcs``, removed 2026-07-11 --
+#: see ASTROMETRY_WCS_CORRECTION_FLOW.md).  Products from it are still on disk
+#: and still match ``jw*_crf.fits``.
+#:
+#: They must never be pooled into a registration verdict: in those files the
+#: FITS header and the ASDF GWCS disagree with EACH OTHER by arcseconds,
+#: because that path realigned one representation and not the other.  Measured
+#: 2026-07-29 on cloudc F405N -- all 32 ``*_realigned_to_vvv_*_crf.fits``
+#: frames read 8.0-8.1 ARCSEC FITS-vs-GWCS, against 6.7 mas for the live
+#: ``*_destreak_o002_crf.fits`` products in the same directory.  Which number
+#: the gate saw therefore depended on which representation it happened to read
+#: -- exactly the stale-frame-via-permissive-glob failure of #175/#176, and it
+#: would change behaviour again the moment the reader switches to the GWCS.
+_RETIRED_LINEAGE_TOKENS = ("realigned", "refcat", "vvv")
 
 
 def _parse_crf(name):
@@ -98,6 +114,12 @@ def _parse_crf(name):
     # disagree (a product-named crf copied into a per-exposure name) is a parse
     # failure, not a coin-flip on whichever token the code happens to read
     if m.group("obs2") != m.group("obs"):
+        return None
+    # Retired-path products (see _RETIRED_LINEAGE_TOKENS): their FITS header and
+    # their GWCS disagree by arcseconds, so pooling them makes the verdict a
+    # coin-flip on which representation the reader used.
+    lineage = set(m.group("lineage").split("_")) - {""}
+    if lineage & set(_RETIRED_LINEAGE_TOKENS):
         return None
     det = m.group("det")
     module = "mirimage" if det == "mirimage" else det[:4]

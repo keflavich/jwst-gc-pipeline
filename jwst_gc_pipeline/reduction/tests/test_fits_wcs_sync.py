@@ -92,6 +92,53 @@ def test_sync_header_to_gwcs_raises_when_it_cannot_meet_tolerance():
         sync_header_to_gwcs(fits.Header(), g, SHAPE, tol_mas=1e-9)
 
 
+def test_the_gate_is_the_measured_error_not_the_requested_bound():
+    """The ladder cannot slip a bad header past on an unread warning.
+
+    ``sip_header_from_gwcs`` loosens its request when 0.01 px is unreachable and
+    warns; if the warning goes unread, ``sync_header_to_gwcs``'s verification is
+    all that is left.  That verification gates on the **measured** disagreement,
+    not on the requested ``max_pix_error`` -- which is the property that makes
+    the ladder safe.
+
+    Note the two are NOT interchangeable: ``max_pix_error`` is an upper bound on
+    a fit whose degree is discrete, so the achieved error is often far better
+    than requested.  On real frames the loosest rung (0.1 px) achieves 0.594 mas
+    (brick SW), 4.394 mas (LW) and 8.392 mas (MIRI) -- all over tolerance, so
+    all would raise; but on a weakly-distorted WCS the same 0.1 px request lands
+    at 0.107 mas, which is genuinely fine and correctly passes.  Asserting
+    "loose rung => always raises" would therefore be wrong.  Assert the real
+    invariant instead: measured over tolerance <=> raises.
+    """
+    from jwst_gc_pipeline.reduction.fits_wcs_sync import (_FALLBACK_PIX_ERRORS,
+                                                          FITS_GWCS_TOL_MAS)
+    g = _distorted_gwcs()
+    for rung in _FALLBACK_PIX_ERRORS:
+        hdr = sip_header_from_gwcs(g, max_pix_error=rung)
+        measured, _ = fits_gwcs_discrepancy_mas(hdr, g, SHAPE)
+        if measured > FITS_GWCS_TOL_MAS:
+            with pytest.raises(FitsGwcsMismatchError, match='disagrees with'):
+                sync_header_to_gwcs(fits.Header(), g, SHAPE, max_pix_error=rung)
+        else:
+            got, _ = sync_header_to_gwcs(fits.Header(), g, SHAPE,
+                                         max_pix_error=rung)
+            assert got == pytest.approx(measured, rel=1e-9)
+
+
+def test_a_genuinely_bad_fit_raises_even_though_it_only_warned():
+    """The concrete case behind the invariant above: a distortion strong enough
+    that a loose request produces a header over tolerance.  The fit warns AND
+    the write is refused -- the warning is a diagnostic, never the only guard."""
+    from jwst_gc_pipeline.reduction.fits_wcs_sync import FITS_GWCS_TOL_MAS
+    # 100x the fixture's distortion: degree-3 cannot represent it
+    g = _distorted_gwcs(amplitude=3e-2)
+    hdr = sip_header_from_gwcs(g, max_pix_error=0.1)
+    measured, _ = fits_gwcs_discrepancy_mas(hdr, g, SHAPE)
+    assert measured > FITS_GWCS_TOL_MAS, measured
+    with pytest.raises(FitsGwcsMismatchError, match='disagrees with'):
+        sync_header_to_gwcs(fits.Header(), g, SHAPE, max_pix_error=0.1)
+
+
 def test_stale_high_order_sip_coefficients_are_stripped():
     """``Header.update`` merges: a degree-3 fit over a degree-4 header leaves
     orphan A_0_4/A_4_0/... cards that disagree with the written A_ORDER.

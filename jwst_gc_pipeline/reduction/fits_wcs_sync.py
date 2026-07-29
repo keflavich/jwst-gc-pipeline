@@ -37,22 +37,38 @@ different low-order surface per detector *and per filter*, so it injects
 spurious cross-filter and cross-detector structure exactly where the
 astrometric gates look.
 
+**The whole 5-8 mas is attributable to ``max_pix_error``** -- to the degree-3
+refit itself, and to nothing else.  See the note on orphan coefficients below
+before assuming otherwise.
+
 Two further defects the bare ``header.update()`` had:
 
 1. ``Header.update`` **merges**.  Overwriting a degree-4 header with a degree-3
-   fit leaves orphan ``A_0_4``/``A_4_0``/``A_2_2``... cards behind, disagreeing
-   with the ``A_ORDER=3`` that astropy honours.  Observed on every
-   ``_destreak.fits`` in the archive.
+   fit leaves orphan ``A_0_4``/``A_1_3``/``A_2_2``/``A_3_1``/``A_4_0`` cards
+   behind, contradicting the ``A_ORDER=3`` written beside them.  Observed on
+   every ``_destreak.fits`` in the archive.
+
+   **These orphans are inert in astropy and contribute 0.000 mas** -- astropy
+   allocates the SIP coefficient matrix from ``A_ORDER`` and never reads terms
+   above it (measured: deleting all ten orphan cards changes positions by
+   0.000000 mas over an 8x8 grid on the full array).  They are stripped anyway,
+   because a header that contradicts itself is a trap for any reader that
+   infers the order from the cards present rather than from ``A_ORDER``, and
+   for non-astropy consumers -- but they are *not* part of the measured error.
+
 2. Nothing ever *checked* that the written FITS WCS reproduced the GWCS.
+   ``check_wcs`` compared only the array **centre**, where the distortion
+   residual is identically zero by construction.  A 25x accuracy regression
+   survived because the check was placed where the error vanishes.
 
 So: fit tight, strip stale coefficients, and **verify against the GWCS before
 returning**.
 
 Rule of thumb
 -------------
-Read the GWCS (``jwst_gc_pipeline.frame_wcs.open_frame_wcs``) whenever it
-exists.  Use this module only at the few points where a FITS header genuinely
-must be written for an external consumer.
+Read the GWCS (``jwst_gc_pipeline.frame_wcs.frame_wcs``) whenever it exists.
+Use this module only at the few points where a FITS header genuinely must be
+written for an external consumer.
 """
 import os
 import re
@@ -77,6 +93,26 @@ SIP_MAX_PIX_ERROR = float(os.environ.get('SIP_MAX_PIX_ERROR', 0.01))
 FITS_GWCS_TOL_MAS = float(os.environ.get('FITS_GWCS_TOL_MAS', 0.5))
 
 #: Fallback ladder if the tight fit cannot be achieved (degree caps out at 9).
+#:
+#: The ladder cannot silently degrade a header, because
+#: :func:`sync_header_to_gwcs` gates on the **measured** disagreement, not on
+#: the requested ``max_pix_error``.  The warning is a diagnostic; the
+#: measurement is the guard.
+#:
+#: Do not reason from the rung to an error budget -- ``max_pix_error`` is an
+#: upper bound on a fit whose DEGREE is discrete, so the achieved error is
+#: usually far better than requested and the relationship is not monotonic in
+#: any useful way.  Measured (requested px -> achieved mas):
+#:
+#:   brick SW nrca1    0.01->0.000  0.02->0.594  0.05->0.594  0.1->0.594  0.25->5.487
+#:   brick LW nrcalong 0.01->0.000  0.02->0.000  0.05->0.000  0.1->4.394  0.25->6.586
+#:   sickle MIRI       0.01->0.000  0.02->0.000  0.05->0.000  0.1->8.392  0.25->8.392
+#:
+#: In practice no real frame has needed the ladder at all: 0.01 px converges on
+#: the first try for NIRCam SW/LW and for MIRI (8 MIRI frames across
+#: sickle/brick/cloudc/w51, all degree 4, all achieving <1e-4 mas) -- so MIRI,
+#: despite auditing worst at 8.39 mas *as previously written*, is not a case
+#: that exercises the ladder.
 _FALLBACK_PIX_ERRORS = (0.01, 0.02, 0.05, 0.1)
 
 _SIP_KEY_RE = re.compile(r'^(A|B|AP|BP)_(\d+_\d+|ORDER)$')

@@ -190,11 +190,18 @@ cross-filter, 30 mas inter-frame overlap).
 Two further defects of the bare update, both now fixed:
 
 1. `Header.update` **merges**. A degree-3 fit written over a delivered degree-4
-   header leaves orphan `A_0_4`/`A_4_0`/`A_2_2` cards that contradict the
-   written `A_ORDER=3`. Present on every `_destreak.fits` in the archive.
+   header leaves orphan `A_0_4`/`A_1_3`/`A_2_2`/`A_3_1`/`A_4_0` cards that
+   contradict the written `A_ORDER=3`. Present on every `_destreak.fits` in the
+   archive. **These orphans are inert in astropy and are NOT part of the 5–8 mas**
+   — astropy sizes the SIP matrix from `A_ORDER` and never reads terms above it
+   (deleting all ten changes positions by 0.000000 mas). The entire discrepancy
+   is attributable to `max_pix_error` alone. They are stripped anyway, because a
+   self-contradicting header is a trap for any reader that infers the order from
+   the cards present, and for non-astropy consumers.
 2. Nothing ever *checked* that the written FITS WCS reproduced the GWCS.
    `check_wcs` compared only the array **centre**, which agrees by construction
-   — the distortion residual lives at the corners.
+   — the distortion residual lives at the corners. A 25× accuracy regression
+   survived because the check was placed exactly where the error vanishes.
 
 ### The rule
 
