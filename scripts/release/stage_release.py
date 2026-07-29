@@ -573,6 +573,9 @@ def _frame_bulk_offset(sc, ref):
     off, source = r["off"], "histogram"
     if r.get("ok") and not r.get("swept"):
         try:
+            # cell_arcsec=1e9 = ONE cell spanning the whole footprint: we want the
+            # single field-wide same-star bulk here, not a per-cell distortion map,
+            # so the giant cell pools every matched pair into one robust residual.
             lrm = local_residual_map(sc, ref, r, cell_arcsec=1e9,
                                      match_radius=0.3 * u.arcsec, min_stars=200)
             cells = lrm.get("cells") or []
@@ -616,16 +619,28 @@ def check_catalog_on_frame(items, field, tol_mas=FRAME_TOL_MAS):
         col = next((c for c in ("skycoord", "skycoord_ref") if c in t.colnames), None)
         if col is None:
             continue
-        good = np.isfinite(SkyCoord(t[col]).ra.deg)
+        finite = np.isfinite(SkyCoord(t[col]).ra.deg)
+        sat = np.zeros(len(t), dtype=bool)
         for satcol in ("is_saturated", "replaced_saturated"):
             if satcol in t.colnames:
-                good &= ~np.asarray(t[satcol], dtype=bool)
-        sc = SkyCoord(t[col])[good]
+                sat |= np.asarray(t[satcol], dtype=bool)
+        sc_all = SkyCoord(t[col])[finite]
+        sc = SkyCoord(t[col])[finite & ~sat]
         off, source = _frame_bulk_offset(sc, ref)
         ok = off is not None and off <= tol_mas
+        # Report the saturated-INCLUDED offset alongside the (gating) clean one --
+        # print only, never gates.  Saturated-star centroids carry a strong
+        # flux-dependent bias (worst in F187N) and are excluded from the gate, but
+        # that bias is itself a finding; keeping the with-saturated number in the
+        # staging log means a future regression in saturated-star astrometry shows
+        # up in the same place, instead of the gate silently absorbing it.
+        off_sat, _ = _frame_bulk_offset(sc_all, ref) if sat.any() else (None, "")
+        satnote = "" if not sat.any() else (
+            f"  [with-saturated: {'no tie' if off_sat is None else f'{off_sat:.1f} mas'}"
+            f", {int(sat.sum())} sat]")
         print(f"  frame {it['filter']} {it.get('observation') or ''}: bulk vs Gaia-refcat "
               + ("no tie" if off is None else f"{off:.1f} mas ({source})")
-              + f"  {'ok' if ok else 'OFF-FRAME'}", flush=True)
+              + f"  {'ok' if ok else 'OFF-FRAME'}" + satnote, flush=True)
         if not ok:
             fails.append(((it["filter"], it.get("observation")), off))
     return fails
