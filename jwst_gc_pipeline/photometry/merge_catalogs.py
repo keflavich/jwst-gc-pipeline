@@ -641,6 +641,18 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     avg_dec = nanaverage(arr_dec, axis=1, weights=pos_weights)
     std_ra = nanaverage((arr_ra - avg_ra[:, None])**2, weights=pos_weights, axis=1)**0.5
     std_dec = nanaverage((arr_dec - avg_dec[:, None])**2, weights=pos_weights, axis=1)**0.5
+    # A positional scatter needs >=2 contributing frames.  With a single kept
+    # match (nmatch_good==1) the sole (arr - avg) term is exactly 0, so std_ra/
+    # std_dec come out as an EXACT 0 -- a scatter of zero mas that falsely
+    # advertises infinite positional precision for an unconstrained one-frame
+    # source, and lets it sail through the hypot(std_ra,std_dec)<=maxpos_mas
+    # multi-frame confirmation gate (cataloging.py) as if it had perfect
+    # multi-frame agreement.  A single sample cannot estimate a scatter: mark it
+    # undefined (NaN) so downstream isfinite() gates exclude it from any
+    # position-consistency tier instead of admitting it on a fake zero.
+    _n_pos = nmatch_good
+    std_ra = np.where(_n_pos >= 2, std_ra, np.nan)
+    std_dec = np.where(_n_pos >= 2, std_dec, np.nan)
     avgpos = SkyCoord(avg_ra, avg_dec, unit=(u.deg, u.deg), frame='icrs')
     print(f"Phase 1: position averages done in {time.time()-_t0:.1f}s", flush=True)
 

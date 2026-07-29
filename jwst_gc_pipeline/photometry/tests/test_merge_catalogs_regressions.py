@@ -172,6 +172,71 @@ def test_combine_singleframe_keeps_sources_with_nan_fluxerr(_sci_fits):
         f"NaN flux_avg at rows {np.where(~np.isfinite(flux_avg))[0]}"
 
 
+def test_combine_singleframe_single_frame_position_std_is_nan(_sci_fits):
+    """A single-frame source must get std_ra/std_dec = NaN, not an exact 0.
+
+    Positional scatter is a population std over the contributing frames.  With
+    only one kept match the sole (arr - avg) term is exactly 0, so the old code
+    reported std_ra == std_dec == 0.0 -- a zero-mas scatter that (a) advertises
+    infinite precision for an unconstrained one-frame source and (b) passes the
+    hypot(std_ra,std_dec) <= maxpos_mas multi-frame confirmation gate in
+    cataloging as if the source had perfect multi-frame agreement.  A single
+    sample cannot estimate a scatter: it must be NaN so downstream isfinite()
+    gates exclude it.  Multi-frame sources must still get a FINITE std.
+    """
+    rng = np.random.default_rng(7)
+    n_multi = 4          # sources present in every frame
+    n_frame = 4
+
+    base_ra = 266.5 + np.arange(n_multi) * (1.0 / 3600.0)
+    base_dec = np.full(n_multi, -28.8)
+    # The solo source sits well away from the multi-frame ones and appears in
+    # frame 0 ONLY -> nmatch_good == 1.
+    solo_ra = 266.5 + (n_multi + 3) * (1.0 / 3600.0)
+    solo_dec = -28.8
+
+    tbls = []
+    for f in range(n_frame):
+        ra = base_ra + rng.normal(scale=1e-6, size=n_multi)
+        dec = base_dec + rng.normal(scale=1e-6, size=n_multi)
+        flux = np.full(n_multi, 1000.0)
+        dflux = np.full(n_multi, 10.0)
+        qf = np.full(n_multi, 1.0)
+        fracflux = np.full(n_multi, 0.9)
+        if f == 0:
+            ra = np.append(ra, solo_ra)
+            dec = np.append(dec, solo_dec)
+            flux = np.append(flux, 1000.0)
+            dflux = np.append(dflux, 10.0)
+            qf = np.append(qf, 1.0)
+            fracflux = np.append(fracflux, 0.9)
+        sc = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame='icrs')
+        tbls.append(_make_crowdsource_frame(sc, flux, dflux, qf, fracflux,
+                                            exposure=f + 1, filename=_sci_fits))
+
+    out = MC.combine_singleframe(tbls, nanaverage=MC.nanaverage_numpy)
+
+    nmg = np.asarray(out['nmatch_good'], dtype=float)
+    std_ra = np.asarray(out['std_ra'], dtype=float)
+    std_dec = np.asarray(out['std_dec'], dtype=float)
+
+    solo = nmg <= 1
+    multi = nmg >= 2
+    assert solo.sum() >= 1, "test did not produce a single-frame source"
+    assert multi.sum() >= 1, "test did not produce a multi-frame source"
+
+    # single-frame -> NaN (was exactly 0.0 before the fix)
+    assert np.all(np.isnan(std_ra[solo])), \
+        f"single-frame std_ra not NaN: {std_ra[solo]}"
+    assert np.all(np.isnan(std_dec[solo])), \
+        f"single-frame std_dec not NaN: {std_dec[solo]}"
+    # multi-frame -> finite (fix must not blank real scatter)
+    assert np.all(np.isfinite(std_ra[multi])), \
+        f"multi-frame std_ra not finite: {std_ra[multi]}"
+    assert np.all(np.isfinite(std_dec[multi])), \
+        f"multi-frame std_dec not finite: {std_dec[multi]}"
+
+
 # ---------------------------------------------------------------------------
 # merge_catalogs: missing ref_filter must raise (no silent reference switch).
 # ---------------------------------------------------------------------------
