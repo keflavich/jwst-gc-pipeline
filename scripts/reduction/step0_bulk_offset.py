@@ -16,9 +16,18 @@ The expensive re-measure is skipped when nothing that could change the answer
 has changed -- see ``bulk_offset_step0.generation_hash``.
 
 ORDERING: this needs source positions, so **m1 per-frame cataloging must have
-run**.  It reads catalogs built on the raw-WCS frames; a rigid field shift moves
-every source identically, so a pre-alignment catalog measures the bulk offset
-perfectly well.
+run**.  A rigid field shift moves every source identically, so a pre-alignment
+catalog measures the bulk offset perfectly well.
+
+CATALOG STATE: the per-frame catalogs on this archive are usually built AFTER the
+correction was applied -- the frames carry ``RAOFFSET``/``DEOFFSET`` -- so a fresh
+measurement is the residual the frames still owe rather than the bulk itself.
+Step 0 reads the applied value and verifies ``recorded - applied``, printing all
+three numbers; ``--assume-raw-wcs`` compares against the recorded bulk instead.
+
+VISITS: a field whose visits carry different bulk ties (brick 1182 obs004 visit
+001 sits ~17" from visit 002) cannot be verified by one measurement over both.
+Step 0 refuses and asks for ``--visit``.
 
 Examples
 --------
@@ -45,9 +54,12 @@ from astropy.table import Table
 
 from jwst_gc_pipeline.reduction import alignment_config as ac
 from jwst_gc_pipeline.reduction.bulk_offset_step0 import (
-    BULK_NO_ROW, BULK_NONE, BULK_TABLE_ABSENT, BulkOffsetVerificationError,
-    bulk_tie_state, recorded_bulk_mas, reference_frame_matches_refcat,
-    step0_bulk_offset,
+    BULK_NO_ROW, BULK_NONE, BULK_TABLE_ABSENT, BULK_VISITS_DISAGREE,
+    BULK_VISITS_MIXED, REFCAT_PATTERNS, BulkOffsetVerificationError,
+    applied_bulk_mas, bulk_tie_state, default_catalog_glob,
+    default_frame_glob, duplicate_exposure_catalogs,
+    recorded_bulk_over_visits, refcat_for_frame,
+    reference_frame_matches_refcat, step0_bulk_offset, verify_tolerance_mas,
 )
 
 
@@ -95,7 +107,8 @@ def main(argv=None):
     ap.add_argument('--basepath', default=None,
                     help='default /orange/adamginsburg/jwst/<target>')
     ap.add_argument('--refcat', default=None,
-                    help='gaia+virac2 seed refcat (default: newest in <basepath>/catalogs)')
+                    help='reference catalog (default: the one under '
+                         '<basepath>/catalogs matching the field\'s frame)')
     ap.add_argument('--catalog-glob', default=None,
                     help='per-frame catalogs (default: the standard per-frame pattern)')
     ap.add_argument('--mtag', default='_m1',
@@ -103,6 +116,14 @@ def main(argv=None):
                          'a field cataloged only through m2 needs _m2)')
     ap.add_argument('--frame-glob', default=None,
                     help='frames whose WCS generation is hashed')
+    ap.add_argument('--visit', default=None,
+                    help='scope the run to one visit, as the 3-digit suffix (e.g. '
+                         '002). Required when a field\'s visits carry different '
+                         'bulk ties -- one stacked measurement cannot verify two.')
+    ap.add_argument('--assume-raw-wcs', action='store_true',
+                    help='compare against the recorded bulk even when the frames '
+                         'already carry an applied offset (default: verify the '
+                         'residual the frames still owe)')
     ap.add_argument('--allow-measure', action='store_true',
                     help='permit MEASURE mode when nothing is on record (new data)')
     ap.add_argument('--force', action='store_true',
@@ -111,27 +132,29 @@ def main(argv=None):
 
     basepath = args.basepath or f'/orange/adamginsburg/jwst/{args.target}'
     filt = args.filtername.upper()
+    cfg = ac.resolve(args.proposal, args.field)
+    state = bulk_tie_state(args.proposal, args.field)
 
     refcat = args.refcat
     if refcat is None:
-        cands = sorted(glob.glob(f'{basepath}/catalogs/gaia_virac2_refcat*.fits'))
-        if not cands:
-            print(f"ERROR: no gaia_virac2_refcat*.fits in {basepath}/catalogs; "
-                  f"pass --refcat", file=sys.stderr)
+        refcat, cands = refcat_for_frame(
+            basepath, cfg.reference_frame if cfg else '')
+        if refcat is None:
+            print(f"ERROR: no reference catalog in {basepath}/catalogs matching "
+                  f"{list(REFCAT_PATTERNS)}; pass --refcat", file=sys.stderr)
             return 2
-        refcat = cands[-1]
+        if len(cands) > 1:
+            print(f"[step0] {len(cands)} reference catalogs available; chose "
+                  f"{os.path.basename(refcat)} for the "
+                  f"{cfg.reference_frame if cfg else 'unknown'} frame")
 
-    # Same shape build_virac2_offsets._gather uses; the filter token comes FIRST
-    # and the catalogs sit directly under <basepath>/<FILT>/.
-    # The exposure number is pinned to FIVE DIGITS rather than left as `exp*`.
-    # A greedy `exp*` also matches the `_group_` variant -- a SECOND measurement
-    # of the same exposure -- so a field carrying both stages silently averages
-    # two catalog stages together.  Measured on sickle F187N (192 catalogs for 96
-    # frames) that moved the tie from (-11.2, -106.8) to (+73.2, -70.6) mas: a
-    # ~60 mas swing against a 100 mas tolerance.
-    cat_glob = args.catalog_glob or (
-        f'{basepath}/{filt}/{filt.lower()}_*_visit*_vgroup*_exp?????'
-        f'{args.mtag}_daophot_basic.fits')
+    # See bulk_offset_step0.default_catalog_glob for why the exposure number is
+    # pinned to five digits: a greedy `exp*` also matches the `_group_` variant of
+    # the same exposure, and on sickle F187N (192 catalogs for 96 frames) that
+    # moved the measured tie from (-11.2, -106.8) to (+73.2, -70.6) mas -- ~60 mas
+    # against a 100 mas tolerance.
+    cat_glob = args.catalog_glob or default_catalog_glob(
+        basepath, filt, args.mtag)
     cat_paths = sorted(glob.glob(cat_glob))
     if not cat_paths:
         print(f"ERROR: no catalogs matched {cat_glob}. Either this field has not "
@@ -140,26 +163,65 @@ def main(argv=None):
               file=sys.stderr)
         return 2
 
-    frame_glob = args.frame_glob or f'{basepath}/{filt}/pipeline/*_destreak.fits'
+    # One catalog per exposure.  Several catalog STAGES exist per exposure and a
+    # loose glob can match two of them, feeding the same stars in twice under two
+    # different measurements -- which shifted the sickle tie by ~60 mas.
+    dupes = duplicate_exposure_catalogs(cat_paths)
+    if dupes:
+        example = sorted(dupes.items())[0]
+        print(f"ERROR: {len(dupes)} exposures matched more than one catalog, so the "
+              f"same stars would be measured twice under different stages. Narrow "
+              f"--catalog-glob / --mtag to exactly one stage.\n"
+              f"  e.g. exposure {example[0]} matched:\n    "
+              + "\n    ".join(os.path.basename(p) for p in sorted(example[1])),
+              file=sys.stderr)
+        return 2
+
+    # Scoped to this observation: a filter directory holds every observation of
+    # the proposal, and folding another one's frames in corrupts both the
+    # generation hash and the set of visits considered.
+    frame_glob = args.frame_glob or default_frame_glob(
+        basepath, filt, args.proposal, args.field)
     frame_paths = sorted(glob.glob(frame_glob))
     if not frame_paths:
         print(f"ERROR: no frames matched {frame_glob}", file=sys.stderr)
         return 2
 
+    if args.visit:
+        want = str(args.visit).zfill(3)
+        cat_paths = [p for p in cat_paths if f'_visit{want}_' in os.path.basename(p)]
+        frame_paths = [p for p in frame_paths
+                       if os.path.basename(p).split('_')[0].endswith(want)]
+        if not cat_paths or not frame_paths:
+            print(f"ERROR: --visit {want} left {len(cat_paths)} catalogs and "
+                  f"{len(frame_paths)} frames; check the visit number",
+                  file=sys.stderr)
+            return 2
+        print(f"[step0] scoped to visit {want}: {len(cat_paths)} catalogs, "
+              f"{len(frame_paths)} frames")
+
     from jwst_gc_pipeline.photometry.visit_consensus import load_reference_catalog
     ref = load_reference_catalog(refcat)
     coords = _load_catalog_coords(cat_paths)
 
-    cfg = ac.resolve(args.proposal, args.field)
-    state = bulk_tie_state(args.proposal, args.field)
     if state == BULK_NONE:
         print(f"NOTE: {args.proposal}/o{args.field} has no alignment_config entry, "
               f"so there is nothing on record to verify.")
-    frame_name = os.path.basename(frame_paths[0])
-    visit = frame_name.split('_')[0]
-    recorded, status = recorded_bulk_mas(
-        basepath, args.proposal, args.field, filt, visit,
-        float(np.median(coords.dec.deg)), frame_name=frame_name)
+    # Resolve the tie over EVERY visit in play, not just whichever frame sorts
+    # first -- a field spanning two differently-tied visits has no single "the"
+    # bulk offset, and one stacked measurement cannot verify two of them.
+    recorded, status, per_visit = recorded_bulk_over_visits(
+        basepath, args.proposal, args.field, filt, frame_paths,
+        float(np.median(coords.dec.deg)))
+    visit = os.path.basename(frame_paths[0]).split('_')[0]
+
+    def _per_visit_report():
+        lines = []
+        for vis in sorted(per_visit):
+            val, st = per_visit[vis]
+            shown = f"({val[0]:+.1f},{val[1]:+.1f}) mas" if val else "--"
+            lines.append(f"    {vis}: {st:<16} {shown}")
+        return "\n".join(lines)
 
     # Only "no config entry" is genuinely new data.  A declared table that is
     # missing, or present without a matching row, means we CANNOT TELL -- and
@@ -173,21 +235,61 @@ def main(argv=None):
               f"source; do NOT measure a fresh tie over the top.", file=sys.stderr)
         return 4
     if status == BULK_NO_ROW:
-        print(f"STEP 0 CANNOT RUN: the offsets table for {args.proposal}/o{args.field} "
-              f"exists but carries no bulk row for visit {visit} / {filt}. The field "
-              f"is tied; this BAND is not. Rebuild the table for this filter rather "
-              f"than recording a new tie.", file=sys.stderr)
+        print(f"STEP 0 CANNOT RUN: {args.proposal}/o{args.field} is tied "
+              f"({state}), but no bulk row was found for visit {visit} / {filt}. "
+              f"The field is tied; this (visit, band) is not. Rebuild the table for "
+              f"this filter rather than recording a new tie.", file=sys.stderr)
+        return 4
+    if status in (BULK_VISITS_MIXED, BULK_VISITS_DISAGREE):
+        why = ("some visits are tied and others are not"
+               if status == BULK_VISITS_MIXED
+               else "the visits are tied to different values")
+        print(f"STEP 0 CANNOT RUN: {args.proposal}/o{args.field}/{filt} spans "
+              f"{len(per_visit)} visits and {why}, so a single measurement over all "
+              f"of them cannot verify any one of them:\n{_per_visit_report()}\n"
+              f"  Re-run per visit with --visit <3-digit suffix>.", file=sys.stderr)
         return 4
 
+    # A recorded tie is only comparable with a measurement in the SAME frame, and
+    # a tie MEASURED against the wrong frame would be recorded in the wrong frame,
+    # so this is checked on both paths.
+    frame_ok, frame_detail = reference_frame_matches_refcat(
+        cfg.reference_frame if cfg else '', refcat)
     if recorded is not None:
         print(f"[step0] bulk tie on record ({state}): "
               f"({recorded[0]:+.1f},{recorded[1]:+.1f}) mas")
-        # A recorded tie is only comparable with a measurement in the SAME frame.
-        frame_ok, frame_detail = reference_frame_matches_refcat(
-            cfg.reference_frame if cfg else '', refcat)
-        if not frame_ok:
-            print(f"\nSTEP 0 CANNOT RUN\n{frame_detail}", file=sys.stderr)
-            return 5
+    if not frame_ok and (recorded is not None or args.allow_measure):
+        print(f"\nSTEP 0 CANNOT RUN\n{frame_detail}", file=sys.stderr)
+        return 5
+
+    # What the measurement SHOULD come out as depends on whether these catalogs
+    # were built before or after the correction was applied.  On this archive it is
+    # usually after -- brick F200W visit 001 frames carry an applied
+    # (-17.597, +13.453) arcsec, exactly the recorded bulk -- in which case a fresh
+    # measurement is the RESIDUAL, near zero.  Comparing that against the recorded
+    # bulk fails by the entire size of the offset and reports a correctly-tied
+    # field as broken.
+    if recorded is not None:
+        adra, addec, n_with, n_total = applied_bulk_mas(
+            frame_paths, float(np.median(coords.dec.deg)))
+        if n_with and np.hypot(adra, addec) > 1.0:
+            expected = (recorded[0] - adra, recorded[1] - addec)
+            print(f"[step0] {n_with}/{n_total} frames already carry an applied "
+                  f"({adra:+.1f},{addec:+.1f}) mas, so these catalogs are not "
+                  f"raw-WCS.")
+            if args.assume_raw_wcs:
+                print("[step0] --assume-raw-wcs: comparing against the "
+                      "recorded value anyway.")
+            else:
+                owed = float(np.hypot(*expected))
+                print(f"[step0] verifying the RESIDUAL still owed: recorded - "
+                      f"applied = ({expected[0]:+.1f},{expected[1]:+.1f}) mas")
+                if owed > verify_tolerance_mas():
+                    print(f"[step0] NOTE: the applied offset differs from the "
+                          f"recorded one by {owed:.1f} mas, so the frames carry "
+                          f"neither the raw state nor the recorded tie. What "
+                          f"follows tests the frames as they stand, not the table.")
+                recorded = expected
 
     if recorded is None and not args.allow_measure:
         print(f"REFUSING to measure: {args.proposal}/o{args.field}/{filt} has no "
@@ -196,13 +298,14 @@ def main(argv=None):
         return 3
 
     print(f"[step0] {args.target} {args.proposal}/o{args.field}/{filt}: "
-          f"{len(cat_paths)} catalogs, {len(frame_paths)} frames, refcat "
-          f"{os.path.basename(refcat)}")
+          f"{len(cat_paths)} catalogs, {len(coords)} sources, "
+          f"{len(frame_paths)} frames, refcat {os.path.basename(refcat)}")
 
     try:
         result = step0_bulk_offset(
             coords, ref['all'], ref['sparse'], frame_paths, basepath,
             args.proposal, args.field, filt, recorded_mas=recorded,
+            visit=(str(args.visit).zfill(3) if args.visit else None),
             reference_id=(cfg.reference_frame if cfg else 'unknown'),
             ref_mag=ref.get('mag'), force=args.force)
     except BulkOffsetVerificationError as ex:

@@ -25,9 +25,18 @@ Why it needs m1
 
 Measuring a bulk offset needs source positions, which means cataloging has to
 have run.  That is the one real ordering constraint: **m1 per-frame cataloging
-must run before drizzling**, on the raw-WCS frames.  A rigid field shift moves
-every source identically, so a catalog built before alignment measures the bulk
-offset perfectly well -- but it has to exist.
+must run before drizzling**.  A rigid field shift moves every source identically,
+so a catalog built before alignment measures the bulk offset perfectly well --
+but it has to exist.
+
+The catalogs on this archive are usually NOT raw-WCS, though: brick F200W
+visit 001 frames carry an applied (-17.597, +13.453) arcsec and sickle F187N an
+applied (-0.102, -0.034) arcsec, in both cases exactly the recorded bulk.  A
+measurement on such catalogs is therefore the RESIDUAL the frames still owe, near
+zero -- so what VERIFY compares against is ``recorded - applied``, and
+:func:`applied_bulk_mas` is what tells the two states apart.  Comparing a
+residual against the full recorded bulk fails by the whole size of the offset and
+reports a correctly-tied field as broken.
 
 Measurement method
 ------------------
@@ -53,6 +62,7 @@ That way the expensive path runs exactly when the answer could have changed.
 import hashlib
 import json
 import os
+import re
 import warnings
 from dataclasses import asdict, dataclass
 from typing import Optional
@@ -64,10 +74,14 @@ __all__ = [
     'BULK_VERIFY_TOL_MAS', 'generation_hash', 'measure_bulk_offset',
     'verify_recorded_bulk', 'step0_bulk_offset',
     'load_step0_record', 'save_step0_record', 'step0_record_path',
-    'bulk_tie_state', 'recorded_bulk_mas',
+    'bulk_tie_state', 'recorded_bulk_mas', 'recorded_bulk_over_visits',
     'BULK_RECORDED', 'BULK_IN_TABLE', 'BULK_NONE',
     'BULK_OK', 'BULK_TABLE_ABSENT', 'BULK_NO_ROW', 'BULK_NOT_CONFIGURED',
+    'BULK_VISITS_MIXED', 'BULK_VISITS_DISAGREE',
     'reference_frame_matches_refcat',
+    'exposure_key', 'duplicate_exposure_catalogs', 'refcat_for_frame',
+    'default_catalog_glob', 'default_frame_glob', 'REFCAT_PATTERNS',
+    'applied_bulk_mas', 'verify_tolerance_mas',
 ]
 
 #: A recorded bulk offset must still describe the data to within this, on-sky.
@@ -126,8 +140,13 @@ class BulkOffsetResult:
                 and self.sep_mas <= _tol())
 
 
-def _tol() -> float:
+def verify_tolerance_mas() -> float:
+    """The tolerance a recorded bulk tie must still describe the data to (mas)."""
     return float(os.environ.get('BULK_VERIFY_TOL_MAS', BULK_VERIFY_TOL_MAS))
+
+
+#: Internal alias kept for the many call sites inside this module.
+_tol = verify_tolerance_mas
 
 
 # ---------------------------------------------------------------------------
@@ -179,9 +198,17 @@ def generation_hash(frame_paths, reference_id, recorded=None, extra=''):
 # on-disk record
 # ---------------------------------------------------------------------------
 
-def step0_record_path(basepath, proposal_id, field, filtername):
-    return os.path.join(basepath, 'offsets',
-                        f'step0_bulk_{proposal_id}_o{field}_{filtername}.json')
+def step0_record_path(basepath, proposal_id, field, filtername, visit=None):
+    """Where a step-0 outcome is recorded.
+
+    ``visit`` is part of the filename when the run was scoped to one visit: a
+    field whose visits carry different bulk ties produces a different result per
+    visit, and a shared filename means each run evicts the other's record.
+    """
+    stem = f'step0_bulk_{proposal_id}_o{field}_{filtername}'
+    if visit:
+        stem += f'_v{visit}'
+    return os.path.join(basepath, 'offsets', f'{stem}.json')
 
 
 def load_step0_record(path):
@@ -259,7 +286,7 @@ def verify_recorded_bulk(recorded_mas, measured_mas, tol_mas=None, context=''):
 def step0_bulk_offset(catalog_coords, ref_coords_all, ref_coords_sparse,
                       frame_paths, basepath, proposal_id, field, filtername,
                       recorded_mas=None, reference_id='VIRAC2',
-                      catalog_mag=None, ref_mag=None, force=False):
+                      catalog_mag=None, ref_mag=None, force=False, visit=None):
     """Run step 0 for one (field, filter).
 
     ``recorded_mas`` is the bulk offset already on record (on-sky mas), or None
@@ -268,7 +295,10 @@ def step0_bulk_offset(catalog_coords, ref_coords_all, ref_coords_sparse,
     alignment config to adopt.
     """
     context = f"{proposal_id}/o{field}/{filtername}"
-    rec_path = step0_record_path(basepath, proposal_id, field, filtername)
+    if visit:
+        context += f"/v{visit}"
+    rec_path = step0_record_path(basepath, proposal_id, field, filtername,
+                                 visit=visit)
     ghash = generation_hash(frame_paths, reference_id, recorded=recorded_mas)
     cached = load_step0_record(rec_path)
 
@@ -387,6 +417,12 @@ BULK_TABLE_ABSENT = 'table_absent'
 BULK_NO_ROW = 'no_row'
 BULK_NOT_CONFIGURED = 'not_configured'
 
+#: Outcomes that only arise once more than one visit is in play.  A field whose
+#: frames span several visits has no single "the" bulk tie, and summarising it by
+#: whichever visit happens to sort first is a silent choice, not a measurement.
+BULK_VISITS_MIXED = 'visits_mixed'          # some visits tied, others not
+BULK_VISITS_DISAGREE = 'visits_disagree'    # all tied, but to different values
+
 
 def bulk_tie_state(proposal_id, field):
     """Return one of ``BULK_RECORDED`` / ``BULK_IN_TABLE`` / ``BULK_NONE``.
@@ -483,6 +519,177 @@ def recorded_bulk_mas(basepath, proposal_id, field, filtername, visit,
     return None, BULK_NOT_CONFIGURED
 
 
+def recorded_bulk_over_visits(basepath, proposal_id, field, filtername,
+                              frame_names, dec_deg):
+    """Resolve the recorded bulk tie across EVERY visit present in the frames.
+
+    Returns ``(value, status, per_visit)`` where ``per_visit`` maps each visit
+    token to its own ``(value, status)``.
+
+    Step 0 measures ONE bulk offset from all the supplied catalogs stacked
+    together, so it can only verify a field that has one bulk tie.  Taking
+    ``sorted(frames)[0]``'s visit and calling that "the" recorded value hides two
+    real situations:
+
+    * some visits are tied and others are not (cloudef 2092 obs002 is a two-visit
+      mosaic where only visit 002 carries a recorded shift);
+    * every visit is tied, but to genuinely different values (brick 1182 obs004
+      visit 001 sits ~17" away from visit 002).
+
+    In both cases a single stacked measurement cannot confirm the record, so this
+    reports ``BULK_VISITS_MIXED`` / ``BULK_VISITS_DISAGREE`` rather than picking
+    one and appearing to succeed.  Scope the run to one visit to proceed.
+    """
+    per_visit = {}
+    for fn in frame_names:
+        base = os.path.basename(fn)
+        visit = base.split('_')[0]
+        if visit in per_visit:
+            continue
+        per_visit[visit] = recorded_bulk_mas(
+            basepath, proposal_id, field, filtername, visit, dec_deg,
+            frame_name=base)
+
+    if not per_visit:
+        return None, BULK_NOT_CONFIGURED, per_visit
+
+    statuses = {st for _, st in per_visit.values()}
+    if len(per_visit) == 1 or statuses == {BULK_NOT_CONFIGURED}:
+        (value, status), = list(per_visit.values())[:1]
+        return value, status, per_visit
+
+    if statuses != {BULK_OK}:
+        # A mix of "tied" and "cannot tell" across visits.  If NOTHING resolved,
+        # report the single shared reason instead of inventing a mixed state.
+        if BULK_OK not in statuses and len(statuses) == 1:
+            return None, statuses.pop(), per_visit
+        return None, BULK_VISITS_MIXED, per_visit
+
+    values = [value for value, _ in per_visit.values()]
+    first = values[0]
+    spread = max(float(np.hypot(v[0] - first[0], v[1] - first[1])) for v in values)
+    if spread > _tol():
+        return None, BULK_VISITS_DISAGREE, per_visit
+    return first, BULK_OK, per_visit
+
+
+# ---------------------------------------------------------------------------
+# one catalog per exposure
+# ---------------------------------------------------------------------------
+
+#: ``f187n_nrcb1_visit001_vgroup03102_exp00001`` -- everything after this is the
+#: catalog's STAGE tag (``_m1``, ``_group_m1``, ``_resbgsub_group_m5``, ...).
+_EXPOSURE_RE = re.compile(
+    r'^(?P<filt>[^_]+)_(?P<det>[^_]+)_visit(?P<visit>\d+)_'
+    r'vgroup(?P<vgroup>[^_]+)_exp(?P<exp>\d{5})_(?P<stage>.+)$')
+
+
+def default_catalog_glob(basepath, filtername, mtag='_m1'):
+    """The per-frame catalog glob step 0 reads by default.
+
+    Same shape as ``build_virac2_offsets._gather``: the filter token comes FIRST
+    and the catalogs sit directly under ``<basepath>/<FILT>/``.  The exposure
+    number is pinned to FIVE DIGITS rather than left as ``exp*``, because a greedy
+    ``exp*`` also matches the ``_group_`` variant -- a second catalog of the SAME
+    exposure -- and a field carrying both stages then feeds every star in twice.
+    Lives here rather than in the script so a revert fails a test.
+    """
+    filt = str(filtername).upper()
+    return (f'{basepath}/{filt}/{filt.lower()}_*_visit*_vgroup*_exp?????'
+            f'{mtag}_daophot_basic.fits')
+
+
+def applied_bulk_mas(frame_paths, dec_deg):
+    """The offset ALREADY written into these frames' WCS, as on-sky mas.
+
+    Returns ``(dra_mas, ddec_mas, n_with, n_total)``; ``(0.0, 0.0)`` when no frame
+    carries one.  ``unified_alignment`` records the applied total in
+    ``RAOFFSET``/``DEOFFSET`` (coordinate arcsec), so this is what makes the
+    difference between "the catalogs are raw" and "the catalogs are already tied".
+
+    Step 0's docstring says it reads catalogs built on raw-WCS frames, but on this
+    archive that is often not the state on disk: brick F200W visit 001 carries an
+    applied (-17.597, +13.453) arcsec and sickle F187N an applied (-0.102,
+    -0.034) arcsec -- in both cases exactly the recorded bulk.  A fresh
+    measurement on such catalogs is the RESIDUAL, near zero, so comparing it with
+    the recorded bulk fails by the whole size of the bulk offset and reports a
+    correctly-tied field as broken.  The caller has to subtract this to know what
+    the measurement should be.
+
+    The keyword is the per-exposure TOTAL (bulk + jitter), so the median across
+    frames carries a jitter-sized uncertainty of tens of mas.
+    """
+    from astropy.io import fits
+
+    dras, ddecs = [], []
+    n_total = 0
+    for path in frame_paths:
+        n_total += 1
+        try:
+            with fits.open(path) as fh:
+                dra = fh[1].header.get('RAOFFSET', fh[0].header.get('RAOFFSET'))
+                ddec = fh[1].header.get('DEOFFSET', fh[0].header.get('DEOFFSET'))
+        except (OSError, IndexError, KeyError):
+            continue
+        if dra is None or ddec is None:
+            continue
+        dras.append(float(dra))
+        ddecs.append(float(ddec))
+    if not dras:
+        return 0.0, 0.0, 0, n_total
+    cosd = np.cos(np.radians(float(dec_deg)))
+    return (float(np.median(dras)) * cosd * 1000.0,
+            float(np.median(ddecs)) * 1000.0, len(dras), n_total)
+
+
+def default_frame_glob(basepath, filtername, proposal_id, field):
+    """The frames whose WCS generation step 0 hashes, for ONE observation.
+
+    Scoped to ``jw<proposal><obs>*`` rather than every ``*_destreak.fits`` in the
+    filter directory.  A filter directory holds every observation of the
+    proposal: cloudef F480M carries obs002 (two visits) alongside obs005, and an
+    unscoped glob folded obs005's frames into obs002's generation hash and
+    reported a third visit that had nothing to do with the requested field.
+    """
+    filt = str(filtername).upper()
+    stem = f"jw{str(proposal_id).zfill(5)}{str(field).zfill(3)}"
+    return f'{basepath}/{filt}/pipeline/{stem}*_destreak.fits'
+
+
+def exposure_key(catalog_path):
+    """``(filter, detector, visit, vgroup, exposure)`` for a per-frame catalog.
+
+    Returns ``None`` when the name does not follow the pipeline's per-exposure
+    convention, so a hand-supplied ``--catalog-glob`` with some other naming
+    scheme is left alone rather than rejected.
+    """
+    m = _EXPOSURE_RE.match(os.path.basename(str(catalog_path)))
+    if m is None:
+        return None
+    return (m.group('filt'), m.group('det'), m.group('visit'),
+            m.group('vgroup'), m.group('exp'))
+
+
+def duplicate_exposure_catalogs(catalog_paths):
+    """Exposures represented more than once in ``catalog_paths``.
+
+    Returns ``{exposure_key: [paths]}`` for every exposure with more than one
+    catalog.  The pipeline writes several STAGES per exposure (``_m1`` alongside
+    ``_group_m1``, ``_resbgsub_group_m5``, ...), and a glob loose enough to match
+    two of them feeds the same stars in twice under two different measurements.
+    That is not a harmless duplication: on sickle F187N the mixed set moved the
+    measured tie from (-11.2, -106.8) to (+73.2, -70.6) mas -- ~60 mas against a
+    100 mas tolerance -- so it has to be refused rather than averaged.
+    """
+    from collections import defaultdict
+    seen = defaultdict(list)
+    for path in catalog_paths:
+        key = exposure_key(path)
+        if key is not None:
+            seen[key].append(path)
+    return {k: v for k, v in seen.items() if len(v) > 1}
+
+
 def reference_frame_matches_refcat(reference_frame, refcat_path):
     """Does the loaded reference catalog belong to the frame the field is tied to?
 
@@ -514,3 +721,38 @@ def reference_frame_matches_refcat(reference_frame, refcat_path):
         f"comparing across frames produces a real separation that is not an "
         f"astrometry error. Pass --refcat pointing at a {reference_frame} catalog, "
         f"or re-record this field's bulk tie against {found}.")
+
+
+#: Reference-catalog patterns searched under ``<basepath>/catalogs/``.
+#: ``gaia_virac2_refcat*`` is the Galactic-Centre seed catalog; ``gaia_refcat*``
+#: is what the fields outside the VVV/VIRAC2 footprint (W51, M4, M92) have.
+REFCAT_PATTERNS = ('gaia_virac2_refcat*.fits', 'gaia_refcat*.fits')
+
+
+def refcat_for_frame(basepath, reference_frame):
+    """Pick the reference catalog that belongs to ``reference_frame``.
+
+    Returns ``(path, candidates)``; ``path`` is ``None`` when nothing was found.
+    Searching only ``gaia_virac2_refcat*.fits`` misses every field outside the
+    VIRAC2 footprint -- W51, M4 and M92 carry ``gaia_refcat.fits`` and nothing
+    else -- so those fields could not start without an explicit ``--refcat``.
+    Since :func:`reference_frame_matches_refcat` now blocks a cross-frame
+    comparison, choosing the catalog that matches the declared frame is what
+    keeps the default path usable rather than merely safe.
+    """
+    import glob as _glob
+    candidates = []
+    for pattern in REFCAT_PATTERNS:
+        candidates.extend(sorted(_glob.glob(os.path.join(
+            str(basepath), 'catalogs', pattern))))
+    # de-duplicate while preserving order (the patterns overlap)
+    seen, ordered = set(), []
+    for path in candidates:
+        if path not in seen:
+            seen.add(path)
+            ordered.append(path)
+    matching = [p for p in ordered
+                if reference_frame_matches_refcat(reference_frame, p)[0]]
+    if matching:
+        return matching[-1], ordered
+    return (ordered[-1] if ordered else None), ordered
