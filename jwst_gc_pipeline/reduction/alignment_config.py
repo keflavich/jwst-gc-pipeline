@@ -1,5 +1,13 @@
-"""Per-field astrometric alignment configuration -- the single source of truth
-for HOW each (proposal, observation) is tied to an absolute reference frame.
+"""Per-field astrometric alignment configuration for the NIRCam reduction --
+the single source of truth for HOW each (proposal, observation) is tied to an
+absolute reference frame.
+
+SCOPE: NIRCam only.  ``PipelineMIRI.fix_alignment`` and
+``PipelineRerunNIRISS.fix_alignment`` still carry their own dispatch and their
+own inline policy constants (MIRI keeps a ``_PER_VISIT_SHIFT`` map and a w51
+rule; neither writes the component keywords nor runs the staleness guard).
+Folding those in is follow-up work -- until then, do not read this file as
+repo-wide.
 
 This replaces the per-proposal ``if/elif`` chain that used to live inside
 ``PipelineRerunNIRCAM-LONG.fix_alignment``.  That chain had grown one branch per
@@ -54,6 +62,7 @@ explicitly.  Locked tables carry only the total, so the split is *derived* (see
 ``unified_alignment``) -- in every case the total is preserved exactly.
 """
 
+import os
 from dataclasses import dataclass, field as _dc_field
 from typing import Dict, Optional, Tuple
 
@@ -264,7 +273,6 @@ def resolve(proposal_id, field) -> Optional[FieldAlignment]:
 
 def visit_key_for(cfg: FieldAlignment, fn) -> str:
     """Derive this frame's visit key from its filename, per ``cfg.visit_key``."""
-    import os
     stem = os.path.basename(fn).split('_')[0]
     if cfg.visit_key == 'suffix3':
         return stem[-3:]

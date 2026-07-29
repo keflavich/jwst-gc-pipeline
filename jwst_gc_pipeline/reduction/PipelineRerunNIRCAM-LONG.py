@@ -1164,43 +1164,11 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
     return locals()
 
 
-# offsets tables already collapse-checked this process (warn once per file, not per frame)
-_VALIDATED_OFFSETS_TABLES = set()
-
-
-def _apply_consensus_offsets_table(fn, basepath, proposal_id, filtername, field):
-    """Return (rashift, decshift) astropy Quantities for THIS exposure from the
-    per-exposure consensus offsets table seeded by the m2 astrometry checkpoint
-    (``seed_offsets_table_from_consensus``).
-
-    The table lives at ``{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_consensus.csv``
-    and is keyed (Visit, Filter, Exposure, Module) with ``dra (arcsec)`` /
-    ``ddec (arcsec)`` in the Δα-coordinate convention ``fix_alignment`` applies.
-
-    Returns (0,0) arcsec when the table does not exist yet (the FIRST reduction
-    pass, before cataloging has measured the consensus) so the frame stays at the
-    tweakreg/assign_wcs frame and the checkpoint can measure the raw scatter, and
-    (0,0) when this exposure has no row (it was already within consensus
-    tolerance, so no shift is needed)."""
-    tblfn = f'{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_consensus.csv'
-    if not os.path.exists(tblfn):
-        print(f"[consensus] no table {tblfn} yet; leaving "
-              f"{os.path.basename(fn)} at frame (0,0)")
-        return 0 * u.arcsec, 0 * u.arcsec
-    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
-        lookup_consensus_offset)
-    tbl = Table.read(tblfn)
-    visit = fn.split('_')[0]
-    exposure = int(fn.split('_')[-3])
-    thismodule = fn.split('_')[-2]
-    vgroup = fn.split('_')[1]      # exposure numbers restart per visit group
-    try:
-        dra, ddec = lookup_consensus_offset(
-            tbl, visit, exposure, thismodule, filtername, vgroup=vgroup)
-    except ValueError as ex:
-        raise ValueError(f"{ex} in {tblfn} (frame {fn})") from ex
-    return dra * u.arcsec, ddec * u.arcsec
-
+# NOTE: _apply_consensus_offsets_table and the module-level
+# _VALIDATED_OFFSETS_TABLES set lived here.  Both moved into
+# jwst_gc_pipeline/reduction/unified_alignment.py when the per-proposal
+# dispatch collapsed; leaving the originals behind would have implied the
+# consensus path still routes through this file, which it does not.
 
 def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, filtername=None,
                   use_average=True):

@@ -412,3 +412,83 @@ def test_force_realign_env_turns_warning_into_error(monkeypatch):
     monkeypatch.setenv('FORCE_REALIGN_ON_DISAGREE', '1')
     with pytest.raises(RuntimeError, match='refusing to silently keep'):
         ua.warn_or_raise_if_stale(hdr, now, 'f.fits')
+
+
+# ---------------------------------------------------------------------------
+# guards that were wired but could not fire
+# ---------------------------------------------------------------------------
+
+def test_generation_mismatch_actually_raises(tmp_path):
+    """The strong generation layer indexed the stamp with the TABLE's column
+    spelling (`calver`) while generation_stamp produces `cal_ver`, so the moment
+    a table carried base_* stamps this died on KeyError instead of comparing.
+    It never showed because nothing populates the columns yet."""
+    from astropy.table import Table as _T
+    row = _T(rows=[('1.14.1', 'jwst_1253.pmap', 'True')],
+             names=('base_calver', 'base_crds_ctx', 'base_dvacorr'))
+    frame_gen = {'cal_ver': '1.21.0', 'crds_ctx': 'jwst_1584.pmap', 'dvacorr': 'True'}
+    with pytest.raises(RuntimeError, match='GENERATION MISMATCH'):
+        ua._assert_generation_row('f.fits', row, frame_gen, row)
+
+
+def test_generation_match_passes(tmp_path):
+    from astropy.table import Table as _T
+    row = _T(rows=[('1.21.0', 'jwst_1584.pmap', 'True')],
+             names=('base_calver', 'base_crds_ctx', 'base_dvacorr'))
+    frame_gen = {'cal_ver': '1.21.0', 'crds_ctx': 'jwst_1584.pmap', 'dvacorr': 'True'}
+    ua._assert_generation_row('f.fits', row, frame_gen, row)  # no raise
+
+
+def test_partially_keyed_component_header_is_stale_not_a_crash():
+    """A frame with RAOFFBLK/RAOFFJIT but no DEOFFBLK used to abort fix_alignment
+    with `KeyError: DEOFFBLK`.  The total branch already handled this; the
+    component branch must too, and the answer is STALE."""
+    hdr = fits.Header()
+    hdr[ua.TOTAL_RA_KEY] = 0.0
+    hdr[ua.BULK_RA_KEY] = 0.0
+    hdr[ua.JITTER_RA_KEY] = 0.0
+    msg = ua.check_alignment_stale(hdr, ua.AlignmentShift(), 'partial.fits')
+    assert msg is not None
+    assert 'bulk Dec' in msg
+
+
+def test_missing_table_is_distinguishable_from_a_measured_zero(tmp_path):
+    """'the table is not there yet' and 'the table says zero' must not produce
+    identical objects -- that is the same conflation this module removes one
+    level up."""
+    bp = str(tmp_path)
+    absent = ua.resolve_shift(
+        'jw06151001001_02101_00001_nrcb3_destreak.fits',
+        '6151', '001', 'F480M', 'nrcb', bp)
+    _write_consensus(bp, '6151',
+                     rows=[('jw06151001001', 'F480M', -1, 'all', 0.0, 0.0)])
+    measured = ua.resolve_shift(
+        'jw06151001001_02101_00001_nrcb3_destreak.fits',
+        '6151', '001', 'F480M', 'nrcb', bp)
+    assert absent.total_ra == measured.total_ra == 0.0
+    assert not absent.table_present
+    assert measured.table_present
+    assert absent.prov_stage == 'NO_TABLE'
+
+
+def test_header_records_alignment_state_positively():
+    """Unconfigured must be a greppable fact in the product, not the absence of
+    a card."""
+    hdr = fits.Header()
+    ua.write_alignment_header(hdr, ua.AlignmentShift(configured=False,
+                                                     table_present=False))
+    assert hdr['ALIGNSRC'] == 'NONE'
+    assert hdr['ALIGNREF'] == 'NONE'
+    assert hdr['ALIGNTBL'] == 'ABSENT'
+
+
+def test_ambiguous_consensus_row_names_the_table_and_frame(tmp_path):
+    bp = str(tmp_path)
+    _write_consensus(bp, '6151', rows=[
+        ('jw06151001001', 'F480M', -1, 'all', 0.01, 0.02),
+        ('jw06151001001', 'F480M', 3, 'nrcb3', 0.001, 0.002),
+        ('jw06151001001', 'F480M', 3, 'nrcb3', 0.003, 0.004),
+    ])
+    fn = 'jw06151001001_02101_00003_nrcb3_destreak.fits'
+    with pytest.raises(ValueError, match='table=.*consensus.csv'):
+        ua.resolve_shift(fn, '6151', '001', 'F480M', 'nrcb', bp)

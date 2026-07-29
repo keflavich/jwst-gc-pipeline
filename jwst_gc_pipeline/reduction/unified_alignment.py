@@ -1,12 +1,19 @@
 """One code path for resolving an exposure's astrometric shift, with the applied
 shift split into its BULK and JITTER components.
 
-``fix_alignment`` used to decide where an exposure's shift came from with a
-per-proposal ``if/elif`` chain whose ``else`` arm returned ``(0, 0)``.  This
-module replaces that chain: the *policy* (which frame, which source) lives in
-:mod:`jwst_gc_pipeline.reduction.alignment_config`, and the *mechanism* (read
-the table, narrow to this exposure, verify the generation) lives here, once, for
-every field.
+The NIRCam ``fix_alignment`` used to decide where an exposure's shift came from
+with a per-proposal ``if/elif`` chain whose ``else`` arm returned ``(0, 0)``.
+This module replaces that chain: the *policy* (which frame, which source) lives
+in :mod:`jwst_gc_pipeline.reduction.alignment_config`, and the *mechanism* (read
+the table, narrow to this exposure, check the WCS generation) lives here, once,
+for every NIRCam field.  MIRI and NIRISS keep their own dispatch -- see the
+scope note in ``alignment_config``.
+
+On the generation check: its strong layer compares per-row ``base_*`` stamps
+against the frame's.  NOTHING WRITES THOSE COLUMNS YET, so in practice every
+field currently falls through to the mtime fallback, which this module itself
+calls WEAK.  The strong layer is wired and tested but dormant until a tie builder
+stamps the rows.
 
 Bulk / jitter
 -------------
@@ -93,6 +100,11 @@ class AlignmentShift:
     jitter_dec: float = 0.0
     #: False when the field has no configured alignment at all.
     configured: bool = True
+    #: False when the configured table does not exist yet.  Distinct from a
+    #: table that exists and reports zero -- conflating "undeterminable" with
+    #: "measured zero" is the failure mode this module exists to remove, and it
+    #: recurs one level down without this flag.
+    table_present: bool = True
     #: ``alignment_config`` source constant, or ``''`` when unconfigured.
     source: str = ''
     #: Absolute reference frame this tie is against.
@@ -147,7 +159,7 @@ def resolve_shift(fn, proposal_id, field, filtername, module, basepath,
               f"frame (0,0). Any astrometry checkpoint correction written for this "
               f"field will NOT be applied -- add an entry to "
               f"jwst_gc_pipeline/reduction/alignment_config.py.", flush=True)
-        return AlignmentShift(configured=False)
+        return AlignmentShift(configured=False, table_present=False)
 
     if cfg.source == RECORDED_BULK:
         return _shift_from_recorded_bulk(fn, cfg, filtername)
@@ -187,7 +199,8 @@ def _shift_from_consensus(fn, cfg, basepath, proposal_id, filtername, module):
               f"{os.path.basename(fn)} at frame (0,0)")
         return AlignmentShift(source=TABLE_CONSENSUS,
                               reference_frame=cfg.reference_frame,
-                              prov_table=os.path.basename(tblfn))
+                              prov_table=os.path.basename(tblfn),
+                              table_present=False, prov_stage='NO_TABLE')
 
     tbl = Table.read(tblfn)
     visit = os.path.basename(fn).split('_')[0]
@@ -199,8 +212,12 @@ def _shift_from_consensus(fn, cfg, basepath, proposal_id, filtername, module):
 
     # TOTAL comes from the shared helper so this path stays bit-identical to
     # what the checkpoint itself computes.
-    total_ra, total_dec = lookup_consensus_offset(
-        tbl, visit, exposure, thismodule, filtername, vgroup=vgroup)
+    try:
+        total_ra, total_dec = lookup_consensus_offset(
+            tbl, visit, exposure, thismodule, filtername, vgroup=vgroup)
+    except ValueError as ex:
+        raise ValueError(
+            f"{ex} [table={tblfn}, frame={os.path.basename(fn)}]") from ex
 
     # BULK is the per-visit sentinel row, read directly.
     bulk_ra = bulk_dec = 0.0
@@ -398,8 +415,8 @@ def _check_generation(fn, offsets_tbl, locked_tbl):
     except (OSError, KeyError, IndexError) as gex:
         print(f"[genlock] could not read generation keys from {fn}: {gex}")
 
-    has_stamps = all(f'base_{k}' in offsets_tbl.colnames
-                     for k in ('calver', 'crds_ctx', 'dvacorr'))
+    has_stamps = all(f'base_{col}' in offsets_tbl.colnames
+                     for col, _ in _GENERATION_COLUMNS)
     if not has_stamps:
         try:
             t_tbl = os.path.getmtime(locked_tbl)
@@ -418,16 +435,28 @@ def _check_generation(fn, offsets_tbl, locked_tbl):
     return frame_gen
 
 
+#: Generation stamp columns, as ``(table column suffix, generation_stamp key)``.
+#: These names DIVERGE: the tie builders write ``base_calver`` while
+#: ``generation_stamp`` lowercases ``CAL_VER`` to ``cal_ver``.  The check used to
+#: index the stamp with the COLUMN spelling, so the moment a table carried the
+#: stamps the strongest generation layer would have died on ``KeyError: 'calver'``
+#: instead of comparing anything.  It never fired only because nothing populates
+#: the columns yet.
+_GENERATION_COLUMNS = (('calver', 'cal_ver'),
+                       ('crds_ctx', 'crds_ctx'),
+                       ('dvacorr', 'dvacorr'))
+
+
 def _assert_generation_row(fn, row, frame_gen, offsets_tbl):
     """Hard-fail when the matched row was solved on a different WCS generation."""
-    has_stamps = all(f'base_{k}' in offsets_tbl.colnames
-                     for k in ('calver', 'crds_ctx', 'dvacorr'))
+    has_stamps = all(f'base_{col}' in offsets_tbl.colnames
+                     for col, _ in _GENERATION_COLUMNS)
     if not (has_stamps and frame_gen is not None):
         return
-    mismatch = {k: (str(row[f'base_{k}'][0]), frame_gen[k])
-                for k in ('calver', 'crds_ctx', 'dvacorr')
-                if str(row[f'base_{k}'][0]) not in ('', 'nan')
-                and str(row[f'base_{k}'][0]) != frame_gen[k]}
+    mismatch = {col: (str(row[f'base_{col}'][0]), frame_gen[key])
+                for col, key in _GENERATION_COLUMNS
+                if str(row[f'base_{col}'][0]) not in ('', 'nan')
+                and str(row[f'base_{col}'][0]) != frame_gen[key]}
     if not mismatch:
         return
     gmsg = (f"[genlock] GENERATION MISMATCH for {fn}: the tie row was solved on "
@@ -456,10 +485,13 @@ def write_alignment_header(header, shift: AlignmentShift):
     header[BULK_DEC_KEY] = (shift.bulk_dec, 'arcsec, bulk (visit->reference) dDec')
     header[JITTER_RA_KEY] = (shift.jitter_ra, 'arcsec, per-exposure jitter dRA')
     header[JITTER_DEC_KEY] = (shift.jitter_dec, 'arcsec, per-exposure jitter dDec')
-    if shift.source:
-        header[SOURCE_KEY] = (shift.source, 'alignment shift source')
-    if shift.reference_frame:
-        header[FRAME_KEY] = (shift.reference_frame, 'absolute reference frame')
+    # Always written, including 'NONE'.  Recording "this frame is tied to
+    # nothing" as the ABSENCE of a card is the same record-an-absence pattern
+    # this module retires elsewhere; a greppable positive is free.
+    header[SOURCE_KEY] = (shift.source or 'NONE', 'alignment shift source')
+    header[FRAME_KEY] = (shift.reference_frame or 'NONE', 'absolute reference frame')
+    if not shift.table_present:
+        header['ALIGNTBL'] = ('ABSENT', 'configured offsets table did not exist')
     return header
 
 
@@ -481,11 +513,15 @@ def check_alignment_stale(header, shift: AlignmentShift, fn, tol_arcsec=None):
 
     has_components = BULK_RA_KEY in header and JITTER_RA_KEY in header
     if has_components:
+        # .get(..., nan) for the SAME reason the total branch uses it: a frame
+        # with only some component cards must be reported STALE (non-finite ->
+        # not within tolerance), not abort fix_alignment with a KeyError that
+        # says nothing about astrometry.
         pairs = (
-            ('bulk RA', float(header[BULK_RA_KEY]), shift.bulk_ra),
-            ('bulk Dec', float(header[BULK_DEC_KEY]), shift.bulk_dec),
-            ('jitter RA', float(header[JITTER_RA_KEY]), shift.jitter_ra),
-            ('jitter Dec', float(header[JITTER_DEC_KEY]), shift.jitter_dec),
+            ('bulk RA', float(header.get(BULK_RA_KEY, np.nan)), shift.bulk_ra),
+            ('bulk Dec', float(header.get(BULK_DEC_KEY, np.nan)), shift.bulk_dec),
+            ('jitter RA', float(header.get(JITTER_RA_KEY, np.nan)), shift.jitter_ra),
+            ('jitter Dec', float(header.get(JITTER_DEC_KEY, np.nan)), shift.jitter_dec),
         )
     else:
         pairs = (
