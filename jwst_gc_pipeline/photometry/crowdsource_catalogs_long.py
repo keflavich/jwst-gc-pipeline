@@ -9,6 +9,7 @@ import numpy
 import regions
 import numpy as np
 from pathlib import Path
+from jwst_gc_pipeline.frame_wcs import frame_wcs
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
 from astropy.convolution import convolve, convolve_fft, Gaussian2DKernel, interpolate_replace_nans
 from astropy.table import Table, vstack
@@ -3356,7 +3357,7 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                     f"was fit successfully, so its per-frame products must exist; a "
                     f"missing one would punch a hole in the {kind} mosaic.  Aborting.")
             with fits.open(raw_resid) as h:
-                ww = wcs.WCS(h['SCI'].header)
+                ww = frame_wcs(h)
                 base = h['SCI'].data.astype(float)
             with fits.open(raw_model) as h:
                 base = base + h['SCI'].data.astype(float)  # = data_for_residual

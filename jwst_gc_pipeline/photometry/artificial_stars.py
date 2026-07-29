@@ -58,6 +58,7 @@ from scipy import ndimage
 from scipy.spatial import cKDTree
 
 # Pipeline building blocks (the m1 detection path + PSFPhotometry shim).
+from jwst_gc_pipeline.frame_wcs import frame_wcs
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
 
 # Detection parameters SINGLE-SOURCED from production (review #130 item 1):
@@ -377,7 +378,7 @@ def run_frame(band, detector, workdir, n_stars=1250, seed=0, smoke=False):
         import warnings
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')
-            ww = astropy_wcs.WCS(hdul['SCI'].header)
+            ww = frame_wcs(hdul)
 
     if smoke:
         sci = sci[:512, :512].copy()

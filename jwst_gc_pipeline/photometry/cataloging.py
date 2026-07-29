@@ -47,6 +47,7 @@ from jwst_gc_pipeline.photometry.psf_fitting import (
 # cataloging.py uses the one canonical implementation.  Importing the host
 # module at load time is fine: it does NOT import this module at top level
 # (only lazily in its dispatch branch), so there is no import cycle.
+from jwst_gc_pipeline.frame_wcs import frame_wcs
 from jwst_gc_pipeline.photometry import crowdsource_catalogs_long as _L
 from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
     SeededFinder,
@@ -1483,7 +1484,13 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
 
     fh, im1, data, wht, err, instrument, telescope, obsdate = _L.load_data(filename)
     inst_token = instrument.lower()
-    ww = wcs.WCS(im1[1].header)
+    # THE per-frame astrometric WCS: every catalog RA/Dec in this run comes from
+    # it.  Read the GWCS (ASDF extension), not the SCI header's SIP fit -- SIP
+    # is only a fitted approximation of the true distortion, and on frames
+    # written before the tight-fit change it is 5-8 mas off in a
+    # position-dependent, per-detector, per-filter way (see frame_wcs).  Falls
+    # back to the SIP WCS, with a warning, if the product has no GWCS.
+    ww = frame_wcs(filename)
 
     background_map = None
     original_data = data.copy()  # manual residuals are built vs the pristine data
@@ -1524,7 +1531,13 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
             except Exception as _e:
                 print(f"[manual] bg crop failed ({_e}); reprojecting full mosaic", flush=True)
                 bg_data = bg_hdu.data.astype(float)
-        bg_reproj, _ = reproject_interp((bg_data, bg_wcs), ww, shape_out=data.shape)
+        # reproject needs a real astropy/APE-14 WCS as the output grid; hand it
+        # the frame's FITS WCS.  This is a background map, not astrometry --
+        # the SIP fit residual is far below anything a background gradient cares
+        # about.
+        bg_reproj, _ = reproject_interp((bg_data, bg_wcs),
+                                        getattr(ww, 'fits_wcs', ww),
+                                        shape_out=data.shape)
         del bg_data
         bg_finite = np.where(np.isfinite(bg_reproj), bg_reproj, 0.0)
         zeros = data == 0
@@ -3344,6 +3357,9 @@ def _stamp_catalog_provenance(path, stage, options, parent_paths=None):
     (missing package, bad file, unknown stage, unreadable parent sidecar) is
     swallowed.
     """
+    # WCS-source card first: it must not depend on the versioning package being
+    # importable, because it is what identifies a catalog as GWCS- or SIP-built.
+    _stamp_wcs_source(path)
     try:
         from jwst_gc_pipeline.versioning import stamping as _vstamp
         from jwst_gc_pipeline.versioning import fingerprint as _vfp
@@ -3363,6 +3379,29 @@ def _stamp_catalog_provenance(path, stage, options, parent_paths=None):
         except (OSError, ValueError, KeyError):
             upstream = None
     _vstamp.try_stamp_catalog(path, stage, params=params, upstream=upstream)
+
+
+def _stamp_wcs_source(path):
+    """Record whether this product's positions came from GWCSes or from SIP.
+
+    Catalogs built before the GWCS-first change carry NO ``WCSSRC`` card, so its
+    presence-and-value is what makes a catalog self-identifying across that
+    change.  Without it the only discriminator is the build date, which is
+    exactly what should not be relied on at staging time -- positions moved by
+    up to ~5-8 mas (position-dependent, per detector and per filter).
+
+    FAIL-SOFT, like the sidecar stamping above: provenance never breaks
+    cataloging.
+    """
+    from astropy.io import fits as _fits
+
+    from jwst_gc_pipeline.frame_wcs import wcs_provenance_cards
+    try:
+        with _fits.open(path, mode='update') as _h:
+            for _k, _v, _c in wcs_provenance_cards():
+                _h[0].header[_k] = (_v, _c)
+    except (OSError, KeyError, IndexError, ValueError):
+        return
 
 
 def _run_crossfilter_astrom_checkpoint(vetted_paths_by_filter, cut_bp, basepath,

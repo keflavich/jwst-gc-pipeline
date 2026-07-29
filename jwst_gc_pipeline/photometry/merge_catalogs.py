@@ -32,6 +32,7 @@ ABMAG_OFFSET = 8.90
 # this module shares one source of truth without importing webbpsf.  The
 # flags-based bgsub token is imported as ``_bgsub_token`` (this module calls it
 # with explicit booleans, matching the producer-side names).
+from jwst_gc_pipeline.frame_wcs import frame_wcs
 from jwst_gc_pipeline.photometry.naming import (
     _inst_token, _svo_filter_id,
     _bgsub_token_from_flags as _bgsub_token,
@@ -1484,7 +1485,9 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
 
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
-        wcses = [wcs.WCS(fits.getheader(fn, ext=('SCI', 1))) for fn in imgfns]
+        # GWCS, not the SCI header's SIP fit: these WCSes turn every per-frame
+        # (x, y) into the catalog's RA/Dec.  See jwst_gc_pipeline.frame_wcs.
+        wcses = [frame_wcs(fn) for fn in imgfns]
 
     for tbl, ww in zip(tbls, wcses):
         if 'skycoord' not in tbl.colnames:
@@ -1661,8 +1664,8 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
 
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
-        wcses = [wcs.WCS(fits.getheader(fn, ext=('SCI', 1))) if fn is not None else None
-                 for fn in imgfns]
+        # GWCS, not the SCI header's SIP fit -- see jwst_gc_pipeline.frame_wcs.
+        wcses = [frame_wcs(fn) if fn is not None else None for fn in imgfns]
 
     from jwst_gc_pipeline.photometry.naming import _instrument_override as _iov
     _ftname = ('fwhm_table_niriss.ecsv' if _iov() == 'NIRISS' else 'fwhm_table.ecsv')

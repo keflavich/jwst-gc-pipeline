@@ -215,7 +215,14 @@ def forced_fill_band(tbl, filt, frames, *, prepare_frame, frame_arg_builder,
                   f"{traceback.format_exc()}", flush=True)
             continue
         ny, nx = ctx.nan_replaced_data.shape
-        xpix, ypix = ctx.ww.all_world2pix(ra, dec, 0)
+        # The cross-band source list spans the whole mosaic, so for any single
+        # frame most reference positions fall outside its footprint.  With the
+        # GWCS (ctx.ww is a FrameWCS) those return NaN and are dropped by the
+        # ``inb`` test below.  With a SIP WCS the iterative inverse cannot
+        # converge there and raises NoConvergence unless ``quiet=True`` --
+        # which aborted the entire W51 m8 fill (#187).  Pass quiet for the
+        # SIP-fallback case; FrameWCS ignores it (its inverse is exact).
+        xpix, ypix = ctx.ww.all_world2pix(ra, dec, 0, quiet=True)
         inb = (xpix > 2) & (xpix < nx - 3) & (ypix > 2) & (ypix < ny - 3) & \
               np.isfinite(xpix) & np.isfinite(ypix)
         if not inb.any():
