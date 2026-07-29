@@ -48,6 +48,7 @@ from jwst.datamodels import ImageModel
 from jwst_gc_pipeline.reduction.destreak import destreak
 
 from jwst_gc_pipeline.reduction.align_to_catalogs import merge_a_plus_b
+from jwst_gc_pipeline.reduction.fits_wcs_sync import sync_header_to_gwcs
 from jwst_gc_pipeline.reduction.saturated_star_finding import remove_saturated_stars
 
 import crds
@@ -1549,7 +1550,18 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
         align_fits = fits.open(fn)
         align_fits[1].header['OLCRVAL1'] = align_fits[1].header['CRVAL1']
         align_fits[1].header['OLCRVAL2'] = align_fits[1].header['CRVAL2']
-        align_fits[1].header.update(ww.to_fits()[0])
+        # NOT ``header.update(ww.to_fits()[0])``: gwcs's to_fits defaults to
+        # max_pix_error=0.25 px, which fitted a degree-3 SIP disagreeing with
+        # the GWCS by up to 5.5 mas (SW) / 6.6 mas (LW) -- on top of the 2 mas
+        # m2 and 5 mas m7 astrometric tolerances -- and merged over the
+        # delivered degree-4 fit, orphaning its high-order coefficients.
+        # sync_header_to_gwcs strips stale SIP, fits at 0.01 px, and VERIFIES.
+        _sip_max, _sip_med = sync_header_to_gwcs(
+            align_fits[1].header, ww, fa.data.shape, label=os.path.basename(fn))
+        print(f"FITS/SIP header synced to GWCS: max {_sip_max:.4f} mas, "
+              f"median {_sip_med:.4f} mas")
+        align_fits[1].header['SIPGWMAX'] = (
+            _sip_max, '[mas] max FITS/SIP vs GWCS disagreement')
         align_fits[1].header['RAOFFSET'] = rashift.value
         align_fits[1].header['DEOFFSET'] = decshift.value
         # correction provenance: base/target fiducials + convention + the
@@ -1612,9 +1624,27 @@ def check_wcs(fn):
             print(f"OLCRVAL1={fh[1].header['OLCRVAL1']}, OLCRVAL2={fh[1].header['OLCRVAL2']}")
         if 'RAOFFSET' in fh[1].header:
             print("RA, DE offset: ", fh[1].header['RAOFFSET'], fh[1].header['DEOFFSET'])
-        ww = WCS(fh[1].header)
+        # relax=True: a header whose CTYPE lost the '-SIP' suffix still carries
+        # A_*/B_*; without relax the distortion is silently dropped.
+        ww = WCS(fh[1].header, relax=True)
         fits_center = ww.pixel_to_world(_fx, _fy)
         print(f"FITS pixel_to_world({_fx},{_fy}) = {fits_center}, sep from new GWCS={fits_center.separation(new_center).to(u.arcsec)}")
+        # The center agrees by construction even when the SIP fit is poor --
+        # the distortion residual lives at the corners.  Measure the whole
+        # array (this is what caught the 0.25 px to_fits() default).
+        from jwst_gc_pipeline.reduction.fits_wcs_sync import (
+            fits_gwcs_discrepancy_mas, FITS_GWCS_TOL_MAS)
+        _max_mas, _med_mas = fits_gwcs_discrepancy_mas(
+            fh[1].header, wcsobj, (int(_fy * 2), int(_fx * 2)))
+        print(f"FITS/SIP vs GWCS over the array: max {_max_mas:.4f} mas, "
+              f"median {_med_mas:.4f} mas")
+        if _max_mas > FITS_GWCS_TOL_MAS:
+            warnings.warn(
+                f"{fn}: the FITS/SIP header disagrees with the GWCS by up to "
+                f"{_max_mas:.3f} mas (> {FITS_GWCS_TOL_MAS} mas). This frame "
+                f"predates the tight-SIP fix; anything reading the FITS header "
+                f"instead of the GWCS carries that position-dependent error. "
+                f"Regenerate it, or read the GWCS.")
         fh.close()
     else:
         print(f"COULD NOT CHECK WCS FOR {fn}: does not exist")
