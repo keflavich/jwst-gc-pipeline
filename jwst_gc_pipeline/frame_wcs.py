@@ -199,8 +199,28 @@ class FrameWCS:
                 f"{' ' + os.path.basename(self.filename) if self.filename else ''}>")
 
     def __getattr__(self, name):
-        # only reached for attributes not defined on the class
+        # Only reached for attributes not defined on the class.  Dunders must
+        # NOT be delegated: `pickle` looks up __reduce_ex__/__getstate__, which
+        # would be answered by the wrapped FITS WCS -- pickling then recursed
+        # forever, and copy.deepcopy silently returned a plain astropy WCS,
+        # i.e. every worker process would quietly fall back to SIP.
+        if name.startswith('__') and name.endswith('__'):
+            raise AttributeError(name)
         return getattr(self._fits, name)
+
+    # Explicit state handling so multiprocessing / dask workers get a FrameWCS
+    # back, not a bare FITS WCS.  gwcs objects are picklable (astropy models).
+    def __reduce__(self):
+        return (_rebuild_frame_wcs, (self._gwcs, self._fits, self.filename))
+
+    def __copy__(self):
+        return FrameWCS(self._gwcs, self._fits, filename=self.filename)
+
+    def __deepcopy__(self, memo):
+        import copy as _copy
+        return FrameWCS(_copy.deepcopy(self._gwcs, memo),
+                        _copy.deepcopy(self._fits, memo),
+                        filename=self.filename)
 
     def __getitem__(self, item):
         # astropy slicing cannot carry a GWCS; degrade explicitly.
@@ -256,6 +276,11 @@ class FrameWCS:
         ra, dec = (np.asarray(v, dtype=float) for v in rd)
         x, y = self._gwcs.invert(ra, dec)
         return np.asarray(x) + origin, np.asarray(y) + origin
+
+
+def _rebuild_frame_wcs(gwcs_obj, fits_wcs, filename):
+    """Unpickle helper for :class:`FrameWCS` (module-level so it is picklable)."""
+    return FrameWCS(gwcs_obj, fits_wcs, filename=filename)
 
 
 def _split_origin(args, kwargs):

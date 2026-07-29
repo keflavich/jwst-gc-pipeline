@@ -185,6 +185,28 @@ def test_missing_gwcs_falls_back_with_a_warning(tmp_path):
         frame_wcs(str(path), require_gwcs=True)
 
 
+def test_survives_pickle_and_deepcopy_as_a_framewcs(frame):
+    """The pipeline hands frame WCSes to multiprocessing / dask workers.
+
+    Without explicit state handling, ``__getattr__`` answered pickle's
+    ``__reduce_ex__`` lookup from the wrapped FITS WCS: pickling recursed
+    forever, and ``deepcopy`` silently returned a plain ``astropy.wcs.WCS`` --
+    so every worker would quietly fall back to SIP while the parent used the
+    GWCS. Both must round-trip as a FrameWCS that still transforms via the GWCS.
+    """
+    import copy
+    import pickle
+
+    g, ww = frame
+    x, y = _xy()
+    ra_g, dec_g = g(x, y)
+
+    for clone in (pickle.loads(pickle.dumps(ww)), copy.deepcopy(ww), copy.copy(ww)):
+        assert isinstance(clone, FrameWCS), type(clone)
+        ra, dec = clone.all_pix2world(x, y, 0)
+        assert np.allclose(ra, ra_g) and np.allclose(dec, dec_g)
+
+
 def test_frame_wcs_passes_through_an_existing_wcs(frame):
     """Call sites may hand in either a path or an already-built WCS."""
     _, ww = frame
