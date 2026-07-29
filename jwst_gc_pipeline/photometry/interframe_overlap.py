@@ -345,7 +345,7 @@ def overlap_offset_grid(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS, nx=12, ny=12,
         base = dict(a=la, b=lb, overlap=True, worst_off_mas=None,
                     worst_off_cell=None, n_ok=0, n_total=0, n_no_coverage=0,
                     could_not_verify=False, clean=False, ok=False,
-                    fail_reason=None)
+                    fail_reason=None, samestar_only=False)
 
         # 2. pooled swept tie with measurability floor
         m = measure_offset(a_in, b_in, maxsep=maxsep,
@@ -392,9 +392,21 @@ def overlap_offset_grid(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS, nx=12, ny=12,
                     off=ss["off_mas"], contrast=None,
                     n_peak=ss["n_pairs"], swept=False,
                     window_arcsec=None, samestar=True)
+                # A POOLED-ONLY pass: the per-cell coverage grid was unmeasurable
+                # (that is why we are here), so this pair has NO spatial bookkeeping
+                # -- one field-wide median stands in for the whole overlap. Mark it
+                # ``samestar_only`` so a caller can tell it apart from a pass backed
+                # by the per-cell layer: a pooled median cannot see a localized-gross
+                # seam confined to a sub-region (a per-detector misregistration is a
+                # fraction of the overlap, and at this density its displaced sources
+                # drop out of the matched sample rather than biasing the median). The
+                # release gate should treat a ``samestar_only`` pass as weaker and
+                # seek external-refcat corroboration (issue #174 / PR #184 arbiter)
+                # rather than as an equal to a per-cell-verified clean pass.
                 base.update(
                     worst_off_mas=ss["off_mas"], n_ok=1 if within else 0,
-                    n_total=1, could_not_verify=False,
+                    n_total=1, n_pairs=int(ss["n_pairs"]), samestar_only=True,
+                    could_not_verify=False,
                     clean=bool(within), ok=bool(within),
                     fail_reason=(None if within else
                                  f"same-star offset {ss['off_mas']:.0f} mas "

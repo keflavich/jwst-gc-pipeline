@@ -341,6 +341,26 @@ def test_grid_samestar_fallback_rescues_when_histogram_not_measurable(monkeypatc
     assert r["ok"] is True
     assert r["pooled"].get("samestar") is True
     assert r["pooled_off_mas"] < 30.0
+    # A pooled-only pass MUST be distinguishable from a per-cell-verified one, so
+    # the release gate can require external-refcat corroboration (PR #184 arbiter)
+    # for it rather than trusting a field-wide median that cannot see a localized
+    # sub-region seam.
+    assert r["samestar_only"] is True
+    assert r.get("n_pairs", 0) > 0
+
+
+def test_per_cell_pass_is_not_flagged_samestar_only():
+    """A pair whose per-cell coverage layer measures it (the normal path) must NOT
+    carry the samestar_only marker -- the flag distinguishes ONLY pooled-only passes."""
+    ra, dec = _field(n=6000, seed=27)
+    a = SkyCoord(ra * u.deg, dec * u.deg)
+    r2, d2 = _shift(ra, dec, 5.0, -3.0)
+    b = SkyCoord(r2 * u.deg, d2 * u.deg)
+    res = overlap_offset_grid({"a": a, "b": b}, tol_mas=30.0, nx=8, ny=8,
+                              maxsep=1 * u.arcsec)
+    r = res[0]
+    assert r["ok"] is True
+    assert r["samestar_only"] is False
 
 
 def test_grid_samestar_fallback_runs_despite_gross_unconfirmed_peak(monkeypatch):
