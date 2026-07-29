@@ -147,28 +147,44 @@ def test_parse_crf_extracts_proposal_observation_module():
     # non-crf / malformed names are rejected (fail-closed, not mis-parsed)
     assert gate._parse_crf("jw02221-o001_t001_nircam_clear-f405n-merged_i2d.fits") is None
     assert gate._parse_crf("random_file.fits") is None
+    # leading obs and trailing _oOOO_ must AGREE, else parse failure
+    assert gate._parse_crf(
+        "jw02221001001_03101_00002_nrcalong_destreak_o002_crf.fits") is None
+
+
+def test_mosaic_obs_keys_handles_combined_and_instruments():
+    assert gate._mosaic_obs_keys(
+        "jw02221-o001_t001_nircam_clear-f405n-merged_i2d.fits") == {"02221-001"}
+    # combined multi-observation MIRI association -> BOTH observations
+    assert gate._mosaic_obs_keys(
+        "jw05365-o002-998_t001_miri_clear-f770w-mirimage_data_i2d.fits") == {
+            "05365-002", "05365-998"}
+
+
+def _write_brick_f405n(tmp_path):
+    pdir = tmp_path / "brick" / "F405N" / "pipeline"
+    pdir.mkdir(parents=True)
+    for n in ("jw02221001001_03101_00001_nrcblong_destreak_o001_crf.fits",
+              "jw02221001001_03101_00002_nrcalong_destreak_o001_crf.fits",
+              "jw02221002001_03101_00001_nrcblong_destreak_o002_crf.fits"):
+        (pdir / n).write_bytes(b"x")
+    # the released brick F405N mosaic is o001 only
+    (pdir / "jw02221-o001_t001_nircam_clear-f405n-merged_i2d.fits").write_bytes(b"x")
+    return pdir
 
 
 def test_observation_scoping_filters_stray_programs(monkeypatch, tmp_path):
     """A shared target dir carries stray crf from other programs/observations
     (the brick dir holds 2221 o002 = cloudc); scoping must exclude them.  The
-    DEFAULT (observations=None) derives the released observations from the merged
-    mosaics on disk, so the stray o002 (which has no released brick mosaic) is
-    dropped with no explicit argument."""
-    pdir = tmp_path / "brick" / "F405N" / "pipeline"
-    pdir.mkdir(parents=True)
-    names = ["jw02221001001_03101_00001_nrcblong_destreak_o001_crf.fits",
-             "jw02221001001_03101_00002_nrcalong_destreak_o001_crf.fits",
-             "jw02221002001_03101_00001_nrcblong_destreak_o002_crf.fits"]
-    for n in names:
-        (pdir / n).write_bytes(b"x")
-    # the released brick mosaic is o001 only -> default scope excludes o002
-    (pdir / "jw02221-o001_t001_nircam_clear-f405n-merged_i2d.fits").write_bytes(b"x")
+    DEFAULT derives the released observations from THIS filter directory's
+    mosaics (per-directory), so the stray o002 is dropped with no argument."""
+    _write_brick_f405n(tmp_path)
     monkeypatch.setattr(gate, "BASE", str(tmp_path))
     monkeypatch.setattr(gate, "_detect", lambda path: None)  # count frames only
-    # explicit empty set = scoping disabled -> every well-formed crf
-    _, _, nframes_all = gate.build_groups("brick", "F405N", observations=set())
-    # default (None) -> auto-derived from the o001 mosaic present
+    # NO_SCOPE = scoping disabled -> every well-formed crf
+    _, _, nframes_all = gate.build_groups("brick", "F405N",
+                                          observations=gate.NO_SCOPE)
+    # default (None) -> per-directory derivation from the o001 mosaic present
     _, _, nframes_default = gate.build_groups("brick", "F405N")
     # explicit proposal-aware scope
     _, _, nframes_scoped = gate.build_groups("brick", "F405N",
@@ -176,3 +192,30 @@ def test_observation_scoping_filters_stray_programs(monkeypatch, tmp_path):
     assert nframes_all == 3
     assert nframes_default == 2
     assert nframes_scoped == 2
+
+
+def test_scope_is_restrict_only_no_readmit_across_instruments(monkeypatch, tmp_path):
+    """A broad field-level scope that also lists a MIRI observation sharing the
+    stray's proposal-obs key (brick MIRI F2550W and the cloudc NIRCam strays are
+    both 2221 o002) must NOT re-admit the stray: the per-directory derivation is
+    intersected, never expanded."""
+    _write_brick_f405n(tmp_path)
+    monkeypatch.setattr(gate, "BASE", str(tmp_path))
+    monkeypatch.setattr(gate, "_detect", lambda path: None)
+    _, _, nframes = gate.build_groups(
+        "brick", "F405N", observations={"02221-001", "01182-004", "02221-002"})
+    assert nframes == 2   # o002 NOT re-admitted despite being in the passed set
+
+
+def test_underivable_scope_warns_and_disables(monkeypatch, tmp_path, capsys):
+    """No mosaic on disk -> derivation empty -> scoping OFF but LOUD (a silent
+    green-because-nothing-derived is the banned false-agreement class)."""
+    pdir = tmp_path / "brick" / "F405N" / "pipeline"
+    pdir.mkdir(parents=True)
+    (pdir / "jw02221001001_03101_00001_nrcalong_destreak_o001_crf.fits").write_bytes(b"x")
+    (pdir / "jw02221002001_03101_00001_nrcblong_destreak_o002_crf.fits").write_bytes(b"x")
+    monkeypatch.setattr(gate, "BASE", str(tmp_path))
+    monkeypatch.setattr(gate, "_detect", lambda path: None)
+    _, _, nframes = gate.build_groups("brick", "F405N")   # no mosaic -> no scope
+    assert nframes == 2   # both accepted (scoping disabled)
+    assert "scoping DISABLED" in capsys.readouterr().out

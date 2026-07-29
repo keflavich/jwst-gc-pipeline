@@ -547,23 +547,54 @@ FRAME_REFCAT = {
 }
 
 
+def _obs_keys_from_name(name):
+    """``"<proposal>-<observation>"`` key(s) from a product/prefix basename
+    ``jwPPPPP-oOOO[-MMM]...`` (a combined ``-oOOO-MMM`` encodes both)."""
+    m = re.match(r"^jw(?P<prop>\d{5})-o(?P<obs>\d{3})(?:-(?P<obs2>\d{3}))?", name)
+    if m is None:
+        return set()
+    keys = {f"{m.group('prop')}-{m.group('obs')}"}
+    if m.group("obs2"):
+        keys.add(f"{m.group('prop')}-{m.group('obs2')}")
+    return keys
+
+
 def _release_observations(field_cfg):
-    """The set of ``"<proposal>-<observation>"`` keys this field's release
-    covers, from ``proposal_prefix`` (e.g. ``jw01182-o004_t001_...`` ->
-    ``01182-004``).  A field spanning multiple programs/observations (brick =
-    1182 o004 + 2221 o001) lists several prefixes; the union scopes the
-    reference-free overlap gate so stray crf from other observations in a shared
-    target directory are excluded.  Returns an empty set when the prefixes carry
-    no ``-oNNN`` token (e.g. gc2211's bare ``jw02211`` + ``observations`` list),
-    leaving the gate to self-derive from the mosaics on disk."""
+    """Every ``"<proposal>-<observation>"`` key this field's release covers,
+    across ALL instruments -- so the reference-free overlap gate's scope is not
+    silently NIRCam-only.  Sources:
+
+    - ``proposal_prefix`` entries carrying ``-oNNN`` (brick = 1182 o004 +
+      2221 o001);
+    - a bare ``jwPPPPP`` proposal_prefix combined with the ``observations`` list
+      (gc2211 = ``jw02211`` + ``["o023","o050"]`` -> 02211-023, 02211-050);
+    - explicit per-instrument mosaic lists (``miri`` / ``nircam`` config keys),
+      whose ``src`` basenames carry the MIRI observations that ``proposal_prefix``
+      (a NIRCam prefix) omits -- e.g. sgrb2 MIRI o002/o998, sickle MIRI o001/o002.
+
+    The gate INTERSECTS this per filter directory, so listing a MIRI observation
+    here can never re-admit a stray NIRCam crf that shares its proposal-obs key
+    (brick MIRI F2550W and the cloudc NIRCam strays are both 2221 o002)."""
     prefixes = field_cfg.get("proposal_prefix", [])
     if isinstance(prefixes, str):
         prefixes = [prefixes]
     obs = set()
+    bare_props = []
     for pref in prefixes:
-        m = re.match(r"^jw(?P<prop>\d{5})-o(?P<obs>\d{3})", pref)
-        if m:
-            obs.add(f"{m.group('prop')}-{m.group('obs')}")
+        keys = _obs_keys_from_name(pref)
+        if keys:
+            obs |= keys
+        else:
+            mb = re.match(r"^jw(\d{5})$", pref)
+            if mb:
+                bare_props.append(mb.group(1))
+    for o in field_cfg.get("observations", []):
+        mo = re.match(r"^o?(\d{3})$", str(o))
+        if mo:
+            obs |= {f"{bp}-{mo.group(1)}" for bp in bare_props}
+    for key in ("miri", "nircam"):
+        for entry in field_cfg.get(key, []):
+            obs |= _obs_keys_from_name(os.path.basename(str(entry.get("src", ""))))
     return obs
 
 

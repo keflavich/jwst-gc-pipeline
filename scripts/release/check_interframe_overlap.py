@@ -94,6 +94,11 @@ def _parse_crf(name):
     m = _CRF_RE.match(os.path.basename(name))
     if m is None:
         return None
+    # the leading obs and the trailing _oOOO_ must agree; a name whose tokens
+    # disagree (a product-named crf copied into a per-exposure name) is a parse
+    # failure, not a coin-flip on whichever token the code happens to read
+    if m.group("obs2") != m.group("obs"):
+        return None
     det = m.group("det")
     module = "mirimage" if det == "mirimage" else det[:4]
     return dict(prop=m.group("prop"), obs=m.group("obs"), visit=m.group("visit"),
@@ -110,35 +115,92 @@ def _group_key(crf_path):
     return f"{p['obs']}{p['visit']}:{p['module']}"
 
 
-def _field_observations(field):
-    """The set of ``"<proposal>-<observation>"`` keys actually RELEASED for a
-    field, derived from the merged science mosaics present on disk.  The gate
-    checks exactly the per-exposure frames that built those mosaics; any crf
-    whose observation has no released mosaic (a stray from another program in a
-    shared target directory) is out of scope by construction."""
+# regex for a merged science mosaic of EITHER instrument (nircam merged_i2d /
+# miri ..._data_i2d), incl. the combined multi-observation form
+# jwPPPPP-oOOO-MMM (an association of obs OOO and MMM -> both are released).
+_MOSAIC_OBS_RE = re.compile(
+    r"^jw(?P<prop>\d{5})-o(?P<obs>\d{3})(?:-(?P<obs2>\d{3}))?_t001_"
+    r"(?:nircam|miri)_")
+
+
+def _mosaic_obs_keys(name):
+    """The ``"<proposal>-<observation>"`` key(s) a merged-mosaic basename
+    encodes (a combined ``-oOOO-MMM`` mosaic encodes both)."""
+    m = _MOSAIC_OBS_RE.match(os.path.basename(name))
+    if m is None:
+        return set()
+    keys = {f"{m.group('prop')}-{m.group('obs')}"}
+    if m.group("obs2"):
+        keys.add(f"{m.group('prop')}-{m.group('obs2')}")
+    return keys
+
+
+# explicit sentinel: "scoping disabled -- accept every well-formed crf".
+# Distinct from ``None`` (derive the scope) so a derivation that finds NOTHING
+# is never silently indistinguishable from a deliberate opt-out.
+NO_SCOPE = object()
+
+
+def _field_observations(field, filt):
+    """The ``"<proposal>-<observation>"`` keys RELEASED in ONE filter directory,
+    from the merged science mosaics on disk there.  Derivation is PER FILTER
+    DIRECTORY (not per field): a ``{field}/{filt}/pipeline`` dir holds one
+    instrument's products, so a MIRI filter derives MIRI observations and a
+    NIRCam filter derives NIRCam ones -- and a stray obs sharing a proposal-obs
+    key across instruments (brick MIRI F2550W and the cloudc NIRCam crf are both
+    2221 o002) can never leak between them.  ``images-merged/`` is included for
+    the per-observation release layout (gc2211's o050 lives there).
+
+    Matches ONLY the canonical science-mosaic form
+    ``..._t001_<instr>_clear-<filt>-...`` -- a shared dir also holds
+    NON-canonical stray products (the cloudc combined
+    ``jw02221-o002_t001_nircam_f405n-f444w_i2d.fits`` has no ``clear`` and is not
+    a release mosaic); matching those would re-derive the stray's observation."""
     obs = set()
-    for p in glob.glob(f"{BASE}/{field}/*/pipeline/"
-                       "jw*-o*_t001_nircam_clear-*-merged_i2d.fits"):
-        m = re.match(r"^jw(?P<prop>\d{5})-o(?P<obs>\d{3})_t001_",
-                     os.path.basename(p))
-        if m:
-            obs.add(f"{m.group('prop')}-{m.group('obs')}")
+    fl = filt.lower()
+    for pat in (f"{BASE}/{field}/{filt}/pipeline/jw*-o*_t001_nircam_clear-{fl}-*_i2d.fits",
+                f"{BASE}/{field}/{filt}/pipeline/jw*-o*_t001_miri_clear-{fl}-*_i2d.fits",
+                f"{BASE}/{field}/images-merged/jw*-o*_t001_nircam_clear-{fl}-*_i2d.fits",
+                f"{BASE}/{field}/images-merged/jw*-o*_t001_miri_clear-{fl}-*_i2d.fits"):
+        for p in glob.glob(pat):
+            obs |= _mosaic_obs_keys(p)
     return obs
 
 
 def build_groups(field, filt, observations=None):
     """Detect on each per-exposure crf and pool by (obs+visit, module).
 
-    ``observations``: iterable of ``"<proposal>-<observation>"`` keys to scope
-    to.  Defaults (None) to the field's RELEASED observations
-    (``_field_observations``) so a stray crf from another program/observation in
-    a shared target dir cannot pollute the verdict.  Pass an explicit set to
-    override; pass an empty set to disable scoping (accept every well-formed
-    crf).
+    Scoping (excludes stray crf from other programs/observations in a shared
+    target dir -- the brick dir also holds 2221 o002 = cloudc crf):
+
+    - ``observations=None`` (default): scope to the RELEASED observations derived
+      from THIS filter directory's mosaics (``_field_observations``);
+    - an explicit iterable of ``"<proposal>-<observation>"`` keys: RESTRICT the
+      derived scope to their intersection (restrict-only -- a broad field-level
+      set, e.g. one that also lists a MIRI observation, can never RE-ADMIT a
+      stray that the per-directory derivation already excluded);
+    - ``NO_SCOPE``: disable scoping, accept every well-formed crf.
+
+    A derivation that yields nothing (no mosaic on disk) is announced loudly and
+    leaves scoping OFF for that filter -- on a shared target dir that is exactly
+    when a stray would slip in, so it must not pass silently.
     """
-    if observations is None:
-        observations = _field_observations(field)
-    observations = set(observations) if observations else None
+    if observations is NO_SCOPE:
+        scope = None
+    else:
+        derived = _field_observations(field, filt)
+        if observations is None:
+            scope = derived or None
+            if scope is None:
+                print(f"  WARNING: {field}/{filt}: could not derive released "
+                      f"observations (no mosaic on disk) -- scoping DISABLED; a "
+                      f"stray crf from another observation could pollute this "
+                      f"verdict", flush=True)
+        else:
+            passed = set(observations)
+            # restrict-only: intersect with the per-directory derivation when it
+            # exists; fall back to the passed set only when nothing was derived
+            scope = (derived & passed) if derived else passed
     # Enumerate broadly, then let the precise _parse_crf regex decide -- a name
     # that is not a well-formed crf, or belongs to an out-of-scope observation,
     # is dropped.  MIRI crf carry no _destreak token; the parser covers them
@@ -148,7 +210,7 @@ def build_groups(field, filt, observations=None):
         p = _parse_crf(fn)
         if p is None:
             continue
-        if observations is not None and p["obs_key"] not in observations:
+        if scope is not None and p["obs_key"] not in scope:
             continue
         frames.append(fn)
     groups = {}
