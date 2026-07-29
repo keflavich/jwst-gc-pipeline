@@ -885,11 +885,12 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
     AstrometryRegressionError
         At a late stage (m3+) when any exposure or the reference tie moved
         beyond ``STAGE_STABILITY_TOL_MAS``, or when the reference tie is
-        BOTH off by more than ``REFERENCE_APPLY_MIN_MAS`` AND incoherent
-        (``apply_ok`` False) — the solution moved and degraded, so it can
+        incoherent (``apply_ok`` False) AND moved beyond that same tolerance
+        since the m2 freeze — the solution both moved and degraded, so it can
         neither be verified nor corrected over (narrow override
-        ``ASTROM_ALLOW_FROZEN_INCOHERENT_TIE=1``).  Unless
-        ``ALLOW_LATE_STAGE_ASTROM_SHIFT=1``.
+        ``ASTROM_ALLOW_FROZEN_INCOHERENT_TIE=1``).  An incoherent tie that did
+        NOT move is recorded as unverified and does not stop the run: it is the
+        same residual m2 passed with.  Unless ``ALLOW_LATE_STAGE_ASTROM_SHIFT=1``.
     """
     stage = str(stage)
     correcting = stage in CORRECTION_STAGES
@@ -1067,23 +1068,76 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                         f"({why}) -- NOT applying; investigate")
                     if not correcting and not _env_flag(
                             "ASTROM_ALLOW_FROZEN_INCOHERENT_TIE"):
-                        # FROZEN stage, and the tie both MOVED (off >
-                        # REFERENCE_APPLY_MIN_MAS) AND went incoherent.  Before
-                        # #111 this fell through to `unverified` only and the
-                        # run continued -- a silent exit from the frozen-stage
-                        # gate, exactly the shape the gate exists to catch.
-                        # Since #108 apply_ok no longer flips on a fine
-                        # sparse-Gaia disagreement, so incoherence here means
-                        # something genuinely bad.  Route it to `failures`, the
-                        # same blocking channel the measured-delta branch and
-                        # DuplicateExposureError (#169) use, so it obeys
-                        # ALLOW_LATE_STAGE_ASTROM_SHIFT like every other
-                        # frozen-stage stop.
-                        failures.append(
-                            f"{vctx}: consensus->reference offset {off:.2f} mas at a "
-                            f"FROZEN stage AND the reference tie is incoherent "
-                            f"({why}) -- the solution both moved and degraded; "
-                            f"it cannot be verified and must not be corrected over")
+                        # FROZEN stage with an incoherent tie.  Before #111 this
+                        # fell through to `unverified` only and the run
+                        # continued -- a silent exit from the frozen-stage gate,
+                        # exactly the shape the gate exists to catch.  Route it
+                        # to `failures`, the same blocking channel the
+                        # measured-delta branch and DuplicateExposureError
+                        # (#169) use, so it obeys ALLOW_LATE_STAGE_ASTROM_SHIFT
+                        # like every other frozen-stage stop.
+                        #
+                        # The condition is MOVEMENT since the m2 freeze, exactly
+                        # as in the coherent branch above -- NOT the absolute
+                        # magnitude of the tie.  A frozen stage asks one
+                        # question, "did it move since m2", and the absolute
+                        # residual is the wrong instrument for it: m2
+                        # legitimately PASSes with a large unactionable residual
+                        # (an incoherent tie is never applied, so the residual
+                        # survives into every later stage unchanged), and
+                        # re-testing that same residual absolutely at m3..m7
+                        # re-trips on scatter m2 already tolerated -- the same
+                        # failure mode as the brick F182M m3 "MOVED 5.86 mas"
+                        # false regression documented in
+                        # _m2_reference_tie_baseline.  Measured on the on-disk
+                        # records (2026-07-29): an absolute-magnitude condition
+                        # would newly stop 34 (field, stage, filter, visit)
+                        # combos, 21 of which had not moved from the m2 record
+                        # current at the time -- including every sgra ~49 mas
+                        # tie, which reads the SAME ~49 mas at m2 and at m3-m6
+                        # and moved 0.1-0.5 mas.
+                        base = _m2_reference_tie_baseline(record_dir, filt, visit)
+                        now_dra, now_ddec = (ref_tie.get("dra_mas"),
+                                             ref_tie.get("ddec_mas"))
+                        finite_now = (now_dra is not None and now_ddec is not None
+                                      and np.isfinite(now_dra)
+                                      and np.isfinite(now_ddec))
+                        if base is None:
+                            # Fail closed, mirroring the coherent branch: with no
+                            # baseline the movement question cannot be answered.
+                            failures.append(
+                                f"{vctx}: consensus->reference offset {off:.2f} mas at a "
+                                f"FROZEN stage AND the reference tie is incoherent "
+                                f"({why}) -- and there is NO m2 baseline record to "
+                                f"test movement against, so the tie can neither be "
+                                f"verified nor shown to be unchanged")
+                        elif not finite_now:
+                            failures.append(
+                                f"{vctx}: consensus->reference offset {off:.2f} mas at a "
+                                f"FROZEN stage AND the reference tie is incoherent "
+                                f"({why}) -- the tie reports no finite bulk "
+                                f"(dra_mas={now_dra}, ddec_mas={now_ddec}), so its "
+                                f"movement since the m2 freeze cannot be measured")
+                        else:
+                            delta = float(np.hypot(now_dra - base[0],
+                                                   now_ddec - base[1]))
+                            if delta > STAGE_STABILITY_TOL_MAS:
+                                failures.append(
+                                    f"{vctx}: consensus->reference MOVED {delta:.2f} mas "
+                                    f"since the m2 freeze "
+                                    f"(m2=({base[0]:+.2f},{base[1]:+.2f}), now="
+                                    f"({now_dra:+.2f},{now_ddec:+.2f}) mas) at a "
+                                    f"FROZEN stage AND the reference tie is incoherent "
+                                    f"({why}) -- the solution both moved and degraded; "
+                                    f"it cannot be verified and must not be corrected over")
+                            else:
+                                print(f"ASTROM CHECKPOINT [{stage}] STABLE (unverified): "
+                                      f"{vctx} tie unchanged since m2 (delta "
+                                      f"{delta:.2f} mas <= {STAGE_STABILITY_TOL_MAS}) "
+                                      f"but still not trustworthy ({why}); the "
+                                      f"{off:.2f} mas residual is the SAME one m2 "
+                                      f"passed with -- not a frozen-stage regression",
+                                      flush=True)
 
         visits.append(dict(
             visit=visit, filtername=filt,

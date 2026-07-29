@@ -111,15 +111,28 @@ audit the full ladder from these records.
 | `ASTROM_ALLOW_FROZEN_INCOHERENT_TIE=1` | narrow override: at m3+, demote "tie moved AND went incoherent" back to `unverified` instead of blocking (see below) |
 | `ALLOW_CROSSFILTER_ASTROM_FAIL=1` | override the cross-filter gate |
 
-At a frozen (m3+) stage a consensus→reference offset above
-`REFERENCE_APPLY_MIN_MAS` whose tie is *also* incoherent (`apply_ok` False —
-no coherent dense peak, per-tile not clean, or a gross sparse split) is a
-**blocking** failure: the solution both moved and degraded, so neither the
-"it only moved a little" nor the "we could not measure it" reading is safe.
-Before this gate existed such a case was recorded only as `unverified` and
-the run continued.  `ASTROM_ALLOW_FROZEN_INCOHERENT_TIE=1` demotes just this
-case (the global `ALLOW_LATE_STAGE_ASTROM_SHIFT=1` still demotes it too, along
-with every other frozen-stage stop).
+At a frozen (m3+) stage a consensus→reference tie that is incoherent
+(`apply_ok` False — no coherent dense peak, per-tile not clean, or a gross
+sparse split) **and** has MOVED more than `STAGE_STABILITY_TOL_MAS` from the
+tie recorded at the m2 freeze is a **blocking** failure: the solution both
+moved and degraded, so neither the "it only moved a little" nor the "we could
+not measure it" reading is safe.  Before this gate existed such a case was
+recorded only as `unverified` and the run continued.
+
+The movement test is deliberate, and matches the coherent branch above it.
+The absolute magnitude of the tie is the wrong instrument for a frozen stage:
+an incoherent tie is never applied, so whatever residual m2 passed with
+survives unchanged into every later stage, and re-testing it absolutely at
+m3..m7 re-trips on scatter m2 already tolerated (the same failure mode as the
+brick F182M m3 "MOVED 5.86 mas" false regression).  Measured over the on-disk
+records on 2026-07-29, an absolute-magnitude condition would newly stop 34
+(field, stage, filter, visit) combos, 21 of which had not moved from the m2
+record that was current when they were written.  When
+there is no m2 baseline to compare against, the gate fails closed and blocks.
+
+`ASTROM_ALLOW_FROZEN_INCOHERENT_TIE=1` demotes just this case (the global
+`ALLOW_LATE_STAGE_ASTROM_SHIFT=1` still demotes it too, along with every other
+frozen-stage stop).
 
 Overrides exist for deliberate, justified use — never to make a red gate
 green (same policy as `ALLOW_REGISTRATION_FAIL`).

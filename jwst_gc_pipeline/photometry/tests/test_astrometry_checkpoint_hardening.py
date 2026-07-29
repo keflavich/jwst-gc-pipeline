@@ -9,10 +9,14 @@ silently neutered rather than loudly fail.
    WRITER used ``filtername or 'all'``.  A ``filtername=None`` caller wrote
    ``checkpoint_m2_all`` and the reader asked for a name that does not exist ->
    "no m2 baseline record found" -> a FALSE regression at every frozen stage.
-3. A frozen stage whose reference tie both MOVED (``off >
-   REFERENCE_APPLY_MIN_MAS``) and went INCOHERENT (``apply_ok`` False) fell into
-   the could-not-verify branch and the run continued -- a silent exit from the
-   gate in exactly the case the gate exists for.
+3. A frozen stage whose reference tie both MOVED since the m2 freeze and went
+   INCOHERENT (``apply_ok`` False) fell into the could-not-verify branch and the
+   run continued -- a silent exit from the gate in exactly the case the gate
+   exists for.  The blocking condition is MOVEMENT (the frozen-stage contract
+   everywhere else in the module), not the absolute magnitude of the tie: an
+   incoherent tie is never applied, so the residual m2 passed with survives into
+   every later stage, and testing it absolutely re-trips on scatter m2 already
+   tolerated.
 
 All of these are hermetic: the heavy consensus/reference numerics are
 monkeypatched (they are covered by test_visit_consensus).
@@ -188,15 +192,100 @@ _MOVED = REFERENCE_APPLY_MIN_MAS + 8.0     # comfortably above the apply floor
 
 
 def test_frozen_stage_incoherent_moved_tie_raises(tmp_path, monkeypatch):
-    """The soft exit this closes: the tie is 10 mas off AND apply_ok is False,
-    so it can neither be verified nor corrected over.  It used to be recorded as
-    `unverified` and the run continued."""
+    """The soft exit this closes: m2 froze the tie at (0.5, 0); it has since
+    moved to (10, 0) AND apply_ok is False, so it can neither be verified nor
+    corrected over.  It used to be recorded as `unverified` and the run
+    continued."""
     monkeypatch.delenv("ALLOW_LATE_STAGE_ASTROM_SHIFT", raising=False)
     monkeypatch.delenv("ASTROM_ALLOW_FROZEN_INCOHERENT_TIE", raising=False)
-    _write_m2_baseline(str(tmp_path), _MOVED, 0.0)
+    _write_m2_baseline(str(tmp_path), 0.5, 0.0)
     _patch_consensus_and_tie(monkeypatch, dra_now=_MOVED, ddec_now=0.0,
                              apply_ok=False)
     with pytest.raises(AstrometryRegressionError, match="incoherent"):
+        run_visit_checkpoint([_tiny_visit_table()], "m3", refcat=_DUMMY_REFCAT,
+                             filtername="F212N", record_dir=str(tmp_path),
+                             context="test")
+
+
+def test_frozen_stage_incoherent_tie_that_did_not_move_does_not_raise(
+        tmp_path, monkeypatch):
+    """The blocking condition is MOVEMENT, not absolute magnitude.
+
+    The sgra shape, straight off disk: a ~49 mas tie that reads the SAME ~49 mas
+    at m2 (where it PASSed, because an incoherent tie is never applied) and at
+    m3-m6, having moved 0.1-0.5 mas.  Nothing regressed between the freeze and
+    now, so the frozen-stage gate has nothing to say; the residual stays in
+    `unverified` where m2 left it.  Testing the absolute magnitude here would
+    re-trip on scatter m2 already tolerated -- the same failure mode as the
+    brick F182M m3 "MOVED 5.86 mas" false regression.
+    """
+    monkeypatch.delenv("ALLOW_LATE_STAGE_ASTROM_SHIFT", raising=False)
+    monkeypatch.delenv("ASTROM_ALLOW_FROZEN_INCOHERENT_TIE", raising=False)
+    _write_m2_baseline(str(tmp_path), 49.0, 0.0)
+    _patch_consensus_and_tie(monkeypatch, dra_now=49.2, ddec_now=0.0,
+                             apply_ok=False)
+    rec = run_visit_checkpoint([_tiny_visit_table()], "m5", refcat=_DUMMY_REFCAT,
+                               filtername="F212N", record_dir=str(tmp_path),
+                               context="test")
+    assert rec["failures"] == []
+    assert rec["passed"]
+    assert rec["unverified"]              # still audited, just not blocking
+    assert not rec["all_verified"]
+
+
+def test_frozen_stage_incoherent_tie_without_a_baseline_fails_closed(
+        tmp_path, monkeypatch):
+    """No m2 record => the movement question cannot be answered at all, so the
+    gate blocks (mirrors the coherent branch's no-baseline behaviour)."""
+    monkeypatch.delenv("ALLOW_LATE_STAGE_ASTROM_SHIFT", raising=False)
+    monkeypatch.delenv("ASTROM_ALLOW_FROZEN_INCOHERENT_TIE", raising=False)
+    _patch_consensus_and_tie(monkeypatch, dra_now=_MOVED, ddec_now=0.0,
+                             apply_ok=False)
+    with pytest.raises(AstrometryRegressionError, match="NO m2 baseline record"):
+        run_visit_checkpoint([_tiny_visit_table()], "m3", refcat=_DUMMY_REFCAT,
+                             filtername="F212N", record_dir=str(tmp_path),
+                             context="test")
+
+
+def test_frozen_stage_incoherent_tie_movement_reads_the_samestar_baseline(
+        tmp_path, monkeypatch):
+    """The movement test must read the SAME estimator the current tie reports
+    (the same-star reported bulk), not the histogram ``vs_full`` -- otherwise it
+    reproduces the brick F182M m3 false regression on the incoherence path
+    instead of the coherent one.  m2 recorded bulk (+1,-6) with vs_full
+    (+6.7,-7.5); the tie still reads (+1,-6) and is incoherent -> no movement,
+    no stop."""
+    monkeypatch.delenv("ALLOW_LATE_STAGE_ASTROM_SHIFT", raising=False)
+    monkeypatch.delenv("ASTROM_ALLOW_FROZEN_INCOHERENT_TIE", raising=False)
+    _write_m2_baseline(str(tmp_path), 1.0, -6.0, vs_full=(6.7, -7.5))
+    _patch_consensus_and_tie(monkeypatch, dra_now=1.0, ddec_now=-6.0,
+                             apply_ok=False)
+    rec = run_visit_checkpoint([_tiny_visit_table()], "m3", refcat=_DUMMY_REFCAT,
+                               filtername="F212N", record_dir=str(tmp_path),
+                               context="test")
+    assert rec["failures"] == []
+    assert rec["passed"]
+
+
+def test_frozen_stage_incoherent_tie_without_a_finite_bulk_fails_closed(
+        tmp_path, monkeypatch):
+    """A tie that reports an offset but no finite bulk cannot be differenced
+    against the baseline; the movement question is unanswerable, so block."""
+    monkeypatch.delenv("ALLOW_LATE_STAGE_ASTROM_SHIFT", raising=False)
+    monkeypatch.delenv("ASTROM_ALLOW_FROZEN_INCOHERENT_TIE", raising=False)
+    _write_m2_baseline(str(tmp_path), 1.0, -6.0)
+    _patch_consensus_and_tie(monkeypatch, dra_now=_MOVED, ddec_now=0.0,
+                             apply_ok=False)
+    real_tie = _ac.measure_reference_tie
+
+    def _no_bulk(*args, **kwargs):
+        tie = real_tie(*args, **kwargs)
+        tie["dra_mas"] = None
+        tie["ddec_mas"] = None
+        return tie
+
+    monkeypatch.setattr(_ac, "measure_reference_tie", _no_bulk)
+    with pytest.raises(AstrometryRegressionError, match="no finite bulk"):
         run_visit_checkpoint([_tiny_visit_table()], "m3", refcat=_DUMMY_REFCAT,
                              filtername="F212N", record_dir=str(tmp_path),
                              context="test")
@@ -207,6 +296,7 @@ def test_frozen_stage_incoherent_tie_is_also_recorded_unverified(
     """The audit trail is preserved: the case still appears in `unverified` (so
     the record's all_verified is False), it is merely ALSO blocking."""
     monkeypatch.setenv("ALLOW_LATE_STAGE_ASTROM_SHIFT", "1")
+    _write_m2_baseline(str(tmp_path), 0.5, 0.0)
     _patch_consensus_and_tie(monkeypatch, dra_now=_MOVED, ddec_now=0.0,
                              apply_ok=False)
     rec = run_visit_checkpoint([_tiny_visit_table()], "m4", refcat=_DUMMY_REFCAT,
@@ -223,6 +313,7 @@ def test_frozen_stage_incoherent_tie_narrow_escape(tmp_path, monkeypatch):
     out (same shape as ASTROM_ALLOW_MISSING_PERFRAME)."""
     monkeypatch.delenv("ALLOW_LATE_STAGE_ASTROM_SHIFT", raising=False)
     monkeypatch.setenv("ASTROM_ALLOW_FROZEN_INCOHERENT_TIE", "1")
+    _write_m2_baseline(str(tmp_path), 0.5, 0.0)
     _patch_consensus_and_tie(monkeypatch, dra_now=_MOVED, ddec_now=0.0,
                              apply_ok=False)
     rec = run_visit_checkpoint([_tiny_visit_table()], "m4", refcat=_DUMMY_REFCAT,
@@ -270,6 +361,7 @@ def test_frozen_stage_incoherent_tie_failure_is_in_the_record(tmp_path, monkeypa
     """The written record carries the blocking reason, so the ladder audit can
     see it without re-running anything."""
     monkeypatch.setenv("ALLOW_LATE_STAGE_ASTROM_SHIFT", "1")
+    _write_m2_baseline(str(tmp_path), 0.5, 0.0)
     _patch_consensus_and_tie(monkeypatch, dra_now=_MOVED, ddec_now=0.0,
                              apply_ok=False)
     run_visit_checkpoint([_tiny_visit_table()], "m6", refcat=_DUMMY_REFCAT,
@@ -279,4 +371,5 @@ def test_frozen_stage_incoherent_tie_failure_is_in_the_record(tmp_path, monkeypa
         rec = json.load(fh)
     assert rec["failures"]
     assert "FROZEN stage AND the reference tie is incoherent" in rec["failures"][0]
+    assert "MOVED" in rec["failures"][0]        # states how far, from what
     assert not rec["passed"]
