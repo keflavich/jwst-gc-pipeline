@@ -448,16 +448,23 @@ def _prepare_cutout_input(filename, basepath, filtername, options):
     # ``wcs.WCS(im1['SCI'].header)`` reads the correct (cutout) WCS; the
     # shifted GWCS stays in the ASDF extension for datamodels / resample.
     #
-    # relax=True is REQUIRED: the detector-frame parent WCS is RA---TAN-SIP, and
-    # plain to_header() drops the '-SIP' CTYPE suffix while leaving the A_*/B_*
-    # SIP coefficients in the header.  astropy still applies SIP (with a warning),
-    # so catalog RA/Dec stay correct, but viewers that honor CTYPE strictly (CARTA)
-    # then IGNORE the distortion -> every per-frame cutout image (residual, model,
-    # _resbg_reproj, _srcfind_input) displays ~0.3-0.5 px offset from the catalog
-    # and from the rectified i2d.  relax=True writes CTYPE='RA---TAN-SIP' so the
-    # SIP is declared and applied consistently everywhere.
+    # The header is fitted from the SHIFTED GWCS, not from ``cut.wcs``.
+    # ``cut.wcs`` is a crop of the parent's *SIP approximation*, so it inherits
+    # whatever error that approximation had (up to 5-8 mas on frames written
+    # before the tight-fit fix) -- the cutout would then disagree with its own
+    # ASDF GWCS.  sync_header_to_gwcs fits at 0.01 px, strips stale SIP
+    # coefficients (Header.update merges, so a lower-degree fit would leave
+    # orphan high-order terms behind), and verifies the result against the GWCS.
+    #
+    # It writes CTYPE='RA---TAN-SIP' explicitly.  A plain to_header() drops the
+    # '-SIP' suffix while leaving A_*/B_* in place: astropy still applies the
+    # distortion (with a warning) so catalog RA/Dec stay correct, but viewers
+    # that honor CTYPE strictly (CARTA) IGNORE it -> every per-frame cutout
+    # image displays ~0.3-0.5 px off from the catalog and from the i2d.
+    from jwst_gc_pipeline.reduction.fits_wcs_sync import sync_header_to_gwcs
     with fits.open(cutout_filename, mode='update') as h:
-        h['SCI'].header.update(cut.wcs.to_header(relax=True))
+        sync_header_to_gwcs(h['SCI'].header, shifted, (ny_c, nx_c),
+                            label=os.path.basename(cutout_filename))
         h.flush()
 
     print(f"CUTOUT '{label}': wrote {cut.data.shape} cutout centered "
