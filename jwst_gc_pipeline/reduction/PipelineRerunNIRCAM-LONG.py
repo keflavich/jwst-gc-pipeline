@@ -415,7 +415,7 @@ def get_allowed_modules(proposal_id, field, requested_modules, filtername=None):
 
 def main(filtername, module, Observations=None, regionname='brick', do_destreak=True,
          field='001', proposal_id='2221', skip_step1and2=False, use_average=True,
-         skymatch_method=None):
+         skymatch_method=None, skip_outlier_detection=True):
     """
     skip_step1and2 will not re-fit the ramps to produce the _cal images.  This
     can save time if you just want to redo the tweakreg steps but already have
@@ -899,6 +899,34 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         # subtract=True is essential (else the matched levels are only recorded,
         # not applied -- see PipelineMIRI.py).
         image3_steps = {'tweakreg': tweakreg_parameters}
+
+        # outlier_detection: SKIPPED by default on these crowded GC fields (#161).
+        # Diagnosis (PR #180) established the step over-flags real bright-star PSF
+        # signal -- diffraction spikes and the dark inter-spike gaps -- as OUTLIER,
+        # punching NaN holes into the _crf/_i2d that cataloging then loses.  The
+        # cause is a MIS-SPECIFIED VARIANCE MODEL, not a tunable threshold:
+        # outlier_detection compares each exposure to the resampled-stack median
+        # with a tolerance built from ERR (photon+read noise only), but an
+        # UNDERSAMPLED PSF sampled at different sub-pixel dither phases legitimately
+        # disperses 5-9x ERR wherever the PSF is steep (0.98x ERR on flat sky ->
+        # 9.4x on the spikes).  Decisive test: two exposures at the SAME dither
+        # pointing agree at the ERR level even at the flagged pixels, while
+        # exposures at DIFFERENT pointings differ ~9x more -- which excludes every
+        # per-frame defect (cosmic rays, persistence, brighter-fatter, ramp
+        # nonlinearity are all independent per exposure and would show up
+        # within-pointing too; they do not).  Raising snr/scale (closed PR #163)
+        # only rescales the wrong tolerance and would suppress genuine CRs equally.
+        # Cosmic rays are already rejected per-ramp by JumpStep in Detector1
+        # (independent, and this issue's ramp analysis found <1% genuine jumps
+        # among the flagged pixels), so dropping the inapplicable image-space
+        # comparison costs little.  Re-enable with --run-outlier-detection if a
+        # field is sparse enough that residual (post-JumpStep) CRs dominate.
+        if skip_outlier_detection:
+            image3_steps['outlier_detection'] = {'skip': True}
+            print(f"outlier_detection SKIPPED (#161; JumpStep handles CRs) ({module})")
+        else:
+            print(f"outlier_detection ENABLED at pipeline defaults ({module})")
+
         if skymatch_method:
             image3_steps['skymatch'] = {'save_results': True,
                                         'subtract': True,
@@ -967,6 +995,35 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
                 shutil.copy(_pc, _target)
                 print(f"  crf rename: {os.path.basename(_pc)} -> "
                       f"{os.path.basename(_target)}", flush=True)
+        elif skip_outlier_detection:
+            # outlier_detection is the step that emits the CR-flagged crf; with it
+            # skipped (#161) Image3 writes none, so cataloging's per-exposure
+            # *_o{field}_crf.fits glob would starve (or silently reuse a stale
+            # reduction's crf).  tweakreg is also skip=True here (alignment was done
+            # upstream -- members already carry the final WCS), so the correct crf
+            # is just the member frame itself: same SCI/ERR/WCS, DQ WITHOUT the
+            # spurious OUTLIER flags.  Copy each member -> its per-exposure crf name.
+            if skymatch_method:
+                print("  WARNING: --skymatch-method set WITH outlier_detection "
+                      "skipped: the per-exposure crf are copied from the PRE-skymatch "
+                      "member frames (skymatch's subtraction is applied in-memory and "
+                      "only reaches the resampled i2d, not these copies).", flush=True)
+            _n_crf = 0
+            for member in asn_data['products'][0]['members']:
+                _mb = os.path.basename(member['expname'])
+                _src = (member['expname'] if os.path.exists(member['expname'])
+                        else os.path.join(output_dir, _mb))
+                _target = os.path.join(
+                    output_dir, _mb.replace('.fits', f'_o{field}_crf.fits'))
+                if not os.path.exists(_src):
+                    print(f"  WARNING: member frame {_mb} missing; crf NOT written",
+                          flush=True)
+                    continue
+                shutil.copy(_src, _target)
+                _n_crf += 1
+            print(f"  outlier_detection skipped: wrote {_n_crf} per-exposure crf as "
+                  f"copies of the aligned member frames (no OUTLIER flags added)",
+                  flush=True)
         else:
             print(f"  (no product-named crf {_prod_name}_*_o{field}_crf.fits found; "
                   f"assuming crf already per-exposure named)", flush=True)
@@ -1650,6 +1707,16 @@ if __name__ == "__main__":
                            "background pedestals and remove mosaic seams "
                            "(subtract=True, match_down=False).",
                       metavar="skymatch_method")
+    parser.add_option("--run-outlier-detection", dest="run_outlier_detection",
+                      default=False, action='store_true',
+                      help="Re-enable Image3 outlier_detection (OFF by default on "
+                           "these crowded GC fields; see #161). It over-flags real "
+                           "bright-star PSF signal because ERR under-models the "
+                           "dither-phase dispersion of the undersampled PSF; CRs are "
+                           "already handled per-ramp by JumpStep. Use this only for "
+                           "fields sparse enough that residual post-JumpStep CRs "
+                           "dominate.",
+                      metavar="run_outlier_detection")
     (options, args) = parser.parse_args()
 
     # Production run guard: refuse to run the imaging stage on an untagged or
@@ -1666,6 +1733,7 @@ if __name__ == "__main__":
     skip_step1and2 = options.skip_step1and2
     no_destreak = bool(options.no_destreak)
     skymatch_method = (options.skymatch_method or '').strip() or None
+    skip_outlier_detection = not options.run_outlier_detection
     print(options)
 
     with open(os.path.expanduser('~/.mast_api_token'), 'r') as fh:
@@ -1711,6 +1779,7 @@ if __name__ == "__main__":
                                skip_step1and2=skip_step1and2,
                                do_destreak=not no_destreak,
                                skymatch_method=skymatch_method,
+                               skip_outlier_detection=skip_outlier_detection,
                               )
 
 
