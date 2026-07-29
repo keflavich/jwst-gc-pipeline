@@ -167,3 +167,68 @@ def test_bulk_accumulates_on_sentinel_row(tmp_path):
     cosd = np.cos(np.radians(DEC))
     assert abs(float(sentinel["dra (arcsec)"][0]) - (-38.0 / 1000.0) / cosd) < 1e-9
     assert abs(float(sentinel["ddec (arcsec)"][0]) - (-11.0 / 1000.0)) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# Vgroup migration: rows written before the column existed
+# ---------------------------------------------------------------------------
+
+def test_upsert_migrates_pre_vgroup_row_instead_of_orphaning_it(tmp_path):
+    """A row seeded BEFORE the Vgroup column existed keys as "" (no group).  The
+    next iteration's correction for the SAME physical exposure carries a real
+    vgroup, so the exact key misses -- and an INSERT there would silently orphan
+    everything that row had already accumulated (the arches consensus table on
+    disk is exactly this shape).  It must be adopted and backfilled instead."""
+    p = seed_offsets_table_from_consensus(
+        str(tmp_path), "2045", "001", [_corr("1", 1, "nrca1", 0.0, 20.0)])
+    assert len(Table.read(p)) == 1
+    # second iteration: same exposure, now with its visit group
+    c = _corr("1", 1, "nrca1", 0.0, 5.0)
+    c["vgroup"] = "02101"
+    seed_offsets_table_from_consensus(str(tmp_path), "2045", "001", [c])
+    t = Table.read(p)
+    assert len(t) == 1, "the pre-Vgroup row was orphaned, not migrated"
+    assert str(t["Vgroup"][0]).strip() in ("2101", "02101")
+    # the 20 mas the legacy row carried is still there, plus the new 5
+    assert abs(float(t["ddec (arcsec)"][0]) - 0.025) < 1e-12
+    assert abs(float(t["prov_ddec_added_mas"][0]) - 25.0) < 1e-9
+    # and it is found by a vgroup-aware lookup
+    dra, ddec = lookup_consensus_offset(t, "jw02045001001", 1, "nrca1", "F115W",
+                                        vgroup="02101")
+    assert abs(ddec - 0.025) < 1e-12
+
+
+def test_upsert_refuses_to_split_a_blended_pre_vgroup_row(tmp_path):
+    """If TWO visit groups claim the same pre-Vgroup row, that row blended two
+    disjoint pointings and there is no way to say whose shift it holds.  Refuse
+    rather than hand it to whichever correction is processed first."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        OffsetsTableUpdateError)
+    import pytest
+    seed_offsets_table_from_consensus(
+        str(tmp_path), "2221", "002", [_corr("1", 1, "nrcb1", 0.0, 20.0)])
+    corrs = []
+    for vg in ("06201", "12201"):
+        c = _corr("1", 1, "nrcb1", 0.0, 5.0)
+        c["vgroup"] = vg
+        corrs.append(c)
+    with pytest.raises(OffsetsTableUpdateError, match="(?i)blended"):
+        seed_offsets_table_from_consensus(str(tmp_path), "2221", "002", corrs)
+
+
+def test_lookup_still_applies_a_row_whose_vgroup_is_empty(tmp_path):
+    """An empty Vgroup cell means "group unknown" (pre-column row, or a row the
+    builder's field-safe merge preserved), NOT "matches nothing" -- dropping it
+    would silently discard an accumulated correction."""
+    t = Table([dict(Visit="jw04147012001", Filter="F115W", Module="nrcb2",
+                    Exposure=2, Vgroup="",
+                    **{"dra (arcsec)": 0.00894, "ddec (arcsec)": -0.002}),
+               dict(Visit="jw04147012001", Filter="F115W", Module="nrcb3",
+                    Exposure=2, Vgroup="03101",
+                    **{"dra (arcsec)": 0.001, "ddec (arcsec)": 0.0})])
+    dra, ddec = lookup_consensus_offset(t, "jw04147012001", 2, "nrcb2", "F115W",
+                                        vgroup="07101")
+    assert abs(dra - 0.00894) < 1e-9
+    # a row that NAMES a different group is still excluded
+    assert lookup_consensus_offset(t, "jw04147012001", 2, "nrcb3", "F115W",
+                                   vgroup="07101") == (0.0, 0.0)

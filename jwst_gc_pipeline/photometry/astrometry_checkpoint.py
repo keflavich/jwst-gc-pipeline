@@ -332,8 +332,8 @@ def _assert_vgroup_granularity(corrections, tbl, offsets_path):
         return
     per_key = {}
     for corr in corrections:
-        vg = corr.get("vgroup")
-        if vg is None or str(vg) in ("", "None"):
+        vg = vgroup_key(corr.get("vgroup"))
+        if not vg:
             continue
         key = (str(corr.get("visit")), str(corr.get("filtername")),
                corr.get("exposure"), str(corr.get("module")))
@@ -360,14 +360,8 @@ def vgroup_key(value):
     therefore fails to match an existing bulk row on the second upsert and
     inserts a duplicate sentinel instead of accumulating onto it.
     """
-    if value is None:
+    if value is None or isinstance(value, np.ma.core.MaskedConstant):
         return ""
-    try:                                   # numpy masked constant
-        import numpy.ma as _ma
-        if value is _ma.masked:
-            return ""
-    except ImportError:
-        pass
     s = str(value).strip()
     if s in ("", "--", "nan", "None", "N/A"):
         return ""
@@ -386,6 +380,35 @@ def same_vgroup(a, b):
     if sa.isdigit() and sb.isdigit():
         return int(sa) == int(sb)
     return sa == sb
+
+
+def _finite_float(value, default=0.0):
+    """``float(value)`` for a table cell that may be missing or masked."""
+    if value is None or isinstance(value, np.ma.core.MaskedConstant):
+        return default
+    return float(value)
+
+
+def vgroup_row_matches(row_value, wanted):
+    """Does an offsets-table row whose ``Vgroup`` cell is ``row_value`` apply to
+    visit group ``wanted``?
+
+    An EMPTY cell means "visit group UNKNOWN", not "visit group nothing": it is
+    what a row written before this column existed (or a row preserved from
+    another filter by the builder's field-safe merge, which fills missing columns
+    with '') reads back as.  Such a row must keep applying exactly as it did
+    before the column was added -- narrowing it away would SILENTLY drop a
+    correction a previous iteration had already accumulated onto it, which is the
+    same class of failure as the curation collapse the checkpoints exist to
+    prevent.  So an empty cell is a WILDCARD.
+
+    The ambiguity that creates (an unknown-vgroup row AND a real-vgroup row for
+    the same exposure both match) is caught loudly downstream: both
+    ``lookup_consensus_offset`` and ``fix_alignment`` raise on a >1 match.
+    """
+    if vgroup_key(row_value) == "":
+        return True
+    return same_vgroup(row_value, wanted)
 
 
 def _module_variants(module):
@@ -476,8 +499,28 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
         # that carries Vgroup MUST be narrowed by it or two disjoint pointings
         # share a row.  (_assert_vgroup_granularity refuses the case where the
         # correction set needs this and the table cannot express it.)
-        if corr.get("vgroup") is not None and "Vgroup" in tbl.colnames:
-            match &= np.array([same_vgroup(g, corr["vgroup"]) for g in tbl["Vgroup"]])
+        # ``vgroup_key`` -- NOT ``is not None`` -- because exposure_key stringifies
+        # a missing VGROUP meta to the literal "None", which would otherwise narrow
+        # against a token no row can ever carry ("matches NO row").
+        wanted_vgroup = vgroup_key(corr.get("vgroup"))
+        if "Vgroup" in tbl.colnames and wanted_vgroup:
+            match &= np.array([vgroup_row_matches(g, wanted_vgroup)
+                               for g in tbl["Vgroup"]])
+        elif ("Vgroup" in tbl.colnames and corr.get("exposure") is not None
+              and match.sum() > 1):
+            # a per-EXPOSURE correction that does not know its vgroup, on a table
+            # that does: the shift would be ADDED to every group's row.  That is
+            # the accumulation _assert_vgroup_granularity refuses in the mirror
+            # case (table cannot express it); refuse it here too.
+            spans = {vgroup_key(g) for g in tbl["Vgroup"][match]}
+            if len(spans - {""}) > 1:
+                raise OffsetsTableUpdateError(
+                    f"correction {corr} carries NO visit group but matches rows "
+                    f"from {sorted(spans)} in {offsets_path} -- applying it would "
+                    f"add the same shift to every group's row.  The exposure "
+                    f"number restarts per visit group, so the correction must "
+                    f"name its group (visit_consensus.exposure_key carries it as "
+                    f"key[4]).")
         if match.sum() == 0:
             raise OffsetsTableUpdateError(
                 f"correction {corr} matches NO row in {offsets_path} -- refusing "
@@ -587,9 +630,11 @@ def lookup_consensus_offset(tbl, visit, exposure, module, filtername, vgroup=Non
            & np.array([str(m) in variants for m in tbl["Module"]]))
     # exposure numbers restart per visit group, so a Vgroup-carrying table must be
     # narrowed by it -- otherwise two disjoint pointings collide on one exposure
-    # number and the lookup below raises "match=2".
-    if vgroup is not None and "Vgroup" in tbl.colnames:
-        jit &= np.array([same_vgroup(g, vgroup) for g in tbl["Vgroup"]])
+    # number and the lookup below raises "match=2".  A row whose Vgroup cell is
+    # EMPTY predates the column and still applies (vgroup_row_matches); a row that
+    # names a DIFFERENT group does not.
+    if vgroup_key(vgroup) and "Vgroup" in tbl.colnames:
+        jit &= np.array([vgroup_row_matches(g, vgroup) for g in tbl["Vgroup"]])
     nj = int(jit.sum())
     if nj > 1:
         raise ValueError(
@@ -655,15 +700,21 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
     bykey = {}
     if existed:
         for r in Table.read(out_path):
+            row = {c: r[c] for c in r.colnames}
+            # normalise the round-tripped cell ONCE (masked/'--'/int64 -> canonical
+            # string) so the key, the migration below and the written column all
+            # agree on one representation.
+            row["Vgroup"] = vgroup_key(row.get("Vgroup"))
             key = (str(r["Visit"]), str(r["Filter"]), int(r["Exposure"]),
-                   str(r["Module"]),
-                   vgroup_key(r["Vgroup"]) if "Vgroup" in r.colnames else "")
-            bykey[key] = {c: r[c] for c in r.colnames}
+                   str(r["Module"]), row["Vgroup"])
+            bykey[key] = row
 
+    # Resolve every correction's identity ONCE: its upsert key, and the key the
+    # SAME physical exposure carried before the Vgroup column existed.
+    prepared = []
     for corr in corrections:
         visit = int(str(corr["visit"])[-3:])
         visit_tok = f"jw0{proposal_id}{field}{visit:03d}"
-        cosd = max(np.cos(np.radians(float(corr["dec_deg"]))), 1e-6)
         # A consensus->reference correction is the per-VISIT bulk tie (whole
         # visit onto VIRAC2) -- it carries exposure=None AND module=None.  Store
         # it under the sentinel (BULK_EXPOSURE, BULK_MODULE) row so fix_alignment
@@ -673,13 +724,53 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
         is_bulk = corr.get("exposure") is None and corr.get("module") is None
         exposure = BULK_EXPOSURE if is_bulk else int(corr["exposure"])
         module = BULK_MODULE if is_bulk else str(corr["module"])
+        # VGROUP is part of the identity (exposure numbers restart per group);
+        # BULK rows are visit-wide and carry the sentinel "" instead.  Canonicalise
+        # here so a missing meta ("None" from exposure_key) cannot be written into
+        # the column as a literal token nothing will ever match.
+        vgroup = "" if is_bulk else vgroup_key(corr.get("vgroup"))
+        key = (visit_tok, corr["filtername"], exposure, module, vgroup)
+        prepared.append((corr, visit_tok, exposure, module, vgroup, key))
+
+    # MIGRATION of pre-Vgroup rows.  A row written before this column existed
+    # keys as "" (no vgroup), while the correction for the same physical exposure
+    # now carries a real one -- so the exact key MISSES and the upsert would
+    # INSERT a second row, silently orphaning whatever the old row had already
+    # accumulated (the arches consensus table, the only one on disk, is exactly
+    # this case: 85 per-exposure rows with no Vgroup).  Adopt the old row and
+    # backfill its Vgroup instead.  If TWO groups would claim the same legacy row
+    # it is a genuine blend of two pointings that cannot be split -- refuse
+    # rather than guess which one inherits the accumulated shift.
+    claims = {}
+    for _c, visit_tok, exposure, module, vgroup, key in prepared:
+        if not vgroup or key in bykey:
+            continue
+        legacy = (visit_tok, key[1], exposure, module, "")
+        if legacy in bykey:
+            claims.setdefault(legacy, set()).add(vgroup)
+    for legacy, vgs in sorted(claims.items()):
+        if len(vgs) > 1:
+            raise OffsetsTableUpdateError(
+                f"{os.path.basename(out_path)} row {legacy[:4]} was written "
+                f"before the Vgroup column existed and now has corrections from "
+                f"{sorted(vgs)} -- it BLENDED those visit groups into one row, so "
+                f"there is no way to say which group its accumulated shift "
+                f"belongs to.  Rebuild the table (or move it aside and re-seed) "
+                f"before applying per-vgroup corrections.")
+        vgroup = vgs.pop()
+        row = bykey.pop(legacy)
+        row["Vgroup"] = vgroup
+        bykey[legacy[:4] + (vgroup,)] = row
+        kept = tuple(_finite_float(row.get(c))
+                     for c in ("prov_dra_added_mas", "prov_ddec_added_mas"))
+        print(f"[consensus] migrated pre-Vgroup row {legacy[:4]} -> "
+              f"Vgroup={vgroup} (keeps its accumulated "
+              f"{kept[0]:+.2f},{kept[1]:+.2f} mas)", flush=True)
+
+    for corr, visit_tok, exposure, module, vgroup, key in prepared:
+        cosd = max(np.cos(np.radians(float(corr["dec_deg"]))), 1e-6)
         dra_add = (float(corr["dra_onsky_mas"]) / 1000.0) / cosd
         ddec_add = float(corr["ddec_onsky_mas"]) / 1000.0
-        # VGROUP is part of the identity (exposure numbers restart per group);
-        # BULK rows are visit-wide and carry the sentinel "" instead.
-        vgroup = "" if is_bulk else str(corr.get("vgroup") or "")
-        key = (visit_tok, corr["filtername"], exposure, module,
-               vgroup_key(vgroup))
         if key in bykey:
             row = bykey[key]
             row["dra (arcsec)"] = float(row["dra (arcsec)"]) + dra_add

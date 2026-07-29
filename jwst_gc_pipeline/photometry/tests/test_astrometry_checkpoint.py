@@ -884,3 +884,57 @@ def test_vgroup_key_normalises_csv_roundtrip_forms():
     assert vgroup_key(ma.masked) == ""
     assert vgroup_key("--") == vgroup_key("") == vgroup_key(None) == ""
     assert vgroup_key("06201") != vgroup_key("12201")
+
+
+def test_update_offsets_table_refuses_a_vgroupless_correction_that_spans_groups(tmp_path):
+    """A per-exposure correction with no visit group, on a table that HAS one:
+    the shift would be added to every group's row (the accumulation
+    _assert_vgroup_granularity refuses in the mirror case)."""
+    path = _vgroup_csv(tmp_path)
+    corr = [dict(visit="jw02221002001", exposure=1, module="nrcb1",
+                 filtername="F212N", dra_onsky_mas=0.0, ddec_onsky_mas=10.0,
+                 dec_deg=DEC_TEST)]
+    with pytest.raises(OffsetsTableUpdateError, match="(?i)carries NO visit group"):
+        update_offsets_table(path, corr, "m2")
+
+
+def test_update_offsets_table_ignores_a_stringified_missing_vgroup(tmp_path):
+    """exposure_key stringifies a missing VGROUP meta to the literal "None".
+    That must read as "unknown", not as a token to narrow on -- narrowing on it
+    would match no row and hard-fail the whole re-tie."""
+    path = _offsets_csv(tmp_path)          # no Vgroup column
+    corr = [dict(visit="jw01182004001", exposure=1, module="nrcb1",
+                 filtername="F212N", vgroup="None", dra_onsky_mas=0.0,
+                 ddec_onsky_mas=10.0, dec_deg=DEC_TEST)]
+    out = update_offsets_table(path, corr, "m2")
+    row = out[(np.array([str(v) for v in out["Visit"]]) == "jw01182004001")
+              & (out["Exposure"] == 1)][0]
+    assert row["ddec"] == pytest.approx(0.5 + 0.01, abs=1e-9)
+
+
+def test_vgroup_row_matches_treats_empty_as_unknown():
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import vgroup_row_matches
+    import numpy.ma as ma
+    assert vgroup_row_matches("", "06201")
+    assert vgroup_row_matches(ma.masked, "06201")
+    assert vgroup_row_matches("06201", "6201")
+    assert not vgroup_row_matches("12201", "06201")
+
+
+def test_vgroup_key_keeps_a_non_digit_token_whole():
+    """MIRI/parallel groups carry a trailing letter; truncating to the digit
+    prefix would silently return a DIFFERENT group."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        same_vgroup, vgroup_key)
+    assert vgroup_key("0210b") == "0210b"
+    assert not same_vgroup("0210b", "0210")
+
+
+def test_build_virac2_offsets_parses_whole_vgroup_token():
+    from jwst_gc_pipeline.reduction.build_virac2_offsets import parse_vgroup
+    assert parse_vgroup("f212n_nrcb1_visit001_vgroup06201_exp00001_m3_daophot_basic.fits") == "6201"
+    # the zero-padded and bare spellings of one group key identically
+    assert (parse_vgroup("f182m_nrcb3_visit001_vgroup07101_exp00003_m3_daophot_basic.fits")
+            == parse_vgroup("f182m_nrcb3_visit001_vgroup7101_exp00003_m3_daophot_basic.fits"))
+    # a non-digit token is kept whole, not truncated to its digit prefix
+    assert parse_vgroup("f2550w_mirimage_visit001_vgroup0020210b_exp00001_m3_daophot_basic.fits") == "0020210b"

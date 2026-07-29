@@ -1293,13 +1293,24 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
             # each, so (visit, exposure) alone is ambiguous -- cloudc has 2 groups
             # in every filter, gc2211 has 6.  Tables built before Vgroup existed
             # have no such column and are matched exactly as before.
-            if match.sum() > 1 and 'Vgroup' in offsets_tbl.colnames:
-                from jwst_gc_pipeline.photometry.astrometry_checkpoint import same_vgroup
-                match = match & np.array([same_vgroup(g, vgroup)
+            #
+            # UNCONDITIONAL (unlike the Exposure/Module narrowing above): a lone
+            # surviving row is exactly the dangerous case.  If the table happens to
+            # carry a row for the OTHER group's exposure N and none for this one,
+            # `match.sum() == 1` and a `> 1` guard would silently apply a DIFFERENT
+            # pointing's shift.  Narrow always and let the != 1 check below raise.
+            # A row with an EMPTY Vgroup cell predates the column (or was preserved
+            # by the builder's field-safe merge) and still applies -- see
+            # vgroup_row_matches.
+            if 'Vgroup' in offsets_tbl.colnames:
+                from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+                    vgroup_row_matches)
+                match = match & np.array([vgroup_row_matches(g, vgroup)
                                           for g in offsets_tbl['Vgroup']])
             if match.sum() != 1:
                 raise ValueError(f"module-locked offset match={match.sum()} for {fn} "
-                                 f"(visit={visit}, exposure={exposure}, filter={filtername}); "
+                                 f"(visit={visit}, exposure={exposure}, "
+                                 f"vgroup={vgroup}, filter={filtername}); "
                                  f"expected exactly 1 row in {locked_tbl}")
             row = offsets_tbl[match]
             if _has_stamps and _frame_gen is not None:

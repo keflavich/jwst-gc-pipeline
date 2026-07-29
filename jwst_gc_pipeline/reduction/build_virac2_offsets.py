@@ -53,6 +53,12 @@ from ..astrometry_utils import _resolve_existing_path
 # Sanctioned density-immune, window-swept, guarded bulk-offset estimator (replaces the
 # bespoke coarse_xcorr this module used to reimplement -- see brick-jwst-2221 PR #39 review).
 from ..photometry.astrometry_offsets import measure_offset
+# ONE canonical form for the visit-group token on both sides of the table: the
+# builder writes it here, update_offsets_table / lookup_consensus_offset /
+# fix_alignment compare against it.  (Both '_vgroup07101' and '_vgroup7101' exist
+# on disk for the same group, so keying on the raw token would split one pointing's
+# detectors across two rows -- the exact failure the column exists to prevent.)
+from ..photometry.astrometry_checkpoint import vgroup_key
 
 V2EP = 2014.0
 SEARCH = 0.3 * u.arcsec
@@ -441,6 +447,23 @@ def module_key(det):
     return det if det in LW_DETS else det[:4]
 
 
+def parse_vgroup(basename):
+    """Canonical visit-group id of a per-frame catalog filename.
+
+    Matches the WHOLE token (``_vgroup<TOKEN>_exp``), not just its digit prefix:
+    MIRI and parallel visit groups can carry a trailing letter (sgrb2/F2550W has
+    ``vgroup0020210b``), and ``r'_vgroup(\\d+)'`` would silently truncate that to
+    ``0020210`` -- a DIFFERENT group id, returned as if it were correct.
+    Canonicalised with ``vgroup_key`` so the zero-padded and bare spellings of the
+    same group (both ``_vgroup07101`` and ``_vgroup7101`` exist on disk) key and
+    compare identically on the table's producer and consumer sides.
+    """
+    m = re.search(r'_vgroup([^_]+)_exp', basename)
+    if m is None:
+        raise ValueError(f"cannot parse a visit group from {basename}")
+    return vgroup_key(m.group(1))
+
+
 def _gather(filt, base, sub, mtag, dets):
     """Collect per-(visit,vgroup,exp) and per-visit SIAF positions + legacy coarse.
 
@@ -459,7 +482,7 @@ def _gather(filt, base, sub, mtag, dets):
         for f in glob.glob(f'{base}/{sub}/{filt}_{det}_visit*_vgroup*_exp*{mtag}_daophot_basic.fits'):
             b = os.path.basename(f)
             vis = b.split('_visit')[1][:3]; exp = int(re.search(r'_exp(\d+)', b).group(1))
-            vgr = re.search(r'_vgroup(\d+)', b).group(1)
+            vgr = parse_vgroup(b)
             ra, dec, ra0, de0 = load_siaf(f)
             byve[(vis, vgr, exp)][0].append(ra); byve[(vis, vgr, exp)][1].append(dec)
             byv[vis].append((ra, dec)); coarse[vis][0].append(ra0); coarse[vis][1].append(de0)
@@ -655,6 +678,12 @@ if __name__ == '__main__':
                         f"  python -m jwst_gc_pipeline.reduction."
                         f"build_virac2_offsets --region {k} --per-module\n"
                         for k in siblings))
+            # NB Vgroup needs no counterpart to the half-per-module refusal above.
+            # The Module narrowing treats an unmatched row as "not this module",
+            # so a half-filled column strands the rows that were not rebuilt; the
+            # Vgroup narrowing treats an EMPTY cell as "group unknown -> applies"
+            # (astrometry_checkpoint.vgroup_row_matches), so preserved rows keep
+            # matching exactly as they did before the column existed.
             # dtype-aware fill: `np.nan` into a string column makes vstack raise
             # TableMergeError ('float64' vs 'str160').
             for c in t.colnames:
