@@ -700,24 +700,42 @@ def check_filter(field, filt, refcat=None, verbose=True, observations=None):
         p = pw.get((r["a"], r["b"])) or pw.get((r["b"], r["a"])) or {}
         r["pairwise"] = {k: p.get(k) for k in
                          ("off_mas", "dra_mas", "ddec_mas", "contrast",
-                          "n_peak", "measurable", "swept", "ok")}
+                          "n_peak", "measurable", "swept", "ok",
+                          "window_consistent", "window_edge_fraction",
+                          "alias_rejected")}
         # Authoritative discriminant: did ANY mutual-coverage TILE get measured?
         # n_total == 0 -> a sparse / thin overlap where NEITHER the per-tile
         # same-star layer NOR the pooled frame-vs-frame histogram is trustworthy
         # (against a dense clustered field the wrong-pair bias yields a
         # _confirm_tie-CONFIRMED but SPURIOUS pooled peak: brick F405N
         # nrca-long|nrcb-long read 55 mas pooled over 0 tiles, yet same-star vs
-        # VIRAC = 3 mas).  Defer EVERY such flagged pair to the external
-        # SAME-STAR reference below; never hard-fail on the pooled number alone.
-        # A genuine gross offset (brick-1182 v001 ~20") is deferred too and is
-        # then caught by the reference (really off) or fail-closed if no --refcat.
+        # VIRAC = 3 mas).  Defer such a flagged pair to the external SAME-STAR
+        # reference below rather than hard-failing on the pooled number alone.
+        #
+        # EXCEPT when the pooled peak is WINDOW-CONFIRMED (issue #158): a real
+        # rigid offset reads the SAME value at every window large enough to hold
+        # it, while a pair-density ridge slides with the window.  Deferring a
+        # window-confirmed gross offset would report the brick-1182 v001 ~20"
+        # class as "could not verify" (rc=2, unknown) rather than as the measured
+        # misregistration it is (rc=1, actionable) -- and with no --refcat both
+        # collapse to the same refusal, so the operator loses the one signal that
+        # says which it was.  A confirmed gross peak is a MEASUREMENT; fail on it.
         n_tiles_measured = int(r.get("n_total", 0) or 0)
         if n_tiles_measured == 0:
-            if r.get("could_not_verify") or not r.get("ok", True):
-                if p.get("measurable") and not p.get("ok", True):
+            gross_measured = bool(p.get("measurable")) and not p.get("ok", True)
+            if gross_measured and p.get("window_consistent") is True:
+                r["fail_reason"] = (
+                    f"gross pairwise offset {p['off_mas']:.0f} mas "
+                    f"(swept={p.get('swept')}, reproduced at an independent "
+                    f"window) over a 0-tile overlap")
+                r["could_not_verify"] = False
+                bad.append(r)
+            elif r.get("could_not_verify") or not r.get("ok", True):
+                if gross_measured:
                     r["fail_reason"] = (
                         f"gross pairwise offset {p['off_mas']:.0f} mas "
-                        f"(swept={p.get('swept')}) over a 0-tile overlap -- "
+                        f"(swept={p.get('swept')}, window_consistent="
+                        f"{p.get('window_consistent')}) over a 0-tile overlap -- "
                         f"pooled histogram not authoritative; deferred to reference")
                 unverifiable.append(r)
             # ok + 0 tiles = clean non-overlap: nothing to check.
