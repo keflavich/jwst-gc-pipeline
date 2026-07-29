@@ -547,12 +547,57 @@ FRAME_REFCAT = {
 }
 
 
+def _frame_bulk_offset(sc, ref):
+    """The catalog's bulk offset vs the reference, by the SANCTIONED method
+    (CLAUDE.md): histogram-stack + SWEEP to DETECT the tie (density-immune,
+    catches a gross >window shift like brick-1182 v001 ~700 mas), then refine
+    the PRECISE bulk same-star via ``local_residual_map`` (a single giant cell)
+    -- which itself REFUSES unless the verified global tie is already small, so
+    pairs are unambiguous.  This is NOT an ad-hoc dense NN-median.
+
+    Returns ``(off_mas_or_None, source)``.  ``source`` is ``"same-star"`` for a
+    refined fine tie, ``"histogram"`` when the tie is large/unverifiable (the
+    genuinely-off-frame case -- the raw sweep value, which is meant to be large),
+    or ``"no-tie"``.  The histogram peak is knowingly biased several mas against
+    a DENSE reference (histogram-vs-samestar-offset-bias), so we never gate on it
+    for a fine tie -- only same-star.  A large sweep value is used as-is because
+    for a gross shift the overstatement is immaterial (it fails the gate anyway)
+    and the refinement legitimately refuses."""
+    import numpy as np
+    import astropy.units as u
+    from jwst_gc_pipeline.photometry.astrometry_offsets import (
+        measure_offset, local_residual_map, GlobalTieNotVerifiedError)
+    r = measure_offset(sc, ref, maxsep=3.0 * u.arcsec, sweep=True)
+    if r is None:
+        return None, "no-tie"
+    off, source = r["off"], "histogram"
+    if r.get("ok") and not r.get("swept"):
+        try:
+            lrm = local_residual_map(sc, ref, r, cell_arcsec=1e9,
+                                     match_radius=0.3 * u.arcsec, min_stars=200)
+            cells = lrm.get("cells") or []
+            if cells:
+                c = max(cells, key=lambda cc: cc["n"])
+                sdra = r["dra"] + c["dra_mas"]
+                sddec = r["ddec"] + c["ddec_mas"]
+                off, source = float(np.hypot(sdra, sddec)), "same-star"
+        except GlobalTieNotVerifiedError:
+            pass   # tie too large to refine -> keep the (large) histogram value
+    return off, source
+
+
 def check_catalog_on_frame(items, field, tol_mas=FRAME_TOL_MAS):
     """Every shipped per-filter catalog must lie on the field's Gaia-tied reference frame.
-    Measures the catalog's bulk offset vs the Gaia refcat (sanctioned offset-histogram);
-    a bulk > ``tol_mas`` means the catalog is on a WRONG frame (crowdsource/VVV/2MASS) and
-    must not ship. Returns list of ((filter,obs), off_mas) failures, or [] if no refcat is
-    mapped for the field (can't enforce -> caller warns)."""
+    Measures the catalog's bulk offset vs the Gaia refcat by the sanctioned same-star
+    method (``_frame_bulk_offset``); a bulk > ``tol_mas`` means the catalog is on a WRONG
+    frame (crowdsource/VVV/2MASS) and must not ship. Returns list of ((filter,obs), off_mas)
+    failures, or [] if no refcat is mapped for the field (can't enforce -> caller warns).
+
+    Saturated / replaced-saturated sources are EXCLUDED from the measurement: their
+    centroids carry a strong flux-dependent bias (worst in the narrow Pa-alpha F187N,
+    where the brightest quartile pulls the raw bulk by tens of mas) that has nothing to
+    do with the frame.  Including them made F187N read 68 mas (a false OFF-FRAME) while
+    the clean same-star tie is ~1 mas.  An astrometric frame check uses good centroids."""
     refpath = FRAME_REFCAT.get(field)
     if not refpath or not os.path.exists(refpath):
         return None
@@ -560,7 +605,6 @@ def check_catalog_on_frame(items, field, tol_mas=FRAME_TOL_MAS):
     import astropy.units as u
     from astropy.table import Table
     from astropy.coordinates import SkyCoord
-    from jwst_gc_pipeline.photometry.astrometry_offsets import measure_offset
     rt = Table.read(refpath)
     rcol = "skycoord" if "skycoord" in rt.colnames else None
     ref = SkyCoord(rt[rcol]) if rcol else SkyCoord(rt["ra"] * u.deg, rt["dec"] * u.deg)
@@ -572,12 +616,16 @@ def check_catalog_on_frame(items, field, tol_mas=FRAME_TOL_MAS):
         col = next((c for c in ("skycoord", "skycoord_ref") if c in t.colnames), None)
         if col is None:
             continue
-        sc = SkyCoord(t[col]); sc = sc[np.isfinite(sc.ra.deg)]
-        r = measure_offset(sc, ref, maxsep=3.0 * u.arcsec, sweep=False)
-        off = None if r is None else r["off"]
+        good = np.isfinite(SkyCoord(t[col]).ra.deg)
+        for satcol in ("is_saturated", "replaced_saturated"):
+            if satcol in t.colnames:
+                good &= ~np.asarray(t[satcol], dtype=bool)
+        sc = SkyCoord(t[col])[good]
+        off, source = _frame_bulk_offset(sc, ref)
         ok = off is not None and off <= tol_mas
         print(f"  frame {it['filter']} {it.get('observation') or ''}: bulk vs Gaia-refcat "
-              + ("no tie" if off is None else f"{off:.1f} mas") + f"  {'ok' if ok else 'OFF-FRAME'}", flush=True)
+              + ("no tie" if off is None else f"{off:.1f} mas ({source})")
+              + f"  {'ok' if ok else 'OFF-FRAME'}", flush=True)
         if not ok:
             fails.append(((it["filter"], it.get("observation")), off))
     return fails
