@@ -70,28 +70,32 @@ def detect(path, thr=30.0):
     return SkyCoord(w.pixel_to_world(t["xcentroid"], t["ycentroid"])), np.asarray(t["flux"], float)
 
 
-# Precise merged-mosaic filename parser.  A permissive `jw*-o*...` glob matches
-# EVERY proposal/observation; a shared target directory can hold a stray mosaic
-# from another observation (the same class of contamination that fed the overlap
-# gate stale 2221 o002 = cloudc crf).  We enumerate with a tight character-class
-# glob (no `*` in the proposal/observation) and validate each name with this
-# regex, which also yields the proposal-observation key so a cross-observation
-# ambiguity can be caught rather than silently resolved by `g[0]`.
+# Precise merged-mosaic filename parser.  The bug being fixed is that `g[0]` on
+# an UNSORTED `glob.glob(jw*-o*...)` picked a non-deterministic file whenever >1
+# matched.  We enumerate with a tight character-class glob (no `*` in the
+# proposal/observation) and validate each name with this regex, which yields the
+# proposal-observation key.  NOTE: >1 observation in one filter directory is a
+# NORMAL layout, not a stray -- gc2211 is multi-observation by design and
+# ngc6334 F200W carries two proposals (both o001) on purpose.  So the ambiguity
+# is resolved by (a) an optional release scope and (b) a DETERMINISTIC sorted
+# pick, NOT by refusing.  Distinguishing a genuine multi-observation layout from
+# a misfiled stray is what the release ``observations`` scope is for; a
+# within-directory obs count cannot tell them apart.  Filter class allows the
+# wide-double bands (F150W2/F322W2) -- their trailing `2` was silently dropped,
+# and a dropped band fails OPEN (cross-band needs >=2 bands or it warns-not-fails).
 _MOSAIC_RE = re.compile(
     r"^jw(?P<prop>\d{5})-o(?P<obs>\d{3})_t001_nircam_clear-"
-    r"(?P<filt>f\d{3,4}[wmn])-(?P<module>merged|nrca|nrcb|nrcalong|nrcblong)"
+    r"(?P<filt>f\d{3,4}[wmn]2?)-(?P<module>merged|nrca|nrcb|nrcalong|nrcblong)"
     r"_i2d\.fits$")
 
 
-class AmbiguousMosaicError(RuntimeError):
-    """Raised when >1 observation's mosaic matches a single (field, filter,
-    module) -- a shared target dir holding a stray mosaic from another
-    observation/program.  Fail closed: refuse rather than silently pick one."""
-
-
-def _mosaic_candidates(field, filt, module):
-    """All on-disk mosaics for (field, filt, module) as (obs_key, path),
-    name-validated.  ``obs_key`` = ``"<proposal>-<observation>"``."""
+def _mosaic_candidates(field, filt, module, observations=None):
+    """On-disk mosaics for (field, filt, module) as sorted (obs_key, path),
+    name-validated.  ``obs_key`` = ``"<proposal>-<observation>"``.  When
+    ``observations`` (a set of obs_keys) is given, only in-scope mosaics are
+    returned -- this is how a misfiled stray from another observation is
+    excluded (brick's 2221 o002), while a legitimate multi-observation layout
+    keeps all its in-scope mosaics."""
     # tight glob: 5-digit proposal, 3-digit observation -- no `*` in either
     pat = (f"{BASE}/{field}/{filt}/pipeline/"
            f"jw[0-9][0-9][0-9][0-9][0-9]-o[0-9][0-9][0-9]_t001_nircam_clear-"
@@ -100,23 +104,19 @@ def _mosaic_candidates(field, filt, module):
     for p in sorted(glob.glob(pat)):
         m = _MOSAIC_RE.match(os.path.basename(p))
         if m and m.group("filt") == filt.lower() and m.group("module") == module:
-            out.append((f"{m.group('prop')}-{m.group('obs')}", p))
-    return out
+            key = f"{m.group('prop')}-{m.group('obs')}"
+            if observations is not None and key not in observations:
+                continue
+            out.append((key, p))
+    return sorted(out)
 
 
-def mosaic(field, filt, module="merged"):
-    cands = _mosaic_candidates(field, filt, module)
-    if not cands:
-        return None
-    obs_keys = {k for k, _ in cands}
-    if len(obs_keys) > 1:
-        raise AmbiguousMosaicError(
-            f"{field} {filt} {module}: {len(obs_keys)} observations' mosaics "
-            f"present ({', '.join(sorted(obs_keys))}) -- a stray mosaic from "
-            f"another observation is misfiled in this directory. Remove it or "
-            f"scope the release; refusing to silently pick one.\n  "
-            + "\n  ".join(p for _, p in cands))
-    return cands[0][1]
+def mosaic(field, filt, module="merged", observations=None):
+    """The merged mosaic for (field, filt, module).  Deterministic: a sorted
+    pick of the (in-scope) name-validated candidates -- fixes the non-
+    deterministic `g[0]` on an unsorted glob.  Returns None when none match."""
+    cands = _mosaic_candidates(field, filt, module, observations=observations)
+    return cands[0][1] if cands else None
 
 
 def catalog_sc(field, filt):
@@ -213,13 +213,13 @@ def per_cell(det, flux, truth, label, bright_pct=None, fail_min_ratio=MIN_PEAK_R
                 _g=(off, verified, (xe, ye)))
 
 
-def build_truths(field, filt, xband):
-    det, flux = detect(mosaic(field, filt, "merged"))
+def build_truths(field, filt, xband, observations=None):
+    det, flux = detect(mosaic(field, filt, "merged", observations=observations))
     truths = {}
     # 1. per-module
     pm = []
     for m in ("nrca", "nrcb", "nrcalong", "nrcblong"):
-        p = mosaic(field, filt, m)
+        p = mosaic(field, filt, m, observations=observations)
         if p:
             s, _ = detect(p)
             if s is not None:
@@ -229,7 +229,7 @@ def build_truths(field, filt, xband):
                                         np.concatenate([s.dec.deg for s in pm]) * u.deg)
     # 2. cross-band
     if xband:
-        p = mosaic(field, xband, "merged")
+        p = mosaic(field, xband, "merged", observations=observations)
         if p:
             s, _ = detect(p)
             truths[f"cross-band({xband})"] = s
@@ -278,7 +278,7 @@ def field_bands(field):
     return sorted(set(out))
 
 
-def scan_field(field, verbose=True, images_only=False):
+def scan_field(field, verbose=True, images_only=False, observations=None):
     """Run the cross-band + own-catalog failsafes on EVERY band of a field.
 
     Cross-band truth for band F = the pooled detections of all OTHER bands of the field
@@ -295,7 +295,7 @@ def scan_field(field, verbose=True, images_only=False):
         return dict(field=field, bands=bands, error="need >=2 bands for cross-band")
     dets = {}
     for b in bands:
-        p = mosaic(field, b, "merged")
+        p = mosaic(field, b, "merged", observations=observations)
         s, f = detect(p) if p else (None, None)
         dets[b] = (s, f)
         if verbose:
@@ -349,12 +349,19 @@ def main(argv=None):
     ap.add_argument("--images-only", action="store_true",
                     help="cross-band (image-to-image) check only; skip own-catalog "
                          "(gate for an image-only release)")
+    ap.add_argument("--observations", default=None,
+                    help="csv of <proposal>-<observation> keys (e.g. "
+                         "02221-001,01182-004) to scope mosaic selection to; a "
+                         "misfiled stray from another observation in a shared "
+                         "target dir is excluded.  Omit to pick deterministically "
+                         "(sorted) among whatever validly-named mosaics are present.")
     ap.add_argument("--plot", default=None)
     ap.add_argument("--json", default=None)
     args = ap.parse_args(argv)
+    obs = set(args.observations.split(",")) if args.observations else None
 
     if args.scan or not args.filter:
-        res = scan_field(args.field, images_only=args.images_only)
+        res = scan_field(args.field, images_only=args.images_only, observations=obs)
         if args.json:
             json.dump(res, open(args.json, "w"), indent=2, default=str)
         print(json.dumps({"field": res.get("field"), "PASS": res.get("PASS"),
@@ -363,7 +370,8 @@ def main(argv=None):
             return 0    # could not verify (e.g. <2 bands) -> warn, do NOT block
         return 0 if res.get("PASS") else 1   # exit 1 = FAIL -> gate blocks staging
 
-    det, flux, truths = build_truths(args.field, args.filter, args.xband)
+    det, flux, truths = build_truths(args.field, args.filter, args.xband,
+                                     observations=obs)
     # own-catalog gets the relaxed fail bar; per-module / cross-band stay strict.
     results = [per_cell(det, flux, t, f"{args.filter} vs {name}",
                         fail_min_ratio=(FAIL_MIN_RATIO if name == "own-catalog"
