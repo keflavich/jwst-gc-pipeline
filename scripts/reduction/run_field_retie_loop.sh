@@ -72,7 +72,12 @@ for ((it=1; it<=MAXITER; it++)); do
 
     # --- 1. reduce (blocks until the whole array finishes) ---
     echo "[iter $it] reducing (fix_alignment applies consensus table if present: $([ -f "$CONSENSUS_TBL" ] && echo yes || echo no))"
+    # --job-name at SUBMIT time (standing rule, CLAUDE.md): the in-script runtime
+    # rename only fires when the job STARTS, and a quota-bound retie sits PENDING
+    # for hours under the generic name -- which is exactly when the queue is being
+    # watched, and when several reduce arrays are in flight at once.
     sbatch --wait --array=0-$((NF-1)) --qos="$QOS" \
+        --job-name="${TARGET}${PROPOSAL}-o${FIELD}-reduce-retie${it}" \
         --export="${export_common}" \
         "$HERE/submit_reduction.sbatch"
 
