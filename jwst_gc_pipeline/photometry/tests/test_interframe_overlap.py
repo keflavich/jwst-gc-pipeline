@@ -343,6 +343,27 @@ def test_grid_samestar_fallback_rescues_when_histogram_not_measurable(monkeypatc
     assert r["pooled_off_mas"] < 30.0
 
 
+def test_grid_samestar_fallback_runs_despite_gross_unconfirmed_peak(monkeypatch):
+    """Real brick F182M: the dense histogram returns a SPURIOUS coherent peak
+    (ok=True, ~140 mas) that fails narrow-window confirmation (not measurable).
+    The fallback must NOT be gated off by that bias peak -- the same-star
+    anti-collapse guard, not the histogram, decides -- so a true ~12 mas tie is
+    still recovered and PASSES."""
+    monkeypatch.setattr(_ifo, "measure_offset",
+                        lambda *a, **k: dict(dra=100.0, ddec=100.0, off=141.0,
+                                             contrast=6.0, n_peak=50, ok=True,
+                                             swept=True, window_arcsec=3.0))
+    ra, dec = _field(n=6000, seed=26)
+    a = SkyCoord(ra * u.deg, dec * u.deg)
+    r2, d2 = _shift(ra, dec, 10.0, -6.0)   # true tie 12 mas
+    b = SkyCoord(r2 * u.deg, d2 * u.deg)
+    res = overlap_offset_grid({"a": a, "b": b}, tol_mas=30.0, maxsep=1 * u.arcsec)
+    r = res[0]
+    assert r["could_not_verify"] is False
+    assert r["ok"] is True
+    assert r["pooled"].get("samestar") is True
+
+
 def test_grid_samestar_fallback_fails_a_real_seam(monkeypatch):
     """Same forced-not-measurable path, but a 45 mas dense tie (> 30 tol) must
     FAIL via the same-star fallback -- the rescue is NOT a blanket pass."""

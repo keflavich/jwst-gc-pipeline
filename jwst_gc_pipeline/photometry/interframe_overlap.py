@@ -367,42 +367,40 @@ def overlap_offset_grid(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS, nx=12, ny=12,
                                   "swept", "window_arcsec")}
         base["pooled_off_mas"] = None if m is None else float(m["off"])
         if not measurable:
-            # A swept COHERENT above-tol peak that merely failed narrow-window
-            # confirmation is a candidate misregistration -- do NOT launder it
-            # through same-star; leave it for the reference map / a look.
-            swept_coherent_gross = (m is not None and m.get("ok")
-                                    and m["off"] > tol_mas)
-            if not swept_coherent_gross:
-                # DENSE-OVERLAP SAME-STAR FALLBACK: the histogram peak is
-                # defeated by the wrong-pair background of a huge dense overlap
-                # (brick SW modules: ~2.4M detections, ~46k true counterparts),
-                # but the matched-pair median is exact once the tie is certified
-                # small.  samestar_overlap_offset REFUSES unless the matches are
-                # genuinely tight (median NN sep < radius/3), which cannot happen
-                # for a gross offset -- so this is density-immune, not a raw
-                # dense NN-median.
-                ss = samestar_overlap_offset(
-                    a_in, b_in, match_radius=match_radius,
-                    min_pairs=max(200, min_overlap_pairs),
-                    context=f"{context} {la}|{lb} samestar")
-                if ss is not None:
-                    within = ss["off_mas"] <= tol_mas
-                    base["pooled_off_mas"] = ss["off_mas"]
-                    base["pooled"] = dict(
-                        dra=ss["dra_mas"], ddec=ss["ddec_mas"],
-                        off=ss["off_mas"], contrast=None,
-                        n_peak=ss["n_pairs"], swept=False,
-                        window_arcsec=None, samestar=True)
-                    base.update(
-                        worst_off_mas=ss["off_mas"], n_ok=1 if within else 0,
-                        n_total=1, could_not_verify=False,
-                        clean=bool(within), ok=bool(within),
-                        fail_reason=(None if within else
-                                     f"same-star offset {ss['off_mas']:.0f} mas "
-                                     f"(n={ss['n_pairs']}, dense-overlap "
-                                     f"fallback)"))
-                    results.append(base)
-                    continue
+            # DENSE-OVERLAP SAME-STAR FALLBACK: the histogram peak is defeated by
+            # the wrong-pair background of a huge dense overlap (brick SW modules:
+            # ~2.4M detections, ~46k true counterparts) -- it returns a spurious
+            # low-quality peak (e.g. 140 mas) that fails narrow-window
+            # confirmation, yet the true tie is ~11 mas.  The matched-pair median
+            # is exact once the tie is certified small, and
+            # samestar_overlap_offset certifies that INTRINSICALLY: it REFUSES
+            # unless the matches are genuinely tight (median NN sep < radius/3 ~
+            # 100 mas), which a gross offset cannot produce.  So the anti-collapse
+            # guard -- NOT the (here-unreliable) histogram peak -- is what keeps a
+            # real gross offset from being laundered: an offset >~100 mas refuses
+            # (escalates to could-not-verify), 30-100 mas is returned and FAILS,
+            # <30 passes.  Nothing in the fail band is masked.
+            ss = samestar_overlap_offset(
+                a_in, b_in, match_radius=match_radius,
+                min_pairs=max(200, min_overlap_pairs),
+                context=f"{context} {la}|{lb} samestar")
+            if ss is not None:
+                within = ss["off_mas"] <= tol_mas
+                base["pooled_off_mas"] = ss["off_mas"]
+                base["pooled"] = dict(
+                    dra=ss["dra_mas"], ddec=ss["ddec_mas"],
+                    off=ss["off_mas"], contrast=None,
+                    n_peak=ss["n_pairs"], swept=False,
+                    window_arcsec=None, samestar=True)
+                base.update(
+                    worst_off_mas=ss["off_mas"], n_ok=1 if within else 0,
+                    n_total=1, could_not_verify=False,
+                    clean=bool(within), ok=bool(within),
+                    fail_reason=(None if within else
+                                 f"same-star offset {ss['off_mas']:.0f} mas "
+                                 f"(n={ss['n_pairs']}, dense-overlap fallback)"))
+                results.append(base)
+                continue
             base.update(could_not_verify=True, ok=True)
             results.append(base)
             continue
