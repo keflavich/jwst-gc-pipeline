@@ -269,3 +269,38 @@ def test_measurement_is_delegated_to_the_sanctioned_estimator():
         assert banned not in src, (
             f"{banned} appeared in bulk_offset_step0.py; measurement belongs in "
             f"measure_reference_tie, not here")
+
+
+# ---------------------------------------------------------------------------
+# an estimator that refused to sign off cannot confirm anything
+# ---------------------------------------------------------------------------
+
+def test_verify_refuses_when_the_estimator_did_not_sign_off(field, monkeypatch):
+    """apply_ok=False is usually a dirty per-tile map -- a rigid sub-field shift
+    that the bulk number alone does not reveal, which is the single failure this
+    step exists to catch.  A close separation must not pass it."""
+    bp, frames = field
+    monkeypatch.setattr(s0, 'measure_bulk_offset',
+                        _FakeTie(-88.0, -35.0, apply_ok=False))
+    with pytest.raises(BulkOffsetVerificationError, match='INCONCLUSIVE'):
+        s0.step0_bulk_offset(None, None, None, frames, bp, '3958', '007',
+                             'F187N', recorded_mas=(-90.0, -34.0))
+    assert not os.path.exists(s0.step0_record_path(bp, '3958', '007', 'F187N'))
+
+
+def test_widening_the_tolerance_does_not_cache_a_pass(field, monkeypatch):
+    """A pass recorded under a widened BULK_VERIFY_TOL_MAS must not satisfy a
+    later run at the normal tolerance."""
+    bp, frames = field
+    fake = _FakeTie(1800.0, -700.0)
+    monkeypatch.setattr(s0, 'measure_bulk_offset', fake)
+    kw = dict(recorded_mas=(-90.0, -34.0))
+    monkeypatch.setenv('BULK_VERIFY_TOL_MAS', '5000')
+    first = s0.step0_bulk_offset(None, None, None, frames, bp, '3958', '007',
+                                 'F187N', **kw)
+    assert first.passed
+    monkeypatch.setenv('BULK_VERIFY_TOL_MAS', '100')
+    with pytest.raises(BulkOffsetVerificationError):
+        s0.step0_bulk_offset(None, None, None, frames, bp, '3958', '007',
+                             'F187N', **kw)
+    assert fake.calls == 2, "the widened-tolerance record was re-served"

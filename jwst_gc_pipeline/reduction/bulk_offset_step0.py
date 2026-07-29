@@ -53,6 +53,7 @@ That way the expensive path runs exactly when the answer could have changed.
 import hashlib
 import json
 import os
+import warnings
 from dataclasses import asdict, dataclass
 from typing import Optional
 
@@ -108,9 +109,17 @@ class BulkOffsetResult:
 
     @property
     def passed(self) -> bool:
+        # apply_ok gates BOTH modes.  A measurement the sanctioned estimator
+        # refused cannot confirm a recorded tie any more than it can establish a
+        # new one -- and on the verify path the refusal usually means the
+        # per-tile map is dirty, i.e. a rigid sub-field shift the bulk number
+        # alone does not reveal.
+        if not self.apply_ok:
+            return False
         if self.mode == 'measure':
-            return self.apply_ok
-        return self.sep_mas is not None and self.sep_mas <= _tol()
+            return True
+        return (self.sep_mas is not None and np.isfinite(self.sep_mas)
+                and self.sep_mas <= _tol())
 
 
 def _tol() -> float:
@@ -136,6 +145,11 @@ def generation_hash(frame_paths, reference_id, recorded=None, extra=''):
     h = hashlib.sha256()
     h.update(str(reference_id).encode())
     h.update(str(extra).encode())
+    # The TOLERANCE is part of what makes a verification meaningful: a pass
+    # recorded under a widened BULK_VERIFY_TOL_MAS must not satisfy a later run
+    # at the normal tolerance.  Without this a single wide run caches a large
+    # disagreement as a pass and re-serves it forever.
+    h.update(f"tol={_tol():.6f}".encode())
     if recorded is not None:
         h.update(f"{float(recorded[0]):.6f},{float(recorded[1]):.6f}".encode())
     for path in sorted(frame_paths):
@@ -253,8 +267,16 @@ def step0_bulk_offset(catalog_coords, ref_coords_all, ref_coords_sparse,
     ghash = generation_hash(frame_paths, reference_id, recorded=recorded_mas)
     cached = load_step0_record(rec_path)
 
-    if (not force and cached is not None and cached.get('hash') == ghash
-            and cached.get('passed')):
+    cached_ok = False
+    if cached is not None and cached.get('hash') == ghash and cached.get('passed'):
+        # Re-evaluate rather than trusting the stored boolean: `passed` was
+        # computed under whatever tolerance was in force when it was written.
+        _csep = cached.get('sep_mas')
+        cached_ok = bool(cached.get('apply_ok')) and (
+            cached.get('mode') == 'measure'
+            or (_csep is not None and np.isfinite(_csep)
+                and float(_csep) <= _tol()))
+    if not force and cached_ok:
         print(f"[step0] {context}: generation unchanged since "
               f"{cached.get('verified_at', 'a previous run')} -- reusing the "
               f"verified bulk tie (hash {ghash[:12]}).")
@@ -295,6 +317,22 @@ def step0_bulk_offset(catalog_coords, ref_coords_all, ref_coords_sparse,
         detail = 'no bulk offset on record; measured and recorded'
     else:
         mode = 'verify'
+        if not apply_ok:
+            _msg = (
+                f"BULK OFFSET VERIFICATION INCONCLUSIVE for {context}: "
+                f"measure_reference_tie did not sign off (apply_ok=False) on its "
+                f"measurement ({measured[0]:+.1f},{measured[1]:+.1f}) mas, so it "
+                f"cannot confirm the recorded tie "
+                f"({recorded_mas[0]:+.1f},{recorded_mas[1]:+.1f}) mas either. "
+                f"apply_ok is False when the per-tile map is not clean -- which is "
+                f"exactly the 'bulk reads ~0 while half the mosaic is shifted' case "
+                f"this step exists to catch, so treating a close separation as a "
+                f"pass would defeat the check. Inspect the per-tile map and the "
+                f"sweep result. ({ALLOW_FAIL_ENV}=1 to override deliberately.)")
+            if os.environ.get(ALLOW_FAIL_ENV) == '1':
+                warnings.warn(_msg)
+            else:
+                raise BulkOffsetVerificationError(_msg)
         sep = verify_recorded_bulk(recorded_mas, measured, context=context)
         print(f"[step0] {context}: VERIFIED recorded bulk offset "
               f"({recorded_mas[0]:+.1f},{recorded_mas[1]:+.1f}) mas against a fresh "
@@ -322,3 +360,96 @@ def step0_bulk_offset(catalog_coords, ref_coords_all, ref_coords_sparse,
 def _utcnow():
     import datetime
     return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')
+
+
+# ---------------------------------------------------------------------------
+# where a field's bulk tie actually lives
+# ---------------------------------------------------------------------------
+
+#: The three states a field can be in, which must NOT collapse into two.
+BULK_RECORDED = 'recorded'     # a constant in alignment_config -- verifiable here
+BULK_IN_TABLE = 'in_table'     # carried by a locked/consensus offsets table
+BULK_NONE = 'none'             # no config entry at all
+
+
+def bulk_tie_state(proposal_id, field):
+    """Return one of ``BULK_RECORDED`` / ``BULK_IN_TABLE`` / ``BULK_NONE``.
+
+    Most fields the pipeline spends its time on (brick, cloudc, sgrc, W51) carry
+    their bulk tie inside an offsets table rather than as a constant.  Collapsing
+    "tied, but by a table" into "nothing on record" would send those fields into
+    MEASURE mode and print a recommendation to record a tie they already have --
+    the same undeterminable-vs-negative conflation this module exists to avoid.
+    """
+    from jwst_gc_pipeline.reduction.alignment_config import (
+        RECORDED_BULK, TABLE_CONSENSUS, TABLE_LOCKED, resolve,
+    )
+    cfg = resolve(proposal_id, field)
+    if cfg is None:
+        return BULK_NONE
+    if cfg.source == RECORDED_BULK:
+        return BULK_RECORDED
+    if cfg.source in (TABLE_LOCKED, TABLE_CONSENSUS):
+        return BULK_IN_TABLE
+    return BULK_NONE
+
+
+def recorded_bulk_mas(basepath, proposal_id, field, filtername, visit,
+                      dec_deg, frame_name=None):
+    """The bulk tie on record for this (visit, filter), as ON-SKY mas.
+
+    Reads whichever source ``alignment_config`` declares -- a recorded constant,
+    a locked table's per-(Visit, Filter) bulk, or a consensus table's BULK
+    sentinel -- so VERIFY works on every configured field rather than only on the
+    three that happen to use constants.  Returns ``None`` when the field has no
+    tie on record yet (genuinely new data), which is the only case that should
+    reach MEASURE.
+    """
+    from jwst_gc_pipeline.reduction import alignment_config as ac
+    from jwst_gc_pipeline.reduction import unified_alignment as ua
+
+    cfg = ac.resolve(proposal_id, field)
+    if cfg is None:
+        return None
+    cosd = np.cos(np.radians(float(dec_deg)))
+    filt = str(filtername).upper()
+
+    if cfg.source == ac.RECORDED_BULK:
+        # visit_key_for handles the per-proposal convention (2092 keys on the
+        # 3-character visit suffix, not the full token) -- hand-rolling
+        # `basename.split('_')[0]` here silently misses those fields.
+        key = ac.visit_key_for(cfg, frame_name) if frame_name else visit
+        dra, ddec, found = ac.lookup_recorded_bulk(cfg, key, filt)
+        return (dra * cosd * 1000.0, ddec * 1000.0) if found else None
+
+    if cfg.source == ac.TABLE_LOCKED:
+        path = (f'{basepath}/offsets/'
+                f'Offsets_JWST_Brick{proposal_id}_VIRAC2locked.csv')
+        if not os.path.exists(path):
+            return None
+        from astropy.table import Table
+        tbl = Table.read(path)
+        dra, ddec = ua._derive_locked_bulk(tbl, visit, filt)
+        if dra == 0.0 and ddec == 0.0:
+            return None
+        return (dra * cosd * 1000.0, ddec * 1000.0)
+
+    if cfg.source == ac.TABLE_CONSENSUS:
+        path = (f'{basepath}/offsets/'
+                f'Offsets_JWST_Brick{proposal_id}_consensus.csv')
+        if not os.path.exists(path):
+            return None
+        from astropy.table import Table
+        from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+            BULK_EXPOSURE, BULK_MODULE,
+        )
+        tbl = Table.read(path)
+        sel = ((tbl['Visit'] == visit) & (tbl['Filter'] == filt)
+               & (tbl['Exposure'] == BULK_EXPOSURE)
+               & (tbl['Module'] == BULK_MODULE))
+        if int(sel.sum()) != 1:
+            return None
+        row = tbl[sel]
+        return (float(row['dra (arcsec)'][0]) * cosd * 1000.0,
+                float(row['ddec (arcsec)'][0]) * 1000.0)
+    return None
