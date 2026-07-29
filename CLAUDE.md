@@ -101,6 +101,18 @@ exactly how brick-1182 v001's ~20" offset first read as ~2"/incoherent. So:
   `window_arcsec ≫` your expected offset means the frame is grossly shifted.
 - On a weak tie, cross-check TWO references (`agree_across_references`, VIRAC vs
   Gaia-only): a real tie agrees; a spurious peak moves.
+- **A swept peak near the window EDGE is geometry, not a tie** (issue #158). Two
+  adjacent, non-overlapping footprints (two NIRCam modules, two mosaic tiles) have
+  a pair-density RIDGE at the lag that slides one onto the other; the search window
+  truncates it and the histogram's arg-max lands on the cut. Such a "peak" is sharp,
+  clears the contrast floor, and MOVES with the window (W51: off = 54.8/59.8/64.7/
+  67.2/75.9/89.0/99.5" at windows 55/60/66/70/80/90/100"). A real tie reads the
+  SAME offset at every window that can contain it. Check `window_edge_fraction`
+  (off/window; ~1 is the tell) and pass `confirm_windows=True` for any tie you
+  expect to be small — it re-measures at an independent window and rejects a peak
+  that does not reproduce. One accepted alias CASCADES: the displaced exposure
+  enters the consensus union, and every later exposure then ties to it at
+  contrast 200, so the guard must reject the FIRST marginal tie.
 
 ### Correcting an already-aligned frame after the offsets table changes
 
