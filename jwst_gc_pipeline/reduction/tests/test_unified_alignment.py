@@ -222,7 +222,7 @@ def test_w51_consensus_reference_frame_is_gaia_not_virac(tmp_path):
 
 @pytest.mark.parametrize('proposal,field,target', [
     ('2045', '001', 'arches'),
-    ('2045', '004', 'quintuplet'),
+    ('2045', '003', 'quintuplet'),
     ('5365', '001', 'sgrb2'),
     ('2092', '005', 'cloudef obs005'),
 ])
