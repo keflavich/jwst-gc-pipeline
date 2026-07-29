@@ -153,6 +153,80 @@ def test_forced_fill_prep_failure_handling(capsys):
                             fit_shape=(5, 5), verbose=False)
 
 
+class _NaNOffFootprintWCS:
+    """Mimics ``frame_wcs.FrameWCS`` (the GWCS-backed frame reader): its
+    ``all_world2pix`` returns ``NaN`` for positions outside the frame footprint
+    instead of raising, and SWALLOWS the astropy-SIP inverse kwargs
+    (``quiet``/``tolerance``/``maxiter``/...) a caller may still pass.
+
+    Building an ``astropy.wcs.WCS`` from a per-frame SIP header is now forbidden
+    (``tests/test_no_sip_frame_astrometry``), so the SIP inverse -- which raised
+    ``NoConvergence`` (aborting the w51 m8 fill) or, with ``quiet=True``, returned
+    finite garbage with no warning -- can no longer reach ``forced_fill``.  The
+    fill must instead rely on the GWCS ``NaN`` and its own ``isfinite`` gate."""
+    _SIP_KW = ('quiet', 'tolerance', 'maxiter', 'adaptive', 'detect_divergence')
+
+    def __init__(self, ww, nx, ny):
+        self._ww = ww
+        self._nx, self._ny = nx, ny
+
+    def all_world2pix(self, *args, **kwargs):
+        for k in self._SIP_KW:
+            kwargs.pop(k, None)
+        xpix, ypix = self._ww.all_world2pix(*args, **kwargs)
+        off = ((xpix < -self._nx) | (xpix > 2 * self._nx)
+               | (ypix < -self._ny) | (ypix > 2 * self._ny))
+        return np.where(off, np.nan, xpix), np.where(off, np.nan, ypix)
+
+
+def test_forced_fill_drops_offfootprint_nan_positions():
+    """Regression (2026-07-28 w51 m7->m8; revised for the GWCS-only WCS regime):
+    the cross-band source list spans the whole mosaic, so for a single frame many
+    reference positions fall outside its footprint.  ``ctx.ww`` is now a
+    ``frame_wcs.FrameWCS`` (the authoritative GWCS), which returns ``NaN`` there
+    rather than raising ``NoConvergence`` -- that raise came from the SIP inverse,
+    which is now forbidden for frame astrometry.  The forced fill must DROP those
+    NaN positions through its ``isfinite`` in-bounds test and fill only the
+    in-footprint sources, never crashing.  A far-off-footprint phantom must be
+    silently excluded; the in-footprint phantoms are still filled."""
+    tbl0, prepare_frame, ndet, cjy, zp, atrue = _build()
+    # append a phantom far outside the frame (~2 deg away) that the GWCS maps to
+    # NaN and the fill must drop, not fit.  SkyCoord columns cannot be
+    # default-filled by add_row, so rebuild by extending each column.
+    far = SkyCoord(268.4 * u.deg, -27.0 * u.deg)
+    tbl = Table()
+    sc = tbl0['skycoord_ref']
+    tbl['skycoord_ref'] = SkyCoord(
+        np.r_[sc.ra.deg, far.ra.deg] * u.deg,
+        np.r_[sc.dec.deg, far.dec.deg] * u.deg)
+    for c in ('flux_f405n', 'flux_jy_f405n', 'mag_ab_f405n',
+              'mag_vega_f405n', 'emag_ab_f405n'):
+        tbl[c] = np.r_[np.asarray(tbl0[c], float), np.nan]
+    tbl['mask_f405n'] = np.r_[np.asarray(tbl0['mask_f405n'], bool), True]
+    tbl['is_saturated_f405n'] = np.r_[np.asarray(tbl0['is_saturated_f405n'], bool), False]
+    tbl['near_saturated_f405n_f405n'] = np.r_[
+        np.asarray(tbl0['near_saturated_f405n_f405n'], bool), False]
+    ifar = len(tbl) - 1
+
+    base_ctx = prepare_frame()
+    ny, nx = base_ctx.nan_replaced_data.shape
+
+    def prep_gwcs(**kw):
+        base_ctx.ww = _NaNOffFootprintWCS(base_ctx.ww, nx, ny) \
+            if not isinstance(base_ctx.ww, _NaNOffFootprintWCS) else base_ctx.ww
+        return base_ctx
+
+    # off-footprint -> NaN -> dropped; must NOT crash
+    nrec = ff.forced_fill_band(tbl, 'f405n', ['frame1'],
+                               prepare_frame=prep_gwcs,
+                               frame_arg_builder=lambda fn: {}, nsigma=3.0,
+                               fit_shape=(5, 5), verbose=False)
+    assert nrec == 2                              # only the 2 in-footprint phantoms
+    assert not bool(tbl['forced_filled_f405n'][ifar])   # far phantom NaN -> never fitted
+    assert bool(tbl['mask_f405n'][ifar])                # stays a non-detection
+
+
 if __name__ == '__main__':
     test_forced_fill_recovers_phantom()
+    test_forced_fill_survives_world2pix_nonconvergence()
     print("PASS")

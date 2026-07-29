@@ -27,7 +27,20 @@ MERGE_EXTRA=${MERGE_EXTRA:-}
 PIPE_ROOT=${PIPE_ROOT:-}
 [ -n "$PIPE_ROOT" ] && export PYTHONPATH="$PIPE_ROOT:$PYTHONPATH"
 PY=${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/python}
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Locate m8_merge_partials.py robustly.  Under `sbatch` SLURM copies the batch
+# script to a spool dir, so ${BASH_SOURCE[0]} points there and $HERE/<sibling>.py
+# does not exist (silent rc=2 merge failure, w51 m8).  Resolve via the pipeline
+# repo root instead: PIPE_ROOT if given, else the installed package location.
+if [ -n "$PIPE_ROOT" ] && [ -f "$PIPE_ROOT/scripts/reduction/m8_merge_partials.py" ]; then
+    MERGE_PY="$PIPE_ROOT/scripts/reduction/m8_merge_partials.py"
+else
+    REPO="$("$PY" -c 'import jwst_gc_pipeline,os;print(os.path.dirname(os.path.dirname(jwst_gc_pipeline.__file__)))' 2>/dev/null)"
+    MERGE_PY="$REPO/scripts/reduction/m8_merge_partials.py"
+fi
+if [ ! -f "$MERGE_PY" ]; then
+    echo "FATAL: cannot locate m8_merge_partials.py (tried PIPE_ROOT and package root '$REPO'); set PIPE_ROOT to the repo." >&2
+    exit 66
+fi
 
 [ -n "${SLURM_JOB_ID:-}" ] && scontrol update JobId="$SLURM_JOB_ID" \
     JobName="${TARGET}-catalog-m8merge" 2>/dev/null || true
@@ -37,5 +50,9 @@ M7_ARG=""
 [ -n "$M7" ] && M7_ARG="--m7=$M7" || M7_ARG="--catdir=$CATDIR --module=$MODULES"
 
 echo "M8_MERGE start $(date -u +%FT%TZ) NODE=$(hostname) target=$TARGET filters=$FILT_CSV"
-"$PY" "$HERE/m8_merge_partials.py" $M7_ARG --filters="$FILT_CSV" --execute $MERGE_EXTRA
-echo "M8_MERGE_DONE rc=$? $(date -u +%FT%TZ)"
+"$PY" "$MERGE_PY" $M7_ARG --filters="$FILT_CSV" --execute $MERGE_EXTRA
+rc=$?
+echo "M8_MERGE_DONE rc=$rc $(date -u +%FT%TZ)"
+# Propagate the real exit code: a trailing echo previously masked a failed merge
+# as SLURM COMPLETED (the merge could silently not run and the job still passed).
+exit $rc
