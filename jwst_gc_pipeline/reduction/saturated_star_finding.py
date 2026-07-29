@@ -40,6 +40,8 @@ from astropy import log
 from astropy.coordinates import SkyCoord
 from astropy import units as u
 from .filtering import get_filtername, get_fwhm
+from ..frame_wcs import frame_wcs, gwcs_from_file
+from .fits_wcs_sync import sync_header_to_gwcs
 import requests
 import urllib3
 import builtins
@@ -1978,7 +1980,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     _partner_xy = None
     if partner_sky is not None and len(partner_sky):
         try:
-            _pw = wcs.WCS(fitsdata['SCI'].header, relax=True)
+            _pw = frame_wcs(fitsdata)
             _pxs, _pys = _pw.world_to_pixel(partner_sky)
             _partner_xy = list(zip(np.atleast_1d(_pxs), np.atleast_1d(_pys)))
         except Exception as _pex:
@@ -2085,7 +2087,7 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     _is_miri_gate = (header.get('INSTRUME', '').lower() == 'miri')
     if _is_miri_gate and ((seed_prominence_min and seed_prominence_min > 0)
                           or (seed_core_min and seed_core_min > 0)):
-        _frame_wcs = wcs.WCS(fitsdata['SCI'].header)
+        _frame_wcs = frame_wcs(fitsdata)
         _gate_img = seed_gate_image if seed_gate_image is not None else data
         _use_coadd = seed_gate_image is not None and seed_gate_wcs is not None
         kept_records, n_prom, n_core, n_conc = [], 0, 0, 0
@@ -2313,14 +2315,15 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             if isinstance(big_grid_large, list):
                 big_grid_large = big_grid_large[0]
 
-    # WCS for ALL pixel->sky conversions below (sky_centroid, skycoord_fit, etc.)
-    # MUST come from the SCI header, which carries the full RA---TAN-SIP
-    # distortion.  ``header`` is the PRIMARY header (fitsdata[0]) and only has a
-    # WCS at all because remove_saturated_stars copies one in -- historically via
-    # a plain to_header() that DROPPED the SIP terms, so every satstar position
-    # was ~0.1" off at the detector edges.  Read SCI directly (relax=True keeps
-    # SIP) so the fit coordinates are correct regardless of the primary copy.
-    ww = wcs.WCS(fitsdata['SCI'].header, relax=True)
+    # WCS for ALL pixel->sky conversions below (sky_centroid, skycoord_fit, ...).
+    # Read the frame's GWCS, never the PRIMARY header: ``header`` is
+    # fitsdata[0] and only has a WCS at all because remove_saturated_stars
+    # copies one in -- historically via a plain to_header() that DROPPED the SIP
+    # terms, so every satstar position was ~0.1" off at the detector edges.
+    # frame_wcs takes the ASDF GWCS (exact) and falls back to the SCI header's
+    # SIP with relax=True; the SIP fit itself is 5-8 mas off on frames written
+    # before the tight-fit change (see jwst_gc_pipeline.frame_wcs).
+    ww = frame_wcs(fitsdata)
 
     # We force the centroid to be fixed b/c the fitter doesn't do a great job with this...
     # ....this is not optimal...
@@ -4605,16 +4608,22 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
 
     header = fh[0].header
     if 'CRPIX1' not in header:
-        # Copy the SCI WCS -- INCLUDING SIP distortion -- into the satstar
-        # catalog/model/residual header.  ``WCS(...).to_header()`` drops the
-        # SIP A_i_j/B_i_j terms by default (SIP is non-standard, omitted unless
-        # relax=True on BOTH read and write), so for the common JWST case where
-        # the SCI CTYPE is ``RA---TAN-SIP`` the distortion is silently lost.
-        # The satstar model/residual live on the SCI pixel grid, so a SIP-less
-        # header makes them reproject a few 0.1" off (the SIP magnitude at the
-        # detector edges) and contaminates the merged image.  relax=True keeps
-        # the SIP coefficients verbatim.
-        header.update(wcs.WCS(fh['SCI'].header, relax=True).to_header(relax=True))
+        # Copy a WCS -- INCLUDING the distortion -- into the satstar
+        # catalog/model/residual PRIMARY header.  ``WCS(...).to_header()`` drops
+        # the SIP A_i_j/B_i_j terms by default (SIP is non-standard, omitted
+        # unless relax=True on BOTH read and write), so for the common JWST case
+        # where the SCI CTYPE is ``RA---TAN-SIP`` the distortion was silently
+        # lost and the model/residual reprojected a few 0.1" off at the detector
+        # edges.  Prefer refitting the frame's GWCS at 0.01 px (verified against
+        # the GWCS, so the copy is faithful rather than inheriting whatever the
+        # SCI header happened to hold); fall back to copying the SCI SIP
+        # verbatim with relax=True when there is no GWCS to fit.
+        _gw = gwcs_from_file(filename)
+        if _gw is not None:
+            sync_header_to_gwcs(header, _gw, fh['SCI'].data.shape,
+                                label=os.path.basename(filename))
+        else:
+            header.update(wcs.WCS(fh['SCI'].header, relax=True).to_header(relax=True))
     # ZEROFRAME auto-discovery.  Two independent consumers:
     #  * FIT ANCHORING (default ON; env SATSTAR_ZEROFRAME_FIT=0 disables):
     #    recovered group-0 rim pixels anchor the satstar amplitude, fixing the

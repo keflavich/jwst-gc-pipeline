@@ -47,6 +47,7 @@ from jwst_gc_pipeline.photometry.psf_fitting import (
 # cataloging.py uses the one canonical implementation.  Importing the host
 # module at load time is fine: it does NOT import this module at top level
 # (only lazily in its dispatch branch), so there is no import cycle.
+from jwst_gc_pipeline.frame_wcs import frame_wcs
 from jwst_gc_pipeline.photometry import crowdsource_catalogs_long as _L
 from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
     SeededFinder,
@@ -1440,7 +1441,13 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
 
     fh, im1, data, wht, err, instrument, telescope, obsdate = _L.load_data(filename)
     inst_token = instrument.lower()
-    ww = wcs.WCS(im1[1].header)
+    # THE per-frame astrometric WCS: every catalog RA/Dec in this run comes from
+    # it.  Read the GWCS (ASDF extension), not the SCI header's SIP fit -- SIP
+    # is only a fitted approximation of the true distortion, and on frames
+    # written before the tight-fit change it is 5-8 mas off in a
+    # position-dependent, per-detector, per-filter way (see frame_wcs).  Falls
+    # back to the SIP WCS, with a warning, if the product has no GWCS.
+    ww = frame_wcs(filename)
 
     background_map = None
     original_data = data.copy()  # manual residuals are built vs the pristine data
@@ -1481,7 +1488,13 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
             except Exception as _e:
                 print(f"[manual] bg crop failed ({_e}); reprojecting full mosaic", flush=True)
                 bg_data = bg_hdu.data.astype(float)
-        bg_reproj, _ = reproject_interp((bg_data, bg_wcs), ww, shape_out=data.shape)
+        # reproject needs a real astropy/APE-14 WCS as the output grid; hand it
+        # the frame's FITS WCS.  This is a background map, not astrometry --
+        # the SIP fit residual is far below anything a background gradient cares
+        # about.
+        bg_reproj, _ = reproject_interp((bg_data, bg_wcs),
+                                        getattr(ww, 'fits_wcs', ww),
+                                        shape_out=data.shape)
         del bg_data
         bg_finite = np.where(np.isfinite(bg_reproj), bg_reproj, 0.0)
         zeros = data == 0

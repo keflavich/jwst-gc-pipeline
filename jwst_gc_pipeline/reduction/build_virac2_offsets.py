@@ -103,6 +103,9 @@ def coarse_xcorr(sc, ref, maxsep=COARSE_MAXSEP):
             bool(r.get("swept", False)))
 
 
+from jwst_gc_pipeline.frame_wcs import frame_wcs
+
+
 def detect_i2d_sources(i2d_path, thr=80.0, fwhm=2.5):
     """Bright high-SNR source SkyCoords from a drizzled mosaic (for the coarse tie)."""
     from astropy.io import fits
@@ -414,7 +417,11 @@ def load_siaf(f):
     if 'x_fit' in t.colnames and 'FILENAME' in t.meta:
         crf = _resolve_existing_path(t.meta['FILENAME'])
         with fits.open(crf) as hl:
-            wcs = WCS(hl['SCI'].header)
+            # GWCS, not the SCI header's SIP fit.  This re-projects every
+            # per-frame (x_fit, y_fit) to build the VIRAC2 offsets table -- a
+            # 5-8 mas position-dependent SIP-fit error here propagates straight
+            # into the tie every frame is then corrected by.
+            wcs = frame_wcs(hl)
             ra0 = float(hl['SCI'].header.get('RAOFFSET', t.meta.get('RAOFFSET', 0.0)))
             de0 = float(hl['SCI'].header.get('DEOFFSET', t.meta.get('DEOFFSET', 0.0)))
         sc = SkyCoord(wcs.pixel_to_world(farr(t['x_fit']), farr(t['y_fit'])))

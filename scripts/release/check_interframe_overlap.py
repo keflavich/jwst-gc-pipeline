@@ -44,6 +44,7 @@ from astropy.table import Table
 from astropy.wcs import WCS
 from photutils.detection import find_peaks
 
+from jwst_gc_pipeline.frame_wcs import frame_wcs
 from jwst_gc_pipeline.photometry.interframe_overlap import (
     overlap_offset_grid, pairwise_overlap_offsets, DEFAULT_OVERLAP_TOL_MAS)
 from jwst_gc_pipeline.photometry.astrometry_offsets import measure_offset_grid
@@ -56,9 +57,14 @@ GRID_MAX_OFF_MAS = float(os.environ.get("OVERLAP_GRID_MAX_OFF_MAS", 80.0))
 
 
 def _detect(path, nsigma=8.0, box=5):
+    # GWCS, not the SCI header's SIP fit.  This is the BLOCKING inter-frame
+    # overlap gate: it compares frame-vs-frame star positions at a 30 mas
+    # tolerance, so a 5-8 mas position-dependent SIP-fit error (different per
+    # detector and per filter, i.e. different for the two frames being
+    # compared) is a large fraction of the gate's own budget.
     with fits.open(path, memmap=True) as h:
         d = np.asarray(h["SCI"].data)
-        w = WCS(h["SCI"].header)
+        w = frame_wcs(h)
     fin = np.isfinite(d)
     if fin.sum() < 2000:
         return None

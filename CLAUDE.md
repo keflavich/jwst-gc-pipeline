@@ -125,6 +125,43 @@ significant 2″ cell >15 mas.  Do not disable (`ASTROM_CHECKPOINT=0`) or
 override (`ALLOW_LATE_STAGE_ASTROM_SHIFT`, `ALLOW_CROSSFILTER_ASTROM_FAIL`)
 without written justification.
 
+### ⛔ ASTROMETRY RULE #2 — read the GWCS; the SIP header is only an approximation
+
+**Do NOT build an `astropy.wcs.WCS` from a detector-frame SCI header for anything
+astrometric.** Use:
+
+```python
+from jwst_gc_pipeline.frame_wcs import frame_wcs
+ww = frame_wcs(filename_or_hdulist)      # GWCS-backed; SIP fallback + warning
+```
+
+Every JWST detector-frame product carries **two** WCSes: the **GWCS** in the ASDF
+extension (`model.meta.wcs`) — the authoritative full distortion chain — and a
+FITS `RA---TAN-SIP` header, which is a *fitted low-order approximation* of it.
+SIP cannot represent the JWST distortion; it can only fit it, and both directions
+of that fit carry error:
+
+- **forward**: 5–8 mas on every frame written before 2026-07-29, *position-dependent
+  and different per detector and per filter*, so no bulk tie removes it. Cause:
+  `gwcs.WCS.to_fits()` defaults to `max_pix_error=0.25` **px** (STScI uses 0.01),
+  and the reduction re-stamped headers with a bare `header.update(ww.to_fits()[0])`.
+- **inverse**: a *separate* fitted polynomial, up to 176 millipixels off, that
+  **raises `NoConvergence`** off-footprint — the failure that aborted the entire
+  W51 m8 forced fill.
+
+The GWCS has neither problem (inverse exact to <1 mpix; off-footprint → `NaN`,
+no exception) and is no slower.
+
+- Enforced by the grep-guard test `jwst_gc_pipeline/tests/test_no_sip_frame_astrometry.py`.
+- Any FITS WCS you *write* goes through `reduction.fits_wcs_sync.sync_header_to_gwcs`,
+  which fits at 0.01 px and **verifies** the result against the GWCS.
+- Audit on-disk products: `python scripts/release/audit_fits_gwcs_agreement.py --field <f>`.
+- `i2d` mosaics are exempt — `resample` writes a rectified plain `RA---TAN` grid
+  with no SIP, so `WCS(i2d_header)` is exact.
+- `astropy.wcs.WCS(header)` on a frame must always pass `relax=True`: a header whose
+  CTYPE lost the `-SIP` suffix still carries `A_*`/`B_*`, and without `relax` the
+  distortion is silently dropped (~0.1" at the detector corners).
+
 ### Reading list before any astrometry change
 - `jwst_gc_pipeline/reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md` — the full flow,
   the two authoring points, no-double-correction rule, epochs, module-lock policy.
