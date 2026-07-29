@@ -45,8 +45,9 @@ from astropy.table import Table
 
 from jwst_gc_pipeline.reduction import alignment_config as ac
 from jwst_gc_pipeline.reduction.bulk_offset_step0 import (
-    BULK_IN_TABLE, BULK_NONE, BulkOffsetVerificationError, bulk_tie_state,
-    recorded_bulk_mas, step0_bulk_offset,
+    BULK_NO_ROW, BULK_NONE, BULK_TABLE_ABSENT, BulkOffsetVerificationError,
+    bulk_tie_state, recorded_bulk_mas, reference_frame_matches_refcat,
+    step0_bulk_offset,
 )
 
 
@@ -122,8 +123,14 @@ def main(argv=None):
 
     # Same shape build_virac2_offsets._gather uses; the filter token comes FIRST
     # and the catalogs sit directly under <basepath>/<FILT>/.
+    # The exposure number is pinned to FIVE DIGITS rather than left as `exp*`.
+    # A greedy `exp*` also matches the `_group_` variant -- a SECOND measurement
+    # of the same exposure -- so a field carrying both stages silently averages
+    # two catalog stages together.  Measured on sickle F187N (192 catalogs for 96
+    # frames) that moved the tie from (-11.2, -106.8) to (+73.2, -70.6) mas: a
+    # ~60 mas swing against a 100 mas tolerance.
     cat_glob = args.catalog_glob or (
-        f'{basepath}/{filt}/{filt.lower()}_*_visit*_vgroup*_exp*'
+        f'{basepath}/{filt}/{filt.lower()}_*_visit*_vgroup*_exp?????'
         f'{args.mtag}_daophot_basic.fits')
     cat_paths = sorted(glob.glob(cat_glob))
     if not cat_paths:
@@ -150,20 +157,41 @@ def main(argv=None):
               f"so there is nothing on record to verify.")
     frame_name = os.path.basename(frame_paths[0])
     visit = frame_name.split('_')[0]
-    recorded = recorded_bulk_mas(basepath, args.proposal, args.field, filt, visit,
-                                 float(np.median(coords.dec.deg)),
-                                 frame_name=frame_name)
+    recorded, status = recorded_bulk_mas(
+        basepath, args.proposal, args.field, filt, visit,
+        float(np.median(coords.dec.deg)), frame_name=frame_name)
+
+    # Only "no config entry" is genuinely new data.  A declared table that is
+    # missing, or present without a matching row, means we CANNOT TELL -- and
+    # routing that to MEASURE would record a new tie for a field that already
+    # has one.
+    if status == BULK_TABLE_ABSENT:
+        print(f"STEP 0 CANNOT RUN: {args.proposal}/o{args.field}/{filt} is declared "
+              f"{state} in alignment_config, but the offsets table it names is not "
+              f"on disk under {basepath}/offsets/. This is not new data -- it is a "
+              f"missing table. Build it (build_virac2_offsets) or fix the declared "
+              f"source; do NOT measure a fresh tie over the top.", file=sys.stderr)
+        return 4
+    if status == BULK_NO_ROW:
+        print(f"STEP 0 CANNOT RUN: the offsets table for {args.proposal}/o{args.field} "
+              f"exists but carries no bulk row for visit {visit} / {filt}. The field "
+              f"is tied; this BAND is not. Rebuild the table for this filter rather "
+              f"than recording a new tie.", file=sys.stderr)
+        return 4
+
     if recorded is not None:
         print(f"[step0] bulk tie on record ({state}): "
               f"({recorded[0]:+.1f},{recorded[1]:+.1f}) mas")
-    elif state == BULK_IN_TABLE:
-        print(f"[step0] {args.proposal}/o{args.field}/{filt} is tied by an offsets "
-              f"TABLE, but that table has no bulk entry for visit {visit} / {filt} "
-              f"yet -- so there is nothing to verify for this band.")
+        # A recorded tie is only comparable with a measurement in the SAME frame.
+        frame_ok, frame_detail = reference_frame_matches_refcat(
+            cfg.reference_frame if cfg else '', refcat)
+        if not frame_ok:
+            print(f"\nSTEP 0 CANNOT RUN\n{frame_detail}", file=sys.stderr)
+            return 5
 
     if recorded is None and not args.allow_measure:
         print(f"REFUSING to measure: {args.proposal}/o{args.field}/{filt} has no "
-              f"recorded bulk offset, and measuring one writes a new tie. Re-run "
+              f"alignment_config entry, and measuring one writes a new tie. Re-run "
               f"with --allow-measure if this really is new data.", file=sys.stderr)
         return 3
 

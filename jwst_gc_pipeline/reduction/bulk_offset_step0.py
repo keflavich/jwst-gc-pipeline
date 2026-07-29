@@ -64,6 +64,10 @@ __all__ = [
     'BULK_VERIFY_TOL_MAS', 'generation_hash', 'measure_bulk_offset',
     'verify_recorded_bulk', 'step0_bulk_offset',
     'load_step0_record', 'save_step0_record', 'step0_record_path',
+    'bulk_tie_state', 'recorded_bulk_mas',
+    'BULK_RECORDED', 'BULK_IN_TABLE', 'BULK_NONE',
+    'BULK_OK', 'BULK_TABLE_ABSENT', 'BULK_NO_ROW', 'BULK_NOT_CONFIGURED',
+    'reference_frame_matches_refcat',
 ]
 
 #: A recorded bulk offset must still describe the data to within this, on-sky.
@@ -134,8 +138,10 @@ def generation_hash(frame_paths, reference_id, recorded=None, extra=''):
     """Hash the things that, if they change, invalidate a bulk verification.
 
     Covers each frame's WCS-generation stamp (CAL_VER / CRDS context / DVA
-    correction state), the identity of the reference catalog, and the recorded
-    value being checked.  Frame *contents* are deliberately not hashed -- a
+    correction state), the identity of the reference catalog, the recorded
+    value being checked, AND the tolerance it was checked at (a pass recorded
+    under a widened BULK_VERIFY_TOL_MAS must not satisfy a stricter later run).
+    Frame *contents* are deliberately not hashed -- a
     re-reduction that leaves the generation identical produces the same
     astrometric solution, and hashing pixels would make this uselessly slow.
     """
@@ -241,7 +247,6 @@ def verify_recorded_bulk(recorded_mas, measured_mas, tol_mas=None, context=''):
            f"re-derive the bulk offset and update alignment_config.py. "
            f"({ALLOW_FAIL_ENV}=1 to override deliberately.)")
     if os.environ.get(ALLOW_FAIL_ENV) == '1':
-        import warnings
         warnings.warn(msg)
         return sep
     raise BulkOffsetVerificationError(msg)
@@ -371,6 +376,17 @@ BULK_RECORDED = 'recorded'     # a constant in alignment_config -- verifiable he
 BULK_IN_TABLE = 'in_table'     # carried by a locked/consensus offsets table
 BULK_NONE = 'none'             # no config entry at all
 
+#: Outcomes of looking up a field's recorded bulk tie.  These are DISTINCT on
+#: purpose: only ``BULK_NOT_CONFIGURED`` means "genuinely new data", and only it
+#: may lead to MEASURE.  A missing table file and a table with no matching row
+#: are both "we cannot tell", which is an error -- returning a bare ``None`` for
+#: all of them re-creates the undeterminable-vs-negative conflation this module
+#: exists to remove.
+BULK_OK = 'ok'
+BULK_TABLE_ABSENT = 'table_absent'
+BULK_NO_ROW = 'no_row'
+BULK_NOT_CONFIGURED = 'not_configured'
+
 
 def bulk_tie_state(proposal_id, field):
     """Return one of ``BULK_RECORDED`` / ``BULK_IN_TABLE`` / ``BULK_NONE``.
@@ -396,49 +412,61 @@ def bulk_tie_state(proposal_id, field):
 
 def recorded_bulk_mas(basepath, proposal_id, field, filtername, visit,
                       dec_deg, frame_name=None):
-    """The bulk tie on record for this (visit, filter), as ON-SKY mas.
+    """The bulk tie on record for this (visit, filter), as ``(value, status)``.
 
-    Reads whichever source ``alignment_config`` declares -- a recorded constant,
-    a locked table's per-(Visit, Filter) bulk, or a consensus table's BULK
-    sentinel -- so VERIFY works on every configured field rather than only on the
-    three that happen to use constants.  Returns ``None`` when the field has no
-    tie on record yet (genuinely new data), which is the only case that should
-    reach MEASURE.
+    ``value`` is ON-SKY mas, or ``None`` when there is nothing to compare
+    against.  ``status`` says WHY, and the distinction is the point:
+
+    ``BULK_OK``               a tie was found; verify against it
+    ``BULK_TABLE_ABSENT``     the declared table file is not on disk
+    ``BULK_NO_ROW``           the table exists but has no row for this key
+    ``BULK_NOT_CONFIGURED``   no config entry -- the ONLY "genuinely new data"
+
+    Collapsing the middle two into "nothing on record" is what would send a
+    tied field into MEASURE and print a recommendation to record a tie it
+    already has.  A zero-valued row is a real measurement and returns
+    ``BULK_OK`` with ``(0.0, 0.0)`` -- it is not the same as no row.
     """
     from jwst_gc_pipeline.reduction import alignment_config as ac
-    from jwst_gc_pipeline.reduction import unified_alignment as ua
 
     cfg = ac.resolve(proposal_id, field)
     if cfg is None:
-        return None
+        return None, BULK_NOT_CONFIGURED
     cosd = np.cos(np.radians(float(dec_deg)))
     filt = str(filtername).upper()
 
     if cfg.source == ac.RECORDED_BULK:
         # visit_key_for handles the per-proposal convention (2092 keys on the
-        # 3-character visit suffix, not the full token) -- hand-rolling
-        # `basename.split('_')[0]` here silently misses those fields.
+        # 3-character visit suffix, not the full token).
         key = ac.visit_key_for(cfg, frame_name) if frame_name else visit
         dra, ddec, found = ac.lookup_recorded_bulk(cfg, key, filt)
-        return (dra * cosd * 1000.0, ddec * 1000.0) if found else None
+        if not found:
+            return None, BULK_NO_ROW
+        return (dra * cosd * 1000.0, ddec * 1000.0), BULK_OK
 
     if cfg.source == ac.TABLE_LOCKED:
         path = (f'{basepath}/offsets/'
                 f'Offsets_JWST_Brick{proposal_id}_VIRAC2locked.csv')
         if not os.path.exists(path):
-            return None
+            return None, BULK_TABLE_ABSENT
         from astropy.table import Table
         tbl = Table.read(path)
-        dra, ddec = ua._derive_locked_bulk(tbl, visit, filt)
-        if dra == 0.0 and ddec == 0.0:
-            return None
-        return (dra * cosd * 1000.0, ddec * 1000.0)
+        if 'Visit' not in tbl.colnames:
+            return None, BULK_NO_ROW
+        sel = (tbl['Visit'] == visit) & (tbl['Filter'] == filt)
+        if not sel.any():
+            return None, BULK_NO_ROW
+        # row presence decides, NOT the value -- a genuine (0, 0) tie is a
+        # measurement, not an absence.
+        dra = float(np.median(np.asarray(tbl['dra (arcsec)'][sel], dtype=float)))
+        ddec = float(np.median(np.asarray(tbl['ddec (arcsec)'][sel], dtype=float)))
+        return (dra * cosd * 1000.0, ddec * 1000.0), BULK_OK
 
     if cfg.source == ac.TABLE_CONSENSUS:
         path = (f'{basepath}/offsets/'
                 f'Offsets_JWST_Brick{proposal_id}_consensus.csv')
         if not os.path.exists(path):
-            return None
+            return None, BULK_TABLE_ABSENT
         from astropy.table import Table
         from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
             BULK_EXPOSURE, BULK_MODULE,
@@ -448,8 +476,41 @@ def recorded_bulk_mas(basepath, proposal_id, field, filtername, visit,
                & (tbl['Exposure'] == BULK_EXPOSURE)
                & (tbl['Module'] == BULK_MODULE))
         if int(sel.sum()) != 1:
-            return None
+            return None, BULK_NO_ROW
         row = tbl[sel]
         return (float(row['dra (arcsec)'][0]) * cosd * 1000.0,
-                float(row['ddec (arcsec)'][0]) * 1000.0)
-    return None
+                float(row['ddec (arcsec)'][0]) * 1000.0), BULK_OK
+    return None, BULK_NOT_CONFIGURED
+
+
+def reference_frame_matches_refcat(reference_frame, refcat_path):
+    """Does the loaded reference catalog belong to the frame the field is tied to?
+
+    A recorded tie is only comparable with a measurement made against the SAME
+    absolute frame.  sickle records a GNS tie while the default refcat search
+    finds a ``gaia_virac2_refcat*.fits``; measuring one against the other
+    produces a real, large separation whose message ("the recorded value is
+    wrong") points an operator at the wrong thing entirely.
+
+    Returns ``(ok, detail)``.  Unknown/unrecognised refcat names return ``True``
+    -- this must not become a new way to block a correct run.
+    """
+    from jwst_gc_pipeline.reduction.alignment_config import GAIA, GNS, VIRAC2
+    name = os.path.basename(str(refcat_path)).lower()
+    if 'gns' in name:
+        found = GNS
+    elif 'virac' in name:
+        found = VIRAC2
+    elif 'gaia' in name:
+        found = GAIA
+    else:
+        return True, f"unrecognised refcat {name!r}; not checking the frame"
+    if str(reference_frame) == found:
+        return True, f"{found} refcat matches the configured frame"
+    return False, (
+        f"FRAME MISMATCH: this field's tie is recorded in the {reference_frame} "
+        f"frame, but the reference catalog loaded is {found} ({name}). A recorded "
+        f"tie can only be verified against a measurement in the SAME frame -- "
+        f"comparing across frames produces a real separation that is not an "
+        f"astrometry error. Pass --refcat pointing at a {reference_frame} catalog, "
+        f"or re-record this field's bulk tie against {found}.")

@@ -304,3 +304,125 @@ def test_widening_the_tolerance_does_not_cache_a_pass(field, monkeypatch):
         s0.step0_bulk_offset(None, None, None, frames, bp, '3958', '007',
                              'F187N', **kw)
     assert fake.calls == 2, "the widened-tolerance record was re-served"
+
+
+# ---------------------------------------------------------------------------
+# where a field's bulk tie lives -- three states, not two
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize('proposal,field,expect', [
+    ('1182', '004', s0.BULK_IN_TABLE),
+    ('4147', '012', s0.BULK_IN_TABLE),
+    ('6151', '001', s0.BULK_IN_TABLE),
+    ('3958', '007', s0.BULK_RECORDED),
+    ('2092', '002', s0.BULK_RECORDED),
+    ('9999', '001', s0.BULK_NONE),
+])
+def test_bulk_tie_state(proposal, field, expect):
+    """Fields tied by a TABLE must not look like fields with nothing on record;
+    collapsing those sends a tied field into MEASURE."""
+    assert s0.bulk_tie_state(proposal, field) == expect
+
+
+def test_missing_table_is_not_reported_as_new_data(tmp_path):
+    """A declared table that is absent means 'cannot tell', not 'new data'."""
+    bp = str(tmp_path)
+    os.makedirs(os.path.join(bp, 'offsets'))
+    val, status = s0.recorded_bulk_mas(bp, '4147', '012', 'F212N',
+                                       'jw04147012001', -29.4)
+    assert val is None
+    assert status == s0.BULK_TABLE_ABSENT
+
+
+def test_table_without_a_matching_row_is_its_own_state(tmp_path):
+    from astropy.table import Table
+    bp = str(tmp_path)
+    os.makedirs(os.path.join(bp, 'offsets'))
+    Table(rows=[('jw01182004001', 'F200W', -17.5, 13.4)],
+          names=('Visit', 'Filter', 'dra (arcsec)', 'ddec (arcsec)')).write(
+        os.path.join(bp, 'offsets', 'Offsets_JWST_Brick1182_VIRAC2locked.csv'))
+    val, status = s0.recorded_bulk_mas(bp, '1182', '004', 'F444W',
+                                       'jw01182004001', -29.0)
+    assert val is None and status == s0.BULK_NO_ROW
+
+
+def test_a_genuine_zero_row_is_a_measurement_not_an_absence(tmp_path):
+    """`(0, 0)` in the table is a real tie.  Treating it as 'nothing on record'
+    would route an already-tied field to MEASURE."""
+    from astropy.table import Table
+    bp = str(tmp_path)
+    os.makedirs(os.path.join(bp, 'offsets'))
+    Table(rows=[('jw01182004001', 'F200W', 0.0, 0.0)],
+          names=('Visit', 'Filter', 'dra (arcsec)', 'ddec (arcsec)')).write(
+        os.path.join(bp, 'offsets', 'Offsets_JWST_Brick1182_VIRAC2locked.csv'))
+    val, status = s0.recorded_bulk_mas(bp, '1182', '004', 'F200W',
+                                       'jw01182004001', -29.0)
+    assert status == s0.BULK_OK
+    assert val == pytest.approx((0.0, 0.0))
+
+
+def test_only_an_unconfigured_field_reads_as_new_data(tmp_path):
+    val, status = s0.recorded_bulk_mas(str(tmp_path), '9999', '001', 'F212N',
+                                       'jw09999001001', -29.0)
+    assert val is None and status == s0.BULK_NOT_CONFIGURED
+
+
+def test_recorded_bulk_uses_the_configured_visit_key(tmp_path):
+    """2092 keys on the 3-character visit suffix; a hand-rolled
+    basename.split('_')[0] misses it entirely."""
+    v2, st2 = s0.recorded_bulk_mas(
+        str(tmp_path), '2092', '002', 'F480M', 'ignored', 0.0,
+        frame_name='jw02092002002_02101_00003_nrcb3_destreak.fits')
+    assert st2 == s0.BULK_OK and v2[1] == pytest.approx(-171.0)
+    v1, st1 = s0.recorded_bulk_mas(
+        str(tmp_path), '2092', '002', 'F480M', 'ignored', 0.0,
+        frame_name='jw02092002001_02101_00003_nrcb3_destreak.fits')
+    assert st1 == s0.BULK_NO_ROW and v1 is None
+
+
+# ---------------------------------------------------------------------------
+# frame vs refcat
+# ---------------------------------------------------------------------------
+
+def test_gns_tie_measured_against_a_virac_refcat_is_refused():
+    """sickle records a GNS tie; the default refcat search finds gaia_virac2.
+    Comparing across frames yields a real separation that is NOT an astrometry
+    error, and the failure message would send an operator after the wrong thing."""
+    ok, detail = s0.reference_frame_matches_refcat(
+        'GNS', '/orange/adamginsburg/jwst/sickle/catalogs/gaia_virac2_refcat_epoch2024.64.fits')
+    assert not ok
+    assert 'FRAME MISMATCH' in detail and 'GNS' in detail
+
+
+def test_matching_frame_passes():
+    ok, _ = s0.reference_frame_matches_refcat(
+        'VIRAC2', '/x/catalogs/gaia_virac2_refcat_epoch2023.72.fits')
+    assert ok
+
+
+def test_unrecognised_refcat_does_not_block():
+    """This check must not become a new way to fail a correct run."""
+    ok, _ = s0.reference_frame_matches_refcat('VIRAC2', '/x/catalogs/mystery.fits')
+    assert ok
+
+
+# ---------------------------------------------------------------------------
+# the unreadable-frame guard must be distinguishable from the basename hash
+# ---------------------------------------------------------------------------
+
+def test_unreadable_frame_changes_the_hash_beyond_its_name(field, tmp_path):
+    """Mutation cover: hashing only the basename would give the same digest for
+    two unreadable frames whose ERRORS differ.  A frame that cannot be read must
+    not hash as though it had been checked."""
+    bp, frames = field
+    truncated = os.path.join(bp, 'jw02045001001_02101_00009_nrcb3_destreak.fits')
+    with open(truncated, 'wb') as fh:
+        fh.write(b'not a fits file at all')
+    missing = os.path.join(bp, 'jw02045001001_02101_00009_nrcb3_destreak.fits.gone')
+    h_trunc = s0.generation_hash([truncated], 'VIRAC2')
+    h_missing = s0.generation_hash([missing], 'VIRAC2')
+    # different failure modes -> different digests; a basename-only hash would
+    # collide these two whenever the names matched
+    assert h_trunc != h_missing
+    # and neither may equal the digest of a readable frame
+    assert h_trunc != s0.generation_hash([frames[0]], 'VIRAC2')
