@@ -642,6 +642,32 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     avg_dec = nanaverage(arr_dec, axis=1, weights=pos_weights)
     std_ra = nanaverage((arr_ra - avg_ra[:, None])**2, weights=pos_weights, axis=1)**0.5
     std_dec = nanaverage((arr_dec - avg_dec[:, None])**2, weights=pos_weights, axis=1)**0.5
+
+    # A position scatter of EXACTLY 0 in both axes is never a real across-exposure
+    # measurement: it means the kept per-frame positions were byte-identical, which
+    # happens when a source has < 2 independently-fit positions OR its per-frame
+    # positions were copied from a fixed seed (forced/seeded refit -- the on-disk
+    # ``skycoord_centroid`` is the same seed value in every exposure while the flux
+    # is fit per frame; ``forced_refit`` rows).  Reporting std=0 is FALSE precision
+    # (a perfect "0 mas") that lets such a source pass the position-scatter QC gate
+    # (``cataloging.nmatch_confirm_maxpos_mas``, ``0 <= maxpos``) for FREE, even
+    # though its position was never measured across frames.  Two independently-fit
+    # float positions are never bit-identical, so an exact 0 is a reliable marker of
+    # this degeneracy.  Mark the scatter undefined (NaN) so the QC gate's
+    # ``isfinite`` guard withholds the astrometric confirm instead of granting it.
+    # (Diagnosed on brick m8 2026-07-29: ~0.2-0.6% of nmatch>3 LW sources; ~8x
+    # enriched in forced_refit.  The real per-frame scatter is not recoverable at
+    # merge time because skycoord_centroid was already collapsed upstream -- that
+    # upstream collapse is the deeper root cause, tracked separately.)
+    _pos_degenerate = np.isfinite(std_ra) & np.isfinite(std_dec) & (std_ra == 0) & (std_dec == 0)
+    _n_degenerate = int(_pos_degenerate.sum())
+    if _n_degenerate:
+        print(f"Phase 1: {_n_degenerate} source(s) have exactly-zero position "
+              f"scatter (copied/seeded per-frame positions) -> std_ra/std_dec set "
+              f"NaN (undefined, not 0 mas)", flush=True)
+        std_ra = np.where(_pos_degenerate, np.nan, std_ra)
+        std_dec = np.where(_pos_degenerate, np.nan, std_dec)
+
     avgpos = SkyCoord(avg_ra, avg_dec, unit=(u.deg, u.deg), frame='icrs')
     print(f"Phase 1: position averages done in {time.time()-_t0:.1f}s", flush=True)
 
