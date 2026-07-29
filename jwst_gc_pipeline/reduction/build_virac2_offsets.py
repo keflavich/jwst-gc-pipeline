@@ -36,6 +36,13 @@ offset an NN read as ~0).  Add a field by adding a REGION entry (proposal/field/
 {filt: (subdir, obs-epoch, mtag)}).  A multi-pointing field needs a VIRAC2 cache covering
 ALL its pointings.
 
+``mtag`` names the merge stage of the per-frame catalogs the tie is measured on, and it is
+per-(OBSERVATION, filter), not per-filter: when two observations catalog into one directory
+under the same names, whichever ran last owns each stage, so the mtag must name a stage the
+region's OWN observation actually has (cloudef obs005 reached only m2 while obs002 reached
+m7 -- see the cloudef entries).  ``_gather`` verifies this from each catalog's crf and
+refuses the mismatch rather than relabelling another observation's tie.
+
 Usage:  python -m jwst_gc_pipeline.reduction.build_virac2_offsets --region <key> [filt ...]
 """
 import sys, glob, os, re, argparse
@@ -168,19 +175,41 @@ REGION = {
                           'f410m': ('F410M', 2023.30, '_m3'), 'f466n': ('F466N', 2023.30, '_m3')}),
     # cloudef (2092): Cloud E (obs 002) + Cloud F (obs 005), separate pointings ->
     # separate region keys; combine their VIRAC2locked tables into one Offsets file after.
-    # Per-exposure catalogs are unstaged (f210m_nrcX_visit..._exp..._daophot_basic) -> mtag=''.
-    # WARNING (2026-07-29): obs 005 has NO per-frame catalogs on disk -- every file the
-    # cloudef5 glob matches has meta FILENAME = jw02092002001_..., i.e. obs 002.  Before
-    # _gather verified the observation, a cloudef5 build silently relabelled obs 002's tie
-    # as jw02092005001; obs 005 F162M is a real ~7.5" gross offset, so that would have been
-    # badly wrong.  _gather now REFUSES it.  cloudef5 becomes buildable once obs 005 is
-    # cataloged (and then needs otag=True if its products carry the observation token).
+    #
+    # ⚠ THE mtag IS PER-OBSERVATION, NOT PER-FILTER-ONLY (2026-07-29).  Both
+    # observations catalog into the SAME directory under the SAME per-frame names
+    # (cloudef has no `_oNNN_` token anywhere -- 0 of 11635 catalogs carry one), so
+    # whichever run wrote a given stage last OWNS that stage's files.  Census by crf
+    # provenance (meta['FILENAME']), F*/*_visit*_vgroup*_exp*<mtag>_daophot_basic:
+    #
+    #     stage    F162M          F210M          F360M         F480M
+    #     _m1      obs005 (72)    obs005 (72)    obs005 (24)   obs005 16 + obs002 8
+    #     _m2      obs005 (72)    obs005 (72)    obs005 (24)   obs005 16 + obs002 8
+    #     _m3      obs002 (72)    obs002 (64)    obs002 (16)   obs002 (16)
+    #     _m4..m7  obs002         obs002         obs002        obs002
+    #
+    # obs 005 IS cataloged -- through m2, for all four filters.  It simply has no
+    # m3+ products, so an `_m3` glob under cloudef5 can only ever match obs 002's
+    # files.  Before _gather verified the observation, that silently relabelled obs
+    # 002's tie as jw02092005001 -- and cloudef obs005 F162M is a real ~7.5" gross
+    # offset, so it would have been badly wrong.  The fix is the mtag, not the data:
+    # cloudef5 uses `_m2` (its own deepest stage), cloudef2 keeps `_m3`.
+    #
+    # Measuring the tie on m2 is not a downgrade: the builder takes positions from
+    # x_fit/y_fit through the LIVE crf GWCS (load_siaf) with a qfit<0.4 / flux>0 cut,
+    # and later merge stages refine deblending and photometry, not the frame.  m2 is
+    # also the stage the pipeline itself measures and CORRECTS astrometry at (m3+ are
+    # frozen -- ASTROMETRY_CHECKPOINTS.md), and 1182 already ties f356w/f444w at _m2
+    # for the same reason: it is the deepest stage those products reached.
+    # Verified 2026-07-29: cloudef5 at _m2 gathers jw02092005001 only -- 8 exposures
+    # x 8 detectors in F162M/F210M, 8 x 2 in F360M/F480M, no obs-002 contamination --
+    # and all four obs-005 merged i2d mosaics exist for the coarse tie.
     'cloudef2': dict(proposal='2092', field='002', basepath='/orange/adamginsburg/jwst/cloudef',
                      filts={'f162m': ('F162M', 2023.21, '_m3'), 'f210m': ('F210M', 2023.21, '_m3'),
                             'f360m': ('F360M', 2023.21, '_m3'), 'f480m': ('F480M', 2023.21, '_m3')}),
     'cloudef5': dict(proposal='2092', field='005', basepath='/orange/adamginsburg/jwst/cloudef',
-                     filts={'f162m': ('F162M', 2023.21, '_m3'), 'f210m': ('F210M', 2023.21, '_m3'),
-                            'f360m': ('F360M', 2023.21, '_m3'), 'f480m': ('F480M', 2023.21, '_m3')}),
+                     filts={'f162m': ('F162M', 2023.21, '_m2'), 'f210m': ('F210M', 2023.21, '_m2'),
+                            'f360m': ('F360M', 2023.21, '_m2'), 'f480m': ('F480M', 2023.21, '_m2')}),
     # sgrc (4147/012).  The VIRAC2locked table was previously authored without a
     # REGION entry and covered only 7 of the 8 reduced bands -- F115W had NO row, so
     # the m2 checkpoint's F115W corrections matched nothing and update_offsets_table

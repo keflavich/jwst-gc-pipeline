@@ -126,6 +126,38 @@ def test_solve_refuses_a_visit_whose_every_exposure_failed(monkeypatch):
         bvo._solve(byve, byv, coarse, 0.0, 0.0, None, 'f200w')
 
 
+def test_regions_sharing_a_directory_are_separable():
+    """Two regions that glob the SAME (basepath, subdir, filter) must differ in
+    something the glob or the crf check can act on -- an ``otag``, or an ``mtag``
+    naming the stage that region's OWN observation reached.
+
+    cloudef2 (2092/002) and cloudef5 (2092/005) catalog into one directory with no
+    observation token in the filenames, so the stage is the only separator: obs 005
+    reached m2, obs 002 reached m7, and cloudef5 globbing ``_m3`` matched 100%
+    obs-002 files.  The five gc2211 regions share a directory too and separate by
+    ``otag``.
+    """
+    from collections import defaultdict
+    by_dir = defaultdict(list)
+    for key, rc in bvo.REGION.items():
+        for filt, (sub, _ep, mtag) in rc['filts'].items():
+            by_dir[(rc['basepath'], sub, filt)].append(
+                (key, mtag, bool(rc.get('otag'))))
+    for where, entries in sorted(by_dir.items()):
+        if len(entries) < 2:
+            continue
+        assert all(e[2] for e in entries) or len({e[1] for e in entries}) == len(entries), (
+            f"regions {[e[0] for e in entries]} all glob {where} and cannot be "
+            f"told apart: none carries an otag and they share an mtag")
+
+
+def test_cloudef_ties_each_observation_at_its_own_deepest_stage():
+    """Regression on the specific mis-scope: cloudef5 at ``_m3`` could only ever
+    match obs-002 catalogs (obs 005 has no m3+ products)."""
+    assert {v[2] for v in bvo.REGION['cloudef5']['filts'].values()} == {'_m2'}
+    assert {v[2] for v in bvo.REGION['cloudef2']['filts'].values()} == {'_m3'}
+
+
 def test_gc2211_regions_are_registered_per_observation():
     keys = [k for k in bvo.REGION if k.startswith('gc2211')]
     assert keys == ['gc2211_023', 'gc2211_028', 'gc2211_046',
