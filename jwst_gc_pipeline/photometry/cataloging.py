@@ -72,6 +72,49 @@ from photutils.background import Background2D, MedianBackground, MMMBackground
 from photutils.psf import SourceGrouper
 
 
+class MergedcatMosaicError(RuntimeError):
+    """A phase could not write its merged-catalog residual / model i2d mosaics.
+
+    Fail-closed: the residual i2d is the NEXT phase's detection image and
+    background, so a run that silently continues without it produces degraded
+    later phases and no mosaics at all -- the failure mode of issue #159 for
+    ``--cutout-region`` runs.  Set ``ALLOW_MISSING_MERGEDCAT_MOSAIC=1`` to
+    downgrade this back to a warning.
+    """
+
+
+MERGEDCAT_MOSAIC_OVERRIDE_ENV = 'ALLOW_MISSING_MERGEDCAT_MOSAIC'
+
+
+def _handle_mergedcat_mosaic_failure(phase, module, filt, ex):
+    """Fail-closed handler for a failed mergedcat residual / model i2d build.
+
+    Re-raises as ``MergedcatMosaicError`` unless
+    ``ALLOW_MISSING_MERGEDCAT_MOSAIC=1``, in which case it prints and returns so
+    the run limps on (the pre-#159 behaviour).
+
+    Why fail closed: this block used to print-and-continue, so a run whose
+    mergedcat mosaics were never written still exited 0 and the operator only
+    discovered the missing ``*_mergedcat_{model,residual}_i2d.fits`` later --
+    which is exactly how issue #159 (every ``--cutout-region`` run vs. the
+    custom ``output_wcs``) stayed unnoticed.  The residual i2d is not
+    display-only: it is the NEXT phase's detection image AND its background, so
+    continuing past this silently degrades every later phase.
+    """
+    print(f"manual [{phase}]: mergedcat residual / bg build failed: {ex}\n"
+          f"{traceback.format_exc()}", flush=True)
+    if os.environ.get(MERGEDCAT_MOSAIC_OVERRIDE_ENV, '') == '1':
+        print(f"manual [{phase}]: {MERGEDCAT_MOSAIC_OVERRIDE_ENV}=1 set -- "
+              f"continuing without the mergedcat mosaics", flush=True)
+        return
+    if isinstance(ex, MergedcatMosaicError):
+        raise ex
+    raise MergedcatMosaicError(
+        f"[{phase}] {module}/{filt}: mergedcat residual / model i2d mosaic "
+        f"build failed: {ex}  (set {MERGEDCAT_MOSAIC_OVERRIDE_ENV}=1 to "
+        f"continue anyway)") from ex
+
+
 # ---------------------------------------------------------------------------
 # Physical overshoot QC: the fix qfit misses
 # ---------------------------------------------------------------------------
@@ -4440,9 +4483,12 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             bg_for_next[(module, filt)] = _L._cutout_smooth_residual_bg(mc_i2d)
                         print(f"manual [{phase}]: smoothed bg for next phase = "
                               f"{bg_for_next[(module, filt)]}", flush=True)
+                    else:
+                        raise MergedcatMosaicError(
+                            f"[{phase}] {module}/{filt}: build_mergedcat_residuals "
+                            f"returned no usable residual i2d (got {mc_i2d!r})")
                 except Exception as ex:
-                    print(f"manual [{phase}]: mergedcat residual / bg build failed: {ex}",
-                          flush=True)
+                    _handle_mergedcat_mosaic_failure(phase, module, filt, ex)
 
     # -------------------------------------------------------------------
     # Cross-band merge (final step, multifilter only).  Port of the legacy

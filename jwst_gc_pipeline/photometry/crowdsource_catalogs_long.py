@@ -343,16 +343,68 @@ class CutoutNoOverlap(ValueError):
     """
 
 
+def _fits_imaging_transform_class():
+    """``gwcs.fitswcs.FITSImagingWCSTransform`` if this gwcs provides it, else
+    None (older gwcs builds i2d WCSs as plain compound models)."""
+    try:
+        from gwcs.fitswcs import FITSImagingWCSTransform
+    except ImportError:
+        return None
+    return FITSImagingWCSTransform
+
+
+def _shift_fits_imaging_transform(transform, x0, y0):
+    """Sub-grid a ``FITSImagingWCSTransform`` by moving CRPIX, or None if
+    ``transform`` is not one.
+
+    ``FITSImagingWCSTransform`` evaluates ``f(x - crpix)``, so a grid whose
+    origin sits at parent pixel ``(x0, y0)`` is EXACTLY the same transform with
+    ``crpix -> crpix - (x0, y0)``.  Rebuilding it this way (rather than
+    composing a pixel ``Shift`` in front) is what keeps the FITS-imaging
+    structure ``jwst.resample`` requires of a custom ``output_wcs``: it accepts
+    a ``FITSImagingWCSTransform`` directly, and otherwise hunts for a
+    ``Projection`` model inside a CompoundModel -- which a composed
+    ``Shift & Shift | FITSImagingWCSTransform`` does NOT expose, because the
+    projection is a plain attribute of the (atomic) FITS transform rather than
+    a node of the compound tree.  That is the whole of issue #159: the cutout /
+    finite-crop data_i2d WCS came out as such a composition, so every mergedcat
+    residual / model mosaic resample died with "could not find a Projection
+    model in the output WCS transform".
+    """
+    cls = _fits_imaging_transform_class()
+    if cls is None or not isinstance(transform, cls):
+        return None
+    crpix = np.asarray(transform.crpix.value, dtype=float)
+    return cls(transform.projection,
+               crpix=[crpix[0] - float(x0), crpix[1] - float(y0)],
+               crval=list(np.asarray(transform.crval.value, dtype=float)),
+               cdelt=list(np.asarray(transform.cdelt.value, dtype=float)),
+               pc=np.asarray(transform.pc.value, dtype=float))
+
+
 def _shift_gwcs(gwcs_obj, x0, y0):
     """GWCS for a cutout whose origin is full-frame pixel ``(x0, y0)``:
     cutout ``(x, y)`` -> full ``(x + x0, y + y0)`` -> world.
 
-    Prepends a pixel ``Shift`` to the forward transform so the cutout keeps
-    the exact (rectified) astrometry of the parent i2d.
+    For a rectified i2d WCS (a ``FITSImagingWCSTransform``) this re-derives the
+    cutout grid as a SUB-GRID of the parent grid -- same projection, same
+    cdelt/pc, CRPIX moved by the cutout origin -- so the result is still a
+    FITS-imaging WCS and stays usable as a ResampleStep ``output_wcs`` (#159).
+    A side benefit is that cutout mosaics land on the same pixel grid as the
+    full-field ones and can be compared pixel-for-pixel.
+
+    For anything else (e.g. a detector-frame SIP/distortion WCS, where no
+    CRPIX-only sub-grid exists) it falls back to prepending a pixel ``Shift``
+    to the forward transform.  That composition keeps the exact astrometry and
+    still exposes its ``Projection`` node to resample, so it remains a valid
+    custom output WCS.
     """
     import gwcs as _gwcs
     from astropy.modeling.models import Shift
-    shifted = (Shift(float(x0)) & Shift(float(y0))) | gwcs_obj.forward_transform
+    forward = gwcs_obj.forward_transform
+    shifted = _shift_fits_imaging_transform(forward, x0, y0)
+    if shifted is None:
+        shifted = (Shift(float(x0)) & Shift(float(y0))) | forward
     return _gwcs.WCS(forward_transform=shifted,
                      input_frame=gwcs_obj.input_frame,
                      output_frame=gwcs_obj.output_frame)
@@ -370,6 +422,28 @@ def _crop_to_slices(a, ny, nx, yslc, xslc):
     if a.ndim == 3 and a.shape[-2:] == (ny, nx):
         return a[:, yslc, xslc]
     return a
+
+
+_FITS_LINEAR_WCS_KEYS = ('CD1_1', 'CD1_2', 'CD2_1', 'CD2_2',
+                         'PC1_1', 'PC1_2', 'PC2_1', 'PC2_2',
+                         'CDELT1', 'CDELT2')
+
+
+def _update_fits_wcs_header(header, new_wcs_header):
+    """Replace ``header``'s linear WCS with ``new_wcs_header``'s, in place.
+
+    A plain ``header.update(...)`` leaves the OLD linear-WCS keywords behind.
+    JWST cal/crf SCI headers carry a CD matrix while
+    ``astropy.wcs.WCS.to_header()`` emits PC+CDELT, so the merged header ends up
+    with BOTH -- which the FITS standard forbids and which astropy resolves by
+    silently ignoring CDELT ("cdelt will be ignored since cd is present").  Drop
+    the old CD/PC/CDELT set first so exactly one representation survives.
+    """
+    for key in _FITS_LINEAR_WCS_KEYS:
+        if key in header and key not in new_wcs_header:
+            del header[key]
+    header.update(new_wcs_header)
+    return header
 
 
 def _prepare_cutout_input(filename, basepath, filtername, options):
@@ -2712,6 +2786,32 @@ def _reduction_mosaic_output_wcs(pipeline_dir, proposal_id, field, inst_token,
     return out
 
 
+def _check_resample_output_wcs(gwcs_obj, context=''):
+    """Raise ValueError unless ``gwcs_obj`` is usable as a ResampleStep
+    ``output_wcs``.
+
+    ``jwst.resample`` accepts a custom output WCS only if its forward transform
+    is a ``FITSImagingWCSTransform`` or a CompoundModel containing a
+    ``Projection`` node; anything else dies deep inside ``update_fits_wcsinfo``
+    AFTER the (expensive) drizzle, with no hint of which grid was at fault
+    (#159).  Checking up front turns that into an immediate, named failure.
+    """
+    from astropy.modeling.core import CompoundModel
+    from astropy.modeling.projections import Projection
+    transform = gwcs_obj.forward_transform
+    cls = _fits_imaging_transform_class()
+    if cls is not None and isinstance(transform, cls):
+        return
+    if isinstance(transform, CompoundModel) and any(
+            isinstance(m, Projection) for m in transform.traverse_postorder()):
+        return
+    raise ValueError(
+        f"output_wcs{(' for ' + context) if context else ''} is not a valid "
+        f"resample target: its forward transform ({type(transform).__name__}) "
+        f"is neither a FITSImagingWCSTransform nor a CompoundModel containing "
+        f"a Projection, so jwst.resample cannot write its FITS wcsinfo")
+
+
 def _i2d_grid_output_wcs(i2d_path, out_asdf):
     """Write the GWCS of an existing i2d datamodel to ``out_asdf`` (for
     ResampleStep ``output_wcs``), or return None if the i2d is missing.
@@ -2727,6 +2827,8 @@ def _i2d_grid_output_wcs(i2d_path, out_asdf):
         return None
     import asdf as _asdf
     with ImageModel(i2d_path) as _m:
+        _check_resample_output_wcs(_m.meta.wcs,
+                                   context=os.path.basename(i2d_path))
         _asdf.AsdfFile({'wcs': _m.meta.wcs}).write_to(out_asdf)
     return out_asdf
 
@@ -3546,13 +3648,14 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
         else:
             model_product = product_name.replace('_mergedcat_residual',
                                                  '_mergedcat_model')
-            try:
-                mpath = _resample_to_i2d(
-                    written_model[kind], pipeline_dir, model_product,
-                    crop_to_data=(_shared_wcs is None), output_wcs=_shared_wcs)
-                print(f"mergedcat: wrote {kind} model i2d {mpath}", flush=True)
-            except Exception as ex:
-                print(f"mergedcat: model i2d build failed ({ex})", flush=True)
+            # NOT swallowed: a missing model i2d used to be reported and
+            # forgotten, which is how #159 hid an entire class of cutout runs
+            # that "completed" with no mosaics.  Let it propagate to the single
+            # fail-closed gate in cataloging.run_manual_pipeline.
+            mpath = _resample_to_i2d(
+                written_model[kind], pipeline_dir, model_product,
+                crop_to_data=(_shared_wcs is None), output_wcs=_shared_wcs)
+            print(f"mergedcat: wrote {kind} model i2d {mpath}", flush=True)
     return outpaths
 
 
