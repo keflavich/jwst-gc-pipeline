@@ -738,6 +738,52 @@ def _group_by_visit_filter(tables):
     return groups
 
 
+def _record_name(stage, filtername):
+    """Record basename for a (stage, filtername) checkpoint.
+
+    SINGLE source of truth for the writer (``_write_record``) and the frozen-stage
+    baseline readers.  The ``or 'all'`` fallback matters: a ``filtername=None``
+    caller writes ``checkpoint_m2_all``, and a reader that interpolated the bare
+    ``None`` would look for ``checkpoint_m2_None_latest.json``, silently miss the
+    baseline, and turn every frozen stage into a FALSE regression ("no m2 baseline
+    record found").  Issue #111 item 2.
+    """
+    return f"checkpoint_{stage}_{filtername or 'all'}"
+
+
+def _m2_record_path(record_dir, filtername):
+    """Path of the latest m2 record for this filter, or None when there is none.
+
+    Reader/writer symmetry (issue #111 item 2).  The writer keys the record on
+    ``run_visit_checkpoint``'s ``filtername`` ARGUMENT; the frozen-stage readers
+    key on the per-group filter parsed from the table metadata.  Those agree for
+    every current caller, but a ``filtername=None`` caller writes
+    ``checkpoint_m2_all`` while the reader asks for ``checkpoint_m2_F212N`` —
+    the baseline is then silently missed and EVERY frozen stage reports a false
+    "no m2 baseline record found" regression.  So resolve the exact-filter
+    spelling first and fall back to the ``_all`` spelling the writer's
+    ``or 'all'`` produces.
+    """
+    if not record_dir:
+        return None
+    candidates = [_record_name("m2", filtername), _record_name("m2", None)]
+    seen = set()
+    for name in candidates:
+        if name in seen:
+            continue
+        seen.add(name)
+        path = os.path.join(record_dir, f"{name}_latest.json")
+        if os.path.exists(path):
+            if name != candidates[0]:
+                print(f"ASTROM CHECKPOINT: m2 baseline for {filtername} read "
+                      f"from the filter-agnostic record {os.path.basename(path)} "
+                      f"(no {os.path.basename(candidates[0])}_latest.json) -- "
+                      f"the m2 writer was called with filtername=None",
+                      flush=True)
+            return path
+    return None
+
+
 def _m2_reference_tie_baseline(record_dir, filtername, visit):
     """(dra_mas, ddec_mas) of the m2-frozen consensus->reference tie for this
     (filter, visit), from the latest m2 record; None when unavailable.
@@ -753,10 +799,8 @@ def _m2_reference_tie_baseline(record_dir, filtername, visit):
     back to ``vs_full`` only for legacy records that predate the reported-bulk
     field.
     """
-    if not record_dir:
-        return None
-    path = os.path.join(record_dir, f"checkpoint_m2_{filtername}_latest.json")
-    if not os.path.exists(path):
+    path = _m2_record_path(record_dir, filtername)
+    if path is None:
         return None
     with open(path) as fh:
         rec = json.load(fh)
@@ -791,10 +835,8 @@ def _m2_exposure_baseline(record_dir, filtername, visit):
     could NEVER pass a frozen stage, 2026-07-20).
     """
     out = {}
-    if not record_dir:
-        return out
-    path = os.path.join(record_dir, f"checkpoint_m2_{filtername}_latest.json")
-    if not os.path.exists(path):
+    path = _m2_record_path(record_dir, filtername)
+    if path is None:
         return out
     with open(path) as fh:
         rec = json.load(fh)
@@ -842,8 +884,12 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
     ------
     AstrometryRegressionError
         At a late stage (m3+) when any exposure or the reference tie moved
-        beyond ``STAGE_STABILITY_TOL_MAS`` (unless
-        ``ALLOW_LATE_STAGE_ASTROM_SHIFT=1``).
+        beyond ``STAGE_STABILITY_TOL_MAS``, or when the reference tie is
+        BOTH off by more than ``REFERENCE_APPLY_MIN_MAS`` AND incoherent
+        (``apply_ok`` False) — the solution moved and degraded, so it can
+        neither be verified nor corrected over (narrow override
+        ``ASTROM_ALLOW_FROZEN_INCOHERENT_TIE=1``).  Unless
+        ``ALLOW_LATE_STAGE_ASTROM_SHIFT=1``.
     """
     stage = str(stage)
     correcting = stage in CORRECTION_STAGES
@@ -1011,13 +1057,33 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                     # no coherent dense peak, per-tile not clean, or a GROSS
                     # sparse split (spurious peak). A fine ~5-10 mas Gaia-sparse
                     # split no longer lands here (gc-gaia-frame-not-catalog).
+                    why = (f"cross-ref sep={ref_tie['cross_reference'].get('sep_mas'):.1f} mas, "
+                           f"gross_ok={ref_tie.get('cross_reference_gross_ok')}, "
+                           f"per-tile clean={ref_tie['per_tile'].get('clean')}, "
+                           f"swept={ref_tie.get('swept')}")
                     unverified.append(
                         f"{vctx}: consensus->reference offset {off:.2f} mas but the "
                         f"VIRAC tie is not trustworthy "
-                        f"(cross-ref sep={ref_tie['cross_reference'].get('sep_mas'):.1f} mas, "
-                        f"gross_ok={ref_tie.get('cross_reference_gross_ok')}, "
-                        f"per-tile clean={ref_tie['per_tile'].get('clean')}, "
-                        f"swept={ref_tie.get('swept')}) -- NOT applying; investigate")
+                        f"({why}) -- NOT applying; investigate")
+                    if not correcting and not _env_flag(
+                            "ASTROM_ALLOW_FROZEN_INCOHERENT_TIE"):
+                        # FROZEN stage, and the tie both MOVED (off >
+                        # REFERENCE_APPLY_MIN_MAS) AND went incoherent.  Before
+                        # #111 this fell through to `unverified` only and the
+                        # run continued -- a silent exit from the frozen-stage
+                        # gate, exactly the shape the gate exists to catch.
+                        # Since #108 apply_ok no longer flips on a fine
+                        # sparse-Gaia disagreement, so incoherence here means
+                        # something genuinely bad.  Route it to `failures`, the
+                        # same blocking channel the measured-delta branch and
+                        # DuplicateExposureError (#169) use, so it obeys
+                        # ALLOW_LATE_STAGE_ASTROM_SHIFT like every other
+                        # frozen-stage stop.
+                        failures.append(
+                            f"{vctx}: consensus->reference offset {off:.2f} mas at a "
+                            f"FROZEN stage AND the reference tie is incoherent "
+                            f"({why}) -- the solution both moved and degraded; "
+                            f"it cannot be verified and must not be corrected over")
 
         visits.append(dict(
             visit=visit, filtername=filt,
@@ -1042,13 +1108,13 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                       reference_apply_min_mas=REFERENCE_APPLY_MIN_MAS,
                       stage_stability_tol_mas=STAGE_STABILITY_TOL_MAS))
     if record_dir:
-        _write_record(record_dir, f"checkpoint_{stage}_{filtername or 'all'}", record)
+        _write_record(record_dir, _record_name(stage, filtername), record)
 
     for w in unverified:
         print(f"ASTROM CHECKPOINT [{stage}] COULD NOT VERIFY: {w}", flush=True)
     if failures and not correcting:
-        msg = (f"ASTROMETRY REGRESSION at stage {stage}: the solution moved after "
-               f"it was frozen --\n  " + "\n  ".join(failures))
+        msg = (f"ASTROMETRY REGRESSION at stage {stage}: the solution moved or "
+               f"degraded after it was frozen --\n  " + "\n  ".join(failures))
         if _env_flag("ALLOW_LATE_STAGE_ASTROM_SHIFT"):
             print(f"WARNING (override ALLOW_LATE_STAGE_ASTROM_SHIFT=1): {msg}",
                   flush=True)

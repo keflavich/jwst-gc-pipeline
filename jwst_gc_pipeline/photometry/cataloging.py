@@ -3222,9 +3222,24 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     # residual class is known table-inexpressible.
     floor_mas = float(os.environ.get('ASTROM_M2_CORRECTION_FLOOR_MAS', '0') or 0)
     if floor_mas > 0:
+        # LOUD key access, not .get(..., 0.0): a correction source that omits
+        # the magnitude keys would read magnitude 0 for EVERY correction, so
+        # everything would be "sub-floor" and the checkpoint would be silently
+        # neutered (issue #111 item 1).  A missing key is a defect in the
+        # correction producer -- raise it where it happens.
+        _missing = [c for c in corrections
+                    if 'dra_onsky_mas' not in c or 'ddec_onsky_mas' not in c]
+        if _missing:
+            raise KeyError(
+                f"astrom checkpoint [{merge_label}] {filt}/{module}: "
+                f"{len(_missing)} of {len(corrections)} correction(s) lack "
+                f"'dra_onsky_mas'/'ddec_onsky_mas'; the "
+                f"ASTROM_M2_CORRECTION_FLOOR_MAS filter cannot measure their "
+                f"magnitude and would silently treat them as sub-floor. "
+                f"First offender keys: {sorted(_missing[0])}")
         actionable = [c for c in corrections
-                      if np.hypot(c.get('dra_onsky_mas', 0.0),
-                                  c.get('ddec_onsky_mas', 0.0)) >= floor_mas]
+                      if np.hypot(c['dra_onsky_mas'],
+                                  c['ddec_onsky_mas']) >= floor_mas]
         if not actionable:
             print(f"astrom checkpoint [{merge_label}] {filt}/{module}: PASS with "
                   f"{len(corrections)} sub-floor residual(s) "

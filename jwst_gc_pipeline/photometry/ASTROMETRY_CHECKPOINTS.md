@@ -108,7 +108,18 @@ audit the full ladder from these records.
 | `ASTROM_CHECKPOINT_APPLY=1` | at m2, auto-apply corrections to the offsets table + stale-tag im0 |
 | `ASTROM_REFCAT=<path>` | reference catalog override (default: `{basepath}/catalogs/gaia_virac2_refcat*.fits`) |
 | `ALLOW_LATE_STAGE_ASTROM_SHIFT=1` | override the m3+ frozen-solution gate |
+| `ASTROM_ALLOW_FROZEN_INCOHERENT_TIE=1` | narrow override: at m3+, demote "tie moved AND went incoherent" back to `unverified` instead of blocking (see below) |
 | `ALLOW_CROSSFILTER_ASTROM_FAIL=1` | override the cross-filter gate |
+
+At a frozen (m3+) stage a consensus→reference offset above
+`REFERENCE_APPLY_MIN_MAS` whose tie is *also* incoherent (`apply_ok` False —
+no coherent dense peak, per-tile not clean, or a gross sparse split) is a
+**blocking** failure: the solution both moved and degraded, so neither the
+"it only moved a little" nor the "we could not measure it" reading is safe.
+Before this gate existed such a case was recorded only as `unverified` and
+the run continued.  `ASTROM_ALLOW_FROZEN_INCOHERENT_TIE=1` demotes just this
+case (the global `ALLOW_LATE_STAGE_ASTROM_SHIFT=1` still demotes it too, along
+with every other frozen-stage stop).
 
 Overrides exist for deliberate, justified use — never to make a red gate
 green (same policy as `ALLOW_REGISTRATION_FAIL`).
