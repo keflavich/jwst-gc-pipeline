@@ -155,14 +155,6 @@ def _bbox_intervals(gw):
     return intervals if len(intervals) == 2 else None
 
 
-def _bbox_center(gw):
-    """Mid-point of ``gw``'s bounding box, or None if it has none."""
-    intervals = _bbox_intervals(gw)
-    if intervals is None:
-        return None
-    return tuple(0.5 * (lo + hi) for lo, hi in intervals)
-
-
 def _bbox_center_and_extent(gw):
     """``(nx, ny)`` implied by ``gw``'s bounding box, or None."""
     intervals = _bbox_intervals(gw)
@@ -173,18 +165,24 @@ def _bbox_center_and_extent(gw):
 
 
 def gwcs_from_file(filename, use_cache=True):
-    """The GWCS stored in ``filename``'s ASDF extension, or None.
+    """The GWCS of ``filename``, via ``stdatamodels.jwst.datamodels``, or None.
 
-    Reads the ``ASDF`` BinTable extension's bytes and deserialises them
-    in-memory, rather than instantiating a ``jwst`` datamodel: no schema
-    validation and no pixel data, so it does not pay the datamodel open cost
-    and holds no handle on the file.
+    This deliberately uses the **upstream** datamodels reader rather than
+    parsing the ASDF extension by hand.  ``meta.wcs`` is the documented,
+    STScI-maintained way to get a JWST product's WCS; a hand-rolled reader has
+    to reimplement ASDF-in-FITS block resolution, extension handling and lazy
+    loading, and would need re-checking against every ``asdf``/``gwcs``/``jwst``
+    release.  Same rule as ``adjust_wcs`` in ASTROMETRY_WCS_CORRECTION_FLOW.md:
+    use STScI tools.
 
-    Results are memoised on ``(path, mtime, size)``.  A file rewritten in place
-    (``fix_alignment`` overwrites its input) therefore invalidates its own entry.
+    Cost is not a reason to hand-roll -- ``datamodels.open`` + ``meta.wcs`` is
+    ~0.15 s per frame, which the memoisation below removes for repeat reads.
+
+    Results are memoised on ``(path, mtime, size)``, so a file rewritten in
+    place (``fix_alignment`` overwrites its input) invalidates its own entry.
     """
     try:
-        import asdf
+        import stdatamodels.jwst.datamodels as _dm
     except ImportError:                                  # pragma: no cover
         return None
 
@@ -197,33 +195,14 @@ def gwcs_from_file(filename, use_cache=True):
         return _GWCS_CACHE[key]
 
     try:
-        with fits.open(filename, memmap=False, lazy_load_hdus=True) as hdul:
-            if 'ASDF' not in hdul:
-                return None
-            buf = hdul['ASDF'].data['ASDF_METADATA'].tobytes()
-    except (OSError, KeyError, IndexError, TypeError, ValueError):
-        # not an ASDF-in-FITS product, or the extension is unreadable
-        return None
-
-    import io
-    try:
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')
-            # lazy_load=True is required: the tree's `data`/`err`/`dq` nodes are
-            # external references to the FITS extensions, which cannot resolve
-            # from an in-memory buffer.  Nothing here touches them.
-            with asdf.open(io.BytesIO(buf), lazy_load=True, memmap=False,
-                           ignore_missing_extensions=True) as af:
-                gw = af.tree.get('meta', {}).get('wcs')
-                if gw is not None:
-                    # Exercise both directions while the buffer is still open,
-                    # so any lazily-loaded array inside the transform (e.g. a
-                    # tabular distortion term) is materialised now rather than
-                    # failing at first use after the buffer is gone.
-                    _c = _bbox_center(gw)
-                    if _c is not None:
-                        gw.invert(*gw(*_c))
-    except (OSError, ValueError, KeyError, TypeError, IndexError):
+            # memmap=False so nothing in the returned transform can depend on a
+            # mapping of a file we are about to close.
+            with _dm.open(filename, memmap=False) as model:
+                gw = getattr(model.meta, 'wcs', None)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        # not a JWST datamodel product, or it carries no WCS
         return None
 
     if use_cache and gw is not None:
