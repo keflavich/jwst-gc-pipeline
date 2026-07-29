@@ -299,7 +299,7 @@ def _verdict(clean, measurable, worst_off_mas=float("nan"), n_ok=0, n_total=0,
              reason="", **extra):
     """Uniform arbiter verdict.  ``measurable`` is the third state the gate needs:
     a map with no cell holding enough stars is COULD-NOT-VERIFY, which is a
-    different (and honest) answer from ``clean``."""
+    different answer from ``clean``, and the gate must not treat them alike."""
     out = dict(clean=bool(clean), measurable=bool(measurable),
                worst_off_mas=float(worst_off_mas), n_ok=int(n_ok),
                n_total=int(n_total), reason=reason)
