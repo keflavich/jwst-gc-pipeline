@@ -78,6 +78,19 @@ from photutils.background import Background2D, MedianBackground, MMMBackground
 from photutils.psf import SourceGrouper
 
 
+class VettedCombineError(RuntimeError):
+    """The per-obs vetted catalogs for one phase could not be combined.
+
+    Fail-closed: the combined catalog is the final science catalog and the m7
+    cross-band seed, so continuing would leave the previous run's version on
+    disk to be read as the seed.  The inputs are found by glob rather than
+    named by the caller, so the message lists them -- usually one was written
+    by older code and carries an incompatible dtype for a shared column.
+    (A missing or extra column does NOT get here: vstack outer-joins and masks
+    it.)
+    """
+
+
 class MergedcatMosaicError(RuntimeError):
     """A phase could not write its merged-catalog residual / model i2d mosaics.
 
@@ -2435,6 +2448,24 @@ def _write_carta_catalog(cat, path):
     out.write(path, overwrite=True)
 
 
+def _column_dtype_conflicts(paths, tables):
+    """One line per column whose dtype is not the same in every input.
+
+    astropy names the column and the dtypes but not the file, which is what
+    the operator needs when the inputs came from a glob.
+    """
+    lines = []
+    for col in sorted({c for t in tables for c in t.colnames}):
+        # mixin columns (skycoord) have no dtype -- nothing to compare
+        seen = {os.path.basename(p): str(t[col].dtype)
+                for p, t in zip(paths, tables)
+                if col in t.colnames and hasattr(t[col], 'dtype')}
+        if len(set(seen.values())) > 1:
+            lines.append(f"  column {col!r} differs: "
+                         + ', '.join(f'{f} is {d}' for f, d in seen.items()))
+    return lines
+
+
 def _combine_per_obs_vetted(vetted_path, merged_path, combined_path,
                             this_obs_only, label=''):
     """Combine the per-obs `_o*_vetted` catalogs into the all-obs vetted one.
@@ -2453,13 +2484,15 @@ def _combine_per_obs_vetted(vetted_path, merged_path, combined_path,
     else:
         siblings = sorted(glob.glob(
             merged_path.replace('.fits', '_o*_vetted.fits')))
-    tables = []
+    read, tables = [], []
     for path in siblings:
         try:
             tables.append(Table.read(path))
         except (OSError, ValueError, KeyError, IORegistryError) as ex:
             print(f"{label}: cannot read {os.path.basename(path)} ({ex})",
                   flush=True)
+        else:
+            read.append(path)
     if not tables:
         return
     # This catalog is the m7 seed, so it must never be stale and never be half
@@ -2470,8 +2503,21 @@ def _combine_per_obs_vetted(vetted_path, merged_path, combined_path,
     # the case that matters.)
     if os.path.exists(combined_path):
         os.remove(combined_path)
-    combined = tables[0] if len(tables) == 1 else table_vstack(
-        tables, metadata_conflicts='silent')
+    try:
+        combined = tables[0] if len(tables) == 1 else table_vstack(
+            tables, metadata_conflicts='silent')
+    except (ValueError, TypeError) as ex:
+        # Fatal by design -- continuing would leave a stale combined catalog to
+        # be read as the m7 seed.  The inputs came from a glob, not from the
+        # caller, so say which file is the odd one out; a bare astropy message
+        # names the column and dtypes but no filename.
+        detail = _column_dtype_conflicts(read, tables)
+        if not detail:      # failed for some other reason -- at least say which files
+            detail = [f"  inputs: {[os.path.basename(p) for p in read]}"]
+        raise VettedCombineError(
+            f"cannot combine the per-obs vetted catalogs for "
+            f"{os.path.basename(combined_path)}: {type(ex).__name__}: {ex}\n"
+            + '\n'.join(detail)) from ex
     if len(tables) > 1 and 'skycoord' in combined.colnames:
         combined = _dedup_combined_vetted(combined)
     root, ext = os.path.splitext(combined_path)   # keep ext: astropy sniffs it

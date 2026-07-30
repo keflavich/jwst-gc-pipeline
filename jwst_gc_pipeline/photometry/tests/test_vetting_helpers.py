@@ -276,7 +276,7 @@ def test_a_failed_combine_leaves_no_stale_catalog(tmp_path, monkeypatch):
     monkeypatch.setattr(C, 'table_vstack',
                         lambda *a, **k: (_ for _ in ()).throw(
                             ValueError('column mismatch')))
-    with pytest.raises(ValueError):
+    with pytest.raises(C.VettedCombineError):   # named, with the file list
         C._combine_per_obs_vetted(str(tmp_path / 'cat_o002_vetted.fits'),
                                   str(merged), str(combined),
                                   this_obs_only=False)
@@ -383,3 +383,135 @@ def test_the_already_filled_array_is_used_not_the_raw_data(monkeypatch):
         types.SimpleNamespace(satstar_ramp_recover=True))
     assert out[0, 3] == 0.0, 'the repaired value was overwritten with raw data'
     assert np.isfinite(out[0, 3])
+
+
+def test_a_failed_combine_names_the_files_it_globbed(tmp_path):
+    """The inputs come from a glob, not from the caller, so the error must
+    name them.  Otherwise a column-mismatch traceback gives no clue which
+    file on disk is the odd one out."""
+    merged = tmp_path / 'cat.fits'
+    _vetted(1).write(merged, overwrite=True)
+    _vetted(3, 266.5).write(tmp_path / 'cat_o001_vetted.fits', overwrite=True)
+    # A missing or extra column does NOT raise -- vstack outer-joins and masks
+    # it.  What raises is a shared column with an incompatible dtype.
+    odd = _vetted(3, 267.5)
+    odd['qfit'] = np.array(['a', 'b', 'c'])
+    odd.write(tmp_path / 'cat_o002_vetted.fits', overwrite=True)
+
+    combined = tmp_path / 'cat_vetted.fits'
+    with pytest.raises(C.VettedCombineError) as excinfo:
+        C._combine_per_obs_vetted(str(tmp_path / 'cat_o002_vetted.fits'),
+                                  str(merged), str(combined),
+                                  this_obs_only=False)
+    message = str(excinfo.value)
+    # which file is the odd one out, not just the list of everything globbed
+    assert 'cat_o002_vetted.fits' in message
+    assert "column 'qfit' differs" in message
+    # and the original astropy diagnostic survives
+    assert 'qfit' in message and 'float64' in message
+    assert excinfo.value.__cause__ is not None
+
+
+def test_the_odd_file_is_named_even_when_a_sibling_was_unreadable(tmp_path):
+    """The dtype report must index the files it READ, not everything globbed.
+
+    With an unreadable sibling in the middle the two lists diverge, and using
+    the glob list would name the wrong file.
+    """
+    merged = tmp_path / 'cat.fits'
+    _vetted(1).write(merged, overwrite=True)
+    _vetted(3, 266.5).write(tmp_path / 'cat_o001_vetted.fits', overwrite=True)
+    (tmp_path / 'cat_o002_vetted.fits').write_text('not a fits file')
+    odd = _vetted(3, 268.5)
+    odd['qfit'] = np.array(['a', 'b', 'c'])
+    odd.write(tmp_path / 'cat_o003_vetted.fits', overwrite=True)
+
+    with pytest.raises(C.VettedCombineError) as excinfo:
+        C._combine_per_obs_vetted(str(tmp_path / 'cat_o003_vetted.fits'),
+                                  str(merged), str(tmp_path / 'cat_vetted.fits'),
+                                  this_obs_only=False, label='t')
+    message = str(excinfo.value)
+    assert 'cat_o003_vetted.fits is |S1' in message   # the real culprit
+    assert 'cat_o002_vetted.fits is' not in message   # unreadable, never compared
+
+
+def test_consistent_columns_are_not_listed(tmp_path):
+    # Reporting every column would bury the one that actually conflicts.
+    merged = tmp_path / 'cat.fits'
+    _vetted(1).write(merged, overwrite=True)
+    _vetted(3, 266.5).write(tmp_path / 'cat_o001_vetted.fits', overwrite=True)
+    odd = _vetted(3, 267.5)
+    odd['qfit'] = np.array(['a', 'b', 'c'])
+    odd.write(tmp_path / 'cat_o002_vetted.fits', overwrite=True)
+
+    with pytest.raises(C.VettedCombineError) as excinfo:
+        C._combine_per_obs_vetted(str(tmp_path / 'cat_o002_vetted.fits'),
+                                  str(merged), str(tmp_path / 'cat_vetted.fits'),
+                                  this_obs_only=False)
+    message = str(excinfo.value)
+    assert "column 'qfit' differs" in message
+    assert "column 'flux' differs" not in message     # same dtype in both
+
+
+def test_a_non_dtype_failure_still_names_the_inputs(tmp_path):
+    # The fallback: same dtype, different shape -> no dtype conflict to report.
+    merged = tmp_path / 'cat.fits'
+    _vetted(1).write(merged, overwrite=True)
+    a = _vetted(3, 266.5)
+    a['shaped'] = np.zeros((3, 2))
+    a.write(tmp_path / 'cat_o001_vetted.fits', overwrite=True)
+    b = _vetted(3, 267.5)
+    b['shaped'] = np.zeros((3, 4))
+    b.write(tmp_path / 'cat_o002_vetted.fits', overwrite=True)
+
+    with pytest.raises(C.VettedCombineError) as excinfo:
+        C._combine_per_obs_vetted(str(tmp_path / 'cat_o002_vetted.fits'),
+                                  str(merged), str(tmp_path / 'cat_vetted.fits'),
+                                  this_obs_only=False)
+    message = str(excinfo.value)
+    assert 'differs' not in message                   # no dtype conflict
+    assert 'cat_o001_vetted.fits' in message and 'cat_o002_vetted.fits' in message
+
+
+def test_a_typeerror_from_the_stack_is_wrapped_too(tmp_path, monkeypatch):
+    """numpy raises TypeError, not ValueError, for some dtype clashes.
+
+    `UFuncTypeError` is a TypeError; narrowing the catch to ValueError alone
+    would let it escape unwrapped, with no file names attached.
+    """
+    merged = tmp_path / 'cat.fits'
+    _vetted(1).write(merged, overwrite=True)
+    for obs in ('001', '002'):
+        _vetted(3).write(tmp_path / f'cat_o{obs}_vetted.fits', overwrite=True)
+    monkeypatch.setattr(C, 'table_vstack',
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            TypeError('ufunc loop missing')))
+    with pytest.raises(C.VettedCombineError) as excinfo:
+        C._combine_per_obs_vetted(str(tmp_path / 'cat_o002_vetted.fits'),
+                                  str(merged), str(tmp_path / 'cat_vetted.fits'),
+                                  this_obs_only=False)
+    assert 'ufunc loop missing' in str(excinfo.value)
+
+
+def test_inputs_with_different_column_sets_do_not_break_the_report(tmp_path):
+    """The real catalogs differ: 19 columns in one obs, 21 in another.
+
+    Without the `col in t.colnames` guard, the report raises KeyError from
+    inside the error handler and the diagnostic is lost.
+    """
+    merged = tmp_path / 'cat.fits'
+    _vetted(1).write(merged, overwrite=True)
+    a = _vetted(3, 266.5)
+    a['only_here'] = np.arange(3)              # column the other file lacks
+    a.write(tmp_path / 'cat_o001_vetted.fits', overwrite=True)
+    odd = _vetted(3, 267.5)
+    odd['qfit'] = np.array(['a', 'b', 'c'])    # the real conflict
+    odd.write(tmp_path / 'cat_o002_vetted.fits', overwrite=True)
+
+    with pytest.raises(C.VettedCombineError) as excinfo:
+        C._combine_per_obs_vetted(str(tmp_path / 'cat_o002_vetted.fits'),
+                                  str(merged), str(tmp_path / 'cat_vetted.fits'),
+                                  this_obs_only=False)
+    message = str(excinfo.value)
+    assert "column 'qfit' differs" in message
+    assert 'only_here' not in message          # present in one file only
