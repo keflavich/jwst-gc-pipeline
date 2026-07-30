@@ -38,22 +38,25 @@ model/mask held at 81, only `size` swept:
 | 51 | −5.2% | 0.7 mas | 273 s | 0.47× |
 | 81 | 0 (ref) | 0 | 585 s | 1.00× |
 
-The amplitude leverage of a saturated star lives in its extended unsaturated
-wings/spikes (the core is masked). A small box excludes them (`n_pixels_fit`
-3324 → 44 as size 81 → 11) and **underestimates the flux by 5–90%**, monotonic
-and systematic. The brightest star is unfittable below size 21 (box inside the
-masked core). Position, by contrast, is footprint-robust (<5 mas by size ≈17).
-The contamination worry is *inverted* for these bright stars: a small box gives
-*lower* flux, not higher — wing leverage dominates faint contamination.
+A small box excludes most of the fitted pixels (`n_pixels_fit` 3324 → 44 as size
+81 → 11) and the fitted flux **departs from the size-81 value by 5–90%**,
+monotonic and systematic (the small box gives *lower* flux). The brightest star
+is unfittable below size 21 (box inside the masked core). Position, by contrast,
+is footprint-robust (<5 mas by size ≈17). Which footprint is *correct* is a
+separate question — see §7.1; the leverage-vs-contamination interpretation below
+is one hypothesis, not established. (Note: `flux₈₁/flux_size` is written `R` in
+§7; here the same effect is quoted as the signed percentage change.)
 
 ## 4. Adaptive-by-core alone does not fix it
 
 `adaptive_fit_shape_ab.py`: opt-in `adaptive_fit_shape=True` sets
 `fit_shape = clip(2.83·r_core + 17, 21, 81)` (r_core = √(sat_area/π), forced
 odd). A/B vs flat-81 on one gc2211 F200W frame: **80% faster** (117 s vs 585 s),
-position free (1.4 mas), but a **systematic −11% flux bias at all brightnesses**
-(signed, not scatter). Scaling the box to the core spreads the loss evenly but
-does not remove it — the wing leverage genuinely needs the area.
+position free (1.4 mas), but a **systematic −11% flux change at all brightnesses**
+(signed, not scatter) vs the size-81 fit. Scaling the box to the core spreads
+the change evenly but does not remove it. (Whether size-81 or the smaller box is
+correct is unresolved — §7.1; on gc2211's deep-crowded field the two disagree,
+and this A/B does not adjudicate which is right.)
 
 ## 5. Method under validation — fit-small + size-dependent flux correction
 
@@ -99,13 +102,15 @@ ground truth** (see §7.1 caveat).
 The two datasets diverge strongly, and **it is not just the r_core distribution**
 — at *matched* r_core (`R@31`, N in parentheses):
 
-| r_core | gc2211 R@31 | brick R@31 |
+| r_core | gc2211 R@31 (N) | brick R@31 (N) |
 |---|---|---|
-| 3–4 | 1.10 (38) | 1.02 (27) |
-| 4–5 | 1.11 (86) | 0.98 (1) |
-| 5–7 | 1.18 (62) | 0.99 (11) |
+| 3–4 | 1.10 (38) | 1.03 (54) |
+| 4–5 | 1.11 (86) | 0.97 (4) |
+| 5–7 | 1.18 (62) | 0.98 (20) |
 
-Where the two overlap in r_core, gc2211 still sits ~10–18% higher. So R is **not**
+(gc2211 = 1 frame, 189 in-FOV satstars; brick = both F200W frames pooled. The
+r_core 4–5 brick bin stays thin — brick simply has few stars there.) Where the
+two overlap in r_core, gc2211 still sits ~10–18% higher. So R is **not**
 a function of `(size, r_core, filter)` alone; a correction calibrated on one
 dataset (≈1.0 for brick) would mis-correct the other by 10–20%.
 
