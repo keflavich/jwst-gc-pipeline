@@ -2448,6 +2448,24 @@ def _write_carta_catalog(cat, path):
     out.write(path, overwrite=True)
 
 
+def _column_dtype_conflicts(paths, tables):
+    """One line per column whose dtype is not the same in every input.
+
+    astropy names the column and the dtypes but not the file, which is what
+    the operator needs when the inputs came from a glob.
+    """
+    lines = []
+    for col in sorted({c for t in tables for c in t.colnames}):
+        # mixin columns (skycoord) have no dtype -- nothing to compare
+        seen = {os.path.basename(p): str(t[col].dtype)
+                for p, t in zip(paths, tables)
+                if col in t.colnames and hasattr(t[col], 'dtype')}
+        if len(set(seen.values())) > 1:
+            lines.append(f"  column {col!r} differs: "
+                         + ', '.join(f'{f} is {d}' for f, d in seen.items()))
+    return lines
+
+
 def _combine_per_obs_vetted(vetted_path, merged_path, combined_path,
                             this_obs_only, label=''):
     """Combine the per-obs `_o*_vetted` catalogs into the all-obs vetted one.
@@ -2466,13 +2484,15 @@ def _combine_per_obs_vetted(vetted_path, merged_path, combined_path,
     else:
         siblings = sorted(glob.glob(
             merged_path.replace('.fits', '_o*_vetted.fits')))
-    tables = []
+    read, tables = [], []
     for path in siblings:
         try:
             tables.append(Table.read(path))
         except (OSError, ValueError, KeyError, IORegistryError) as ex:
             print(f"{label}: cannot read {os.path.basename(path)} ({ex})",
                   flush=True)
+        else:
+            read.append(path)
     if not tables:
         return
     # This catalog is the m7 seed, so it must never be stale and never be half
@@ -2486,15 +2506,18 @@ def _combine_per_obs_vetted(vetted_path, merged_path, combined_path,
     try:
         combined = tables[0] if len(tables) == 1 else table_vstack(
             tables, metadata_conflicts='silent')
-    except Exception as ex:
+    except (ValueError, TypeError) as ex:
         # Fatal by design -- continuing would leave a stale combined catalog to
-        # be read as the m7 seed.  But the inputs came from a glob, not from the
-        # caller, so name them: otherwise the operator gets a column-mismatch
-        # traceback with no clue which file on disk is the odd one out.
+        # be read as the m7 seed.  The inputs came from a glob, not from the
+        # caller, so say which file is the odd one out; a bare astropy message
+        # names the column and dtypes but no filename.
+        detail = _column_dtype_conflicts(read, tables)
+        if not detail:      # failed for some other reason -- at least say which files
+            detail = [f"  inputs: {[os.path.basename(p) for p in read]}"]
         raise VettedCombineError(
             f"cannot combine the per-obs vetted catalogs for "
             f"{os.path.basename(combined_path)}: {type(ex).__name__}: {ex}\n"
-            f"  inputs: {[os.path.basename(p) for p in siblings]}") from ex
+            + '\n'.join(detail)) from ex
     if len(tables) > 1 and 'skycoord' in combined.colnames:
         combined = _dedup_combined_vetted(combined)
     root, ext = os.path.splitext(combined_path)   # keep ext: astropy sniffs it

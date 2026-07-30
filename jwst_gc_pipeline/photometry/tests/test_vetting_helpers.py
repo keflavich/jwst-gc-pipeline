@@ -404,7 +404,9 @@ def test_a_failed_combine_names_the_files_it_globbed(tmp_path):
                                   str(merged), str(combined),
                                   this_obs_only=False)
     message = str(excinfo.value)
-    assert 'cat_o001_vetted.fits' in message
+    # which file is the odd one out, not just the list of everything globbed
     assert 'cat_o002_vetted.fits' in message
-    assert excinfo.value.__cause__ is not None      # original kept
-    assert not combined.exists()
+    assert "column 'qfit' differs" in message
+    # and the original astropy diagnostic survives
+    assert 'qfit' in message and 'float64' in message
+    assert excinfo.value.__cause__ is not None
