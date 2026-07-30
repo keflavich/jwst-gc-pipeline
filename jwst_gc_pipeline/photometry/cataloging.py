@@ -2462,6 +2462,10 @@ def _combine_per_obs_vetted(vetted_path, merged_path, combined_path,
                   flush=True)
     if not tables:
         return
+    # Remove the previous run's file first: if the stack or the dedup below
+    # raises, a restart that skips this phase must not read a stale catalog.
+    if os.path.exists(combined_path):
+        os.remove(combined_path)
     combined = tables[0] if len(tables) == 1 else table_vstack(
         tables, metadata_conflicts='silent')
     if len(tables) > 1 and 'skycoord' in combined.colnames:
@@ -2475,8 +2479,9 @@ def _combine_per_obs_vetted(vetted_path, merged_path, combined_path,
     try:
         _write_carta_catalog(combined,
                              combined_path.replace('.fits', '_carta.fits'))
-    except (OSError, ValueError, KeyError) as ex:
-        print(f"{label}: CARTA catalog export failed ({ex})", flush=True)
+    except (OSError, ValueError, TypeError, KeyError, u.UnitsError) as ex:
+        print(f"{label}: CARTA catalog export failed "
+              f"({type(ex).__name__}: {ex})", flush=True)
 
 
 def _dedup_combined_vetted(comb, min_sep_deg=0.11 / 3600.0):

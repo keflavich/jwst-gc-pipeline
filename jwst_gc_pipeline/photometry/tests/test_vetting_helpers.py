@@ -5,6 +5,8 @@ of them could be tested.
 """
 import types
 
+import pytest
+
 import numpy as np
 from astropy.coordinates import SkyCoord
 from astropy.table import Table
@@ -156,8 +158,10 @@ def _stub_ramp(monkeypatch, *, slope_ratio=1.0, group0=True, core_ratio=1.0):
     monkeypatch.setattr(SSF, 'ramp_recover_saturated',
                         lambda *a, **k: (np.full((4, 4), 11.0), rim, deep,
                                          slope_ratio))
+    wide = np.zeros((4, 4), dtype=bool)
+    wide[1, 1] = wide[2, 2] = True     # covers the slope rim as well
     monkeypatch.setattr(SSF, 'zeroframe_recover_saturated',
-                        lambda *a, **k: (np.full((4, 4), 22.0), deep, deep,
+                        lambda *a, **k: (np.full((4, 4), 22.0), wide, deep,
                                          core_ratio))
 
 
@@ -221,8 +225,57 @@ def test_zeroframe_only_fills_its_rim(monkeypatch):
     out = C._fill_saturated_pixels(
         CAL, data, dq, was_sat, model, data.copy(),
         types.SimpleNamespace(satstar_zeroframe_recover=True))
-    assert out[2, 2] == 22.0      # the zeroframe stub's rim is `deep`
-    assert out[1, 1] == 5.0       # not its rim -> model
+    # With no ramp recovery, the zeroframe rim covers both pixels.
+    assert out[1, 1] == 22.0 and out[2, 2] == 22.0
+
+
+def test_group0_may_only_fill_the_deep_core(monkeypatch):
+    # The group-0 rim covers (1,1) too, but the ramp slope already has it and is
+    # the more trustworthy method when the field is crowded.  Dropping the
+    # `deep &` guard would let group 0 overwrite it.
+    _stub_ramp(monkeypatch)
+    data, dq, was_sat, model = _frame()
+    out = C._fill_saturated_pixels(
+        CAL, data, dq, was_sat, model, data.copy(),
+        types.SimpleNamespace(satstar_ramp_recover=True))
+    assert out[1, 1] == 11.0      # slope keeps it; 22.0 would mean group 0 won
+    assert out[2, 2] == 22.0
+
+
+def test_carta_export_survives_a_table_it_cannot_convert(tmp_path, capsys):
+    # Exercises the real except tuple, not a monkeypatched raiser: ra/dec in
+    # pixel units make SkyCoord raise UnitsError, which is not a ValueError.
+    from astropy import units as u
+    merged = tmp_path / 'cat.fits'
+    _vetted(1).write(merged, overwrite=True)
+    bad = Table({'ra': [1.0, 2.0] * u.pix, 'dec': [1.0, 2.0] * u.pix,
+                 'flux': [1.0, 2.0]})
+    bad.write(tmp_path / 'cat_o001_vetted.fits', overwrite=True)
+    combined = tmp_path / 'cat_vetted.fits'
+    C._combine_per_obs_vetted(str(tmp_path / 'cat_o001_vetted.fits'),
+                              str(merged), str(combined), this_obs_only=False,
+                              label='t')
+    assert combined.exists()
+    assert 'CARTA catalog export failed' in capsys.readouterr().out
+
+
+def test_a_failed_combine_leaves_no_stale_catalog(tmp_path, monkeypatch):
+    # The combined catalog is the m7 seed.  If the stack raises, the previous
+    # run's file must be gone, not left for a restart to read.
+    merged = tmp_path / 'cat.fits'
+    _vetted(1).write(merged, overwrite=True)
+    combined = tmp_path / 'cat_vetted.fits'
+    _vetted(9).write(combined, overwrite=True)       # last run's output
+    for obs in ('001', '002'):
+        _vetted(3).write(tmp_path / f'cat_o{obs}_vetted.fits', overwrite=True)
+    monkeypatch.setattr(C, 'table_vstack',
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            ValueError('column mismatch')))
+    with pytest.raises(ValueError):
+        C._combine_per_obs_vetted(str(tmp_path / 'cat_o002_vetted.fits'),
+                                  str(merged), str(combined),
+                                  this_obs_only=False)
+    assert not combined.exists()
 
 
 def test_the_callers_array_is_never_modified_in_place(monkeypatch):
