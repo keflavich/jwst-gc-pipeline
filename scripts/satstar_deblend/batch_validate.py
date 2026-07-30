@@ -13,11 +13,10 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-sys.path.insert(0, '/blue/adamginsburg/adamginsburg/repos/jwst-gc-pipeline-wt-satdeblend')
-sys.path.insert(0, os.path.dirname(__file__))
 from jwst_gc_pipeline.reduction.saturated_star_finding import find_saturated_stars
 from jwst_gc_pipeline.reduction.filtering import get_fwhm
-from deblend_zeroframe import deblend_blob_zeroframe, robust_zf_ceiling
+from jwst_gc_pipeline.reduction.satstar_deblend import (
+    deblend_blob_zeroframe, robust_zf_ceiling)
 
 GC = '/orange/adamginsburg/jwst/gc2211'
 OUTDIR = os.path.join(os.path.dirname(__file__), 'out_batch')
@@ -80,7 +79,7 @@ for filt, cglob in FRAMES:
         sat_ceiling = robust_zf_ceiling(zeroframe)
         zf_recover = float(np.mean((zeroframe > 0) & (zeroframe < sat_ceiling)))
 
-        saturated, sources, coms = find_saturated_stars(fd)
+        saturated, sources, coms, _seed_kinds = find_saturated_stars(fd)
         nsrc = int(sources.max())
         slices = find_objects(sources)
         sizes = sum_labels(saturated, sources, np.arange(nsrc) + 1)
