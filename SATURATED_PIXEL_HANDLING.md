@@ -141,7 +141,8 @@ fluxes. ⚠ The narrative comment at the top of `find_saturated_stars` asserted 
 masks `saturated & _unrecoverable` from 2026-07-04 until 2026-07-30; **no code path
 ever did that**, and the comment has now been corrected. Two separate things came out
 of that: the *description* was wrong (fixed), and the *question* it raised — should
-frame-0-recovered wings be fit rather than masked? — is open. Evidence that the
+frame-0-recovered wings be fit rather than masked? — is open, tracked in
+[#213](https://github.com/keflavich/jwst-gc-pipeline/issues/213). Evidence that the
 current masked-core behaviour is deliberate rather than accidental: the wing
 self-calibration (`apply_wing_selfcal`, `SATSTAR_WINGCAL`, default on) exists
 specifically to correct the bias of masked-core wing fits, and

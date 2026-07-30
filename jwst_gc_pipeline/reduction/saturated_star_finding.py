@@ -444,8 +444,8 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
     #     truly-lost test -- on a _cal product it can be empty while every
     #     SATURATED pixel is DO_NOT_USE, and on the _crf sibling it covers all
     #     of them.
-    #     OPEN: whether frame0-recovered wings should instead be fit --
-    #     see SATURATED_PIXEL_HANDLING.md section 2b.
+    #     OPEN (#213): whether frame0-recovered wings should instead be fit
+    #     -- see #213 and SATURATED_PIXEL_HANDLING.md section 2b.
     # SATSTAR_SEED_REQUIRE_DO_NOT_USE=1 restores the old narrow seed, for
     # debugging only.
     _truly_lost_restricted = False
