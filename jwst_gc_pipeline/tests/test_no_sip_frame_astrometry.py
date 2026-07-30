@@ -51,6 +51,14 @@ _SIP_WCS = re.compile(
 ALLOWLIST = {
     # the GWCS-first reader itself: it *is* the sanctioned SIP fallback
     "jwst_gc_pipeline/frame_wcs.py",
+    # load_frame_wcs() is GWCS-first via stdatamodels (prefer_gwcs=True) and the
+    # WCS(hdul['SCI'].header) below it is that reader's own warned fallback, the
+    # same shape as frame_wcs.py's.  NB the fallback is NOT harmless on the
+    # products this package globs: on _crf/_destreak the SIP fit disagrees with
+    # the GWCS by up to ~5.5 mas, which exceeds the ~0.6-3.8 mas CRDS-vs-STDGDC
+    # delta the experiment measures.  Tracked on #154; allowlisted here because
+    # the call site is a deliberate fallback, not a SIP-first astrometry read.
+    "jwst_gc_pipeline/astrometry_gdc/gdc_wcs.py",
     # writes/verifies the SIP header against the GWCS -- reads SIP on purpose
     "jwst_gc_pipeline/reduction/fits_wcs_sync.py",
     "scripts/release/audit_fits_gwcs_agreement.py",
