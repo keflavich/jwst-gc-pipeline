@@ -42,6 +42,14 @@ def test_every_target_has_a_job_list():
         jobs = MC.individual_frame_merge_jobs(target)
         assert jobs, f'{target} has no merge jobs'
         assert len(set(jobs)) == len(jobs), f'{target} has duplicate jobs'
+        # The registration gate skips a per-filter array task via `jobs` being
+        # truthy.  A target with exactly ONE job would make that task both the
+        # single filter AND the whole field, and it would be skipped wrongly.
+        # No target is like that today; fail here if one appears.
+        assert len(jobs) > 1, (
+            f'{target} has a single merge job -- see the gate predicate in '
+            f'main(), which assumes a per-filter array task is not the whole '
+            f'field')
 
 
 def test_method_suffixes_are_the_per_frame_filename_tokens():
@@ -109,3 +117,70 @@ def test_the_required_merge_is_the_current_science_product():
     strict = [suffix for suffix, policy in MC.CROWDSOURCE_MERGES
               if policy == 'raise']
     assert strict == ['_nsky0']
+
+
+# --- registration gate scope ---------------------------------------------
+# The gate scans the whole field, so it belongs to a run that merged the whole
+# field.  Before the flattening it was the reverse by accident: the old loop
+# returned early on a plain run (never reaching the gate) while every array task
+# fell through to it, so N tasks each scanned a half-built field.
+
+def _run_main(monkeypatch, argv, env, gate_calls):
+    import sys
+    monkeypatch.setattr(sys, 'argv', argv)
+    for k, v in env.items():
+        if v is None:
+            monkeypatch.delenv(k, raising=False)
+        else:
+            monkeypatch.setenv(k, v)
+    monkeypatch.setattr(MC, 'merge_crowdsource', lambda **kw: None)
+    monkeypatch.setattr(MC, 'merge_daophot', lambda **kw: None)
+    monkeypatch.setattr(MC, 'merge_individual_frames', lambda **kw: None)
+
+    import jwst_gc_pipeline.photometry.registration_gate as RG
+    monkeypatch.setattr(RG, 'run_registration_gate',
+                        lambda *a, **k: gate_calls.append(a) or {'returncode': 0})
+    MC.main()
+
+
+@pytest.mark.localdata
+def test_gate_runs_on_a_whole_field_run(monkeypatch):
+    calls = []
+    _run_main(monkeypatch,
+              ['merge_catalogs', '--target', 'brick'],
+              {'RUN_REGISTRATION_GATE': '1', 'SLURM_ARRAY_TASK_ID': None},
+              calls)
+    assert len(calls) == 1
+
+
+@pytest.mark.localdata
+def test_gate_does_not_run_per_array_task(monkeypatch, capsys):
+    calls = []
+    _run_main(monkeypatch,
+              ['merge_catalogs', '--target', 'brick', '--merge-singlefields'],
+              {'RUN_REGISTRATION_GATE': '1', 'SLURM_ARRAY_TASK_ID': '3'},
+              calls)
+    assert calls == []
+    assert 'registration gate skipped' in capsys.readouterr().out
+
+
+@pytest.mark.localdata
+def test_gate_stays_off_unless_asked(monkeypatch):
+    calls = []
+    _run_main(monkeypatch,
+              ['merge_catalogs', '--target', 'brick'],
+              {'RUN_REGISTRATION_GATE': None, 'SLURM_ARRAY_TASK_ID': None},
+              calls)
+    assert calls == []
+
+
+@pytest.mark.localdata
+def test_gate_runs_for_an_array_task_that_merged_everything(monkeypatch):
+    # Without --merge-singlefields there are no per-filter jobs, so --array=0
+    # is the whole merge, not one filter of it.
+    calls = []
+    _run_main(monkeypatch,
+              ['merge_catalogs', '--target', 'brick'],
+              {'RUN_REGISTRATION_GATE': '1', 'SLURM_ARRAY_TASK_ID': '0'},
+              calls)
+    assert len(calls) == 1

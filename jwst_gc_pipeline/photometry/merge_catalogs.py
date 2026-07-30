@@ -3034,21 +3034,31 @@ def main():
         print(f'daophot phase done, {time.time() - t0:.0f}s')
 
 
-    # A whole-field cross-band scan is only meaningful once every band is
-    # merged, so it runs here.  Catches a brick-1182-style local
-    # misregistration (half a mosaic shifted while the field-average offset
-    # reads ~0) at build time rather than at release.  Off by default so it
-    # cannot wedge a run:
+    # A whole-field cross-band scan belongs to the run that merged the whole
+    # field.  That is a plain run, and also an array run with no per-filter
+    # jobs (no --merge-singlefields), where task 0 IS the whole merge.  It is
+    # not a per-filter array task: N of those would each launch their own scan
+    # while the field is still being built.  Catches a brick-1182-style
+    # local misregistration (half a mosaic shifted while the field-average
+    # offset reads ~0) at build time rather than at release.  Off by default so
+    # it cannot wedge a run:
     #   RUN_REGISTRATION_GATE=1     -> run it, warn on FAIL
     #   REGISTRATION_GATE_STRICT=1  -> also raise on FAIL
     if os.environ.get('RUN_REGISTRATION_GATE') == '1':
-        from jwst_gc_pipeline.photometry.registration_gate import run_registration_gate
-        strict = os.environ.get('REGISTRATION_GATE_STRICT') == '1'
-        res = run_registration_gate(options.target, strict=strict)
-        if res['returncode'] == 1:
-            print(f"WARNING: registration gate FAILED for '{options.target}' -- a band "
-                  f"is locally misregistered (see scan above). Do NOT release these "
-                  f"products; set REGISTRATION_GATE_STRICT=1 to hard-fail.", flush=True)
+        if task_id is not None and jobs:
+            print(f"registration gate skipped: array task {task_id} merged one "
+                  f"(program, filter), not the field.  Run the scan once after "
+                  f"the array finishes:\n"
+                  f"    python -m jwst_gc_pipeline.photometry.registration_gate "
+                  f"--field {options.target}", flush=True)
+        else:
+            from jwst_gc_pipeline.photometry.registration_gate import run_registration_gate
+            strict = os.environ.get('REGISTRATION_GATE_STRICT') == '1'
+            res = run_registration_gate(options.target, strict=strict)
+            if res['returncode'] == 1:
+                print(f"WARNING: registration gate FAILED for '{options.target}' -- a band "
+                      f"is locally misregistered (see scan above). Do NOT release these "
+                      f"products; set REGISTRATION_GATE_STRICT=1 to hard-fail.", flush=True)
 
     print("Done")
 
