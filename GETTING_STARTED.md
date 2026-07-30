@@ -40,23 +40,29 @@ cannot load it.
 ## Data layout
 
 Everything hangs off one **basepath** per target. Only `<FILTER>/pipeline/` is
-created for you — the rest you must populate **before** stage 1, because it
-reads them:
+created for you. Two of the rest are **inputs you must supply**; the others must
+simply **exist**, empty — nothing creates them and you get a write error if they
+are missing:
 
 ```
 <basepath>/                     e.g. /orange/adamginsburg/jwst/sickle/
 ├── F212N/                      one directory per filter, uppercase
 │   └── pipeline/               your _cal/_rate frames in, *_crf.fits out
 ├── reduction/fwhm_table.ecsv   INPUT.  Stage 1 reads it before writing anything
-├── regions_/<inst>_<target>_fov.reg   INPUT.  The field footprint
 ├── offsets/                    INPUT for table-locked fields; see alignment_config
-├── psfs/                       gridded PSF models (built on demand)
-└── catalogs/                   merged catalogs — the science output
+├── regions_/<inst>_<target>_fov.reg   INPUT for MIRI only (see below)
+├── psfs/                       must exist; PSF models are written here
+└── catalogs/                   must exist; merged catalogs land here
 ```
 
 Put your `_cal` (or `_rate`) frames under `<basepath>/<FILTER>/pipeline/` before
-running stage 1. A missing `reduction/fwhm_table.ecsv` or FOV region file stops
-stage 1 immediately.
+running stage 1. A missing `reduction/fwhm_table.ecsv` stops stage 1 at once.
+`mkdir` `psfs/` and `catalogs/` yourself — the code writes into them without
+creating them (only cutout runs `makedirs`).
+
+The FOV region file is a **MIRI** input. The NIRCam driver still looks it up,
+but the value feeds the VVV realignment step that was retired in July 2026 and
+is now read by nothing; a missing entry there is a silent no-op.
 
 ---
 
@@ -101,14 +107,15 @@ can check `--array` bounds before submitting.
 
 ## Adding a new dataset
 
-A new target is not configuration — it is a code change in **eight places**,
-keyed by target or proposal id. In the order you hit them:
+A new target is not configuration — it is a code change in **seven places** for
+NIRCam, eight with MIRI, keyed by target or proposal id. In the order you hit
+them:
 
 | stage | what | where |
 |---|---|---|
 | reduce | proposal → obs → target | `field_to_reg_mapping`, inside `__main__` of `reduction/PipelineRerunNIRCAM-LONG.py` |
-| reduce | target → FOV region file | `fov_regname` in the same file |
 | reduce | alignment strategy | `ALIGNMENT_CONFIG` (a tuple of `FieldAlignment`) in `reduction/alignment_config.py` |
+| reduce (MIRI) | target → FOV region file | `fov_regname` in `reduction/PipelineMIRI.py` |
 | catalog | visits per program | `nvisits`, inside `main()` of `photometry/crowdsource_catalogs_long.py` |
 | merge | filters per program | `obs_filters` in `photometry/merge_catalogs.py` |
 | merge | observation number | `project_obsnum` in the same file |
@@ -123,6 +130,11 @@ or overridden, so you edit the source. `obs_filters` also has a second copy in
 `reduction/make_merged_psf.py`. Miss `field_to_reg_mapping` and stage 1 dies
 with a bare `KeyError`; miss `obs_filters` and the merge dies with a `TypeError`
 on `None`.
+
+One more worth knowing about, though it will not stop you: `refnames`
+(`PipelineRerunNIRCAM-LONG.py`) is read with `.get()`, so an unregistered
+proposal silently passes `refname=None` into the alignment step rather than
+failing.
 
 > This is the single biggest obstacle to using the pipeline on a new field, and
 > it is a known problem rather than a design. A registry that these six read
