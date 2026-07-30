@@ -3,7 +3,6 @@ import time
 import datetime
 import os
 import re
-import sys
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from astropy.io import fits
@@ -95,6 +94,43 @@ obs_filters_niriss = {
     # Sgr C 4147 obs 012 NIRISS imaging.
     'sgrc': {'4147': ['f158m', 'f200w', 'f356w', 'f480m']},
 }
+
+
+# Per-frame catalog suffix written by each photometry method.
+INDIV_MERGE_SUFFIX = {'crowdsource': '_nsky0',
+                      'dao': '_basic',
+                      'daoiterative': '_iterative',
+                      'iterative': '_iterative',
+                      }
+
+# Which all-filter merges main() runs, and what a failure means.
+#   'raise'      -- any failure stops the run
+#   'missing-ok' -- tolerate "no inputs found", raise on anything else
+#   'skip'       -- never fatal; these products are optional
+CROWDSOURCE_MERGES = (('', 'skip'), ('_nsky0', 'raise'), ('_unweighted', 'skip'))
+DAOPHOT_MERGES = (('basic', 'missing-ok'), ('iterative', 'skip'))
+
+_MISSING_INPUT_MESSAGES = ('No tables found', 'had no matches',
+                           'had different n(imgs)')
+
+
+def _run_merge(merge_func, label, on_error, **kwargs):
+    """Run one all-filter merge under the `on_error` policy above."""
+    print(f'{label}: starting', flush=True)
+    try:
+        merge_func(**kwargs)
+    except (ValueError, NotImplementedError, OSError, KeyError) as ex:
+        missing = any(msg in str(ex) for msg in _MISSING_INPUT_MESSAGES)
+        if on_error == 'raise' or (on_error == 'missing-ok' and not missing):
+            raise
+        print(f'{label}: skipped ({type(ex).__name__}: {ex})', flush=True)
+
+
+def individual_frame_merge_jobs(target):
+    """The (program, filter) pairs to merge, in SLURM array-index order."""
+    return [(progid, filtername)
+            for progid, filternames in _obs_filters_for(target).items()
+            for filtername in filternames]
 
 
 def _obs_filters_for(target):
@@ -2850,12 +2886,12 @@ def main():
                       default=False,
                       action="store_true",
                       help="skip_daophot", metavar="skip_daophot")
-    parser.add_option("--strict-require-blur", dest="strict_require_blur",
-                      default=False,
-                      action="store_true",
-                      help="Fail if blur files are not found?", metavar="strict_require_blur")
     parser.add_option("--make-refcat", dest='make_refcat', default=False,
                       action='store_true')
+    parser.add_option('--list-jobs', dest='list_jobs', default=False,
+                      action='store_true',
+                      help='Print the SLURM array index -> (program, filter) map '
+                           'and exit.')
     parser.add_option('--max-expnum', dest='max_expnum', default=24, type='int')
     parser.add_option('--indiv-merge-methods', dest='indiv_merge_methods', default='dao,crowdsource,daoiterative')
     parser.add_option('--iteration-label', dest='iteration_label', default=None,
@@ -2911,182 +2947,84 @@ def main():
                       '6778': None,  # NGC 6334 (Garcia Marin); alignment done in imaging
     }
 
-    # need to have incrementing _before_ test
-    index = -1
+    module = modules[0]
+    if len(modules) > 1:
+        print(f"merging module={module} only; rerun with "
+              f"--modules={','.join(modules[1:])} for the rest")
 
-    for module in modules:
-        for desat in (False, True):
-            for bgsub in (False, True):
-                for epsf in (False, True):
-                    for fitpsf in (False, True):
-                        for blur in (False, True):
+    # Step 1: per-(program, filter) merge of the individual-frame catalogs.
+    # This list is the SLURM array axis -- task N runs job N.  --list-jobs
+    # prints the map so the --array bounds can be checked before submitting.
+    jobs = individual_frame_merge_jobs(target) if options.merge_singlefields else []
+    if options.list_jobs:
+        for index, (progid, filtername) in enumerate(jobs):
+            print(f"{index}\t{progid}\t{filtername}")
+        return
 
-                            if options.merge_singlefields:
-                                singlefield_done = False
-                                for progid in _obs_filters_for(target):
-                                    for filtername in (_obs_filters_for(target)[progid]):
-                                        if singlefield_done:
-                                            # skip ahead to merge-all-indiv step
-                                            continue
-                                        index += 1
-                                        print(index, filtername, progid)
-                                        # enable array jobs based only on filters
-                                        if os.getenv('SLURM_ARRAY_TASK_ID') is not None and int(os.getenv('SLURM_ARRAY_TASK_ID')) != index:
-                                            print(f'Task={os.getenv("SLURM_ARRAY_TASK_ID")} does not match index {index}')
-                                            continue
+    task_id = os.getenv('SLURM_ARRAY_TASK_ID')
+    task_id = int(task_id) if task_id is not None else None
+    if task_id is not None and task_id >= len(jobs):
+        raise ValueError(f"SLURM_ARRAY_TASK_ID={task_id} is past the last job "
+                         f"({len(jobs) - 1}); fix the --array bounds "
+                         f"(--list-jobs prints the map)")
 
-                                        for method in indiv_merge_methods:
-                                            print(method)
-                                            # could loop & also do _iterative...
-                                            suffix = {'crowdsource': '_nsky0',
-                                                      'dao': '_basic',
-                                                      'daoiterative': '_iterative',
-                                                      'iterative': '_iterative',
-                                                      }[method]
-                                            try:
-                                                merge_individual_frames(module=module,
-                                                                        desat=desat,
-                                                                        filtername=filtername,
-                                                                        progid=progid,
-                                                                        bgsub=bgsub,
-                                                                        epsf=epsf,
-                                                                        fitpsf=fitpsf,
-                                                                        blur=blur,
-                                                                        suffix=suffix,
-                                                                        target=target,
-                                                                        exposure_numbers=np.arange(1, options.max_expnum + 1),
-                                                                        offsets_table=offsets_tables[progid],
-                                                                        method=method,
-                                                                        iteration_label=options.iteration_label,
-                                                                        resbgsub=options.resbgsub,
-                                                                        basepath=basepath,
-                                                                        n_spatial_chunks=int(options.n_spatial_chunks),
-                                                                        field=options.field,
-                                                                        merge_workers=int(options.merge_workers))
-                                            except ValueError as ex:
-                                                if blur and not options.strict_require_blur:
-                                                    print("Skipping missing blur files")
-                                                elif 'No tables found' in str(ex):
-                                                    # This filter has zero per-frame catalogs for
-                                                    # this run -- skip it, don't kill the whole merge.
-                                                    # Legitimate cases: a per-obs merge where the obs
-                                                    # lacks the filter (gc2211 o023 has no F150W), OR a
-                                                    # target whose filter list includes bands not
-                                                    # cataloged in this pass (brick's 2221 list carries
-                                                    # MIRI f2550w, absent from the NIRCam m7 run).
-                                                    print(f"Skipping {filtername} (prog {progid}): no per-frame "
-                                                          f"catalogs found, continuing ({ex})", flush=True)
-                                                else:
-                                                    raise ex
-                                            print(f"Finished merge_individual_frames {suffix} {progid} {filtername} {method}")
-                                            if os.getenv('SLURM_ARRAY_TASK_ID') is not None:
-                                                singlefield_done = True
+    for index, (progid, filtername) in enumerate(jobs):
+        if task_id not in (None, index):
+            continue
+        for method in indiv_merge_methods:
+            print(f"[{index}] merge_individual_frames {progid} {filtername} "
+                  f"{method}", flush=True)
+            try:
+                merge_individual_frames(
+                    module=module, filtername=filtername, progid=progid,
+                    suffix=INDIV_MERGE_SUFFIX[method], method=method,
+                    target=target, basepath=basepath, field=options.field,
+                    exposure_numbers=np.arange(1, options.max_expnum + 1),
+                    offsets_table=offsets_tables[progid],
+                    iteration_label=options.iteration_label,
+                    resbgsub=options.resbgsub,
+                    n_spatial_chunks=int(options.n_spatial_chunks),
+                    merge_workers=int(options.merge_workers))
+            except ValueError as ex:
+                # A filter with no per-frame catalogs is normal -- the obs may
+                # not have that filter, or this pass cataloged one instrument
+                # while the target's filter list covers several.
+                if 'No tables found' not in str(ex):
+                    raise
+                print(f"  no per-frame catalogs for {filtername} ({progid}); "
+                      f"skipping", flush=True)
 
-                            else:
-                                index += 1
+    # Step 2: the all-filter merged catalogs, once.
+    merge_kwargs = dict(module=module, target=target, basepath=basepath,
+                        indivexp=options.merge_singlefields,
+                        resbgsub=options.resbgsub,
+                        iteration_label=options.iteration_label)
+    if not options.skip_crowdsource:
+        t0 = time.time()
+        for suffix, on_error in CROWDSOURCE_MERGES:
+            _run_merge(merge_crowdsource, f'crowdsource{suffix or " (no suffix)"}',
+                       on_error, suffix=suffix, **merge_kwargs)
+        print(f'crowdsource phase done, {time.time() - t0:.0f}s')
 
-                            # enable array jobs
-                            if os.getenv('SLURM_ARRAY_TASK_ID') is not None and int(os.getenv('SLURM_ARRAY_TASK_ID')) != index:
-                                print(f'Task={os.getenv("SLURM_ARRAY_TASK_ID")} does not match index {index}')
-                                continue
-
-                            t0 = time.time()
-                            print(f"Index {index}")
-                            if not options.skip_crowdsource:
-                                print(f'crowdsource {module} desat={desat} bgsub={bgsub} epsf={epsf} blur={blur} fitpsf={fitpsf} target={target}. ', flush=True)
-                                try:
-                                    merge_crowdsource(module=module, desat=desat, bgsub=bgsub, epsf=epsf,
-                                                      fitpsf=fitpsf, target=target, basepath=basepath, blur=blur, indivexp=options.merge_singlefields,
-                                                      resbgsub=options.resbgsub,
-                                                      iteration_label=options.iteration_label)
-                                except Exception as ex:
-                                    print(f"Living with this error: {ex}, {type(ex)}, {str(ex)}")
-                                try:
-                                    for suffix in ("_nsky0", ):#"_nsky15"): "_nsky1",
-                                        print(f'crowdsource {suffix} {module}')
-                                        merge_crowdsource(module=module, suffix=suffix, desat=desat, bgsub=bgsub, epsf=epsf,
-                                                          fitpsf=fitpsf, target=target, basepath=basepath, blur=blur, indivexp=options.merge_singlefields,
-                                                          resbgsub=options.resbgsub,
-                                                          iteration_label=options.iteration_label)
-                                except Exception as ex:
-                                    print(f"Exception: {ex}, {type(ex)}, {str(ex)}")
-                                    exc_type, exc_obj, exc_tb = sys.exc_info()
-                                    print(f"Exception occurred on line {exc_tb.tb_lineno}")
-                                    raise ex
-
-                                try:
-                                    print(f'crowdsource unweighted {module}', flush=True)
-                                    merge_crowdsource(module=module, suffix='_unweighted', desat=desat, bgsub=bgsub, epsf=epsf,
-                                                      fitpsf=fitpsf, target=target, basepath=basepath, blur=blur, indivexp=options.merge_singlefields,
-                                                      resbgsub=options.resbgsub,
-                                                      iteration_label=options.iteration_label)
-                                except NotImplementedError:
-                                    continue
-                                except Exception as ex:
-                                    print(f"Exception for unweighted crowdsource: {ex}, {type(ex)}, {str(ex)}")
-                                    #raise ex
-
-                                print(f'crowdsource phase done.  time elapsed={time.time()-t0}')
-
-                            if not options.skip_daophot:
-                                t0 = time.time()
-                                print("DAOPHOT")
-                                print(f'daophot basic {module} desat={desat} bgsub={bgsub} epsf={epsf} blur={blur} fitpsf={fitpsf} target={target}', flush=True)
-                                try:
-                                    merge_daophot(daophot_type='basic', module=module, desat=desat,
-                                                  bgsub=bgsub, epsf=epsf,
-                                                  target=target, basepath=basepath, blur=blur, indivexp=options.merge_singlefields,
-                                                  ref_filter=options.ref_filter,
-                                                  resbgsub=options.resbgsub,
-                                                  iteration_label=options.iteration_label)
-                                except Exception as ex:
-                                    print(f'daophot basic {module} desat={desat} bgsub={bgsub} epsf={epsf} blur={blur} fitpsf={fitpsf} target={target}', flush=True)
-                                    if blur and not options.strict_require_blur:
-                                        print("Skipping missing blur files")
-                                    elif isinstance(ex, ValueError) and 'had no matches' in str(ex):
-                                        print(f"Skipping missing daophot basic catalogs (only daoiterative was run): {ex}", flush=True)
-                                    else:
-                                        print(f"Exception when running merge_daophot: {ex}, {type(ex)}, {str(ex)}", flush=True)
-                                        exc_tb = sys.exc_info()[2]
-                                        fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
-                                        print(f"Exception {ex} was in {fname} line {exc_tb.tb_lineno}", flush=True)
-                                        print(f"Exception {ex} was in {fname} line {exc_tb.tb_next.tb_lineno}", flush=True)
-                                        raise ex
-                                try:
-                                    print(f'daophot iterative {module} desat={desat} bgsub={bgsub} epsf={epsf} blur={blur} fitpsf={fitpsf} target={target}', flush=True)
-                                    merge_daophot(daophot_type='iterative', module=module, desat=desat,
-                                                  bgsub=bgsub, epsf=epsf,
-                                                  target=target, basepath=basepath, blur=blur, indivexp=options.merge_singlefields,
-                                                  ref_filter=options.ref_filter,
-                                                  resbgsub=options.resbgsub,
-                                                  iteration_label=options.iteration_label)
-                                except Exception as ex:
-                                    if blur and not options.strict_require_blur:
-                                        print("Skipping missing blur files")
-                                    else:
-                                        print(f"Exception running merge daophot iterative: {ex}, {type(ex)}, {str(ex)}", flush=True)
-                                        exc_tb = sys.exc_info()[2]
-                                        fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
-                                        print(f"Exception {ex} was in {fname} line {exc_tb.tb_lineno}", flush=True)
-                                print(f'dao phase done.  time elapsed={time.time()-t0}')
-                                print()
-
-                            if os.getenv('SLURM_ARRAY_TASK_ID') is None:
-                                if options.make_refcat:
-                                    raise Exception("make_refcat is not supported with SLURM_ARRAY_TASK_ID")
-                                return
+    if not options.skip_daophot:
+        t0 = time.time()
+        for daophot_type, on_error in DAOPHOT_MERGES:
+            _run_merge(merge_daophot, f'daophot {daophot_type}', on_error,
+                       daophot_type=daophot_type, ref_filter=options.ref_filter,
+                       **merge_kwargs)
+        print(f'daophot phase done, {time.time() - t0:.0f}s')
 
     if options.make_refcat:
-        import make_reftable
+        from jwst_gc_pipeline.photometry import make_reftable
         make_reftable.main()
 
-    # Tailing registration failsafe: a full all-band merge just finished, so this is
-    # the first moment a whole-field cross-band scan is meaningful. Catches a
-    # brick-1182-style LOCALIZED misregistration (a half-mosaic grossly shifted while
-    # the bulk offset reads ~0) at build time instead of at release. Opt-in and non-fatal by
-    # default so it can never wedge a run or disrupt in-flight remediation chains:
-    #   RUN_REGISTRATION_GATE=1          -> run it, WARN on FAIL
-    #   REGISTRATION_GATE_STRICT=1       -> also RAISE on FAIL (hard gate)
+    # A whole-field cross-band scan is only meaningful once every band is
+    # merged, so it runs here.  Catches a brick-1182-style local
+    # misregistration (half a mosaic shifted while the field-average offset
+    # reads ~0) at build time rather than at release.  Off by default so it
+    # cannot wedge a run:
+    #   RUN_REGISTRATION_GATE=1     -> run it, warn on FAIL
+    #   REGISTRATION_GATE_STRICT=1  -> also raise on FAIL
     if os.environ.get('RUN_REGISTRATION_GATE') == '1':
         from jwst_gc_pipeline.photometry.registration_gate import run_registration_gate
         strict = os.environ.get('REGISTRATION_GATE_STRICT') == '1'
