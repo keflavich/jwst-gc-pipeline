@@ -32,6 +32,8 @@ ABMAG_OFFSET = 8.90
 # flags-based bgsub token is imported as ``_bgsub_token`` (this module calls it
 # with explicit booleans, matching the producer-side names).
 from jwst_gc_pipeline.frame_wcs import frame_wcs
+from jwst_gc_pipeline.photometry.residual_background import (
+    RESBKG_COLUMNS, combine_frames as combine_resbkg_frames)
 from jwst_gc_pipeline.photometry.naming import (
     _inst_token, _svo_filter_id,
     _bgsub_token_from_flags as _bgsub_token,
@@ -408,7 +410,7 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
         flux_colname = 'flux_fit'
         # skycoord comes in as skycoord_centroid but we want it to leave as skycoord
         skycoord_colname = 'skycoord_centroid'
-        column_names = (flux_colname, flux_error_colname, 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'iter_detected', 'group_id', 'group_size', 'ra', 'dec', 'dra', 'ddec', )
+        column_names = (flux_colname, flux_error_colname, 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'iter_detected', 'group_id', 'group_size', 'ra', 'dec', 'dra', 'ddec', ) + RESBKG_COLUMNS
 
     # Loop 1: Add new sources, which are any that don't have a match in the existing catalog closer than min_offset
     # this loop _only_ adds new sources
@@ -752,8 +754,12 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     # Phase 2: stream the remaining columns one at a time.
     # ra/dec are skipped because their summaries are already in newtbl
     # (skycoord_avg, std_ra, std_dec).  flux and flux_err are already done.
+    # The resbkg_* columns are excluded here and combined separately below:
+    # Phase 2 weights everything by inverse FLUX variance, which is the wrong
+    # weight for a background measurement (a bright star does not make its own
+    # sky better determined).  They get npix/rms**2 instead.
     already_done = {flux_colname, flux_error_colname, 'ra', 'dec',
-                    'skycoord', skycoord_colname}
+                    'skycoord', skycoord_colname} | set(RESBKG_COLUMNS)
     _p2_cols = [k for k in column_names
                 if k not in already_done and k in tbls[0].colnames]
     print(f"Phase 2: streaming {len(_p2_cols)} remaining columns one at a time "
@@ -792,6 +798,40 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
         del arr
         print(f"  Phase 2 [{_ci}] column {key!r}: DONE (std {time.time()-_t_mean:.1f}s, "
               f"total {time.time()-_t0:.1f}s)", flush=True)
+
+    # --- residual-footprint background: dedicated inverse-variance combine ---
+    # Sigma-clipped across frames, weighted by npix/rms**2 (the inverse variance
+    # of each footprint's MEAN), not by flux error.  See
+    # photometry/residual_background.py.
+    if all(k in tbls[0].colnames for k in RESBKG_COLUMNS):
+        _t0 = time.time()
+        print(f"Residual-footprint background: stacking {len(RESBKG_COLUMNS)} "
+              f"columns ({n_src}x{n_tbl}) for the weighted combine...", flush=True)
+        _stack = {}
+        for key in RESBKG_COLUMNS:
+            _a = np.full((n_src, n_tbl), np.nan, dtype='float32')
+            for ii, tbl in enumerate(tbls):
+                if key not in tbl.colnames:
+                    continue
+                keep = saved_keep[ii]
+                mi = saved_match_inds[ii]
+                _a[mi[keep], ii] = tbl[key][keep]
+            _stack[key] = _a
+        # npix is a count: absent frames must read 0, not NaN
+        _stack['resbkg_npix'] = np.nan_to_num(_stack['resbkg_npix'], nan=0.0)
+        _combined = combine_resbkg_frames(_stack['resbkg_mean'],
+                                          _stack['resbkg_rms'],
+                                          _stack['resbkg_npix'])
+        for _k, _v in _combined.items():
+            newtbl[_k] = _v
+        newtbl.meta['resbkg'] = (
+            'mean/RMS of a small footprint on the star-subtracted residual; '
+            'combined across frames as a sigma-clipped average weighted by '
+            'npix/rms**2. Diagnostic; not used by the flux fit.')
+        del _stack
+        _n_ok = int(np.isfinite(_combined['resbkg_mean_avg']).sum())
+        print(f"Residual-footprint background: {_n_ok}/{n_src} sources combined "
+              f"in {time.time()-_t0:.1f}s", flush=True)
 
     # weights, keepmask, saved_match_inds, saved_keep kept until function
     # return; Python will free them after caller drops newtbl reference.
@@ -1293,7 +1333,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
         # flux_colname = 'flux_fit'
     elif method in ('dao', 'daophot', 'basic', 'daobasic', 'iterative', 'daoiterative'):
         flux_error_colname = 'flux_err'
-        column_names = ('flux_fit', flux_error_colname, 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'iter_detected', 'group_size')
+        column_names = ('flux_fit', flux_error_colname, 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'iter_detected', 'group_size') + RESBKG_COLUMNS
         # flux_colname = 'flux'
         method_suffix = 'daophot'
     else:

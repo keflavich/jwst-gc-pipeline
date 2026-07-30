@@ -40,6 +40,8 @@ from jwst_gc_pipeline.photometry.naming import (
     _iteration_token, _bgsub_token,
     residual_to_smoothed_bg_i2d, smoothed_bg_to_detection_i2d, vetted_to_i2dseed)
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS, mopt
+from jwst_gc_pipeline.photometry.residual_background import (
+    measure_footprint_background)
 from jwst_gc_pipeline.photometry.psf_fitting import (
     _make_psfphotometry, _make_model_image, _dedup_close_sources,
     forced_psf_photometry,
@@ -1920,6 +1922,42 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         module=module, pupil=pupil)
 
 
+def _attach_residual_background(result, residual, ctx, options, label=''):
+    """Add ``resbkg_mean``/``resbkg_rms``/``resbkg_npix`` to a per-frame catalog.
+
+    Measured on the star-subtracted residual, so it traces the extended
+    emission at each source rather than the surrounding stars.  See
+    ``photometry/residual_background.py`` for why this is kept separate from
+    photutils' annulus ``local_bkg`` instead of replacing it.
+
+    FAIL-SOFT: this is a diagnostic column set.  A failure here must not lose a
+    frame's photometry, so the columns are simply absent if it cannot run.
+    """
+    if not bool(mopt(options, 'manual_residual_background')):
+        return result
+    if 'x_fit' not in result.colnames or len(result) == 0:
+        return result
+    try:
+        box = int(mopt(options, 'manual_residual_background_box'))
+        mean, rms, npix = measure_footprint_background(
+            residual, np.asarray(result['x_fit'], dtype=float),
+            np.asarray(result['y_fit'], dtype=float),
+            box=box, mask=ctx.mask)
+    except (ValueError, IndexError, TypeError) as exc:
+        print(f"[{label}] residual-footprint background skipped: "
+              f"{type(exc).__name__}: {exc}", flush=True)
+        return result
+    result['resbkg_mean'] = mean
+    result['resbkg_rms'] = rms
+    result['resbkg_npix'] = npix
+    result.meta['RESBKGBX'] = (box, 'residual background footprint (px)')
+    n_ok = int(np.isfinite(mean).sum())
+    print(f"[{label}] residual-footprint background ({box}x{box}): "
+          f"{n_ok}/{len(result)} measured, median "
+          f"{np.nanmedian(mean) if n_ok else float('nan'):.4g}", flush=True)
+    return result
+
+
 def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
     """Write the per-frame catalog (``save_photutils_results``) + residual +
     model for one manual pass, with the manual ``_m{N}`` iteration token.  The
@@ -1929,6 +1967,20 @@ def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
     """
     iter_ = _iteration_token(iteration_label)
     bp = ctx.out_basepath
+
+    # Residual-footprint background (Jay Anderson 3x3 convention).  Built from
+    # the SAME residual that is written below -- pristine data minus the satstar
+    # model minus the star-only model -- so it measures the extended emission at
+    # the source position rather than the neighbour-contaminated annulus that
+    # photutils' LocalBackground uses.  Diagnostic only; nothing here feeds back
+    # into the flux fit.  Computed BEFORE save_photutils_results because that
+    # function drops rows with bad x_fit, and the columns must be filtered with
+    # them rather than misaligned afterwards.
+    _resbkg_base = (ctx.original_data if ctx.satstar_model_subtracted is None
+                    else ctx.original_data - ctx.satstar_model_subtracted)
+    _residual_for_bkg = _resbkg_base - modsky
+    _attach_residual_background(result, _residual_for_bkg, ctx, options, label=iteration_label)
+
     saved = _L.save_photutils_results(
         result, ctx.ww, ctx.filename, im1=ctx.im1, detector=detector,
         basepath=bp, filtername=ctx.filtername, module=ctx.module,
@@ -1938,9 +1990,7 @@ def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
         group=ctx.group, psf=None, background_map=ctx.background_map,
         iteration_label=iteration_label)
 
-    base = (ctx.original_data if ctx.satstar_model_subtracted is None
-            else ctx.original_data - ctx.satstar_model_subtracted)
-    residual = base - modsky
+    residual = _residual_for_bkg
     stub = (f'{bp}/{ctx.filtername}/pipeline/jw0{ctx.proposal_id}-o{ctx.field}_t001_'
             f'{ctx.inst_token}_{ctx.pupil}-{ctx.filtername.lower()}-{ctx.module}'
             f'{ctx.visitid_}{ctx.vgroupid_}{ctx.exposure_}{ctx.desat}{ctx.bgsub}'
