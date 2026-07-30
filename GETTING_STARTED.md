@@ -9,9 +9,11 @@ catalogs. Three stages, in order:
 | **catalog** | detect + PSF-fit each exposure, iteratively → per-frame catalogs | `python -m jwst_gc_pipeline.photometry.crowdsource_catalogs_long` |
 | **merge** | combine per-frame catalogs across exposures and filters | `python -m jwst_gc_pipeline.photometry.merge_catalogs` |
 
-Merge is not quite the end: cross-band products need the **m8** forced-fill pass
-(`scripts/reduction/submit_cataloging_m8*.sbatch`, described in
-`PHOTOMETRY_PIPELINE.md`).
+The catalog stage runs the whole phase ladder itself, including the m7
+cross-band merge and the **m8** forced fill, which is on by default
+(`--no-forced-fill-m8` turns it off). The `submit_cataloging_m8*.sbatch`
+scripts are a walltime split for fields too big for one job — not an extra step
+you have to remember.
 
 **Read this first if you are not on HiPerGator: [Running elsewhere](#running-elsewhere)
 — the honest answer is "partly".**
@@ -78,12 +80,18 @@ are missing:
 └── catalogs/                   must exist; merged catalogs land here
 ```
 
-Put your `_cal` (or `_rate`) frames under `<basepath>/<FILTER>/pipeline/` before
-running stage 1. A missing `reduction/fwhm_table.ecsv` stops stage 1 at once —
-copy `jwst_gc_pipeline/reduction/fwhm_table.ecsv` from the package rather than
-building your own.
-`mkdir` `psfs/` and `catalogs/` yourself — the code writes into them without
-creating them (only cutout runs `makedirs`).
+Before running stage 1:
+
+- **Frames.** Put your `_cal` (or `_rate`) files in `<basepath>/<FILTER>/pipeline/`.
+- **An Image3 association file** next to them, named
+  `jw0<proposal>-o<obs>*_image3_*_asn.json`. Stage 1 globs for one; finding
+  none, it queries MAST and starts downloading the whole program, with no
+  warning that it is doing so.
+- **The FWHM table.** Copy `jwst_gc_pipeline/reduction/fwhm_table.ecsv` from the
+  package to `<basepath>/reduction/`. Stage 1 reads it before writing anything
+  and stops at once if it is absent.
+- **`mkdir psfs catalogs`.** The code writes into both without creating them
+  (only cutout runs call `makedirs`).
 
 The FOV region file is a **MIRI** input. The NIRCam driver still looks it up,
 but the value feeds the VVV realignment step that was retired in July 2026 and
