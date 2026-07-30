@@ -52,7 +52,7 @@ roundness/sharpness bounds.
 | pass | round | sharp | local-S/N | S/N filter |
 |------|-------|-------|-----------|------------|
 | m1 (discover) | ±1.0 | 0.30–1.40 | 5.0 | off |
-| m2+ | ±0.3 | 0.50–1.00 | 3.0 | on |
+| m2+ | ±1.0 | 0.50–1.00 | 3.0 | on |
 
 The co-add-augmented seed (m3+) runs a second `daofind` on the detection co-add
 with `round ≤ 0.5`, `sharp 0.4–1.2`, deduped at `0.5 × FWHM`. FWHM is per-filter
@@ -97,7 +97,8 @@ Post-fit, in order:
 (qfit ≤ 0.2) OR (peakSB > 20 × local_bkg) OR (snr ≥ 20 AND qfit < 0.4 AND solo)
 ```
 
-**and** it clears `local-S/N ≥ 5`; then drops anything flagged overshoot.
+**and** it clears `local-S/N ≥ 5` — **or** it is qfit-confident (`qfit ≤ 0.2`),
+which bypasses the S/N floor; then drops anything flagged overshoot.
 **MIRI** vets on data-co-add `prominence = (core − annulus_median)/annulus_MAD ≥
 threshold`.
 
@@ -110,6 +111,7 @@ threshold`.
 | **MIRI** | (5, 8) m12–m4, (3, 8) m5–m6 | 51 (raw passes) | 0.4 | 8 → 3 | 8 → 3 across m12→m6 |
 
 Extended-emission handling auto-engages on those targets (`--extended-emission` /
-`--no-extended-emission` to force). Grouping, frame-0 recovery, and cross-band
-confirmation are opt-in everywhere.
-</content>
+`--no-extended-emission` to force). Grouping and frame-0 recovery are opt-in
+everywhere; cross-band confirmation is the DEFAULT
+(`--manual-crossband-seed-min-filters=2`). On the extended-emission targets a
+prominence gate also auto-engages at 3.0 (`--manual-ext-prom-min=-1` = AUTO).

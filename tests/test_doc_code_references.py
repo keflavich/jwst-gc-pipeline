@@ -443,3 +443,129 @@ def test_allowlist_is_earned(tracked_paths):
         if not re.search(r'(as[- ]of|HISTORICAL|not maintained|snapshot)', text[:2000], re.I):
             problems.append(f'{doc}: no "as-of/historical" banner near the top')
     assert not problems, 'LINE_CITATION_ALLOWLIST has rotted:\n  ' + '\n  '.join(problems)
+
+
+# ---------------------------------------------------------------------------
+# rule 4c -- documented photometry defaults vs MANUAL_DEFAULTS
+# ---------------------------------------------------------------------------
+
+def _flag_to_dest():
+    """``{'--manual-x': 'manual_x'}`` from the parser source (no import)."""
+    src = os.path.join(REPO, 'jwst_gc_pipeline/photometry/crowdsource_catalogs_long.py')
+    tree = ast.parse(open(src, errors='replace').read())
+    out = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or getattr(node.func, 'attr', None) != 'add_option':
+            continue
+        kw = {k.arg: k.value for k in node.keywords}
+        dest = kw.get('dest')
+        if not isinstance(dest, ast.Constant):
+            continue
+        for arg in node.args:
+            if isinstance(arg, ast.Constant) and str(arg.value).startswith('--'):
+                out[arg.value] = dest.value
+    return out
+
+
+def _as_number(cell):
+    cell = cell.replace('**', '').replace('`', '').strip()
+    cell = cell.replace('−', '-').replace('–', '-')
+    m = re.fullmatch(r'([+-]?\d+(?:\.\d+)?)', cell)
+    return float(m.group(1)) if m else None
+
+
+def test_documented_photometry_defaults_match_manual_defaults():
+    """Every Table-B default cell that names a MANUAL_DEFAULTS knob must match.
+
+    The 2026-07-30 audit compared only numeric cells in flag-keyed rows and
+    reported "0 mismatches"; the daofind window was documented as +-0.3 while
+    MANUAL_DEFAULTS had carried -+1.0 since 2026-07-07, in a PHASE-keyed table the
+    checker never looked at.  Both shapes are covered here.
+    """
+    from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
+
+    flag_to_dest = _flag_to_dest()
+    doc = 'PHOTOMETRY_PIPELINE.md'
+    text = open(os.path.join(REPO, doc), errors='replace').read()
+
+    mismatches, checked = [], 0
+    for lineno, line in enumerate(text.splitlines(), 1):
+        line = line.strip()
+        if not line.startswith('|'):
+            continue
+        cells = [c.strip() for c in line.strip('|').split('|')]
+        m = re.match(r'^`?(--[\w\-]+)`?', cells[0])
+        if not m or len(cells) < 2:
+            continue
+        dest = flag_to_dest.get(m.group(1))
+        if dest not in MANUAL_DEFAULTS:
+            continue
+        want = MANUAL_DEFAULTS[dest]
+        if not isinstance(want, (int, float)) or isinstance(want, bool):
+            continue
+        # A row may document a pair ("-1.0 / 1.0") for two knobs; accept a match
+        # against any number in the default cell.
+        nums = [_as_number(tok) for tok in re.split(r'[/,]', cells[1])]
+        nums = [n for n in nums if n is not None]
+        if not nums:
+            continue
+        checked += 1
+        if not any(abs(n - float(want)) < 1e-9 for n in nums):
+            mismatches.append(f'{doc}:{lineno}: {m.group(1)} doc={cells[1]!r} '
+                              f'code={want} (MANUAL_DEFAULTS[{dest!r}])')
+
+    assert checked, 'parsed no flag-keyed default rows out of Table B'
+    assert not mismatches, ('documented defaults disagree with MANUAL_DEFAULTS:\n  '
+                            + '\n  '.join(mismatches))
+
+
+def test_daofind_phase_table_matches_code():
+    """The PHASE-keyed daofind table (m1 / m2 / m3..m7) must match the code.
+
+    m1's window is hard-coded in ``cataloging.py``; m2+ come from
+    MANUAL_DEFAULTS.  This is the table that carried the wrong roundness window.
+    """
+    from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
+
+    text = open(os.path.join(REPO, 'PHOTOMETRY_PIPELINE.md'), errors='replace').read()
+    head = '| pass | round lo/hi | sharp lo/hi |'
+    if head not in text:
+        pytest.fail('daofind phase table not found -- update this guard')
+    seg = text[text.index(head):]
+    seg = seg[:seg.index('\n\n')]
+
+    rows = {}
+    for line in seg.splitlines():
+        cells = [c.strip() for c in line.strip().strip('|').split('|')]
+        if len(cells) < 4 or cells[0].startswith('pass') or set(''.join(cells)) <= set('-: '):
+            continue
+        def pair(cell):
+            vals = [_as_number(t) for t in re.split(r'[/,]', cell)]
+            return [v for v in vals if v is not None]
+        rows[cells[0]] = (pair(cells[1]), pair(cells[2]), pair(cells[3]))
+
+    m1 = next((v for k, v in rows.items() if k.startswith('m1')), None)
+    assert m1, f'no m1 row parsed from {sorted(rows)}'
+    assert m1[0] == [-1.0, 1.0], f'm1 roundness documented {m1[0]}, code hard-codes [-1.0, 1.0]'
+    assert m1[1] == [0.30, 1.40], f'm1 sharpness documented {m1[1]}, code hard-codes [0.30, 1.40]'
+
+    want_round = [MANUAL_DEFAULTS['manual_resid_roundlo'], MANUAL_DEFAULTS['manual_resid_roundhi']]
+    want_sharp = [MANUAL_DEFAULTS['manual_resid_sharplo'], MANUAL_DEFAULTS['manual_resid_sharphi']]
+    want_snr = MANUAL_DEFAULTS['manual_iter2_local_snr']
+    later = {k: v for k, v in rows.items() if not k.startswith('m1')}
+    assert later, 'no m2+ rows parsed'
+    for name, (rnd, shp, snr) in later.items():
+        assert rnd == want_round, f'{name}: roundness doc={rnd} code={want_round}'
+        assert shp == want_sharp, f'{name}: sharpness doc={shp} code={want_sharp}'
+        assert snr == [want_snr], f'{name}: local-S/N doc={snr} code=[{want_snr}]'
+
+
+def test_no_leaked_tool_markup_in_docs(docs):
+    """`</content>` / `</invoke>` pasted into a doc is a broken artifact."""
+    offenders = []
+    for doc in docs:
+        for lineno, line in enumerate(
+                open(os.path.join(REPO, doc), errors='replace').read().splitlines(), 1):
+            if re.search(r'</?(?:content|invoke|antml:\w+)\b', line):
+                offenders.append(f'{doc}:{lineno}: {line.strip()[:60]}')
+    assert not offenders, 'leaked tool-call markup in docs:\n  ' + '\n  '.join(offenders)

@@ -60,8 +60,17 @@ or the `ALLOW_*` overrides without a written justification.
 ---
 
 ## 1. Absolute frame
-- Each mosaic ties to VIRAC2 (PM-propagated to obs epoch) `< ~30 mas` bulk, per-tile,
-  high contrast; per-visit (not just whole-mosaic). VIRAC2 & Gaia agree.
+- Each mosaic ties to VIRAC2 (PM-propagated to obs epoch) bulk, per-tile, high
+  contrast; per-visit (not just whole-mosaic). VIRAC2 & Gaia agree.
+- **Enforced tolerance: `FRAME_TOL_MAS = 15.0`** in `stage_release.py`
+  (`check_catalog_on_frame`, catalog vs the Gaia-tied refcat) — tighter than the
+  `~30 mas` this item used to quote, so a 25 mas tie that reads "acceptable" here
+  is hard-refused by the gate.
+- ⚠ **This gate only runs where a refcat is mapped.** `FRAME_REFCAT` in
+  `stage_release.py` currently contains **`brick` only**; for every other field
+  `check_catalog_on_frame` returns `None` ("can't enforce → caller warns"), so item
+  1 is a warning, not a block. Add the field's Gaia-tied refcat there before
+  treating this as enforced.
 
 ## 1b. Astrometric frame + epoch declaration (BLOCKING)
 
@@ -80,7 +89,9 @@ can remove. A one-line frame/epoch statement makes this class of error visible
 at plan time.
 
 ## 2. Image ↔ catalog agreement
-- Released mosaic and its released catalog agree `< ~15 mas`, per tile — and both agree
+- Released mosaic and its released catalog agree — **enforced tolerance
+  `SAME_RUN_TOL_MAS = 30.0`, whole-image** (not per-tile; the per-tile check is item
+  2b, which blocks above 30 mas) — and both agree
   with the reference (not just with each other; a shared offset passes item 2 but fails
   item 1).
 
