@@ -110,8 +110,12 @@ INDIV_MERGE_SUFFIX = {'crowdsource': '_nsky0',
 CROWDSOURCE_MERGES = (('', 'skip'), ('_nsky0', 'raise'), ('_unweighted', 'skip'))
 DAOPHOT_MERGES = (('basic', 'missing-ok'), ('iterative', 'skip'))
 
+# The exact phrases the merge functions use when they find no inputs.
+# Checked against the raise sites: merge_individual_frames ("No tables found"),
+# merge_crowdsource ("had no matches" / "had different n(imgs)"),
+# merge_daophot ("No daophot <type> catalogs found across filters").
 _MISSING_INPUT_MESSAGES = ('No tables found', 'had no matches',
-                           'had different n(imgs)')
+                           'had different n(imgs)', 'catalogs found across filters')
 
 
 def _run_merge(merge_func, label, on_error, **kwargs):
@@ -2957,16 +2961,25 @@ def main():
     # prints the map so the --array bounds can be checked before submitting.
     jobs = individual_frame_merge_jobs(target) if options.merge_singlefields else []
     if options.list_jobs:
+        if not jobs:
+            print("no per-(program, filter) jobs: without --merge-singlefields "
+                  "this module runs as a single job (--array=0), the all-filter "
+                  "merges only")
         for index, (progid, filtername) in enumerate(jobs):
             print(f"{index}\t{progid}\t{filtername}")
         return
 
+    # Without --merge-singlefields there are no per-filter jobs, only the
+    # all-filter merges below -- one job, index 0.
     task_id = os.getenv('SLURM_ARRAY_TASK_ID')
     task_id = int(task_id) if task_id is not None else None
-    if task_id is not None and task_id >= len(jobs):
-        raise ValueError(f"SLURM_ARRAY_TASK_ID={task_id} is past the last job "
-                         f"({len(jobs) - 1}); fix the --array bounds "
-                         f"(--list-jobs prints the map)")
+    if task_id is not None and task_id >= max(len(jobs), 1):
+        raise ValueError(
+            f"SLURM_ARRAY_TASK_ID={task_id} is past the last job "
+            f"({max(len(jobs), 1) - 1}); fix the --array bounds "
+            f"(--list-jobs prints the map)"
+            + ("" if jobs else ". Add --merge-singlefields to get one job "
+                              "per (program, filter)"))
 
     for index, (progid, filtername) in enumerate(jobs):
         if task_id not in (None, index):
@@ -3015,8 +3028,16 @@ def main():
         print(f'daophot phase done, {time.time() - t0:.0f}s')
 
     if options.make_refcat:
-        from jwst_gc_pipeline.photometry import make_reftable
-        make_reftable.main()
+        # make_reftable measures its offsets as a nearest-neighbour median
+        # against a dense catalog, which raises DenseNNMedianAstrometryError
+        # (CLAUDE.md astrometry rule #1).  The old code could not run it either
+        # -- it raised without an array and its import path was wrong -- so
+        # nothing regresses here; say why instead of pretending.
+        raise NotImplementedError(
+            "--make-refcat is disabled: make_reftable.main() measures offsets "
+            "by nearest-neighbour median against a dense reference, which "
+            "astrometry rule #1 forbids.  Build reference catalogs with "
+            "make_reference_from_pipeline_catalogs.py instead.")
 
     # A whole-field cross-band scan is only meaningful once every band is
     # merged, so it runs here.  Catches a brick-1182-style local

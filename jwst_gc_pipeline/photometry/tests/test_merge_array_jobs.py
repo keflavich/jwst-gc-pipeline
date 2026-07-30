@@ -12,12 +12,28 @@ import pytest
 from jwst_gc_pipeline.photometry import merge_catalogs as MC
 
 
-def test_job_order_is_program_then_filter():
-    jobs = MC.individual_frame_merge_jobs('brick')
-    expected = [(progid, filt)
-                for progid, filts in MC.obs_filters['brick'].items()
-                for filt in filts]
-    assert jobs == expected
+def test_brick_job_order_is_pinned():
+    # Written out, not recomputed from obs_filters: reordering that dict must
+    # fail this test, because it silently moves every array task.
+    assert MC.individual_frame_merge_jobs('brick') == [
+        ('2221', 'f410m'), ('2221', 'f212n'), ('2221', 'f466n'),
+        ('2221', 'f405n'), ('2221', 'f187n'), ('2221', 'f182m'),
+        ('2221', 'f2550w'),
+        ('1182', 'f444w'), ('1182', 'f356w'), ('1182', 'f200w'),
+        ('1182', 'f115w'),
+    ]
+
+
+def test_job_list_follows_the_instrument_override(monkeypatch):
+    # main() reads _obs_filters_for(), which swaps in the NIRISS filter set.
+    # A job list built from the raw obs_filters dict would ignore that, and a
+    # NIRISS array job would land on the wrong filter.
+    sgrc_nircam = MC.individual_frame_merge_jobs('sgrc')
+    monkeypatch.setenv('GC_INSTRUMENT_OVERRIDE', 'niriss')
+    assert MC.individual_frame_merge_jobs('sgrc') == [
+        ('4147', 'f158m'), ('4147', 'f200w'),
+        ('4147', 'f356w'), ('4147', 'f480m')]
+    assert MC.individual_frame_merge_jobs('sgrc') != sgrc_nircam
 
 
 def test_every_target_has_a_job_list():
@@ -27,10 +43,11 @@ def test_every_target_has_a_job_list():
         assert len(set(jobs)) == len(jobs), f'{target} has duplicate jobs'
 
 
-def test_each_method_maps_to_a_suffix():
-    # main() indexes INDIV_MERGE_SUFFIX with the --indiv-merge-methods values.
-    for method in 'dao', 'crowdsource', 'daoiterative':
-        assert MC.INDIV_MERGE_SUFFIX[method].startswith('_')
+def test_method_suffixes_are_the_per_frame_filename_tokens():
+    assert MC.INDIV_MERGE_SUFFIX == {'crowdsource': '_nsky0',
+                                     'dao': '_basic',
+                                     'daoiterative': '_iterative',
+                                     'iterative': '_iterative'}
 
 
 def _boom(exc):
@@ -48,6 +65,16 @@ def test_missing_ok_swallows_only_missing_inputs():
     MC._run_merge(_boom(ValueError('had no matches')), 'x', 'missing-ok')
     with pytest.raises(ValueError):
         MC._run_merge(_boom(ValueError('column mismatch')), 'x', 'missing-ok')
+
+
+@pytest.mark.parametrize('message', MC._MISSING_INPUT_MESSAGES)
+def test_each_missing_input_phrase_is_one_a_merge_actually_raises(message):
+    # A phrase that no merge function emits makes 'missing-ok' dead code.
+    import inspect
+    source = inspect.getsource(MC)
+    raises = [ln for ln in source.splitlines() if message in ln]
+    assert raises, f'nothing in merge_catalogs raises {message!r}'
+    MC._run_merge(_boom(ValueError(f'... {message} ...')), 'x', 'missing-ok')
 
 
 def test_skip_policy_swallows_expected_failures():
