@@ -92,6 +92,61 @@ def test_sync_header_to_gwcs_raises_when_it_cannot_meet_tolerance():
         sync_header_to_gwcs(fits.Header(), g, SHAPE, tol_mas=1e-9)
 
 
+def test_gwcs_does_not_raise_when_accuracy_is_unreachable():
+    """Pins the gwcs 1.0.3 behaviour the retry logic has to be built around.
+
+    An earlier version of this module assumed ``to_fits_sip`` raises ValueError
+    when the requested accuracy is unreachable, and had a LOOSENING ladder with
+    an ``except ValueError`` around it.  gwcs does not raise: ``fit_2D_poly``
+    issues a ``scipy.linalg.LinAlgWarning`` and returns a header anyway -- so
+    that ladder never advanced and its warning was unreachable.  If a future gwcs
+    starts raising, this test fails and the retry logic should be revisited.
+    """
+    g = _distorted_gwcs(amplitude=5000)          # far beyond degree-9 reach
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always')
+        hdr = g.to_fits_sip(max_pix_error=0.01, max_inv_pix_error=0.01, npoints=32)
+    assert hdr is not None and 'A_ORDER' in hdr, "gwcs returned no header"
+    assert any('SIP approximation accuracy' in str(w.message) for w in caught), \
+        [str(w.message) for w in caught]
+    # ... and its own SIPMXERR card is not a usable accuracy signal either:
+    # it reports a tiny value while simultaneously warning it failed.
+    assert float(hdr['SIPMXERR']) < 0.01
+
+
+def test_tightening_retry_rescues_an_over_tolerance_fit():
+    """The retry ladder TIGHTENS, driven by the measured error, and helps.
+
+    The reference fixture at the default 0.01 px request fits degree 2 and
+    measures 0.107 mas.  Force a tolerance below that: sync_header_to_gwcs must
+    not give up -- it must tighten (degree 3 -> 5) until it is inside, warn that
+    it had to, and report the achieved value.
+    """
+    from jwst_gc_pipeline.reduction.fits_wcs_sync import SipAccuracyWarning
+    g = _distorted_gwcs()
+    first = sip_header_from_gwcs(g)                       # 0.01 px
+    first_mas, _ = fits_gwcs_discrepancy_mas(first, g, SHAPE)
+    assert first_mas > 0.05, first_mas       # fixture must actually need help
+
+    hdr = fits.Header()
+    with pytest.warns(SipAccuracyWarning, match='tighter request'):
+        got, _ = sync_header_to_gwcs(hdr, g, SHAPE, tol_mas=first_mas / 2.0)
+    assert got <= first_mas / 2.0
+    assert int(hdr['A_ORDER']) > int(first['A_ORDER'])    # degree really rose
+    # and the header actually written is the one that was measured
+    remeasured, _ = fits_gwcs_discrepancy_mas(hdr, g, SHAPE)
+    assert remeasured == pytest.approx(got, rel=1e-9)
+
+
+def test_verification_gates_on_the_measured_error():
+    """The guard is the measurement, not the requested bound -- and with gwcs
+    never raising, it is the ONLY guard.  A tolerance no fit can reach must
+    raise after the whole tightening ladder is exhausted."""
+    g = _distorted_gwcs()
+    with pytest.raises(FitsGwcsMismatchError, match='at every requested accuracy'):
+        sync_header_to_gwcs(fits.Header(), g, SHAPE, tol_mas=1e-12)
+
+
 def test_stale_high_order_sip_coefficients_are_stripped():
     """``Header.update`` merges: a degree-3 fit over a degree-4 header leaves
     orphan A_0_4/A_4_0/... cards that disagree with the written A_ORDER.

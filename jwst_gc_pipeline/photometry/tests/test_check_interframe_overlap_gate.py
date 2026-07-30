@@ -152,6 +152,35 @@ def test_parse_crf_extracts_proposal_observation_module():
         "jw02221001001_03101_00002_nrcalong_destreak_o002_crf.fits") is None
 
 
+def test_parse_crf_rejects_retired_realign_path_products():
+    """Products of the RETIRED post-resample realign path must never be pooled.
+
+    ``realign_to_vvv`` / ``sync_gwcs_to_fits_wcs`` (removed from the code
+    2026-07-11; its cloudc outputs are dated 2023-08-01) left
+    ``*_realigned_to_vvv_*_crf.fits`` on disk, and those files' FITS header and
+    ASDF GWCS disagree with EACH OTHER by arcseconds.  Measured 2026-07-29 on all
+    32 such frames in cloudc/F405N -- two populations, split by visit:
+
+        visit 001 (16):  7.972 - 8.067 arcsec
+        visit 002 (16):  4.091 - 4.170 arcsec
+        live _destreak_o002_crf (32):  6.681 - 7.972 mas, median 7.327
+
+    The ~3.9 arcsec VISIT-TO-VISIT differential is the part that matters here,
+    since this gate groups by (obs+visit, module).  They match the ``jw*_crf.fits``
+    glob, so the verdict depended on which representation the reader used -- the
+    #175/#176 stale-frame failure again.  Scope: this covers the 32 files in the
+    one directory that has them; 46 of 127 directories still pool multiple
+    lineage copies per exposure (see _RETIRED_LINEAGE_TOKENS).
+    """
+    for bad in ("jw02221002001_08201_00001_nrcblong_destreak_realigned_to_vvv_o002_crf.fits",
+                "jw02221002001_02201_00004_nrcalong_destreak_realigned_to_vvv_o002_crf.fits",
+                "jw02221002001_02201_00004_nrcalong_realigned_to_refcat_o002_crf.fits"):
+        assert gate._parse_crf(bad) is None, bad
+    # the live products in the same directory still parse
+    assert gate._parse_crf(
+        "jw02221002001_08201_00001_nrcblong_destreak_o002_crf.fits") is not None
+
+
 def test_mosaic_obs_keys_handles_combined_and_instruments():
     assert gate._mosaic_obs_keys(
         "jw02221-o001_t001_nircam_clear-f405n-merged_i2d.fits") == {"02221-001"}
