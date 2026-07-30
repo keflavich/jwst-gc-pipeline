@@ -430,7 +430,8 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
     saturated = (dq & dqflags.pixel['SATURATED']) > 0
     # Seeding and fit-masking use DIFFERENT saturation masks.  A pixel saturated
     # in a late group but good in group 0 is recovered by the ramp fit; only
-    # 0-good-group pixels carry DO_NOT_USE.
+    # 0-good-group pixels carry DO_NOT_USE, i.e. a NaN VAR_POISSON -- which is
+    # how the fit mask finds them (`_unrecoverable`).
     #   seed on the FULL saturated mask -- else a moderately saturated star with
     #     a recovered core is never seeded and never cataloged (daofind cannot
     #     fit its core either), which lost real W51 cluster stars.
@@ -2057,7 +2058,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
     #   prominence < seed_prominence_min -> diffuse emission (real >=15, fake 1-3)
     #   core < seed_core_min -> compact bumps on smooth emission, where a tiny
     #     annulus MAD inflates the prominence (real >=1200, fake ~800).  In
-    #     surface-brightness units; the 1000 default is F770W-calibrated.
+    #     surface-brightness units; the 1000 default is F770W-calibrated, so
+    #     revisit it for other MIRI broadbands (0 disables just this criterion).
     # Measured on the deep coadd when one is given, not this frame: a one-frame
     # noise spike can push a phantom past the threshold in a single frame and the
     # cross-frame merge then keeps it.  Unmeasurable (NaN) is kept.
@@ -3256,8 +3258,9 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                           f"{_peak_cap_factor}x)", flush=True)
             # Amplitude floor: the spike-weighted fit reaches only ~75-90% of the
             # coadd core, leaving 10-27% of the bright cores in the residual, so
-            # push the model peak up to 0.95x the measurable core -- never above
-            # it, so the leftover is positive.  The core must be read from a tight
+            # push the model peak up to 0.90x the measurable core -- never above
+            # it, so the leftover stays positive even if the model centroid is a
+            # pixel off.  The core must be read from a tight
             # <=4 px box at the fit position: an earlier version used a
             # sat_area-scaled radius, grabbed a bright neighbour's core and
             # injected 70k-deep pits.  Spike-fit small-PSF stars only.
@@ -3318,9 +3321,10 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # ramp fit, the data is not clipped, so it is the true surface brightness
         # and a point-source model must not exceed it.  Cap the model peak to it.
         # No fake-vs-real test is needed (there is no clean discriminator, and the
-        # cap is right either way), but it only applies when the core is MOSTLY
-        # recovered: a deeply saturated star's recovered ring sits far below its
-        # true peak, so capping to it would badly under-subtract.
+        # cap is right either way), but it only applies when the truly-lost
+        # fraction is under NIRCAM_SATSTAR_RECOVERED_MAXLOST (0.2): a deeply
+        # saturated star's recovered ring sits far below its true peak, so
+        # capping to it would badly under-subtract.
         # NIRCAM_SATSTAR_RECOVERED_CAP.
         if (not _is_miri and int(os.environ.get('NIRCAM_SATSTAR_RECOVERED_CAP', 0))
                 and len(result) and np.isfinite(float(result['flux_fit'][0]))):
@@ -3624,14 +3628,15 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         #    print(f"Warning: Saturated mask area ({area_saturated}) is larger than number of pixels above threshold ({num_pixels_above_threshold}); skipping source", flush=True)
         #    continue
 
-        # Reject bad fits before they reach the satstar model: flux <= 0,
+        # Reject bad fits before they reach the satstar model.  NIRCam: flux <= 0,
         # snr <= 3 (unconstrained), qfit > 5 (vs ~1 for an OK fit),
         # sidelobe_resid_sigma < -10 (badly over-fit -- STPSF's first sidelobe is
         # brighter than the real one for saturated stars, so a wing-matched fit
         # leaves a strongly negative residual there), ssr_ratio > 1 (no real
         # source).  MIRI skips the ssr gate -- its gridded-PSF ring mismatch puts
         # ssr at 17-400 even for excellent fits -- and NIRCam applies it only to
-        # low-confidence fits, since it was deleting real bright stars.
+        # low-confidence fits, since it was deleting real bright stars.  MIRI's
+        # thresholds are looser throughout (snr 2, qfit 15, sidelobe -40).
         # See accept_satstar_fit.
         accept_source = accept_satstar_fit(
             result_is_none=(result is None), fluxerr=fluxerr, snr=snr,
@@ -3644,9 +3649,9 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
 
         # Post-fit severity gate (NIRCam in-FOV): a genuine saturated star's
         # model must at least reach its filter's saturation level at its own peak.
-        # In the crf products every SATURATED pixel is blanked, so neither the
-        # data nor the variance can tell a real saturated core from the any-group
-        # over-flag -- but the fit can.  0.5x margin for wing-fit scatter on
+        # In the crf products every SATURATED pixel is blanked (SCI and
+        # VAR_POISSON both NaN), so neither the data nor the variance can tell a
+        # real saturated core from the any-group over-flag -- but the fit can.  0.5x margin for wing-fit scatter on
         # borderline saturation.  Rejects fall through to the daophot channel,
         # which had them right all along.  MIRI and forced sources are excluded.
         if (not _is_miri and not forced_source
@@ -3759,7 +3764,10 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                 # the fit position -- the most direct test for a model that would
                 # gouge a pit.  Real stars read <=~0.5, phantoms and runaways
                 # >=4, with no overlap, and it catches what concentration cannot
-                # (a bright knot looks compact but reads ~100 here).
+                # (a bright knot looks compact but reads ~100 here).  Do NOT
+                # tighten seed_oversub_ratio (3.0) toward 1: a correctly
+                # peak-capped real satstar reads ~1.5, and cutting there would
+                # delete it and leave it unsubtracted.
                 # The denominator must be the adaptive core peak (_cc), not a 3x3
                 # box at the centre: a star saturated in most frames is clipped
                 # even in the coadd, so a 3x3 centre reads low and the gate then

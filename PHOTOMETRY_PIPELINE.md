@@ -98,12 +98,12 @@ only when the off-FOV cross-frame reconciliation supplies flux overrides/drops,
 or `overwrite=True` (`cataloging.py:1742`). Steps:
 
 1. **Identify saturated pixels** from the DQ plane: the `SATURATED` bit
-   (`saturated_star_finding.py:282`), plus `DO_NOT_USE` for truly-lost pixels
+   (`saturated_star_finding.py`), plus `DO_NOT_USE` for truly-lost pixels
    (0 good ramp groups) and `JUMP_DET` cosmic-ray handling (saturated clusters
    ≥3 px are protected). Connected components → one candidate saturated star per
    blob.
 2. **Fit each blob** with a gridded WebbPSF/STPSF model (`npsf=16`, `oversample=2`;
-   `saturated_star_finding.py:76-77`). In-FOV field of view: **fovp 512** for SW
+   `saturated_star_finding.py`). In-FOV field of view: **fovp 512** for SW
    (NRC?1-4) and MIRI, **fovp 1024** for LW (NRC?LONG) (`:1639`). Grids live in
    `<basepath>/psfs`, named `{inst}_{detector}_{filter}_fovp{N}_samp2_npsf16.fits`
    (`:93`). The LW detector token is `nrcb5`/`nrca5` (WebbPSF naming), **not**

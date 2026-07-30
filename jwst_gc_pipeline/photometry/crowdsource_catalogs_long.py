@@ -507,8 +507,10 @@ def _prepare_cutout_input(filename, basepath, filtername, options):
     # the ASDF extension).  Fit it from the shifted GWCS, not from cut.wcs --
     # cut.wcs is a crop of the parent's SIP approximation and inherits its error.
     # sync_header_to_gwcs fits at 0.01 px, drops stale SIP terms, verifies the
-    # result, and writes CTYPE='RA---TAN-SIP' (CARTA ignores the distortion
-    # without that suffix, displaying the cutout ~0.4 px off).
+    # result, and writes CTYPE='RA---TAN-SIP' explicitly.  Without that suffix
+    # astropy still applies the A_*/B_* distortion, so catalog RA/Dec stay
+    # correct, but viewers that honour CTYPE strictly (CARTA) ignore it and
+    # DISPLAY the cutout ~0.3-0.5 px off from its own catalog.
     from jwst_gc_pipeline.reduction.fits_wcs_sync import sync_header_to_gwcs
     with fits.open(cutout_filename, mode='update') as h:
         sync_header_to_gwcs(h['SCI'].header, shifted, (ny_c, nx_c),
@@ -4761,7 +4763,9 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     # The manual-iteration pipeline (cataloging.py) is the default.  Its phases
     # are sequential -- each detects on the previous phase's residual mosaic --
     # so it runs in-process as one job, never split across a SLURM array.
-    # --legacy-iterations still uses the array loop further down.
+    # --legacy-iterations splits: a legacy CUTOUT run also goes in-process, via
+    # _run_cutout_pipeline just below, and returns before the array loop; a
+    # legacy full-frame run falls through to that loop.
     if options.each_exposure and os.getenv('SLURM_ARRAY_TASK_ID') is None:
         if getattr(options, 'manual_iterations', False):
             # Imported lazily so the legacy path never depends on it and there is

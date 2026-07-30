@@ -20,7 +20,7 @@ starting points, not fixed addresses.
 ## 1. Pipeline of a saturated star
 
 1. **Detect** — read the `SATURATED` DQ bit, reject `JUMP_DET` cosmic rays, keep
-   clusters ≥ 3 px (`find_saturated_stars`, `saturated_star_finding.py:282`).
+   clusters ≥ 3 px (`find_saturated_stars`, `saturated_star_finding.py`).
 2. **Filter spurious flags** — drop DQ-SATURATED components sitting on *faint*
    data (persistence / JUMP mis-tags) via a per-filter **data floor**
    (`_SATSTAR_DATA_FLOOR`, `:221`; test at `:325`).
@@ -54,7 +54,7 @@ starting points, not fixed addresses.
 
 ## 2. Detection & DQ flagging (shared)
 
-- **SATURATED bit + CR rejection** (`saturated_star_finding.py:282`): extract
+- **SATURATED bit + CR rejection** (`saturated_star_finding.py`): extract
   `dqflags.pixel['SATURATED']`, reject `JUMP_DET`, require ≥3-px clusters to
   separate ramp non-linearity from single-pixel CRs.
 - **Data floor** (`_SATSTAR_DATA_FLOOR`, `:221`; `_resolve_satstar_data_floor`,
@@ -82,7 +82,7 @@ over-flags the saturated set, masks recoverable data, and (worse) sweeps real
 stars on bright emission into the satstar channel while vetoing them from daophot
 — so they vanish from the catalog.
 
-**Where:** `find_saturated_stars` (`saturated_star_finding.py:282`):
+**Where:** `find_saturated_stars` (`saturated_star_finding.py`):
 ```python
 saturated = (dq & dqflags.pixel['SATURATED']) > 0
 ```
@@ -173,7 +173,7 @@ glow, and lack of BFE/IPC sidelobes drive a different configuration. Triggered b
 
 | mechanism | NIRCam | MIRI | file:line |
 |---|---|---|---|
-| Accept: qfit_max | 5.0 | **15.0** | `saturated_star_finding.py:1558` |
+| Accept: qfit_max | 5.0 | **15.0** | `saturated_star_finding.py` |
 | Accept: sidelobe_min | −10.0 | **−40.0** | `:1559` |
 | Accept: ssr_ratio_max | 1.0 | **2.0** | `:1560` |
 | Accept: snr_min | 3.0 | **2.0** | `:1561` |
