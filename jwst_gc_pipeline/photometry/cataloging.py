@@ -3076,15 +3076,66 @@ def _astrom_checkpoint_refcat(basepath):
     return None
 
 
-def _astrom_find_offsets_table(basepath, proposal_id):
-    """The offsets table fix_alignment would consume, in its preference order."""
+def _astrom_offsets_channel(proposal_id, field):
+    """Which offsets table THIS field is aligned from, per ``alignment_config``.
+
+    Returns ``'locked'`` / ``'consensus'`` / ``'none'``.  ``'none'`` means the
+    field takes no table-driven correction at all (an unconfigured field, or one
+    whose whole tie is a recorded constant), so writing a correction for it would
+    produce a table nothing reads.
+    """
+    from jwst_gc_pipeline.reduction.alignment_config import (
+        RECORDED_BULK, TABLE_CONSENSUS, TABLE_LOCKED, resolve,
+    )
+    cfg = resolve(proposal_id, field)
+    if cfg is None:
+        return 'none'
+    if cfg.source == TABLE_CONSENSUS:
+        return 'consensus'
+    if cfg.source == TABLE_LOCKED:
+        return 'locked'
+    if cfg.source == RECORDED_BULK:
+        # bulk is a constant; only the per-exposure term is table-driven
+        return 'consensus' if cfg.consensus_jitter else 'none'
+    return 'none'
+
+
+def _astrom_find_offsets_table(basepath, proposal_id, field=None):
+    """The offsets table ``fix_alignment`` will consume for THIS field.
+
+    Resolved from ``alignment_config`` -- the SAME declaration the reducer reads
+    -- not by globbing for whatever table happens to be on disk.  The old
+    filename-preference glob (``*locked.csv`` first, then ``*_average.csv``, then
+    ``*.csv``) is what let the writer and the reader point at different files:
+    the checkpoint would find and edit ``..._VIRAC2locked.csv`` while
+    ``fix_alignment`` was configured to read ``..._consensus.csv``, so every
+    correction landed in a table nothing consumed and the re-tie loop re-measured
+    the same residual forever.  That is exactly how sgrc came out of a full
+    reduction at ``RAOFFSET=0.0``.
+
+    ``field`` is required to distinguish observations of one proposal that are
+    aligned differently (2045: arches is consensus-driven, quintuplet locked).
+    Falls back to the legacy globs only for a field with no config entry, which
+    the caller reports separately.
+    """
     import glob as _glob
-    for pat in (f"{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_*locked.csv",
-                f"{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_*_average.csv",
-                f"{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_*.csv"):
-        cands = sorted(_glob.glob(pat))
-        if cands:
-            return cands[0]
+    channel = _astrom_offsets_channel(proposal_id, field)
+    if channel == 'consensus':
+        path = f"{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_consensus.csv"
+        # absent -> None, which routes the caller to seed it
+        return path if os.path.exists(path) else None
+    if channel == 'locked':
+        path = f"{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_VIRAC2locked.csv"
+        if os.path.exists(path):
+            return path
+        # the pre-locked average / per-exposure tables fix_alignment still falls
+        # back to when no locked table exists yet
+        for pat in (f"{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_*locked.csv",
+                    f"{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_*_average.csv"):
+            cands = sorted(_glob.glob(pat))
+            if cands:
+                return cands[0]
+        return None
     return None
 
 
@@ -3292,7 +3343,19 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
 
     # m2 measured a real misalignment: im0 is wrong.
     assert merge_label in CORRECTION_STAGES
-    offsets_path = _astrom_find_offsets_table(basepath, proposal_id)
+    _field = str(getattr(options, 'field', ''))
+    _channel = _astrom_offsets_channel(proposal_id, _field)
+    if _channel == 'none':
+        raise RuntimeError(
+            f"astrom checkpoint [{merge_label}] {filt}/{module}: measured "
+            f"{len(corrections)} real correction(s) for proposal {proposal_id} "
+            f"observation {_field}, but alignment_config declares NO table-driven "
+            f"correction channel for this field -- so anything written here would "
+            f"land in a table fix_alignment never reads, and the next re-tie would "
+            f"re-measure the identical residual (the arches/sgrb2 failure). Add an "
+            f"entry to jwst_gc_pipeline/reduction/alignment_config.py declaring "
+            f"where this field's tie lives before correcting it.")
+    offsets_path = _astrom_find_offsets_table(basepath, proposal_id, _field)
     applied = False
     seeded = False
     if os.environ.get('ASTROM_CHECKPOINT_APPLY', '') == '1':
@@ -3305,8 +3368,10 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
         # the applied tie removes the bulk jitter).  Route consensus tables (and
         # the no-table seed case) through the UPSERT helper instead; only the
         # brick/cloudc module-locked tables use the strict update.
-        _is_consensus = offsets_path is None or str(offsets_path).endswith(
-            '_consensus.csv')
+        # Which helper writes is decided by the CONFIGURED channel, not by the
+        # filename that happened to be found -- a filename test re-opens the
+        # reader/writer split this lookup was changed to close.
+        _is_consensus = _channel == 'consensus'
         if _is_consensus:
             from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
                 seed_offsets_table_from_consensus)
