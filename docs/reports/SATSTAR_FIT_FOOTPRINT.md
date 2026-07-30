@@ -82,51 +82,77 @@ flux — an aperture-correction analog for the fit footprint.
 Datasets: brick {F200W, F212N (SW); F405N, F410M (LW)} for calibration; gc2211
 F200W + brick {F182M, F466N} held out.
 
-## 7. Results — the correction does NOT generalize (approach-1 premise disproven)
+## 7. Results — a universal `(size, r_core, filter)` correction does not generalize
 
 Calibration array (job 38335896, brick 2 SW + 2 LW × 2 frames, 17,306 matched
-star-size rows) + the earlier gc2211 F200W sweep.
+star-size rows) + the gc2211 F200W sweep. Reference throughout is the size-81
+fit; **"R" measures departure from that reference, which is NOT established as
+ground truth** (see §7.1 caveat).
 
-**The flux-footprint bias is field/environment-intrinsic, not a function of
-(size, r_core, filter).** Median R = flux₈₁/flux_size:
+`R = flux₈₁ / flux_size`, F200W:
 
-| field / regime | R @ size 11 | R @ 31 | R @ 51 | local_bkg |
-|---|---|---|---|---|
-| brick F200W (low bkg) | 1.02 | 1.007 | 1.001 | 0.75 |
-| gc2211 F200W (dense GC, high bkg) | 1.91 | 1.12 | 1.03 | 1.8 |
+| dataset | R @ 11 | R @ 31 | R @ 51 | local_bkg | NGROUPS / EXPTIME |
+|---|---|---|---|---|---|
+| brick F200W (prop 1182) | 1.02 | 1.01 | 1.00 | 0.75 | **7 / 344 s** |
+| gc2211 F200W (prop 2211) | 1.91 | 1.12 | 1.03 | 1.8 | **2 / 97 s** |
 
-Same filter, same PSF grid type (`nircam_..._fovp512`), similar r_core
-distributions (median ~4.6) — yet brick shows ~0% footprint sensitivity while
-gc2211 shows −47% at size 11. **At matched flux** the fields still differ:
+The two datasets diverge strongly, and **it is not just the r_core distribution**
+— at *matched* r_core (`R@31`, N in parentheses):
 
-| flux bin | gc2211 R@31 | brick R@31 |
+| r_core | gc2211 R@31 | brick R@31 |
 |---|---|---|
-| 3e4–1e5 | 1.11 | 1.00 |
-| 1e5–3e5 | 1.17 | 0.90 |
-| 3e5–1e7 | 1.19 | 0.98 |
+| 3–4 | 1.10 (38) | 1.02 (27) |
+| 4–5 | 1.11 (86) | 0.98 (1) |
+| 5–7 | 1.18 (62) | 0.99 (11) |
 
-So flux, r_core, and local_bkg do **not** predict R across fields (within gc2211
-R tracks flux/r_core at ρ≈0.5 but is flat in local_bkg; the field offset is
-unexplained by any per-star quantity). gc2211's brighter stars on a ~2.3× higher
-background genuinely carry more wing flux outside a small box (flux doubles from
-size 11→81); brick's stars are already well-determined by a small box.
+Where the two overlap in r_core, gc2211 still sits ~10–18% higher. So R is **not**
+a function of `(size, r_core, filter)` alone; a correction calibrated on one
+dataset (≈1.0 for brick) would mis-correct the other by 10–20%.
 
-**Consequence:** a universal `C(size, r_core, filter)` correction calibrated on
-one field is ≈1.0 and would leave a dense field's photometry biased −15–20%.
-Approach 1 (fit-small + universal flux correction) is therefore **not viable**.
+### 7.1 What we have NOT established (confounds — reviewer-raised, acknowledged)
+
+- **Size-81 is not proven to be truth.** R > 1 in gc2211 is equally consistent
+  with the *small* box being right and the *large* box over-counting (blended
+  neighbours / diffuse background in a crowded field). The sign alone does not
+  identify which footprint is correct; an independent flux reference (unsaturated
+  curve-of-growth, aperture photometry, or synthetic-injection recovery) is
+  needed and has not been run. So this section says the fits *differ*, not that
+  the small box is *biased*.
+- **Field vs saturation-depth is confounded.** brick F200W (prop 1182) is
+  NGROUPS=7 / 344 s; gc2211 F200W (prop 2211) is NGROUPS=2 / 97 s. The two
+  datasets differ in saturation depth and exposure as well as crowding/background,
+  so "field-intrinsic" is not justified — the driving axis (crowding, background,
+  ramp depth, or a mix) is not isolated. Both are per-observation quantities.
+- **"Same PSF grid" was only same-*named*.** The `nircam_nrca1_f200w_fovp512…fits`
+  files differ between the two `psfs/` dirs (different md5), so the PSF model is
+  an additional uncontrolled variable, not a controlled constant.
+- **Thin coverage in the large-r_core / bright regime**, small N per bin, single
+  frame per dataset for the cross-dataset table, no error bars.
+
+**Defensible conclusion:** the departure from size-81 is **dataset/observation-
+dependent in a way `(size, r_core, filter)` does not capture**, so a *universal*
+flux correction (approach 1 as originally scoped) is not supportable on this
+evidence. Whether a richer, depth/crowding-aware correction could work — and
+which footprint is actually truth — is **open**, pending the controls in §7.1.
 
 ## 8. Recommendation
 
-1. **Keep the full fit box (81) for saturated-star photometry.** It is genuinely
-   needed in dense/high-background fields (gc2211-type) — not just contamination
-   — and is harmless (only slower) where it isn't. Production already does this.
-2. **Fit-small is free for saturated-star ASTROMETRY** in every field (position
-   is footprint-robust to <5 mas by size ≈17, ~6× faster). Use small boxes for
+1. **Keep the current default (full fit box) for saturated-star photometry** —
+   not because size-81 is proven correct, but because the size-dependence is
+   large and its truth/confounds are unresolved, so changing the default now
+   would be unvalidated. Production already uses the full box.
+2. **Fit-small is safe for saturated-star ASTROMETRY** in both datasets tested
+   (position robust to <5 mas by size ≈17 across thousands of stars, ~6×
+   faster) — the one clean, well-supported win. Use small boxes for
    position-only passes.
-3. **Speedup for photometry only via a validated environment gate** (small box
-   where background/crowding is demonstrably low). The predictor is field/local-
-   environment level (not per-star flux/r_core/local_bkg), so this needs its own
-   calibration + per-field verification; modest payoff, deferred.
+3. **Before any photometry speedup**, run the §7.1 controls: (a) an independent
+   flux truth to fix the direction of the effect; (b) disentangle field vs
+   NGROUPS/depth (e.g. same field at two ramp depths, or match sat_area AND
+   NGROUPS); (c) confirm/rebuild matched PSF grids. Only then is a
+   depth/crowding-aware correction worth attempting.
+
+The opt-in `adaptive_fit_shape` (default off) is retained as the astrometry-pass
+lever and to reproduce the A/B; it is **not** recommended for photometry.
 
 Net: the decoupling exists and position is cheap, but saturated-star **flux**
 cannot be shrunk with a universal correction — the extensive validation caught

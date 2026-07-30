@@ -3019,7 +3019,12 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # scale/margin default to map the largest core (sat_area cap ~1600 ->
             # r_core ~22.6) back to size=81, so bright stars are unchanged.
             _size_eff = size
-            if (adaptive_fit_shape and not forced_source
+            # NIRCam in-FOV only: MIRI heavily-saturated stars deliberately fit the
+            # LARGE spike-resolving PSF (see _use_large_infov above); shrinking their
+            # fit_shape is untested and would strand the spike leverage.  Also skip
+            # non-scalar ``size`` (an explicit (ny,nx) request) and forced sources
+            # (custom LSQ path, no fit_shape).
+            if (adaptive_fit_shape and not forced_source and not _is_miri
                     and src_sat_area is not None and np.isscalar(size)):
                 _r_core = np.sqrt(max(int(src_sat_area), 1) / np.pi)
                 _size_eff = int(np.clip(adaptive_fit_scale * _r_core + adaptive_fit_margin,
