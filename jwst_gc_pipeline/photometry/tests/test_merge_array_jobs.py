@@ -133,7 +133,8 @@ def _run_main(monkeypatch, argv, env, gate_calls):
             monkeypatch.delenv(k, raising=False)
         else:
             monkeypatch.setenv(k, v)
-    monkeypatch.setattr(MC, 'merge_crowdsource', lambda **kw: None)
+    monkeypatch.setattr(MC, 'merge_crowdsource',
+                        lambda **kw: print(f"basepath={kw.get('basepath')}"))
     monkeypatch.setattr(MC, 'merge_daophot', lambda **kw: None)
     monkeypatch.setattr(MC, 'merge_individual_frames', lambda **kw: None)
 
@@ -184,3 +185,19 @@ def test_gate_runs_for_an_array_task_that_merged_everything(monkeypatch):
               {'RUN_REGISTRATION_GATE': '1', 'SLURM_ARRAY_TASK_ID': '0'},
               calls)
     assert len(calls) == 1
+
+
+@pytest.mark.localdata
+def test_the_merge_honours_the_basepath_override(monkeypatch, tmp_path, capsys):
+    """Reduction and cataloging both redirect; the merge did not.
+
+    A redirected run therefore reduced and cataloged under the override, then
+    merged out of the hard-coded tree.
+    """
+    calls = []
+    monkeypatch.setenv('GC_BASEPATH_OVERRIDE', str(tmp_path))
+    _run_main(monkeypatch,
+              ['merge_catalogs', '--target', 'brick', '--skip-daophot'],
+              {'SLURM_ARRAY_TASK_ID': None, 'RUN_REGISTRATION_GATE': None},
+              calls)
+    assert str(tmp_path) in capsys.readouterr().out

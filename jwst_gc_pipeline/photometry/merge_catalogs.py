@@ -32,6 +32,7 @@ ABMAG_OFFSET = 8.90
 # flags-based bgsub token is imported as ``_bgsub_token`` (this module calls it
 # with explicit booleans, matching the producer-side names).
 from jwst_gc_pipeline.frame_wcs import frame_wcs
+from jwst_gc_pipeline.scratch_basepath import apply_basepath_override
 from jwst_gc_pipeline.photometry.naming import (
     _inst_token, _svo_filter_id,
     _bgsub_token_from_flags as _bgsub_token,
@@ -2940,6 +2941,10 @@ def main():
         basepath = f'/orange/adamginsburg/jwst/{target}/'
     else:
         basepath = f'/blue/adamginsburg/adamginsburg/jwst/{target}/'
+    # The reduction and cataloging drivers both honour this; the merge did not,
+    # so a redirected run reduced and cataloged under the override and then
+    # merged out of the hard-coded tree.
+    basepath = apply_basepath_override(basepath)
 
     offsets_tables = {'1182': Table.read(f'/blue/adamginsburg/adamginsburg/jwst/brick/offsets/Offsets_JWST_Brick1182_F444ref.csv'),
                       '2221': None,

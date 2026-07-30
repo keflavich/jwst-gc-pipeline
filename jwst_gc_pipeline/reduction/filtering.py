@@ -42,11 +42,15 @@ import os
 try:
     import webbpsf
     from webbpsf.utils import to_griddedpsfmodel
-    os.environ['WEBBPSF_PATH'] = '/orange/adamginsburg/jwst/webbpsf-data/'
+    # setdefault, not assignment: saturated_star_finding REQUIRES this variable
+    # and raises without it, so overwriting it sent anyone who set it correctly
+    # to a HiPerGator path that does not exist on their machine.  Unset (the
+    # HiPerGator case) still gets the same value as before.
+    os.environ.setdefault('WEBBPSF_PATH', '/orange/adamginsburg/jwst/webbpsf-data/')
 except ImportError:
     import stpsf
     from stpsf.utils import to_griddedpsfmodel
-    os.environ['STPSF_PATH'] = '/orange/adamginsburg/jwst/stpsf-data/'
+    os.environ.setdefault('STPSF_PATH', '/orange/adamginsburg/jwst/stpsf-data/')
 
 try:
     from paths import basepath

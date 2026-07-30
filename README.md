@@ -12,6 +12,12 @@ generic pipeline code could be shared with other Galactic Center JWST
 projects, while the Brick-specific science analysis (ice analyses, CO
 modeling, paper figures) remains in `brick2221`.
 
+## Getting started
+
+**[GETTING_STARTED.md](GETTING_STARTED.md)** — install, the three stages and how
+to run them, the data layout, what a new dataset needs, and what does and does
+not work off HiPerGator.
+
 ## Layout
 
 - `jwst_gc_pipeline.reduction` — pipeline stages
