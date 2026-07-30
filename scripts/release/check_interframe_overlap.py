@@ -84,20 +84,43 @@ _CRF_RE = re.compile(
     r"(?P<lineage>(?:_[a-z0-9]+)*?)_o(?P<obs2>\d{3})_crf\.fits$")
 
 #: Lineage tokens of the RETIRED post-resample realignment path
-#: (``realign_to_vvv`` / ``sync_gwcs_to_fits_wcs``, removed 2026-07-11 --
-#: see ASTROMETRY_WCS_CORRECTION_FLOW.md).  Products from it are still on disk
-#: and still match ``jw*_crf.fits``.
+#: (``realign_to_vvv`` / ``sync_gwcs_to_fits_wcs``, removed from the code
+#: 2026-07-11 -- see ASTROMETRY_WCS_CORRECTION_FLOW.md).  Its OUTPUTS are older
+#: than that removal (the cloudc set is dated 2023-08-01), and still on disk, and
+#: still match ``jw*_crf.fits``.
 #:
-#: They must never be pooled into a registration verdict: in those files the
-#: FITS header and the ASDF GWCS disagree with EACH OTHER by arcseconds,
-#: because that path realigned one representation and not the other.  Measured
-#: 2026-07-29 on cloudc F405N -- all 32 ``*_realigned_to_vvv_*_crf.fits``
-#: frames read 8.0-8.1 ARCSEC FITS-vs-GWCS, against 6.7 mas for the live
-#: ``*_destreak_o002_crf.fits`` products in the same directory.  Which number
-#: the gate saw therefore depended on which representation it happened to read
-#: -- exactly the stale-frame-via-permissive-glob failure of #175/#176, and it
-#: would change behaviour again the moment the reader switches to the GWCS.
+#: They must never be pooled into a registration verdict: in those files the FITS
+#: header and the ASDF GWCS disagree with EACH OTHER by arcseconds, because that
+#: path realigned one representation and not the other.  Measured 2026-07-29 on
+#: cloudc/F405N, all 32 ``*_realigned_to_vvv_*_crf.fits``:
+#:
+#:     visit 001 (16 frames):  7.972 - 8.067 arcsec FITS-vs-GWCS
+#:     visit 002 (16 frames):  4.091 - 4.170 arcsec
+#:     live *_destreak_o002_crf (32):  6.681 - 7.972 mas, median 7.327
+#:
+#: The ~3.9 arcsec VISIT-TO-VISIT differential matters more here than the
+#: absolute size, because this gate groups by (obs+visit, module) -- a
+#: visit-dependent shift is precisely what it exists to catch.  Those files also
+#: lack the ``-SIP`` CTYPE suffix, so astropy warns when reading them: a second,
+#: independent reason no reader gets the intended answer out of them.
+#:
+#: SCOPE, stated plainly: this blocklist removes 32 files in ONE directory
+#: (cloudc/F405N is the only directory archive-wide with retired-path crf).  It
+#: does NOT solve lineage staleness in general -- 46 of 127 pipeline directories
+#: still admit more than one lineage copy of the same exposure (mostly
+#: ``['', '_destreak']`` or ``['_align', '_destreak']``), and in cloudc/F405N the
+#: ``bare`` copy sits 8.5 arcsec from the live ``_destreak`` one by same-pixel sky
+#: position.  Selecting a single family per exposure is the general fix; see the
+#: follow-up issue.  Do not read this blocklist as more than it is.
 _RETIRED_LINEAGE_TOKENS = ("realigned", "refcat", "vvv")
+
+
+def _retired_lineage(name):
+    """True if ``name`` is a retired-path crf (the reason _parse_crf rejected it)."""
+    m = _CRF_RE.match(os.path.basename(name))
+    if m is None:
+        return False
+    return bool(set(m.group("lineage").split("_")) & set(_RETIRED_LINEAGE_TOKENS))
 
 
 def _parse_crf(name):
@@ -228,13 +251,26 @@ def build_groups(field, filt, observations=None):
     # is dropped.  MIRI crf carry no _destreak token; the parser covers them
     # (excluding MIRI once silently PASSED the F2550W doubled-star saga).
     frames = []
+    n_retired = 0
     for fn in sorted(glob.glob(f"{BASE}/{field}/{filt}/pipeline/jw*_crf.fits")):
         p = _parse_crf(fn)
         if p is None:
+            # _parse_crf returns None both for "not a well-formed crf name" and
+            # for "deliberately excluded retired-path product".  Count the second
+            # so a silently smaller frame set stays distinguishable from an empty
+            # directory: check_filter fails closed on nframes == 0, but a PARTIAL
+            # exclusion (a visit losing all its frames) would pass with fewer
+            # groups and no trace.
+            if _retired_lineage(fn):
+                n_retired += 1
             continue
         if scope is not None and p["obs_key"] not in scope:
             continue
         frames.append(fn)
+    if n_retired:
+        print(f"  {field}/{filt}: excluded {n_retired} retired-path crf "
+              f"(realign_to_vvv lineage; FITS header and GWCS disagree by "
+              f"arcseconds in those files)", flush=True)
     groups = {}
     ndet = {}
     for fn in frames:

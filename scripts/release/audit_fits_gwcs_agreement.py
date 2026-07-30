@@ -7,7 +7,7 @@ tight-SIP fix carry a fit made at gwcs's ``max_pix_error=0.25`` px default and
 disagree with their own GWCS by up to ~5-8 mas in a position-dependent way.
 Anything that read the FITS header instead of the GWCS -- per-frame catalog
 positions, the interframe overlap gate, satstar positions -- inherited that
-error.
+error.  (PR #191 switches those readers to the GWCS.)
 
 Usage
 -----
@@ -98,7 +98,8 @@ def main(argv=None):
           f"disagreement.")
     if nbad:
         print("These frames' FITS headers are a degraded approximation of their "
-              "own GWCS. Read the GWCS (jwst_gc_pipeline.frame_wcs) or "
+              "own GWCS. Read the GWCS (model.meta.wcs via "
+              "stdatamodels.jwst.datamodels) or "
               "regenerate the frames.")
     return 1 if nbad else 0
 
