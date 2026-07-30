@@ -67,13 +67,28 @@ def test_missing_ok_swallows_only_missing_inputs():
         MC._run_merge(_boom(ValueError('column mismatch')), 'x', 'missing-ok')
 
 
+def _raised_message_text():
+    """Every string literal that appears inside a `raise` in merge_catalogs."""
+    import ast
+    import inspect
+    tree = ast.parse(inspect.getsource(MC))
+    text = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Raise):
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                    text.append(sub.value)
+    return text
+
+
 @pytest.mark.parametrize('message', MC._MISSING_INPUT_MESSAGES)
 def test_each_missing_input_phrase_is_one_a_merge_actually_raises(message):
-    # A phrase that no merge function emits makes 'missing-ok' dead code.
-    import inspect
-    source = inspect.getsource(MC)
-    raises = [ln for ln in source.splitlines() if message in ln]
-    assert raises, f'nothing in merge_catalogs raises {message!r}'
+    # A phrase no merge function raises makes 'missing-ok' dead code, which is
+    # how the daophot no-input case stayed fatal despite the policy saying
+    # otherwise.  Match against `raise` statements only -- a phrase that appears
+    # solely in a comment or a docstring does not count.
+    assert any(message in raised for raised in _raised_message_text()), (
+        f'no `raise` in merge_catalogs contains {message!r}')
     MC._run_merge(_boom(ValueError(f'... {message} ...')), 'x', 'missing-ok')
 
 
