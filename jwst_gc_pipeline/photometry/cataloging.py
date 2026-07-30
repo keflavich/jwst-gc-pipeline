@@ -2462,15 +2462,22 @@ def _combine_per_obs_vetted(vetted_path, merged_path, combined_path,
                   flush=True)
     if not tables:
         return
-    # Remove the previous run's file first: if the stack or the dedup below
-    # raises, a restart that skips this phase must not read a stale catalog.
+    # This catalog is the m7 seed, so it must never be stale and never be half
+    # written.  Drop the previous run's file up front, so a failure below leaves
+    # nothing rather than something out of date; then write through a temp file
+    # and rename, so a partial write is never readable.  (Writing to the temp
+    # file alone would not do -- on failure the old file would survive, which is
+    # the case that matters.)
     if os.path.exists(combined_path):
         os.remove(combined_path)
     combined = tables[0] if len(tables) == 1 else table_vstack(
         tables, metadata_conflicts='silent')
     if len(tables) > 1 and 'skycoord' in combined.colnames:
         combined = _dedup_combined_vetted(combined)
-    combined.write(combined_path, overwrite=True)
+    root, ext = os.path.splitext(combined_path)   # keep ext: astropy sniffs it
+    staging = f'{root}.tmp{ext}'
+    combined.write(staging, overwrite=True)
+    os.replace(staging, combined_path)
     print(f"{label}: combined {len(siblings)} per-obs vetted -> "
           f"{os.path.basename(combined_path)} ({len(combined)} all-obs sources)",
           flush=True)

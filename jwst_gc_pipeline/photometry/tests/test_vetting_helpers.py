@@ -32,6 +32,11 @@ def test_carta_export_has_plain_float_coordinates(tmp_path):
     assert got['dec'].dtype.kind == 'f'
     assert 'flux' in got.colnames and 'qfit' in got.colnames
     assert 'skycoord' not in got.colnames
+    # Values, not just dtypes -- ra and dec must not be swapped or shifted.
+    want = SkyCoord(_vetted(3)['skycoord'])
+    assert np.allclose(got['ra'], want.ra.deg)
+    assert np.allclose(got['dec'], want.dec.deg)
+    assert not np.allclose(got['ra'], want.dec.deg)
 
 
 def test_carta_export_accepts_plain_radec_input(tmp_path):
@@ -313,3 +318,49 @@ def test_a_failed_carta_export_does_not_stop_the_run(tmp_path, monkeypatch,
                               str(merged), str(combined), this_obs_only=False)
     assert combined.exists()                  # the science catalog survived
     assert 'CARTA catalog export failed' in capsys.readouterr().out
+
+
+def test_a_wrong_shaped_ramp_is_refused(monkeypatch):
+    # Without the shape guard a subarray ramp would be handed to
+    # ramp_recover_saturated, which does not check shapes itself.
+    _stub_ramp(monkeypatch)
+    monkeypatch.setattr(C, '_load_ramp_cube',
+                        lambda p: (np.zeros((3, 8, 8)), None))
+    data, dq, was_sat, model = _frame()
+    out = C._fill_saturated_pixels(
+        CAL, data, dq, was_sat, model, data.copy(),
+        types.SimpleNamespace(satstar_ramp_recover=True))
+    assert out[1, 1] == 5.0 and out[2, 2] == 5.0     # model, not a crash
+
+
+def test_a_wrong_shaped_group0_is_refused(monkeypatch):
+    _stub_ramp(monkeypatch)
+    monkeypatch.setattr(C, '_load_ramp_group0', lambda p: np.zeros((8, 8)))
+    data, dq, was_sat, model = _frame()
+    out = C._fill_saturated_pixels(
+        CAL, data, dq, was_sat, model, data.copy(),
+        types.SimpleNamespace(satstar_ramp_recover=True))
+    assert out[1, 1] == 11.0     # slope rim still recovered
+    assert out[2, 2] == 5.0      # deep core -> model, group 0 refused
+
+
+def test_a_wrong_shaped_group0_is_refused_on_the_zeroframe_path(monkeypatch):
+    _stub_ramp(monkeypatch)
+    monkeypatch.setattr(C, '_load_ramp_group0', lambda p: np.zeros((8, 8)))
+    data, dq, was_sat, model = _frame()
+    out = C._fill_saturated_pixels(
+        CAL, data, dq, was_sat, model, data.copy(),
+        types.SimpleNamespace(satstar_zeroframe_recover=True))
+    assert out[1, 1] == 5.0 and out[2, 2] == 5.0
+
+
+def test_no_temp_file_is_left_behind(tmp_path):
+    merged = tmp_path / 'cat.fits'
+    _vetted(1).write(merged, overwrite=True)
+    _vetted(3).write(tmp_path / 'cat_o001_vetted.fits', overwrite=True)
+    combined = tmp_path / 'cat_vetted.fits'
+    C._combine_per_obs_vetted(str(tmp_path / 'cat_o001_vetted.fits'),
+                              str(merged), str(combined), this_obs_only=False)
+    assert combined.exists()
+    assert not (tmp_path / 'cat_vetted.tmp.fits').exists()
+    assert list(tmp_path.glob('*.tmp*')) == []
