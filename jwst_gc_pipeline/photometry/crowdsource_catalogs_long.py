@@ -49,25 +49,9 @@ from astropy.utils.exceptions import AstropyWarning, AstropyDeprecationWarning
 warnings.simplefilter('ignore', category=AstropyWarning)
 
 
-# ---------------------------------------------------------------------------
-# Monkey-patch around astropy.nddata.utils.overlap_slices bug (hit via
-# photutils.make_model_image when photutils passes small_array_shape as an
-# ndarray and an out-of-frame source yields e_max == 0).
-#
-# At line ~138 of astropy/nddata/utils.py:
-#   if e_max < 0 or (e_max == 0 and small_array_shape != (0, 0)):
-# When small_array_shape is an ndarray, `ndarray != (0, 0)` returns an array
-# and the `or` branch raises:
-#   ValueError: The truth value of an array with more than one element
-#   is ambiguous. Use a.any() or a.all()
-#
-# This is triggered by IterativePSFPhotometry when a fit converges to a
-# source centered at e.g. y = -7.63 with sub_shape=(15, 15): then
-# e_max = int(-15.13) + 15 = 0 and the comparison explodes.
-#
-# We wrap the function so that small_array_shape is coerced to a tuple of
-# ints before the comparison, matching the function's own semantics.
-# ---------------------------------------------------------------------------
+# Work around an astropy bug: overlap_slices compares small_array_shape to a
+# tuple, which raises if photutils passed it as an ndarray (happens for a
+# source fit just off the frame edge).  Coerce to a tuple of ints first.
 import astropy.nddata.utils as _astropy_nddata_utils
 _original_overlap_slices = _astropy_nddata_utils.overlap_slices
 
@@ -519,23 +503,12 @@ def _prepare_cutout_input(filename, basepath, filtername, options):
         new.meta.wcs = shifted
         new.save(cutout_filename)
 
-    # Write the matching cutout FITS WCS into the SCI header so the pipeline's
-    # ``wcs.WCS(im1['SCI'].header)`` reads the correct (cutout) WCS; the
-    # shifted GWCS stays in the ASDF extension for datamodels / resample.
-    #
-    # The header is fitted from the SHIFTED GWCS, not from ``cut.wcs``.
-    # ``cut.wcs`` is a crop of the parent's *SIP approximation*, so it inherits
-    # whatever error that approximation had (up to 5-8 mas on frames written
-    # before the tight-fit fix) -- the cutout would then disagree with its own
-    # ASDF GWCS.  sync_header_to_gwcs fits at 0.01 px, strips stale SIP
-    # coefficients (Header.update merges, so a lower-degree fit would leave
-    # orphan high-order terms behind), and verifies the result against the GWCS.
-    #
-    # It writes CTYPE='RA---TAN-SIP' explicitly.  A plain to_header() drops the
-    # '-SIP' suffix while leaving A_*/B_* in place: astropy still applies the
-    # distortion (with a warning) so catalog RA/Dec stay correct, but viewers
-    # that honor CTYPE strictly (CARTA) IGNORE it -> every per-frame cutout
-    # image displays ~0.3-0.5 px off from the catalog and from the i2d.
+    # Give the cutout a FITS WCS in its SCI header (the shifted GWCS stays in
+    # the ASDF extension).  Fit it from the shifted GWCS, not from cut.wcs --
+    # cut.wcs is a crop of the parent's SIP approximation and inherits its error.
+    # sync_header_to_gwcs fits at 0.01 px, drops stale SIP terms, verifies the
+    # result, and writes CTYPE='RA---TAN-SIP' (CARTA ignores the distortion
+    # without that suffix, displaying the cutout ~0.4 px off).
     from jwst_gc_pipeline.reduction.fits_wcs_sync import sync_header_to_gwcs
     with fits.open(cutout_filename, mode='update') as h:
         sync_header_to_gwcs(h['SCI'].header, shifted, (ny_c, nx_c),
@@ -700,18 +673,9 @@ class WrappedPSFModel(crowdsource.psf.SimplePSF):
         col = np.atleast_1d(col)
         row = np.atleast_1d(row)
 
-        # NOTE: this loop CANNOT be batched into a single
-        # ``self.psfgridmodel.evaluate(...)`` call with vector
-        # ``x_0``/``y_0``.  ``photutils.psf.GriddedPSFModel.evaluate``
-        # explicitly forces those args to scalars (``if not
-        # np.isscalar(x_0): x_0 = x_0[0]``) because the bilinear
-        # interpolation between adjacent grid ePSFs is computed for a
-        # single subpixel offset per call.  Vectorising would require a
-        # custom interpolator that reproduces ``_calc_model_values`` for
-        # an array of (x_0, y_0) at once and bypasses photutils.  Not
-        # worth the maintenance cost in this code path -- WrappedPSFModel
-        # is only used by the crowdsource fit_im branch, which the main
-        # iter3 pipeline no longer runs (daophot path is preferred).
+        # One evaluate() per source: GriddedPSFModel.evaluate forces x_0/y_0 to
+        # scalars, so this cannot be vectorised without replacing photutils'
+        # interpolator.  Only the (unused) crowdsource fit_im branch gets here.
         stamps = []
         for i in range(len(col)):
             stamps.append(self.psfgridmodel.evaluate(cols+col[i], rows+row[i], 1, col[i], row[i]))
@@ -952,15 +916,10 @@ def _resolve_seed_skycoords(seed_table, ww=None, preferred_skycoord_col=None):
         if not np.any(_column_mask(seed_table['skycoord'])):
             return seed_table
 
-    # 2. Plain ra/dec columns -> single vector SkyCoord construction.
-    # IMPORTANT: only short-circuit on ra/dec when no preferred SkyCoord-mixin
-    # column is requested.  Otherwise the iter3 per-filter seed snap (which
-    # adds ``skycoord_{filter}`` to override the union's SW-only ra/dec
-    # astrometry) would be ignored.  Detected 2026-06-03 on sickle F480M
-    # iter3 source 55 init at unsnapped pix (310.26,126.62) despite union
-    # row 13911 having been correctly snapped to (311.80,127.07): consumer's
-    # _resolve_seed_skycoords hit ra/dec fallback before checking
-    # skycoord_f480m.
+    # 2. Plain ra/dec columns -> one vector SkyCoord.  Only take this shortcut
+    # when no preferred SkyCoord column was asked for: a requested
+    # ``skycoord_{filter}`` overrides the union's ra/dec and must win.
+    # Regression: test_crowdsource_long_regressions.py.
     if ('skycoord' not in seed_table.colnames
             and 'ra' in seed_table.colnames and 'dec' in seed_table.colnames
             and preferred_skycoord_col is None):
@@ -1061,15 +1020,9 @@ def obs_token(proposal_id, field):
     """
     if str(proposal_id) == '2211' and field not in (None, ''):
         return f'_o{field}'
-    # ngc6334: TWO proposals (7213 + 6778) share the same target dir and share
-    # the filters F200W + F470N, cataloged with the SAME obs number (001) and the
-    # SAME (visit, vgroup, exp) tuples -- so the per-frame catalog-table name
-    # ``f200w_{module}_visit001_vgroup02101_exp00001_...`` is identical across the
-    # two proposals and the second run silently overwrites the first (= data loss:
-    # 6778 clobbered 7213's F200W/F470N catalogs, 2026-07-09).  These two proposal
-    # ids appear ONLY in ngc6334, so disambiguate by proposal id (no field/target
-    # threading needed).  Non-shared filters get the token too (harmless -- one
-    # proposal per filter -> nothing to collide with), keeping the scheme uniform.
+    # ngc6334's two proposals (7213, 6778) share a target dir, filters, obs
+    # number AND (visit, vgroup, exp) tuples, so their per-frame catalog names
+    # collide and the second run overwrites the first.  Tag by proposal id.
     if str(proposal_id) in ('7213', '6778'):
         return f'_j{proposal_id}'
     return ''
@@ -2028,15 +1981,8 @@ def save_photutils_results(result, ww, filename,
     # the catalog tables collide across obs and silently overwrite.  MUST match
     # _predict_tblfilename and the merge_catalogs.py glob.  See obs_token().
     obs_ = _obs_token_from_options(options)
-    # Historical bug: this used to be `{module}{detector}` with no
-    # separator, which produced doubled tokens like ``nrcbnrcb`` /
-    # ``nrcanrca`` whenever ``module == detector`` (which is always
-    # the case for the eachexp call paths) and broke the
-    # ``merge_catalogs.py`` glob that expects just ``{module}``.
-    # The original iter1 convention used only ``{module}`` and that's
-    # what every other filename slot in this file (and the seed-catalog
-    # inference in legacy/crowdsource_step.py, ~line 1085) still uses.
-    # Restored.
+    # {module} only, no detector token -- that is what merge_catalogs.py globs
+    # for and what every other filename in this file uses.
     tblfilename = f"{basepath}/{filtername}/{filtername.lower()}_{module}{obs_}{visitid_}{vgroupid_}{exposure_}{desat}{bgsub}{epsf_}{blur_}{group}{iter_}_daophot_{basic_or_iterative}.fits"
 
     long_keys = [k for k in result.meta if len(k) > 8]
@@ -2170,18 +2116,10 @@ def get_psf_model(filtername, proposal_id, field,
                         grid = grid[0]
                     break
 
-        # All-detectors path (module='merged'): stpsf_detector_for_module
-        # returns None, so the per-detector cache lookup above is skipped.
-        # Without this branch we fall through to MAST + nrc.psf_grid(
-        # all_detectors=True, save=True), which rebuilds AND overwrites every
-        # channel grid already sitting on disk -- ~7-8 h/run on brick, repeated
-        # once per (module, filter) merged-residual phase.  Downstream only ever
-        # uses grid[0] (see the isinstance(grid, list) collapses below), so load
-        # the channel's per-detector grids from disk in webbpsf ``detector_list``
-        # order (NRCA1..NRCA4,NRCB1..NRCB4 for SW; NRCA5,NRCB5 for LW) and hand
-        # back the list; grid[0] is then the same grid the rebuild would have
-        # produced.  Consistent with the single-detector cache policy above,
-        # which likewise loads whatever grid is on disk regardless of obsdate.
+        # module='merged' has no single cache detector, and the fallback
+        # (psf_grid(all_detectors=True, save=True)) rebuilds every grid on disk
+        # -- ~7-8 h per phase.  Load the channel's grids from disk instead, in
+        # webbpsf detector_list order, so grid[0] is what a rebuild would give.
         if grid is None and _cache_detector is None and instrument != 'MIRI':
             # LW = NIRCam long channel.  Almost all LW filters are F3xx/F4xx, but
             # F250M and F277W are LW too (no '3'/'4') -- name them explicitly so
@@ -2306,16 +2244,8 @@ def get_psf_model(filtername, proposal_id, field,
                     time.sleep(min(2 ** ntries, 30))
 
         if use_grid:
-            # 2026-04-24: stpsf's to_griddedpsfmodel sometimes returns
-            # a list of grids when module='merged' is used for the LW
-            # detectors (one grid per detector), not a single
-            # GriddedPSFModel.  The downstream code (e.g.
-            # ``dao_psf_model.flux.min = 0``) treats the return as a
-            # single grid and crashes with
-            # ``AttributeError: 'list' object has no attribute 'flux'``.
-            # The use_grid=False branch already handles this; mirror it
-            # here so both LW (cloudc + brick + sgrb2 etc) iter3 runs
-            # don't fail on PSF setup.
+            # to_griddedpsfmodel returns a LIST (one grid per detector) for
+            # module='merged'; downstream wants a single grid.
             if isinstance(grid, list):
                 grid = grid[0]
             return grid, WrappedPSFModel(grid, stampsz=stampsz)
@@ -2439,16 +2369,10 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
 
         return True
 
-    # Chunked iter3 LW runs (brick 2221 / cloudc) split each frame's sources
-    # across N seed chunks; each chunk writes its own
-    # ``..._iter3_chunkXXofYY_daophot_{kind}_residual.fits`` where
-    # ``residual_K = data_for_residual - model_K`` (data_for_residual is shared
-    # across chunks).  Mosaicing chunk residuals directly would double-count
-    # source flux not fit in that chunk.  Glob both un-chunked and chunked
-    # variants; chunked variants are combined into a single frame-level
-    # residual below before mosaicing.
-    # Chunked variants embed ``_chunkXXofYY_`` between the iter token and
-    # ``_daophot_``: e.g. ``..._iter3_chunk00of08_daophot_basic_residual.fits``.
+    # Chunked runs write one residual per seed chunk
+    # (``..._iter3_chunk00of08_daophot_basic_residual.fits``), each subtracting
+    # only its own chunk's model.  Mosaicing them directly would double-count
+    # the flux other chunks fit, so they are combined per frame first (below).
     chunked_iter_regex = (re.compile(re.escape(iter_) + r'_chunk\d+of\d+_daophot_')
                           if iter_ else re.compile(r'_chunk\d+of\d+_daophot_'))
     for module_pattern in module_patterns:
@@ -2680,15 +2604,9 @@ def save_residual_datamodel(input_filename, output_filename, data, clear_dq=Fals
                             setattr(model, _vn, _arr)
                 except Exception:
                     pass
-        # The residual/model image is sky-pedestal-free BY CONSTRUCTION: the
-        # model is rendered point sources (>= 0) and the residual already has the
-        # source+satstar model subtracted.  But this datamodel inherits the input
-        # frame's meta.background.level (the sky level measured during reduction)
-        # with subtracted=False, so when ResampleStep coadds these per-frame
-        # images into the i2d mosaic it RE-SUBTRACTS that sky level -> a spurious
-        # uniform NEGATIVE pedestal (verified: F480M model i2d median -11.25 with
-        # the inherited level vs +1.07 with it zeroed).  Mark the background as
-        # already removed so resample adds nothing.
+        # These images carry no sky by construction, but the datamodel inherits
+        # meta.background.level with subtracted=False, so resample would subtract
+        # that sky again and leave a uniform negative pedestal in the mosaic.
         try:
             model.meta.background.level = 0.0
             model.meta.background.subtracted = True
@@ -3191,16 +3109,10 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     else:
         _all_sc = SkyCoord(merged['ra'], merged['dec'], unit='deg')
     _all_flux = np.asarray(merged[fcol], dtype=float)
-    # A ``replaced_saturated`` star is removed per-frame via the satstar MODEL
-    # (subtracted into ``base``), so rendering it here with the small point-source
-    # PSF would DOUBLE-subtract it.  BUT a star can be saturated in only SOME
-    # frames (satstar-fit there) and merely bright in OTHERS (no satstar fit in
-    # those frames) -- in the latter ``base`` never removed it, so it MUST be
-    # rendered or it lingers in the residual AND is missing from the model
-    # (observed: sickle F480M bright stars left at ~88% of data peak).  So we keep
-    # the saturated rows separate and decide PER FRAME (in the loop) whether THIS
-    # frame's satstar model actually covers each one; uncovered ones are rendered
-    # as ordinary point sources.  (See the QA POLICY block below.)
+    # Saturated stars are already subtracted from ``base`` by the satstar model
+    # -- but only in the frames where they were actually saturated.  Keep them
+    # separate and decide per frame: covered by that frame's satstar model ->
+    # skip, otherwise render as an ordinary point source.
     if 'replaced_saturated' in merged.colnames:
         _satrow = np.asarray(merged['replaced_saturated'], dtype=bool)
     else:
@@ -3261,26 +3173,12 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     written = {k: [] for k in kinds}
     written_model = {k: [] for k in kinds}
 
-    # Per-frame renders are independent (each reads its own raw residual/model,
-    # projects the shared read-only merged catalog + PSF grid, writes its own
-    # products keyed by a per-frame ``stem``), so they can fan out across threads.
-    # Threads (not processes) avoid pickling the PSF grid + merged catalog; the
-    # jwst datamodel WRITES are serialized under _save_lock (jwst DataModel save
-    # is not guaranteed thread-safe).  The speedup is PARTIAL: _render_model_from_table
-    # is a Python per-source loop (GIL-held); the gain comes from overlapping the
-    # fits I/O, world_to_pixel, scipy binary_dilation and the datamodel reads --
-    # expect a few x, not linear in thread count.
-    #
-    # Gated on the SEPARATE, opt-in ``--mergedcat-render-threads`` (default 1 =
-    # serial, byte-identical).  NOT --parallel-workers: every production sbatch
-    # sets that from $SLURM_CPUS_PER_TASK, so reusing it would silently enable the
-    # threaded path on live jobs before byte-identity is validated.
-    #
-    # Frame ``stem``s must be unique across overlapping_frames (per-detector
-    # naming guarantees this); if two frames shared a stem they would write the
-    # same out_resid/out_model and, threaded, the last writer would be
-    # nondeterministic.  Assert it so a naming regression fails loudly, serial or
-    # threaded.
+    # Per-frame renders are independent, so they can run on threads (shared
+    # read-only PSF grid + catalog, no pickling).  Datamodel writes go under
+    # _save_lock.  Expect a few x, not linear: the render loop holds the GIL.
+    # Opt-in via --mergedcat-render-threads (default 1 = serial), deliberately
+    # NOT --parallel-workers, which every production sbatch already sets.
+    # Frame stems must be unique or two threads write the same file.
     _render_threads = max(1, int(getattr(options, 'mergedcat_render_threads', 1) or 1))
     import threading as _threading
     _save_lock = _threading.Lock()
@@ -3394,16 +3292,11 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
             # bright non-saturated rows -> flat-topped with the saturated group
             bx = list(kx[bright_nonsat]); by = list(ky[bright_nonsat])
             bf = list(kf[bright_nonsat])
-            # Saturated stars: render only the ones THIS frame's satstar model does
-            # NOT cover (else they linger in the residual -- see split above).  A
-            # star is "covered" when the per-frame satstar model has a real peak at
-            # its position; where it was not satstar-fit the model is exactly 0.
-            # These UNCOVERED saturated stars are rendered SEPARATELY (srx/sry/srf)
-            # so their model can be capped to the data (below) -- rendering them at
-            # the merged (saturation-clipped) flux as a peaked point source
-            # over-predicts the star in the frames where it is UNsaturated (cloudc
-            # F2550W bright star A: model 2797 vs true star 2296) and gouges the
-            # thermal-background pedestal (a -501 hole).
+            # Render only the saturated stars this frame's satstar model does not
+            # already cover (covered = the model has a real peak there).  They go
+            # in their own arrays so the model can be capped to the data below:
+            # the merged flux is saturation-clipped and over-predicts the star in
+            # frames where it was not saturated, gouging a hole in the background.
             srx, sry, srf = [], [], []
             if len(sat_sc):
                 sxx, syy = ww.world_to_pixel(sat_sc)
@@ -3467,49 +3360,19 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
                               'flux_fit': np.asarray(srf, dtype=float)})
                 mc_model = mc_model + _render_model_from_table(
                     stbl, rg, base.shape, psf_shape)
-            # ============================ QA POLICY ============================
-            # The residual and model QA images obey a STRICT content policy that
-            # downstream evaluation (and the residual-bg feedback loop) depend on:
-            #
-            #   RESIDUAL  = background ONLY.  NO stars -- neither saturated nor
-            #               unsaturated.  Built as base - mc_model, where
-            #                 base     = data - satstar_model  (data_for_residual;
-            #                            saturated stars ALREADY removed per-frame)
-            #                 mc_model = rendered UNSATURATED point sources only
-            #                            (replaced_saturated rows were dropped from
-            #                            `merged` above; rendering them here would
-            #                            double-subtract the satstars).
-            #               So the INTERMEDIATE model subtracted to make the
-            #               residual MUST EXCLUDE saturated stars (they are gone
-            #               via `base`).  A clean residual = pure extended bg.
-            #               (If saturated stars LINGER in the residual, the
-            #               per-frame satstar model under-fit them -- a satstar
-            #               problem, not a policy problem here.)
-            #
-            #   MODEL i2d = stars ONLY (saturated AND unsaturated), NO background.
-            #               mc_model (unsat point sources) + satstar_sm (the
-            #               saturated-star model added back FOR DISPLAY).  The
-            #               written datamodel also zeroes meta.background so the
-            #               resampled mosaic carries no sky pedestal.
-            #
-            # CRITICAL ASYMMETRY: the model SUBTRACTED to form the residual must
-            # NOT include satstars; the MODEL written to disk MUST include them.
-            # Regression: tests/test_residual_model_policy.py.
-            # ==================================================================
+            # What the two QA images must contain (test_residual_model_policy.py):
+            #   residual  = background only, no stars.  base - mc_model, where
+            #               base already has the satstars subtracted, so the
+            #               subtracted model must EXCLUDE them.
+            #   model i2d = stars only, no background: mc_model + satstar_sm, so
+            #               the written model must INCLUDE them.
             mc_resid = (base - mc_model).astype('float32')   # residual: bg only (no stars)
-            # NaN-mask deep over-subtraction PITS (MIRI).  A satstar model with
-            # over-estimated amplitude gouges a deep NEGATIVE pit; at the masked
-            # saturated CORE (sickle pillar -755k) and -- crucially -- out in the
-            # UNSATURATED WINGS, where the DATA is valid (~700) but the broad model
-            # subtracts ~1e6 (w51 F770W 11.2e6-flux satstar: resid -1.02e6 at
-            # data=667, NOT a DQ-SATURATED pixel).  The legacy mask required
-            # DQ-SATURATED and so MISSED every wing pit, leaving -1e6 holes in the
-            # residual the iterative background must not see.  Broaden: NaN ANY
-            # deeply-negative pit (over-subtraction signature) regardless of DQ,
-            # plus the legacy saturated-core pits, then dilate to fill the basin.
-            # Positive residual (unsubtracted bright flux the user wants) is KEPT --
-            # a pit must be < 0.  Far fewer pixels than the broad SATURATED flag,
-            # so no resample balloon.  Thresholds env-tunable.
+            # MIRI: NaN out over-subtraction pits so the iterative background
+            # never sees them.  An over-bright satstar model digs deep negative
+            # holes both at the saturated core and out in the unsaturated wings,
+            # so key on "deeply negative" rather than on the SATURATED DQ bit
+            # (which misses every wing pit), then dilate to fill the basin.
+            # Positive residual is kept -- a pit must be < 0.
             if _instrument_from_filter(filtername) == 'MIRI':
                 try:
                     _fin = np.isfinite(mc_resid)
@@ -4574,19 +4437,10 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     _run_tag = assert_runnable_version('cataloging')
     print(f"cataloging: running under pipeline tag {_run_tag}")
 
-    # Deprecate mosaic-mode photometry (2026-05-25).  Reasons:
-    # * mosaic-mode skips satstar fitting (the per-frame DQ_SATURATED gate is
-    #   only meaningful in the original cal files, not in the drizzled
-    #   mosaic), so saturated stars stay un-subtracted -- contradicts the
-    #   "satstar first, before any daofind/daophot" requirement.
-    # * Iter3 chains, --postprocess-residuals, force-union satstar, the
-    #   satstar-artifact filter, seed_union, and all the recent fixes assume
-    #   per-frame inputs.  Mosaic mode misses those benefits silently.
-    # * No live launcher in /orange/.../shellscripts uses non-each-exposure
-    #   mode for new runs; the remaining call sites are legacy.  Refuse
-    #   here to force callers to use --each-exposure.
-    # --finalize-only is allowed without --each-exposure because it only runs
-    # mosaic_each_exposure_residuals on already-produced per-frame residuals.
+    # Mosaic-mode photometry is retired: it cannot fit saturated stars (the
+    # DQ_SATURATED gate only means something in the per-frame cal files) and
+    # every later feature assumes per-frame inputs.  Require --each-exposure.
+    # --finalize-only is exempt; it only mosaics existing per-frame residuals.
     if (not options.each_exposure
             and not options.finalize_only
             and not options.list_missing_tasks):
@@ -4792,15 +4646,9 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     else:
         basepath = f'/blue/adamginsburg/adamginsburg/jwst/{field_to_reg_mapping[field]}/'
 
-    # NIRISS: reduced products live under <target>/niriss/<FILTER>/ (namespaced so
-    # NIRISS F480M/F356W do not collide with the NIRCam <target>/<FILTER> trees).
-    # Append the 'niriss/' level so every downstream {basepath}/<FILTER>/pipeline
-    # glob, per-frame catalog write, {basepath}/catalogs (refcat), {basepath}/
-    # offsets (m2 checkpoint), {basepath}/reduction (fwhm) and {basepath}/regions_
-    # resolve there.  The support trees (reduction/regions_/catalogs/offsets/psfs)
-    # are staged under <target>/niriss/ by scripts/reduction/stage_niriss_basepath.sh
-    # (symlinks to the shared <target>/ trees for read-only inputs; real dirs for
-    # niriss-specific outputs).
+    # NIRISS products live under <target>/niriss/ so its F480M/F356W do not
+    # collide with NIRCam's.  Moving basepath down one level redirects every
+    # downstream glob at once; stage_niriss_basepath.sh sets that tree up.
     if _instrument_override() == 'NIRISS':
         basepath = f'{basepath}niriss/'
         print(f"NIRISS instrument override: basepath -> {basepath}", flush=True)
@@ -4910,16 +4758,10 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     _cutout_run = bool(getattr(options, 'cutout_region', ''))
     _cutout_overlap_count = 0
 
-    # The manual-iteration pipeline (cataloging.py) is the default path.  Its
-    # phases are sequential (each detects on the previous phase's merged residual
-    # mosaic), so the whole multi-phase pipeline runs IN-PROCESS as a single job
-    # -- full-frame OR cutout -- never split across a SLURM array.  It is NOT
-    # cutout-specific: with no --cutout-region it processes the full frames in
-    # place under ``basepath``.  Run it as a single (non-array) job.
-    #
-    # The legacy --cutout-region in-process path (_run_cutout_pipeline) is kept
-    # only for --legacy-iterations cutout runs.  Full-frame legacy runs still
-    # fall through to the SLURM-array each-exposure loop below (byte-identical).
+    # The manual-iteration pipeline (cataloging.py) is the default.  Its phases
+    # are sequential -- each detects on the previous phase's residual mosaic --
+    # so it runs in-process as one job, never split across a SLURM array.
+    # --legacy-iterations still uses the array loop further down.
     if options.each_exposure and os.getenv('SLURM_ARRAY_TASK_ID') is None:
         if getattr(options, 'manual_iterations', False):
             # Imported lazily so the legacy path never depends on it and there is
@@ -4984,16 +4826,10 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             exposure_id = filename.split("_")[2]
                             visit_id = filename.split("_")[0][-3:]
                             vgroup_id = filename.split("_")[1]
-                            # Extract the actual detector token from the
-                            # filename (e.g. nrca1, nrcb3, nrcalong).  When
-                            # ``module='merged'`` is passed, get_filenames()
-                            # returned files across all detectors; saving
-                            # all of them under the literal 'merged' token
-                            # caused the 8 detector outputs per exposure to
-                            # overwrite each other, dropping nmatch_good
-                            # from the expected 6 (dithers) to 1.  Pass the
-                            # per-file detector through so save_photutils_results
-                            # writes a unique filename per (exposure, detector).
+                            # Name outputs by the file's own detector token.
+                            # module='merged' spans all detectors, so writing
+                            # them all under 'merged' would overwrite 8 outputs
+                            # per exposure down to 1.
                             file_detector = filename.split("_")[3]
                             if module == 'merged':
                                 file_module = file_detector
@@ -5120,19 +4956,10 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
 
 def get_filenames(basepath, filtername, proposal_id, field, each_suffix, module, pupil='clear', visitid='001', allow_empty=False):
 
-    # jw01182004002_02101_00012_nrcalong_destreak_o004_crf.fits
-    # jw02221001001_07101_00012_nrcalong_destreak_o001_crf.fits
-    # jw02221001001_05101_00022_nrcb3_destreak_o001_crf.fits
-    # 2026-04-24: when module='merged' (used by the LW per-frame
-    # photometry runs to indicate "both NIRCam long-wavelength
-    # detectors"), the per-frame data files actually carry the
-    # detector-specific tokens 'nrcalong' / 'nrcblong' in their names.
-    # The earlier ``*{module}*`` glob with module='merged' returned 0
-    # files for any LW filter because those files don't have the
-    # literal substring 'merged'.  Expand the search so module='merged'
-    # matches both detector tokens.
-    # MIRI imaging has a single detector ('mirimage'); 'merged' there
-    # collapses to that single token.
+    # Filenames carry a real detector token, e.g.
+    #   jw02221001001_05101_00022_nrcb3_destreak_o001_crf.fits
+    # so module='merged' has to be expanded to the detectors it stands for:
+    # nrcalong/nrcblong for NIRCam LW, the single 'mirimage' for MIRI.
     if module == 'merged':
         if _instrument_from_filter(filtername) == 'MIRI':
             glob_modules = ['mirimage']
