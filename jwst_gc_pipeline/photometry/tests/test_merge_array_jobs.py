@@ -201,3 +201,22 @@ def test_the_merge_honours_the_basepath_override(monkeypatch, tmp_path, capsys):
               {'SLURM_ARRAY_TASK_ID': None, 'RUN_REGISTRATION_GATE': None},
               calls)
     assert str(tmp_path) in capsys.readouterr().out
+
+
+@pytest.mark.localdata
+def test_a_non_brick_merge_does_not_need_the_brick_offsets_file(monkeypatch,
+                                                                tmp_path):
+    """The 1182 offsets table sat at an absolute path and was read eagerly, so
+    every target's merge depended on that one file existing."""
+    reads = []
+    real_read = MC.Table.read
+    monkeypatch.setattr(MC.Table, 'read',
+                        classmethod(lambda cls, *a, **k: reads.append(a[0]) or
+                                    real_read(*a, **k)))
+    calls = []
+    monkeypatch.setenv('GC_BASEPATH_OVERRIDE', str(tmp_path))
+    _run_main(monkeypatch,
+              ['merge_catalogs', '--target', 'sickle', '--skip-daophot'],
+              {'SLURM_ARRAY_TASK_ID': None, 'RUN_REGISTRATION_GATE': None},
+              calls)
+    assert not any('Offsets_JWST_Brick1182' in str(r) for r in reads), reads

@@ -125,6 +125,15 @@ def _run_merge(merge_func, label, on_error, **kwargs):
         print(f'{label}: skipped ({type(ex).__name__}: {ex})', flush=True)
 
 
+_BRICK_1182_OFFSETS = ('/blue/adamginsburg/adamginsburg/jwst/brick/offsets/'
+                       'Offsets_JWST_Brick1182_F444ref.csv')
+
+
+def _read_offsets_table(path_or_none):
+    """Load an offsets table lazily.  `None` means the field aligns in imaging."""
+    return None if path_or_none is None else Table.read(path_or_none)
+
+
 def individual_frame_merge_jobs(target):
     """The (program, filter) pairs to merge, in SLURM array-index order."""
     return [(progid, filtername)
@@ -2946,7 +2955,10 @@ def main():
     # merged out of the hard-coded tree.
     basepath = apply_basepath_override(basepath)
 
-    offsets_tables = {'1182': Table.read(f'/blue/adamginsburg/adamginsburg/jwst/brick/offsets/Offsets_JWST_Brick1182_F444ref.csv'),
+    # Only 1182 has an offsets table; the rest align in imaging.  Read it on
+    # demand -- it lives at an absolute path, and eagerly reading it made every
+    # run of every target depend on that one file.
+    offsets_tables = {'1182': _BRICK_1182_OFFSETS,
                       '2221': None,
                       '3958': None,
                       '2092': None,
@@ -3004,7 +3016,7 @@ def main():
                     suffix=INDIV_MERGE_SUFFIX[method], method=method,
                     target=target, basepath=basepath, field=options.field,
                     exposure_numbers=np.arange(1, options.max_expnum + 1),
-                    offsets_table=offsets_tables[progid],
+                    offsets_table=_read_offsets_table(offsets_tables[progid]),
                     iteration_label=options.iteration_label,
                     resbgsub=options.resbgsub,
                     n_spatial_chunks=int(options.n_spatial_chunks),

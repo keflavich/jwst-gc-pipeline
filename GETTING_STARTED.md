@@ -27,10 +27,11 @@ Then set, in your shell or job script:
 ```bash
 export CRDS_PATH=/somewhere/with/20GB          # JWST reference files land here
 export CRDS_SERVER_URL=https://jwst-crds.stsci.edu
-export STPSF_PATH=/path/to/stpsf-data          # PSF models (WEBBPSF_PATH on older installs)
+export STPSF_PATH=/path/to/stpsf-data          # PSF models; required
 ```
 
-`STPSF_PATH` is required — the saturated-star finder raises without it.
+`STPSF_PATH` is required by name — the saturated-star finder raises without
+it, and setting `WEBBPSF_PATH` instead does not satisfy that check.
 
 There are no console scripts. Everything runs as `python -m <module>` or, for
 the reduction driver, as a path — its filename contains a hyphen, so `python -m`
@@ -38,21 +39,24 @@ cannot load it.
 
 ## Data layout
 
-Everything hangs off one **basepath** per target. Stage 1 creates the rest:
+Everything hangs off one **basepath** per target. Only `<FILTER>/pipeline/` is
+created for you — the rest you must populate **before** stage 1, because it
+reads them:
 
 ```
 <basepath>/                     e.g. /orange/adamginsburg/jwst/sickle/
 ├── F212N/                      one directory per filter, uppercase
-│   └── pipeline/               reduced products: *_crf.fits, *_i2d.fits
-├── catalogs/                   merged catalogs (the science output)
-├── offsets/                    astrometric offset tables
-├── reduction/                  FWHM tables and reduction bookkeeping
-├── psfs/                       gridded PSF models
-└── regions_/                   DS9 region files
+│   └── pipeline/               your _cal/_rate frames in, *_crf.fits out
+├── reduction/fwhm_table.ecsv   INPUT.  Stage 1 reads it before writing anything
+├── regions_/<inst>_<target>_fov.reg   INPUT.  The field footprint
+├── offsets/                    INPUT for table-locked fields; see alignment_config
+├── psfs/                       gridded PSF models (built on demand)
+└── catalogs/                   merged catalogs — the science output
 ```
 
-Put your uncalibrated or `_cal` frames under `<basepath>/<FILTER>/pipeline/`
-before running stage 1.
+Put your `_cal` (or `_rate`) frames under `<basepath>/<FILTER>/pipeline/` before
+running stage 1. A missing `reduction/fwhm_table.ecsv` or FOV region file stops
+stage 1 immediately.
 
 ---
 
@@ -68,7 +72,11 @@ sbatch --array=0-3 --export=ALL,PROPOSAL=2221,FIELD=001,FILTERS="F405N F410M F46
        scripts/reduction/submit_reduction.sbatch
 
 # 2. catalog — after stage 1 has written the *_crf.fits
+#    PROPOSAL, FIELD, TARGET, EACH_SUFFIX and MODULES travel together: set one
+#    and you must set all five, or the script exits 64.  EACH_SUFFIX names the
+#    reduced products to catalog and embeds the obs number.
 sbatch --array=0-3 --export=ALL,PROPOSAL=2221,FIELD=001,TARGET=brick,\
+EACH_SUFFIX=destreak_o001_crf,MODULES=merged,\
 FILTERS="F405N F410M F466N F212N" \
        --job-name=brick2221-o001-cat \
        scripts/reduction/submit_cataloging.sbatch
@@ -93,24 +101,28 @@ can check `--array` bounds before submitting.
 
 ## Adding a new dataset
 
-A new target is not configuration — it is a code change in **six places**. All
-of them are dictionaries keyed by target or proposal id:
+A new target is not configuration — it is a code change in **eight places**,
+keyed by target or proposal id. In the order you hit them:
 
-| what | where |
-|---|---|
-| filters per program | `obs_filters` in `photometry/merge_catalogs.py` |
-| visits per program | `nvisits`, inside `main()` in `photometry/crowdsource_catalogs_long.py` |
-| observation number | `project_obsnum` in `photometry/merge_catalogs.py` |
-| astrometric offsets | `offsets_tables`, inside `main()` in `photometry/merge_catalogs.py` |
-| alignment strategy | `ALIGNMENT_CONFIG` in `reduction/alignment_config.py` |
-| starless-image targets | `TARGETS` in `photometry/make_starless_image.py` |
+| stage | what | where |
+|---|---|---|
+| reduce | proposal → obs → target | `field_to_reg_mapping`, inside `__main__` of `reduction/PipelineRerunNIRCAM-LONG.py` |
+| reduce | target → FOV region file | `fov_regname` in the same file |
+| reduce | alignment strategy | `ALIGNMENT_CONFIG` (a tuple of `FieldAlignment`) in `reduction/alignment_config.py` |
+| catalog | visits per program | `nvisits`, inside `main()` of `photometry/crowdsource_catalogs_long.py` |
+| merge | filters per program | `obs_filters` in `photometry/merge_catalogs.py` |
+| merge | observation number | `project_obsnum` in the same file |
+| merge | astrometric offsets | `offsets_tables`, inside `main()` in the same file |
+| starless | target list | `TARGETS` in `photometry/make_starless_image.py` |
 
-Plus the basepath itself, which is an `if target in (...)` branch in
-`merge_catalogs.main()` choosing between two hard-coded roots.
+Plus the basepath, an `if target in (...)` branch in `merge_catalogs.main()`
+choosing between two hard-coded roots.
 
-Two of those dictionaries live *inside functions*, so they cannot be imported,
-inspected, or overridden — you edit the source. `obs_filters` also exists in a
-second copy in `reduction/make_merged_psf.py`.
+**Three** of these live *inside functions* — they cannot be imported, inspected
+or overridden, so you edit the source. `obs_filters` also has a second copy in
+`reduction/make_merged_psf.py`. Miss `field_to_reg_mapping` and stage 1 dies
+with a bare `KeyError`; miss `obs_filters` and the merge dies with a `TypeError`
+on `None`.
 
 > This is the single biggest obstacle to using the pipeline on a new field, and
 > it is a known problem rather than a design. A registry that these six read
@@ -139,9 +151,16 @@ So today, off HiPerGator:
 | catalog | redirects | redirects |
 | merge | redirects | redirects |
 
-That is: you can run NIRCam long-wavelength end to end against your own tree.
-For MIRI and NIRISS you must reduce elsewhere, or patch those two drivers the
-way the NIRCam one is patched — one call to `apply_basepath_override`.
+That is: NIRCam long-wavelength **writes** where you tell it. It is not yet a
+clean end-to-end run off HiPerGator, because some **inputs** are still absolute:
+
+- `PipelineRerunNIRCAM-LONG.py` opens `~/.mast_api_token` and logs in to MAST
+  unconditionally, even with `-s`.
+- Reference catalogs and several diagnostic paths are hard-coded under
+  `/orange`.
+
+For MIRI and NIRISS you must reduce elsewhere, or add the one
+`apply_basepath_override` call the NIRCam driver has.
 
 The SLURM scripts are HiPerGator-specific throughout — partition names, the
 CRDS cache path, and an absolute path to one conda environment. Treat them as
