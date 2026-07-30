@@ -805,6 +805,9 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     # photometry/residual_background.py.
     if all(k in tbls[0].colnames for k in RESBKG_COLUMNS):
         _t0 = time.time()
+        # Phase 1/2's weight arrays are dead by here and are (n_src, n_tbl)
+        # each; drop them before allocating three more stacks of that size.
+        del weights, pos_weights, weights_with_fallback
         print(f"Residual-footprint background: stacking {len(RESBKG_COLUMNS)} "
               f"columns ({n_src}x{n_tbl}) for the weighted combine...", flush=True)
         _stack = {}
@@ -833,8 +836,10 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
         print(f"Residual-footprint background: {_n_ok}/{n_src} sources combined "
               f"in {time.time()-_t0:.1f}s", flush=True)
 
-    # weights, keepmask, saved_match_inds, saved_keep kept until function
-    # return; Python will free them after caller drops newtbl reference.
+    # keepmask, saved_match_inds, saved_keep kept until function return;
+    # Python will free them after the caller drops the newtbl reference.
+    # (weights/pos_weights/weights_with_fallback are freed above, before the
+    # residual-background stacks are allocated.)
     return newtbl
 
 
@@ -1471,7 +1476,12 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     # make a table that is nearly equivalent to standard tables (with no 'x' or 'y' coordinate)
     minimal_version = {colname: merged_exposure_table[f'{colname}_avg']
                        for colname in column_names if f'{colname}_avg' in merged_exposure_table.colnames}
-    for key in ('dra_avg', 'ddec_avg', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', f'{flux_error_colname}_prop'):
+    # resbkg_mean_std/_err/_nframes have no '<col>_avg' form, so the
+    # comprehension above cannot pick them up -- carry them explicitly or the
+    # released catalog advertises five columns and ships two.
+    for key in ('dra_avg', 'ddec_avg', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good',
+                'resbkg_mean_std', 'resbkg_mean_err', 'resbkg_nframes',
+                f'{flux_error_colname}_prop'):
         if key in merged_exposure_table.colnames:
             minimal_version[key.split("_avg")[0]] = merged_exposure_table[key]
 

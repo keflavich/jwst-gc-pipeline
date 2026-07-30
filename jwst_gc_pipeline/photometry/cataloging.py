@@ -1935,15 +1935,18 @@ def _attach_residual_background(result, residual, ctx, options, label=''):
     """
     if not bool(mopt(options, 'manual_residual_background')):
         return result
-    if 'x_fit' not in result.colnames or len(result) == 0:
+    # Guard on BOTH columns the body reads: guarding only x_fit let a table
+    # without y_fit raise KeyError straight out of a function whose contract is
+    # "never costs a frame its photometry".
+    if not {'x_fit', 'y_fit'} <= set(result.colnames) or len(result) == 0:
         return result
     try:
         box = int(mopt(options, 'manual_residual_background_box'))
         mean, rms, npix = measure_footprint_background(
             residual, np.asarray(result['x_fit'], dtype=float),
             np.asarray(result['y_fit'], dtype=float),
-            box=box, mask=ctx.mask)
-    except (ValueError, IndexError, TypeError) as exc:
+            box=box, mask=getattr(ctx, 'mask', None))
+    except (ValueError, IndexError, TypeError, KeyError, AttributeError) as exc:
         print(f"[{label}] residual-footprint background skipped: "
               f"{type(exc).__name__}: {exc}", flush=True)
         return result
