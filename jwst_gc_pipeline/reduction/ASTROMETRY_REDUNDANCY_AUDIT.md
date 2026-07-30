@@ -19,8 +19,10 @@ that let the collapse happen and recur.
 ## Ranked redundancies
 
 ### R1 (CRITICAL) — THREE builders write the same `Offsets_JWST_Brick<prop>_VIRAC2locked.csv`
-`build_virac2_locked_perexp.py` (per-visit), `relock_exposures.py` (per-exposure),
-and `build_calframe_locked_offsets.py` all write the **same production table**
+`brick2221/analysis/build_virac2_locked_perexp.py` (per-visit),
+`brick2221/analysis/relock_exposures.py` (per-exposure), and
+`brick2221/analysis/build_calframe_locked_offsets.py` — all three in
+**brick-jwst-2221**, not here — all write the **same production table**
 that `fix_alignment` consumes. Whichever ran last wins; a fix in one builder is
 silently overwritten by another on the next run. This IS the recurrence engine:
 the brick-1182 collapse persisted across rebuilds because the fixed and unfixed
@@ -31,8 +33,9 @@ builders competed for one file.
   `validate_offsets_table()` call at the end of the surviving builder.
 
 ### R2 (CRITICAL) — 3× duplicate `robust_shift` / `robust_offset` with parameter drift
-`relock_exposures.py:robust_shift`, `build_calframe_locked_offsets.py:robust_shift`,
-`lock_exposures.py:robust_offset` are near-identical clipped-median solvers with
+`brick2221/analysis/relock_exposures.py::robust_shift`,
+`brick2221/analysis/build_calframe_locked_offsets.py::robust_shift` and
+`brick2221/analysis/lock_exposures.py::robust_offset` are near-identical clipped-median solvers with
 **different constants** (search 0.3" vs 0.5"; clip 60 vs 80). Tuning one does not
 fix the others; two can produce conflicting offsets for the same data.
 - **Fix:** one shared solver. Prefer routing all of them through

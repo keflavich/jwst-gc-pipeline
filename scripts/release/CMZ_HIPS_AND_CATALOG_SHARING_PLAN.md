@@ -1,5 +1,5 @@
-> **Note on paths:** `jwst_rgb/`, `scripts/gc2211_rgb_images.py` and
-> `assemble_cmz_catalog.py` referenced below live **outside this repo** (the
+> **Note on paths:** `jwst_rgb/`, `jwst_rgb/scripts/gc2211_rgb_images.py` and
+> `assemble_cmz_catalog.py` (planned) referenced below live **outside this repo** (the
 > `jwst_rgb` tree / brick-jwst-2221). In-repo CMZ code is
 > `jwst_gc_pipeline/cmz/` + `scripts/release/build_cmz_products.py`.
 
@@ -169,7 +169,7 @@ hierarchical catalog product. Three things to build: an **assembly**, a
 
 ### 2.2 Assemble the CMZ-wide catalog (new tooling)
 
-`assemble_cmz_catalog.py`: vstack the per-field cross-band `resbgsub_m7` catalogs
+`assemble_cmz_catalog.py` (planned): vstack the per-field cross-band `resbgsub_m7` catalogs
 into one table, with:
 - **de-duplication in field-overlap regions** (same-star match across field
   boundaries within a tolerance; keep the higher-S/N / more-bands detection),
@@ -213,7 +213,7 @@ coverage MOC.
 
 ### 2.5 Release integration + steps
 
-1. `assemble_cmz_catalog.py` (vstack + dedup + provenance + unified columns).
+1. `assemble_cmz_catalog.py` (planned) (vstack + dedup + provenance + unified columns).
 2. `hats-import` → HATS Parquet; also emit a flat Parquet + keep FITS/ECSV.
 3. `Hipsgen-cat.jar` → HiPS catalog; `mocpy` → catalog coverage MOC.
 4. `stage_release.py` gains a `--cmz-catalog` step that (re)assembles when any

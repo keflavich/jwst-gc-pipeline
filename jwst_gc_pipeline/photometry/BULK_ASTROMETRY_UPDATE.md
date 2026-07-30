@@ -130,4 +130,3 @@ correction, nudge their WCS with the reduction's `adjust_wcs` path (a `CRVAL`
 shift), the same primitive `fix_alignment` uses. The catalogs and mosaics then
 agree. (Not automated here — the catalogs are the science deliverable and the
 common case.)
-```

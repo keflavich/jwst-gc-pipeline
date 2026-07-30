@@ -357,8 +357,9 @@ frame with `consensus_jitter=True`.
 NIRCam offsets-table path. The sickle MIRI frames are registered to the NIRCam
 F480M frame by region-specific scripts in **brick-jwst-2221**
 (`brick2221/reduction/register_sickle_miri_o001_o002.py`,
-`register_o002_f770w_per_frame_to_f480m.py`,
-`register_o002_f770w_gwcs_to_f480m.py`, `merge_sickle_miri_o001_o002.py`). They
+`brick2221/reduction/register_o002_f770w_per_frame_to_f480m.py`,
+`brick2221/reduction/register_o002_f770w_gwcs_to_f480m.py`,
+`brick2221/reduction/merge_sickle_miri_o001_o002.py`). They
 edit the per-frame FITS WCS / embedded gwcs in place (idempotent via
 `MIRIDRA`/`MIRIDDE`/`MIRIWCSN`) and **must be run before cataloging** a sickle
 MIRI obs, or its mosaics sit ~3.3″ off truth while the catalog underneath is

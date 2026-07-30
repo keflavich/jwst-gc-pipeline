@@ -88,7 +88,9 @@ then next phase's stage A `afterok` stage B. m7 finalize also does cross-band.
 
 ## Validation
 
-`tests/test_perframe_equivalence.py` (or a script): run a small cutout BOTH
+`scripts/reduction/validate_perframe_equivalence.sh` (the shipped shell driver;
+this plan originally proposed a `tests/`-side equivalence test that was never
+written): run a small cutout BOTH
 monolithically and via the per-frame path; assert the final per-filter vetted
 catalogs + cross-band table are **bit-identical** (same rows, same flux columns).
 
