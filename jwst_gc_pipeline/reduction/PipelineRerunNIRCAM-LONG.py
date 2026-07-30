@@ -1164,43 +1164,11 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
     return locals()
 
 
-# offsets tables already collapse-checked this process (warn once per file, not per frame)
-_VALIDATED_OFFSETS_TABLES = set()
-
-
-def _apply_consensus_offsets_table(fn, basepath, proposal_id, filtername, field):
-    """Return (rashift, decshift) astropy Quantities for THIS exposure from the
-    per-exposure consensus offsets table seeded by the m2 astrometry checkpoint
-    (``seed_offsets_table_from_consensus``).
-
-    The table lives at ``{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_consensus.csv``
-    and is keyed (Visit, Filter, Exposure, Module) with ``dra (arcsec)`` /
-    ``ddec (arcsec)`` in the Δα-coordinate convention ``fix_alignment`` applies.
-
-    Returns (0,0) arcsec when the table does not exist yet (the FIRST reduction
-    pass, before cataloging has measured the consensus) so the frame stays at the
-    tweakreg/assign_wcs frame and the checkpoint can measure the raw scatter, and
-    (0,0) when this exposure has no row (it was already within consensus
-    tolerance, so no shift is needed)."""
-    tblfn = f'{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_consensus.csv'
-    if not os.path.exists(tblfn):
-        print(f"[consensus] no table {tblfn} yet; leaving "
-              f"{os.path.basename(fn)} at frame (0,0)")
-        return 0 * u.arcsec, 0 * u.arcsec
-    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
-        lookup_consensus_offset)
-    tbl = Table.read(tblfn)
-    visit = fn.split('_')[0]
-    exposure = int(fn.split('_')[-3])
-    thismodule = fn.split('_')[-2]
-    vgroup = fn.split('_')[1]      # exposure numbers restart per visit group
-    try:
-        dra, ddec = lookup_consensus_offset(
-            tbl, visit, exposure, thismodule, filtername, vgroup=vgroup)
-    except ValueError as ex:
-        raise ValueError(f"{ex} in {tblfn} (frame {fn})") from ex
-    return dra * u.arcsec, ddec * u.arcsec
-
+# NOTE: _apply_consensus_offsets_table and the module-level
+# _VALIDATED_OFFSETS_TABLES set lived here.  Both moved into
+# jwst_gc_pipeline/reduction/unified_alignment.py when the per-proposal
+# dispatch collapsed; leaving the originals behind would have implied the
+# consensus path still routes through this file, which it does not.
 
 def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, filtername=None,
                   use_average=True):
@@ -1250,313 +1218,32 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
     if module is None:
         module = 'nrc' + mod.meta.instrument.module.lower()
 
-    _prov_tbl = None       # offsets table actually consumed (header provenance)
-    _prov_row_stage = ''   # checkpoint stage that last corrected the row, if any
-    _frame_gen = None      # this frame's WCS-generation stamp (set in the locked branch)
-    if (field == '004' and proposal_id == '1182') or (field in ('001', '002') and proposal_id == '2221'):
-        # field 002 (Cloud C) added 2026-06-22: route through the per-exposure VIRAC2-locked
-        # table (cloudc/offsets/Offsets_JWST_Brick2221_VIRAC2locked.csv, built by
-        # build_virac2_locked_perexp.py --region cloudc) instead of the old hardcoded per-visit
-        # shifts below. Replaces the deprecated F405N-crowdsource frame (~90 mas off Gaia).
-        refname = refnames[proposal_id]
-        exposure = int(fn.split("_")[-3])
-        thismodule = fn.split("_")[-2]
-        visit = fn.split("_")[0]
-        # jw<prop><obs><visit>_<VGROUP>_<exposure>_<detector>_...: the exposure
-        # number restarts per visit group, so the group is part of the identity.
-        vgroup = fn.split("_")[1]
-        # MODULE-LOCKED per-VISIT offsets (preferred). The NIRCam detectors are SIAF-locked
-        # to <0.01 px within an exposure, and the SIAF/assign_wcs solution already carries the
-        # correct per-exposure dithers + per-detector geometry; the only uncorrected term is the
-        # per-VISIT guide-star pointing error.  So the alignment must be ONE shift per visit applied
-        # identically to all exposures AND all 8 detectors -- NOT an independent per-detector (or
-        # per-exposure) tweakreg shift, which breaks the lock and produces filter-to-filter
-        # 'quiltwork' (~10-15 mas) and injects per-exposure VIRAC2 noise.  The locked table (built by
-        # brick2221/analysis/relock_exposures.py: undo the recorded per-detector offset -> SIAF ->
-        # one VIRAC2-tied shift jointly solved over all exposures+detectors of the visit) is keyed on
-        # (Visit, Filter) only -- NO Module, NO Exposure column.
-        locked_tbl = f'{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_VIRAC2locked.csv'
-        if os.path.exists(locked_tbl):
-            offsets_tbl = Table.read(locked_tbl)
-            # GENERATION GUARD (layered, 2026-07-13).  A correction is only
-            # valid on the WCS GENERATION it was solved against (the frame
-            # drifted ~30-48 mas between Brick runs; ~69 mas VIRAC2 offset
-            # root cause).  Verification layers, strongest first:
-            #   1. per-row BASE STAMPS (base_calver / base_crds_ctx /
-            #      base_dvacorr, written by the tie builders from the crf they
-            #      solved on): compared against THIS frame's generation keys.
-            #      A mismatch is deterministic evidence of a stale tie ->
-            #      hard-fail (override: GENLOCK_ALLOW_MISMATCH=1).
-            #   2. mtime fallback (columns absent): WEAK -- the standard chain
-            #      regenerates destreak fresh, so crf mtime > table mtime on
-            #      EVERY run including correct ones; warn-only, and
-            #      GENLOCK_STRICT applies only to this fallback.
-            _frame_gen = None
-            try:
-                from jwst_gc_pipeline.astrometry_utils import generation_stamp
-                with fits.open(fn) as _gfh:
-                    _hdr0 = dict(_gfh[0].header)
-                    _hdr0.update({k: v for k, v in _gfh[1].header.items()
-                                  if k in ('DVACORR',)})
-                    _frame_gen = generation_stamp(_hdr0)
-            except (OSError, KeyError, IndexError) as _gex:
-                print(f"[genlock] could not read generation keys from {fn}: {_gex}")
-            _has_stamps = all(f'base_{k}' in offsets_tbl.colnames
-                              for k in ('calver', 'crds_ctx', 'dvacorr'))
-            if not _has_stamps:
-                try:
-                    _t_tbl = os.path.getmtime(locked_tbl); _t_crf = os.path.getmtime(fn)
-                except OSError:
-                    _t_tbl = _t_crf = None
-                if _t_tbl is not None and _t_tbl < _t_crf - 1.0:
-                    import datetime as _dt
-                    _gmsg = (f"[genlock] offsets table {os.path.basename(locked_tbl)} has no "
-                             f"base_* generation stamps and predates crf "
-                             f"{os.path.basename(fn)}; the tie may be a reduction "
-                             f"generation behind (mtime is a WEAK proxy -- rebuild the "
-                             f"table with the stamping builders for a real check).")
-                    if os.environ.get('GENLOCK_STRICT'):
-                        raise RuntimeError(_gmsg)
-                    print("WARNING: " + _gmsg, flush=True)
-            # One-time collapse check: the ad-hoc VIRAC2locked curation once overwrote
-            # brick-1182 visit-001's offset with visit-002's (both ~+1.9" for a visit
-            # truly ~20" off). Warn if distinct visits share a value here so it can't
-            # be applied blind again. Once per file per process (not per frame).
-            if locked_tbl not in _VALIDATED_OFFSETS_TABLES:
-                _VALIDATED_OFFSETS_TABLES.add(locked_tbl)
-                from jwst_gc_pipeline.reduction.validate_offsets_table import assert_offsets_table_sane
-                assert_offsets_table_sane(offsets_tbl, context=os.path.basename(locked_tbl))
-            match = ((offsets_tbl['Visit'] == visit)
-                     & (offsets_tbl['Filter'] == filtername))
-            # Support BOTH conventions: per-VISIT tables (1 row/visit, no usable Exposure) and
-            # per-EXPOSURE tables (N rows/visit, Exposure int).  Narrow by Exposure only when
-            # >1 row matches.  Per-exposure removes real per-exposure jitter (~7-8 mas, measured
-            # 2026-06-20; same sign across all filters) WITHOUT injecting per-exposure VIRAC2
-            # noise -- the per-exposure term is solved against the dense INTERNAL consensus
-            # (build_virac2_locked_perexp.py), only the per-visit bulk touches VIRAC2.
-            if match.sum() > 1 and 'Exposure' in offsets_tbl.colnames:
-                match = match & (offsets_tbl['Exposure'] == exposure)
-            # Per-MODULE narrowing (default OFF: filters lock NRCA==NRCB together, per the
-            # <1 mas CRDS inter-module policy). Documented exception: F410M. Our reprocessing
-            # (CAL_VER 1.14.1.dev43 + CRDS jwst_1253.pmap) applies FILTER-SPECIFIC distortion
-            # (0249 F410M/NRCALONG vs 0300 NRCBLONG); these leave NRCALONG ~40 mas inconsistent
-            # with NRCBLONG, which a single per-filter shift cannot correct (2026-07-02 audit vs
-            # VIRAC2). Such filters carry per-module rows (a 'Module' column); narrow to this
-            # module. Filters with a single row still lock both modules identically.
-            if match.sum() > 1 and 'Module' in offsets_tbl.colnames:
-                match = match & ((offsets_tbl['Module'] == thismodule)
-                                 | (offsets_tbl['Module'] == thismodule.strip('1234')))
-            # Per-VGROUP narrowing.  A visit can dither across several visit groups
-            # (physically disjoint sky tiles) and the exposure number RESTARTS in
-            # each, so (visit, exposure) alone is ambiguous -- cloudc has 2 groups
-            # in every filter, gc2211 has 6.  Tables built before Vgroup existed
-            # have no such column and are matched exactly as before.
-            #
-            # UNCONDITIONAL (unlike the Exposure/Module narrowing above): a lone
-            # surviving row is exactly the dangerous case.  If the table happens to
-            # carry a row for the OTHER group's exposure N and none for this one,
-            # `match.sum() == 1` and a `> 1` guard would silently apply a DIFFERENT
-            # pointing's shift.  Narrow always and let the != 1 check below raise.
-            # A row with an EMPTY Vgroup cell predates the column (or was preserved
-            # by the builder's field-safe merge) and still applies -- see
-            # vgroup_row_matches.
-            if 'Vgroup' in offsets_tbl.colnames:
-                from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
-                    vgroup_row_matches)
-                match = match & np.array([vgroup_row_matches(g, vgroup)
-                                          for g in offsets_tbl['Vgroup']])
-            if match.sum() != 1:
-                raise ValueError(f"module-locked offset match={match.sum()} for {fn} "
-                                 f"(visit={visit}, exposure={exposure}, "
-                                 f"vgroup={vgroup}, filter={filtername}); "
-                                 f"expected exactly 1 row in {locked_tbl}")
-            row = offsets_tbl[match]
-            if _has_stamps and _frame_gen is not None:
-                _mismatch = {k: (str(row[f'base_{k}'][0]), _frame_gen[k])
-                             for k in ('calver', 'crds_ctx', 'dvacorr')
-                             if str(row[f'base_{k}'][0]) not in ('', 'nan')
-                             and str(row[f'base_{k}'][0]) != _frame_gen[k]}
-                if _mismatch:
-                    _gmsg = (f"[genlock] GENERATION MISMATCH for {fn}: the tie row was "
-                             f"solved on {_mismatch} (base vs frame). Applying it would "
-                             f"stack a stale correction on a moved frame. Rebuild the "
-                             f"VIRAC2locked table on THIS generation "
-                             f"(GENLOCK_ALLOW_MISMATCH=1 to override).")
-                    if os.environ.get('GENLOCK_ALLOW_MISMATCH') == '1':
-                        print("WARNING (override): " + _gmsg, flush=True)
-                    else:
-                        raise RuntimeError(_gmsg)
-            rashift = float(row['dra (arcsec)'][0]) * u.arcsec
-            decshift = float(row['ddec (arcsec)'][0]) * u.arcsec
-            print(f"MODULE-LOCKED per-visit offset for {fn}: ({rashift}, {decshift})")
-        elif use_average:
-            if 'bug' in refname.lower():
-                raise ValueError("This is a disallowed reference file")
-            tblfn = f'{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_{refname}_average.csv'
-            print(f"Using average offset table {tblfn}")
-            offsets_tbl = Table.read(tblfn)
-            match = (((offsets_tbl['Module'] == thismodule) |
-                      (offsets_tbl['Module'] == thismodule.strip('1234'))) &
-                     (offsets_tbl['Filter'] == filtername)
-                     )
-            if 'Visit' in offsets_tbl.colnames:
-                match &= (offsets_tbl['Visit'] == visit)
-            row = offsets_tbl[match]
-            print(f'Running manual align for merged for {filtername} {row["Module"][0]}.')
-        else:
-            if 'bug' in refname.lower():
-                raise ValueError("This is a disallowed reference file")
-            tblfn = f'{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_{refname}.csv'
-            print(f"Using offset table {tblfn}")
-            offsets_tbl = Table.read(tblfn)
-            match = ((offsets_tbl['Visit'] == visit) &
-                     (offsets_tbl['Exposure'] == exposure) &
-                     ((offsets_tbl['Module'] == thismodule) | (offsets_tbl['Module'] == thismodule.strip('1234'))) &
-                     (offsets_tbl['Filter'] == filtername)
-                     )
-            row = offsets_tbl[match]
-            print(f'Running manual align for merged for {filtername} {row["Group"][0]} {row["Module"][0]} {row["Exposure"][0]}.')
-        if match.sum() != 1:
-            raise ValueError(f"too many or too few matches for {fn} (match.sum() = {match.sum()}).  exposure={exposure}, thismodule={thismodule}, filtername={filtername}")
-        rashift = float(row['dra (arcsec)'][0])*u.arcsec
-        decshift = float(row['ddec (arcsec)'][0])*u.arcsec
-        _prov_tbl = locked_tbl if os.path.exists(locked_tbl) else tblfn
-        if 'prov_stage' in offsets_tbl.colnames:
-            _prov_row_stage = str(row['prov_stage'][0])
-    elif (field == '002' and proposal_id == '2221'):
-        visit = fn.split('_')[0][-3:]
-        thismodule = fn.split("_")[-2].strip('1234')
-        if visit == '001':
-            decshift = 7.95*u.arcsec
-            rashift = 0.6*u.arcsec
-        elif visit == '002':
-            decshift = 3.85*u.arcsec
-            rashift = 1.57*u.arcsec
-        else:
-            decshift = 0*u.arcsec
-            rashift = 0*u.arcsec
-        if filtername.upper() in ('F212N', 'F187N', 'F182M'):
-            print('Short wavelength offset correction.')
-            if 'nrca' in thismodule.lower():
-                decshift += 0.1*u.arcsec
-                rashift += -0.23*u.arcsec
-    elif (field == '002' and str(proposal_id) == '2092'):
-        # Cloud E (2092 obs002) is a 2-visit mosaic.  There is no per-frame
-        # absolute tweakreg here (TweakRegStep is skipped) and the post-resample
-        # realign is a single global median shift, so an internal visit-to-visit
-        # pointing difference passes straight through and blurs stars in the
-        # visit-001/002 overlap.  Measured offset (277 matched stars, F480M
-        # nrcblong overlap, 2026-06-10): visit002 - visit001 = (dRA -98, dDec
-        # +171) mas -- a PURE translation (linear-fit gradients <=0.3 mas/arcsec,
-        # residual <7 mas; no rotation/scale).  Bring visit 002 onto visit 001
-        # (verified in-WCS: this shift takes the overlap offset to (-6, -5) mas);
-        # the subsequent realign-to-refcat sets the common absolute zero point.
-        # The offset is a guide-star/pointing difference, so it is the same for
-        # all detectors/filters of the visit -> keyed on visit only.
-        visit = fn.split('_')[0][-3:]
-        if visit == '002':
-            rashift = 0.098*u.arcsec
-            decshift = -0.171*u.arcsec
-        else:
-            rashift = 0*u.arcsec
-            decshift = 0*u.arcsec
-    elif (field == '007' and str(proposal_id) == '3958'):
-        # Sickle NIRCam: tie each exposure to the GNS frame.  Audit 2026-06-20:
-        # sickle had NO per-exposure alignment (fell through to the else ->
-        # rashift=0), so its catalogs sat at the raw assign_wcs frame ~90 mas off
-        # the GNS-tied mosaics/refcat (mosaic frame != catalog frame).  The
-        # sickle->GNS offset is a single field translation, constant across
-        # filters/exposures to <3 mas; measured per filter on the m6/m7 merged
-        # catalogs vs catalogs/nircam_bootstrapped_to_gns_refcat.fits (see
-        # _bench/build_sickle_gns_offsets.py + offsets/Offsets_JWST_Brick3958_GNS.csv).
-        # corr below is ON-SKY (GNS - catalog), mas.  adjust_wcs's delta_ra is a
-        # COORDINATE (Delta-alpha) rotation -> on-sky RA = delta_ra*cos(dec)
-        # (preflight: delta_ra=-90 mas gave -78.9 mas on-sky = -90*cos(28.8));
-        # so delta_ra = corr_dRA_onsky / cos(dec).  delta_dec is on-sky 1:1.
-        _gns = {'F187N': (-89.7, -34.2), 'F210M': (-88.5, -34.5),
-                'F335M': (-89.5, -33.2), 'F470N': (-91.4, -33.9),
-                'F480M': (-90.6, -33.1)}
-        _cdra, _cddec = _gns.get(filtername.upper(), (-90.0, -34.0))
-        _cosd = np.cos(np.radians(-28.805))
-        rashift = (_cdra / 1000.0 / _cosd) * u.arcsec
-        decshift = (_cddec / 1000.0) * u.arcsec
-    elif str(proposal_id) in ('1979', '1334'):
-        # M4 (1979 o002 + o003="M-4-shift") and M92 (1334 o001): non-GC halo
-        # clusters outside VIRAC2/VVV -> tie each exposure to Gaia DR3
-        # (gaia_refcat.fits, PM-propagated).  Audit 2026-07-11: these fell through
-        # to the else (rashift=0), sat at the raw assign_wcs frame ~2" off Gaia
-        # (RAOFFSET=0, no offsets table, no catalog).  Bulk tie = measure_offset
-        # histogram of the untied destreak crf vs gaia_refcat, per (visit,filter)
-        # (measure_perobs; c=94-530).  M92 is a PURE per-visit shift (all 4 filters
-        # agree to <20 mas); M4 differs SW(F150W2) vs LW(F322W2) ~300-500 mas so is
-        # keyed per (visit,filter).  corr is ON-SKY (Gaia - detection) mas; adjust_wcs
-        # delta_ra is a COORDINATE rotation -> delta_ra = corr_dRA_onsky / cos(dec),
-        # delta_dec 1:1 (same convention as the sickle GNS branch above).
-        _gaia_tie = {
-            ('jw01979002001', 'F150W2'): (104.7, -180.3),
-            ('jw01979002001', 'F322W2'): (-442.9, -87.9),
-            ('jw01979003001', 'F150W2'): (-2189.0, 370.7),
-            ('jw01979003001', 'F322W2'): (-1914.7, 546.9),
-            ('jw01334001001', 'F090W'): (-1832.1, -708.2),
-            ('jw01334001001', 'F150W'): (-1853.5, -710.6),
-            ('jw01334001001', 'F277W'): (-1852.1, -711.7),
-            ('jw01334001001', 'F444W'): (-1852.7, -710.7),
-        }
-        _visit = fn.split('_')[0]
-        _key = (_visit, filtername.upper())
-        _cdra, _cddec = _gaia_tie.get(_key, (0.0, 0.0))
-        _cosd = np.cos(np.radians(-26.427 if str(proposal_id) == '1979' else 43.139))
-        rashift = (_cdra / 1000.0 / _cosd) * u.arcsec
-        decshift = (_cddec / 1000.0) * u.arcsec
-        if _key not in _gaia_tie:
-            print(f"WARNING: no Gaia tie for {_key}; leaving {fn} at raw frame (0,0)")
-    elif str(proposal_id) == '4147':
-        # sgrc: per-exposure CONSENSUS re-tie (2026-07-16).  tweakreg is skipped
-        # in this pipeline, so sgrc had NO per-exposure alignment (fell through to
-        # the else -> rashift=0) and its exposures scattered ~2-8 mas around the
-        # visit consensus (m2 astrometry checkpoint flagged 39 exposures > 2 mas
-        # in F115W/nrcb alone).  The consensus offsets table -- seeded AND upserted
-        # by the m2 checkpoint (seed_offsets_table_from_consensus; update_offsets
-        # _table is NOT used for consensus tables) -- carries two row kinds, both
-        # summed by lookup_consensus_offset:
-        #   * per-exposure JITTER (real Exposure/Module): tie each exposure onto
-        #     the dense INTERNAL consensus (removes raw guide-star jitter);
-        #   * the per-visit BULK sentinel row (Exposure=-1, Module='all'): the
-        #     consensus->VIRAC2 tie, applied identically to every exposure.
-        # This offsets table is now the SINGLE place sgrc is tied to VIRAC2 --
-        # the post-Image3 realign_to_catalog is RETIRED (see ~line 973/1090), so
-        # there is no second live tie and no double-correction.  The '012'
-        # gaia_virac2 refcat (Fix A) is the reference the checkpoint measures the
-        # bulk AGAINST; it does not itself shift the frames.  On the FIRST
-        # reduction pass the table does not exist yet, so the helper returns
-        # (0,0) and the checkpoint measures the raw scatter.  dra/ddec are arcsec
-        # Δα coordinate (same convention as the brick VIRAC2locked table).
-        rashift, decshift = _apply_consensus_offsets_table(
-            fn, basepath, str(proposal_id), filtername, field)
-        _prov_tbl = f'Offsets_JWST_Brick{proposal_id}_consensus.csv'
-        _prov_row_stage = 'm2-consensus'
-    elif str(proposal_id) == '6151':
-        # w51: per-exposure CONSENSUS re-tie (2026-07-22).  Same class as sgrc
-        # (4147) above -- tweakreg is skipped and W51 runs do_destreak=False
-        # (EXTENDED_EMISSION_FIELDS), so its exposures had NO per-exposure tie
-        # (fell through to the else -> rashift=0) and scattered ~3-19 mas around
-        # the visit consensus (the m2 checkpoint flagged 16 F480M/merged exposures).
-        # The consensus offsets table is seeded + upserted by the m2 checkpoint
-        # (seed_offsets_table_from_consensus); lookup_consensus_offset sums the
-        # per-exposure JITTER rows and the per-visit BULK sentinel (the
-        # consensus->Gaia tie -- W51's reference is gaia_refcat.fits, outside the
-        # VVV/VIRAC2 footprint).  On the FIRST reduction pass the table does not
-        # exist yet, so the helper returns (0,0) and the checkpoint measures the
-        # raw scatter.  dra/ddec are arcsec Δα coordinate (same convention as the
-        # brick VIRAC2locked / sgrc consensus tables).
-        rashift, decshift = _apply_consensus_offsets_table(
-            fn, basepath, str(proposal_id), filtername, field)
-        _prov_tbl = f'Offsets_JWST_Brick{proposal_id}_consensus.csv'
-        _prov_row_stage = 'm2-consensus'
-    else:
-        rashift = 0*u.arcsec
-        decshift = 0*u.arcsec
-    print(f"Shift for {fn} is {rashift}, {decshift}")
+    # ---------------------------------------------------------------------
+    # ONE path for every field.  Which reference frame and which shift source
+    # applies to this (proposal, observation) is declared in
+    # jwst_gc_pipeline/reduction/alignment_config.py; resolving it -- reading the
+    # table, narrowing to this exposure, checking the WCS generation -- happens
+    # once, in unified_alignment.resolve_shift, for all of them.
+    #
+    # This replaces a per-proposal if/elif chain whose `else` returned (0, 0).
+    # Any proposal without an explicit branch was silently left unaligned while
+    # the m2 checkpoint wrote corrections into a table nothing read, so a re-tie
+    # loop on such a field re-measured the same residual forever (arches/2045,
+    # quintuplet/2045, sgrb2/5365, cloudef/2092 obs 005 were all in that state).
+    # An unconfigured field still gets (0, 0), but now says so loudly and is
+    # distinguishable from a genuine zero tie via `_shift.configured`.
+    # ---------------------------------------------------------------------
+    from jwst_gc_pipeline.reduction.unified_alignment import (
+        resolve_shift, warn_or_raise_if_stale, write_alignment_header)
+    _shift = resolve_shift(fn, proposal_id, field, filtername, module, basepath,
+                           refname=refnames.get(str(proposal_id)),
+                           use_average=use_average)
+    rashift = _shift.ra_quantity
+    decshift = _shift.dec_quantity
+    _prov_tbl = _shift.prov_table          # offsets table actually consumed
+    _prov_row_stage = _shift.prov_stage    # checkpoint stage that last corrected it
+    _frame_gen = _shift.frame_generation   # this frame's WCS-generation stamp
+    print(f"Shift for {fn} is {_shift}")
     align_fits = fits.open(fn)
     if 'RAOFFSET' in align_fits[1].header:
         # don't shift twice if we re-run
@@ -1564,27 +1251,12 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
         # DISAGREEMENT GUARD: the plain skip-if-present check silently KEPT a stale
         # RAOFFSET after the offsets table was corrected -- brick-1182 v001 crf held
         # +1.9" while the table said -17.5", so half the mosaic stayed ~20" off and
-        # the idempotent guard blocked the fix. Compare the baked-in RAOFFSET to the
-        # value we WOULD apply now; if they disagree, this frame is stale.
-        _cur_ra = float(align_fits[1].header['RAOFFSET'])
-        _cur_de = float(align_fits[1].header.get('DEOFFSET', 'nan'))
-        _dra = abs(_cur_ra - rashift.value)
-        _dde = abs(_cur_de - decshift.value)
-        _tol = float(os.environ.get('RAOFFSET_DISAGREE_TOL_ARCSEC', 0.05))
-        if _dra > _tol or _dde > _tol:
-            _msg = (f"STALE ASTROMETRY: {fn} carries RAOFFSET/DEOFFSET "
-                    f"({_cur_ra:+.4f},{_cur_de:+.4f})\" but the current table would "
-                    f"apply ({rashift.value:+.4f},{decshift.value:+.4f})\" "
-                    f"(disagree {_dra:.3f},{_dde:.3f}\" > {_tol}\"). This frame was "
-                    f"built from an OLD table and the skip-if-present guard is hiding "
-                    f"it. Regenerate the working copy from _cal (destreak overwrite) "
-                    f"so RAOFFSET resets and the current table is applied, OR set "
-                    f"FORCE_REALIGN_ON_DISAGREE=1 to re-apply now.")
-            if os.environ.get('FORCE_REALIGN_ON_DISAGREE') == '1':
-                raise RuntimeError(
-                    _msg + " [FORCE_REALIGN_ON_DISAGREE=1: refusing to silently keep "
-                    "a stale frame; regenerate it from _cal.]")
-            warnings.warn(_msg)
+        # the idempotent guard blocked the fix. Compare what is baked into the frame
+        # against what we WOULD apply now; if they disagree, this frame is stale.
+        # Frames carrying the component keywords are compared PER COMPONENT, so a
+        # re-measured bulk can no longer be masked by an opposite jitter change that
+        # happens to sum back to the same total.
+        warn_or_raise_if_stale(align_fits[1].header, _shift, fn)
     else:
         # ASDF header
         fa = ImageModel(fn)
@@ -1643,8 +1315,8 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
               f"median {_sip_med:.4f} mas")
         align_fits[1].header['SIPGWMAX'] = (
             _sip_max, '[mas] max FITS/SIP vs GWCS disagreement')
-        align_fits[1].header['RAOFFSET'] = rashift.value
-        align_fits[1].header['DEOFFSET'] = decshift.value
+        # total (historical keywords, unchanged meaning) + the bulk/jitter split
+        write_alignment_header(align_fits[1].header, _shift)
         # correction provenance: base/target fiducials + convention + the
         # generation this frame carried when corrected (audit at any time:
         # recompute pixel_to_world(ABASEPX,ABASEPY) and compare to ATGTRA/ATGTDE)
