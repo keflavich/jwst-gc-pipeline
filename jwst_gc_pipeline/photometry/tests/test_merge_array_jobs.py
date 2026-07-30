@@ -42,6 +42,14 @@ def test_every_target_has_a_job_list():
         jobs = MC.individual_frame_merge_jobs(target)
         assert jobs, f'{target} has no merge jobs'
         assert len(set(jobs)) == len(jobs), f'{target} has duplicate jobs'
+        # The registration gate skips a per-filter array task via `jobs` being
+        # truthy.  A target with exactly ONE job would make that task both the
+        # single filter AND the whole field, and it would be skipped wrongly.
+        # No target is like that today; fail here if one appears.
+        assert len(jobs) > 1, (
+            f'{target} has a single merge job -- see the gate predicate in '
+            f'main(), which assumes a per-filter array task is not the whole '
+            f'field')
 
 
 def test_method_suffixes_are_the_per_frame_filename_tokens():
