@@ -11,7 +11,6 @@ from astropy.coordinates import SkyCoord
 from scipy.ndimage import sum_labels
 from scipy.spatial import cKDTree
 
-sys.path.insert(0, '/blue/adamginsburg/adamginsburg/repos/jwst-gc-pipeline-wt-satdeblend')
 from jwst_gc_pipeline.reduction import saturated_star_finding as ssf
 from jwst_gc_pipeline.reduction.satstar_deblend import build_deblended_source_records, robust_zf_ceiling
 from jwst_gc_pipeline.reduction.filtering import get_fwhm

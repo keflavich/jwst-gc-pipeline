@@ -12,7 +12,6 @@ Usage:  run_satstar_compare.py {baseline|deblend} [crf_path]
 """
 import os, sys, time
 os.environ.setdefault('STPSF_PATH', '/orange/adamginsburg/jwst/stpsf-data/')
-sys.path.insert(0, '/blue/adamginsburg/adamginsburg/repos/jwst-gc-pipeline-wt-satdeblend')
 import numpy as np
 from astropy.io import fits
 from astropy.table import Table

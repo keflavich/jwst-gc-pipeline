@@ -19,7 +19,9 @@ individual saturated cores. (It is raw uncalibrated DN, noisy, with a pedestal -
 use for POSITIONS, not flux. The very brightest stars still saturate a SMALL
 central ZF region; their spikes still pin the centre.)
 
-## Approach (ZEROFRAME-primary, UNIFIED two-regime deblend) — `deblend_zeroframe.py`
+## Approach (ZEROFRAME-primary, UNIFIED two-regime deblend)
+The code lives in `jwst_gc_pipeline/reduction/satstar_deblend.py`; the scripts
+here import it.
 ZF-saturated cores are stored as ZEROS (black holes), so two regimes coexist even
 within one frame.  `deblend_blob_zeroframe` handles both:
 1. **ZF-SATURATED cores (deep stars).** `invalid = (zf==0)|(zf>=ceiling)|~finite`;
@@ -50,8 +52,6 @@ o046/o049 0-4%, F277W LW 5%.  Both regimes confirmed working on real doubles.
 ## Scripts
 - `find_merged_satblobs.py` — locate/cross-check merged-double blobs (GNS + daophot).
 - `probe_ramp_cores.py`, `probe_zeroframe.py` — the frame-zero investigation.
-- `deblend_zeroframe.py` — the deblender (standalone; to be ported into
-  `jwst_gc_pipeline/reduction/saturated_star_finding.py`).
 - `validate_deblend.py` — example-blob + whole-frame validation, writes `out/`.
 - `make_carta_artifacts.py` — writes ZEROFRAME-with-WCS, NEW deblend catalog,
   OLD one-per-blob catalog next to the dev frame's pipeline products.
