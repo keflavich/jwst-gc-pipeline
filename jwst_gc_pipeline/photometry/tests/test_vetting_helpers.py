@@ -364,3 +364,22 @@ def test_no_temp_file_is_left_behind(tmp_path):
     assert combined.exists()
     assert not (tmp_path / 'cat_vetted.tmp.fits').exists()
     assert list(tmp_path.glob('*.tmp*')) == []
+
+
+def test_the_already_filled_array_is_used_not_the_raw_data(monkeypatch):
+    """`filled` is the NaN-replaced array; `data` still has its NaNs.
+
+    Every other test passes `filled=data.copy()`, so the two are identical and a
+    mix-up between them is invisible.  In production they differ at every NaN
+    pixel, and using `data` would put NaNs back into the science array.
+    """
+    _stub_ramp(monkeypatch)
+    data, dq, was_sat, model = _frame()
+    data[0, 3] = np.nan            # raw data: a bad pixel
+    filled = data.copy()
+    filled[0, 3] = 0.0             # already repaired upstream
+    out = C._fill_saturated_pixels(
+        CAL, data, dq, was_sat, model, filled,
+        types.SimpleNamespace(satstar_ramp_recover=True))
+    assert out[0, 3] == 0.0, 'the repaired value was overwritten with raw data'
+    assert np.isfinite(out[0, 3])
