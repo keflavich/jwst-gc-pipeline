@@ -1,5 +1,14 @@
 # Per-frame fan-out for the manual `--each-exposure` pipeline (option C)
 
+> **Status: implemented.** The flags described here exist
+> (`--manual-frame-shard`, `--manual-skip-finalize`, `--manual-finalize-only`,
+> `--manual-start-phase`, `--manual-stop-after-phase`), the submitters live in
+> `scripts/reduction/` (`submit_cataloging_perframe.sh`,
+> `submit_cataloging_perframe_phase.sbatch`), and the monolith-vs-per-frame
+> equivalence check is `scripts/reduction/validate_perframe_equivalence.sh` (a
+> shell driver, **not** `tests/test_perframe_equivalence.py`). Kept for the design
+> rationale.
+
 Goal: let each exposure frame be cataloged as an independent small SLURM job so
 cataloging backfills into small queue holes (the queue bottleneck is large-cpu
 node scarcity). Splits BELOW the filter boundary that `submit_cataloging_chain.sh`
@@ -7,7 +16,7 @@ already exploits.
 
 ## Key finding from the code read
 
-`run_manual_pipeline` (cataloging.py:1738) runs phases `m12→m3→m4→m5→m6[→m7]`.
+`run_manual_pipeline` (`cataloging.py`) runs phases `m12→m3→m4→m5→m6[→m7]`.
 Each phase, for each `(module, filt)`:
 
 1. build the seed (`prev_seed`) from the prior phase's vetted catalog + an

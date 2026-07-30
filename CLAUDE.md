@@ -25,7 +25,7 @@ false-agreement failure, so NN-median against a dense catalog is banned outright
 
 This is now **enforced in code** — `measure_offsets.assert_sparse_reference_for_nn_median`
 raises `DenseNNMedianAstrometryError` — and by a **grep-guard test**
-(`tests/test_no_adhoc_nn_median_astrometry.py`) that fails CI if a NEW file pairs a
+(`jwst_gc_pipeline/photometry/tests/test_no_adhoc_nn_median_astrometry.py`) that fails CI if a NEW file pairs a
 NN match with a median/mean. Do not disable either.
 
 ### The ONLY sanctioned ways to measure an astrometric offset
@@ -178,7 +178,12 @@ every call path) and is not slower overall (forward ~1.3× slower, inverse ~1.1�
 
 ### Reading list before any astrometry change
 - `jwst_gc_pipeline/reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md` — the full flow,
-  the two authoring points, no-double-correction rule, epochs, module-lock policy.
+  the single authoring point, no-double-correction rule, epochs, module-lock
+  policy, and the per-field alignment registry.
+- `jwst_gc_pipeline/reduction/alignment_config.py` — **where a field's reference
+  frame and shift source are declared** (NIRCam only; MIRI/NIRISS still dispatch
+  internally). A field with no entry is left at the raw `assign_wcs` frame and
+  says so loudly; add an entry rather than special-casing a caller.
 - `jwst_gc_pipeline/photometry/ASTROMETRY_CHECKPOINTS.md` — the stage checkpoint
   ladder (visit consensus, frozen stages, cross-filter gate).
 - The `brick-1182-*` and `dense-nn-median-guard-enforced` memory notes.

@@ -1,3 +1,8 @@
+> **Note on paths:** `jwst_rgb/`, `scripts/gc2211_rgb_images.py` and
+> `assemble_cmz_catalog.py` referenced below live **outside this repo** (the
+> `jwst_rgb` tree / brick-jwst-2221). In-repo CMZ code is
+> `jwst_gc_pipeline/cmz/` + `scripts/release/build_cmz_products.py`.
+
 # CMZ HiPS mosaic + giant-catalog sharing — plan
 
 Plan for (1) a **growing two-color CMZ HiPS** image that new fields (program

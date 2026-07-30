@@ -1,5 +1,10 @@
 PSF Photometry Plan 2026-06-09
 
+> ⚠ **HISTORICAL PLANNING DOC (2026-06-09).** This is the design sketch that
+> became the m12→m8 pipeline; the shipped behaviour is documented in
+> `PHOTOMETRY_PIPELINE.md` (and `PIPELINE_METHODS.md` for the prose version).
+> Where the two disagree, `PHOTOMETRY_PIPELINE.md` is current.
+
 Following Matt Hosek's approach, we'll change the PSF Photometry pipeline.
 
 The old path for iter1 is:

@@ -68,7 +68,7 @@ The pipeline is a sequence of phases. Detection uses a progressively cleaner
 co-add so sources hidden in one stage surface in the next; **the fit always runs
 on the raw or background-subtracted frames, never on the i2d.** The phase list is
 `['m12', 'm3', 'm4', 'm5', 'm6']`, plus `'m7'` for multi-filter runs
-(`cataloging.py:2633`); `m8` runs after the m7 cross-band merge.
+(`run_manual_pipeline`); `m8` runs after the m7 cross-band merge.
 
 Every phase, for every frame, runs the same skeleton
 (`do_photometry_step_manual` → `_prepare_frame_for_photometry` →
@@ -95,30 +95,33 @@ source-masked smoothed background that seeds the next phase.
 
 Done once per frame, cached as `<frame>_..._satstar_catalog.fits`; recomputed
 only when the off-FOV cross-frame reconciliation supplies flux overrides/drops,
-or `overwrite=True` (`cataloging.py:1742`). Steps:
+or `overwrite=True` (`_prepare_frame_for_photometry`). Steps:
 
 1. **Identify saturated pixels** from the DQ plane: the `SATURATED` bit
-   (`saturated_star_finding.py:282`), plus `DO_NOT_USE` for truly-lost pixels
+   (`find_saturated_stars`), plus `DO_NOT_USE` for truly-lost pixels
    (0 good ramp groups) and `JUMP_DET` cosmic-ray handling (saturated clusters
    ≥3 px are protected). Connected components → one candidate saturated star per
    blob.
-2. **Fit each blob** with a gridded WebbPSF/STPSF model (`npsf=16`, `oversample=2`;
-   `saturated_star_finding.py:76-77`). In-FOV field of view: **fovp 512** for SW
-   (NRC?1-4) and MIRI, **fovp 1024** for LW (NRC?LONG) (`:1639`). Grids live in
-   `<basepath>/psfs`, named `{inst}_{detector}_{filter}_fovp{N}_samp2_npsf16.fits`
-   (`:93`). The LW detector token is `nrcb5`/`nrca5` (WebbPSF naming), **not**
+2. **Fit each blob** with a gridded WebbPSF/STPSF model (`npsf=16`,
+   `oversample=2`; `get_psf`). In-FOV field of view: **fovp 512** for SW
+   (NRC?1-4) and MIRI, **fovp 1024** for LW (NRC?LONG) (`get_saturated_stars`).
+   Grids live in `<basepath>/psfs`, named
+   `{inst}_{detector}_{filter}_fovp{N}_samp{S}_npsf{N}.fits` (the `psf_fn`
+   template in `get_psf`). The LW detector token is `nrcb5`/`nrca5` (WebbPSF naming), **not**
    `nrcblong` — the per-frame cache lookup maps `nrcXlong → nrcX5`.
-3. **Keep-gate** each fit (`accept_satstar_fit`, `:1061`): NIRCam requires
+3. **Keep-gate** each fit (`accept_satstar_fit`): NIRCam requires
    `qfit ≤ 5`, `snr ≥ 3`, `sidelobe ≥ -10 σ`, and `ssr_ratio ≤ 1` — but the ssr
    gate is applied **only to low-confidence fits** (`snr ≤ 10`); high-S/N,
    good-qfit satstars bypass it so real bright stars are never dropped. MIRI uses
    looser bounds (`qfit ≤ 15`, `snr ≥ 2`, `sidelobe ≥ -40`, `ssr ≤ 2`).
 4. **MIRI-only seed gates** reject false blobs in extended emission:
    `seed_prominence_min=8.0`, `seed_core_min=1000.0`, `seed_conc_min=1.3`
-   (`:1273`; F770W/Sickle-calibrated, env-overridable), plus a spike-merge that
+   (`get_saturated_stars` keyword defaults; F770W/Sickle-calibrated,
+   env-overridable), plus a spike-merge that
    folds diffraction-spike satellites into their core.
 5. **Off-FOV bright stars** (spikes bleeding in from outside the frame) use a
-   **large** forced grid — fovp **2048** (SW) / **1024** (LW/MIRI) (`:1679`) — a
+   **large** forced grid — fovp **2048** (SW) / **1024** (LW/MIRI)
+   (`get_saturated_stars`) — a
    position prior, an integer grid search (`radius=5 px`), a `model ≤ data` clamp
    at the 10th percentile (`oversub_clamp_percentile=10.0`), and a cross-frame
    flux reconciliation that pins runaway far-detector fits to the nearest-detector
@@ -141,7 +144,8 @@ detections within `~1.5 × FWHM` of a hard-saturated pixel are dropped.
 
 ### daofind parameters
 
-Detection is `photutils.DAOStarFinder` (`cataloging.py:563`). The `threshold`
+Detection is `photutils.DAOStarFinder` (`_build_manual_seed` /
+`_daofind_emission_floor`). The `threshold`
 passed to DAOStarFinder is the **global minimum** of the local-noise map — i.e.
 deliberately permissive "detect everything" — and the **real** selection is the
 subsequent per-source **local-S/N filter** plus the round/sharp bounds:
@@ -152,7 +156,8 @@ subsequent per-source **local-S/N filter** plus the round/sharp bounds:
 | m2 (iter2) | −0.3 / +0.3 | 0.50 / 1.00 | 3.0 | on | m1 catalog + m1 residual |
 | m3..m7 (per-frame) | −0.3 / +0.3 | 0.50 / 1.00 | 3.0 | on | prev vetted catalog |
 
-(`cataloging.py:1683` m1, `:1699` m2, `:1717` m3+.) The wider round/sharp window
+(the per-phase `roundlo`/`roundhi`/`sharplo`/`sharphi` arguments threaded into
+`_build_manual_seed`.) The wider round/sharp window
 on **m1** is intentional: the first unseeded pass casts a wide net; **m2 onward**
 tighten toward star-like shapes because they reseed on residuals where extended
 emission dominates the false positives.
@@ -166,7 +171,7 @@ F212N 2.34, F480M 2.57 px).
 
 ### The fit (identical every phase)
 
-Single-pass **BASIC** `photutils.PSFPhotometry` (`cataloging.py:213`):
+Single-pass **BASIC** `photutils.PSFPhotometry` (`_manual_phot_pass`):
 `fitter=LevMarLSQFitter()`, `fit_shape=(5, 5)`, `aperture_radius = 2.0 × FWHM`,
 a `LocalBackground` annulus (`inner ≈ aperture + 0.5·FWHM`, width `≈ FWHM`), and
 — only with `--group` — a `SourceGrouper(min_separation = manual_group_min_sep_fwhm × FWHM)`
@@ -177,7 +182,7 @@ Post-fit, in order: **overshoot QC** (rendered model peak vs local data peak; if
 `model_peak > 1.2 × data_peak` the free-position fit walked off the star →
 `--manual-overshoot-action=refit` re-solves flux-only at the pinned seed position
 via the closed-form `f = Σ(d·p·w)/Σ(p²·w)`, clamped ≥0); **non-positive-flux ban**
-(`flux_fit ≤ 0` dropped at `cataloging.py:465` — a positive PSF cannot have a
+(`flux_fit ≤ 0` dropped in `_manual_phot_pass` — a positive PSF cannot have a
 negative peak); **dedup**; **near-saturation / satstar-wing rejection**.
 
 ### Phase-by-phase detection & fit surfaces
@@ -216,8 +221,8 @@ negative peak); **dedup**; **near-saturation / satstar-wing rejection**.
 ### Merge + vet (per-phase barrier)
 
 After each phase the per-frame catalogs are merged, `iter_found` is tagged, and
-the merged catalog is vetted by `_filter_extended_emission` (`cataloging.py:761`,
-called `:3474`). NIRCam keeps a source if it is **star-like**
+the merged catalog is vetted by `_filter_extended_emission`. NIRCam keeps a
+source if it is **star-like**
 
 ```
 star_like = (qfit ≤ 0.2) OR (flags in keep_flags) OR (peakSB > 20 × local_bkg)
@@ -325,7 +330,7 @@ Notes on the tri-state and env-driven values:
   `--no-extended-emission` force it. Turning it on auto-sets the structure-noise
   prune to `(1.0, 2.0)` unless you override `--manual-struct-noise-x/-y`.
 - **MIRI** per-phase values come from the `miri_tuning` schedule
-  (`cataloging.py:2916-2990`); the prominence schedule is env-tunable
+  (the MIRI prominence block in `cataloging.py`); the prominence schedule is env-tunable
   (`MIRI_PROM_SNR_PROGRESSIVE`, `MIRI_PROM_SNR_HI/LO`), defaulting to 8→3 across
   m12→m6.
 - **Satstar seed gates** (`seed_prominence_min=8`, `seed_core_min=1000`,
@@ -378,6 +383,24 @@ Under `<basepath>/cutouts/<label>/` (or in place for full-frame):
 - `..._m{N}_..._mergedcat_residual_smoothed_bg_i2d.fits` — background map.
 - `<frame>_..._satstar_catalog.fits` (+ `_extended_` variant) — cached per-frame
   saturated-star fits.
+
+### The `<obs>` token in merged filenames
+
+`<obs>` above is **not decoration** — it is `crowdsource_catalogs_long.obs_token()`,
+the per-observation filename disambiguator. It is empty for most fields, and
+non-empty exactly where two runs would otherwise write the same filename:
+
+| proposal | token | why |
+|---|---|---|
+| 2211 (gc2211) | `_o<field>`, e.g. `_o023` | 5 GC pointings (023/028/046/049/050) REUSE the same `(visit, vgroup, exp)` tuples, so the obs-less per-frame catalog name is identical across observations sharing a filter (F200W: o023/o046/o049/o050; F277W: all five) |
+| 7213 and 6778 (ngc6334) | `_j7213` / `_j6778` | TWO proposals share one target directory **and** the filters F200W + F470N, cataloged with the same obs number (001) and the same tuples — 6778 silently overwrote 7213's F200W/F470N catalogs on 2026-07-09 (real data loss) |
+| everything else | `''` | single-obs-per-basepath; filenames unchanged |
+
+**If you glob these products, glob the token too.** A reader that hard-codes
+`..._resbgsub_m7.fits` finds nothing for gc2211 and silently sees only one of the
+two proposals for NGC 6334. The per-frame residual/model products under
+`{filter}/pipeline/` already carry `-o{field}` and are unaffected. Regression test:
+`photometry/tests/test_obs_token_proposal_collision.py`.
 
 The iteration tokens (`_m1.._m7`, `_dao_basic`) are disjoint from the legacy
 `iter2/iter3/iter4`, `_daoiterative` products, so the two paths coexist in one
