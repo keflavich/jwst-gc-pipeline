@@ -1395,6 +1395,10 @@ def _fill_saturated_pixels(filename, data, dqarr, was_sat, finite_model,
     Recovery must never break a reduction, so a bad or missing ramp file falls
     through to the next method instead of raising.
     """
+    if not (getattr(options, 'satstar_ramp_recover', False)
+            or getattr(options, 'satstar_zeroframe_recover', False)):
+        return np.where(was_sat, finite_model, filled)
+
     dilate = int(getattr(options, 'satstar_zeroframe_dilate', 3))
     dataf = np.asarray(data, dtype=float)
 
@@ -1443,17 +1447,23 @@ def _fill_from_ramp_slope(filename, dataf, dqarr, was_sat, finite_model,
     filled = np.where(rim, recovered, filled)
     done = rim.copy()
 
-    # The deep core is railed even at group 0's slope; try the group-0 recovery.
+    # The deep core is railed even at group 0's slope; try the group-0 recovery
+    # for it.  A failure here keeps the slope rim we already have -- it must not
+    # discard it and fall back to the model.
     n_group0 = 0
-    group0 = _load_ramp_group0(filename)
-    if group0 is not None and group0.shape == dataf.shape and deep.any():
-        core_recovered, core_rim, _, core_ratio = zeroframe_recover_saturated(
-            dataf, dqarr, group0, sat_dilate=dilate)
-        if np.isfinite(core_ratio):
-            core = deep & core_rim
-            filled = np.where(core, core_recovered, filled)
-            done = done | core
-            n_group0 = int(core.sum())
+    try:
+        group0 = _load_ramp_group0(filename)
+        if group0 is not None and group0.shape == dataf.shape and deep.any():
+            core_recovered, core_rim, _, core_ratio = zeroframe_recover_saturated(
+                dataf, dqarr, group0, sat_dilate=dilate)
+            if np.isfinite(core_ratio):
+                core = deep & core_rim
+                filled = np.where(core, core_recovered, filled)
+                done = done | core
+                n_group0 = int(core.sum())
+    except (OSError, ValueError, KeyError, IndexError, TypeError) as ex:
+        print(f"[manual] deep-core group-0 recovery skipped "
+              f"({type(ex).__name__}: {ex}); keeping the slope rim", flush=True)
 
     print(f"[manual] ramp-slope rim recovery: K={slope_ratio:.3f} "
           f"slope_rim={int(rim.sum())} deepcore={int(deep.sum())} "
@@ -2447,7 +2457,7 @@ def _combine_per_obs_vetted(vetted_path, merged_path, combined_path,
     for path in siblings:
         try:
             tables.append(Table.read(path))
-        except (OSError, ValueError, IORegistryError) as ex:
+        except (OSError, ValueError, KeyError, IORegistryError) as ex:
             print(f"{label}: cannot read {os.path.basename(path)} ({ex})",
                   flush=True)
     if not tables:
@@ -2460,8 +2470,13 @@ def _combine_per_obs_vetted(vetted_path, merged_path, combined_path,
     print(f"{label}: combined {len(siblings)} per-obs vetted -> "
           f"{os.path.basename(combined_path)} ({len(combined)} all-obs sources)",
           flush=True)
-    _write_carta_catalog(combined,
-                         combined_path.replace('.fits', '_carta.fits'))
+    # The CARTA sibling is a viewer convenience.  The science catalogs are
+    # already on disk at this point, so a failure here must not abort the run.
+    try:
+        _write_carta_catalog(combined,
+                             combined_path.replace('.fits', '_carta.fits'))
+    except (OSError, ValueError, KeyError) as ex:
+        print(f"{label}: CARTA catalog export failed ({ex})", flush=True)
 
 
 def _dedup_combined_vetted(comb, min_sep_deg=0.11 / 3600.0):

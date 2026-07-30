@@ -118,3 +118,145 @@ def test_ramp_slope_helper_declines_without_a_ramp():
     assert C._fill_from_ramp_slope(
         '/nonexistent_nrca1_cal.fits', np.zeros((4, 4)), np.zeros((4, 4), int),
         np.zeros((4, 4), bool), np.zeros((4, 4)), np.zeros((4, 4)), 3) is None
+
+
+# --- the recovery ladder itself -------------------------------------------
+# The tests above only reach the model-only branch.  These stub the ramp
+# loaders so the masks (rim / deep / done / was_sat & ~done) are exercised:
+# invert one of them and these fail.
+
+CAL = 'frame_nrca1_cal.fits'
+
+
+def _frame():
+    """4x4 frame: pixel (1,1) is a saturated rim, (2,2) a deep core."""
+    data = np.full((4, 4), 100.0)
+    dq = np.zeros((4, 4), dtype=int)
+    was_sat = np.zeros((4, 4), dtype=bool)
+    was_sat[1, 1] = was_sat[2, 2] = True
+    model = np.full((4, 4), 5.0)
+    return data, dq, was_sat, model
+
+
+def _masks():
+    rim = np.zeros((4, 4), dtype=bool)
+    rim[1, 1] = True
+    deep = np.zeros((4, 4), dtype=bool)
+    deep[2, 2] = True
+    return rim, deep
+
+
+def _stub_ramp(monkeypatch, *, slope_ratio=1.0, group0=True, core_ratio=1.0):
+    from jwst_gc_pipeline.reduction import saturated_star_finding as SSF
+    rim, deep = _masks()
+    monkeypatch.setattr(C, '_load_ramp_cube',
+                        lambda p: (np.zeros((3, 4, 4)), None))
+    monkeypatch.setattr(C, '_load_ramp_group0',
+                        lambda p: np.zeros((4, 4)) if group0 else None)
+    monkeypatch.setattr(SSF, 'ramp_recover_saturated',
+                        lambda *a, **k: (np.full((4, 4), 11.0), rim, deep,
+                                         slope_ratio))
+    monkeypatch.setattr(SSF, 'zeroframe_recover_saturated',
+                        lambda *a, **k: (np.full((4, 4), 22.0), deep, deep,
+                                         core_ratio))
+
+
+def test_ramp_slope_fills_the_rim_and_group0_fills_the_deep_core(monkeypatch):
+    _stub_ramp(monkeypatch)
+    data, dq, was_sat, model = _frame()
+    options = types.SimpleNamespace(satstar_ramp_recover=True)
+    out = C._fill_saturated_pixels(CAL, data, dq, was_sat, model,
+                                   data.copy(), options)
+    assert out[1, 1] == 11.0      # rim -> ramp slope
+    assert out[2, 2] == 22.0      # deep core -> group 0
+    assert out[0, 0] == 100.0     # untouched
+
+
+def test_deep_core_falls_back_to_the_model_without_group0(monkeypatch):
+    _stub_ramp(monkeypatch, group0=False)
+    data, dq, was_sat, model = _frame()
+    out = C._fill_saturated_pixels(
+        CAL, data, dq, was_sat, model, data.copy(),
+        types.SimpleNamespace(satstar_ramp_recover=True))
+    assert out[1, 1] == 11.0      # rim still recovered
+    assert out[2, 2] == 5.0       # deep core -> model
+
+
+def test_a_non_finite_scale_rejects_the_whole_ramp_recovery(monkeypatch):
+    _stub_ramp(monkeypatch, slope_ratio=np.nan)
+    data, dq, was_sat, model = _frame()
+    out = C._fill_saturated_pixels(
+        CAL, data, dq, was_sat, model, data.copy(),
+        types.SimpleNamespace(satstar_ramp_recover=True))
+    assert out[1, 1] == 5.0 and out[2, 2] == 5.0
+
+
+def test_a_group0_failure_keeps_the_slope_rim(monkeypatch):
+    # Regression: an unreadable group 0 must not discard the rim already
+    # recovered from the ramp slope.
+    _stub_ramp(monkeypatch)
+    monkeypatch.setattr(C, '_load_ramp_group0',
+                        lambda p: (_ for _ in ()).throw(OSError('bad ramp')))
+    data, dq, was_sat, model = _frame()
+    out = C._fill_saturated_pixels(
+        CAL, data, dq, was_sat, model, data.copy(),
+        types.SimpleNamespace(satstar_ramp_recover=True))
+    assert out[1, 1] == 11.0
+    assert out[2, 2] == 5.0
+
+
+def test_ramp_slope_wins_over_zeroframe_when_both_are_enabled(monkeypatch):
+    _stub_ramp(monkeypatch)
+    data, dq, was_sat, model = _frame()
+    out = C._fill_saturated_pixels(
+        CAL, data, dq, was_sat, model, data.copy(),
+        types.SimpleNamespace(satstar_ramp_recover=True,
+                              satstar_zeroframe_recover=True))
+    assert out[1, 1] == 11.0      # 11 = ramp, 22 = zeroframe
+
+
+def test_zeroframe_only_fills_its_rim(monkeypatch):
+    _stub_ramp(monkeypatch)
+    data, dq, was_sat, model = _frame()
+    out = C._fill_saturated_pixels(
+        CAL, data, dq, was_sat, model, data.copy(),
+        types.SimpleNamespace(satstar_zeroframe_recover=True))
+    assert out[2, 2] == 22.0      # the zeroframe stub's rim is `deep`
+    assert out[1, 1] == 5.0       # not its rim -> model
+
+
+def test_the_callers_array_is_never_modified_in_place(monkeypatch):
+    _stub_ramp(monkeypatch)
+    data, dq, was_sat, model = _frame()
+    filled = data.copy()
+    C._fill_saturated_pixels(CAL, data, dq, was_sat, model, filled,
+                             types.SimpleNamespace(satstar_ramp_recover=True))
+    assert np.array_equal(filled, data)
+
+
+def test_the_dedup_removes_a_repeated_source(tmp_path):
+    # The other combine tests use well-separated positions, so the dedup
+    # branch never fires.
+    merged = tmp_path / 'cat.fits'
+    _vetted(1).write(merged, overwrite=True)
+    same = _vetted(3, 266.5)
+    same.write(tmp_path / 'cat_o001_vetted.fits', overwrite=True)
+    same.write(tmp_path / 'cat_o002_vetted.fits', overwrite=True)
+    combined = tmp_path / 'cat_vetted.fits'
+    C._combine_per_obs_vetted(str(tmp_path / 'cat_o002_vetted.fits'),
+                              str(merged), str(combined), this_obs_only=False)
+    assert len(Table.read(combined)) == 3     # 6 stacked -> 3 after dedup
+
+
+def test_a_failed_carta_export_does_not_stop_the_run(tmp_path, monkeypatch,
+                                                     capsys):
+    merged = tmp_path / 'cat.fits'
+    _vetted(1).write(merged, overwrite=True)
+    _vetted(3).write(tmp_path / 'cat_o001_vetted.fits', overwrite=True)
+    monkeypatch.setattr(C, '_write_carta_catalog',
+                        lambda *a: (_ for _ in ()).throw(OSError('disk full')))
+    combined = tmp_path / 'cat_vetted.fits'
+    C._combine_per_obs_vetted(str(tmp_path / 'cat_o001_vetted.fits'),
+                              str(merged), str(combined), this_obs_only=False)
+    assert combined.exists()                  # the science catalog survived
+    assert 'CARTA catalog export failed' in capsys.readouterr().out
