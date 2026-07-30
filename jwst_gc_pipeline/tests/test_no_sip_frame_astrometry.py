@@ -5,8 +5,10 @@ extension) and a fitted ``RA---TAN-SIP`` approximation of it (SCI header).
 Building an ``astropy.wcs.WCS`` from a per-exposure SCI header therefore silently
 substitutes the approximation for the truth:
 
-* the fit residual -- 5-8 mas, position-dependent and different per detector
-  *and* per filter, on every frame written before the tight-fit change.  (In
+* the fit residual -- 5-8 mas, position-dependent and a different surface per
+  DETECTOR (4.38 mas between two detectors at fixed filter; only 0.70 mas
+  between two filters on the same detector), on every frame written before the
+  tight-fit change.  (In
   pixels that same residual is up to ~165 millipixels; SIP's own forward->inverse
   round trip closes to 0.000 mpix, so it is one error seen in two units, not
   two.)

@@ -3345,7 +3345,7 @@ def _stamp_wcs_source(path):
     presence-and-value is what makes a catalog self-identifying across that
     change.  Without it the only discriminator is the build date, which is
     exactly what should not be relied on at staging time -- positions moved by
-    up to ~5-8 mas (position-dependent, per detector and per filter).
+    up to ~5-8 mas (position-dependent, and a different surface per detector).
 
     FAIL-SOFT, like the sidecar stamping above: provenance never breaks
     cataloging.

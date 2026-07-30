@@ -142,8 +142,14 @@ SIP cannot represent the JWST distortion; it can only fit it, and both direction
 of that fit carry error:
 
 - **the fit residual**: 5–8 mas on every frame written before 2026-07-29,
-  *position-dependent and different per detector and per filter*, so no bulk tie
-  removes it. Cause: `gwcs.WCS.to_fits()` defaults to `max_pix_error=0.25` **px**
+  *position-dependent and a different surface per DETECTOR*, so no bulk tie
+  removes it: removing the best-fit six-parameter affine (the most general
+  frame-level registration) absorbs only 0.5-5.3% of its RMS. Measured
+  2026-07-30: nrca1 vs nrcb1 at fixed filter differ by 4.38 mas, but F182M vs
+  F212N on the SAME detector by only 0.70 mas (median 0.15) -- so it biases
+  inter-detector/inter-module comparisons directly and cross-filter ones only at
+  the sub-mas level. (An earlier version of this rule said "per detector and per
+  filter"; that overstated the real but sub-mas filter term by ~10x.) Cause: `gwcs.WCS.to_fits()` defaults to `max_pix_error=0.25` **px**
   (STScI uses 0.01), and the reduction re-stamped headers with a bare
   `header.update(ww.to_fits()[0])`. In pixels that is up to ~165 mpix — the same
   error, not a second one: SIP's own forward→inverse round trip closes to 0.000 mpix.

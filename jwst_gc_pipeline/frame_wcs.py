@@ -23,11 +23,19 @@ millipixels, so the ``AP_*``/``BP_*`` inverse fit and its solver add nothing
 measurable.  There is one error -- the degree of the polynomial -- and it shows
 up in whichever direction you look.
 
-It is position-dependent and a different surface per detector *and* per filter,
-so no bulk tie removes it; that is exactly the shape of error the astrometric
-gates look for (2 mas m2 consensus, 5 mas m7 cross-filter, 30 mas overlap).
-With the tight fit this package now writes, the residual is ~0.00 mas; on every
-frame written before that fix it is 5-8 mas.
+It is position-dependent, corner-dominated (below ~0.5 mas inside r ~ 600 px on
+a 2048^2 SW detector, >5 mas only in the outer ~100 px), and almost entirely
+NON-AFFINE: removing the best-fit six-parameter affine -- the most general
+correction a frame-level registration can apply -- absorbs only 0.5-5.3% of its
+RMS.  No bulk tie removes it.
+
+It is a **detector** property, not a filter one (measured 2026-07-30): two
+detectors at fixed filter differ by 4.38 mas, two filters on the same detector by
+only 0.70 mas (median 0.15).  So it biases inter-detector and inter-module
+comparisons at the full few-mas level, and cross-filter comparisons only at the
+sub-mas level.  With the tight fit this package now writes the residual is
+~0.00 mas; on every frame written before that fix it is 5-8 mas.  Full
+characterisation: astrometry_paper/sip_vs_gwcs.tex.
 
 **2. Off-footprint behaviour -- genuinely independent, and worse than a crash.**
 SIP's inverse is solved iteratively and diverges outside the frame.  What
