@@ -439,11 +439,11 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
     #     saturated pixels).  Recovered late-group pixels are excluded from the
     #     fit too, and apply_wing_selfcal (SATSTAR_WINGCAL) exists to correct the
     #     bias that masking the core puts into the wing fit.
-    #     Do NOT write this as `saturated & _unrecoverable`: no code path has
-    #     ever done that, and `isnan(VAR_POISSON)` is not a portable
-    #     truly-lost test -- on a _cal product it can be empty while every
-    #     SATURATED pixel is DO_NOT_USE, and on the _crf sibling it covers all
-    #     of them.
+    #     The FIT has never used `saturated & _unrecoverable` -- that pair only
+    #     sets a diagnostic flag bit below -- and `isnan(VAR_POISSON)` is not a
+    #     portable truly-lost test anyway: on a _cal product it can be empty
+    #     while every SATURATED pixel is DO_NOT_USE, and on the _crf sibling it
+    #     covers all of them.
     #     OPEN (#213): whether frame0-recovered wings should instead be fit
     #     -- see #213 and SATURATED_PIXEL_HANDLING.md section 2b.
     # SATSTAR_SEED_REQUIRE_DO_NOT_USE=1 restores the old narrow seed, for
