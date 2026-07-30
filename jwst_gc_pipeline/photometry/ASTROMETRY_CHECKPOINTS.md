@@ -140,8 +140,9 @@ never silently green.
   lands on the SAME row, additively (8 × 0.4″ → +3.2″, each part legal). Such a
   correction set is now refused. Tables that DO carry `Module` are unaffected —
   checked 2026-07-30: cloudc's (built `--per-module`) and **sgrc's** both have a
-  populated `Module` column, so the guard returns early for them; cloudef's and
-  gc2211's have none. (`_assert_module_granularity`'s own docstring still names
+  populated `Module` column, so the guard returns early for them; **brick's two
+  tables (1182, 2221), cloudef's and gc2211's have none**, so those are the ones
+  the guard protects. (`_assert_module_granularity`'s own docstring still names
   sgrc as Module-less; that is stale.)
 * Stale im0 mosaics are RENAMED `*_i2d_im0_badastrom.fits` (+ a `.why.json`
   sidecar and a ledger in `astrometry_checkpoints/`), never deleted, never

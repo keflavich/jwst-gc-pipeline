@@ -87,7 +87,9 @@ documented in [`PHOTOMETRY_PIPELINE.md`](PHOTOMETRY_PIPELINE.md). Pass
    `destreak.destreak` to write the working copy — except on the
    `EXTENDED_EMISSION_FIELDS` (`w51`, `sickle`, `wd2`, `ngc6334`), where
    destreaking is forced off and the working copy is a plain `_cal` → `_align.fits`
-   copy — then `fix_alignment`,
+   copy. **sickle overrides that per filter**: its SW filters do destreak
+   (`*_destreak_*_crf`), its LW filters do not (`*_align_*_crf`) — the suffixes
+   `--each-suffix` then has to match. Then `fix_alignment`,
    which resolves this exposure's shift through
    `unified_alignment.resolve_shift` (driven by `alignment_config.py`) and bakes
    it into the GWCS. `TweakRegStep` is **skipped**: the tie is applied

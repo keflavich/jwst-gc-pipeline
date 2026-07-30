@@ -93,8 +93,9 @@ back.
   is compared to raw SCI inside the component. And the severity floor is **not**
   only a daophot-mask knob — it drives four finder behaviours (the seed severity
   gate plus peak-, sub-floor- and partner-band seeding, §2b), which is where its
-  largest effect is. MIRI filters have no entry, so the daophot-side narrowing is
-  a no-op there.
+  largest effect is. MIRI filters have no entry, so no narrowing happens there — meaning MIRI daophot
+  masks EVERY any-group SATURATED pixel and the original harm (real sources vetoed
+  on bright emission; cloudc 2526 F770W) is unmitigated on MIRI.
 
   Override: `--saturation-data-floor` (photometry), env `SATSTAR_DATA_FLOOR`
   (finder). `-1` = per-filter auto; `0` = mask all SATURATED; `>0` = explicit.
@@ -126,17 +127,25 @@ mask and add positive seeding paths, and (b) gate on data *severity* instead:
 | channel | mask used today | where |
 |---|---|---|
 | satstar **seeding** | starts from the full any-group `SATURATED` mask (≥3-px clusters, `JUMP_DET` disambiguated, per-filter wing data floor), then a severity gate **removes** components and three blocks **add** seeds — see below | `find_saturated_stars` |
-| satstar **fit** | the current source's saturated component **dilated** by the adaptive mask buffer, plus other sources' saturated pixels; with a ZEROFRAME anchor, only the group-0-saturated deep core (`zf_deep_core`) | `get_saturated_stars` |
+| satstar **fit** | the current source's saturated component **dilated** by the adaptive mask buffer, plus other sources' saturated pixels — for a **forced / off-FOV** source the *whole* saturated mask is dilated instead (no per-source split, no wing self-cal). With a ZEROFRAME anchor `zf_deep_core` is substituted for `saturated` and goes through the same dilation. The mask also carries `cutout == 0` and `isnan(cutout)`, and `data` is zeroed where `VAR_POISSON` is NaN — which is *why* truly-lost pixels are excluded in practice. | `get_saturated_stars` |
 | daophot fit mask | any-group `SATURATED`, narrowed to pixels whose data exceeds the per-filter `SAT_SEVERITY_FLOOR` | `_prepare_frame_for_photometry` (`cataloging.py`) |
 | `_filter_near_saturation` veto | the **raw** any-group `SATURATED` bit from `ctx.dqarr`, recomputed inside the veto; drops fits within `near_sat_dist_pix` (1.0 px on NIRCam). **The severity floor does not reach this veto.** | `crowdsource_catalogs_long.py` |
 
 `_unrecoverable = isnan(VAR_POISSON)` is **not** the fit mask. It is used for the
 per-pixel flag image (bit 1 = saturated-but-recovered, bit 2 = unrecoverable), for
-centroid refinement, and for the opt-in `NIRCAM_SATSTAR_RECOVERED_CAP` flux cap
-(default off). ⚠ The narrative comment at the top of `find_saturated_stars` states
-that the fit masks `saturated & _unrecoverable` — **the code does not do that**; it
-masks the dilated full component. Treat the comment as intent, not description; the
-gap (should recovered wings be fit?) is unresolved, not a documentation error.
+centroid refinement, and for the `NIRCAM_SATSTAR_RECOVERED_CAP` flux cap. That cap is off in the bare
+function but **cataloging sets it to `1` on the extended-emission NIRCam fields**
+(`w51`, `sickle`, `wd2`, `ngc6334`) unless the variable is already in the
+environment, so on those four fields `_unrecoverable` does change reported
+fluxes. ⚠ The narrative comment at the top of `find_saturated_stars` asserted that the fit
+masks `saturated & _unrecoverable` from 2026-07-04 until 2026-07-30; **no code path
+ever did that**, and the comment has now been corrected. Two separate things came out
+of that: the *description* was wrong (fixed), and the *question* it raised — should
+frame-0-recovered wings be fit rather than masked? — is open. Evidence that the
+current masked-core behaviour is deliberate rather than accidental: the wing
+self-calibration (`apply_wing_selfcal`, `SATSTAR_WINGCAL`, default on) exists
+specifically to correct the bias of masked-core wing fits, and
+`NIRCAM_SATSTAR_RECOVERED_CAP` exists because the recovered core is masked.
 
 **Why seeding must not be restricted to truly-lost cores.** A moderately saturated
 star whose core was frame-0-recovered has no truly-lost pixel, so a seed restricted
@@ -157,9 +166,12 @@ plan called it `SATSTAR_REQUIRE_DO_NOT_USE`).
 - **adds** partner-band seeds where the same star was accepted in a
   near-degenerate partner band (F410M↔F405N, F182M↔F187N).
 
-On brick F200W with defaults these paths roughly double the seed count over the
-DQ-only set, so a majority of seeds have no saturated pixel of their own. Reason
-about the seed list from these four blocks, not from the DQ bit alone.
+Measured with the shipped defaults: brick F200W 157 → **350 seeds** (2.23×; mask
+3200 → 9140 px; `dqsat` 157 / `peak` 33 / `subfloor` 160, so **55%** of seeds
+contain no DQ-saturated pixel at all), brick F182M 161 → **420** (2.61×; 62%).
+⚠ F200W's severity floor (4000) is one of the unmeasured †channel-sibling
+estimates, so its 2.23× is contingent on a guessed floor; F182M's 4000 is measured.
+Reason about the seed list from these four blocks, not from the DQ bit alone.
 
 **Empirical scale of the over-flagging** (MIRI sgrb2 F770W,
 `jw05365998001_02101_00003`): the cal DQ flags 3,114 px SATURATED; only **345
@@ -188,8 +200,9 @@ on the decoupling above plus the severity floor, not on this correction.
   but it was ramp-based and MIRI-scoped.
 - `#40` `satstar-truly-saturated` — proposed restricting the *finder* to
   `SATURATED & DO_NOT_USE` on by default. **Superseded:** that seed restriction is
-  now opt-in and OFF (see above); what survived is the *fit*-side truly-lost mask
-  and the unmasked, fitted recovered wings.
+  now opt-in and OFF (see above), and the fit-side truly-lost mask it implied was
+  never implemented either — the fit masks the dilated saturated component. What
+  survived is the *decoupling* of the two channels and the data-severity gate.
 - `#41` `fix-daophot-truly-lost-sat` — proposed `is_saturated =
   truly_lost_saturated_mask(dq)` on the daophot path. **Not what shipped:** no
   `truly_lost_saturated_mask` exists. The daophot path keeps the any-group mask
@@ -199,9 +212,14 @@ on the decoupling above plus the severity floor, not on this correction.
   dropping genuinely saturated cores from the mask.
 
 **Bottom line:** the mistake was using one **any-group** mask for both channels.
-Seeding uses the full mask (or moderate saturated stars vanish); the fit excludes
-only NaN-variance truly-lost pixels; daophot gates on data severity. Do not
-re-restrict the seeding mask.
+Seeding starts from the full mask (restricting it to truly-lost cores makes
+moderate saturated stars vanish) and is then reshaped by the severity gate and the
+three additive blocks; the satstar fit masks the **dilated** saturated component,
+not the NaN-variance subset; daophot gates on data severity. Before changing any of
+these, read the table above — three plausible-sounding "fixes" (restrict seeding to
+`DO_NOT_USE`, mask only truly-lost pixels in the fit, narrow
+`_filter_near_saturation` with the severity floor) each describe something the code
+deliberately does not do.
 
 ---
 
@@ -220,7 +238,13 @@ re-restrict the seeding mask.
   (forced) stars require the **large grid** (2048 SW / 1024 LW) to carry the
   diffraction spikes that reach ~40″ into the frame.
 - **Accept gate** (`accept_satstar_fit`; thresholds passed in by
-  `get_saturated_stars`, not signature defaults): on MIRI keep if finite `0 < qfit < 5.0`
+  `get_saturated_stars`, not signature defaults). On **NIRCam**: require
+  `snr > 3.0` and `flux > 0`; reject on `qfit` only when it is finite, so a
+  **non-finite `qfit` passes** (and a negative one does too); `sidelobe > -10σ`
+  when finite; the `ssr_ratio < 1.0` backstop is bypassed for a trustworthy fit
+  (`snr > 10` and `qfit < 5.0`). MIRI instead requires
+  `isfinite(qfit) and 0 < qfit < 15.0` and drops the ssr test entirely
+  (`snr > 2.0`, `sidelobe > -40σ`). Keep if finite `0 < qfit < 5.0`
   (with sidelobe/ssr backstops); `snr > 3.0`. The `ssr_ratio < 1.0` gate is
   **confidence-subordinated** — a high-S/N (>10), good-qfit fit is kept even if
   ssr fails (BFE makes the STPSF first sidelobe brighter than the real star).
@@ -239,10 +263,10 @@ glow, and lack of BFE/IPC sidelobes drive a different configuration. Triggered b
 
 | mechanism | NIRCam | MIRI | file:line |
 |---|---|---|---|
-| Accept: qfit_max | 5.0 | **15.0** | `accept_satstar_fit` |
-| Accept: sidelobe_min | −10.0 | **−40.0** | `accept_satstar_fit` |
-| Accept: ssr_ratio_max | 1.0 | **2.0** | `accept_satstar_fit` |
-| Accept: snr_min | 3.0 | **2.0** | `accept_satstar_fit` |
+| Accept: qfit_max | 5.0 | **15.0** | set in `get_saturated_stars`, applied by `accept_satstar_fit` |
+| Accept: sidelobe_min | −10.0 | **−40.0** | set in `get_saturated_stars` |
+| Accept: ssr_ratio_max | 1.0 | **2.0** | set in `get_saturated_stars` |
+| Accept: snr_min | 3.0 | **2.0** | set in `get_saturated_stars` |
 | ssr gate | confidence-subordinated | **dropped** (finite qfit only) | `accept_satstar_fit` |
 | Mask buffer | scale 0.4 / cap 6 | **scale 0.8 / cap 12** (wider charge bleed) | `compute_adaptive_mask_buffer` |
 | Spike-satellite merge | off | **on** (`gap=3`, ratio 3:1) | `_merge_spike_satellites` |
@@ -312,7 +336,7 @@ flux, trading depth for a brighter saturation ceiling:
 A narrower filter saturates at a **brighter** magnitude than a broad/medium band
 (less in-band flux per pixel), so filter selection is itself a depth-vs-
 saturation-ceiling choice. Set with `--filternames`; the per-filter
-`_SATSTAR_DATA_FLOOR` / `_NIRCAM_SAT_DATA_FLOOR` (§2) and per-filter clamp tuning
+`_SATSTAR_DATA_FLOOR` / `SAT_SEVERITY_FLOOR` (§2) and per-filter clamp tuning
 (`--satstar-oversub-clamp-percentile`, lower for single-detector LW over bright
 background e.g. F335M) reflect this. Example: F466N (narrow) keeps stars
 unsaturated several mag brighter than F410M (medium) at the same exposure.

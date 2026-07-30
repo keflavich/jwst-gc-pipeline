@@ -448,8 +448,11 @@ suffix: it lands mid-name in several families (`f200w_nrca_j6778_…`,
 hard-codes `..._resbgsub_m7.fits` silently gets the pooled catalog for gc2211
 instead of the per-observation one it probably wanted, and for NGC 6334 matches
 **neither** proposal. The per-frame residual/model products under
-`{filter}/pipeline/` already carry `-o{field}` (gc2211) or a `jw07213-`/`jw06778-`
-prefix (ngc6334). Regression test:
+`{filter}/pipeline/` are separated a different way again — gc2211's carry
+`_o{field}` with an **underscore**
+(`jw02211023001_..._destreak_o023_crf_m3_satstar_model.fits`), and ngc6334's are
+separated only by the exposure stem's proposal id (`jw06778001001_..._align_o001_crf_...`);
+the hyphenated `jw06778-o001_` form is the asn/mosaic name, not the per-frame one. Regression test:
 `photometry/tests/test_obs_token_proposal_collision.py`.
 
 The iteration tokens (`_m1.._m7`, `_dao_basic`) are disjoint from the legacy
