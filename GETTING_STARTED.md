@@ -83,10 +83,12 @@ are missing:
 Before running stage 1:
 
 - **Frames.** Put your `_cal` (or `_rate`) files in `<basepath>/<FILTER>/pipeline/`.
-- **An Image3 association file** next to them, named
-  `jw0<proposal>-o<obs>*_image3_*_asn.json`. Stage 1 globs for one; finding
-  none, it queries MAST and starts downloading the whole program, with no
-  warning that it is doing so.
+- **An Image3 association file** next to them. Stage 1 globs for
+  `jw0<proposal>-o<obs>*_image3_*0[0-9][0-9]_asn.json` — note the three digits
+  before `_asn.json`, which a hand-made name is unlikely to have. A real one
+  looks like `jw02221-o001_20221007t121022_image3_007_asn.json`. Finding none,
+  stage 1 queries MAST and starts downloading the whole program, with no warning
+  that it is doing so.
 - **The FWHM table.** Copy `jwst_gc_pipeline/reduction/fwhm_table.ecsv` from the
   package to `<basepath>/reduction/`. Stage 1 reads it before writing anything
   and stops at once if it is absent.
