@@ -2412,6 +2412,14 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
     return out
 
 
+# Per-obs vetted siblings to combine: a single-observation token only.
+# A JOINT run writes `_o001-002_vetted.fits`, which `_o*` also matches -- pooling
+# it with `_o001` and `_o002` counts every source in the joint footprint twice.
+# The 0.11" dedup does not remove them: the joint run vetted against a different
+# coadd, so its positions differ slightly (measured on sickle F770W m3: 873
+# sources instead of 828, 45 spurious).
+_SINGLE_OBS_VETTED = re.compile(r'_o\d+_vetted\.fits$')
+
 CARTA_EXPORT_COLUMNS = ('flux', 'flux_err', 'qfit', 'cfit', 'flags',
                         'is_saturated', 'replaced_saturated', 'iter_found')
 
@@ -2451,8 +2459,9 @@ def _combine_per_obs_vetted(vetted_path, merged_path, combined_path,
     if this_obs_only:
         siblings = [vetted_path]
     else:
-        siblings = sorted(glob.glob(
-            merged_path.replace('.fits', '_o*_vetted.fits')))
+        siblings = sorted(p for p in glob.glob(
+            merged_path.replace('.fits', '_o*_vetted.fits'))
+            if _SINGLE_OBS_VETTED.search(os.path.basename(p)))
     tables = []
     for path in siblings:
         try:
@@ -2470,8 +2479,19 @@ def _combine_per_obs_vetted(vetted_path, merged_path, combined_path,
     # the case that matters.)
     if os.path.exists(combined_path):
         os.remove(combined_path)
-    combined = tables[0] if len(tables) == 1 else table_vstack(
-        tables, metadata_conflicts='silent')
+    try:
+        combined = tables[0] if len(tables) == 1 else table_vstack(
+            tables, metadata_conflicts='silent')
+    except (ValueError, TypeError) as ex:
+        # Fatal by design -- a stale combined catalog would be read as the m7
+        # seed.  Name the inputs so the operator knows which to delete or
+        # re-run, instead of getting a bare column-mismatch traceback.
+        raise type(ex)(
+            f"cannot combine the per-obs vetted catalogs for "
+            f"{os.path.basename(combined_path)}: {ex}\n"
+            f"  inputs: {[os.path.basename(p) for p in siblings]}\n"
+            f"  usually one was written by older code with different columns; "
+            f"delete it and re-run that obs.") from ex
     if len(tables) > 1 and 'skycoord' in combined.colnames:
         combined = _dedup_combined_vetted(combined)
     root, ext = os.path.splitext(combined_path)   # keep ext: astropy sniffs it

@@ -383,3 +383,48 @@ def test_the_already_filled_array_is_used_not_the_raw_data(monkeypatch):
         types.SimpleNamespace(satstar_ramp_recover=True))
     assert out[0, 3] == 0.0, 'the repaired value was overwritten with raw data'
     assert np.isfinite(out[0, 3])
+
+
+# --- the joint-run token must not be pooled with the per-obs ones ----------
+
+def test_the_joint_run_catalog_is_not_pooled_with_the_per_obs_ones(tmp_path):
+    """A joint run writes `_o001-002_vetted.fits`, which `_o*` also matches.
+
+    Combining it with `_o001` and `_o002` counts every source in the joint
+    footprint twice.  Measured on sickle F770W m3 before this guard: 873
+    sources instead of 828.
+    """
+    merged = tmp_path / 'cat.fits'
+    _vetted(1).write(merged, overwrite=True)
+    _vetted(3, 266.5).write(tmp_path / 'cat_o001_vetted.fits', overwrite=True)
+    _vetted(3, 267.5).write(tmp_path / 'cat_o002_vetted.fits', overwrite=True)
+    # the joint run's own output, same sources again at slightly different
+    # positions so the 0.11" dedup cannot collapse them
+    joint = _vetted(6, 266.5)
+    joint['skycoord'] = SkyCoord(joint['skycoord'].ra.deg + 0.001,
+                                 joint['skycoord'].dec.deg, unit='deg')
+    joint.write(tmp_path / 'cat_o001-002_vetted.fits', overwrite=True)
+
+    combined = tmp_path / 'cat_vetted.fits'
+    C._combine_per_obs_vetted(str(tmp_path / 'cat_o002_vetted.fits'),
+                              str(merged), str(combined), this_obs_only=False)
+    assert len(Table.read(combined)) == 6      # 3 + 3, not 12
+
+
+def test_a_column_mismatch_names_the_files(tmp_path):
+    merged = tmp_path / 'cat.fits'
+    _vetted(1).write(merged, overwrite=True)
+    _vetted(3, 266.5).write(tmp_path / 'cat_o001_vetted.fits', overwrite=True)
+    # A missing/extra column is NOT an error -- vstack outer-joins and masks it.
+    # What actually raises is the same column with incompatible dtypes.
+    odd = _vetted(3, 267.5)
+    odd['qfit'] = np.array(['a', 'b', 'c'])
+    odd.write(tmp_path / 'cat_o002_vetted.fits', overwrite=True)
+    combined = tmp_path / 'cat_vetted.fits'
+    with pytest.raises((ValueError, TypeError)) as excinfo:
+        C._combine_per_obs_vetted(str(tmp_path / 'cat_o002_vetted.fits'),
+                                  str(merged), str(combined),
+                                  this_obs_only=False)
+    message = str(excinfo.value)
+    assert 'cat_o001_vetted.fits' in message and 'cat_o002_vetted.fits' in message
+    assert not combined.exists()
