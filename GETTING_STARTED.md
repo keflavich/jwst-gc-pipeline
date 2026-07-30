@@ -28,13 +28,35 @@ cd jwst-gc-pipeline
 pip install -e .
 ```
 
-Then set, in your shell or job script:
+### On HiPerGator
+
+The caches already exist — do not download your own. The submit scripts export
+`CRDS_PATH`, `CRDS_SERVER_URL` and `GC_ALLOW_DEV` for you, so **if you submit
+with them you need only this**:
 
 ```bash
-export CRDS_PATH=/somewhere/with/20GB          # JWST reference files land here
+export STPSF_PATH=/orange/adamginsburg/jwst/stpsf-data
+```
+
+Running the modules by hand instead, add:
+
+```bash
+export CRDS_PATH=/orange/adamginsburg/jwst/crds     # 147 GB, already populated
 export CRDS_SERVER_URL=https://jwst-crds.stsci.edu
-export STPSF_PATH=/path/to/stpsf-data          # PSF models; required
-export GC_ALLOW_DEV=1                          # see below -- you need this
+export GC_ALLOW_DEV=1
+```
+
+The submit scripts default to
+`/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/python`; override
+with `PYTHON=...` if you have your own environment.
+
+### Anywhere else
+
+```bash
+export CRDS_PATH=/somewhere/with/room           # JWST reference files land here
+export CRDS_SERVER_URL=https://jwst-crds.stsci.edu
+export STPSF_PATH=/path/to/stpsf-data           # separate download; required
+export GC_ALLOW_DEV=1                           # see below -- you need this
 ```
 
 **`GC_ALLOW_DEV=1` is not optional for a working checkout.** Both entry points
