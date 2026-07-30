@@ -109,3 +109,55 @@ def test_the_required_merge_is_the_current_science_product():
     strict = [suffix for suffix, policy in MC.CROWDSOURCE_MERGES
               if policy == 'raise']
     assert strict == ['_nsky0']
+
+
+# --- registration gate scope ---------------------------------------------
+# The gate scans the whole field, so it belongs to a run that merged the whole
+# field.  Before the flattening it was the reverse by accident: the old loop
+# returned early on a plain run (never reaching the gate) while every array task
+# fell through to it, so N tasks each scanned a half-built field.
+
+def _run_main(monkeypatch, argv, env, gate_calls):
+    import sys
+    monkeypatch.setattr(sys, 'argv', argv)
+    for k, v in env.items():
+        if v is None:
+            monkeypatch.delenv(k, raising=False)
+        else:
+            monkeypatch.setenv(k, v)
+    monkeypatch.setattr(MC, 'merge_crowdsource', lambda **kw: None)
+    monkeypatch.setattr(MC, 'merge_daophot', lambda **kw: None)
+    monkeypatch.setattr(MC, 'merge_individual_frames', lambda **kw: None)
+
+    import jwst_gc_pipeline.photometry.registration_gate as RG
+    monkeypatch.setattr(RG, 'run_registration_gate',
+                        lambda *a, **k: gate_calls.append(a) or {'returncode': 0})
+    MC.main()
+
+
+def test_gate_runs_on_a_whole_field_run(monkeypatch):
+    calls = []
+    _run_main(monkeypatch,
+              ['merge_catalogs', '--target', 'brick'],
+              {'RUN_REGISTRATION_GATE': '1', 'SLURM_ARRAY_TASK_ID': None},
+              calls)
+    assert len(calls) == 1
+
+
+def test_gate_does_not_run_per_array_task(monkeypatch, capsys):
+    calls = []
+    _run_main(monkeypatch,
+              ['merge_catalogs', '--target', 'brick', '--merge-singlefields'],
+              {'RUN_REGISTRATION_GATE': '1', 'SLURM_ARRAY_TASK_ID': '3'},
+              calls)
+    assert calls == []
+    assert 'registration gate skipped' in capsys.readouterr().out
+
+
+def test_gate_stays_off_unless_asked(monkeypatch):
+    calls = []
+    _run_main(monkeypatch,
+              ['merge_catalogs', '--target', 'brick'],
+              {'RUN_REGISTRATION_GATE': None, 'SLURM_ARRAY_TASK_ID': None},
+              calls)
+    assert calls == []

@@ -3034,21 +3034,30 @@ def main():
         print(f'daophot phase done, {time.time() - t0:.0f}s')
 
 
-    # A whole-field cross-band scan is only meaningful once every band is
-    # merged, so it runs here.  Catches a brick-1182-style local
-    # misregistration (half a mosaic shifted while the field-average offset
-    # reads ~0) at build time rather than at release.  Off by default so it
-    # cannot wedge a run:
+    # A whole-field cross-band scan is only meaningful once EVERY band is
+    # merged, which is true of a plain run and false of any single array task:
+    # a task merges one (program, filter), so N tasks would each launch their
+    # own scan of a field that is still half-built.  Catches a brick-1182-style
+    # local misregistration (half a mosaic shifted while the field-average
+    # offset reads ~0) at build time rather than at release.  Off by default so
+    # it cannot wedge a run:
     #   RUN_REGISTRATION_GATE=1     -> run it, warn on FAIL
     #   REGISTRATION_GATE_STRICT=1  -> also raise on FAIL
     if os.environ.get('RUN_REGISTRATION_GATE') == '1':
-        from jwst_gc_pipeline.photometry.registration_gate import run_registration_gate
-        strict = os.environ.get('REGISTRATION_GATE_STRICT') == '1'
-        res = run_registration_gate(options.target, strict=strict)
-        if res['returncode'] == 1:
-            print(f"WARNING: registration gate FAILED for '{options.target}' -- a band "
-                  f"is locally misregistered (see scan above). Do NOT release these "
-                  f"products; set REGISTRATION_GATE_STRICT=1 to hard-fail.", flush=True)
+        if task_id is not None:
+            print(f"registration gate skipped: array task {task_id} merged one "
+                  f"filter, not the field.  Run the scan once after the array "
+                  f"finishes:\n"
+                  f"    python scripts/release/check_interframe_overlap.py "
+                  f"--field {options.target} --scan", flush=True)
+        else:
+            from jwst_gc_pipeline.photometry.registration_gate import run_registration_gate
+            strict = os.environ.get('REGISTRATION_GATE_STRICT') == '1'
+            res = run_registration_gate(options.target, strict=strict)
+            if res['returncode'] == 1:
+                print(f"WARNING: registration gate FAILED for '{options.target}' -- a band "
+                      f"is locally misregistered (see scan above). Do NOT release these "
+                      f"products; set REGISTRATION_GATE_STRICT=1 to hard-fail.", flush=True)
 
     print("Done")
 
