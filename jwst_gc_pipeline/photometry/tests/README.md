@@ -55,12 +55,14 @@ photometry on a synthetic image; documented here so they aren't forgotten.
 Good next step: build a tiny synthetic GriddedPSFModel + injected-star image
 fixture and drive `do_photometry_step` end-to-end.
 
-- **V12 iter2 source injection, Modes A & B** (crowdsource_catalogs_long.py):
+- **V12 iter2 source injection, Modes A & B** (`do_photometry_step` in
+  legacy/crowdsource_step.py; grep "Mode A"):
   faint target near a bright neighbour must survive pre-fit dedup as an
   injected iter2 seed (Mode A) or when the union seed is just outside the
   V11 snap radius (Mode B). Needs union + iter2 seed tables driven through
   the seed-merge + dedup stage.
-- **V12 satstar snap-to-iter2** (crowdsource_catalogs_long.py):
+- **V12 satstar snap-to-iter2** (`do_photometry_step` in
+  legacy/crowdsource_step.py; grep "Per-filter iter2 snap"):
   force-union satstar entries at SW positions must be snapped to the
   per-filter iter2 position so dedup doesn't keep the unsnapped one.
 - **Post-fit dedup thresholds** (crowdsource_catalogs_long.py): 0.5→1.5 (2026-04-24, deep negative residuals) then →1.0 px

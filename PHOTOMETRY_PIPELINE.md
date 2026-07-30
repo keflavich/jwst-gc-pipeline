@@ -104,21 +104,20 @@ or `overwrite=True` (`cataloging.py:1742`). Steps:
    blob.
 2. **Fit each blob** with a gridded WebbPSF/STPSF model (`npsf=16`, `oversample=2`;
    `saturated_star_finding.py`). In-FOV field of view: **fovp 512** for SW
-   (NRC?1-4) and MIRI, **fovp 1024** for LW (NRC?LONG) (`:1639`). Grids live in
-   `<basepath>/psfs`, named `{inst}_{detector}_{filter}_fovp{N}_samp2_npsf16.fits`
-   (`:93`). The LW detector token is `nrcb5`/`nrca5` (WebbPSF naming), **not**
+   (NRC?1-4) and MIRI, **fovp 1024** for LW (NRC?LONG). Grids live in
+   `<basepath>/psfs`, named `{inst}_{detector}_{filter}_fovp{N}_samp2_npsf16.fits`. The LW detector token is `nrcb5`/`nrca5` (WebbPSF naming), **not**
    `nrcblong` — the per-frame cache lookup maps `nrcXlong → nrcX5`.
-3. **Keep-gate** each fit (`accept_satstar_fit`, `:1061`): NIRCam requires
+3. **Keep-gate** each fit (`accept_satstar_fit`): NIRCam requires
    `qfit ≤ 5`, `snr ≥ 3`, `sidelobe ≥ -10 σ`, and `ssr_ratio ≤ 1` — but the ssr
    gate is applied **only to low-confidence fits** (`snr ≤ 10`); high-S/N,
    good-qfit satstars bypass it so real bright stars are never dropped. MIRI uses
    looser bounds (`qfit ≤ 15`, `snr ≥ 2`, `sidelobe ≥ -40`, `ssr ≤ 2`).
 4. **MIRI-only seed gates** reject false blobs in extended emission:
    `seed_prominence_min=8.0`, `seed_core_min=1000.0`, `seed_conc_min=1.3`
-   (`:1273`; F770W/Sickle-calibrated, env-overridable), plus a spike-merge that
+   (; F770W/Sickle-calibrated, env-overridable), plus a spike-merge that
    folds diffraction-spike satellites into their core.
 5. **Off-FOV bright stars** (spikes bleeding in from outside the frame) use a
-   **large** forced grid — fovp **2048** (SW) / **1024** (LW/MIRI) (`:1679`) — a
+   **large** forced grid — fovp **2048** (SW) / **1024** (LW/MIRI) — a
    position prior, an integer grid search (`radius=5 px`), a `model ≤ data` clamp
    at the 10th percentile (`oversub_clamp_percentile=10.0`), and a cross-frame
    flux reconciliation that pins runaway far-detector fits to the nearest-detector
@@ -152,7 +151,7 @@ subsequent per-source **local-S/N filter** plus the round/sharp bounds:
 | m2 (iter2) | −0.3 / +0.3 | 0.50 / 1.00 | 3.0 | on | m1 catalog + m1 residual |
 | m3..m7 (per-frame) | −0.3 / +0.3 | 0.50 / 1.00 | 3.0 | on | prev vetted catalog |
 
-(`cataloging.py:1683` m1, `:1699` m2, `:1717` m3+.) The wider round/sharp window
+(`cataloging.py:1683` m1 m2 m3+.) The wider round/sharp window
 on **m1** is intentional: the first unseeded pass casts a wide net; **m2 onward**
 tighten toward star-like shapes because they reseed on residuals where extended
 emission dominates the false positives.
@@ -217,7 +216,7 @@ negative peak); **dedup**; **near-saturation / satstar-wing rejection**.
 
 After each phase the per-frame catalogs are merged, `iter_found` is tagged, and
 the merged catalog is vetted by `_filter_extended_emission` (`cataloging.py:761`,
-called `:3474`). NIRCam keeps a source if it is **star-like**
+called ). NIRCam keeps a source if it is **star-like**
 
 ```
 star_like = (qfit ≤ 0.2) OR (flags in keep_flags) OR (peakSB > 20 × local_bkg)

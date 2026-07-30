@@ -3260,8 +3260,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             # coadd core, leaving 10-27% of the bright cores in the residual, so
             # push the model peak up to 0.90x the measurable core -- never above
             # it, so the leftover stays positive even if the model centroid is a
-            # pixel off.  The core must be read from a tight
-            # <=4 px box at the fit position: an earlier version used a
+            # pixel off.  The core is read at the fit position (see the note
+            # below on why a 3x3 median): an earlier version used a
             # sat_area-scaled radius, grabbed a bright neighbour's core and
             # injected 70k-deep pits.  Spike-fit small-PSF stars only.
             if (not _use_large_infov and _spike_flux is not None
@@ -3651,8 +3651,8 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # model must at least reach its filter's saturation level at its own peak.
         # In the crf products every SATURATED pixel is blanked (SCI and
         # VAR_POISSON both NaN), so neither the data nor the variance can tell a
-        # real saturated core from the any-group over-flag -- but the fit can.  0.5x margin for wing-fit scatter on
-        # borderline saturation.  Rejects fall through to the daophot channel,
+        # real saturated core from the any-group over-flag -- but the fit can.
+        # 0.5x margin for wing-fit scatter on borderline saturation.  Rejects fall through to the daophot channel,
         # which had them right all along.  MIRI and forced sources are excluded.
         if (not _is_miri and not forced_source
                 and result is not None and _sev_floor and _sev_floor > 0):
