@@ -52,7 +52,7 @@ hdr = fitsdata['SCI'].header
 ww = WCS(hdr)
 data = fitsdata['SCI'].data
 
-saturated, sources, coms = find_saturated_stars(fitsdata)
+saturated, sources, coms, _seed_kinds = find_saturated_stars(fitsdata)
 nsrc = int(sources.max())
 sizes = sum_labels(saturated, sources, np.arange(nsrc) + 1)
 slices = find_objects(sources)

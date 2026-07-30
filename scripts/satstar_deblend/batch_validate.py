@@ -79,7 +79,7 @@ for filt, cglob in FRAMES:
         sat_ceiling = robust_zf_ceiling(zeroframe)
         zf_recover = float(np.mean((zeroframe > 0) & (zeroframe < sat_ceiling)))
 
-        saturated, sources, coms = find_saturated_stars(fd)
+        saturated, sources, coms, _seed_kinds = find_saturated_stars(fd)
         nsrc = int(sources.max())
         slices = find_objects(sources)
         sizes = sum_labels(saturated, sources, np.arange(nsrc) + 1)

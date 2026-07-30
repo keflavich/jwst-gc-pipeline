@@ -2,8 +2,9 @@
 # Submit baseline + deblend satstar comparison on one gc2211 frame as two slurm
 # jobs (run in parallel, ~2-4h each).  QOS/account = astronomy-dept-b (project rule).
 set -euo pipefail
-WT=/blue/adamginsburg/adamginsburg/repos/jwst-gc-pipeline-wt-satdeblend
-SCR=$WT/scripts/satstar_deblend
+# Resolve relative to this script, not a hard-coded worktree (the old
+# jwst-gc-pipeline-wt-satdeblend path no longer exists).
+SCR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG=$SCR/out_compare
 mkdir -p "$LOG"
 PY=/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/python

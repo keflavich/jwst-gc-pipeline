@@ -43,7 +43,7 @@ zf_out = f'{PIPE}/{EXP}_zeroframe.fits'
 zf_hdu.writeto(zf_out, overwrite=True)
 print(f'wrote {zf_out}', flush=True)
 
-saturated, sources, coms = find_saturated_stars(fd)
+saturated, sources, coms, _seed_kinds = find_saturated_stars(fd)
 nsrc = int(sources.max())
 slices = find_objects(sources)
 sizes = sum_labels(saturated, sources, np.arange(nsrc) + 1)

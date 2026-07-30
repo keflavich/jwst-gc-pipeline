@@ -28,7 +28,7 @@ ww = WCS(fd['SCI'].header)
 _, fwhm_pix = get_fwhm(fd[0].header, instrument_replacement='NIRCam')
 zeroframe = fits.open(f'{GC}/F200W/pipeline/jw02211023001_02201_00001_nrca1_ramp.fits')['ZEROFRAME'].data[0].astype(float)
 
-saturated, sources, coms = ssf.find_saturated_stars(fd)
+saturated, sources, coms, _seed_kinds = ssf.find_saturated_stars(fd)
 coms = ssf._refine_coms_by_data(coms, data, sources)
 sizes = sum_labels(saturated, sources, np.arange(int(sources.max())) + 1)
 

@@ -1,6 +1,5 @@
 # gc2211 saturated-star deblending (merged saturated cores)
 
-**Worktree:** `jwst-gc-pipeline-wt-satdeblend` (branch `satstar-deblend-gc2211`).
 
 ## Problem
 gc2211 GC fields are so crowded that bright stars' SATURATED-DQ cores TOUCH and
@@ -61,9 +60,11 @@ o046/o049 0-4%, F277W LW 5%.  Both regimes confirmed working on real doubles.
   residual + satstar/NEW/OLD catalogs, with jump coords for L168/L15/L31.
 - `gc2211-merged-images-catalog` — merged i2d deep images + merged daophot cat.
 
-## TODO (integration)
-Port `deblend_blob_zeroframe` into `get_saturated_stars`: load the matching
-`_ramp.fits` ZEROFRAME per frame, replace the one-record-per-component loop with
-one `source_record` per returned centre (sharing the blob's sat-mask), keep the
-existing brightest-first iterative-subtraction fit. Then a residual re-detection
-pass for marginally-saturated companions.
+## Integration — done
+`get_saturated_stars` calls `build_deblended_source_records`
+(`jwst_gc_pipeline/reduction/satstar_deblend.py`), which loads the frame's
+matching `_ramp.fits` ZEROFRAME and returns one `source_record` per resolved
+centre instead of one per connected component, all sharing the blob's sat-mask.
+Enable with `--deblend-satstars`.
+
+Still open: a residual re-detection pass for marginally-saturated companions.

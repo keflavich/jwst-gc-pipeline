@@ -23,6 +23,7 @@ CAL = f'{GC}/F200W/jw02211023001_02201_00001_nrca1_cal.fits'
 RAMP = f'{GC}/F200W/pipeline/jw02211023001_02201_00001_nrca1_ramp.fits'
 RESID = f'{GC}/F200W/pipeline/jw02211023001_02201_00001_nrca1_destreak_o023_crf_iter3_satstar_residual.fits'
 OUTDIR = os.path.join(os.path.dirname(__file__), 'out')
+os.makedirs(OUTDIR, exist_ok=True)
 
 fd = fits.open(CAL)
 data = fd['SCI'].data
@@ -37,7 +38,7 @@ try:
 except Exception:
     resid = None
 
-saturated, sources, coms = find_saturated_stars(fd)
+saturated, sources, coms, _seed_kinds = find_saturated_stars(fd)
 nsrc = int(sources.max())
 slices = find_objects(sources)
 sizes = sum_labels(saturated, sources, np.arange(nsrc) + 1)
