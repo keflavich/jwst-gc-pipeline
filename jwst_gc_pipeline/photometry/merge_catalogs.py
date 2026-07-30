@@ -103,29 +103,23 @@ INDIV_MERGE_SUFFIX = {'crowdsource': '_nsky0',
                       'iterative': '_iterative',
                       }
 
-# Which all-filter merges main() runs, and what a failure means.
-#   'raise'      -- any failure stops the run
-#   'missing-ok' -- tolerate "no inputs found", raise on anything else
-#   'skip'       -- never fatal; these products are optional
+# Which all-filter merges main() runs, and whether a failure is fatal.
+# 'skip' products are optional leftovers of older runs -- a missing input for
+# one of them is normal.  The two 'raise' entries are the current science
+# products: no inputs for those means the run did not produce what it claims to.
 CROWDSOURCE_MERGES = (('', 'skip'), ('_nsky0', 'raise'), ('_unweighted', 'skip'))
-DAOPHOT_MERGES = (('basic', 'missing-ok'), ('iterative', 'skip'))
-
-# The exact phrases the merge functions use when they find no inputs.
-# Checked against the raise sites: merge_individual_frames ("No tables found"),
-# merge_crowdsource ("had no matches" / "had different n(imgs)"),
-# merge_daophot ("No daophot <type> catalogs found across filters").
-_MISSING_INPUT_MESSAGES = ('No tables found', 'had no matches',
-                           'had different n(imgs)', 'catalogs found across filters')
+DAOPHOT_MERGES = (('basic', 'raise'), ('iterative', 'skip'))
 
 
 def _run_merge(merge_func, label, on_error, **kwargs):
-    """Run one all-filter merge under the `on_error` policy above."""
+    """Run one all-filter merge.  `on_error` is 'raise' or 'skip'."""
+    if on_error not in ('raise', 'skip'):
+        raise ValueError(f"on_error must be 'raise' or 'skip', got {on_error!r}")
     print(f'{label}: starting', flush=True)
     try:
         merge_func(**kwargs)
     except (ValueError, NotImplementedError, OSError, KeyError) as ex:
-        missing = any(msg in str(ex) for msg in _MISSING_INPUT_MESSAGES)
-        if on_error == 'raise' or (on_error == 'missing-ok' and not missing):
+        if on_error == 'raise':
             raise
         print(f'{label}: skipped ({type(ex).__name__}: {ex})', flush=True)
 
@@ -2923,6 +2917,18 @@ def main():
                            'specific tiling.')
     (options, args) = parser.parse_args()
 
+    if options.make_refcat:
+        # Refused up front, not after the merges: make_reftable.main() measures
+        # offsets by nearest-neighbour median against a dense catalog, which
+        # raises DenseNNMedianAstrometryError (astrometry rule #1).  The old
+        # code could not run it either -- it raised without an array and its
+        # import path was wrong -- so nothing regresses; say why instead.
+        raise NotImplementedError(
+            "--make-refcat is disabled: make_reftable.main() measures offsets "
+            "by nearest-neighbour median against a dense reference, which "
+            "astrometry rule #1 forbids.  Build reference catalogs with "
+            "make_reference_from_pipeline_catalogs.py instead.")
+
     modules = options.modules.split(",")
     target = options.target
     indiv_merge_methods = options.indiv_merge_methods.split(",")
@@ -3027,17 +3033,6 @@ def main():
                        **merge_kwargs)
         print(f'daophot phase done, {time.time() - t0:.0f}s')
 
-    if options.make_refcat:
-        # make_reftable measures its offsets as a nearest-neighbour median
-        # against a dense catalog, which raises DenseNNMedianAstrometryError
-        # (CLAUDE.md astrometry rule #1).  The old code could not run it either
-        # -- it raised without an array and its import path was wrong -- so
-        # nothing regresses here; say why instead of pretending.
-        raise NotImplementedError(
-            "--make-refcat is disabled: make_reftable.main() measures offsets "
-            "by nearest-neighbour median against a dense reference, which "
-            "astrometry rule #1 forbids.  Build reference catalogs with "
-            "make_reference_from_pipeline_catalogs.py instead.")
 
     # A whole-field cross-band scan is only meaningful once every band is
     # merged, so it runs here.  Catches a brick-1182-style local

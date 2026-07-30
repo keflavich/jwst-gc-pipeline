@@ -61,35 +61,31 @@ def test_raise_policy_propagates():
         MC._run_merge(_boom(ValueError('No tables found')), 'x', 'raise')
 
 
-def test_missing_ok_swallows_only_missing_inputs():
-    MC._run_merge(_boom(ValueError('had no matches')), 'x', 'missing-ok')
+def test_daophot_basic_no_input_is_fatal(tmp_path):
+    """A merge with zero daophot-basic inputs must fail, not exit 0.
+
+    This is what the deleted 'missing-ok' policy got wrong: it swallowed
+    merge_daophot's real no-input message, so a run with no inputs finished
+    successfully having built no cross-band product.  Asserted against the
+    message merge_daophot actually raises, not against the source text.
+    """
+    with pytest.raises((ValueError, OSError, KeyError)) as excinfo:
+        MC.merge_daophot(daophot_type='basic', module='merged', target='brick',
+                         basepath=str(tmp_path), indivexp=True)
+    assert 'catalogs found' in str(excinfo.value) or 'no matches' in str(
+        excinfo.value), f'unexpected failure mode: {excinfo.value}'
+
+    policy = dict(MC.DAOPHOT_MERGES)['basic']
+    assert policy == 'raise', 'daophot basic must not swallow a missing input'
+
+
+def test_only_two_policies_exist():
+    # A third state that nothing legitimately used is how 'missing-ok' became
+    # both dead code and, once "fixed", a silent skip of a required product.
+    policies = {p for _, p in MC.CROWDSOURCE_MERGES + MC.DAOPHOT_MERGES}
+    assert policies <= {'raise', 'skip'}
     with pytest.raises(ValueError):
-        MC._run_merge(_boom(ValueError('column mismatch')), 'x', 'missing-ok')
-
-
-def _raised_message_text():
-    """Every string literal that appears inside a `raise` in merge_catalogs."""
-    import ast
-    import inspect
-    tree = ast.parse(inspect.getsource(MC))
-    text = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Raise):
-            for sub in ast.walk(node):
-                if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
-                    text.append(sub.value)
-    return text
-
-
-@pytest.mark.parametrize('message', MC._MISSING_INPUT_MESSAGES)
-def test_each_missing_input_phrase_is_one_a_merge_actually_raises(message):
-    # A phrase no merge function raises makes 'missing-ok' dead code, which is
-    # how the daophot no-input case stayed fatal despite the policy saying
-    # otherwise.  Match against `raise` statements only -- a phrase that appears
-    # solely in a comment or a docstring does not count.
-    assert any(message in raised for raised in _raised_message_text()), (
-        f'no `raise` in merge_catalogs contains {message!r}')
-    MC._run_merge(_boom(ValueError(f'... {message} ...')), 'x', 'missing-ok')
+        MC._run_merge(_boom(ValueError('x')), 'x', 'missing-ok')
 
 
 def test_skip_policy_swallows_expected_failures():
