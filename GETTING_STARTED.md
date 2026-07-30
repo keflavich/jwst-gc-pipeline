@@ -9,6 +9,10 @@ catalogs. Three stages, in order:
 | **catalog** | detect + PSF-fit each exposure, iteratively → per-frame catalogs | `python -m jwst_gc_pipeline.photometry.crowdsource_catalogs_long` |
 | **merge** | combine per-frame catalogs across exposures and filters | `python -m jwst_gc_pipeline.photometry.merge_catalogs` |
 
+Merge is not quite the end: cross-band products need the **m8** forced-fill pass
+(`scripts/reduction/submit_cataloging_m8*.sbatch`, described in
+`PHOTOMETRY_PIPELINE.md`).
+
 **Read this first if you are not on HiPerGator: [Running elsewhere](#running-elsewhere)
 — the honest answer is "partly".**
 
@@ -28,7 +32,26 @@ Then set, in your shell or job script:
 export CRDS_PATH=/somewhere/with/20GB          # JWST reference files land here
 export CRDS_SERVER_URL=https://jwst-crds.stsci.edu
 export STPSF_PATH=/path/to/stpsf-data          # PSF models; required
+export GC_ALLOW_DEV=1                          # see below -- you need this
 ```
+
+**`GC_ALLOW_DEV=1` is not optional for a working checkout.** Both entry points
+call `assert_runnable_version`, which refuses to run unless HEAD sits exactly on
+a `YYYY-MM-DD_PR<n>` release tag with a clean tree:
+
+```
+UntaggedPipelineError: refusing to run a PRODUCTION stage on an untagged
+or dirty tree
+```
+
+One local edit, or being a few commits past the last tag, is enough. The submit
+scripts set it for you; running the modules directly, you must.
+
+You also need a MAST token at `~/.mast_api_token` — the reduction driver opens
+it unconditionally, before doing any work, on HiPerGator as well as off it.
+
+`pip install -e '.[test]'` if you want to run the test suite. `STPSF_PATH` needs
+the stpsf reference data, which is a separate download.
 
 `STPSF_PATH` is required by name — the saturated-star finder raises without
 it, and setting `WEBBPSF_PATH` instead does not satisfy that check.
@@ -48,7 +71,7 @@ are missing:
 <basepath>/                     e.g. /orange/adamginsburg/jwst/sickle/
 ├── F212N/                      one directory per filter, uppercase
 │   └── pipeline/               your _cal/_rate frames in, *_crf.fits out
-├── reduction/fwhm_table.ecsv   INPUT.  Stage 1 reads it before writing anything
+├── reduction/fwhm_table.ecsv   INPUT.  Copy the one shipped in the package
 ├── offsets/                    INPUT for table-locked fields; see alignment_config
 ├── regions_/<inst>_<target>_fov.reg   INPUT for MIRI only (see below)
 ├── psfs/                       must exist; PSF models are written here
@@ -56,7 +79,9 @@ are missing:
 ```
 
 Put your `_cal` (or `_rate`) frames under `<basepath>/<FILTER>/pipeline/` before
-running stage 1. A missing `reduction/fwhm_table.ecsv` stops stage 1 at once.
+running stage 1. A missing `reduction/fwhm_table.ecsv` stops stage 1 at once —
+copy `jwst_gc_pipeline/reduction/fwhm_table.ecsv` from the package rather than
+building your own.
 `mkdir` `psfs/` and `catalogs/` yourself — the code writes into them without
 creating them (only cutout runs `makedirs`).
 
@@ -166,8 +191,7 @@ So today, off HiPerGator:
 That is: NIRCam long-wavelength **writes** where you tell it. It is not yet a
 clean end-to-end run off HiPerGator, because some **inputs** are still absolute:
 
-- `PipelineRerunNIRCAM-LONG.py` opens `~/.mast_api_token` and logs in to MAST
-  unconditionally, even with `-s`.
+- The MAST login noted under Install is unconditional — even with `-s`.
 - Reference catalogs and several diagnostic paths are hard-coded under
   `/orange`.
 
