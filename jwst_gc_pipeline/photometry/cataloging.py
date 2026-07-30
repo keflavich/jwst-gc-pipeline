@@ -78,6 +78,19 @@ from photutils.background import Background2D, MedianBackground, MMMBackground
 from photutils.psf import SourceGrouper
 
 
+class VettedCombineError(RuntimeError):
+    """The per-obs vetted catalogs for one phase could not be combined.
+
+    Fail-closed: the combined catalog is the final science catalog and the m7
+    cross-band seed, so continuing would leave the previous run's version on
+    disk to be read as the seed.  The inputs are found by glob rather than
+    named by the caller, so the message lists them -- usually one was written
+    by older code and carries an incompatible dtype for a shared column.
+    (A missing or extra column does NOT get here: vstack outer-joins and masks
+    it.)
+    """
+
+
 class MergedcatMosaicError(RuntimeError):
     """A phase could not write its merged-catalog residual / model i2d mosaics.
 
@@ -2478,7 +2491,7 @@ def _combine_per_obs_vetted(vetted_path, merged_path, combined_path,
         # be read as the m7 seed.  But the inputs came from a glob, not from the
         # caller, so name them: otherwise the operator gets a column-mismatch
         # traceback with no clue which file on disk is the odd one out.
-        raise RuntimeError(
+        raise VettedCombineError(
             f"cannot combine the per-obs vetted catalogs for "
             f"{os.path.basename(combined_path)}: {type(ex).__name__}: {ex}\n"
             f"  inputs: {[os.path.basename(p) for p in siblings]}") from ex

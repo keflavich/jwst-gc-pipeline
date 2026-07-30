@@ -276,7 +276,7 @@ def test_a_failed_combine_leaves_no_stale_catalog(tmp_path, monkeypatch):
     monkeypatch.setattr(C, 'table_vstack',
                         lambda *a, **k: (_ for _ in ()).throw(
                             ValueError('column mismatch')))
-    with pytest.raises(RuntimeError):        # re-raised with the file names
+    with pytest.raises(C.VettedCombineError):   # named, with the file list
         C._combine_per_obs_vetted(str(tmp_path / 'cat_o002_vetted.fits'),
                                   str(merged), str(combined),
                                   this_obs_only=False)
@@ -399,7 +399,7 @@ def test_a_failed_combine_names_the_files_it_globbed(tmp_path):
     odd.write(tmp_path / 'cat_o002_vetted.fits', overwrite=True)
 
     combined = tmp_path / 'cat_vetted.fits'
-    with pytest.raises(RuntimeError) as excinfo:
+    with pytest.raises(C.VettedCombineError) as excinfo:
         C._combine_per_obs_vetted(str(tmp_path / 'cat_o002_vetted.fits'),
                                   str(merged), str(combined),
                                   this_obs_only=False)
