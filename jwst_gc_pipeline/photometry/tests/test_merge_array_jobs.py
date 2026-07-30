@@ -135,6 +135,7 @@ def _run_main(monkeypatch, argv, env, gate_calls):
     MC.main()
 
 
+@pytest.mark.localdata
 def test_gate_runs_on_a_whole_field_run(monkeypatch):
     calls = []
     _run_main(monkeypatch,
@@ -144,6 +145,7 @@ def test_gate_runs_on_a_whole_field_run(monkeypatch):
     assert len(calls) == 1
 
 
+@pytest.mark.localdata
 def test_gate_does_not_run_per_array_task(monkeypatch, capsys):
     calls = []
     _run_main(monkeypatch,
@@ -154,6 +156,7 @@ def test_gate_does_not_run_per_array_task(monkeypatch, capsys):
     assert 'registration gate skipped' in capsys.readouterr().out
 
 
+@pytest.mark.localdata
 def test_gate_stays_off_unless_asked(monkeypatch):
     calls = []
     _run_main(monkeypatch,
@@ -161,3 +164,15 @@ def test_gate_stays_off_unless_asked(monkeypatch):
               {'RUN_REGISTRATION_GATE': None, 'SLURM_ARRAY_TASK_ID': None},
               calls)
     assert calls == []
+
+
+@pytest.mark.localdata
+def test_gate_runs_for_an_array_task_that_merged_everything(monkeypatch):
+    # Without --merge-singlefields there are no per-filter jobs, so --array=0
+    # is the whole merge, not one filter of it.
+    calls = []
+    _run_main(monkeypatch,
+              ['merge_catalogs', '--target', 'brick'],
+              {'RUN_REGISTRATION_GATE': '1', 'SLURM_ARRAY_TASK_ID': '0'},
+              calls)
+    assert len(calls) == 1
