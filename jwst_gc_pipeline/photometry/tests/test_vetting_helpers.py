@@ -471,3 +471,47 @@ def test_a_non_dtype_failure_still_names_the_inputs(tmp_path):
     message = str(excinfo.value)
     assert 'differs' not in message                   # no dtype conflict
     assert 'cat_o001_vetted.fits' in message and 'cat_o002_vetted.fits' in message
+
+
+def test_a_typeerror_from_the_stack_is_wrapped_too(tmp_path, monkeypatch):
+    """numpy raises TypeError, not ValueError, for some dtype clashes.
+
+    `UFuncTypeError` is a TypeError; narrowing the catch to ValueError alone
+    would let it escape unwrapped, with no file names attached.
+    """
+    merged = tmp_path / 'cat.fits'
+    _vetted(1).write(merged, overwrite=True)
+    for obs in ('001', '002'):
+        _vetted(3).write(tmp_path / f'cat_o{obs}_vetted.fits', overwrite=True)
+    monkeypatch.setattr(C, 'table_vstack',
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            TypeError('ufunc loop missing')))
+    with pytest.raises(C.VettedCombineError) as excinfo:
+        C._combine_per_obs_vetted(str(tmp_path / 'cat_o002_vetted.fits'),
+                                  str(merged), str(tmp_path / 'cat_vetted.fits'),
+                                  this_obs_only=False)
+    assert 'ufunc loop missing' in str(excinfo.value)
+
+
+def test_inputs_with_different_column_sets_do_not_break_the_report(tmp_path):
+    """The real catalogs differ: 19 columns in one obs, 21 in another.
+
+    Without the `col in t.colnames` guard, the report raises KeyError from
+    inside the error handler and the diagnostic is lost.
+    """
+    merged = tmp_path / 'cat.fits'
+    _vetted(1).write(merged, overwrite=True)
+    a = _vetted(3, 266.5)
+    a['only_here'] = np.arange(3)              # column the other file lacks
+    a.write(tmp_path / 'cat_o001_vetted.fits', overwrite=True)
+    odd = _vetted(3, 267.5)
+    odd['qfit'] = np.array(['a', 'b', 'c'])    # the real conflict
+    odd.write(tmp_path / 'cat_o002_vetted.fits', overwrite=True)
+
+    with pytest.raises(C.VettedCombineError) as excinfo:
+        C._combine_per_obs_vetted(str(tmp_path / 'cat_o002_vetted.fits'),
+                                  str(merged), str(tmp_path / 'cat_vetted.fits'),
+                                  this_obs_only=False)
+    message = str(excinfo.value)
+    assert "column 'qfit' differs" in message
+    assert 'only_here' not in message          # present in one file only
