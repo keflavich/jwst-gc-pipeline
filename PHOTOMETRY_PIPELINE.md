@@ -337,7 +337,7 @@ after m6.
 | `--manual-detect-threshold-scale` | 1.0 | 1.0 | 1.0 | 1.0 | scales the permissive daofind threshold |
 | `--local-snr-threshold` | 5.0 | 5.0 | 5.0 | 5.0 | m1 per-source local S/N |
 | `--manual-keep-intermediate-model-i2d` | off | off | off | off | write a model i2d for EVERY phase, not just the last |
-| prominence gate (`miri_prominence_snr`) | 0.0 | 0 (off) | 0 (off) | **8→3 progressive** (m12:8, m4:5.5, m6:3) |
+| prominence gate (`miri_prominence_snr`) | 5.0 (the `MANUAL_DEFAULTS`/`mopt` value; the `do_photometry_step_manual` signature default is 0.0, and there is no CLI flag) | 0 (off — NIRCam leaves it 0) | 0 (off) | **8→3 progressive** (m12:8, m4:5.5, m6:3), scheduled by `miri_tuning` |
 | `--nircam-prom-m1` / `-m2` / `-m3plus` | 0.0 | 0 (off) | 0 (off; opt-in) | n/a |
 | `--group` | off | off (pass `--group`) | | |
 | `--manual-group-min-sep-fwhm` | 2.0 | 2.0 (use ~3.0 for blends) | | |

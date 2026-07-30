@@ -449,7 +449,8 @@ separations move up to ~25 mas between epochs; a direct proper-motion hazard).
 Measured on the Brick by network self-calibration: fitted inter-detector scale
 = 9.7–9.9e-5 (2221, predicted 9.18e-5) and 1.05–1.06e-4 (1182, predicted
 1.00e-4); after removal, static SIAF detector placements are 1–2.5 mas
-(astrometry-paper `siaf_accuracy.tex`, `analysis/network_selfcal.py`).
+(astrometry-paper `siaf_accuracy.tex`,
+`scripts/analysis/siaf_selfcal/network_selfcal.py`).
 
 **The correction.** `dva_correction.apply_dva_correction(fn)` applies the
 per-detector rigid shift computed from the file's own header (`VA_SCALE`,

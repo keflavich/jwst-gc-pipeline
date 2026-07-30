@@ -52,10 +52,6 @@ _FOREIGN_PREFIXES = ('brick2221/', 'jwst_rgb/', 'peppar/', 'jwst/', 'stdatamodel
                      'crowdsource/', 'poppy/', 'synphot/', 'asdf/', 'drizzle/',
                      'crds/', 'numpy/', 'scipy/', '_bench/')
 
-#: Repo-relative paths whose basename also exists upstream would make the
-#: "resolves to a tracked file" test ambiguous.  There are none today; assert it.
-_AMBIGUOUS_BASENAMES = {'__init__.py'}
-
 # ---------------------------------------------------------------------------
 # citation surface forms.  Anchored on a source-file extension so prose like
 # "Table 2:15" is not a citation.  ``L`` and the word "line" are both accepted
@@ -74,6 +70,9 @@ _CITATION_RES = (
 _REVERSED_CITATION_RE = _CITATION_RES[3]
 #: ``symbol:NNN`` names no file, so ``_is_ours`` cannot judge it -- it is always ours.
 _SYMBOL_CITATION_RE = _CITATION_RES[4]
+
+#: Docs that restate photometry defaults; all of them get value-checked.
+_VALUE_DOCS = ('PHOTOMETRY_PIPELINE.md', 'PHOTOMETRY_PIPELINE_BRIEF.md')
 
 _SYMBOL_REF_RE = re.compile(r'([\w./\-]+\.py)::([\w.]+)')
 _MODULE_RE = re.compile(r'\bjwst_gc_pipeline(?:\.[a-zA-Z_]\w*)+')
@@ -140,13 +139,31 @@ def tracked_paths():
     return paths, basenames
 
 
+def _resolves(path, tracked_paths, doc=None):
+    """``_is_ours``, plus doc-relative resolution (``../reduction/x.py``)."""
+    if _is_ours(path, tracked_paths):
+        return True
+    if doc:
+        rel = os.path.normpath(os.path.join(os.path.dirname(doc), path))
+        return rel in tracked_paths[0]
+    return False
+
+
 def _is_ours(path, tracked_paths):
-    """Does this doc-written path point at a file in THIS repo?"""
+    """Does this doc-written path point at a file in THIS repo?
+
+    If the doc gives a DIRECTORY component it has to match: ``analysis/x.py`` is
+    NOT satisfied by ``scripts/analysis/siaf_selfcal/x.py``.  Matching on basename
+    alone enforced "referenced code must exist" at basename granularity, so a
+    wrong path read as correct.  A bare basename is still accepted, since docs
+    legitimately write ``cataloging.py``.
+    """
     paths, basenames = tracked_paths
     if path in paths or any(p.endswith('/' + path) for p in paths):
         return True
-    base = os.path.basename(path)
-    return base in basenames and base not in _AMBIGUOUS_BASENAMES
+    if '/' in path:
+        return False
+    return path in basenames
 
 
 def _names_defined(path):
@@ -552,8 +569,21 @@ def _flag_to_dest():
     return out
 
 
+def _default_tokens(cell):
+    """Split a default cell into candidate value tokens.
+
+    The trailing explanatory parenthetical is removed from the WHOLE cell before
+    splitting, because it may itself contain ``/`` or ``,`` -- otherwise a row
+    whose default is annotated silently stops being checked.
+    """
+    cell = re.sub(r'\s*\([^()]*\)\s*$', '', cell.strip())
+    return re.split(r'[/,]', cell)
+
+
 def _as_number(cell):
     cell = cell.replace('**', '').replace('`', '').strip()
+    cell = re.sub(r'\s*\([^)]*\)\s*$', '', cell)              # "1.3 (see note)"
+    cell = re.sub(r'\s*(?:px|mas|arcsec|MJy/sr)$', '', cell)   # "1.3 px"
     cell = cell.replace('−', '-').replace('–', '-')
     m = re.fullmatch(r'([+-]?\d+(?:\.\d+)?)', cell)
     return float(m.group(1)) if m else None
@@ -577,61 +607,68 @@ def _partner_dest(dest, defaults):
 
 
 def test_documented_photometry_defaults_match_manual_defaults():
-    """Every Table-B default cell that names a MANUAL_DEFAULTS knob must match.
+    """Documented defaults must match MANUAL_DEFAULTS, in every doc that states them.
 
-    The 2026-07-30 audit compared only numeric cells in flag-keyed rows and
-    reported "0 mismatches"; the daofind window was documented as +-0.3 while
-    MANUAL_DEFAULTS had carried -+1.0 since 2026-07-07, in a PHASE-keyed table the
-    checker never looked at.  Both shapes are covered here.
+    Three lessons are baked in.  (a) The 2026-07-30 audit compared only numeric
+    cells in FLAG-keyed rows and reported "0 mismatches"; the daofind window was
+    documented -+0.3 while MANUAL_DEFAULTS carried +-1.0 in a PHASE-keyed table.
+    (b) A row keyed by a backticked ``dest`` rather than a ``--flag`` hid a real
+    5.0-vs-0.0 mismatch (``miri_prominence_snr``) from the first version of this
+    test.  (c) The same tables are restated in PHOTOMETRY_PIPELINE_BRIEF.md, so
+    checking one file leaves a verbatim copy of the wrong number next door.
     """
     from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
 
     flag_to_dest = _flag_to_dest()
-    doc = 'PHOTOMETRY_PIPELINE.md'
-    text = open(os.path.join(REPO, doc), errors='replace').read()
-
     mismatches, checked = [], 0
-    for lineno, line in enumerate(text.splitlines(), 1):
-        line = line.strip()
-        if not line.startswith('|'):
-            continue
-        cells = [c.strip() for c in line.strip('|').split('|')]
-        m = re.match(r'^`?(--[\w\-]+)`?', cells[0])
-        if not m or len(cells) < 2:
-            continue
-        dest = flag_to_dest.get(m.group(1))
-        if dest not in MANUAL_DEFAULTS:
-            continue
-        want = MANUAL_DEFAULTS[dest]
-        if not isinstance(want, (int, float)) or isinstance(want, bool):
-            continue
-        nums = [_as_number(tok) for tok in re.split(r'[/,]', cells[1])]
-        nums = [n for n in nums if n is not None]
-        if not nums:
-            continue
-        checked += 1
-        if len(nums) == 1:
-            if abs(nums[0] - float(want)) >= 1e-9:
-                mismatches.append(f'{doc}:{lineno}: {m.group(1)} doc={cells[1]!r} '
-                                  f'code={want} (MANUAL_DEFAULTS[{dest!r}])')
-            continue
-        # A pair cell ("-1.0 / 1.0") documents this knob AND its partner; compare
-        # POSITIONALLY.  Accepting a match against any number in the cell made the
-        # test blind to an order/sign inversion -- which is the exact class of error
-        # it was added for (the daofind window was documented -+0.3 for -+1.0).
-        partner = _partner_dest(dest, MANUAL_DEFAULTS)
-        if partner is None:
-            mismatches.append(f'{doc}:{lineno}: {m.group(1)} documents a pair '
-                              f'({cells[1]!r}) but no partner knob for {dest!r} '
-                              'could be resolved -- split the row')
-            continue
-        want_pair = [float(want), float(MANUAL_DEFAULTS[partner])]
-        if [abs(a - b) < 1e-9 for a, b in zip(nums[:2], want_pair)] != [True, True]:
-            mismatches.append(f'{doc}:{lineno}: {m.group(1)} doc={cells[1]!r} '
-                              f'code={want_pair} ({dest!r}, {partner!r}) '
-                              '-- order matters')
+    for doc in _VALUE_DOCS:
+        text = open(os.path.join(REPO, doc), errors='replace').read()
+        for lineno, line in enumerate(text.splitlines(), 1):
+            line = line.strip()
+            if not line.startswith('|'):
+                continue
+            cells = [c.strip() for c in line.strip('|').split('|')]
+            if len(cells) < 2:
+                continue
+            flag = re.match(r'^`?(--[\w\-]+)`?', cells[0])
+            if flag:
+                dest, label = flag_to_dest.get(flag.group(1)), flag.group(1)
+            else:
+                named = re.search(r'`([a-z][a-z0-9_]{3,})`', cells[0])
+                dest = label = named.group(1) if named else None
+            if dest not in MANUAL_DEFAULTS:
+                continue
+            want = MANUAL_DEFAULTS[dest]
+            if not isinstance(want, (int, float)) or isinstance(want, bool):
+                continue
+            nums = [n for n in (_as_number(t) for t in _default_tokens(cells[1]))
+                    if n is not None]
+            if not nums:
+                continue
+            checked += 1
+            if len(nums) == 1:
+                if abs(nums[0] - float(want)) >= 1e-9:
+                    mismatches.append(f'{doc}:{lineno}: {label} doc={cells[1]!r} '
+                                      f'code={want} (MANUAL_DEFAULTS[{dest!r}])')
+                continue
+            # A pair cell ("-1.0 / 1.0") documents this knob AND its partner;
+            # compare POSITIONALLY, or an order/sign inversion passes.
+            partner = _partner_dest(dest, MANUAL_DEFAULTS)
+            if partner is None:
+                mismatches.append(f'{doc}:{lineno}: {label} documents a pair '
+                                  f'({cells[1]!r}) but no partner knob for {dest!r} '
+                                  'could be resolved -- split the row')
+                continue
+            want_pair = [float(want), float(MANUAL_DEFAULTS[partner])]
+            if any(abs(a - b) >= 1e-9 for a, b in zip(nums[:2], want_pair)):
+                mismatches.append(f'{doc}:{lineno}: {label} doc={cells[1]!r} '
+                                  f'code={want_pair} ({dest!r}, {partner!r}) '
+                                  '-- order matters')
 
-    assert checked, 'parsed no flag-keyed default rows out of Table B'
+    assert checked >= 25, (
+        f'only {checked} documented defaults were value-checked; the parser has '
+        'probably stopped matching (an annotated cell, a unit suffix, or a '
+        'de-backticked flag name silently disables a row)')
     assert not mismatches, ('documented defaults disagree with MANUAL_DEFAULTS:\n  '
                             + '\n  '.join(mismatches))
 
@@ -747,7 +784,8 @@ def test_named_py_files_exist(docs, tracked_paths):
         for lineno, line in enumerate(_strip_code_blocks(text), 1):
             for m in pat.finditer(line):
                 path = m.group(1)
-                if path.startswith(_FOREIGN_PREFIXES) or _is_ours(path, tracked_paths):
+                if (path.startswith(_FOREIGN_PREFIXES)
+                        or _resolves(path, tracked_paths, doc)):
                     continue
                 # untracked-but-present scratch scripts are real files
                 if os.path.exists(os.path.join(REPO, path)):
@@ -771,3 +809,80 @@ def test_doc_fences_are_balanced(docs):
         if n % 2:
             bad.append(f'{doc}: {n} unpaired ``` markers')
     assert not bad, 'unbalanced code fences:\n  ' + '\n  '.join(bad)
+
+
+def _round_sharp_snr_from_cells(cells):
+    """Parse ``±1.0 / 0.30–1.40 / 5.0`` or a 3-column round|sharp|snr row."""
+    def span(cell):
+        cell = cell.replace('**', '').replace('`', '').strip()
+        cell = re.sub(r'\s*\([^)]*\)\s*$', '', cell)
+        cell = cell.replace('−', '-').replace('–', ' ').replace('/', ' ')
+        if cell.startswith('±'):
+            v = _as_number(cell[1:].strip())
+            return None if v is None else [-v, v]
+        vals = [_as_number(t) for t in cell.split()]
+        vals = [v for v in vals if v is not None]
+        if vals:
+            return vals
+        # a cell that trails prose ("5.0, no S/N filter"): take the leading number
+        lead = re.match(r'\s*(-?\d+(?:\.\d+)?)', cell)
+        return [float(lead.group(1))] if lead else None
+    return [span(c) for c in cells]
+
+
+def test_daofind_windows_are_consistent_everywhere():
+    """Every restatement of the daofind window must match the code.
+
+    The phase table in PHOTOMETRY_PIPELINE.md was guarded first; the same numbers
+    are restated in that file's Table A and, verbatim, in
+    PHOTOMETRY_PIPELINE_BRIEF.md.  Mutating either copy re-introduced the
+    originating +-0.3 bug with the suite green, so all restatements are parsed here
+    and compared to the same two sources of truth.
+    """
+    from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
+
+    code_m1 = _m1_seed_window()
+    want = {
+        'm1': ([code_m1['roundlo'], code_m1['roundhi']],
+               [code_m1['sharplo'], code_m1['sharphi']], 5.0),
+        'm2': ([MANUAL_DEFAULTS['manual_resid_roundlo'],
+                MANUAL_DEFAULTS['manual_resid_roundhi']],
+               [MANUAL_DEFAULTS['manual_resid_sharplo'],
+                MANUAL_DEFAULTS['manual_resid_sharphi']],
+               MANUAL_DEFAULTS['manual_iter2_local_snr']),
+    }
+    bad, seen = [], 0
+    for doc in _VALUE_DOCS:
+        for lineno, line in enumerate(
+                open(os.path.join(REPO, doc), errors='replace').read().splitlines(), 1):
+            line = line.strip()
+            if not line.startswith('|'):
+                continue
+            cells = [c.strip() for c in line.strip('|').split('|')]
+            label = cells[0].replace('*', '').strip().lower()
+            key = ('m1' if label.startswith(('daofind m1', 'm1'))
+                   else 'm2' if label.startswith(('daofind m2', 'm2', 'm3')) else None)
+            if key is None:
+                continue
+            # Table A packs the three quantities into one cell; the phase tables
+            # and the BRIEF give them as separate columns.
+            if len(cells) >= 3 and '/' in cells[2] and 'round' in cells[1].lower():
+                trio = _round_sharp_snr_from_cells(re.split(r'\s*/\s*', cells[2], maxsplit=2))
+            elif len(cells) >= 4:
+                trio = _round_sharp_snr_from_cells(cells[1:4])
+            else:
+                continue
+            rnd, shp, snr = trio
+            if not (rnd and shp and snr):
+                continue
+            seen += 1
+            w_r, w_s, w_snr = want[key]
+            if rnd != w_r:
+                bad.append(f'{doc}:{lineno}: {key} roundness doc={rnd} code={w_r}')
+            if shp != w_s:
+                bad.append(f'{doc}:{lineno}: {key} sharpness doc={shp} code={w_s}')
+            if abs(snr[0] - w_snr) >= 1e-9:
+                bad.append(f'{doc}:{lineno}: {key} local-S/N doc={snr[0]} code={w_snr}')
+    assert seen >= 5, (f'only {seen} daofind rows parsed across {_VALUE_DOCS}; '
+                       'a restatement is being skipped')
+    assert not bad, 'daofind windows disagree with the code:\n  ' + '\n  '.join(bad)
