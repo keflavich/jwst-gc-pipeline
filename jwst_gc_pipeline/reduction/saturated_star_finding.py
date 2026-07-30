@@ -3652,8 +3652,9 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
         # In the crf products every SATURATED pixel is blanked (SCI and
         # VAR_POISSON both NaN), so neither the data nor the variance can tell a
         # real saturated core from the any-group over-flag -- but the fit can.
-        # 0.5x margin for wing-fit scatter on borderline saturation.  Rejects fall through to the daophot channel,
-        # which had them right all along.  MIRI and forced sources are excluded.
+        # 0.5x margin for wing-fit scatter on borderline saturation.  Rejects
+        # fall through to the daophot channel, which had them right all along.
+        # MIRI and forced sources are excluded.
         if (not _is_miri and not forced_source
                 and result is not None and _sev_floor and _sev_floor > 0):
             try:
