@@ -98,10 +98,13 @@ only when the off-FOV cross-frame reconciliation supplies flux overrides/drops,
 or `overwrite=True` (`_prepare_frame_for_photometry`). Steps:
 
 1. **Identify saturated pixels** from the DQ plane: the `SATURATED` bit
-   (`find_saturated_stars`), plus `DO_NOT_USE` for truly-lost pixels
-   (0 good ramp groups) and `JUMP_DET` cosmic-ray handling (saturated clusters
-   ≥3 px are protected). Connected components → one candidate saturated star per
-   blob.
+   (`find_saturated_stars`) with `JUMP_DET` cosmic-ray handling (saturated
+   clusters ≥3 px are protected). Connected components → one candidate saturated
+   star per blob. `DO_NOT_USE` does **not** restrict seeding by default (see
+   `SATURATED_PIXEL_HANDLING.md` §2b — the restriction is opt-in via
+   `SATSTAR_SEED_REQUIRE_DO_NOT_USE`, default OFF), and the seed set is further
+   shaped by the per-filter severity gate plus peak-, sub-floor- and
+   partner-band seeding.
 2. **Fit each blob** with a gridded WebbPSF/STPSF model (`npsf=16`,
    `oversample=2`; `get_psf`). In-FOV field of view: **fovp 512** for SW
    (NRC?1-4) and MIRI, **fovp 1024** for LW (NRC?LONG) (`get_saturated_stars`).
@@ -387,19 +390,31 @@ Under `<basepath>/cutouts/<label>/` (or in place for full-frame):
 ### The `<obs>` token in merged filenames
 
 `<obs>` above is **not decoration** — it is `crowdsource_catalogs_long.obs_token()`,
-the per-observation filename disambiguator. It is empty for most fields, and
-non-empty exactly where two runs would otherwise write the same filename:
+a filename disambiguator. It is empty for most fields, and non-empty for exactly
+three proposals. It is **not** a general collision guard: it covers the two
+collisions below and nothing else (brick 1182+2221 sharing a basepath is worked
+around by a file copy in `cataloging.py`; m4/1979 obs 002+003 is a known deferred
+collision noted in `merge_catalogs.py`; cloudef uses a separate visit token):
 
 | proposal | token | why |
 |---|---|---|
 | 2211 (gc2211) | `_o<field>`, e.g. `_o023` | 5 GC pointings (023/028/046/049/050) REUSE the same `(visit, vgroup, exp)` tuples, so the obs-less per-frame catalog name is identical across observations sharing a filter (F200W: o023/o046/o049/o050; F277W: all five) |
-| 7213 and 6778 (ngc6334) | `_j7213` / `_j6778` | TWO proposals share one target directory **and** the filters F200W + F470N, cataloged with the same obs number (001) and the same tuples — 6778 silently overwrote 7213's F200W/F470N catalogs on 2026-07-09 (real data loss) |
+| 7213 and 6778 (ngc6334) | `_j7213` / `_j6778`, keyed on **proposal**, not observation | TWO proposals share one target directory **and** the filters F200W + F470N, cataloged with the same obs number (001) and the same tuples — 6778 silently overwrote 7213's F200W/F470N catalogs on 2026-07-09 (real data loss). Non-shared filters get the token too, for uniformity. |
 | everything else | `''` | single-obs-per-basepath; filenames unchanged |
 
-**If you glob these products, glob the token too.** A reader that hard-codes
-`..._resbgsub_m7.fits` finds nothing for gc2211 and silently sees only one of the
-two proposals for NGC 6334. The per-frame residual/model products under
-`{filter}/pipeline/` already carry `-o{field}` and are unaffected. Regression test:
+Note `obs_token('2211', None) == ''`: an all-observations gc2211 run (`field=None`)
+writes the **token-less** name, so on disk gc2211 carries both
+`..._resbgsub_m7.fits` (the pooled run) and per-obs `..._resbgsub_m7_o023.fits`,
+`..._o028.fits`, …
+
+**If you glob these products, glob the token too**, and do not assume it is a
+suffix: it lands mid-name in several families (`f200w_nrca_j6778_…`,
+`…_m6_dao_basic_o028_vetted.fits`, `…_m8_o023_dedup.fits`). A reader that
+hard-codes `..._resbgsub_m7.fits` silently gets the pooled catalog for gc2211
+instead of the per-observation one it probably wanted, and for NGC 6334 matches
+**neither** proposal. The per-frame residual/model products under
+`{filter}/pipeline/` already carry `-o{field}` (gc2211) or a `jw07213-`/`jw06778-`
+prefix (ngc6334). Regression test:
 `photometry/tests/test_obs_token_proposal_collision.py`.
 
 The iteration tokens (`_m1.._m7`, `_dao_basic`) are disjoint from the legacy

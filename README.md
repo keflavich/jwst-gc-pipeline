@@ -22,15 +22,17 @@ modeling, paper figures) remains in `brick2221`.
   - `alignment_config.py` — **the per-field alignment registry**: which absolute
     reference frame and which shift source each `(proposal, observation)` uses
   - `unified_alignment.py` — resolves that declaration for one exposure
-    (`resolve_shift`), applies it, and stamps the provenance header cards; the
-    one path every NIRCam field goes through
+    (`resolve_shift`) and writes the alignment header cards; the one path every
+    NIRCam field goes through. The GWCS shift itself is applied by the runner
+    (`adjust_wcs` in `PipelineRerunNIRCAM-LONG.fix_alignment`).
   - `validate_offsets_table.py` — offsets-table sanity guards
     (`flag_collapsed_visits` / `assert_offsets_table_sane`)
   - `build_virac2_offsets.py`, `build_gaia_virac2_refcat.py`,
     `build_gaia_virac2_refcat_byquery.py` — reference-catalog and offsets-table
     builders
-  - `bulk_offset_step0.py` — bulk-offset VERIFY step (importable + tested; not
-    yet wired into the reduction)
+  - `bulk_offset_step0.py` — measures **and** verifies a field's bulk offset;
+    importable, tested, and driveable via `scripts/reduction/step0_bulk_offset.py`,
+    but not yet called from the reduction itself
   - `destreak.py` — percentile-subtraction destriper for NIRCam horizontal
     quadrants
   - `align_to_catalogs.py` — generic catalog matching. The post-resample mosaic
@@ -47,14 +49,17 @@ modeling, paper figures) remains in `brick2221`.
 
 - `jwst_gc_pipeline.photometry` — catalog-level processing
   - `crowdsource_catalogs_long.py` — CLI / `main()` for both short and long
-    filters, plus the crowdsource path
+    filters, plus shared helpers (`obs_token`, seed resolution, satstar glue).
+    The crowdsource fitter itself now lives in `photometry/legacy/`.
   - `cataloging.py` — the PSF-photometry pipeline (explicit m12→m8 sequence of
     single-pass detect/fit/reseed stages); the default path. See
     `PHOTOMETRY_PIPELINE.md`.
   - `manual_defaults.py` — single source of truth for the tunable defaults
-  - `astrometry_checkpoint.py`, `visit_consensus.py`, `measure_offsets.py`,
-    `astrometry_offsets.py` — the in-pipeline astrometry failsafe ladder. See
+  - `astrometry_checkpoint.py`, `visit_consensus.py`, `astrometry_offsets.py` —
+    the in-pipeline astrometry failsafe ladder. See
     `photometry/ASTROMETRY_CHECKPOINTS.md`.
+  - `measure_offsets.py` — the dense-NN-median guard
+    (`assert_sparse_reference_for_nn_median`) and offset measurement helpers
   - `interframe_overlap.py`, `registration_gate.py` — registration gates
   - `make_reftable.py` — astrometric reference table construction
   - `merge_catalogs.py` — multi-wavelength catalog merger
@@ -77,8 +82,12 @@ documented in [`PHOTOMETRY_PIPELINE.md`](PHOTOMETRY_PIPELINE.md). Pass
 
 ## Reduction process
 
-1. `PipelineRerunNIRCAM-LONG.py` — run JWST `calwebb_image3`. Per exposure it
-   calls `destreak.destreak` to write the working copy, then `fix_alignment`,
+1. `PipelineRerunNIRCAM-LONG.py` — run JWST `calwebb_image3` (optionally
+   Detector1/Image2 first, with non-default settings). Per exposure it calls
+   `destreak.destreak` to write the working copy — except on the
+   `EXTENDED_EMISSION_FIELDS` (`w51`, `sickle`, `wd2`, `ngc6334`), where
+   destreaking is forced off and the working copy is a plain `_cal` → `_align.fits`
+   copy — then `fix_alignment`,
    which resolves this exposure's shift through
    `unified_alignment.resolve_shift` (driven by `alignment_config.py`) and bakes
    it into the GWCS. `TweakRegStep` is **skipped**: the tie is applied
@@ -90,8 +99,8 @@ documented in [`PHOTOMETRY_PIPELINE.md`](PHOTOMETRY_PIPELINE.md). Pass
    (`saturated_star_finding.remove_saturated_stars`) runs **here**, not in the
    reduction. The same module handles short- and long-wavelength filters.
 3. `merge_catalogs.py` — merge multi-wavelength catalogs.
-   `make_reftable.py` builds the F410M-based reference table and is called from
-   `merge_catalogs`.
+   `make_reftable.py` builds the **F405N**-based reference table (it switched from
+   F410M on 2023-06-28) and is called from `merge_catalogs`.
 
 ## Setup
 
@@ -103,8 +112,10 @@ For each field/program:
   `merge_catalogs` and `align_to_catalogs`.
 - **Declare the field's alignment in
   [`jwst_gc_pipeline/reduction/alignment_config.py`](jwst_gc_pipeline/reduction/alignment_config.py)**
-  (reference frame + shift source). A NIRCam field with no entry is refused
-  rather than silently left at the raw `assign_wcs` frame.
+  (reference frame + shift source). A NIRCam field with no entry still gets
+  `(0, 0)` — it is **not** refused — but `resolve_shift` now prints
+  `NO CONFIGURED ALIGNMENT …` and returns `configured=False` instead of failing
+  silently. Nothing consumes that flag to stop the run, so read the log.
 
 ## Astrometric WCS corrections
 

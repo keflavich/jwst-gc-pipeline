@@ -253,10 +253,11 @@ A field with **no entry** is now loud, not silent: `resolve_shift` prints
 `NO CONFIGURED ALIGNMENT for proposal=… field=…` and returns
 `AlignmentShift(configured=False)`, i.e. the frame stays at `(0, 0)` and says so.
 
-⚠ **SCOPE: NIRCam only.** `PipelineMIRI.fix_alignment` and
-`PipelineRerunNIRISS.fix_alignment` still carry their own dispatch and their own
-inline policy constants (MIRI keeps a `_PER_VISIT_SHIFT` map and a w51 rule);
-neither writes the component keywords nor runs the staleness guard. Folding them
+⚠ **SCOPE: NIRCam only.** `PipelineMIRI.fix_alignment` carries its own dispatch
+and its own inline policy constants (a `_PER_VISIT_SHIFT` map and a w51 rule);
+`PipelineRerunNIRISS.fix_alignment` has no dispatch at all — it hardcodes
+`rashift = decshift = 0 arcsec`. Neither writes the component keywords nor runs
+the staleness guard. Folding them
 in is follow-up work — do not read `alignment_config.py` as repo-wide.
 
 Each entry declares two orthogonal things:
@@ -305,15 +306,24 @@ the per-field provenance (`notes=`).
 more than one row still matches** (so per-visit and per-exposure tables both
 work), then by `Module` on the same condition (default OFF — filters lock
 NRCA==NRCB together; F410M is the documented exception), and then by `Vgroup`
-**unconditionally** — a visit can dither across several visit groups and the
-exposure number restarts in each, so a lone surviving row for the *other* group
-is exactly the dangerous case. Anything other than exactly one surviving row
-raises `ValueError`. The applied numbers come from the `dra (arcsec)` /
-`ddec (arcsec)` columns.
+**unconditionally when the column exists** — a visit can dither across several
+visit groups and the exposure number restarts in each, so a lone surviving row for
+the *other* group is exactly the dangerous case. An **empty** `Vgroup` cell matches
+any group (`vgroup_row_matches`), so pre-`Vgroup` rows keep applying. Anything
+other than exactly one surviving row raises `ValueError`. The applied numbers come
+from the `dra (arcsec)` / `ddec (arcsec)` columns.
 
-If no locked table exists, `resolve_shift` falls back to
+⚠ **As of 2026-07-30 no `VIRAC2locked` table on disk carries a `Vgroup` column**
+(checked: 1182, 2221 brick + cloudc, 4147, 2092, 2211 — only w51's `_consensus.csv`
+has one), so that narrowing is currently inert exactly where it matters most:
+gc2211's own config note records 6 visit groups reusing exposure numbers. Rebuild
+those tables with the column before relying on the guard.
+
+If no locked table exists, `_shift_from_locked` falls back to
 `Offsets_JWST_Brick<prop>_<refname>_average.csv` (`use_average=True`, the
 default) or `Offsets_JWST_Brick<prop>_<refname>.csv`, and requires a `refname`.
+This fallback is **locked-source only**: a `TABLE_CONSENSUS` field whose table is
+missing gets `(0, 0)` with `table_present=False` and no fallback.
 
 ## Offsets-table provenance (how each `offsets/Offsets_*.csv` is built)
 

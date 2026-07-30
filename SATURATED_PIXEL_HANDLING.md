@@ -41,7 +41,10 @@ back.
    prominence / core-brightness / concentration (`_seed_prominence` /
    `_seed_concentration`, gated inside `get_saturated_stars`).
 8. **Accept gate** — keep the fit on qfit / sidelobe / ssr / snr
-   (`accept_satstar_fit`; defaults are that function's keyword defaults).
+   (`accept_satstar_fit`). Its keep thresholds are **required** keyword args with
+   no defaults; the per-instrument values are set by the caller in
+   `get_saturated_stars` (`_qfit_max_keep = 15.0 if _is_miri else 5.0`, etc.).
+   Only `ssr_trust_snr=10.0` is a signature default.
 9. **(opt) ZEROFRAME rim recovery** — de-inflate the charge-migration rim using
    group-0 (`zeroframe_recover_saturated`; `--satstar-zeroframe-recover`).
 10. **(opt) Off-FOV stars** — fit bright stars whose *centers* are outside the
@@ -67,7 +70,7 @@ back.
   is NaN-variance (genuinely unrecoverable). Guards against persistence / JUMP
   artifacts mis-tagged SATURATED on faint sources.
 
-  | filters | satstar-finder floor (`_SATSTAR_DATA_FLOOR`) | daophot-mask severity floor (`SAT_SEVERITY_FLOOR`) |
+  | filters | finder wing floor (`_SATSTAR_DATA_FLOOR`) | data-severity floor (`SAT_SEVERITY_FLOOR`) |
   |---|---|---|
   | F187N | 1000 | **8000** |
   | F140M F162M F405N F480M | 1000 | 5000 |
@@ -84,6 +87,15 @@ back.
   resolved by `_resolve_satstar_severity_floor` (explicit arg > env
   `SATSTAR_SEVERITY_FLOOR` > per-filter table > 0 = off).
 
+  The two columns are **different measurements**, not the same test at two levels:
+  the finder wing floor is compared to the component max of a 5-px
+  maximum-filtered SCI (a wing/neighbourhood statistic), while the severity floor
+  is compared to raw SCI inside the component. And the severity floor is **not**
+  only a daophot-mask knob — it drives four finder behaviours (the seed severity
+  gate plus peak-, sub-floor- and partner-band seeding, §2b), which is where its
+  largest effect is. MIRI filters have no entry, so the daophot-side narrowing is
+  a no-op there.
+
   Override: `--saturation-data-floor` (photometry), env `SATSTAR_DATA_FLOOR`
   (finder). `-1` = per-filter auto; `0` = mask all SATURATED; `>0` = explicit.
 
@@ -96,30 +108,58 @@ before "fixing" the detection mask again.**
 
 The cal/crf `SATURATED` bit is set on every pixel that saturates in *any* ramp
 group, including pixels the ramp fitter fully recovered from good earlier groups.
-Only a pixel whose **first** group saturates is genuinely unrecoverable, and only
-those carry `DO_NOT_USE` / a NaN `VAR_POISSON`.
+Only a pixel whose **first** group saturates is genuinely unrecoverable.
 
-Using that single any-group mask for BOTH detection and fitting was the original
-defect: it over-flagged the saturated set, masked recoverable data, and swept real
-stars on bright emission into the satstar channel while vetoing them from daophot.
-The fix was **not** to restrict detection — it was to split the two uses:
+⚠ **`isnan(VAR_POISSON)` is not a portable stand-in for "truly lost."** Measured on
+one brick F200W exposure (2026-07-30): the `_cal` product has 3200 `SATURATED` px,
+43539 `DO_NOT_USE` px and **zero** NaN-`VAR_POISSON` px, while its `_destreak_o004_crf`
+sibling has the same 3200 `SATURATED` px with **all 3200** NaN-`VAR_POISSON`. So the
+quantity means different things at different pipeline stages; do not build a gate on
+it without checking which product you are on.
+
+Using one any-group mask for BOTH seeding and the daophot veto was the original
+defect: it over-flagged the saturated set and swept real stars on bright emission
+into the satstar channel while vetoing them from daophot. The fix was **not** to
+restrict detection to truly-lost cores — it was to (a) keep seeding on the full
+mask and add positive seeding paths, and (b) gate on data *severity* instead:
 
 | channel | mask used today | where |
 |---|---|---|
-| satstar **seeding** | the **full** any-group `SATURATED` mask (≥3-px clusters, `JUMP_DET` disambiguated, per-filter data floor) | `find_saturated_stars` |
-| satstar **fit** | `saturated & _unrecoverable`, with `_unrecoverable = isnan(VAR_POISSON)`; the recovered wings are **kept and fit** | `get_saturated_stars` |
-| daophot fit mask + `_filter_near_saturation` veto | any-group `SATURATED`, narrowed to pixels whose data exceeds the per-filter `SAT_SEVERITY_FLOOR` | `_prepare_frame_for_photometry` (`cataloging.py`) |
+| satstar **seeding** | starts from the full any-group `SATURATED` mask (≥3-px clusters, `JUMP_DET` disambiguated, per-filter wing data floor), then a severity gate **removes** components and three blocks **add** seeds — see below | `find_saturated_stars` |
+| satstar **fit** | the current source's saturated component **dilated** by the adaptive mask buffer, plus other sources' saturated pixels; with a ZEROFRAME anchor, only the group-0-saturated deep core (`zf_deep_core`) | `get_saturated_stars` |
+| daophot fit mask | any-group `SATURATED`, narrowed to pixels whose data exceeds the per-filter `SAT_SEVERITY_FLOOR` | `_prepare_frame_for_photometry` (`cataloging.py`) |
+| `_filter_near_saturation` veto | the **raw** any-group `SATURATED` bit from `ctx.dqarr`, recomputed inside the veto; drops fits within `near_sat_dist_pix` (1.0 px on NIRCam). **The severity floor does not reach this veto.** | `crowdsource_catalogs_long.py` |
 
-`get_saturated_stars` also records the split per pixel in its flag image: bit 1 =
-saturated-but-recovered, bit 2 = unrecoverable.
+`_unrecoverable = isnan(VAR_POISSON)` is **not** the fit mask. It is used for the
+per-pixel flag image (bit 1 = saturated-but-recovered, bit 2 = unrecoverable), for
+centroid refinement, and for the opt-in `NIRCAM_SATSTAR_RECOVERED_CAP` flux cap
+(default off). ⚠ The narrative comment at the top of `find_saturated_stars` states
+that the fit masks `saturated & _unrecoverable` — **the code does not do that**; it
+masks the dilated full component. Treat the comment as intent, not description; the
+gap (should recovered wings be fit?) is unresolved, not a documentation error.
 
-**Why seeding must stay on the full mask.** A moderately saturated star whose core
-was frame-0-recovered has NO truly-lost pixel, so a seed restricted to
-`SATURATED & DO_NOT_USE` never seeds it — and daofind cannot fit its saturated
+**Why seeding must not be restricted to truly-lost cores.** A moderately saturated
+star whose core was frame-0-recovered has no truly-lost pixel, so a seed restricted
+to `SATURATED & DO_NOT_USE` never seeds it — and daofind cannot fit its saturated
 core either, so it is never cataloged at all. That dropped real W51 cluster stars
-(A/B). The truly-lost seed restriction therefore survives only as an opt-in debug
-switch, **`SATSTAR_SEED_REQUIRE_DO_NOT_USE=1`, default OFF** (note the `_SEED_`;
-the earlier plan called it `SATSTAR_REQUIRE_DO_NOT_USE`).
+(A/B). The restriction survives only as an opt-in debug switch,
+**`SATSTAR_SEED_REQUIRE_DO_NOT_USE=1`, default OFF** (note the `_SEED_`; the earlier
+plan called it `SATSTAR_REQUIRE_DO_NOT_USE`).
+
+**But the seed set is not simply the DQ mask.** With a per-filter
+`SAT_SEVERITY_FLOOR` in force, `find_saturated_stars` also:
+
+- **removes** components with no NaN-variance core whose peak is below the floor
+  (bright-star over-flags — the comment cites brick F182M carrying 362 fake
+  satstars, 45% of that catalog);
+- **adds** peak-based seeds at bright *unflagged* pixels above the floor;
+- **adds** sub-floor seeds above `SATSTAR_SUBFLOOR_SEED_FRAC` × floor (0.35);
+- **adds** partner-band seeds where the same star was accepted in a
+  near-degenerate partner band (F410M↔F405N, F182M↔F187N).
+
+On brick F200W with defaults these paths roughly double the seed count over the
+DQ-only set, so a majority of seeds have no saturated pixel of their own. Reason
+about the seed list from these four blocks, not from the DQ bit alone.
 
 **Empirical scale of the over-flagging** (MIRI sgrb2 F770W,
 `jw05365998001_02101_00003`): the cal DQ flags 3,114 px SATURATED; only **345
@@ -169,7 +209,7 @@ re-restrict the seeding mask.
 
 - **Fit engine** (`get_saturated_stars`): per component, mask the
   saturated core (dilated by an **adaptive buffer** scaling with core area —
-  NIRCam `scale=0.4, cap=6, min=2`, `compute_adaptive_mask_buffer:610`),
+  NIRCam `scale=0.4, cap=6, min=2`, `compute_adaptive_mask_buffer`),
   estimate a local background in an **adaptive annulus**
   (`compute_adaptive_bkg_annulus`), and PSF-fit
   the wings with 1/ERR² weighting. Sources are fit **brightest-core-first** and
@@ -179,7 +219,8 @@ re-restrict the seeding mask.
   (a 512-px grid under-estimates bright LW flux by 50–70%); SW use 512. Off-FOV
   (forced) stars require the **large grid** (2048 SW / 1024 LW) to carry the
   diffraction spikes that reach ~40″ into the frame.
-- **Accept gate** (`accept_satstar_fit`, defaults in its signature): keep if finite `0 < qfit < 5.0`
+- **Accept gate** (`accept_satstar_fit`; thresholds passed in by
+  `get_saturated_stars`, not signature defaults): on MIRI keep if finite `0 < qfit < 5.0`
   (with sidelobe/ssr backstops); `snr > 3.0`. The `ssr_ratio < 1.0` gate is
   **confidence-subordinated** — a high-S/N (>10), good-qfit fit is kept even if
   ssr fails (BFE makes the STPSF first sidelobe brighter than the real star).
@@ -358,7 +399,7 @@ these flag sets would remove the footgun of setting them individually.)*
 | `MIRI_SATSTAR_RENDER_FOOTPRINT` | 1 | render the model only inside the star's footprint |
 | `MIRI_SATSTAR_WING_FLOOR` | 5.0 | wing data floor for the render |
 | `MIRI_SATSTAR_FLATTOP` / `…_PLATEAU_FRAC` | 0 / 0.15 | replace the model inside a flat-topped core with the data |
-| `MIRI_SATSTAR_PHANTOM_FLUX_FLOOR` / `…_SSR_MAX` / `…_RATIO_MAX` | 0 (off) / 50 / 50 | post-fit bright-phantom rejection (F770W-calibrated floor 1e5 set in the launcher) |
+| `MIRI_SATSTAR_PHANTOM_FLUX_FLOOR` / `…_SSR_MAX` / `…_RATIO_MAX` | 0 (off) / 50 / 50 | post-fit bright-phantom rejection; the code suggests an F770W-calibrated floor of 1e5, but no launcher in this repo sets it |
 | `MIRI_DAOPHOT_PROM_ROBUST` | 0 | neighbour-robust prominence on the daophot side |
 | `MIRI_EDGE_DETECT_MARGIN` | 8 | detection margin at the detector edge |
 | `MIRI_RESID_PIT_NMAD` / `…_DILATE` | 15.0 / 2 | residual-pit masking |
@@ -372,7 +413,8 @@ these flag sets would remove the footgun of setting them individually.)*
 | `SATSTAR_LOG_VERBOSE` | 0 | verbose finder logging |
 | `SATSTAR_DEDUP_ARCSEC` | 0.15 | consolidation dedup radius (`merge_catalogs`) |
 | `SATSTAR_REPLACE_RADIUS_ARCSEC` | (see code) | satstar→daophot replacement radius |
-| `SATSTAR_FP_*` (14 vars: `_REJECT`, `_REJECT_RATIO`, `_REJECT_MIN_N`, `_REJECT_BRIGHTFRAC`, `_FLUXRATIO`, `_MERGE_MAX_ARCSEC`, `_COMP_ARCSEC`, `_BIG_ARCSEC`, `_BIGCORE_ARCSEC`, `_BIGCORE_MERGE_ARCSEC`, `_PIXSCALE_ARCSEC`, …) | see `merge_catalogs.py` | false-positive rejection / merging at consolidation |
+| `SATSTAR_FP_*` (11 vars: `_REJECT`, `_REJECT_RATIO`, `_REJECT_MIN_N`, `_REJECT_BRIGHTFRAC`, `_FLUXRATIO`, `_MERGE_MAX_ARCSEC`, `_COMP_ARCSEC`, `_BIG_ARCSEC`, `_BIGCORE_ARCSEC`, `_BIGCORE_MERGE_ARCSEC`, `_USE_ANCHOR`) | see `merge_catalogs.py` | false-positive rejection / merging at consolidation |
+| `SATSTAR_PIXSCALE_ARCSEC` | 0.063 | pixel scale used by those radii (no `FP_` in the name) |
 | `STPSF_PATH` | (required) | WebbPSF grid data (set before import) |
 
 The finder/merger read ~50 `SATSTAR_*`/`MIRI_*` variables in total; the table above

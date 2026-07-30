@@ -128,13 +128,21 @@ never silently green.
   total `|offset|`** — an m2 visit-consensus correction is mas-scale by
   construction, so arcsecond-scale `prov_*_added_mas` is a category error, while a
   large *total* can be perfectly correct (brick-1182's released table is median
-  12.1″ with only 68/7.6 mas of `prov_*` additions).
+  12.1″ with only 68/7.6 mas of `prov_*` additions — verified on the live table).
+  ⚠ **Blind spot:** `update_offsets_table` zero-fills the `prov_*` columns when
+  they are absent, so a rebuilt or legacy table restarts the accumulator at 0 —
+  and cloudef's live table, the field whose +102″ runaway motivates this whole
+  paragraph, has **no `prov_*` columns at all**. On such a table both the drift
+  bound and the `prov_*` diagnostic are blind.
 * **Module-granularity refusal** (`_assert_module_granularity`). Corrections are
   keyed `(visit, exposure, module)`, but the apply loop skips module narrowing on a
   table with no `Module` column — so every detector's correction for one exposure
   lands on the SAME row, additively (8 × 0.4″ → +3.2″, each part legal). Such a
-  correction set is now refused. Tables built `--per-module` (cloudc's) are
-  unaffected; sgrc's and cloudef's have no `Module` column.
+  correction set is now refused. Tables that DO carry `Module` are unaffected —
+  checked 2026-07-30: cloudc's (built `--per-module`) and **sgrc's** both have a
+  populated `Module` column, so the guard returns early for them; cloudef's and
+  gc2211's have none. (`_assert_module_granularity`'s own docstring still names
+  sgrc as Module-less; that is stale.)
 * Stale im0 mosaics are RENAMED `*_i2d_im0_badastrom.fits` (+ a `.why.json`
   sidecar and a ledger in `astrometry_checkpoints/`), never deleted, never
   edited.
