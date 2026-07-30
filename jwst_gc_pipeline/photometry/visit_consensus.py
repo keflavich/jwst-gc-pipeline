@@ -320,7 +320,17 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
     entries = []
     for tbl in exposure_tables:
         keep = select_reliable_stars(tbl, snr_min=snr_min, qfit_max=qfit_max)
-        coords = catalog_coords(tbl)[keep]
+        _all_coords = catalog_coords(tbl)
+        # A "reliable" star (good snr/qfit) can still carry a non-finite RA/Dec --
+        # e.g. a saturated-core replacement / recovered row whose position solve
+        # failed.  It must NOT enter the consensus: these coords are concatenated
+        # straight into a cKDTree (parity-halves path) and np.median (dec_mid),
+        # both of which raise on NaN/inf ("data must be finite").  Drop non-finite
+        # positions here so n_reliable, coords, and flux stay consistent and every
+        # downstream tie sees only finite coordinates.
+        _finite = np.isfinite(_all_coords.ra.deg) & np.isfinite(_all_coords.dec.deg)
+        keep = np.asarray(keep, dtype=bool) & _finite
+        coords = _all_coords[keep]
         if "flux_fit" in tbl.colnames:
             flux = np.asarray(tbl["flux_fit"], dtype=float)[keep]
         else:
