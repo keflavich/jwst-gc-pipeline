@@ -483,3 +483,70 @@ def test_kdtree_reference_identical_to_plain_path():
               "window_arcsec"):
         assert tree[k] == pytest.approx(plain[k], rel=1e-9), k
     assert tree["off"] == pytest.approx(np.hypot(25.0, 8.0), abs=2.0)
+
+
+# ---------------------------------------------------------------------------
+# module-scoped growth (issue #158 root fix): adjacent NRCA/NRCB tiles that
+# share no stars must not be swept-tied into one component; same-module large
+# real shifts must still tie.
+# ---------------------------------------------------------------------------
+def test_adjacent_module_tiles_do_not_merge_across_the_gap():
+    """Two NIRCam modules on ADJACENT, disjoint sky tiles (~56" apart, no shared
+    stars) must seed SEPARATE components -- the cross-module growth tie is
+    bounded + non-swept, so with no genuine overlap it cannot lock onto the
+    window-edge footprint alias (issue #158)."""
+    from jwst_gc_pipeline.photometry.visit_consensus import module_family
+    rng = np.random.default_rng(7)
+    n = 350
+    ra_a = RA0 + rng.uniform(0, 40.0, n) / 3600.0 / COSD
+    dec_a = DEC0 + rng.uniform(0, 40.0, n) / 3600.0
+    # NRCB tile 56" south, DIFFERENT stars (disjoint footprints)
+    ra_b = RA0 + rng.uniform(0, 40.0, n) / 3600.0 / COSD
+    dec_b = (DEC0 - 56.0 / 3600.0) + rng.uniform(0, 40.0, n) / 3600.0
+    tables = []
+    for e in range(1, 4):
+        tables.append(_exposure_table(ra_a, dec_a, exposure=e, module="nrcalong",
+                                      filtername="F335M", noise_mas=1.0,
+                                      rng=np.random.default_rng(100 + e)))
+    for e in range(1, 4):
+        tables.append(_exposure_table(ra_b, dec_b, exposure=e, module="nrcblong",
+                                      filtername="F335M", noise_mas=1.0,
+                                      rng=np.random.default_rng(200 + e)))
+    cons = build_visit_consensus(tables, context="test-adjacent-modules")
+    exps = cons["exposures"]
+    comps_a = {e["component"] for e in exps
+               if module_family(e["key"][2]) == "a" and e["component"] >= 0}
+    comps_b = {e["component"] for e in exps
+               if module_family(e["key"][2]) == "b" and e["component"] >= 0}
+    assert comps_a and comps_b, "each module should tie within its own footprint"
+    assert comps_a.isdisjoint(comps_b), (
+        f"NRCA and NRCB were merged into a shared component (issue #158 alias): "
+        f"a={comps_a} b={comps_b}")
+    assert cons["n_components"] >= 2
+
+
+def test_same_module_large_shift_still_ties():
+    """A single same-module exposure with a large (~20") rigid im0 error but the
+    SAME stars must still be found + tied by the full sweep -- the cross-module
+    bound must not touch same-module growth (brick-1182 v001 ~20")."""
+    rng = np.random.default_rng(11)
+    n = 400
+    ra = RA0 + rng.uniform(0, 60.0, n) / 3600.0 / COSD
+    dec = DEC0 + rng.uniform(0, 60.0, n) / 3600.0
+    tables = []
+    for e in range(1, 4):
+        tables.append(_exposure_table(ra, dec, exposure=e, module="nrcalong",
+                                      filtername="F335M", noise_mas=1.0,
+                                      rng=np.random.default_rng(300 + e)))
+    # exposure 4: same module + same stars, but a 20" (20000 mas) rigid shift
+    tables.append(_exposure_table(ra, dec, exposure=4, module="nrcalong",
+                                  filtername="F335M", dra_mas=20000.0, ddec_mas=0.0,
+                                  noise_mas=1.0, rng=np.random.default_rng(304)))
+    cons = build_visit_consensus(tables, context="test-samemod-largeshift")
+    exps = cons["exposures"]
+    e4 = [e for e in exps if e["key"][1] == 4][0]
+    assert e4["component"] >= 0, \
+        "the 20-inch-shifted same-module exposure must tie, not become an island"
+    comps = {e["component"] for e in exps if e["component"] >= 0}
+    assert len(comps) == 1, \
+        f"same-module exposures should form ONE component, got {comps}"

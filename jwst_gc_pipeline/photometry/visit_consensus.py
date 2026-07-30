@@ -39,6 +39,12 @@ from .astrometry_offsets import (
 # MISALIGNED: its im0 (first-pass) alignment must be replaced.
 EXPOSURE_CONSENSUS_TOL_MAS = 2.0
 
+# A cross-module exposure (different NIRCam module -> adjacent, ~disjoint sky
+# tile) may only join a component through a GENUINE small-offset overlap, never a
+# wide sweep across the ~56" module gap (the issue-158 window-edge alias).  This
+# bounds the cross-module growth tie: dither/guide-star scale, no sweep.
+_CROSS_MODULE_TIE_MAXSEP = 3.0 * u.arcsec
+
 # Sweep windows for the PER-EXPOSURE tie to the visit consensus (issue #158).
 # That tie is mas-scale BY CONSTRUCTION -- it removes guide-star jitter between
 # exposures of one visit, not a pointing error -- so offering the histogram a
@@ -402,20 +408,46 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
                                n_peak=usable[seed_i]["n_reliable"])
             remaining.discard(seed_i)
             union = usable[seed_i]["coords"]
+            # Module families already tied into this component.  A DIFFERENT
+            # NIRCam module images an ADJACENT, ~disjoint sky tile (~56" away,
+            # sharing ~no stars per exposure); a wide sweep across that gap locks
+            # onto the footprint cross-correlation at the search-window edge --
+            # the #158 alias (fake ~28-29" antisymmetric split).  Growing across
+            # it also violates this builder's own invariant (components are
+            # per-overlap-tile, tied to each other ONLY through the absolute
+            # reference).  So a cross-module exposure may join a component ONLY
+            # through a GENUINE small-offset overlap (bounded window, no sweep,
+            # non-swept tie); otherwise it seeds its own component and is aligned
+            # via measure_reference_tie.  Same-module exposures keep the full
+            # sweep so a large single-frame WCS error (brick-1182 v001 ~20") is
+            # still found.  #185's confirm_windows remains the statistical
+            # backstop; this is the geometric one.
+            comp_modfam = {module_family(usable[seed_i]["key"][2])}
             grew = True
             while grew and remaining:
                 grew = False
                 for i in sorted(remaining,
                                 key=lambda j: -usable[j]["n_reliable"]):
-                    res = measure_offset(usable[i]["coords"],
-                                         _crop_to_footprint(union, usable[i]["coords"]),
-                                         sweep=True, confirm_windows=True,
-                                         context=f"{context} exp{usable[i]['key']} "
-                                                 f"vs component {comp} union")
-                    if res is None or not res["ok"]:
-                        continue
+                    _cropped = _crop_to_footprint(union, usable[i]["coords"])
+                    if module_family(usable[i]["key"][2]) not in comp_modfam:
+                        res = measure_offset(
+                            usable[i]["coords"], _cropped,
+                            sweep=False, maxsep=_CROSS_MODULE_TIE_MAXSEP,
+                            context=f"{context} exp{usable[i]['key']} "
+                                    f"vs component {comp} union (cross-module)")
+                        if res is None or not res["ok"] or res.get("swept"):
+                            continue
+                    else:
+                        res = measure_offset(
+                            usable[i]["coords"], _cropped,
+                            sweep=True, confirm_windows=True,
+                            context=f"{context} exp{usable[i]['key']} "
+                                    f"vs component {comp} union")
+                        if res is None or not res["ok"]:
+                            continue
                     rel[i] = res
                     comp_id[i] = comp
+                    comp_modfam.add(module_family(usable[i]["key"][2]))
                     remaining.discard(i)
                     shifted_i = _shift(usable[i]["coords"], res["dra"], res["ddec"])
                     union = SkyCoord(
