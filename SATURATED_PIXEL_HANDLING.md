@@ -20,28 +20,29 @@ starting points, not fixed addresses.
 ## 1. Pipeline of a saturated star
 
 1. **Detect** — read the `SATURATED` DQ bit, reject `JUMP_DET` cosmic rays, keep
-   clusters ≥ 3 px (`find_saturated_stars`, `saturated_star_finding.py`).
+   clusters ≥ 3 px (`find_saturated_stars`, `saturated_star_finding.py:282`).
 2. **Filter spurious flags** — drop DQ-SATURATED components sitting on *faint*
    data (persistence / JUMP mis-tags) via a per-filter **data floor**
-   (`_SATSTAR_DATA_FLOOR`; test at ).
+   (`_SATSTAR_DATA_FLOOR`, `:221`; test at `:325`).
 3. **Label + refine** — connected components (`ndimage.label`), remove large
    edge bleeds (preserving genuine NaN-variance cores), refine centroids on the
-   real core (`_refine_coms_by_data`).
+   real core (`_refine_coms_by_data`, `:484`).
 4. **(MIRI) merge spike satellites** — fold diffraction-spike fragments into the
-   parent core (`_merge_spike_satellites`; off for NIRCam).
+   parent core (`_merge_spike_satellites`, `:161`; off for NIRCam).
 5. **(opt) Deblend touching cores** — split merged saturated blobs into one seed
    per star using the ZEROFRAME (`--deblend-satstars`, `satstar_deblend.py`).
 6. **Fit** — PSF fit with the core masked, adaptive mask buffer + background
    annulus, inverse-variance (1/ERR²) weighting, brightest-first with iterative
-   subtraction (`get_saturated_stars`).
+   subtraction (`get_saturated_stars`, `:1116`).
 7. **(MIRI) seed gate** — drop extended-emission "phantom" components by
-   prominence / core-brightness / concentration.
-8. **Accept gate** — keep the fit on qfit / sidelobe / ssr / snr (defaults ).
+   prominence / core-brightness / concentration (`:1292`).
+8. **Accept gate** — keep the fit on qfit / sidelobe / ssr / snr (`:1018`,
+   defaults `:1558`).
 9. **(opt) ZEROFRAME rim recovery** — de-inflate the charge-migration rim using
-   group-0 (`zeroframe_recover_saturated`; `--satstar-zeroframe-recover`).
+   group-0 (`zeroframe_recover_saturated`, `:389`; `--satstar-zeroframe-recover`).
 10. **(opt) Off-FOV stars** — fit bright stars whose *centers* are outside the
     frame but whose spikes reach in; reconcile flux across frames
-    (`reconcile_outside_fov_satstar_fluxes`; `--fit-satstar-outside-fov`).
+    (`reconcile_outside_fov_satstar_fluxes`, `:708`; `--fit-satstar-outside-fov`).
 11. **Output** — `*_satstar_catalog.fits`, `*_satstar_model.fits`,
     `*_satstar_residual.fits`, `*_satstar_flags.fits`.
 12. **Photometry integration** — daophot fits on the satstar-model-subtracted
@@ -53,10 +54,11 @@ starting points, not fixed addresses.
 
 ## 2. Detection & DQ flagging (shared)
 
-- **SATURATED bit + CR rejection** (`saturated_star_finding.py`): extract
+- **SATURATED bit + CR rejection** (`saturated_star_finding.py:282`): extract
   `dqflags.pixel['SATURATED']`, reject `JUMP_DET`, require ≥3-px clusters to
   separate ramp non-linearity from single-pixel CRs.
-- **Data floor** (`_SATSTAR_DATA_FLOOR`; `_resolve_satstar_data_floor`): a DQ-SATURATED component is only trusted if the max data value in its
+- **Data floor** (`_SATSTAR_DATA_FLOOR`, `:221`; `_resolve_satstar_data_floor`,
+  `:227`): a DQ-SATURATED component is only trusted if the max data value in its
   wings exceeds the per-filter floor (MJy/sr), or its core is NaN-variance
   (genuinely unrecoverable). Guards against persistence / JUMP artifacts
   mis-tagged SATURATED on faint sources.
@@ -80,7 +82,7 @@ over-flags the saturated set, masks recoverable data, and (worse) sweeps real
 stars on bright emission into the satstar channel while vetoing them from daophot
 — so they vanish from the catalog.
 
-**Where:** `find_saturated_stars` (`saturated_star_finding.py`):
+**Where:** `find_saturated_stars` (`saturated_star_finding.py:282`):
 ```python
 saturated = (dq & dqflags.pixel['SATURATED']) > 0
 ```
@@ -88,7 +90,8 @@ saturated = (dq & dqflags.pixel['SATURATED']) > 0
 if the pixel saturated in *any* group. Only a pixel whose **first** group
 saturates is genuinely unrecoverable; any later-group saturation still yields a
 valid ramp-fit slope. The code documents this itself
-(`first_group_saturation_mask`; `correct_dq_first_group_saturation`).
+(`first_group_saturation_mask`, `:3189`; `correct_dq_first_group_saturation`,
+`:3218`).
 
 **Empirical scale** (MIRI sgrb2 F770W, `jw05365998001_02101_00003`): the cal DQ
 flags 3,114 px SATURATED; only **345 (11%)** are first-group (truly
@@ -105,7 +108,7 @@ satstar finder predates the git history; this is the earliest tracked commit).
 default behaviour on `main` is affected. **A proper fix is now in flight (PRs #40
 + #41, see below)**; until merged, on `main`:
 - **NIRCam: entirely unmitigated.** The only correction returns `dq` unchanged
-  unless the instrument is MIRI (`correct_dq_first_group_saturation`).
+  unless the instrument is MIRI (`correct_dq_first_group_saturation`, `:3227`).
 - **MIRI: unmitigated by default.** That correction is env-gated
   `MIRI_FIRSTGROUP_SAT_DQ` (default `0`) and needs a sibling `_ramp.fits`.
 
@@ -140,17 +143,18 @@ both to close it on `main`.
 
 ## 3. NIRCam handling
 
-- **Fit engine** (`get_saturated_stars`): per component, mask the
+- **Fit engine** (`get_saturated_stars`, `:1116`): per component, mask the
   saturated core (dilated by an **adaptive buffer** scaling with core area —
-  NIRCam `scale=0.4, cap=6, min=2`, `compute_adaptive_mask_buffer`),
-  estimate a local background in an **adaptive annulus**, and PSF-fit
+  NIRCam `scale=0.4, cap=6, min=2`, `compute_adaptive_mask_buffer:610`),
+  estimate a local background in an **adaptive annulus** (`:657`), and PSF-fit
   the wings with 1/ERR² weighting. Sources are fit **brightest-core-first** and
-  each accepted model is subtracted from the working image before the next fit, so neighbouring wings don't double-count.
-- **PSF grid by size**: LW (NRCA5/NRCB5) in-FOV stars use `fov=1024`
+  each accepted model is subtracted from the working image before the next fit
+  (`:1400`), so neighbouring wings don't double-count.
+- **PSF grid by size** (`:1447`): LW (NRCA5/NRCB5) in-FOV stars use `fov=1024`
   (a 512-px grid under-estimates bright LW flux by 50–70%); SW use 512. Off-FOV
   (forced) stars require the **large grid** (2048 SW / 1024 LW) to carry the
   diffraction spikes that reach ~40″ into the frame.
-- **Accept gate** (defaults ): keep if finite `0 < qfit < 5.0`
+- **Accept gate** (`:1018`, defaults `:1558`): keep if finite `0 < qfit < 5.0`
   (with sidelobe/ssr backstops); `snr > 3.0`. The `ssr_ratio < 1.0` gate is
   **confidence-subordinated** — a high-S/N (>10), good-qfit fit is kept even if
   ssr fails (BFE makes the STPSF first sidelobe brighter than the real star).
@@ -169,33 +173,33 @@ glow, and lack of BFE/IPC sidelobes drive a different configuration. Triggered b
 
 | mechanism | NIRCam | MIRI | file:line |
 |---|---|---|---|
-| Accept: qfit_max | 5.0 | **15.0** | `saturated_star_finding.py` |
-| Accept: sidelobe_min | −10.0 | **−40.0** | |
-| Accept: ssr_ratio_max | 1.0 | **2.0** | |
-| Accept: snr_min | 3.0 | **2.0** | |
-| ssr gate | confidence-subordinated | **dropped** (finite qfit only) | |
-| Mask buffer | scale 0.4 / cap 6 | **scale 0.8 / cap 12** (wider charge bleed) | |
-| Spike-satellite merge | off | **on** (`gap=3`, ratio 3:1) | |
-| PSF grid in-FOV | small unless LW | **large when sat-area ≥ 200 px** (spikes set amplitude) | |
-| 2-D local background | off | **on in-FOV** (median-filter, removes emission) | |
-| Extended-emission seed gate | off | **on** (prominence / core / concentration) | |
-| Position fit | bounded (+size term) | **bounded to 1.5×FWHM** (env `MIRI_SATSTAR_BOUNDED_FIT`) | |
+| Accept: qfit_max | 5.0 | **15.0** | `saturated_star_finding.py:1558` |
+| Accept: sidelobe_min | −10.0 | **−40.0** | `:1559` |
+| Accept: ssr_ratio_max | 1.0 | **2.0** | `:1560` |
+| Accept: snr_min | 3.0 | **2.0** | `:1561` |
+| ssr gate | confidence-subordinated | **dropped** (finite qfit only) | `:1039` |
+| Mask buffer | scale 0.4 / cap 6 | **scale 0.8 / cap 12** (wider charge bleed) | `:1720` |
+| Spike-satellite merge | off | **on** (`gap=3`, ratio 3:1) | `:161`, `:1230` |
+| PSF grid in-FOV | small unless LW | **large when sat-area ≥ 200 px** (spikes set amplitude) | `:1477` |
+| 2-D local background | off | **on in-FOV** (median-filter, removes emission) | `:1811` |
+| Extended-emission seed gate | off | **on** (prominence / core / concentration) | `:1292` |
+| Position fit | bounded (+size term) | **bounded to 1.5×FWHM** (env `MIRI_SATSTAR_BOUNDED_FIT`) | `:2172` |
 | Satstar-coincidence daophot exclusion | off (`0`) | **on** (`1.5×FWHM`) | `cataloging.py:1571` |
 | Prominence-SNR schedule | n/a | **8.0 (m12–m4) → 3.0 (m5–m6)** | `cataloging.py:2856` |
 | Coarse-bg detection | off | **51-px median on raw phases** | `cataloging.py:2601` |
 | m7 cross-band merge | run | **skipped** (per-phase schedule replaces it) | `cataloging.py:2591` |
 
-**MIRI seed gate (phantom rejection):** MIRI broadbands (F770W, F2100W)
+**MIRI seed gate (phantom rejection, `:1292`):** MIRI broadbands (F770W, F2100W)
 saturate on *nebulosity*, sprouting dozens of non-stellar DQ-SATURATED
 components that, fit as PSFs, become phantom bright stars (deep negative pits in
 the residual). The gate drops a component unless it is a compact bright star:
-`_seed_prominence` ≥ `seed_prominence_min` (8.0), core ≥ `seed_core_min`
+`_seed_prominence` (`:876`) ≥ `seed_prominence_min` (8.0), core ≥ `seed_core_min`
 (1000), concentration ≥ `seed_conc_min` (1.3), measured on the **deep coadd**
 (frame-invariant) when available. `robust=True` uses a neighbour-immune metric
 (25th-pct + lower-half MAD). Env overrides: `MIRI_SATSTAR_SEED_{PROM,CORE,CONC}_MIN`,
 `MIRI_SATSTAR_SEED_PROM_ROBUST`.
 
-**MIRI first-group DQ** (`correct_dq_first_group_saturation`, env
+**MIRI first-group DQ** (`correct_dq_first_group_saturation`, `:3218`, env
 `MIRI_FIRSTGROUP_SAT_DQ`, default off): clears the SATURATED bit on pixels that
 saturate only in *later* ramp groups (recoverable), keeping only truly
 unrecoverable first-group saturation.
@@ -220,7 +224,7 @@ flux, trading depth for a brighter saturation ceiling:
 | **ZEROFRAME core deblend** | group-0 peaks of `_ramp.fits` | resolves cores that touch in `_cal` | `--deblend-satstars` | crowded fields where bright cores merge (gc2211) |
 | **(MIRI) first-group DQ** | group-0 GROUPDQ | keep only unrecoverable core | env `MIRI_FIRSTGROUP_SAT_DQ` | MIRI over bright background |
 
-- **`--satstar-zeroframe-recover`** (`zeroframe_recover_saturated`):
+- **`--satstar-zeroframe-recover`** (`zeroframe_recover_saturated`, `:389`):
   the `_cal` rim is *inflated* above truth because charge from the saturating core
   **migrates/blooms outward** during the integration — a near-saturation
   well-overflow effect, **not** the classical brighter-fatter effect (BFE) and
@@ -272,13 +276,13 @@ these flag sets would remove the footgun of setting them individually.)*
   daophot fits that are really satstar-wing artifacts:
   - `--satstar-artifact-ratio` (default 1.0) + `--satstar-artifact-sigK` (3.0):
     drop a daophot fit where `dao_model < ratio × satstar_model` inside the gate
-    (`_filter_satstar_artifacts`).
+    (`_filter_satstar_artifacts`, `:249`).
   - **(MIRI)** coincidence exclusion: drop daophot fits within `1.5×FWHM` of a
     satstar entry (`cataloging.py:1571`; off for NIRCam).
 - **Off-FOV over-subtraction clamp**: forced (off-field) satstar models are
   clamped to the data (`--satstar-oversub-clamp-percentile`, default 10 → clamp
   90% of the >5σ footprint) so deep spikes don't leave negative pits.
-- **Cross-frame flux reconciliation**: the same off-FOV star fit in many
+- **Cross-frame flux reconciliation** (`:708`): the same off-FOV star fit in many
   frames is reconciled — trust the frame whose detector centre is closest (sees
   the highest-S/N spikes), reject high runaways, floor against single-frame
   under-subtraction.
