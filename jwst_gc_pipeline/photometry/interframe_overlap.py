@@ -51,7 +51,8 @@ from astropy import units as u
 from astropy.coordinates import SkyCoord, search_around_sky
 
 from jwst_gc_pipeline.photometry.astrometry_offsets import (
-    local_residual_map, measure_offset, measure_offset_grid)
+    confirm_peak_windows, local_residual_map, measure_offset,
+    measure_offset_grid)
 
 
 # Overlapping same-instrument frames should co-register to well under a NIRCam
@@ -198,7 +199,10 @@ def pairwise_overlap_offsets(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS,
             results.append(dict(a=la, b=lb, overlap=False, n_overlap=n_close,
                                 off_mas=None, dra_mas=None, ddec_mas=None,
                                 contrast=None, n_peak=0, measurable=False,
-                                ok=True, swept=False, window_arcsec=None))
+                                ok=True, swept=False, window_arcsec=None,
+                                window_consistent=None,
+                                window_edge_fraction=None,
+                                alias_rejected=False))
             continue
         # measure on the intersection populations only (sources far outside
         # the shared footprint can only contribute noise pairs)
@@ -209,7 +213,10 @@ def pairwise_overlap_offsets(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS,
             results.append(dict(a=la, b=lb, overlap=False, n_overlap=n_close,
                                 off_mas=None, dra_mas=None, ddec_mas=None,
                                 contrast=None, n_peak=0, measurable=False,
-                                ok=True, swept=False, window_arcsec=None))
+                                ok=True, swept=False, window_arcsec=None,
+                                window_consistent=None,
+                                window_edge_fraction=None,
+                                alias_rejected=False))
             continue
         # A verdict needs BOTH a coherent peak (contrast) AND a peak holding a
         # non-trivial fraction of the shared population (n_peak) -- a stripey
@@ -226,13 +233,28 @@ def pairwise_overlap_offsets(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS,
         measurable = conf is not None
         within = m["off"] <= tol_mas
         ok = measurable and within
+        # WINDOW CONFIRMATION (issue #158), run LAZILY.  A real rigid offset reads
+        # the same value at every window large enough to hold it; a pair-density
+        # ridge slides with the window.  Only a pair about to be called grossly
+        # misregistered needs that discriminator, so confirm exactly there:
+        # ``measure_offset(confirm_windows=True)`` would probe EVERY swept peak at
+        # 1.4x and 2.2x its window, i.e. two extra wide-window histograms per
+        # pair, for pairs whose verdict cannot change.
+        if measurable and not within and m.get("swept"):
+            _conf_w = confirm_peak_windows(
+                a[_in_bounds(a, bounds)], b[_in_bounds(b, bounds)], m,
+                min_pairs=min_overlap_pairs)
+            m = dict(m, window_consistent=_conf_w["consistent"])
         results.append(dict(a=la, b=lb, overlap=True, n_overlap=n_close,
                             off_mas=float(m["off"]), dra_mas=float(m["dra"]),
                             ddec_mas=float(m["ddec"]), contrast=float(m["contrast"]),
                             n_peak=int(m.get("n_peak", 0)),
                             measurable=bool(measurable),
                             ok=bool(ok), swept=bool(m.get("swept", False)),
-                            window_arcsec=m.get("window_arcsec")))
+                            window_arcsec=m.get("window_arcsec"),
+                            window_consistent=m.get("window_consistent"),
+                            window_edge_fraction=m.get("window_edge_fraction"),
+                            alias_rejected=bool(m.get("alias_rejected", False))))
     return results
 
 
