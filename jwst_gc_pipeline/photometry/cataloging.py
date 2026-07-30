@@ -2470,8 +2470,18 @@ def _combine_per_obs_vetted(vetted_path, merged_path, combined_path,
     # the case that matters.)
     if os.path.exists(combined_path):
         os.remove(combined_path)
-    combined = tables[0] if len(tables) == 1 else table_vstack(
-        tables, metadata_conflicts='silent')
+    try:
+        combined = tables[0] if len(tables) == 1 else table_vstack(
+            tables, metadata_conflicts='silent')
+    except Exception as ex:
+        # Fatal by design -- continuing would leave a stale combined catalog to
+        # be read as the m7 seed.  But the inputs came from a glob, not from the
+        # caller, so name them: otherwise the operator gets a column-mismatch
+        # traceback with no clue which file on disk is the odd one out.
+        raise RuntimeError(
+            f"cannot combine the per-obs vetted catalogs for "
+            f"{os.path.basename(combined_path)}: {type(ex).__name__}: {ex}\n"
+            f"  inputs: {[os.path.basename(p) for p in siblings]}") from ex
     if len(tables) > 1 and 'skycoord' in combined.colnames:
         combined = _dedup_combined_vetted(combined)
     root, ext = os.path.splitext(combined_path)   # keep ext: astropy sniffs it

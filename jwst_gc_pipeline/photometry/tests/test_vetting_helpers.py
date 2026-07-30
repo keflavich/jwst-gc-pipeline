@@ -276,7 +276,7 @@ def test_a_failed_combine_leaves_no_stale_catalog(tmp_path, monkeypatch):
     monkeypatch.setattr(C, 'table_vstack',
                         lambda *a, **k: (_ for _ in ()).throw(
                             ValueError('column mismatch')))
-    with pytest.raises(ValueError):
+    with pytest.raises(RuntimeError):        # re-raised with the file names
         C._combine_per_obs_vetted(str(tmp_path / 'cat_o002_vetted.fits'),
                                   str(merged), str(combined),
                                   this_obs_only=False)
@@ -383,3 +383,28 @@ def test_the_already_filled_array_is_used_not_the_raw_data(monkeypatch):
         types.SimpleNamespace(satstar_ramp_recover=True))
     assert out[0, 3] == 0.0, 'the repaired value was overwritten with raw data'
     assert np.isfinite(out[0, 3])
+
+
+def test_a_failed_combine_names_the_files_it_globbed(tmp_path):
+    """The inputs come from a glob, not from the caller, so the error must
+    name them.  Otherwise a column-mismatch traceback gives no clue which
+    file on disk is the odd one out."""
+    merged = tmp_path / 'cat.fits'
+    _vetted(1).write(merged, overwrite=True)
+    _vetted(3, 266.5).write(tmp_path / 'cat_o001_vetted.fits', overwrite=True)
+    # A missing or extra column does NOT raise -- vstack outer-joins and masks
+    # it.  What raises is a shared column with an incompatible dtype.
+    odd = _vetted(3, 267.5)
+    odd['qfit'] = np.array(['a', 'b', 'c'])
+    odd.write(tmp_path / 'cat_o002_vetted.fits', overwrite=True)
+
+    combined = tmp_path / 'cat_vetted.fits'
+    with pytest.raises(RuntimeError) as excinfo:
+        C._combine_per_obs_vetted(str(tmp_path / 'cat_o002_vetted.fits'),
+                                  str(merged), str(combined),
+                                  this_obs_only=False)
+    message = str(excinfo.value)
+    assert 'cat_o001_vetted.fits' in message
+    assert 'cat_o002_vetted.fits' in message
+    assert excinfo.value.__cause__ is not None      # original kept
+    assert not combined.exists()
