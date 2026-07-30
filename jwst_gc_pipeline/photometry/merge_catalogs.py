@@ -2917,22 +2917,22 @@ def main():
                            'specific tiling.')
     (options, args) = parser.parse_args()
 
-    if options.make_refcat:
-        # Refused up front, not after the merges: make_reftable.main() measures
-        # offsets by nearest-neighbour median against a dense catalog, which
-        # raises DenseNNMedianAstrometryError (astrometry rule #1).  The old
-        # code could not run it either -- it raised without an array and its
-        # import path was wrong -- so nothing regresses; say why instead.
-        raise NotImplementedError(
-            "--make-refcat is disabled: make_reftable.main() measures offsets "
-            "by nearest-neighbour median against a dense reference, which "
-            "astrometry rule #1 forbids.  Build reference catalogs with "
-            "make_reference_from_pipeline_catalogs.py instead.")
-
     modules = options.modules.split(",")
     target = options.target
     indiv_merge_methods = options.indiv_merge_methods.split(",")
     print("Options:", options)
+
+    if options.make_refcat:
+        # Refused before any merge runs, not after: make_reftable.main()
+        # measures offsets by nearest-neighbour median against a dense catalog,
+        # which raises DenseNNMedianAstrometryError (astrometry rule #1).  The
+        # old code could not run it either -- it raised without an array and its
+        # import path was wrong -- so nothing regresses; say why instead.
+        parser.error(
+            "--make-refcat is disabled: make_reftable.main() measures offsets "
+            "by nearest-neighbour median against a dense reference, which "
+            "astrometry rule #1 forbids.  Build reference catalogs with "
+            "make_reference_from_pipeline_catalogs.py instead.")
 
     if target in ('sickle', 'cloudef', 'sgrc', 'sgrb2', 'arches', 'quintuplet', 'sgra', 'gc2211', 'w51',
                   'm92', 'ngc6397', 'm4',  # globular clusters (Anderson co-I) on /orange

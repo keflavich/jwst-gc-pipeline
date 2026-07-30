@@ -8,6 +8,7 @@ pin its order (an index shift would send an array task at the wrong filter) and
 the three-state error policy.
 """
 import pytest
+from astropy.table import Table
 
 from jwst_gc_pipeline.photometry import merge_catalogs as MC
 
@@ -61,7 +62,7 @@ def test_raise_policy_propagates():
         MC._run_merge(_boom(ValueError('No tables found')), 'x', 'raise')
 
 
-def test_daophot_basic_no_input_is_fatal(tmp_path):
+def test_daophot_basic_no_input_is_fatal(tmp_path, monkeypatch):
     """A merge with zero daophot-basic inputs must fail, not exit 0.
 
     This is what the deleted 'missing-ok' policy got wrong: it swallowed
@@ -69,7 +70,12 @@ def test_daophot_basic_no_input_is_fatal(tmp_path):
     successfully having built no cross-band product.  Asserted against the
     message merge_daophot actually raises, not against the source text.
     """
-    with pytest.raises((ValueError, OSError, KeyError)) as excinfo:
+    # merge_daophot queries the SVO filter service before it checks its inputs;
+    # stub it so a cold cache cannot masquerade as the failure under test.
+    monkeypatch.setattr(MC.SvoFps, 'get_filter_list',
+                        lambda *a, **k: Table({'filterID': ['JWST/NIRCam.F410M'],
+                                               'WavelengthEff': [40971.0]}))
+    with pytest.raises(ValueError) as excinfo:
         MC.merge_daophot(daophot_type='basic', module='merged', target='brick',
                          basepath=str(tmp_path), indivexp=True)
     assert 'catalogs found' in str(excinfo.value) or 'no matches' in str(
