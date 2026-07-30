@@ -410,3 +410,64 @@ def test_a_failed_combine_names_the_files_it_globbed(tmp_path):
     # and the original astropy diagnostic survives
     assert 'qfit' in message and 'float64' in message
     assert excinfo.value.__cause__ is not None
+
+
+def test_the_odd_file_is_named_even_when_a_sibling_was_unreadable(tmp_path):
+    """The dtype report must index the files it READ, not everything globbed.
+
+    With an unreadable sibling in the middle the two lists diverge, and using
+    the glob list would name the wrong file.
+    """
+    merged = tmp_path / 'cat.fits'
+    _vetted(1).write(merged, overwrite=True)
+    _vetted(3, 266.5).write(tmp_path / 'cat_o001_vetted.fits', overwrite=True)
+    (tmp_path / 'cat_o002_vetted.fits').write_text('not a fits file')
+    odd = _vetted(3, 268.5)
+    odd['qfit'] = np.array(['a', 'b', 'c'])
+    odd.write(tmp_path / 'cat_o003_vetted.fits', overwrite=True)
+
+    with pytest.raises(C.VettedCombineError) as excinfo:
+        C._combine_per_obs_vetted(str(tmp_path / 'cat_o003_vetted.fits'),
+                                  str(merged), str(tmp_path / 'cat_vetted.fits'),
+                                  this_obs_only=False, label='t')
+    message = str(excinfo.value)
+    assert 'cat_o003_vetted.fits is |S1' in message   # the real culprit
+    assert 'cat_o002_vetted.fits is' not in message   # unreadable, never compared
+
+
+def test_consistent_columns_are_not_listed(tmp_path):
+    # Reporting every column would bury the one that actually conflicts.
+    merged = tmp_path / 'cat.fits'
+    _vetted(1).write(merged, overwrite=True)
+    _vetted(3, 266.5).write(tmp_path / 'cat_o001_vetted.fits', overwrite=True)
+    odd = _vetted(3, 267.5)
+    odd['qfit'] = np.array(['a', 'b', 'c'])
+    odd.write(tmp_path / 'cat_o002_vetted.fits', overwrite=True)
+
+    with pytest.raises(C.VettedCombineError) as excinfo:
+        C._combine_per_obs_vetted(str(tmp_path / 'cat_o002_vetted.fits'),
+                                  str(merged), str(tmp_path / 'cat_vetted.fits'),
+                                  this_obs_only=False)
+    message = str(excinfo.value)
+    assert "column 'qfit' differs" in message
+    assert "column 'flux' differs" not in message     # same dtype in both
+
+
+def test_a_non_dtype_failure_still_names_the_inputs(tmp_path):
+    # The fallback: same dtype, different shape -> no dtype conflict to report.
+    merged = tmp_path / 'cat.fits'
+    _vetted(1).write(merged, overwrite=True)
+    a = _vetted(3, 266.5)
+    a['shaped'] = np.zeros((3, 2))
+    a.write(tmp_path / 'cat_o001_vetted.fits', overwrite=True)
+    b = _vetted(3, 267.5)
+    b['shaped'] = np.zeros((3, 4))
+    b.write(tmp_path / 'cat_o002_vetted.fits', overwrite=True)
+
+    with pytest.raises(C.VettedCombineError) as excinfo:
+        C._combine_per_obs_vetted(str(tmp_path / 'cat_o002_vetted.fits'),
+                                  str(merged), str(tmp_path / 'cat_vetted.fits'),
+                                  this_obs_only=False)
+    message = str(excinfo.value)
+    assert 'differs' not in message                   # no dtype conflict
+    assert 'cat_o001_vetted.fits' in message and 'cat_o002_vetted.fits' in message
