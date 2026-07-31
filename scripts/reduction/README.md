@@ -18,7 +18,7 @@ Runs `PipelineRerunNIRCAM-LONG.py` → Image3 imaging + per-exposure
 `fix_alignment` + post-resample `realign_to_catalog`
 (see `jwst_gc_pipeline/reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md`).
 Defaults: proposal 4147, field 012, modules `nrca,nrcb,merged`, `-s`
-(reuse existing `*_cal.fits`; does **not** re-download from MAST).
+(reuse the `*_cal.fits` already on disk).
 
 ## 2. Cataloging
 
@@ -32,7 +32,7 @@ only; on by default). The combined m8 is then de-duplicated into
 star into two reference rows, dedup collapses complementary-coverage pairs but
 keeps resolved binaries). m8 runs automatically in whichever job completes the
 final phase's finalize — the monolith, the Stream-2 m7 job, or the Stream-3 m7
-finalize — so you do not schedule it separately.
+finalize.
 
 **m8 fan-out (when the inline fill overruns the wall).** The monolithic m8
 sweeps every frame serially; on dense fields (sickle: 192 frames in F187N+F210M
@@ -49,9 +49,9 @@ scripts/reduction/submit_cataloging_m8.sh
 This submits one `submit_cataloging_m8_partial.sbatch` per band (each fills only
 its band → `..._resbgsub_m8_partial_<FILT>.fits` via `--manual-m8-partial`) plus
 a merge (`submit_cataloging_m8_merge.sbatch` → `m8_merge_partials.py`), chained
-`afterok`. The merge **refuses to write a half-merged m8 if any band's partial
-is missing** (no silent band fallback), then dedups. `SUFFIXES` must align 1:1
-with `FILTERS` (SW vs LW bands usually differ). Two streams below for the main
+`afterok`. The merge **requires every band's partial and fails loudly if one is
+missing**, then dedups. `SUFFIXES` must align 1:1 with `FILTERS` (SW vs LW bands
+usually differ). Two streams below for the main
 m12..m7 work, pick by what the queue will give you:
 
 ### Stream 1 — fast / high-resource (per-filter array)
@@ -60,14 +60,13 @@ m12..m7 work, pick by what the queue will give you:
 sbatch --array=0-7 scripts/reduction/submit_cataloging.sbatch         # after stage 1
 ```
 
-One filter per task. Each task now passes `--parallel-workers=$SLURM_CPUS_PER_TASK`
-so the frame fits actually use every requested core (previously the fat job left
-all but one core idle). A single-filter task runs m12..m6 only — no cross-band
-m7. To also build the cross-band catalog, either run the monolithic multifilter
+One filter per task. Each task passes `--parallel-workers=$SLURM_CPUS_PER_TASK`
+so the frame fits use every requested core. A single-filter task runs m12..m6.
+To also build the cross-band catalog, either run the monolithic multifilter
 job (one task, with **every filter listed explicitly**, e.g.
-`FILTERS="F182M,F187N,F212N,F405N,F410M,F466N"`) or use stream 2. There is no
-`all` keyword: `multifilter` is `len(filternames) > 1`, so `FILTERS="all"` yields a
-one-element list, skips m7 entirely, and then fails the FWHM lookup on a filter
+`FILTERS="F182M,F187N,F212N,F405N,F410M,F466N"`) or use stream 2. `FILTERS` must
+name each filter: `multifilter` is `len(filternames) > 1`, so `FILTERS="all"`
+yields a one-element list, skips m7, and then fails the FWHM lookup on a filter
 named `all`.
 
 ### Stream 2 — low-resource / dependency-chained (optional)
@@ -84,17 +83,14 @@ finalize**, chained with `--dependency=afterok`:
   (`PERFILTER_CPUS`, default 4) that fits small queue holes;
 - **stage 2:** `submit_cataloging_m7.sbatch` — m7 cross-band over all filters,
   reusing on-disk m6 products via `--manual-start-phase m7`, run only after the
-  array finishes OK (4 cpu — m7 is I/O/table-stack bound, not cpu-parallel).
+  array finishes OK (4 cpu — m7 is I/O/table-stack bound).
 
-Same science as the monolith. (Earlier templates warned the standalone m7 dropped
-the out-of-FOV satstar flux pins; that no longer applies — m12 now persists its
-reconciled overrides/drops to disk (`*_satstar_reconciled_m12.fits`) and every
-`--manual-start-phase` run reconstructs them, so the finalize re-applies the same
-pins as a monolithic run. Off-FOV satstars additionally get the Spitzer-prior
-`_spitzer.reg` + model<=data clamp, loaded fresh each phase in both paths, which
-is believed to make the m12 `satstar_overrides` pins vestigial for off-FOV stars
-— unverified, but moot given the disk round-trip above. See `cataloging.py`
-`run_manual_pipeline` start_phase note.)
+Same science as the monolith. m12 persists its reconciled overrides/drops to
+disk (`*_satstar_reconciled_m12.fits`) and every `--manual-start-phase` run
+reconstructs them, so the standalone m7 finalize re-applies the same out-of-FOV
+satstar flux pins as a monolithic run. Off-FOV satstars additionally get the
+Spitzer-prior `_spitzer.reg` + model<=data clamp, loaded fresh each phase in both
+paths. See `cataloging.py` `run_manual_pipeline` start_phase note.
 Pass `DEBLEND_SATSTARS=1` to plumb the ZEROFRAME satstar deblend through **both**
 stages (the m7 finalize honors it too) so a re-made satstar catalog at m7 matches
 m12 — required for crowded GC fields (gc2211/arches/quintuplet/sgra).
@@ -110,14 +106,14 @@ Splits BELOW the filter boundary: for each phase (`m12→m3→m4→m5→m6[→m7
 submits a per-frame **fan-out array** (`NSHARDS` tiny `FANOUT_CPUS`-core tasks,
 each fitting a frame shard) then one **finalize** barrier job, chained
 `afterok`, phase after phase. The fan-out tasks are the smallest possible ask,
-so they backfill into queue holes a per-filter job never sees. (m8 is not a
-fan-out phase — it runs inside the m7 finalize barrier, same as the monolith.)
+so they backfill into queue holes too small for a per-filter job. (m8 runs inside
+the m7 finalize barrier, same as the monolith.)
 
 `NSHARDS` is only a granularity knob — the shard predicate (`frame_index % N`)
-covers every exposure for any `N` (no double-fit, no gaps); the finalize verifies
-a completion marker for every frame and **hard-crashes on any miss** (no silent
-exposure drop). This required persisting the cross-phase state that used to be
-in-memory only: `resid_i2d_for_next` (deterministic path),
+covers every exposure exactly once for any `N`; the finalize verifies a
+completion marker for every frame and **hard-crashes on any miss**. This required
+persisting the cross-phase state that used to be in-memory only:
+`resid_i2d_for_next` (deterministic path),
 `satstar_overrides`/`satstar_drops` (new `_satstar_reconciled_m12.fits`),
 `prev_merged_for` (from the prior merged catalog's `iter_found` column); the
 smoothed bg already reconstructed (`_reconstruct_smoothed_bg_path`). All gated by
@@ -131,7 +127,7 @@ locally and diffs the final catalogs. Unit tests:
 `jwst_gc_pipeline/photometry/tests/test_perframe_helpers.py`.
 
 Off-FOV satstars: same handling as Stream 2 (persisted m12 overrides
-reconstructed from disk, plus the Spitzer-prior path — no known fidelity gap);
+reconstructed from disk, plus the Spitzer-prior path);
 pass `DEBLEND_SATSTARS=1` to carry the ZEROFRAME deblend through every
 per-frame stage.
 
@@ -146,11 +142,10 @@ sbatch --array=0-3 --export=ALL,PROPOSAL=2221,FIELD=001,TARGET=brick,\
 
 ## Refactor-compatibility notes (why the old templates fail)
 
-- **Reduction entry point cannot use `python -m`.** The file name
-  `PipelineRerunNIRCAM-LONG.py` has a hyphen → not an importable module.
-  It must be launched by full path. The sbatch resolves that path from the
-  pip-installed `jwst_gc_pipeline` (or from `PIPE_ROOT` if pinning a
-  worktree/branch).
+- **Launch the reduction entry point by full path.** The hyphen in
+  `PipelineRerunNIRCAM-LONG.py` makes it an illegal module name, so `python -m`
+  fails on it. The sbatch resolves that path from the pip-installed
+  `jwst_gc_pipeline` (or from `PIPE_ROOT` if pinning a worktree/branch).
 - **Cataloging entry point uses `python -m`** (it is a proper module).
 - The pre-refactor `_bench/cloudef_o002_rereduce.sbatch` invokes
   `brick-jwst-2221/brick2221/reduction/...` — the OLD package
@@ -169,12 +164,12 @@ single filter's `nrca,nrcb,merged` Image3 (resample is the memory peak).
 Cataloging (fast/Stream-1, fat per-filter): 32 cpu / 128 gb / 48 h — dense GC
 fields are source-count bound and use multiprocessing.
 
-**Scheduling note:** queue delay here is dominated by *large-cpu node scarcity*,
-not memory. The light/low-resource stages therefore ask few cpus so they backfill
-into small queue holes instead of waiting tens of hours for a big node:
+**Scheduling note:** queue delay here is dominated by *large-cpu node scarcity*.
+The light/low-resource stages therefore ask few cpus so they backfill into small
+queue holes instead of waiting tens of hours for a big node:
 - Stream-2 per-filter (stage 1): 4 cpu (tune with `PERFILTER_CPUS`);
-- m7 cross-band finalize (stage 2): 4 cpu — it is I/O + table-stack bound, not
-  cpu-parallel, so extra cpus buy nothing but a longer wait.
+- m7 cross-band finalize (stage 2): 4 cpu — it is I/O + table-stack bound, so
+  extra cpus buy only a longer wait.
 
 Only the **cpu** ask is shrunk. `--mem` and `--time` are kept generous on purpose:
 trimming those risks an OOM/timeout kill mid-run (losing the whole job's work),
