@@ -365,3 +365,13 @@ def test_an_obs_built_by_hand_has_working_defaults():
     """The dict fields defaulted to (), so glob_obsid raised AttributeError on
     any Obs not built by the loader."""
     assert F.Obs(proposal='9999').glob_obsid() is None
+
+
+def test_the_offsets_table_follows_the_basepath_the_caller_is_using():
+    """Built from the registry's own root, it pointed at the released tree even
+    when GC_BASEPATH_OVERRIDE had sent the run somewhere else."""
+    assert F.offsets_table_path('brick', '1182', basepath='/scratch/brick/') == (
+        '/scratch/brick/offsets/Offsets_JWST_Brick1182_F444ref.csv')
+    assert F.offsets_table_relpath('brick', '1182') == (
+        'offsets/Offsets_JWST_Brick1182_F444ref.csv')
+    assert F.offsets_table_relpath('brick', '2221') is None

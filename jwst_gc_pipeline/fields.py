@@ -316,19 +316,37 @@ def fov_region(target):
     return None if field is None else field.fov_region
 
 
-def offsets_table_path(target, proposal):
-    """Absolute path to a field's measured offsets table, or ``None``.
+def offsets_table_relpath(target, proposal):
+    """A field's offsets table, relative to its directory, or ``None``.
 
-    Returns a path, not a read table: reading it is the caller's job, and doing
-    it eagerly made every run of every target depend on one field's file.
+    Relative on purpose: the caller joins it to the basepath it is actually
+    using, so a run redirected by ``GC_BASEPATH_OVERRIDE`` reads the table in
+    the tree it is working in.
     """
     field = BY_NAME.get(target)
     if field is None:
         return None
     obs = field.observation(proposal)
-    if obs is None or obs.offsets_table is None:
+    return None if obs is None else obs.offsets_table
+
+
+def offsets_table_path(target, proposal, basepath=None):
+    """Path to a field's measured offsets table, or ``None``.
+
+    ``basepath`` is the directory the caller is working in; it defaults to the
+    field's registered one. Returns a path, not a read table: reading it is the
+    caller's job, and doing it eagerly made every run of every target depend on
+    one field's file.
+    """
+    relative = offsets_table_relpath(target, proposal)
+    if relative is None:
         return None
-    return os.path.join(field.basepath, obs.offsets_table)
+    if basepath is None:
+        field = BY_NAME.get(target)
+        if field is None:
+            return None
+        basepath = field.basepath
+    return os.path.join(basepath, relative)
 
 
 def merge_jobs(target, instrument='nircam'):

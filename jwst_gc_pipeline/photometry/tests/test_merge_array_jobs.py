@@ -238,7 +238,9 @@ def test_an_array_task_that_merged_one_filter_stops_before_the_all_filter_merges
     Letting each of N array tasks run it gives N concurrent writers, most of
     them reading inputs a sibling task has not produced yet."""
     calls = []
-    monkeypatch.setenv('SLURM_ARRAY_TASK_ID', '3')
+    # Task 5 is a 2221 filter, which has no offsets table; a 1182 task would
+    # also exercise the offsets read, which test_fields_registry covers.
+    monkeypatch.setenv('SLURM_ARRAY_TASK_ID', '5')
     monkeypatch.setenv('GC_BASEPATH_OVERRIDE', str(tmp_path))
     monkeypatch.setattr(MC, 'merge_individual_frames', lambda **kw: None)
     monkeypatch.setattr(MC, 'merge_crowdsource',
@@ -256,6 +258,12 @@ def test_a_plain_run_still_does_the_all_filter_merges(monkeypatch, tmp_path):
     calls = []
     monkeypatch.delenv('SLURM_ARRAY_TASK_ID', raising=False)
     monkeypatch.setenv('GC_BASEPATH_OVERRIDE', str(tmp_path))
+    # A plain run walks every job, so it reaches brick/1182 and its offsets
+    # table.  Stage one in the redirected tree, as stage_scratch_basepath.sh does.
+    offsets = tmp_path / 'offsets'
+    offsets.mkdir()
+    Table({'Visit': ['001'], 'dra (arcsec)': [0.0], 'ddec (arcsec)': [0.0]}).write(
+        offsets / 'Offsets_JWST_Brick1182_F444ref.csv', format='ascii.csv')
     monkeypatch.setattr(MC, 'merge_individual_frames', lambda **kw: None)
     monkeypatch.setattr(MC, 'merge_crowdsource',
                         lambda **kw: calls.append('crowdsource'))

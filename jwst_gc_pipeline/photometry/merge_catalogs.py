@@ -2927,7 +2927,8 @@ def main():
                     target=target, basepath=basepath, field=options.field,
                     exposure_numbers=np.arange(1, options.max_expnum + 1),
                     offsets_table=_read_offsets_table(
-                        field_registry.offsets_table_path(target, progid)),
+                        field_registry.offsets_table_path(target, progid,
+                                                          basepath=basepath)),
                     iteration_label=options.iteration_label,
                     resbgsub=options.resbgsub,
                     n_spatial_chunks=int(options.n_spatial_chunks),
