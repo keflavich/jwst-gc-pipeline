@@ -1839,7 +1839,8 @@ def flattop_satstar_model(model_image, data_bg_sub, plateau_frac=0.15,
     return np.maximum(out, 0)
 
 
-def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_prominence_robust=False, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, zeroframe_deblend=False, deblend_daophot_xy=None, deblend_confirm_xy=None, sat_data_floor=None, satstar_severity_floor=None, phantom_flux_floor=0.0, phantom_ssr_max=50.0, phantom_ratio_max=50.0, partner_sky=None):
+def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=81, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=2, adaptive_mask_buffer_scale=True, adaptive_bkg_annulus=True, plot=True, rindsz=3, use_merged_psf_for_merged=False, outside_star_pixels=None, outside_star_fit_box=512, forced_grid_search_radius=5, satstar_central_downweight_sigma=0.0, flux_overrides=None, flux_drops=None, oversub_clamp_percentile=10.0, seed_prominence_min=8.0, seed_core_min=1000.0, seed_conc_min=1.3, seed_prominence_robust=False, seed_oversub_ratio=3.0, seed_fake_model_min=1.0e4, seed_fake_localpk_max=3.5e3, seed_gate_image=None, seed_gate_wcs=None, zeroframe=None, zeroframe_deblend=False, deblend_daophot_xy=None, deblend_confirm_xy=None, sat_data_floor=None, satstar_severity_floor=None, phantom_flux_floor=0.0, phantom_ssr_max=50.0, phantom_ratio_max=50.0, partner_sky=None,
+                        adaptive_fit_shape=False, adaptive_fit_scale=2.83, adaptive_fit_margin=17.0, adaptive_fit_min=21):
     # ``flux_drops``: optional list of SkyCoord.  An out-of-field (forced) source
     # whose seed sky position matches a drop within ~1.0" is SKIPPED entirely
     # (not fit, not contributed): cross-frame reconciliation found no trustworthy
@@ -2940,11 +2941,40 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
                                 and int(src_sat_area) >= _SAT_AREA_LARGE)
             _infov_psf = big_grid_large if _use_large_infov else big_grid
             _psf_for_fit = _infov_psf
+            # ADAPTIVE fit footprint (opt-in): scale the PSFPhotometry ``fit_shape``
+            # to THIS star's saturated-core radius instead of the global ``size``.
+            # The fit-footprint sweep (scripts/satstar_deblend/fit_footprint_sweep.py)
+            # showed satstar flux is set by the extended unsaturated wings the box
+            # captures: a box that only reaches the masked core underestimates the
+            # flux 5-90%, and the amplitude leverage grows with the core (brightest
+            # stars need the full ``size``).  So a GLOBAL small box biases flux, but a
+            # box scaled to the core -- large only where the core is large -- keeps
+            # the bright stars accurate while shrinking the many faint/small-core
+            # satstars (cheaper, and less faint-neighbour contamination in the fit).
+            # scale/margin default to map the largest core (sat_area cap ~1600 ->
+            # r_core ~22.6) back to size=81, so bright stars are unchanged.
+            _size_eff = size
+            # NIRCam in-FOV only: MIRI heavily-saturated stars deliberately fit the
+            # LARGE spike-resolving PSF (see _use_large_infov above); shrinking their
+            # fit_shape is untested and would strand the spike leverage.  Also skip
+            # non-scalar ``size`` (an explicit (ny,nx) request) and forced sources
+            # (custom LSQ path, no fit_shape).
+            if (adaptive_fit_shape and not forced_source and not _is_miri
+                    and src_sat_area is not None and np.isscalar(size)):
+                _r_core = np.sqrt(max(int(src_sat_area), 1) / np.pi)
+                _size_eff = int(np.clip(adaptive_fit_scale * _r_core + adaptive_fit_margin,
+                                        adaptive_fit_min, size))
+                if _size_eff % 2 == 0:   # photutils fit_shape must be ODD on both axes
+                    _size_eff = min(_size_eff + 1, int(size) if int(size) % 2 else int(size) - 1)
+                if _size_eff != size:
+                    print(f"  adaptive fit_shape: sat_area={src_sat_area} "
+                          f"r_core={_r_core:.1f} -> fit_shape={_size_eff} (was {size})",
+                          flush=True)
             psfphot = PSFPhotometry(
                                     localbkg_estimator=localbkg_estimator,
                                     fitter=lmfitter,
                                     psf_model=_psf_for_fit,
-                                    fit_shape=size,
+                                    fit_shape=_size_eff,
                                     aperture_radius=15*fwhm_pix)
             # get the underlying model
             model = getattr(psfphot, "psf_model", None)
