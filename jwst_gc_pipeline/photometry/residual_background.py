@@ -1,260 +1,269 @@
-"""Per-source local background from a small footprint on the STAR-SUBTRACTED residual.
+r"""Per-source background from a small footprint on the star-subtracted residual.
 
-Motivation
+Provides a per-source local background measured on the residual image after the
+point-source model has been subtracted, following the convention used by Jay
+Anderson's JWST1PASS: the mean and pixel-to-pixel RMS of a small (default
+:math:`3\times3` px) footprint centred on each source.  It is written per
+exposure and combined across exposures into the merged catalogue.  It is
+strictly diagnostic; no value computed here feeds back into the flux fit.
+
+It complements, and does not replace, the local background photutils already
+subtracts during the fit (``local_bkg``).  The two are measured on different
+images and answer different questions; see `Relationship to local_bkg`
+below.
+
+Notation
+--------
+For exposure :math:`i` and source :math:`s`:
+
+:math:`D_i`
+    the NaN-interpolated science frame, before any background subtraction
+    (``ctx.original_data``, captured prior to both the ``Background2D`` and the
+    smoothed-residual subtractions).
+:math:`S_i`
+    the fitted saturated-star model.
+:math:`P_i`
+    the fitted point-source (PSF) model, rendered with ``include_local_bkg=False``.
+:math:`B_i`
+    whichever background was subtracted from the array actually fitted at this
+    stage: zero at m1-m4, the reprojected smoothed-residual mosaic at m5-m7, and
+    the ``Background2D`` map when ``--bgsub`` is set.
+
+Two distinct images follow:
+
+.. math::
+
+    A_i = D_i - S_i - B_i \qquad\text{(the array passed to the fitter)}
+
+    R_i = D_i - S_i - P_i \qquad\text{(the residual measured here)}
+
+:math:`A_i` retains the point sources and has the background removed;
+:math:`R_i` removes the point sources and retains the background.  Because
+:math:`R_i` is defined from :math:`D_i` rather than from the fitted array, it
+carries no :math:`B_i` term and is therefore **independent of the pipeline
+stage**: an m4 and an m7 value of the quantities below are directly comparable.
+
+Per-exposure quantities
+-----------------------
+Let :math:`(\hat{x}_s, \hat{y}_s)` be the fitted position, :math:`b` the
+(odd) box size and :math:`h=(b-1)/2`.  The footprint is the pixel set
+
+.. math::
+
+    \mathcal{F}_i(s) = \bigl\{(x,y) \;:\;
+        |x - \operatorname{round}(\hat{x}_s)| \le h, \;
+        |y - \operatorname{round}(\hat{y}_s)| \le h \bigr\} \cap \Omega_i,
+
+with :math:`\Omega_i` the array bounds, and the valid subset excludes masked and
+non-finite pixels:
+
+.. math::
+
+    \mathcal{V}_i(s) = \bigl\{p \in \mathcal{F}_i(s) \;:\;
+        R_i(p) \ \text{finite} \ \wedge\ p \notin \mathcal{M}_i \bigr\},
+    \qquad n_i(s) = \bigl|\mathcal{V}_i(s)\bigr|.
+
+======================  ==========================================================
+column                  definition
+======================  ==========================================================
+``modelsub_bkg``        :math:`b_i(s) = \dfrac{1}{n_i}\displaystyle\sum_{p \in \mathcal{V}_i(s)} R_i(p)`
+``modelsub_bkg_rms``    :math:`\sigma_i(s) = \sqrt{\dfrac{1}{n_i-1}\displaystyle\sum_{p \in \mathcal{V}_i(s)} \bigl(R_i(p)-b_i\bigr)^2}`
+``modelsub_bkg_npix``   :math:`n_i(s)`
+======================  ==========================================================
+
+No clipping is applied within the footprint: with nine pixels a clip is
+unstable and biases the mean low.  :math:`b_i` and :math:`\sigma_i` are NaN when
+:math:`n_i = 0` and :math:`n_i \le 1` respectively, so :math:`n_i` distinguishes
+an edge-clipped footprint from one with no data at all.
+
+Merged quantities
+-----------------
+Let :math:`w_i = n_i / \sigma_i^2`, the inverse variance of :math:`b_i` under
+the assumption of independent pixels, and let :math:`\mathcal{K}(s)` be the set
+of exposures surviving both the usability cut
+(:math:`n_i \ge` ``min_npix``, :math:`\sigma_i > 0`, both values finite) and a
+:math:`\kappa`-:math:`\sigma` clip of :math:`\{b_i\}` across exposures
+(:math:`\kappa=3`, ``mad_std`` scale, median centre).  Write
+:math:`W = \sum_{i \in \mathcal{K}} w_i` and :math:`N = |\mathcal{K}|`.
+
+=========================  =====================================================
+column                     definition
+=========================  =====================================================
+``mean_modelsub_bkg``      :math:`\bar{b} = W^{-1}\displaystyle\sum_{i \in \mathcal{K}} w_i b_i`
+``mean_modelsub_bkg_std``  :math:`s_b = \sqrt{W^{-1}\displaystyle\sum_{i \in \mathcal{K}} w_i (b_i - \bar{b})^2}`
+``mean_modelsub_bkg_err``  :math:`\epsilon_b = W^{-1/2}`
+``modelsub_bkg_rms_avg``   :math:`\bar{\sigma} = \Bigl(\sum_{i \in \mathcal{K}} n_i\Bigr)^{-1}\displaystyle\sum_{i \in \mathcal{K}} n_i \sigma_i`
+``modelsub_bkg_nframes``   :math:`N`
+``modelsub_bkg_npix_avg``  :math:`\bar{n} = N^{-1}\displaystyle\sum_{i \in \mathcal{K}} n_i`
+=========================  =====================================================
+
+Three properties of these definitions are deliberate and easy to get wrong:
+
+* :math:`\bar{\sigma}` is weighted by :math:`n_i` **alone**, not by :math:`w_i`.
+  Weighting a quantity by its own inverse square drives the result toward the
+  smallest value; measured on eight exposures, :math:`w_i`-weighting returned a
+  median of 1.067 against 1.203 for both :math:`n_i`-weighting and an unweighted
+  mean, i.e. 11% low.
+* :math:`s_b` is the population (not sample) form, matching the ``std_*_avg``
+  convention elsewhere in ``merge_catalogs``.  It is biased low by
+  :math:`1-\sqrt{(N-1)/N}` — 29% at :math:`N=2`, 6.5% at :math:`N=8`.  It is
+  NaN for :math:`N=1`, where scatter is undefined rather than zero.
+* :math:`N` is stored as a float so that NaN survives ``replace_saturated``,
+  which appends saturated-star rows with NaN in every column they lack.  NaN
+  therefore means "never measured" and :math:`0` means "measured, no usable
+  exposure".
+
+Relationship to ``local_bkg``
+-----------------------------
+``PSFPhotometry`` is constructed with ``LocalBackground(r_{\rm in}, r_{\rm out})``,
+:math:`r_{\rm in} = \max(6, \operatorname{round}(2.5\,\mathrm{FWHM}))`,
+:math:`r_{\rm out} = r_{\rm in} + \max(4, \operatorname{round}(\mathrm{FWHM}))`
+— 6 and 10 px for every NIRCam filter, larger for MIRI from F1000W up — using
+photutils' default estimator, a :math:`3\sigma`-clipped ``MedianBackground``:
+
+.. math::
+
+    \ell_i(s) = \operatorname{median}_{3\sigma}
+        \bigl\{ A_i(p) \;:\; r_{\rm in} \le |p - \hat{p}_s| < r_{\rm out} \bigr\}.
+
+==========================  ========================  ==========================
+                            ``local_bkg``             ``modelsub_bkg``
+==========================  ========================  ==========================
+image                       :math:`A_i`               :math:`R_i`
+region                      annulus, 6-10 px          :math:`3\times3` px
+statistic                   :math:`3\sigma`-clipped   mean, and pixel RMS
+                            median
+point sources present       yes                       no
+background present          no (from m5)              yes
+stage-dependent             yes                       no
+subtracted by the fit       yes                       no
+scatter reported            no                        yes
+==========================  ========================  ==========================
+
+Because :math:`A_i` contains :math:`-B_i`, ``local_bkg`` measures a different
+physical quantity at different stages.  Median over sources, brick F182M nrca1
+exposure 1:
+
+=====================  ======  ======  ======  ======  ======  ======  ======
+                       m1      m2      m3      m4      m5      m6      m7
+=====================  ======  ======  ======  ======  ======  ======  ======
+``local_bkg``          4.43    4.45    4.40    4.42    0.42    0.45    0.44
+``modelsub_bkg``       4.26    4.04    4.12    4.07    4.28    4.27    4.51
+=====================  ======  ======  ======  ======  ======  ======  ======
+
+``local_bkg`` collapses toward zero once :math:`B_i \ne 0`; ``modelsub_bkg``
+does not.  Since the column name alone does not record which regime a catalogue
+belongs to, every catalogue additionally carries a basis-qualified alias —
+``local_bkg_raw``, ``local_bkg_bgsub``, ``local_bkg_resbgsub`` or
+``local_bkg_bgsub_resbgsub`` (see :func:`local_bkg_column_name`) — and an
+``LBKGBASE`` header card.  The unqualified ``local_bkg`` column is unchanged.
+
+Validation
 ----------
-The PSF fit already carries a local background: ``PSFPhotometry`` is built with
-``LocalBackground(inner, outer)`` (radii
-``inner = max(6, int(round(2*FWHM + 0.5*FWHM)))``,
-``outer = inner + max(4, int(round(FWHM)))`` -- 6 and 10 px for every NIRCam
-filter; MIRI differs from F1000W up), whose estimator is
-photutils' default **sigma-clipped MedianBackground** (NOT MMM; verified from
-``repr(LocalBackground(6, 10))`` and from the ``LOCAL_BK`` card written into the
-catalogues).  That estimator runs on **the array being fit** -- the
-NaN-interpolated frame, with the *saturated*-star model removed and whichever
-background subtraction is in effect already applied.  So at the ``resbgsub``
-stages the extended background has already been removed from that array, and it
-describes the diffuse emission only weakly.  (It also still contains every
-unsaturated neighbour -- but that turns out NOT to be why this module helps;
-see "What actually produces the gain" below, where the neighbour effect is
-measured and explains none of the difference.)  It is also a single number per source per frame, with no
-associated scatter.
+Against the smoothed-residual map that was subtracted at m5-m7, sampled at each
+source (brick F182M nrca1 m7, :math:`n = 19\,865`; Spearman rank correlation):
 
-This module adds an independent, complementary estimate, following the
-convention Jay Anderson uses in JWST1PASS: the **mean and RMS of a small
-(default 3x3 px) footprint centred on the source**, measured on the *residual*
-image after the star-only model has been subtracted.  That residual is built
-from the PRISTINE (pre-background-subtraction) data minus the satstar model
-minus the star model, so it retains the extended emission while removing the
-point sources -- which is exactly what ``local_bkg`` cannot report.
+=========================================  ======
+quantity                                   :math:`\rho`
+=========================================  ======
+``modelsub_bkg``                           0.86
+``local_bkg``                              0.32
+=========================================  ======
 
-Does it trace the extended emission?  Yes.  Measured on brick F182M nrca1 m7
-(19 865 sources, one exposure), against the m6 smoothed-residual background map
-that was actually subtracted from the fitted array, sampled at each source:
+with medians 4.51, 0.44 and 4.08 respectively.  Binning the same frame
+:math:`8\times8` across the detector, the cell medians span 3.02-7.22 with a
+cell-to-cell scatter of 0.822 against a standard error on a cell median of
+0.074 — spatial structure at :math:`11\times` its own noise.
 
-    Spearman r(modelsub_bkg, subtracted bg map) = 0.86
-    Spearman r(local_bkg,   subtracted bg map) = 0.32
-    median bg-map value at sources = 4.08,  median modelsub_bkg = 4.51,
-    median local_bkg = 0.44,  median(local_bkg - modelsub_bkg) = -4.04
+The improvement over ``local_bkg`` is attributable to the image, not to the
+footprint.  Applying photutils' own ``LocalBackground(6, 10)`` to :math:`R_i`
+instead of :math:`A_i` gives :math:`\rho = 0.89`, marginally better than the
+:math:`3\times3`, with a 21% tighter scatter about the reference and far less
+bright-source bias (4.99 against 14.24 at a reference value of 5.55 in the
+brightest percentile).  The :math:`3\times3` footprint is retained because it is
+Anderson's convention, because ``modelsub_bkg_rms`` is intended as a *local*
+pixel-scatter estimate for which an annulus at 6-10 px is not a substitute, and
+because a compact footprint remains local in a crowded field.  The reference is
+itself a smoothed map, which favours larger apertures by construction; that
+caveat does not apply to the bright-source comparison.  ``--residual-background-box``
+changes the footprint size.
 
-The ~4-unit offset is the extended background that had already been removed from
-the fitted array.  NOTE it is removed by the **iter3/m6 residual-smoothed
-background** (``--use-iter3-residual-bg``, the ``_resbgsub`` token), not by
-``Background2D`` -- at m7 ``options.bgsub`` is False and ``Background2D`` never
-runs on these frames.
+Limitations
+-----------
+**Bright sources.**  The footprint lies where the PSF model was subtracted, so
+model error enters :math:`b_i` directly.  Deviations from the reference map, by
+flux percentile (systematic = median deviation, noise = MAD):
 
-Spatial coherence, same frame binned 8x8 across the detector: cell medians span
-3.02-7.22 with a cell-to-cell scatter of 0.822, against a standard error on a
-cell median of 0.074 (~321 sources per cell).  That is structure at **11x** the
-noise on it.  (Do not compare the cell scatter to the per-source MAD: the raw
-MAD of 0.710 is 1.053 in sigma units, i.e. LARGER than the cell scatter, so that
-comparison argues the wrong way.  The right comparison is against the error on
-the cell statistic.)
+====================  ======  ==================  ==================
+flux percentile            n  ``modelsub_bkg``    ``local_bkg``
+====================  ======  ==================  ==================
+0-25                    4972  +0.28 / 0.27        +0.31 / 0.22
+25-50                   4972  +0.38 / 0.30        +0.38 / 0.25
+50-75                   4972  +0.44 / 0.34        +0.46 / 0.30
+75-90                   2983  +0.53 / 0.44        +0.57 / 0.31
+90-99                   1790  +1.12 / 1.32        +1.05 / 0.59
+99-100                   198  +8.33 / 8.02        +3.40 / 0.90
+====================  ======  ==================  ==================
 
-The two columns are **not** independent -- Spearman r(modelsub_bkg, local_bkg) =
-0.51, since both are influenced by the same sky.  (A Pearson r of ~0.12 on these
-heavy-tailed distributions is misleading, and a low correlation would not have
-demonstrated independence anyway.)  The case for keeping both is the 0.86-vs-0.32
-comparison above, not their mutual correlation.
+Both estimators are biased, and by nearly the same amount below the 99th
+percentile — a bias common to a 6-10 px annulus and a :math:`3\times3` box is
+not a property of either aperture, and is consistent with PSF wing flux absent
+from the model.  In the brightest percentile they diverge: ``modelsub_bkg``
+acquires both a large systematic and thirty times the faint-source noise, since
+the footprint sits in the core where subtraction error is largest and varies
+between sources; ``local_bkg`` acquires a smaller but far more coherent bias
+from the wings crossing the annulus.  Spearman
+:math:`\rho(b, F_{\rm fit}) = 0.32` and
+:math:`\rho(\sigma, F_{\rm fit}) = 0.64`, so :math:`w_i` is itself correlated
+with the value it weights.  Use either column as a background tracer only with
+a flux or ``qfit`` cut; read a large :math:`|b|` on a bright source as a
+subtraction-quality indicator.  The full range of :math:`b` on this frame is
+about :math:`-215` to :math:`+455`.
 
-The two estimates answer different questions and are both kept:
+**Correlated pixels.**  :math:`w_i = n_i/\sigma_i^2` assumes independent
+pixels.  The lag-1 autocorrelation of the high-passed residual is
+:math:`\sim0.4`-:math:`0.6` (the exact value depends on the high-pass
+definition), from destreaking, NaN interpolation, IPC and the model subtraction
+— these are detector-space ``_crf`` frames, never resampled, so this is not
+drizzle correlation.  Two errors partly cancel: correlation makes
+:math:`\sigma_i` underestimate the true pixel scatter, while
+:math:`n_{\rm eff} < n_i` makes the true variance of :math:`b_i` larger than
+:math:`\sigma_i^2/n_i`.  Empirically
+:math:`\operatorname{median}(s_b/\epsilon_b) = 1.06`-:math:`1.13` for sources
+with :math:`N \ge 3`, so :math:`\epsilon_b` is accurate to roughly 10%.
 
-===============================  ==========================  ====================
-                                 ``local_bkg`` (photutils)   ``modelsub_bkg`` (here)
-===============================  ==========================  ====================
-image                            data being fit              pristine minus models
-region                           annulus, r ~ 6-10 px        3x3 px on the source
-statistic                        sigma-clipped median        mean, and pixel RMS
-point sources removed            no                          yes (model subtracted)
-stage-dependent                  yes                         no
-used by the fit                  yes (subtracted)            no (diagnostic)
-scatter reported                 no                          yes
-===============================  ==========================  ====================
+**Precision of a single** :math:`\sigma_i`.  Nine pixels give a fractional
+uncertainty of :math:`1/\sqrt{2(n_i-1)} \approx 25\%`.  ``modelsub_bkg_rms`` is
+useful as a weight and as a relative map, not as a per-exposure noise value.
 
-**What actually produces the gain: the IMAGE, not the footprint.**  It would be
-easy to read the table above as "a 3x3 box beats an annulus because an annulus
-is contaminated by neighbours".  That is not what the data says, and the
-neighbour argument is weak anyway -- ``LocalBackground``'s estimator is a
-3-sigma-clipped median, which is exactly the statistic that survives a minority
-of contaminated pixels.
+**Saturated cores.**  :math:`R_i` is built on :math:`D_i`, so at a saturated
+core the clipped data minus the full extrapolated satstar model is strongly
+negative.  The mask excludes SATURATED pixels, but with
+``--saturation-data-floor`` above zero only above-floor saturated pixels are
+masked, so sub-floor pixels may enter a neighbouring source's footprint.  This
+is the likely origin of the negative tail.
 
-Running photutils' own ``LocalBackground(6, 10)`` -- same class, same radii --
-on the SAME star-subtracted residual, and scoring both against the m6
-smoothed-bg map that was actually subtracted (brick F182M nrca1 m7, n = 19 865):
+Relation to the background map
+------------------------------
+At m5-m7 the map subtracted to form :math:`A_i` is available as
+``ctx.background_map`` and could be sampled at each source directly.  That is a
+different quantity: the map is a smoothed *model* derived from the previous
+iteration's residual, whereas :math:`b_i` is a *measurement* on the current
+residual at the source, and it exists at m1-m4 where no map does.  The map has
+no analogue of :math:`\sigma_i`.  The difference
+:math:`b_i - (\text{map at } s)` recovers the background-model error.
 
-    Spearman vs bg map:  3x3 on residual      0.865
-                         6-10 annulus on residual   0.891
-                         6-10 annulus on fitted data (= local_bkg)  0.330
-    median:              3x3 4.513 | annulus 4.193 | bg map 4.079
-    scatter about map:   3x3 0.371 | annulus 0.293
-    brightest 1%:        3x3 14.24 | annulus 4.99 | bg map 5.55
-
-The annulus on the residual is **better on every metric** -- closer median,
-21% tighter scatter, and essentially immune to the bright-source contamination
-that is this column's worst failure mode (4.99 vs 14.24 against a truth of
-5.55).  The whole of the 0.33 -> 0.87 improvement comes from measuring on the
-star-subtracted, pre-background-subtraction residual; none of it requires the
-3x3.
-
-The 3x3 is kept because it is **Jay Anderson's JWST1PASS convention**, because
-``modelsub_bkg_rms`` is meant to be a LOCAL pixel-scatter estimate (an annulus
-RMS at r ~ 6-10 px is a different quantity), and because a compact footprint
-stays local in a crowded field.  It costs accuracy relative to a wider
-footprint on the same residual, and that is a deliberate trade.
-``manual_residual_background_box`` / ``--residual-background-box`` change it.
-
-One caveat on the comparison, in fairness: the reference is itself a *smoothed*
-map, so a ~200-pixel aperture correlates with it better than a 9-pixel one
-partly by construction.  That does not apply to the bright-1% row, which is the
-decisive one.
-
-Why not just sample the background map directly?
-------------------------------------------------
-At m5-m7 ``ctx.background_map`` IS the map that was subtracted, it is already
-passed to ``save_photutils_results``, and ``_sample_background_map()`` would
-read it at each source in three lines -- scoring 1.00 against itself, with no
-bright-source contamination and no 9-pixel noise.  It is a fair question.
-
-The answer is that they are different objects.  The map is a *model* built from
-the previous iteration's residual, smoothed; ``modelsub_bkg`` is a *measurement*
-on this iteration's residual at this source.  Sampling the map tells you what
-the pipeline assumed; measuring the residual tells you what is actually left
-there, including where the model was wrong.  ``modelsub_bkg_rms`` also has no
-equivalent in the map.  At m1-m4 there is no map at all.
-
-(A third option -- measuring the footprint on ``nan_replaced_data - modsky``
-rather than on the pristine-based residual -- would give bg_true - bg_model,
-the background-model ERROR, which is arguably the more actionable diagnostic.
-The pristine basis was chosen instead because it makes the column
-stage-invariant, so an m4 and an m7 value are directly comparable.  The
-model-error version is recoverable as ``modelsub_bkg - <map at source>``.)
-
-Naming
-------
-The merged columns deliberately do NOT follow this file's usual
-``std_{key}_avg`` / ``nmatch`` / ``{err}_prop`` conventions: they are
-``mean_modelsub_bkg``, ``mean_modelsub_bkg_std``, ``mean_modelsub_bkg_err``,
-``modelsub_bkg_rms_avg``, ``modelsub_bkg_nframes``, ``modelsub_bkg_npix_avg``.
-The names describe the physical quantity (a mean over images of a mean over a
-footprint) rather than the merge mechanics.  A script that looks up
-``std_<col>_avg`` will not find the scatter for this column.
-
-Scope: this describes the per-frame PSF-fitting path (``cataloging.py``, and
-the identical setup in ``legacy/crowdsource_step.py`` and
-``artificial_stars.py``).  The **saturated**-star channel in
-``reduction/saturated_star_finding.py`` is different -- ``LocalBackground(25,
-50)``, an adaptive annulus, or ``None`` with a median-filter background
-subtracted beforehand for MIRI -- and is not covered by anything here.
-Saturated stars appended by ``replace_saturated`` get ``modelsub_bkg* = NaN``, so
-they sit outside both estimators.  So do **m8 forced-fill** sources: the columns
-are attached in ``_save_manual_pass``, which m8 does not call, so an m8-filled
-band carries whatever the m7 cross-band table had for it (masked, for the band
-being filled).
-
-``modelsub_bkg*`` is **diagnostic only** -- nothing here feeds back into the flux
-fit.  Changing that would change every flux in the catalogue and is out of
-scope for this module.
-
-.. warning::
-
-   **Neither estimator is a clean sky measurement for bright sources, and they
-   fail differently.**  Measured on brick F182M nrca1 m7 against the m6
-   smoothed-residual background map that was actually subtracted (so the
-   expected residual is 0 for ``local_bkg`` and the map value for
-   ``modelsub_bkg``).  Systematic = median deviation, noise = MAD:
-
-   ====================  ======  ===================  ===================
-   flux bin                   n  modelsub_bkg         local_bkg
-                                 (systematic / MAD)   (systematic / MAD)
-   ====================  ======  ===================  ===================
-   0-25 %                  4972  +0.28 / 0.27         +0.31 / 0.22
-   25-50 %                 4972  +0.38 / 0.30         +0.38 / 0.25
-   50-75 %                 4972  +0.44 / 0.34         +0.46 / 0.30
-   75-90 %                 2983  +0.53 / 0.44         +0.57 / 0.31
-   90-99 %                 1790  +1.12 / 1.32         +1.05 / 0.59
-   brightest 1 %            198  **+8.33 / 8.02**     **+3.40 / 0.90**
-   ====================  ======  ===================  ===================
-
-   Two things to read off this:
-
-   * Up to the 99th percentile the two estimators are biased by *almost
-     exactly the same amount* (+0.28/+0.31, +0.38/+0.38, ... +1.12/+1.05).
-     A common bias in an annulus at 6-10 px and in a 3x3 box on the source is
-     unlikely to be a property of either aperture -- it points at PSF wings /
-     halo flux that the model does not carry.
-   * In the brightest percentile they diverge and both fail.
-     ``modelsub_bkg`` acquires a systematic of +8.3 with a comparable MAD of
-     8.0 -- i.e. **both a bias and 30x the faint-source noise**, because the
-     3x3 sits in the core where subtraction error is largest and varies source
-     to source.  ``local_bkg`` acquires a smaller but far more *coherent*
-     systematic, +3.4 with a MAD of only 0.90 -- the annulus still contains the
-     star's wings, biasing it high consistently rather than noisily.
-
-   So: bright-star contamination is **systematic in both**, and additionally
-   **stochastic in modelsub_bkg**.  Use either as a background tracer only with
-   a flux or ``qfit`` cut.  A large ``|modelsub_bkg|`` on a bright star is best
-   read as a subtraction-quality flag.  Spearman r(modelsub_bkg, flux_fit) =
-   0.32; r(modelsub_bkg_rms, flux_fit) = 0.64, so the combining weight is
-   itself correlated with the value it weights.  Full range: about -215 to +455 (the negative tail is mask-dependent).
-
-Stage dependence: local_bkg vs modelsub_bkg
--------------------------------------------
-``local_bkg`` measures whatever ``LocalBackground`` saw, and that changes with
-the stage; ``modelsub_bkg`` is built from the pristine frame every time and does
-not.  Measured on brick F182M nrca1 exposure 1 (median over sources):
-
-    stage                m1     m2     m3     m4    | m5     m6     m7
-    local_bkg           4.43   4.45   4.40   4.42   | 0.42   0.45   0.44
-    (basis)             raw    raw    raw    raw    | resbgsub ...
-
-``modelsub_bkg`` reads 4.04-4.51 across the same stages (m2 4.04, m4 4.07,
-m7 4.51; part of the spread is population, the stages hold 19.9k-49k sources).
-The point is that it does not collapse toward 0.44.  So at m1-m4, ``local_bkg`` ~
-``modelsub_bkg``, both measuring the same sky; from m5 the smoothed-residual
-background has been removed from the fitted array and ``local_bkg`` collapses
-toward 0 while ``modelsub_bkg`` stays put.  That is the intended behaviour of
-both, but it means **the same column name held two different physical
-quantities across stages** with nothing recording which.  Hence
-:func:`local_bkg_column_name`: every catalogue now also carries
-``local_bkg_raw`` / ``local_bkg_bgsub`` / ``local_bkg_resbgsub`` (and the
-``LBKGBASE`` header card), alongside the unchanged ``local_bkg``.
-
-Per-frame vs merged
--------------------
-:func:`measure_footprint_background` runs once per exposure and writes
-``modelsub_bkg`` / ``modelsub_bkg_rms`` / ``modelsub_bkg_npix`` into that exposure's
-catalogue.  :func:`combine_frames` then reduces the per-exposure values to the
-merged-catalogue entry: a **sigma-clipped, inverse-variance weighted average**
-with the across-frame scatter, the propagated error, the npix-weighted mean of
-the per-frame pixel RMS (note: npix only, NOT npix/rms**2 -- see
-:func:`combine_frames`), the number of frames that survived clipping, and the
-mean footprint size.
-
-Caveats
--------
-* A 3x3 footprint is 9 pixels.  The per-frame ``modelsub_bkg_rms`` is a noisy
-  estimate of the local pixel-to-pixel scatter (fractional uncertainty
-  ~1/sqrt(2(N-1)) ~ 25%); it is useful as a weight and as a relative map, not
-  as a precise noise value for a single frame.
-* No clipping is applied *within* the footprint.  With 9 pixels a clip is
-  unstable and would bias the mean low; masked and non-finite pixels are
-  excluded instead.  Clipping happens across frames, where there are enough
-  independent samples for it to mean something.
-* Footprint pixels are correlated -- lag-1 autocorrelation of the high-passed
-  residual is ~0.4-0.6 depending on the high-pass definition, from destreaking, NaN interpolation, IPC and
-  the model subtraction itself (these are detector-space ``_crf`` frames, never
-  resampled, so this is not drizzle correlation).  Strictly, ``npix/rms**2`` is
-  therefore not the inverse variance of the mean.  Empirically it is close: two
-  errors cancel, since correlation makes ``rms`` under-estimate sigma while
-  N_eff < npix makes the true variance of the mean larger.  Measured over 8 real
-  exposures, ``median(mean_modelsub_bkg_std / mean_modelsub_bkg_err)`` for sources
-  with >=3 frames, i.e. the propagated error is right to ~10%.
-* See the bright-source warning above: this is not a pure sky measurement.
-* The residual is built on the PRISTINE array, so at a saturated core the
-  clipped data minus the full extrapolated satstar model is hugely negative.
-  ``ctx.mask`` excludes SATURATED pixels, but with ``--saturation-data-floor``
-  > 0 only ABOVE-floor saturated pixels are masked, so sub-floor saturated
-  pixels can still enter a neighbour's footprint.  This is the likely origin of
-  the -220 tail.
+Scope
+-----
+The above describes the per-exposure PSF-fitting path in ``cataloging.py``, and
+the identical estimator configuration in ``legacy/crowdsource_step.py`` and
+``artificial_stars.py``.  The saturated-star channel in
+``reduction/saturated_star_finding.py`` uses different settings
+(``LocalBackground(25, 50)``, an adaptive annulus, or no estimator with a
+median-filtered background removed beforehand for MIRI) and is not described
+here.  Saturated stars appended by ``replace_saturated``, and sources filled by
+the m8 forced cross-band fill, carry no ``modelsub_bkg*`` values: the columns
+are written in ``_save_manual_pass``, which neither path calls.
 """
 import warnings
 
