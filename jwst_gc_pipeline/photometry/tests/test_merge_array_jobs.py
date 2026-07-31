@@ -14,14 +14,20 @@ from jwst_gc_pipeline.photometry import merge_catalogs as MC
 
 
 def test_brick_job_order_is_pinned():
-    # Written out, not recomputed from obs_filters: reordering that dict must
-    # fail this test, because it silently moves every array task.
+    # Written out, not recomputed from the registry: a change of order silently
+    # moves every array task onto a different filter.
+    #
+    # The order used to be the order obs_filters happened to be written in.  It
+    # is now derived -- proposals numerically, filters by wavelength -- so that
+    # editing fields.yaml cannot move a task.  fields.merge_jobs is pinned the
+    # same way in test_fields_registry; two pins on the layer above and below,
+    # because this is the one thing that must not drift quietly.
     assert MC.individual_frame_merge_jobs('brick') == [
-        ('2221', 'f410m'), ('2221', 'f212n'), ('2221', 'f466n'),
-        ('2221', 'f405n'), ('2221', 'f187n'), ('2221', 'f182m'),
+        ('1182', 'f115w'), ('1182', 'f200w'), ('1182', 'f356w'),
+        ('1182', 'f444w'),
+        ('2221', 'f182m'), ('2221', 'f187n'), ('2221', 'f212n'),
+        ('2221', 'f405n'), ('2221', 'f410m'), ('2221', 'f466n'),
         ('2221', 'f2550w'),
-        ('1182', 'f444w'), ('1182', 'f356w'), ('1182', 'f200w'),
-        ('1182', 'f115w'),
     ]
 
 

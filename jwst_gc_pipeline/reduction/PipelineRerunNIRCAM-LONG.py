@@ -99,7 +99,9 @@ medfilt_size = {'F410M': 15, 'F405N': 256, 'F466N': 55,
 
 # Registered in jwst_gc_pipeline/fields.yaml -- the one place a target is
 # declared.  See docs/FIELDS.md.
-from jwst_gc_pipeline import fields
+# Imported as field_registry: `fields` is a local variable in these
+# drivers (the --field list), and shadowed the module.
+from jwst_gc_pipeline import fields as field_registry
 
 
 # Reference catalog configuration by proposal and field.
@@ -1080,7 +1082,7 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         _stamp_imaging_product(os.path.join(
             output_dir, asn_data['products'][0]['name'] + "_i2d.fits"))
 
-        _fov = fields.fov_region(regionname)
+        _fov = field_registry.fov_region(regionname)
         vvv_region_file = f"{basepath}/{_fov}" if _fov else None
         # Only run VVV realignment for targets whose refnames is 'VVV'.  Gaia /
         # GNS / UKIDSS targets (Wd1, Wd2, W51, GC fields) must skip this
@@ -1174,7 +1176,7 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
     from jwst_gc_pipeline.reduction.unified_alignment import (
         resolve_shift, warn_or_raise_if_stale, write_alignment_header)
     _shift = resolve_shift(fn, proposal_id, field, filtername, module, basepath,
-                           refname=fields.reference_catalog(str(proposal_id)),
+                           refname=field_registry.reference_catalog(str(proposal_id)),
                            use_average=use_average)
     rashift = _shift.ra_quantity
     decshift = _shift.dec_quantity
@@ -1279,7 +1281,7 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
                 dra_onsky_mas=rashift.value * _cosd_prov * 1000.0,
                 ddec_onsky_mas=decshift.value * 1000.0,
                 method='offsets-table (histogram-stacked tie)',
-                references=fields.reference_catalog(proposal_id) or 'n/a',
+                references=field_registry.reference_catalog(proposal_id) or 'n/a',
                 table_name=_prov_tbl or 'hardcoded/none'):
             align_fits[1].header[_k] = (_v, _c)
         align_fits.writeto(fn, overwrite=True)
@@ -1407,7 +1409,7 @@ if __name__ == "__main__":
     Observations.login(api_token)
 
 
-    field_to_reg_mapping = fields.field_to_reg_mapping(proposal_id, 'nircam')
+    field_to_reg_mapping = field_registry.field_to_reg_mapping(proposal_id, 'nircam')
 
     for field in fields:
         for filtername in filternames:

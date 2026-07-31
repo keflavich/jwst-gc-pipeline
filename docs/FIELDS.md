@@ -2,7 +2,9 @@
 
 Every target the pipeline knows about is declared in one file:
 [`jwst_gc_pipeline/fields.yaml`](../jwst_gc_pipeline/fields.yaml). Adding a
-target is an edit to that file, and to nothing else.
+target to the **reduce, catalog and merge stages** is an edit to that file
+alone. Four smaller lists elsewhere still name targets; see
+[What this does not replace](#what-this-does-not-replace).
 
 `jwst_gc_pipeline/fields.py` loads it and answers the questions the pipeline
 asks: which filters a proposal observed, which observation number to build a
@@ -16,7 +18,7 @@ Add a block under `fields:`:
 ```yaml
   mynewfield:
     root: orange                       # which data tree; see `roots:` at the top
-    fov_region: regions_/nircam_mynewfield_fov.reg    # MIRI only; omit otherwise
+    fov_region: regions_/nircam_mynewfield_fov.reg    # NIRCam realignment only; omit otherwise
     observations:
       '9999':                          # the proposal id
         nvisits: 2
@@ -39,10 +41,11 @@ shuffling the file and comparing.
 |---|---|
 | `obsids` | Every observation number that images this field, per instrument. |
 | `glob_obsid` | The observation number the merge builds filename patterns from, per instrument. Needed only when `obsids` lists more than one; `'*'` matches several. |
+| `joint_obsids` | Tokens naming several observations cataloged in one run, e.g. `'002-998'`. |
 | `nvisits` | How many visits the observation has. |
 | `filters` | The filters to catalog and merge, lowercase. |
 | `niriss_filters` | NIRISS reuses NIRCam filter names on a different pixel scale, so its filters and products are kept apart. |
-| `reference_catalog` | The astrometric frame token, which also names the offsets table. |
+| `reference_catalog` | The astrometric frame token, which also names the offsets table.  Keyed per proposal: two fields sharing a proposal must agree, and the loader raises if they disagree. |
 | `offsets_table` | Path to the measured astrometric offsets, relative to the field's directory. Measured from the data once and then fixed. |
 
 ### Observation numbers are per instrument, and they have to be
@@ -58,7 +61,7 @@ opposite order:
 Both are right; the products on disk agree with each. Before this file existed,
 one number was recorded per (target, proposal) — the NIRCam one — and the merge
 used it for MIRI filters too. A Brick F2550W merge therefore looked for
-`jw02221-o001*f2550w*i2d.fits`, found none of the 34 files that are named
+`jw02221-o001*f2550w*i2d.fits`, found none of the 17 files named
 `jw02221-o002`, and quietly fell back to a less accurate WCS instead of
 stopping.
 
@@ -95,11 +98,20 @@ you edited the source. Nothing checked that they agreed, and they had drifted:
 Each of those is a way for two hand-maintained copies of one fact to disagree,
 and each degraded quietly rather than stopping.
 
-## What it does not replace
+## What this does not replace
 
-`ALIGNMENT_CONFIG` in `jwst_gc_pipeline/reduction/alignment_config.py` stays
-where it is. It is already one typed registry with its own tests, and it
-describes how a field is aligned rather than what a field is.
+Four lists outside the three pipeline stages still name targets. A new field
+reaches them only if you use the tool that reads them.
+
+| where | list | what it duplicates |
+|---|---|---|
+| `reduction/alignment_config.py` | `ALIGNMENT_CONFIG` | nothing — it describes how a field is *aligned*, not what a field is, and is already one typed registry with its own tests |
+| `scripts/release/stage_release.py` | `FIELDS` | the data directory and observation prefixes |
+| `photometry/make_starless_image.py` | `TARGETS` | the base path and filter list |
+| `reduction/build_virac2_offsets.py` | `REGION` | the base path |
+
+The last three are worth folding in next; each is a place two copies of one
+fact can drift apart, which is what this change is about.
 
 `jwst_gc_pipeline/reduction/make_merged_psf.py` keeps its own out-of-date copies.
 It is deprecated and scheduled for removal; nothing imports it.

@@ -60,15 +60,17 @@ def test_wd1_and_wd2_are_on_orange():
 # Equivalence with what the pipeline used to hold.
 # --------------------------------------------------------------------------
 
-#: The (target, proposal) pairs whose obsid the registry supplies and the old
-#: `project_obsnum` did not, plus the one it drops.  Each is a decision.
+#: How the NIRCam `project_obsnum` view differs from the old dictionary.  Each
+#: entry is a decision, not a diff nobody read.  cloudc/2526 is absent from this
+#: list on purpose: it is MIRI-only, so it has no NIRCam number -- the merge
+#: reaches it through `glob_obsid(..., 'miri')` instead.
 OBSNUM_CHANGES = {
-    # Was absent, so a cloudc 2526 merge raised KeyError('2526').  The
-    # observation is real: 2526 obs 021, MIRI F770W, target 'G0'.
-    ('cloudc', '2526'): '021',
     # w51 has no 1182 data on disk and no 1182 filters, so no merge could ever
     # reach this; it was never observed.
     ('w51', '1182'): None,
+    # omegacen is in the reduce driver's map and had no merge entry at all.
+    ('omegacen', '8322'): '001',
+    ('omegacen', '12587'): '001',
 }
 
 
@@ -113,6 +115,13 @@ def test_project_obsnum_matches_apart_from_the_listed_changes():
         for proposal, obsid in per_proposal.items():
             expected = OBSNUM_CHANGES.get((target, proposal), obsid)
             assert view.get(target, {}).get(proposal) == expected, (target, proposal)
+
+    # And nothing appeared that neither the old dictionary nor the list above
+    # accounts for -- checking only the listed pairs would let a spurious extra
+    # entry through.
+    extra = {(t, p) for t, d in view.items() for p in d
+             if p not in todays.get(t, {})} - set(OBSNUM_CHANGES)
+    assert not extra, f'undeclared project_obsnum entries: {sorted(extra)}' 
 
 
 def test_nvisits_is_the_transpose_and_keeps_its_values():
@@ -280,3 +289,79 @@ def test_no_module_keeps_its_own_copy(module, name):
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     with open(os.path.join(root, module)) as fh:
         assert name not in fh.read(), f'{module} still defines {name}'
+
+
+# --------------------------------------------------------------------------
+# Findings from the adversarial review of this change.
+# --------------------------------------------------------------------------
+
+def test_the_registry_import_is_not_shadowed_by_a_local_variable():
+    """Every driver has a local `fields` (the --field list).  Importing the
+    module under that name made `fields.field_to_reg_mapping` an
+    AttributeError on a list, at startup, in all three reduce drivers."""
+    import ast
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    for module in ('jwst_gc_pipeline/reduction/PipelineRerunNIRCAM-LONG.py',
+                   'jwst_gc_pipeline/reduction/PipelineMIRI.py',
+                   'jwst_gc_pipeline/reduction/PipelineRerunNIRISS.py',
+                   'jwst_gc_pipeline/photometry/crowdsource_catalogs_long.py',
+                   'jwst_gc_pipeline/photometry/merge_catalogs.py'):
+        tree = ast.parse(open(os.path.join(root, module)).read())
+        imported = {alias.asname or alias.name
+                    for node in ast.walk(tree)
+                    if isinstance(node, ast.ImportFrom) and node.module == 'jwst_gc_pipeline'
+                    for alias in node.names if alias.name == 'fields'}
+        assigned = {t.id for node in ast.walk(tree)
+                    if isinstance(node, ast.Assign)
+                    for t in node.targets if isinstance(t, ast.Name)}
+        assert not (imported & assigned), (
+            f'{module} imports the registry as {sorted(imported & assigned)} '
+            f'and also assigns that name')
+
+
+def test_cloudef_keeps_its_miri_observations():
+    """Present in the catalog driver's copy of the map, absent from the reduce
+    driver's -- which is the copy this registry was generated from."""
+    assert F.field_to_reg_mapping('2092', 'miri') == {
+        '004': 'cloudef', '006': 'cloudef', '008': 'cloudef'}
+
+
+@pytest.mark.parametrize('proposal,token,target', [
+    ('5365', '002-998', 'sgrb2'),
+    ('3958', '001-002', 'sickle'),
+])
+def test_joint_observations_survive(proposal, token, target):
+    """Both halves tile one field; cataloging either alone builds half a
+    mosaic."""
+    assert F.field_to_reg_mapping(proposal, 'miri')[token] == target
+    assert F.default_field_token(target, proposal, 'miri') == token
+
+
+def test_the_default_field_prefers_the_joint_token():
+    """It used to come from whichever key an inverted dict happened to keep."""
+    assert F.default_field_token('sgrb2', '5365', 'miri') == '002-998'
+    assert F.default_field_token('sickle', '3958', 'nircam') == '001'
+
+
+def test_a_proposal_cannot_have_two_reference_catalogs(monkeypatch):
+    """The frame token names the offsets table, which is per proposal, so two
+    fields sharing a proposal must agree rather than one winning silently."""
+    other = F.Field('other', root='orange', observations=(
+        F.Obs(proposal='2221', reference_catalog='Gaia'),))
+    monkeypatch.setattr(F, 'FIELDS', F.FIELDS + (other,))
+    with pytest.raises(F.FieldRegistryError, match='more than one reference catalog'):
+        F.reference_catalog('2221')
+
+
+def test_a_registry_loaded_from_elsewhere_uses_its_own_roots(tmp_path):
+    raw = {'roots': {'orange': '/somewhere/else'},
+           'fields': {'x': {'root': 'orange'}}}
+    _, loaded = _reload_from(tmp_path, raw)
+    assert loaded[0].basepath == '/somewhere/else/x/'
+
+
+def test_an_obs_built_by_hand_has_working_defaults():
+    """The dict fields defaulted to (), so glob_obsid raised AttributeError on
+    any Obs not built by the loader."""
+    assert F.Obs(proposal='9999').glob_obsid() is None

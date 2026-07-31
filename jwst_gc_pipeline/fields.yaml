@@ -79,8 +79,10 @@ fields:
         reference_catalog: VIRAC2
         obsids:
           nircam: ['002', '005']
+          miri: ['004', '006', '008']
         glob_obsid:
           nircam: '*'
+          miri: '*'
         filters: [f162m, f210m, f360m, f480m, f770w, f2100w]
 
   gc2211:
@@ -176,15 +178,19 @@ fields:
   sgrb2:
     root: orange
     fov_region: regions_/nircam_sgrb2_fov.reg
-    # MIRI FOV region recorded as 'nope' before this file existed;
-    # the MIRI driver reads fov_region and finds none.
+    # A MIRI FOV region was recorded as the string 'nope' before this file
+    # existed.  Only the NIRCam driver reads fov_region, so it was never used.
     observations:
       '5365':
         nvisits: 1
         reference_catalog: VIRAC2
         obsids:
           nircam: ['001']
+          # 002 and 998 ('..._skipped_redo') tile the full field between them.
           miri: ['001', '002', '998']
+        # Both must be cataloged together or the mosaic is missing half its data.
+        joint_obsids:
+          miri: ['002-998']
         filters: [f150w, f182m, f187n, f210m, f212n, f300m, f360m, f405n, f410m, f466n, f480m, f770w, f1280w, f2550w]
 
   sgrc:
@@ -210,6 +216,10 @@ fields:
         obsids:
           nircam: ['001', '002', '007']
           miri: ['001', '002']
+        # Both MIRI observations are cataloged in one run; this token names that
+        # run, and get_filenames globs both.
+        joint_obsids:
+          miri: ['001-002']
         glob_obsid:
           nircam: '*'
         filters: [f187n, f210m, f335m, f470n, f480m, f770w, f1130w, f1500w]
@@ -217,8 +227,8 @@ fields:
   w51:
     root: orange
     fov_region: regions_/nircam_w51_fov.reg
-    # MIRI FOV region recorded as 'nope' before this file existed;
-    # the MIRI driver reads fov_region and finds none.
+    # A MIRI FOV region was recorded as the string 'nope' before this file
+    # existed.  Only the NIRCam driver reads fov_region, so it was never used.
     observations:
       '6151':
         nvisits: 2

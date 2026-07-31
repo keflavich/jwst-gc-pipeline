@@ -38,21 +38,23 @@ from jwst_gc_pipeline.photometry.naming import (
 )
 from jwst_gc_pipeline.photometry.measure_offsets import (
     assert_sparse_reference_for_nn_median)
-from jwst_gc_pipeline import fields
+# Imported as field_registry: `fields` is a local variable in these
+# drivers (the --field list), and shadowed the module.
+from jwst_gc_pipeline import fields as field_registry
 
 filternames = filternames_narrow = ['f410m', 'f212n', 'f466n', 'f405n', 'f187n', 'f182m']
 
 # Every registry that used to live here is now one YAML file: see
 # jwst_gc_pipeline/fields.yaml and docs/FIELDS.md.  Adding a target is an edit
 # to that file alone.
-obs_filters = fields.obs_filters()
+obs_filters = field_registry.obs_filters()
 
 # NIRISS filter sets, keyed by target.  NIRISS shares filter names with NIRCam,
 # so its filters cannot live in the shared ``obs_filters`` map (a NIRCam sgrc
 # cross-band merge must NOT pull in the NIRISS f200w/f356w/f158m catalogs, which
 # live under <target>/niriss/).  Selected at runtime by _obs_filters_for() when
 # the process instrument override is NIRISS.
-obs_filters_niriss = fields.obs_filters('niriss')
+obs_filters_niriss = field_registry.obs_filters('niriss')
 
 
 # Per-frame catalog suffix written by each photometry method.
@@ -83,15 +85,30 @@ def _run_merge(merge_func, label, on_error, **kwargs):
         print(f'{label}: skipped ({type(ex).__name__}: {ex})', flush=True)
 
 
+def _obsid_for_glob(target, proposal, filtername):
+    """The observation number to build an i2d filename from, for this filter.
+
+    Instrument-aware: proposal 2221 numbers its NIRCam and MIRI pointings of
+    brick and cloudc in opposite order, so one number per (target, proposal)
+    can only ever be right for one of them.  Before this was wired up, a Brick
+    F2550W merge globbed the NIRCam number, matched none of the MIRI files, and
+    fell back to a less accurate WCS with only a printed warning.
+
+    ``None`` when that instrument did not observe the field under that
+    proposal, which callers skip rather than interpolate.
+    """
+    return field_registry.glob_obsid(target, proposal, _inst_token(filtername))
+
+
 def individual_frame_merge_jobs(target):
     """The (program, filter) pairs to merge.  Task *n* of the SLURM array runs
-    entry *n*, so the order is derived in fields.merge_jobs rather than taken
+    entry *n*, so the order is derived in field_registry.merge_jobs rather than taken
     from the order anything was written down in."""
     from jwst_gc_pipeline.photometry.naming import _instrument_override
     instrument = 'niriss' if _instrument_override() == 'NIRISS' else 'nircam'
     if instrument == 'niriss' and target not in obs_filters_niriss:
         instrument = 'nircam'
-    return fields.merge_jobs(target, instrument)
+    return field_registry.merge_jobs(target, instrument)
 
 
 def _obs_filters_for(target):
@@ -102,7 +119,7 @@ def _obs_filters_for(target):
         return obs_filters_niriss[target]
     return obs_filters.get(target)
 
-project_obsnum = fields.project_obsnum()
+project_obsnum = field_registry.project_obsnum()
 
 
 def getmtime(x):
@@ -1394,8 +1411,9 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
     imgfns = [x
               for obsid in _obs_filters_for(target)
               for filn in _obs_filters_for(target)[obsid]
+              if _obsid_for_glob(target, obsid, filn) is not None
               for x in glob.glob(f"{basepath}/{filn.upper()}/pipeline/"
-                                 f"jw0{obsid}-o{project_obsnum[target][obsid]}_t001_{_inst_token(filn)}*{filn.lower()}*{module}_i2d.fits")
+                                 f"jw0{obsid}-o{_obsid_for_glob(target, obsid, filn)}_t001_{_inst_token(filn)}*{filn.lower()}*{module}_i2d.fits")
               if f'{module}_' in x or f'{module}1_' in x
              ]
 
@@ -1613,8 +1631,9 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
                       flush=True)
                 continue
         _proj = _project_for_target_filter(target, filn)
-        _img_matches = [x for x in glob.glob(
-            f"{basepath}/{filn.upper()}/pipeline/jw0{_proj}-o{project_obsnum[target][_proj]}"
+        _obsid = _obsid_for_glob(target, _proj, filn)
+        _img_matches = [] if _obsid is None else [x for x in glob.glob(
+            f"{basepath}/{filn.upper()}/pipeline/jw0{_proj}-o{_obsid}"
             f"_t001_{_inst_token(filn)}*{filn.lower()}*{module}_i2d.fits")
             if f'{module}_' in x or f'{module}1_' in x]
         if not _img_matches:
@@ -2850,7 +2869,7 @@ def main():
             "astrometry rule #1 forbids.  Build reference catalogs with "
             "make_reference_from_pipeline_catalogs.py instead.")
 
-    basepath = fields.basepath(target)
+    basepath = field_registry.basepath(target)
 
     def read_offsets_table(progid):
         """The measured offsets for one proposal, or None.
@@ -2858,7 +2877,7 @@ def main():
         Read here rather than up front: it is one field's file, and reading it
         eagerly made every run of every target depend on it.
         """
-        path = fields.offsets_table_path(target, progid)
+        path = field_registry.offsets_table_path(target, progid)
         return None if path is None else Table.read(path)
 
     module = modules[0]

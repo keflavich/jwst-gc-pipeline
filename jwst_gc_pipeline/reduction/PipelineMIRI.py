@@ -70,7 +70,9 @@ print(jwst.__version__)
 
 # Registered in jwst_gc_pipeline/fields.yaml -- the one place a target is
 # declared.  See docs/FIELDS.md.
-from jwst_gc_pipeline import fields
+# Imported as field_registry: `fields` is a local variable in these
+# drivers (the --field list), and shadowed the module.
+from jwst_gc_pipeline import fields as field_registry
 
 # Reference catalog configuration by proposal and field.
 # Paths are relative to basepath.
@@ -319,7 +321,7 @@ def main(filtername, Observations=None, regionname='brick',
 
     wavelength = int(filtername[1:4])
 
-    basepath = fields.basepath(regionname)
+    basepath = field_registry.basepath(regionname)
     fwhm_tbl = Table.read(f'{basepath}/reduction/fwhm_table.ecsv')
     row = fwhm_tbl[fwhm_tbl['Filter'] == filtername]
     fwhm = fwhm_arcsec = float(row['PSF FWHM (arcsec)'][0])
@@ -876,7 +878,7 @@ if __name__ == "__main__":
     # sickle.  Only 3958 obs 001/002 belong to the sickle.  Route o003 to the
     # brick/ tree so its images + catalogs land under /orange/.../jwst/brick/
     # and never clash with sickle/ products (which share the 3958 program id).
-    field_to_reg_mapping = fields.field_to_reg_mapping(proposal_id, 'miri')
+    field_to_reg_mapping = field_registry.field_to_reg_mapping(proposal_id, 'miri')
 
     for field in fields:
         for filtername in filternames:

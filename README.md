@@ -24,7 +24,7 @@ modeling, paper figures) remains in `brick2221`.
     generic catalog matching)
   - `saturated_star_finding.py` — PSF fitting and removal of saturated stars
   - `filtering.py` — filter / FWHM / instrument utilities
-  - `make_merged_psf.py` — gridded PSF construction
+  - `make_merged_psf.py` — gridded PSF construction (deprecated; scheduled for removal)
   - `merge_a_plus_b.py`, `realign_and_merge.py` — module merging and
     reprojection helpers
   - `run_notebook.py` — utilities
