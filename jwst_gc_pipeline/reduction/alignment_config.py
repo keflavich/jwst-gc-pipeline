@@ -72,7 +72,8 @@ __all__ = [
     'ANY', 'VIRAC2', 'GAIA', 'GNS',
     'TABLE_LOCKED', 'TABLE_CONSENSUS', 'RECORDED_BULK',
     'BulkEntry', 'FieldAlignment', 'resolve', 'lookup_recorded_bulk',
-    'ALIGNMENT_CONFIG',
+    'ALIGNMENT_CONFIG', 'offsets_channel', 'offsets_table_path',
+    'CHANNEL_LOCKED', 'CHANNEL_CONSENSUS', 'CHANNEL_NONE',
 ]
 
 #: Wildcard for a ``recorded_bulk`` key component (matches any visit / filter).
@@ -380,3 +381,53 @@ def lookup_recorded_bulk(cfg: FieldAlignment, visit, filtername):
             return entry.dra / 1000.0 / cosd, entry.ddec / 1000.0, True
         return entry.dra, entry.ddec, True
     return 0.0, 0.0, False
+
+
+#: Offsets-table channel names.  ``'none'`` means the field takes no
+#: table-driven correction at all, so writing one would produce a table nothing
+#: reads.
+CHANNEL_LOCKED = 'locked'
+CHANNEL_CONSENSUS = 'consensus'
+CHANNEL_NONE = 'none'
+
+
+def offsets_channel(proposal_id, field):
+    """Which offsets table m2 REWRITES for this field: ``'locked'`` /
+    ``'consensus'`` / ``'none'``.
+
+    This is the single answer to "which file changes when the checkpoint
+    corrects this field", and every consumer must ask it rather than guessing
+    from what happens to exist on disk.  Guessing has now failed twice: first a
+    hardcoded ``_consensus.csv`` (missed every locked field), then a
+    locked-before-consensus preference order (missed cloudef obs002, whose bulk
+    is a recorded constant but whose per-exposure jitter is written to
+    ``_consensus.csv`` -- while a stale ``_VIRAC2locked.csv`` sat beside it and
+    won the preference).  Both produced the same silent symptom: the re-tie loop
+    watched a file nobody wrote, saw no change, and stopped.
+    """
+    cfg = resolve(proposal_id, field)
+    if cfg is None:
+        return CHANNEL_NONE
+    if cfg.source == TABLE_CONSENSUS:
+        return CHANNEL_CONSENSUS
+    if cfg.source == TABLE_LOCKED:
+        return CHANNEL_LOCKED
+    if cfg.source == RECORDED_BULK:
+        # bulk is a constant; only the per-exposure term is table-driven
+        return CHANNEL_CONSENSUS if cfg.consensus_jitter else CHANNEL_NONE
+    return CHANNEL_NONE
+
+
+def offsets_table_path(basepath, proposal_id, field):
+    """Absolute path of the offsets table m2 rewrites, or ``''`` for ``'none'``.
+
+    Existence is deliberately NOT checked: on the first re-tie iteration the
+    table does not exist yet, and "absent now, written by the checkpoint" is
+    exactly the transition callers need to observe.
+    """
+    ch = offsets_channel(proposal_id, field)
+    if ch == CHANNEL_LOCKED:
+        return f'{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_VIRAC2locked.csv'
+    if ch == CHANNEL_CONSENSUS:
+        return f'{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_consensus.csv'
+    return ''

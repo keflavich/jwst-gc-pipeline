@@ -48,32 +48,35 @@ BASE=${BASE:-/orange/adamginsburg/jwst/${TARGET}}
 ASTROM_M2_CORRECTION_FLOOR_MAS=${ASTROM_M2_CORRECTION_FLOOR_MAS:-0}
 export ASTROM_M2_CORRECTION_FLOOR_MAS
 # Which offsets table does m2 REWRITE for this field?  The before/after md5sum
-# check below is only meaningful against that one file.
+# check below is only meaningful against that one file, and the answer depends on
+# the field's CONFIGURED CHANNEL -- not on which tables happen to exist.
 #
-# A hardcoded "_consensus.csv" missed every VIRAC2locked-style field (sgrc,
-# cloudc, cloudef, sgrb2, quintuplet, gc2211): the check compared two
-# nonexistent paths, both "none", so the loop concluded the table "did NOT
-# change" and aborted after iter 1 even when the correction had been applied.
+# Guessing has failed twice.  A hardcoded "_consensus.csv" missed every locked
+# field (sgrc, cloudc, sgrb2, quintuplet, gc2211).  A locked-before-consensus
+# preference order then missed cloudef obs002, whose bulk is a recorded constant
+# but whose per-exposure jitter the checkpoint writes to "_consensus.csv" -- a
+# stale "_VIRAC2locked.csv" sat beside it and won the preference.  Both produced
+# the same silent symptom: watch a file nobody writes, see no change, stop with
+# "this is NOT a checkpoint re-tie" while the correction had in fact been made.
 #
-# The two names below are the same pair alignment_config.py distinguishes
-# (TABLE_LOCKED -> _VIRAC2locked.csv, TABLE_CONSENSUS -> _consensus.csv); keep
-# them in step with it.  An explicit preference order rather than a glob,
-# because an offsets directory holds INPUT tables too and they sort first:
-# gc2211 has 15 "_GNS_perexp_<obs>_<filter>.csv" beside the real one and brick
-# has a dozen "_F###ref*"/"_VIRAC2frame*", so `ls ... | head -1` picks a file
-# m2 never rewrites -- the hash then never changes and the same misleading
-# "did NOT change" abort fires, just for a different reason.
-#
-# Neither name present (or a field that uses some third table): set OFFSETS_TBL
-# explicitly.
+# alignment_config.offsets_table_path is the single source of truth, and it is
+# what cataloging's own _astrom_offsets_channel delegates to.  OFFSETS_TBL
+# overrides it for a field that uses some third table.
 CONSENSUS_TBL="${OFFSETS_TBL:-}"
 if [ -z "$CONSENSUS_TBL" ]; then
-    for _cand in "${BASE}/offsets/Offsets_JWST_Brick${PROPOSAL}_VIRAC2locked.csv" \
-                 "${BASE}/offsets/Offsets_JWST_Brick${PROPOSAL}_consensus.csv"; do
-        [ -f "$_cand" ] && { CONSENSUS_TBL="$_cand"; break; }
-    done
+    CONSENSUS_TBL=$(PYTHONPATH="${PIPE_ROOT:-}:${PYTHONPATH:-}" python -c "
+from jwst_gc_pipeline.reduction.alignment_config import offsets_table_path
+print(offsets_table_path('$BASE', '$PROPOSAL', '$FIELD'))" 2>/dev/null)
 fi
-CONSENSUS_TBL="${CONSENSUS_TBL:-${BASE}/offsets/Offsets_JWST_Brick${PROPOSAL}_consensus.csv}"
+if [ -z "$CONSENSUS_TBL" ]; then
+    echo "REFUSING: alignment_config declares no table-driven correction channel for"
+    echo "  proposal=$PROPOSAL field=$FIELD.  The m2 checkpoint cannot record a"
+    echo "  correction for this field, so a re-tie loop can never converge."
+    echo "  Add an entry to jwst_gc_pipeline/reduction/alignment_config.py, or set"
+    echo "  OFFSETS_TBL explicitly if it uses some other table."
+    exit 2
+fi
+echo "offsets table watched for changes: $CONSENSUS_TBL"
 
 read -r -a _FA <<< "$FILTERS"
 NF=${#_FA[@]}
