@@ -1,7 +1,7 @@
 # Versioning, Provenance & Rerun-Skip — design + operating instructions
 
 **Goal:** strong provenance for every pipeline product *and* efficient runs that
-skip the computationally expensive steps that provably don't need to re-run.
+skip the computationally expensive steps that are provably unaffected.
 
 This document is the authority for the tag scheme, the per-product provenance
 record, and the rules that decide whether a stage must be re-run. The tooling
@@ -44,11 +44,11 @@ any shift there (`astrometry_checkpoint.CORRECTION_STAGES = m1/m2/m12`).
 
 ---
 
-## 2. Per-facet fingerprints (why we don't hash "the file")
+## 2. Per-facet fingerprints (why we hash by facet)
 
-The re-run decision is not "did the product change" but "**which facet** changed",
-because different facets permit different, cheaper actions. Every product carries
-three independent, header-decoupled output hashes (`fingerprint.facet_hashes`):
+The re-run decision turns on "**which facet** changed", because different facets
+permit different, cheaper actions. Every product carries three independent,
+header-decoupled output hashes (`fingerprint.facet_hashes`):
 
 | Facet       | Hash over…                                            | A change here means… |
 |-------------|-------------------------------------------------------|----------------------|
@@ -56,10 +56,9 @@ three independent, header-decoupled output hashes (`fingerprint.facet_hashes`):
 | `wcs_hash`  | canonicalized WCS cards incl. `RAOFFSET`/`DEOFFSET`   | astrometric solution moved → maybe only refresh RA/Dec |
 | `meta_hash` | remaining header cards (WCS + volatile stamps excluded)| header-only → re-stamp, recompute nothing |
 
-Byte-identity of `data_hash` is the mechanism the repo lacked: staleness used to
-be judged from mtime + generation stamps, never content. Now, after a jwst/CRDS
-re-reduction, if the re-drizzled SCI is **byte-identical**, cataloging is proven
-unnecessary — decided, not guessed.
+Byte-identity of `data_hash` judges staleness from content; earlier tooling judged
+it from mtime + generation stamps. So after a jwst/CRDS re-reduction, a
+**byte-identical** re-drizzled SCI proves cataloging can be skipped.
 
 The **input** side of each stage is fingerprinted too:
 
@@ -69,8 +68,7 @@ The **input** side of each stage is fingerprinted too:
   (`fingerprint.STAGE_CODE_FILES`). Deliberately coarse: cataloging stages share
   one file-set, so a cataloging-code change forces m12 to *recompute* and the
   resulting `data_hash` comparison prunes whether m3+ actually change. Coarse
-  input hashes only ever cost the owning stage's compute, never a spurious
-  full-cascade.
+  input hashes cost at most the owning stage's compute.
 * `params` — the non-volatile CLI/options (`fingerprint.params_hash`; job name /
   worker count / paths excluded).
 * `upstream` — the upstream stage's output facet hashes (this is how the cascade
@@ -90,8 +88,8 @@ even if the sidecar is lost.
   number, annotated tag on the merge commit. Created by
   `.github/workflows/tag-on-merge.yml`.
 * **Dev tag** (untagged or dirty tree): `YYYY-MM-DD_PR<n>_<shortcommit>[-dirty]`
-  — the nearest release tag's lineage + this commit. A dev product can never be
-  mistaken for a release product.
+  — the nearest release tag's lineage + this commit. A dev product is always
+  distinguishable from a release product.
 
 `tags.get_pipeline_tag()` resolves the current tag; every stage stamps it as
 `GCTAG` (extending the existing `GCPIPEV` raw-commit stamp in
@@ -112,9 +110,9 @@ only on tagged versions** — this is the mechanism that enforces it.
 
 The guard is called at exactly two points — the `__main__`/`main()` CLI entries
 of `PipelineRerunNIRCAM-LONG.py` (imaging) and `crowdsource_catalogs_long.py`
-(cataloging). It is **not** called inside `run_manual_pipeline`, the cutout
-sub-runs, or any importable helper, so importing these modules (tests, notebooks,
-programmatic callers) never trips it.
+(cataloging). Everything importable — `run_manual_pipeline`, the cutout sub-runs,
+the helpers — runs free of it, so tests, notebooks and programmatic callers work
+as usual.
 
 #### ⚠️ Rollout (do this in the same change that merges the guard)
 
@@ -148,8 +146,9 @@ tagged checkout). A hand-launched command must do the same.
 * `SKIP` — reuse the recorded product.
 * `RESTAMP` — only re-write the header stamp.
 * `REPROJECT` — refresh `x,y → ra,dec` on the existing catalog
-  (`astrometry_utils.reproject_xy_to_world`); **no PSF fit**. Valid because the
-  cataloging fits are done in detector (x,y) space with `group=False`, so
+  (`astrometry_utils.reproject_xy_to_world`); **the existing fit is reused**.
+  Valid because the cataloging fits are done in detector (x,y) space with
+  `group=False`, so
   `x_fit`/`y_fit` are generation-invariant — only the sky projection is stale.
 * `REFIT` — re-run this cataloging stage's fit (and, by the cascade, all later
   stages).
@@ -169,9 +168,8 @@ A WCS-only change (data identical) has two legitimate, distinct intents:
 * **`reseed`**: you are *re-tying* the astrometry at m12 and want the fits redone
   from the corrected seeds. → `REFIT` from m12, full cascade.
 
-`rerun plan --wcs-change-mode {posthoc,reseed}` selects. The engine cannot infer
-intent, so it defaults to the cheap, common case and makes the expensive one
-explicit.
+`rerun plan --wcs-change-mode {posthoc,reseed}` selects. The operator supplies the
+intent: the default is the cheap, common case, and the expensive one is explicit.
 
 ---
 
@@ -252,7 +250,7 @@ plan = rerun.plan_from_records(recorded_map, current_map)   # cascaded
   `pool_facets` over the per-exposure `_crf` sidecars for that (module, filter)
   — the per-band catalogs pool their own frames, m7/m8 pool across all filters.
   So a re-reduced frame (changed crf `data` facet) now forces a downstream
-  `REFIT` through the **pure sidecar** path too, not only through `plan --field`.
+  `REFIT` through the **pure sidecar** path as well as through `plan --field`.
   (Fail-soft: if a crf sidecar is absent, that parent is simply omitted.)
 * **PR4 — `plan` field locator.** (this PR, WIP.) `rerun plan --field/--proposal`
   locates each stage's product(s) by the naming conventions, reads the recorded

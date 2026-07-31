@@ -53,17 +53,17 @@ Expand `photometry/naming.py`, route through it.
 no-silent-frame-drops + collision guard, resolve_max_group_size, _max_r_for_source tiers,
 ERR/data shape-mismatch trim, _filter_to_wavelength specials.
 
-## Phase 3 — STScI / library redundancy  [STATUS: WCS items CLOSED — not redundant]
-**RESOLVED 2026-06-18 against latest origin/main.** The audit's WCS findings were wrong;
-they predated `reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md` (added this morning), which
-documents the WCS flow as deliberate, correct design:
-- `sync_gwcs_to_fits_wcs` is NOT replaceable by `adjust_wcs`: adjust_wcs's own docstring says
-  it is "not designed to handle GWCS of resampled images." STScI provides no resampled-i2d WCS
-  shifter; the hand-built FITSImagingWCSTransform is the minimal supported path (<0.01 mas,
+## Phase 3 — STScI / library redundancy  [STATUS: WCS items CLOSED]
+**RESOLVED 2026-06-18 against latest origin/main.**
+`reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md` documents the WCS flow as deliberate,
+correct design:
+- `sync_gwcs_to_fits_wcs` stays: adjust_wcs's own docstring says it is "not designed to
+  handle GWCS of resampled images", and STScI provides no resampled-i2d WCS shifter, so the
+  hand-built FITSImagingWCSTransform is the minimal supported path (<0.01 mas,
   idempotent). Doc already says "if a future jwst/gwcs ships one, replace it."
 - `fix_alignment` FITS+GWCS double-write and the skipped TweakRegStep are the deliberate
   two-authoring-points / no-double-correction design.
-So: NOTHING to change for WCS.
+So: keep the WCS code as it stands.
 
 Tier 1 (WCS): CLOSED — deliberate design, see the flow doc.
 - `reduction/align_to_catalogs.py:312-465` `realign_to_catalog` + `photometry/measure_offsets.py`
@@ -82,7 +82,7 @@ Tier 2 (mechanical, low risk):
 - `PipelineRerunF212N.py:98-128` DQ bit decomp → `stdatamodels.dqflags.dqflags_to_mnemonics`
   (skip if file deleted in Phase 0).
 
-Tier 3 (background/stats, medium, research-tuned — careful, not bit-identical):
+Tier 3 (background/stats, medium, research-tuned — careful, these swaps shift values):
 - `filtering.py:120-285,488-500` → `photutils.Background2D` + `MADStdBackgroundRMS`.
 - `destreak.py:36-95` → `Background2D`.
 - `make_starless_image.py` infill/stamp/annulus → astropy.convolution + photutils apertures.
@@ -167,12 +167,12 @@ is genuinely shared and stays active.
   mutable global write (`_SUPPRESS_DIAGNOSTICS`) targets `_host` so the host's
   catalog_zoom_diagnostic sees it.
 - [x] Host `crowdsource_catalogs_long.py` 6365 → 3850 lines (−2515). Active CLI `main` stays;
-  its two legacy call sites lazily `from ...legacy.crowdsource_step import ...` (no import cycle).
+  its two legacy call sites lazily `from ...legacy.crowdsource_step import ...` (avoids an import cycle).
 - [x] Tests repointed: integration test alias L → legacy module; the 4 moved-helper test classes
   → `CS` (legacy), host-helper tests keep `L` (host).
 - [x] Full photometry suite: 116 passed.
-- [ ] FOLLOW-UP (optional, cleaner): the legacy module relies on namespace injection rather than
-  explicit imports; could be tidied to explicit `from host import (...)` later. And the shared
+- [ ] FOLLOW-UP (optional, cleaner): the legacy module relies on namespace injection; could be
+  tidied to explicit `from host import (...)` later. And the shared
   helpers still physically live in crowdsource_catalogs_long (fine — active path imports them).
 
 NEXT (one focused mechanical step, manifest below → `legacy/crowdsource_step.py`):

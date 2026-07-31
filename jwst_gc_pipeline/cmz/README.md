@@ -7,7 +7,7 @@ Growing two-color HiPS + shareable giant catalog. Implements
 (red)** — both CMZ-wide with program 10678; **F405N is a legacy per-field
 fallback** where a field predates F480M coverage.
 
-## Layers (complementary, not alternatives)
+## Layers (complementary)
 
 | Need | Module | Tool | Dep |
 |---|---|---|---|
@@ -15,7 +15,7 @@ fallback** where a field predates F480M coverage.
 | growing color mosaic (**incremental, pure-Python**) | `hips` | `reproject.hips` + Pillow | `reproject`, `Pillow` |
 | WHERE data is (footprint) | `coverage_moc` | `mocpy` | `mocpy` |
 | ANALYSE / cross-match at scale | `hats_export` | `hats-import` + LSDB | `hats-import` |
-| VIEW catalog in Aladin | `hipsgen.build_catalog_hips` | `Hipsgen-cat.jar` (only piece with no pure-Python equivalent) | Java + jar |
+| VIEW catalog in Aladin | `hipsgen.build_catalog_hips` | `Hipsgen-cat.jar` (the one Java-only piece) | Java + jar |
 
 `hipsgen.py` (Java) is **optional** — used for the progressive catalog HiPS, or as
 an alternative image builder if you specifically want CDS Hipsgen.
@@ -48,7 +48,7 @@ PY
 # 4. HATS for LSDB (scalable) — analysis/cross-match
 python -m jwst_gc_pipeline.cmz.hats_export --parquet cmz_catalog.parquet \
        --out hats/ --name cmz_jwst
-# Catalog HiPS for Aladin (the one Java piece; no pure-Python generator exists):
+# Catalog HiPS for Aladin (the one Java piece):
 #   export HIPSGENCAT_JAR=/path/Hipsgen-cat.jar
 #   python -c "from jwst_gc_pipeline.cmz import hipsgen; \
 #              hipsgen.build_catalog_hips('cmz_catalog.fits','HiPS/cmz_cat')"
@@ -59,8 +59,8 @@ python -m jwst_gc_pipeline.cmz.hats_export --parquet cmz_catalog.parquet \
 `add_field_to_mono_hips` builds the new field's HiPS in scratch and
 `merge_hips_trees` folds it into the master **per order** (nan-aware combine).
 reproject.hips already writes a correct all-order pyramid per field, so the merge
-does **no** pyramid re-derivation (hence no HEALPix orientation math) and rewrites
-only the master tiles the field overlaps. `derive_two_color_hips` is per-tile over
+is a plain per-order tile combine (HEALPix orientation stays inside reproject) and
+rewrites only the master tiles the field overlaps. `derive_two_color_hips` is per-tile over
 the shared tiles — cheap to re-derive at any stretch.
 
 ## Provenance

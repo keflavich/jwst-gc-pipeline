@@ -3,7 +3,7 @@
 Each test here pins a specific bug or defensive code path documented by a
 comment block in the cataloging/merging modules, so parameter tuning and
 refactors can't silently re-introduce a fixed failure. Tests build small
-synthetic inputs (no real survey data, no network).
+synthetic inputs and run offline.
 
 Run the whole suite:
 
@@ -16,7 +16,7 @@ photutils/jwst/crowdsource and is slow (tens of seconds, cold). pytest pays
 each module import once per session.
 
 **Scope of the map below:** it lists the regression tests that pin a specific
-documented comment block. It is **not** an index of the suite — the directory
+documented comment block. The directory
 carries far more tests than appear here (astrometry checkpoints, interframe
 overlap, registration gate, obs-token collisions, satstar gates, …). Use
 `pytest --collect-only -q` for the full list.
@@ -68,7 +68,7 @@ fixture and drive `do_photometry_step` end-to-end.
   the seed-merge + dedup stage.
 - **V12 satstar snap-to-iter2** (the satstar force-union snap in `crowdsource_catalogs_long.py`):
   force-union satstar entries at SW positions must be snapped to the
-  per-filter iter2 position so dedup doesn't keep the unsnapped one.
+  per-filter iter2 position so dedup keeps the snapped one.
 - **Post-fit dedup thresholds** (the post-fit dedup radius in
   `crowdsource_catalogs_long.py`): 0.5→1.5 (2026-04-24, deep negative residuals) then →1.0 px
   (V13, preserve real adjacent stars 3.32 px apart). Needs two-PSF synthetic
@@ -84,4 +84,4 @@ fixture and drive `do_photometry_step` end-to-end.
 - **Memory two-phase refactor** (`merge_catalogs.py::combine_singleframe`) and
   **SeededFinder vectorised-skycoord perf**
   (`crowdsource_catalogs_long.py::SeededFinder`): these
-  are performance/scaling properties, not correctness assertions.
+  are performance/scaling properties.
