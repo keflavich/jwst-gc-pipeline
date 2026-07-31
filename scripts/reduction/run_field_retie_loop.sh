@@ -47,7 +47,18 @@ BASE=${BASE:-/orange/adamginsburg/jwst/${TARGET}}
 # still measuring+recording every residual. Default 0 = strict 2 mas (unchanged).
 ASTROM_M2_CORRECTION_FLOOR_MAS=${ASTROM_M2_CORRECTION_FLOOR_MAS:-0}
 export ASTROM_M2_CORRECTION_FLOOR_MAS
-CONSENSUS_TBL="${BASE}/offsets/Offsets_JWST_Brick${PROPOSAL}_consensus.csv"
+# Detect whichever offsets table the field actually uses -- fields vary between
+# "_consensus.csv" (arches) and "_VIRAC2locked.csv"/other reference-tagged names
+# (sgrc, cloudc, cloudef, sgrb2, quintuplet, ...).  A hardcoded "_consensus.csv"
+# here silently misses every VIRAC2locked-style field: the before/after md5sum
+# check below always compares two nonexistent paths (both "none"), so the loop
+# thinks the table "did NOT change" and aborts after iter 1 even when the
+# correction was applied successfully.  Glob for the bare table instead (exact
+# ".csv" suffix excludes the timestamped ".pre_m2_..."/".pre_rebuild_..." backups).
+# Confirmed necessary + working end-to-end on quintuplet 2026-07-29/30 -- do not
+# drop this back to the hardcoded guess.
+CONSENSUS_TBL=$(ls "${BASE}/offsets/Offsets_JWST_Brick${PROPOSAL}"_*.csv 2>/dev/null | head -1)
+CONSENSUS_TBL="${CONSENSUS_TBL:-${BASE}/offsets/Offsets_JWST_Brick${PROPOSAL}_consensus.csv}"
 
 read -r -a _FA <<< "$FILTERS"
 NF=${#_FA[@]}
