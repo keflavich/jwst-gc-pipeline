@@ -134,8 +134,8 @@ dataset (≈1.0 for brick) would mis-correct the other by 10–20%.
   frame per dataset for the cross-dataset table, no error bars.
 
 **Conclusion:** the departure from size-81 is **dataset/observation-dependent
-beyond `(size, r_core, filter)`**, so the evidence rules out a *universal*
-flux correction (approach 1 as originally scoped). A richer, depth/crowding-aware
+beyond `(size, r_core, filter)`**, so a *universal* flux correction
+(approach 1 as originally scoped) is not supportable on this evidence. A richer, depth/crowding-aware
 correction — and which footprint is truth — stays **open**, pending the controls
 in §7.1.
 
@@ -155,7 +155,7 @@ in §7.1.
    depth/crowding-aware correction worth attempting.
 
 The opt-in `adaptive_fit_shape` (default off) is retained as the astrometry-pass
-lever and to reproduce the A/B.
+lever and to reproduce the A/B.  It is not recommended for photometry.
 
 Net: the decoupling exists and position is cheap; saturated-star **flux** needs
 the full box until a dataset-aware correction is validated.

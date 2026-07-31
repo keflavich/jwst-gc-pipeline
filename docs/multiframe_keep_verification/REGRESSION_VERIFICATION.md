@@ -16,8 +16,9 @@ the deep coadd is *worse*, 43%, from crowding), but the first extended-emission
 vetting then drops faint *detected* stars (completeness 0.64 → 0.42). Hosek keeps
 those faint marginal stars via `ndet≥3`; we were dropping them per-vetting on
 single-catalog `qfit`/`snr`. This change recovers the survival loss. The ~32% of
-Hosek missed entirely (faint / crowded / spike-blocked) is the detection floor,
-covered by the remaining-miss anatomy at the end.
+Hosek missed entirely (faint / crowded / spike-blocked) is the detection floor.
+The remaining-miss anatomy at the end characterises it; recovering it is outside
+this change.
 
 The fix (opt-in, default OFF): keep any source with `nmatch ≥ N` and
 `qfit ≤ cap`, regardless of the qfit/snr cuts. An optional position-stability

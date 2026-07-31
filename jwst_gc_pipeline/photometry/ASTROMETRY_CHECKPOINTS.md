@@ -46,7 +46,11 @@ cross-filter" = the m7 cross-band merge.
 5. Every exposure re-measured against the consensus; misaligned = off > 2 mas
    AND significant vs the peak error bars.
 
-## The reference tie (`measure_reference_tie`) — five independent checks
+## The reference tie (`measure_reference_tie`) — five checks
+
+A and B are independent measurements; C compares them, and D and E test the
+same peak for stability.  Agreement among all five is therefore weaker evidence
+than five independent checks would be.
 
 * A: `measure_offset` vs the full (dense **VIRAC2**) refcat, sweep on — **this is
   the reference tie**;

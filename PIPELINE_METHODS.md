@@ -135,7 +135,8 @@ against the true local sky rather than against structured nebular emission. The
 background is recomputed from the cleanest available residual at each stage. The
 guard against a runaway (the background absorbing real extended emission) is the
 union mask above. The per-stage `[bg]` line reports the output name, the number
-of masked sources and the mask radius.
+of masked sources and the mask radius — those three items only, so a
+background-to-background delta is neither computed nor logged.
 
 ## Cross-frame merging and vetting
 
