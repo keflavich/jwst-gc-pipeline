@@ -102,6 +102,7 @@ fields.obs_filters()      # {target: {proposal: [filters]}}
 fields.project_obsnum()   # {target: {proposal: obsid}}
 fields.nvisits()          # {proposal: {target: n}}   <- transposition is the view's job
 fields.basepath(target)   # replaces the if/else branch
+fields.offsets_table_paths()   # NOT a drop-in -- see below
 ```
 
 `test_fields_registry.py` asserts each view **equals the dictionary it
@@ -165,6 +166,26 @@ NIRISS set stays where it is and the view composes with it.
 2. Should the registry be data (YAML/TOML) instead of Python? Data cannot carry
    the comments that explain *why* cloudef is two observations of one field,
    and those comments are load-bearing.
-3. Is `offsets_table` a registry fact or a runtime lookup? It is currently a
-   path read at merge time; the registry could hold the path and let the caller
-   read it, which is what the lazy read added in #219 already does.
+3. Is `offsets_table` a registry fact or a runtime lookup? Settled, and it is
+   the one view that is **not** a drop-in: today's `offsets_tables` holds a
+   read `astropy.Table`, not a path. A str passes the `is not None` guard in
+   `merge_individual_frames` and then raises `TypeError` on
+   `offsets_table['Visit']`. The view is therefore named
+   `offsets_table_paths()`, and the step that adopts it must do the read at the
+   call site — which is what the lazy `_read_offsets_table` in #219 already
+   does, so the two compose.
+
+   It also refuses to build when one proposal is shared by two fields with
+   different tables. Three proposals are shared (2221 brick+cloudc, 2045
+   arches+quintuplet, 1979 m4+ngc6397) and downstream keys by proposal alone,
+   so the second would otherwise vanish silently.
+
+4. **Order is load-bearing, and the tests that pin it must outlive step 2.**
+   The array index comes from proposal order and the cross-band column order
+   from filter order. The order tests are pinned to a written-out literal, not
+   to `MC.obs_filters` — comparing against a dict that step 2 deletes would
+   turn them into `view == view` and silently reopen the hole.
+
+5. `make_merged_psf.py` hardcodes `/orange/.../jwst/{target}/` for **brick**,
+   which both the registry and the branch put on **blue**. A pre-existing bug
+   that step 7 would surface.

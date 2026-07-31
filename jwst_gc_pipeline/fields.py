@@ -150,16 +150,31 @@ def nvisits():
     return out
 
 
-def offsets_tables():
-    """`{proposal: path-or-None}` -- as in merge_catalogs.main().
+def offsets_table_paths():
+    """`{proposal: path-or-None}`.
 
-    Today's dict omits 1905, 3523 and 2526 entirely, so `offsets_tables[progid]`
-    raises KeyError for every wd1/wd2 per-filter merge.  This view covers every
-    registered proposal, which is the same bug class as cloudc/2526 and is fixed
-    by construction rather than by remembering.
+    NOT a drop-in for `merge_catalogs.main`'s `offsets_tables`, which holds a
+    read `astropy.Table`, not a path.  A str there passes the `is not None`
+    guard in `merge_individual_frames` and then raises `TypeError` on
+    `offsets_table['Visit']`.  The migration step that adopts this must do the
+    read at the call site -- which is what the lazy `_read_offsets_table` in
+    #219 already does, so the two compose.
+
+    Today's dict also omits 1905, 3523 and 2526 entirely, so
+    `offsets_tables[progid]` raises KeyError for every wd1/wd2 per-filter merge.
+    This covers every registered proposal by construction.
     """
-    return {o.proposal: o.offsets_table
-            for f in FIELDS for o in f.observations}
+    out = {}
+    for f in FIELDS:
+        for o in f.observations:
+            if o.proposal in out and out[o.proposal] != o.offsets_table:
+                raise ValueError(
+                    f"proposal {o.proposal} is shared by more than one field "
+                    f"with different offsets tables ({out[o.proposal]!r} vs "
+                    f"{o.offsets_table!r}).  It is keyed by proposal alone "
+                    f"downstream, so one of them would be dropped silently.")
+            out[o.proposal] = o.offsets_table
+    return out
 
 
 def basepath(target):
