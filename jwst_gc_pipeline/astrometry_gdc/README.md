@@ -7,8 +7,9 @@ mirrored at `/orange/adamginsburg/jwst/distortion/jayander_stdgdc/NIRCam`
 (override with `$JWST_GDC_ROOT`; a root with or without the trailing `NIRCam`
 level is accepted).
 
-Nothing in the main pipeline imports this package — it is **opt-in**
-(`python -m jwst_gc_pipeline.astrometry_gdc.correct_catalog ...`).
+The package is **opt-in**: it runs from its own CLI
+(`python -m jwst_gc_pipeline.astrometry_gdc.correct_catalog ...`) and the main
+pipeline leaves it unimported.
 
 ## File format (verified on NRCB1/F212N and NRCBL/F277W)
 
@@ -75,8 +76,8 @@ GC-program bands:
 
 ## Integration design
 
-This is an **affine-anchored starlist correction, NOT a CRDS reference-file
-swap**: frames' on-disk WCS and drizzling are untouched.
+This is an **affine-anchored starlist correction**: frames' on-disk WCS and
+drizzling are untouched, and CRDS reference files stay as they are.
 
 `gdc_wcs.GDCSkySolution` samples the frame's existing WCS (gwcs when
 loadable, else the SCI FITS-SIP approximation) on a sparse grid (default
@@ -102,8 +103,8 @@ python -m jwst_gc_pipeline.astrometry_gdc.correct_catalog \
 ```
 
 adds `skycoord_gdc_ra`/`skycoord_gdc_dec` (deg) + provenance meta
-(`GDCFILE`, `GDCVERS`, `GDCAFFX/Y`, `GDCRMS`, ...); it never overwrites
-existing skycoord columns.
+(`GDCFILE`, `GDCVERS`, `GDCAFFX/Y`, `GDCRMS`, ...), leaving existing skycoord
+columns intact.
 
 ## Experiment results (2026-07-23, corrected 2026-07-28)
 
@@ -119,9 +120,9 @@ position-dependent term that sits **below** the ~1 mas per-exposure centroid
 noise, so it is invisible to the per-star / bulk metrics (A–E: consensus
 scatter, frame-pair offsets, VIRAC2/Gaia bulk, Hosek median separation all read
 "unchanged" — per-detection scatter is 1.02 → 0.99 mas).  The apparent Hosek
-degradation is an anchoring-convention artifact, not a distortion regression
-(§7).  The larger 2.7–5 mas brick A/B seam is inter-detector affine placement,
-untouchable by a distortion swap (separate SIAF-class lever).
+degradation is an anchoring-convention artifact (§7).  The larger 2.7–5 mas
+brick A/B seam is inter-detector affine placement, untouchable by a distortion
+swap (separate SIAF-class lever).
 
 **Recommendation:** a real, if small, improvement — adopt where a coherent
 sub-mas position-dependent systematic matters (absolute astrometry, long-baseline
@@ -143,5 +144,4 @@ module-overlap validation.
    should isolate distortion-model differences from PSF-fit differences.
 
 Both experiments compare catalogs star-by-star through existing matched-pair
-machinery — no NN-median-vs-dense-reference measurement anywhere (see
-ASTROMETRY RULE #1 in the repo CLAUDE.md).
+machinery, per ASTROMETRY RULE #1 in the repo CLAUDE.md.

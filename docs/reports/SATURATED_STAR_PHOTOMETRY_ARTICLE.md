@@ -13,7 +13,7 @@ Galactic-center color–magnitude diagram (CMD), and their photometry in this
 pipeline was wrong by up to ~50% (0.5 mag), with magnitude-dependent structure
 that produced unphysical color jumps, population gaps, and detached "clouds" at
 the saturated↔unsaturated boundary. We describe the diagnostic campaign that
-localized the errors, the hypotheses tested and rejected along the way, and the
+localized the errors, the hypotheses it ruled out along the way, and the
 method finally adopted: DQ-severity gating of spurious saturation flags,
 peak-based seeding of unflagged charge-migration stars, ramp-zeroframe anchoring
 of the saturated rim with a brightness-dependent recovery scale, PSF wing
@@ -43,8 +43,8 @@ The symptom that started this campaign was categorical: in every CMD pair
 (wide−wide, wide−medium, wide−narrow), the saturated population was displaced
 from the unsaturated locus by 0.2–0.5 mag in color, with a population gap at
 F187N = 14–15 and internally-distinct sub-clouds. Errors of this size are
-science-breaking, and the requirement was set accordingly: **no systematic
-color shift between saturation classes**, verified per band pair by an
+science-breaking, and the requirement was set accordingly: **colors must agree
+across the saturation boundary**, verified per band pair by an
 executable metric (`photometry/saturation_continuity.py`).
 
 ## 2. Data and diagnostic tooling
@@ -52,7 +52,7 @@ executable metric (`photometry/saturation_continuity.py`).
 - **Fields:** the Brick (JWST 2221, o001/o004; NIRCam F182M/F187N/F212N +
   F405N/F410M/F466N) as the science-representative crowded field; **M92**
   (GO-1334, F090W/F150W) as a zero-background cross-validation field with
-  thousands of isolated calibrators and *no* extended emission.
+  thousands of isolated calibrators on empty sky.
 - **Truth references:** narrow-band photometry saturates ~2.5 mag later than
   the wide/medium bands, so F187N/F405N unsaturated measurements provide
   per-star flux truth for stars saturated in F182M/F410M; brightness ordering
@@ -65,30 +65,29 @@ executable metric (`photometry/saturation_continuity.py`).
   unsaturated / flagged-recovered / zeroframe-anchored / substituted classes
   (`brick_multiband_class_cmds_2026-07-10.png`).
 
-## 3. Hypotheses tested and rejected
+## 3. Hypotheses tested
 
-The failure was not one bug; it was six stacked mechanisms. The path to that
-conclusion ran through explicit hypotheses, most of which died under test.
+The failure was six stacked mechanisms, reached through the explicit
+hypotheses below.
 
-**H1 — "The fits are bad" (rejected).** Fit quality on the wings is excellent
-(qfit ≈ 0.05 on the brightest satstars) and residual images show the model
-tracking the observed wings; the visible residual is a saturated-core + spike
-remnant, not misconvergence. A separately-reported 0.2″ centroid jitter turned
-out to be *stale position bounds on the shared PSF-grid object* between
-successive fits — a harness bug, fixed and regression-tested, unrelated to the
-flux errors.
+**H1 — Fit quality is excellent on the wings.** qfit ≈ 0.05 on the brightest
+satstars, and residual images show the model tracking the observed wings; the
+visible residual is a saturated-core + spike remnant. A separately-reported
+0.2″ centroid jitter came from *stale position bounds on the shared PSF-grid
+object* between successive fits — a separate harness bug, fixed and
+regression-tested.
 
-**H2 — "Replacement bookkeeping loses the fits" (partially confirmed —
-necessary, not sufficient).** Satstar↔catalog matching used a 0.05″ radius,
+**H2 — Replacement bookkeeping: a necessary fix, insufficient alone.**
+Satstar↔catalog matching used a 0.05″ radius,
 but satstar positions scatter 0.08–0.15″ relative to daophot centroids; 90% of
 catastrophically-clipped wide-band rows had their correct satstar within 0.5″.
 Mutual-nearest matching at 0.5″ (with a faint-replacement veto) fixed the
 bookkeeping (`brick_cmd_replace_radius_sim_2026-07-10.png`),
-and the clouds moved — but did not join the locus. The flux values themselves
-were still wrong.
+and the clouds moved partway toward the locus. The flux values themselves
+remained wrong.
 
-**H3 — "The satstar catalog is contaminated by fakes" (confirmed — necessary,
-not sufficient).** The detection path used the any-group SATURATED DQ bit,
+**H3 — The satstar catalog is contaminated by fakes (confirmed; one of
+several causes).** The detection path used the any-group SATURATED DQ bit,
 which flags pixels that saturate only in late groups and are fully recoverable:
 45% of the SW satstar entries were unsaturated stars measured as if their cores
 were missing (89% over-flag on MIRI F770W). Component-level severity floors
@@ -97,12 +96,12 @@ plus a post-fit implied-peak gate removed them (F182M consolidated satstars
 peaks and the gate began rejecting *real* deep satstars (F187N: 157 survivors
 vs ~1173 expected); an observed-peak second chance restored them.
 
-**H4 — "Phantoms can be removed by a prominence/core-shape gate" (rejected).**
+**H4 — Prominence/core-shape gating: superseded.**
 Deep-pit phantoms on bright-star diffraction spikes are as sharp as real cores;
-no prominence threshold separated them without killing real stars. The
-severity/implied-peak gating (H3) superseded this approach.
+every prominence threshold that removed them also removed real stars. The
+severity/implied-peak gating (H3) took its place.
 
-**H5 — "The masked-core bias can be inverted analytically" (rejected).**
+**H5 — The masked-core bias: inversion is unstable.**
 Reproducing the production geometry on unsaturated stars of known flux — the
 key controlled experiment — showed the daophot 5×5 fit with a 2.5 px masked
 core recovers only **18.8%** of the true flux
@@ -111,9 +110,9 @@ Multiplying by ~5.3 amplifies every noise and normalization error by the same
 factor; inversion is unstable. Conclusion: clipped daophot photometry of
 saturated stars must be **substituted**, never corrected in place.
 
-**H6 — "The bright 'unsaturated' reference locus is trustworthy" (rejected —
-the comparison was inverted).** The wing-calibrated satstars appeared offset
-−0.6 mag from the bright gray locus; but the gray locus itself sat ~1.5 mag
+**H6 — The bright "unsaturated" reference locus is itself clipped.** The
+wing-calibrated satstars appeared offset
+−0.6 mag from the bright gray locus; the gray locus itself sat ~1.5 mag
 *above* the physical saturation limit. Those are **unflagged charge-migration
 stars**: peaks above the severity floor with *zero* DQ-SATURATED pixels
 (96% of the affected population), whose suppressed cores clip the daophot
@@ -123,24 +122,24 @@ Fix: peak-based seeding (image peaks above the severity floor, ≥2 px
 components, 2 px shoulder dilation) routes these stars into the satstar
 channel (`brick_cmd_iter3_peakseed_2026-07-10.png`).
 
-**H7 — "The ZEROFRAME extension recovers the rim" (rejected on a technicality,
-then repaired).** The cal-file ZEROFRAME extension is zeroed exactly at the
-flagged pixels we need. The ramp file's calibrated first read (SCI[0,0]) is
-not; it anchors the DQ-saturated rim as R(g0)×g0. A **scalar** R was then
-rejected too: the cal/group0 ratio drifts 0.229 → 0.167 from g0 ~2k → 20k DN
+**H7 — The rim is recovered from the ramp's first read.** The cal-file
+ZEROFRAME extension is zeroed exactly at the
+flagged pixels we need; the ramp file's calibrated first read (SCI[0,0])
+keeps them and anchors the DQ-saturated rim as R(g0)×g0. A **scalar** R fails
+in turn: the cal/group0 ratio drifts 0.229 → 0.167 from g0 ~2k → 20k DN
 even after linearity correction (charge migration again), so R is calibrated
 per frame as a binned function of g0, with a pile-up-plateau ceiling and a
 g0 > 0 validity mask (a percentile ceiling failed on dark frames).
 
-**H8 — "The remaining flux error is a field/background systematic"
-(rejected).** The decisive test used M92: zero background, no extinction
+**H8 — The wing excess survives in a zero-background field.** The decisive
+test used M92: zero background, no extinction
 structure, 812–1248 calibrators per configuration. The wing excess persisted,
 was **purely multiplicative** (additive term ≈ 0), and was flux-independent
 across brightness quartiles
 (`m92_wing_stacks2d_2026-07-10.png`,
 `m92_wing_ratio_curves_2026-07-10.png`).
 An injected-model control run through the identical machinery recovered
-0.95–0.99 everywhere — the estimators do not invent excess. Stacking and
+0.95–0.99 everywhere, so the estimators report real excess. Stacking and
 registration artifacts were bounded < 3% by model-through-machinery and
 deliberate mis-centering controls.
 
@@ -154,7 +153,7 @@ masked-core fit experiment (H5), and the M92 cross-validation (H8) — on five
 filters and three detectors. The masked-core bias it predicts matches the
 production failure in sign, magnitude, and radius dependence in both fields.
 
-**H9 — "A static per-filter correction table fixes it" (rejected).** The
+**H9 — Static per-filter tables are unsafe; calibrate per frame.** The
 deficit's radial structure differs per filter (F182M rising to +25% at r=5;
 F187N/F212N confined to small radii; F405N neutral; M92 F150W *faint*-biased
 at its Airy-dip radius), and 12/20 of the M92 STPSF grids carry a phantom OPD
@@ -197,8 +196,8 @@ Masked-core substitution calibration curves per filter (STPSF + stacked-PSF
 based, `scripts/analysis/wing_calibration/calcurves/`) quantify the bias as a
 function of masked-pixel count for 8 filters
 (`masked_core_calibration_curves_2026-07-10.png`);
-they motivated and validate the self-calibration but the production correction
-is the per-frame measurement, not the static curve (H9).
+they motivated and validate the self-calibration; the production correction
+is the per-frame measurement (H9).
 
 ## 5. Results
 
@@ -227,7 +226,7 @@ the satstars extend the giant branch in all four pairs. (*F212N−F405N spans
 the full extinction vector, so its intrinsic color spread inflates the metric;
 the demo floor below applies to all four numbers.)
 
-**Demo floor (stated plainly).** These catalog-level numbers are bounded from
+**Demo floor.** These catalog-level numbers are bounded from
 below by the demo's construction: the *unsaturated-side* photometry was
 measured on frames with the OLD (wrong-wing) satstar models subtracted, and
 rows overwritten by pre-gate fake satstars are unrecoverable without
@@ -245,9 +244,8 @@ certifies every band pair in CI.
    residual ≈ **−0.25 mag** for that stratum. *Control:* stars carry
    `wingcal_rmask`, so the stratum is identifiable; the planned M92
    sparse-field campaign (zero background, thousands of calibrators to r>20 px)
-   calibrates C(r>10) directly. Until then these stars are flagged, not
-   silently trusted.
-2. **Calibration precision, not just accuracy.** Each frame's ratio is a
+   calibrates C(r>10) directly. Until then these stars carry the flag.
+2. **Calibration precision.** Each frame's ratio is a
    median over ~30 stars: 3–5% per frame, averaging down over the 4–8 frames
    contributing to each consolidated satstar (~2–3% effective). *Control:*
    `wingcal_ratio` per row enables outlier-frame rejection at merge time.
@@ -288,28 +286,27 @@ same frame), which is what CMD-based science requires.
 A note on the astrometry numbers: the 0.08–0.15″ scatter quoted in §3 (H2) is
 the satstar-vs-**daophot** offset for the *same* saturated star — and the
 daophot centroid of a clipped, charge-migration-skewed core is itself the
-corrupted quantity. Measured properly, the wing-constrained satstar positions
-perform far better: frame-to-frame repeatability is **3 mas** median (F182M
+corrupted quantity. The wing-constrained satstar positions are much
+tighter: frame-to-frame repeatability is **3 mas** median (F182M
 and F410M, ≥4 dithers per star), and consolidated satstar positions agree with
 *clean unsaturated* F187N daophot centroids of the same stars to **14 mas**
 median (90th percentile 109 mas, dominated by blends/mismatches at the 0.3″
 match radius). So the large replacement radius exists to catch the corrupted
-daophot positions being replaced, not because satstar positions are poor.
-Satstar astrometry is ~5× worse than the 2.7 mas unsaturated benchmark but
+daophot positions being replaced. Satstar astrometry is ~5× worse than the 2.7 mas unsaturated benchmark but
 usable — with per-star repeatability as the error estimate — even for
 proper-motion work at the long-baseline (multi-year) level.
 
 ## 8. Conclusions
 
-1. The 0.5 mag saturated-star errors were six stacked mechanisms; no single
-   fix was sufficient, and two of the "reference" populations used to judge
+1. The 0.5 mag saturated-star errors were six stacked mechanisms, each
+   needing its own fix, and two of the "reference" populations used to judge
    the errors were themselves corrupted (H3, H6).
 2. The load-bearing physical finding is the STPSF wing deficit (~10–30%,
    filter-dependent), established with controls in a zero-background field;
    it will be reported upstream to STScI with the M92 evidence.
 3. The adopted correction is *self*-calibration — per frame, against the same
-   model grid, at the same mask radius — rather than any static table; it is
-   robust to model-grid defects by construction.
+   model grid, at the same mask radius; it is robust to model-grid defects by
+   construction.
 4. Certification is executable (`assert_saturation_continuity`) and blocked
    only on the full re-cataloging run; every frame-level component has been
    independently validated.
@@ -332,8 +329,8 @@ peak measurements put the strip stars at 0.4–0.8× (F410M) and 0.67–1.64×
 (F182M) of the floor; wing-annulus photometry (2.5–7 px, fully linear)
 shows the F410M strip catalog fluxes ≥0.17 mag too faint while F405N at the
 same magnitudes is clean. SW strips are migration-dominated (a 9×9 cal
-aperture recovers +0.15 mag over the PSF fit); LW strip flux is mostly not
-locally conserved (+0.06 mag).
+aperture recovers +0.15 mag over the PSF fit); the same aperture on LW
+recovers +0.06 mag, so LW strip flux is largely non-local.
 
 Fixes (this branch): (i) **sub-floor seeding** — DQ-clean components peaking
 in [0.35×floor, floor) enter the satstar channel with an amplitude-derived
