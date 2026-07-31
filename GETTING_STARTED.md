@@ -235,9 +235,9 @@ python -m jwst_gc_pipeline.photometry.merge_catalogs \
        --target=brick --merge-singlefields --list-jobs
 ```
 
-Eleven lines for the Brick, so `--array=0-10`. Without `MERGE_SINGLEFIELDS=1`
-the job does the all-filter merges only, which is what the second submission
-above is.
+It prints one line per array task, numbered from zero: eleven of them for the
+Brick, so `--array=0-10`. Without `MERGE_SINGLEFIELDS=1` the job does the
+all-filter merges only, which is what the second submission above is.
 
 Stage 2 runs the per-exposure phases and, when given two or more filters, the
 cross-band merge that follows them. The forced fill that measures each star in
@@ -261,8 +261,8 @@ Two conventions the submit scripts already follow, and that you should carry
 into any script of your own:
 
 - **Submit with `--account=astronomy-dept --qos=astronomy-dept-b`.** The
-  default `adamginsburg` QOS caps a job at 10 CPUs, so a 16- or 32-CPU task
-  submitted under it stays PENDING forever.
+  default QOS has a much lower CPU cap, and a job that asks for more than the
+  cap never starts.
 - **Name the job at submit time**, as
   `<target><program>-o<obsid>-<stage>[-FILTER]`. Several reduce and catalog
   jobs are usually in flight at once, and a job renamed once it starts shows
