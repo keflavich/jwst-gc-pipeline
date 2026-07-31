@@ -310,12 +310,12 @@ any group (`vgroup_row_matches`), so pre-`Vgroup` rows keep applying. Narrowing
 must leave exactly one row; any other count raises `ValueError`. The applied
 numbers come from the `dra (arcsec)` / `ddec (arcsec)` columns.
 
-⚠ **As of 2026-07-30 the `Vgroup` column exists only in w51's `_consensus.csv`**
-— the `VIRAC2locked` tables on disk (1182, 2221 brick + cloudc, 4147, 2092, 2211)
-still use the pre-`Vgroup` layout, so that narrowing is currently inert exactly
-where it matters most: gc2211's own config note records 6 visit groups reusing
-exposure numbers. Rebuild those tables with the column before relying on the
-guard.
+⚠ **As of 2026-07-31 four tables on disk carry a `Vgroup` column**: cloudc's
+2221, quintuplet's 2045, sgrc's 4147, and w51's `_consensus.csv`. Brick's 1182
+and 2221 tables, and cloudef's and gc2211's, still use the pre-`Vgroup` layout,
+so the narrowing stays inert exactly where it matters most: gc2211's own config
+note records 6 visit groups reusing exposure numbers. Rebuild those tables with
+the column before relying on the guard.
 
 If no locked table exists, `_shift_from_locked` falls back to
 `Offsets_JWST_Brick<prop>_<refname>_average.csv` (`use_average=True`, the
