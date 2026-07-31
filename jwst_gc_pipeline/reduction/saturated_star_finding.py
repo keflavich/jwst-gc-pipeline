@@ -4515,6 +4515,9 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
 
 
 def main():
+    # The module-level guard at the top of this file raises first, so this is
+    # belt and braces -- but it called os.get(), which does not exist, so it
+    # would have raised AttributeError if anything ever reached it.
     if not os.environ.get('STPSF_PATH'):
         raise ValueError("STPSF_PATH must be specified")
 

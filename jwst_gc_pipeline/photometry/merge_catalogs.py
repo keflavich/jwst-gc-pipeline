@@ -2958,7 +2958,10 @@ def main():
     # so a redirected run reduced and cataloged under the override and then
     # merged out of the hard-coded tree.
     basepath = apply_basepath_override(basepath)
-    os.makedirs(os.path.join(basepath, 'catalogs'), exist_ok=True)
+    if target in obs_filters:
+        # Only for a target we know.  Doing it unconditionally meant a typo'd
+        # --target created a directory tree for a field that does not exist.
+        os.makedirs(os.path.join(basepath, 'catalogs'), exist_ok=True)
 
     # Only 1182 has an offsets table; the rest align in imaging.  Read it on
     # demand -- it lives at an absolute path, and eagerly reading it made every
@@ -3036,6 +3039,24 @@ def main():
                       f"skipping", flush=True)
 
     # Step 2: the all-filter merged catalogs, once.
+    #
+    # ONCE, literally: these read EVERY filter's step-1 output and write one set
+    # of files.  An array of N tasks each running this is N concurrent writers
+    # of the same catalogs, most of them reading inputs their sibling tasks have
+    # not produced yet.  So a task that merged one filter stops here, and the
+    # all-filter merges are a separate job that depends on the whole array --
+    # see scripts/reduction/submit_merge.sbatch.
+    #
+    # Same predicate as the registration gate below: `jobs` is empty without
+    # --merge-singlefields, so a plain --array=0 run IS the whole merge and
+    # goes on.  A plain run has task_id None and goes on.
+    if task_id is not None and jobs:
+        print(f'array task {task_id}: per-filter merge done.  The all-filter '
+              f'merges need every filter, so run them once the array has '
+              f'finished (a job with no --array and no --merge-singlefields).',
+              flush=True)
+        return
+
     merge_kwargs = dict(module=module, target=target, basepath=basepath,
                         indivexp=options.merge_singlefields,
                         resbgsub=options.resbgsub,

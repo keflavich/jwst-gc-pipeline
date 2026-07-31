@@ -2,23 +2,30 @@
 # ---------------------------------------------------------------------------
 # Stage 3: merge the per-exposure catalogs (jwst_gc_pipeline.photometry.merge_catalogs).
 #
-# Two ways to run it, and the SLURM form you use depends on which:
+# The merge has two parts, and they must run in order:
 #
-#   * Per-(program, filter) merges -- submit as an ARRAY, one task per job.
-#     Ask the module for the index -> (program, filter) map first, so you know
-#     the array bounds:
-#         python -m jwst_gc_pipeline.photometry.merge_catalogs \
-#                --target=brick --merge-singlefields --list-jobs
-#     Then, for an 11-entry map:
-#         sbatch --array=0-10 --export=ALL,TARGET=brick,MERGE_SINGLEFIELDS=1 \
-#                --job-name=brick2221-o001-merge scripts/reduction/submit_merge.sbatch
+#   1. one per-(program, filter) merge per filter -- parallelisable, an ARRAY
+#   2. the all-filter merges, which read EVERY filter's part-1 output -- ONE job
 #
-#   * All-filter merges only -- one task, no --array.
-#         sbatch --export=ALL,TARGET=brick --job-name=brick2221-o001-merge \
-#                scripts/reduction/submit_merge.sbatch
+# So it is two submissions.  Ask for the index -> (program, filter) map first;
+# it runs nothing and tells you the array bounds:
 #
-# Without --array, MERGE_SINGLEFIELDS=1 still runs every per-(program, filter)
-# job, serially, in the one task.
+#     python -m jwst_gc_pipeline.photometry.merge_catalogs \
+#            --target=brick --merge-singlefields --list-jobs
+#
+# Then, for an 11-entry map:
+#
+#     jid=$(sbatch --parsable --array=0-10 \
+#           --export=ALL,TARGET=brick,MERGE_SINGLEFIELDS=1 \
+#           --job-name=brick2221-o001-merge scripts/reduction/submit_merge.sbatch)
+#     sbatch --dependency=afterok:$jid --export=ALL,TARGET=brick \
+#            --job-name=brick2221-o001-mergeall scripts/reduction/submit_merge.sbatch
+#
+# An array task that merged one filter stops before part 2, so submitting only
+# the array leaves the all-filter catalogs unwritten.
+#
+# On one node instead: drop --array and set MERGE_SINGLEFIELDS=1.  That runs
+# every per-filter job serially and then the all-filter merges, in one task.
 # ---------------------------------------------------------------------------
 #SBATCH --job-name=merge
 #SBATCH --account=astronomy-dept
@@ -55,8 +62,13 @@ PY=${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/pytho
 SINGLE_ARG=""
 [ "$MERGE_SINGLEFIELDS" = "1" ] && SINGLE_ARG="--merge-singlefields"
 
-[ -n "${SLURM_JOB_ID:-}" ] && scontrol update JobId="$SLURM_JOB_ID" \
-    JobName="${TARGET}-merge${SLURM_ARRAY_TASK_ID:+-$SLURM_ARRAY_TASK_ID}" 2>/dev/null || true
+# Only rename when the job was submitted under the placeholder name: a name
+# passed at submit time identifies target + program + obsid, which this cannot
+# reconstruct, and overwriting it breaks the naming convention.
+if [ "${SLURM_JOB_NAME:-merge}" = "merge" ] && [ -n "${SLURM_JOB_ID:-}" ]; then
+    scontrol update JobId="$SLURM_JOB_ID" \
+        JobName="${TARGET}-merge${SLURM_ARRAY_TASK_ID:+-$SLURM_ARRAY_TASK_ID}" 2>/dev/null || true
+fi
 
 echo "MERGE start $(date -u +%FT%TZ) NODE=$(hostname) target=$TARGET task=${SLURM_ARRAY_TASK_ID:-none}"
 "$PY" -m jwst_gc_pipeline.photometry.merge_catalogs \

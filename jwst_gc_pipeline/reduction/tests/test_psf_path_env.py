@@ -52,3 +52,23 @@ def test_neither_branch_assigns_the_psf_path():
                          and t.value.attr == 'environ'
                          for t in node.targets)]
     assert not offenders, f'assigns instead of setdefault: {offenders}'
+
+
+def test_the_stpsf_guard_calls_a_function_that_exists():
+    """It called ``os.get``, which is not a thing.  Reaching that line would
+    have raised AttributeError instead of the message it means to give.
+
+    Checked by reading the source: the module-level guard higher up the file
+    raises first, so the branch cannot be exercised at run time.
+    """
+    import ast
+    import os as _os
+    path = _os.path.join(
+        _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+        'saturated_star_finding.py')
+    tree = ast.parse(open(path).read())
+    calls = [node for node in ast.walk(tree)
+             if isinstance(node, ast.Attribute)
+             and isinstance(node.value, ast.Name) and node.value.id == 'os'
+             and node.attr == 'get']
+    assert not calls, 'os.get() does not exist; use os.environ.get()'

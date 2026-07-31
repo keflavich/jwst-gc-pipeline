@@ -10,18 +10,17 @@ Work through it in three stages, in order:
 |---|---|---|
 | **1. reduce** | mosaics the exposures (JWST Image3) and corrects their astrometry, writing one `*_crf.fits` per exposure | `python jwst_gc_pipeline/reduction/PipelineRerunNIRCAM-LONG.py` |
 | **2. catalog** | detects stars and fits a PSF to each one, exposure by exposure, writing one catalog per exposure | `python -m jwst_gc_pipeline.photometry.crowdsource_catalogs_long` |
-| **3. merge** | combines those catalogs across exposures, then across filters, into the catalog you use | `python -m jwst_gc_pipeline.photometry.merge_catalogs` |
-
-Stage 1 is a script path rather than `python -m`, because `python -m` rejects
-the hyphen in its filename.
+| **3. merge** | combines those catalogs across exposures, and assembles the all-filter products | `python -m jwst_gc_pipeline.photometry.merge_catalogs` |
 
 Stage 1 differs by instrument; stages 2 and 3 are shared.
 
-| instrument | stage-1 script | stages 2 and 3 |
-|---|---|---|
-| NIRCam | `jwst_gc_pipeline/reduction/PipelineRerunNIRCAM-LONG.py` — short and long filters both; the `-LONG` is left over from when it handled only the long ones | as above |
-| MIRI | `jwst_gc_pipeline/reduction/PipelineMIRI.py` | add `--instrument=miri` |
-| NIRISS | `jwst_gc_pipeline/reduction/PipelineRerunNIRISS.py` | add `--instrument=niriss` |
+| instrument | stage-1 script | stage 2 adds | stage 3 |
+|---|---|---|---|
+| NIRCam | `reduction/PipelineRerunNIRCAM-LONG.py` — short and long filters both | `--modules=merged` | as above |
+| MIRI | `reduction/PipelineMIRI.py` | `--instrument=miri --modules=mirimage` | `GC_INSTRUMENT_OVERRIDE=miri` |
+| NIRISS | `reduction/PipelineRerunNIRISS.py` | `--instrument=niriss --modules=nis` | `GC_INSTRUMENT_OVERRIDE=niriss` |
+
+Stage 3 takes the instrument from the environment rather than a flag.
 
 Away from HiPerGator, stage 1 for NIRCam writes wherever you point it; MIRI and
 NIRISS write to a hard-coded `/orange` path until someone patches them. See
@@ -49,9 +48,9 @@ Four environment variables configure it.
 ### On HiPerGator
 
 The caches already exist, so point at them rather than fetching your own. The
-submit scripts export all four, so submitting through them leaves nothing to
-set. To run the modules by hand (not using submission scripts that include
-these variables), export:
+submit scripts export `CRDS_PATH`, `CRDS_SERVER_URL` and `GC_ALLOW_DEV`;
+`STPSF_PATH` you set yourself either way. To run the modules by hand, export
+all four:
 
 ```bash
 export CRDS_PATH=/orange/adamginsburg/jwst/crds
@@ -95,7 +94,8 @@ The code calls it the **basepath**.
 ├── F212N/                      one directory per filter, uppercase
 │   └── pipeline/               put your exposures here; stage 1 writes *_crf.fits here
 ├── psfs/                       stage 2 writes PSF models here
-├── catalogs/                   stage 3 writes merged catalogs here
+├── catalogs/                   stages 2 and 3 write catalogs here; also holds
+│                               the reference catalog you supply
 ├── offsets/                    only for fields aligned from a table (see alignment_config.py)
 └── regions_/nircam_<target>_fov.reg    only for MIRI
 ```
@@ -114,8 +114,8 @@ observation, so if you downloaded the data from MAST you already have it. Stage
 jw0<proposal>-o<obs>*_image3_*0[0-9][0-9]_asn.json
 ```
 
-— three digits before `_asn.json`, which is what a MAST filename has and a
-hand-written one usually lacks. A real one:
+That pattern needs a run of digits before `_asn.json`, which MAST filenames have
+and a hand-written name usually lacks. A real one:
 
 ```
 jw02221-o001_20221007t121022_image3_007_asn.json
@@ -124,8 +124,14 @@ jw02221-o001_20221007t121022_image3_007_asn.json
 Finding none, stage 1 downloads the observation's association files from MAST.
 It does that only when none is on disk.
 
-The MIRI FOV region file is named `nircam_<target>_fov.reg` regardless of
-instrument — the MIRI driver reuses the NIRCam footprint.
+**A reference catalog** at `<basepath>/catalogs/`, and, for a field aligned from
+a table, **an offsets table** at `<basepath>/offsets/`. Which reference catalog a
+field uses is registered in `REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD`; stage 1
+stops with a clear error naming the file it wanted. Both paths are relative to
+the basepath, so they follow `GC_BASEPATH_OVERRIDE`.
+
+The FOV region file is named `nircam_<target>_fov.reg` whatever the instrument.
+Only the NIRCam driver reads it.
 
 You no longer supply a `reduction/fwhm_table.ecsv`: the PSF width of each
 filter is an instrument constant, so the pipeline reads the table that ships in
@@ -134,36 +140,51 @@ uses it.
 
 ---
 
-## A worked example, start to finish
+## A worked example
 
-This runs all three stages on a 20-arcsec cutout of the Brick in one filter, in
-minutes rather than in a day. Everything lands in a scratch directory of your
-own, well clear of released products.
+Stages 1 and 2 on one filter of the Brick, writing to a scratch directory of
+your own so nothing can touch released products. Measured on HiPerGator: about
+18 minutes for stage 1 and 34 for stage 2, on a 20-arcsec cutout.
+
+Stage 1 reads three things from the target directory besides the exposures: the
+association file, the reference catalog, and (for this field) an offsets table.
+`stage_scratch_basepath.sh` copies exactly those out of the real tree and
+nothing the pipeline writes, so start with it:
 
 ```bash
 export GC_BASEPATH_OVERRIDE=$HOME/scratch/brick-demo/
-mkdir -p "$GC_BASEPATH_OVERRIDE"
+scripts/reduction/stage_scratch_basepath.sh \
+    /blue/adamginsburg/adamginsburg/jwst/brick \
+    "$GC_BASEPATH_OVERRIDE" reduce destreak_o001_crf F410M
+```
 
-# Stage 1 -- reduce.  -s reuses the *_cal files already on disk; drop it to
-# re-fit the ramps from the raw data instead (much slower).
+Then:
+
+```bash
+# Stage 1 -- reduce.  -s reuses the *_cal files on disk; drop it to re-fit the
+# ramps from the raw data instead, which is much slower.
 python jwst_gc_pipeline/reduction/PipelineRerunNIRCAM-LONG.py \
        -p 2221 -d 001 -f F410M -m merged -s
 
 # Stage 2 -- catalog.  --each-suffix names the stage-1 products to photometer
-# and carries the observation number.
+# and carries the observation number.  --cutout-region keeps it to minutes.
 python -m jwst_gc_pipeline.photometry.crowdsource_catalogs_long \
        --proposal_id=2221 --field=001 --target=brick \
        --filternames=F410M --modules=merged \
        --each-exposure --each-suffix=destreak_o001_crf \
        --cutout-region=266.5350,-28.7050,20
-
-# Stage 3 -- merge.
-python -m jwst_gc_pipeline.photometry.merge_catalogs \
-       --target=brick --merge-singlefields
 ```
 
-Results land in `$GC_BASEPATH_OVERRIDE/cutouts/<label>/catalogs/`. Drop
-`--cutout-region` for the real thing, and expect stage 2 to take hours.
+Stage 1 writes 48 `*_destreak_o001_crf.fits` into
+`$GC_BASEPATH_OVERRIDE/F410M/pipeline/`. Stage 2 writes per-exposure catalogs
+into `$GC_BASEPATH_OVERRIDE/cutouts/<label>/catalogs/`.
+
+**Stage 3 needs the whole filter set, so the one-filter example stops here.**
+The merge combines filters, and it looks in `<basepath>/catalogs/` rather than
+under `cutouts/`. Run it after a full-field, all-filter stage 2 — see
+[Running on HiPerGator](#running-on-hipergator). The same is true of the last two
+phases of stage 2: the cross-band merge and the forced fill both need at least
+two filters, so a one-filter run ends after the per-exposure phases.
 
 `GC_BASEPATH_OVERRIDE` redirects the basepath for all three stages. Leave it
 unset to work in the target's own directory.
@@ -173,7 +194,8 @@ unset to work in the target's own directory.
 ## Running on HiPerGator
 
 The same three stages, as SLURM jobs. Stages 1 and 2 are arrays with one task
-per filter; stage 3 is an array with one task per (program, filter).
+per filter. Stage 3 is an array with one task per (program, filter), followed by
+a single job that combines the filters.
 
 ```bash
 # Stage 1 -- reduce
@@ -190,14 +212,23 @@ sbatch --array=0-3 \
        --job-name=brick2221-o001-cat \
        scripts/reduction/submit_cataloging.sbatch
 
-# Stage 3 -- merge
-sbatch --array=0-10 --export=ALL,TARGET=brick,MERGE_SINGLEFIELDS=1 \
-       --job-name=brick2221-o001-merge \
+# Stage 3 -- merge.  Two submissions: an array for the per-filter merges, then
+# one job that combines the filters, after the whole array has finished.
+jid=$(sbatch --parsable --array=0-10 \
+      --export=ALL,TARGET=brick,MERGE_SINGLEFIELDS=1 \
+      --job-name=brick2221-o001-merge \
+      scripts/reduction/submit_merge.sbatch)
+sbatch --dependency=afterok:$jid --export=ALL,TARGET=brick \
+       --job-name=brick2221-o001-mergeall \
        scripts/reduction/submit_merge.sbatch
 ```
 
+Stage 1's array leaves `MODULES` at its default, `nrca,nrcb,merged` — three
+mosaics per filter, where the worked example above builds only `merged`. Set
+`MODULES=merged` to match it.
+
 Stage 3's array bounds come from the target's (program, filter) list. Print it
-first, which runs nothing:
+first:
 
 ```bash
 python -m jwst_gc_pipeline.photometry.merge_catalogs \
@@ -205,12 +236,14 @@ python -m jwst_gc_pipeline.photometry.merge_catalogs \
 ```
 
 Eleven lines for the Brick, so `--array=0-10`. Without `MERGE_SINGLEFIELDS=1`
-the job does the all-filter merges only, and needs no array.
+the job does the all-filter merges only, which is what the second submission
+above is.
 
-Stage 2 runs the whole photometry ladder in one job, ending with the cross-band
-merge and a forced fill that measures each star in the filters where it went
-undetected. For a field too large to finish in one walltime, the
-`submit_cataloging_m8*.sbatch` scripts split that final fill across two jobs.
+Stage 2 runs the per-exposure phases and, when given two or more filters, the
+cross-band merge that follows them. The forced fill that measures each star in
+the filters where it went undetected is a separate invocation
+(`--manual-start-phase=m8`); the `submit_cataloging_m8*.sbatch` scripts run it,
+split across two jobs for a field too large for one walltime.
 
 ### What the jobs ask for
 
@@ -239,13 +272,15 @@ into any script of your own:
 
 ## Adding a new target
 
-Every target is listed by hand in eight places for NIRCam — ten if you also run
-MIRI — each keyed by target name or proposal id. In the order a run hits them:
+Every target is listed by hand in nine places for NIRCam — eleven if you also
+run MIRI — each keyed by target name or proposal id. In the order a run hits
+them:
 
 | stage | registry | file |
 |---|---|---|
 | reduce | `field_to_reg_mapping` — proposal + obs → target | `reduction/PipelineRerunNIRCAM-LONG.py`, inside `if __name__` |
-| reduce | `refnames` — astrometric reference catalog | `reduction/PipelineRerunNIRCAM-LONG.py` |
+| reduce | `refnames` — astrometric reference frame token | `reduction/PipelineRerunNIRCAM-LONG.py` |
+| reduce | `REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD` — which reference catalog file | `reduction/PipelineRerunNIRCAM-LONG.py` |
 | reduce | `ALIGNMENT_CONFIG` — how the field is aligned | `reduction/alignment_config.py` |
 | reduce (MIRI) | `fov_regname` — target → FOV region file | `reduction/PipelineMIRI.py` |
 | reduce (MIRI) | `field_to_reg_mapping` again | `reduction/PipelineMIRI.py`, inside `if __name__` |
@@ -260,15 +295,16 @@ and one in the merge, choosing between `/orange` and `/blue`. Keep them
 identical. They disagreed on `wd1` and `wd2` until 2026-07-31: the catalog
 stage wrote to `/orange` while the merge read from `/blue`.
 
-Four of these registries sit **inside a function**, so importing, printing or
-overriding one means editing the source first.
+Three sit **inside a function** and two more inside an `if __name__` block, so
+importing, printing or overriding them means editing the source first.
 
 Miss one and you get:
 
 | missed | what happens |
 |---|---|
 | `field_to_reg_mapping` | `KeyError: '<proposal>'`, in whichever stage you reached first |
-| `obs_filters` | the merge raises `TypeError` on `None` |
+| `REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD` | `KeyError: No reference catalog mapping configured for proposal_id=...` |
+| `obs_filters` | the merge raises `AttributeError: 'NoneType' object has no attribute 'items'` |
 | `refnames` | nothing visible — it is read with `.get()`, so the alignment step quietly receives `None` |
 
 Two more registries duplicate this information and are worth knowing about:
@@ -298,13 +334,11 @@ NIRISS reduction drivers build their basepath directly and ignore it; giving
 them the one `apply_basepath_override` call the NIRCam driver already has would
 fix that.
 
-Two things stay absolute even under the override, so a full run off HiPerGator
-still needs manual work:
-
-- 32 files in the package contain a literal `/orange/adamginsburg` or
-  `/blue/adamginsburg` path.
-- The reference catalogs used for astrometry, and several diagnostic outputs,
-  are among them.
+32 files in the package contain a literal `/orange/adamginsburg` or
+`/blue/adamginsburg` path, so a full run off HiPerGator still needs manual work.
+The reference catalogs are not among them: those are basepath-relative and
+follow the override, which makes them inputs you have to supply rather than
+paths you have to patch.
 
 A portability layer was proposed in #98 and closed unmerged; `scratch_basepath.py`
 still refers to it.
@@ -326,4 +360,4 @@ adapt.
   because breaking them produced wrong answers that looked right.
 
 To work on the pipeline itself, `pip install -e '.[test]'` adds the test suite;
-run it with `pytest jwst_gc_pipeline`.
+run it with `pytest jwst_gc_pipeline tests`.

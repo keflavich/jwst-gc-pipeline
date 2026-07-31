@@ -162,7 +162,9 @@ def test_gate_does_not_run_per_array_task(monkeypatch, capsys):
               {'RUN_REGISTRATION_GATE': '1', 'SLURM_ARRAY_TASK_ID': '3'},
               calls)
     assert calls == []
-    assert 'registration gate skipped' in capsys.readouterr().out
+    # The task now stops before both the all-filter merges and the gate, and
+    # says so once.  The gate's own skip message became unreachable.
+    assert 'all-filter merges' in capsys.readouterr().out
 
 
 @pytest.mark.localdata
@@ -220,3 +222,48 @@ def test_a_non_brick_merge_does_not_need_the_brick_offsets_file(monkeypatch,
               {'SLURM_ARRAY_TASK_ID': None, 'RUN_REGISTRATION_GATE': None},
               calls)
     assert not any('Offsets_JWST_Brick1182' in str(r) for r in reads), reads
+
+
+# --- the all-filter merges are not per-task --------------------------------
+
+def test_an_array_task_that_merged_one_filter_stops_before_the_all_filter_merges(
+        monkeypatch, capsys, tmp_path):
+    """Step 2 reads every filter's step-1 output and writes one set of files.
+    Letting each of N array tasks run it gives N concurrent writers, most of
+    them reading inputs a sibling task has not produced yet."""
+    calls = []
+    monkeypatch.setenv('SLURM_ARRAY_TASK_ID', '3')
+    monkeypatch.setenv('GC_BASEPATH_OVERRIDE', str(tmp_path))
+    monkeypatch.setattr(MC, 'merge_individual_frames', lambda **kw: None)
+    monkeypatch.setattr(MC, 'merge_crowdsource',
+                        lambda **kw: calls.append('crowdsource'))
+    monkeypatch.setattr(MC, 'merge_daophot', lambda **kw: calls.append('daophot'))
+    import sys
+    monkeypatch.setattr(sys, 'argv',
+                        ['merge_catalogs', '--target', 'brick', '--merge-singlefields'])
+    MC.main()
+    assert calls == [], 'an array task ran the all-filter merges'
+    assert 'all-filter merges' in capsys.readouterr().out
+
+
+def test_a_plain_run_still_does_the_all_filter_merges(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.delenv('SLURM_ARRAY_TASK_ID', raising=False)
+    monkeypatch.setenv('GC_BASEPATH_OVERRIDE', str(tmp_path))
+    monkeypatch.setattr(MC, 'merge_individual_frames', lambda **kw: None)
+    monkeypatch.setattr(MC, 'merge_crowdsource',
+                        lambda **kw: calls.append('crowdsource'))
+    monkeypatch.setattr(MC, 'merge_daophot', lambda **kw: calls.append('daophot'))
+    import sys
+    monkeypatch.setattr(sys, 'argv', ['merge_catalogs', '--target', 'brick'])
+    MC.main()
+    assert 'crowdsource' in calls and 'daophot' in calls
+
+
+def test_a_typod_target_creates_no_directories(monkeypatch, tmp_path):
+    monkeypatch.setenv('GC_BASEPATH_OVERRIDE', str(tmp_path / 'nope'))
+    import sys
+    monkeypatch.setattr(sys, 'argv', ['merge_catalogs', '--target', 'brickk'])
+    with pytest.raises((AttributeError, KeyError, TypeError)):
+        MC.main()
+    assert not (tmp_path / 'nope' / 'catalogs').exists()
