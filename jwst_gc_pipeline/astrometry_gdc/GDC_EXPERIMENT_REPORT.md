@@ -1,3 +1,6 @@
+> ⚠ **Experiment report — line numbers are as-of the run date and are not
+> maintained.** Symbol names are still valid; resolve them with `git grep`.
+
 # GDC-vs-CRDS astrometry experiment — results
 
 Date: 2026-07-23.  Branch `feature/jayander-gdc` (PR #154).  Pure

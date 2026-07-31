@@ -134,7 +134,8 @@ beside them as `jwst_nircam_filteroffset_0004.rmap.stale_20220901_swappedAB`.
 3. **Fingerprint test for the swap:** re-run `AssignWcsStep` with a pinned
    context and a fresh cache, diff the WCS at pixel (1024,1024) per detector.
    Anti-symmetric A/B shifts matching the table above = the swap. All-zero =
-   clean. (Script pattern: `_jwst_version_delta.py`, 2026-07 audit.)
+   clean. (Script pattern: `_jwst_version_delta.py`, an untracked scratch script
+   from the 2026-07 audit; not committed, so do not expect to find it here.)
 4. **Never conclude "version regression" from CAL_VER correlation alone** —
    vary the cache, not just the context/version, before attributing.
 5. Measure offsets only with the sanctioned histogram-stacking helpers

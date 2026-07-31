@@ -493,7 +493,8 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
     basepath = apply_basepath_override(basepath)
     if basepath != _bp0:
         print(f"GC_BASEPATH_OVERRIDE active (reduction): basepath -> {basepath}", flush=True)
-    fwhm_tbl = Table.read(f'{basepath}/reduction/fwhm_table.ecsv')
+    from jwst_gc_pipeline.reduction.fwhm import fwhm_table_path
+    fwhm_tbl = Table.read(fwhm_table_path(basepath))
     row = fwhm_tbl[fwhm_tbl['Filter'] == filtername]
     if module == 'merged':
         expected_modules = ('merged',)
@@ -607,6 +608,10 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
             except Exception as ex:
                 print(f"Failed to move file with error {ex}")
 
+    # Ramp files.  Only stage 1+2 read them, so -s / skip_step1and2 skips the
+    # download -- otherwise a run that only wanted the association file above
+    # pulled the program's whole uncal set (~1.2 GB for one filter) as well.
+    if mast_needed and not skip_step1and2:
         products_fits = Observations.filter_products(data_products_by_obs, extension="fits")
         print("products_fits length:", len(products_fits))
         uncal_mask = np.array([

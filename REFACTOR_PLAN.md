@@ -1,5 +1,12 @@
 # Refactor Plan — jwst-gc-pipeline
 
+> ⚠ **HISTORICAL SNAPSHOT (2026-06-17). Do not use as a map of the current tree.**
+> Every path, line number and LOC count below is as-of that date. Its own Phase 0
+> has since **deleted** several of the modules it names — `crowdsource_catalogs_short.py`,
+> `PipelineRerunNIRCAM-SHORT.py`, `PipelineRerunF212N.py`, `crowdsource_fields.py`
+> (commit `f4fdaa2`) — and the post-resample realign it discusses was retired in
+> `39f9560`. Read it for the *rationale* of a refactor, not for locations.
+
 Generated 2026-06-17, executing in worktree `refactor-bloat` (branch `worktree-refactor-bloat`,
 based on origin/main @ 318b902).
 

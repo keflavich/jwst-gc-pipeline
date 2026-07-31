@@ -27,8 +27,9 @@ there even for non-brick datasets.
 The sickle MIRI → NIRCam-F480M registration scripts are **region-specific** and
 live in the **brick-jwst-2221** repo, not here:
 `brick2221/reduction/register_sickle_miri_o001_o002.py`,
-`register_o002_f770w_per_frame_to_f480m.py`,
-`register_o002_f770w_gwcs_to_f480m.py`, `merge_sickle_miri_o001_o002.py`
+`brick2221/reduction/register_o002_f770w_per_frame_to_f480m.py`,
+`brick2221/reduction/register_o002_f770w_gwcs_to_f480m.py`,
+`brick2221/reduction/merge_sickle_miri_o001_o002.py`
 (+ `brick2221/reduction/build_sickle_gns_offsets.py` and
 `brick2221/shellscripts/sickle_gns_reduce_retry.sh` for the NIRCam sickle→GNS
 offsets). They are **manual pre-steps** — run before cataloging a sickle MIRI obs
@@ -36,8 +37,8 @@ or its mosaics sit ~3.3″ off truth. See the "Offsets-table provenance" section
 `jwst_gc_pipeline/reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md`.
 
 Analysis scripts (source validation/classification, CMDs) live in
-`brick-jwst-2221/brick2221/analysis/` (`f2550w_source_validation_o003.py`,
-`miri_cmd.py`) -- jwst-gc-pipeline is for pipeline work, brick2221 for
+**brick-jwst-2221** (`brick2221/analysis/f2550w_source_validation_o003.py`,
+`brick2221/analysis/miri_cmd.py`) -- jwst-gc-pipeline is for pipeline work, brick2221 for
 analysis work.
 
 ## Key lessons encoded in these scripts

@@ -34,6 +34,7 @@ ABMAG_OFFSET = 8.90
 from jwst_gc_pipeline.frame_wcs import frame_wcs
 from jwst_gc_pipeline.photometry.residual_background import (
     RESBKG_COLUMNS, combine_frames as combine_resbkg_frames)
+from jwst_gc_pipeline.scratch_basepath import apply_basepath_override
 from jwst_gc_pipeline.photometry.naming import (
     _inst_token, _svo_filter_id,
     _bgsub_token_from_flags as _bgsub_token,
@@ -124,6 +125,15 @@ def _run_merge(merge_func, label, on_error, **kwargs):
         if on_error == 'raise':
             raise
         print(f'{label}: skipped ({type(ex).__name__}: {ex})', flush=True)
+
+
+_BRICK_1182_OFFSETS = ('/blue/adamginsburg/adamginsburg/jwst/brick/offsets/'
+                       'Offsets_JWST_Brick1182_F444ref.csv')
+
+
+def _read_offsets_table(path_or_none):
+    """Load an offsets table lazily.  `None` means the field aligns in imaging."""
+    return None if path_or_none is None else Table.read(path_or_none)
 
 
 def individual_frame_merge_jobs(target):
@@ -3008,14 +3018,29 @@ def main():
             "astrometry rule #1 forbids.  Build reference catalogs with "
             "make_reference_from_pipeline_catalogs.py instead.")
 
+    # Keep this list identical to the one in crowdsource_catalogs_long.main().
+    # They disagreed on wd1/wd2 until 2026-07-31: the catalog stage wrote to
+    # /orange and the merge then read a /blue path that was never created.
     if target in ('sickle', 'cloudef', 'sgrc', 'sgrb2', 'arches', 'quintuplet', 'sgra', 'gc2211', 'w51',
+                  'wd1', 'wd2',
                   'm92', 'ngc6397', 'm4',  # globular clusters (Anderson co-I) on /orange
                   'ngc6334'):  # NGC 6334 (Cat's Paw SFR)
         basepath = f'/orange/adamginsburg/jwst/{target}/'
     else:
         basepath = f'/blue/adamginsburg/adamginsburg/jwst/{target}/'
+    # The reduction and cataloging drivers both honour this; the merge did not,
+    # so a redirected run reduced and cataloged under the override and then
+    # merged out of the hard-coded tree.
+    basepath = apply_basepath_override(basepath)
+    if target in obs_filters:
+        # Only for a target we know.  Doing it unconditionally meant a typo'd
+        # --target created a directory tree for a field that does not exist.
+        os.makedirs(os.path.join(basepath, 'catalogs'), exist_ok=True)
 
-    offsets_tables = {'1182': Table.read(f'/blue/adamginsburg/adamginsburg/jwst/brick/offsets/Offsets_JWST_Brick1182_F444ref.csv'),
+    # Only 1182 has an offsets table; the rest align in imaging.  Read it on
+    # demand -- it lives at an absolute path, and eagerly reading it made every
+    # run of every target depend on that one file.
+    offsets_tables = {'1182': _BRICK_1182_OFFSETS,
                       '2221': None,
                       '3958': None,
                       '2092': None,
@@ -3073,7 +3098,7 @@ def main():
                     suffix=INDIV_MERGE_SUFFIX[method], method=method,
                     target=target, basepath=basepath, field=options.field,
                     exposure_numbers=np.arange(1, options.max_expnum + 1),
-                    offsets_table=offsets_tables[progid],
+                    offsets_table=_read_offsets_table(offsets_tables[progid]),
                     iteration_label=options.iteration_label,
                     resbgsub=options.resbgsub,
                     n_spatial_chunks=int(options.n_spatial_chunks),
@@ -3088,6 +3113,24 @@ def main():
                       f"skipping", flush=True)
 
     # Step 2: the all-filter merged catalogs, once.
+    #
+    # ONCE, literally: these read EVERY filter's step-1 output and write one set
+    # of files.  An array of N tasks each running this is N concurrent writers
+    # of the same catalogs, most of them reading inputs their sibling tasks have
+    # not produced yet.  So a task that merged one filter stops here, and the
+    # all-filter merges are a separate job that depends on the whole array --
+    # see scripts/reduction/submit_merge.sbatch.
+    #
+    # Same predicate as the registration gate below: `jobs` is empty without
+    # --merge-singlefields, so a plain --array=0 run IS the whole merge and
+    # goes on.  A plain run has task_id None and goes on.
+    if task_id is not None and jobs:
+        print(f'array task {task_id}: per-filter merge done.  The all-filter '
+              f'merges need every filter, so run them once the array has '
+              f'finished (a job with no --array and no --merge-singlefields).',
+              flush=True)
+        return
+
     merge_kwargs = dict(module=module, target=target, basepath=basepath,
                         indivexp=options.merge_singlefields,
                         resbgsub=options.resbgsub,

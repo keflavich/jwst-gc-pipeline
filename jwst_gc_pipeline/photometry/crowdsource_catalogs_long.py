@@ -4661,13 +4661,6 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     else:
         basepath = f'/blue/adamginsburg/adamginsburg/jwst/{field_to_reg_mapping[field]}/'
 
-    # NIRISS products live under <target>/niriss/ so its F480M/F356W do not
-    # collide with NIRCam's.  Moving basepath down one level redirects every
-    # downstream glob at once; stage_niriss_basepath.sh sets that tree up.
-    if _instrument_override() == 'NIRISS':
-        basepath = f'{basepath}niriss/'
-        print(f"NIRISS instrument override: basepath -> {basepath}", flush=True)
-
     # Non-destructive experimental runs: redirect the WHOLE basepath to a scratch
     # tree staged (stage_scratch_basepath.sh) with symlinks/copies of the real
     # INPUT frames only, so a full-frame run writes its outputs there and never
@@ -4678,6 +4671,22 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     basepath = apply_basepath_override(basepath)
     if basepath != _bp0:
         print(f"GC_BASEPATH_OVERRIDE active: basepath -> {basepath}", flush=True)
+
+    # NIRISS products live under <target>/niriss/ so its F480M/F356W do not
+    # collide with NIRCam's.  Moving basepath down one level redirects every
+    # downstream glob at once; stage_niriss_basepath.sh sets that tree up.
+    # This runs AFTER the override, which replaces the path wholesale and so
+    # used to discard the sub-level -- a redirected NIRISS run then wrote where
+    # a redirected NIRCam run of the same target writes.
+    if _instrument_override() == 'NIRISS':
+        basepath = f'{basepath}niriss/'
+        print(f"NIRISS instrument override: basepath -> {basepath}", flush=True)
+
+    # PSF grids and catalogs are written here.  Create them: every existing
+    # target tree already has both, so a new target was the only thing that
+    # ever hit the missing-directory error.
+    for _subdir in ('psfs', 'catalogs'):
+        os.makedirs(os.path.join(basepath, _subdir), exist_ok=True)
 
     pl.close('all')
 

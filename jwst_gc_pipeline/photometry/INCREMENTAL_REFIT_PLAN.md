@@ -7,6 +7,9 @@
   is **bit-identical** when the background changes only outside the source's
   footprint (`test_incremental_refit.py::test_far_bg_change_leaves_independent_fit_bit_identical`),
   and DOES change for a localized in-footprint change (control).
+- ⛔ **The two CLI flags named below do not exist yet.** `--manual-incremental-refit`
+  and `--manual-incremental-refit-verify` are the *planned* names for the wiring
+  step; `grep` will not find them in `crowdsource_catalogs_long.py` today.
 - ⏭️ **Fit-loop wiring is the next, VERIFY-GATED step** (see "Wiring" below). It is
   deliberately NOT in this PR: it is surgery on the core per-frame fit path
   (`do_photometry_step_manual`), including `modsky` reconstruction, and must be

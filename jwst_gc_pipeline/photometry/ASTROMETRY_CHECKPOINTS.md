@@ -74,7 +74,9 @@ never silently green.
 ## Corrections & provenance
 
 * The offsets table is the ONLY authoring channel (see
-  `../reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md`).
+  `../reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md`; which table a field reads is
+  declared in `../reduction/alignment_config.py` and resolved by
+  `unified_alignment.resolve_shift`).
   `update_offsets_table` converts on-sky mas → the table's Δα-coordinate
   convention, refuses corrections that match no row, refuses a per-exposure
   correction against a per-visit (module-locked) table, validates the result
@@ -101,6 +103,47 @@ never silently green.
     the group) instead of inserting a second row beside it. If two groups claim
     the same legacy row, that row blended two pointings and the upsert REFUSES
     rather than guessing which group inherits the shift.
+* **Magnitude ceilings on what may be written** (`_assert_correction_magnitudes`).
+  A correction is bounded by its KIND:
+
+  | correction kind | constant | default | override |
+  |---|---|---|---|
+  | per-exposure jitter (has an `exposure` or a `module`) | `MAX_CORRECTION_ARCSEC` | **0.5″** | `ASTROM_MAX_CORRECTION_ARCSEC` |
+  | per-visit BULK tie (`exposure is None` **and** `module is None`) | `MAX_BULK_CORRECTION_ARCSEC` | **60″** | `ASTROM_MAX_BULK_CORRECTION_ARCSEC` |
+
+  Jitter is mas-scale by construction, so 0.5″ is already generous — that is the
+  gate cloudef needed (its +102″ runaway was written to a per-EXPOSURE row). The
+  bulk tie is deliberately loose because a wrong-guide-star visit really is
+  arcseconds off (brick-1182 visit-001 ~17–20″) and correcting it is the job; 60″
+  is `measure_offset`'s sweep ceiling, past which a "measurement" cannot have come
+  from a swept peak. A non-positive or unparseable override raises rather than
+  silently refusing every correction.
+* **Cumulative drift bound.** The per-correction ceiling cannot see creep across
+  successive calls (five legal 0.4″ corrections = 2″ of silent drift; cloudef
+  reached 105″ that way). Because `prov_dra/ddec_added_mas` accumulate, the write
+  path also rejects any ROW whose total accumulated correction exceeds the **bulk**
+  limit. ⚠ Note what this does and does not catch: it bounds accumulation at 60″,
+  so a table can still accumulate tens of arcseconds of `prov_*_added_mas` without
+  tripping it. **The diagnostic for a poisoned table is `prov_*_added_mas`, not the
+  total `|offset|`** — an m2 visit-consensus correction is mas-scale by
+  construction, so arcsecond-scale `prov_*_added_mas` is a category error, while a
+  large *total* can be perfectly correct (brick-1182's released table is median
+  12.1″ with only 68/7.6 mas of `prov_*` additions — verified on the live table).
+  ⚠ **Blind spot:** `update_offsets_table` zero-fills the `prov_*` columns when
+  they are absent, so a rebuilt or legacy table restarts the accumulator at 0 —
+  and cloudef's live table, the field whose +102″ runaway motivates this whole
+  paragraph, has **no `prov_*` columns at all**. On such a table both the drift
+  bound and the `prov_*` diagnostic are blind.
+* **Module-granularity refusal** (`_assert_module_granularity`). Corrections are
+  keyed `(visit, exposure, module)`, but the apply loop skips module narrowing on a
+  table with no `Module` column — so every detector's correction for one exposure
+  lands on the SAME row, additively (8 × 0.4″ → +3.2″, each part legal). Such a
+  correction set is now refused. Tables that DO carry `Module` are unaffected —
+  checked 2026-07-30: cloudc's (built `--per-module`) and **sgrc's** both have a
+  populated `Module` column, so the guard returns early for them; **brick's two
+  tables (1182, 2221), cloudef's and gc2211's have none**, so those are the ones
+  the guard protects. (`_assert_module_granularity`'s own docstring still names
+  sgrc as Module-less; that is stale.)
 * Stale im0 mosaics are RENAMED `*_i2d_im0_badastrom.fits` (+ a `.why.json`
   sidecar and a ledger in `astrometry_checkpoints/`), never deleted, never
   edited.
@@ -128,6 +171,12 @@ audit the full ladder from these records.
 | `ASTROM_REFCAT=<path>` | reference catalog override (default: `{basepath}/catalogs/gaia_virac2_refcat*.fits`) |
 | `ALLOW_LATE_STAGE_ASTROM_SHIFT=1` | override the m3+ frozen-solution gate |
 | `ALLOW_CROSSFILTER_ASTROM_FAIL=1` | override the cross-filter gate |
+| `ASTROM_MAX_CORRECTION_ARCSEC=<f>` | raise/lower the per-exposure ceiling (default 0.5″) |
+| `ASTROM_MAX_BULK_CORRECTION_ARCSEC=<f>` | raise/lower the per-visit bulk ceiling **and** the cumulative-drift bound (default 60″) |
+| `ASTROM_ALLOW_MISSING_PERFRAME=1` | demote the missing-per-frame-catalog stop (`cataloging.py`) |
+| `CATALOG_ALLOW_UNVETTED_FALLBACK=1` | allow the unvetted-catalog fallback |
+| `OFFSETS_TABLE_COLLAPSE_RAISE=1` | make the collapsed-visit guard raise instead of warn (`reduction/validate_offsets_table.py`) |
+| `FORCE_REALIGN_ON_DISAGREE=1` | hard-stop when a frame's baked `RAOFFSET` disagrees with the current table (`reduction/unified_alignment.py`) |
 
 Overrides exist for deliberate, justified use — never to make a red gate
 green (same policy as `ALLOW_REGISTRATION_FAIL`).

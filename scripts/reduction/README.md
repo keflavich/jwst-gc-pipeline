@@ -64,7 +64,11 @@ One filter per task. Each task now passes `--parallel-workers=$SLURM_CPUS_PER_TA
 so the frame fits actually use every requested core (previously the fat job left
 all but one core idle). A single-filter task runs m12..m6 only — no cross-band
 m7. To also build the cross-band catalog, either run the monolithic multifilter
-job (one task, `FILTERS="all"`) or use stream 2.
+job (one task, with **every filter listed explicitly**, e.g.
+`FILTERS="F182M,F187N,F212N,F405N,F410M,F466N"`) or use stream 2. There is no
+`all` keyword: `multifilter` is `len(filternames) > 1`, so `FILTERS="all"` yields a
+one-element list, skips m7 entirely, and then fails the FWHM lookup on a filter
+named `all`.
 
 ### Stream 2 — low-resource / dependency-chained (optional)
 
