@@ -2568,8 +2568,8 @@ def save_residual_datamodel(input_filename, output_filename, data, clear_dq=Fals
     core at 3378/10547, but the mosaic shows ~0 -- the saturated-core pixels were
     weighted out).  Unsaturated stars (C/D) keep good DQ so they survive; only the
     saturated cores were being lost.  Clearing DQ lets the full model resample.
-    Used ONLY for the model; the RESIDUAL keeps the data DQ (NaN cores there are
-    honest -- the data IS missing).
+    Used ONLY for the model; the RESIDUAL keeps the data DQ (a NaN core there is
+    correct -- the data IS missing).
     """
     import astropy.io.fits as fits_io
 

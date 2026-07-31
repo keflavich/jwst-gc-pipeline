@@ -28,9 +28,9 @@ def to_hats(parquet_path, out_dir, catalog_name, ra_col='ra', dec_col='dec',
             overwrite=True, client=None, threaded=False, **import_kwargs):
     """Convert a flat Parquet catalog to a HATS catalog directory.
 
-    Parameters mirror ``hats_import.catalog.arguments.ImportArguments``.
-    hats-import 0.10.x has no ``overwrite`` kwarg, so ``overwrite`` here clears
-    an existing output dir first.  Extra ``import_kwargs`` pass through
+    Parameters mirror ``hats_import.catalog.arguments.ImportArguments`` as of
+    hats-import 0.10.x, which has no ``overwrite`` kwarg, so ``overwrite`` here
+    clears an existing output dir first.  Extra ``import_kwargs`` pass through
     to ``ImportArguments`` (e.g. ``dask_n_workers``).  Returns
     ``out_dir/catalog_name``.  Run on the ``.parquet`` from
     ``catalog_assembly.write_outputs``; a ``skycoord`` mixin is expanded to

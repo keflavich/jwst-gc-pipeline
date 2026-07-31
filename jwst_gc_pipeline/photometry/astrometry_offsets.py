@@ -322,7 +322,9 @@ def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
         AUTO-ESCALATE the search window through ``sweep_windows`` and keep the
         highest-contrast result.  This is ON by default: it is the guard against a
         large offset masquerading as "no tie" (the brick-1182 v001 trap), and it
-        is what makes the contrast threshold meaningful at all.
+        is what makes the contrast threshold meaningful: with ``sweep=False``
+        the contrast comes from one narrow window, in which a large offset and a
+        genuine absence of a tie are indistinguishable.
     sweep_windows : iterable of float or None
         Windows (arcsec) to escalate through (default ``DEFAULT_SWEEP_WINDOWS``).
     confirm_windows : bool
@@ -349,8 +351,12 @@ def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
         widening (investigate: the frame is grossly shifted).  ``dra_err`` /
         ``ddec_err`` are MAD-based standard errors of the peak position from
         the ``n_peak`` near-peak pairs.  ``window_edge_fraction`` is
-        ``off / window`` -- near 1 the peak is riding the window edge and is
-        probably a geometric artifact of the window itself (issue #158).
+        ``off / window`` -- near 1 the peak is riding the window edge.  Two
+        non-overlapping footprints have a pair-density ridge at the lag that
+        slides one onto the other, and the window truncates it, so the arg-max
+        lands on the cut: that is footprint geometry, not a tie (issue #158).
+        Widening the window MOVES such a peak instead of removing it;
+        ``confirm_windows`` / ``window_consistent`` is the gate.
         ``windows`` records every evaluated window so a record can be audited
         after the fact.
     """

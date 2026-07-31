@@ -2728,8 +2728,8 @@ def _structure_noise_keep(data, err, *, xpix, ypix, struct_x=0.0, struct_y=0.0,
         peak > smoothed_mean + struct_x * real_noise + struct_y * structure_noise
 
     smoothed_mean   = median-filtered data on ``smooth_box`` (>~5x FWHM, so it
-                      tracks the large-scale background and smooths over the
-                      filaments);
+                      follows the large-scale background and leaves the
+                      filaments in ``data - smoothed``);
     real_noise      = propagated per-pixel ERR;
     structure_noise = local scatter of (data - smoothed) over ``struct_box`` -- the
                       "noise" introduced by emission structure.  This rejects

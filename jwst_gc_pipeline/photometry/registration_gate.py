@@ -20,8 +20,9 @@ Design notes
 * Default is **warn** (return a status); pass ``strict=True`` / ``--strict`` to
   RAISE on FAIL so it can hard-gate a chain. A scan that cannot run (e.g. <2 bands
   present) is a WARN, never a block -- it must not wedge a partial run.
-* The underlying failsafe measures per-cell agreement-fraction + offset-histogram,
-  which is what CLAUDE.md's astrometry rule #1 requires. See CLAUDE.md.
+* The underlying failsafe measures per-cell agreement-fraction plus
+  offset-histogram stacking, and never nearest-neighbour-medians against the
+  dense reference (CLAUDE.md astrometry rule #1). See CLAUDE.md.
 """
 import json
 import os

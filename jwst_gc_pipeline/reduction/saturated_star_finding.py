@@ -1713,9 +1713,9 @@ def is_bright_flux_phantom(flux, flux_init, ssr_ratio, *, flux_floor=1.0e5,
     ~10^5-px DQ-SATURATED blob, so every PRE-fit metric fails -- an emission knot is
     a compact bright peak that the seed gate scores as MORE stellar than a genuine
     saturated star whose own core is zeroed (prominence/core/conc/data-floor/NaN-
-    core/morphology all rank the phantom >= the real star; verified W51 F770W).  The
+    core/morphology all rank the phantom >= the real star; W51 F770W).  The
     two signals that DO separate them are POST-fit, and only for very bright fits
-    (the ``flux_floor`` precondition is load-bearing -- it protects genuine deeply-
+    (the ``flux_floor`` precondition protects genuine deeply-
     saturated stars whose faint wing-seed gives a large extrapolation ratio, e.g. a
     real spiky star at flux 2e4 with flux/flux_init=61):
 
@@ -1725,8 +1725,8 @@ def is_bright_flux_phantom(flux, flux_init, ssr_ratio, *, flux_floor=1.0e5,
       * ``flux / flux_init > ratio_max`` -- the fit EXTRAPOLATED an enormous flux
         from a faint seed (W51 SPUR2: flux_init 6677 -> flux_fit 7.0e6, 1054x).
 
-    Requires ``flux > flux_floor`` AND (bad ssr OR bad ratio).  Verified on W51
-    F770W: flags 7/153 satstars, all confirmed emission phantoms by eye, zero real-
+    Requires ``flux > flux_floor`` AND (bad ssr OR bad ratio).  On W51
+    F770W it flags 7/153 satstars, all confirmed emission phantoms by eye, zero real-
     star false drops (the user's real well-fit bright star: ssr=12, ratio=14 ->
     kept).  Thresholds are F770W-surface-brightness-calibrated; ``flux_floor`` is
     field/filter dependent -> override per run (MIRI_SATSTAR_PHANTOM_*).  Returns

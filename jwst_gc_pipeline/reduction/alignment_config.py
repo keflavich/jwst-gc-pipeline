@@ -43,7 +43,8 @@ VVV footprint use Gaia directly.  The frame is therefore configured per field.
 ``RECORDED_BULK``
     A bulk offset already measured and recorded here as a constant.  These are
     pure bulk -- no per-exposure jitter term -- and are the entries that pipeline
-    step 0 will VERIFY, leaving the recorded constant in place, once that lands.
+    step 0 verifies, leaving the recorded constant in place
+    (``jwst_gc_pipeline.reduction.bulk_offset_step0``).
 
 Bulk vs jitter
 --------------

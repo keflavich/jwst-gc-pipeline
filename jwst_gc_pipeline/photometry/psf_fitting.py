@@ -149,8 +149,9 @@ def forced_psf_photometry(image, psf_model, init_params, *,
 
     Two properties make this the right tool for that refit:
 
-    * **Position pinned at the trusted SEED** (``x_init``/``y_init``); the
-      drifted ``x_fit`` is discarded.  The whole failure is the centroid
+    * **Position pinned at the trusted SEED** (``x_init``/``y_init``): the
+      drifted ``x_fit`` never enters this function, and the returned
+      ``x_fit``/``y_fit`` are the seed.  The whole failure is the centroid
       wandering, so the flux is re-measured where the star actually is -- at the
       seed.  With position fixed, the model is LINEAR in flux, so the weighted
       least-squares flux has the exact closed form

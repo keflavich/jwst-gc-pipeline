@@ -70,7 +70,7 @@ def _resolve_existing_path(path):
 
 def reproject_xy_to_world(cat, crf_path=None, xcol='x_fit', ycol='y_fit', sci_ext='SCI'):
     """Sky positions from the STABLE detector pixel centroids through the CURRENT
-    crf WCS.
+    crf WCS, superseding the catalog's cached ``skycoord_centroid``.
 
     A per-frame ``daophot_basic`` catalog stores ``skycoord_centroid`` computed
     from the crf WCS *at catalog-build time*.  When the crf is re-drizzled with a

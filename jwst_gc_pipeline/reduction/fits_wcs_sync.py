@@ -59,9 +59,9 @@ Two further defects the bare ``header.update()`` had:
    ``check_wcs`` compared only the array **centre**, where the distortion
    residual is identically zero by construction (measured on brick F182M nrca1:
    centre 0.0000 mas, (0,0) 5.117 mas, (2047,2047) 5.289 mas).  A 25x loosening
-   of the REQUESTED bound (0.25 px vs STScI's 0.01; the measured change it caused
-   is 5.487 -> 0.000 mas) survived because the check sat exactly where the error
-   vanishes: a gate that cannot see the failure it is named for.
+   of the REQUESTED bound (0.25 px vs STScI's 0.01) survived because the check sat
+   exactly where the error vanishes: a gate blind to the failure it is named for.
+   Measured, that loosening takes brick SW nrca1 from 0.000 to 5.487 mas.
 
 So: fit tight, strip stale coefficients, and **verify against the GWCS before
 returning**.
