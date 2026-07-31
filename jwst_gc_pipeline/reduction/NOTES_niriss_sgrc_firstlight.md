@@ -1,8 +1,8 @@
 # NIRISS Sgr C (4147 / obs 012) — first-light reduction + cataloging
 
 New instrument path (first NIRISS in this pipeline). Ported from the MIRI
-single-detector runner, NOT NIRCAM-LONG (no module/destreak/SW-LW split applies
-to the single NIS detector).
+single-detector runner: NIRISS has one NIS detector, so the module / destreak /
+SW-LW split plays no part.
 
 ## What runs
 - Reduction: `reduction/PipelineRerunNIRISS.py` (Detector1+Image2 from uncal →
@@ -39,13 +39,12 @@ cross-check blocks a good VIRAC tie (Sgr C is deep; the JWST-detectable Gaia
 subset is small). So for first light we demote the checkpoint to a warning and
 ship the tweakreg-abs VIRAC tie (~9 mas).
 
-DEFERRED (not blocking first light): (a) the 2–10 mas per-exposure consensus
+DEFERRED (after first light): (a) the 2–10 mas per-exposure consensus
 refinement (would need NIRISS `fix_alignment` to consume a consensus offsets
 table, à la the NIRCAM sgrc `_apply_consensus_offsets_table` path, then
 regenerate + re-catalog); (b) root-causing the 18.7″ sparse-Gaia cross-ref for
 single-detector NIRISS (refcat Gaia-subset epoch/PM to obs 2024.49? checkpoint
-pairing for one detector?). Both are astrometry-refinement follow-ups, not
-first-light blockers.
+pairing for one detector?). Both are astrometry-refinement follow-ups.
 
 ## Status (2026-07-25)
 F200W: reduction + full m6 catalog (104,816 sources; clean model/residual;

@@ -6,8 +6,7 @@
 > `scripts/reduction/` (`submit_cataloging_perframe.sh`,
 > `submit_cataloging_perframe_phase.sbatch`), and the monolith-vs-per-frame
 > equivalence check is `scripts/reduction/validate_perframe_equivalence.sh` (a
-> shell driver, **not** `tests/test_perframe_equivalence.py`). Kept for the design
-> rationale.
+> shell driver). Kept for the design rationale.
 
 Goal: let each exposure frame be cataloged as an independent small SLURM job so
 cataloging backfills into small queue holes (the queue bottleneck is large-cpu
@@ -27,9 +26,9 @@ Each phase, for each `(module, filt)`:
    catalogs → vet → tag `iter_found` provenance → build the mergedcat residual
    i2d → smooth it into the next phase's background map.
 
-So per-frame splitting is naturally **per-phase `{fan-out array → finalize}`**,
-chained `afterok`, looped over phases — NOT "one job runs all phases" (phase p
-needs phase p-1's *global* merge/residual/bg).
+So per-frame splitting is **per-phase `{fan-out array → finalize}`**, chained
+`afterok`, looped over phases: phase p needs phase p-1's *global*
+merge/residual/bg.
 
 ## The four cross-phase state objects (in-memory dicts keyed by `(module,filt)`)
 
@@ -53,7 +52,7 @@ New `optparse` options on `crowdsource_catalogs_long.py`:
   `index % N == I`. Default '' = all (monolithic).
 - `--manual-skip-finalize` — fan-out worker: fit the (sharded) frames, write a
   per-frame completion marker, then STOP before the barrier.
-- `--manual-finalize-only` — barrier job: do NOT fit; verify every candidate
+- `--manual-finalize-only` — barrier job: skip the fit; verify every candidate
   frame has its phase marker (hard-crash on any miss → no silent drop), then
   reconcile/merge/vet/provenance/residual/bg as usual.
 
@@ -76,8 +75,8 @@ m12 file). Then the phase-loop body runs byte-for-byte as today.
   sliced `phases[0]` is a later phase).
 - **m12 reconcile (2133-2170)**: additionally PERSIST `_ovr/_drp` to
   `{cut_bp}/catalogs/{filt}_{module}_satstar_reconciled_m12.fits`.
-- everything 2172→ (merge/vet/provenance/residual/bg): runs only when not
-  `skip_finalize`.
+- everything 2172→ (merge/vet/provenance/residual/bg): runs in the barrier job
+  (`skip_finalize` off).
 
 ## SLURM orchestration
 
@@ -88,9 +87,8 @@ then next phase's stage A `afterok` stage B. m7 finalize also does cross-band.
 
 ## Validation
 
-`scripts/reduction/validate_perframe_equivalence.sh` (the shipped shell driver;
-this plan originally proposed a `tests/`-side equivalence test that was never
-written): run a small cutout BOTH
+`scripts/reduction/validate_perframe_equivalence.sh` (the shipped shell driver):
+run a small cutout BOTH
 monolithically and via the per-frame path; assert the final per-filter vetted
 catalogs + cross-band table are **bit-identical** (same rows, same flux columns).
 
