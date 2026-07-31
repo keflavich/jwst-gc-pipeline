@@ -678,17 +678,16 @@ def detect_module_antisymmetry(exposures,
     Per-exposure jitter is common-mode across the detectors of one exposure --
     every detector of an exposure rides the same guide-star pointing error, so
     the modules agree.  Two modules reading LARGE, equal-and-opposite offsets is
-    not a pointing error at all: it is one module tied onto the other's stars
-    (directly, or through a consensus frame that a single bad tie corrupted and
-    the median re-centring then split evenly between them).
+    the signature of one module tied onto the other's stars (directly, or
+    through a consensus frame that a single bad tie corrupted and the median
+    re-centring then split evenly between them).
 
-    Deliberately NOT keyed to a specific separation.  The obvious candidate --
-    the SIAF nrcalong<->nrcblong reference-point separation, ~174" -- is not
-    what the W51 alias sat at: the measured module split was ~56", the lag that
-    slides the two module FOOTPRINTS onto each other, which depends on the
-    mosaic/dither pattern and so has no fixed value.  Keying on a hardcoded
-    separation would have made this guard silently never fire.  What IS
-    invariant is the antisymmetry and the SCALE (see MODULE_ANTISYMMETRY_MIN_MAS).
+    The guard keys on what IS invariant: the antisymmetry and the SCALE (see
+    MODULE_ANTISYMMETRY_MIN_MAS).  The W51 alias sat at a ~56" module split --
+    the lag that slides the two module FOOTPRINTS onto each other, which depends
+    on the mosaic/dither pattern and so has no fixed value -- while the SIAF
+    nrcalong<->nrcblong reference-point separation is ~174".  Keying on a
+    hardcoded separation would have made this guard silently never fire.
 
     ``exposures`` is ``build_visit_consensus(...)['exposures']``.
 
@@ -825,8 +824,8 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
     C. cross-reference agreement (A vs B).  A GROSS split (> ``gross_tol_mas``)
        means A is a spurious/window-limited peak (reference-dependent) and DOES
        block.  A fine split (~5-10 mas, the sparse-Gaia noise regime) is recorded
-       but does NOT block — that is a JWST-side population effect, not a catalog
-       conflict (Gaia<->VIRAC2 agree ~2.3 mas over the Brick footprint).
+       but does NOT block — it is a JWST-side population effect
+       (Gaia<->VIRAC2 agree ~2.3 mas over the Brick footprint).
     D. per-tile map vs the full reference (``measure_offset_grid``) — a bulk
        ~0 with a shifted half-mosaic FAILS here.
     E. (when the band overlaps VIRAC2 and magnitudes are provided) a

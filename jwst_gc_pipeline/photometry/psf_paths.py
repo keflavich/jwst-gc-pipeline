@@ -1,8 +1,8 @@
 """Centralized gridded-PSF storage paths.
 
 Gridded PSFs are determined by the physics (instrument, detector/module,
-filter, oversampling, blur) and do NOT change from field to field or proposal
-to proposal, yet the legacy layout stored one copy per (proposal, field):
+filter, oversampling, blur), so one grid serves every field and every proposal,
+yet the legacy layout stored one copy per (proposal, field):
 
     {jwst_root}/{target}/psfs/{FILTER}_{prop}_{field}_merged_PSFgrid_oversample{N}[_blur].fits
 

@@ -16,8 +16,8 @@ so in the overlap the visit-001 image landed ~90 mas from the visit-002 image an
 every star drizzled into a ~0.09" double.  Bulk / coarse-grid / vs-reference QC
 all passed it: the whole-field histogram peak averaged the two visits to ~50 mas,
 the 4x4 grid diluted the thin overlap strip inside a 67" tile, and
-``registration_failsafes`` searched only +-2.5" vs the reference (not frame-vs-
-frame) and averaged the overlap away.
+``registration_failsafes`` compared each frame only against the reference
+catalog, within +-2.5", and averaged the overlap away.
 
 The ONLY check that sees it is REFERENCE-FREE and PAIRWISE: for every pair of
 exposure-groups that overlap on the sky, histogram-stack their mutual offset and
@@ -39,9 +39,9 @@ culprit).  Then::
     from jwst_gc_pipeline.photometry.interframe_overlap import assert_overlaps_registered
     assert_overlaps_registered(groups, tol_mas=30.0)   # raises on any bad overlap
 
-Detections should come from the per-exposure ``_crf`` frames (each on its own
-corrected GWCS), NOT from the drizzled mosaic (which has already merged the
-frames and doubled the stars).
+Detections must come from the per-exposure ``_crf`` frames, each on its own
+corrected GWCS.  The drizzled mosaic has already merged the frames and doubled
+the stars, so it can no longer show the disagreement.
 """
 
 import itertools
@@ -157,7 +157,7 @@ def pairwise_overlap_offsets(groups, tol_mas=DEFAULT_OVERLAP_TOL_MAS,
     groups : dict[str, SkyCoord]
         ``{label: source_list}`` -- one entry per exposure-group (visit, or
         visit x detector).  Source lists must come from the per-exposure
-        corrected frames, not the merged mosaic.
+        corrected frames; the merged mosaic has already doubled the stars.
     tol_mas : float
         A pair is FLAGGED (``ok=False``) if it has a coherent mutual tie whose
         magnitude exceeds this.

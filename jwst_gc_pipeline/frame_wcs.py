@@ -17,11 +17,11 @@ of the fit carry error:
 **1. The fit residual.**  ``all_pix2world`` through the SIP header differs from
 the GWCS by, on a brick F182M nrca1 ``_crf`` (20k random pixels), a median of
 0.82 mas and a max of 5.1 mas -- equivalently 26 and 165 **millipixels** at the
-31.2 mas/px SW plate scale.  Those are the *same* number in two units, not two
-separate defects: SIP's own forward->inverse round trip closes to 0.000
+31.2 mas/px SW plate scale.  Those are the *same* number in two units.  There is
+one error -- the degree of the polynomial -- and it shows up in whichever
+direction you look: SIP's own forward->inverse round trip closes to 0.000
 millipixels, so the ``AP_*``/``BP_*`` inverse fit and its solver add nothing
-measurable.  There is one error -- the degree of the polynomial -- and it shows
-up in whichever direction you look.
+measurable.
 
 It is position-dependent and a different surface per detector *and* per filter,
 so no bulk tie removes it; that is exactly the shape of error the astrometric
@@ -29,9 +29,9 @@ gates look for (2 mas m2 consensus, 5 mas m7 cross-filter, 30 mas overlap).
 With the tight fit this package now writes, the residual is ~0.00 mas; on every
 frame written before that fix it is 5-8 mas.
 
-**2. Off-footprint behaviour -- genuinely independent, and worse than a crash.**
-SIP's inverse is solved iteratively and diverges outside the frame.  What
-happens then depends on the call path, and none of the three is safe:
+**2. Off-footprint behaviour -- a second, independent defect, and worse than a
+crash.**  SIP's inverse is solved iteratively and diverges outside the frame.
+What happens then depends on the call path; all three paths are unsafe:
 
 ===========================================  ==========================================
 call                                         result for a point ~2 deg off-frame
@@ -46,8 +46,8 @@ The silent finite value is the dangerous one: it propagates into a catalog
 instead of stopping the run.  The GWCS returns ``NaN`` on all paths -- the
 correct sentinel, which the callers' in-bounds tests already drop.
 
-**Cost.**  Not a wash in the way you might guess: forward, GWCS is ~1.3x slower
-(50k transforms, best of 7: 8.4 ms vs 6.4 ms); inverse, GWCS is ~1.1x *faster*
+**Cost.**  Forward, GWCS is ~1.3x slower (50k transforms, best of 7: 8.4 ms vs
+6.4 ms); inverse, GWCS is ~1.1x *faster*
 (14.0 ms vs 15.7 ms), because the analytic inverse beats SIP's iterative solve.
 Absolute numbers vary with machine load; the directions are stable.
 

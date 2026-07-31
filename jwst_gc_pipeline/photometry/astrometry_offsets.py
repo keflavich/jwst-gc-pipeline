@@ -321,8 +321,8 @@ def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
         If the initial window shows no coherent tie (contrast < ``min_contrast``),
         AUTO-ESCALATE the search window through ``sweep_windows`` and keep the
         highest-contrast result.  This is ON by default: it is the guard against a
-        large offset masquerading as "no tie" (the brick-1182 v001 trap).  A single
-        contrast threshold at a fixed narrow window is NOT trustworthy without it.
+        large offset masquerading as "no tie" (the brick-1182 v001 trap), and it
+        is what makes the contrast threshold meaningful at all.
     sweep_windows : iterable of float or None
         Windows (arcsec) to escalate through (default ``DEFAULT_SWEEP_WINDOWS``).
     confirm_windows : bool
@@ -350,8 +350,9 @@ def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
         ``ddec_err`` are MAD-based standard errors of the peak position from
         the ``n_peak`` near-peak pairs.  ``window_edge_fraction`` is
         ``off / window`` -- near 1 the peak is riding the window edge and is
-        probably geometry, not a tie.  ``windows`` records every evaluated
-        window so a record can be audited after the fact.
+        probably a geometric artifact of the window itself (issue #158).
+        ``windows`` records every evaluated window so a record can be audited
+        after the fact.
     """
     min_contrast = DEFAULT_MIN_CONTRAST if min_contrast is None else min_contrast
     maxsep_arcsec = maxsep.to(u.arcsec).value if hasattr(maxsep, "to") else float(maxsep)

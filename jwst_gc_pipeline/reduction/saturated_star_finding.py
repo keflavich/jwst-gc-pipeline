@@ -760,9 +760,9 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
     A bright star's DQ-SATURATED region reads wrong in the calibrated frame: the
     deep core is clipped LOW, but the rim is INFLATED above the true flux because
     charge migrates/blooms outward from the saturating core during the
-    integration (a near-saturation well-overflow effect -- NOT the classical
-    brighter-fatter effect, and not IPC).  Verified
-    on sickle F210M (NIRCam): at the rim the saturated-frame cal sits ~15% ABOVE the ramp
+    integration (a near-saturation well-overflow effect; the classical
+    brighter-fatter effect and IPC are separate mechanisms).  Measured on sickle
+    F210M (NIRCam): at the rim the saturated-frame cal sits ~15% ABOVE the ramp
     first read (recovered/cal ~ 0.85).  Subtracting a fixed PSF model from that
     inflated rim leaves a positive ring (the "+7587 dot" the user sees on the
     most-saturated stars).
@@ -801,8 +801,8 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
     sat_dilate : int
         Dilation (px) of the DQ-SATURATED mask to catch the charge-migration rim.
     infl_tol : float
-        In the dilation buffer (not DQ-flagged), only rewrite pixels inflated by
-        more than this fraction above R*group0.
+        In the dilation buffer (the ring outside the DQ-SATURATED mask), only
+        rewrite pixels inflated by more than this fraction above R*group0.
     R : float or None
         Precomputed ratio; if None it is measured from ``data``/``group0``.
 
@@ -894,7 +894,7 @@ def zeroframe_recover_saturated(data, dq, group0, *, R_g0_min=2000.0,
 def ramp_slope_map(ramp_sci, ramp_groupdq=None, *, ceiling=None,
                    min_good_groups=2):
     """Per-pixel count RATE (DN/group) from a least-squares fit over each pixel's
-    PRE-SATURATION ramp groups, detected from the DATA (not GROUPDQ).
+    PRE-SATURATION ramp groups, detected from the ramp DATA.
 
     The calibrated frame (MJy/sr) is proportional to the ramp-fit SLOPE, not the
     single first read (group-0): ``cal / slope`` is flat to ~4% and crowding-
@@ -904,12 +904,12 @@ def ramp_slope_map(ramp_sci, ramp_groupdq=None, *, ceiling=None,
     from its SLOPE, fit over the groups BEFORE it hit the well.
 
     Saturation is detected from the ramp DATA, because the ``_ramp.fits``
-    GROUPDQ broadcasts the SATURATED flag to EVERY group of a flagged pixel (it
-    is not a per-group onset), and the 2-D crf SATURATED mask is any-group
-    over-inclusive.  A pixel's usable groups are the leading run whose DN is
-    below the pile-up ``ceiling``; the first group at/above the ceiling and all
-    after it are dropped.  (Optional ``ramp_groupdq`` is used ONLY to drop
-    JUMP_DET groups -- cosmic rays -- not for saturation.)
+    GROUPDQ broadcasts the SATURATED flag to EVERY group of a flagged pixel, so
+    it marks the pixel without saying WHEN saturation began, and the 2-D crf
+    SATURATED mask is any-group over-inclusive.  A pixel's usable groups are the
+    leading run whose DN is below the pile-up ``ceiling``; the first group
+    at/above the ceiling and all after it are dropped.  (Optional
+    ``ramp_groupdq`` is used ONLY to drop JUMP_DET groups -- cosmic rays.)
 
     Parameters
     ----------
@@ -1677,9 +1677,9 @@ def is_fake_bright(model_peak, local_peak, *, model_min=1.0e4, localpk_max=3.5e3
     smooth extended emission with NO compact source -- gouging a bright fake star
     (and a NaN/deep-negative pit in the residual) where there is none.
 
-    Two signals, both needed to be field-general (an ABSOLUTE local-peak cut alone
-    does NOT generalise: a real saturated star in a faint field can have a local
-    peak of ~2000 while a fake in a bright field reaches ~2300):
+    Two signals, both needed to be field-general.  An ABSOLUTE local-peak cut
+    alone is ambiguous across fields: a real saturated star in a faint field can
+    have a local peak of ~2000 while a fake in a bright field reaches ~2300.
 
       * ``model_peak > model_min`` AND ``local_peak < localpk_max`` -- the fit
         claims a very bright source the local image cannot support.

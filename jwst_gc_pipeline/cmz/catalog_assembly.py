@@ -6,10 +6,10 @@ with a column union, add per-source provenance (which field / program / obsid /
 pipeline tag it came from), de-duplicate sources that fall in a field-overlap
 region, and record a per-source filter-coverage count.
 
-Deliberately schema-flexible: it does NOT hard-code the per-filter column names
-(they differ field to field).  A field table only needs RA/Dec columns; every
-other column is carried through, and the column union fills gaps with masked
-values.  ``coverage_cols`` (or the auto-detected flux/mag columns) drive the
+Deliberately schema-flexible: the per-filter column names are discovered at
+runtime (they differ field to field).  A field table only needs RA/Dec columns;
+every other column is carried through, and the column union fills gaps with
+masked values.  ``coverage_cols`` (or the auto-detected flux/mag columns) drive the
 coverage count and the dedup "keep the better detection" rule.
 """
 import glob as _glob
