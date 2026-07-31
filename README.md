@@ -50,7 +50,7 @@ needs, and how much of it runs off HiPerGator.
   - `dva_correction.py`, `static_placement_correction.py`, `fits_wcs_sync.py` —
     inter-detector DVA, SIAF placement, and FITS↔GWCS header sync
   - `filtering.py` — filter / FWHM / instrument utilities
-  - `make_merged_psf.py` — gridded PSF construction
+  - `make_merged_psf.py` — gridded PSF construction (deprecated; scheduled for removal)
   - `run_notebook.py` — utilities
 
 - `jwst_gc_pipeline.photometry` — catalog-level processing

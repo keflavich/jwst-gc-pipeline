@@ -1,0 +1,270 @@
+# Every field this pipeline knows about, and every observation of it.
+#
+# This file is the single place a new target is registered.  Edit it, and the
+# reduce, catalog and merge stages all pick the target up; nothing else needs
+# changing.  jwst_gc_pipeline/fields.py loads it and derives the lookups the
+# pipeline uses.  See docs/FIELDS.md.
+#
+# ORDER HERE MEANS NOTHING.  Write entries wherever they read best; the loader
+# sorts proposals numerically and filters by wavelength, so what the pipeline
+# sees is the same whatever order you use.
+
+# The two data trees.  A field's `root:` names one of these, and this is the
+# only place the absolute paths appear.
+roots:
+  orange: /orange/adamginsburg/jwst
+  blue: /blue/adamginsburg/adamginsburg/jwst
+
+fields:
+
+  arches:
+    root: orange
+    fov_region: regions_/nircam_arches_fov.reg
+    observations:
+      '2045':
+        nvisits: 1
+        reference_catalog: VIRAC2
+        obsids:
+          nircam: ['001']
+        filters: [f212n, f323n]
+
+  brick:
+    root: blue
+    fov_region: regions_/nircam_brick_fov.reg
+    observations:
+      '1182':
+        nvisits: 2
+        reference_catalog: VIRAC2
+        obsids:
+          nircam: ['004']
+        # Measured from the data once and locked in.  Relative to this field's
+        # directory.
+        offsets_table: offsets/Offsets_JWST_Brick1182_F444ref.csv
+        filters: [f115w, f200w, f356w, f444w]
+      '2221':
+        nvisits: 2
+        reference_catalog: THIS_IS_A_BUG_IF_YOU_USE_THIS
+        obsids:
+          nircam: ['001']
+          miri: ['002']
+        filters: [f182m, f187n, f212n, f405n, f410m, f466n, f2550w]
+      '3958':
+        reference_catalog: VIRAC2
+        obsids:
+          miri: ['003']
+
+  cloudc:
+    root: blue
+    fov_region: regions_/nircam_cloudc_fov.reg
+    observations:
+      '2221':
+        nvisits: 2
+        reference_catalog: THIS_IS_A_BUG_IF_YOU_USE_THIS
+        obsids:
+          nircam: ['002']
+          miri: ['001']
+        filters: [f182m, f187n, f212n, f405n, f410m, f466n, f2550w]
+      '2526':
+        nvisits: 1
+        obsids:
+          miri: ['021']
+        filters: [f770w]
+
+  cloudef:
+    root: orange
+    fov_region: regions_/nircam_cloudef_fov.reg
+    observations:
+      '2092':
+        nvisits: 1
+        reference_catalog: VIRAC2
+        obsids:
+          nircam: ['002', '005']
+          miri: ['004', '006', '008']
+        glob_obsid:
+          nircam: '*'
+          miri: '*'
+        filters: [f162m, f210m, f360m, f480m, f770w, f2100w]
+
+  gc2211:
+    root: orange
+    observations:
+      '2211':
+        nvisits: 1
+        reference_catalog: VIRAC2
+        obsids:
+          nircam: ['023', '028', '046', '049', '050']
+        glob_obsid:
+          nircam: '*'
+        filters: [f150w, f200w, f277w]
+
+  m4:
+    root: orange
+    observations:
+      '1979':
+        nvisits: 1
+        reference_catalog: Gaia
+        obsids:
+          nircam: ['002', '003']
+        glob_obsid:
+          nircam: '002'
+        filters: [f150w2, f322w2]
+
+  m92:
+    root: orange
+    observations:
+      '1334':
+        nvisits: 1
+        reference_catalog: Gaia
+        obsids:
+          nircam: ['001']
+        filters: [f090w, f150w, f277w, f444w]
+
+  ngc6334:
+    root: orange
+    observations:
+      '6778':
+        nvisits: 3
+        obsids:
+          nircam: ['001']
+        filters: [f090w, f187n, f200w, f277w, f335m, f470n]
+      '7213':
+        nvisits: 2
+        obsids:
+          nircam: ['001']
+        filters: [f115w, f162m, f182m, f200w, f356w, f405n, f444w, f470n]
+
+  ngc6397:
+    root: orange
+    observations:
+      '1979':
+        nvisits: 1
+        reference_catalog: Gaia
+        obsids:
+          nircam: ['001']
+        filters: [f150w2, f322w2]
+
+  omegacen:
+    root: orange
+    observations:
+      '8322':
+        obsids:
+          nircam: ['001']
+      '12587':
+        obsids:
+          nircam: ['001']
+
+  quintuplet:
+    root: orange
+    fov_region: regions_/nircam_quintuplet_fov.reg
+    observations:
+      '2045':
+        nvisits: 1
+        reference_catalog: VIRAC2
+        obsids:
+          nircam: ['003']
+        filters: [f212n, f323n]
+
+  sgra:
+    root: orange
+    fov_region: regions_/nircam_sgra_fov.reg
+    observations:
+      '1939':
+        nvisits: 1
+        reference_catalog: VIRAC2
+        obsids:
+          nircam: ['001']
+        filters: [f115w, f212n, f405n]
+
+  sgrb2:
+    root: orange
+    fov_region: regions_/nircam_sgrb2_fov.reg
+    # A MIRI FOV region was recorded as the string 'nope' before this file
+    # existed.  Only the NIRCam driver reads fov_region, so it was never used.
+    observations:
+      '5365':
+        nvisits: 1
+        reference_catalog: VIRAC2
+        obsids:
+          nircam: ['001']
+          # 002 and 998 ('..._skipped_redo') tile the full field between them.
+          miri: ['001', '002', '998']
+        # Both must be cataloged together or the mosaic is missing half its data.
+        joint_obsids:
+          miri: ['002-998']
+        filters: [f150w, f182m, f187n, f210m, f212n, f300m, f360m, f405n, f410m, f466n, f480m, f770w, f1280w, f2550w]
+
+  sgrc:
+    root: orange
+    fov_region: regions_/nircam_sgrc_fov.reg
+    observations:
+      '4147':
+        nvisits: 1
+        reference_catalog: VIRAC2
+        obsids:
+          nircam: ['012']
+          niriss: ['012']
+        filters: [f115w, f162m, f182m, f212n, f360m, f405n, f470n, f480m]
+        niriss_filters: [f158m, f200w, f356w, f480m]
+
+  sickle:
+    root: orange
+    fov_region: regions_/nircam_sickle_fov.reg
+    observations:
+      '3958':
+        nvisits: 1
+        reference_catalog: VIRAC2
+        obsids:
+          nircam: ['001', '002', '007']
+          miri: ['001', '002']
+        # Both MIRI observations are cataloged in one run; this token names that
+        # run, and get_filenames globs both.
+        joint_obsids:
+          miri: ['001-002']
+        glob_obsid:
+          nircam: '*'
+        filters: [f187n, f210m, f335m, f470n, f480m, f770w, f1130w, f1500w]
+
+  w51:
+    root: orange
+    fov_region: regions_/nircam_w51_fov.reg
+    # A MIRI FOV region was recorded as the string 'nope' before this file
+    # existed.  Only the NIRCam driver reads fov_region, so it was never used.
+    observations:
+      '6151':
+        nvisits: 2
+        reference_catalog: Gaia
+        obsids:
+          nircam: ['001']
+          # MIRI obs 001 was labelled 'w51_background' by the reduce driver
+          # alone.  No such tree exists; its products are in w51/, and the
+          # catalog stage always treated both as w51.
+          miri: ['001', '002']
+        glob_obsid:
+          miri: '002'
+        filters: [f140m, f162m, f182m, f187n, f210m, f335m, f360m, f405n, f410m, f480m, f770w, f1280w, f2100w]
+
+  wd1:
+    root: orange
+    fov_region: regions_/nircam_wd1_fov.reg
+    observations:
+      '1905':
+        nvisits: 3
+        reference_catalog: Gaia
+        obsids:
+          nircam: ['001', '003']
+        glob_obsid:
+          nircam: '001'
+        filters: [f115w, f150w, f164n, f187n, f200w, f212n, f277w, f323n, f405n, f444w, f466n]
+
+  wd2:
+    root: orange
+    fov_region: regions_/nircam_wd2_fov.reg
+    observations:
+      '3523':
+        nvisits: 1
+        reference_catalog: Gaia
+        obsids:
+          nircam: ['003', '005']
+        glob_obsid:
+          nircam: '005'
+        filters: [f115w, f150w, f162m, f164n, f182m, f187n, f200w, f212n, f250m, f277w, f300m, f323n, f335m, f405n, f410m, f444w, f466n]

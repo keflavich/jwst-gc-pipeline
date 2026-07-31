@@ -203,6 +203,9 @@ from jwst_gc_pipeline.photometry.naming import (
 from jwst_gc_pipeline.photometry.psf_paths import (
     resolve_merged_psf_grid_path, central_psf_dir,
 )
+# Imported as field_registry: `fields` is a local variable in these
+# drivers (the --field list), and shadowed the module.
+from jwst_gc_pipeline import fields as field_registry
 
 
 def _seed_table_chunk_subset(seed_table, ww, image_shape,
@@ -4497,105 +4500,22 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     proposal_id = options.proposal_id
     target = options.target
 
-    nvisits = {'2221': {'brick': 2, 'cloudc': 2},
-               # 2526 obs 021 = "G0" CMZ cloud-c filament F770W (1 visit),
-               # routed into the cloudc tree.
-               '2526': {'cloudc': 1},
-               '1182': {'brick': 2},
-               '3958': {'sickle': 1},
-               # cloudef = Cloud E (obs 002) + Cloud F (obs 005), two
-               # NIRCam pointings reduced together as one target.  Each
-               # obs has only 1 visit; the catalog script's visit loop
-               # is scoped to a single --field=<obs>, so nvisits is
-               # per-obs (=1), not per-target (=2).  The per-obs cat
-               # arrays in the wrapper iterate fields externally.
-               '2092': {'cloudef': 1},
-               '4147': {'sgrc': 1},
-               '5365': {'sgrb2': 1},
-               '2045': {'arches': 1, 'quintuplet': 1},
-               '1939': {'sgra': 1},
-               '2211': {'gc2211': 1},
-               # Westerlund 1 (1905) + Westerlund 2 (3523): each proposal has one
-               # main pointing per target.
-               # Wd1 (1905) o001 is a 3-VISIT NIRCam mosaic (visits 001/002/003 are
-               # offset tiles stepping ~2.7' E; together they span the full reduction
-               # footprint). nvisits=1 previously cataloged only visit 001 (the west
-               # tile) -> catalog + data_i2d covered ~1/3. Wd2 (3523) o005 is a single
-               # visit (32 frames), so 1 is correct there.
-               '1905': {'wd1': 3},
-               '3523': {'wd2': 1},
-               # w51 already exists in this codebase under proposals 1182 (obs 004)
-               # and 6151 (obs 001).  Re-assert Gaia as ref via PipelineRerunNIRCAM-LONG.
-               '6151': {'w51': 2},
-               # Globular clusters (Jay Anderson co-I; added 2026-07-01). 1 visit
-               # per field; 1979 'm4' spans two fields (o002, o003) run separately.
-               '1334': {'m92': 1},
-               '1979': {'ngc6397': 1, 'm4': 1},
-               # NGC 6334 (Cat's Paw): 7213 o001 = 2 visits, 6778 o001 = 3 visits.
-               '7213': {'ngc6334': 2},
-               '6778': {'ngc6334': 3},
-               }
-    # 2211 is an asteroid-survey program with 5 separate GC pointings; all
-    # map to the same 'gc2211' target/basepath, distinguished only by field.
-    field_to_reg_mapping = {'2221': {'001': 'brick', '002': 'cloudc'},
-                            '1182': {'004': 'brick'},
-                            # 3958: 007 = NIRCam (sickle); MIRI pointings
-                            # 001/002 = sickle, but 003 = the BRICK MIRI field
-                            # (shares the 3958 program id, routed to brick/ so
-                            # its catalogs do not land in / clash with sickle/).
-                            # '001-002' = JOINT sickle run (both MIRI obs
-                            # cataloged together; see get_filenames joint glob).
-                            '3958': {'007': 'sickle', '001': 'sickle',
-                                     '002': 'sickle', '003': 'brick',
-                                     '001-002': 'sickle'},
-                            # 2092: 002/005 = NIRCam; 004/006/008 = MIRI
-                            '2092': {'002': 'cloudef', '005': 'cloudef',
-                                     '004': 'cloudef', '006': 'cloudef',
-                                     '008': 'cloudef'},
-                            '4147': {'012': 'sgrc'},
-                            # 5365 sgrb2 MIRI: obs 002 + obs 998 (skipped_redo);
-                            # '002-998' = JOINT run combining both obs's 4 tiles.
-                            '5365': {'001': 'sgrb2', '002': 'sgrb2',
-                                     '998': 'sgrb2', '002-998': 'sgrb2'},
-                            '2045': {'001': 'arches', '003': 'quintuplet'},
-                            '1939': {'001': 'sgra'},
-                            '2211': {'023': 'gc2211', '028': 'gc2211',
-                                     '046': 'gc2211', '049': 'gc2211',
-                                     '050': 'gc2211'},
-                            '1905': {'001': 'wd1', '003': 'wd1'},
-                            '3523': {'003': 'wd2', '005': 'wd2'},
-                            '6151': {'001': 'w51'},
-                            # 2526 obs 021 = "G0" CMZ cloud-c filament F770W
-                            '2526': {'021': 'cloudc'},
-                            # Globular clusters (Jay Anderson co-I; added 2026-07-01)
-                            '1334': {'001': 'm92'},
-                            '1979': {'001': 'ngc6397', '002': 'm4', '003': 'm4'},
-                            # NGC 6334 (Cat's Paw SFR; extended emission)
-                            '7213': {'001': 'ngc6334'},
-                            '6778': {'001': 'ngc6334'},
-                            }[proposal_id]
-    # Instrument-dependent field numbering for MIRI (mirimage).  The map above is
-    # NIRCam-era; proposal 2221 numbers the brick/cloudc MIRI pointings OPPOSITE
-    # to its NIRCam pointings (NIRCam brick=001/cloudc=002; MIRI brick=002/
-    # cloudc=001), and the w51 (6151) / sgrb2 (5365) MIRI pointings are obs 002,
-    # which the NIRCam-era map omits.  Override only for mirimage so NIRCam runs
-    # are untouched.
-    if 'mirimage' in [str(m).lower() for m in modules]:
-        if proposal_id == '2221':
-            field_to_reg_mapping = {'002': 'brick', '001': 'cloudc'}
-        elif proposal_id == '6151':
-            field_to_reg_mapping = {'001': 'w51', '002': 'w51'}
-        elif proposal_id == '5365':
-            field_to_reg_mapping = {'001': 'sgrb2', '002': 'sgrb2',
-                                    '998': 'sgrb2', '002-998': 'sgrb2'}
-    reg_to_field_mapping = {v:k for k,v in field_to_reg_mapping.items()}
+    nvisits = field_registry.nvisits()
+    # One registry: jwst_gc_pipeline/fields.yaml.  Proposal 2221 numbers its
+    # brick and cloudc MIRI pointings opposite to its NIRCam ones, so the
+    # mapping is per-instrument.
+    instrument = ('miri' if 'mirimage' in [str(m).lower() for m in modules]
+                  else 'nircam')
+    field_to_reg_mapping = field_registry.field_to_reg_mapping(proposal_id, instrument)
+    reg_to_field_mapping = {v: k for k, v in field_to_reg_mapping.items()}
     # When multiple fields share a target (e.g. proposal 2211 / gc2211 has
     # 5 GC pointings 023/028/046/049/050), the inverted mapping collapses to
     # one entry, so prefer the explicit --field value when it's available.
     if getattr(options, 'field', None):
         field = str(options.field)
     else:
-        field = reg_to_field_mapping[target]
+        field = (field_registry.default_field_token(target, proposal_id, instrument)
+                 or reg_to_field_mapping[target])
 
     # Module restrictions per proposal/field/filter for single-module datasets
     # Sickle is NRCB-only (SUB640 subarray) but detectors differ by wavelength:
@@ -4653,13 +4573,8 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
             )
         modules = filtered_modules
 
-    if field_to_reg_mapping[field] in ('sickle', 'cloudef', 'sgrc', 'sgrb2', 'arches', 'quintuplet', 'sgra', 'gc2211', 'wd1', 'wd2', 'w51',
-                                       # globular clusters (Anderson co-I) live on /orange
-                                       'm92', 'ngc6397', 'm4',
-                                       'ngc6334'):  # NGC 6334 (Cat's Paw SFR)
-        basepath = f'/orange/adamginsburg/jwst/{field_to_reg_mapping[field]}/'
-    else:
-        basepath = f'/blue/adamginsburg/adamginsburg/jwst/{field_to_reg_mapping[field]}/'
+    basepath = field_registry.basepath(
+        field_registry.target_for_obsid(proposal_id, field, instrument))
 
     # Non-destructive experimental runs: redirect the WHOLE basepath to a scratch
     # tree staged (stage_scratch_basepath.sh) with symlinks/copies of the real
