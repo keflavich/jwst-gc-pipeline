@@ -15,7 +15,7 @@ a position in the merge job list.
 """
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
 
 import yaml
@@ -47,10 +47,12 @@ class Obs:
 
     proposal: str
     #: Every observation number, per instrument, that images this field.
-    obsids: Dict[str, Tuple[str, ...]] = ()
+    obsids: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
+    #: Tokens naming several observations cataloged in one run, e.g. '002-998'.
+    joint_obsids: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
     #: The observation number the merge builds file globs from, per instrument.
     #: Defaults to the only entry in ``obsids``; ``'*'`` matches several.
-    glob_obsids: Dict[str, str] = ()
+    glob_obsids: Dict[str, str] = field(default_factory=dict)
     nvisits: Optional[int] = None
     filters: Tuple[str, ...] = ()
     niriss_filters: Tuple[str, ...] = ()
@@ -85,10 +87,15 @@ class Field:
     root: str
     observations: Tuple[Obs, ...] = ()
     fov_region: Optional[str] = None
+    #: The roots block this field was loaded with.  Carried rather than read
+    #: from the module global, so a registry loaded from another file resolves
+    #: against its own roots.
+    roots: Optional[Dict[str, str]] = None
 
     @property
     def basepath(self):
-        return f'{ROOTS[self.root]}/{self.name}/'
+        roots = self.roots if self.roots is not None else ROOTS
+        return f'{roots[self.root]}/{self.name}/'
 
     def observation(self, proposal):
         """The ``Obs`` for one proposal, or ``None``."""
@@ -102,7 +109,7 @@ def _load(path=REGISTRY_PATH):
     with open(path) as fh:
         raw = yaml.safe_load(fh)
     roots = dict(raw['roots'])
-    fields = []
+    loaded = []
     for name, spec in raw['fields'].items():
         if spec['root'] not in roots:
             raise FieldRegistryError(
@@ -121,6 +128,8 @@ def _load(path=REGISTRY_PATH):
             observations.append(Obs(
                 proposal=str(proposal),
                 obsids=obsids,
+                joint_obsids={inst.lower(): tuple(sorted(ids)) for inst, ids
+                              in (obs.get('joint_obsids') or {}).items()},
                 glob_obsids={inst.lower(): str(v) for inst, v
                              in (obs.get('glob_obsid') or {}).items()},
                 nvisits=obs.get('nvisits'),
@@ -131,10 +140,11 @@ def _load(path=REGISTRY_PATH):
                 reference_catalog=obs.get('reference_catalog'),
                 offsets_table=obs.get('offsets_table'),
             ))
-        fields.append(Field(name=name, root=spec['root'],
+        loaded.append(Field(name=name, root=spec['root'],
                             observations=tuple(observations),
-                            fov_region=spec.get('fov_region')))
-    return roots, tuple(sorted(fields, key=lambda f: f.name))
+                            fov_region=spec.get('fov_region'),
+                            roots=roots))
+    return roots, tuple(sorted(loaded, key=lambda f: f.name))
 
 
 ROOTS, FIELDS = _load()
@@ -229,7 +239,8 @@ def field_to_reg_mapping(proposal, instrument='nircam'):
         obs = field.observation(proposal)
         if obs is None:
             continue
-        for obsid in obs.obsids.get(instrument, ()):
+        for obsid in (tuple(obs.obsids.get(instrument, ()))
+                      + tuple(obs.joint_obsids.get(instrument, ()))):
             if obsid in out:
                 raise FieldRegistryError(
                     f'proposal {proposal} observation {obsid} ({instrument}) '
@@ -258,17 +269,45 @@ def target_for_obsid(proposal, obsid, instrument='nircam'):
         f'{sorted(targets)}')
 
 
+def default_field_token(target, proposal, instrument='nircam'):
+    """The --field value to use for a target when none was given.
+
+    A joint token wins: Sgr B2's MIRI observations 002 and 998 tile the field
+    between them and are cataloged as '002-998', so picking either one alone
+    would catalog half a mosaic.  Relying on which key an inverted dict happened
+    to keep is how that used to be decided.
+    """
+    known = BY_NAME.get(target)
+    if known is None:
+        return None
+    obs = known.observation(proposal)
+    if obs is None:
+        return None
+    instrument = instrument.lower()
+    joint = obs.joint_obsids.get(instrument, ())
+    if joint:
+        return joint[0]
+    seen = obs.obsids.get(instrument, ())
+    return seen[0] if seen else None
+
+
 def reference_catalog(proposal):
     """The astrometric reference frame token for one proposal, or ``None``.
 
     Keyed by proposal because the offsets-table filename it builds is, and
     every field sharing a proposal shares that frame today.
     """
-    for field in FIELDS:
-        obs = field.observation(proposal)
+    seen = {}
+    for known in FIELDS:
+        obs = known.observation(proposal)
         if obs is not None and obs.reference_catalog is not None:
-            return obs.reference_catalog
-    return None
+            seen.setdefault(obs.reference_catalog, []).append(known.name)
+    if len(seen) > 1:
+        raise FieldRegistryError(
+            f'proposal {proposal} is given more than one reference catalog: '
+            f'{ {k: sorted(v) for k, v in seen.items()} }.  The frame token '
+            f'names the offsets table, which is per proposal.')
+    return next(iter(seen), None)
 
 
 def fov_region(target):

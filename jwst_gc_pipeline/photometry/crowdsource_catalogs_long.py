@@ -203,7 +203,9 @@ from jwst_gc_pipeline.photometry.naming import (
 from jwst_gc_pipeline.photometry.psf_paths import (
     resolve_merged_psf_grid_path, central_psf_dir,
 )
-from jwst_gc_pipeline import fields
+# Imported as field_registry: `fields` is a local variable in these
+# drivers (the --field list), and shadowed the module.
+from jwst_gc_pipeline import fields as field_registry
 
 
 def _seed_table_chunk_subset(seed_table, ww, image_shape,
@@ -4485,21 +4487,22 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     proposal_id = options.proposal_id
     target = options.target
 
-    nvisits = fields.nvisits()
+    nvisits = field_registry.nvisits()
     # One registry: jwst_gc_pipeline/fields.yaml.  Proposal 2221 numbers its
     # brick and cloudc MIRI pointings opposite to its NIRCam ones, so the
     # mapping is per-instrument.
     instrument = ('miri' if 'mirimage' in [str(m).lower() for m in modules]
                   else 'nircam')
-    field_to_reg_mapping = fields.field_to_reg_mapping(proposal_id, instrument)
-    reg_to_field_mapping = {v:k for k,v in field_to_reg_mapping.items()}
+    field_to_reg_mapping = field_registry.field_to_reg_mapping(proposal_id, instrument)
+    reg_to_field_mapping = {v: k for k, v in field_to_reg_mapping.items()}
     # When multiple fields share a target (e.g. proposal 2211 / gc2211 has
     # 5 GC pointings 023/028/046/049/050), the inverted mapping collapses to
     # one entry, so prefer the explicit --field value when it's available.
     if getattr(options, 'field', None):
         field = str(options.field)
     else:
-        field = reg_to_field_mapping[target]
+        field = (field_registry.default_field_token(target, proposal_id, instrument)
+                 or reg_to_field_mapping[target])
 
     # Module restrictions per proposal/field/filter for single-module datasets
     # Sickle is NRCB-only (SUB640 subarray) but detectors differ by wavelength:
@@ -4557,8 +4560,8 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
             )
         modules = filtered_modules
 
-    basepath = fields.basepath(
-        fields.target_for_obsid(proposal_id, field, instrument))
+    basepath = field_registry.basepath(
+        field_registry.target_for_obsid(proposal_id, field, instrument))
 
     # NIRISS products live under <target>/niriss/ so its F480M/F356W do not
     # collide with NIRCam's.  Moving basepath down one level redirects every
