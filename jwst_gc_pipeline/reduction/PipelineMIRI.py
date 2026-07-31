@@ -323,7 +323,8 @@ def main(filtername, Observations=None, regionname='brick',
     wavelength = int(filtername[1:4])
 
     basepath = f'/orange/adamginsburg/jwst/{regionname}/'
-    fwhm_tbl = Table.read(f'{basepath}/reduction/fwhm_table.ecsv')
+    from jwst_gc_pipeline.reduction.fwhm import fwhm_table_path
+    fwhm_tbl = Table.read(fwhm_table_path(basepath))
     row = fwhm_tbl[fwhm_tbl['Filter'] == filtername]
     fwhm = fwhm_arcsec = float(row['PSF FWHM (arcsec)'][0])
     fwhm_pix = float(row['PSF FWHM (pixel)'][0])

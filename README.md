@@ -15,8 +15,8 @@ modeling, paper figures) remains in `brick2221`.
 ## Getting started
 
 **[GETTING_STARTED.md](GETTING_STARTED.md)** — install, the three stages and how
-to run them, the data layout, what a new dataset needs, and what does and does
-not work off HiPerGator.
+to run them, a worked end-to-end example, the data layout, what a new dataset
+needs, and how much of it runs off HiPerGator.
 
 ## Layout
 

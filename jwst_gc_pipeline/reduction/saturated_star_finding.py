@@ -4515,7 +4515,7 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
 
 
 def main():
-    if not os.get('STPSF_PATH'):
+    if not os.environ.get('STPSF_PATH'):
         raise ValueError("STPSF_PATH must be specified")
 
     from optparse import OptionParser

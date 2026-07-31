@@ -2944,7 +2944,11 @@ def main():
             "astrometry rule #1 forbids.  Build reference catalogs with "
             "make_reference_from_pipeline_catalogs.py instead.")
 
+    # Keep this list identical to the one in crowdsource_catalogs_long.main().
+    # They disagreed on wd1/wd2 until 2026-07-31: the catalog stage wrote to
+    # /orange and the merge then read a /blue path that was never created.
     if target in ('sickle', 'cloudef', 'sgrc', 'sgrb2', 'arches', 'quintuplet', 'sgra', 'gc2211', 'w51',
+                  'wd1', 'wd2',
                   'm92', 'ngc6397', 'm4',  # globular clusters (Anderson co-I) on /orange
                   'ngc6334'):  # NGC 6334 (Cat's Paw SFR)
         basepath = f'/orange/adamginsburg/jwst/{target}/'
@@ -2954,6 +2958,7 @@ def main():
     # so a redirected run reduced and cataloged under the override and then
     # merged out of the hard-coded tree.
     basepath = apply_basepath_override(basepath)
+    os.makedirs(os.path.join(basepath, 'catalogs'), exist_ok=True)
 
     # Only 1182 has an offsets table; the rest align in imaging.  Read it on
     # demand -- it lives at an absolute path, and eagerly reading it made every
