@@ -231,7 +231,7 @@ to `DO_NOT_USE`, mask only truly-lost pixels in the fit, narrow
   (forced) stars require the **large grid** (2048 SW / 1024 LW) to carry the
   diffraction spikes that reach ~40″ into the frame.
 - **Accept gate** (`accept_satstar_fit`; thresholds passed in by
-  `get_saturated_stars`). On **NIRCam**: require
+  `get_saturated_stars`, not signature defaults). On **NIRCam**: require
   `snr > 3.0` and `flux > 0`; reject on `qfit` only when it is finite, so a
   **non-finite `qfit` passes** (and a negative one does too); `sidelobe > -10σ`
   when finite; the `ssr_ratio < 1.0` backstop is bypassed for a trustworthy fit
@@ -310,7 +310,8 @@ flux, trading depth for a brighter saturation ceiling:
 - **`--satstar-zeroframe-recover`** (`zeroframe_recover_saturated`):
   the `_cal` rim is *inflated* above truth because charge from the saturating core
   **migrates/blooms outward** during the integration — a near-saturation
-  well-overflow effect. Verified on **NIRCam** (sickle F210M: rim `_cal` sits ~15%
+  well-overflow effect, distinct from the classical brighter-fatter effect (BFE)
+  and from IPC. Verified on **NIRCam** (sickle F210M: rim `_cal` sits ~15%
   above the ramp first read, `recovered/cal ≈ 0.85`); it applies to any saturating
   source with a `_ramp.fits`. Group-0 (read before the
   migration) gives the true profile → rewrite inflated rim pixels with `R×group0`

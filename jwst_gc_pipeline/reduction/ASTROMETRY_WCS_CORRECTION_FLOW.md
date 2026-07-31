@@ -166,7 +166,8 @@ Every detector-frame product carries **two** WCS representations:
 | **GWCS** (ASDF extension, `model.meta.wcs`) | `_cal`, `_destreak`, `_align`, `_crf` | **authoritative** — the full SIAF distortion + velocity aberration + projection chain |
 | FITS `RA---TAN-SIP` (SCI header) | same files | a *fitted low-order polynomial approximation* of the GWCS, for plain-`astropy.wcs` consumers (DS9/CARTA, `reproject`) |
 
-SIP approximates the JWST distortion by fitting it. **Read the GWCS for anything
+SIP is a polynomial fit to the JWST distortion and cannot reproduce it exactly.
+**Read the GWCS for anything
 astrometric.** The SIP header exists for display and for external tools, and its
 fidelity depends on how it was fitted.
 
@@ -374,7 +375,9 @@ run against a correct CRDS cache*, so an independent per-module tweak would
 inject VIRAC2 noise and break the lock.
 
 **ROOT CAUSE (2026-07-11): the F410M inter-module offset came from a STALE LOCAL
-CRDS CACHE serving a module-swapped LW `filteroffset` mapping.** Full incident
+CRDS CACHE serving a module-swapped LW `filteroffset` mapping** — rather than
+from the jwst version or the SIAF/distortion references, which were correct
+throughout. Full incident
 report, fingerprint table, and auditor checklist:
 **[docs/reports/CRDS_STALE_FILTEROFFSET_RMAP_INCIDENT.md](../../docs/reports/CRDS_STALE_FILTEROFFSET_RMAP_INCIDENT.md)**.
 Short version: `jwst_nircam_filteroffset_0004.rmap` was corrected in place by CRDS
