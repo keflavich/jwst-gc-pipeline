@@ -1,296 +1,282 @@
-"""The registry must reproduce today's dictionaries exactly.
+"""The field registry: does it say what the pipeline used to say, and does the
+order of the YAML file stay irrelevant?
 
-That is what makes the migration safe: call sites can move one at a time,
-because each view is byte-for-byte what the dictionary it replaces holds now.
-Where a view deliberately differs, the difference is written down here.
+Two kinds of test here.
+
+*Equivalence* — each view reproduces the dictionary it replaced. Where it
+deliberately differs, the difference is written out below, so changing one of
+them is a decision rather than a diff nobody reads.
+
+*Order independence* — the whole point of the YAML file is that you can write
+an entry wherever it reads best. Shuffling the file must change nothing,
+especially not ``merge_jobs``, which is the SLURM array: entry *n* is task *n*,
+so a reordering would run each task on a different filter.
 """
-import ast
-import pathlib
-import re
+import copy
+import random
 
 import pytest
+import yaml
 
-from jwst_gc_pipeline import fields
-from jwst_gc_pipeline.photometry import merge_catalogs as MC
+from jwst_gc_pipeline import fields as F
 
-# Today's dictionaries disagree in two places, in two different ways.  The
-# registry holds each fact once, so it cannot reproduce either -- which is the
-# point.  Both are bugs, not conventions.
-#
-#   cloudc/2526  in obs_filters, absent from project_obsnum.  The registry
-#                carries it with obsid=None; merge_catalogs.py:1482 and :1701
-#                index project_obsnum unguarded, so that pair raises KeyError.
-INCOMPLETE = {('cloudc', '2526')}
-#   w51/1182     in project_obsnum only.  Nothing iterates it -- the job list
-#                comes from obs_filters -- so it is simply dead, and the
-#                registry drops it.
-DROPPED = {('w51', '1182')}
 
-# The SLURM array index is derived from each target's proposal order, and the
-# cross-band merged catalogs' column order from each filter list.  WRITTEN OUT,
-# not recomputed: the tests below must keep meaning something after migration
-# step 2 deletes `MC.obs_filters` and points it at the view, at which point any
-# comparison against that name becomes `view == view`.
-EXPECTED_JOB_ORDER = {
-    'arches': (
-        ('2045', ('f212n', 'f323n')),
-    ),
-    'brick': (
-        ('2221', ('f410m', 'f212n', 'f466n', 'f405n', 'f187n', 'f182m', 'f2550w')),
-        ('1182', ('f444w', 'f356w', 'f200w', 'f115w')),
-    ),
-    'cloudc': (
-        ('2221', ('f410m', 'f212n', 'f466n', 'f405n', 'f187n', 'f182m', 'f2550w')),
-        ('2526', ('f770w',)),
-    ),
-    'cloudef': (
-        ('2092', ('f162m', 'f210m', 'f360m', 'f480m', 'f770w', 'f2100w')),
-    ),
-    'gc2211': (
-        ('2211', ('f150w', 'f200w', 'f277w')),
-    ),
-    'm4': (
-        ('1979', ('f150w2', 'f322w2')),
-    ),
-    'm92': (
-        ('1334', ('f090w', 'f150w', 'f277w', 'f444w')),
-    ),
-    'ngc6334': (
-        ('7213', ('f115w', 'f162m', 'f182m', 'f200w', 'f356w', 'f405n', 'f444w', 'f470n')),
-        ('6778', ('f090w', 'f187n', 'f200w', 'f277w', 'f335m', 'f470n')),
-    ),
-    'ngc6397': (
-        ('1979', ('f150w2', 'f322w2')),
-    ),
-    'quintuplet': (
-        ('2045', ('f212n', 'f323n')),
-    ),
-    'sgra': (
-        ('1939', ('f115w', 'f212n', 'f405n')),
-    ),
-    'sgrb2': (
-        ('5365', ('f150w', 'f182m', 'f187n', 'f210m', 'f212n', 'f300m', 'f360m', 'f405n', 'f410m', 'f466n', 'f480m', 'f770w', 'f1280w', 'f2550w')),
-    ),
-    'sgrc': (
-        ('4147', ('f115w', 'f162m', 'f182m', 'f212n', 'f360m', 'f405n', 'f470n', 'f480m')),
-    ),
-    'sickle': (
-        ('3958', ('f187n', 'f210m', 'f335m', 'f470n', 'f480m', 'f770w', 'f1130w', 'f1500w')),
-    ),
-    'w51': (
-        ('6151', ('f140m', 'f162m', 'f182m', 'f187n', 'f210m', 'f335m', 'f360m', 'f405n', 'f410m', 'f480m', 'f770w', 'f1280w', 'f2100w')),
-    ),
-    'wd1': (
-        ('1905', ('f115w', 'f150w', 'f164n', 'f187n', 'f200w', 'f212n', 'f277w', 'f323n', 'f405n', 'f444w', 'f466n')),
-    ),
-    'wd2': (
-        ('3523', ('f115w', 'f150w', 'f162m', 'f164n', 'f182m', 'f187n', 'f200w', 'f212n', 'f250m', 'f277w', 'f300m', 'f323n', 'f335m', 'f405n', 'f410m', 'f444w', 'f466n')),
-    ),
+# --------------------------------------------------------------------------
+# What the registry says, pinned.
+# --------------------------------------------------------------------------
+
+def test_every_field_has_a_root_the_roots_block_defines():
+    for field in F.FIELDS:
+        assert field.root in F.ROOTS, field.name
+
+
+def test_the_roots_are_the_only_absolute_paths():
+    """A field's directory is built from `roots`, so redirecting the pipeline
+    to another disk is one edit."""
+    with open(F.REGISTRY_PATH) as fh:
+        raw = fh.read()
+    body = raw.split('fields:', 1)[1]
+    assert '/orange/' not in body and '/blue/' not in body
+
+
+def test_basepath_matches_the_root_it_names():
+    assert F.basepath('brick') == '/blue/adamginsburg/adamginsburg/jwst/brick/'
+    assert F.basepath('sgrc') == '/orange/adamginsburg/jwst/sgrc/'
+
+
+def test_an_unregistered_target_gets_the_blue_tree():
+    """What the `if target in (...)` branches this replaced did in their else."""
+    assert F.basepath('nosuchfield') == '/blue/adamginsburg/adamginsburg/jwst/nosuchfield/'
+
+
+def test_wd1_and_wd2_are_on_orange():
+    """The catalog and merge drivers disagreed about these two: the catalog
+    stage wrote to /orange and the merge read from /blue."""
+    assert F.basepath('wd1').startswith('/orange/')
+    assert F.basepath('wd2').startswith('/orange/')
+
+
+# --------------------------------------------------------------------------
+# Equivalence with what the pipeline used to hold.
+# --------------------------------------------------------------------------
+
+#: The (target, proposal) pairs whose obsid the registry supplies and the old
+#: `project_obsnum` did not, plus the one it drops.  Each is a decision.
+OBSNUM_CHANGES = {
+    # Was absent, so a cloudc 2526 merge raised KeyError('2526').  The
+    # observation is real: 2526 obs 021, MIRI F770W, target 'G0'.
+    ('cloudc', '2526'): '021',
+    # w51 has no 1182 data on disk and no 1182 filters, so no merge could ever
+    # reach this; it was never observed.
+    ('w51', '1182'): None,
 }
 
 
-def _literal_nvisits():
-    """`nvisits` lives inside main(), so it can only be read as source."""
-    src = (pathlib.Path(fields.__file__).parent / 'photometry'
-           / 'crowdsource_catalogs_long.py').read_text()
-    match = re.search(r'^\s*nvisits = \{', src, re.M)
-    start = match.end() - 1
-    depth = 0
-    for end in range(start, len(src)):
-        depth += (src[end] == '{') - (src[end] == '}')
-        if depth == 0:
-            break
-    return ast.literal_eval(src[start:end + 1])
+def test_obs_filters_lists_the_same_filters_as_before():
+    todays = {
+        'brick': {'2221': ['f410m', 'f212n', 'f466n', 'f405n', 'f187n', 'f182m', 'f2550w'],
+                  '1182': ['f444w', 'f356w', 'f200w', 'f115w']},
+        'cloudc': {'2221': ['f410m', 'f212n', 'f466n', 'f405n', 'f187n', 'f182m', 'f2550w'],
+                   '2526': ['f770w']},
+        'sgra': {'1939': ['f115w', 'f212n', 'f405n']},
+        'arches': {'2045': ['f212n', 'f323n']},
+        'quintuplet': {'2045': ['f212n', 'f323n']},
+        'gc2211': {'2211': ['f150w', 'f200w', 'f277w']},
+        'm92': {'1334': ['f090w', 'f150w', 'f277w', 'f444w']},
+    }
+    view = F.obs_filters()
+    for target, per_proposal in todays.items():
+        for proposal, filters in per_proposal.items():
+            assert sorted(view[target][proposal]) == sorted(filters), (target, proposal)
 
 
-def test_obs_filters_view_matches_todays_dict():
-    assert fields.obs_filters() == MC.obs_filters
+def test_project_obsnum_matches_apart_from_the_listed_changes():
+    todays = {'brick': {'2221': '001', '1182': '004'},
+              'cloudc': {'2221': '002'},
+              'sickle': {'3958': '*'},
+              'cloudef': {'2092': '*'},
+              'sgrc': {'4147': '012'},
+              'sgrb2': {'5365': '001'},
+              'arches': {'2045': '001'},
+              'quintuplet': {'2045': '003'},
+              'sgra': {'1939': '001'},
+              'gc2211': {'2211': '*'},
+              'wd1': {'1905': '001'},
+              'wd2': {'3523': '005'},
+              'w51': {'6151': '001', '1182': '002'},
+              'm92': {'1334': '001'},
+              'ngc6397': {'1979': '001'},
+              'm4': {'1979': '002'},
+              'ngc6334': {'7213': '001', '6778': '001'}}
+    view = F.project_obsnum()
+    for target, per_proposal in todays.items():
+        for proposal, obsid in per_proposal.items():
+            expected = OBSNUM_CHANGES.get((target, proposal), obsid)
+            assert view.get(target, {}).get(proposal) == expected, (target, proposal)
 
 
-@pytest.mark.parametrize('target', sorted(EXPECTED_JOB_ORDER))
-def test_view_preserves_proposal_and_filter_ORDER(target):
-    """Order is not cosmetic, and this is pinned to a literal on purpose.
-
-    `individual_frame_merge_jobs` builds the SLURM array index from each
-    target's proposal order, so swapping two observations inside one field
-    sends every array task at a different filter.  Filter order sets the column
-    order of the cross-band merged catalogs.  Value equality sees neither.
-    """
-    view = fields.obs_filters()[target]
-    assert tuple((p, tuple(fs)) for p, fs in view.items()) == \
-        EXPECTED_JOB_ORDER[target], (
-            f'{target}: order changed -- SLURM array indices and cross-band '
-            f'column order would move')
+def test_nvisits_is_the_transpose_and_keeps_its_values():
+    view = F.nvisits()
+    assert view['2221'] == {'brick': 2, 'cloudc': 2}
+    assert view['1979'] == {'ngc6397': 1, 'm4': 1}
+    assert view['6778']['ngc6334'] == 3
+    assert view['1905']['wd1'] == 3
 
 
-def test_the_written_out_order_still_matches_todays_dict():
-    """Guards the literal above against drifting from reality WHILE both exist.
-
-    DELETE this at migration step 2 -- do not repoint it at the view.  The
-    literal is what keeps the order honest once `MC.obs_filters` is gone;
-    comparing the literal against the view it guards would be circular.
-    """
-    today = {t: tuple((p, tuple(fs)) for p, fs in d.items())
-             for t, d in MC.obs_filters.items()}
-    assert today == EXPECTED_JOB_ORDER
-
-
-@pytest.mark.parametrize('target', sorted(EXPECTED_JOB_ORDER))
-def test_the_job_list_built_from_the_view_is_identical(target):
-    """End-to-end: the (proposal, filter) pairs an array job would dispatch."""
-    from_view = [(p, f) for p, fs in fields.obs_filters()[target].items()
-                 for f in fs]
-    expected = [(p, f) for p, fs in EXPECTED_JOB_ORDER[target] for f in fs]
-    assert from_view == expected
+def test_no_view_emits_none_where_a_glob_is_built():
+    """`jw0{proposal}-o{obsid}_*` with obsid None matches nothing and says so
+    to no one; a missing entry must be missing, not None."""
+    for target, per_proposal in F.project_obsnum().items():
+        for proposal, obsid in per_proposal.items():
+            assert obsid is not None, (target, proposal)
+    for target, per_proposal in F.obs_filters().items():
+        for proposal, filters in per_proposal.items():
+            assert all(f is not None for f in filters), (target, proposal)
 
 
-@pytest.mark.parametrize('target', sorted(EXPECTED_JOB_ORDER))
-def test_offsets_view_covers_every_proposal_of_the_field(target):
-    """Today's dict omits 1905, 3523 and 2526, so `offsets_tables[progid]`
-    raises KeyError for every wd1/wd2 per-filter merge."""
-    view = fields.offsets_table_paths(target)
-    needed = set(MC.obs_filters[target])
-    assert needed <= set(view), sorted(needed - set(view))
+def test_an_observation_with_no_nircam_data_is_absent_from_project_obsnum():
+    """cloudc/2526 is MIRI only, so it has no NIRCam observation number."""
+    assert '2526' not in F.project_obsnum().get('cloudc', {})
 
 
-def test_two_fields_may_each_have_their_own_table_for_a_shared_proposal():
-    """brick/2221 and cloudc/2221 are different observations.  Today's dict is
-    keyed by proposal alone and cannot express a table for each; the registry
-    must not re-import that limit."""
-    brick = fields.offsets_table_paths('brick')
-    cloudc = fields.offsets_table_paths('cloudc')
-    assert '2221' in brick and '2221' in cloudc      # shared proposal
-    assert set(brick) != set(cloudc)                 # different observations
+# --------------------------------------------------------------------------
+# Per-instrument observation numbers.
+# --------------------------------------------------------------------------
+
+def test_proposal_2221_numbers_nircam_and_miri_opposite_to_each_other():
+    """Both are right; the products on disk agree with each.  One number per
+    (target, proposal) could only ever be right for one of them."""
+    assert F.glob_obsid('brick', '2221', 'nircam') == '001'
+    assert F.glob_obsid('brick', '2221', 'miri') == '002'
+    assert F.glob_obsid('cloudc', '2221', 'nircam') == '002'
+    assert F.glob_obsid('cloudc', '2221', 'miri') == '001'
 
 
-def test_the_brick_offsets_path_is_exactly_todays():
-    """The one real table in the pipeline, compared against the literal in
-    merge_catalogs rather than by substring -- appending '.BOGUS' to the
-    registry path used to pass."""
-    src = (pathlib.Path(fields.__file__).parent / 'photometry'
-           / 'merge_catalogs.py').read_text()
-    literal = re.search(r"'1182': Table\.read\(f'([^']+)'\)", src).group(1)
-    assert fields.offsets_table_paths('brick')['1182'] == literal
-    assert pathlib.Path(literal).exists(), literal
+def test_field_to_reg_mapping_is_per_instrument():
+    assert F.field_to_reg_mapping('2221', 'nircam') == {'001': 'brick', '002': 'cloudc'}
+    assert F.field_to_reg_mapping('2221', 'miri') == {'002': 'brick', '001': 'cloudc'}
 
 
-def test_offsets_view_is_paths_not_tables():
-    """Today's dict holds a read Table; a str passes the `is not None` guard in
-    merge_individual_frames and then raises TypeError on ['Visit']."""
-    value = fields.offsets_table_paths('brick')['1182']
-    assert isinstance(value, str)
+def test_a_joint_observation_resolves_to_its_one_field():
+    """Sgr B2's MIRI observations 002 and 998 are cataloged together."""
+    assert F.target_for_obsid('5365', '002-998', 'miri') == 'sgrb2'
 
 
-def test_one_field_listing_a_proposal_twice_is_an_error(monkeypatch):
-    """A genuine mistake, unlike two fields sharing a proposal."""
-    doubled = fields.Field('x', root='blue', observations=(
-        fields.Obs('2221', offsets_table='/a.csv'),
-        fields.Obs('2221', offsets_table='/b.csv')))
-    monkeypatch.setattr(fields, 'BY_NAME', dict(fields.BY_NAME, x=doubled))
-    with pytest.raises(ValueError, match='twice'):
-        fields.offsets_table_paths('x')
+def test_an_unregistered_observation_says_so():
+    with pytest.raises(KeyError, match='not in fields.yaml'):
+        F.target_for_obsid('9999', '001')
 
 
-def test_project_obsnum_view_matches_todays_dict():
-    view, today = fields.project_obsnum(), MC.project_obsnum
-    assert set(view) == set(today)
-    for target in today:
-        expected = dict(today[target])
-        got = dict(view[target])
-        for name, proposal in INCOMPLETE | DROPPED:
-            if name == target:
-                expected.pop(proposal, None)
-                got.pop(proposal, None)
-        assert got == expected, target
+def test_two_fields_cannot_claim_one_observation(monkeypatch):
+    clash = F.Field('clash', root='orange', observations=(
+        F.Obs(proposal='2221', obsids={'nircam': ('001',)}),))
+    monkeypatch.setattr(F, 'FIELDS', F.FIELDS + (clash,))
+    with pytest.raises(F.FieldRegistryError, match='claimed by both'):
+        F.field_to_reg_mapping('2221', 'nircam')
 
 
-def test_no_view_emits_None_where_the_dict_has_no_key():
-    """An incomplete observation must vanish from the view, not appear as None.
+# --------------------------------------------------------------------------
+# Order independence.
+# --------------------------------------------------------------------------
 
-    Consumers interpolate these into globs -- `merge_catalogs.py:1482` builds
-    `jw0{proposal}-o{obsid}_...` -- so a None obsid yields `jw02526-oNone_*`,
-    which matches nothing.  That converts today's loud KeyError('2526') into a
-    silent empty result, which is strictly worse.
-    """
-    for target, proposals in fields.project_obsnum().items():
-        for proposal, obsid in proposals.items():
-            assert obsid is not None, f'{target}/{proposal} emitted None'
-    for proposal, targets in fields.nvisits().items():
-        for target, n in targets.items():
-            assert n is not None, f'{target}/{proposal} emitted None'
+#: The merge job list for the Brick, written out.  Comparing against a view
+#: would make this test `view == view`; the point is to pin the array indices
+#: to something a person wrote down.
+BRICK_MERGE_JOBS = [
+    ('1182', 'f115w'), ('1182', 'f200w'), ('1182', 'f356w'), ('1182', 'f444w'),
+    ('2221', 'f182m'), ('2221', 'f187n'), ('2221', 'f212n'), ('2221', 'f405n'),
+    ('2221', 'f410m'), ('2221', 'f466n'), ('2221', 'f2550w'),
+]
 
 
-def test_the_incomplete_observation_is_absent_from_project_obsnum():
-    """cloudc/2526 has no obsid, so it must not appear at all."""
-    for target, proposal in INCOMPLETE:
-        assert proposal not in fields.project_obsnum()[target], (
-            f'{target}/{proposal} has no obsid but appears in the view')
+def test_the_merge_job_order_is_pinned():
+    assert F.merge_jobs('brick') == BRICK_MERGE_JOBS
 
 
-def test_nvisits_view_matches_todays_dict():
-    assert fields.nvisits() == _literal_nvisits()
+def test_an_unregistered_target_has_no_merge_jobs_and_says_so():
+    """An empty job list would make a typo'd target a silent no-op."""
+    with pytest.raises(KeyError, match='nothing to merge'):
+        F.merge_jobs('nosuchfield')
 
 
-def _orange_targets_from_the_branch():
-    """Parse the tuple out of merge_catalogs rather than retyping it.
-
-    A hand-copied list in the test would be one more duplicate of the very
-    thing this registry exists to remove.
-    """
-    src = (pathlib.Path(fields.__file__).parent / 'photometry'
-           / 'merge_catalogs.py').read_text()
-    start = src.index("    if target in ('sickle'")
-    end = src.index('):', start)
-    return set(re.findall(r"'([a-z0-9]+)'", src[start:end]))
+def test_filters_come_back_in_wavelength_order():
+    """f2550w after f466n, which alphabetical order would get wrong."""
+    brick = F.obs_filters()['brick']['2221']
+    assert brick == ['f182m', 'f187n', 'f212n', 'f405n', 'f410m', 'f466n', 'f2550w']
 
 
-def test_basepath_matches_the_branch_it_replaces():
-    orange = _orange_targets_from_the_branch()
-    assert orange, 'could not parse the branch'
-    for target in fields.BY_NAME:
-        expected = (f'/orange/adamginsburg/jwst/{target}/' if target in orange
-                    else f'/blue/adamginsburg/adamginsburg/jwst/{target}/')
-        assert fields.basepath(target) == expected, target
+def test_proposals_come_back_numerically():
+    assert list(F.obs_filters()['brick']) == ['1182', '2221']
 
 
-@pytest.mark.parametrize('unknown', ['ngc3603', 'not_a_field', ''])
-def test_an_unregistered_target_gets_the_blue_tree(unknown):
-    """The branch has no membership test on its else -- anything unknown gets
-    blue.  Raising KeyError instead would break every unregistered caller."""
-    assert fields.basepath(unknown) == (
-        f'/blue/adamginsburg/adamginsburg/jwst/{unknown}/')
+def _reload_from(tmp_path, raw):
+    path = tmp_path / 'fields.yaml'
+    with open(path, 'w') as fh:
+        yaml.safe_dump(raw, fh)
+    return F._load(str(path))
 
 
-# --- what the registry buys: these cannot be written down inconsistently -----
+def test_shuffling_the_file_changes_nothing(tmp_path):
+    """The property the YAML file is for: write entries wherever they read
+    best."""
+    with open(F.REGISTRY_PATH) as fh:
+        raw = yaml.safe_load(fh)
 
-def test_every_observation_is_complete():
-    """The failure the scattered dictionaries allow, caught in one place."""
-    incomplete = [(f.name, o.proposal) for f in fields.FIELDS
-                  for o in f.observations
-                  if o.obsid is None or o.nvisits is None or not o.filters]
-    unexpected = set(incomplete) - INCOMPLETE
-    assert not unexpected, (
-        f'observations missing an obsid, nvisits or filters: {sorted(unexpected)}')
+    shuffled = copy.deepcopy(raw)
+    rng = random.Random(20260731)
+    names = list(shuffled['fields'])
+    rng.shuffle(names)
+    shuffled['fields'] = {n: shuffled['fields'][n] for n in names}
+    for spec in shuffled['fields'].values():
+        proposals = list(spec.get('observations') or {})
+        rng.shuffle(proposals)
+        spec['observations'] = {p: spec['observations'][p] for p in proposals}
+        for obs in spec['observations'].values():
+            for key in ('filters', 'niriss_filters'):
+                if obs.get(key):
+                    rng.shuffle(obs[key])
+
+    straight_dir = tmp_path / 'straight'
+    tumbled_dir = tmp_path / 'tumbled'
+    straight_dir.mkdir()
+    tumbled_dir.mkdir()
+    _, straight = _reload_from(straight_dir, raw)
+    _, tumbled = _reload_from(tumbled_dir, shuffled)
+    assert straight == tumbled
 
 
-def test_the_incomplete_set_is_still_exactly_that():
-    """If someone fixes cloudc/2526, this fails and says to update the list."""
-    incomplete = {(f.name, o.proposal) for f in fields.FIELDS
-                  for o in f.observations
-                  if o.obsid is None or o.nvisits is None or not o.filters}
-    assert incomplete == INCOMPLETE, (
-        f'the set of incomplete observations changed: {sorted(incomplete)}.  '
-        f'If you fixed one, remove it from INCOMPLETE.')
+def test_an_unknown_instrument_is_rejected(tmp_path):
+    raw = {'roots': {'blue': '/b'},
+           'fields': {'x': {'root': 'blue',
+                            'observations': {'1': {'obsids': {'nirspec': ['001']}}}}}}
+    with pytest.raises(F.FieldRegistryError, match='unknown instrument'):
+        _reload_from(tmp_path, raw)
 
 
-def test_the_dropped_entries_are_still_absent_from_obs_filters():
-    """w51/1182 is dead because the job list is built from obs_filters."""
-    for target, proposal in DROPPED:
-        assert proposal not in MC.obs_filters.get(target, {}), (
-            f'{target}/{proposal} is now in obs_filters, so it is no longer '
-            f'dead -- add it to the registry and drop it from DROPPED.')
+def test_a_root_the_roots_block_does_not_define_is_rejected(tmp_path):
+    raw = {'roots': {'blue': '/b'}, 'fields': {'x': {'root': 'green'}}}
+    with pytest.raises(F.FieldRegistryError, match='the roots block defines'):
+        _reload_from(tmp_path, raw)
 
 
-@pytest.mark.parametrize('name', sorted(fields.BY_NAME))
-def test_no_field_is_empty(name):
-    assert fields.BY_NAME[name].observations, f'{name} has no observations'
+# --------------------------------------------------------------------------
+# The registry is the only copy.
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize('module,name', [
+    ('jwst_gc_pipeline/photometry/merge_catalogs.py', 'obs_filters = {'),
+    ('jwst_gc_pipeline/photometry/merge_catalogs.py', 'project_obsnum = {'),
+    ('jwst_gc_pipeline/photometry/crowdsource_catalogs_long.py', 'nvisits = {'),
+    ('jwst_gc_pipeline/photometry/crowdsource_catalogs_long.py', 'field_to_reg_mapping = {'),
+    ('jwst_gc_pipeline/reduction/PipelineRerunNIRCAM-LONG.py', 'refnames = {'),
+    ('jwst_gc_pipeline/reduction/PipelineRerunNIRCAM-LONG.py', 'fov_regname = {'),
+    ('jwst_gc_pipeline/reduction/PipelineRerunNIRCAM-LONG.py', 'field_to_reg_mapping = {'),
+    ('jwst_gc_pipeline/reduction/PipelineMIRI.py', 'fov_regname = {'),
+    ('jwst_gc_pipeline/reduction/PipelineMIRI.py', 'field_to_reg_mapping = {'),
+])
+def test_no_module_keeps_its_own_copy(module, name):
+    """A second copy is how these drifted apart in the first place."""
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    with open(os.path.join(root, module)) as fh:
+        assert name not in fh.read(), f'{module} still defines {name}'

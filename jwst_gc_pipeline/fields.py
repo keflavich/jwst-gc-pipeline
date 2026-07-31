@@ -1,33 +1,80 @@
-"""One registry of the fields this pipeline knows about.
+"""The fields this pipeline knows about, loaded from ``fields.yaml``.
 
-PROPOSAL, not yet wired in.  See ``docs/FIELD_REGISTRY_PROPOSAL.md``.
+Adding a target used to mean editing eight to ten dictionaries scattered across
+six files, four of them inside functions where they could not be imported or
+overridden. Nothing checked that they agreed, and several had drifted apart.
+They are now one YAML file, and this module turns it into the lookups the
+pipeline uses.
 
-Adding a target currently means editing seven dictionaries in five files, three
-of them inside functions where they cannot be imported or overridden.  Nothing
-checks that they agree, and today two of them do not: `cloudc/2526` is in
-`obs_filters` but not `project_obsnum` (that merge raises `KeyError`), and
-`w51/1182` is the reverse.
+To add a target, edit ``fields.yaml``. Nothing here needs changing.
 
-This module holds the same information once.  The views at the bottom reproduce
-each existing dictionary exactly, so call sites can move over one at a time
-instead of in a single sweep.
+**Order in the YAML file means nothing.** Proposals come back sorted
+numerically and filters sorted by wavelength, so where you write an entry has
+no effect on what the pipeline does — including the SLURM array index, which is
+a position in the merge job list.
 """
+import os
+import re
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
-ROOTS = {'orange': '/orange/adamginsburg/jwst',
-         'blue': '/blue/adamginsburg/adamginsburg/jwst'}
+import yaml
+
+#: Instruments a field can be observed with, in the order views report them.
+INSTRUMENTS = ('nircam', 'miri', 'niriss')
+
+REGISTRY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             'fields.yaml')
+
+
+class FieldRegistryError(ValueError):
+    """The registry file says something the pipeline cannot act on."""
+
+
+def _wavelength_key(filtername):
+    """Sort key putting filters in wavelength order: f115w, f405n, f2550w.
+
+    Alphabetical would read f1130w before f187n, which is neither the order a
+    person expects nor the order a colour-ordered catalog wants.
+    """
+    match = re.match(r'f(\d+)', filtername.lower())
+    return (int(match.group(1)) if match else 10 ** 6, filtername.lower())
 
 
 @dataclass(frozen=True)
 class Obs:
-    """One observation of one field, under one proposal."""
+    """One proposal's observations of one field."""
 
     proposal: str
-    obsid: Optional[str] = None            # -> project_obsnum
-    nvisits: Optional[int] = None          # -> nvisits
-    filters: Tuple[str, ...] = ()          # -> obs_filters
-    offsets_table: Optional[str] = None    # -> offsets_tables
+    #: Every observation number, per instrument, that images this field.
+    obsids: Dict[str, Tuple[str, ...]] = ()
+    #: The observation number the merge builds file globs from, per instrument.
+    #: Defaults to the only entry in ``obsids``; ``'*'`` matches several.
+    glob_obsids: Dict[str, str] = ()
+    nvisits: Optional[int] = None
+    filters: Tuple[str, ...] = ()
+    niriss_filters: Tuple[str, ...] = ()
+    reference_catalog: Optional[str] = None
+    #: Path to the measured astrometric offsets, relative to the field
+    #: directory. Measured from the data once and then fixed.
+    offsets_table: Optional[str] = None
+
+    def glob_obsid(self, instrument='nircam'):
+        """The observation number to build a filename glob from.
+
+        ``None`` when this proposal did not observe the field with this
+        instrument, which callers must treat as "no data", never as a value to
+        interpolate: ``jw02526-oNone_*`` matches nothing silently.
+        """
+        instrument = instrument.lower()
+        if instrument in self.glob_obsids:
+            return self.glob_obsids[instrument]
+        seen = self.obsids.get(instrument, ())
+        if len(seen) == 1:
+            return seen[0]
+        if len(seen) > 1:
+            return '*'
+        return None
 
 
 @dataclass(frozen=True)
@@ -35,167 +82,229 @@ class Field:
     """One target, and every observation of it."""
 
     name: str
-    root: str                         # 'orange' or 'blue' -- which /.../jwst tree
+    root: str
     observations: Tuple[Obs, ...] = ()
+    fov_region: Optional[str] = None
 
     @property
     def basepath(self):
         return f'{ROOTS[self.root]}/{self.name}/'
 
-
-FIELDS = (
-    Field('arches', root='orange', observations=(
-        Obs('2045', obsid='001', nvisits=1,
-            filters=('f212n', 'f323n')),
-    )),
-    Field('brick', root='blue', observations=(
-        Obs('2221', obsid='001', nvisits=2,
-            filters=('f410m', 'f212n', 'f466n', 'f405n', 'f187n', 'f182m', 'f2550w')),
-        Obs('1182', obsid='004', nvisits=2,
-            offsets_table=('/blue/adamginsburg/adamginsburg/jwst/brick/offsets/'
-                           'Offsets_JWST_Brick1182_F444ref.csv'),
-            filters=('f444w', 'f356w', 'f200w', 'f115w')),
-    )),
-    Field('cloudc', root='blue', observations=(
-        Obs('2221', obsid='002', nvisits=2,
-            filters=('f410m', 'f212n', 'f466n', 'f405n', 'f187n', 'f182m', 'f2550w')),
-        Obs('2526', obsid=None, nvisits=1,
-            filters=('f770w',)),
-    )),
-    Field('cloudef', root='orange', observations=(
-        Obs('2092', obsid='*', nvisits=1,
-            filters=('f162m', 'f210m', 'f360m', 'f480m', 'f770w', 'f2100w')),
-    )),
-    Field('gc2211', root='orange', observations=(
-        Obs('2211', obsid='*', nvisits=1,
-            filters=('f150w', 'f200w', 'f277w')),
-    )),
-    Field('m4', root='orange', observations=(
-        Obs('1979', obsid='002', nvisits=1,
-            filters=('f150w2', 'f322w2')),
-    )),
-    Field('m92', root='orange', observations=(
-        Obs('1334', obsid='001', nvisits=1,
-            filters=('f090w', 'f150w', 'f277w', 'f444w')),
-    )),
-    Field('ngc6334', root='orange', observations=(
-        Obs('7213', obsid='001', nvisits=2,
-            filters=('f115w', 'f162m', 'f182m', 'f200w', 'f356w', 'f405n', 'f444w', 'f470n')),
-        Obs('6778', obsid='001', nvisits=3,
-            filters=('f090w', 'f187n', 'f200w', 'f277w', 'f335m', 'f470n')),
-    )),
-    Field('ngc6397', root='orange', observations=(
-        Obs('1979', obsid='001', nvisits=1,
-            filters=('f150w2', 'f322w2')),
-    )),
-    Field('quintuplet', root='orange', observations=(
-        Obs('2045', obsid='003', nvisits=1,
-            filters=('f212n', 'f323n')),
-    )),
-    Field('sgra', root='orange', observations=(
-        Obs('1939', obsid='001', nvisits=1,
-            filters=('f115w', 'f212n', 'f405n')),
-    )),
-    Field('sgrb2', root='orange', observations=(
-        Obs('5365', obsid='001', nvisits=1,
-            filters=('f150w', 'f182m', 'f187n', 'f210m', 'f212n', 'f300m', 'f360m', 'f405n', 'f410m', 'f466n', 'f480m', 'f770w', 'f1280w', 'f2550w')),
-    )),
-    Field('sgrc', root='orange', observations=(
-        Obs('4147', obsid='012', nvisits=1,
-            filters=('f115w', 'f162m', 'f182m', 'f212n', 'f360m', 'f405n', 'f470n', 'f480m')),
-    )),
-    Field('sickle', root='orange', observations=(
-        Obs('3958', obsid='*', nvisits=1,
-            filters=('f187n', 'f210m', 'f335m', 'f470n', 'f480m', 'f770w', 'f1130w', 'f1500w')),
-    )),
-    Field('w51', root='orange', observations=(
-        Obs('6151', obsid='001', nvisits=2,
-            filters=('f140m', 'f162m', 'f182m', 'f187n', 'f210m', 'f335m', 'f360m', 'f405n', 'f410m', 'f480m', 'f770w', 'f1280w', 'f2100w')),
-    )),
-    Field('wd1', root='blue', observations=(
-        Obs('1905', obsid='001', nvisits=3,
-            filters=('f115w', 'f150w', 'f164n', 'f187n', 'f200w', 'f212n', 'f277w', 'f323n', 'f405n', 'f444w', 'f466n')),
-    )),
-    Field('wd2', root='blue', observations=(
-        Obs('3523', obsid='005', nvisits=1,
-            filters=('f115w', 'f150w', 'f162m', 'f164n', 'f182m', 'f187n', 'f200w', 'f212n', 'f250m', 'f277w', 'f300m', 'f323n', 'f335m', 'f405n', 'f410m', 'f444w', 'f466n')),
-    )),
-)
+    def observation(self, proposal):
+        """The ``Obs`` for one proposal, or ``None``."""
+        for obs in self.observations:
+            if obs.proposal == str(proposal):
+                return obs
+        return None
 
 
+def _load(path=REGISTRY_PATH):
+    with open(path) as fh:
+        raw = yaml.safe_load(fh)
+    roots = dict(raw['roots'])
+    fields = []
+    for name, spec in raw['fields'].items():
+        if spec['root'] not in roots:
+            raise FieldRegistryError(
+                f"field {name!r} has root {spec['root']!r}; "
+                f"the roots block defines {sorted(roots)}")
+        observations = []
+        for proposal, obs in sorted((spec.get('observations') or {}).items(),
+                                    key=lambda kv: int(kv[0])):
+            obsids = {inst.lower(): tuple(sorted(ids))
+                      for inst, ids in (obs.get('obsids') or {}).items()}
+            unknown = set(obsids) - set(INSTRUMENTS)
+            if unknown:
+                raise FieldRegistryError(
+                    f'{name}/{proposal} lists unknown instrument(s) '
+                    f'{sorted(unknown)}; known: {list(INSTRUMENTS)}')
+            observations.append(Obs(
+                proposal=str(proposal),
+                obsids=obsids,
+                glob_obsids={inst.lower(): str(v) for inst, v
+                             in (obs.get('glob_obsid') or {}).items()},
+                nvisits=obs.get('nvisits'),
+                filters=tuple(sorted(obs.get('filters') or (),
+                                     key=_wavelength_key)),
+                niriss_filters=tuple(sorted(obs.get('niriss_filters') or (),
+                                            key=_wavelength_key)),
+                reference_catalog=obs.get('reference_catalog'),
+                offsets_table=obs.get('offsets_table'),
+            ))
+        fields.append(Field(name=name, root=spec['root'],
+                            observations=tuple(observations),
+                            fov_region=spec.get('fov_region')))
+    return roots, tuple(sorted(fields, key=lambda f: f.name))
+
+
+ROOTS, FIELDS = _load()
 BY_NAME = {f.name: f for f in FIELDS}
 
 
-def obs_filters():
-    """`{target: {proposal: [filters]}}` -- as in merge_catalogs."""
-    return {f.name: {o.proposal: list(o.filters) for o in f.observations}
-            for f in FIELDS}
-
-
-def project_obsnum():
-    """`{target: {proposal: obsid}}` -- as in merge_catalogs.
-
-    An observation with no obsid is OMITTED, not emitted as None.  Consumers
-    interpolate this straight into a glob (`jw0{prop}-o{obsid}_...`), so a None
-    would produce `jw02526-oNone_*` and match nothing -- turning today's loud
-    KeyError into a silent empty result.
-    """
-    return {f.name: {o.proposal: o.obsid for o in f.observations
-                     if o.obsid is not None}
-            for f in FIELDS}
-
-
-def nvisits():
-    """`{proposal: {target: n}}` -- note this one is the TRANSPOSE of the other
-    two, which is a thing a human has to remember and a view does not."""
-    out = {}
-    for f in FIELDS:
-        for o in f.observations:
-            if o.nvisits is not None:   # no entry has None today; guards a
-                                        # future incomplete one from becoming
-                                        # `range(1, None)` at the call site
-                out.setdefault(o.proposal, {})[f.name] = o.nvisits
-    return out
-
-
-def offsets_table_paths(target):
-    """`{proposal: path-or-None}` for ONE field.
-
-    Per target on purpose.  `merge_catalogs.main()` runs one target at a time,
-    and brick/2221 and cloudc/2221 are different observations with different
-    alignment histories -- so giving cloudc its own 2221 offsets table is a
-    normal future edit.  Today's dict is keyed by proposal alone and could not
-    express that; a registry that refused it would just re-import the
-    limitation it exists to remove.
-
-    NOT a drop-in for that dict, which holds a read `astropy.Table`, not a path.
-    A str there passes the `is not None` guard in `merge_individual_frames` and
-    then raises `TypeError` on `offsets_table['Visit']`.  The migration step
-    that adopts this must do the read at the call site -- which is what the lazy
-    `_read_offsets_table` in #219 already does, so the two compose.
-
-    Covers every proposal of the field, unlike today's dict, which omits 1905,
-    3523 and 2526 and so raises KeyError for every wd1/wd2 per-filter merge.
-    """
-    field = BY_NAME.get(target)
-    if field is None:
-        return {}
-    out = {}
-    for o in field.observations:
-        if o.proposal in out:
-            raise ValueError(
-                f'{target} lists proposal {o.proposal} twice')
-        out[o.proposal] = o.offsets_table
-    return out
-
+# --------------------------------------------------------------------------
+# Views.  Each one answers a question the pipeline used to answer with its own
+# hand-maintained dictionary.
+# --------------------------------------------------------------------------
 
 def basepath(target):
-    """The data root for one target, replacing the `if target in (...)` branch.
+    """The data directory for one target.
 
-    An unregistered target gets the blue tree, which is what that branch's
-    `else` does -- not a KeyError.  Registering a new field is what moves it.
+    An unregistered target gets the blue tree, which is what the ``if target in
+    (...)`` branches this replaces did in their ``else``.
     """
     known = BY_NAME.get(target)
     if known is not None:
         return known.basepath
     return f"{ROOTS['blue']}/{target}/"
+
+
+def obs_filters(instrument='nircam'):
+    """``{target: {proposal: [filters]}}``.
+
+    NIRISS reuses NIRCam filter names on a different pixel scale, so it has its
+    own set and its own products; asking for it returns only the fields that
+    have one.
+    """
+    if instrument.lower() == 'niriss':
+        return {f.name: {o.proposal: list(o.niriss_filters)
+                         for o in f.observations if o.niriss_filters}
+                for f in FIELDS
+                if any(o.niriss_filters for o in f.observations)}
+    return {f.name: {o.proposal: list(o.filters)
+                     for o in f.observations if o.filters}
+            for f in FIELDS if any(o.filters for o in f.observations)}
+
+
+def glob_obsid(target, proposal, instrument='nircam'):
+    """The observation number to build a filename glob from, or ``None``.
+
+    Instrument-aware on purpose. Proposal 2221 numbers its NIRCam and MIRI
+    observations of the same two fields in opposite order (brick is NIRCam 001
+    and MIRI 002; cloudc is the reverse), so one number per (target, proposal)
+    cannot be right for both.
+    """
+    field = BY_NAME.get(target)
+    if field is None:
+        return None
+    obs = field.observation(proposal)
+    return None if obs is None else obs.glob_obsid(instrument)
+
+
+def project_obsnum():
+    """``{target: {proposal: obsid}}`` for NIRCam.
+
+    A proposal that did not observe a field with NIRCam is omitted rather than
+    given ``None``: consumers interpolate this into a glob, where ``None``
+    would match nothing without saying so.
+    """
+    out = {}
+    for field in FIELDS:
+        entries = {o.proposal: o.glob_obsid('nircam') for o in field.observations}
+        entries = {k: v for k, v in entries.items() if v is not None}
+        if entries:
+            out[field.name] = entries
+    return out
+
+
+def nvisits():
+    """``{proposal: {target: n}}`` -- the transpose of the other two, which is
+    a thing a reader had to remember and a view does not."""
+    out = {}
+    for field in FIELDS:
+        for obs in field.observations:
+            if obs.nvisits is not None:
+                out.setdefault(obs.proposal, {})[field.name] = obs.nvisits
+    return out
+
+
+def field_to_reg_mapping(proposal, instrument='nircam'):
+    """``{obsid: target}`` for one proposal and instrument.
+
+    The reduce and catalog drivers use this to name the field an observation
+    belongs to.
+    """
+    instrument = instrument.lower()
+    out = {}
+    for field in FIELDS:
+        obs = field.observation(proposal)
+        if obs is None:
+            continue
+        for obsid in obs.obsids.get(instrument, ()):
+            if obsid in out:
+                raise FieldRegistryError(
+                    f'proposal {proposal} observation {obsid} ({instrument}) '
+                    f'is claimed by both {out[obsid]!r} and {field.name!r}')
+            out[obsid] = field.name
+    return out
+
+
+def target_for_obsid(proposal, obsid, instrument='nircam'):
+    """Which field an observation belongs to.
+
+    ``obsid`` may name several observations cataloged together, as
+    ``'001-002'``; every part must belong to the same field.
+    """
+    mapping = field_to_reg_mapping(proposal, instrument)
+    parts = str(obsid).split('-')
+    targets = {mapping[p] for p in parts if p in mapping}
+    if len(targets) == 1:
+        return targets.pop()
+    if not targets:
+        raise KeyError(
+            f'proposal {proposal} observation {obsid!r} ({instrument}) is not '
+            f'in fields.yaml; known observations: {sorted(mapping)}')
+    raise FieldRegistryError(
+        f'joint observation {obsid!r} spans more than one field: '
+        f'{sorted(targets)}')
+
+
+def reference_catalog(proposal):
+    """The astrometric reference frame token for one proposal, or ``None``.
+
+    Keyed by proposal because the offsets-table filename it builds is, and
+    every field sharing a proposal shares that frame today.
+    """
+    for field in FIELDS:
+        obs = field.observation(proposal)
+        if obs is not None and obs.reference_catalog is not None:
+            return obs.reference_catalog
+    return None
+
+
+def fov_region(target):
+    """Path to the field-of-view region file, relative to the field directory."""
+    field = BY_NAME.get(target)
+    return None if field is None else field.fov_region
+
+
+def offsets_table_path(target, proposal):
+    """Absolute path to a field's measured offsets table, or ``None``.
+
+    Returns a path, not a read table: reading it is the caller's job, and doing
+    it eagerly made every run of every target depend on one field's file.
+    """
+    field = BY_NAME.get(target)
+    if field is None:
+        return None
+    obs = field.observation(proposal)
+    if obs is None or obs.offsets_table is None:
+        return None
+    return os.path.join(field.basepath, obs.offsets_table)
+
+
+def merge_jobs(target, instrument='nircam'):
+    """``[(proposal, filter), ...]`` for one target, in a fixed order.
+
+    This list is the SLURM array: task *n* runs entry *n*. The order is derived
+    (proposals numerically, filters by wavelength) rather than taken from the
+    file, so editing the registry cannot move a task onto a different filter.
+    """
+    per_target = obs_filters(instrument).get(target)
+    if not per_target:
+        raise KeyError(
+            f'{target!r} has no {instrument} filters in fields.yaml, so there '
+            f'is nothing to merge.  Registered: '
+            f'{sorted(obs_filters(instrument))}')
+    return [(proposal, filtername)
+            for proposal in sorted(per_target, key=int)
+            for filtername in per_target[proposal]]
