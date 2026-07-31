@@ -38,6 +38,14 @@ MAX_GROUP_SIZE=${MAX_GROUP_SIZE:-unlimited}
 CROSSBAND_REF=${CROSSBAND_REF:-}
 PIPE_ROOT=${PIPE_ROOT:-}
 export EXTRA_ARGS=${EXTRA_ARGS:-}   # may contain commas -> inherit via --export=ALL
+# MODULES is comma-valued for any multi-module field ("nrca,nrcb"), and sbatch
+# --export is itself comma-separated: inlining it as MODULES=$MODULES makes
+# sbatch read "nrcb" as a separate KEY=VALUE-less token and the variable arrives
+# truncated to "nrca".  The m2 checkpoint then only ever sees one module, so the
+# other half of the field stays untied while the run reports success -- the
+# "half the mosaic offset" failure class.  Export it and let --export=ALL carry
+# it, exactly as EXTRA_ARGS above.
+export MODULES
 
 # Granularity + per-stage resource slices (cpu only; mem/time stay generous so a
 # job is never killed mid-run -- see scripts/reduction/README.md scheduling note).
@@ -56,7 +64,7 @@ if [ -z "${PHASES:-}" ]; then
     [ "${#_FA[@]}" -gt 1 ] && PHASES="$PHASES m7"
 fi
 
-COMMON="ALL,PROPOSAL=$PROPOSAL,FIELD=$FIELD,TARGET=$TARGET,MODULES=$MODULES"
+COMMON="ALL,PROPOSAL=$PROPOSAL,FIELD=$FIELD,TARGET=$TARGET"
 COMMON="$COMMON,EACH_SUFFIX=$EACH_SUFFIX,MAX_GROUP_SIZE=$MAX_GROUP_SIZE,NSHARDS=$NSHARDS"
 COMMON="$COMMON,FILTERS=$FILTERS"
 [ -n "$PIPE_ROOT" ] && COMMON="$COMMON,PIPE_ROOT=$PIPE_ROOT"
