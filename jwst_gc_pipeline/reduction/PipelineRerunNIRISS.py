@@ -27,6 +27,8 @@ from glob import glob
 from astroquery.mast import Mast, Observations
 import copy
 import os
+
+from jwst_gc_pipeline import fields
 import re
 import shutil
 import numpy as np
@@ -656,7 +658,7 @@ if __name__ == "__main__":
     Mast.login(api_token.strip())
     Observations.login(api_token)
 
-    field_to_reg_mapping = {'4147': {'012': 'sgrc'}}[proposal_id]
+    field_to_reg_mapping = fields.field_to_reg_mapping(proposal_id, 'niriss')
 
     for field in fields:
         for filtername in filternames:

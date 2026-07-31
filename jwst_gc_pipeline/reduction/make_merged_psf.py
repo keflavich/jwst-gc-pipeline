@@ -1,3 +1,14 @@
+"""DEPRECATED -- scheduled for removal.
+
+Nothing imports this module and no pipeline stage runs it. It also imports
+``webbpsf``, which this project replaced with ``stpsf``, so it cannot run as
+written.
+
+It keeps its own copies of the filter and observation-number registries. Those
+copies are brick-only, uppercase, and already out of date (no F2550W). Do not
+add to them and do not copy them: jwst_gc_pipeline/fields.yaml is the registry.
+See docs/FIELDS.md.
+"""
 import numpy as np
 import copy
 import os

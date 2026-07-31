@@ -38,62 +38,21 @@ from jwst_gc_pipeline.photometry.naming import (
 )
 from jwst_gc_pipeline.photometry.measure_offsets import (
     assert_sparse_reference_for_nn_median)
+from jwst_gc_pipeline import fields
 
 filternames = filternames_narrow = ['f410m', 'f212n', 'f466n', 'f405n', 'f187n', 'f182m']
-obs_filters = {'brick': {'2221': filternames + ['f2550w'],
-                         '1182': ['f444w', 'f356w', 'f200w', 'f115w'],
-                         },
-               'cloudc': {'2221': filternames + ['f2550w'],
-                          # 2526 obs 021 = "G0" CMZ cloud-c filament F770W
-                          '2526': ['f770w']},
-               # sickle NIRCam (obs 007) + MIRI (obs 001/002/003)
-               'sickle': {'3958': ['f187n', 'f210m', 'f335m', 'f470n', 'f480m',
-                                   'f770w', 'f1130w', 'f1500w']},
-               # cloudef NIRCam (obs 002/005) + MIRI (obs 004/006/008)
-               'cloudef': {'2092': ['f162m', 'f210m', 'f360m', 'f480m',
-                                    'f770w', 'f2100w']},
-               'sgrc': {'4147': ['f115w', 'f162m', 'f182m', 'f212n', 'f360m', 'f405n', 'f470n', 'f480m']},
-               'sgrb2': {'5365': ['f150w', 'f182m', 'f187n', 'f210m', 'f212n', 'f300m', 'f360m', 'f405n', 'f410m', 'f466n', 'f480m', 'f770w', 'f1280w', 'f2550w']},
-               'arches': {'2045': ['f212n', 'f323n']},
-               'quintuplet': {'2045': ['f212n', 'f323n']},
-               'sgra': {'1939': ['f115w', 'f212n', 'f405n']},
-               'gc2211': {'2211': ['f150w', 'f200w', 'f277w']},
-               # Westerlund 1 (Guarcello 1905) + Westerlund 2 (Guarcello 3523)
-               'wd1': {'1905': ['f115w', 'f150w', 'f164n', 'f187n', 'f200w', 'f212n',
-                                'f277w', 'f323n', 'f405n', 'f444w', 'f466n']},
-               'wd2': {'3523': ['f115w', 'f150w', 'f162m', 'f164n', 'f182m', 'f187n',
-                                'f200w', 'f212n', 'f250m', 'f277w', 'f300m', 'f323n',
-                                'f335m', 'f405n', 'f410m', 'f444w', 'f466n']},
-               # W51 (Goddard prop 6151 NIRCam obs 001).  In disk -- use Gaia DR3
-               # as astrometric ref.  Filter list per user 2026-06-13: F140M
-               # F162M F182M F187N F210M F335M F360M F405N F410M F480M.
-               'w51': {'6151': ['f140m', 'f162m', 'f182m', 'f187n', 'f210m',
-                                'f335m', 'f360m', 'f405n', 'f410m', 'f480m',
-                                'f770w', 'f1280w', 'f2100w']},
-               # Globular clusters (Jay Anderson co-I; added 2026-07-01)
-               'm92': {'1334': ['f090w', 'f150w', 'f277w', 'f444w']},
-               'ngc6397': {'1979': ['f150w2', 'f322w2']},
-               # m4: primary pointing obs 002 only. obs 003 (M-4-shift) shares
-               # visit/vgroup/exp tuples (both visit 001) with no per-obs token
-               # (1979 is not multi-obs like 2211), so cataloging it into the same
-               # basepath would collide/overwrite; deferred (its aligned i2d exist).
-               'm4': {'1979': ['f150w2', 'f322w2']},
-               # NGC 6334 (Cat's Paw SFR; extended emission). 7213 (Cheng) + 6778
-               # (Garcia Marin), both NIRCam. Filters = effective bandpass; verify
-               # vs downloaded cal headers.
-               'ngc6334': {'7213': ['f115w', 'f162m', 'f182m', 'f200w', 'f356w', 'f405n', 'f444w', 'f470n'],
-                           '6778': ['f090w', 'f187n', 'f200w', 'f277w', 'f335m', 'f470n']},
-               }
+
+# Every registry that used to live here is now one YAML file: see
+# jwst_gc_pipeline/fields.yaml and docs/FIELDS.md.  Adding a target is an edit
+# to that file alone.
+obs_filters = fields.obs_filters()
 
 # NIRISS filter sets, keyed by target.  NIRISS shares filter names with NIRCam,
 # so its filters cannot live in the shared ``obs_filters`` map (a NIRCam sgrc
 # cross-band merge must NOT pull in the NIRISS f200w/f356w/f158m catalogs, which
 # live under <target>/niriss/).  Selected at runtime by _obs_filters_for() when
 # the process instrument override is NIRISS.
-obs_filters_niriss = {
-    # Sgr C 4147 obs 012 NIRISS imaging.
-    'sgrc': {'4147': ['f158m', 'f200w', 'f356w', 'f480m']},
-}
+obs_filters_niriss = fields.obs_filters('niriss')
 
 
 # Per-frame catalog suffix written by each photometry method.
@@ -125,10 +84,14 @@ def _run_merge(merge_func, label, on_error, **kwargs):
 
 
 def individual_frame_merge_jobs(target):
-    """The (program, filter) pairs to merge, in SLURM array-index order."""
-    return [(progid, filtername)
-            for progid, filternames in _obs_filters_for(target).items()
-            for filtername in filternames]
+    """The (program, filter) pairs to merge.  Task *n* of the SLURM array runs
+    entry *n*, so the order is derived in fields.merge_jobs rather than taken
+    from the order anything was written down in."""
+    from jwst_gc_pipeline.photometry.naming import _instrument_override
+    instrument = 'niriss' if _instrument_override() == 'NIRISS' else 'nircam'
+    if instrument == 'niriss' and target not in obs_filters_niriss:
+        instrument = 'nircam'
+    return fields.merge_jobs(target, instrument)
 
 
 def _obs_filters_for(target):
@@ -139,54 +102,7 @@ def _obs_filters_for(target):
         return obs_filters_niriss[target]
     return obs_filters.get(target)
 
-project_obsnum = {'brick': {'2221': '001',
-                            '1182': '004',
-                            },
-                  'cloudc': {'2221': '002',
-                             },
-                  # sickle NIRCam is obs 007 but the MIRI pointings are obs
-                  # 001/002/003; use a wildcard (the per-filter glob already
-                  # disambiguates because the filter token is in the name).
-                  'sickle': {'3958': '*',
-                             },
-                  # cloudef (proposal 2092) covers Cloud E (obs 002, t001)
-                  # and Cloud F (obs 005, t002) as two adjacent pointings.
-                  # The pipeline output retains t001 in both names (the
-                  # asn rename hardcodes t001), so the per-filter i2d glob
-                  # only needs an obs-id wildcard.
-                  'cloudef': {'2092': '*',
-                              },
-                  'sgrc': {'4147': '012',
-                           },
-                  'sgrb2': {'5365': '001',
-                            },
-                  'arches': {'2045': '001',
-                             },
-                  'quintuplet': {'2045': '003',
-                                 },
-                  'sgra': {'1939': '001',
-                           },
-                  # gc2211 (asteroid proposal 2211) has 5 GC pointings
-                  # (obs IDs 023, 028, 046, 049, 050) all sharing the
-                  # python target name 'gc2211'.  Use a glob wildcard
-                  # for the obs ID so per-filter merge picks up i2d
-                  # files from any of the 5 pointings.
-                  'gc2211': {'2211': '*',
-                             },
-                  'wd1': {'1905': '001',
-                          },
-                  'wd2': {'3523': '005',
-                          },
-                  'w51': {'6151': '001',
-                          '1182': '002',
-                          },
-                  # Globular clusters (Jay Anderson co-I; added 2026-07-01)
-                  'm92': {'1334': '001'},
-                  'ngc6397': {'1979': '001'},
-                  'm4': {'1979': '002'},  # primary pointing; obs 003 deferred
-                  # NGC 6334 (Cat's Paw SFR)
-                  'ngc6334': {'7213': '001', '6778': '001'},
-                  }
+project_obsnum = fields.project_obsnum()
 
 
 def getmtime(x):
@@ -2934,28 +2850,16 @@ def main():
             "astrometry rule #1 forbids.  Build reference catalogs with "
             "make_reference_from_pipeline_catalogs.py instead.")
 
-    if target in ('sickle', 'cloudef', 'sgrc', 'sgrb2', 'arches', 'quintuplet', 'sgra', 'gc2211', 'w51',
-                  'm92', 'ngc6397', 'm4',  # globular clusters (Anderson co-I) on /orange
-                  'ngc6334'):  # NGC 6334 (Cat's Paw SFR)
-        basepath = f'/orange/adamginsburg/jwst/{target}/'
-    else:
-        basepath = f'/blue/adamginsburg/adamginsburg/jwst/{target}/'
+    basepath = fields.basepath(target)
 
-    offsets_tables = {'1182': Table.read(f'/blue/adamginsburg/adamginsburg/jwst/brick/offsets/Offsets_JWST_Brick1182_F444ref.csv'),
-                      '2221': None,
-                      '3958': None,
-                      '2092': None,
-                      '4147': None,
-                      '5365': None,
-                      '2045': None,
-                      '1939': None,
-                      '2211': None,
-                      '6151': None,  # W51; astrometry handled in imaging, no offsets table
-                      '1334': None,  # M92 (Anderson co-I); alignment done in imaging
-                      '1979': None,  # M4 / NGC6397 (Anderson co-I); alignment done in imaging
-                      '7213': None,  # NGC 6334 (Cheng); alignment done in imaging
-                      '6778': None,  # NGC 6334 (Garcia Marin); alignment done in imaging
-    }
+    def read_offsets_table(progid):
+        """The measured offsets for one proposal, or None.
+
+        Read here rather than up front: it is one field's file, and reading it
+        eagerly made every run of every target depend on it.
+        """
+        path = fields.offsets_table_path(target, progid)
+        return None if path is None else Table.read(path)
 
     module = modules[0]
     if len(modules) > 1:
@@ -2999,7 +2903,7 @@ def main():
                     suffix=INDIV_MERGE_SUFFIX[method], method=method,
                     target=target, basepath=basepath, field=options.field,
                     exposure_numbers=np.arange(1, options.max_expnum + 1),
-                    offsets_table=offsets_tables[progid],
+                    offsets_table=read_offsets_table(progid),
                     iteration_label=options.iteration_label,
                     resbgsub=options.resbgsub,
                     n_spatial_chunks=int(options.n_spatial_chunks),
