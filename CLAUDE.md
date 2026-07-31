@@ -231,6 +231,10 @@ active `main` working tree (it is the live reduction environment).
 ## Other conventions
 - SLURM: use `--account=astronomy-dept --qos=astronomy-dept-b`. The default
   `adamginsburg` QOS caps cpu=10 and will hang a 16-cpu task.
+- The submit scripts default to
+  `/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/python`.
+  Override with `PYTHON=...`.  GETTING_STARTED.md keeps this generic on
+  purpose -- it is a fact about this account, not about the pipeline.
 - New photometry code goes in new modules, not the `crowdsource_catalogs_long.py`
   monolith.
 - No bare `try/except`; catch specific exceptions only.
