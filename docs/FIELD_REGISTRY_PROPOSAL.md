@@ -102,7 +102,7 @@ fields.obs_filters()      # {target: {proposal: [filters]}}
 fields.project_obsnum()   # {target: {proposal: obsid}}
 fields.nvisits()          # {proposal: {target: n}}   <- transposition is the view's job
 fields.basepath(target)   # replaces the if/else branch
-fields.offsets_table_paths()   # NOT a drop-in -- see below
+fields.offsets_table_paths(target)   # per target; NOT a drop-in -- see below
 ```
 
 `test_fields_registry.py` asserts each view **equals the dictionary it
@@ -175,10 +175,13 @@ NIRISS set stays where it is and the view composes with it.
    call site — which is what the lazy `_read_offsets_table` in #219 already
    does, so the two compose.
 
-   It also refuses to build when one proposal is shared by two fields with
-   different tables. Three proposals are shared (2221 brick+cloudc, 2045
-   arches+quintuplet, 1979 m4+ngc6397) and downstream keys by proposal alone,
-   so the second would otherwise vanish silently.
+   It is keyed **per target**, because `main()` runs one target at a time and
+   brick/2221 and cloudc/2221 are different observations with different
+   alignment histories. Today's dict is keyed by proposal alone and cannot
+   express a table for each; an earlier draft of this registry *refused* that
+   configuration, which would have re-imported the exact limitation the
+   registry exists to remove. It errors only on a genuine mistake — one field
+   listing the same proposal twice.
 
 4. **Order is load-bearing, and the tests that pin it must outlive step 2.**
    The array index comes from proposal order and the cross-band column order

@@ -126,7 +126,9 @@ def test_view_preserves_proposal_and_filter_ORDER(target):
 def test_the_written_out_order_still_matches_todays_dict():
     """Guards the literal above against drifting from reality WHILE both exist.
 
-    This is the only test here that may legitimately be deleted at step 2.
+    DELETE this at migration step 2 -- do not repoint it at the view.  The
+    literal is what keeps the order honest once `MC.obs_filters` is gone;
+    comparing the literal against the view it guards would be circular.
     """
     today = {t: tuple((p, tuple(fs)) for p, fs in d.items())
              for t, d in MC.obs_filters.items()}
@@ -142,12 +144,23 @@ def test_the_job_list_built_from_the_view_is_identical(target):
     assert from_view == expected
 
 
-def test_offsets_view_covers_every_registered_proposal():
+@pytest.mark.parametrize('target', sorted(EXPECTED_JOB_ORDER))
+def test_offsets_view_covers_every_proposal_of_the_field(target):
     """Today's dict omits 1905, 3523 and 2526, so `offsets_tables[progid]`
     raises KeyError for every wd1/wd2 per-filter merge."""
-    view = fields.offsets_table_paths()
-    needed = {p for d in MC.obs_filters.values() for p in d}
+    view = fields.offsets_table_paths(target)
+    needed = set(MC.obs_filters[target])
     assert needed <= set(view), sorted(needed - set(view))
+
+
+def test_two_fields_may_each_have_their_own_table_for_a_shared_proposal():
+    """brick/2221 and cloudc/2221 are different observations.  Today's dict is
+    keyed by proposal alone and cannot express a table for each; the registry
+    must not re-import that limit."""
+    brick = fields.offsets_table_paths('brick')
+    cloudc = fields.offsets_table_paths('cloudc')
+    assert '2221' in brick and '2221' in cloudc      # shared proposal
+    assert set(brick) != set(cloudc)                 # different observations
 
 
 def test_the_brick_offsets_path_is_exactly_todays():
@@ -157,32 +170,25 @@ def test_the_brick_offsets_path_is_exactly_todays():
     src = (pathlib.Path(fields.__file__).parent / 'photometry'
            / 'merge_catalogs.py').read_text()
     literal = re.search(r"'1182': Table\.read\(f'([^']+)'\)", src).group(1)
-    assert fields.offsets_table_paths()['1182'] == literal
+    assert fields.offsets_table_paths('brick')['1182'] == literal
     assert pathlib.Path(literal).exists(), literal
 
 
 def test_offsets_view_is_paths_not_tables():
-    """Naming matters here: today's dict holds a read Table, and a str passes
-    the `is not None` guard before raising TypeError on ['Visit']."""
-    assert not hasattr(fields, 'offsets_tables')
-    value = fields.offsets_table_paths()['1182']
+    """Today's dict holds a read Table; a str passes the `is not None` guard in
+    merge_individual_frames and then raises TypeError on ['Visit']."""
+    value = fields.offsets_table_paths('brick')['1182']
     assert isinstance(value, str)
 
 
-def test_a_shared_proposal_cannot_silently_drop_a_table():
-    """2221 is brick+cloudc, 2045 arches+quintuplet, 1979 m4+ngc6397.  Keyed by
-    proposal alone downstream, so a per-field table would vanish."""
-    shared = fields.Field('x', root='blue', observations=(
-        fields.Obs('2221', offsets_table='/a.csv'),))
-    other = fields.Field('y', root='blue', observations=(
-        fields.Obs('2221', offsets_table='/b.csv'),))
-    original = fields.FIELDS
-    try:
-        fields.FIELDS = (shared, other)
-        with pytest.raises(ValueError, match='shared by more than one field'):
-            fields.offsets_table_paths()
-    finally:
-        fields.FIELDS = original
+def test_one_field_listing_a_proposal_twice_is_an_error(monkeypatch):
+    """A genuine mistake, unlike two fields sharing a proposal."""
+    doubled = fields.Field('x', root='blue', observations=(
+        fields.Obs('2221', offsets_table='/a.csv'),
+        fields.Obs('2221', offsets_table='/b.csv')))
+    monkeypatch.setattr(fields, 'BY_NAME', dict(fields.BY_NAME, x=doubled))
+    with pytest.raises(ValueError, match='twice'):
+        fields.offsets_table_paths('x')
 
 
 def test_project_obsnum_view_matches_todays_dict():

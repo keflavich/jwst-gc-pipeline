@@ -150,30 +150,34 @@ def nvisits():
     return out
 
 
-def offsets_table_paths():
-    """`{proposal: path-or-None}`.
+def offsets_table_paths(target):
+    """`{proposal: path-or-None}` for ONE field.
 
-    NOT a drop-in for `merge_catalogs.main`'s `offsets_tables`, which holds a
-    read `astropy.Table`, not a path.  A str there passes the `is not None`
-    guard in `merge_individual_frames` and then raises `TypeError` on
-    `offsets_table['Visit']`.  The migration step that adopts this must do the
-    read at the call site -- which is what the lazy `_read_offsets_table` in
-    #219 already does, so the two compose.
+    Per target on purpose.  `merge_catalogs.main()` runs one target at a time,
+    and brick/2221 and cloudc/2221 are different observations with different
+    alignment histories -- so giving cloudc its own 2221 offsets table is a
+    normal future edit.  Today's dict is keyed by proposal alone and could not
+    express that; a registry that refused it would just re-import the
+    limitation it exists to remove.
 
-    Today's dict also omits 1905, 3523 and 2526 entirely, so
-    `offsets_tables[progid]` raises KeyError for every wd1/wd2 per-filter merge.
-    This covers every registered proposal by construction.
+    NOT a drop-in for that dict, which holds a read `astropy.Table`, not a path.
+    A str there passes the `is not None` guard in `merge_individual_frames` and
+    then raises `TypeError` on `offsets_table['Visit']`.  The migration step
+    that adopts this must do the read at the call site -- which is what the lazy
+    `_read_offsets_table` in #219 already does, so the two compose.
+
+    Covers every proposal of the field, unlike today's dict, which omits 1905,
+    3523 and 2526 and so raises KeyError for every wd1/wd2 per-filter merge.
     """
+    field = BY_NAME.get(target)
+    if field is None:
+        return {}
     out = {}
-    for f in FIELDS:
-        for o in f.observations:
-            if o.proposal in out and out[o.proposal] != o.offsets_table:
-                raise ValueError(
-                    f"proposal {o.proposal} is shared by more than one field "
-                    f"with different offsets tables ({out[o.proposal]!r} vs "
-                    f"{o.offsets_table!r}).  It is keyed by proposal alone "
-                    f"downstream, so one of them would be dropped silently.")
-            out[o.proposal] = o.offsets_table
+    for o in field.observations:
+        if o.proposal in out:
+            raise ValueError(
+                f'{target} lists proposal {o.proposal} twice')
+        out[o.proposal] = o.offsets_table
     return out
 
 
