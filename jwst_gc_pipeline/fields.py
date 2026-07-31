@@ -299,7 +299,12 @@ def merge_jobs(target, instrument='nircam'):
     (proposals numerically, filters by wavelength) rather than taken from the
     file, so editing the registry cannot move a task onto a different filter.
     """
-    per_target = obs_filters(instrument).get(target, {})
+    per_target = obs_filters(instrument).get(target)
+    if not per_target:
+        raise KeyError(
+            f'{target!r} has no {instrument} filters in fields.yaml, so there '
+            f'is nothing to merge.  Registered: '
+            f'{sorted(obs_filters(instrument))}')
     return [(proposal, filtername)
             for proposal in sorted(per_target, key=int)
             for filtername in per_target[proposal]]

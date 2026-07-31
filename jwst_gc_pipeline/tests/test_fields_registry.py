@@ -193,6 +193,12 @@ def test_the_merge_job_order_is_pinned():
     assert F.merge_jobs('brick') == BRICK_MERGE_JOBS
 
 
+def test_an_unregistered_target_has_no_merge_jobs_and_says_so():
+    """An empty job list would make a typo'd target a silent no-op."""
+    with pytest.raises(KeyError, match='nothing to merge'):
+        F.merge_jobs('nosuchfield')
+
+
 def test_filters_come_back_in_wavelength_order():
     """f2550w after f466n, which alphabetical order would get wrong."""
     brick = F.obs_filters()['brick']['2221']
