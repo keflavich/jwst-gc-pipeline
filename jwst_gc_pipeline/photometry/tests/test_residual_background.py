@@ -12,7 +12,7 @@ from astropy.table import Table
 
 from jwst_gc_pipeline.photometry.residual_background import (
     FOOTPRINT_BOX, MERGED_RESBKG_COLUMNS, RESBKG_COLUMNS, combine_frames,
-    measure_footprint_background)
+    local_bkg_column_name, measure_footprint_background)
 
 
 # ---------------------------------------------------------------- per frame --
@@ -111,10 +111,10 @@ def test_combine_is_inverse_variance_weighted_by_npix_over_rms_squared():
     npix = np.array([[9.0, 9.0]])
     out = combine_frames(mean, rms, npix)
     w0, w1 = 9 / 1.0 ** 2, 9 / 10.0 ** 2
-    assert out['resbkg_mean_avg'][0] == pytest.approx(
+    assert out['mean_modelsub_bkg'][0] == pytest.approx(
         (w0 * 10 + w1 * 20) / (w0 + w1))
-    assert out['resbkg_mean_err'][0] == pytest.approx(1 / np.sqrt(w0 + w1))
-    assert out['resbkg_nframes'][0] == 2
+    assert out['mean_modelsub_bkg_err'][0] == pytest.approx(1 / np.sqrt(w0 + w1))
+    assert out['modelsub_bkg_nframes'][0] == 2
 
 
 def test_combine_sigma_clips_an_outlier_frame():
@@ -132,22 +132,22 @@ def test_combine_sigma_clips_an_outlier_frame():
     npix = np.full((1, 10), 9.0)
 
     out = combine_frames(mean, rms, npix, sigma=3.0)
-    assert out['resbkg_nframes'][0] < 10                  # the outlier is gone
-    assert out['resbkg_mean_avg'][0] == pytest.approx(good.mean(), abs=1.0)
+    assert out['modelsub_bkg_nframes'][0] < 10                  # the outlier is gone
+    assert out['mean_modelsub_bkg'][0] == pytest.approx(good.mean(), abs=1.0)
 
     # and the threshold is load-bearing: a huge sigma keeps the outlier
     loose = combine_frames(mean, rms, npix, sigma=1e6)
-    assert loose['resbkg_nframes'][0] == 10
-    assert loose['resbkg_mean_avg'][0] > 50
+    assert loose['modelsub_bkg_nframes'][0] == 10
+    assert loose['mean_modelsub_bkg'][0] > 50
 
 
 def test_combine_reports_nan_scatter_for_a_single_frame():
     """Scatter across one frame is undefined, not 0 -- same trap as std_ra."""
     out = combine_frames(np.array([[3.0]]), np.array([[1.0]]),
                          np.array([[9.0]]))
-    assert out['resbkg_nframes'][0] == 1
-    assert out['resbkg_mean_avg'][0] == pytest.approx(3.0)
-    assert np.isnan(out['resbkg_mean_std'][0])
+    assert out['modelsub_bkg_nframes'][0] == 1
+    assert out['mean_modelsub_bkg'][0] == pytest.approx(3.0)
+    assert np.isnan(out['mean_modelsub_bkg_std'][0])
 
 
 def test_combine_scatter_is_the_across_frame_rms():
@@ -158,8 +158,8 @@ def test_combine_scatter_is_the_across_frame_rms():
     rms = np.ones((1, 2))
     npix = np.full((1, 2), 9.0)
     out = combine_frames(mean, rms, npix)
-    assert out['resbkg_mean_avg'][0] == pytest.approx(5.0)
-    assert out['resbkg_mean_std'][0] == pytest.approx(1.0)
+    assert out['mean_modelsub_bkg'][0] == pytest.approx(5.0)
+    assert out['mean_modelsub_bkg_std'][0] == pytest.approx(1.0)
 
 
 def test_combine_drops_edge_clipped_and_unmeasured_frames():
@@ -168,16 +168,16 @@ def test_combine_drops_edge_clipped_and_unmeasured_frames():
     rms = np.array([[1.0, 1.0, 1.0]])
     npix = np.array([[9.0, 1.0, 0.0]])         # frame 1 edge-clipped to 1 px
     out = combine_frames(mean, rms, npix, min_npix=2)
-    assert out['resbkg_nframes'][0] == 1
-    assert out['resbkg_mean_avg'][0] == pytest.approx(5.0)
+    assert out['modelsub_bkg_nframes'][0] == 1
+    assert out['mean_modelsub_bkg'][0] == pytest.approx(5.0)
 
 
 def test_combine_source_with_no_usable_frame_is_nan_not_zero():
     out = combine_frames(np.array([[np.nan, np.nan]]),
                          np.array([[np.nan, np.nan]]),
                          np.array([[0.0, 0.0]]))
-    assert out['resbkg_nframes'][0] == 0
-    for k in ('resbkg_mean_avg', 'resbkg_mean_std', 'resbkg_mean_err'):
+    assert out['modelsub_bkg_nframes'][0] == 0
+    for k in ('mean_modelsub_bkg', 'mean_modelsub_bkg_std', 'mean_modelsub_bkg_err'):
         assert np.isnan(out[k][0]), k
 
 
@@ -188,7 +188,7 @@ def test_combine_rms_avg_is_the_weighted_mean_of_the_per_frame_rms():
     npix = np.full((1, 2), 9.0)
     w = 9 / np.array([1.0, 9.0])
     out = combine_frames(mean, rms, npix)
-    assert out['resbkg_rms_avg'][0] == pytest.approx(
+    assert out['modelsub_bkg_rms_avg'][0] == pytest.approx(
         (w * np.array([1.0, 3.0])).sum() / w.sum(), rel=1e-5)
 
 
@@ -276,9 +276,9 @@ def test_bright_source_subtraction_residual_biases_the_value():
     """PIN the documented limitation: this is NOT a pure sky measurement.
 
     On real data (brick F182M nrca1 m7) the brightest 1% of sources read
-    resbkg_mean ~14.3 where the subtracted background map says ~5.5 -- i.e.
+    modelsub_bkg ~14.3 where the subtracted background map says ~5.5 -- i.e.
     ~+9 units, ~2.6x the true background, is PSF-subtraction residual rather
-    than sky, and Spearman r(resbkg_mean, flux_fit) = 0.32.
+    than sky, and Spearman r(modelsub_bkg, flux_fit) = 0.32.
 
     Reproduce the mechanism synthetically: the same fractional model error on a
     bright and a faint star biases the bright one far more, because the error
@@ -303,10 +303,49 @@ def test_bright_source_subtraction_residual_biases_the_value():
     assert abs(bias_bright) > 50 * abs(bias_faint)
 
 
+def test_local_bkg_alias_names_the_array_it_was_measured_on():
+    """``local_bkg`` held two different physical quantities across stages -- ~4.4
+    at m1-m4 (raw frame) and ~0.44 at m5-m7 (smoothed-residual background
+    already removed) -- with nothing in the catalog recording which."""
+    assert local_bkg_column_name('raw') == 'local_bkg_raw'
+    assert local_bkg_column_name('bgsub') == 'local_bkg_bgsub'
+    assert local_bkg_column_name('resbgsub') == 'local_bkg_resbgsub'
+    # both subtractions in effect -> a legal FITS column name, not 'a+b'
+    assert local_bkg_column_name('bgsub+resbgsub') == 'local_bkg_bgsub_resbgsub'
+
+
+def test_attach_records_the_local_bkg_basis_and_keeps_the_original_column():
+    """The alias must be additive: existing consumers read ``local_bkg``."""
+    from jwst_gc_pipeline.photometry.cataloging import _attach_residual_background
+    import types
+
+    result = Table({'x_fit': [10.0], 'y_fit': [10.0], 'flux_fit': [1.0],
+                    'local_bkg': [0.44]})
+    opts = types.SimpleNamespace(manual_residual_background=True,
+                                 manual_residual_background_box=3)
+    ctx = types.SimpleNamespace(mask=None, bkg_basis='resbgsub')
+    out = _attach_residual_background(result, np.ones((30, 30)), ctx, opts)
+
+    assert out.meta['LBKGBASE'][0] == 'resbgsub'
+    assert 'local_bkg' in out.colnames                    # unchanged for consumers
+    assert out['local_bkg_resbgsub'][0] == pytest.approx(0.44)
+    # and modelsub_bkg is the stage-INVARIANT one, measured on what we passed in
+    assert out['modelsub_bkg'][0] == pytest.approx(1.0)
+
+    # a raw-stage frame gets the other name from the same code path
+    ctx_raw = types.SimpleNamespace(mask=None, bkg_basis='raw')
+    out2 = _attach_residual_background(
+        Table({'x_fit': [10.0], 'y_fit': [10.0], 'local_bkg': [4.4]}),
+        np.ones((30, 30)), ctx_raw, opts)
+    assert 'local_bkg_raw' in out2.colnames
+    assert 'local_bkg_resbgsub' not in out2.colnames
+
+
 def test_column_name_contracts_are_stable():
     """Downstream (merge_catalogs) keys off these names."""
-    assert RESBKG_COLUMNS == ('resbkg_mean', 'resbkg_rms', 'resbkg_npix')
-    assert 'resbkg_mean_avg' in MERGED_RESBKG_COLUMNS
+    assert RESBKG_COLUMNS == ('modelsub_bkg', 'modelsub_bkg_rms',
+                              'modelsub_bkg_npix')
+    assert 'mean_modelsub_bkg' in MERGED_RESBKG_COLUMNS
 
 
 # ------------------------------------------------------------- integration --
@@ -323,7 +362,7 @@ def test_attach_is_fail_soft_and_optional():
 
     out = _attach_residual_background(result.copy(), np.ones((30, 30)), ctx, opts)
     assert all(c in out.colnames for c in RESBKG_COLUMNS)
-    assert out['resbkg_mean'][0] == pytest.approx(1.0)
+    assert out['modelsub_bkg'][0] == pytest.approx(1.0)
 
     # a broken residual must not raise -- the frame keeps its photometry
     broken = _attach_residual_background(result.copy(), np.ones((3, 3, 3)),
@@ -364,7 +403,7 @@ def test_columns_survive_the_bad_xfit_row_drop_in_alignment():
     kept = result[~bad]
     assert len(kept) == 3
     for row in kept:
-        assert row['resbkg_mean'] == pytest.approx(row['x_fit'])
+        assert row['modelsub_bkg'] == pytest.approx(row['x_fit'])
 
 
 def test_merge_block_combines_through_combine_singleframe(monkeypatch):
@@ -389,9 +428,9 @@ def test_merge_block_combines_through_combine_singleframe(monkeypatch):
         t['flux_fit'] = np.full(n, 100.0)
         t['flux_err'] = np.full(n, 1.0)
         t['qfit'] = np.full(n, 0.1)
-        t['resbkg_mean'] = np.full(n, 4.0) + j * 0.0   # same in every frame
-        t['resbkg_rms'] = np.full(n, 1.0)
-        t['resbkg_npix'] = np.full(n, 9.0)
+        t['modelsub_bkg'] = np.full(n, 4.0) + j * 0.0   # same in every frame
+        t['modelsub_bkg_rms'] = np.full(n, 1.0)
+        t['modelsub_bkg_npix'] = np.full(n, 9.0)
         t.meta = {'exposure': j, 'ra_offset': 0.0, 'dec_offset': 0.0,
                   'filter': 'F182M'}
         tbls.append(t)
@@ -400,12 +439,12 @@ def test_merge_block_combines_through_combine_singleframe(monkeypatch):
 
     for col in MERGED_RESBKG_COLUMNS:
         assert col in out.colnames, f"{col} missing from the merged table"
-    assert np.nanmedian(out['resbkg_mean_avg']) == pytest.approx(4.0, abs=1e-3)
-    assert np.nanmedian(out['resbkg_nframes']) == 4
+    assert np.nanmedian(out['mean_modelsub_bkg']) == pytest.approx(4.0, abs=1e-3)
+    assert np.nanmedian(out['modelsub_bkg_nframes']) == 4
     # and the per-frame names must NOT also appear with Phase 2's flux-weighted
     # _avg suffix -- that would mean they were combined the wrong way too
-    assert 'resbkg_mean_avg' in out.colnames
-    assert 'std_resbkg_mean_avg' not in out.colnames
+    assert 'mean_modelsub_bkg' in out.colnames
+    assert 'std_mean_modelsub_bkg' not in out.colnames
 
 
 def test_attach_is_fail_soft_on_a_missing_y_fit_or_mask():

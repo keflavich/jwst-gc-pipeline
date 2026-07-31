@@ -41,7 +41,7 @@ from jwst_gc_pipeline.photometry.naming import (
     residual_to_smoothed_bg_i2d, smoothed_bg_to_detection_i2d, vetted_to_i2dseed)
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS, mopt
 from jwst_gc_pipeline.photometry.residual_background import (
-    measure_footprint_background)
+    local_bkg_column_name, measure_footprint_background)
 from jwst_gc_pipeline.photometry.psf_fitting import (
     _make_psfphotometry, _make_model_image, _dedup_close_sources,
     forced_psf_photometry,
@@ -1661,6 +1661,18 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         print(f"[manual] subtracted reprojected smoothed-bg {os.path.basename(resbg_path)} "
               f"(sum={float(np.nansum(bg_finite)):.3e})", flush=True)
 
+    # What LocalBackground will actually be measured on.  `local_bkg` means a
+    # different physical quantity at m4 (raw frame) and m5 (smoothed-residual
+    # background already removed) -- measured on brick F182M nrca1 exp1, its
+    # median goes 4.43/4.45/4.40/4.42 at m1-m4 to 0.42/0.45/0.44 at m5-m7 --
+    # and nothing in the catalog recorded which one you were looking at.
+    _basis = []
+    if options.bgsub:
+        _basis.append('bgsub')
+    if resbg_path:
+        _basis.append('resbgsub')
+    bkg_basis = '+'.join(_basis) if _basis else 'raw'
+
     data = data.astype('float32')
 
     grid, _psf_model = _L.get_psf_model(
@@ -1917,6 +1929,7 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         dao_psf_model=dao_psf_model, grouper=grouper,
         satstar_table=satstar_table, satstar_model_subtracted=satstar_model_subtracted,
         original_data=original_data, background_map=background_map,
+        bkg_basis=bkg_basis,
         out_basepath=out_basepath, filename=filename,
         proposal_id=proposal_id, field=field, filtername=filtername,
         module=module, pupil=pupil)
@@ -1950,14 +1963,29 @@ def _attach_residual_background(result, residual, ctx, options, label=''):
         print(f"[{label}] residual-footprint background skipped: "
               f"{type(exc).__name__}: {exc}", flush=True)
         return result
-    result['resbkg_mean'] = mean
-    result['resbkg_rms'] = rms
-    result['resbkg_npix'] = npix
-    result.meta['RESBKGBX'] = (box, 'residual background footprint (px)')
+    result['modelsub_bkg'] = mean
+    result['modelsub_bkg_rms'] = rms
+    result['modelsub_bkg_npix'] = npix
+    result.meta['MSBKGBOX'] = (box, 'model-subtracted background footprint (px)')
+    result.meta['MSBKGSRC'] = ('raw-satstar-starmodel',
+                               'modelsub_bkg is stage-INVARIANT by construction')
+
+    # Record what photutils' local_bkg was measured on, and expose it under a
+    # self-describing alias.  The plain local_bkg column is kept unchanged so
+    # existing consumers are unaffected; the alias is what makes an m4 and an
+    # m7 catalog distinguishable without consulting the filename.
+    basis = str(getattr(ctx, 'bkg_basis', 'raw'))
+    result.meta['LBKGBASE'] = (basis, 'array LocalBackground was measured on')
+    if 'local_bkg' in result.colnames:
+        result[local_bkg_column_name(basis)] = np.asarray(result['local_bkg'],
+                                                          dtype=float)
+
     n_ok = int(np.isfinite(mean).sum())
-    print(f"[{label}] residual-footprint background ({box}x{box}): "
+    print(f"[{label}] model-subtracted background ({box}x{box}): "
           f"{n_ok}/{len(result)} measured, median "
-          f"{np.nanmedian(mean) if n_ok else float('nan'):.4g}", flush=True)
+          f"{np.nanmedian(mean) if n_ok else float('nan'):.4g}; "
+          f"local_bkg basis={basis!r} -> {local_bkg_column_name(basis)}",
+          flush=True)
     return result
 
 
@@ -1971,7 +1999,7 @@ def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
     iter_ = _iteration_token(iteration_label)
     bp = ctx.out_basepath
 
-    # Residual-footprint background (Jay Anderson 3x3 convention).  Built from
+    # Model-subtracted footprint background (Jay Anderson 3x3 convention).  Built from
     # the SAME residual that is written below -- pristine data minus the satstar
     # model minus the star-only model -- so it measures the extended emission at
     # the source position rather than the neighbour-contaminated annulus that

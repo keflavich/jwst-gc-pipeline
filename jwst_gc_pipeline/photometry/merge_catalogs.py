@@ -821,19 +821,21 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
                 _a[mi[keep], ii] = tbl[key][keep]
             _stack[key] = _a
         # npix is a count: absent frames must read 0, not NaN
-        _stack['resbkg_npix'] = np.nan_to_num(_stack['resbkg_npix'], nan=0.0)
-        _combined = combine_resbkg_frames(_stack['resbkg_mean'],
-                                          _stack['resbkg_rms'],
-                                          _stack['resbkg_npix'])
+        _stack['modelsub_bkg_npix'] = np.nan_to_num(_stack['modelsub_bkg_npix'], nan=0.0)
+        _combined = combine_resbkg_frames(_stack['modelsub_bkg'],
+                                          _stack['modelsub_bkg_rms'],
+                                          _stack['modelsub_bkg_npix'])
         for _k, _v in _combined.items():
             newtbl[_k] = _v
-        newtbl.meta['resbkg'] = (
-            'mean/RMS of a small footprint on the star-subtracted residual; '
-            'combined across frames as a sigma-clipped average weighted by '
-            'npix/rms**2. Diagnostic; not used by the flux fit.')
+        newtbl.meta['modelsub_bkg'] = (
+            'mean/RMS of a small footprint on (raw data - satstar - star '
+            'model), stage-invariant by construction; combined across frames '
+            'as a sigma-clipped average weighted by npix/rms**2. Diagnostic; '
+            'not used by the flux fit. Cf. local_bkg_<basis>, which depends on '
+            'the stage.')
         del _stack
-        _n_ok = int(np.isfinite(_combined['resbkg_mean_avg']).sum())
-        print(f"Residual-footprint background: {_n_ok}/{n_src} sources combined "
+        _n_ok = int(np.isfinite(_combined['mean_modelsub_bkg']).sum())
+        print(f"Model-subtracted background: {_n_ok}/{n_src} sources combined "
               f"in {time.time()-_t0:.1f}s", flush=True)
 
     # keepmask, saved_match_inds, saved_keep kept until function return;
@@ -1476,11 +1478,13 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     # make a table that is nearly equivalent to standard tables (with no 'x' or 'y' coordinate)
     minimal_version = {colname: merged_exposure_table[f'{colname}_avg']
                        for colname in column_names if f'{colname}_avg' in merged_exposure_table.colnames}
-    # resbkg_mean_std/_err/_nframes have no '<col>_avg' form, so the
-    # comprehension above cannot pick them up -- carry them explicitly or the
-    # released catalog advertises five columns and ships two.
+    # The mean_modelsub_bkg family has no '<col>_avg' form, so the
+    # comprehension above cannot pick any of it up -- carry it explicitly or
+    # the released catalog advertises five columns and ships none.
     for key in ('dra_avg', 'ddec_avg', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good',
-                'resbkg_mean_std', 'resbkg_mean_err', 'resbkg_nframes',
+                'mean_modelsub_bkg', 'mean_modelsub_bkg_std',
+                'mean_modelsub_bkg_err', 'modelsub_bkg_rms_avg',
+                'modelsub_bkg_nframes',
                 f'{flux_error_colname}_prop'):
         if key in merged_exposure_table.colnames:
             minimal_version[key.split("_avg")[0]] = merged_exposure_table[key]

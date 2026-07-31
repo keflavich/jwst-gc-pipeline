@@ -28,10 +28,10 @@ Does it trace the extended emission?  Yes.  Measured on brick F182M nrca1 m7
 (19 888 sources, one exposure), against the m6 smoothed-residual background map
 that was actually subtracted from the fitted array, sampled at each source:
 
-    Spearman r(resbkg_mean, subtracted bg map) = 0.86
+    Spearman r(modelsub_bkg, subtracted bg map) = 0.86
     Spearman r(local_bkg,   subtracted bg map) = 0.32
-    median bg-map value at sources = 4.08,  median resbkg_mean = 4.51,
-    median local_bkg = 0.44,  median(local_bkg - resbkg_mean) = -4.04
+    median bg-map value at sources = 4.08,  median modelsub_bkg = 4.51,
+    median local_bkg = 0.44,  median(local_bkg - modelsub_bkg) = -4.04
 
 The ~4-unit offset is the extended background that had already been removed from
 the fitted array.  NOTE it is removed by the **iter3/m6 residual-smoothed
@@ -47,7 +47,7 @@ MAD of 0.710 is 1.053 in sigma units, i.e. LARGER than the cell scatter, so that
 comparison argues the wrong way.  The right comparison is against the error on
 the cell statistic.)
 
-The two columns are **not** independent -- Spearman r(resbkg_mean, local_bkg) =
+The two columns are **not** independent -- Spearman r(modelsub_bkg, local_bkg) =
 0.51, since both are influenced by the same sky.  (A Pearson r of 0.116 on these
 heavy-tailed distributions is misleading, and a low correlation would not have
 demonstrated independence anyway.)  The case for keeping both is the 0.86-vs-0.32
@@ -56,7 +56,7 @@ comparison above, not their mutual correlation.
 The two estimates answer different questions and are both kept:
 
 ===============================  ==========================  ====================
-                                 ``local_bkg`` (photutils)   ``resbkg_*`` (here)
+                                 ``local_bkg`` (photutils)   ``modelsub_bkg*`` (here)
 ===============================  ==========================  ====================
 image                            data being fit (bg-sub'd)   pristine-minus-models residual
 region                           annulus, r ~ 6-10 px        3x3 px on the source
@@ -72,38 +72,79 @@ the identical setup in ``legacy/crowdsource_step.py`` and
 ``reduction/saturated_star_finding.py`` is different -- ``LocalBackground(25,
 50)``, an adaptive annulus, or ``None`` with a median-filter background
 subtracted beforehand for MIRI -- and is not covered by anything here.
-Saturated stars appended by ``replace_saturated`` get ``resbkg_* = NaN``, so
+Saturated stars appended by ``replace_saturated`` get ``modelsub_bkg* = NaN``, so
 they sit outside both estimators.
 
-``resbkg_*`` is **diagnostic only** -- nothing here feeds back into the flux
+``modelsub_bkg*`` is **diagnostic only** -- nothing here feeds back into the flux
 fit.  Changing that would change every flux in the catalogue and is out of
 scope for this module.
 
 .. warning::
 
-   **``resbkg_mean`` is not a pure sky measurement for bright sources.**  The
-   footprint sits exactly where the PSF model was subtracted, so imperfect
-   subtraction enters it directly.  On the frame above, binned by fitted flux:
+   **Neither estimator is a clean sky measurement for bright sources, and they
+   fail differently.**  Measured on brick F182M nrca1 m7 against the m6
+   smoothed-residual background map that was actually subtracted (so the
+   expected residual is 0 for ``local_bkg`` and the map value for
+   ``modelsub_bkg``).  Systematic = median deviation, noise = MAD:
 
-       flux percentile        median resbkg_mean   median subtracted bg map
-       faintest quartile            3.92                   3.65
-       middle                       4.54                   4.29
-       upper quartile               5.03                   4.48
-       brightest 1%                14.27                   5.48
+   ====================  ======  ===================  ===================
+   flux bin                   n  modelsub_bkg         local_bkg
+                                 (systematic / MAD)   (systematic / MAD)
+   ====================  ======  ===================  ===================
+   0-25 %                  4972  +0.28 / 0.27         +0.31 / 0.22
+   25-50 %                 4972  +0.38 / 0.30         +0.38 / 0.25
+   50-75 %                 4972  +0.44 / 0.34         +0.46 / 0.30
+   75-90 %                 2983  +0.53 / 0.44         +0.57 / 0.31
+   90-99 %                 1790  +1.12 / 1.32         +1.05 / 0.59
+   brightest 1 %            198  **+8.33 / 8.02**     **+3.40 / 0.90**
+   ====================  ======  ===================  ===================
 
-   So for a typical source the contamination is ~6% and harmless, but in the
-   brightest percentile roughly **+9 units -- about 2.6x the true background --
-   is subtraction residual, not sky**.  Spearman r(resbkg_mean, flux_fit) =
-   0.32; the full range of resbkg_mean runs from -220 to +455.  ``resbkg_rms``
-   is even more flux-correlated (r = 0.64), so the combining weight
-   ``npix/rms**2`` is itself correlated with the value it weights.  Use
-   ``resbkg_mean`` as a background tracer only with a flux or ``qfit`` cut; read
-   large ``|resbkg_mean|`` on a bright star as a subtraction-quality flag.
+   Two things to read off this:
+
+   * Up to the 99th percentile the two estimators are biased by *almost
+     exactly the same amount* (+0.28/+0.31, +0.38/+0.38, ... +1.12/+1.05).
+     A common bias in an annulus at 6-10 px and in a 3x3 box on the source is
+     unlikely to be a property of either aperture -- it points at PSF wings /
+     halo flux that the model does not carry.
+   * In the brightest percentile they diverge and both fail.
+     ``modelsub_bkg`` acquires a systematic of +8.3 with a comparable MAD of
+     8.0 -- i.e. **both a bias and 30x the faint-source noise**, because the
+     3x3 sits in the core where subtraction error is largest and varies source
+     to source.  ``local_bkg`` acquires a smaller but far more *coherent*
+     systematic, +3.4 with a MAD of only 0.90 -- the annulus still contains the
+     star's wings, biasing it high consistently rather than noisily.
+
+   So: bright-star contamination is **systematic in both**, and additionally
+   **stochastic in modelsub_bkg**.  Use either as a background tracer only with
+   a flux or ``qfit`` cut.  A large ``|modelsub_bkg|`` on a bright star is best
+   read as a subtraction-quality flag.  Spearman r(modelsub_bkg, flux_fit) =
+   0.32; r(modelsub_bkg_rms, flux_fit) = 0.64, so the combining weight is
+   itself correlated with the value it weights.  Full range: -220 to +455.
+
+Stage dependence: local_bkg vs modelsub_bkg
+-------------------------------------------
+``local_bkg`` measures whatever ``LocalBackground`` saw, and that changes with
+the stage; ``modelsub_bkg`` is built from the pristine frame every time and does
+not.  Measured on brick F182M nrca1 exposure 1 (median over sources):
+
+    stage                m1     m2     m3     m4    | m5     m6     m7
+    local_bkg           4.43   4.45   4.40   4.42   | 0.42   0.45   0.44
+    (basis)             raw    raw    raw    raw    | resbgsub ...
+
+``modelsub_bkg`` reads ~4.5 at every stage.  So at m1-m4, ``local_bkg`` ~
+``modelsub_bkg``, both measuring the same sky; from m5 the smoothed-residual
+background has been removed from the fitted array and ``local_bkg`` collapses
+toward 0 while ``modelsub_bkg`` stays put.  That is the intended behaviour of
+both, but it means **the same column name held two different physical
+quantities across stages** with nothing recording which.  Hence
+:func:`local_bkg_column_name`: every catalogue now also carries
+``local_bkg_raw`` / ``local_bkg_bgsub`` / ``local_bkg_resbgsub`` (and the
+``LBKGBASE`` header card), alongside the unchanged ``local_bkg``.
 
 Per-frame vs merged
 -------------------
 :func:`measure_footprint_background` runs once per exposure and writes
-``resbkg_mean`` / ``resbkg_rms`` / ``resbkg_npix`` into that exposure's
+``modelsub_bkg`` / ``modelsub_bkg_rms`` / ``modelsub_bkg_npix`` into that exposure's
 catalogue.  :func:`combine_frames` then reduces the per-exposure values to the
 merged-catalogue entry: a **sigma-clipped, inverse-variance weighted average**
 with the across-frame scatter, the propagated error, and the number of frames
@@ -111,7 +152,7 @@ that survived clipping.
 
 Caveats
 -------
-* A 3x3 footprint is 9 pixels.  The per-frame ``resbkg_rms`` is a noisy
+* A 3x3 footprint is 9 pixels.  The per-frame ``modelsub_bkg_rms`` is a noisy
   estimate of the local pixel-to-pixel scatter (fractional uncertainty
   ~1/sqrt(2(N-1)) ~ 25%); it is useful as a weight and as a relative map, not
   as a precise noise value for a single frame.
@@ -126,7 +167,7 @@ Caveats
   therefore not the inverse variance of the mean.  Empirically it is close: two
   errors cancel, since correlation makes ``rms`` under-estimate sigma while
   N_eff < npix makes the true variance of the mean larger.  Measured over 8 real
-  exposures, ``median(resbkg_mean_std / resbkg_mean_err) = 1.06`` for sources
+  exposures, ``median(modelsub_bkg_std / modelsub_bkg_err) = 1.06`` for sources
   with >=3 frames, i.e. the propagated error is right to ~10%.
 * See the bright-source warning above: this is not a pure sky measurement.
 """
@@ -135,18 +176,37 @@ import warnings
 import numpy as np
 
 __all__ = ['FOOTPRINT_BOX', 'RESBKG_COLUMNS', 'MERGED_RESBKG_COLUMNS',
-           'measure_footprint_background', 'combine_frames']
+           'measure_footprint_background', 'combine_frames',
+           'local_bkg_column_name']
 
 #: Default footprint size in pixels (Jay Anderson's JWST1PASS convention).
 FOOTPRINT_BOX = 3
 
 #: Per-exposure column names written by :func:`measure_footprint_background`.
-RESBKG_COLUMNS = ('resbkg_mean', 'resbkg_rms', 'resbkg_npix')
+RESBKG_COLUMNS = ('modelsub_bkg', 'modelsub_bkg_rms', 'modelsub_bkg_npix')
 
 #: Merged-catalogue column names written by :func:`combine_frames`.
-MERGED_RESBKG_COLUMNS = ('resbkg_mean_avg', 'resbkg_mean_std',
-                         'resbkg_mean_err', 'resbkg_rms_avg',
-                         'resbkg_nframes')
+MERGED_RESBKG_COLUMNS = ('mean_modelsub_bkg', 'mean_modelsub_bkg_std',
+                         'mean_modelsub_bkg_err', 'modelsub_bkg_rms_avg',
+                         'modelsub_bkg_nframes')
+
+
+def local_bkg_column_name(bkg_basis):
+    """Descriptive name for photutils' ``local_bkg`` given what it was run on.
+
+    ``local_bkg`` is whatever ``LocalBackground`` measured on the array being
+    fit, and that array differs by stage: raw at m1-m4, smoothed-residual
+    background already removed at m5-m7.  Measured on brick F182M nrca1 exp1
+    the median goes 4.43 / 4.45 / 4.40 / 4.42 (m1-m4) to 0.42 / 0.45 / 0.44
+    (m5-m7) -- the same column name for two different physical quantities, with
+    nothing in the catalog to tell them apart.
+
+    ``'raw'`` -> ``local_bkg_raw``; ``'bgsub'`` -> ``local_bkg_bgsub``;
+    ``'resbgsub'`` -> ``local_bkg_resbgsub``; ``'bgsub+resbgsub'`` ->
+    ``local_bkg_bgsub_resbgsub``.  The plain ``local_bkg`` column is always
+    kept as well, so existing consumers are unaffected.
+    """
+    return 'local_bkg_' + str(bkg_basis).replace('+', '_')
 
 
 def measure_footprint_background(residual, x, y, *, box=FOOTPRINT_BOX,
@@ -253,12 +313,12 @@ def combine_frames(mean, rms, npix, *, sigma=3.0, maxiters=5, min_npix=2,
     Returns
     -------
     dict
-        ``resbkg_mean_avg``  weighted, clipped mean background
-        ``resbkg_mean_std``  weighted scatter of the kept frames (the "RMS"
+        ``modelsub_bkg_avg``  weighted, clipped mean background
+        ``modelsub_bkg_std``  weighted scatter of the kept frames (the "RMS"
                              across exposures; NaN for a single frame, where
                              scatter is undefined rather than 0)
-        ``resbkg_mean_err``  propagated error, ``1/sqrt(sum(w))``
-        ``resbkg_rms_avg``   mean of the per-frame pixel RMS (local noise level)
+        ``modelsub_bkg_err``  propagated error, ``1/sqrt(sum(w))``
+        ``modelsub_bkg_rms_avg``   mean of the per-frame pixel RMS (local noise level)
         ``resbkg_nframes``   number of frames surviving the cuts and clipping
     """
     from astropy.stats import sigma_clip
@@ -341,8 +401,8 @@ def combine_frames(mean, rms, npix, *, sigma=3.0, maxiters=5, min_npix=2,
     rsum = np.where(keep, w * rms, 0).sum(axis=1)
     rms_avg[ok] = rsum[ok] / sw[ok]
 
-    return {'resbkg_mean_avg': avg,
-            'resbkg_mean_std': std,
-            'resbkg_mean_err': err,
-            'resbkg_rms_avg': rms_avg,
-            'resbkg_nframes': nframes}
+    return {'mean_modelsub_bkg': avg,
+            'mean_modelsub_bkg_std': std,
+            'mean_modelsub_bkg_err': err,
+            'modelsub_bkg_rms_avg': rms_avg,
+            'modelsub_bkg_nframes': nframes}
