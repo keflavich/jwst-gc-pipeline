@@ -2,8 +2,7 @@
 
 Reusable procedure for moving the Galactic Center NIRCam reduction to a new
 `jwst` version and/or CRDS context. Run this **every time** you consider an
-upgrade. It is a **photometric re-calibration campaign**, not an astrometry
-change — treat it as such.
+upgrade. Treat it as a **photometric re-calibration campaign**.
 
 The worked example at the bottom (2026-07: jwst 1.14 -> 1.21, CRDS 1253 -> 1581)
 shows the expected shape of the answers. Redo the measurements each time; do not
@@ -31,9 +30,9 @@ leaving the ramp-level refs (dark/gain/linearity/superbias/readnoise) and the
 **astrometric refs (distortion, filteroffset)** unchanged. So:
 
 - **Photometry moves** -> every flux-derived product must be rebuilt.
-- **Astrometry usually does NOT move** with a CRDS bump -> no re-tie, just
-  re-verify. (A jwst *version* bump can still perturb resample/drizzle at the mas
-  level — re-verify anyway.)
+- **Astrometry usually holds** across a CRDS bump -> re-verify only, and keep
+  the existing tie. (A jwst *version* bump can still perturb resample/drizzle at
+  the mas level — re-verify anyway.)
 
 Confirm this invariant holds for your specific pair in Phase 0; if a CRDS delivery
 DID change distortion/filteroffset, escalate — that is an astrometry campaign too.
@@ -108,7 +107,8 @@ one-page old-vs-new diff report and get sign-off.
 - Rebuild catalogs (m1-m8) + cross-band merges per field.
 - Re-run the astrometry audit + all flux-derived analysis (SEDs, color cuts,
   YSO/candidate selections, external-catalog flux ties).
-- Astrometry: NO re-tie needed if distortion was stable — just re-verify each field.
+- Astrometry: re-verify each field. A stable distortion reference keeps the
+  existing tie valid.
 
 ## Phase 3 — Release
 
@@ -125,8 +125,8 @@ one-page old-vs-new diff report and get sign-off.
   `BRICK_FILTEROFFSET_SWAP_FIX_NOTES.md` for the pattern (re-run Image2 under the
   OLD context so flat/photom are byte-identical while the WCS is corrected by the
   newer jwst code).
-- **Upgrade to get newer absolute ZPs / calibration?** YES, but as a deliberate
-  campaign per this playbook, not a side effect.
+- **Upgrade to get newer absolute ZPs / calibration?** YES, as a deliberate
+  campaign per this playbook.
 - **Cheap intermediate (newer ZPs, no version bump):** re-run **Image2 only**
   (assign_wcs+flat+photom) under the new context, keeping existing ramps. Caveat:
   mixes old-version ramps with new photom/flat — let the Phase-1 comparison decide
@@ -158,7 +158,7 @@ F444W 0.402 -> 0.391 = **-2.7%** (~0.03 mag). Band-dependent, up to ~3%.
 
 **Headlines:**
 1. Astrometry stable — distortion + filteroffset byte-identical -> the WCS
-   (including the filteroffset module-swap fix) does not move with the CRDS bump. A
+   (including the filteroffset module-swap fix) holds across the CRDS bump. A
    full re-reduction under jwst 1.21 also auto-fixes the filteroffset module-swap
    (a jwst 1.14 bug) for every field/LW band.
 2. Photometry changes (new photom + flat) -> rebuild all flux-derived products;
@@ -166,8 +166,8 @@ F444W 0.402 -> 0.391 = **-2.7%** (~0.03 mag). Band-dependent, up to ~3%.
 
 **Custom-code breakage found:** jwst 1.21 Image2 has a `bkg` reftype absent in
 1253 -> full Image2 under 1253 errors on prefetch; skip `bkg_subtract` (the 2024
-cal had no background step, so this is faithful).
+cal ran without a background step, so this is faithful).
 
-**Conclusion (2026-07):** NOT bundled with the brick astrometry fix. The
+**Conclusion (2026-07):** kept separate from the brick astrometry fix. The
 filteroffset fix was done under 1253 with photometry preserved. A full refresh is a
 separate, pinned, piloted campaign for after the immediate deliverables.

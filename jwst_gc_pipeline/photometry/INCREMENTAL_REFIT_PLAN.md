@@ -7,28 +7,27 @@
   is **bit-identical** when the background changes only outside the source's
   footprint (`test_incremental_refit.py::test_far_bg_change_leaves_independent_fit_bit_identical`),
   and DOES change for a localized in-footprint change (control).
-- ⛔ **The two CLI flags named below do not exist yet.** `--manual-incremental-refit`
-  and `--manual-incremental-refit-verify` are the *planned* names for the wiring
-  step; `grep` will not find them in `crowdsource_catalogs_long.py` today.
-- ⏭️ **Fit-loop wiring is the next, VERIFY-GATED step** (see "Wiring" below). It is
-  deliberately NOT in this PR: it is surgery on the core per-frame fit path
-  (`do_photometry_step_manual`), including `modsky` reconstruction, and must be
-  landed behind `--manual-incremental-refit` (default OFF) and certified by a
-  `--manual-incremental-refit-verify` run on a real field (fit both ways, assert
-  reused == full) before the fast path is trusted. That verification run cannot be
-  done in the authoring session, so the wiring ships separately once it can be run.
+- ⛔ **The two CLI flags named below are planned names, not yet implemented.**
+  `--manual-incremental-refit` and `--manual-incremental-refit-verify` arrive with
+  the wiring step.
+- ⏭️ **Fit-loop wiring is the next, VERIFY-GATED step** (see "Files" below). It is
+  surgery on the core per-frame fit path (`do_photometry_step_manual`), including
+  `modsky` reconstruction. It lands behind `--manual-incremental-refit`
+  (default OFF) and is certified by a `--manual-incremental-refit-verify` run on a
+  real field (fit both ways, assert reused == full) before the fast path is
+  trusted. The wiring ships separately, once that run can be done.
 
 ## The waste
 
 The manual pipeline runs ~6 phases (`m12, m3, m4, m5, m6, m7`). **Every phase
 re-fits every seeded source in all 192 frames** — the dominant cost (~2 h/phase
 at 32 workers, profiled on the live brick runs). But between two consecutive
-phases most fits are *identical*: nothing that determines them changed.
+phases most fits are *identical*: everything that determines them is unchanged.
 
 ## When is a per-source fit provably identical between phases?
 
 The default cataloging fit is **`group=False`** — photutils `PSFPhotometry` with
-**no grouper**, so **each source is fit independently** over its `fit_shape`
+**the grouper off**, so **each source is fit independently** over its `fit_shape`
 (5×5) window, with a `LocalBackground` annulus out to `localbkg_outer`
 (~3.5·FWHM). An independent single-source fit is a deterministic function of
 exactly three things:
@@ -38,7 +37,7 @@ exactly three things:
 3. the **image data within the source's footprint** = `raw − bg`, over the disk
    of radius `localbkg_outer` around the seed (fit window + localbkg annulus).
 
-`raw` is the same every phase (the frame never changes). The only per-phase input
+`raw` is the same every phase (the frame is fixed). The only per-phase input
 that varies is the **background map** `bg` (source-masked smoothed bg, rebuilt
 from the previous phase's residual; bg subtraction is active for `m5, m6, m7`).
 Therefore, for a source that is still seeded at the same position:
@@ -46,19 +45,18 @@ Therefore, for a source that is still seeded at the same position:
 > **fit(phase N) == fit(phase N−1)  ⇔  max |bg_N − bg_{N−1}| ≈ 0 over the
 > source's footprint disk.**
 
-A **new nearby seed does NOT change** an existing source's independent fit: with
-no grouper, the neighbour's flux is already in the data window either way (it is
-never *modelled* in the independent fit), so adding it as a seed changes nothing
-for the incumbent. Hence — for `group=False` — there is **no group-membership
-condition**; the reuse test is purely (same seed) ∧ (bg unchanged over footprint).
+A **new nearby seed leaves** an existing source's independent fit **unchanged**:
+with the grouper off, the neighbour's flux sits in the data window either way.
+So for `group=False` the reuse test is purely (same seed) ∧ (bg unchanged over
+footprint).
 
 (`group=True` couples a group's members, so a seed added to a group changes the
-joint fit. Incremental refit **disables itself and falls back to a full fit when
-`group=True`** — conservative.)
+joint fit. Incremental refit **falls back to a full fit when `group=True`** —
+conservative.)
 
 ## Algorithm (per frame, per phase N≥2, group=False)
 
-Inputs available **on disk** (no in-memory threading): phase N's bg map
+Inputs all come **from disk**: phase N's bg map
 (`resbg_path`), phase N−1's saved per-frame catalog, and phase N−1's bg map.
 
 1. Load `bg_N` and `bg_{N-1}`; compute `dbg = |bg_N − bg_{N-1}|`.
@@ -66,8 +64,8 @@ Inputs available **on disk** (no in-memory threading): phase N's bg map
    at pixel p taints any source whose footprint reaches p).
 3. For each seed of phase N: **reusable** iff
    - it matches a phase-(N−1) *fitted* source within `match_tol_pix` (≤0.01 px —
-     the seed is carried forward unchanged, not re-detected off-position), and
-   - its footprint disk touches **no** dirty pixel, and
+     the seed is carried forward unchanged), and
+   - its footprint disk lies entirely in **clean** pixels, and
    - its footprint is fully on valid (unmasked) data in both phases.
 4. **Fit only the non-reusable seeds** via the normal `_manual_phot_pass` (its
    `init_params = seed[~reusable]`).
@@ -95,7 +93,7 @@ Inputs available **on disk** (no in-memory threading): phase N's bg map
   the frame's pixel noise; `match_tol_pix ≤ 0.01`. A source is refit whenever in
   doubt.
 - **Fail-open**: any error in the reuse path (missing prev catalog, shape
-  mismatch, NaN bg) falls back to a full fit for that frame — never a silent drop.
+  mismatch, NaN bg) falls back to a full fit for that frame.
 - **Disabled** for `group=True`, for phase 1 (no prior), and when the prev
   catalog / prev bg is absent.
 
@@ -110,8 +108,8 @@ hours per filter. Measured savings are reported by the verify/among-run logs.
 
 ## Files
 
-- `incremental_refit.py` — pure `classify_reusable_seeds`, `dirty_bg_mask`,
-  `splice_reused_rows` (no I/O; unit-tested).
+- `incremental_refit.py` — `classify_reusable_seeds`, `dirty_bg_mask`,
+  `splice_reused_rows`: pure functions, unit-tested.
 - `cataloging.py` — `run_manual_pipeline` passes the prev phase label + prev bg
   path per frame; `do_photometry_step_manual` calls the classifier, subsets the
   seed, and splices (all behind `--manual-incremental-refit`).

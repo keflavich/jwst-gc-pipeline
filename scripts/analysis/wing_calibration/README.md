@@ -55,7 +55,7 @@ median over the 4 sparsest detectors per filter, the headline numbers):
 - The 4 detectors nearer the cluster core (1.5-2.4k calibrators) instead
   show a steep spurious rise (C(25) = 2.6-4.7, clamp residual up to
   −1.3 mag) with tiny frame-to-frame scatter: crowding contamination of
-  the stacked wings, NOT PSF structure.  Deep-C(r) measurements are only
+  the stacked wings.  Deep-C(r) measurements are only
   trustworthy on genuinely sparse fields — the same contamination
   presumably inflates any Brick-side deep extrapolation.
 - The phantom OPD blob (model-only, ~3.2% excess flux at r~35 px in all 8

@@ -27,6 +27,10 @@ from glob import glob
 from astroquery.mast import Mast, Observations
 import copy
 import os
+
+# Imported as field_registry: `fields` is a local variable in these
+# drivers (the --field list), and shadowed the module.
+from jwst_gc_pipeline import fields as field_registry
 import re
 import shutil
 import numpy as np
@@ -656,7 +660,7 @@ if __name__ == "__main__":
     Mast.login(api_token.strip())
     Observations.login(api_token)
 
-    field_to_reg_mapping = {'4147': {'012': 'sgrc'}}[proposal_id]
+    field_to_reg_mapping = field_registry.field_to_reg_mapping(proposal_id, 'niriss')
 
     for field in fields:
         for filtername in filternames:

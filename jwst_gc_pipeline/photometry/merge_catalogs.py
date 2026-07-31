@@ -32,6 +32,8 @@ ABMAG_OFFSET = 8.90
 # flags-based bgsub token is imported as ``_bgsub_token`` (this module calls it
 # with explicit booleans, matching the producer-side names).
 from jwst_gc_pipeline.frame_wcs import frame_wcs
+from jwst_gc_pipeline.photometry.residual_background import (
+    RESBKG_COLUMNS, combine_frames as combine_resbkg_frames)
 from jwst_gc_pipeline.scratch_basepath import apply_basepath_override
 from jwst_gc_pipeline.photometry.naming import (
     _inst_token, _svo_filter_id,
@@ -39,62 +41,23 @@ from jwst_gc_pipeline.photometry.naming import (
 )
 from jwst_gc_pipeline.photometry.measure_offsets import (
     assert_sparse_reference_for_nn_median)
+# Imported as field_registry: `fields` is a local variable in these
+# drivers (the --field list), and shadowed the module.
+from jwst_gc_pipeline import fields as field_registry
 
 filternames = filternames_narrow = ['f410m', 'f212n', 'f466n', 'f405n', 'f187n', 'f182m']
-obs_filters = {'brick': {'2221': filternames + ['f2550w'],
-                         '1182': ['f444w', 'f356w', 'f200w', 'f115w'],
-                         },
-               'cloudc': {'2221': filternames + ['f2550w'],
-                          # 2526 obs 021 = "G0" CMZ cloud-c filament F770W
-                          '2526': ['f770w']},
-               # sickle NIRCam (obs 007) + MIRI (obs 001/002/003)
-               'sickle': {'3958': ['f187n', 'f210m', 'f335m', 'f470n', 'f480m',
-                                   'f770w', 'f1130w', 'f1500w']},
-               # cloudef NIRCam (obs 002/005) + MIRI (obs 004/006/008)
-               'cloudef': {'2092': ['f162m', 'f210m', 'f360m', 'f480m',
-                                    'f770w', 'f2100w']},
-               'sgrc': {'4147': ['f115w', 'f162m', 'f182m', 'f212n', 'f360m', 'f405n', 'f470n', 'f480m']},
-               'sgrb2': {'5365': ['f150w', 'f182m', 'f187n', 'f210m', 'f212n', 'f300m', 'f360m', 'f405n', 'f410m', 'f466n', 'f480m', 'f770w', 'f1280w', 'f2550w']},
-               'arches': {'2045': ['f212n', 'f323n']},
-               'quintuplet': {'2045': ['f212n', 'f323n']},
-               'sgra': {'1939': ['f115w', 'f212n', 'f405n']},
-               'gc2211': {'2211': ['f150w', 'f200w', 'f277w']},
-               # Westerlund 1 (Guarcello 1905) + Westerlund 2 (Guarcello 3523)
-               'wd1': {'1905': ['f115w', 'f150w', 'f164n', 'f187n', 'f200w', 'f212n',
-                                'f277w', 'f323n', 'f405n', 'f444w', 'f466n']},
-               'wd2': {'3523': ['f115w', 'f150w', 'f162m', 'f164n', 'f182m', 'f187n',
-                                'f200w', 'f212n', 'f250m', 'f277w', 'f300m', 'f323n',
-                                'f335m', 'f405n', 'f410m', 'f444w', 'f466n']},
-               # W51 (Goddard prop 6151 NIRCam obs 001).  In disk -- use Gaia DR3
-               # as astrometric ref.  Filter list per user 2026-06-13: F140M
-               # F162M F182M F187N F210M F335M F360M F405N F410M F480M.
-               'w51': {'6151': ['f140m', 'f162m', 'f182m', 'f187n', 'f210m',
-                                'f335m', 'f360m', 'f405n', 'f410m', 'f480m',
-                                'f770w', 'f1280w', 'f2100w']},
-               # Globular clusters (Jay Anderson co-I; added 2026-07-01)
-               'm92': {'1334': ['f090w', 'f150w', 'f277w', 'f444w']},
-               'ngc6397': {'1979': ['f150w2', 'f322w2']},
-               # m4: primary pointing obs 002 only. obs 003 (M-4-shift) shares
-               # visit/vgroup/exp tuples (both visit 001) with no per-obs token
-               # (1979 is not multi-obs like 2211), so cataloging it into the same
-               # basepath would collide/overwrite; deferred (its aligned i2d exist).
-               'm4': {'1979': ['f150w2', 'f322w2']},
-               # NGC 6334 (Cat's Paw SFR; extended emission). 7213 (Cheng) + 6778
-               # (Garcia Marin), both NIRCam. Filters = effective bandpass; verify
-               # vs downloaded cal headers.
-               'ngc6334': {'7213': ['f115w', 'f162m', 'f182m', 'f200w', 'f356w', 'f405n', 'f444w', 'f470n'],
-                           '6778': ['f090w', 'f187n', 'f200w', 'f277w', 'f335m', 'f470n']},
-               }
+
+# Every registry that used to live here is now one YAML file: see
+# jwst_gc_pipeline/fields.yaml and docs/FIELDS.md.  Adding a target is an edit
+# to that file alone.
+obs_filters = field_registry.obs_filters()
 
 # NIRISS filter sets, keyed by target.  NIRISS shares filter names with NIRCam,
 # so its filters cannot live in the shared ``obs_filters`` map (a NIRCam sgrc
 # cross-band merge must NOT pull in the NIRISS f200w/f356w/f158m catalogs, which
 # live under <target>/niriss/).  Selected at runtime by _obs_filters_for() when
 # the process instrument override is NIRISS.
-obs_filters_niriss = {
-    # Sgr C 4147 obs 012 NIRISS imaging.
-    'sgrc': {'4147': ['f158m', 'f200w', 'f356w', 'f480m']},
-}
+obs_filters_niriss = field_registry.obs_filters('niriss')
 
 
 # Per-frame catalog suffix written by each photometry method.
@@ -125,8 +88,19 @@ def _run_merge(merge_func, label, on_error, **kwargs):
         print(f'{label}: skipped ({type(ex).__name__}: {ex})', flush=True)
 
 
-_BRICK_1182_OFFSETS = ('/blue/adamginsburg/adamginsburg/jwst/brick/offsets/'
-                       'Offsets_JWST_Brick1182_F444ref.csv')
+def _obsid_for_glob(target, proposal, filtername):
+    """The observation number to build an i2d filename from, for this filter.
+
+    Instrument-aware: proposal 2221 numbers its NIRCam and MIRI pointings of
+    brick and cloudc in opposite order, so one number per (target, proposal)
+    can only ever be right for one of them.  Before this was wired up, a Brick
+    F2550W merge globbed the NIRCam number, matched none of the MIRI files, and
+    fell back to a less accurate WCS with only a printed warning.
+
+    ``None`` when that instrument did not observe the field under that
+    proposal, which callers skip rather than interpolate.
+    """
+    return field_registry.glob_obsid(target, proposal, _inst_token(filtername))
 
 
 def _read_offsets_table(path_or_none):
@@ -135,10 +109,14 @@ def _read_offsets_table(path_or_none):
 
 
 def individual_frame_merge_jobs(target):
-    """The (program, filter) pairs to merge, in SLURM array-index order."""
-    return [(progid, filtername)
-            for progid, filternames in _obs_filters_for(target).items()
-            for filtername in filternames]
+    """The (program, filter) pairs to merge.  Task *n* of the SLURM array runs
+    entry *n*, so the order is derived in field_registry.merge_jobs rather than taken
+    from the order anything was written down in."""
+    from jwst_gc_pipeline.photometry.naming import _instrument_override
+    instrument = 'niriss' if _instrument_override() == 'NIRISS' else 'nircam'
+    if instrument == 'niriss' and target not in obs_filters_niriss:
+        instrument = 'nircam'
+    return field_registry.merge_jobs(target, instrument)
 
 
 def _obs_filters_for(target):
@@ -149,54 +127,7 @@ def _obs_filters_for(target):
         return obs_filters_niriss[target]
     return obs_filters.get(target)
 
-project_obsnum = {'brick': {'2221': '001',
-                            '1182': '004',
-                            },
-                  'cloudc': {'2221': '002',
-                             },
-                  # sickle NIRCam is obs 007 but the MIRI pointings are obs
-                  # 001/002/003; use a wildcard (the per-filter glob already
-                  # disambiguates because the filter token is in the name).
-                  'sickle': {'3958': '*',
-                             },
-                  # cloudef (proposal 2092) covers Cloud E (obs 002, t001)
-                  # and Cloud F (obs 005, t002) as two adjacent pointings.
-                  # The pipeline output retains t001 in both names (the
-                  # asn rename hardcodes t001), so the per-filter i2d glob
-                  # only needs an obs-id wildcard.
-                  'cloudef': {'2092': '*',
-                              },
-                  'sgrc': {'4147': '012',
-                           },
-                  'sgrb2': {'5365': '001',
-                            },
-                  'arches': {'2045': '001',
-                             },
-                  'quintuplet': {'2045': '003',
-                                 },
-                  'sgra': {'1939': '001',
-                           },
-                  # gc2211 (asteroid proposal 2211) has 5 GC pointings
-                  # (obs IDs 023, 028, 046, 049, 050) all sharing the
-                  # python target name 'gc2211'.  Use a glob wildcard
-                  # for the obs ID so per-filter merge picks up i2d
-                  # files from any of the 5 pointings.
-                  'gc2211': {'2211': '*',
-                             },
-                  'wd1': {'1905': '001',
-                          },
-                  'wd2': {'3523': '005',
-                          },
-                  'w51': {'6151': '001',
-                          '1182': '002',
-                          },
-                  # Globular clusters (Jay Anderson co-I; added 2026-07-01)
-                  'm92': {'1334': '001'},
-                  'ngc6397': {'1979': '001'},
-                  'm4': {'1979': '002'},  # primary pointing; obs 003 deferred
-                  # NGC 6334 (Cat's Paw SFR)
-                  'ngc6334': {'7213': '001', '6778': '001'},
-                  }
+project_obsnum = field_registry.project_obsnum()
 
 
 def getmtime(x):
@@ -418,7 +349,7 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
         flux_colname = 'flux_fit'
         # skycoord comes in as skycoord_centroid but we want it to leave as skycoord
         skycoord_colname = 'skycoord_centroid'
-        column_names = (flux_colname, flux_error_colname, 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'iter_detected', 'group_id', 'group_size', 'ra', 'dec', 'dra', 'ddec', )
+        column_names = (flux_colname, flux_error_colname, 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'iter_detected', 'group_id', 'group_size', 'ra', 'dec', 'dra', 'ddec', ) + RESBKG_COLUMNS
 
     # Loop 1: Add new sources, which are any that don't have a match in the existing catalog closer than min_offset
     # this loop _only_ adds new sources
@@ -762,8 +693,12 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     # Phase 2: stream the remaining columns one at a time.
     # ra/dec are skipped because their summaries are already in newtbl
     # (skycoord_avg, std_ra, std_dec).  flux and flux_err are already done.
+    # The resbkg_* columns are excluded here and combined separately below:
+    # Phase 2 weights everything by inverse FLUX variance, which is the wrong
+    # weight for a background measurement (a bright star does not make its own
+    # sky better determined).  They get npix/rms**2 instead.
     already_done = {flux_colname, flux_error_colname, 'ra', 'dec',
-                    'skycoord', skycoord_colname}
+                    'skycoord', skycoord_colname} | set(RESBKG_COLUMNS)
     _p2_cols = [k for k in column_names
                 if k not in already_done and k in tbls[0].colnames]
     print(f"Phase 2: streaming {len(_p2_cols)} remaining columns one at a time "
@@ -803,8 +738,64 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
         print(f"  Phase 2 [{_ci}] column {key!r}: DONE (std {time.time()-_t_mean:.1f}s, "
               f"total {time.time()-_t0:.1f}s)", flush=True)
 
-    # weights, keepmask, saved_match_inds, saved_keep kept until function
-    # return; Python will free them after caller drops newtbl reference.
+    # --- residual-footprint background: dedicated inverse-variance combine ---
+    # Sigma-clipped across frames, weighted by npix/rms**2 (the inverse variance
+    # of each footprint's MEAN), not by flux error.  See
+    # photometry/residual_background.py.
+    # Gate on ANY table, not tbls[0].  A frame with 0 detections never gets
+    # these columns (cataloging._attach_residual_background returns early), and
+    # combine_singleframe treats 0-source frames as an ordinary expected case
+    # -- so a single empty exposure landing at index 0, or a partial re-run
+    # leaving an old-format catalog there, silently deleted all the merged
+    # columns.  The stacking loop below already handles the mixed case.
+    if any(k in _t.colnames for _t in tbls for k in RESBKG_COLUMNS):
+        _t0 = time.time()
+        # Phase 1/2's weight arrays are dead by here and are (n_src, n_tbl)
+        # each; drop them before allocating three more stacks of that size.
+        del weights, pos_weights, weights_with_fallback
+        print(f"Residual-footprint background: stacking {len(RESBKG_COLUMNS)} "
+              f"columns ({n_src}x{n_tbl}) for the weighted combine...", flush=True)
+        _stack = {}
+        for key in RESBKG_COLUMNS:
+            _a = np.full((n_src, n_tbl), np.nan, dtype='float32')
+            for ii, tbl in enumerate(tbls):
+                if key not in tbl.colnames:
+                    continue
+                keep = saved_keep[ii]
+                mi = saved_match_inds[ii]
+                _a[mi[keep], ii] = tbl[key][keep]
+            _stack[key] = _a
+        # npix is a count: absent frames must read 0, not NaN
+        _stack['modelsub_bkg_npix'] = np.nan_to_num(_stack['modelsub_bkg_npix'], nan=0.0)
+        _combined = combine_resbkg_frames(_stack['modelsub_bkg'],
+                                          _stack['modelsub_bkg_rms'],
+                                          _stack['modelsub_bkg_npix'])
+        # Carry npix too: the per-frame docstring sells it as the discriminator
+        # between "edge-clipped footprint" and "no data", and without it a
+        # 2-pixel and a 9-pixel footprint are indistinguishable downstream.
+        with np.errstate(invalid='ignore'):
+            _npx = np.where(np.isfinite(_stack['modelsub_bkg']),
+                            _stack['modelsub_bkg_npix'], np.nan)
+            _combined['modelsub_bkg_npix_avg'] = np.nanmean(
+                _npx, axis=1).astype('float32')
+        for _k, _v in _combined.items():
+            newtbl[_k] = _v
+        newtbl.meta['modelsub_bkg'] = (
+            'mean/RMS of a small footprint on (raw data - satstar - star '
+            'model), stage-invariant by construction; combined across frames '
+            'as a sigma-clipped average weighted by npix/rms**2 (the RMS '
+            'column is npix-weighted instead). Diagnostic; '
+            'not used by the flux fit. Cf. local_bkg_<basis>, which depends on '
+            'the stage.')
+        del _stack
+        _n_ok = int(np.isfinite(_combined['mean_modelsub_bkg']).sum())
+        print(f"Model-subtracted background: {_n_ok}/{n_src} sources combined "
+              f"in {time.time()-_t0:.1f}s", flush=True)
+
+    # keepmask, saved_match_inds, saved_keep kept until function return;
+    # Python will free them after the caller drops the newtbl reference.
+    # (weights/pos_weights/weights_with_fallback are freed above, before the
+    # residual-background stacks are allocated.)
     return newtbl
 
 
@@ -1303,7 +1294,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
         # flux_colname = 'flux_fit'
     elif method in ('dao', 'daophot', 'basic', 'daobasic', 'iterative', 'daoiterative'):
         flux_error_colname = 'flux_err'
-        column_names = ('flux_fit', flux_error_colname, 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'iter_detected', 'group_size')
+        column_names = ('flux_fit', flux_error_colname, 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'iter_detected', 'group_size') + RESBKG_COLUMNS
         # flux_colname = 'flux'
         method_suffix = 'daophot'
     else:
@@ -1441,7 +1432,19 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     # make a table that is nearly equivalent to standard tables (with no 'x' or 'y' coordinate)
     minimal_version = {colname: merged_exposure_table[f'{colname}_avg']
                        for colname in column_names if f'{colname}_avg' in merged_exposure_table.colnames}
-    for key in ('dra_avg', 'ddec_avg', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', f'{flux_error_colname}_prop'):
+    # The four mean_* / _nframes names have no '<col>_avg' form, so the
+    # comprehension above cannot see them at all; carry them explicitly.
+    # (modelsub_bkg_rms_avg and modelsub_bkg_npix_avg DO have that form and are
+    # already picked up above -- but note the comprehension strips '_avg', so in
+    # the released minimal table they land as 'modelsub_bkg_rms' and
+    # 'modelsub_bkg_npix', which collide by name with the PER-FRAME columns of
+    # the same spelling.  Same convention as flux_fit_avg -> flux_fit; the
+    # *_allcols.fits table keeps the unambiguous names.)
+    for key in ('dra_avg', 'ddec_avg', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good',
+                'mean_modelsub_bkg', 'mean_modelsub_bkg_std',
+                'mean_modelsub_bkg_err', 'modelsub_bkg_rms_avg',
+                'modelsub_bkg_nframes', 'modelsub_bkg_npix_avg',
+                f'{flux_error_colname}_prop'):
         if key in merged_exposure_table.colnames:
             minimal_version[key.split("_avg")[0]] = merged_exposure_table[key]
 
@@ -1488,8 +1491,9 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
     imgfns = [x
               for obsid in _obs_filters_for(target)
               for filn in _obs_filters_for(target)[obsid]
+              if _obsid_for_glob(target, obsid, filn) is not None
               for x in glob.glob(f"{basepath}/{filn.upper()}/pipeline/"
-                                 f"jw0{obsid}-o{project_obsnum[target][obsid]}_t001_{_inst_token(filn)}*{filn.lower()}*{module}_i2d.fits")
+                                 f"jw0{obsid}-o{_obsid_for_glob(target, obsid, filn)}_t001_{_inst_token(filn)}*{filn.lower()}*{module}_i2d.fits")
               if f'{module}_' in x or f'{module}1_' in x
              ]
 
@@ -1707,8 +1711,9 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
                       flush=True)
                 continue
         _proj = _project_for_target_filter(target, filn)
-        _img_matches = [x for x in glob.glob(
-            f"{basepath}/{filn.upper()}/pipeline/jw0{_proj}-o{project_obsnum[target][_proj]}"
+        _obsid = _obsid_for_glob(target, _proj, filn)
+        _img_matches = [] if _obsid is None else [x for x in glob.glob(
+            f"{basepath}/{filn.upper()}/pipeline/jw0{_proj}-o{_obsid}"
             f"_t001_{_inst_token(filn)}*{filn.lower()}*{module}_i2d.fits")
             if f'{module}_' in x or f'{module}1_' in x]
         if not _img_matches:
@@ -2944,43 +2949,14 @@ def main():
             "astrometry rule #1 forbids.  Build reference catalogs with "
             "make_reference_from_pipeline_catalogs.py instead.")
 
-    # Keep this list identical to the one in crowdsource_catalogs_long.main().
-    # They disagreed on wd1/wd2 until 2026-07-31: the catalog stage wrote to
-    # /orange and the merge then read a /blue path that was never created.
-    if target in ('sickle', 'cloudef', 'sgrc', 'sgrb2', 'arches', 'quintuplet', 'sgra', 'gc2211', 'w51',
-                  'wd1', 'wd2',
-                  'm92', 'ngc6397', 'm4',  # globular clusters (Anderson co-I) on /orange
-                  'ngc6334'):  # NGC 6334 (Cat's Paw SFR)
-        basepath = f'/orange/adamginsburg/jwst/{target}/'
-    else:
-        basepath = f'/blue/adamginsburg/adamginsburg/jwst/{target}/'
     # The reduction and cataloging drivers both honour this; the merge did not,
     # so a redirected run reduced and cataloged under the override and then
-    # merged out of the hard-coded tree.
-    basepath = apply_basepath_override(basepath)
+    # merged out of the registry's tree.
+    basepath = apply_basepath_override(field_registry.basepath(target))
     if target in obs_filters:
         # Only for a target we know.  Doing it unconditionally meant a typo'd
         # --target created a directory tree for a field that does not exist.
         os.makedirs(os.path.join(basepath, 'catalogs'), exist_ok=True)
-
-    # Only 1182 has an offsets table; the rest align in imaging.  Read it on
-    # demand -- it lives at an absolute path, and eagerly reading it made every
-    # run of every target depend on that one file.
-    offsets_tables = {'1182': _BRICK_1182_OFFSETS,
-                      '2221': None,
-                      '3958': None,
-                      '2092': None,
-                      '4147': None,
-                      '5365': None,
-                      '2045': None,
-                      '1939': None,
-                      '2211': None,
-                      '6151': None,  # W51; astrometry handled in imaging, no offsets table
-                      '1334': None,  # M92 (Anderson co-I); alignment done in imaging
-                      '1979': None,  # M4 / NGC6397 (Anderson co-I); alignment done in imaging
-                      '7213': None,  # NGC 6334 (Cheng); alignment done in imaging
-                      '6778': None,  # NGC 6334 (Garcia Marin); alignment done in imaging
-    }
 
     module = modules[0]
     if len(modules) > 1:
@@ -3024,7 +3000,9 @@ def main():
                     suffix=INDIV_MERGE_SUFFIX[method], method=method,
                     target=target, basepath=basepath, field=options.field,
                     exposure_numbers=np.arange(1, options.max_expnum + 1),
-                    offsets_table=_read_offsets_table(offsets_tables[progid]),
+                    offsets_table=_read_offsets_table(
+                        field_registry.offsets_table_path(target, progid,
+                                                          basepath=basepath)),
                     iteration_label=options.iteration_label,
                     resbgsub=options.resbgsub,
                     n_spatial_chunks=int(options.n_spatial_chunks),

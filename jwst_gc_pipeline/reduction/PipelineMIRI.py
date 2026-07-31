@@ -68,12 +68,11 @@ def print(*args, **kwargs):
 
 print(jwst.__version__)
 
-fov_regname = {'brick': 'regions_/nircam_brick_fov.reg',
-               'cloudc': 'regions_/nircam_cloudc_fov.reg',
-               'sickle': 'regions_/nircam_sickle_fov.reg',
-               'w51': 'nope',
-               'sgrb2': 'nope',
-               }
+# Registered in jwst_gc_pipeline/fields.yaml -- the one place a target is
+# declared.  See docs/FIELDS.md.
+# Imported as field_registry: `fields` is a local variable in these
+# drivers (the --field list), and shadowed the module.
+from jwst_gc_pipeline import fields as field_registry
 
 # Reference catalog configuration by proposal and field.
 # Paths are relative to basepath.
@@ -322,7 +321,7 @@ def main(filtername, Observations=None, regionname='brick',
 
     wavelength = int(filtername[1:4])
 
-    basepath = f'/orange/adamginsburg/jwst/{regionname}/'
+    basepath = field_registry.basepath(regionname)
     from jwst_gc_pipeline.reduction.fwhm import fwhm_table_path
     fwhm_tbl = Table.read(fwhm_table_path(basepath))
     row = fwhm_tbl[fwhm_tbl['Filter'] == filtername]
@@ -880,19 +879,7 @@ if __name__ == "__main__":
     # sickle.  Only 3958 obs 001/002 belong to the sickle.  Route o003 to the
     # brick/ tree so its images + catalogs land under /orange/.../jwst/brick/
     # and never clash with sickle/ products (which share the 3958 program id).
-    field_to_reg_mapping = {'2221': {'002': 'brick', '001': 'cloudc'},
-                            '3958': {'001': 'sickle', '002': 'sickle', '003': 'brick'},
-                            # 5365 sgrb2 MIRI: the actual observations are obs
-                            # 002 + obs 998 ("..._skipped_redo"); together their
-                            # 4 mosaic tiles (002: 0210b/02105, 998: 06101/12101)
-                            # tile the full Sgr B2 field -- BOTH must be reduced
-                            # and joint-cataloged (--field=002-998) or the mosaic
-                            # is missing half the data.
-                            '5365': {'001': 'sgrb2', '002': 'sgrb2', '998': 'sgrb2'},
-                            '6151': {'001': 'w51_background', '002': 'w51'},
-                            # 2526 obs 021 = "G0" CMZ cloud-c filament F770W
-                            '2526': {'021': 'cloudc'},
-                            }[proposal_id]
+    field_to_reg_mapping = field_registry.field_to_reg_mapping(proposal_id, 'miri')
 
     for field in fields:
         for filtername in filternames:

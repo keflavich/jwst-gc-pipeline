@@ -14,14 +14,20 @@ from jwst_gc_pipeline.photometry import merge_catalogs as MC
 
 
 def test_brick_job_order_is_pinned():
-    # Written out, not recomputed from obs_filters: reordering that dict must
-    # fail this test, because it silently moves every array task.
+    # Written out, not recomputed from the registry: a change of order silently
+    # moves every array task onto a different filter.
+    #
+    # The order used to be the order obs_filters happened to be written in.  It
+    # is now derived -- proposals numerically, filters by wavelength -- so that
+    # editing fields.yaml cannot move a task.  fields.merge_jobs is pinned the
+    # same way in test_fields_registry; two pins on the layer above and below,
+    # because this is the one thing that must not drift quietly.
     assert MC.individual_frame_merge_jobs('brick') == [
-        ('2221', 'f410m'), ('2221', 'f212n'), ('2221', 'f466n'),
-        ('2221', 'f405n'), ('2221', 'f187n'), ('2221', 'f182m'),
+        ('1182', 'f115w'), ('1182', 'f200w'), ('1182', 'f356w'),
+        ('1182', 'f444w'),
+        ('2221', 'f182m'), ('2221', 'f187n'), ('2221', 'f212n'),
+        ('2221', 'f405n'), ('2221', 'f410m'), ('2221', 'f466n'),
         ('2221', 'f2550w'),
-        ('1182', 'f444w'), ('1182', 'f356w'), ('1182', 'f200w'),
-        ('1182', 'f115w'),
     ]
 
 
@@ -232,7 +238,9 @@ def test_an_array_task_that_merged_one_filter_stops_before_the_all_filter_merges
     Letting each of N array tasks run it gives N concurrent writers, most of
     them reading inputs a sibling task has not produced yet."""
     calls = []
-    monkeypatch.setenv('SLURM_ARRAY_TASK_ID', '3')
+    # Task 5 is a 2221 filter, which has no offsets table; a 1182 task would
+    # also exercise the offsets read, which test_fields_registry covers.
+    monkeypatch.setenv('SLURM_ARRAY_TASK_ID', '5')
     monkeypatch.setenv('GC_BASEPATH_OVERRIDE', str(tmp_path))
     monkeypatch.setattr(MC, 'merge_individual_frames', lambda **kw: None)
     monkeypatch.setattr(MC, 'merge_crowdsource',
@@ -250,6 +258,12 @@ def test_a_plain_run_still_does_the_all_filter_merges(monkeypatch, tmp_path):
     calls = []
     monkeypatch.delenv('SLURM_ARRAY_TASK_ID', raising=False)
     monkeypatch.setenv('GC_BASEPATH_OVERRIDE', str(tmp_path))
+    # A plain run walks every job, so it reaches brick/1182 and its offsets
+    # table.  Stage one in the redirected tree, as stage_scratch_basepath.sh does.
+    offsets = tmp_path / 'offsets'
+    offsets.mkdir()
+    Table({'Visit': ['001'], 'dra (arcsec)': [0.0], 'ddec (arcsec)': [0.0]}).write(
+        offsets / 'Offsets_JWST_Brick1182_F444ref.csv', format='ascii.csv')
     monkeypatch.setattr(MC, 'merge_individual_frames', lambda **kw: None)
     monkeypatch.setattr(MC, 'merge_crowdsource',
                         lambda **kw: calls.append('crowdsource'))

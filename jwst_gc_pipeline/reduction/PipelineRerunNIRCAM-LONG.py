@@ -97,73 +97,12 @@ medfilt_size = {'F410M': 15, 'F405N': 256, 'F466N': 55,
                 'F277W': 55, 'F300M': 55, 'F360M': 55,
                 }
 
-fov_regname = {'brick': 'regions_/nircam_brick_fov.reg',
-               'cloudc': 'regions_/nircam_cloudc_fov.reg',
-               'sickle': 'regions_/nircam_sickle_fov.reg',
-               'sgrb2': 'regions_/nircam_sgrb2_fov.reg',
-               'w51': 'regions_/nircam_w51_fov.reg',
-               'cloudef': 'regions_/nircam_cloudef_fov.reg',
-               'sgrc': 'regions_/nircam_sgrc_fov.reg',
-               'arches': 'regions_/nircam_arches_fov.reg',
-               'quintuplet': 'regions_/nircam_quintuplet_fov.reg',
-               'sgra': 'regions_/nircam_sgra_fov.reg',
-               'wd1': 'regions_/nircam_wd1_fov.reg',
-               'wd2': 'regions_/nircam_wd2_fov.reg',
-               }
+# Registered in jwst_gc_pipeline/fields.yaml -- the one place a target is
+# declared.  See docs/FIELDS.md.
+# Imported as field_registry: `fields` is a local variable in these
+# drivers (the --field list), and shadowed the module.
+from jwst_gc_pipeline import fields as field_registry
 
-refnames = {'2221': 'THIS_IS_A_BUG_IF_YOU_USE_THIS', # <--- we aren't using F405ref, which was the previous one, and I want hard-failures if this gets encountered
-            # 1182 obs 004 = brick.  refnames[proposal_id] is used by
-            # fix_alignment() to build the per-exposure offsets-table filename
-            # offsets/Offsets_JWST_Brick1182_<refname>_average.csv.
-            #
-            # 2026-06-18: switched 'F200ref' -> 'VIRAC2' (UPSTREAM FOLD).  The old
-            # F200ref_average table is F200W-derived (relative frame); applied to
-            # F115W it left ~97 mas (bulk + per-detector wrong-filter distortion)
-            # between the crf/_i2d/model/residual and the absolute (catalog/
-            # realigned) frame.  Offsets_JWST_Brick1182_VIRAC2_average.csv is a
-            # copy of F200ref_average with the F115W rows folded to the absolute
-            # VIRAC2-2014.0 frame (build_virac2_fixalign_offsets.py); non-F115W
-            # rows are still identical to F200ref (fold per-filter as processed).
-            # So crf -> _i2d -> model -> residual -> catalog -> realigned now
-            # share ONE frame and realign_to_catalog ~= 0.  See
-            # ASTROMETRY_WCS_CORRECTION_FLOW.md.
-            '1182': 'VIRAC2',
-            # sickle. Repointed 2026-07-16 to the Gaia-DR3+VIRAC2 seed
-            # (gaia_virac2_refcat_epoch2024.64.fits); token flipped GNS -> VIRAC2 so the
-            # offsets-table name + realignment gate match the new frame.
-            '3958': 'VIRAC2',
-            # sgrb2: re-anchored 2026-06-18 to Gaia DR3 + VIRAC2
-            # (gaia_virac2_refcat_epoch2024.68.fits).  Token left as 'VVV' after
-            # that switch, so VVV realignment kept firing on a VIRAC2-frame field.
-            '5365': 'VIRAC2',
-            '6151': 'Gaia',  # w51: switched 2026-06-10 (was UKIDSS)
-            # 2026-07-16: GC fields below repointed VVV/GNS -> VIRAC2-GaiaDR3 seed;
-            # tokens flipped to 'VIRAC2' so refname (offsets-table name + realign gate) is
-            # consistent with the new anchor. No Offsets_JWST_Brick{prop}_VIRAC2_average.csv
-            # exists for these tweakreg fields (rashift falls through to 0), same as before.
-            '2092': 'VIRAC2',
-            # sgrc: re-anchored 2026-07-16 to Gaia DR3 + VIRAC2 (same GC
-            # reference-frame policy as sgrb2/brick/cloudc).  Was 'VVV', which
-            # (a) pointed tweakreg/realign at the raw VVV frame
-            # (nircam_bootstrapped_to_vvv_refcat.fits, II/376/vvv4 -- no PM,
-            # ~tens of mas off Gaia) and (b) armed the VVV realign gate on what
-            # is now a VIRAC2-frame field.  'VIRAC2' turns that gate off and
-            # names the per-exposure consensus offsets table fix_alignment reads.
-            '4147': 'VIRAC2',
-            '2045': 'VIRAC2',
-            '1939': 'VIRAC2',
-            '2211': 'VIRAC2',
-            # Westerlund 1 (Guarcello prop 1905) + Westerlund 2 (Guarcello prop 3523).
-            # Both clusters are outside the deep Galactic Center, so Gaia DR3 is
-            # the correct astrometric reference (NOT GNS, NOT VVV).
-            '1905': 'Gaia',
-            '3523': 'Gaia',
-            # M92 (halo GC) + M4/NGC6397 (Bedin): non-GC clusters, pure Gaia DR3
-            # frame.  Tied per-(visit,filter) in fix_alignment (added 2026-07-11);
-            # 'Gaia' here keeps the VVV-realign gate OFF (it only fires on 'VVV').
-            '1334': 'Gaia',
-            '1979': 'Gaia',
-            }
 
 # Reference catalog configuration by proposal and field.
 # Paths are relative to basepath.
@@ -1148,7 +1087,8 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         _stamp_imaging_product(os.path.join(
             output_dir, asn_data['products'][0]['name'] + "_i2d.fits"))
 
-        vvv_region_file = f"{basepath}/{fov_regname[regionname]}" if regionname in fov_regname else None
+        _fov = field_registry.fov_region(regionname)
+        vvv_region_file = f"{basepath}/{_fov}" if _fov else None
         # Only run VVV realignment for targets whose refnames is 'VVV'.  Gaia /
         # GNS / UKIDSS targets (Wd1, Wd2, W51, GC fields) must skip this
         # because retrieve_vvv returns no rows outside VVV coverage.
@@ -1241,7 +1181,7 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
     from jwst_gc_pipeline.reduction.unified_alignment import (
         resolve_shift, warn_or_raise_if_stale, write_alignment_header)
     _shift = resolve_shift(fn, proposal_id, field, filtername, module, basepath,
-                           refname=refnames.get(str(proposal_id)),
+                           refname=field_registry.reference_catalog(str(proposal_id)),
                            use_average=use_average)
     rashift = _shift.ra_quantity
     decshift = _shift.dec_quantity
@@ -1346,7 +1286,7 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
                 dra_onsky_mas=rashift.value * _cosd_prov * 1000.0,
                 ddec_onsky_mas=decshift.value * 1000.0,
                 method='offsets-table (histogram-stacked tie)',
-                references=refnames.get(proposal_id, 'n/a'),
+                references=field_registry.reference_catalog(proposal_id) or 'n/a',
                 table_name=_prov_tbl or 'hardcoded/none'):
             align_fits[1].header[_k] = (_v, _c)
         align_fits.writeto(fn, overwrite=True)
@@ -1474,29 +1414,7 @@ if __name__ == "__main__":
     Observations.login(api_token)
 
 
-    field_to_reg_mapping = {'2221': {'001': 'brick', '002': 'cloudc'},
-                            '1182': {'004': 'brick', '002': 'w51'},
-                            '5365': {'001': 'sgrb2'},
-                            '6151': {'001': 'w51'},
-                            '3958': {'007': 'sickle', '001': 'sickle', '002': 'sickle'},
-                            '2092': {'002': 'cloudef', '005': 'cloudef'},
-                            '4147': {'012': 'sgrc'},
-                            '2045': {'001': 'arches', '003': 'quintuplet'},
-                            '1939': {'001': 'sgra'},
-                            '2211': {'023': 'gc2211', '028': 'gc2211',
-                                     '046': 'gc2211', '049': 'gc2211',
-                                     '050': 'gc2211'},
-                            '1905': {'001': 'wd1', '003': 'wd1'},
-                            '3523': {'003': 'wd2', '005': 'wd2'},
-                            # Globular clusters (Jay Anderson co-I; added 2026-06-30)
-                            '1334': {'001': 'm92'},
-                            '1979': {'001': 'ngc6397', '002': 'm4', '003': 'm4'},
-                            '8322': {'001': 'omegacen'},
-                            '12587': {'001': 'omegacen'},
-                            # NGC 6334 (Cat's Paw SFR; extended emission)
-                            '7213': {'001': 'ngc6334'},
-                            '6778': {'001': 'ngc6334'},
-                            }[proposal_id]
+    field_to_reg_mapping = field_registry.field_to_reg_mapping(proposal_id, 'nircam')
 
     for field in fields:
         for filtername in filternames:

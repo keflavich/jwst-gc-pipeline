@@ -18,14 +18,13 @@ regenerating the HiPS + catalog products.
 ## 0. Grounding — what exists today
 
 **Image HiPS** (in `/orange/adamginsburg/jwst/jwst_scripts/`, the `jwst_rgb`
-package — *not* this repo):
+package):
 - Generator: **`reproject.hips.reproject_to_hips`** (astropy `reproject`), galactic
-  frame, 512-px PNG tiles to order 13 (`jwst_rgb/save_rgb.py:191`). **Not** CDS
-  `Hipsgen.jar`.
+  frame, 512-px PNG tiles to order 13 (`jwst_rgb/save_rgb.py:191`).
 - Input is a **already-composited RGBA PNG** with embedded AVM/WCS — HiPS is built
-  from the color PNG, not the FITS.
-- **Full rebuild every time** (`shutil.rmtree` + regenerate). **No** incremental
-  growth, **no** MOC, **no** catalog HiPS, **no** Allsky.
+  from the color PNG.
+- **Full rebuild every time** (`shutil.rmtree` + regenerate). Incremental growth,
+  MOC, catalog HiPS and Allsky are all still to be built.
 - The "third color by interpolation" already exists: `make_two_filter_rgb`
   (`scripts/gc2211_rgb_images.py:109`) sets R = long band, B = short band,
   **G = 0.5·(R+B)** of the asinh-stretched channels. Stretch = `simple_norm`
@@ -34,23 +33,23 @@ package — *not* this repo):
 **Release** (`scripts/release/`): per-field `-merged_i2d.fits` mosaics + per-field
 cross-band catalog (`basic_merged_indivexp_photometry_tables_merged_resbgsub_m7…`),
 staged to `/orange/adamginsburg/jwst/releases/<version>/[<group>/]<field>/`, served
-via Globus + HTTPS + a static webpage (`make_webpage.py`). **No cross-field CMZ
-catalog** and **no footprint/coverage tracking** exist yet. **Program 10678 is
-greenfield** — onboard via the `FIELDS` dict in `stage_release.py`.
+via Globus + HTTPS + a static webpage (`make_webpage.py`). A **cross-field CMZ
+catalog** and **footprint/coverage tracking** are still to be built. **Program
+10678 is greenfield** — onboard via the `FIELDS` dict in `stage_release.py`.
 
 **Filter reality (decisive for the two-color choice):**
 - **F212N** — the CMZ-wide short-wave anchor (blue).
 - **F480M** — the **CMZ-wide long band with program 10678** (red). The go-forward
   two-color pair is **F212N + F480M**.
-- **F405N** — a **legacy** per-field long-narrow band, present in the older
-  programs (2221/1182/5365/4147) but not the go-forward CMZ set. Use it only as a
-  fallback for a legacy field that predates F480M coverage.
+- **F405N** — a **legacy** per-field long-narrow band in the older programs
+  (2221/1182/5365/4147). Use it only as a fallback for a legacy field that
+  predates F480M coverage.
 - ⇒ Two-color = F212N (blue) + F480M (red), with F405N a legacy per-region
   fallback (§1.2).
 
 > Note: a data survey of the *current* disk (pre-10678) shows F405N common and
-> F480M sparse — that is the legacy set, not the go-forward one. Key the design on
-> 10678's filters (F212N + F480M), not the legacy on-disk mix.
+> F480M sparse — that is the legacy set. Key the design on 10678's filters
+> (F212N + F480M).
 
 ---
 
@@ -73,8 +72,8 @@ different stretches without recomputing the substrate.
 > limits (vmin/vmax per band) are computed once over the whole survey (from a
 > coarse HiPS order) and applied to every tile. A per-tile stretch makes each tile
 > self-normalize, which **seams** the mosaic at tile boundaries. This is a hard
-> requirement, not an optimization — `hips.derive_two_color_hips` computes global
-> limits by default; do not replace them with per-tile percentiles.
+> requirement — `hips.derive_two_color_hips` computes global limits by default;
+> do not replace them with per-tile percentiles.
 
 ```
 per-field i2d ──► mono HiPS: HiPS/F212N   (incremental, real flux, fits tiles)
@@ -103,28 +102,26 @@ to nothing and the mosaic is uniformly F212N+F480M.
 
 | | **A. CDS `Hipsgen.jar`** (recommended for the survey substrate) | **B. `reproject.hips`** (keep for per-target quick-looks) |
 |---|---|---|
-| Incremental add | **Native** — re-run over an index incl. new files; only affected tiles rewrite | none (full rebuild); would need a custom tile-merge (§1.5) |
+| Incremental add | **Native** — re-run over an index incl. new files; only affected tiles rewrite | full rebuild; needs the custom tile-merge of §1.5 |
 | Input | FITS i2d directly (real flux, mono) | composited PNG (current path) |
 | MOC | **generates coverage MOC** | none |
 | Color HiPS | **RGB HiPS from 2–3 mono HiPS** built-in | done upstream in the PNG |
-| Allsky / low orders | yes | not written |
+| Allsky / low orders | yes | none |
 | Dep | Java (`Hipsgen.jar`, one jar) | pure Python (already in use) |
 
-**Recommendation: pure-Python (`reproject.hips`) — no Java.** The apparent reason
-to reach for Hipsgen (native incremental) is not actually needed: because
-`reproject.hips` writes a **correct all-order pyramid per field**, folding a new
-field into the master is a **per-order tile combine** with **no pyramid
-re-derivation** — so it is incremental *and* avoids the HEALPix nested-child
-orientation math (exactly the bug class the repo's HiPS-orientation QA already
-polices). §1.5 is therefore the primary path, not a fallback. Keep the Java
-Hipsgen driver only for the one thing pure-Python can't do — the progressive
-**catalog** HiPS (§2.4) — and as an optional alternative image builder.
+**Recommendation: pure-Python (`reproject.hips`) — no Java.** `reproject.hips`
+writes a **correct all-order pyramid per field**, so folding a new field into the
+master is a **per-order tile combine**: incremental, and clear of the HEALPix
+nested-child orientation math (exactly the bug class the repo's HiPS-orientation
+QA already polices). §1.5 is therefore the primary path. Keep the Java Hipsgen
+driver for the one Java-only piece — the progressive **catalog** HiPS (§2.4) —
+and as an optional alternative image builder.
 
 ### 1.4 Coverage MOC — also the footprint tracker the release lacks
 
 For each field/filter, compute a **MOC** (Multi-Order Coverage, `mocpy`) from the
 i2d valid-data footprint. The union MOC per filter = the survey coverage map. This:
-- fills the "no footprint/coverage tracking" release gap,
+- fills the release's footprint/coverage-tracking gap,
 - drives incremental rebuilds (the MOC of a *new* field = exactly the tiles to
   regenerate),
 - is published as a `.fits`/`.moc` for Aladin overlay + machine-readable coverage,
@@ -134,11 +131,11 @@ i2d valid-data footprint. The union MOC per filter = the survey coverage map. Th
 
 `reproject_to_hips` each NEW field into a scratch tree, then merge **per order**:
 for each `(Norder, Npix)` tile the field produced, copy it in if the master lacks
-it, else combine the two (nan-aware mean/priority) and write back. **No ancestor
-regeneration is needed** — reproject.hips already emitted a correct tile at every
-order for that field, so the coarse tiles combine directly the same way the deep
-ones do. That is what makes this both incremental (only overlapping master tiles
-change) and safe (no hand-rolled HEALPix nested-child orientation). FITS (numeric)
+it, else combine the two (nan-aware mean/priority) and write back. reproject.hips
+already emitted a correct tile at every order for that field, so every order
+combines the same way and the master pyramid stays valid. That is what makes this
+both incremental (only overlapping master tiles change) and safe (HEALPix
+nested-child orientation stays inside reproject). FITS (numeric)
 tiles keep the combine lossless; the color layer is derived on top (§1.1).
 
 ### 1.6 Rollout / steps
@@ -163,9 +160,9 @@ tiles keep the combine lossless; the color layer is derived on top (§1.1).
 
 ### 2.1 The gap
 
-All catalog merging today is **within a field**. There is no CMZ-wide table and no
-hierarchical catalog product. Three things to build: an **assembly**, a
-**distribution format**, and a **visualization**.
+All catalog merging today is **within a field**. A CMZ-wide table and a
+hierarchical catalog product are both still to be built, so three things are
+needed: an **assembly**, a **distribution format**, and a **visualization**.
 
 ### 2.2 Assemble the CMZ-wide catalog (new tooling)
 
@@ -191,8 +188,8 @@ formerly `hipscat`) **Parquet** dataset via `hats-import`: HEALPix-partitioned,
 - **LSDB** (LINCC Frameworks) reads it for parallel, out-of-core **cross-matching
   and analytics** — "80 TB from a laptop"; the format Rubin/STScI/IPAC/CDS/ESA are
   standardizing on.
-- Cloud/Globus-friendly, partition-pruned queries (no full download to filter by
-  sky region or magnitude).
+- Cloud/Globus-friendly, partition-pruned queries (fetch only the sky region or
+  magnitude range asked for).
 - Keep the flat **FITS + ECSV** (current) *and* add a flat **Parquet** for the
   "just give me one file" user; HATS is the scalable path.
 
@@ -201,7 +198,8 @@ formerly `hipscat`) **Parquet** dataset via `hats-import`: HEALPix-partitioned,
 Generate a **HiPS catalog** (progressive catalog) with CDS **`Hipsgen-cat.jar`**
 from the assembled table. This is the direct answer to "catalog visualization in
 Aladin/HiPS": a zoom-dependent source layer that Aladin Lite/Desktop (and ESASky,
-etc.) render natively — pan/zoom over millions of sources with no server. Embed it
+etc.) render natively — pan/zoom over millions of sources straight from static
+files. Embed it
 in the release webpage's Aladin Lite pane, overlaid on the color image HiPS + the
 coverage MOC.
 
@@ -209,7 +207,7 @@ coverage MOC.
 > - **`mocpy`** → *coverage* (footprint/where-is-data), not per-source display.
 > - **`Hipsgen-cat` (HiPS catalog)** → *visualization* of sources in Aladin.
 > - **`HATS`/`hipscat` + LSDB** → *analysis/distribution/cross-match* at scale.
-> Use all three; they are complementary layers, not alternatives.
+> Use all three; they are complementary layers.
 
 ### 2.5 Release integration + steps
 
@@ -278,7 +276,7 @@ python scripts/release/make_webpage.py --cmz-hips cmz/hips/CMZ_color \
    incrementally (only its overlapping tiles rewrite); the catalog + MOC
    re-assemble from the current member set.
 
-### Deps + backfill (author-run; not auto-run)
+### Deps + backfill (author-run)
 
 The catalog + two-color HiPS run in the stock env (astropy/reproject/Pillow/
 pyarrow). The optional layers need `pip install mocpy hats-import lsdb` (and, for

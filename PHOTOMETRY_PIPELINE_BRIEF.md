@@ -6,7 +6,7 @@ distributed fan-out, see [`PHOTOMETRY_PIPELINE.md`](PHOTOMETRY_PIPELINE.md).
 
 The pipeline is a sequence of `daofind → fit → residual → reseed` passes.
 Detection runs on a progressively cleaner co-add (so sources hidden in one pass
-surface in the next); **the fit always runs on the frames, never on the co-add.**
+surface in the next); **the fit always runs on the frames.**
 All numbers below are NIRCam-standard defaults; regime deltas are at the end.
 
 ## Per-frame recipe (every pass)
@@ -60,8 +60,8 @@ with `round ≤ 0.5`, `sharp 0.4–1.2`, deduped at `0.5 × FWHM`. FWHM is per-f
 
 ## Fit
 
-Single-pass **BASIC** `PSFPhotometry` (not iterative — reseeding is across
-passes): `LevMarLSQFitter`, `fit_shape = (5, 5)`, `aperture = 2 × FWHM`, a
+Single-pass **BASIC** `PSFPhotometry` (reseeding happens between passes):
+`LevMarLSQFitter`, `fit_shape = (5, 5)`, `aperture = 2 × FWHM`, a
 `LocalBackground` annulus, and — with `--group` — joint fitting of sources closer
 than `min_separation = 2 × FWHM` (use `~3 × FWHM` for blends).
 
@@ -69,8 +69,8 @@ Post-fit, in order:
 - **Overshoot:** if rendered `model_peak > 1.2 × data_peak`, the free fit walked
   off the star → refit flux-only at the pinned seed position (closed-form, clamped
   ≥ 0).
-- **Negative-flux ban:** `flux ≤ 0` dropped (a positive PSF cannot have a negative
-  peak).
+- **Negative-flux ban:** `flux ≤ 0` dropped (the PSF is strictly positive, so a
+  real source has positive flux).
 - Dedup, satstar-wing / near-saturation rejection.
 
 ## Passes
@@ -85,8 +85,8 @@ Post-fit, in order:
 - **m7** (multi-filter): seed from the cross-band merge of every filter's m6
   catalog (deduped, optionally requiring ≥2-filter confirmation), fit on m6
   background-subtracted frames.
-- **m8:** no detection — **force-fit** flux at each cross-band merged position that
-  is a non-saturated non-detection in some band (position pinned, flux-only), then
+- **m8:** **force-fit** only — flux at each cross-band merged position that is a
+  non-saturated non-detection in some band (position pinned, flux-only), then
   dedup. Recovers non-detections / sets noise limits.
 
 ## Vetting (per-pass, after merge)

@@ -63,9 +63,8 @@ or the `ALLOW_*` overrides without a written justification.
 - Each mosaic ties to VIRAC2 (PM-propagated to obs epoch) bulk, per-tile, high
   contrast; per-visit (not just whole-mosaic). VIRAC2 & Gaia agree.
 - **Enforced tolerance: `FRAME_TOL_MAS = 15.0`** in `stage_release.py`
-  (`check_catalog_on_frame`, catalog vs the Gaia-tied refcat) — tighter than the
-  `~30 mas` this item used to quote, so a 25 mas tie that reads "acceptable" here
-  is hard-refused by the gate.
+  (`check_catalog_on_frame`, catalog vs the Gaia-tied refcat) — a 25 mas tie is
+  hard-refused by the gate.
 - ⚠ **This gate only runs where a refcat is mapped.** `FRAME_REFCAT` in
   `stage_release.py` currently contains **`brick` only**; for every other field
   `check_catalog_on_frame` returns `None` ("can't enforce → caller warns"), so item
@@ -90,10 +89,9 @@ at plan time.
 
 ## 2. Image ↔ catalog agreement
 - Released mosaic and its released catalog agree — **enforced tolerance
-  `SAME_RUN_TOL_MAS = 30.0`, whole-image** (not per-tile; the per-tile check is item
-  2b, which blocks above 30 mas) — and both agree
-  with the reference (not just with each other; a shared offset passes item 2 but fails
-  item 1).
+  `SAME_RUN_TOL_MAS = 30.0`, whole-image** (item 2b is the per-tile check, which
+  blocks above 30 mas) — and both agree with the reference: a shared offset passes
+  item 2 but fails item 1.
 
 ## ⛔ 2b. Same-run image↔catalog provenance (BLOCKING)
 
@@ -119,8 +117,8 @@ The absolute arbiter is always VIRAC2 — image↔catalog agreement is only mean
 ## 4. Catalog provenance
 - Release uses the current complete vetted products
   (`*_resbgsub_m7_dao_basic_vetted`), **not** the stale `*_LOCKED_*` per-filter catalogs
-  (`best_dao_basic()` — the catalog-selection helper in **brick-jwst-2221**, not in
-  this repo — can return a stale LOCKED file that is ~1.9″/21″ off).
+  (`best_dao_basic()` — the catalog-selection helper in **brick-jwst-2221** — can
+  return a stale LOCKED file that is ~1.9″/21″ off).
 
 ## 5. Versioning & provenance
 - MANIFEST per-file version bumped; webpage version column updated.

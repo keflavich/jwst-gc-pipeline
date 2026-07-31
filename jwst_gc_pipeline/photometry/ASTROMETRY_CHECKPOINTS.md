@@ -10,12 +10,12 @@ CLI `scripts/reduction/run_astrometry_checkpoint.py`.
 
 Astrometry errors at the 17″, 4″, 2″, 150 mas, 100 mas, and 50 mas level have
 repeatedly propagated through the full pipeline because the alignment was
-measured ONCE (coarsely, against a merged first-pass image — "im0") and never
-re-verified against the much better information cataloging itself produces.
-The target accuracy is ~1 mas (limited by the VIRAC2 reference density).  A
-single measurement is never sufficient; every stage must re-verify, and any
-disagreement must either be corrected at its single authoring point (the
-offsets table + `fix_alignment`) or stop the pipeline.
+measured ONCE (coarsely, against a merged first-pass image — "im0") and carried
+forward unchecked, while cataloging itself produces much better information.
+The target accuracy is ~1 mas (limited by the VIRAC2 reference density).  Every
+stage must therefore re-verify, and any disagreement must either be corrected at
+its single authoring point (the offsets table + `fix_alignment`) or stop the
+pipeline.
 
 ## The ladder
 
@@ -23,7 +23,7 @@ offsets table + `fix_alignment`) or stop the pipeline.
 |---|---|---|
 | **m2** (after the m12 merge — first per-frame catalogs) | per-(visit, filter) consensus; every exposure re-measured vs the consensus (tol **2 mas**); consensus tied to VIRAC2/Gaia with the multi-check ladder | **CORRECT**: offsets table updated (provenance columns, validated, backed up), im0 `_i2d` mosaics stale-tagged `*_im0_badastrom.fits`, run STOPS (`AstrometryCorrectionRequiredError`) — the crf frames must be regenerated before any further cataloging |
 | **m3, m4, m5, m6** | same measurement | **RED FLAG**: the solution is frozen after m2; positions come from the same crf GWCS, so a shift here is a real defect (centroiding systematics, seed drag, stale frame). `AstrometryRegressionError`, blocking |
-| **m7 cross-band merge** | cross-filter agreement: anchor = filter nearest VIRAC2 Ks (2.149 µm); every filter vs anchor < **5 mas** bulk; matched-pair local residual map, no significant **2″** cell > **15 mas** (error bars mandatory — one star is not a measurement) | `CrossFilterAstrometryError`, blocking, before the merge pools positions |
+| **m7 cross-band merge** | cross-filter agreement: anchor = filter nearest VIRAC2 Ks (2.149 µm); every filter vs anchor < **5 mas** bulk; matched-pair local residual map, no significant **2″** cell > **15 mas** (error bars mandatory) | `CrossFilterAstrometryError`, blocking, before the merge pools positions |
 
 Stage-name mapping: the user-facing plan's "m1 pass" = the repo's m12 phase
 (iter1+iter2); its merge is labeled **m2** — that is the correcting
@@ -32,31 +32,31 @@ cross-filter" = the m7 cross-band merge.
 
 ## The consensus measurement (`visit_consensus.py`)
 
-1. Reliable-star cut per exposure catalog (qfit ≤ 0.1, S/N ≥ 10, not a
-   replaced-saturated fit).
+1. Reliable-star cut per exposure catalog (qfit ≤ 0.1, S/N ≥ 10, excluding
+   replaced-saturated fits).
 2. Anchor = exposure with the most reliable stars; every exposure's offset to
-   the anchor measured with `measure_offset` (histogram + **sweep** — a 20″
-   shifted exposure is found, never absorbed).
+   the anchor measured with `measure_offset` (histogram + **sweep**, so a 20″
+   shifted exposure is found).
 3. Exposures shifted into the anchor frame, stars associated
    (`search_around_sky` nearest pair — unambiguous only BECAUSE the relative
    offsets were removed first), consensus = per-star median over
    ≥ 2 exposures.
 4. Consensus frame re-centred by the **median** of the per-exposure offsets
-   (one bad exposure cannot drag the frame toward itself).
+   (the median limits the pull of any one bad exposure).
 5. Every exposure re-measured against the consensus; misaligned = off > 2 mas
    AND significant vs the peak error bars.
 
-## The reference tie (`measure_reference_tie`) — no single number signs off
+## The reference tie (`measure_reference_tie`) — five independent checks
 
 * A: `measure_offset` vs the full (dense **VIRAC2**) refcat, sweep on — **this is
   the reference tie**;
-* B: vs the sparse Gaia-only subset — a **diagnostic** cross-check, not the catalog;
+* B: vs the sparse Gaia-only subset — a **diagnostic** cross-check;
 * C: `agree_across_references` (A vs B).  In the GC **Gaia is the frame, never the
   reference catalog, and is too sparse to BLOCK** (memory: `gc-gaia-frame-not-catalog`;
   Gaia↔VIRAC2 agree ~2.3 mas over the Brick, so a fine ~5–10 mas split is a JWST-side
-  population effect, not a catalog conflict).  Two tolerances:
-  * **fine** (`REFERENCE_AGREE_TOL_MAS`, 5 mas) — recorded as `cross_reference.agree`
-    for diagnostics; **does NOT gate**;
+  population effect).  Two tolerances:
+  * **fine** (`REFERENCE_AGREE_TOL_MAS`, 5 mas) — recorded as `cross_reference.agree`,
+    **diagnostic only**;
   * **gross** (`REFERENCE_CROSSCHECK_GROSS_MAS`, ~100 mas) — `cross_reference_gross_ok`;
     the only cross-check that gates `apply_ok`, catching a spurious/window-limited
     VIRAC peak (brick-1182 v001 ~700 mas tell);
@@ -67,9 +67,8 @@ cross-filter" = the m7 cross-band merge.
   small global tie).
 
 A correction is applied **only** when A is coherent AND the gross cross-check
-passes AND D is clean (`apply_ok`).  The fine sparse-Gaia agreement is reported but
-does NOT block.  Anything else is recorded as *could-not-verify* — loud, audited,
-never silently green.
+passes AND D is clean (`apply_ok`).  Anything else is recorded as
+*could-not-verify* — loud and audited.
 
 ## Corrections & provenance
 
@@ -80,8 +79,8 @@ never silently green.
   `update_offsets_table` converts on-sky mas → the table's Δα-coordinate
   convention, refuses corrections that match no row, refuses a per-exposure
   correction against a per-visit (module-locked) table, validates the result
-  with the collapsed-visit guard (raising — the brick-1182 signature must
-  never be written), keeps a timestamped backup, and stamps provenance
+  with the collapsed-visit guard (which raises on the brick-1182 signature),
+  keeps a timestamped backup, and stamps provenance
   columns (`prov_stage`, `prov_date`, `prov_dra_added_mas`,
   `prov_ddec_added_mas`, `prov_source`).
 * **`Vgroup` is part of a per-exposure row's identity.** A visit can dither
@@ -94,15 +93,14 @@ never silently green.
   (`same_vgroup` — a CSV round-trip makes astropy read `"06201"` back as
   `6201`).
   Two rules keep an OLDER table safe:
-  * an EMPTY `Vgroup` cell means "group unknown", not "matches nothing": such a
+  * an EMPTY `Vgroup` cell means "group unknown", so such a
     row (written before the column existed, or preserved by the builder's
     field-safe merge) keeps applying exactly as it did — see
     `vgroup_row_matches`. Dropping it would silently discard an accumulated
     correction;
-  * the consensus upsert MIGRATES a pre-`Vgroup` row (adopts it and backfills
-    the group) instead of inserting a second row beside it. If two groups claim
-    the same legacy row, that row blended two pointings and the upsert REFUSES
-    rather than guessing which group inherits the shift.
+  * the consensus upsert MIGRATES a pre-`Vgroup` row: it adopts the row and
+    backfills the group. If two groups claim
+    the same legacy row, that row blended two pointings and the upsert REFUSES.
 * **Magnitude ceilings on what may be written** (`_assert_correction_magnitudes`).
   A correction is bounded by its KIND:
 
@@ -115,20 +113,19 @@ never silently green.
   gate cloudef needed (its +102″ runaway was written to a per-EXPOSURE row). The
   bulk tie is deliberately loose because a wrong-guide-star visit really is
   arcseconds off (brick-1182 visit-001 ~17–20″) and correcting it is the job; 60″
-  is `measure_offset`'s sweep ceiling, past which a "measurement" cannot have come
-  from a swept peak. A non-positive or unparseable override raises rather than
-  silently refusing every correction.
-* **Cumulative drift bound.** The per-correction ceiling cannot see creep across
-  successive calls (five legal 0.4″ corrections = 2″ of silent drift; cloudef
-  reached 105″ that way). Because `prov_dra/ddec_added_mas` accumulate, the write
+  is `measure_offset`'s sweep ceiling, so any larger value lies outside what a
+  swept peak can produce. A non-positive or unparseable override raises.
+* **Cumulative drift bound.** The per-correction ceiling bounds one call at a
+  time, so creep accumulates across successive calls (five legal 0.4″ corrections
+  = 2″ of silent drift; cloudef reached 105″ that way). Because
+  `prov_dra/ddec_added_mas` accumulate, the write
   path also rejects any ROW whose total accumulated correction exceeds the **bulk**
-  limit. ⚠ Note what this does and does not catch: it bounds accumulation at 60″,
-  so a table can still accumulate tens of arcseconds of `prov_*_added_mas` without
-  tripping it. **The diagnostic for a poisoned table is `prov_*_added_mas`, not the
-  total `|offset|`** — an m2 visit-consensus correction is mas-scale by
-  construction, so arcsecond-scale `prov_*_added_mas` is a category error, while a
-  large *total* can be perfectly correct (brick-1182's released table is median
-  12.1″ with only 68/7.6 mas of `prov_*` additions — verified on the live table).
+  limit. ⚠ That bounds accumulation at 60″, so a table can still reach tens of
+  arcseconds of `prov_*_added_mas` inside the bound. **The diagnostic for a
+  poisoned table is `prov_*_added_mas`** — an m2 visit-consensus correction is
+  mas-scale by construction, so arcsecond-scale `prov_*_added_mas` is a category
+  error, while a large *total* `|offset|` can be perfectly correct (brick-1182's
+  released table is median 12.1″ with 68/7.6 mas of `prov_*` additions).
   ⚠ **Blind spot:** `update_offsets_table` zero-fills the `prov_*` columns when
   they are absent, so a rebuilt or legacy table restarts the accumulator at 0 —
   and cloudef's live table, the field whose +102″ runaway motivates this whole
@@ -138,15 +135,12 @@ never silently green.
   keyed `(visit, exposure, module)`, but the apply loop skips module narrowing on a
   table with no `Module` column — so every detector's correction for one exposure
   lands on the SAME row, additively (8 × 0.4″ → +3.2″, each part legal). Such a
-  correction set is now refused. Tables that DO carry `Module` are unaffected —
-  checked 2026-07-30: cloudc's (built `--per-module`) and **sgrc's** both have a
-  populated `Module` column, so the guard returns early for them; **brick's two
-  tables (1182, 2221), cloudef's and gc2211's have none**, so those are the ones
-  the guard protects. (`_assert_module_granularity`'s own docstring still names
-  sgrc as Module-less; that is stale.)
-* Stale im0 mosaics are RENAMED `*_i2d_im0_badastrom.fits` (+ a `.why.json`
-  sidecar and a ledger in `astrometry_checkpoints/`), never deleted, never
-  edited.
+  correction set is now refused. As of 2026-07-30, cloudc's table (built
+  `--per-module`) and **sgrc's** both have a populated `Module` column, so the
+  guard returns early for them; **brick's two tables (1182, 2221), cloudef's and
+  gc2211's lack the column**, so those are the ones the guard protects.
+* Stale im0 mosaics are RENAMED `*_i2d_im0_badastrom.fits` and kept intact (+ a
+  `.why.json` sidecar and a ledger in `astrometry_checkpoints/`).
 * `fix_alignment` stamps `APROVST/APROVMT/APROVDR/APROVDD/APROVRF/APROVTB/
   APROVDT` header cards when it (re-)applies a table, so every aligned frame
   carries the provenance of its astrometric fix next to `RAOFFSET/DEOFFSET`.
@@ -178,21 +172,20 @@ audit the full ladder from these records.
 | `OFFSETS_TABLE_COLLAPSE_RAISE=1` | make the collapsed-visit guard raise instead of warn (`reduction/validate_offsets_table.py`) |
 | `FORCE_REALIGN_ON_DISAGREE=1` | hard-stop when a frame's baked `RAOFFSET` disagrees with the current table (`reduction/unified_alignment.py`) |
 
-Overrides exist for deliberate, justified use — never to make a red gate
-green (same policy as `ALLOW_REGISTRATION_FAIL`).
+Overrides exist for deliberate, justified use only (same policy as
+`ALLOW_REGISTRATION_FAIL`).
 
 ## Relationship to the other astrometry shields
 
 * `measure_offset` / `measure_offset_grid` — the sanctioned measurement
-  (CLAUDE.md rule #1); everything here builds on it.  `measure_offset` now
-  also returns `dra_err/ddec_err/n_peak` (MAD-based peak standard errors) and
+  (CLAUDE.md rule #1); everything here builds on it.  `measure_offset` also
+  returns `dra_err/ddec_err/n_peak` (MAD-based peak standard errors) and
   subsamples internally above `MAX_PAIRS_PER_WINDOW` so dense-catalog sweeps
   are memory-safe.
 * `local_residual_map` — fine-scale (2″) matched-pair residual mapping,
   precondition-gated on a verified small global tie (it raises
-  `GlobalTieNotVerifiedError` otherwise, so it can never become an ad-hoc
-  dense-NN shortcut).
+  `GlobalTieNotVerifiedError` otherwise).
 * `registration_failsafes.py` / the inter-frame overlap gate (PR #85) —
   release-time product checks.  The checkpoints complement them: they run
-  DURING cataloging, at mas-level tolerances, and can stop the error at its
-  source instead of at the release gate.
+  DURING cataloging, at mas-level tolerances, and stop the error at its
+  source.

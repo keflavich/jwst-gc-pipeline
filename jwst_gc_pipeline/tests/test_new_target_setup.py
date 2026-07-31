@@ -29,39 +29,21 @@ def _source(path):
         return fh.read()
 
 
-def _orange_target_list(path):
-    """The tuple of targets a driver sends to /orange.
-
-    Found by its membership test rather than by line number, so it survives
-    edits elsewhere in the file.
-    """
-    for node in ast.walk(ast.parse(_source(path))):
-        if not isinstance(node, ast.Compare) or len(node.ops) != 1:
-            continue
-        if not isinstance(node.ops[0], ast.In):
-            continue
-        comparator = node.comparators[0]
-        if not isinstance(comparator, (ast.Tuple, ast.List)):
-            continue
-        values = [e.value for e in comparator.elts
-                  if isinstance(e, ast.Constant) and isinstance(e.value, str)]
-        if 'sickle' in values and 'sgrb2' in values:
-            return set(values)
-    raise AssertionError(f'no /orange target list found in {path}')
-
-
-def test_the_catalog_and_merge_drivers_agree_on_which_tree_a_target_lives_in():
-    catalog, merge = _orange_target_list(CATALOG), _orange_target_list(MERGE)
-    assert catalog == merge, (
-        'the catalog and merge drivers disagree, so one stage writes to a tree '
-        f'the other never reads: only in catalog={sorted(catalog - merge)}, '
-        f'only in merge={sorted(merge - catalog)}')
+def test_neither_driver_keeps_its_own_list_of_which_tree_a_target_lives_in():
+    """The two lists disagreed on wd1/wd2 until 2026-07-31: the catalog stage
+    wrote to /orange and the merge read from /blue.  One registry now answers
+    for both, so a second copy cannot drift from it."""
+    for path in (CATALOG, MERGE):
+        source = _source(path)
+        assert 'field_registry.basepath(' in source, path
+        assert "'/orange/adamginsburg/jwst/" not in source, (
+            f'{path} still builds a data root itself')
 
 
 @pytest.mark.parametrize('target', ['wd1', 'wd2'])
-def test_wd1_and_wd2_are_on_orange_in_both_drivers(target):
-    assert target in _orange_target_list(CATALOG)
-    assert target in _orange_target_list(MERGE)
+def test_wd1_and_wd2_are_on_orange(target):
+    from jwst_gc_pipeline import fields
+    assert fields.basepath(target).startswith('/orange/')
 
 
 def test_the_catalog_driver_creates_the_directories_it_writes_into():

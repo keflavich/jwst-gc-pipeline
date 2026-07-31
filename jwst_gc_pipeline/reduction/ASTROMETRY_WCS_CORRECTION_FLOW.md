@@ -16,12 +16,12 @@ Implemented in:
 > **Retired 2026-07-11:** the post-resample mosaic realign (`realign_to_catalog` /
 > `realign_to_vvv` → `*_realigned-to-refcat.fits` / `*_realigned-to-vvv.fits` +
 > `sync_gwcs_to_fits_wcs`) is **gone**. On the dense-refcat GC fields it was a
-> guarded no-op (OLCRVAL = none, i.e. a byte-identical ~5 GB copy of `_i2d`) and was
-> **never the release deliverable** (`scripts/release/stage_release.py` publishes
-> `_i2d.fits`). The astrometric solution now has **exactly one** authoring point —
+> guarded no-op (OLCRVAL = none, i.e. a byte-identical ~5 GB copy of `_i2d`), and
+> `scripts/release/stage_release.py` publishes `_i2d.fits` as the release
+> deliverable. The astrometric solution now has **exactly one** authoring point —
 > per-exposure `fix_alignment` — and the `_i2d` mosaic is correct *by construction*.
 > The `realign_to_catalog` / `realign_to_vvv` functions remain as `NotImplementedError`
-> stubs so any stale caller fails loudly instead of silently mis-aligning.
+> stubs so any stale caller fails loudly.
 
 ---
 
@@ -33,10 +33,9 @@ DENSE reference catalog (VIRAC2 / VVV / GNS, median NN spacing ≲ 3").** When t
 true shift exceeds the reference's nearest-neighbour spacing, NN pairs the WRONG
 star and the median **collapses toward ~0** (or a spurious value). It fabricates
 false agreement and has repeatedly fooled *validation* of the GC fields (a
-NN-median check "confirms 0.00 fine" on a frame that is really off). (Note: the
-brick-1182 v001 ~20" error itself was an offsets-table CURATION collapse, not a
-NN-median measurement — see the brick-1182 note — but NN-median is the same class
-of failure and must never be used.)
+NN-median check "confirms 0.00 fine" on a frame that is really off). The
+brick-1182 v001 ~20" error came from an offsets-table CURATION collapse (see the
+brick-1182 note) — the same class of silent false-agreement failure.
 
 This is now enforced in code:
 `jwst_gc_pipeline.photometry.measure_offsets.assert_sparse_reference_for_nn_median`
@@ -55,7 +54,7 @@ This is now enforced in code:
 - **a SPARSE reference** — the Gaia-only subset (`source == b'GaiaDR3'`, medNN
   ~5.7"), never the full dense catalog.
 
-**A bulk offset ≈ 0 is NOT sign-off.** A half-mosaic can be grossly SHIFTED while
+**Sign-off requires a PER-TILE map.** A half-mosaic can be grossly SHIFTED while
 the field-average reads ~0 (brick-1182 visit-001: a clean ~20" rigid step across the
 y=0.5 seam). Always map the offset PER TILE
 (`measure_offset_grid`, `registration_failsafes.py`) and require per-tile peak
@@ -74,14 +73,14 @@ fails CI if a new file pairs a NN match with a median/mean — do not write ad-h
 | `*_cal.fits` (archive L2b, per-exposure) | **No** — never modified in place | — | (immutable input) |
 | `*_destreak*.fits` / `*_align.fits` (per-exposure working copy) | **Yes — GWCS** | `fix_alignment()` → `jwst.tweakreg.utils.adjust_wcs` | **Yes** (`RAOFFSET` header guard) |
 | `*_crf.fits` (CR-flagged per-exposure, from Image3) | inherits the corrected GWCS | (produced by Image3 from the corrected input) | n/a |
-| `*_i2d.fits` (resampled mosaic — **final image deliverable**) | inherits, **not separately shifted** | resample of the corrected exposures | (pristine) |
+| `*_i2d.fits` (resampled mosaic — **final image deliverable**) | inherits | resample of the corrected exposures | (pristine) |
 | per-frame catalogs (`*_daophot_basic.fits`) | use the corrected crf GWCS | (read crf GWCS) | n/a |
 | merged catalog | **Yes — table-space** | `shift_individual_catalog()`: `final = centroid − RAOFFSET_meta + dra_table` | re-derivable from any offsets table |
 
 **The astrometric solution now has exactly ONE authoring point:**
 1. **Per-exposure** (`fix_alignment` → `adjust_wcs`): the science-bearing tie.
-   Catalogs (on crf) and the `_i2d` mosaic both inherit it. There is no
-   post-resample mosaic realign (retired 2026-07-11 — see the note at the top).
+   Catalogs (on crf) and the `_i2d` mosaic both inherit it. The post-resample
+   mosaic realign was retired 2026-07-11 (see the note at the top).
 
 ---
 
@@ -102,8 +101,8 @@ Image3Pipeline.call(..., tweakreg skip=True)    (TweakRegStep is SKIPPED — see
 ```
 
 **TweakRegStep is intentionally skipped** (`tweakreg_parameters['skip'] = True`).
-All absolute alignment is done by our `fix_alignment` (per-exposure), **not** by the
-pipeline TweakReg step. Do not re-enable TweakReg, or you will double-correct.
+All absolute alignment comes from our `fix_alignment` (per-exposure). Do not
+re-enable TweakReg, or you will double-correct.
 
 ---
 
@@ -113,16 +112,16 @@ pipeline TweakReg step. Do not re-enable TweakReg, or you will double-correct.
   offsets table (relative frame-to-frame + bulk). It is **idempotent**: the first
   thing it does is check for a `RAOFFSET` keyword and bail if present
   (`align_to_catalogs.py` / `PipelineRerun … fix_alignment`, the `if 'RAOFFSET' in header` guard).
-  Re-running the pipeline therefore never stacks shifts on the per-exposure files.
+  Re-running the pipeline therefore applies the shift exactly once.
 - Because the tie is baked into every exposure's GWCS **before** Image3, both the
   `_crf` (→ catalogs) and the resampled `_i2d` mosaic inherit it. The mosaic is
-  correct *by construction* — there is no separate post-resample mosaic shift to
-  stack or drift (the old `realign_to_catalog` step was retired 2026-07-11).
-- Catalogs never read the i2d. They read the crf GWCS and then re-express the tie
-  in table space: `shift_individual_catalog` does `centroid − RAOFFSET_meta + dra_table`,
+  correct *by construction*: the single per-exposure shift is the only one it
+  ever receives (the old `realign_to_catalog` step was retired 2026-07-11).
+- Catalogs read the crf GWCS and re-express the tie in table space:
+  `shift_individual_catalog` does `centroid − RAOFFSET_meta + dra_table`,
   i.e. it *removes* the GWCS-baked `RAOFFSET` and re-applies the current offsets
   table value. This makes the catalog frame re-derivable from any offsets table
-  **without** re-running the pipeline, and keeps catalog ↔ mosaic ties consistent
+  by a table edit alone, and keeps catalog ↔ mosaic ties consistent
   (both ultimately trace to the same offsets table + refcat).
 
 **Single rule to avoid double-correction:** the astrometry is corrected at *exactly
@@ -140,23 +139,21 @@ provenance cards (stage, method, applied shift, references, table) next to
 
 ---
 
-## Tooling: use STScI tools; the one documented exception
+## Tooling: use STScI tools
 
 - **Per-exposure GWCS shifts MUST use `jwst.tweakreg.utils.adjust_wcs`.** It applies
   the shift on the `v2v3`/tangent frame of a *calibrated* (`_cal`/`_tweakreg`/`_skymatch`)
   GWCS — the supported, correct path. `fix_alignment` already does this. Do **not**
   hand-edit `crval`/`pc` of a per-exposure GWCS.
 
-- **No post-resample (i2d) GWCS edit is performed.** `adjust_wcs`'s own docstring
-  states it is *"not designed to handle … GWCS of resampled images"*, and STScI ships
-  no sanctioned resampled-WCS shifter. Rather than hand-edit the mosaic GWCS, the
-  pipeline applies the entire astrometric tie at the `_cal`/per-exposure level (via
-  `adjust_wcs` in `fix_alignment`) so the resampled i2d is correct *by construction* —
-  the i2d and catalogs share a single tie mechanism. **This is exactly the "preferred
-  simplification" the old design deferred; it is now the design** (the
-  `realign_to_catalog` + `sync_gwcs_to_fits_wcs` post-resample path was retired
-  2026-07-11). Any residual rigid mosaic zero-point must be absorbed into the
-  per-exposure offsets table, never re-introduced as a mosaic-level GWCS edit.
+- **The whole astrometric tie is applied at the `_cal`/per-exposure level** (via
+  `adjust_wcs` in `fix_alignment`), so the resampled i2d is correct *by
+  construction* and the i2d and catalogs share a single tie mechanism. This is
+  also the only supported option: `adjust_wcs`'s own docstring states it is
+  *"not designed to handle … GWCS of resampled images"*, and STScI ships no
+  sanctioned resampled-WCS shifter. Any residual rigid mosaic zero-point must be
+  absorbed into the per-exposure offsets table, never re-introduced as a
+  mosaic-level GWCS edit.
 
 ---
 
@@ -169,9 +166,9 @@ Every detector-frame product carries **two** WCS representations:
 | **GWCS** (ASDF extension, `model.meta.wcs`) | `_cal`, `_destreak`, `_align`, `_crf` | **authoritative** — the full SIAF distortion + velocity aberration + projection chain |
 | FITS `RA---TAN-SIP` (SCI header) | same files | a *fitted low-order polynomial approximation* of the GWCS, for plain-`astropy.wcs` consumers (DS9/CARTA, `reproject`) |
 
-SIP cannot represent the JWST distortion exactly — only fit it. **Read the GWCS
-for anything astrometric.** The SIP header exists for display and for external
-tools, and its fidelity is a property of how it was fitted.
+SIP approximates the JWST distortion by fitting it. **Read the GWCS for anything
+astrometric.** The SIP header exists for display and for external tools, and its
+fidelity depends on how it was fitted.
 
 ### The 0.25 px default trap (found 2026-07-29)
 
@@ -189,7 +186,7 @@ therefore *replaced the delivered fit with one an order of magnitude worse*:
 | same GWCS refit at `max_pix_error=0.01` | 4–5 | 0.000 mas | 0.000 mas |
 
 That 5–8 mas is *position-dependent* and differs per detector **and per filter**,
-so it is not removed by a bulk tie: it injects spurious structure exactly where
+so a bulk tie leaves it in place: it injects spurious structure exactly where
 the astrometric gates look (2 mas m2 per-exposure consensus, 5 mas m7
 cross-filter, 30 mas inter-frame overlap).
 
@@ -198,20 +195,20 @@ Two further defects of the bare update, both now fixed:
 1. `Header.update` **merges**. A degree-3 fit written over a delivered degree-4
    header leaves orphan `A_0_4`/`A_1_3`/`A_2_2`/`A_3_1`/`A_4_0` cards that
    contradict the written `A_ORDER=3`. Present on **nearly** every
-   `_destreak.fits` in the archive (55 of 60 sampled from the 7,012 on disk). **These orphans are inert in astropy and are NOT part of the 5–8 mas**
-   — astropy sizes the SIP matrix from `A_ORDER` and never reads terms above it
-   (deleting all ten changes positions by 0.000000 mas). The entire discrepancy
-   is attributable to `max_pix_error` alone. They are stripped anyway, because a
-   self-contradicting header is a trap for any reader that infers the order from
-   the cards present, and for non-astropy consumers.
-2. Nothing ever *checked* that the written FITS WCS reproduced the GWCS.
+   `_destreak.fits` in the archive (55 of 60 sampled from the 7,012 on disk).
+   **These orphans are inert in astropy** — astropy sizes the SIP matrix from
+   `A_ORDER` and reads only terms up to it (deleting all ten changes positions
+   by 0.000000 mas). The entire 5–8 mas is attributable to `max_pix_error`
+   alone. The orphans are stripped anyway, because a self-contradicting header
+   is a trap for any reader that infers the order from the cards present, and
+   for non-astropy consumers.
+2. The written FITS WCS went unverified against the GWCS.
    `check_wcs` compared only the array **centre**, which agrees by construction
    — the distortion residual lives at the corners (brick F182M nrca1: centre
    0.0000 mas, (0,0) 5.117 mas, (2047,2047) 5.289 mas). A 25× loosening of the
-   *requested* bound (0.25 px vs STScI's 0.01 — not a measured accuracy ratio;
-   the measured change is 5.487 → 0.000 mas) survived because the check sat
-   exactly where the error vanishes: a gate that cannot see the failure it is
-   named for.
+   *requested* bound (0.25 px vs STScI's 0.01; the measured change is
+   5.487 → 0.000 mas) survived because the check sat exactly where the error
+   vanishes: a gate blind to the failure it is named for.
 
 ### The rule
 
@@ -238,34 +235,34 @@ with no SIP, so their FITS WCS is exact.
 
 ## Which shift a frame gets: the alignment registry (NIRCam)
 
-**One path for every NIRCam field.** `fix_alignment` does not decide anything
-itself: it calls `unified_alignment.resolve_shift(fn, proposal_id, field,
+**One path for every NIRCam field.** `fix_alignment` delegates the whole
+decision: it calls `unified_alignment.resolve_shift(fn, proposal_id, field,
 filtername, module, basepath, refname=…, use_average=…)`, which looks the field
 up in **`alignment_config.py`** — the single source of truth for how each
 `(proposal, observation)` is tied to an absolute frame. This replaced a
 per-proposal `if/elif` chain whose `else` arm returned `(0, 0)`, so any field
-without a branch was silently left at the raw `assign_wcs` frame while the m2
+missing a branch was silently left at the raw `assign_wcs` frame while the m2
 checkpoint wrote corrections into a table nothing read (arches/2045,
 quintuplet/2045, sgrb2/5365, cloudef/2092 obs 005 all sat in that state; a re-tie
 loop on such a field re-measures the identical residual forever).
 
-A field with **no entry** is now loud, not silent: `resolve_shift` prints
+A field with **no entry** is now loud: `resolve_shift` prints
 `NO CONFIGURED ALIGNMENT for proposal=… field=…` and returns
-`AlignmentShift(configured=False)`, i.e. the frame stays at `(0, 0)` and says so.
+`AlignmentShift(configured=False)`; the frame stays at `(0, 0)` and says so.
 
 ⚠ **SCOPE: NIRCam only.** `PipelineMIRI.fix_alignment` carries its own dispatch
 and its own inline policy constants (a `_PER_VISIT_SHIFT` map and a w51 rule);
-`PipelineRerunNIRISS.fix_alignment` has no dispatch at all — it hardcodes
-`rashift = decshift = 0 arcsec`. Neither writes the component keywords nor runs
-the staleness guard. Folding them
-in is follow-up work — do not read `alignment_config.py` as repo-wide.
+`PipelineRerunNIRISS.fix_alignment` hardcodes
+`rashift = decshift = 0 arcsec`. Both skip the component keywords and the
+staleness guard. Folding them
+in is follow-up work — read `alignment_config.py` as NIRCam-only.
 
 Each entry declares two orthogonal things:
 
 - **`reference_frame`** — WHICH absolute frame (`VIRAC2` / `Gaia` / `GNS`). GC
   fields use VIRAC2 (Gaia is the *frame* but far too sparse to be the reference
   *catalog* — see `CLAUDE.md`); halo/disk clusters outside the VVV footprint use
-  Gaia directly. Deliberately not hardcoded to VIRAC2.
+  Gaia directly. Each field declares its own frame.
 - **`source`** — WHERE the numbers come from:
 
 | `source` | reads | row kinds |
@@ -309,29 +306,30 @@ NRCA==NRCB together; F410M is the documented exception), and then by `Vgroup`
 **unconditionally when the column exists** — a visit can dither across several
 visit groups and the exposure number restarts in each, so a lone surviving row for
 the *other* group is exactly the dangerous case. An **empty** `Vgroup` cell matches
-any group (`vgroup_row_matches`), so pre-`Vgroup` rows keep applying. Anything
-other than exactly one surviving row raises `ValueError`. The applied numbers come
-from the `dra (arcsec)` / `ddec (arcsec)` columns.
+any group (`vgroup_row_matches`), so pre-`Vgroup` rows keep applying. Narrowing
+must leave exactly one row; any other count raises `ValueError`. The applied
+numbers come from the `dra (arcsec)` / `ddec (arcsec)` columns.
 
-⚠ **As of 2026-07-30 no `VIRAC2locked` table on disk carries a `Vgroup` column**
-(checked: 1182, 2221 brick + cloudc, 4147, 2092, 2211 — only w51's `_consensus.csv`
-has one), so that narrowing is currently inert exactly where it matters most:
-gc2211's own config note records 6 visit groups reusing exposure numbers. Rebuild
-those tables with the column before relying on the guard.
+⚠ **As of 2026-07-31 four tables on disk carry a `Vgroup` column**: cloudc's
+2221, quintuplet's 2045, sgrc's 4147, and w51's `_consensus.csv`. Brick's 1182
+and 2221 tables, and cloudef's and gc2211's, still use the pre-`Vgroup` layout,
+so the narrowing stays inert exactly where it matters most: gc2211's own config
+note records 6 visit groups reusing exposure numbers. Rebuild those tables with
+the column before relying on the guard.
 
 If no locked table exists, `_shift_from_locked` falls back to
 `Offsets_JWST_Brick<prop>_<refname>_average.csv` (`use_average=True`, the
 default) or `Offsets_JWST_Brick<prop>_<refname>.csv`, and requires a `refname`.
 This fallback is **locked-source only**: a `TABLE_CONSENSUS` field whose table is
-missing gets `(0, 0)` with `table_present=False` and no fallback.
+missing gets `(0, 0)` with `table_present=False`.
 
 ## Offsets-table provenance (how each `offsets/Offsets_*.csv` is built)
 
-The `TABLE_LOCKED` tables are **inputs** the pipeline consumes but does not
-itself generate — so the builders are tracked for provenance. Losing a builder
-means a correction can no longer be reproduced or audited from first principles
-even though catalogs/mosaics already carry it. (`_consensus.csv` is the
-exception: the m2 checkpoint writes it.)
+The `TABLE_LOCKED` tables are **inputs**: external builders write them and the
+pipeline consumes them, so the builders are tracked for provenance. Losing a
+builder makes a correction impossible to reproduce or audit from first
+principles even though catalogs/mosaics already carry it. (`_consensus.csv` is
+the exception: the m2 checkpoint writes it.)
 
 | reference frame | offsets table | builder |
 |---|---|---|
@@ -353,8 +351,8 @@ that re-reduces sickle with the GNS table. Sickle's shift is declared in
 `alignment_config.py` (proposal 3958, obs 007) as `RECORDED_BULK` in the GNS
 frame with `consensus_jitter=True`.
 
-**MIRI registration** is a separate, manual pre-step — MIRI does **not** use the
-NIRCam offsets-table path. The sickle MIRI frames are registered to the NIRCam
+**MIRI registration** is a separate, manual pre-step with its own path. The
+sickle MIRI frames are registered to the NIRCam
 F480M frame by region-specific scripts in **brick-jwst-2221**
 (`brick2221/reduction/register_sickle_miri_o001_o002.py`,
 `brick2221/reduction/register_o002_f770w_per_frame_to_f480m.py`,
@@ -370,15 +368,14 @@ are region-general examples; the operational MIRI scripts live in brick-jwst-222
 
 `fix_alignment` applies **one shift per (visit, filter) to BOTH modules** (NRCA and
 NRCB) — the locked table (`Offsets_JWST_Brick<pid>_VIRAC2locked.csv`) is keyed on
-(Visit, Filter), not Module. This is deliberate: NIRCam's SIAF/`assign_wcs` solution
+(Visit, Filter). This is deliberate: NIRCam's SIAF/`assign_wcs` solution
 co-registers the two long-wave detectors (NRCA5, NRCB5) to <~1 mas *when assign_wcs is
-run against a correct CRDS cache*, so an independent per-module tweak would normally
+run against a correct CRDS cache*, so an independent per-module tweak would
 inject VIRAC2 noise and break the lock.
 
-**ROOT CAUSE CORRECTION (2026-07-11): the F410M inter-module offset was a STALE LOCAL
-CRDS CACHE serving a module-swapped LW `filteroffset` mapping — NOT a jwst-version bug
-and NOT a SIAF/distortion issue.** Full incident report, fingerprint table, and
-auditor checklist:
+**ROOT CAUSE (2026-07-11): the F410M inter-module offset came from a STALE LOCAL
+CRDS CACHE serving a module-swapped LW `filteroffset` mapping.** Full incident
+report, fingerprint table, and auditor checklist:
 **[docs/reports/CRDS_STALE_FILTEROFFSET_RMAP_INCIDENT.md](../../docs/reports/CRDS_STALE_FILTEROFFSET_RMAP_INCIDENT.md)**.
 Short version: `jwst_nircam_filteroffset_0004.rmap` was corrected in place by CRDS
 early in Cycle 1; local caches seeded 2022-09 (brick, arches, arches_quintuplet,
@@ -388,19 +385,18 @@ file) and vice versa. Result: anti-symmetric per-module sky errors equal to the
 (own−other) filter-offset difference — F410M ±26.3 mas/module (52.5 mas A−B
 differential), F405N (F444W+F405N) ±11.0 (22.0), F466N ±1.9 — **independent of the
 installed jwst version**. Once the cache is correct, every band re-assigns to 0.0 mas
-across jwst 1.14→1.21; SW mappings were identical in both rmap generations, so SW was
-never affected. The earlier attribution to "jwst 1.14 applied the distortion wrong"
-came from CAL_VER correlating with which `CRDS_PATH` each reduction generation used;
-the "verified under jwst_1253 AND jwst_1581" cross-check varied the *context* but not
-the *cache*, so it could not detect the difference. Checks:
+across jwst 1.14→1.21; SW mappings were identical in both rmap generations, so SW
+stayed correct throughout. Lesson for the auditor: a cross-check that varies the
+CRDS *context* while reusing the same *cache* can only ever see context effects.
+Checks:
 `sha1sum $CRDS_PATH/mappings/jwst/jwst_nircam_filteroffset_0004.rmap`
 (`aade9b095a34…` correct, `98d39dc5403e…` stale/swapped) and the `_cal` header
 `R_FILOFF` (NRCALONG must use 0007, NRCBLONG 0008).
 
-**Correct fix (surgical): re-run Image2 (assign_wcs) with a verified-fresh CRDS cache.**
+**Fix (surgical): re-run Image2 (assign_wcs) with a verified-fresh CRDS cache.**
 Pinning the context keeps flat/photom references identical → photometry is preserved
-(no flux perturbation mid-release) while astrometry is fixed. This needs NO
-offsets-table hack. (Applied to brick+cloudc LW 2026-07-04.)
+through the release while astrometry is fixed. The offsets table stays untouched.
+(Applied to brick+cloudc LW 2026-07-04.)
 
 **Interim workaround currently in place (must be reverted if Image2 is re-run):** F410M was
 given per-module rows (a `Module` column = `nrcalong`/`nrcblong`) in the locked table with a
@@ -415,8 +411,8 @@ both-module row) or it will double-correct by ~48 mas.
 **Rule for the offsets-table builder:** a per-module split is a LAST-RESORT workaround for a
 frame that cannot be reprocessed. Before splitting, first verify the CRDS cache
 (sha1sum check above) and re-run assign_wcs against a fresh cache — a stale local CRDS
-cache (module-swapped LW filteroffset mapping), not jwst version and not CRDS
-distortion content, was the actual cause for F410M. (The brick 2221 locked table was
+cache (module-swapped LW filteroffset mapping) was the cause for
+F410M. (The brick 2221 locked table was
 rebuilt with a single both-module F410M row after the 2026-07-04 re-assign; the
 band-aid split is gone.)
 
@@ -424,7 +420,7 @@ band-aid split is gone.)
 
 - Gaia DR3 reference epoch = **2016.0**.
 - VIRAC2 (VizieR II/387) reference epoch = **2014.0** (Smith+2025: *"fixed at the
-  reference epoch, 2014.0"*). Not 2014.3, not 2016.0.
+  reference epoch, 2014.0"*).
 - The seed refcat (`build_gaia_virac2_refcat.py`) propagates each to the F115W
   observation epoch **2022.70** with per-source PM. `GAIA_EPOCH`/`VIRAC2_EPOCH`
   constants live at the top of that script.
@@ -464,10 +460,10 @@ mechanism as `fix_alignment`); idempotency via the `DVACORR` marker keyword
 - Opt-in: `APPLY_DVA_CORRECTION=1` enables the hook in `fix_alignment`
   (applied BEFORE the tie so offsets tables are measured on DVA-consistent
   frames). Default off = byte-identical behavior.
-- Apply to `_cal`-derived working copies, not archives; regenerating from
+- Apply to `_cal`-derived working copies only; regenerating from
   `_cal` resets it (marker disappears with the overwrite) exactly like
   `RAOFFSET`.
-- Do NOT "fix" the module offset with per-module offsets-table rows instead:
+- Do NOT "fix" the module offset with per-module offsets-table rows:
   the module separation error is deterministic and epoch-dependent — a fitted
   per-module shift goes stale as VA changes and injects reference noise (see
   the module-lock section above).
