@@ -22,8 +22,10 @@ fields:
     fov_region: regions_/nircam_arches_fov.reg
     observations:
       '2045':
+        reference_catalog:
+          '001': catalogs/gaia_virac2_refcat_epoch2023.64.fits
         nvisits: 1
-        reference_catalog: VIRAC2
+        reference_frame: VIRAC2
         obsids:
           nircam: ['001']
         filters: [f212n, f323n]
@@ -33,8 +35,13 @@ fields:
     fov_region: regions_/nircam_brick_fov.reg
     observations:
       '1182':
+        reference_catalog:
+          '004': catalogs/gaia_virac2_refcat_epoch2022.70.fits
+        reference_catalog_by_filter:
+          '004':
+            f115w: catalogs/gaia_virac2_refcat_epoch2022.70.fits
         nvisits: 2
-        reference_catalog: VIRAC2
+        reference_frame: VIRAC2
         obsids:
           nircam: ['004']
         # Measured from the data once and locked in.  Relative to this field's
@@ -42,14 +49,23 @@ fields:
         offsets_table: offsets/Offsets_JWST_Brick1182_F444ref.csv
         filters: [f115w, f200w, f356w, f444w]
       '2221':
+        reference_catalog:
+          '002':
+            - catalogs/pipeline_based_nircam-f182m_reference_astrometric_catalog.fits
+            - catalogs/twomass.fits
+          '001': catalogs/gaia_virac2_refcat_epoch2022.70.fits
         nvisits: 2
-        reference_catalog: THIS_IS_A_BUG_IF_YOU_USE_THIS
+        reference_frame: THIS_IS_A_BUG_IF_YOU_USE_THIS
         obsids:
           nircam: ['001']
           miri: ['002']
         filters: [f182m, f187n, f212n, f405n, f410m, f466n, f2550w]
       '3958':
-        reference_catalog: VIRAC2
+        reference_catalog:
+          '003':
+            - catalogs/pipeline_based_nircam-f182m_reference_astrometric_catalog.fits
+            - catalogs/twomass.fits
+        reference_frame: VIRAC2
         obsids:
           miri: ['003']
 
@@ -58,13 +74,23 @@ fields:
     fov_region: regions_/nircam_cloudc_fov.reg
     observations:
       '2221':
+        reference_catalog:
+          '001':
+            - catalogs/pipeline_based_nircam-f182m_reference_astrometric_catalog.fits
+            - catalogs/twomass.fits
+          '002': catalogs/gaia_virac2_refcat_epoch2023.30.fits
         nvisits: 2
-        reference_catalog: THIS_IS_A_BUG_IF_YOU_USE_THIS
+        reference_frame: THIS_IS_A_BUG_IF_YOU_USE_THIS
         obsids:
           nircam: ['002']
           miri: ['001']
         filters: [f182m, f187n, f212n, f405n, f410m, f466n, f2550w]
       '2526':
+        reference_catalog:
+          '021':
+            - catalogs/gaia_virac2_refcat_epoch2023.30.fits
+            - catalogs/pipeline_based_nircam-f182m_reference_astrometric_catalog.fits
+            - catalogs/twomass.fits
         nvisits: 1
         obsids:
           miri: ['021']
@@ -75,8 +101,11 @@ fields:
     fov_region: regions_/nircam_cloudef_fov.reg
     observations:
       '2092':
+        reference_catalog:
+          '002': catalogs/gaia_virac2_refcat_epoch2023.21.fits
+          '005': catalogs/gaia_virac2_refcat_epoch2023.21.fits
         nvisits: 1
-        reference_catalog: VIRAC2
+        reference_frame: VIRAC2
         obsids:
           nircam: ['002', '005']
           miri: ['004', '006', '008']
@@ -89,8 +118,14 @@ fields:
     root: orange
     observations:
       '2211':
+        reference_catalog:
+          '023': catalogs/gaia_virac2_refcat_epoch2023.71.fits
+          '028': catalogs/gaia_virac2_refcat_epoch2023.71_o028.fits
+          '046': catalogs/gaia_virac2_refcat_epoch2023.71.fits
+          '049': catalogs/gaia_virac2_refcat_epoch2023.71.fits
+          '050': catalogs/gaia_virac2_refcat_epoch2023.71.fits
         nvisits: 1
-        reference_catalog: VIRAC2
+        reference_frame: VIRAC2
         obsids:
           nircam: ['023', '028', '046', '049', '050']
         glob_obsid:
@@ -101,8 +136,11 @@ fields:
     root: orange
     observations:
       '1979':
+        reference_catalog:
+          '002': catalogs/gaia_refcat.fits
+          '003': catalogs/gaia_refcat.fits
         nvisits: 1
-        reference_catalog: Gaia
+        reference_frame: Gaia
         obsids:
           nircam: ['002', '003']
         glob_obsid:
@@ -113,8 +151,10 @@ fields:
     root: orange
     observations:
       '1334':
+        reference_catalog:
+          '001': catalogs/gaia_refcat.fits
         nvisits: 1
-        reference_catalog: Gaia
+        reference_frame: Gaia
         obsids:
           nircam: ['001']
         filters: [f090w, f150w, f277w, f444w]
@@ -123,11 +163,15 @@ fields:
     root: orange
     observations:
       '6778':
+        reference_catalog:
+          '001': catalogs/gaia_virac2_refcat_epoch2024.68.fits
         nvisits: 3
         obsids:
           nircam: ['001']
         filters: [f090w, f187n, f200w, f277w, f335m, f470n]
       '7213':
+        reference_catalog:
+          '001': catalogs/gaia_virac2_refcat_epoch2026.30.fits
         nvisits: 2
         obsids:
           nircam: ['001']
@@ -137,8 +181,10 @@ fields:
     root: orange
     observations:
       '1979':
+        reference_catalog:
+          '001': catalogs/gaia_refcat.fits
         nvisits: 1
-        reference_catalog: Gaia
+        reference_frame: Gaia
         obsids:
           nircam: ['001']
         filters: [f150w2, f322w2]
@@ -147,9 +193,13 @@ fields:
     root: orange
     observations:
       '8322':
+        reference_catalog:
+          '001': catalogs/gaia_refcat.fits
         obsids:
           nircam: ['001']
       '12587':
+        reference_catalog:
+          '001': catalogs/gaia_refcat.fits
         obsids:
           nircam: ['001']
 
@@ -158,8 +208,10 @@ fields:
     fov_region: regions_/nircam_quintuplet_fov.reg
     observations:
       '2045':
+        reference_catalog:
+          '003': catalogs/gaia_virac2_refcat_epoch2024.62.fits
         nvisits: 1
-        reference_catalog: VIRAC2
+        reference_frame: VIRAC2
         obsids:
           nircam: ['003']
         filters: [f212n, f323n]
@@ -169,8 +221,10 @@ fields:
     fov_region: regions_/nircam_sgra_fov.reg
     observations:
       '1939':
+        reference_catalog:
+          '001': catalogs/gaia_virac2_refcat_epoch2022.72.fits
         nvisits: 1
-        reference_catalog: VIRAC2
+        reference_frame: VIRAC2
         obsids:
           nircam: ['001']
         filters: [f115w, f212n, f405n]
@@ -182,8 +236,10 @@ fields:
     # existed.  Only the NIRCam driver reads fov_region, so it was never used.
     observations:
       '5365':
+        reference_catalog:
+          '001': catalogs/gaia_virac2_refcat_epoch2024.68.fits
         nvisits: 1
-        reference_catalog: VIRAC2
+        reference_frame: VIRAC2
         obsids:
           nircam: ['001']
           # 002 and 998 ('..._skipped_redo') tile the full field between them.
@@ -198,8 +254,10 @@ fields:
     fov_region: regions_/nircam_sgrc_fov.reg
     observations:
       '4147':
+        reference_catalog:
+          '012': catalogs/gaia_virac2_refcat_epoch2023.72.fits
         nvisits: 1
-        reference_catalog: VIRAC2
+        reference_frame: VIRAC2
         obsids:
           nircam: ['012']
           niriss: ['012']
@@ -211,8 +269,16 @@ fields:
     fov_region: regions_/nircam_sickle_fov.reg
     observations:
       '3958':
+        reference_catalog:
+          '001':
+            - catalogs/pipeline_based_nircam-f210m_reference_astrometric_catalog.fits
+            - catalogs/gaia_virac2_refcat_epoch2024.64.fits
+          '002':
+            - catalogs/pipeline_based_nircam-f210m_reference_astrometric_catalog.fits
+            - catalogs/gaia_virac2_refcat_epoch2024.64.fits
+          '007': catalogs/gaia_virac2_refcat_epoch2024.64.fits
         nvisits: 1
-        reference_catalog: VIRAC2
+        reference_frame: VIRAC2
         obsids:
           nircam: ['001', '002', '007']
           miri: ['001', '002']
@@ -231,8 +297,10 @@ fields:
     # existed.  Only the NIRCam driver reads fov_region, so it was never used.
     observations:
       '6151':
+        reference_catalog:
+          '001': catalogs/gaia_refcat.fits
         nvisits: 2
-        reference_catalog: Gaia
+        reference_frame: Gaia
         obsids:
           nircam: ['001']
           # MIRI obs 001 was labelled 'w51_background' by the reduce driver
@@ -248,8 +316,10 @@ fields:
     fov_region: regions_/nircam_wd1_fov.reg
     observations:
       '1905':
+        reference_catalog:
+          '001': catalogs/gaia_refcat.fits
         nvisits: 3
-        reference_catalog: Gaia
+        reference_frame: Gaia
         obsids:
           nircam: ['001', '003']
         glob_obsid:
@@ -261,8 +331,10 @@ fields:
     fov_region: regions_/nircam_wd2_fov.reg
     observations:
       '3523':
+        reference_catalog:
+          '005': catalogs/gaia_refcat.fits
         nvisits: 1
-        reference_catalog: Gaia
+        reference_frame: Gaia
         obsids:
           nircam: ['003', '005']
         glob_obsid:

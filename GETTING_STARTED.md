@@ -126,7 +126,7 @@ It does that only when none is on disk.
 
 **A reference catalog** at `<basepath>/catalogs/`, and, for a field aligned from
 a table, **an offsets table** at `<basepath>/offsets/`. Which reference catalog a
-field uses is registered in `REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD`; stage 1
+field uses is registered in `fields.yaml`; stage 1
 stops with a clear error naming the file it wanted. Both paths are relative to
 the basepath, so they follow `GC_BASEPATH_OVERRIDE`.
 
@@ -137,6 +137,54 @@ You no longer supply a `reduction/fwhm_table.ecsv`: the PSF width of each
 filter is an instrument constant, so the pipeline reads the table that ships in
 `jwst_gc_pipeline/reduction/`. A target directory that has its own copy still
 uses it.
+
+---
+
+## One command
+
+For a dataset that is registered in `fields.yaml`, this reduces, catalogs and
+merges the whole observation, submitting each stage so it waits for the one
+before:
+
+```bash
+python -m jwst_gc_pipeline.run_pipeline --proposal 2221 --obsid 001
+```
+
+From Python:
+
+```python
+from jwst_gc_pipeline.run_pipeline import run_pipeline
+run_pipeline(proposal=2221, obsid=1)
+```
+
+Add `--dry-run` to see the `sbatch` lines without submitting. To try the whole
+chain in minutes, give it a cutout — that runs in your shell rather than the
+queue:
+
+```bash
+python -m jwst_gc_pipeline.run_pipeline --proposal 2221 --obsid 001 \
+       --filters F410M --cutout-region 266.5350,-28.7050,20
+```
+
+**What the observation is** — target, filters, data directory, reference
+catalog — comes from [`fields.yaml`](jwst_gc_pipeline/fields.yaml). A proposal
+that is not registered stops with the block to add; see
+[`docs/FIELDS.md`](docs/FIELDS.md).
+
+**Where it runs** — account, QOS, CPUs, memory, walltime and how far each stage
+fans out — comes from [`config.yaml`](jwst_gc_pipeline/config.yaml), which ships
+with HiPerGator's settings. To run elsewhere, copy it and point
+`GC_PIPELINE_CONFIG` at your copy:
+
+```bash
+cp jwst_gc_pipeline/config.yaml ~/my-cluster.yaml
+export GC_PIPELINE_CONFIG=~/my-cluster.yaml
+```
+
+A copy need only contain what differs.
+
+The rest of this page is what that command does, stage by stage, for when you
+need to run one on its own.
 
 ---
 
@@ -272,48 +320,37 @@ into any script of your own:
 
 ## Adding a new target
 
-Every target is listed by hand in nine places for NIRCam — eleven if you also
-run MIRI — each keyed by target name or proposal id. In the order a run hits
-them:
+One file: [`jwst_gc_pipeline/fields.yaml`](jwst_gc_pipeline/fields.yaml). Add a
+block, and the reduce, catalog and merge stages all pick the target up.
 
-| stage | registry | file |
-|---|---|---|
-| reduce | `field_to_reg_mapping` — proposal + obs → target | `reduction/PipelineRerunNIRCAM-LONG.py`, inside `if __name__` |
-| reduce | `refnames` — astrometric reference frame token | `reduction/PipelineRerunNIRCAM-LONG.py` |
-| reduce | `REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD` — which reference catalog file | `reduction/PipelineRerunNIRCAM-LONG.py` |
-| reduce | `ALIGNMENT_CONFIG` — how the field is aligned | `reduction/alignment_config.py` |
-| reduce (MIRI) | `fov_regname` — target → FOV region file | `reduction/PipelineMIRI.py` |
-| reduce (MIRI) | `field_to_reg_mapping` again | `reduction/PipelineMIRI.py`, inside `if __name__` |
-| catalog | `field_to_reg_mapping` again | `photometry/crowdsource_catalogs_long.py`, inside `main()` |
-| catalog | `nvisits` — visits per program | `photometry/crowdsource_catalogs_long.py`, inside `main()` |
-| merge | `obs_filters` — filters per program | `photometry/merge_catalogs.py` |
-| merge | `project_obsnum` — observation number | `photometry/merge_catalogs.py` |
-| merge | `offsets_tables` — astrometric offsets | `photometry/merge_catalogs.py`, inside `main()` |
+```yaml
+  mynewfield:
+    root: orange                       # which data tree; see `roots:` at the top
+    observations:
+      '9999':                          # the proposal id
+        nvisits: 2
+        reference_frame: VIRAC2        # names the offsets table and realign gate
+        obsids:
+          nircam: ['001']              # every observation of this field
+        reference_catalog:             # what the astrometry ties TO
+          '001': catalogs/gaia_virac2_refcat_epoch2025.5.fits
+        filters: [f115w, f212n, f405n]
+```
 
-Plus the basepath: two `if target in (...)` branches, one in the catalog driver
-and one in the merge, choosing between `/orange` and `/blue`. Keep them
-identical. They disagreed on `wd1` and `wd2` until 2026-07-31: the catalog
-stage wrote to `/orange` while the merge read from `/blue`.
+`run_pipeline` on an unregistered proposal prints this block with your
+proposal and observation filled in, so the quickest way to start is to run it
+and paste what it gives you.
 
-Three sit **inside a function** and two more inside an `if __name__` block, so
-importing, printing or overriding them means editing the source first.
+Order in the file means nothing: the loader sorts proposals numerically and
+filters by wavelength, so where you write an entry has no effect — including on
+the SLURM array index. [`docs/FIELDS.md`](docs/FIELDS.md) describes every key.
 
-Miss one and you get:
-
-| missed | what happens |
-|---|---|
-| `field_to_reg_mapping` | `KeyError: '<proposal>'`, in whichever stage you reached first |
-| `REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD` | `KeyError: No reference catalog mapping configured for proposal_id=...` |
-| `obs_filters` | the merge raises `AttributeError: 'NoneType' object has no attribute 'items'` |
-| `refnames` | nothing visible — it is read with `.get()`, so the alignment step quietly receives `None` |
-
-Two more registries duplicate this information and are worth knowing about:
-`obs_filters` and `obs_ids` in `reduction/make_merged_psf.py`, and
-`obs_filters_niriss` in `photometry/merge_catalogs.py` for NIRISS runs. Also
-`TARGETS` in `photometry/make_starless_image.py` if you want starless images.
-
-> Known design flaw, and the biggest obstacle to adding a field. One shared
-> registry would turn all of this into a data change. Proposed in #220.
+**Two things live outside the registry.** `ALIGNMENT_CONFIG` in
+`reduction/alignment_config.py` says *how* a field is aligned rather than what a
+field is, and is already one typed registry with its own tests. And three
+smaller target lists are only reached by the tool that reads them:
+`stage_release.py`'s `FIELDS`, `make_starless_image.py`'s `TARGETS`, and
+`build_virac2_offsets.py`'s `REGION`.
 
 ---
 

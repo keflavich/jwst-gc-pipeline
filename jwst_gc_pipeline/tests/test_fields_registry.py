@@ -344,14 +344,80 @@ def test_the_default_field_prefers_the_joint_token():
     assert F.default_field_token('sickle', '3958', 'nircam') == '001'
 
 
-def test_a_proposal_cannot_have_two_reference_catalogs(monkeypatch):
+#: Every (proposal, obsid) that PipelineRerunNIRCAM-LONG.py listed before the
+#: reference catalogs moved into the registry, with the file it named.  Written
+#: out so the move is checkable rather than asserted.
+NIRCAM_REFERENCE_CATALOGS = {
+    ('2221', '001'): 'gaia_virac2_refcat_epoch2022.70.fits',
+    ('1182', '004'): 'gaia_virac2_refcat_epoch2022.70.fits',
+    ('3958', '007'): 'gaia_virac2_refcat_epoch2024.64.fits',
+    ('5365', '001'): 'gaia_virac2_refcat_epoch2024.68.fits',
+    ('6151', '001'): 'gaia_refcat.fits',
+    ('2092', '002'): 'gaia_virac2_refcat_epoch2023.21.fits',
+    ('2092', '005'): 'gaia_virac2_refcat_epoch2023.21.fits',
+    ('4147', '012'): 'gaia_virac2_refcat_epoch2023.72.fits',
+    ('2045', '001'): 'gaia_virac2_refcat_epoch2023.64.fits',
+    ('2045', '003'): 'gaia_virac2_refcat_epoch2024.62.fits',
+    ('1939', '001'): 'gaia_virac2_refcat_epoch2022.72.fits',
+    ('2211', '023'): 'gaia_virac2_refcat_epoch2023.71.fits',
+    ('2211', '028'): 'gaia_virac2_refcat_epoch2023.71_o028.fits',
+    ('1905', '001'): 'gaia_refcat.fits',
+    ('3523', '005'): 'gaia_refcat.fits',
+    ('1334', '001'): 'gaia_refcat.fits',
+    ('1979', '001'): 'gaia_refcat.fits',
+    ('7213', '001'): 'gaia_virac2_refcat_epoch2026.30.fits',
+    ('6778', '001'): 'gaia_virac2_refcat_epoch2024.68.fits',
+}
+
+
+@pytest.mark.parametrize('key,filename', sorted(NIRCAM_REFERENCE_CATALOGS.items()))
+def test_the_registry_names_the_catalog_the_driver_used_to(key, filename):
+    proposal, obsid = key
+    assert F.reference_catalog_path(proposal, obsid).endswith(filename)
+
+
+def test_the_reference_catalog_is_per_instrument():
+    """Proposal 2221 observation 001 is brick under NIRCam and cloudc under
+    MIRI; each ties to its own catalog."""
+    nircam = F.reference_catalog_path('2221', '001', instrument='nircam')
+    miri = F.reference_catalog_path('2221', '001', instrument='miri')
+    assert '/brick/' in nircam and '/cloudc/' in miri
+
+
+def test_miri_registers_candidates_and_nircam_registers_one():
+    """MIRI takes the first candidate present on disk; NIRCam has exactly one."""
+    assert len(F.reference_catalog_candidates('3958', '001', instrument='miri')) == 2
+    assert len(F.reference_catalog_candidates('3958', '007')) == 1
+
+
+def test_the_per_filter_override_survives():
+    """1182 F115W was anchored directly to the Gaia-tied seed."""
+    assert F.reference_catalog_path(
+        '1182', '004', filtername='F115W').endswith(
+            'gaia_virac2_refcat_epoch2022.70.fits')
+
+
+def test_an_observation_with_no_catalog_names_the_block_to_add(monkeypatch):
+    """A new field hits this before anything else, so the error has to say
+    which file to edit and what to put in it."""
+    lonely = F.Field('lonely', root='orange', observations=(
+        F.Obs(proposal='4242', obsids={'nircam': ('001',)}),))
+    monkeypatch.setattr(F, 'FIELDS', F.FIELDS + (lonely,))
+    monkeypatch.setitem(F.BY_NAME, 'lonely', lonely)
+    with pytest.raises(F.FieldRegistryError) as problem:
+        F.reference_catalog_candidates('4242', '001')
+    message = str(problem.value)
+    assert 'fields.yaml' in message and 'reference_catalog:' in message
+
+
+def test_a_proposal_cannot_have_two_reference_frames(monkeypatch):
     """The frame token names the offsets table, which is per proposal, so two
     fields sharing a proposal must agree rather than one winning silently."""
     other = F.Field('other', root='orange', observations=(
-        F.Obs(proposal='2221', reference_catalog='Gaia'),))
+        F.Obs(proposal='2221', reference_frame='Gaia'),))
     monkeypatch.setattr(F, 'FIELDS', F.FIELDS + (other,))
-    with pytest.raises(F.FieldRegistryError, match='more than one reference catalog'):
-        F.reference_catalog('2221')
+    with pytest.raises(F.FieldRegistryError, match='more than one reference frame'):
+        F.reference_frame('2221')
 
 
 def test_a_registry_loaded_from_elsewhere_uses_its_own_roots(tmp_path):

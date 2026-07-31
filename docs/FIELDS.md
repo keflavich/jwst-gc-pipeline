@@ -22,11 +22,16 @@ Add a block under `fields:`:
     observations:
       '9999':                          # the proposal id
         nvisits: 2
-        reference_catalog: VIRAC2
+        reference_frame: VIRAC2
         obsids:
           nircam: ['001']              # every observation of this field
+        reference_catalog:
+          '001': catalogs/gaia_virac2_refcat_epoch2025.5.fits
         filters: [f115w, f212n, f405n]
 ```
+
+`python -m jwst_gc_pipeline.run_pipeline --proposal 9999 --obsid 001` on an
+unregistered proposal prints this block with your values filled in.
 
 That is the whole change. The reduce, catalog and merge stages all read it.
 
@@ -45,7 +50,9 @@ shuffling the file and comparing.
 | `nvisits` | How many visits the observation has. |
 | `filters` | The filters to catalog and merge, lowercase. |
 | `niriss_filters` | NIRISS reuses NIRCam filter names on a different pixel scale, so its filters and products are kept apart. |
-| `reference_catalog` | The astrometric frame token, which also names the offsets table.  Keyed per proposal: two fields sharing a proposal must agree, and the loader raises if they disagree. |
+| `reference_frame` | The astrometric frame token (`VIRAC2`, `Gaia`), which names the offsets table and arms the realignment gate. Keyed per proposal: two fields sharing a proposal must agree, and the loader raises if they disagree. |
+| `reference_catalog` | Observation number → the catalog file the astrometry ties TO, relative to the field directory. Per observation, because different observations of one proposal sit at different epochs. MIRI and NIRISS may list several candidates and take the first present on disk. |
+| `reference_catalog_by_filter` | The rare per-filter override of the above: observation → filter → file. |
 | `offsets_table` | Path to the measured astrometric offsets, relative to the field's directory. Measured from the data once and then fixed. |
 
 ### Observation numbers are per instrument, and they have to be
@@ -94,6 +101,12 @@ you edited the source. Nothing checked that they agreed, and they had drifted:
 - **`wd1` and `wd2` were on `/orange` in the catalog driver and `/blue` in the
   merge**, so those targets cataloged to one tree and merged from the other.
 - **The MIRI observation numbers**, described above.
+- **The reference catalogs were a fourth and fifth registry** in the reduction
+  drivers, keyed by (proposal, observation) and, in one case, by filter. The
+  field-registry documentation said registration was centralised while
+  `PipelineRerunNIRCAM-LONG.py` still did its own exact lookup, so a new field
+  registered here still failed at stage 1. They are `reference_catalog` entries
+  now.
 
 Each of those is a way for two hand-maintained copies of one fact to disagree,
 and each degraded quietly rather than stopping.

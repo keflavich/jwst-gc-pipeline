@@ -63,7 +63,7 @@ include-package-data = true
 [tool.setuptools.package-data]
 "jwst_gc_pipeline.reduction" = ["*.ecsv"]
 # The field registry; jwst_gc_pipeline.fields reads it at import.
-"jwst_gc_pipeline" = ["fields.yaml"]
+"jwst_gc_pipeline" = ["fields.yaml", "config.yaml"]
 
 [tool.setuptools_scm]
 write_to = "jwst_gc_pipeline/version.py"
