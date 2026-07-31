@@ -803,7 +803,13 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     # Sigma-clipped across frames, weighted by npix/rms**2 (the inverse variance
     # of each footprint's MEAN), not by flux error.  See
     # photometry/residual_background.py.
-    if all(k in tbls[0].colnames for k in RESBKG_COLUMNS):
+    # Gate on ANY table, not tbls[0].  A frame with 0 detections never gets
+    # these columns (cataloging._attach_residual_background returns early), and
+    # combine_singleframe treats 0-source frames as an ordinary expected case
+    # -- so a single empty exposure landing at index 0, or a partial re-run
+    # leaving an old-format catalog there, silently deleted all the merged
+    # columns.  The stacking loop below already handles the mixed case.
+    if any(k in _t.colnames for _t in tbls for k in RESBKG_COLUMNS):
         _t0 = time.time()
         # Phase 1/2's weight arrays are dead by here and are (n_src, n_tbl)
         # each; drop them before allocating three more stacks of that size.
@@ -825,6 +831,14 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
         _combined = combine_resbkg_frames(_stack['modelsub_bkg'],
                                           _stack['modelsub_bkg_rms'],
                                           _stack['modelsub_bkg_npix'])
+        # Carry npix too: the per-frame docstring sells it as the discriminator
+        # between "edge-clipped footprint" and "no data", and without it a
+        # 2-pixel and a 9-pixel footprint are indistinguishable downstream.
+        with np.errstate(invalid='ignore'):
+            _npx = np.where(np.isfinite(_stack['modelsub_bkg']),
+                            _stack['modelsub_bkg_npix'], np.nan)
+            _combined['modelsub_bkg_npix_avg'] = np.nanmean(
+                _npx, axis=1).astype('float32')
         for _k, _v in _combined.items():
             newtbl[_k] = _v
         newtbl.meta['modelsub_bkg'] = (
@@ -1484,7 +1498,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     for key in ('dra_avg', 'ddec_avg', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good',
                 'mean_modelsub_bkg', 'mean_modelsub_bkg_std',
                 'mean_modelsub_bkg_err', 'modelsub_bkg_rms_avg',
-                'modelsub_bkg_nframes',
+                'modelsub_bkg_nframes', 'modelsub_bkg_npix_avg',
                 f'{flux_error_colname}_prop'):
         if key in merged_exposure_table.colnames:
             minimal_version[key.split("_avg")[0]] = merged_exposure_table[key]

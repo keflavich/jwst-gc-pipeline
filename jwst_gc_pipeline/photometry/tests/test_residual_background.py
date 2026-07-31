@@ -181,15 +181,32 @@ def test_combine_source_with_no_usable_frame_is_nan_not_zero():
         assert np.isnan(out[k][0]), k
 
 
-def test_combine_rms_avg_is_the_weighted_mean_of_the_per_frame_rms():
-    """Its VALUE was previously unasserted -- a mutant returning the sum passed."""
+def test_combine_rms_avg_is_weighted_by_npix_only_not_by_1_over_rms_squared():
+    """It is advertised as the mean of the per-frame pixel RMS, so it must not
+    be weighted by 1/rms**2 -- weighting a quantity by its own inverse square
+    drives the result toward the smallest value.  Measured on 8 real brick
+    F182M nrca1 m7 exposures, npix/rms**2 weighting gave a median of 1.03
+    against 1.4038 for npix-only and 1.4042 for a plain mean: ~26% low.
+    """
+    # equal npix -> must reduce to the PLAIN mean, whatever the rms values are
     mean = np.array([[5.0, 5.0]])
     rms = np.array([[1.0, 3.0]])
     npix = np.full((1, 2), 9.0)
-    w = 9 / np.array([1.0, 9.0])
     out = combine_frames(mean, rms, npix)
-    assert out['modelsub_bkg_rms_avg'][0] == pytest.approx(
-        (w * np.array([1.0, 3.0])).sum() / w.sum(), rel=1e-5)
+    assert out['modelsub_bkg_rms_avg'][0] == pytest.approx(2.0, rel=1e-5)
+
+    # unequal npix -> npix-weighted, so the fuller footprint counts for more
+    npix2 = np.array([[9.0, 3.0]])
+    out2 = combine_frames(mean, rms, npix2)
+    assert out2['modelsub_bkg_rms_avg'][0] == pytest.approx(
+        (9 * 1.0 + 3 * 3.0) / 12.0, rel=1e-5)
+
+    # and the mean_modelsub_bkg weighting is UNCHANGED -- still npix/rms**2
+    m2 = np.array([[10.0, 20.0]])
+    o3 = combine_frames(m2, np.array([[1.0, 10.0]]), np.full((1, 2), 9.0))
+    w0, w1 = 9 / 1.0 ** 2, 9 / 10.0 ** 2
+    assert o3['mean_modelsub_bkg'][0] == pytest.approx(
+        (w0 * 10 + w1 * 20) / (w0 + w1), rel=1e-5)
 
 
 def test_combine_rejects_1d_input_instead_of_silently_transposing():
@@ -220,7 +237,10 @@ def test_combine_does_not_blow_the_memory_budget():
     _, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
 
-    assert peak / inputs < 3.0, (
+    # True algorithmic ratio is ~1.6-2.0; 3.0 would have passed a 50%
+    # regression.  astropy.stats is imported at module scope precisely so this
+    # measures the algorithm and not the import (it read 3.16x cold before).
+    assert peak / inputs < 2.3, (
         f"combine_frames peaked at {peak / inputs:.1f}x its input size; the "
         f"float32/free-as-you-go handling has regressed")
 
@@ -445,6 +465,45 @@ def test_merge_block_combines_through_combine_singleframe(monkeypatch):
     # _avg suffix -- that would mean they were combined the wrong way too
     assert 'mean_modelsub_bkg' in out.colnames
     assert 'std_mean_modelsub_bkg' not in out.colnames
+
+
+def test_merge_survives_a_frame_without_the_columns(monkeypatch):
+    """A 0-detection frame never gets modelsub_bkg (attach returns early), and
+    combine_singleframe treats 0-source frames as an ordinary expected case.
+    Gating the merged combine on tbls[0] alone therefore deleted all the merged
+    columns whenever such a frame landed at index 0 -- silently, while the
+    stacking loop 12 lines below already handled the mixed case.
+    """
+    from astropy.coordinates import SkyCoord
+    import astropy.units as u
+    from jwst_gc_pipeline.photometry import merge_catalogs as mc
+
+    rng = np.random.default_rng(11)
+    n = 30
+    ra = 266.5 + rng.normal(0, 1e-4, n)
+    dec = -28.7 + rng.normal(0, 1e-4, n)
+
+    tbls = []
+    for j in range(4):
+        t = Table()
+        t['skycoord_centroid'] = SkyCoord(ra * u.deg, dec * u.deg)
+        t['flux_fit'] = np.full(n, 100.0)
+        t['flux_err'] = np.full(n, 1.0)
+        t['qfit'] = np.full(n, 0.1)
+        if j != 0:                       # frame 0 lacks them, as an empty frame would
+            t['modelsub_bkg'] = np.full(n, 4.0)
+            t['modelsub_bkg_rms'] = np.full(n, 1.0)
+            t['modelsub_bkg_npix'] = np.full(n, 9.0)
+        t.meta = {'exposure': j, 'ra_offset': 0.0, 'dec_offset': 0.0,
+                  'filter': 'F182M'}
+        tbls.append(t)
+
+    out = mc.combine_singleframe(tbls, nanaverage=mc.nanaverage_numpy)
+    for col in MERGED_RESBKG_COLUMNS:
+        assert col in out.colnames, (
+            f"{col} vanished because table 0 lacked the per-frame columns")
+    assert np.nanmedian(out['mean_modelsub_bkg']) == pytest.approx(4.0, abs=1e-3)
+    assert np.nanmedian(out['modelsub_bkg_nframes']) == 3   # the 3 that had them
 
 
 def test_attach_is_fail_soft_on_a_missing_y_fit_or_mask():

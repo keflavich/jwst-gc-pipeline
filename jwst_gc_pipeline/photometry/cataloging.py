@@ -1946,15 +1946,16 @@ def _attach_residual_background(result, residual, ctx, options, label=''):
     FAIL-SOFT: this is a diagnostic column set.  A failure here must not lose a
     frame's photometry, so the columns are simply absent if it cannot run.
     """
-    if not bool(mopt(options, 'manual_residual_background')):
-        return result
     # Guard on BOTH columns the body reads: guarding only x_fit let a table
     # without y_fit raise KeyError straight out of a function whose contract is
     # "never costs a frame its photometry".
     if not {'x_fit', 'y_fit'} <= set(result.colnames) or len(result) == 0:
         return result
     try:
-        box = int(mopt(options, 'manual_residual_background_box'))
+        if not bool(mopt(options, 'manual_residual_background')):
+            return result
+        box = int(mopt(options, 'manual_residual_background_box')
+                  or MANUAL_DEFAULTS['manual_residual_background_box'])
         mean, rms, npix = measure_footprint_background(
             residual, np.asarray(result['x_fit'], dtype=float),
             np.asarray(result['y_fit'], dtype=float),

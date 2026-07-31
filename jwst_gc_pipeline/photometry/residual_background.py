@@ -56,15 +56,84 @@ comparison above, not their mutual correlation.
 The two estimates answer different questions and are both kept:
 
 ===============================  ==========================  ====================
-                                 ``local_bkg`` (photutils)   ``modelsub_bkg*`` (here)
+                                 ``local_bkg`` (photutils)   ``modelsub_bkg`` (here)
 ===============================  ==========================  ====================
-image                            data being fit (bg-sub'd)   pristine-minus-models residual
+image                            data being fit              pristine minus models
 region                           annulus, r ~ 6-10 px        3x3 px on the source
-statistic                        MMM mode                    mean, and pixel RMS
-neighbour stars included         yes                         no (model removed)
+statistic                        sigma-clipped median        mean, and pixel RMS
+point sources removed            no                          yes (model subtracted)
+stage-dependent                  yes                         no
 used by the fit                  yes (subtracted)            no (diagnostic)
 scatter reported                 no                          yes
 ===============================  ==========================  ====================
+
+**What actually produces the gain: the IMAGE, not the footprint.**  It would be
+easy to read the table above as "a 3x3 box beats an annulus because an annulus
+is contaminated by neighbours".  That is not what the data says, and the
+neighbour argument is weak anyway -- ``LocalBackground``'s estimator is a
+3-sigma-clipped median, which is exactly the statistic that survives a minority
+of contaminated pixels.
+
+Running photutils' own ``LocalBackground(6, 10)`` -- same class, same radii --
+on the SAME star-subtracted residual, and scoring both against the m6
+smoothed-bg map that was actually subtracted (brick F182M nrca1 m7, n = 19 865):
+
+    Spearman vs bg map:  3x3 on residual      0.865
+                         6-10 annulus on residual   0.891
+                         6-10 annulus on fitted data (= local_bkg)  0.330
+    median:              3x3 4.513 | annulus 4.193 | bg map 4.079
+    scatter about map:   3x3 0.371 | annulus 0.293
+    brightest 1%:        3x3 14.24 | annulus 4.99 | bg map 5.55
+
+The annulus on the residual is **better on every metric** -- closer median,
+21% tighter scatter, and essentially immune to the bright-source contamination
+that is this column's worst failure mode (4.99 vs 14.24 against a truth of
+5.55).  The whole of the 0.33 -> 0.87 improvement comes from measuring on the
+star-subtracted, pre-background-subtraction residual; none of it requires the
+3x3.
+
+The 3x3 is kept because it is **Jay Anderson's JWST1PASS convention**, because
+``modelsub_bkg_rms`` is meant to be a LOCAL pixel-scatter estimate (an annulus
+RMS at r ~ 6-10 px is a different quantity), and because a compact footprint
+stays local in a crowded field.  It costs accuracy relative to a wider
+footprint on the same residual, and that is a deliberate trade.
+``manual_residual_background_box`` / ``--residual-background-box`` change it.
+
+One caveat on the comparison, in fairness: the reference is itself a *smoothed*
+map, so a ~200-pixel aperture correlates with it better than a 9-pixel one
+partly by construction.  That does not apply to the bright-1% row, which is the
+decisive one.
+
+Why not just sample the background map directly?
+------------------------------------------------
+At m5-m7 ``ctx.background_map`` IS the map that was subtracted, it is already
+passed to ``save_photutils_results``, and ``_sample_background_map()`` would
+read it at each source in three lines -- scoring 1.00 against itself, with no
+bright-source contamination and no 9-pixel noise.  It is a fair question.
+
+The answer is that they are different objects.  The map is a *model* built from
+the previous iteration's residual, smoothed; ``modelsub_bkg`` is a *measurement*
+on this iteration's residual at this source.  Sampling the map tells you what
+the pipeline assumed; measuring the residual tells you what is actually left
+there, including where the model was wrong.  ``modelsub_bkg_rms`` also has no
+equivalent in the map.  At m1-m4 there is no map at all.
+
+(A third option -- measuring the footprint on ``nan_replaced_data - modsky``
+rather than on the pristine-based residual -- would give bg_true - bg_model,
+the background-model ERROR, which is arguably the more actionable diagnostic.
+The pristine basis was chosen instead because it makes the column
+stage-invariant, so an m4 and an m7 value are directly comparable.  The
+model-error version is recoverable as ``modelsub_bkg - <map at source>``.)
+
+Naming
+------
+The merged columns deliberately do NOT follow this file's usual
+``std_{key}_avg`` / ``nmatch`` / ``{err}_prop`` conventions: they are
+``mean_modelsub_bkg``, ``mean_modelsub_bkg_std``, ``mean_modelsub_bkg_err``,
+``modelsub_bkg_rms_avg``, ``modelsub_bkg_nframes``, ``modelsub_bkg_npix_avg``.
+The names describe the physical quantity (a mean over images of a mean over a
+footprint) rather than the merge mechanics.  A script that looks up
+``std_<col>_avg`` will not find the scatter for this column.
 
 Scope: this describes the per-frame PSF-fitting path (``cataloging.py``, and
 the identical setup in ``legacy/crowdsource_step.py`` and
@@ -73,7 +142,10 @@ the identical setup in ``legacy/crowdsource_step.py`` and
 50)``, an adaptive annulus, or ``None`` with a median-filter background
 subtracted beforehand for MIRI -- and is not covered by anything here.
 Saturated stars appended by ``replace_saturated`` get ``modelsub_bkg* = NaN``, so
-they sit outside both estimators.
+they sit outside both estimators.  So do **m8 forced-fill** sources: the columns
+are attached in ``_save_manual_pass``, which m8 does not call, so an m8-filled
+band carries whatever the m7 cross-band table had for it (masked, for the band
+being filled).
 
 ``modelsub_bkg*`` is **diagnostic only** -- nothing here feeds back into the flux
 fit.  Changing that would change every flux in the catalogue and is out of
@@ -170,10 +242,21 @@ Caveats
   exposures, ``median(modelsub_bkg_std / modelsub_bkg_err) = 1.06`` for sources
   with >=3 frames, i.e. the propagated error is right to ~10%.
 * See the bright-source warning above: this is not a pure sky measurement.
+* The residual is built on the PRISTINE array, so at a saturated core the
+  clipped data minus the full extrapolated satstar model is hugely negative.
+  ``ctx.mask`` excludes SATURATED pixels, but with ``--saturation-data-floor``
+  > 0 only ABOVE-floor saturated pixels are masked, so sub-floor saturated
+  pixels can still enter a neighbour's footprint.  This is the likely origin of
+  the -220 tail.
 """
 import warnings
 
 import numpy as np
+# Imported at module level, not inside combine_frames: a lazy import charges
+# astropy.stats to the first call's memory peak, which made the memory guard
+# measure the import rather than the algorithm (3.16x cold vs 1.99x warm).
+from astropy.stats import sigma_clip
+from astropy.utils.exceptions import AstropyUserWarning
 
 __all__ = ['FOOTPRINT_BOX', 'RESBKG_COLUMNS', 'MERGED_RESBKG_COLUMNS',
            'measure_footprint_background', 'combine_frames',
@@ -321,8 +404,6 @@ def combine_frames(mean, rms, npix, *, sigma=3.0, maxiters=5, min_npix=2,
         ``modelsub_bkg_rms_avg``   mean of the per-frame pixel RMS (local noise level)
         ``resbkg_nframes``   number of frames surviving the cuts and clipping
     """
-    from astropy.stats import sigma_clip
-    from astropy.utils.exceptions import AstropyUserWarning
 
     # float32 throughout, and NO upcast of the caller's stacks.  These arrays
     # are (n_sources, n_frames): at brick F200W scale (4.4M x 192) each one is
@@ -370,10 +451,14 @@ def combine_frames(mean, rms, npix, *, sigma=3.0, maxiters=5, min_npix=2,
     sw = w.sum(axis=1)
     ok = sw > 0
 
-    avg = np.full(mean.shape[0], np.nan)
-    std = np.full(mean.shape[0], np.nan)
-    err = np.full(mean.shape[0], np.nan)
-    rms_avg = np.full(mean.shape[0], np.nan)
+    # dtype-matched outputs: float64 here would both double these columns on
+    # disk (they propagate per band through the crossband merge) and force an
+    # upcast in the `dev` expression below, building two full (n_src, n_frames)
+    # float64 temporaries at the largest allocation site.
+    avg = np.full(mean.shape[0], np.nan, dtype=dtype)
+    std = np.full(mean.shape[0], np.nan, dtype=dtype)
+    err = np.full(mean.shape[0], np.nan, dtype=dtype)
+    rms_avg = np.full(mean.shape[0], np.nan, dtype=dtype)
     nframes = keep.sum(axis=1).astype(int)
 
     vals = np.where(keep, mean, 0).astype(dtype, copy=False)
@@ -396,10 +481,18 @@ def combine_frames(mean, rms, npix, *, sigma=3.0, maxiters=5, min_npix=2,
                              / sw[multi])
         del dev
 
-    # Weighted, for consistency with everything else here (an unweighted mean
-    # would let an edge-clipped 2-pixel footprint count as much as a full one).
-    rsum = np.where(keep, w * rms, 0).sum(axis=1)
-    rms_avg[ok] = rsum[ok] / sw[ok]
+    # Weighted by npix ONLY -- deliberately NOT by w = npix/rms**2.  The stated
+    # rationale (don't let an edge-clipped 2-pixel footprint count as much as a
+    # full one) is satisfied by npix; the 1/rms**2 factor weights a quantity by
+    # its own inverse square and drives the result toward the smallest value.
+    # Measured on 8 real brick F182M nrca1 m7 exposures: npix/rms**2 gave a
+    # median of 1.03 against 1.4038 for npix-only and 1.4042 for a plain mean,
+    # i.e. the advertised "mean of the per-frame pixel RMS" was ~26% low.
+    wn = np.where(keep, npix, 0).astype(dtype, copy=False)
+    swn = wn.sum(axis=1)
+    okn = swn > 0
+    rms_avg[okn] = (wn[okn] * np.where(keep, rms, 0)[okn]).sum(axis=1) / swn[okn]
+    del wn
 
     return {'mean_modelsub_bkg': avg,
             'mean_modelsub_bkg_std': std,
