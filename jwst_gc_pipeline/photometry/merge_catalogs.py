@@ -32,6 +32,8 @@ ABMAG_OFFSET = 8.90
 # flags-based bgsub token is imported as ``_bgsub_token`` (this module calls it
 # with explicit booleans, matching the producer-side names).
 from jwst_gc_pipeline.frame_wcs import frame_wcs
+from jwst_gc_pipeline.photometry.residual_background import (
+    RESBKG_COLUMNS, combine_frames as combine_resbkg_frames)
 from jwst_gc_pipeline.scratch_basepath import apply_basepath_override
 from jwst_gc_pipeline.photometry.naming import (
     _inst_token, _svo_filter_id,
@@ -418,7 +420,7 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
         flux_colname = 'flux_fit'
         # skycoord comes in as skycoord_centroid but we want it to leave as skycoord
         skycoord_colname = 'skycoord_centroid'
-        column_names = (flux_colname, flux_error_colname, 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'iter_detected', 'group_id', 'group_size', 'ra', 'dec', 'dra', 'ddec', )
+        column_names = (flux_colname, flux_error_colname, 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'iter_detected', 'group_id', 'group_size', 'ra', 'dec', 'dra', 'ddec', ) + RESBKG_COLUMNS
 
     # Loop 1: Add new sources, which are any that don't have a match in the existing catalog closer than min_offset
     # this loop _only_ adds new sources
@@ -762,8 +764,12 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     # Phase 2: stream the remaining columns one at a time.
     # ra/dec are skipped because their summaries are already in newtbl
     # (skycoord_avg, std_ra, std_dec).  flux and flux_err are already done.
+    # The resbkg_* columns are excluded here and combined separately below:
+    # Phase 2 weights everything by inverse FLUX variance, which is the wrong
+    # weight for a background measurement (a bright star does not make its own
+    # sky better determined).  They get npix/rms**2 instead.
     already_done = {flux_colname, flux_error_colname, 'ra', 'dec',
-                    'skycoord', skycoord_colname}
+                    'skycoord', skycoord_colname} | set(RESBKG_COLUMNS)
     _p2_cols = [k for k in column_names
                 if k not in already_done and k in tbls[0].colnames]
     print(f"Phase 2: streaming {len(_p2_cols)} remaining columns one at a time "
@@ -803,8 +809,64 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
         print(f"  Phase 2 [{_ci}] column {key!r}: DONE (std {time.time()-_t_mean:.1f}s, "
               f"total {time.time()-_t0:.1f}s)", flush=True)
 
-    # weights, keepmask, saved_match_inds, saved_keep kept until function
-    # return; Python will free them after caller drops newtbl reference.
+    # --- residual-footprint background: dedicated inverse-variance combine ---
+    # Sigma-clipped across frames, weighted by npix/rms**2 (the inverse variance
+    # of each footprint's MEAN), not by flux error.  See
+    # photometry/residual_background.py.
+    # Gate on ANY table, not tbls[0].  A frame with 0 detections never gets
+    # these columns (cataloging._attach_residual_background returns early), and
+    # combine_singleframe treats 0-source frames as an ordinary expected case
+    # -- so a single empty exposure landing at index 0, or a partial re-run
+    # leaving an old-format catalog there, silently deleted all the merged
+    # columns.  The stacking loop below already handles the mixed case.
+    if any(k in _t.colnames for _t in tbls for k in RESBKG_COLUMNS):
+        _t0 = time.time()
+        # Phase 1/2's weight arrays are dead by here and are (n_src, n_tbl)
+        # each; drop them before allocating three more stacks of that size.
+        del weights, pos_weights, weights_with_fallback
+        print(f"Residual-footprint background: stacking {len(RESBKG_COLUMNS)} "
+              f"columns ({n_src}x{n_tbl}) for the weighted combine...", flush=True)
+        _stack = {}
+        for key in RESBKG_COLUMNS:
+            _a = np.full((n_src, n_tbl), np.nan, dtype='float32')
+            for ii, tbl in enumerate(tbls):
+                if key not in tbl.colnames:
+                    continue
+                keep = saved_keep[ii]
+                mi = saved_match_inds[ii]
+                _a[mi[keep], ii] = tbl[key][keep]
+            _stack[key] = _a
+        # npix is a count: absent frames must read 0, not NaN
+        _stack['modelsub_bkg_npix'] = np.nan_to_num(_stack['modelsub_bkg_npix'], nan=0.0)
+        _combined = combine_resbkg_frames(_stack['modelsub_bkg'],
+                                          _stack['modelsub_bkg_rms'],
+                                          _stack['modelsub_bkg_npix'])
+        # Carry npix too: the per-frame docstring sells it as the discriminator
+        # between "edge-clipped footprint" and "no data", and without it a
+        # 2-pixel and a 9-pixel footprint are indistinguishable downstream.
+        with np.errstate(invalid='ignore'):
+            _npx = np.where(np.isfinite(_stack['modelsub_bkg']),
+                            _stack['modelsub_bkg_npix'], np.nan)
+            _combined['modelsub_bkg_npix_avg'] = np.nanmean(
+                _npx, axis=1).astype('float32')
+        for _k, _v in _combined.items():
+            newtbl[_k] = _v
+        newtbl.meta['modelsub_bkg'] = (
+            'mean/RMS of a small footprint on (raw data - satstar - star '
+            'model), stage-invariant by construction; combined across frames '
+            'as a sigma-clipped average weighted by npix/rms**2 (the RMS '
+            'column is npix-weighted instead). Diagnostic; '
+            'not used by the flux fit. Cf. local_bkg_<basis>, which depends on '
+            'the stage.')
+        del _stack
+        _n_ok = int(np.isfinite(_combined['mean_modelsub_bkg']).sum())
+        print(f"Model-subtracted background: {_n_ok}/{n_src} sources combined "
+              f"in {time.time()-_t0:.1f}s", flush=True)
+
+    # keepmask, saved_match_inds, saved_keep kept until function return;
+    # Python will free them after the caller drops the newtbl reference.
+    # (weights/pos_weights/weights_with_fallback are freed above, before the
+    # residual-background stacks are allocated.)
     return newtbl
 
 
@@ -1303,7 +1365,7 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
         # flux_colname = 'flux_fit'
     elif method in ('dao', 'daophot', 'basic', 'daobasic', 'iterative', 'daoiterative'):
         flux_error_colname = 'flux_err'
-        column_names = ('flux_fit', flux_error_colname, 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'iter_detected', 'group_size')
+        column_names = ('flux_fit', flux_error_colname, 'skycoord', 'qfit', 'cfit', 'flux_init', 'flags', 'local_bkg', 'iter_detected', 'group_size') + RESBKG_COLUMNS
         # flux_colname = 'flux'
         method_suffix = 'daophot'
     else:
@@ -1441,7 +1503,19 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     # make a table that is nearly equivalent to standard tables (with no 'x' or 'y' coordinate)
     minimal_version = {colname: merged_exposure_table[f'{colname}_avg']
                        for colname in column_names if f'{colname}_avg' in merged_exposure_table.colnames}
-    for key in ('dra_avg', 'ddec_avg', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good', f'{flux_error_colname}_prop'):
+    # The four mean_* / _nframes names have no '<col>_avg' form, so the
+    # comprehension above cannot see them at all; carry them explicitly.
+    # (modelsub_bkg_rms_avg and modelsub_bkg_npix_avg DO have that form and are
+    # already picked up above -- but note the comprehension strips '_avg', so in
+    # the released minimal table they land as 'modelsub_bkg_rms' and
+    # 'modelsub_bkg_npix', which collide by name with the PER-FRAME columns of
+    # the same spelling.  Same convention as flux_fit_avg -> flux_fit; the
+    # *_allcols.fits table keeps the unambiguous names.)
+    for key in ('dra_avg', 'ddec_avg', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good',
+                'mean_modelsub_bkg', 'mean_modelsub_bkg_std',
+                'mean_modelsub_bkg_err', 'modelsub_bkg_rms_avg',
+                'modelsub_bkg_nframes', 'modelsub_bkg_npix_avg',
+                f'{flux_error_colname}_prop'):
         if key in merged_exposure_table.colnames:
             minimal_version[key.split("_avg")[0]] = merged_exposure_table[key]
 

@@ -3755,6 +3755,19 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                           "Use only when chasing a memory leak."),
                     metavar="profile_memory")
     # --- manual-iteration path (cataloging.py; replaces IterativePSFPhotometry) ---
+    parser.add_option("--no-residual-background", dest="manual_residual_background",
+                      default=MANUAL_DEFAULTS['manual_residual_background'],
+                      action="store_false",
+                      help="disable the model-subtracted footprint background "
+                           "(modelsub_bkg columns); diagnostic only")
+    # default from MANUAL_DEFAULTS, NOT None: mopt() is getattr(options, name,
+    # DEFAULT), so an attribute present-but-None returns None and int(None)
+    # would be swallowed by the fail-soft, silently disabling the column.
+    parser.add_option("--residual-background-box", dest="manual_residual_background_box",
+                      default=MANUAL_DEFAULTS['manual_residual_background_box'],
+                      type=int,
+                      help="footprint size in px for modelsub_bkg (default 3, "
+                           "Jay Anderson JWST1PASS convention); forced odd")
     parser.add_option("--manual-iterations", dest="manual_iterations",
                     default=True, action='store_true',
                     help=("Use the default PSF photometry pipeline "

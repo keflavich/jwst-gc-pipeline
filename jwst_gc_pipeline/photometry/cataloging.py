@@ -40,6 +40,8 @@ from jwst_gc_pipeline.photometry.naming import (
     _iteration_token, _bgsub_token,
     residual_to_smoothed_bg_i2d, smoothed_bg_to_detection_i2d, vetted_to_i2dseed)
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS, mopt
+from jwst_gc_pipeline.photometry.residual_background import (
+    local_bkg_column_name, measure_footprint_background)
 from jwst_gc_pipeline.photometry.psf_fitting import (
     _make_psfphotometry, _make_model_image, _dedup_close_sources,
     forced_psf_photometry,
@@ -1659,6 +1661,18 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         print(f"[manual] subtracted reprojected smoothed-bg {os.path.basename(resbg_path)} "
               f"(sum={float(np.nansum(bg_finite)):.3e})", flush=True)
 
+    # What LocalBackground will actually be measured on.  `local_bkg` means a
+    # different physical quantity at m4 (raw frame) and m5 (smoothed-residual
+    # background already removed) -- measured on brick F182M nrca1 exp1, its
+    # median goes 4.43/4.45/4.40/4.42 at m1-m4 to 0.42/0.45/0.44 at m5-m7 --
+    # and nothing in the catalog recorded which one you were looking at.
+    _basis = []
+    if options.bgsub:
+        _basis.append('bgsub')
+    if resbg_path:
+        _basis.append('resbgsub')
+    bkg_basis = '+'.join(_basis) if _basis else 'raw'
+
     data = data.astype('float32')
 
     grid, _psf_model = _L.get_psf_model(
@@ -1915,9 +1929,70 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         dao_psf_model=dao_psf_model, grouper=grouper,
         satstar_table=satstar_table, satstar_model_subtracted=satstar_model_subtracted,
         original_data=original_data, background_map=background_map,
+        bkg_basis=bkg_basis,
         out_basepath=out_basepath, filename=filename,
         proposal_id=proposal_id, field=field, filtername=filtername,
         module=module, pupil=pupil)
+
+
+def _attach_residual_background(result, residual, ctx, options, label=''):
+    """Add ``modelsub_bkg``/``modelsub_bkg_rms``/``modelsub_bkg_npix`` to a
+    per-frame catalog, plus the ``local_bkg`` basis alias and ``LBKGBASE``.
+
+    Measured on the star-subtracted residual, so it traces the extended
+    emission at each source rather than the surrounding stars.  See
+    ``photometry/residual_background.py`` for why this is kept separate from
+    photutils' annulus ``local_bkg`` instead of replacing it.
+
+    FAIL-SOFT: this is a diagnostic column set.  A failure here must not lose a
+    frame's photometry, so the columns are simply absent if it cannot run.
+    """
+    # Guard on BOTH columns the body reads: guarding only x_fit let a table
+    # without y_fit raise KeyError straight out of a function whose contract is
+    # "never costs a frame its photometry".
+    if not {'x_fit', 'y_fit'} <= set(result.colnames) or len(result) == 0:
+        return result
+    # The local_bkg alias and LBKGBASE describe photutils' OWN column and cost
+    # nothing to compute, so they are written before the enable check:
+    # --no-residual-background disables the footprint measurement, not the
+    # record of which array local_bkg was measured on.
+    try:
+        basis = str(getattr(ctx, 'bkg_basis', 'raw'))
+        result.meta['LBKGBASE'] = (basis, 'array LocalBackground was measured on')
+        if 'local_bkg' in result.colnames:
+            result[local_bkg_column_name(basis)] = np.asarray(
+                result['local_bkg'], dtype=float)
+    except (KeyError, AttributeError, TypeError, ValueError) as exc:
+        print(f"[{label}] local_bkg alias skipped: {type(exc).__name__}: {exc}",
+              flush=True)
+
+    try:
+        if not bool(mopt(options, 'manual_residual_background')):
+            return result
+        box = int(mopt(options, 'manual_residual_background_box')
+                  or MANUAL_DEFAULTS['manual_residual_background_box'])
+        mean, rms, npix = measure_footprint_background(
+            residual, np.asarray(result['x_fit'], dtype=float),
+            np.asarray(result['y_fit'], dtype=float),
+            box=box, mask=getattr(ctx, 'mask', None))
+    except (ValueError, IndexError, TypeError, KeyError, AttributeError) as exc:
+        print(f"[{label}] residual-footprint background skipped: "
+              f"{type(exc).__name__}: {exc}", flush=True)
+        return result
+    result['modelsub_bkg'] = mean
+    result['modelsub_bkg_rms'] = rms
+    result['modelsub_bkg_npix'] = npix
+    result.meta['MSBKGBOX'] = (box, 'model-subtracted background footprint (px)')
+    result.meta['MSBKGSRC'] = ('raw-satstar-starmodel',
+                               'modelsub_bkg is stage-INVARIANT by construction')
+
+    n_ok = int(np.isfinite(mean).sum())
+    print(f"[{label}] model-subtracted background ({box}x{box}): "
+          f"{n_ok}/{len(result)} measured, median "
+          f"{np.nanmedian(mean) if n_ok else float('nan'):.4g}; "
+          f"local_bkg basis={basis!r} -> {local_bkg_column_name(basis)}",
+          flush=True)
+    return result
 
 
 def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
@@ -1929,6 +2004,20 @@ def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
     """
     iter_ = _iteration_token(iteration_label)
     bp = ctx.out_basepath
+
+    # Model-subtracted footprint background (Jay Anderson 3x3 convention).  Built from
+    # the SAME residual that is written below -- pristine data minus the satstar
+    # model minus the star-only model -- so it measures the extended emission at
+    # the source position, which photutils' LocalBackground cannot report
+    # because it runs on the array being fit.  Diagnostic only; nothing here feeds back
+    # into the flux fit.  Computed BEFORE save_photutils_results because that
+    # function drops rows with bad x_fit, and the columns must be filtered with
+    # them rather than misaligned afterwards.
+    _resbkg_base = (ctx.original_data if ctx.satstar_model_subtracted is None
+                    else ctx.original_data - ctx.satstar_model_subtracted)
+    _residual_for_bkg = _resbkg_base - modsky
+    _attach_residual_background(result, _residual_for_bkg, ctx, options, label=iteration_label)
+
     saved = _L.save_photutils_results(
         result, ctx.ww, ctx.filename, im1=ctx.im1, detector=detector,
         basepath=bp, filtername=ctx.filtername, module=ctx.module,
@@ -1938,9 +2027,7 @@ def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
         group=ctx.group, psf=None, background_map=ctx.background_map,
         iteration_label=iteration_label)
 
-    base = (ctx.original_data if ctx.satstar_model_subtracted is None
-            else ctx.original_data - ctx.satstar_model_subtracted)
-    residual = base - modsky
+    residual = _residual_for_bkg
     stub = (f'{bp}/{ctx.filtername}/pipeline/jw0{ctx.proposal_id}-o{ctx.field}_t001_'
             f'{ctx.inst_token}_{ctx.pupil}-{ctx.filtername.lower()}-{ctx.module}'
             f'{ctx.visitid_}{ctx.vgroupid_}{ctx.exposure_}{ctx.desat}{ctx.bgsub}'
