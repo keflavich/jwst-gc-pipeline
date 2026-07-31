@@ -42,11 +42,15 @@ import os
 try:
     import webbpsf
     from webbpsf.utils import to_griddedpsfmodel
-    os.environ['WEBBPSF_PATH'] = '/orange/adamginsburg/jwst/webbpsf-data/'
+    # setdefault, not assignment: saturated_star_finding REQUIRES this variable
+    # and raises without it, so overwriting it sent anyone who set it correctly
+    # to a HiPerGator path that does not exist on their machine.  Unset (the
+    # HiPerGator case) still gets the same value as before.
+    os.environ.setdefault('WEBBPSF_PATH', '/orange/adamginsburg/jwst/webbpsf-data/')
 except ImportError:
     import stpsf
     from stpsf.utils import to_griddedpsfmodel
-    os.environ['STPSF_PATH'] = '/orange/adamginsburg/jwst/stpsf-data/'
+    os.environ.setdefault('STPSF_PATH', '/orange/adamginsburg/jwst/stpsf-data/')
 
 try:
     from paths import basepath
@@ -75,15 +79,8 @@ def get_fwhm(header, instrument_replacement='NIRCam'):
     #filtername = header['FILTER']
     filtername = get_filtername(header)
 
-    # NIRISS has its own FWHM table (0.0656 arcsec/pix native scale, incl F158M
-    # which is absent from the shared NIRCam-scale table).  Read it from the
-    # package so it does not depend on a per-target reduction/ tree.
-    if str(instrument).upper() == 'NIRISS':
-        from pathlib import Path as _Path
-        _fwhm_table = _Path(__file__).resolve().parent / 'fwhm_table_niriss.ecsv'
-    else:
-        _fwhm_table = f'{basepath}/reduction/fwhm_table.ecsv'
-    fwhm_tbl = Table.read(_fwhm_table)
+    from jwst_gc_pipeline.reduction.fwhm import fwhm_table_path
+    fwhm_tbl = Table.read(fwhm_table_path(basepath, instrument))
     row = fwhm_tbl[fwhm_tbl['Filter'] == filtername]
     fwhm = fwhm_arcsec = float(row['PSF FWHM (arcsec)'][0])
     fwhm_pix = float(row['PSF FWHM (pixel)'][0])
