@@ -34,10 +34,15 @@ photometry reproducible and auditable, and lets us insert physically motivated
 quality controls between passes.
 
 A guiding principle throughout: **the fit is always performed on the individual
-calibrated exposures (frames), never on the combined mosaic.** The mosaic is
-used only to *detect* sources and to build cleaner detection images between
-passes; the flux of every source is always measured on the native, undistorted
-frames where the PSF is well defined.
+calibrated exposures (frames), never on the combined mosaic.** The mosaic's role is
+to *detect* sources and to build cleaner detection images between passes; the flux
+of every source is measured on the native detector frames, where the PSF is well
+defined. Those frames are the **distorted** ones — they carry a 3rd-order SIP
+approximation plus the authoritative GWCS, while the mosaic is the rectified
+product; the point is that fitting happens before resampling, not that the frames
+are undistorted. One qualification: from m5 onward the mosaic-derived smoothed
+background is reprojected onto each frame and subtracted *before* fitting (see
+§Background), so the mosaic does enter the reported fluxes by that route.
 
 ## Point-spread function
 
@@ -63,9 +68,12 @@ cleaner* from one pass to the next:
 
 Detections are filtered on a local signal-to-noise estimate and on peak shape
 (roundness/sharpness) to suppress diffuse-emission bumps and cosmic-ray-like
-artifacts. At each pass the new detections are **unioned with the previous
-pass's vetted catalog**, so the source list grows monotonically and earlier,
-trusted sources are never lost.
+artifacts. At each pass the new detections are **unioned with the previous pass's
+vetted catalog**. That makes the seed list grow in the normal case, but it is
+**not** monotonic: the seed is the *vetted* subset, so a source the vetting stage
+rejects (or a non-positive fit) is dropped from the next pass's seed as well — and
+because it is also absent from the vetted residual mosaic, it reappears there as an
+unsubtracted source rather than being re-fit.
 
 ## Per-pass fitting procedure
 
@@ -76,11 +84,16 @@ For each pass and each frame the following steps are applied:
    neighboring faint sources. (They are reinserted with their saturated-star flux
    for the final catalog; they are not re-measured as ordinary point sources.)
 
-2. **Joint fitting of blends.** Sources closer together than a few times the PSF
-   FWHM are fit *simultaneously* as a group rather than independently. Fitting
-   close pairs independently causes each to over-subtract in the valley between
-   them, driving the fainter source artificially negative; joint fitting removes
-   this bias.
+2. **Joint fitting of blends — available, OFF by default.** Sources closer
+   together than a few times the PSF FWHM *can* be fit simultaneously as a group
+   rather than independently (`--group`, with `--manual-group-min-sep-fwhm`,
+   default 2.0). Fitting close pairs independently causes each to over-subtract in
+   the valley between them, driving the fainter source artificially negative;
+   joint fitting removes that bias at a cost that rises steeply with group size.
+   **`--group` defaults to off and only one submitter passes it**
+   (`submit_cataloging_m8_partial.sbatch`), so the shipped catalogs are fit
+   source-by-source. Note the other submitters pass `--max-group-size` *without*
+   `--group`, which is a no-op.
 
 3. **Single-pass PSF fit.** Each (group of) source(s) is fit with the
    spatially-varying PSF. The flux is constrained to be non-negative.
@@ -113,13 +126,20 @@ For each pass and each frame the following steps are applied:
 
 After a pass, the per-frame source models are subtracted and the frames are
 recombined into a residual mosaic. From this residual we build a smoothed
-**diffuse-background** map, having first masked the locations of fitted sources
-so their cores do not bias the background low. This background is subtracted from
+**diffuse-background** map, having first masked source positions so that a bright
+star is not absorbed into the "background". The mask is the **union of the vetted
+catalog and the independent i2d detection seed**, not the fitted list alone:
+masking only what was fitted is self-reinforcing — a star dropped by vetting is
+left unmasked, is absorbed into the background, is then subtracted away, and can
+never be recovered (ngc6334 F405N: the reconstructed background reached 164 at a
+298-peak star). This background is subtracted from
 the frames before the next fitting pass, so that faint-source fluxes are measured
 against the true local sky rather than against structured nebular emission. The
-background is recomputed from the cleanest available residual at each stage, and
-the change between successive background estimates is logged so that a runaway
-(in which the background begins absorbing real extended emission) is visible.
+background is recomputed from the cleanest available residual at each stage. The
+guard against a runaway (the background absorbing real extended emission) is the
+union mask above, **not** a successive-estimate comparison: nothing computes or
+logs a background-to-background delta today. The per-stage `[bg]` line reports
+only the output name, the number of masked sources and the mask radius.
 
 ## Cross-frame merging and vetting
 
@@ -135,11 +155,15 @@ pass.
 ## Multi-filter cross-band stage
 
 When more than one filter is processed together, a final detect/fit pass seeds
-the fit with the union of the per-filter source lists — deduplicated so a star
-seen in several bands is seeded once — so that a source detected confidently in
-one band is measured in the others even where it is individually marginal. (A
-stricter cross-band requirement — detection in two or more bands within a tight
-positional tolerance — is planned but not yet the default.)
+the fit from the per-filter source lists, deduplicated so a star seen in several
+bands is seeded once, so that a source detected confidently in one band is measured
+in the others even where it is individually marginal. **The seed requires detection
+in at least two bands** within a tight positional tolerance
+(`--manual-crossband-seed-min-filters`, default **2**, at
+`--manual-crossband-seed-max-sep-mas` 30); the permissive single-band union is the
+legacy path, reachable with `=1` and explicitly not recommended. Earlier versions
+of this document described the union as the default; it has not been since the
+stringent seed landed.
 
 The per-band catalogs are then cross-matched into a single multi-filter table.
 A closing **forced cross-band fill** step revisits that table: wherever a source
@@ -159,24 +183,35 @@ the saturated stars added back so it overlays against the data), and the diffuse
 background map. Because every pass is explicit and its products are saved, the
 photometry can be inspected stage by stage.
 
-The principal quality safeguards are: enforcement of non-negative flux
-everywhere (the PSF is positive); the model-vs-data peak overshoot test that
-catches centroid-walk inflation a goodness-of-fit statistic would miss;
-source-masked background estimation to avoid the background-eats-source feedback
-loop; and joint fitting of close blends to avoid mutual over-subtraction.
+The principal quality safeguards are: rejection of non-positive fitted flux in
+the detect/fit passes (the PSF is strictly positive, so `flux_fit ≤ 0` is a
+negative-peak model); the model-vs-data peak overshoot test that catches
+centroid-walk inflation a goodness-of-fit statistic would miss, together with a
+final overshoot **drop** for fits whose model peak still exceeds 5× the local data
+peak after the refit; and source-masked background estimation to avoid the
+background-eats-source feedback loop. Joint fitting of close blends is available
+but off by default (§Per-pass fitting).
+
+**One deliberate exception to positivity:** the m8 forced cross-band fill fits with
+the *signed* estimator (`nonnegative=False`) and inverse-variance-averages the
+result, so a non-detection carries a two-sided noise estimate rather than a hard
+zero. Fluxes reported by m8 for non-detections may therefore be negative.
 
 ## Known limitations
 
 - The passes are inherently ordered (each detects on the previous pass's
-  recombined residual image), so throughput is ultimately limited by the serial
+  recombined image — the raw co-add at m3, the residual thereafter; m12 is
+  per-frame only), so throughput is ultimately limited by the serial
   recombination (resampling) between passes. The per-exposure fits *within* a
   pass are embarrassingly parallel and can be distributed across many machines;
   only the between-pass recombination is a barrier.
-- The cross-band seed is a deduplicated union rather than a strict multi-band
-  coincidence requirement.
+- The cross-band seed requires a ≥2-band coincidence by default, so a source
+  genuinely detectable in only one band is not seeded there unless
+  `--manual-crossband-seed-min-filters=1` is passed.
 - Faint sources blended into the wings of much brighter or saturated stars are
   detected but may still be lost at the fitting/deduplication stage. The
   forced cross-band fill recovers such sources where they were detected in at
-  least one other band; sources lost in every band still require a dedicated
-  fit-side deblending stage (forced photometry at detected positions), which is
-  not yet applied.
+  least one other band. A fit-side deblending stage does exist for saturated cores
+  (`--deblend-satstars`, `reduction/satstar_deblend.py`, on for gc2211) but is off
+  by default; sources lost in every band around *unsaturated* bright stars are
+  still not recovered.

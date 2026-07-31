@@ -58,6 +58,12 @@ ALLOWLIST = {
     # median tie. The coarse absolute tie uses measure_offset, never NN.
     "jwst_gc_pipeline/reduction/build_virac2_offsets.py",
     "jwst_gc_pipeline/reduction/align_to_catalogs.py",  # guarded realign_to_catalog
+    # No astrometry here: the match pairs the SAME star with itself across two
+    # fit_shape settings of the SAME frames, and the median is taken of a FLUX
+    # RATIO column (R = flux_ref/flux_size) to build the correction table.  No
+    # positional offset is derived, so the collapse this guard exists to catch
+    # cannot occur.
+    "scripts/satstar_deblend/collect_correction_data.py",
     "jwst_gc_pipeline/photometry/generate_offsets_table.py",  # guarded voff()
     "jwst_gc_pipeline/photometry/make_reference_from_pipeline_catalogs.py",  # guarded bootstrap
     # cross-band source association for catalog merging / dedup (NOT astrometry)

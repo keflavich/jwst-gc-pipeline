@@ -7,6 +7,10 @@ L2 products (`*_cal.fits`) to the final mosaics and catalogs, and to prevent
 
 Implemented in:
 - `PipelineRerunNIRCAM-LONG.py` — `fix_alignment()` (per-exposure), Image3 call.
+- `alignment_config.py` — the per-field registry: which reference frame and which
+  shift source each `(proposal, observation)` uses (**NIRCam only**).
+- `unified_alignment.py` — `resolve_shift()` resolves that declaration for one
+  exposure; the single code path all NIRCam fields take.
 - `photometry/merge_catalogs.py` — `shift_individual_catalog()` (catalog side).
 
 > **Retired 2026-07-11:** the post-resample mosaic realign (`realign_to_catalog` /
@@ -87,7 +91,9 @@ fails CI if a new file pairs a NN match with a median/mean — do not write ad-h
 archive  jw…_cal.fits                          (MAST L2b; assign_wcs GWCS; NEVER edited in place)
    │  destreak()  →  jw…_destreak_oNNN.fits     (working copy)
    │  fix_alignment(...)                        (per-exposure GWCS shift via adjust_wcs;
-   │                                             reads offsets/Offsets_JWST_Brick<pid>_<ref>[_average].csv;
+   │                                             shift resolved by unified_alignment.resolve_shift
+   │                                             from the alignment_config.py declaration
+   │                                             (locked / consensus table, or recorded bulk);
    │                                             writes RAOFFSET/DEOFFSET + OLCRVAL → IDEMPOTENT)
    ▼
 Image3Pipeline.call(..., tweakreg skip=True)    (TweakRegStep is SKIPPED — see note)
@@ -230,18 +236,107 @@ with no SIP, so their FITS WCS is exact.
 
 ---
 
+## Which shift a frame gets: the alignment registry (NIRCam)
+
+**One path for every NIRCam field.** `fix_alignment` does not decide anything
+itself: it calls `unified_alignment.resolve_shift(fn, proposal_id, field,
+filtername, module, basepath, refname=…, use_average=…)`, which looks the field
+up in **`alignment_config.py`** — the single source of truth for how each
+`(proposal, observation)` is tied to an absolute frame. This replaced a
+per-proposal `if/elif` chain whose `else` arm returned `(0, 0)`, so any field
+without a branch was silently left at the raw `assign_wcs` frame while the m2
+checkpoint wrote corrections into a table nothing read (arches/2045,
+quintuplet/2045, sgrb2/5365, cloudef/2092 obs 005 all sat in that state; a re-tie
+loop on such a field re-measures the identical residual forever).
+
+A field with **no entry** is now loud, not silent: `resolve_shift` prints
+`NO CONFIGURED ALIGNMENT for proposal=… field=…` and returns
+`AlignmentShift(configured=False)`, i.e. the frame stays at `(0, 0)` and says so.
+
+⚠ **SCOPE: NIRCam only.** `PipelineMIRI.fix_alignment` carries its own dispatch
+and its own inline policy constants (a `_PER_VISIT_SHIFT` map and a w51 rule);
+`PipelineRerunNIRISS.fix_alignment` has no dispatch at all — it hardcodes
+`rashift = decshift = 0 arcsec`. Neither writes the component keywords nor runs
+the staleness guard. Folding them
+in is follow-up work — do not read `alignment_config.py` as repo-wide.
+
+Each entry declares two orthogonal things:
+
+- **`reference_frame`** — WHICH absolute frame (`VIRAC2` / `Gaia` / `GNS`). GC
+  fields use VIRAC2 (Gaia is the *frame* but far too sparse to be the reference
+  *catalog* — see `CLAUDE.md`); halo/disk clusters outside the VVV footprint use
+  Gaia directly. Deliberately not hardcoded to VIRAC2.
+- **`source`** — WHERE the numbers come from:
+
+| `source` | reads | row kinds |
+|---|---|---|
+| `TABLE_LOCKED` | `offsets/Offsets_JWST_Brick<prop>_VIRAC2locked.csv` (curated, per-visit **or** per-exposure) | one total per matched row |
+| `TABLE_CONSENSUS` | `offsets/Offsets_JWST_Brick<prop>_consensus.csv`, seeded/upserted by the m2 checkpoint | per-visit BULK sentinel + sparse per-exposure JITTER rows |
+| `RECORDED_BULK` | constants in `alignment_config.py` itself | pure bulk; with `consensus_jitter=True` the consensus sentinel + jitter are summed on top |
+
+Every applied shift decomposes as `total = bulk + jitter` — bulk is the
+field/visit tie to the absolute frame (arcseconds when a guide-star acquisition
+went wrong, known once, stable); jitter is the tens-of-mas per-exposure residual
+around the visit consensus, re-measured every re-tie iteration.
+
+### The configured fields
+
+| proposal | obs | frame | source | reference filter | notes |
+|---|---|---|---|---|---|
+| 1182 | 004 | VIRAC2 | `TABLE_LOCKED` | — | brick, top-half visit-001 fix |
+| 2221 | 001, 002 | VIRAC2 | `TABLE_LOCKED` | — | brick / cloudc |
+| 4147 | all | VIRAC2 | `TABLE_LOCKED` | F212N | sgrc |
+| 6151 | all | **Gaia** | `TABLE_CONSENSUS` | F200W | w51 (outside the VVV footprint) |
+| 2045 | 001 | VIRAC2 | `TABLE_CONSENSUS` | F212N | arches |
+| 2045 | 003 | VIRAC2 | `TABLE_LOCKED` | F212N | quintuplet |
+| 5365 | all | VIRAC2 | `TABLE_LOCKED` | F212N | sgrb2 |
+| 2211 | all | VIRAC2 | `TABLE_LOCKED` | F200W | gc2211 |
+| 2092 | 005 | VIRAC2 | `TABLE_LOCKED` | F210M | cloudef obs 005 |
+| 2092 | 002 | VIRAC2 | `RECORDED_BULK` + jitter | F210M | cloudef obs 002 |
+| 3958 | 007 | **GNS** | `RECORDED_BULK` + jitter | F210M | sickle; GNS numbers kept verbatim pending re-measurement against VIRAC2 |
+| 1979 | all | **Gaia** | `RECORDED_BULK` | — | M4 (o002 + o003), halo cluster outside VVV |
+| 1334 | all | **Gaia** | `RECORDED_BULK` | — | M92 (o001), pure per-visit shift |
+
+Keep this table in step with `ALIGNMENT_CONFIG`; the module's own docstrings carry
+the per-field provenance (`notes=`).
+
+### How a locked-table row is selected
+
+`_shift_from_locked` narrows on `(Visit, Filter)`, then by `Exposure` **only if
+more than one row still matches** (so per-visit and per-exposure tables both
+work), then by `Module` on the same condition (default OFF — filters lock
+NRCA==NRCB together; F410M is the documented exception), and then by `Vgroup`
+**unconditionally when the column exists** — a visit can dither across several
+visit groups and the exposure number restarts in each, so a lone surviving row for
+the *other* group is exactly the dangerous case. An **empty** `Vgroup` cell matches
+any group (`vgroup_row_matches`), so pre-`Vgroup` rows keep applying. Anything
+other than exactly one surviving row raises `ValueError`. The applied numbers come
+from the `dra (arcsec)` / `ddec (arcsec)` columns.
+
+⚠ **As of 2026-07-30 no `VIRAC2locked` table on disk carries a `Vgroup` column**
+(checked: 1182, 2221 brick + cloudc, 4147, 2092, 2211 — only w51's `_consensus.csv`
+has one), so that narrowing is currently inert exactly where it matters most:
+gc2211's own config note records 6 visit groups reusing exposure numbers. Rebuild
+those tables with the column before relying on the guard.
+
+If no locked table exists, `_shift_from_locked` falls back to
+`Offsets_JWST_Brick<prop>_<refname>_average.csv` (`use_average=True`, the
+default) or `Offsets_JWST_Brick<prop>_<refname>.csv`, and requires a `refname`.
+This fallback is **locked-source only**: a `TABLE_CONSENSUS` field whose table is
+missing gets `(0, 0)` with `table_present=False` and no fallback.
+
 ## Offsets-table provenance (how each `offsets/Offsets_*.csv` is built)
 
-`fix_alignment` reads a per-frame offsets table
-`offsets/Offsets_JWST_Brick<pid>_<refname>[_average].csv` (see
-`PipelineRerunNIRCAM-LONG.py` ~L1047–L1081). Those tables are **inputs** the
-pipeline consumes but does not itself generate — so the builders are tracked for
-provenance. Losing a builder means a correction can no longer be reproduced or
-audited from first principles even though catalogs/mosaics already carry it.
+The `TABLE_LOCKED` tables are **inputs** the pipeline consumes but does not
+itself generate — so the builders are tracked for provenance. Losing a builder
+means a correction can no longer be reproduced or audited from first principles
+even though catalogs/mosaics already carry it. (`_consensus.csv` is the
+exception: the m2 checkpoint writes it.)
 
-| reference frame (`refname`) | offsets table | builder |
+| reference frame | offsets table | builder |
 |---|---|---|
-| Gaia/VIRAC2 (brick/cloudc) | `Offsets_JWST_Brick<pid>_VIRAC2[locked].csv` | `build_gaia_virac2_refcat.py` (seed refcat) + the per-frame measure in the reduction |
+| Gaia/VIRAC2 (brick/cloudc) | `Offsets_JWST_Brick<pid>_VIRAC2[locked].csv` | `build_gaia_virac2_refcat.py` (seed refcat) + `build_virac2_offsets.py` |
+| VIRAC2/Gaia, checkpoint-authored | `Offsets_JWST_Brick<pid>_consensus.csv` | `astrometry_checkpoint.seed_offsets_table_from_consensus` / `update_offsets_table` |
 | **GNS (sickle, prop 3958)** | `Offsets_JWST_Brick3958_GNS.csv` | `brick2221/reduction/build_sickle_gns_offsets.py` (in **brick-jwst-2221** — region-specific) |
 
 **Sickle → GNS:** a 2026-06-20 audit found sickle catalogs sit at the **raw
@@ -254,15 +349,17 @@ convention (`dra_table = corr_dRA_onsky / cos(dec)`). Its output
 `Offsets_JWST_Brick3958_GNS.csv` is dropped into the sickle data tree's
 `offsets/` dir and consumed by `fix_alignment` like any other table.
 `brick2221/shellscripts/sickle_gns_reduce_retry.sh` is the companion submitter
-that re-reduces sickle with the GNS table. (See the `PipelineRerunNIRCAM-LONG.py`
-~L1140 note.)
+that re-reduces sickle with the GNS table. Sickle's shift is declared in
+`alignment_config.py` (proposal 3958, obs 007) as `RECORDED_BULK` in the GNS
+frame with `consensus_jitter=True`.
 
 **MIRI registration** is a separate, manual pre-step — MIRI does **not** use the
 NIRCam offsets-table path. The sickle MIRI frames are registered to the NIRCam
 F480M frame by region-specific scripts in **brick-jwst-2221**
 (`brick2221/reduction/register_sickle_miri_o001_o002.py`,
-`register_o002_f770w_per_frame_to_f480m.py`,
-`register_o002_f770w_gwcs_to_f480m.py`, `merge_sickle_miri_o001_o002.py`). They
+`brick2221/reduction/register_o002_f770w_per_frame_to_f480m.py`,
+`brick2221/reduction/register_o002_f770w_gwcs_to_f480m.py`,
+`brick2221/reduction/merge_sickle_miri_o001_o002.py`). They
 edit the per-frame FITS WCS / embedded gwcs in place (idempotent via
 `MIRIDRA`/`MIRIDDE`/`MIRIWCSN`) and **must be run before cataloging** a sickle
 MIRI obs, or its mosaics sit ~3.3″ off truth while the catalog underneath is
@@ -307,8 +404,9 @@ offsets-table hack. (Applied to brick+cloudc LW 2026-07-04.)
 
 **Interim workaround currently in place (must be reverted if Image2 is re-run):** F410M was
 given per-module rows (a `Module` column = `nrcalong`/`nrcblong`) in the locked table with a
-~48 mas extra shift on NRCALONG, and `fix_alignment` (PipelineRerunNIRCAM-LONG.py ~L1180)
-narrows the match by module when >1 row matches and a `Module` column is present. That
+~48 mas extra shift on NRCALONG, and the locked-table reader
+(`unified_alignment._shift_from_locked`) narrows the match by module when >1 row
+matches and a `Module` column is present. That
 band-aid empirically reproduces what correct assign_wcs does (verified: F410M mosaic
 module step 68 → ~0 mas). **DANGER:** it is applied on top of the OLD (buggy) `_cal` WCS.
 If the `_cal` is regenerated with current jwst, remove the F410M split (revert to a single
@@ -351,7 +449,8 @@ separations move up to ~25 mas between epochs; a direct proper-motion hazard).
 Measured on the Brick by network self-calibration: fitted inter-detector scale
 = 9.7–9.9e-5 (2221, predicted 9.18e-5) and 1.05–1.06e-4 (1182, predicted
 1.00e-4); after removal, static SIAF detector placements are 1–2.5 mas
-(astrometry-paper `siaf_accuracy.tex`, `analysis/network_selfcal.py`).
+(astrometry-paper `siaf_accuracy.tex`,
+`scripts/analysis/siaf_selfcal/network_selfcal.py`).
 
 **The correction.** `dva_correction.apply_dva_correction(fn)` applies the
 per-detector rigid shift computed from the file's own header (`VA_SCALE`,

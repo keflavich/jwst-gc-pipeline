@@ -32,6 +32,7 @@ ABMAG_OFFSET = 8.90
 # flags-based bgsub token is imported as ``_bgsub_token`` (this module calls it
 # with explicit booleans, matching the producer-side names).
 from jwst_gc_pipeline.frame_wcs import frame_wcs
+from jwst_gc_pipeline.scratch_basepath import apply_basepath_override
 from jwst_gc_pipeline.photometry.naming import (
     _inst_token, _svo_filter_id,
     _bgsub_token_from_flags as _bgsub_token,
@@ -98,6 +99,11 @@ def _obsid_for_glob(target, proposal, filtername):
     proposal, which callers skip rather than interpolate.
     """
     return field_registry.glob_obsid(target, proposal, _inst_token(filtername))
+
+
+def _read_offsets_table(path_or_none):
+    """Load an offsets table lazily.  `None` means the field aligns in imaging."""
+    return None if path_or_none is None else Table.read(path_or_none)
 
 
 def individual_frame_merge_jobs(target):
@@ -2869,16 +2875,14 @@ def main():
             "astrometry rule #1 forbids.  Build reference catalogs with "
             "make_reference_from_pipeline_catalogs.py instead.")
 
-    basepath = field_registry.basepath(target)
-
-    def read_offsets_table(progid):
-        """The measured offsets for one proposal, or None.
-
-        Read here rather than up front: it is one field's file, and reading it
-        eagerly made every run of every target depend on it.
-        """
-        path = field_registry.offsets_table_path(target, progid)
-        return None if path is None else Table.read(path)
+    # The reduction and cataloging drivers both honour this; the merge did not,
+    # so a redirected run reduced and cataloged under the override and then
+    # merged out of the registry's tree.
+    basepath = apply_basepath_override(field_registry.basepath(target))
+    if target in obs_filters:
+        # Only for a target we know.  Doing it unconditionally meant a typo'd
+        # --target created a directory tree for a field that does not exist.
+        os.makedirs(os.path.join(basepath, 'catalogs'), exist_ok=True)
 
     module = modules[0]
     if len(modules) > 1:
@@ -2922,7 +2926,8 @@ def main():
                     suffix=INDIV_MERGE_SUFFIX[method], method=method,
                     target=target, basepath=basepath, field=options.field,
                     exposure_numbers=np.arange(1, options.max_expnum + 1),
-                    offsets_table=read_offsets_table(progid),
+                    offsets_table=_read_offsets_table(
+                        field_registry.offsets_table_path(target, progid)),
                     iteration_label=options.iteration_label,
                     resbgsub=options.resbgsub,
                     n_spatial_chunks=int(options.n_spatial_chunks),
@@ -2937,6 +2942,24 @@ def main():
                       f"skipping", flush=True)
 
     # Step 2: the all-filter merged catalogs, once.
+    #
+    # ONCE, literally: these read EVERY filter's step-1 output and write one set
+    # of files.  An array of N tasks each running this is N concurrent writers
+    # of the same catalogs, most of them reading inputs their sibling tasks have
+    # not produced yet.  So a task that merged one filter stops here, and the
+    # all-filter merges are a separate job that depends on the whole array --
+    # see scripts/reduction/submit_merge.sbatch.
+    #
+    # Same predicate as the registration gate below: `jobs` is empty without
+    # --merge-singlefields, so a plain --array=0 run IS the whole merge and
+    # goes on.  A plain run has task_id None and goes on.
+    if task_id is not None and jobs:
+        print(f'array task {task_id}: per-filter merge done.  The all-filter '
+              f'merges need every filter, so run them once the array has '
+              f'finished (a job with no --array and no --merge-singlefields).',
+              flush=True)
+        return
+
     merge_kwargs = dict(module=module, target=target, basepath=basepath,
                         indivexp=options.merge_singlefields,
                         resbgsub=options.resbgsub,

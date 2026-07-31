@@ -11,15 +11,18 @@ are called out.
 Companion docs: `ASTROMETRY_WCS_CORRECTION_FLOW.md` (the correct flow + the ⛔
 dense-NN-median rule). The collapse-detection safeguard now lives in
 `reduction/validate_offsets_table.py` (`flag_collapsed_visits` /
-`assert_offsets_table_sane`, wired into `fix_alignment` at
-`PipelineRerunNIRCAM-LONG.py:1207`); this doc records the *structural* redundancies
+`assert_offsets_table_sane`, called from the locked-table reader
+`unified_alignment._shift_from_locked`, i.e. on every `fix_alignment` that reads a
+locked table); this doc records the *structural* redundancies
 that let the collapse happen and recur.
 
 ## Ranked redundancies
 
 ### R1 (CRITICAL) — THREE builders write the same `Offsets_JWST_Brick<prop>_VIRAC2locked.csv`
-`build_virac2_locked_perexp.py` (per-visit), `relock_exposures.py` (per-exposure),
-and `build_calframe_locked_offsets.py` all write the **same production table**
+`brick2221/analysis/build_virac2_locked_perexp.py` (per-visit),
+`brick2221/analysis/relock_exposures.py` (per-exposure), and
+`brick2221/analysis/build_calframe_locked_offsets.py` — all three in
+**brick-jwst-2221**, not here — all write the **same production table**
 that `fix_alignment` consumes. Whichever ran last wins; a fix in one builder is
 silently overwritten by another on the next run. This IS the recurrence engine:
 the brick-1182 collapse persisted across rebuilds because the fixed and unfixed
@@ -30,8 +33,9 @@ builders competed for one file.
   `validate_offsets_table()` call at the end of the surviving builder.
 
 ### R2 (CRITICAL) — 3× duplicate `robust_shift` / `robust_offset` with parameter drift
-`relock_exposures.py:robust_shift`, `build_calframe_locked_offsets.py:robust_shift`,
-`lock_exposures.py:robust_offset` are near-identical clipped-median solvers with
+`brick2221/analysis/relock_exposures.py::robust_shift`,
+`brick2221/analysis/build_calframe_locked_offsets.py::robust_shift` and
+`brick2221/analysis/lock_exposures.py::robust_offset` are near-identical clipped-median solvers with
 **different constants** (search 0.3" vs 0.5"; clip 60 vs 80). Tuning one does not
 fix the others; two can produce conflicting offsets for the same data.
 - **Fix:** one shared solver. Prefer routing all of them through
@@ -63,12 +67,14 @@ risks a dropped/doubled cosδ (~12% at the GC) or a 1000× unit slip.
   into an arcsec column as a live 1000× bug. It is **not** — line 114 divides by
   1000 (`dra=sr/1000.0  # arcsec`). Verified. Left as documentation only.
 
-### R5 (MEDIUM) — orphaned tables + a reader without a source
+### R5 (MEDIUM) — orphaned tables + a reader without a source — still open 2026-07-30
 `offsets/` accumulates deprecated tables (`*_F200ref*`, `*_F405ref*`, `*_VVV*`)
 no current builder writes; a script that names one by mistake reads a stale
-frame silently. Separately, `fix_alignment` has a merged-mode path that reads
-`*_VIRAC2_average.csv`, but `build_virac2_fixalign_offsets.py` appears
-incomplete (no write) — a **reader whose builder is missing**.
+frame silently. Separately, the locked-table reader falls back to
+`*_VIRAC2_average.csv` when no `VIRAC2locked` table exists
+(`unified_alignment._shift_from_locked`, `use_average=True` by default), but no
+builder in this repo writes that file — a **reader whose builder is missing**
+(verified still true 2026-07-30).
 - **Fix:** archive/delete deprecated tables (keep VIRAC2locked); either complete
   the average builder or remove the average-table path from `fix_alignment`.
 
@@ -86,7 +92,7 @@ retired 2026-07-11), and tests
 `reduction/validate_offsets_table.py` (`flag_collapsed_visits` /
 `assert_offsets_table_sane` + `test_validate_offsets_table.py`) flags a COLLAPSED
 offsets table (distinct visits of a filter sharing an offset to within ~20 mas) and
-is wired into `fix_alignment` (`PipelineRerunNIRCAM-LONG.py:1207`). It fires a warning
+runs inside `unified_alignment._shift_from_locked`, on the `fix_alignment` path. It fires a warning
 by default, or raises `CollapsedOffsetsTableError` with `OFFSETS_TABLE_COLLAPSE_RAISE=1`.
 This audit does NOT re-add it; it documents the redundancies below that make the
 collapse possible in the first place.
@@ -99,5 +105,10 @@ collapse possible in the first place.
 2. ~~Factor the duplicated realign block in PipelineRerunNIRCAM-LONG into one helper.~~
    ✅ DONE 2026-07-11 — realign retired entirely (see R3); both blocks removed.
 3. Add an `|offset| > 60"` insane-magnitude check to `validate_offsets_table`
-   (catches mas/arcsec unit slips) — not yet covered by the collapse check.
+   (catches mas/arcsec unit slips) — **still open**: `validate_offsets_table.py`
+   carries only the collapse check. Note the *write* path already bounds
+   corrections (`MAX_CORRECTION_ARCSEC` 0.5" per-exposure /
+   `MAX_BULK_CORRECTION_ARCSEC` 60" bulk, plus a cumulative-drift bound — see
+   `../photometry/ASTROMETRY_CHECKPOINTS.md`); what is missing is a *read*-side
+   magnitude check on a table the pipeline is about to apply.
 4. Archive deprecated `offsets/*` tables; resolve the `_VIRAC2_average` reader.
