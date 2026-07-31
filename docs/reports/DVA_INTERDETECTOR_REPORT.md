@@ -51,18 +51,19 @@ code is unchanged in contemporary releases.
    the degenerate case of the existing code.)
 5. `jwst/assign_wcs/pointing.py` L35–62 (`v23tosky`): a pure rotation.
 
-No stage in the chain applies the DVA scale to the *separations between*
-aperture reference points. The residual internal inconsistency of the
-delivered WCS, for a detector with reference `ref_d` and any exposure-common
-point `C`, is a rigid per-detector shift (exactly constant across the
-detector, since the intra-detector part is corrected):
+The chain applies the DVA scale within each detector only, leaving the
+*separations between* aperture reference points aberrated. The residual
+internal inconsistency of the delivered WCS, for a detector with reference
+`ref_d` and any exposure-common point `C`, is a rigid per-detector shift
+(exactly constant across the detector, since the intra-detector part is
+corrected):
 
     Δ_d = (1 − VA_SCALE) × (ref_d − C)
 
 For NIRCam, detector references span ~±125″ (SW) / ~±90″ (LW) about the
 instrument center, so `|Δ| ≈ 9–13 mas` per detector at `1−VA_SCALE ≈ 1e-4`,
 anti-symmetric between modules A and B — i.e. it presents as a
-**module A/B offset** of ~16–25 mas that is not a SIAF error.
+**module A/B offset** of ~16–25 mas originating in the DVA step.
 
 ## 2. Measurement method: network self-calibration
 
@@ -85,7 +86,7 @@ simultaneously — and `S_d` is the per-detector placement error. A weighted
 least-squares solve over all pairs separates the two (gauges: mean attitude
 = 0; mean detector shift = 0 per band). The solve is **invariant to any
 rigid per-exposure WCS manipulation**, so alignment history cannot
-contaminate it, and it uses no external reference catalog.
+contaminate it, and it is reference-free.
 
 Solves performed: 2221 F212N / F187N / F182M separately (192 catalogs,
 ~3600–4200 usable pairs each), 2221 F405N+F410M jointly (96 catalogs), 1182
