@@ -424,12 +424,12 @@ Under `<basepath>/cutouts/<label>/` (or in place for full-frame):
 
 ### The `<obs>` token in merged filenames
 
-`<obs>` above is **not decoration** — it is `crowdsource_catalogs_long.obs_token()`,
-a filename disambiguator. It is empty for most fields, and non-empty for exactly
-three proposals. It is **not** a general collision guard: it covers the two
-collisions below and nothing else (brick 1182+2221 sharing a basepath is worked
-around by a file copy in `cataloging.py`; m4/1979 obs 002+003 is a known deferred
-collision noted in `merge_catalogs.py`; cloudef uses a separate visit token):
+`<obs>` above is `crowdsource_catalogs_long.obs_token()`, a filename
+disambiguator. It is empty for most fields and non-empty for exactly three
+proposals. It covers the two collisions below and nothing else — brick 1182+2221
+sharing a basepath is worked around by a file copy in `cataloging.py`, m4/1979 obs
+002+003 is a known deferred collision noted in `merge_catalogs.py`, and cloudef uses
+a separate visit token:
 
 | proposal | token | why |
 |---|---|---|
