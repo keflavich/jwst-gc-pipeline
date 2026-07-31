@@ -182,11 +182,114 @@ def test_a_config_the_runner_cannot_act_on_is_rejected(tmp_path, monkeypatch,
         pipeline_config.load()
 
 
-def test_the_shipped_config_and_the_submit_scripts_agree():
-    """The runner passes these on the sbatch line, so a drift here silently
-    changes what the jobs ask for."""
+def test_every_submit_script_the_config_names_exists():
+    """A missing script would surface as an sbatch failure at submit time."""
     config = pipeline_config.load()
     for stage_name in ('reduce', 'catalog', 'merge'):
-        stage = pipeline_config.stage(config, stage_name)
-        script = os.path.join(rp.REPO_ROOT, stage['submit_script'])
-        assert os.path.exists(script), script
+        for instrument in (pipeline_config.stage(config, stage_name)
+                           ['submit_script']):
+            assert os.path.exists(
+                pipeline_config.submit_script(config, stage_name, instrument))
+
+
+def test_an_instrument_with_no_submit_script_says_so():
+    """Falling back to another instrument's script would run the wrong stage-1
+    driver."""
+    config = pipeline_config.load()
+    with pytest.raises(pipeline_config.ConfigError, match='no submit script'):
+        pipeline_config.submit_script(config, 'reduce', 'miri')
+
+
+def test_a_submit_script_that_is_not_there_is_caught(tmp_path, monkeypatch):
+    mine = tmp_path / 'c.yaml'
+    mine.write_text('stages:\n  reduce:\n    submit_script:\n'
+                    '      nircam: scripts/reduction/nope.sbatch\n')
+    monkeypatch.setenv(pipeline_config.ENV_VAR, str(mine))
+    with pytest.raises(pipeline_config.ConfigError, match='is not there'):
+        pipeline_config.submit_script(pipeline_config.load(), 'reduce')
+
+
+# --------------------------------------------------------------------------
+# Findings from the onboarding review.
+# --------------------------------------------------------------------------
+
+def test_a_nircam_run_leaves_out_the_miri_filters():
+    """brick/2221 registers F2550W, which is MIRI; array task 6 would have run
+    the NIRCam driver on it."""
+    assert 'F2550W' not in rp.resolve('2221', '001')['filters']
+    assert rp.resolve('2221', '002', instrument='miri')['filters'] == ['F2550W']
+
+
+def test_the_suffix_follows_the_destreak_policy():
+    """Four registered targets destreak off and write *_align_o<obs>_crf; a
+    hard-coded destreak_ suffix would find no files."""
+    assert rp.resolve('2221', '001')['each_suffix'] == 'destreak_o001_crf'
+    assert rp.resolve('6778', '001')['each_suffix'] == 'align_o001_crf'
+
+
+def test_sickle_gets_per_filter_suffixes():
+    """Its short filters destreak and its long ones do not, so no single
+    --each-suffix is right."""
+    config = pipeline_config.load()
+    environ = rp._job_environment(rp.resolve('3958', '007'), 'catalog', config)
+    assert 'F470N:align_o007_crf' in environ['EACH_SUFFIX_OVERRIDES']
+    assert environ['EACH_SUFFIX'] == 'destreak_o007_crf'
+
+
+def test_a_non_nircam_run_carries_its_instrument_and_modules():
+    config = pipeline_config.load()
+    plan = rp.resolve('4147', '012', instrument='niriss')
+    environ = rp._job_environment(plan, 'catalog', config)
+    assert environ['GC_INSTRUMENT_OVERRIDE'] == 'niriss'
+    assert environ['MODULES'] == 'nis'
+
+
+def test_each_instrument_reduces_with_its_own_driver():
+    config = pipeline_config.load()
+    for instrument, driver in (('nircam', 'PipelineRerunNIRCAM-LONG.py'),
+                               ('niriss', 'PipelineRerunNIRISS.py')):
+        assert rp.REDUCE_DRIVERS[instrument].endswith(driver)
+
+
+def test_a_typo_in_stages_stops_rather_than_running_nothing():
+    with pytest.raises(SystemExit):
+        rp.main(['--proposal', '2221', '--obsid', '001',
+                 '--stages', 'redcue', '--dry-run'])
+
+
+def test_a_typo_in_the_config_stops(tmp_path, monkeypatch):
+    """fields.yaml validates; this used to accept `sceduler:` in silence."""
+    mine = tmp_path / 'typo.yaml'
+    mine.write_text('sceduler: local\n')
+    monkeypatch.setenv(pipeline_config.ENV_VAR, str(mine))
+    with pytest.raises(pipeline_config.ConfigError, match='unknown top-level'):
+        pipeline_config.load()
+
+
+def test_the_merge_job_is_named_for_the_target():
+    """It covers every proposal of the target, so an -o001- name would lie."""
+    plan = rp.resolve('2221', '001')
+    assert rp._job_name(plan, 'merge') == 'brick-merge'
+    assert rp._job_name(plan, 'reduce') == 'brick2221-o001-reduce'
+
+
+def test_every_registry_attribute_the_drivers_name_resolves():
+    """A rename in fields.py stranded two driver call sites and no test saw
+    it.  This walks the source for `field_registry.<attr>` and checks each."""
+    import ast
+    from jwst_gc_pipeline import fields as registry
+    drivers = ['jwst_gc_pipeline/reduction/PipelineRerunNIRCAM-LONG.py',
+               'jwst_gc_pipeline/reduction/PipelineMIRI.py',
+               'jwst_gc_pipeline/reduction/PipelineRerunNIRISS.py',
+               'jwst_gc_pipeline/photometry/merge_catalogs.py',
+               'jwst_gc_pipeline/photometry/crowdsource_catalogs_long.py']
+    missing = []
+    for driver in drivers:
+        tree = ast.parse(open(os.path.join(rp.REPO_ROOT, driver)).read())
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Attribute)
+                    and isinstance(node.value, ast.Name)
+                    and node.value.id in ('field_registry', 'fields')
+                    and not hasattr(registry, node.attr)):
+                missing.append(f'{driver}: fields.{node.attr}')
+    assert not missing, 'drivers name registry attributes that do not exist:\n  ' + '\n  '.join(missing)

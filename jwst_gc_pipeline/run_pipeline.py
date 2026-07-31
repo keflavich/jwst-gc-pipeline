@@ -30,6 +30,8 @@ import sys
 
 from jwst_gc_pipeline import config as pipeline_config
 from jwst_gc_pipeline import fields
+from jwst_gc_pipeline.photometry.naming import MIRI_FILTERS
+from jwst_gc_pipeline.reduction import destreak_policy
 
 #: The stages, in the order they must run.
 STAGES = ('reduce', 'catalog', 'merge')
@@ -82,6 +84,16 @@ def resolve(proposal, obsid, instrument='nircam', filters=None):
             f'{target} proposal {proposal} has no {instrument} filters in '
             f'fields.yaml, so there is nothing to run.  Add a `filters:` list '
             f'to that observation.')
+    # A NIRCam run must not carry F2550W, and a MIRI run must not carry F410M:
+    # each instrument has its own driver and its own products.
+    if instrument == 'miri':
+        filternames = [f for f in filternames if f.lower() in MIRI_FILTERS]
+    elif instrument == 'nircam':
+        filternames = [f for f in filternames if f.lower() not in MIRI_FILTERS]
+    if not filternames:
+        raise NotRegisteredError(
+            f'{target} proposal {proposal} has no {instrument} filters '
+            f'registered, so there is nothing to run for that instrument.')
     if filters:
         wanted = [f.lower() for f in filters]
         unknown = [f for f in wanted if f not in [x.lower() for x in filternames]]
@@ -99,7 +111,12 @@ def resolve(proposal, obsid, instrument='nircam', filters=None):
         'basepath': fields.basepath(target),
         'reference_catalog': fields.reference_catalog_path(
             proposal, obsid, target=target, instrument=instrument),
-        'each_suffix': f'destreak_o{obsid}_crf',
+        'each_suffix': destreak_policy.crf_suffix(
+            target, filternames[0], obsid),
+        # sickle destreaks its short filters and not its long ones, so no one
+        # suffix is right for the observation.
+        'suffix_by_filter': destreak_policy.suffixes_by_filter(
+            target, filternames, obsid),
     }
 
 
@@ -111,6 +128,31 @@ def _array_bounds(plan, stage_name, config):
     if fan == 'program-filter':
         return len(fields.merge_jobs(plan['target'], plan['instrument']))
     return 1
+
+
+#: The stage-1 driver for each instrument.
+REDUCE_DRIVERS = {
+    'nircam': 'jwst_gc_pipeline/reduction/PipelineRerunNIRCAM-LONG.py',
+    'miri': 'jwst_gc_pipeline/reduction/PipelineMIRI.py',
+    'niriss': 'jwst_gc_pipeline/reduction/PipelineRerunNIRISS.py',
+}
+
+#: What stage 2 calls a detector for each instrument.
+INSTRUMENT_MODULES = {'miri': 'mirimage', 'niriss': 'nis'}
+
+
+def _modules_for(plan, stage):
+    """The `--modules` value: NIRCam names a detector group, the others one
+    detector."""
+    return INSTRUMENT_MODULES.get(plan['instrument'],
+                                  str(stage.get('modules', 'merged')))
+
+
+def _suffix_overrides(plan):
+    """``FILTER:suffix`` pairs, for an observation whose filters differ."""
+    per_filter = plan.get('suffix_by_filter') or {}
+    odd = {f: s for f, s in per_filter.items() if s != plan['each_suffix']}
+    return ','.join(f'{f}:{s}' for f, s in sorted(odd.items()))
 
 
 def _job_environment(plan, stage_name, config):
@@ -127,10 +169,16 @@ def _job_environment(plan, stage_name, config):
     environ['TARGET'] = plan['target']
     environ['FILTERS'] = ' '.join(plan['filters'])
     if stage_name in ('reduce', 'catalog'):
-        environ['MODULES'] = str(stage.get('modules', 'merged'))
+        environ['MODULES'] = _modules_for(plan, stage)
+    if plan['instrument'] != 'nircam':
+        # Stage 2 and the merge read this; stage 1 uses its own driver.
+        environ['GC_INSTRUMENT_OVERRIDE'] = plan['instrument']
     if stage_name == 'catalog':
         # These five travel together; the submit script exits 64 on a partial set.
         environ['EACH_SUFFIX'] = plan['each_suffix']
+        overrides = _suffix_overrides(plan)
+        if overrides:
+            environ['EACH_SUFFIX_OVERRIDES'] = overrides
     if stage_name == 'reduce':
         environ['SKIP'] = '1' if stage.get('skip_step1and2', True) else '0'
     if stage_name == 'merge' and stage.get('fan_out') == 'program-filter':
@@ -144,8 +192,9 @@ def _sbatch_command(plan, stage_name, config, dependency=None):
     """One `sbatch` invocation, as a list of arguments."""
     stage = pipeline_config.stage(config, stage_name)
     slurm = config.get('slurm') or {}
-    script = os.path.join(REPO_ROOT, stage['submit_script'])
-    name = f"{plan['target']}{plan['proposal']}-o{plan['obsid']}-{stage_name}"
+    script = pipeline_config.submit_script(config, stage_name,
+                                           plan['instrument'])
+    name = _job_name(plan, stage_name)
     count = _array_bounds(plan, stage_name, config)
 
     command = ['sbatch', '--parsable']
@@ -164,6 +213,17 @@ def _sbatch_command(plan, stage_name, config, dependency=None):
     return command
 
 
+def _job_name(plan, stage_name):
+    """`<target><program>-o<obsid>-<stage>`, the naming convention.
+
+    The merge is the exception: it covers every proposal of the target, so it
+    is named for the target alone.
+    """
+    if stage_name == 'merge':
+        return f"{plan['target']}-merge"
+    return (f"{plan['target']}{plan['proposal']}-o{plan['obsid']}-{stage_name}")
+
+
 def _merge_all_command(plan, config, dependency):
     """The single job that combines the filters, after the merge array."""
     stage = pipeline_config.stage(config, 'merge')
@@ -175,10 +235,11 @@ def _merge_all_command(plan, config, dependency):
             f'--cpus-per-task={stage["cpus"]}',
             f'--mem={stage["memory"]}',
             f'--time={stage["walltime"]}',
-            f"--job-name={plan['target']}{plan['proposal']}-o{plan['obsid']}-mergeall",
+            f"--job-name={plan['target']}-mergeall",
             f'--dependency=afterok:{dependency}',
             '--export=ALL',
-            os.path.join(REPO_ROOT, stage['submit_script'])]
+            pipeline_config.submit_script(config, 'merge',
+                                          plan['instrument'])]
 
 
 def _local_commands(plan, config, cutout_region=None):
@@ -187,10 +248,9 @@ def _local_commands(plan, config, cutout_region=None):
     filters = ','.join(plan['filters'])
     reduce_stage = pipeline_config.stage(config, 'reduce')
     reduce_command = [
-        python, os.path.join(REPO_ROOT, 'jwst_gc_pipeline/reduction/'
-                                        'PipelineRerunNIRCAM-LONG.py'),
+        python, os.path.join(REPO_ROOT, REDUCE_DRIVERS[plan['instrument']]),
         '-p', plan['proposal'], '-d', plan['obsid'],
-        '-f', filters, '-m', reduce_stage.get('modules', 'merged')]
+        '-f', filters, '-m', _modules_for(plan, reduce_stage)]
     if reduce_stage.get('skip_step1and2', True):
         reduce_command.append('-s')
 
@@ -198,8 +258,13 @@ def _local_commands(plan, config, cutout_region=None):
         python, '-m', 'jwst_gc_pipeline.photometry.crowdsource_catalogs_long',
         f"--proposal_id={plan['proposal']}", f"--field={plan['obsid']}",
         f"--target={plan['target']}", f'--filternames={filters}',
-        f"--modules={pipeline_config.stage(config, 'catalog').get('modules', 'merged')}",
+        f"--modules={_modules_for(plan, pipeline_config.stage(config, 'catalog'))}",
         '--each-exposure', f"--each-suffix={plan['each_suffix']}"]
+    if plan['instrument'] != 'nircam':
+        catalog_command.append(f"--instrument={plan['instrument']}")
+    overrides = _suffix_overrides(plan)
+    if overrides:
+        catalog_command.append(f'--each-suffix-overrides={overrides}')
     if cutout_region:
         catalog_command.append(f'--cutout-region={cutout_region}')
 
@@ -249,6 +314,15 @@ def run_pipeline(proposal, obsid, cutout_region=None, instrument='nircam',
     print(f"  directory: {plan['basepath']}")
     print(f"  refcat:    {plan['reference_catalog']}")
     print(f"  config:    {config['source']} (scheduler: {scheduler})")
+
+    if 'merge' in stages and scheduler == 'slurm':
+        every = fields.merge_jobs(plan['target'], plan['instrument'])
+        proposals = sorted({proposal for proposal, _ in every})
+        if len(proposals) > 1:
+            print(f"  note: the merge covers every proposal of "
+                  f"{plan['target']} ({', '.join(proposals)}), so it runs "
+                  f"{len(every)} tasks rather than one per filter of this "
+                  f"observation")
 
     if scheduler == 'local':
         return _run_local(plan, config, cutout_region, stages, dry_run)
@@ -330,13 +404,18 @@ def main(argv=None):
     parser.add_argument('--dry-run', action='store_true',
                         help='print the commands and submit nothing')
     args = parser.parse_args(argv)
+    chosen = tuple(s.strip() for s in args.stages.split(','))
+    unknown = [s for s in chosen if s not in STAGES]
+    if unknown:
+        parser.error(f'--stages names {unknown}; the stages are '
+                     f'{", ".join(STAGES)}')
     try:
         run_pipeline(proposal=args.proposal, obsid=args.obsid,
                      cutout_region=args.cutout_region,
                      instrument=args.instrument,
                      filters=([f.strip() for f in args.filters.split(',')]
                               if args.filters else None),
-                     stages=tuple(s.strip() for s in args.stages.split(',')),
+                     stages=chosen,
                      dry_run=args.dry_run, config_path=args.config)
     except (NotRegisteredError, fields.FieldRegistryError,
             pipeline_config.ConfigError) as problem:

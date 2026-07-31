@@ -265,27 +265,13 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
     # Once tested, destreak can be re-enabled for those fields.  Until
     # then they run with do_destreak=False.
     # ------------------------------------------------------------------
-    EXTENDED_EMISSION_FIELDS = ('w51', 'sickle', 'wd2', 'ngc6334')
-    if do_destreak and regionname in EXTENDED_EMISSION_FIELDS:
-        print(f"Region {regionname} is extended-emission-dominated and has no "
-              f"background map yet; forcing do_destreak=False to avoid "
-              f"outlier_detection coverage holes.", flush=True)
-        do_destreak = False
-
-    # Sickle policy (user 2026-06-17, [[sickle...]]): the SHORT-wave filters USE
-    # destreak ("the streaks are worse than the destreak artifacts" for SW),
-    # while the LONG-wave filters stay nodestreak/align.  This overrides the
-    # extended-emission force above PER FILTER for sickle so SW -> *_destreak_crf
-    # and LW -> *_align_crf (the suffixes the cataloging --each-suffix consumes).
-    if regionname == 'sickle':
-        _sw_destreak = filtername.upper() in (
-            'F070W', 'F090W', 'F115W', 'F140M', 'F150W', 'F162M', 'F164N',
-            'F182M', 'F187N', 'F200W', 'F210M', 'F212N')
-        do_destreak = _sw_destreak
-        print(f"Sickle per-filter destreak policy: {filtername} -> "
-              f"do_destreak={do_destreak} "
-              f"({'SW=destreak' if _sw_destreak else 'LW=align/nodestreak'})",
-              flush=True)
+    from jwst_gc_pipeline.reduction.destreak_policy import destreaks
+    _was = do_destreak
+    do_destreak = destreaks(regionname, filtername, do_destreak)
+    if _was and not do_destreak:
+        print(f"Region {regionname} filter {filtername}: destreak off "
+              f"(see reduction/destreak_policy.py); the working copy is a "
+              f"plain _cal -> _align.fits copy.", flush=True)
 
     wavelength = int(filtername[1:4])
 
@@ -1050,7 +1036,7 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
     from jwst_gc_pipeline.reduction.unified_alignment import (
         resolve_shift, warn_or_raise_if_stale, write_alignment_header)
     _shift = resolve_shift(fn, proposal_id, field, filtername, module, basepath,
-                           refname=field_registry.reference_catalog(str(proposal_id)),
+                           refname=field_registry.reference_frame(str(proposal_id)),
                            use_average=use_average)
     rashift = _shift.ra_quantity
     decshift = _shift.dec_quantity
@@ -1155,7 +1141,7 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
                 dra_onsky_mas=rashift.value * _cosd_prov * 1000.0,
                 ddec_onsky_mas=decshift.value * 1000.0,
                 method='offsets-table (histogram-stacked tie)',
-                references=field_registry.reference_catalog(proposal_id) or 'n/a',
+                references=field_registry.reference_frame(proposal_id) or 'n/a',
                 table_name=_prov_tbl or 'hardcoded/none'):
             align_fits[1].header[_k] = (_v, _c)
         align_fits.writeto(fn, overwrite=True)

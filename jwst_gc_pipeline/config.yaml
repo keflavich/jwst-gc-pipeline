@@ -16,11 +16,10 @@ scheduler: slurm
 
 slurm:
   account: astronomy-dept
-  qos: astronomy-dept-b
-  partition: hpg-default
   # The default QOS on HiPerGator has a much lower CPU cap, and a job that asks
   # for more than the cap never starts.
-  log_dir: /orange/adamginsburg/jwst/logs
+  qos: astronomy-dept-b
+  partition: hpg-default
 
 # Exported into every job. Values here are read at submit time, so a variable
 # already set in your environment wins.
@@ -31,15 +30,19 @@ environment:
   # Any checkout that is not sitting on a release tag needs this.
   GC_ALLOW_DEV: '1'
 
-# The interpreter jobs run with. Leave empty to use whichever python submitted.
+# The interpreter jobs run with.  This is one HiPerGator account's conda env:
+# on any other machine, set your own or leave it empty to use whichever python
+# submitted the job.
 python: /blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/python
-
-# Scratch for intermediates. SLURM's node-local directory is used when set.
-tmpdir: /blue/adamginsburg/adamginsburg/tmp
 
 stages:
   reduce:
-    submit_script: scripts/reduction/submit_reduction.sbatch
+    # Per instrument: each has its own stage-1 driver.  An instrument with no
+    # entry here has no submit script, and the runner says so rather than
+    # submitting another instrument's.
+    submit_script:
+      nircam: scripts/reduction/submit_reduction.sbatch
+      niriss: scripts/reduction/submit_reduction_niriss.sbatch
     cpus: 16
     memory: 128gb
     walltime: '24:00:00'
@@ -50,7 +53,10 @@ stages:
     modules: merged
 
   catalog:
-    submit_script: scripts/reduction/submit_cataloging.sbatch
+    submit_script:
+      nircam: scripts/reduction/submit_cataloging.sbatch
+      niriss: scripts/reduction/submit_cataloging_niriss.sbatch
+      miri: scripts/reduction/submit_cataloging.sbatch
     cpus: 32
     memory: 128gb
     walltime: '48:00:00'
@@ -58,7 +64,10 @@ stages:
     modules: merged
 
   merge:
-    submit_script: scripts/reduction/submit_merge.sbatch
+    submit_script:
+      nircam: scripts/reduction/submit_merge.sbatch
+      miri: scripts/reduction/submit_merge.sbatch
+      niriss: scripts/reduction/submit_merge.sbatch
     cpus: 4
     memory: 64gb
     walltime: '08:00:00'
@@ -70,4 +79,3 @@ stages:
 # minutes rather than a day.
 cutout:
   scheduler: local
-  size_arcsec: 20.0

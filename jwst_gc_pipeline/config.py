@@ -55,12 +55,31 @@ def load(path=None):
     return config
 
 
+#: Top-level keys the runner reads.  A file with anything else in it is more
+#: likely a typo than an extension, and a typo here changes nothing silently.
+KNOWN_KEYS = {'scheduler', 'slurm', 'environment', 'python', 'stages',
+              'cutout', 'source'}
+
+KNOWN_STAGE_KEYS = {'submit_script', 'cpus', 'memory', 'walltime', 'fan_out',
+                    'skip_step1and2', 'modules'}
+
+
 def _validate(config):
+    unknown = set(config) - KNOWN_KEYS
+    if unknown:
+        raise ConfigError(
+            f'unknown top-level key(s) {sorted(unknown)}; this file sets '
+            f'{sorted(KNOWN_KEYS - {"source"})}')
     if config.get('scheduler') not in ('slurm', 'local'):
         raise ConfigError(
             f"scheduler is {config.get('scheduler')!r}; it must be 'slurm' or "
             f"'local'")
     for name, stage in (config.get('stages') or {}).items():
+        odd = set(stage) - KNOWN_STAGE_KEYS
+        if odd:
+            raise ConfigError(
+                f'stage {name}: unknown key(s) {sorted(odd)}; a stage sets '
+                f'{sorted(KNOWN_STAGE_KEYS)}')
         fan = stage.get('fan_out')
         if fan not in (None, 'filter', 'program-filter', 'none'):
             raise ConfigError(
@@ -76,6 +95,30 @@ def stage(config, name):
             f'stage {name!r} is missing from {config.get("source")}; '
             f'it defines {sorted(stages)}')
     return stages[name]
+
+
+def submit_script(config, stage_name, instrument='nircam'):
+    """The submit script for one stage and instrument, as an absolute path.
+
+    Raises when the instrument has none, rather than falling back to another
+    instrument's script: they call different stage-1 drivers.
+    """
+    scripts = stage(config, stage_name).get('submit_script')
+    if isinstance(scripts, str):
+        scripts = {'nircam': scripts}
+    chosen = (scripts or {}).get(instrument)
+    if not chosen:
+        raise ConfigError(
+            f'stage {stage_name} has no submit script for {instrument} in '
+            f'{config.get("source")}; it has {sorted(scripts or {})}.  Run it '
+            f'with scheduler: local, or add one.')
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    absolute = chosen if os.path.isabs(chosen) else os.path.join(root, chosen)
+    if not os.path.exists(absolute):
+        raise ConfigError(
+            f'stage {stage_name}: submit_script {chosen!r} is not there '
+            f'(looked in {absolute})')
+    return absolute
 
 
 def environment(config):
