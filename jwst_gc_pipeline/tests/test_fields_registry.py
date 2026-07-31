@@ -45,6 +45,50 @@ def test_obs_filters_view_matches_todays_dict():
     assert fields.obs_filters() == MC.obs_filters
 
 
+def test_obs_filters_view_preserves_proposal_ORDER():
+    """`==` ignores key order, and order here is not cosmetic.
+
+    `individual_frame_merge_jobs` builds the SLURM array index by iterating
+    each target's proposals, so swapping two observations inside one field
+    silently sends every array task at a different filter.  Value equality
+    cannot see that; this can.
+    """
+    view = fields.obs_filters()
+    for target, today in MC.obs_filters.items():
+        assert list(view[target]) == list(today), (
+            f'{target}: proposal order changed -- SLURM array indices would move')
+        for proposal, filters in today.items():
+            assert list(view[target][proposal]) == list(filters), (
+                f'{target}/{proposal}: filter order changed -- same problem')
+
+
+@pytest.mark.parametrize('target', sorted(MC.obs_filters))
+def test_the_job_list_built_from_the_view_is_identical(target):
+    """The end-to-end version: same array jobs, same order, per target.
+
+    `individual_frame_merge_jobs` takes one target, so only the order WITHIN a
+    target matters; the registry alphabetises the fields themselves, which no
+    reader depends on.
+    """
+    from_view = [(p, f) for p, fs in fields.obs_filters()[target].items()
+                 for f in fs]
+    from_today = [(p, f) for p, fs in MC.obs_filters[target].items() for f in fs]
+    assert from_view == from_today
+
+
+def test_offsets_tables_view_covers_every_registered_proposal():
+    """Today's dict omits 1905, 3523 and 2526, so `offsets_tables[progid]`
+    raises KeyError for every wd1/wd2 per-filter merge."""
+    view = fields.offsets_tables()
+    needed = {p for d in MC.obs_filters.values() for p in d}
+    assert needed <= set(view), sorted(needed - set(view))
+
+
+def test_the_brick_offsets_table_survives_the_move():
+    """The one real table in the pipeline must not become None in transit."""
+    assert 'Offsets_JWST_Brick1182_F444ref.csv' in fields.offsets_tables()['1182']
+
+
 def test_project_obsnum_view_matches_todays_dict():
     view, today = fields.project_obsnum(), MC.project_obsnum
     assert set(view) == set(today)

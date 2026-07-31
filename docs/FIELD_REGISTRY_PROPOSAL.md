@@ -5,7 +5,8 @@ wired into nothing. Supersedes the closed [#98](https://github.com/keflavich/jws
 
 ## The problem, measured
 
-Adding a target means editing **seven** places across five files:
+Adding a target means editing **nine** registries across six files. Seven you
+hit directly:
 
 | # | registry | where | lines |
 |---|---|---|---|
@@ -17,7 +18,10 @@ Adding a target means editing **seven** places across five files:
 | 6 | `project_obsnum` | `merge_catalogs.py` | 48 |
 | 7 | `offsets_tables` | `merge_catalogs.py`, **inside `main()`** | 15 |
 
-Plus `fov_regname` for MIRI, and the basepath `if target in (...)` branch.
+And two more, found while reviewing this proposal: `obs_filters_niriss`
+(`merge_catalogs.py:93`, silently substituted by `_obs_filters_for`) and
+`obs_ids` (`make_merged_psf.py`). Plus `fov_regname` for MIRI and the basepath
+`if target in (...)` branch.
 
 Three live inside functions, so they cannot be imported, inspected, or
 overridden — you edit the source. Nothing checks that they agree.
@@ -29,10 +33,17 @@ cloudc/2526   in obs_filters, absent from project_obsnum
 w51/1182      in project_obsnum, absent from obs_filters
 ```
 
-`merge_catalogs.py:1482` and `:1701` index `project_obsnum[target][proposal]`
-unguarded, so a `cloudc/2526` merge raises `KeyError('2526')`. The `w51/1182`
-entry is unreachable — the job list is built from `obs_filters` — so it is
-simply dead.
+`merge_catalogs.py:1482` indexes `project_obsnum[target][proposal]` unguarded,
+so a `cloudc/2526` merge raises `KeyError('2526')` — reproduced. (`:1701` is
+*not* reachable for that pair; an earlier `continue` fires first. An earlier
+draft of this document claimed both.) The `w51/1182` entry is unreachable — the
+job list is built from `obs_filters`, and the one other reader guards on
+membership — so it is simply dead.
+
+A third instance of the same class, found while reviewing this proposal:
+`offsets_tables` omits `1905`, `3523` and `2526` entirely, so
+`offsets_tables[progid]` raises `KeyError` for **every wd1 and wd2 per-filter
+merge**.
 
 Neither is exotic. They are what happens when the same fact is written down
 three times by hand.
@@ -51,17 +62,19 @@ One dataclass per field, one per observation, in `jwst_gc_pipeline/fields.py`:
 @dataclass(frozen=True)
 class Obs:
     proposal: str
-    obsid: str | None = None
-    nvisits: int | None = None
-    filters: tuple[str, ...] = ()
-    offsets_table: str | None = None
+    obsid: Optional[str] = None
+    nvisits: Optional[int] = None
+    filters: Tuple[str, ...] = ()
+    offsets_table: Optional[str] = None
 
 
 @dataclass(frozen=True)
 class Field:
     name: str
     root: str                     # 'orange' | 'blue'
-    observations: tuple[Obs, ...] = ()
+                                  # typing.Optional, not `X | None`: the
+                                  # declared floor is Python 3.9
+    observations: Tuple[Obs, ...] = ()
 ```
 
 The whole registry is **76 lines** for 17 fields and 20 observations:
@@ -92,9 +105,11 @@ fields.basepath(target)   # replaces the if/else branch
 ```
 
 `test_fields_registry.py` asserts each view **equals the dictionary it
-replaces**, today, exactly. So call sites move one at a time, each a two-line
-diff, each independently revertible. The registry is not a new source of truth
-until a call site says so.
+replaces**, today, exactly — including **key order**, which is not cosmetic:
+`individual_frame_merge_jobs` derives the SLURM array index from each target's
+proposal order, so a reordering would silently send array tasks at the wrong
+filter. So call sites move one at a time, each independently revertible, and the
+registry is not a source of truth until a call site says so.
 
 The registry data was **generated from the current literals**, not retyped, so
 it is faithful by construction.
@@ -114,18 +129,32 @@ it is faithful by construction.
 6. `ALIGNMENT_CONFIG` last, and possibly never — it is already a single typed
    registry with its own tests. A `Field` could carry a reference to its
    `FieldAlignment` rather than absorbing it.
-7. Delete the duplicate `obs_filters` in `make_merged_psf.py`.
 
-Steps 2–5 are each small enough to review in one sitting.
+   **`refnames` needs care, and is not revertible once folded in.** It is keyed
+   by *proposal*, not (field, proposal): `refnames['2221']` is one value shared
+   by brick and cloudc. Storing it per-`Obs` silently widens that to per-field
+   and lets the two diverge. Its `'THIS_IS_A_BUG_IF_YOU_USE_THIS'` sentinel also
+   has no home in `Obs`. Same for `ALIGNMENT_CONFIG`.
+7. `make_merged_psf.py` last. It is **not** a duplicate to delete: it is
+   proposal-keyed, uppercase, brick-only, missing `f2550w`, and carries its own
+   `obs_ids`. That step is a rewrite.
+
+Steps 2–4 are each small enough to review in one sitting. Step 2 is **not** the
+two-line diff an earlier draft of this document claimed: the real accessor is
+`_obs_filters_for()`, which substitutes `obs_filters_niriss` for NIRISS runs —
+an eighth registry that `Field`/`Obs` cannot represent as written, because
+NIRISS reuses NIRCam filter names. Either `Obs` grows an instrument, or the
+NIRISS set stays where it is and the view composes with it.
 
 ## What this does not do
 
 - It does not make the pipeline portable. Paths are still absolute; `root` only
   chooses between the two existing trees. Portability is a separate change,
   which `basepath()` makes tractable by giving it one place to hook.
-- It does not fix `cloudc/2526` or `w51/1182`. The registry records them as
-  incomplete and dead respectively, and the tests fail loudly if either changes,
-  so the fix is a deliberate decision rather than a silent edit.
+- It does not fix `cloudc/2526`, `w51/1182`, or the missing `offsets_tables`
+  proposals. The registry records `cloudc/2526` as incomplete and `w51/1182` as
+  dead, and covers the missing offsets proposals by construction; tests fail
+  loudly if any of it changes, so each fix stays a deliberate decision.
 - It does not touch `ALIGNMENT_CONFIG`'s content.
 
 ## Open questions

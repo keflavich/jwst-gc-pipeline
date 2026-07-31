@@ -12,7 +12,11 @@ This module holds the same information once.  The views at the bottom reproduce
 each existing dictionary exactly, so call sites can move over one at a time
 instead of in a single sweep.
 """
-from dataclasses import dataclass, field as _field
+from dataclasses import dataclass
+from typing import Optional, Tuple
+
+ROOTS = {'orange': '/orange/adamginsburg/jwst',
+         'blue': '/blue/adamginsburg/adamginsburg/jwst'}
 
 
 @dataclass(frozen=True)
@@ -20,10 +24,10 @@ class Obs:
     """One observation of one field, under one proposal."""
 
     proposal: str
-    obsid: str | None = None          # -> project_obsnum
-    nvisits: int | None = None        # -> nvisits
-    filters: tuple[str, ...] = ()     # -> obs_filters
-    offsets_table: str | None = None  # -> offsets_tables
+    obsid: Optional[str] = None            # -> project_obsnum
+    nvisits: Optional[int] = None          # -> nvisits
+    filters: Tuple[str, ...] = ()          # -> obs_filters
+    offsets_table: Optional[str] = None    # -> offsets_tables
 
 
 @dataclass(frozen=True)
@@ -32,13 +36,11 @@ class Field:
 
     name: str
     root: str                         # 'orange' or 'blue' -- which /.../jwst tree
-    observations: tuple[Obs, ...] = ()
+    observations: Tuple[Obs, ...] = ()
 
     @property
     def basepath(self):
-        roots = {'orange': '/orange/adamginsburg/jwst',
-                 'blue': '/blue/adamginsburg/adamginsburg/jwst'}
-        return f'{roots[self.root]}/{self.name}/'
+        return f'{ROOTS[self.root]}/{self.name}/'
 
 
 FIELDS = (
@@ -50,6 +52,8 @@ FIELDS = (
         Obs('2221', obsid='001', nvisits=2,
             filters=('f410m', 'f212n', 'f466n', 'f405n', 'f187n', 'f182m', 'f2550w')),
         Obs('1182', obsid='004', nvisits=2,
+            offsets_table=('/blue/adamginsburg/adamginsburg/jwst/brick/offsets/'
+                           'Offsets_JWST_Brick1182_F444ref.csv'),
             filters=('f444w', 'f356w', 'f200w', 'f115w')),
     )),
     Field('cloudc', root='blue', observations=(
@@ -146,6 +150,25 @@ def nvisits():
     return out
 
 
+def offsets_tables():
+    """`{proposal: path-or-None}` -- as in merge_catalogs.main().
+
+    Today's dict omits 1905, 3523 and 2526 entirely, so `offsets_tables[progid]`
+    raises KeyError for every wd1/wd2 per-filter merge.  This view covers every
+    registered proposal, which is the same bug class as cloudc/2526 and is fixed
+    by construction rather than by remembering.
+    """
+    return {o.proposal: o.offsets_table
+            for f in FIELDS for o in f.observations}
+
+
 def basepath(target):
-    """The data root for one target, replacing the `if target in (...)` branch."""
-    return BY_NAME[target].basepath
+    """The data root for one target, replacing the `if target in (...)` branch.
+
+    An unregistered target gets the blue tree, which is what that branch's
+    `else` does -- not a KeyError.  Registering a new field is what moves it.
+    """
+    known = BY_NAME.get(target)
+    if known is not None:
+        return known.basepath
+    return f"{ROOTS['blue']}/{target}/"
