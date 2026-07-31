@@ -5,12 +5,12 @@
 Findings from user (AG) visual inspection of the 8-field gate rollout
 (re-cataloged against `satstar-bright-phantom-gate` = current `main` + PR #36).
 
-**Scope note.** With one exception (see F2550W fake density), none of these are
-regressions from the bright-phantom gate (PR #36) — the gate only *removes*
-super-bright phantoms on saturated emission and left every real star verified
-in place. The problems below are **pre-existing MIRI satstar / detection
-behaviour** surfaced by careful inspection of the freshly-regenerated products.
-They are documented here for follow-up (likely separate PRs), not fixed in #36.
+**Scope note.** The problems below are **pre-existing MIRI satstar / detection
+behaviour**, surfaced by careful inspection of the freshly-regenerated products.
+The bright-phantom gate (PR #36) removes super-bright phantoms on saturated
+emission and left every real star verified in place; one item (F2550W fake
+density, §3) interacts with it. Documented here for follow-up, likely as
+separate PRs.
 
 Each item: **observation → cutout → mechanism (confirmed / hypothesis) →
 proposed solution(s) → risk of the solution**.
@@ -41,13 +41,13 @@ PSF/satstar amplitude over-predicts → deep negative core + over-sub ring
   residual there). Cheap, targeted.
 - (B) **Weight the fit by WHT** (extend the existing inverse-variance weighting
   to fold in coverage) so seam pixels contribute less to the amplitude.
-- (C) Cosmetic: NaN-mask sub-threshold-WHT residual pixels so the display isn't
-  polluted (does not fix the catalog flux).
+- (C) Cosmetic: NaN-mask sub-threshold-WHT residual pixels to keep the display
+  clean (the catalog flux stays biased).
 
 **Risk.** (A) can *leave a real bright star unsubtracted* in a genuine low-cov
 hole → a bright positive residual there instead (trade a negative for a
-positive; arguably better). (B) is low-risk but won't fully fix a 3%-coverage
-core. (C) hides information; the flux is still biased.
+positive; arguably better). (B) is low-risk and leaves a 3%-coverage core
+partly wrong. (C) hides information; the flux stays biased.
 
 ---
 
@@ -57,12 +57,12 @@ core. (C) hides information; the flux is still biased.
 
 **Confirmed.** Non-saturated stars subtract cleanly, but **every star with a
 saturated core** leaves a strong **positive** residual ring around a NaN centre
-(resid max 5322 / 3718 / 3147 / 2550, all-positive — no over-sub). The model
+(resid max 5322 / 3718 / 3147 / 2550, all-positive). The model
 core is visibly dimmer/smaller than the data → the satstar **amplitude is fit
 too low**.
 
 **Mechanism (hypotheses, ranked).**
-1. **`--deblend-satstars` flux splitting** (this field runs it; sgrb2 does not):
+1. **`--deblend-satstars` flux splitting** (enabled on this field, disabled on sgrb2):
    splitting a bright star's merged DQ blob into sub-components divides the flux
    among them → each model under-predicts → composite under-subtracts. Strongest
    suspect given it's the config difference vs the over-subtracting fields.
@@ -102,7 +102,7 @@ vetted count rose 1964→2241; part of that increase is these emission fakes.
 
 *This is the one place the gate interacts:* removing super-bright phantom
 over-subtraction gouges left a cleaner residual, on which daofind then finds
-*more* faint emission bumps. Net: more faint fakes, not fewer.
+*more* faint emission bumps. Net: more faint fakes.
 
 **Proposed solutions.**
 - (A) **Filter-dependent detection stringency** for F1280W/F2550W: raise the
@@ -131,9 +131,9 @@ Rows: (a) sat→hole | (b),(c) pockmarks | (d) emission fake.
 Confirmed: model peak **7501 > data peak 3805** (data is saturation-clipped).
 A full-amplitude PSF minus a clipped core goes deeply negative → NaN-masked →
 looks like a masked hole with no fitted star (the star *is* fit and cataloged;
-the residual just can't show it). This is the **clipped-core over-subtraction**
+the residual display hides it). This is the **clipped-core over-subtraction**
 pit — the OVER-sub counterpart to cloudc F770W's UNDER-sub, same root
-(amplitude vs clipped core, no deblend here).
+(amplitude vs clipped core; deblend off here).
 
 **(b) `17:47:19.75 -28:23:49.6`, (c) `17:47:18.39 -28:23:57.0` — pockmarks.**
 Faint sources, minor mis-subtraction (model 72/32 vs data 145/110); small
@@ -146,8 +146,8 @@ cloudc F2550W (a).
 **Proposed solutions.**
 - (a) For clipped-core over-sub: **cap the subtracted model peak to the data's
   charge-migration wing level** (subtract only out to where model ≈ data), or
-  NaN the clipped-core region consistently so it's a clean mask, not a
-  variable-depth pit. Ties to the existing negative-pit / render tasks.
+  NaN the clipped-core region consistently so it reads as a clean mask of
+  fixed depth. Ties to the existing negative-pit / render tasks.
 - (d) Same as cloudc F2550W emission-fake solutions (filter-scoped detection
   stringency + shape vetting).
 
@@ -168,7 +168,7 @@ faint stars (as in §2/§3).
 
 **Recommendation.** These are filter- and field-dependent and the fixes are
 mutually tensioned (stringency vs completeness, amplitude over vs under). Treat
-as **separate follow-up PRs**, each with a by-eye truth region per field, rather
-than bundling into the phantom-gate PR. Highest-value, lowest-risk first:
+as **separate follow-up PRs**, each with a by-eye truth region per field.
+Highest-value, lowest-risk first:
 coverage-gating (brick), then confirm/repair the deblend flux-split (cloudc
 F770W), then filter-scoped emission-fake vetting (F1280W/F2550W).

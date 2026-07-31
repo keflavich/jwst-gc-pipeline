@@ -33,8 +33,8 @@ unrelated fields**, on **five filters** and **three detectors**:
 4. **Zero-background cross-validation (M92 globular cluster, GO-1334)** —
    `m92_wing_stacks2d_2026-07-10.png`, `m92_wing_ratio_curves_2026-07-10.png`,
    `m92_wingfit_bias_curves_2026-07-10.png`: 812–1248 stars per config,
-   plus an **injected-model control** (recovers 0.95–0.99 everywhere,
-   proving the estimators don't invent excesses).
+   plus an **injected-model control** (recovers 0.95–0.99 everywhere, so the
+   estimators report real excess).
 
 **Result** (real/STPSF wing flux ratio; ±1σ):
 
@@ -47,13 +47,13 @@ unrelated fields**, on **five filters** and **three detectors**:
 
 The excess is **flux-independent across brightness quartiles** and, on M92's
 zero background, **purely multiplicative** (additive term ≈ 0) — i.e. a
-property of the real PSF relative to the model, not field systematics.  The
+property of the real PSF relative to the model.  The
 masked-core fit bias it produces matches in sign, magnitude, and radius
 dependence in both fields (Brick F182M: +0.02/+0.11/+0.19/+0.26 mag at
 r_mask = 3/4/8/12; M92 F090W: +0.03/+0.10/+0.16 at 3/4/6).  Per-filter
 structure is real: F187N/F212N excess is confined to small radii, F150W is
-*faint*-biased at its Airy-dip radius, F405N is neutral — so **no static
-correction table is safe**.
+*faint*-biased at its Airy-dip radius, F405N is neutral — so **the correction
+must be measured per frame**.
 
 **Discovery (M92):** 12/20 of the M92 STPSF grids contain a phantom
 "segment blob" (2.2% of total flux at r≈35 px) inherited from OPD sensing
@@ -67,10 +67,10 @@ automatically, because its calibration stars see the same model.
 
 Each layer independently validated on real frames:
 
-1. **Severity gates** (merged, #56): unsaturated stars over-flagged by the
-   any-group SATURATED bit no longer enter the satstar channel (45% of the
-   SW satstar catalogs were such fakes; consolidated F182M satstars
-   2032 → ~780 after the gates).
+1. **Severity gates** (merged, #56): the gates exclude unsaturated stars
+   over-flagged by the any-group SATURATED bit (45% of the SW satstar
+   catalogs were such fakes; consolidated F182M satstars 2032 → ~780 after
+   the gates).
 2. **Mutual-nearest replacement to 0.5″**: satstar fits now reach the
    daophot rows they should replace (positions scatter 0.08–0.15″ vs the
    old 0.05″ radius; 90% of the wide-band "catastrophic clipped" rows have
@@ -94,7 +94,7 @@ Each layer independently validated on real frames:
 5. **Flag decoupling**: `is_saturated` now marks saturated-but-unrepaired
    rows (clipped photometry) independently of `replaced_saturated`.
 
-## 4. Certification status — honest accounting
+## 4. Certification status
 
 **Metric** (`photometry/saturation_continuity.py`,
 `assert_saturation_continuity`): max color jump between saturation classes
@@ -104,8 +104,8 @@ multi-band CMD-shape requirement in executable form.
 **Catalog-level demo** (384-frame satstar rebuild + re-replacement into the
 existing m7 catalogs, `brick_demo_cmd_rebuild_2026-07-10.png`): the fake
 cloud is gone and the mid-bright satstars now join the giant branch;
-F182M−F187N metric improves 0.74 → ~0.55±0.05.  **The demo cannot reach the
-floor**: the *unsaturated-side* photometry it compares against was itself
+F182M−F187N metric improves 0.74 → ~0.55±0.05.  **The demo is bounded below by
+its inputs**: the *unsaturated-side* photometry it compares against was itself
 measured on frames with the OLD (wrong-wing) satstar models subtracted, and
 rows overwritten by old fake satstars are unrecoverable without refitting —
 run-to-run scatter of the residual metric is ±0.1, dominated by that input

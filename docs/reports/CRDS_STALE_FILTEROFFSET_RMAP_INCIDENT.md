@@ -16,38 +16,38 @@ version** — displacing each LW module by up to ~26 mas on sky.
 
 A 2026-07 audit found (a) NIRCam module-A/B offsets that *differed between
 reduction generations* (F410M ≈ 50 mas inter-module) and (b) an apparent
-~78 mas offset between programs 2221 and 1182. Both were initially attributed
-to "a stale `jwst` version and the associated SIAF". That attribution is
-**wrong in a way that matters for remediation**: re-installing or upgrading
-`jwst` does not fix (or cause) the problem, and no SIAF/distortion reference
-was ever wrong. If you are auditing a field and see an inter-module offset in
-an LW band, check the CRDS cache **content** (not just the context name)
-before blaming software versions. This document records the true mechanism,
-the exact signatures, and the checks.
+~78 mas offset between programs 2221 and 1182. The first attribution was "a
+stale `jwst` version and the associated SIAF", and the remediation that
+follows from it differs: the cure is a cache fix, so re-installing or
+upgrading `jwst` leaves the problem in place, and the SIAF/distortion
+references are correct throughout. If you are auditing a field and see an
+inter-module offset in an LW band, check the CRDS cache **content** (sha1sum,
+item 1 below) before blaming software versions. This document records the
+mechanism, the exact signatures, and the checks.
 
 ## The mechanism
 
 1. `assign_wcs` builds NIRCam imaging WCS from (i) CRDS `distortion`
    references, (ii) CRDS `filteroffset` references (a per-module,
    per-channel detector-frame shift in pixels), and (iii) the pointing
-   keywords written by STScI SDP. The installed `jwst` package version
-   changes none of the reference *content*.
+   keywords written by STScI SDP. CRDS alone sets the reference *content*,
+   independent of the installed `jwst` package version.
 2. The rmap `jwst_nircam_filteroffset_0004.rmap` was **corrected in place**
    by CRDS early in Cycle 1 (same file name, new content + new embedded
    sha1sum):
    - **2022-09-01 vintage** (sha1 `98d39dc5403e…`):
      `('LONG','A') → filteroffset_0008` and `('LONG','B') → 0007`.
-     But 0008's own metadata says module **B**, and 0007 says module **A** —
-     i.e. the mapping is swapped.
+     0008's own metadata says module **B** and 0007 says module **A**, so
+     the mapping is swapped.
    - **Server/current** (sha1 `aade9b095a34…`, present in caches synced
      ≥2023-05): `('LONG','A') → 0007`, `('LONG','B') → 0008` — correct.
-   - `SHORT` (SW) rows are **identical** in both generations; SW bands were
-     never affected.
+   - `SHORT` (SW) rows are **identical** in both generations; SW bands are
+     clean.
 3. CRDS caches are trusted once populated: a cache seeded in 2022-09 and
-   never re-synced serves the swapped mapping forever, under **any** context
+   left unsynced serves the swapped mapping forever, under **any** context
    that references rmap 0004 (all of `jwst_1253`, `jwst_1533`, `jwst_1581`
    do). Whether a given reduction was poisoned therefore depends on its
-   `CRDS_PATH`, *not* on its `CRDS_CTX` and not on its `CAL_VER`.
+   `CRDS_PATH` alone; `CRDS_CTX` and `CAL_VER` are silent on it.
 
 ## The signature (how it shows up in data)
 
@@ -69,33 +69,33 @@ the fingerprint; SW bands re-assign to 0.0 mas across `jwst` 1.14 → 1.21.
 **Why it looked like a `jwst`-version bug:** reduction generations that used
 old `jwst` also happened to use the stale caches; the surgical re-assignments
 ran with `CRDS_PATH=/orange/adamginsburg/crds_cache` (fresh copy). CAL_VER
-correlated perfectly with the poisoning, causing the misattribution. The
-earlier "verified identical under jwst_1253 **and** jwst_1581" check compared
-two *contexts* within the same (correct) cache — the stale-cache variable was
-never varied.
+correlated perfectly with the poisoning, which is what drove the
+misattribution. The earlier "verified identical under jwst_1253 **and**
+jwst_1581" check varied only the *context*, holding one (correct) cache
+fixed.
 
-## What the 78 mas "inter-observation offset" actually was
+## What the 78 mas "inter-observation offset" was
 
-Unrelated to the rmap. Decomposed by per-tile offset-histogram audit
-(2026-07-11):
+A product-state artifact, separate from the rmap. Decomposed by per-tile
+offset-histogram audit (2026-07-11):
 
 - The 2221 F212N per-module quick-look mosaics are **untied a-priori
   products**: uniformly ~50–100 mas from VIRAC2 (2022-era blind pointing is
   0.1″ 1σ radial, plus pre-PRDOPSSOC-065 guider-dependent SIAF biases up to
   ~140 mas). Expected; absorbed by the per-exposure VIRAC2 tie.
 - The 1182 F200W per-module mosaics on disk at audit time were written
-  **mid-re-reduction** with the two visits not yet co-aligned (~100 mas Dec
+  **mid-re-reduction**, with the two visits still unaligned (~100 mas Dec
   discontinuity across each module, confirmed per tile).
 - Cross-matching those products produced "A modules disagree by 78 mas, B
-  modules agree" and a 99.6 mas loop-closure failure — correctly diagnosing
-  *non-rigid inputs*, not a frame error. **No released catalog carries this
-  offset** (per-band Gaia DR3 validation: 1–8 mas).
+  modules agree" and a 99.6 mas loop-closure failure — a correct diagnosis of
+  *non-rigid inputs*. **Released catalogs are clean** (per-band Gaia DR3
+  validation: 1–8 mas).
 
 There remains a real ~35 mas A−B declination term in the *untied* 2221 F212N
 2024-generation module mosaics — the documented JDox-class NIRCam
 inter-module registration residual — which the per-exposure tie removes
-downstream. This is why module-level ties and per-tile
-`registration_failsafes` checks, not whole-mosaic ties, gate releases.
+downstream. This is why releases are gated by module-level ties and per-tile
+`registration_failsafes` checks.
 
 ## Remediation state
 
@@ -135,9 +135,9 @@ beside them as `jwst_nircam_filteroffset_0004.rmap.stale_20220901_swappedAB`.
    context and a fresh cache, diff the WCS at pixel (1024,1024) per detector.
    Anti-symmetric A/B shifts matching the table above = the swap. All-zero =
    clean. (Script pattern: `_jwst_version_delta.py`, an untracked scratch script
-   from the 2026-07 audit; not committed, so do not expect to find it here.)
+   from the 2026-07 audit.)
 4. **Never conclude "version regression" from CAL_VER correlation alone** —
-   vary the cache, not just the context/version, before attributing.
+   vary the cache as well as the context/version before attributing.
 5. Measure offsets only with the sanctioned histogram-stacking helpers
    (`astrometry_offsets.measure_offset[_grid]`); map PER TILE before
    interpreting any cross-product comparison, and treat loop-closure failure
@@ -147,8 +147,7 @@ beside them as `jwst_nircam_filteroffset_0004.rmap.stale_20220901_swappedAB`.
 ## Cross-references
 
 - `jwst_gc_pipeline/reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md` — module-lock
-  policy section (updated to point here; supersedes its earlier
-  "stale-jwst-version" root cause).
+  policy section (updated to point here for the root cause).
 - Overleaf astrometry paper, `wcs_provenance.tex` — publication-facing summary
   with the per-program provenance table (SDP/PRD/CRDS/jwst versions, guide
   stars).

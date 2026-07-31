@@ -1,5 +1,5 @@
-> ⚠ **Experiment report — line numbers are as-of the run date and are not
-> maintained.** Symbol names are still valid; resolve them with `git grep`.
+> ⚠ **Experiment report — line numbers are as-of the run date.** Symbol names
+> stay valid; resolve them with `git grep`.
 
 # GDC-vs-CRDS astrometry experiment — results
 
@@ -18,19 +18,17 @@ frame-pair offsets, VIRAC2/Gaia bulk, Hosek median separation).  Those metrics
 correctly read "unchanged"; only same-star residuals binned by detector
 position resolve the gain.  The largest residual astrometric structure (the
 2.7–5 mas brick A/B module-seam terms) is inter-detector affine placement,
-which a distortion-field swap cannot touch (and, by the frame-ownership design
-of this integration, must not) — a distinct and larger lever.**
+which this distortion-field swap leaves alone by design (frame ownership stays
+with the offsets machinery) — a distinct and larger lever.**
 
-> **2026-07-28 correction.**  The original write-up read the noise-dominated
-> metrics (A–E) as "no improvement".  That conflated *invisible-under-noise*
-> with *absent*.  Measurement F (added below) isolates the coherent distortion
-> term the way the pre-treasury report 09 does — bin same-star residuals by
-> detector position, which averages the centroid noise down while the static
-> distortion pattern survives — and recovers the report-09 result **through
-> this package's own `GDCSkySolution`**: STDGDC is ~2× flatter, and this holds
-> on **16/16 brick SW detectors × both covered filters** (median GDC/CRDS floor
-> 0.43).  The verdict is revised from "no measurable improvement" to "real but
-> sub-noise-floor improvement"; see §7.
+> **2026-07-28 update.**  Measurement F (added below) isolates the coherent
+> distortion term the way the pre-treasury report 09 does — bin same-star
+> residuals by detector position, which averages the centroid noise down while
+> the static distortion pattern survives — and recovers the report-09 result
+> **through this package's own `GDCSkySolution`**: STDGDC is ~2× flatter, and
+> this holds on **16/16 brick SW detectors × both covered filters** (median
+> GDC/CRDS floor 0.43).  Metrics A–E are noise-dominated and read "unchanged";
+> the verdict is a real, sub-noise-floor improvement, see §7.
 
 ## 1. Setup
 
@@ -60,10 +58,9 @@ of this integration, must not) — a distinct and larger lever.**
 
 **Per-frame verification.**  Every catalog's `skycoord_centroid` was checked
 same-star against its crf frame's on-disk WCS at (`x_fit`,`y_fit`) — an
-identity check, not a cross-catalog match; > 5 mas would mean a
-regenerated-crf/catalog mismatch and drop the frame.  **All 480 frames
-passed** (median 0.6–0.7 mas, max 0.78 mas), so no F182M snapshot exposure
-was dropped for crf vintage.
+identity check; > 5 mas would mean a regenerated-crf/catalog mismatch and drop
+the frame.  **All 480 frames passed** (median 0.6–0.7 mas, max 0.78 mas), so
+every F182M snapshot exposure was kept.
 
 | field/filter | frames | kept/total stars | cat-vs-crf check (med/max mas) | affine rms v2 (med/max mas) | GDC delta field p95/max (mas) | per-star delta med (mas) |
 |---|---|---|---|---|---|---|
@@ -93,8 +90,8 @@ every arches+brick nrcb4/F212N frame).  `GDCSkySolution` now masks invalid
 map samples (|correction| > 50 px) out of the anchor fit, NaNs them in the
 delta map, warns (`n_anchor_invalid`), and falls back to the frame's original
 WCS position for stars on invalid regions (`n_star_fallback`).  Regression
-tests added (synthetic holed map).  No other F182M/F212N library file has
-holes.
+tests added (synthetic holed map).  A survey of the F182M/F212N library found
+holes in that file alone.
 
 ## 2. Measurement A — relative, frame-overlap (module seam)
 
@@ -140,13 +137,13 @@ detector-pair dependent** (CRDS, b−a convention, med over pairs):
 | brick F182M | nrca3–nrcb3 | 12 | +2.6 | +1.6 | worse (+3.7) |
 | brick F182M | nrca4–nrcb4 | 16 | +0.6 | +2.9 | worse (+5.0) |
 
-**Verdict A: no improvement.**  AB medians move 4.99 → 4.89 mas (F212N,
+**Verdict A: the seam is unchanged.**  AB medians move 4.99 → 4.89 mas (F212N,
 −2%) and 2.74 → 2.85 mas (F182M, +4%, p90 3.15 → 4.07 — mildly worse);
 same-detector controls are unchanged (as designed).  The seam terms are
 static inter-detector *affine placement* differences (filter/epoch dependent
 — they differ between F212N and F182M), which the affine-anchored GDC
 preserves by construction.  This is the SIAF-placement/self-cal class of
-error (`siaf-accuracy-network-selfcal`), not a distortion-map deficiency.
+error (`siaf-accuracy-network-selfcal`).
 
 Arches note: with no offsets table applied (RAOFFSET=0), per-exposure
 pointing errors (~4–18 mas) dominate every arches pair measurement
@@ -205,7 +202,7 @@ field).  Gaia-sparse is the non-blocking diagnostic cross-check.
 
 **Verdict C: identical** — same-star bulk differences <= 0.15 mas; 20"-cell
 robust scatter differences <= 0.6 mas (that scatter itself is the known
-~5–10 mas VIRAC2 local wander + per-star VIRAC noise, not JWST distortion).
+~5–10 mas VIRAC2 local wander + per-star VIRAC noise).
 Bonus confirmations: (i) the brick dense-VIRAC histogram peak reads ~6–9 mas
 where the same-star value is ~0 — the documented dense-reference histogram
 bias, again with filter-dependent sign; (ii) brick's m2cycle2 frames are tied
@@ -241,8 +238,8 @@ exposure-to-frame polynomial transforms absorb net distortion, so
 re-applying raw STDGDC on our side only injects the CRDS-vs-STDGDC delta
 field (~0.6 mas med, up to ~4 mas at edges) as extra disagreement.  (The
 1.9 mas here vs 2.7 mas in the prior report reflects the cleaner
-per-exposure consensus input vs the m7 merged catalog, not a pipeline
-change.)  Photometry columns reproduce the known −3.9 mag normalization and
+per-exposure consensus input vs the m7 merged catalog.)
+Photometry columns reproduce the known −3.9 mag normalization and
 0.24 mag bright-star scatter — untouched by this experiment.
 
 ## 6. Measurement E — v1 vs v2 library sensitivity
@@ -271,8 +268,8 @@ centroid noise down while preserving that pattern.
 The pre-treasury report 09 metric does this: match each bright, isolated star
 across the dither set (the 11 good arches dithers spread each star over ~200 px
 of the detector), tie every frame to the running mean with a per-frame
-6-parameter linear transform (removes pointing + scale + rotation, **not**
-distortion), then **bin the residual by detector position**.  A flatter
+6-parameter linear transform (removes pointing + scale + rotation; the
+distortion survives it), then **bin the residual by detector position**.  A flatter
 distortion solution leaves a smaller binned floor.  Both solutions are measured
 on the identical star set: CRDS = `skycoord_centroid`; GDC = `GDCSkySolution`
 on the same `x_fit`/`y_fit`.  Script:
@@ -294,9 +291,9 @@ report 09's ~2.5× result through this package's own machinery.  The
 **per-detection scatter is unchanged** (1.02 → 0.99 mas) — this is the same
 quantity measurements A–E integrate over, and its flatness is *why* they read
 "no change".  The gain is real, coherent, and static in the detector frame; it
-is simply an order of magnitude below the per-exposure noise floor, so it
-neither helps nor hurts single-exposure repeatability and only shows up as a
-reduced position-dependent systematic in the field-averaged solution.
+sits an order of magnitude below the per-exposure noise floor, so
+single-exposure repeatability stays put and the gain surfaces as a reduced
+position-dependent systematic in the field-averaged solution.
 
 ### F, generalized — all 8 SW detectors × 2 filters (brick)
 
@@ -322,8 +319,8 @@ focal plane.  On the deeper brick frames the per-detection scatter also improves
 modestly on every detector (e.g. F182M nrca1 0.898 → 0.707 mas) — here the
 worst-cell distortion is a larger fraction of the brick noise floor, so a sliver
 of the gain surfaces even in raw scatter.  The improvement is a robust property
-of the STDGDC field, not an arches-specific coincidence, and it holds for both
-SW filters the library covers.  Regenerate by looping
+of the STDGDC field across the focal plane and across both SW filters the
+library covers.  Regenerate by looping
 `distortion_floor_diagnostic` over the 8 SW detectors (vgroup 05101 F212N /
 07101 F182M):
 
@@ -355,34 +352,33 @@ inter-detector affine placements (SIAF class) that no distortion swap can touch
 under the frame-ownership anchoring this integration (correctly) uses.  The
 seam remains the larger lever (`siaf-accuracy-network-selfcal`).
 
-On Measurement D (Hosek): the apparent −0.3 mas is not evidence STDGDC is
-worse.  The comparison floor is 1.9 mas — ~15× the 0.1 mas signal — and this
-package's **affine-anchored** GDC is not the same operation as Hosek's
+On Measurement D (Hosek): the apparent −0.3 mas measures anchoring convention.
+The comparison floor is 1.9 mas — ~15× the 0.1 mas signal — and this
+package's **affine-anchored** GDC is a different operation from Hosek's
 peppar application (peppar keeps the raw STDGDC values and lets its own
 flystar polynomial own the frame).  Re-referencing STDGDC to the CRDS
 mean/scale/rotation, then differencing against Hosek's independent tie, injects
-the CRDS↔STDGDC delta as apparent disagreement.  D measures anchoring
-convention, not distortion quality.
+the CRDS↔STDGDC delta as apparent disagreement.
 
 **Recommendation: STDGDC is a real, if small, astrometric improvement — adopt
 it where a coherent sub-mas position-dependent systematic matters (absolute
 astrometry, long-baseline proper motions, cross-detector ties), since it costs
 nothing at runtime (a post-hoc per-star delta) and is strictly flatter.  It
-does not improve single-exposure repeatability and is not a fix for the larger
-A/B seam.  Wiring `skycoord_gdc_*` into the production m2 tie as the default is
+leaves single-exposure repeatability and the larger A/B seam where they are.
+Wiring `skycoord_gdc_*` into the production m2 tie as the default is
 a separate, larger decision (it changes release astrometry at the ~0.1 mas
-level) and should follow the module-overlap validation, not this benchmark.**
+level); base that decision on the module-overlap validation.**
 
 ## 8. Anomalies found along the way
 
 1. **STDGDC library defect** — NRCB4/F212N v1+v2 border holes (stored as 0);
-   now masked in `GDCSkySolution` (this PR).  Survey of all F182M/F212N
-   library files found no other holes.
+   now masked in `GDCSkySolution` (this PR).  A survey of all F182M/F212N
+   library files found holes in that file alone.
 2. **Arches absolute frame is off by ~27 mas** — the merged arches F212N
    consensus sits at (−8.5, −25.8) mas vs VIRAC2 AND (−8.9, −24.9) mas vs
    Gaia-sparse (same-star, sem ~1 mas; the two refs agree, so it is real and
-   JWST-side).  Consistent with RAOFFSET=0: no offsets table has ever been
-   applied to these arches products.  Additionally 44/48 (A) and 42/48 (B)
+   JWST-side).  Consistent with RAOFFSET=0: these arches products still sit at
+   their as-delivered pointing.  Additionally 44/48 (A) and 42/48 (B)
    exposures are >2 mas (median 3.5, max 19 mas) off their visit consensus —
    uncorrected per-exposure pointing.  Arches needs an offsets table +
    realignment before release-grade use.
@@ -404,11 +400,11 @@ level) and should follow the module-overlap validation, not this benchmark.**
 - **Arches is single-band, single-pointing**: no cross-module overlaps; its
   relative metrics are dominated by uncorrected per-exposure pointing, so the
   AB seam test rests on brick alone.
-- **LW uncovered**: the STDGDC library has no LW solutions except F277W —
-  this experiment says nothing about F323N–F480M distortion.
-- **Affine anchoring is also a blind spot by design**: any CRDS error in
-  per-detector scale/rotation/placement is absorbed into the anchor and NOT
-  tested — only the non-affine distortion difference is.  (That is the
+- **LW uncovered**: the STDGDC library's only LW solution is F277W, so
+  F323N–F480M distortion falls outside this experiment.
+- **Affine anchoring is a blind spot by design**: any CRDS error in
+  per-detector scale/rotation/placement is absorbed into the anchor; the
+  experiment tests the non-affine distortion difference alone.  (That is the
   correct design for this pipeline: the frame is owned by the offsets
   machinery.)
 - **quintuplet F212N replication**: not run (time); the cached machinery
@@ -475,19 +471,19 @@ convention) double-count something our PSF photometry already handles?  And
 how big is it?**  Analysis script:
 `jwst_gc_pipeline/astrometry_gdc/mgc_pixel_area_analysis.py`.
 
-### (0) Library finding: v2 files have NO MGC
+### (0) Library finding: MGC lives only in the v1 files
 
 Every **v2** STDGDC file (all 16 F212N+F182M SW files) stores MGC
-identically **zero** -- only the **v1** files carry the pixel-area map.  The
-peppar-style `version='auto'` (v2-preferred) load therefore silently applies
-no MGC.  The v1 NRCB4/F212N MGC also carries border-hole garbage (values to
+identically **zero**; the **v1** files carry the pixel-area map.  The
+peppar-style `version='auto'` (v2-preferred) load therefore applies a zero
+MGC.  The v1 NRCB4/F212N MGC also carries border-hole garbage (values to
 -3.2 mag), masked below (same class as the section-1 XGC/YGC holes).
 
 ### (a) MGC magnitude scale (v1; valid cells; mmag)
 
-Not <<mmag: p5-p95 spans +-9 to +-20 mmag, extrema to 29 mmag, pk-pk 27-52
-mmag per detector.  Achromatic (F212N == F182M to ~0.1 mmag -- it is
-geometry, not throughput):
+The scale is tens of mmag: p5-p95 spans +-9 to +-20 mmag, extrema to 29 mmag,
+pk-pk 27-52 mmag per detector.  Achromatic (F212N == F182M to ~0.1 mmag), as a
+geometric term should be:
 
 | filter | detector | median | p5 | p95 | max abs | pk-pk | invalid px |
 |---|---|---|---|---|---|---|---|
@@ -508,25 +504,25 @@ geometry, not throughput):
 | F182M | NRCB3 | -0.8 | -14.7 | +11.4 | 22.4 | 38.3 | 0 |
 | F182M | NRCB4 | -0.7 | -19.9 | +16.7 | 28.5 | 51.4 | 0 |
 
-### (b) Our pipeline does NOT apply a per-pixel area term
+### (b) Our pipeline applies one constant pixel area per frame
 
 Evidence chain (all in this branch's tree):
 
 1. The m1 fit runs directly on the crf SCI array in **MJy/sr** (surface
    brightness): `crowdsource_catalogs_long.py:1964-1976` (`load_data`
    returns `im1['SCI'].data` untouched) -> `cataloging.py:1440` ->
-   `cataloging.py:225` (`result = phot(data, ...)`).  No multiplication by
-   the crf `AREA` extension anywhere on that path; the only `area`
+   `cataloging.py:225` (`result = phot(data, ...)`).  The crf `AREA`
+   extension enters nowhere on that path; the only `area`
    references in the photometry package are the cutout machinery *copying*
    the extension through (`crowdsource_catalogs_long.py:439,495,507`).
-2. The PSF model absorbs nothing spatial: every ePSF in the gridded-PSF
+2. The PSF model carries no spatial term: every ePSF in the gridded-PSF
    files the fit uses is normalized to **unit sum** (measured: 6 brick
    F182M/F212N oversample1 grids, 377-533 ePSFs each, sum spread 0.000
    mmag).  So `flux_fit` is the star's locally-summed surface brightness.
 3. Flux calibration multiplies by ONE constant pixel area per frame:
    `merge_catalogs.py:1663-1700` (daophot path) and `1476-1483`
    (crowdsource) and `2403` (satstar) use `wcs.proj_plane_pixel_area()` --
-   the CD-matrix pixel area, spatially constant (SIP does not enter it).
+   the CD-matrix pixel area, spatially constant.
 
 Because the flat field divides out the per-pixel solid-angle response, a
 point source on a larger-than-nominal pixel is *under*-measured by
@@ -556,8 +552,8 @@ file** (to <1 mmag).
 
 ### (d) Verdict
 
-**Applying MGC (or equivalently the AREA map) is (ii) COMPLEMENTARY, not
-double-counting**: our unit-normalized-ePSF fit on MJy/sr frames calibrated
+**Applying MGC (or equivalently the AREA map) is COMPLEMENTARY to what the
+pipeline already does**: our unit-normalized-ePSF fit on MJy/sr frames calibrated
 with a constant per-frame pixel area currently *inherits* the full local
 pixel-area error.  The uncorrected spatial photometric systematic is
 **~7-11 mmag rms per detector, extrema ~30 mmag, pk-pk 27-52 mmag** --
@@ -565,5 +561,5 @@ above the mmag level, though well below the current 0.24 mag bright-star
 scatter floor (Hosek benchmark).  If a correction is ever adopted, prefer
 the pipeline-native crf `AREA` extension (identical information, no v1/v2
 library ambiguity, defined for every filter/detector including LW); note
-the v2-STDGDC MGC is empty, so any peppar-style `auto` application applies
-nothing.
+the v2-STDGDC MGC is empty, so a peppar-style `auto` application applies
+zero.
