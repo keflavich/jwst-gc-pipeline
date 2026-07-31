@@ -68,8 +68,12 @@ def run_one(size):
     fh = fits.open(CRF)
     header = fh[0].header
     if 'CRPIX1' not in header:
-        from astropy import wcs as _wcs
-        header.update(_wcs.WCS(fh['SCI'].header, relax=True).to_header(relax=True))
+        # The GWCS, not the SCI header's SIP approximation (astrometry rule #2:
+        # SIP is a fit of the GWCS and carries 5-8 mas of its own error).
+        from jwst_gc_pipeline.frame_wcs import frame_wcs
+        from jwst_gc_pipeline.reduction.fits_wcs_sync import sync_header_to_gwcs
+        sync_header_to_gwcs(header, frame_wcs(fh).gwcs, fh['SCI'].data.shape,
+                            label='fit-shape-sweep')
     # zeroframe amplitude anchoring: match production (SATSTAR_ZEROFRAME_FIT on)
     kwargs = dict(path_prefix=PATH_PREFIX, plot=False,
                   use_merged_psf_for_merged=False, pad=PAD, size=size)
