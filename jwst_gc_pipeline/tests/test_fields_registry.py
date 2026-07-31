@@ -204,6 +204,29 @@ def test_project_obsnum_view_matches_todays_dict():
         assert got == expected, target
 
 
+def test_no_view_emits_None_where_the_dict_has_no_key():
+    """An incomplete observation must vanish from the view, not appear as None.
+
+    Consumers interpolate these into globs -- `merge_catalogs.py:1482` builds
+    `jw0{proposal}-o{obsid}_...` -- so a None obsid yields `jw02526-oNone_*`,
+    which matches nothing.  That converts today's loud KeyError('2526') into a
+    silent empty result, which is strictly worse.
+    """
+    for target, proposals in fields.project_obsnum().items():
+        for proposal, obsid in proposals.items():
+            assert obsid is not None, f'{target}/{proposal} emitted None'
+    for proposal, targets in fields.nvisits().items():
+        for target, n in targets.items():
+            assert n is not None, f'{target}/{proposal} emitted None'
+
+
+def test_the_incomplete_observation_is_absent_from_project_obsnum():
+    """cloudc/2526 has no obsid, so it must not appear at all."""
+    for target, proposal in INCOMPLETE:
+        assert proposal not in fields.project_obsnum()[target], (
+            f'{target}/{proposal} has no obsid but appears in the view')
+
+
 def test_nvisits_view_matches_todays_dict():
     assert fields.nvisits() == _literal_nvisits()
 

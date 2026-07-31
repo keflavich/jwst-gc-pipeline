@@ -133,7 +133,13 @@ def obs_filters():
 
 
 def project_obsnum():
-    """`{target: {proposal: obsid}}` -- as in merge_catalogs."""
+    """`{target: {proposal: obsid}}` -- as in merge_catalogs.
+
+    An observation with no obsid is OMITTED, not emitted as None.  Consumers
+    interpolate this straight into a glob (`jw0{prop}-o{obsid}_...`), so a None
+    would produce `jw02526-oNone_*` and match nothing -- turning today's loud
+    KeyError into a silent empty result.
+    """
     return {f.name: {o.proposal: o.obsid for o in f.observations
                      if o.obsid is not None}
             for f in FIELDS}
@@ -145,7 +151,9 @@ def nvisits():
     out = {}
     for f in FIELDS:
         for o in f.observations:
-            if o.nvisits is not None:
+            if o.nvisits is not None:   # no entry has None today; guards a
+                                        # future incomplete one from becoming
+                                        # `range(1, None)` at the call site
                 out.setdefault(o.proposal, {})[f.name] = o.nvisits
     return out
 
