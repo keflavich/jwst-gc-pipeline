@@ -334,8 +334,8 @@ still run after m6.
 | `--manual-ext-prom-min` | −1.0 = **AUTO** | 0 (measured emission-free) | **3.0** on extended-emission NIRCam | 0 | prominence rejection in vetting; AUTO engages 3.0 on w51/sickle/wd2/ngc6334 |
 | `--manual-detect-threshold-scale` | 1.0 | 1.0 | 1.0 | 1.0 | scales the permissive daofind threshold |
 | `--local-snr-threshold` | 5.0 | 5.0 | 5.0 | 5.0 | m1 per-source local S/N |
-| `--manual-keep-intermediate-model-i2d` | off | off | off | off | write a model i2d for EVERY phase |
-| prominence gate (`miri_prominence_snr`) | set only in `MANUAL_DEFAULTS`/`mopt` (5.0); the `do_photometry_step_manual` signature default is 0.0 | 0 (off — NIRCam leaves it 0) | 0 (off) | **8→3 progressive** (m12:8, m4:5.5, m6:3), scheduled by `miri_tuning` |
+| `--manual-keep-intermediate-model-i2d` | off | off | off | off | write a model i2d for every phase; off writes the last phase only |
+| prominence gate (`miri_prominence_snr`) | 5.0 in `MANUAL_DEFAULTS`/`mopt`; no CLI flag (the `do_photometry_step_manual` signature default of 0.0 applies only to direct callers) | 0 (off — NIRCam leaves it 0) | 0 (off) | **8→3 progressive** (m12:8, m4:5.5, m6:3), scheduled by `miri_tuning` |
 | `--nircam-prom-m1` / `-m2` / `-m3plus` | 0.0 | 0 (off) | 0 (off; opt-in) | n/a |
 | `--group` | off | off (pass `--group`) | | |
 | `--manual-group-min-sep-fwhm` | 2.0 | 2.0 (use ~3.0 for blends) | | |
@@ -484,8 +484,9 @@ control is the default.
   serialized phase-to-phase.
 - Cross-band seed requires a ≥2-filter coincidence **by default**
   (`--manual-crossband-seed-min-filters=2`, `--manual-crossband-seed-max-sep-mas=30`),
-  so a source detectable in only one band is seeded there only with `=1`, the
-  permissive deduped union legacy path.
+  so a source detectable in only one band is not seeded.
+  `--manual-crossband-seed-min-filters=1` restores the legacy deduped-union
+  behaviour, which does seed it.
 - Faint sources blended on the wings of much brighter or saturated stars may be
   detected but dropped by the fit/dedup; the m8 forced cross-band fill recovers
   such sources where they were already detected in another band. Sources lost in
@@ -510,7 +511,7 @@ science-method narrative (publication style, no code), see
 photutils `IterativePSFPhotometry` (free position + LevMar + internal
 re-detection) is numerically unstable for isolated bright stars: the centroid
 walks and settles on an inflated-flux minimum whose **model peak exceeds the
-data peak** (impossible for a single positive PSF, and `qfit` passes it).
+data peak** (impossible for a single positive PSF, and `qfit` scores it as a good fit).
 This pipeline makes every `daofind → fit → residual → reseed` step explicit,
 uses single-pass BASIC `PSFPhotometry`, and adds a physical model/data-peak
 overshoot check and a strict ban on negative-peak sources.

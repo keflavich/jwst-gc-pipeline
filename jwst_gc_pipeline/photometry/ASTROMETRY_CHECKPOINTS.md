@@ -11,7 +11,7 @@ CLI `scripts/reduction/run_astrometry_checkpoint.py`.
 Astrometry errors at the 17″, 4″, 2″, 150 mas, 100 mas, and 50 mas level have
 repeatedly propagated through the full pipeline because the alignment was
 measured ONCE (coarsely, against a merged first-pass image — "im0") and carried
-forward unchecked, while cataloging itself produces much better information.
+forward unchecked. Cataloging itself produces far better information.
 The target accuracy is ~1 mas (limited by the VIRAC2 reference density).  Every
 stage must therefore re-verify, and any disagreement must either be corrected at
 its single authoring point (the offsets table + `fix_alignment`) or stop the
@@ -122,7 +122,7 @@ passes AND D is clean (`apply_ok`).  Anything else is recorded as
   path also rejects any ROW whose total accumulated correction exceeds the **bulk**
   limit. ⚠ That bounds accumulation at 60″, so a table can still reach tens of
   arcseconds of `prov_*_added_mas` inside the bound. **The diagnostic for a
-  poisoned table is `prov_*_added_mas`** — an m2 visit-consensus correction is
+  poisoned table is `prov_*_added_mas`, not the total `|offset|`** — an m2 visit-consensus correction is
   mas-scale by construction, so arcsecond-scale `prov_*_added_mas` is a category
   error, while a large *total* `|offset|` can be perfectly correct (brick-1182's
   released table is median 12.1″ with 68/7.6 mas of `prov_*` additions).
@@ -172,7 +172,8 @@ audit the full ladder from these records.
 | `OFFSETS_TABLE_COLLAPSE_RAISE=1` | make the collapsed-visit guard raise instead of warn (`reduction/validate_offsets_table.py`) |
 | `FORCE_REALIGN_ON_DISAGREE=1` | hard-stop when a frame's baked `RAOFFSET` disagrees with the current table (`reduction/unified_alignment.py`) |
 
-Overrides exist for deliberate, justified use only (same policy as
+Set an override to record a decision you have already justified by other
+means. A red gate stays red: the override is the record, not the justification (same policy as
 `ALLOW_REGISTRATION_FAIL`).
 
 ## Relationship to the other astrometry shields
@@ -184,7 +185,8 @@ Overrides exist for deliberate, justified use only (same policy as
   are memory-safe.
 * `local_residual_map` — fine-scale (2″) matched-pair residual mapping,
   precondition-gated on a verified small global tie (it raises
-  `GlobalTieNotVerifiedError` otherwise).
+  `GlobalTieNotVerifiedError` otherwise, which is what keeps it from becoming
+  an ad-hoc dense-NN shortcut).
 * `registration_failsafes.py` / the inter-frame overlap gate (PR #85) —
   release-time product checks.  The checkpoints complement them: they run
   DURING cataloging, at mas-level tolerances, and stop the error at its

@@ -92,8 +92,8 @@ documented in [`PHOTOMETRY_PIPELINE.md`](PHOTOMETRY_PIPELINE.md). Pass
 1. `PipelineRerunNIRCAM-LONG.py` — run JWST `calwebb_image3` (optionally
    Detector1/Image2 first, with non-default settings). Per exposure it calls
    `destreak.destreak` to write the working copy. On the
-   `EXTENDED_EMISSION_FIELDS` (`w51`, `sickle`, `wd2`, `ngc6334`) destreaking is
-   forced off and the working copy is a plain `_cal` → `_align.fits` copy.
+   `EXTENDED_EMISSION_FIELDS` (`w51`, `sickle`, `wd2`, `ngc6334`), however,
+   destreaking is forced off and the working copy is a plain `_cal` → `_align.fits` copy.
    **sickle overrides that per filter**: its SW filters destreak
    (`*_destreak_*_crf`), its LW filters take the plain copy (`*_align_*_crf`) —
    the suffixes `--each-suffix` then has to match. Then `fix_alignment`,

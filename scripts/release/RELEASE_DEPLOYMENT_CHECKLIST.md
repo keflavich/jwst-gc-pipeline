@@ -117,7 +117,7 @@ The absolute arbiter is always VIRAC2 — image↔catalog agreement is only mean
 ## 4. Catalog provenance
 - Release uses the current complete vetted products
   (`*_resbgsub_m7_dao_basic_vetted`), **not** the stale `*_LOCKED_*` per-filter catalogs
-  (`best_dao_basic()` — the catalog-selection helper in **brick-jwst-2221** — can
+  (`best_dao_basic()` — the catalog-selection helper in **brick-jwst-2221**, absent from this repo — can
   return a stale LOCKED file that is ~1.9″/21″ off).
 
 ## 5. Versioning & provenance

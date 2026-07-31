@@ -16,7 +16,7 @@ Tool: `jwst_gc_pipeline/photometry/bulk_astrometry_update.py`.
 
 ---
 
-## When this path is valid
+## When this path is valid, and when it is not
 
 Valid **iff the residual tie error is a single rigid offset over the whole field.**
 That holds when the relative astrometry is internally consistent — every exposure
@@ -91,7 +91,7 @@ only when the offset is known-uniform.
 
 ---
 
-## What it changes
+## What it changes, and what it leaves alone
 
 | Touched | Untouched |
 |---|---|

@@ -25,7 +25,7 @@ there even for non-brick datasets.
 ### Sickle MIRI astrometric registration (prop 3958) — see brick-jwst-2221
 
 The sickle MIRI → NIRCam-F480M registration scripts are **region-specific** and
-live in the **brick-jwst-2221** repo:
+live in the **brick-jwst-2221** repo, outside this one:
 `brick2221/reduction/register_sickle_miri_o001_o002.py`,
 `brick2221/reduction/register_o002_f770w_per_frame_to_f480m.py`,
 `brick2221/reduction/register_o002_f770w_gwcs_to_f480m.py`,

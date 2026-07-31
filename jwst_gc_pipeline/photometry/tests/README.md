@@ -3,7 +3,7 @@
 Each test here pins a specific bug or defensive code path documented by a
 comment block in the cataloging/merging modules, so parameter tuning and
 refactors can't silently re-introduce a fixed failure. Tests build small
-synthetic inputs and run offline.
+synthetic inputs and run offline, with no survey data on disk.
 
 Run the whole suite:
 

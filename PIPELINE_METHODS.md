@@ -34,12 +34,13 @@ photometry reproducible and auditable, and lets us insert physically motivated
 quality controls between passes.
 
 A guiding principle throughout: **the fit is always performed on the individual
-calibrated exposures (frames).** The mosaic's role is to *detect* sources and to
+calibrated exposures (frames), never on the combined mosaic.** The mosaic's role is to *detect* sources and to
 build cleaner detection images between passes; the flux of every source is
 measured on the native detector frames, where the PSF is well defined. Those
 frames are the **distorted** ones — they carry a 3rd-order SIP approximation plus
 the authoritative GWCS, while the mosaic is the rectified product; the point is
-that fitting happens before resampling. One qualification: from m5 onward the
+that fitting happens before resampling, rather than that the frames are
+undistorted. One qualification: from m5 onward the
 mosaic-derived smoothed background is reprojected onto each frame and subtracted
 *before* fitting (see §Background), so the mosaic does enter the reported fluxes
 by that route.
@@ -156,7 +157,7 @@ in the others even where it is individually marginal. **The seed requires detect
 in at least two bands** within a tight positional tolerance
 (`--manual-crossband-seed-min-filters`, default **2**, at
 `--manual-crossband-seed-max-sep-mas` 30); the permissive single-band union is the
-legacy path, reachable with `=1`.
+legacy path, reachable with `=1` and not recommended.
 
 The per-band catalogs are then cross-matched into a single multi-filter table.
 A closing **forced cross-band fill** step revisits that table: wherever a source

@@ -18,7 +18,8 @@ Runs `PipelineRerunNIRCAM-LONG.py` → Image3 imaging + per-exposure
 `fix_alignment` + post-resample `realign_to_catalog`
 (see `jwst_gc_pipeline/reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md`).
 Defaults: proposal 4147, field 012, modules `nrca,nrcb,merged`, `-s`
-(reuse the `*_cal.fits` already on disk).
+(reuse the `*_cal.fits` already on disk; without it,
+Detector1/Image2 re-run from `_uncal`, fetching from MAST if needed).
 
 ## 2. Cataloging
 
@@ -106,7 +107,7 @@ Splits BELOW the filter boundary: for each phase (`m12→m3→m4→m5→m6[→m7
 submits a per-frame **fan-out array** (`NSHARDS` tiny `FANOUT_CPUS`-core tasks,
 each fitting a frame shard) then one **finalize** barrier job, chained
 `afterok`, phase after phase. The fan-out tasks are the smallest possible ask,
-so they backfill into queue holes too small for a per-filter job. (m8 runs inside
+so they backfill into queue holes too small for a per-filter job. (m8 is the one phase with no fan-out array: it runs inside
 the m7 finalize barrier, same as the monolith.)
 
 `NSHARDS` is only a granularity knob — the shard predicate (`frame_index % N`)
