@@ -2,8 +2,7 @@
 
 The point of these columns is that they are measured on the STAR-SUBTRACTED
 residual, not on the data being fit -- so they trace the extended emission at
-the source rather than the neighbouring stars that photutils' LocalBackground
-annulus necessarily includes.  The tests below pin that distinction, the
+the source, which photutils' LocalBackground cannot report.  The tests below pin that distinction, the
 weighting used to combine frames, and the edge/mask bookkeeping.
 """
 import numpy as np
@@ -11,8 +10,9 @@ import pytest
 from astropy.table import Table
 
 from jwst_gc_pipeline.photometry.residual_background import (
-    FOOTPRINT_BOX, MERGED_RESBKG_COLUMNS, RESBKG_COLUMNS, combine_frames,
-    local_bkg_column_name, measure_footprint_background)
+    FOOTPRINT_BOX, MERGED_RESBKG_COLUMNS, MERGED_RESBKG_COLUMNS_COMBINE,
+    RESBKG_COLUMNS, combine_frames, local_bkg_column_name,
+    measure_footprint_background)
 
 
 # ---------------------------------------------------------------- per frame --
@@ -185,8 +185,8 @@ def test_combine_rms_avg_is_weighted_by_npix_only_not_by_1_over_rms_squared():
     """It is advertised as the mean of the per-frame pixel RMS, so it must not
     be weighted by 1/rms**2 -- weighting a quantity by its own inverse square
     drives the result toward the smallest value.  Measured on 8 real brick
-    F182M nrca1 m7 exposures, npix/rms**2 weighting gave a median of 1.03
-    against 1.4038 for npix-only and 1.4042 for a plain mean: ~26% low.
+    F182M nrca1 m7 exposures (sky-matched), npix/rms**2 weighting gave a median
+    of 1.067 against 1.203 for npix-only and 1.203 for a plain mean: ~11% low.
     """
     # equal npix -> must reduce to the PLAIN mean, whatever the rms values are
     mean = np.array([[5.0, 5.0]])
@@ -248,7 +248,31 @@ def test_combine_does_not_blow_the_memory_budget():
 def test_combine_returns_every_declared_column():
     out = combine_frames(np.array([[1.0, 2.0]]), np.ones((1, 2)),
                          np.full((1, 2), 9.0))
-    assert set(out) == set(MERGED_RESBKG_COLUMNS)
+    # combine_frames returns all but modelsub_bkg_npix_avg, which merge_catalogs
+    # adds; MERGED_RESBKG_COLUMNS is the merged-CATALOGUE contract.
+    assert set(out) == set(MERGED_RESBKG_COLUMNS_COMBINE)
+    assert set(MERGED_RESBKG_COLUMNS) - set(out) == {'modelsub_bkg_npix_avg'}
+
+
+def test_nframes_is_nan_capable_so_replace_saturated_can_append():
+    """replace_saturated fills columns a satstar row lacks with NaN and then
+    add_row()s it.  An int nframes column made that raise
+
+        ValueError: cannot convert float NaN to integer
+
+    aborting the whole merge on the first field with saturated stars.  Float
+    also separates "never measured" (NaN) from "measured, no usable frame" (0).
+    """
+    out = combine_frames(np.array([[1.0, 2.0]]), np.ones((1, 2)),
+                         np.full((1, 2), 9.0))
+    nf = np.asarray(out['modelsub_bkg_nframes'])
+    assert nf.dtype.kind == 'f', nf.dtype
+    assert nf[0] == 2
+
+    # the actual failing operation, end to end
+    cat = Table({'flux_fit': [1.0], 'modelsub_bkg_nframes': nf})
+    cat.add_row({'flux_fit': 5.0, 'modelsub_bkg_nframes': np.nan})
+    assert np.isnan(cat['modelsub_bkg_nframes'][-1])
 
 
 def test_combine_rejects_mismatched_shapes():
@@ -359,6 +383,16 @@ def test_attach_records_the_local_bkg_basis_and_keeps_the_original_column():
         np.ones((30, 30)), ctx_raw, opts)
     assert 'local_bkg_raw' in out2.colnames
     assert 'local_bkg_resbgsub' not in out2.colnames
+
+    # --no-residual-background disables the FOOTPRINT columns only: the alias
+    # and LBKGBASE describe photutils' own column and must survive it.
+    off = types.SimpleNamespace(manual_residual_background=False,
+                                manual_residual_background_box=3)
+    out3 = _attach_residual_background(
+        Table({'x_fit': [10.0], 'y_fit': [10.0], 'local_bkg': [4.4]}),
+        np.ones((30, 30)), ctx_raw, off)
+    assert 'local_bkg_raw' in out3.colnames and out3.meta['LBKGBASE'][0] == 'raw'
+    assert not any(c in out3.colnames for c in RESBKG_COLUMNS)
 
 
 def test_column_name_contracts_are_stable():

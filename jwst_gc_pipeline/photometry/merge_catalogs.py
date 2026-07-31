@@ -844,7 +844,8 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
         newtbl.meta['modelsub_bkg'] = (
             'mean/RMS of a small footprint on (raw data - satstar - star '
             'model), stage-invariant by construction; combined across frames '
-            'as a sigma-clipped average weighted by npix/rms**2. Diagnostic; '
+            'as a sigma-clipped average weighted by npix/rms**2 (the RMS '
+            'column is npix-weighted instead). Diagnostic; '
             'not used by the flux fit. Cf. local_bkg_<basis>, which depends on '
             'the stage.')
         del _stack
@@ -1492,9 +1493,14 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     # make a table that is nearly equivalent to standard tables (with no 'x' or 'y' coordinate)
     minimal_version = {colname: merged_exposure_table[f'{colname}_avg']
                        for colname in column_names if f'{colname}_avg' in merged_exposure_table.colnames}
-    # The mean_modelsub_bkg family has no '<col>_avg' form, so the
-    # comprehension above cannot pick any of it up -- carry it explicitly or
-    # the released catalog advertises five columns and ships none.
+    # The four mean_* / _nframes names have no '<col>_avg' form, so the
+    # comprehension above cannot see them at all; carry them explicitly.
+    # (modelsub_bkg_rms_avg and modelsub_bkg_npix_avg DO have that form and are
+    # already picked up above -- but note the comprehension strips '_avg', so in
+    # the released minimal table they land as 'modelsub_bkg_rms' and
+    # 'modelsub_bkg_npix', which collide by name with the PER-FRAME columns of
+    # the same spelling.  Same convention as flux_fit_avg -> flux_fit; the
+    # *_allcols.fits table keeps the unambiguous names.)
     for key in ('dra_avg', 'ddec_avg', 'std_ra', 'std_dec', 'nmatch', 'nmatch_good',
                 'mean_modelsub_bkg', 'mean_modelsub_bkg_std',
                 'mean_modelsub_bkg_err', 'modelsub_bkg_rms_avg',

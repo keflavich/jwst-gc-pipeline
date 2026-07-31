@@ -1936,7 +1936,8 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
 
 
 def _attach_residual_background(result, residual, ctx, options, label=''):
-    """Add ``resbkg_mean``/``resbkg_rms``/``resbkg_npix`` to a per-frame catalog.
+    """Add ``modelsub_bkg``/``modelsub_bkg_rms``/``modelsub_bkg_npix`` to a
+    per-frame catalog, plus the ``local_bkg`` basis alias and ``LBKGBASE``.
 
     Measured on the star-subtracted residual, so it traces the extended
     emission at each source rather than the surrounding stars.  See
@@ -1951,6 +1952,20 @@ def _attach_residual_background(result, residual, ctx, options, label=''):
     # "never costs a frame its photometry".
     if not {'x_fit', 'y_fit'} <= set(result.colnames) or len(result) == 0:
         return result
+    # The local_bkg alias and LBKGBASE describe photutils' OWN column and cost
+    # nothing to compute, so they are written before the enable check:
+    # --no-residual-background disables the footprint measurement, not the
+    # record of which array local_bkg was measured on.
+    try:
+        basis = str(getattr(ctx, 'bkg_basis', 'raw'))
+        result.meta['LBKGBASE'] = (basis, 'array LocalBackground was measured on')
+        if 'local_bkg' in result.colnames:
+            result[local_bkg_column_name(basis)] = np.asarray(
+                result['local_bkg'], dtype=float)
+    except (KeyError, AttributeError, TypeError, ValueError) as exc:
+        print(f"[{label}] local_bkg alias skipped: {type(exc).__name__}: {exc}",
+              flush=True)
+
     try:
         if not bool(mopt(options, 'manual_residual_background')):
             return result
@@ -1970,16 +1985,6 @@ def _attach_residual_background(result, residual, ctx, options, label=''):
     result.meta['MSBKGBOX'] = (box, 'model-subtracted background footprint (px)')
     result.meta['MSBKGSRC'] = ('raw-satstar-starmodel',
                                'modelsub_bkg is stage-INVARIANT by construction')
-
-    # Record what photutils' local_bkg was measured on, and expose it under a
-    # self-describing alias.  The plain local_bkg column is kept unchanged so
-    # existing consumers are unaffected; the alias is what makes an m4 and an
-    # m7 catalog distinguishable without consulting the filename.
-    basis = str(getattr(ctx, 'bkg_basis', 'raw'))
-    result.meta['LBKGBASE'] = (basis, 'array LocalBackground was measured on')
-    if 'local_bkg' in result.colnames:
-        result[local_bkg_column_name(basis)] = np.asarray(result['local_bkg'],
-                                                          dtype=float)
 
     n_ok = int(np.isfinite(mean).sum())
     print(f"[{label}] model-subtracted background ({box}x{box}): "
@@ -2003,8 +2008,8 @@ def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
     # Model-subtracted footprint background (Jay Anderson 3x3 convention).  Built from
     # the SAME residual that is written below -- pristine data minus the satstar
     # model minus the star-only model -- so it measures the extended emission at
-    # the source position rather than the neighbour-contaminated annulus that
-    # photutils' LocalBackground uses.  Diagnostic only; nothing here feeds back
+    # the source position, which photutils' LocalBackground cannot report
+    # because it runs on the array being fit.  Diagnostic only; nothing here feeds back
     # into the flux fit.  Computed BEFORE save_photutils_results because that
     # function drops rows with bad x_fit, and the columns must be filtered with
     # them rather than misaligned afterwards.

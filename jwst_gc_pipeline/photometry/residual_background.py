@@ -3,17 +3,20 @@
 Motivation
 ----------
 The PSF fit already carries a local background: ``PSFPhotometry`` is built with
-``LocalBackground(inner, outer)`` (radii ``inner = max(6, 2*FWHM + 0.5*FWHM)``,
-``outer = inner + max(4, FWHM)`` -- 6 and 10 px for F182M), whose estimator is
+``LocalBackground(inner, outer)`` (radii
+``inner = max(6, int(round(2*FWHM + 0.5*FWHM)))``,
+``outer = inner + max(4, int(round(FWHM)))`` -- 6 and 10 px for every NIRCam
+filter; MIRI differs from F1000W up), whose estimator is
 photutils' default **sigma-clipped MedianBackground** (NOT MMM; verified from
 ``repr(LocalBackground(6, 10))`` and from the ``LOCAL_BK`` card written into the
 catalogues).  That estimator runs on **the array being fit** -- the
 NaN-interpolated frame, with the *saturated*-star model removed and whichever
-background subtraction is in effect already applied.  Two consequences: it still
-contains every unsaturated neighbour, so in a crowded field the 6-10 px annulus
-measures other stars as much as sky; and at the ``resbgsub`` stages the extended
-background has already been removed from that array, so it describes the diffuse
-emission only weakly.  It is also a single number per source per frame, with no
+background subtraction is in effect already applied.  So at the ``resbgsub``
+stages the extended background has already been removed from that array, and it
+describes the diffuse emission only weakly.  (It also still contains every
+unsaturated neighbour -- but that turns out NOT to be why this module helps;
+see "What actually produces the gain" below, where the neighbour effect is
+measured and explains none of the difference.)  It is also a single number per source per frame, with no
 associated scatter.
 
 This module adds an independent, complementary estimate, following the
@@ -25,7 +28,7 @@ minus the star model, so it retains the extended emission while removing the
 point sources -- which is exactly what ``local_bkg`` cannot report.
 
 Does it trace the extended emission?  Yes.  Measured on brick F182M nrca1 m7
-(19 888 sources, one exposure), against the m6 smoothed-residual background map
+(19 865 sources, one exposure), against the m6 smoothed-residual background map
 that was actually subtracted from the fitted array, sampled at each source:
 
     Spearman r(modelsub_bkg, subtracted bg map) = 0.86
@@ -48,7 +51,7 @@ comparison argues the wrong way.  The right comparison is against the error on
 the cell statistic.)
 
 The two columns are **not** independent -- Spearman r(modelsub_bkg, local_bkg) =
-0.51, since both are influenced by the same sky.  (A Pearson r of 0.116 on these
+0.51, since both are influenced by the same sky.  (A Pearson r of ~0.12 on these
 heavy-tailed distributions is misleading, and a low correlation would not have
 demonstrated independence anyway.)  The case for keeping both is the 0.86-vs-0.32
 comparison above, not their mutual correlation.
@@ -191,7 +194,7 @@ scope for this module.
    a flux or ``qfit`` cut.  A large ``|modelsub_bkg|`` on a bright star is best
    read as a subtraction-quality flag.  Spearman r(modelsub_bkg, flux_fit) =
    0.32; r(modelsub_bkg_rms, flux_fit) = 0.64, so the combining weight is
-   itself correlated with the value it weights.  Full range: -220 to +455.
+   itself correlated with the value it weights.  Full range: about -215 to +455 (the negative tail is mask-dependent).
 
 Stage dependence: local_bkg vs modelsub_bkg
 -------------------------------------------
@@ -203,7 +206,9 @@ not.  Measured on brick F182M nrca1 exposure 1 (median over sources):
     local_bkg           4.43   4.45   4.40   4.42   | 0.42   0.45   0.44
     (basis)             raw    raw    raw    raw    | resbgsub ...
 
-``modelsub_bkg`` reads ~4.5 at every stage.  So at m1-m4, ``local_bkg`` ~
+``modelsub_bkg`` reads 4.04-4.51 across the same stages (m2 4.04, m4 4.07,
+m7 4.51; part of the spread is population, the stages hold 19.9k-49k sources).
+The point is that it does not collapse toward 0.44.  So at m1-m4, ``local_bkg`` ~
 ``modelsub_bkg``, both measuring the same sky; from m5 the smoothed-residual
 background has been removed from the fitted array and ``local_bkg`` collapses
 toward 0 while ``modelsub_bkg`` stays put.  That is the intended behaviour of
@@ -219,8 +224,10 @@ Per-frame vs merged
 ``modelsub_bkg`` / ``modelsub_bkg_rms`` / ``modelsub_bkg_npix`` into that exposure's
 catalogue.  :func:`combine_frames` then reduces the per-exposure values to the
 merged-catalogue entry: a **sigma-clipped, inverse-variance weighted average**
-with the across-frame scatter, the propagated error, and the number of frames
-that survived clipping.
+with the across-frame scatter, the propagated error, the npix-weighted mean of
+the per-frame pixel RMS (note: npix only, NOT npix/rms**2 -- see
+:func:`combine_frames`), the number of frames that survived clipping, and the
+mean footprint size.
 
 Caveats
 -------
@@ -233,13 +240,13 @@ Caveats
   excluded instead.  Clipping happens across frames, where there are enough
   independent samples for it to mean something.
 * Footprint pixels are correlated -- lag-1 autocorrelation of the high-passed
-  residual is 0.43 (y) / 0.45 (x), from destreaking, NaN interpolation, IPC and
+  residual is ~0.4-0.6 depending on the high-pass definition, from destreaking, NaN interpolation, IPC and
   the model subtraction itself (these are detector-space ``_crf`` frames, never
   resampled, so this is not drizzle correlation).  Strictly, ``npix/rms**2`` is
   therefore not the inverse variance of the mean.  Empirically it is close: two
   errors cancel, since correlation makes ``rms`` under-estimate sigma while
   N_eff < npix makes the true variance of the mean larger.  Measured over 8 real
-  exposures, ``median(modelsub_bkg_std / modelsub_bkg_err) = 1.06`` for sources
+  exposures, ``median(mean_modelsub_bkg_std / mean_modelsub_bkg_err)`` for sources
   with >=3 frames, i.e. the propagated error is right to ~10%.
 * See the bright-source warning above: this is not a pure sky measurement.
 * The residual is built on the PRISTINE array, so at a saturated core the
@@ -259,19 +266,28 @@ from astropy.stats import sigma_clip
 from astropy.utils.exceptions import AstropyUserWarning
 
 __all__ = ['FOOTPRINT_BOX', 'RESBKG_COLUMNS', 'MERGED_RESBKG_COLUMNS',
+           'MERGED_RESBKG_COLUMNS_COMBINE',
            'measure_footprint_background', 'combine_frames',
            'local_bkg_column_name']
 
 #: Default footprint size in pixels (Jay Anderson's JWST1PASS convention).
 FOOTPRINT_BOX = 3
 
-#: Per-exposure column names written by :func:`measure_footprint_background`.
+#: Per-exposure column names.  :func:`measure_footprint_background` returns the
+#: arrays; ``cataloging._attach_residual_background`` writes them under these
+#: names.
 RESBKG_COLUMNS = ('modelsub_bkg', 'modelsub_bkg_rms', 'modelsub_bkg_npix')
 
 #: Merged-catalogue column names written by :func:`combine_frames`.
+#: ``modelsub_bkg_npix_avg`` is added by merge_catalogs, not by combine_frames,
+#: so it is listed here (this is the merged-catalogue contract) but is NOT in
+#: combine_frames' return dict -- see MERGED_RESBKG_COLUMNS_COMBINE.
 MERGED_RESBKG_COLUMNS = ('mean_modelsub_bkg', 'mean_modelsub_bkg_std',
                          'mean_modelsub_bkg_err', 'modelsub_bkg_rms_avg',
-                         'modelsub_bkg_nframes')
+                         'modelsub_bkg_nframes', 'modelsub_bkg_npix_avg')
+
+#: The subset :func:`combine_frames` itself returns.
+MERGED_RESBKG_COLUMNS_COMBINE = MERGED_RESBKG_COLUMNS[:-1]
 
 
 def local_bkg_column_name(bkg_basis):
@@ -396,13 +412,15 @@ def combine_frames(mean, rms, npix, *, sigma=3.0, maxiters=5, min_npix=2,
     Returns
     -------
     dict
-        ``modelsub_bkg_avg``  weighted, clipped mean background
-        ``modelsub_bkg_std``  weighted scatter of the kept frames (the "RMS"
-                             across exposures; NaN for a single frame, where
-                             scatter is undefined rather than 0)
-        ``modelsub_bkg_err``  propagated error, ``1/sqrt(sum(w))``
-        ``modelsub_bkg_rms_avg``   mean of the per-frame pixel RMS (local noise level)
-        ``resbkg_nframes``   number of frames surviving the cuts and clipping
+        ``mean_modelsub_bkg``      weighted, clipped mean background
+        ``mean_modelsub_bkg_std``  weighted scatter of the kept frames (the
+                                   "RMS" across exposures; NaN for a single
+                                   frame, where scatter is undefined, not 0)
+        ``mean_modelsub_bkg_err``  propagated error, ``1/sqrt(sum(w))``
+        ``modelsub_bkg_rms_avg``   npix-weighted mean of the per-frame pixel
+                                   RMS (the local noise level)
+        ``modelsub_bkg_nframes``   frames surviving the cuts and clipping
+                                   (float, so NaN survives replace_saturated)
     """
 
     # float32 throughout, and NO upcast of the caller's stacks.  These arrays
@@ -459,7 +477,11 @@ def combine_frames(mean, rms, npix, *, sigma=3.0, maxiters=5, min_npix=2,
     std = np.full(mean.shape[0], np.nan, dtype=dtype)
     err = np.full(mean.shape[0], np.nan, dtype=dtype)
     rms_avg = np.full(mean.shape[0], np.nan, dtype=dtype)
-    nframes = keep.sum(axis=1).astype(int)
+    # float, NOT int: replace_saturated fills columns a satstar row lacks with
+    # NaN and then add_row()s it, and `cannot convert float NaN to integer`
+    # aborts the whole merge.  Float also separates "never measured" (NaN, e.g.
+    # an appended satstar) from "measured, no usable frame" (0.0).
+    nframes = keep.sum(axis=1).astype(dtype)
 
     vals = np.where(keep, mean, 0).astype(dtype, copy=False)
     avg[ok] = (w[ok] * vals[ok]).sum(axis=1) / sw[ok]
@@ -475,7 +497,7 @@ def combine_frames(mean, rms, npix, *, sigma=3.0, maxiters=5, min_npix=2,
         dev = np.where(keep, mean - avg[:, None], 0).astype(dtype, copy=False)
         # Population (not sample) weighted scatter, matching the existing
         # std_*_avg convention in merge_catalogs.  It is biased LOW for small N
-        # -- 29% at N=2, ~10% at N=8 on real data -- which is acceptable for a
+        # -- 29% at N=2, 6.5% at N=8 -- which is acceptable for a
         # spread indicator but means it is not an unbiased sigma estimate.
         std[multi] = np.sqrt((w[multi] * dev[multi] ** 2).sum(axis=1)
                              / sw[multi])
@@ -485,9 +507,11 @@ def combine_frames(mean, rms, npix, *, sigma=3.0, maxiters=5, min_npix=2,
     # rationale (don't let an edge-clipped 2-pixel footprint count as much as a
     # full one) is satisfied by npix; the 1/rms**2 factor weights a quantity by
     # its own inverse square and drives the result toward the smallest value.
-    # Measured on 8 real brick F182M nrca1 m7 exposures: npix/rms**2 gave a
-    # median of 1.03 against 1.4038 for npix-only and 1.4042 for a plain mean,
-    # i.e. the advertised "mean of the per-frame pixel RMS" was ~26% low.
+    # Measured on 8 real brick F182M nrca1 m7 exposures, sky-matching sources
+    # across them: npix/rms**2 gave a median of 1.067 against 1.203 for
+    # npix-only and 1.203 for a plain mean -- the advertised "mean of the
+    # per-frame pixel RMS" was ~11% low.  (A cruder row-index alignment put it
+    # at ~26%; the sky-matched number is the one to quote.)
     wn = np.where(keep, npix, 0).astype(dtype, copy=False)
     swn = wn.sum(axis=1)
     okn = swn > 0

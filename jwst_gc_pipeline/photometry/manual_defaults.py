@@ -15,9 +15,9 @@ other's helpers.
 MANUAL_DEFAULTS = {
     # -- residual-footprint background (photometry/residual_background.py)
     # Mean/RMS of a small box centred on each source, measured on the
-    # STAR-SUBTRACTED residual -- the diffuse background at the star, as opposed
-    # to photutils' LocalBackground annulus, which is measured on the data being
-    # fit and so includes every unsaturated neighbour.  Diagnostic only: it does
+    # STAR-SUBTRACTED residual -- the diffuse background at the star, which
+    # photutils' LocalBackground cannot report because it runs on the array
+    # being fit.  Diagnostic only: it does
     # not feed back into the flux fit.  3 px follows Jay Anderson's JWST1PASS
     # convention.
     'manual_residual_background': True,
