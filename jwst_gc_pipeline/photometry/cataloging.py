@@ -24,8 +24,13 @@ with legacy ``iter2/iter3/iter4`` ones.
 The superseded legacy path is FROZEN in ``legacy/crowdsource_step.py``
 (BENCHMARKS ONLY; reached via ``--legacy-iterations``).
 """
+import glob
+
 import numpy as np
+from astropy.coordinates import SkyCoord
+from astropy.io.registry import IORegistryError
 from astropy.table import Table
+from astropy.table import vstack as table_vstack
 
 from photutils.background import LocalBackground
 from photutils.detection import DAOStarFinder
@@ -47,6 +52,7 @@ from jwst_gc_pipeline.photometry.psf_fitting import (
 # cataloging.py uses the one canonical implementation.  Importing the host
 # module at load time is fine: it does NOT import this module at top level
 # (only lazily in its dispatch branch), so there is no import cycle.
+from jwst_gc_pipeline.frame_wcs import frame_wcs
 from jwst_gc_pipeline.photometry import crowdsource_catalogs_long as _L
 from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
     SeededFinder,
@@ -70,6 +76,62 @@ from astropy.convolution import Gaussian2DKernel, interpolate_replace_nans, conv
 from astropy.nddata import NDData
 from photutils.background import Background2D, MedianBackground, MMMBackground
 from photutils.psf import SourceGrouper
+
+
+class VettedCombineError(RuntimeError):
+    """The per-obs vetted catalogs for one phase could not be combined.
+
+    Fail-closed: the combined catalog is the final science catalog and the m7
+    cross-band seed, so continuing would leave the previous run's version on
+    disk to be read as the seed.  The inputs are found by glob rather than
+    named by the caller, so the message lists them -- usually one was written
+    by older code and carries an incompatible dtype for a shared column.
+    (A missing or extra column does NOT get here: vstack outer-joins and masks
+    it.)
+    """
+
+
+class MergedcatMosaicError(RuntimeError):
+    """A phase could not write its merged-catalog residual / model i2d mosaics.
+
+    Fail-closed: the residual i2d is the NEXT phase's detection image and
+    background, so a run that silently continues without it produces degraded
+    later phases and no mosaics at all -- the failure mode of issue #159 for
+    ``--cutout-region`` runs.  Set ``ALLOW_MISSING_MERGEDCAT_MOSAIC=1`` to
+    downgrade this back to a warning.
+    """
+
+
+MERGEDCAT_MOSAIC_OVERRIDE_ENV = 'ALLOW_MISSING_MERGEDCAT_MOSAIC'
+
+
+def _handle_mergedcat_mosaic_failure(phase, module, filt, ex):
+    """Fail-closed handler for a failed mergedcat residual / model i2d build.
+
+    Re-raises as ``MergedcatMosaicError`` unless
+    ``ALLOW_MISSING_MERGEDCAT_MOSAIC=1``, in which case it prints and returns so
+    the run limps on (the pre-#159 behaviour).
+
+    Why fail closed: this block used to print-and-continue, so a run whose
+    mergedcat mosaics were never written still exited 0 and the operator only
+    discovered the missing ``*_mergedcat_{model,residual}_i2d.fits`` later --
+    which is exactly how issue #159 (every ``--cutout-region`` run vs. the
+    custom ``output_wcs``) stayed unnoticed.  The residual i2d is not
+    display-only: it is the NEXT phase's detection image AND its background, so
+    continuing past this silently degrades every later phase.
+    """
+    print(f"manual [{phase}]: mergedcat residual / bg build failed: {ex}\n"
+          f"{traceback.format_exc()}", flush=True)
+    if os.environ.get(MERGEDCAT_MOSAIC_OVERRIDE_ENV, '') == '1':
+        print(f"manual [{phase}]: {MERGEDCAT_MOSAIC_OVERRIDE_ENV}=1 set -- "
+              f"continuing without the mergedcat mosaics", flush=True)
+        return
+    if isinstance(ex, MergedcatMosaicError):
+        raise ex
+    raise MergedcatMosaicError(
+        f"[{phase}] {module}/{filt}: mergedcat residual / model i2d mosaic "
+        f"build failed: {ex}  (set {MERGEDCAT_MOSAIC_OVERRIDE_ENV}=1 to "
+        f"continue anyway)") from ex
 
 
 # ---------------------------------------------------------------------------
@@ -1328,6 +1390,100 @@ def _resolve_each_suffix(options, filtername):
     return default
 
 
+def _fill_saturated_pixels(filename, data, dqarr, was_sat, finite_model,
+                           filled, options):
+    """Replace the saturated pixels, best available method first.
+
+    The rim of a heavily saturated star reads too BRIGHT in the cal frame
+    (charge migration), so subtracting the PSF model there leaves a positive
+    ring.  Earlier reads of the ramp still sample the true profile, so:
+
+      1. ramp SLOPE (--satstar-ramp-recover).  cal is proportional to the
+         per-pixel slope, so slope * K_local is immune to the crowding that
+         makes the group-0 self-calibration below drift.  Its deep core (railed
+         even at group 0) chains to method 2, then to the model.
+      2. group 0 (--satstar-zeroframe-recover), same idea, one read.
+      3. the PSF model, for whatever is left.
+
+    Recovery must never break a reduction, so a bad or missing ramp file falls
+    through to the next method instead of raising.
+    """
+    if not (getattr(options, 'satstar_ramp_recover', False)
+            or getattr(options, 'satstar_zeroframe_recover', False)):
+        return np.where(was_sat, finite_model, filled)
+
+    dilate = int(getattr(options, 'satstar_zeroframe_dilate', 3))
+    dataf = np.asarray(data, dtype=float)
+
+    if getattr(options, 'satstar_ramp_recover', False):
+        try:
+            filled_by_ramp = _fill_from_ramp_slope(
+                filename, dataf, dqarr, was_sat, finite_model, filled, dilate)
+        except (OSError, ValueError, KeyError, IndexError, TypeError) as ex:
+            print(f"[manual] ramp-slope recovery skipped "
+                  f"({type(ex).__name__}: {ex}); falling back to "
+                  f"zeroframe/model", flush=True)
+        else:
+            if filled_by_ramp is not None:
+                return filled_by_ramp
+
+    if getattr(options, 'satstar_zeroframe_recover', False):
+        group0 = _load_ramp_group0(filename)
+        if group0 is not None and group0.shape == data.shape:
+            from jwst_gc_pipeline.reduction.saturated_star_finding import (
+                zeroframe_recover_saturated)
+            recovered, rim, deep, ratio = zeroframe_recover_saturated(
+                dataf, dqarr, group0, sat_dilate=dilate)
+            if np.isfinite(ratio):
+                print(f"[manual] zeroframe rim recovery: R={ratio:.3f} "
+                      f"rim={int(rim.sum())} deepcore={int(deep.sum())}",
+                      flush=True)
+                # rim -> recovered truth; everything still saturated -> model.
+                return np.where(rim, recovered,
+                                np.where(was_sat, finite_model, filled))
+
+    return np.where(was_sat, finite_model, filled)
+
+
+def _fill_from_ramp_slope(filename, dataf, dqarr, was_sat, finite_model,
+                          filled, dilate):
+    """Method 1 of `_fill_saturated_pixels`, or None if the ramp cannot do it."""
+    ramp = _load_ramp_cube(filename)
+    if ramp is None or ramp[0].shape[-2:] != dataf.shape:
+        return None
+    from jwst_gc_pipeline.reduction.saturated_star_finding import (
+        ramp_recover_saturated, zeroframe_recover_saturated)
+    recovered, rim, deep, slope_ratio = ramp_recover_saturated(
+        dataf, dqarr, ramp[0], ramp[1], sat_dilate=dilate)
+    if not np.isfinite(slope_ratio):
+        return None
+    filled = np.where(rim, recovered, filled)
+    done = rim.copy()
+
+    # The deep core is railed even at group 0's slope; try the group-0 recovery
+    # for it.  A failure here keeps the slope rim we already have -- it must not
+    # discard it and fall back to the model.
+    n_group0 = 0
+    try:
+        group0 = _load_ramp_group0(filename)
+        if group0 is not None and group0.shape == dataf.shape and deep.any():
+            core_recovered, core_rim, _, core_ratio = zeroframe_recover_saturated(
+                dataf, dqarr, group0, sat_dilate=dilate)
+            if np.isfinite(core_ratio):
+                core = deep & core_rim
+                filled = np.where(core, core_recovered, filled)
+                done = done | core
+                n_group0 = int(core.sum())
+    except (OSError, ValueError, KeyError, IndexError, TypeError) as ex:
+        print(f"[manual] deep-core group-0 recovery skipped "
+              f"({type(ex).__name__}: {ex}); keeping the slope rim", flush=True)
+
+    print(f"[manual] ramp-slope rim recovery: K={slope_ratio:.3f} "
+          f"slope_rim={int(rim.sum())} deepcore={int(deep.sum())} "
+          f"g0_fallback={n_group0}", flush=True)
+    return np.where(was_sat & ~done, finite_model, filled)
+
+
 def _load_ramp_group0(crf_path):
     """Load the ramp first read (group-0) for a per-frame crf/cal file from its
     sibling Detector1 ``_ramp.fits`` (same detector pixel grid, no reprojection).
@@ -1440,7 +1596,13 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
 
     fh, im1, data, wht, err, instrument, telescope, obsdate = _L.load_data(filename)
     inst_token = instrument.lower()
-    ww = wcs.WCS(im1[1].header)
+    # THE per-frame astrometric WCS: every catalog RA/Dec in this run comes from
+    # it.  Read the GWCS (ASDF extension), not the SCI header's SIP fit -- SIP
+    # is only a fitted approximation of the true distortion, and on frames
+    # written before the tight-fit change it is 5-8 mas off in a
+    # position-dependent, per-detector, per-filter way (see frame_wcs).  Falls
+    # back to the SIP WCS, with a warning, if the product has no GWCS.
+    ww = frame_wcs(filename)
 
     background_map = None
     original_data = data.copy()  # manual residuals are built vs the pristine data
@@ -1481,7 +1643,13 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
             except Exception as _e:
                 print(f"[manual] bg crop failed ({_e}); reprojecting full mosaic", flush=True)
                 bg_data = bg_hdu.data.astype(float)
-        bg_reproj, _ = reproject_interp((bg_data, bg_wcs), ww, shape_out=data.shape)
+        # reproject needs a real astropy/APE-14 WCS as the output grid; hand it
+        # the frame's FITS WCS.  This is a background map, not astrometry --
+        # the SIP fit residual is far below anything a background gradient cares
+        # about.
+        bg_reproj, _ = reproject_interp((bg_data, bg_wcs),
+                                        getattr(ww, 'fits_wcs', ww),
+                                        shape_out=data.shape)
         del bg_data
         bg_finite = np.where(np.isfinite(bg_reproj), bg_reproj, 0.0)
         zeros = data == 0
@@ -1651,7 +1819,6 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     # partner catalog preferred; per-frame accepted catalogs as fallback.
     _partner_sky = None
     if bool(getattr(options, 'satstar_partner_seed', False)):
-        import glob
         from astropy.coordinates import SkyCoord
         from jwst_gc_pipeline.photometry.saturation_continuity import DEGENERATE_PAIRS
         _pmap = {}
@@ -1730,83 +1897,9 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
                 finite_model = np.where(np.isfinite(sm), sm, 0.0)
                 if dqarr is not None:
                     was_sat = (dqarr & _L.dqflags.pixel['SATURATED']) != 0
-                    # ZEROFRAME saturated-RIM recovery (#2, opt-in): the most-
-                    # saturated stars leave a positive ring because the cal-frame
-                    # rim is charge-migration-INFLATED above the true flux; the
-                    # ramp first read (group-0) samples the true profile wherever
-                    # it is unsaturated.  Replace the rim with R*group0 (de-
-                    # inflated) so model subtraction collapses the ring; the deep
-                    # core (group-0 also saturated) falls back to model-replace.
-                    _zf_done = False
-                    # Ramp-SLOPE rim recovery (preferred): cal is proportional to
-                    # the per-pixel ramp SLOPE, not group-0, so slope*K_local is
-                    # crowding-immune where the group-0 self-cal below drifts/blows
-                    # up (crowding, deep ramps).  Slope-recoverable rim -> truth;
-                    # deep core (railed at group-0) chains to the group-0 recovery
-                    # then model.
-                    if getattr(options, 'satstar_ramp_recover', False):
-                        # FAIL-SOFT: provenance/recovery must NEVER break a science
-                        # reduction.  Any error here (odd ramp file, shape quirk)
-                        # degrades to the zeroframe/model path, never propagates.
-                        try:
-                            _rc = _load_ramp_cube(filename)
-                            if _rc is not None and _rc[0].shape[-2:] == data.shape:
-                                from jwst_gc_pipeline.reduction.saturated_star_finding import (
-                                    ramp_recover_saturated, zeroframe_recover_saturated)
-                                _dataf = np.asarray(data, dtype=float)
-                                _zdil = int(getattr(options, 'satstar_zeroframe_dilate', 3))
-                                _rec, _rim, _deep, _K = ramp_recover_saturated(
-                                    _dataf, dqarr, _rc[0], _rc[1], sat_dilate=_zdil)
-                                if np.isfinite(_K):
-                                    _recovered = _rim.copy()
-                                    nan_replaced_data = np.where(
-                                        _rim, _rec, nan_replaced_data)
-                                    _ng0 = 0
-                                    _g0 = _load_ramp_group0(filename)
-                                    if (_g0 is not None and _g0.shape == data.shape
-                                            and _deep.any()):
-                                        _r2, _rim2, _d2, _R2 = zeroframe_recover_saturated(
-                                            _dataf, dqarr, _g0, sat_dilate=_zdil)
-                                        if np.isfinite(_R2):
-                                            _dc = _deep & _rim2
-                                            nan_replaced_data = np.where(
-                                                _dc, _r2, nan_replaced_data)
-                                            _recovered = _recovered | _dc
-                                            _ng0 = int(_dc.sum())
-                                    nan_replaced_data = np.where(
-                                        was_sat & ~_recovered, finite_model,
-                                        nan_replaced_data)
-                                    _zf_done = True
-                                    print(f"[manual] ramp-slope rim recovery: K={_K:.3f} "
-                                          f"slope_rim={int(_rim.sum())} "
-                                          f"deepcore={int(_deep.sum())} "
-                                          f"g0_fallback={_ng0}", flush=True)
-                        except (OSError, ValueError, KeyError, IndexError,
-                                TypeError) as _rr_ex:
-                            print(f"[manual] ramp-slope recovery skipped "
-                                  f"({type(_rr_ex).__name__}: {_rr_ex}); "
-                                  f"falling back to zeroframe/model", flush=True)
-                            _zf_done = False
-                    if (not _zf_done) and getattr(options, 'satstar_zeroframe_recover', False):
-                        _g0 = _load_ramp_group0(filename)
-                        if _g0 is not None and _g0.shape == data.shape:
-                            from jwst_gc_pipeline.reduction.saturated_star_finding import (
-                                zeroframe_recover_saturated)
-                            _rec, _rim, _deep, _R = zeroframe_recover_saturated(
-                                np.asarray(data, dtype=float), dqarr, _g0,
-                                sat_dilate=int(getattr(
-                                    options, 'satstar_zeroframe_dilate', 3)))
-                            if np.isfinite(_R):
-                                # rim -> recovered truth; remaining sat -> model.
-                                nan_replaced_data = np.where(
-                                    _rim, _rec,
-                                    np.where(was_sat, finite_model, nan_replaced_data))
-                                _zf_done = True
-                                print(f"[manual] zeroframe rim recovery: R={_R:.3f} "
-                                      f"rim={int(_rim.sum())} deepcore={int(_deep.sum())}",
-                                      flush=True)
-                    if not _zf_done:
-                        nan_replaced_data = np.where(was_sat, finite_model, nan_replaced_data)
+                    nan_replaced_data = _fill_saturated_pixels(
+                        filename, data, dqarr, was_sat, finite_model,
+                        nan_replaced_data, options)
                 nan_replaced_data = nan_replaced_data - finite_model
                 satstar_model_subtracted = finite_model
                 print(f"[manual] subtracted satstar model {os.path.basename(sat_model)} "
@@ -2330,6 +2423,118 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
           f">={min_filters} filters @ {max_sep_mas:g} mas, SNR>{snr_min}, qfit<{qfit_max}; "
           f"from {n} good m6 detections across {len(flist)} filters)", flush=True)
     return out
+
+
+CARTA_EXPORT_COLUMNS = ('flux', 'flux_err', 'qfit', 'cfit', 'flags',
+                        'is_saturated', 'replaced_saturated', 'iter_found')
+
+
+def _write_carta_catalog(cat, path):
+    """Write a sibling catalog CARTA can load.
+
+    CARTA rejects the SkyCoord mixin column the science catalog uses
+    ("Catalog type not supported"), so give it plain float ra/dec in degrees.
+    """
+    if 'skycoord' in cat.colnames:
+        coords = SkyCoord(cat['skycoord'])
+    else:
+        coords = SkyCoord(cat['ra'], cat['dec'], unit='deg')
+    out = Table()
+    out['ra'] = np.asarray(coords.ra.deg, dtype='float64')
+    out['dec'] = np.asarray(coords.dec.deg, dtype='float64')
+    for col in CARTA_EXPORT_COLUMNS:
+        if col in cat.colnames:
+            out[col] = np.asarray(cat[col])
+    out.write(path, overwrite=True)
+
+
+def _column_dtype_conflicts(paths, tables):
+    """One line per column whose dtype is not the same in every input.
+
+    astropy names the column and the dtypes but not the file, which is what
+    the operator needs when the inputs came from a glob.
+    """
+    lines = []
+    for col in sorted({c for t in tables for c in t.colnames}):
+        # mixin columns (skycoord) have no dtype -- nothing to compare
+        seen = {os.path.basename(p): str(t[col].dtype)
+                for p, t in zip(paths, tables)
+                if col in t.colnames and hasattr(t[col], 'dtype')}
+        if len(set(seen.values())) > 1:
+            lines.append(f"  column {col!r} differs: "
+                         + ', '.join(f'{f} is {d}' for f, d in seen.items()))
+    return lines
+
+
+def _combine_per_obs_vetted(vetted_path, merged_path, combined_path,
+                            this_obs_only, label=''):
+    """Combine the per-obs `_o*_vetted` catalogs into the all-obs vetted one.
+
+    Incremental: after obs 001 it holds 001, after 002 it holds 001+002,
+    deduplicated by sky position.  Each footprint was already vetted against
+    its own obs' data_i2d.
+
+    `this_obs_only` uses just this obs' catalog, for a joint run (one vetting
+    pass against the both-obs coadd is the authoritative one, and the `_o*`
+    glob would also pick up stale siblings from earlier separate runs) and for
+    gc2211, where each obs is a different target.
+    """
+    if this_obs_only:
+        siblings = [vetted_path]
+    else:
+        siblings = sorted(glob.glob(
+            merged_path.replace('.fits', '_o*_vetted.fits')))
+    read, tables = [], []
+    for path in siblings:
+        try:
+            tables.append(Table.read(path))
+        except (OSError, ValueError, KeyError, IORegistryError) as ex:
+            print(f"{label}: cannot read {os.path.basename(path)} ({ex})",
+                  flush=True)
+        else:
+            read.append(path)
+    if not tables:
+        return
+    # This catalog is the m7 seed, so it must never be stale and never be half
+    # written.  Drop the previous run's file up front, so a failure below leaves
+    # nothing rather than something out of date; then write through a temp file
+    # and rename, so a partial write is never readable.  (Writing to the temp
+    # file alone would not do -- on failure the old file would survive, which is
+    # the case that matters.)
+    if os.path.exists(combined_path):
+        os.remove(combined_path)
+    try:
+        combined = tables[0] if len(tables) == 1 else table_vstack(
+            tables, metadata_conflicts='silent')
+    except (ValueError, TypeError) as ex:
+        # Fatal by design -- continuing would leave a stale combined catalog to
+        # be read as the m7 seed.  The inputs came from a glob, not from the
+        # caller, so say which file is the odd one out; a bare astropy message
+        # names the column and dtypes but no filename.
+        detail = _column_dtype_conflicts(read, tables)
+        if not detail:      # failed for some other reason -- at least say which files
+            detail = [f"  inputs: {[os.path.basename(p) for p in read]}"]
+        raise VettedCombineError(
+            f"cannot combine the per-obs vetted catalogs for "
+            f"{os.path.basename(combined_path)}: {type(ex).__name__}: {ex}\n"
+            + '\n'.join(detail)) from ex
+    if len(tables) > 1 and 'skycoord' in combined.colnames:
+        combined = _dedup_combined_vetted(combined)
+    root, ext = os.path.splitext(combined_path)   # keep ext: astropy sniffs it
+    staging = f'{root}.tmp{ext}'
+    combined.write(staging, overwrite=True)
+    os.replace(staging, combined_path)
+    print(f"{label}: combined {len(siblings)} per-obs vetted -> "
+          f"{os.path.basename(combined_path)} ({len(combined)} all-obs sources)",
+          flush=True)
+    # The CARTA sibling is a viewer convenience.  The science catalogs are
+    # already on disk at this point, so a failure here must not abort the run.
+    try:
+        _write_carta_catalog(combined,
+                             combined_path.replace('.fits', '_carta.fits'))
+    except (OSError, ValueError, TypeError, KeyError, u.UnitsError) as ex:
+        print(f"{label}: CARTA catalog export failed "
+              f"({type(ex).__name__}: {ex})", flush=True)
 
 
 def _dedup_combined_vetted(comb, min_sep_deg=0.11 / 3600.0):
@@ -3005,11 +3210,10 @@ def _astrom_checkpoint_refcat(basepath):
     checkpoints: env ``ASTROM_REFCAT`` first, else the target's
     ``gaia_virac2_refcat*.fits`` seed refcat.  None (consensus-only checks)
     when the target has no seed refcat."""
-    import glob as _glob
     from jwst_gc_pipeline.photometry.visit_consensus import load_reference_catalog
     path = os.environ.get('ASTROM_REFCAT')
     if not path:
-        cands = sorted(_glob.glob(f"{basepath}/catalogs/gaia_virac2_refcat*.fits"))
+        cands = sorted(glob.glob(f"{basepath}/catalogs/gaia_virac2_refcat*.fits"))
         path = cands[-1] if cands else None
     if path and os.path.exists(path):
         print(f"astrom checkpoint: reference catalog {path}", flush=True)
@@ -3020,15 +3224,65 @@ def _astrom_checkpoint_refcat(basepath):
     return None
 
 
-def _astrom_find_offsets_table(basepath, proposal_id):
-    """The offsets table fix_alignment would consume, in its preference order."""
-    import glob as _glob
-    for pat in (f"{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_*locked.csv",
-                f"{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_*_average.csv",
-                f"{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_*.csv"):
-        cands = sorted(_glob.glob(pat))
-        if cands:
-            return cands[0]
+def _astrom_offsets_channel(proposal_id, field):
+    """Which offsets table THIS field is aligned from, per ``alignment_config``.
+
+    Returns ``'locked'`` / ``'consensus'`` / ``'none'``.  ``'none'`` means the
+    field takes no table-driven correction at all (an unconfigured field, or one
+    whose whole tie is a recorded constant), so writing a correction for it would
+    produce a table nothing reads.
+    """
+    from jwst_gc_pipeline.reduction.alignment_config import (
+        RECORDED_BULK, TABLE_CONSENSUS, TABLE_LOCKED, resolve,
+    )
+    cfg = resolve(proposal_id, field)
+    if cfg is None:
+        return 'none'
+    if cfg.source == TABLE_CONSENSUS:
+        return 'consensus'
+    if cfg.source == TABLE_LOCKED:
+        return 'locked'
+    if cfg.source == RECORDED_BULK:
+        # bulk is a constant; only the per-exposure term is table-driven
+        return 'consensus' if cfg.consensus_jitter else 'none'
+    return 'none'
+
+
+def _astrom_find_offsets_table(basepath, proposal_id, field=None):
+    """The offsets table ``fix_alignment`` will consume for THIS field.
+
+    Resolved from ``alignment_config`` -- the SAME declaration the reducer reads
+    -- not by globbing for whatever table happens to be on disk.  The old
+    filename-preference glob (``*locked.csv`` first, then ``*_average.csv``, then
+    ``*.csv``) is what let the writer and the reader point at different files:
+    the checkpoint would find and edit ``..._VIRAC2locked.csv`` while
+    ``fix_alignment`` was configured to read ``..._consensus.csv``, so every
+    correction landed in a table nothing consumed and the re-tie loop re-measured
+    the same residual forever.  That is exactly how sgrc came out of a full
+    reduction at ``RAOFFSET=0.0``.
+
+    ``field`` is required to distinguish observations of one proposal that are
+    aligned differently (2045: arches is consensus-driven, quintuplet locked).
+    Falls back to the legacy globs only for a field with no config entry, which
+    the caller reports separately.
+    """
+    channel = _astrom_offsets_channel(proposal_id, field)
+    if channel == 'consensus':
+        path = f"{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_consensus.csv"
+        # absent -> None, which routes the caller to seed it
+        return path if os.path.exists(path) else None
+    if channel == 'locked':
+        path = f"{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_VIRAC2locked.csv"
+        if os.path.exists(path):
+            return path
+        # the pre-locked average / per-exposure tables fix_alignment still falls
+        # back to when no locked table exists yet
+        for pat in (f"{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_*locked.csv",
+                    f"{basepath}/offsets/Offsets_JWST_Brick{proposal_id}_*_average.csv"):
+            cands = sorted(glob.glob(pat))
+            if cands:
+                return cands[0]
+        return None
     return None
 
 
@@ -3105,7 +3359,6 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     demotes blocking errors to loud warnings.  Cutout runs are skipped (partial
     frames cannot form a visit consensus).
     """
-    import glob as _glob
     import re as _re
     from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
         AstrometryCorrectionRequiredError, AstrometryRegressionError,
@@ -3137,8 +3390,8 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     # `resbgsub_group` combination.
     base = f"{cut_bp}/{filt.upper()}/{filt.lower()}_*visit*_vgroup*_exp*"
     fns = sorted(set(
-        _glob.glob(f"{base}_{merge_label}_daophot_basic.fits")
-        + _glob.glob(f"{base}_{merge_label}_chunk*of*_daophot_basic.fits")))
+        glob.glob(f"{base}_{merge_label}_daophot_basic.fits")
+        + glob.glob(f"{base}_{merge_label}_chunk*of*_daophot_basic.fits")))
     accept = _perframe_catalog_re(merge_label)
     rejected = [f for f in fns if not accept.search(os.path.basename(f))]
     fns = [f for f in fns if accept.search(os.path.basename(f))]
@@ -3156,7 +3409,7 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
         # The merged product for THIS stage is the discriminator -- if the merge
         # produced output but no per-frame catalog matched, the inputs are wrong;
         # if there is no merge either, the stage simply did not run here.
-        merged = _glob.glob(f"{cut_bp}/catalogs/{filt.lower()}_{module}_"
+        merged = glob.glob(f"{cut_bp}/catalogs/{filt.lower()}_{module}_"
                             f"indivexp_merged*_{merge_label}_dao_basic.fits")
         msg = (f"astrom checkpoint [{merge_label}] {filt}/{module}: NO per-frame "
                f"catalogs matched ({base}_{merge_label}_daophot_basic.fits) -- "
@@ -3251,7 +3504,19 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
 
     # m2 measured a real misalignment: im0 is wrong.
     assert merge_label in CORRECTION_STAGES
-    offsets_path = _astrom_find_offsets_table(basepath, proposal_id)
+    _field = str(getattr(options, 'field', ''))
+    _channel = _astrom_offsets_channel(proposal_id, _field)
+    if _channel == 'none':
+        raise RuntimeError(
+            f"astrom checkpoint [{merge_label}] {filt}/{module}: measured "
+            f"{len(corrections)} real correction(s) for proposal {proposal_id} "
+            f"observation {_field}, but alignment_config declares NO table-driven "
+            f"correction channel for this field -- so anything written here would "
+            f"land in a table fix_alignment never reads, and the next re-tie would "
+            f"re-measure the identical residual (the arches/sgrb2 failure). Add an "
+            f"entry to jwst_gc_pipeline/reduction/alignment_config.py declaring "
+            f"where this field's tie lives before correcting it.")
+    offsets_path = _astrom_find_offsets_table(basepath, proposal_id, _field)
     applied = False
     seeded = False
     if os.environ.get('ASTROM_CHECKPOINT_APPLY', '') == '1':
@@ -3264,8 +3529,10 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
         # the applied tie removes the bulk jitter).  Route consensus tables (and
         # the no-table seed case) through the UPSERT helper instead; only the
         # brick/cloudc module-locked tables use the strict update.
-        _is_consensus = offsets_path is None or str(offsets_path).endswith(
-            '_consensus.csv')
+        # Which helper writes is decided by the CONFIGURED channel, not by the
+        # filename that happened to be found -- a filename test re-opens the
+        # reader/writer split this lookup was changed to close.
+        _is_consensus = _channel == 'consensus'
         if _is_consensus:
             from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
                 seed_offsets_table_from_consensus)
@@ -3316,6 +3583,9 @@ def _stamp_catalog_provenance(path, stage, options, parent_paths=None):
     (missing package, bad file, unknown stage, unreadable parent sidecar) is
     swallowed.
     """
+    # WCS-source card first: it must not depend on the versioning package being
+    # importable, because it is what identifies a catalog as GWCS- or SIP-built.
+    _stamp_wcs_source(path)
     try:
         from jwst_gc_pipeline.versioning import stamping as _vstamp
         from jwst_gc_pipeline.versioning import fingerprint as _vfp
@@ -3335,6 +3605,29 @@ def _stamp_catalog_provenance(path, stage, options, parent_paths=None):
         except (OSError, ValueError, KeyError):
             upstream = None
     _vstamp.try_stamp_catalog(path, stage, params=params, upstream=upstream)
+
+
+def _stamp_wcs_source(path):
+    """Record whether this product's positions came from GWCSes or from SIP.
+
+    Catalogs built before the GWCS-first change carry NO ``WCSSRC`` card, so its
+    presence-and-value is what makes a catalog self-identifying across that
+    change.  Without it the only discriminator is the build date, which is
+    exactly what should not be relied on at staging time -- positions moved by
+    up to ~5-8 mas (position-dependent, per detector and per filter).
+
+    FAIL-SOFT, like the sidecar stamping above: provenance never breaks
+    cataloging.
+    """
+    from astropy.io import fits as _fits
+
+    from jwst_gc_pipeline.frame_wcs import wcs_provenance_cards
+    try:
+        with _fits.open(path, mode='update') as _h:
+            for _k, _v, _c in wcs_provenance_cards():
+                _h[0].header[_k] = (_v, _c)
+    except (OSError, KeyError, IndexError, ValueError):
+        return
 
 
 def _run_crossfilter_astrom_checkpoint(vetted_paths_by_filter, cut_bp, basepath,
@@ -4232,193 +4525,113 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 # MIRI multi-obs keeps the un-tokened all-obs combine (cloudef obs2+5
                 # ARE the same field).  _combsuf is set next to _vtok above.
                 combined_vetted_path = merged_path.replace('.fits', f'{_combsuf}_vetted.fits')
-                try:
-                    merged = Table.read(merged_path)
-                    # post-merge off-FOV cleanup: (A) one row per off-FOV satstar
-                    # (the per-frame fits scatter wider than the 0.15" satstar
-                    # dedup), (B) drop NON-satstar rows that fall >5 PSF widths
-                    # outside this filter's FOV (m7 cross-band-seed unions all
-                    # filters' positions -> off-this-FOV garbage).  See
-                    # _clean_offfov_dups_and_offfield.
-                    merged, _ndup, _noff = _clean_offfov_dups_and_offfield(
-                        merged, filt, _data_i2d_path(module, filt), basepath,
-                        dedup_arcsec=float(getattr(options, 'offfov_dedup_arcsec', 1.0)),
-                        fov_pad_psf=float(getattr(options, 'offfield_fov_pad_psf', 5.0)),
-                        # In dense saturated regions (W51 IRS2) the 1.0" satstar
-                        # dedup collapses DISTINCT in-field stars; restrict it to
-                        # off-FOV rows for the extended-emission/crowded fields.
-                        dedup_offfov_only=(str(target).lower() in _EXTENDED_EMISSION_TARGETS))
-                    if _ndup or _noff:
-                        print(f"manual [{phase}] {filt}/{module}: off-FOV cleanup "
-                              f"removed {_ndup} duplicate satstar row(s) + {_noff} "
-                              f"off-field cross-band-seed artifact(s) -> n={len(merged)}",
-                              flush=True)
-                        merged.write(merged_path, overwrite=True)
-                    # --- iteration-found provenance: the first phase a source
-                    # appears in (matched across phases by sky position) ---
-                    _iter_num = {'m2': 2, 'm3': 3, 'm4': 4, 'm5': 5, 'm6': 6, 'm7': 7}[merge_label]
-                    _msc = SkyCoord(merged['skycoord'])
-                    _ifound = np.full(len(merged), _iter_num, dtype=int)
-                    _prev = prev_merged_for.get((module, filt))
-                    if _prev is not None and len(merged):
-                        _psc, _pif = _prev
-                        _ftab = Table.read(_L.fwhm_table_path())
-                        _fw = float(_ftab[_ftab['Filter'] == filt]['PSF FWHM (arcsec)'][0])
-                        _idx, _sep, _ = _msc.match_to_catalog_sky(_psc)
-                        _m = _sep.arcsec < 0.5 * _fw   # within ~0.5 FWHM = same source
-                        _ifound[_m] = np.asarray(_pif)[np.asarray(_idx)][_m]
-                    merged['iter_found'] = _ifound
+                merged = Table.read(merged_path)
+                # post-merge off-FOV cleanup: (A) one row per off-FOV satstar
+                # (the per-frame fits scatter wider than the 0.15" satstar
+                # dedup), (B) drop NON-satstar rows that fall >5 PSF widths
+                # outside this filter's FOV (m7 cross-band-seed unions all
+                # filters' positions -> off-this-FOV garbage).  See
+                # _clean_offfov_dups_and_offfield.
+                merged, _ndup, _noff = _clean_offfov_dups_and_offfield(
+                    merged, filt, _data_i2d_path(module, filt), basepath,
+                    dedup_arcsec=float(getattr(options, 'offfov_dedup_arcsec', 1.0)),
+                    fov_pad_psf=float(getattr(options, 'offfield_fov_pad_psf', 5.0)),
+                    # In dense saturated regions (W51 IRS2) the 1.0" satstar
+                    # dedup collapses DISTINCT in-field stars; restrict it to
+                    # off-FOV rows for the extended-emission/crowded fields.
+                    dedup_offfov_only=(str(target).lower() in _EXTENDED_EMISSION_TARGETS))
+                if _ndup or _noff:
+                    print(f"manual [{phase}] {filt}/{module}: off-FOV cleanup "
+                          f"removed {_ndup} duplicate satstar row(s) + {_noff} "
+                          f"off-field cross-band-seed artifact(s) -> n={len(merged)}",
+                          flush=True)
                     merged.write(merged_path, overwrite=True)
-                    # upstream = the imaging frames (per-exposure crf sidecars,
-                    # pooled) + the previous phase's merged catalog (the seed).
-                    # A re-reduced frame (changed crf data facet) thus forces a
-                    # REFIT through the pure-sidecar cascade too.
-                    _parents = {'imaging': frame_cache.get((module, filt), [])}
-                    if _prev_merged:
-                        _parents[_prev_phase] = _prev_merged
-                    _stamp_catalog_provenance(merged_path, phase, options,
-                                              parent_paths=_parents)
-                    prev_merged_for[(module, filt)] = (_msc, _ifound)
+                # --- iteration-found provenance: the first phase a source
+                # appears in (matched across phases by sky position) ---
+                _iter_num = {'m2': 2, 'm3': 3, 'm4': 4, 'm5': 5, 'm6': 6, 'm7': 7}[merge_label]
+                _msc = SkyCoord(merged['skycoord'])
+                _ifound = np.full(len(merged), _iter_num, dtype=int)
+                _prev = prev_merged_for.get((module, filt))
+                if _prev is not None and len(merged):
+                    _psc, _pif = _prev
+                    _ftab = Table.read(_L.fwhm_table_path())
+                    _fw = float(_ftab[_ftab['Filter'] == filt]['PSF FWHM (arcsec)'][0])
+                    _idx, _sep, _ = _msc.match_to_catalog_sky(_psc)
+                    _m = _sep.arcsec < 0.5 * _fw   # within ~0.5 FWHM = same source
+                    _ifound[_m] = np.asarray(_pif)[np.asarray(_idx)][_m]
+                merged['iter_found'] = _ifound
+                merged.write(merged_path, overwrite=True)
+                # upstream = the imaging frames (per-exposure crf sidecars,
+                # pooled) + the previous phase's merged catalog (the seed).
+                # A re-reduced frame (changed crf data facet) thus forces a
+                # REFIT through the pure-sidecar cascade too.
+                _parents = {'imaging': frame_cache.get((module, filt), [])}
+                if _prev_merged:
+                    _parents[_prev_phase] = _prev_merged
+                _stamp_catalog_provenance(merged_path, phase, options,
+                                          parent_paths=_parents)
+                prev_merged_for[(module, filt)] = (_msc, _ifound)
 
-                    d_i2d, ww_i2d = None, None
-                    dpath = _data_i2d_path(module, filt)
-                    if os.path.exists(dpath):
-                        with fits.open(dpath) as dh:
-                            hdu = dh['SCI'] if 'SCI' in [h.name for h in dh] else dh[0]
-                            d_i2d = hdu.data.astype(float)
-                            ww_i2d = wcs.WCS(hdu.header)
-                    # MIRI: required deep-i2d prominence gate kills false emission
-                    # sources that pass the qfit OR-branch.  NIRCam: off (0).
-                    _miri_field = (module == 'mirimage'
-                                   or _L._instrument_from_filter(filt) == 'MIRI')
-                    # Hard prominence floor for NIRCam extended-emission vetting.
-                    # --manual-ext-prom-min < 0 (default) => AUTO: 3.0 for an
-                    # extended-emission NIRCam field, off elsewhere; >= 0 uses the
-                    # value verbatim (0 forces it off).  MIRI already gates on
-                    # prominence via min_prominence, so leave its ext_prom_min 0.
-                    _ext_prom_opt = float(mopt(opts_phase, 'manual_ext_prom_min'))
-                    if _ext_prom_opt < 0:
-                        _ext_prom_min = (3.0 if (not _miri_field
-                                                 and _is_extended_emission(opts_phase))
-                                         else 0.0)
-                    else:
-                        _ext_prom_min = _ext_prom_opt
-                    vetted = _filter_extended_emission(
-                        merged, data_i2d_image=d_i2d, ww_i2d=ww_i2d,
-                        qfit_max=float(mopt(opts_phase, 'manual_ext_qfit_max')),
-                        peak_over_bkg=float(mopt(opts_phase, 'manual_ext_peak_over_bkg')),
-                        min_prominence=(float(mopt(opts_phase, 'miri_prominence_snr'))
-                                        if _miri_field else 0.0),
-                        local_snr_min=float(mopt(opts_phase, 'manual_ext_local_snr_min')),
-                        snr_high_keep=float(mopt(opts_phase, 'manual_ext_snr_high_keep')),
-                        qfit_high_keep_max=float(mopt(opts_phase, 'manual_ext_qfit_high_keep_max')),
-                        qfit_recover_max=float(mopt(opts_phase, 'manual_ext_qfit_recover_max')),
-                        recover_satstar_guard_arcsec=float(mopt(opts_phase, 'manual_ext_recover_satstar_guard_arcsec')),
-                        recover_prom_gate=bool(mopt(opts_phase, 'manual_ext_recover_prom_gate')),
-                        recover_prom_log_intercept=float(mopt(opts_phase, 'manual_ext_recover_prom_log_intercept')),
-                        recover_prom_log_slope=float(mopt(opts_phase, 'manual_ext_recover_prom_log_slope')),
-                        nmatch_confirm=int(mopt(opts_phase, 'manual_ext_nmatch_confirm')),
-                        nmatch_confirm_qfit_max=float(mopt(opts_phase, 'manual_ext_nmatch_confirm_qfit_max')),
-                        nmatch_confirm_maxpos_mas=float(mopt(opts_phase, 'manual_ext_nmatch_confirm_maxpos_mas')),
-                        nmatch_confirm_strong=int(mopt(opts_phase, 'manual_ext_nmatch_confirm_strong')),
-                        low_fit_quality_qfit=float(mopt(opts_phase, 'manual_ext_low_fit_quality_qfit')),
-                        ext_prom_min=_ext_prom_min,
-                        sky_clean_keep=bool(mopt(opts_phase, 'manual_sky_clean_keep')),
-                        sky_clean_max_sky_snr=float(mopt(
-                            opts_phase, 'manual_sky_clean_max_sky_snr')),
-                        sky_clean_prom_min=float(mopt(
-                            opts_phase, 'manual_sky_clean_prom_min')),
-                        sky_clean_snr_min=float(mopt(
-                            opts_phase, 'manual_sky_clean_snr_min')),
-                        struct_x=0.0, struct_y=0.0,  # prune at detection, not here
-                        label=f'{phase}:{filt}')
-                    vetted.write(vetted_path, overwrite=True)
-                    # MIRI: combine per-obs tokened vetted catalogs into the
-                    # un-tokened ALL-OBS vetted (the final science catalog + the
-                    # m7 cross-band seed read at _build_crossband_seed).  Globs
-                    # every `_o*_vetted` sibling so it's incremental: after o001
-                    # it holds o001; after o002 it holds o001+o002 (deduped by
-                    # sky position, brighter/first wins in the overlap).  Each
-                    # footprint was already cleaned by its own obs' data_i2d.
-                    if _vtok:
-                        try:
-                            import glob as _glob
-                            from astropy.table import vstack as _vstack
-                            # JOINT run ('-' in field): one vetting pass against
-                            # the joint (both-obs) coadd is authoritative -- do
-                            # NOT vstack stale per-obs `_o001_vetted`/`_o002_vetted`
-                            # siblings from prior separate runs (the `_o*_vetted`
-                            # wildcard would catch them and double/triple-count).
-                            # JOINT run, or gc2211 (each obs a distinct target):
-                            # use ONLY this obs's vetted -- never cross-combine obs.
-                            # MIRI multi-obs (cloudef) still vstacks the _o*_vetted
-                            # siblings into the all-obs catalog.
-                            if '-' in str(field) or _multiobs:
-                                _sibs = [vetted_path]
-                            else:
-                                _sibs = sorted(_glob.glob(
-                                    merged_path.replace('.fits', '_o*_vetted.fits')))
-                            _tabs = []
-                            for _sp in _sibs:
-                                try:
-                                    _tabs.append(Table.read(_sp))
-                                except Exception:
-                                    continue
-                            if _tabs:
-                                _comb = _tabs[0] if len(_tabs) == 1 else _vstack(
-                                    _tabs, metadata_conflicts='silent')
-                                if len(_tabs) > 1 and 'skycoord' in _comb.colnames:
-                                    _comb = _dedup_combined_vetted(_comb)
-                                _comb.write(combined_vetted_path, overwrite=True)
-                                print(f"manual [{phase}]: combined {len(_sibs)} per-obs "
-                                      f"vetted -> {os.path.basename(combined_vetted_path)} "
-                                      f"({len(_comb)} all-obs sources)", flush=True)
-                                # CARTA-friendly export: the science catalog uses
-                                # an astropy SkyCoord MIXIN column (serialized as
-                                # dotted ``skycoord.ra``/``skycoord.dec`` with mixin
-                                # metadata) that CARTA rejects ("Catalog type not
-                                # supported").  Write a sibling with plain float
-                                # ra/dec (deg) columns that CARTA loads directly.
-                                try:
-                                    from astropy.coordinates import SkyCoord as _SC2
-                                    _cart = Table()
-                                    if 'skycoord' in _comb.colnames:
-                                        _sc2 = _SC2(_comb['skycoord'])
-                                    else:
-                                        _sc2 = _SC2(_comb['ra'], _comb['dec'], unit='deg')
-                                    _cart['ra'] = np.asarray(_sc2.ra.deg, dtype='float64')
-                                    _cart['dec'] = np.asarray(_sc2.dec.deg, dtype='float64')
-                                    for _cc in ('flux', 'flux_err', 'qfit', 'cfit',
-                                                'flags', 'is_saturated',
-                                                'replaced_saturated', 'iter_found'):
-                                        if _cc in _comb.colnames:
-                                            _cart[_cc] = np.asarray(_comb[_cc])
-                                    _cart.write(combined_vetted_path.replace(
-                                        '.fits', '_carta.fits'), overwrite=True)
-                                except Exception as _cex2:
-                                    print(f"manual [{phase}]: CARTA catalog export "
-                                          f"failed: {_cex2}", flush=True)
-                        except Exception as _cex:
-                            print(f"manual [{phase}]: vetted combine failed: {_cex}",
-                                  flush=True)
-                except Exception as ex:
-                    # Any failure in the off-FOV cleanup / provenance /
-                    # vetting / per-obs-combine block above lands here.
-                    # Downgrading to the unvetted merged catalog silently
-                    # corrupts every later phase (no-silent-corruption rule),
-                    # so the fallback is OPT-IN: set the environment variable
-                    # CATALOG_ALLOW_UNVETTED_FALLBACK=1 to restore the old
-                    # limp-through behaviour; otherwise the failure re-raises
-                    # and the run stops.
-                    print(f"manual [{phase}]: vetting failed ({ex}); full "
-                          f"traceback:\n{traceback.format_exc()}", flush=True)
-                    if os.environ.get('CATALOG_ALLOW_UNVETTED_FALLBACK', '') == '1':
-                        print(f"manual [{phase}]: CATALOG_ALLOW_UNVETTED_FALLBACK=1 "
-                              f"set -- using unvetted merged catalog as seed",
-                              flush=True)
-                        vetted_path = merged_path
-                    else:
-                        raise
+                d_i2d, ww_i2d = None, None
+                dpath = _data_i2d_path(module, filt)
+                if os.path.exists(dpath):
+                    with fits.open(dpath) as dh:
+                        hdu = dh['SCI'] if 'SCI' in [h.name for h in dh] else dh[0]
+                        d_i2d = hdu.data.astype(float)
+                        ww_i2d = wcs.WCS(hdu.header)
+                # MIRI: required deep-i2d prominence gate kills false emission
+                # sources that pass the qfit OR-branch.  NIRCam: off (0).
+                _miri_field = (module == 'mirimage'
+                               or _L._instrument_from_filter(filt) == 'MIRI')
+                # Hard prominence floor for NIRCam extended-emission vetting.
+                # --manual-ext-prom-min < 0 (default) => AUTO: 3.0 for an
+                # extended-emission NIRCam field, off elsewhere; >= 0 uses the
+                # value verbatim (0 forces it off).  MIRI already gates on
+                # prominence via min_prominence, so leave its ext_prom_min 0.
+                _ext_prom_opt = float(mopt(opts_phase, 'manual_ext_prom_min'))
+                if _ext_prom_opt < 0:
+                    _ext_prom_min = (3.0 if (not _miri_field
+                                             and _is_extended_emission(opts_phase))
+                                     else 0.0)
+                else:
+                    _ext_prom_min = _ext_prom_opt
+                vetted = _filter_extended_emission(
+                    merged, data_i2d_image=d_i2d, ww_i2d=ww_i2d,
+                    qfit_max=float(mopt(opts_phase, 'manual_ext_qfit_max')),
+                    peak_over_bkg=float(mopt(opts_phase, 'manual_ext_peak_over_bkg')),
+                    min_prominence=(float(mopt(opts_phase, 'miri_prominence_snr'))
+                                    if _miri_field else 0.0),
+                    local_snr_min=float(mopt(opts_phase, 'manual_ext_local_snr_min')),
+                    snr_high_keep=float(mopt(opts_phase, 'manual_ext_snr_high_keep')),
+                    qfit_high_keep_max=float(mopt(opts_phase, 'manual_ext_qfit_high_keep_max')),
+                    qfit_recover_max=float(mopt(opts_phase, 'manual_ext_qfit_recover_max')),
+                    recover_satstar_guard_arcsec=float(mopt(opts_phase, 'manual_ext_recover_satstar_guard_arcsec')),
+                    recover_prom_gate=bool(mopt(opts_phase, 'manual_ext_recover_prom_gate')),
+                    recover_prom_log_intercept=float(mopt(opts_phase, 'manual_ext_recover_prom_log_intercept')),
+                    recover_prom_log_slope=float(mopt(opts_phase, 'manual_ext_recover_prom_log_slope')),
+                    nmatch_confirm=int(mopt(opts_phase, 'manual_ext_nmatch_confirm')),
+                    nmatch_confirm_qfit_max=float(mopt(opts_phase, 'manual_ext_nmatch_confirm_qfit_max')),
+                    nmatch_confirm_maxpos_mas=float(mopt(opts_phase, 'manual_ext_nmatch_confirm_maxpos_mas')),
+                    nmatch_confirm_strong=int(mopt(opts_phase, 'manual_ext_nmatch_confirm_strong')),
+                    low_fit_quality_qfit=float(mopt(opts_phase, 'manual_ext_low_fit_quality_qfit')),
+                    ext_prom_min=_ext_prom_min,
+                    sky_clean_keep=bool(mopt(opts_phase, 'manual_sky_clean_keep')),
+                    sky_clean_max_sky_snr=float(mopt(
+                        opts_phase, 'manual_sky_clean_max_sky_snr')),
+                    sky_clean_prom_min=float(mopt(
+                        opts_phase, 'manual_sky_clean_prom_min')),
+                    sky_clean_snr_min=float(mopt(
+                        opts_phase, 'manual_sky_clean_snr_min')),
+                    struct_x=0.0, struct_y=0.0,  # prune at detection, not here
+                    label=f'{phase}:{filt}')
+                vetted.write(vetted_path, overwrite=True)
+                # -> the un-tokened all-obs vetted catalog, which is the final
+                # science catalog and the m7 cross-band seed.
+                if _vtok:
+                    _combine_per_obs_vetted(
+                        vetted_path, merged_path, combined_vetted_path,
+                        this_obs_only=('-' in str(field) or _multiobs),
+                        label=f'manual [{phase}]')
 
                 # build vetted mergedcat residual i2d, smooth -> bg for next phase
                 try:
@@ -4455,9 +4668,12 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             bg_for_next[(module, filt)] = _L._cutout_smooth_residual_bg(mc_i2d)
                         print(f"manual [{phase}]: smoothed bg for next phase = "
                               f"{bg_for_next[(module, filt)]}", flush=True)
+                    else:
+                        raise MergedcatMosaicError(
+                            f"[{phase}] {module}/{filt}: build_mergedcat_residuals "
+                            f"returned no usable residual i2d (got {mc_i2d!r})")
                 except Exception as ex:
-                    print(f"manual [{phase}]: mergedcat residual / bg build failed: {ex}",
-                          flush=True)
+                    _handle_mergedcat_mosaic_failure(phase, module, filt, ex)
 
     # -------------------------------------------------------------------
     # Cross-band merge (final step, multifilter only).  Port of the legacy

@@ -47,7 +47,33 @@ BASE=${BASE:-/orange/adamginsburg/jwst/${TARGET}}
 # still measuring+recording every residual. Default 0 = strict 2 mas (unchanged).
 ASTROM_M2_CORRECTION_FLOOR_MAS=${ASTROM_M2_CORRECTION_FLOOR_MAS:-0}
 export ASTROM_M2_CORRECTION_FLOOR_MAS
-CONSENSUS_TBL="${BASE}/offsets/Offsets_JWST_Brick${PROPOSAL}_consensus.csv"
+# Which offsets table does m2 REWRITE for this field?  The before/after md5sum
+# check below is only meaningful against that one file.
+#
+# A hardcoded "_consensus.csv" missed every VIRAC2locked-style field (sgrc,
+# cloudc, cloudef, sgrb2, quintuplet, gc2211): the check compared two
+# nonexistent paths, both "none", so the loop concluded the table "did NOT
+# change" and aborted after iter 1 even when the correction had been applied.
+#
+# The two names below are the same pair alignment_config.py distinguishes
+# (TABLE_LOCKED -> _VIRAC2locked.csv, TABLE_CONSENSUS -> _consensus.csv); keep
+# them in step with it.  An explicit preference order rather than a glob,
+# because an offsets directory holds INPUT tables too and they sort first:
+# gc2211 has 15 "_GNS_perexp_<obs>_<filter>.csv" beside the real one and brick
+# has a dozen "_F###ref*"/"_VIRAC2frame*", so `ls ... | head -1` picks a file
+# m2 never rewrites -- the hash then never changes and the same misleading
+# "did NOT change" abort fires, just for a different reason.
+#
+# Neither name present (or a field that uses some third table): set OFFSETS_TBL
+# explicitly.
+CONSENSUS_TBL="${OFFSETS_TBL:-}"
+if [ -z "$CONSENSUS_TBL" ]; then
+    for _cand in "${BASE}/offsets/Offsets_JWST_Brick${PROPOSAL}_VIRAC2locked.csv" \
+                 "${BASE}/offsets/Offsets_JWST_Brick${PROPOSAL}_consensus.csv"; do
+        [ -f "$_cand" ] && { CONSENSUS_TBL="$_cand"; break; }
+    done
+fi
+CONSENSUS_TBL="${CONSENSUS_TBL:-${BASE}/offsets/Offsets_JWST_Brick${PROPOSAL}_consensus.csv}"
 
 read -r -a _FA <<< "$FILTERS"
 NF=${#_FA[@]}
@@ -72,7 +98,12 @@ for ((it=1; it<=MAXITER; it++)); do
 
     # --- 1. reduce (blocks until the whole array finishes) ---
     echo "[iter $it] reducing (fix_alignment applies consensus table if present: $([ -f "$CONSENSUS_TBL" ] && echo yes || echo no))"
+    # --job-name at SUBMIT time (standing rule, CLAUDE.md): the in-script runtime
+    # rename only fires when the job STARTS, and a quota-bound retie sits PENDING
+    # for hours under the generic name -- which is exactly when the queue is being
+    # watched, and when several reduce arrays are in flight at once.
     sbatch --wait --array=0-$((NF-1)) --qos="$QOS" \
+        --job-name="${TARGET}${PROPOSAL}-o${FIELD}-reduce-retie${it}" \
         --export="${export_common}" \
         "$HERE/submit_reduction.sbatch"
 

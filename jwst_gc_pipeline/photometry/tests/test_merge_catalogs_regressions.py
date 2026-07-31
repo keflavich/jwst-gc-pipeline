@@ -172,6 +172,53 @@ def test_combine_singleframe_keeps_sources_with_nan_fluxerr(_sci_fits):
         f"NaN flux_avg at rows {np.where(~np.isfinite(flux_avg))[0]}"
 
 
+def test_combine_singleframe_degenerate_position_scatter_is_nan(_sci_fits):
+    """A source whose per-frame positions are BYTE-IDENTICAL across >3 frames
+    (the forced/seeded case: skycoord_centroid copied from a fixed seed every
+    exposure) must come out with std_ra/std_dec = NaN, not 0.
+
+    std=0 is false precision -- it lets the source pass the position-scatter QC
+    gate (cataloging.nmatch_confirm_maxpos_mas, 0 <= maxpos) for free even though
+    its position was never measured across frames.  Normal jittered sources keep
+    a FINITE (>0) scatter.  (2026-07-29, brick m8 nmatch>3 std==0 diagnosis.)
+    """
+    rng = np.random.default_rng(7)
+    n_src, n_frame = 5, 5
+    base_ra = 266.5 + np.arange(n_src) * (1.0 / 3600.0)
+    base_dec = np.full(n_src, -28.8)
+    fixed = 2   # this source has an identical (copied) position in every frame
+
+    tbls = []
+    for f in range(n_frame):
+        ra = base_ra + rng.normal(scale=1e-6, size=n_src)
+        dec = base_dec + rng.normal(scale=1e-6, size=n_src)
+        ra[fixed] = base_ra[fixed]     # byte-identical every frame
+        dec[fixed] = base_dec[fixed]
+        sc = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame='icrs')
+        flux = np.full(n_src, 1000.0)
+        dflux = np.full(n_src, 10.0)
+        qf = np.full(n_src, 1.0)
+        fracflux = np.full(n_src, 0.9)
+        tbls.append(_make_crowdsource_frame(sc, flux, dflux, qf, fracflux,
+                                            exposure=f + 1, filename=_sci_fits))
+
+    out = MC.combine_singleframe(tbls, nanaverage=MC.nanaverage_numpy)
+    assert len(out) == n_src
+    # locate the fixed-position source in the (possibly reordered) output
+    sc_avg = out['skycoord_avg']
+    d = SkyCoord(base_ra[fixed] * u.deg, base_dec[fixed] * u.deg).separation(sc_avg)
+    k = int(np.argmin(d.arcsec))
+    sr = np.asarray(out['std_ra'], dtype=float)
+    sd = np.asarray(out['std_dec'], dtype=float)
+    assert int(out['nmatch'][k]) > 3
+    assert np.isnan(sr[k]) and np.isnan(sd[k]), \
+        f"degenerate copied-position source has std_ra={sr[k]}, std_dec={sd[k]} (want NaN)"
+    # every OTHER source has genuine jitter -> finite, strictly-positive scatter
+    others = [i for i in range(n_src) if i != k]
+    assert np.all(np.isfinite(sr[others])) and np.all(np.isfinite(sd[others]))
+    assert np.all(sr[others] > 0) and np.all(sd[others] > 0)
+
+
 # ---------------------------------------------------------------------------
 # merge_catalogs: missing ref_filter must raise (no silent reference switch).
 # ---------------------------------------------------------------------------

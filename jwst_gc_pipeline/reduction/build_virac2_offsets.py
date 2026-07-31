@@ -36,6 +36,13 @@ offset an NN read as ~0).  Add a field by adding a REGION entry (proposal/field/
 {filt: (subdir, obs-epoch, mtag)}).  A multi-pointing field needs a VIRAC2 cache covering
 ALL its pointings.
 
+``mtag`` names the merge stage of the per-frame catalogs the tie is measured on, and it is
+per-(OBSERVATION, filter), not per-filter: when two observations catalog into one directory
+under the same names, whichever ran last owns each stage, so the mtag must name a stage the
+region's OWN observation actually has (cloudef obs005 reached only m2 while obs002 reached
+m7 -- see the cloudef entries).  ``_gather`` verifies this from each catalog's crf and
+refuses the mismatch rather than relabelling another observation's tie.
+
 Usage:  python -m jwst_gc_pipeline.reduction.build_virac2_offsets --region <key> [filt ...]
 """
 import sys, glob, os, re, argparse
@@ -53,6 +60,12 @@ from ..astrometry_utils import _resolve_existing_path
 # Sanctioned density-immune, window-swept, guarded bulk-offset estimator (replaces the
 # bespoke coarse_xcorr this module used to reimplement -- see brick-jwst-2221 PR #39 review).
 from ..photometry.astrometry_offsets import measure_offset
+# ONE canonical form for the visit-group token on both sides of the table: the
+# builder writes it here, update_offsets_table / lookup_consensus_offset /
+# fix_alignment compare against it.  (Both '_vgroup07101' and '_vgroup7101' exist
+# on disk for the same group, so keying on the raw token would split one pointing's
+# detectors across two rows -- the exact failure the column exists to prevent.)
+from ..photometry.astrometry_checkpoint import vgroup_key
 
 V2EP = 2014.0
 SEARCH = 0.3 * u.arcsec
@@ -101,6 +114,9 @@ def coarse_xcorr(sc, ref, maxsep=COARSE_MAXSEP):
     return (r["dra"] / 1000.0 / cosd, r["ddec"] / 1000.0,
             int(r["npairs"]), float(r["contrast"]), float(r["window_arcsec"]),
             bool(r.get("swept", False)))
+
+
+from jwst_gc_pipeline.frame_wcs import frame_wcs
 
 
 def detect_i2d_sources(i2d_path, thr=80.0, fwhm=2.5):
@@ -162,13 +178,41 @@ REGION = {
                           'f410m': ('F410M', 2023.30, '_m3'), 'f466n': ('F466N', 2023.30, '_m3')}),
     # cloudef (2092): Cloud E (obs 002) + Cloud F (obs 005), separate pointings ->
     # separate region keys; combine their VIRAC2locked tables into one Offsets file after.
-    # Per-exposure catalogs are unstaged (f210m_nrcX_visit..._exp..._daophot_basic) -> mtag=''.
+    #
+    # ⚠ THE mtag IS PER-OBSERVATION, NOT PER-FILTER-ONLY (2026-07-29).  Both
+    # observations catalog into the SAME directory under the SAME per-frame names
+    # (cloudef has no `_oNNN_` token anywhere -- 0 of 11635 catalogs carry one), so
+    # whichever run wrote a given stage last OWNS that stage's files.  Census by crf
+    # provenance (meta['FILENAME']), F*/*_visit*_vgroup*_exp*<mtag>_daophot_basic:
+    #
+    #     stage    F162M          F210M          F360M         F480M
+    #     _m1      obs005 (72)    obs005 (72)    obs005 (24)   obs005 16 + obs002 8
+    #     _m2      obs005 (72)    obs005 (72)    obs005 (24)   obs005 16 + obs002 8
+    #     _m3      obs002 (72)    obs002 (64)    obs002 (16)   obs002 (16)
+    #     _m4..m7  obs002         obs002         obs002        obs002
+    #
+    # obs 005 IS cataloged -- through m2, for all four filters.  It simply has no
+    # m3+ products, so an `_m3` glob under cloudef5 can only ever match obs 002's
+    # files.  Before _gather verified the observation, that silently relabelled obs
+    # 002's tie as jw02092005001 -- and cloudef obs005 F162M is a real ~7.5" gross
+    # offset, so it would have been badly wrong.  The fix is the mtag, not the data:
+    # cloudef5 uses `_m2` (its own deepest stage), cloudef2 keeps `_m3`.
+    #
+    # Measuring the tie on m2 is not a downgrade: the builder takes positions from
+    # x_fit/y_fit through the LIVE crf GWCS (load_siaf) with a qfit<0.4 / flux>0 cut,
+    # and later merge stages refine deblending and photometry, not the frame.  m2 is
+    # also the stage the pipeline itself measures and CORRECTS astrometry at (m3+ are
+    # frozen -- ASTROMETRY_CHECKPOINTS.md), and 1182 already ties f356w/f444w at _m2
+    # for the same reason: it is the deepest stage those products reached.
+    # Verified 2026-07-29: cloudef5 at _m2 gathers jw02092005001 only -- 8 exposures
+    # x 8 detectors in F162M/F210M, 8 x 2 in F360M/F480M, no obs-002 contamination --
+    # and all four obs-005 merged i2d mosaics exist for the coarse tie.
     'cloudef2': dict(proposal='2092', field='002', basepath='/orange/adamginsburg/jwst/cloudef',
                      filts={'f162m': ('F162M', 2023.21, '_m3'), 'f210m': ('F210M', 2023.21, '_m3'),
                             'f360m': ('F360M', 2023.21, '_m3'), 'f480m': ('F480M', 2023.21, '_m3')}),
     'cloudef5': dict(proposal='2092', field='005', basepath='/orange/adamginsburg/jwst/cloudef',
-                     filts={'f162m': ('F162M', 2023.21, '_m3'), 'f210m': ('F210M', 2023.21, '_m3'),
-                            'f360m': ('F360M', 2023.21, '_m3'), 'f480m': ('F480M', 2023.21, '_m3')}),
+                     filts={'f162m': ('F162M', 2023.21, '_m2'), 'f210m': ('F210M', 2023.21, '_m2'),
+                            'f360m': ('F360M', 2023.21, '_m2'), 'f480m': ('F480M', 2023.21, '_m2')}),
     # sgrc (4147/012).  The VIRAC2locked table was previously authored without a
     # REGION entry and covered only 7 of the 8 reduced bands -- F115W had NO row, so
     # the m2 checkpoint's F115W corrections matched nothing and update_offsets_table
@@ -201,6 +245,52 @@ REGION = {
                        basepath='/orange/adamginsburg/jwst/quintuplet',
                        filts={'f212n': ('F212N', 2024.617, '_m3'),
                               'f323n': ('F323N', 2024.617, '_m3')}),
+    # gc2211 (2211): FIVE observations of one proposal reduced into ONE directory
+    # tree, so it needs one region key per observation -- ``field`` is what makes a
+    # region, and Offsets_JWST_Brick2211_VIRAC2locked.csv already separates them by
+    # Visit (jw02211023001 ... jw02211050001).  Two things make this field the one
+    # that most needs the Vgroup column AND the most dangerous to build naively:
+    #   * SIX visit groups per filter (02201 04201 06201 08201 10201 12201) with the
+    #     exposure number restarting in each -- 437-457 corrections/filter that a
+    #     Vgroup-less table cannot express (the refusal this PR lifts);
+    #   * the visit-group ids are REUSED across observations (vgroup 02201 exists
+    #     under o023, o046, o049 AND o050) and every observation reduces to
+    #     ``visit001``, so NEITHER the visit nor the vgroup separates them.  Only
+    #     the crf behind each catalog does -- hence otag=True (glob this
+    #     observation's own ``_oNNN_`` per-frame products) plus _gather's
+    #     crf-observation refusal.  The un-tokened catalogs still in these
+    #     directories are stale duplicates: F200W/f200w_nrca1_visit001_vgroup02201_
+    #     exp00001_m3 has meta FILENAME = jw02211046001_..., i.e. o046 overwrote
+    #     whatever o023/o049/o050 had written to that name.
+    # Epochs are EXPSTART of each observation's own NIRCam frames.
+    # NB the per-(obs,filter) catalog coverage is incomplete mid-campaign; a build
+    # of a pair that has no catalogs (or no merged i2d) fails loudly rather than
+    # writing a partial table.
+    'gc2211_023': dict(proposal='2211', field='023', otag=True,
+                       basepath='/orange/adamginsburg/jwst/gc2211',
+                       filts={'f150w': ('F150W', 2023.707, '_m3'),
+                              'f200w': ('F200W', 2023.707, '_m3'),
+                              'f277w': ('F277W', 2023.707, '_m3')}),
+    'gc2211_028': dict(proposal='2211', field='028', otag=True,
+                       basepath='/orange/adamginsburg/jwst/gc2211',
+                       filts={'f150w': ('F150W', 2023.703, '_m3'),
+                              'f200w': ('F200W', 2023.703, '_m3'),
+                              'f277w': ('F277W', 2023.703, '_m3')}),
+    'gc2211_046': dict(proposal='2211', field='046', otag=True,
+                       basepath='/orange/adamginsburg/jwst/gc2211',
+                       filts={'f150w': ('F150W', 2024.316, '_m3'),
+                              'f200w': ('F200W', 2024.316, '_m3'),
+                              'f277w': ('F277W', 2024.316, '_m3')}),
+    'gc2211_049': dict(proposal='2211', field='049', otag=True,
+                       basepath='/orange/adamginsburg/jwst/gc2211',
+                       filts={'f150w': ('F150W', 2024.633, '_m3'),
+                              'f200w': ('F200W', 2024.633, '_m3'),
+                              'f277w': ('F277W', 2024.633, '_m3')}),
+    'gc2211_050': dict(proposal='2211', field='050', otag=True,
+                       basepath='/orange/adamginsburg/jwst/gc2211',
+                       filts={'f150w': ('F150W', 2025.302, '_m3'),
+                              'f200w': ('F200W', 2025.302, '_m3'),
+                              'f277w': ('F277W', 2025.302, '_m3')}),
 }
 # NIRCam SW (nrca1-4/nrcb1-4) vs LW (nrcalong/nrcblong) split at ~2.4um: F070W..F212N are
 # SW, F250M+ are LW.  Classify by filter number so any GC field's bands map to the right
@@ -402,19 +492,30 @@ def build_consensus(frames):
 
 
 def load_siaf(f):
-    """Recover current-generation SIAF positions. -> (ra,dec,ra0,de0).
+    """Recover current-generation SIAF positions. -> (ra,dec,ra0,de0,crf).
 
     GENERATION LOCK: RA/Dec are recomputed from the STABLE detector x_fit/y_fit
     through the LIVE crf WCS (meta['FILENAME']), not the catalog's cached
     skycoord_centroid (which encodes the WCS at build time and goes stale ~up to
     48 mas across re-drizzle generations).  Then undo the RAOFFSET currently baked
     into that crf to reach SIAF.
+
+    ``crf`` is the exposure this catalog was actually built from (``None`` for a
+    legacy catalog with no ``FILENAME`` meta).  It is the ONLY trustworthy source
+    of the frame's observation: the catalog basename carries `visit001` for every
+    observation of a proposal, so several observations reduced into one directory
+    are indistinguishable by name -- see ``_gather``.
     """
     t = Table.read(f)
+    crf = None
     if 'x_fit' in t.colnames and 'FILENAME' in t.meta:
         crf = _resolve_existing_path(t.meta['FILENAME'])
         with fits.open(crf) as hl:
-            wcs = WCS(hl['SCI'].header)
+            # GWCS, not the SCI header's SIP fit.  This re-projects every
+            # per-frame (x_fit, y_fit) to build the VIRAC2 offsets table -- a
+            # 5-8 mas position-dependent SIP-fit error here propagates straight
+            # into the tie every frame is then corrected by.
+            wcs = frame_wcs(hl)
             ra0 = float(hl['SCI'].header.get('RAOFFSET', t.meta.get('RAOFFSET', 0.0)))
             de0 = float(hl['SCI'].header.get('DEOFFSET', t.meta.get('DEOFFSET', 0.0)))
         sc = SkyCoord(wcs.pixel_to_world(farr(t['x_fit']), farr(t['y_fit'])))
@@ -430,7 +531,8 @@ def load_siaf(f):
         ra0 = float(t.meta.get('RAOFFSET', 0.0)); de0 = float(t.meta.get('DEOFFSET', 0.0))
     fl = farr(t['flux_fit']); q = farr(t['qfit']) if 'qfit' in t.colnames else np.zeros(len(t))
     good = np.isfinite(fl) & (fl > 0) & (q < 0.4) & np.isfinite(sc.ra.deg)
-    return sc.ra.deg[good] - ra0 / 3600.0, sc.dec.deg[good] - de0 / 3600.0, ra0, de0
+    return (sc.ra.deg[good] - ra0 / 3600.0, sc.dec.deg[good] - de0 / 3600.0,
+            ra0, de0, crf)
 
 
 def module_key(det):
@@ -441,25 +543,125 @@ def module_key(det):
     return det if det in LW_DETS else det[:4]
 
 
-def _gather(filt, base, sub, mtag, dets):
-    """Collect per-(visit,exp) and per-visit SIAF positions + legacy coarse for a det set."""
+def parse_vgroup(basename):
+    """Canonical visit-group id of a per-frame catalog filename.
+
+    Matches the WHOLE token (``_vgroup<TOKEN>_exp``), not just its digit prefix:
+    MIRI and parallel visit groups can carry a trailing letter (sgrb2/F2550W has
+    ``vgroup0020210b``), and ``r'_vgroup(\\d+)'`` would silently truncate that to
+    ``0020210`` -- a DIFFERENT group id, returned as if it were correct.
+    Canonicalised with ``vgroup_key`` so the zero-padded and bare spellings of the
+    same group (both ``_vgroup07101`` and ``_vgroup7101`` exist on disk) key and
+    compare identically on the table's producer and consumer sides.
+    """
+    m = re.search(r'_vgroup([^_]+)_exp', basename)
+    if m is None:
+        raise ValueError(f"cannot parse a visit group from {basename}")
+    return vgroup_key(m.group(1))
+
+
+class WrongObservationError(RuntimeError):
+    """A globbed catalog belongs to a different observation than the region."""
+
+
+def _gather(filt, base, sub, mtag, dets, prop=None, field=None, otag=''):
+    """Collect per-(visit,vgroup,exp) and per-visit SIAF positions + legacy coarse.
+
+    Keyed by VGROUP as well as exposure: a visit can dither across several visit
+    groups (physically disjoint sky tiles) and the exposure number RESTARTS in
+    each, so ``(visit, exposure)`` is ambiguous.  Keying on it alone averaged two
+    disjoint pointings into one row -- cloudc has 2 visit groups in every filter,
+    sgrb2 F187N has 2, gc2211 has 6.
+
+    The per-VISIT consensus (``byv``) deliberately still pools all vgroups: it is
+    a superset of stars, and each exposure only matches the tile it overlaps.
+
+    THE VISIT KEY IS THE ``crf``'s, NOT THE CATALOG BASENAME'S.  A catalog is
+    named ``..._visit001_...`` for the FIRST visit of whatever observation it came
+    from, so every observation of a proposal reduced into the same directory is
+    named identically and the basename cannot tell them apart -- while the row
+    this feeds is keyed on the full ``jw<prop><obs><visit>`` token.  Synthesising
+    that token from the region's own ``field`` therefore LABELS whatever was
+    globbed as the requested observation, whether or not it is:
+
+    * ``--region cloudef5`` (2092/005) globs only ``jw02092002001`` catalogs (obs
+      005 has none on disk) and would have written them out as ``jw02092005001``
+      -- obs 002's tie applied to obs 005, which is a real ~7.5" gross offset in
+      F162M;
+    * gc2211's five observations all reduce to ``visit001`` in one directory and
+      REUSE the same visit-group ids (``02201`` appears under o023, o046, o049 and
+      o050), so neither the visit nor the vgroup separates them.
+
+    So the observation is read off ``meta['FILENAME']`` (the exposure the catalog
+    was fit on) and a catalog from another observation is REFUSED, never
+    relabelled.  ``otag`` additionally narrows the glob to one observation's
+    per-frame products (``_o046_``) for fields that carry the token.
+    """
     from collections import defaultdict
     byve = defaultdict(lambda: [[], []]); byv = defaultdict(list); coarse = defaultdict(lambda: [[], []])
+    expect = f'jw0{prop}{field}' if (prop is not None and field is not None) else None
+    wrong_obs = {}
+    seen = {}
+    unstamped = []
     for det in dets:
-        for f in glob.glob(f'{base}/{sub}/{filt}_{det}_visit*_vgroup*_exp*{mtag}_daophot_basic.fits'):
+        for f in sorted(glob.glob(f'{base}/{sub}/{filt}_{det}{otag}'
+                                  f'_visit*_vgroup*_exp*{mtag}_daophot_basic.fits')):
             b = os.path.basename(f)
-            vis = b.split('_visit')[1][:3]; exp = int(re.search(r'_exp(\d+)', b).group(1))
-            ra, dec, ra0, de0 = load_siaf(f)
-            byve[(vis, exp)][0].append(ra); byve[(vis, exp)][1].append(dec)
+            vis3 = b.split('_visit')[1][:3]; exp = int(re.search(r'_exp(\d+)', b).group(1))
+            vgr = parse_vgroup(b)
+            ra, dec, ra0, de0, crf = load_siaf(f)
+            if crf is None:
+                # legacy catalog with no FILENAME meta: the observation cannot be
+                # verified.  Fall back to the region's own token, but SAY SO --
+                # this is the case the refusal above cannot police.
+                vis = f'jw0{prop}{field}{vis3}' if expect else vis3
+                unstamped.append(b)
+            else:
+                vis = os.path.basename(crf).split('_')[0]
+                if expect is not None and not vis.startswith(expect):
+                    wrong_obs.setdefault(vis, []).append(b)
+                    continue
+            if (vis, vgr, exp, det) in seen:
+                raise WrongObservationError(
+                    f"{filt}: two catalogs claim the SAME frame "
+                    f"(visit={vis}, vgroup={vgr}, exp={exp}, det={det}):\n"
+                    f"  {seen[(vis, vgr, exp, det)]}\n  {b}\n"
+                    f"One of them is a stale duplicate from before the per-frame "
+                    f"names carried the observation token; pooling both would "
+                    f"double-weight that frame in the consensus.  Remove or "
+                    f"archive the stale one, or set the region's otag.")
+            seen[(vis, vgr, exp, det)] = b
+            byve[(vis, vgr, exp)][0].append(ra); byve[(vis, vgr, exp)][1].append(dec)
             byv[vis].append((ra, dec)); coarse[vis][0].append(ra0); coarse[vis][1].append(de0)
+    if unstamped:
+        print(f"  [WARNING] {filt}: {len(unstamped)} catalog(s) have no FILENAME "
+              f"meta, so their OBSERVATION could not be verified and the region's "
+              f"own token was assumed: {unstamped[:3]}", flush=True)
+    if wrong_obs:
+        raise WrongObservationError(
+            f"{filt}: {sum(len(v) for v in wrong_obs.values())} globbed catalog(s) "
+            f"belong to observation(s) {sorted(wrong_obs)}, not to this region "
+            f"({expect}*).  Writing them would label another observation's tie as "
+            f"this one's.  Examples: "
+            f"{ {k: v[:2] for k, v in sorted(wrong_obs.items())} }.  Either this "
+            f"observation has not been cataloged yet, or the region needs "
+            f"otag=True so the glob picks its own per-frame products.")
+    if not byve:
+        raise WrongObservationError(
+            f"{filt}: no per-frame catalogs for {expect or 'this region'} matched "
+            f"{base}/{sub}/{filt}_<det>{otag}_visit*_vgroup*_exp*{mtag}_daophot_basic.fits")
     return byve, byv, coarse
 
 
-def _solve(byve, byv, coarse, c_ra, c_dec, ref, prop, field, filt, modlabel=None):
+def _solve(byve, byv, coarse, c_ra, c_dec, ref, filt, modlabel=None):
     """Per-visit bulk tie (consensus vs VIRAC2, seeded by the merged i2d coarse) + per-exposure
     relative shift vs that consensus.  modlabel=None -> module-LOCKED (one shift/exposure over all
     detectors, no Module column).  modlabel set -> that module's own tie, written with a Module
-    cell so fix_alignment applies it per-module (removes a real inter-module A/B offset)."""
+    cell so fix_alignment applies it per-module (removes a real inter-module A/B offset).
+
+    The ``Visit`` written is the key ``_gather`` built from each catalog's own crf
+    (``jw<prop><obs><visit>``) -- NOT a token synthesised from the region, which
+    would relabel whatever was globbed as the requested observation."""
     tag = f"[{modlabel}] " if modlabel else ""
     rows = []
     for vis in sorted(byv):
@@ -499,20 +701,40 @@ def _solve(byve, byv, coarse, c_ra, c_dec, ref, prop, field, filt, modlabel=None
               f"{c_dec_legacy:+.4f}] pervisit({cv_ra:+.4f},{cv_dec:+.4f}) + fine({res[0]*1000:+.1f},{res[1]*1000:+.1f})mas "
               f"=> BULK ({bulk_ra:.4f},{bulk_dec:.4f})\" SEM {res[2]:.2f}/{res[3]:.2f}mas "
               f"n={res[4]}; consensus={len(consensus)}", flush=True)
-        for exp in sorted(e for (v, e) in byve if v == vis):
-            ra = np.concatenate(byve[(vis, exp)][0]); dec = np.concatenate(byve[(vis, exp)][1])
+        want = sorted((g, e) for (v, g, e) in byve if v == vis)
+        failed = []
+        for vgr, exp in want:
+            ra = np.concatenate(byve[(vis, vgr, exp)][0])
+            dec = np.concatenate(byve[(vis, vgr, exp)][1])
             rel = coord_shift(ra, dec, consensus)
             if rel is None:
-                print(f"    {tag}exp{exp}: relative failed"); continue
+                # NOT silent: a missing row means fix_alignment finds no offset for
+                # that exposure.  With a per-exposure table that is a hard match=0
+                # raise at apply time, so it must be visible here too.
+                failed.append((vgr, exp))
+                print(f"    [WARNING] {tag}visit{vis} vgroup{vgr} exp{exp}: relative "
+                      f"tie FAILED -> no row; this exposure will have NO offset",
+                      flush=True)
+                continue
             tot_ra = bulk_ra + rel[0]; tot_dec = bulk_dec + rel[1]
-            row = dict(Visit=f'jw0{prop}{field}{vis}', Exposure=int(exp), Filter=filt.upper(),
+            row = dict(Visit=str(vis), Vgroup=str(vgr),
+                       Exposure=int(exp), Filter=filt.upper(),
                        dra=tot_ra, ddec=tot_dec, nmatch=rel[4],
                        rel_ra_mas=rel[0] * 1000, rel_dec_mas=rel[1] * 1000)
             if modlabel is not None:
                 row['Module'] = modlabel
             rows.append(row)
-            print(f"    {tag}exp{exp:>2}: rel({rel[0]*1000:+.2f},{rel[1]*1000:+.2f})mas n={rel[4]}"
+            print(f"    {tag}vgroup{vgr} exp{exp:>2}: rel({rel[0]*1000:+.2f},"
+                  f"{rel[1]*1000:+.2f})mas n={rel[4]}"
                   f"  -> total({tot_ra:.4f},{tot_dec:.4f})\"", flush=True)
+        if failed and len(failed) == len(want):
+            # every exposure of the visit failed to tie -> the consensus itself is
+            # broken (bad crop, wrong reference, empty catalogs).  Writing a table
+            # with no rows for this visit leaves every one of its frames unaligned.
+            raise SystemExit(
+                f"[FAIL] {filt} {tag}visit {vis}: ALL {len(want)} exposures failed "
+                f"to tie to the visit consensus; refusing to write a table that "
+                f"would leave the whole visit without an offset.")
     return rows
 
 
@@ -532,9 +754,10 @@ def lock_filter(filt, rc, per_module=False):
         raise SystemExit(f"[FAIL] {filt}: could not measure a clean i2d coarse tie; "
                          f"refusing to write a lock table (would re-perpetuate ~0).")
     c_ra, c_dec = i2d_coarse
+    otag = f"_o{field}" if rc.get('otag') else ''
     if not per_module:
-        byve, byv, coarse = _gather(filt, base, sub, mtag, dets)
-        return _solve(byve, byv, coarse, c_ra, c_dec, ref, prop, field, filt, modlabel=None)
+        byve, byv, coarse = _gather(filt, base, sub, mtag, dets, prop, field, otag)
+        return _solve(byve, byv, coarse, c_ra, c_dec, ref, filt, modlabel=None)
     # PER-MODULE: solve a separate tie for each physical module (A=nrca*, B=nrcb*/LW
     # nrcalong/nrcblong).  A single module-locked shift cannot remove a real A/B offset
     # (the ~20 mas Dec-28.71 seam / NRCB distortion residual); two independent ties do.
@@ -544,8 +767,8 @@ def lock_filter(filt, rc, per_module=False):
     rows = []
     for modlabel, gdets in sorted(groups.items()):
         print(f"  --- module '{modlabel}': {gdets} ---", flush=True)
-        byve, byv, coarse = _gather(filt, base, sub, mtag, gdets)
-        rows.extend(_solve(byve, byv, coarse, c_ra, c_dec, ref, prop, field, filt, modlabel=modlabel))
+        byve, byv, coarse = _gather(filt, base, sub, mtag, gdets, prop, field, otag)
+        rows.extend(_solve(byve, byv, coarse, c_ra, c_dec, ref, filt, modlabel=modlabel))
     return rows
 
 
@@ -641,6 +864,12 @@ if __name__ == '__main__':
                         f"  python -m jwst_gc_pipeline.reduction."
                         f"build_virac2_offsets --region {k} --per-module\n"
                         for k in siblings))
+            # NB Vgroup needs no counterpart to the half-per-module refusal above.
+            # The Module narrowing treats an unmatched row as "not this module",
+            # so a half-filled column strands the rows that were not rebuilt; the
+            # Vgroup narrowing treats an EMPTY cell as "group unknown -> applies"
+            # (astrometry_checkpoint.vgroup_row_matches), so preserved rows keep
+            # matching exactly as they did before the column existed.
             # dtype-aware fill: `np.nan` into a string column makes vstack raise
             # TableMergeError ('float64' vs 'str160').
             for c in t.colnames:

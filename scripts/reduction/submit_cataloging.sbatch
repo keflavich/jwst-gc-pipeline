@@ -98,6 +98,20 @@ DEBLEND_SATSTARS=${DEBLEND_SATSTARS:-}
 DEBLEND_ARG=""
 [ -n "$DEBLEND_SATSTARS" ] && DEBLEND_ARG="--deblend-satstars"
 
+# Opt-in saturated-core flux recovery from the sibling _ramp.fits group-0
+# (ZEROFRAME): set ZEROFRAME_RECOVER=1.  Recovers the partially-saturated RIM
+# (group-0 still below the pile-up ceiling) so saturated-star photometry lands on
+# the same flux scale as normal photometry -- the photometric-continuity gate
+# (stage_release.check_photometric_continuity, F182M-F187N / F405N-F410M degenerate
+# colours) fails when it is OFF.  Fail-soft where a frame has no sibling ramp.
+# ZEROFRAME_DILATE (default 3) sets the group-0 saturation-mask dilation.  Note the
+# ramp-SLOPE recover (--satstar-ramp-recover) needs >=2 unsaturated leading groups,
+# so it is a no-op on 2-group (BRIGHT2) data (e.g. brick 2221 LW) -- use zeroframe.
+ZEROFRAME_RECOVER=${ZEROFRAME_RECOVER:-}
+ZEROFRAME_DILATE=${ZEROFRAME_DILATE:-3}
+ZEROFRAME_ARG=""
+[ -n "$ZEROFRAME_RECOVER" ] && ZEROFRAME_ARG="--satstar-zeroframe-recover --satstar-zeroframe-dilate=$ZEROFRAME_DILATE"
+
 read -r -a FILT_ARR <<< "$FILTERS"
 IDX=${SLURM_ARRAY_TASK_ID:-0}
 FILT=${FILT_ARR[$IDX]}
@@ -132,6 +146,7 @@ PYTHON=${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/p
     --max-group-size="$MAX_GROUP_SIZE" \
     --parallel-workers="$PARALLEL_WORKERS" \
     $DEBLEND_ARG \
+    $ZEROFRAME_ARG \
     $EXTRA_ARGS
 rc=$?
 echo "CATALOG done: filter=$FILT rc=$rc"

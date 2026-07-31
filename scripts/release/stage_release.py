@@ -547,12 +547,111 @@ FRAME_REFCAT = {
 }
 
 
+def _frame_bulk_offset(sc, ref):
+    """The catalog's bulk offset vs the reference, by the SANCTIONED method
+    (CLAUDE.md): histogram-stack + SWEEP to DETECT the tie (density-immune,
+    catches a gross >window shift like brick-1182 v001 ~700 mas), then refine
+    the PRECISE bulk same-star via ``local_residual_map`` (a single giant cell)
+    -- which itself REFUSES unless the verified global tie is already small, so
+    pairs are unambiguous.  This is NOT an ad-hoc dense NN-median.
+
+    Returns ``(off_mas_or_None, source)``.  ``source`` is ``"same-star"`` for a
+    refined fine tie, ``"histogram"`` when the tie is large/unverifiable (the
+    genuinely-off-frame case -- the raw sweep value, which is meant to be large),
+    or ``"no-tie"``.  The histogram peak is knowingly biased several mas against
+    a DENSE reference (histogram-vs-samestar-offset-bias), so we never gate on it
+    for a fine tie -- only same-star.  A large sweep value is used as-is because
+    for a gross shift the overstatement is immaterial (it fails the gate anyway)
+    and the refinement legitimately refuses."""
+    import numpy as np
+    import astropy.units as u
+    from jwst_gc_pipeline.photometry.astrometry_offsets import (
+        measure_offset, local_residual_map, GlobalTieNotVerifiedError)
+    r = measure_offset(sc, ref, maxsep=3.0 * u.arcsec, sweep=True)
+    if r is None:
+        return None, "no-tie"
+    off, source = r["off"], "histogram"
+    if r.get("ok") and not r.get("swept"):
+        try:
+            # cell_arcsec=1e9 = ONE cell spanning the whole footprint: we want the
+            # single field-wide same-star bulk here, not a per-cell distortion map,
+            # so the giant cell pools every matched pair into one robust residual.
+            lrm = local_residual_map(sc, ref, r, cell_arcsec=1e9,
+                                     match_radius=0.3 * u.arcsec, min_stars=200)
+            cells = lrm.get("cells") or []
+            if cells:
+                c = max(cells, key=lambda cc: cc["n"])
+                sdra = r["dra"] + c["dra_mas"]
+                sddec = r["ddec"] + c["ddec_mas"]
+                off, source = float(np.hypot(sdra, sddec)), "same-star"
+        except GlobalTieNotVerifiedError:
+            pass   # tie too large to refine -> keep the (large) histogram value
+    return off, source
+
+
+def _obs_keys_from_name(name):
+    """``"<proposal>-<observation>"`` key(s) from a product/prefix basename
+    ``jwPPPPP-oOOO[-MMM]...`` (a combined ``-oOOO-MMM`` encodes both)."""
+    m = re.match(r"^jw(?P<prop>\d{5})-o(?P<obs>\d{3})(?:-(?P<obs2>\d{3}))?", name)
+    if m is None:
+        return set()
+    keys = {f"{m.group('prop')}-{m.group('obs')}"}
+    if m.group("obs2"):
+        keys.add(f"{m.group('prop')}-{m.group('obs2')}")
+    return keys
+
+
+def _release_observations(field_cfg):
+    """Every ``"<proposal>-<observation>"`` key this field's release covers,
+    across ALL instruments -- so the reference-free overlap gate's scope is not
+    silently NIRCam-only.  Sources:
+
+    - ``proposal_prefix`` entries carrying ``-oNNN`` (brick = 1182 o004 +
+      2221 o001);
+    - a bare ``jwPPPPP`` proposal_prefix combined with the ``observations`` list
+      (gc2211 = ``jw02211`` + ``["o023","o050"]`` -> 02211-023, 02211-050);
+    - explicit per-instrument mosaic lists (``miri`` / ``nircam`` config keys),
+      whose ``src`` basenames carry the MIRI observations that ``proposal_prefix``
+      (a NIRCam prefix) omits -- e.g. sgrb2 MIRI o002/o998, sickle MIRI o001/o002.
+
+    The gate INTERSECTS this per filter directory, so listing a MIRI observation
+    here can never re-admit a stray NIRCam crf that shares its proposal-obs key
+    (brick MIRI F2550W and the cloudc NIRCam strays are both 2221 o002)."""
+    prefixes = field_cfg.get("proposal_prefix", [])
+    if isinstance(prefixes, str):
+        prefixes = [prefixes]
+    obs = set()
+    bare_props = []
+    for pref in prefixes:
+        keys = _obs_keys_from_name(pref)
+        if keys:
+            obs |= keys
+        else:
+            mb = re.match(r"^jw(\d{5})$", pref)
+            if mb:
+                bare_props.append(mb.group(1))
+    for o in field_cfg.get("observations", []):
+        mo = re.match(r"^o?(\d{3})$", str(o))
+        if mo:
+            obs |= {f"{bp}-{mo.group(1)}" for bp in bare_props}
+    for key in ("miri", "nircam"):
+        for entry in field_cfg.get(key, []):
+            obs |= _obs_keys_from_name(os.path.basename(str(entry.get("src", ""))))
+    return obs
+
+
 def check_catalog_on_frame(items, field, tol_mas=FRAME_TOL_MAS):
     """Every shipped per-filter catalog must lie on the field's Gaia-tied reference frame.
-    Measures the catalog's bulk offset vs the Gaia refcat (sanctioned offset-histogram);
-    a bulk > ``tol_mas`` means the catalog is on a WRONG frame (crowdsource/VVV/2MASS) and
-    must not ship. Returns list of ((filter,obs), off_mas) failures, or [] if no refcat is
-    mapped for the field (can't enforce -> caller warns)."""
+    Measures the catalog's bulk offset vs the Gaia refcat by the sanctioned same-star
+    method (``_frame_bulk_offset``); a bulk > ``tol_mas`` means the catalog is on a WRONG
+    frame (crowdsource/VVV/2MASS) and must not ship. Returns list of ((filter,obs), off_mas)
+    failures, or [] if no refcat is mapped for the field (can't enforce -> caller warns).
+
+    Saturated / replaced-saturated sources are EXCLUDED from the measurement: their
+    centroids carry a strong flux-dependent bias (worst in the narrow Pa-alpha F187N,
+    where the brightest quartile pulls the raw bulk by tens of mas) that has nothing to
+    do with the frame.  Including them made F187N read 68 mas (a false OFF-FRAME) while
+    the clean same-star tie is ~1 mas.  An astrometric frame check uses good centroids."""
     refpath = FRAME_REFCAT.get(field)
     if not refpath or not os.path.exists(refpath):
         return None
@@ -560,7 +659,6 @@ def check_catalog_on_frame(items, field, tol_mas=FRAME_TOL_MAS):
     import astropy.units as u
     from astropy.table import Table
     from astropy.coordinates import SkyCoord
-    from jwst_gc_pipeline.photometry.astrometry_offsets import measure_offset
     rt = Table.read(refpath)
     rcol = "skycoord" if "skycoord" in rt.colnames else None
     ref = SkyCoord(rt[rcol]) if rcol else SkyCoord(rt["ra"] * u.deg, rt["dec"] * u.deg)
@@ -572,12 +670,28 @@ def check_catalog_on_frame(items, field, tol_mas=FRAME_TOL_MAS):
         col = next((c for c in ("skycoord", "skycoord_ref") if c in t.colnames), None)
         if col is None:
             continue
-        sc = SkyCoord(t[col]); sc = sc[np.isfinite(sc.ra.deg)]
-        r = measure_offset(sc, ref, maxsep=3.0 * u.arcsec, sweep=False)
-        off = None if r is None else r["off"]
+        finite = np.isfinite(SkyCoord(t[col]).ra.deg)
+        sat = np.zeros(len(t), dtype=bool)
+        for satcol in ("is_saturated", "replaced_saturated"):
+            if satcol in t.colnames:
+                sat |= np.asarray(t[satcol], dtype=bool)
+        sc_all = SkyCoord(t[col])[finite]
+        sc = SkyCoord(t[col])[finite & ~sat]
+        off, source = _frame_bulk_offset(sc, ref)
         ok = off is not None and off <= tol_mas
+        # Report the saturated-INCLUDED offset alongside the (gating) clean one --
+        # print only, never gates.  Saturated-star centroids carry a strong
+        # flux-dependent bias (worst in F187N) and are excluded from the gate, but
+        # that bias is itself a finding; keeping the with-saturated number in the
+        # staging log means a future regression in saturated-star astrometry shows
+        # up in the same place, instead of the gate silently absorbing it.
+        off_sat, _ = _frame_bulk_offset(sc_all, ref) if sat.any() else (None, "")
+        satnote = "" if not sat.any() else (
+            f"  [with-saturated: {'no tie' if off_sat is None else f'{off_sat:.1f} mas'}"
+            f", {int(sat.sum())} sat]")
         print(f"  frame {it['filter']} {it.get('observation') or ''}: bulk vs Gaia-refcat "
-              + ("no tie" if off is None else f"{off:.1f} mas") + f"  {'ok' if ok else 'OFF-FRAME'}", flush=True)
+              + ("no tie" if off is None else f"{off:.1f} mas ({source})")
+              + f"  {'ok' if ok else 'OFF-FRAME'}" + satnote, flush=True)
         if not ok:
             fails.append(((it["filter"], it.get("observation")), off))
     return fails
@@ -929,8 +1043,26 @@ def main(argv=None):
         # ~0). Only a reference-free frame-vs-frame check sees it.  (Applies to
         # --images-only too: it reads the crf frames, not catalogs.)
         overlap_gate = Path(__file__).with_name("check_interframe_overlap.py")
-        rc = subprocess.run([sys.executable, str(overlap_gate),
-                             "--field", args.field, "--scan"]).returncode
+        overlap_cmd = [sys.executable, str(overlap_gate),
+                       "--field", args.field, "--scan"]
+        # Scope the reference-free gate to THIS release's observations so stray
+        # crf from other programs in a shared target dir (the brick dir also
+        # holds 2221 o002 = cloudc frames) cannot pollute the frame-vs-frame
+        # verdict.  Derived from proposal_prefix (proposal-aware); the gate also
+        # self-derives from the released mosaics when this is not passed.
+        rel_obs = _release_observations(FIELDS[args.field])
+        if rel_obs:
+            overlap_cmd += ["--observations", ",".join(sorted(rel_obs))]
+        # Pass the field's Gaia/VIRAC2 refcat so the gate can resolve pairs its
+        # reference-free layer cannot measure -- a sparse / thin inter-module
+        # overlap (2221 nrca-long|nrcb-long) has 0 mutual-coverage tiles, so the
+        # frame-vs-frame pooled histogram is unreliable there; the same-star
+        # residual map vs VIRAC2 is the authoritative arbiter (fail-closed still
+        # applies if the refcat is missing).
+        overlap_refcat = FRAME_REFCAT.get(args.field)
+        if overlap_refcat and os.path.exists(overlap_refcat):
+            overlap_cmd += ["--refcat", overlap_refcat]
+        rc = subprocess.run(overlap_cmd).returncode
         if rc == 1:
             print(f"\nREFUSING TO STAGE '{args.field}': inter-frame OVERLAP gate FAILED "
                   f"-- two overlapping visits/detectors are misregistered vs EACH OTHER "

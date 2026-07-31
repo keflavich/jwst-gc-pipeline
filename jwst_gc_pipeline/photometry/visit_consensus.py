@@ -39,6 +39,53 @@ from .astrometry_offsets import (
 # MISALIGNED: its im0 (first-pass) alignment must be replaced.
 EXPOSURE_CONSENSUS_TOL_MAS = 2.0
 
+# A cross-module exposure (different NIRCam module -> adjacent, ~disjoint sky
+# tile) may only join a component through a GENUINE small-offset overlap, never a
+# wide sweep across the ~56" module gap (the issue-158 window-edge alias).  This
+# bounds the cross-module growth tie: dither/guide-star scale, no sweep.
+_CROSS_MODULE_TIE_MAXSEP = 3.0 * u.arcsec
+
+# Sweep windows for the PER-EXPOSURE tie to the visit consensus (issue #158).
+# That tie is mas-scale BY CONSTRUCTION -- it removes guide-star jitter between
+# exposures of one visit, not a pointing error -- so offering the histogram a
+# 30" or 60" window is offering it a chance to find FIELD GEOMETRY (adjacent
+# module footprints, mosaic steps) instead of jitter.  Bounded at 10", well
+# below both the NIRCam module separation (~174") and the W51 module-adjacency
+# ridge (~56") that produced the issue-158 alias.
+#
+# This does NOT weaken gross-frame detection.  When the bounded measurement finds
+# no trustworthy tie the exposure is re-measured over the FULL sweep, and that
+# result is adopted IF its peak reproduces at an independent window: a real 20"
+# misalignment (brick-1182 v001 class) is therefore still found and flagged
+# exactly as before, for the correction ceiling to rule on.  What the bound
+# removes is the OTHER case -- a wide peak that does not reproduce, which stays a
+# recorded ``gross_diagnostic`` and a loud could-not-verify instead of becoming a
+# per-exposure correction.
+PER_EXPOSURE_SWEEP_WINDOWS = (3.0, 10.0)
+
+# --- module antisymmetry (issue #158 backstop) ------------------------------
+# Real per-exposure jitter is COMMON-MODE across the detectors of one exposure:
+# every detector rides the same guide-star pointing error.  An ALIAS that puts
+# each module onto the other module's stars (or a consensus frame corrupted by
+# one such tie, then re-centred on the MEDIAN of the per-exposure offsets) reads
+# ANTI-symmetric: module A at +d, module B at -d.  W51 F335M/F360M/F405N read
+# exactly that at ~28" per module, with the two modules ~56" apart -- the
+# adjacency ridge of their footprints, not any pointing error.
+#
+# The magnitude floor is what makes this specific.  A genuine per-module
+# astrometric split (SIAF/distortion residual) is TENS OF MAS -- W51 F480M and
+# F410M both carry a real ~35 mas module split in exactly this antisymmetric
+# shape, and must NOT be flagged.  The floor is set at the per-exposure
+# correction ceiling (astrometry_checkpoint.MAX_CORRECTION_ARCSEC = 0.5"), so
+# the guard can only ever fire on a correction that is ALREADY refused as
+# unappliable: it takes nothing away, it only replaces an opaque hard stop with
+# a specific, recorded diagnosis.
+MODULE_ANTISYMMETRY_MIN_MAS = 500.0
+# cos of the angle between the two module vectors; -1 = exactly opposed.
+MODULE_ANTISYMMETRY_COS_MAX = -0.9
+# fractional magnitude agreement required between the two module vectors
+MODULE_ANTISYMMETRY_MAG_TOL = 0.3
+
 # Same-star bulk refinement (memory: histogram-vs-samestar-offset-bias): the
 # all-pairs offset HISTOGRAM (check A) is biased by several mas against a DENSE
 # reference -- two catalogs tracing the same clustered field make a non-uniform
@@ -279,7 +326,17 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
     entries = []
     for tbl in exposure_tables:
         keep = select_reliable_stars(tbl, snr_min=snr_min, qfit_max=qfit_max)
-        coords = catalog_coords(tbl)[keep]
+        _all_coords = catalog_coords(tbl)
+        # A "reliable" star (good snr/qfit) can still carry a non-finite RA/Dec --
+        # e.g. a saturated-core replacement / recovered row whose position solve
+        # failed.  It must NOT enter the consensus: these coords are concatenated
+        # straight into a cKDTree (parity-halves path) and np.median (dec_mid),
+        # both of which raise on NaN/inf ("data must be finite").  Drop non-finite
+        # positions here so n_reliable, coords, and flux stay consistent and every
+        # downstream tie sees only finite coordinates.
+        _finite = np.isfinite(_all_coords.ra.deg) & np.isfinite(_all_coords.dec.deg)
+        keep = np.asarray(keep, dtype=bool) & _finite
+        coords = _all_coords[keep]
         if "flux_fit" in tbl.colnames:
             flux = np.asarray(tbl["flux_fit"], dtype=float)[keep]
         else:
@@ -351,20 +408,46 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
                                n_peak=usable[seed_i]["n_reliable"])
             remaining.discard(seed_i)
             union = usable[seed_i]["coords"]
+            # Module families already tied into this component.  A DIFFERENT
+            # NIRCam module images an ADJACENT, ~disjoint sky tile (~56" away,
+            # sharing ~no stars per exposure); a wide sweep across that gap locks
+            # onto the footprint cross-correlation at the search-window edge --
+            # the #158 alias (fake ~28-29" antisymmetric split).  Growing across
+            # it also violates this builder's own invariant (components are
+            # per-overlap-tile, tied to each other ONLY through the absolute
+            # reference).  So a cross-module exposure may join a component ONLY
+            # through a GENUINE small-offset overlap (bounded window, no sweep,
+            # non-swept tie); otherwise it seeds its own component and is aligned
+            # via measure_reference_tie.  Same-module exposures keep the full
+            # sweep so a large single-frame WCS error (brick-1182 v001 ~20") is
+            # still found.  #185's confirm_windows remains the statistical
+            # backstop; this is the geometric one.
+            comp_modfam = {module_family(usable[seed_i]["key"][2])}
             grew = True
             while grew and remaining:
                 grew = False
                 for i in sorted(remaining,
                                 key=lambda j: -usable[j]["n_reliable"]):
-                    res = measure_offset(usable[i]["coords"],
-                                         _crop_to_footprint(union, usable[i]["coords"]),
-                                         sweep=True,
-                                         context=f"{context} exp{usable[i]['key']} "
-                                                 f"vs component {comp} union")
-                    if res is None or not res["ok"]:
-                        continue
+                    _cropped = _crop_to_footprint(union, usable[i]["coords"])
+                    if module_family(usable[i]["key"][2]) not in comp_modfam:
+                        res = measure_offset(
+                            usable[i]["coords"], _cropped,
+                            sweep=False, maxsep=_CROSS_MODULE_TIE_MAXSEP,
+                            context=f"{context} exp{usable[i]['key']} "
+                                    f"vs component {comp} union (cross-module)")
+                        if res is None or not res["ok"] or res.get("swept"):
+                            continue
+                    else:
+                        res = measure_offset(
+                            usable[i]["coords"], _cropped,
+                            sweep=True, confirm_windows=True,
+                            context=f"{context} exp{usable[i]['key']} "
+                                    f"vs component {comp} union")
+                        if res is None or not res["ok"]:
+                            continue
                     rel[i] = res
                     comp_id[i] = comp
+                    comp_modfam.add(module_family(usable[i]["key"][2]))
                     remaining.discard(i)
                     shifted_i = _shift(usable[i]["coords"], res["dra"], res["ddec"])
                     union = SkyCoord(
@@ -397,12 +480,14 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
             # keep this single measure cheap without moving the peak)
             half_bridge = measure_offset(_cap_stars(halves[1].coords),
                                          _cap_stars(halves[0].coords), sweep=True,
+                                         confirm_windows=True,
                                          context=f"{context} half1 vs half0")
         for i, e in enumerate(usable):
             other = halves.get(1 - parity[i])
             if other is None:
                 continue
             res = measure_offset(e["coords"], other, sweep=True,
+                                 confirm_windows=True,
                                  context=f"{context} exp{e['key']} vs half"
                                          f"{1 - parity[i]}")
             if res is None or not res["ok"]:
@@ -516,9 +601,29 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
     consensus_ok = True
     consensus_ref = KDTreeReference(consensus)
     for pos, e in enumerate(usable):
+        # BOUNDED sweep: a per-exposure tie is mas-scale by construction
+        # (PER_EXPOSURE_SWEEP_WINDOWS), and any swept peak must survive an
+        # independent window before it is believed (confirm_windows).
         res = measure_offset(e["coords"], consensus_ref, sweep=True,
+                             sweep_windows=PER_EXPOSURE_SWEEP_WINDOWS,
+                             confirm_windows=True,
                              context=f"{context} exp{e['key']} vs consensus")
         measurable = res is not None and res["ok"]
+        gross = None
+        if not measurable:
+            # The bounded window found nothing trustworthy.  Fall back to the FULL
+            # sweep so a genuinely gross frame is still FOUND -- but only adopt it
+            # when the peak REPRODUCES at an independent window.  That split is the
+            # whole point: a real 20" misalignment confirms (and is then flagged
+            # exactly as before, for the correction ceiling to rule on), while a
+            # window-edge alias does not and stays a recorded could-not-verify.
+            gross = measure_offset(e["coords"], consensus_ref, sweep=True,
+                                   confirm_windows=True,
+                                   context=f"{context} exp{e['key']} vs consensus "
+                                           f"(gross)")
+            if gross is not None and gross["ok"]:
+                res = gross
+                measurable = True
         if not measurable:
             consensus_ok = False
         misaligned = False
@@ -536,6 +641,7 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
             internal_tie=bool(rel[pos] is not None and rel[pos]["npairs"] > 0
                               and (comp_id == comp_id[pos]).sum() > 1),
             vs_consensus=res, unverified=not measurable,
+            gross_diagnostic=gross,
             misaligned=misaligned,
             raoffset_meta=float(e["raoffset_meta"] or 0.0),
             deoffset_meta=float(e["deoffset_meta"] or 0.0)))
@@ -546,6 +652,95 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
                 scatter_mas=scatter_mas, exposures=exposures,
                 consensus_ok=consensus_ok, anchor_key=anchor["key"],
                 n_components=n_components, skipped=skipped)
+
+
+def module_family(module):
+    """Detector -> NIRCam module family ('nrca1'/'nrcalong' -> 'a').
+
+    The antisymmetry test compares MODULES, not detectors: an alias that lands
+    one module on the other's stars moves all four SW detectors of that module
+    together.  Anything unrecognised is returned unchanged, so a non-NIRCam or
+    oddly-named module simply forms its own family (and, being alone, can never
+    trip a two-family antisymmetry test).
+    """
+    m = str(module).strip().lower()
+    if m.startswith("nrc") and len(m) > 3 and m[3] in ("a", "b"):
+        return m[3]
+    return m
+
+
+def detect_module_antisymmetry(exposures,
+                               min_mas=MODULE_ANTISYMMETRY_MIN_MAS,
+                               cos_max=MODULE_ANTISYMMETRY_COS_MAX,
+                               mag_tol=MODULE_ANTISYMMETRY_MAG_TOL):
+    """Flag the issue-158 alias signature: per-module offsets equal and OPPOSITE.
+
+    Per-exposure jitter is common-mode across the detectors of one exposure --
+    every detector of an exposure rides the same guide-star pointing error, so
+    the modules agree.  Two modules reading LARGE, equal-and-opposite offsets is
+    not a pointing error at all: it is one module tied onto the other's stars
+    (directly, or through a consensus frame that a single bad tie corrupted and
+    the median re-centring then split evenly between them).
+
+    Deliberately NOT keyed to a specific separation.  The obvious candidate --
+    the SIAF nrcalong<->nrcblong reference-point separation, ~174" -- is not
+    what the W51 alias sat at: the measured module split was ~56", the lag that
+    slides the two module FOOTPRINTS onto each other, which depends on the
+    mosaic/dither pattern and so has no fixed value.  Keying on a hardcoded
+    separation would have made this guard silently never fire.  What IS
+    invariant is the antisymmetry and the SCALE (see MODULE_ANTISYMMETRY_MIN_MAS).
+
+    ``exposures`` is ``build_visit_consensus(...)['exposures']``.
+
+    Returns ``dict(detected, n_pairs_tested, n_antisymmetric, keys, examples)``
+    where ``keys`` is the set of exposure-key tuples involved.
+    """
+    by_exp = {}
+    for e in exposures:
+        res = e.get("vs_consensus")
+        if res is None or not res.get("ok"):
+            continue
+        key = tuple(e["key"])
+        # (visit, exposure, vgroup) -- module (key[2]) is what we compare across
+        grp = (key[0], key[1], key[4] if len(key) > 4 else None)
+        fam = module_family(key[2])
+        by_exp.setdefault(grp, {}).setdefault(fam, []).append(
+            (key, float(res["dra"]), float(res["ddec"])))
+
+    n_tested = 0
+    n_anti = 0
+    flagged_keys = set()
+    examples = []
+    for grp, fams in sorted(by_exp.items(), key=lambda kv: str(kv[0])):
+        if len(fams) != 2:
+            continue
+        n_tested += 1
+        (fa, va), (fb, vb) = sorted(fams.items())
+        a = np.array([np.mean([v[1] for v in va]), np.mean([v[2] for v in va])])
+        b = np.array([np.mean([v[1] for v in vb]), np.mean([v[2] for v in vb])])
+        na, nb = float(np.hypot(*a)), float(np.hypot(*b))
+        if na < min_mas or nb < min_mas:
+            continue                      # mas-scale split: real, not an alias
+        cos = float(np.dot(a, b) / (na * nb))
+        if cos > cos_max:
+            continue                      # not opposed
+        if abs(na - nb) > mag_tol * max(na, nb):
+            continue                      # not equal in magnitude
+        n_anti += 1
+        for _, vals in fams.items():
+            for key, _dra, _ddec in vals:
+                flagged_keys.add(key)
+        if len(examples) < 4:
+            examples.append(dict(
+                visit=grp[0], exposure=grp[1], vgroup=grp[2],
+                module_a=fa, module_b=fb,
+                dra_a_mas=float(a[0]), ddec_a_mas=float(a[1]),
+                dra_b_mas=float(b[0]), ddec_b_mas=float(b[1]),
+                separation_mas=float(np.hypot(*(a - b))), cos=cos))
+
+    return dict(detected=bool(n_anti), n_pairs_tested=int(n_tested),
+                n_antisymmetric=int(n_anti), keys=flagged_keys,
+                examples=examples, min_mas=float(min_mas))
 
 
 def _brightest_subset_for_spacing(coords, mag, target_spacing_arcsec):

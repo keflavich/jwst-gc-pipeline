@@ -32,7 +32,6 @@ from astropy.coordinates import SkyCoord
 from astropy import units as u
 from scipy.ndimage import label, find_objects, sum_labels
 
-sys.path.insert(0, '/blue/adamginsburg/adamginsburg/repos/jwst-gc-pipeline-wt-satdeblend')
 from jwst_gc_pipeline.reduction.saturated_star_finding import find_saturated_stars
 
 GC = '/orange/adamginsburg/jwst/gc2211'
@@ -53,7 +52,7 @@ hdr = fitsdata['SCI'].header
 ww = WCS(hdr)
 data = fitsdata['SCI'].data
 
-saturated, sources, coms = find_saturated_stars(fitsdata)
+saturated, sources, coms, _seed_kinds = find_saturated_stars(fitsdata)
 nsrc = int(sources.max())
 sizes = sum_labels(saturated, sources, np.arange(nsrc) + 1)
 slices = find_objects(sources)

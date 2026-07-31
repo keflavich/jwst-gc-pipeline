@@ -82,6 +82,25 @@ never silently green.
   never be written), keeps a timestamped backup, and stamps provenance
   columns (`prov_stage`, `prov_date`, `prov_dra_added_mas`,
   `prov_ddec_added_mas`, `prov_source`).
+* **`Vgroup` is part of a per-exposure row's identity.** A visit can dither
+  across several visit groups (physically disjoint sky tiles) and the exposure
+  number RESTARTS in each, so `(visit, filter, exposure, module)` names two
+  different pointings — cloudc has 2 groups in every filter, gc2211 has 6,
+  sgrb2 F187N has 2. Tables built by `build_virac2_offsets` and seeded by
+  `seed_offsets_table_from_consensus` carry the column; `update_offsets_table`,
+  `lookup_consensus_offset` and `fix_alignment` narrow on it
+  (`same_vgroup` — a CSV round-trip makes astropy read `"06201"` back as
+  `6201`).
+  Two rules keep an OLDER table safe:
+  * an EMPTY `Vgroup` cell means "group unknown", not "matches nothing": such a
+    row (written before the column existed, or preserved by the builder's
+    field-safe merge) keeps applying exactly as it did — see
+    `vgroup_row_matches`. Dropping it would silently discard an accumulated
+    correction;
+  * the consensus upsert MIGRATES a pre-`Vgroup` row (adopts it and backfills
+    the group) instead of inserting a second row beside it. If two groups claim
+    the same legacy row, that row blended two pointings and the upsert REFUSES
+    rather than guessing which group inherits the shift.
 * Stale im0 mosaics are RENAMED `*_i2d_im0_badastrom.fits` (+ a `.why.json`
   sidecar and a ledger in `astrometry_checkpoints/`), never deleted, never
   edited.

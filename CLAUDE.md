@@ -101,6 +101,18 @@ exactly how brick-1182 v001's ~20" offset first read as ~2"/incoherent. So:
   `window_arcsec ≫` your expected offset means the frame is grossly shifted.
 - On a weak tie, cross-check TWO references (`agree_across_references`, VIRAC vs
   Gaia-only): a real tie agrees; a spurious peak moves.
+- **A swept peak near the window EDGE is geometry, not a tie** (issue #158). Two
+  adjacent, non-overlapping footprints (two NIRCam modules, two mosaic tiles) have
+  a pair-density RIDGE at the lag that slides one onto the other; the search window
+  truncates it and the histogram's arg-max lands on the cut. Such a "peak" is sharp,
+  clears the contrast floor, and MOVES with the window (W51: off = 54.8/59.8/64.7/
+  67.2/75.9/89.0/99.5" at windows 55/60/66/70/80/90/100"). A real tie reads the
+  SAME offset at every window that can contain it. Check `window_edge_fraction`
+  (off/window; ~1 is the tell) and pass `confirm_windows=True` for any tie you
+  expect to be small — it re-measures at an independent window and rejects a peak
+  that does not reproduce. One accepted alias CASCADES: the displaced exposure
+  enters the consensus union, and every later exposure then ties to it at
+  contrast 200, so the guard must reject the FIRST marginal tie.
 
 ### Correcting an already-aligned frame after the offsets table changes
 
@@ -124,6 +136,45 @@ every filter must agree with the VIRAC2-Ks-nearest anchor to <5 mas with no
 significant 2″ cell >15 mas.  Do not disable (`ASTROM_CHECKPOINT=0`) or
 override (`ALLOW_LATE_STAGE_ASTROM_SHIFT`, `ALLOW_CROSSFILTER_ASTROM_FAIL`)
 without written justification.
+
+### ⛔ ASTROMETRY RULE #2 — read the GWCS; the SIP header is only an approximation
+
+**Do NOT build an `astropy.wcs.WCS` from a detector-frame SCI header for anything
+astrometric.** Use:
+
+```python
+from jwst_gc_pipeline.frame_wcs import frame_wcs
+ww = frame_wcs(filename_or_hdulist)      # GWCS-backed; SIP fallback + warning
+```
+
+Every JWST detector-frame product carries **two** WCSes: the **GWCS** in the ASDF
+extension (`model.meta.wcs`) — the authoritative full distortion chain — and a
+FITS `RA---TAN-SIP` header, which is a *fitted low-order approximation* of it.
+SIP cannot represent the JWST distortion; it can only fit it, and both directions
+of that fit carry error:
+
+- **the fit residual**: 5–8 mas on every frame written before 2026-07-29,
+  *position-dependent and different per detector and per filter*, so no bulk tie
+  removes it. Cause: `gwcs.WCS.to_fits()` defaults to `max_pix_error=0.25` **px**
+  (STScI uses 0.01), and the reduction re-stamped headers with a bare
+  `header.update(ww.to_fits()[0])`. In pixels that is up to ~165 mpix — the same
+  error, not a second one: SIP's own forward→inverse round trip closes to 0.000 mpix.
+- **off-footprint**: the iterative SIP inverse either **raises `NoConvergence`**
+  (the W51 m8 abort) or, with `quiet=True`, returns **finite garbage with no
+  warning** — which lands in a catalog instead of stopping the run.
+
+The GWCS has neither problem (inverse exact to <1 mpix; off-footprint → `NaN` on
+every call path) and is not slower overall (forward ~1.3× slower, inverse ~1.1× faster).
+
+- Enforced by the grep-guard test `jwst_gc_pipeline/tests/test_no_sip_frame_astrometry.py`.
+- Any FITS WCS you *write* goes through `reduction.fits_wcs_sync.sync_header_to_gwcs`,
+  which fits at 0.01 px and **verifies** the result against the GWCS.
+- Audit on-disk products: `python scripts/release/audit_fits_gwcs_agreement.py --field <f>`.
+- `i2d` mosaics are exempt — `resample` writes a rectified plain `RA---TAN` grid
+  with no SIP, so `WCS(i2d_header)` is exact.
+- `astropy.wcs.WCS(header)` on a frame must always pass `relax=True`: a header whose
+  CTYPE lost the `-SIP` suffix still carries `A_*`/`B_*`, and without `relax` the
+  distortion is silently dropped (~0.1" at the detector corners).
 
 ### Reading list before any astrometry change
 - `jwst_gc_pipeline/reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md` — the full flow,

@@ -26,10 +26,13 @@ consensus/VIRAC2locked offsets table solved against the uncorrected frame
 (the corrections would stack); rebuild the offsets tables after enabling.
 """
 import copy
+import os
 
 import numpy as np
 import astropy.units as u
 from astropy.io import fits
+
+from jwst_gc_pipeline.reduction.fits_wcs_sync import sync_header_to_gwcs
 
 MARKER = 'SPLACORR'
 PENDING = 'SPLAPEND'
@@ -116,7 +119,11 @@ def apply_placement_correction(fn, verbose=True):
 
     with fits.open(fn) as hdul:
         h = hdul['SCI'].header
-        h.update(ww.to_fits()[0])
+        # Verified tight SIP fit, not gwcs's 0.25 px default -- see
+        # jwst_gc_pipeline.reduction.fits_wcs_sync.
+        _sip_max, _sip_med = sync_header_to_gwcs(h, ww, fa.data.shape,
+                                                 label=os.path.basename(fn))
+        h['SIPGWMAX'] = (_sip_max, '[mas] max FITS/SIP vs GWCS disagreement')
         h[MARKER] = (True, 'static SIAF placement-field shift applied')
         h['SPLASHRA'] = (dra, '[deg] placement-field RA coord shift')
         h['SPLASHDE'] = (ddec, '[deg] placement-field Dec shift')
