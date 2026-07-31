@@ -3756,7 +3756,8 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     metavar="profile_memory")
     # --- manual-iteration path (cataloging.py; replaces IterativePSFPhotometry) ---
     parser.add_option("--no-residual-background", dest="manual_residual_background",
-                      default=True, action="store_false",
+                      default=MANUAL_DEFAULTS['manual_residual_background'],
+                      action="store_false",
                       help="disable the model-subtracted footprint background "
                            "(modelsub_bkg columns); diagnostic only")
     # default from MANUAL_DEFAULTS, NOT None: mopt() is getattr(options, name,
