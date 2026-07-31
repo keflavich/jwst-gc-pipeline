@@ -210,7 +210,7 @@ def _consensus_correction(fn, basepath, proposal_id, filtername, module):
     Returns ``(sentinel_ra, sentinel_dec, jitter_ra, jitter_dec, table_basename)``;
     zeros and ``''`` when no table exists yet.
 
-    The sentinel is INCLUDED, not skipped.  The checkpoint records corrections as
+    The sentinel is INCLUDED.  The checkpoint records corrections as
     RESIDUALS measured on frames that already carry whatever tie was applied last
     (``seed_offsets_table_from_consensus``: "the correction is the RESIDUAL after
     the previous tie").  So on a field whose bulk is a recorded constant, the

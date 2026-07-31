@@ -32,14 +32,12 @@ same GWCS refit at ``max_pix_error=0.01``     4-5      0.000 mas    0.000 mas
 A 5-8 mas *position-dependent* error in the WCS that per-frame catalogs are
 built from sits right on top of the pipeline's own astrometric tolerances (2 mas
 m2 per-exposure consensus, 5 mas m7 cross-filter gate, 30 mas inter-frame
-overlap gate).  It is not a constant offset that a bulk tie removes: it is a
-different low-order surface per detector *and per filter*, so it injects
-spurious cross-filter and cross-detector structure exactly where the
-astrometric gates look.
+overlap gate).  It is a different low-order surface per detector *and per
+filter*, so no bulk tie removes it and it injects spurious cross-filter and
+cross-detector structure exactly where the astrometric gates look.
 
-**The whole 5-8 mas is attributable to ``max_pix_error``** -- to the degree-3
-refit itself, and to nothing else.  See the note on orphan coefficients below
-before assuming otherwise.
+**The whole 5-8 mas comes from ``max_pix_error``** -- from the degree-3 refit
+itself.  The orphan coefficients described below contribute 0.000 mas.
 
 Two further defects the bare ``header.update()`` had:
 
@@ -55,16 +53,15 @@ Two further defects the bare ``header.update()`` had:
    0.000000 mas over an 8x8 grid on the full array).  They are stripped anyway,
    because a header that contradicts itself is a trap for any reader that
    infers the order from the cards present rather than from ``A_ORDER``, and
-   for non-astropy consumers -- but they are *not* part of the measured error.
+   for non-astropy consumers.
 
 2. Nothing ever *checked* that the written FITS WCS reproduced the GWCS.
    ``check_wcs`` compared only the array **centre**, where the distortion
    residual is identically zero by construction (measured on brick F182M nrca1:
    centre 0.0000 mas, (0,0) 5.117 mas, (2047,2047) 5.289 mas).  A 25x loosening
-   of the REQUESTED bound -- 0.25 px vs STScI's 0.01, NOT a measured accuracy
-   ratio; the measured change is 5.487 -> 0.000 mas -- survived because the check
-   sat exactly where the error vanishes: a gate that cannot see the failure it is
-   named for.
+   of the REQUESTED bound (0.25 px vs STScI's 0.01) survived because the check sat
+   exactly where the error vanishes: a gate blind to the failure it is named for.
+   Measured, that loosening takes brick SW nrca1 from 0.000 to 5.487 mas.
 
 So: fit tight, strip stale coefficients, and **verify against the GWCS before
 returning**.
@@ -73,10 +70,8 @@ Rule of thumb
 -------------
 Read the GWCS whenever it exists -- ``model.meta.wcs`` via
 ``stdatamodels.jwst.datamodels``, or the ``jwst_gc_pipeline.frame_wcs.frame_wcs``
-helper once PR #191 lands.  That module does NOT exist on main yet, so the
-references to it here and in ``scripts/release/audit_fits_gwcs_agreement.py`` are
-forward references, not working imports.  Use this module only at the few points
-where a FITS header genuinely must be written for an external consumer.
+helper.  Use this module only at the few points where a FITS header genuinely
+must be written for an external consumer.
 """
 import os
 import re

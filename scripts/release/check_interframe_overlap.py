@@ -458,7 +458,7 @@ def _global_tie(allsrc, ref, max_off_mas,
 def _samestar_ref_grid(allsrc, ref, max_off_mas, tol_mas=None, cells_arcsec=None,
                        min_stars=SAMESTAR_MIN_STARS, check_radii=True):
     """Absolute cross-check of ``allsrc`` vs a reference catalog by the SAME-STAR
-    residual map -- density-immune -- NOT a per-cell offset histogram.
+    residual map (density-immune).
 
     ``measure_offset_grid`` (per-cell histogram) is fooled by the dense-field
     wrong-pair bias in sparse cells: on brick F405N it read a 58" worst cell
@@ -535,9 +535,9 @@ def _nearest_residuals(src, ref, radius_arcsec, global_result):
     the verified global tie removed.  Indexed on the reference so two exposure
     groups can be differenced star-by-star.
 
-    Deliberately NOT the library's a-side uniqueness filter: ``src`` here is a
-    pooled per-exposure detection list in which every star appears once per
-    dither, so requiring a unique source per reference star would throw away the
+    Deliberately allows a source to serve several reference stars: ``src`` here
+    is a pooled per-exposure detection list in which every star appears once per
+    dither, so the library's a-side uniqueness filter would throw away the
     overlap regions -- exactly where a deferred pair lives."""
     isrc, iref, sep, _ = search_around_sky(src, ref, radius_arcsec * u.arcsec)
     if len(isrc) == 0:

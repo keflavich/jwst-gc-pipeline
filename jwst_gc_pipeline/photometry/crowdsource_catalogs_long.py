@@ -347,15 +347,14 @@ def _shift_fits_imaging_transform(transform, x0, y0):
 
     ``FITSImagingWCSTransform`` evaluates ``f(x - crpix)``, so a grid whose
     origin sits at parent pixel ``(x0, y0)`` is EXACTLY the same transform with
-    ``crpix -> crpix - (x0, y0)``.  Rebuilding it this way (rather than
-    composing a pixel ``Shift`` in front) is what keeps the FITS-imaging
-    structure ``jwst.resample`` requires of a custom ``output_wcs``: it accepts
-    a ``FITSImagingWCSTransform`` directly, and otherwise hunts for a
-    ``Projection`` model inside a CompoundModel -- which a composed
-    ``Shift & Shift | FITSImagingWCSTransform`` does NOT expose, because the
-    projection is a plain attribute of the (atomic) FITS transform rather than
-    a node of the compound tree.  That is the whole of issue #159: the cutout /
-    finite-crop data_i2d WCS came out as such a composition, so every mergedcat
+    ``crpix -> crpix - (x0, y0)``.  Rebuilding it this way keeps the
+    FITS-imaging structure ``jwst.resample`` requires of a custom
+    ``output_wcs``: it accepts a ``FITSImagingWCSTransform`` directly, and
+    otherwise hunts for a ``Projection`` model inside a CompoundModel.  In a
+    composed ``Shift & Shift | FITSImagingWCSTransform`` the projection is a
+    plain attribute of the (atomic) FITS transform rather than a node of the
+    compound tree, so that hunt fails.  That is the whole of issue #159: the
+    cutout / finite-crop data_i2d WCS came out as such a composition, so every mergedcat
     residual / model mosaic resample died with "could not find a Projection
     model in the output WCS transform".
     """
@@ -885,9 +884,9 @@ def _resolve_seed_skycoords(seed_table, ww=None, preferred_skycoord_col=None):
          vstacking heterogeneous tables (e.g. iter1 daophot rows carry
          ``skycoord_centroid``, satstar rows carry ``skycoord_fit``;
          each column is masked on the rows belonging to the other table).
-         The previous implementation picked the first existing column by
-         name and called ``.unmasked``, which exposed the (0,0) fill
-         sentinel for masked rows.  Star B regression 2026-06-02.
+         Taking the first named column and calling ``.unmasked`` reads the
+         (0,0) fill sentinel on those masked rows -- the Star B regression
+         of 2026-06-02 -- so the merge is per-row.
       4. Only ``(x, y)`` available + a WCS -> bulk ``ww.pixel_to_world``
          backfill for any rows still missing sky.
 
@@ -1791,7 +1790,7 @@ def load_outside_fov_satstar_pixels(basepath, ww, data_shape=None,
     (which return NaN flux and stall the pipeline).
 
     Source-file precedence (highest first): the Spitzer/external-catalog
-    prior ``saturated_stars_outside_fov_spitzer.reg`` (NOT locked -- the
+    prior ``saturated_stars_outside_fov_spitzer.reg`` (a prior, so the
     forced-fit grid search still refines its positions on the diffraction
     spikes), then the hand-verified ``saturated_stars_outside_fov_locked.reg``
     (used as-is, no position search), then the original coarse
@@ -2569,8 +2568,8 @@ def save_residual_datamodel(input_filename, output_filename, data, clear_dq=Fals
     core at 3378/10547, but the mosaic shows ~0 -- the saturated-core pixels were
     weighted out).  Unsaturated stars (C/D) keep good DQ so they survive; only the
     saturated cores were being lost.  Clearing DQ lets the full model resample.
-    Used ONLY for the model; the RESIDUAL keeps the data DQ (NaN cores there are
-    honest -- the data IS missing).
+    Used ONLY for the model; the RESIDUAL keeps the data DQ (a NaN core there is
+    correct -- the data IS missing).
     """
     import astropy.io.fits as fits_io
 
@@ -2679,7 +2678,7 @@ def _reduction_mosaic_output_wcs(pipeline_dir, proposal_id, field, inst_token,
     When a reduction mosaic ``jw0{prop}-o{field}_t001_{inst}_{filt}_i2d.fits``
     exists, the cataloging ``_data_i2d`` should be resampled onto its EXACT grid
     so the 'data' image matches the canonical reduction mosaic pixel-for-pixel
-    (verified byte-identical: same crf + same output WCS -> max|diff|=0).
+    (byte-identical: same crf + same output WCS -> max|diff|=0).
     Returns None for fields with no reduction mosaic (NIRCam fields built only by
     cataloging) or cutout runs, leaving the legacy tight-bbox behaviour intact.
     """
@@ -3574,12 +3573,12 @@ def build_filtered_iter2_residual_bg(cut_bp, basepath, filtername, proposal_id,
                                      peak_over_bkg=20.0, psf_shape=(21, 21)):
     """EXPERIMENTAL iter4 background: smoothed iter2 residual where only confident
     STARS are subtracted, so extended-emission false detections stay in the
-    background (and iter4 no longer inflates fluxes to absorb them).
+    background (which stops iter4 inflating fluxes to absorb them).
 
     A source is subtracted (kept in the model) iff it is a confident star:
       qfit <= qfit_max  OR  flags == 1 (central-saturation real star)  OR
       peak surface brightness > peak_over_bkg * local_bkg  (bright real star;
-      peak SB = the peak PIXEL value at the source, NOT the integrated flux).
+      peak SB = the peak PIXEL value at the source).
     Everything else is left in the residual (treated as extended emission).
     Returns the smoothed-bg i2d path.  See NOTES_star_vs_extended_emission.md.
     """

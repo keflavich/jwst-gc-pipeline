@@ -29,19 +29,19 @@ General for ALL GC fields (migrated 2026-07-17 from brick-jwst-2221
 analysis/build_virac2_locked_perexp.py, PR #39). The coarse absolute tie uses the repo's
 sanctioned ``jwst_gc_pipeline.photometry.astrometry_offsets.measure_offset`` (density-immune
 all-pairs histogram with an internal window SWEEP + contrast/error, sitting next to the
-``assert_sparse_reference_for_nn_median`` guard) -- NOT a bespoke coarse histogram and NEVER
-a nearest-neighbour match against the dense mosaic (that fabricates a false 'clean tie at
+``assert_sparse_reference_for_nn_median`` guard) -- NEVER a nearest-neighbour match
+against the dense mosaic (that fabricates a false 'clean tie at
 zero' once the offset exceeds the NN spacing; cloudef obs005 F162M is a real ~7.5" gross
 offset an NN read as ~0).  Add a field by adding a REGION entry (proposal/field/basepath/
 {filt: (subdir, obs-epoch, mtag)}).  A multi-pointing field needs a VIRAC2 cache covering
 ALL its pointings.
 
-``mtag`` names the merge stage of the per-frame catalogs the tie is measured on, and it is
-per-(OBSERVATION, filter), not per-filter: when two observations catalog into one directory
-under the same names, whichever ran last owns each stage, so the mtag must name a stage the
+``mtag`` names the merge stage of the per-frame catalogs the tie is measured on, keyed
+per (OBSERVATION, filter): when two observations catalog into one directory under
+the same names, whichever ran last owns each stage, so the mtag must name a stage the
 region's OWN observation actually has (cloudef obs005 reached only m2 while obs002 reached
 m7 -- see the cloudef entries).  ``_gather`` verifies this from each catalog's crf and
-refuses the mismatch rather than relabelling another observation's tie.
+refuses a mismatch, so another observation's tie stays out of this one's table.
 
 Usage:  python -m jwst_gc_pipeline.reduction.build_virac2_offsets --region <key> [filt ...]
 """

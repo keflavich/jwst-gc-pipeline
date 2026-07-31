@@ -16,9 +16,8 @@ scale and rotation by construction -- only the higher-order distortion field
 changes.  The per-grid-point residual of that fit IS the CRDS-vs-GDC
 distortion delta map, returned for diagnostics.
 
-This is a starlist-level correction (peppar-style), NOT a CRDS reference-file
-swap: the frame's WCS on disk is untouched and downstream drizzling is
-unaffected.
+This is a starlist-level correction (peppar-style): the frame's WCS on disk is
+untouched and downstream drizzling is unaffected.
 """
 import numpy as np
 from astropy import units as u

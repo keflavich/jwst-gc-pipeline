@@ -1,7 +1,7 @@
 """Tailing registration failsafe — run the per-tile local-registration scan at the
 END of a field's reduction/cataloging, so a brick-1182-style localized misregistration
 (a half-mosaic untied while the bulk offset reads ~0) is caught the moment the products
-are built, not months later at release staging.
+are built.
 
 This wraps ``scripts/release/registration_failsafes.py --scan`` (the same per-cell
 cross-band + own-catalog check the release gate uses) so any chain can call it:
@@ -20,8 +20,9 @@ Design notes
 * Default is **warn** (return a status); pass ``strict=True`` / ``--strict`` to
   RAISE on FAIL so it can hard-gate a chain. A scan that cannot run (e.g. <2 bands
   present) is a WARN, never a block -- it must not wedge a partial run.
-* It does NOT itself use nearest-neighbour-median; the underlying failsafe is
-  per-cell agreement-fraction + offset-histogram. See CLAUDE.md.
+* The underlying failsafe measures per-cell agreement-fraction plus
+  offset-histogram stacking, and never nearest-neighbour-medians against the
+  dense reference (CLAUDE.md astrometry rule #1). See CLAUDE.md.
 """
 import json
 import os

@@ -30,7 +30,7 @@ Two orthogonal pieces of information per field
 **Reference frame** -- WHICH absolute frame this field is tied to.  Galactic
 Centre fields use VIRAC2 (Gaia is the *frame* but far too sparse to be the
 reference *catalog* in the GC -- see CLAUDE.md); halo/disk clusters outside the
-VVV footprint use Gaia directly.  This is deliberately NOT hardcoded to VIRAC2.
+VVV footprint use Gaia directly.  The frame is therefore configured per field.
 
 **Shift source** -- WHERE the numbers come from:
 
@@ -43,7 +43,8 @@ VVV footprint use Gaia directly.  This is deliberately NOT hardcoded to VIRAC2.
 ``RECORDED_BULK``
     A bulk offset already measured and recorded here as a constant.  These are
     pure bulk -- no per-exposure jitter term -- and are the entries that pipeline
-    step 0 will VERIFY (not re-measure) once that lands.
+    step 0 verifies, leaving the recorded constant in place
+    (``jwst_gc_pipeline.reduction.bulk_offset_step0``).
 
 Bulk vs jitter
 --------------

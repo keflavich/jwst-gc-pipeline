@@ -2168,7 +2168,7 @@ def _dedup_satstar_catalog(tbl, radius=None, target=None):
     BIG-FOOTPRINT INCONSISTENT REJECT (fix 2, extended-emission targets only).
     When >= SATSTAR_FP_REJECT_MIN_N comparable-brightness satstars pile onto ONE
     large saturated footprint yet disagree in flux by > SATSTAR_FP_REJECT_RATIO,
-    they are unstable PSF fits on bright EXTENDED EMISSION, not a star -> drop the
+    they are unstable PSF fits on bright EXTENDED EMISSION -> drop the
     whole pile.  Gated to the extended-emission targets (w51/sickle/wd2) and
     guarded to comparable-brightness members so a real star + faint junk is never
     dropped.  Env SATSTAR_FP_REJECT (default 1) toggles it.

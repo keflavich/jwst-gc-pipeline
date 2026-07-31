@@ -7,7 +7,7 @@ The legacy ``IterativePSFPhotometry``-based path is numerically unstable for
 isolated bright stars: with free position + LevMar + internal maxiters
 re-detection the fit can walk the centroid and settle on a ~2x inflated-flux
 minimum whose *model peak exceeds the data peak* (physically impossible for a
-single positive PSF; qfit does NOT catch it).  See
+single positive PSF, and it passes qfit).  See
 ``NOTES_star_vs_extended_emission.md`` (C/D case) and ``PSFPhotometryPlan2026-06-09.md``.
 
 This module uses **manual iterations of single-pass** ``PSFPhotometry``,
@@ -2398,8 +2398,8 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
     band (or i2d-structure) detection was force-fit in all bands at the same
     position -> a fake multi-band source with manufactured cross-band-consistent
     positions, stored as if independently detected (the spurious "embedded
-    reddened-F405N-excess" set; cross-band agreement was an artifact of the shared
-    seed, not evidence).  The stringent >=N-filter confirmation -- the long-
+    reddened-F405N-excess" set; the cross-band agreement was an artifact of the
+    shared seed).  The stringent >=N-filter confirmation -- the long-
     standing TODO -- removes single-band/structure detections from the seed so
     they never propagate.  A genuine source bright enough to matter is confirmed
     in >=2 filters; the rare pure-single-band line emitter is the deliberate cost
@@ -2727,8 +2727,9 @@ def _structure_noise_keep(data, err, *, xpix, ypix, struct_x=0.0, struct_y=0.0,
 
         peak > smoothed_mean + struct_x * real_noise + struct_y * structure_noise
 
-    smoothed_mean   = median-filtered data on ``smooth_box`` (>~5x FWHM, so it is
-                      the large-scale background, NOT the filaments);
+    smoothed_mean   = median-filtered data on ``smooth_box`` (>~5x FWHM, so it
+                      follows the large-scale background and leaves the
+                      filaments in ``data - smoothed``);
     real_noise      = propagated per-pixel ERR;
     structure_noise = local scatter of (data - smoothed) over ``struct_box`` -- the
                       "noise" introduced by emission structure.  This rejects

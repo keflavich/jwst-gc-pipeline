@@ -29,9 +29,9 @@ must run before drizzling**.  A rigid field shift moves every source identically
 so a catalog built before alignment measures the bulk offset perfectly well --
 but it has to exist.
 
-The catalogs on this archive are usually NOT raw-WCS, though: brick F200W
-visit 001 frames carry an applied (-17.597, +13.453) arcsec and sickle F187N an
-applied (-0.102, -0.034) arcsec, in both cases exactly the recorded bulk.  A
+The catalogs on this archive usually carry an APPLIED correction already: brick
+F200W visit 001 frames carry an applied (-17.597, +13.453) arcsec and sickle F187N
+an applied (-0.102, -0.034) arcsec, in both cases exactly the recorded bulk.  A
 measurement on such catalogs is therefore the RESIDUAL the frames still owe, near
 zero -- so what VERIFY compares against is ``recorded - applied``, and
 :func:`applied_bulk_mas` is what tells the two states apart.  Comparing a

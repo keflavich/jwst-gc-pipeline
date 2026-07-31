@@ -70,7 +70,7 @@ def _resolve_existing_path(path):
 
 def reproject_xy_to_world(cat, crf_path=None, xcol='x_fit', ycol='y_fit', sci_ext='SCI'):
     """Sky positions from the STABLE detector pixel centroids through the CURRENT
-    crf WCS -- NOT the catalog's cached ``skycoord_centroid``.
+    crf WCS, superseding the catalog's cached ``skycoord_centroid``.
 
     A per-frame ``daophot_basic`` catalog stores ``skycoord_centroid`` computed
     from the crf WCS *at catalog-build time*.  When the crf is re-drizzled with a
@@ -150,8 +150,8 @@ def generation_stamp(header):
 
 def base_mismatch_mas(base_ra, base_dec, now_ra, now_dec):
     """On-sky distance (mas) between a recorded base fiducial and the frame's
-    current fiducial.  > a few mas means the frame is NOT the generation the
-    correction was solved on."""
+    current fiducial.  > a few mas means the frame belongs to a different
+    reduction generation than the one the correction was solved on."""
     cosd = np.cos(np.radians(0.5 * (float(base_dec) + float(now_dec))))
     return float(np.hypot((float(now_ra) - float(base_ra)) * cosd,
                           float(now_dec) - float(base_dec)) * 3.6e6)
