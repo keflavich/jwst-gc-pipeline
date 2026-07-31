@@ -30,6 +30,7 @@ import sys
 
 from jwst_gc_pipeline import config as pipeline_config
 from jwst_gc_pipeline import fields
+from jwst_gc_pipeline.scratch_basepath import apply_basepath_override
 from jwst_gc_pipeline.photometry.naming import MIRI_FILTERS
 from jwst_gc_pipeline.reduction import destreak_policy
 
@@ -102,15 +103,17 @@ def resolve(proposal, obsid, instrument='nircam', filters=None):
                 f'{target} proposal {proposal} has no {unknown} in fields.yaml; '
                 f'it has {sorted(filternames)}')
         filternames = [f for f in filternames if f.lower() in wanted]
+    basepath = apply_basepath_override(fields.basepath(target))
     return {
         'target': target,
         'proposal': proposal,
         'obsid': obsid,
         'instrument': instrument,
         'filters': [f.upper() for f in filternames],
-        'basepath': fields.basepath(target),
+        'basepath': basepath,
         'reference_catalog': fields.reference_catalog_path(
-            proposal, obsid, target=target, instrument=instrument),
+            proposal, obsid, target=target, instrument=instrument,
+            basepath=basepath),
         'each_suffix': destreak_policy.crf_suffix(
             target, filternames[0], obsid),
         # sickle destreaks its short filters and not its long ones, so no one
@@ -164,6 +167,9 @@ def _job_environment(plan, stage_name, config):
     """
     stage = pipeline_config.stage(config, stage_name)
     environ = dict(pipeline_config.environment(config))
+    # The submit scripts prepend this to PYTHONPATH, so the jobs run this
+    # checkout rather than the installed package.
+    environ['PIPE_ROOT'] = REPO_ROOT
     environ['PROPOSAL'] = plan['proposal']
     environ['FIELD'] = plan['obsid']
     environ['TARGET'] = plan['target']
@@ -324,6 +330,11 @@ def run_pipeline(proposal, obsid, cutout_region=None, instrument='nircam',
                   f"{len(every)} tasks rather than one per filter of this "
                   f"observation")
 
+    if cutout_region and len(plan['filters']) > 1:
+        print(f"  note: this cutout runs {len(plan['filters'])} filters one "
+              f"after another in this shell.  --filters F410M keeps it to "
+              f"minutes.")
+
     if scheduler == 'local':
         return _run_local(plan, config, cutout_region, stages, dry_run)
     return _submit_slurm(plan, config, stages, dry_run)
@@ -334,6 +345,12 @@ def _run_local(plan, config, cutout_region, stages, dry_run):
                 _local_commands(plan, config, cutout_region) if name in stages]
     environ = dict(os.environ)
     environ.update(pipeline_config.environment(config))
+    # Stage 1 is a script path, so Python puts ITS directory on sys.path and
+    # `import jwst_gc_pipeline` finds whatever is pip-installed.  Stage 2 uses
+    # `python -m` and finds this checkout.  Without this the two stages run
+    # different versions of the package.
+    environ['PYTHONPATH'] = os.pathsep.join(
+        [REPO_ROOT] + ([environ['PYTHONPATH']] if environ.get('PYTHONPATH') else []))
     for name, command in commands:
         print(f'\n=== {name} ===\n{" ".join(command)}', flush=True)
         if dry_run:

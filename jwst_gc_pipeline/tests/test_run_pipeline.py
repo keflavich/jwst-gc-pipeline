@@ -293,3 +293,48 @@ def test_every_registry_attribute_the_drivers_name_resolves():
                     and not hasattr(registry, node.attr)):
                 missing.append(f'{driver}: fields.{node.attr}')
     assert not missing, 'drivers name registry attributes that do not exist:\n  ' + '\n  '.join(missing)
+
+
+# --------------------------------------------------------------------------
+# Findings from the end-to-end cutout run.
+# --------------------------------------------------------------------------
+
+def test_the_local_run_puts_this_checkout_on_the_path(monkeypatch, tmp_path):
+    """Stage 1 is a script path, so Python puts ITS directory on sys.path and
+    `import jwst_gc_pipeline` finds the pip-installed package.  Stage 2 uses
+    `python -m` and finds the checkout.  The two stages ran different
+    versions."""
+    captured = {}
+
+    def fake_run(command, env=None, cwd=None, **kwargs):
+        captured['env'] = env
+        class Result:
+            returncode = 0
+        return Result()
+
+    monkeypatch.setattr(rp.subprocess, 'run', fake_run)
+    rp.run_pipeline('2221', '001', filters=['F410M'],
+                    cutout_region='1,2,3', dry_run=False)
+    assert captured['env']['PYTHONPATH'].split(os.pathsep)[0] == rp.REPO_ROOT
+
+
+def test_the_submitted_jobs_carry_pipe_root():
+    """submit_*.sbatch prepend PIPE_ROOT to PYTHONPATH, for the same reason."""
+    config = pipeline_config.load()
+    environ = rp._job_environment(rp.resolve('2221', '001'), 'reduce', config)
+    assert environ['PIPE_ROOT'] == rp.REPO_ROOT
+
+
+def test_the_banner_reports_where_output_actually_goes(monkeypatch, capsys):
+    """GC_BASEPATH_OVERRIDE is a safety variable; the one line naming the
+    output directory has to reflect it."""
+    monkeypatch.setenv('GC_BASEPATH_OVERRIDE', '/tmp/demo/brick/')
+    rp.run_pipeline('2221', '001', filters=['F410M'], dry_run=True)
+    out = capsys.readouterr().out
+    assert 'directory: /tmp/demo/brick/' in out
+    assert 'refcat:    /tmp/demo/brick/catalogs/' in out
+
+
+def test_a_multi_filter_cutout_says_it_is_not_minutes(capsys):
+    rp.run_pipeline('2221', '001', cutout_region='1,2,3', dry_run=True)
+    assert '--filters F410M keeps it to minutes' in capsys.readouterr().out

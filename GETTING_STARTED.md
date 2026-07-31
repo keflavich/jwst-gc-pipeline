@@ -97,7 +97,7 @@ The code calls it the **basepath**.
 ├── catalogs/                   stages 2 and 3 write catalogs here; also holds
 │                               the reference catalog you supply
 ├── offsets/                    only for fields aligned from a table (see alignment_config.py)
-└── regions_/nircam_<target>_fov.reg    only for MIRI
+└── regions_/nircam_<target>_fov.reg    read by the NIRCam driver
 ```
 
 The pipeline creates `psfs/` and `catalogs/`. You supply two things:
@@ -196,15 +196,21 @@ your own so nothing can touch released products. Measured on HiPerGator: about
 
 Stage 1 reads three things from the target directory besides the exposures: the
 association file, the reference catalog, and (for this field) an offsets table.
-`stage_scratch_basepath.sh` copies exactly those out of the real tree and
-nothing the pipeline writes, so start with it:
+`stage_scratch_basepath.sh` copies the inputs out of the real tree and nothing
+the pipeline writes, so start with it:
 
 ```bash
-export GC_BASEPATH_OVERRIDE=$HOME/scratch/brick-demo/
+# The scratch directory must end in the target's own name, so the staging
+# script can tell it is staging `brick`.
+export GC_BASEPATH_OVERRIDE=$HOME/scratch/demo/brick/
 scripts/reduction/stage_scratch_basepath.sh \
     /blue/adamginsburg/adamginsburg/jwst/brick \
     "$GC_BASEPATH_OVERRIDE" reduce destreak_o001_crf F410M
 ```
+
+It stages the exposures, the offsets table and the reference catalog. It leaves
+the association file, so stage 1 fetches that from MAST — a minute, and the one
+thing in this example that needs your MAST token.
 
 Then:
 
