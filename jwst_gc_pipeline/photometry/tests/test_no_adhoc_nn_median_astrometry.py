@@ -70,6 +70,11 @@ ALLOWLIST = {
     # PR #57 diagnostic: nearest-neighbour SEPARATION histogram (median only for the
     # figure-title label + a caveat plot) -- NOT an astrometric correction.
     "docs/pr57_recovery_investigation/make_caveat_figs.py",
+    # satstar fit-shape sweep: matches the SAME star between two satstar runs at
+    # different fit-shape sizes to compare their FLUXES (collect_correction_data
+    # .py:55, guarded by MATCH_ARCSEC).  Source association for a photometric
+    # comparison, not an astrometric tie -- no offset is derived or applied.
+    "scripts/satstar_deblend/collect_correction_data.py",
 }
 
 def _iter_py_files():

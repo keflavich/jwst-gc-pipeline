@@ -93,6 +93,12 @@ ALLOWLIST = {
     "docs/pr57_recovery_investigation/make_caveat_figs.py",
     "docs/pr57_recovery_investigation/make_figs.py",
     "scripts/satstar_deblend/batch_validate.py",
+    # satstar fit-shape analysis scripts: they COPY the SCI WCS (relax=True on
+    # both read and write, so the SIP terms survive) into a working header for
+    # the satstar fitter, exactly as saturated_star_finding.py:4617 does.  No
+    # position is derived from the SIP WCS -- it is carried, not evaluated.
+    "scripts/satstar_deblend/adaptive_fit_shape_ab.py",
+    "scripts/satstar_deblend/fit_footprint_sweep.py",
 }
 
 
