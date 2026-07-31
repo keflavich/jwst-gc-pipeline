@@ -429,14 +429,23 @@ def find_saturated_stars(fitsdata, min_sep_from_edge=5, edge_npix=10000,
     dq = fitsdata['DQ'].data
     saturated = (dq & dqflags.pixel['SATURATED']) > 0
     # Seeding and fit-masking use DIFFERENT saturation masks.  A pixel saturated
-    # in a late group but good in group 0 is recovered by the ramp fit; only
-    # 0-good-group pixels carry DO_NOT_USE, i.e. a NaN VAR_POISSON -- which is
-    # how the fit mask finds them (`_unrecoverable`).
-    #   seed on the FULL saturated mask -- else a moderately saturated star with
-    #     a recovered core is never seeded and never cataloged (daofind cannot
-    #     fit its core either), which lost real W51 cluster stars.
-    #   fit-mask only the unrecoverable pixels (in get_saturated_stars) -- the
-    #     recovered wings are valid data and sharpen the centroid and flux.
+    # in a late group but good in group 0 is recovered by the ramp fit and
+    # carries no DO_NOT_USE; only 0-good-group pixels do.
+    #   SEED on the FULL saturated mask.  A moderately saturated star whose core
+    #     was recovered is otherwise never seeded and never cataloged -- daofind
+    #     cannot fit its core either -- which lost real W51 cluster stars.
+    #   FIT-MASK the DILATED saturated component (`_sat_for_mask`, the zeroframe
+    #     deep core if there is one, else `saturated`, OR-ed with other sources'
+    #     saturated pixels).  Recovered late-group pixels are excluded from the
+    #     fit too, and apply_wing_selfcal (SATSTAR_WINGCAL) exists to correct the
+    #     bias that masking the core puts into the wing fit.
+    #     The FIT has never used `saturated & _unrecoverable` -- that pair only
+    #     sets a diagnostic flag bit below -- and `isnan(VAR_POISSON)` is not a
+    #     portable truly-lost test anyway: on a _cal product it can be empty
+    #     while every SATURATED pixel is DO_NOT_USE, and on the _crf sibling it
+    #     covers all of them.
+    #     OPEN (#213): whether frame0-recovered wings should instead be fit
+    #     -- see #213 and SATURATED_PIXEL_HANDLING.md section 2b.
     # SATSTAR_SEED_REQUIRE_DO_NOT_USE=1 restores the old narrow seed, for
     # debugging only.
     _truly_lost_restricted = False
