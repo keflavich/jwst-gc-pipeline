@@ -878,6 +878,18 @@ if __name__ == '__main__':
             for c in old.colnames:
                 if c not in t.colnames:
                     t[c] = _empty_like(old[c], len(t))
+            # Vgroup is a STRING identifier that happens to look numeric.  A
+            # table whose groups are all digits round-trips through CSV as
+            # int64, so merging it with freshly-built str rows raises
+            #   TableMergeError: 'Vgroup' columns have incompatible types
+            #                    ['int64', 'str128']
+            # -- which is what stopped the cloudef obs005 rebuild after obs002
+            # had just written an all-numeric column.  Canonicalise both sides
+            # through vgroup_key (the same normaliser the consumers use, so
+            # '06201' and 6201 stay one group) before stacking.
+            for tbl in (old, t):
+                if 'Vgroup' in tbl.colnames:
+                    tbl['Vgroup'] = [vgroup_key(v) for v in tbl['Vgroup']]
             t = vstack([old, t])
     t.write(path, overwrite=True)
     print(f"\nwrote {path}: {len(t)} rows (replaced {sorted(new_filts)} for prefixes {sorted(new_visit_prefixes)})", flush=True)
