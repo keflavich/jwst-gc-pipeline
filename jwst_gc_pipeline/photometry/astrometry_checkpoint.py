@@ -1202,7 +1202,8 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
             ref_tie = measure_reference_tie(
                 cons["coords"], refcat["all"], refcat["sparse"],
                 filtername=filt, consensus_mag=cons.get("mag"),
-                ref_mag=refcat.get("mag"), context=vctx)
+                ref_mag=refcat.get("mag"), dense=refcat.get("dense", True),
+                context=vctx)
             off = ref_tie["off_mas"]
             if np.isfinite(off) and off > REFERENCE_APPLY_MIN_MAS:
                 if ref_tie["apply_ok"]:
@@ -1343,6 +1344,7 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
         anchor_tie = measure_reference_tie(
             anchor_coords, refcat["all"], refcat["sparse"],
             filtername=anchor_filter, ref_mag=refcat.get("mag"),
+            dense=refcat.get("dense", True),
             context=f"{context} anchor {anchor_filter}")
 
     filters = []
@@ -1360,8 +1362,12 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                 f"({anchor_tie['cross_reference'].get('sep_mas'):.1f} mas > "
                 f"{anchor_tie.get('cross_reference_gross_tol_mas')} mas) -- "
                 f"VIRAC tie likely a spurious/window-limited peak")
-        elif not anchor_tie["per_tile"].get("clean"):
-            failures.append(f"anchor {anchor_filter}: per-tile reference map not clean")
+        elif not anchor_tie.get("per_tile_ok"):
+            # DENSE reference: per-tile map D; Gaia-ONLY reference: same-star
+            # refinement A' (measure_reference_tie picks the right one per regime).
+            detail = ("per-tile reference map not clean" if anchor_tie.get("reference_dense", True)
+                      else "same-star tie could not be refined (Gaia-only reference)")
+            failures.append(f"anchor {anchor_filter}: {detail}")
 
     for filt, tbl in sorted(catalogs_by_filter.items()):
         if filt == anchor_filter:
