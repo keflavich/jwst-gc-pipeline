@@ -494,8 +494,9 @@ class Writeup:
                 f'{self._ref("D4_photometry_precision")} shows the fractional '
                 'flux uncertainty against brightness. The '
                 r'$5\sigma$ depth --- where the median '
-                r'$\sigma_F/F$ reaches $0.2$ --- runs from '
-                f'{depth_span}')
+                r'$\sigma_F/F$ reaches $0.2$ --- '
+                + ('runs from ' if len(on_scale) > 1 else 'is ')
+                + f'{depth_span}')
             if scale and 'instrumental' in scale:
                 body.append(
                     ', on the instrumental scale: no cross-band merge exists '
