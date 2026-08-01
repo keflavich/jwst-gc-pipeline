@@ -79,6 +79,6 @@ PYTHON=${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/p
 echo "REDUCE(MIRI) start: proposal=$PROPOSAL field=$FIELD filter=$FILT skip=$SKIP"
 echo "PIPE=$PIPE"
 "$PYTHON" "$PIPE" -p "$PROPOSAL" -d "$FIELD" -f "$FILT" $SKIP_FLAG
-rc=${PIPESTATUS[0]}
+rc=$?
 echo "REDUCE(MIRI) done: filter=$FILT rc=$rc"
 exit $rc

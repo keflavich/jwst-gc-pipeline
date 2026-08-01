@@ -352,3 +352,62 @@ def test_the_banner_reports_where_output_actually_goes(monkeypatch, capsys):
 def test_a_multi_filter_cutout_says_it_is_not_minutes(capsys):
     rp.run_pipeline('2221', '001', cutout_region='1,2,3', dry_run=True)
     assert '--filters F410M keeps it to minutes' in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------
+# Where the logs go.
+# --------------------------------------------------------------------------
+
+def test_log_dir_reaches_the_submitted_job(capsys):
+    rp.run_pipeline('2221', '001', filters=['F410M'], dry_run=True)
+    out = capsys.readouterr().out
+    assert '--output=/orange/adamginsburg/jwst/logs/reduce_%x_' in out
+
+
+def test_an_array_job_logs_per_task_and_a_single_job_does_not():
+    """SLURM writes 4294967294 for %a on a job that is not an array."""
+    slurm = {'log_dir': '/tmp'}
+    array = rp._log_arguments(slurm, 'catalog', array=True, dry_run=True)[0]
+    single = rp._log_arguments(slurm, 'mergeall', array=False, dry_run=True)[0]
+    assert array.endswith('_%x_%A_%a.out')
+    assert single.endswith('_%x_%j.out')
+
+
+def test_no_log_dir_leaves_the_scripts_own_directive_alone():
+    assert rp._log_arguments({}, 'reduce') == []
+
+
+def test_a_dry_run_creates_nothing(tmp_path):
+    """--dry-run prints commands; it must not touch the filesystem."""
+    absent = tmp_path / 'not-yet' / 'logs'
+    rp._log_arguments({'log_dir': str(absent)}, 'reduce', dry_run=True)
+    assert not absent.exists()
+
+
+def test_an_uncreatable_log_dir_says_so():
+    with pytest.raises(pipeline_config.ConfigError, match='log_dir'):
+        rp._log_arguments({'log_dir': '/proc/definitely/not/writable'},
+                          'reduce')
+
+
+def test_a_misspelled_slurm_key_is_rejected(tmp_path, monkeypatch):
+    """`logdir:` would be ignored, and the logs would silently go elsewhere."""
+    mine = tmp_path / 'c.yaml'
+    mine.write_text('slurm:\n  logdir: /tmp/somewhere\n')
+    monkeypatch.setenv(pipeline_config.ENV_VAR, str(mine))
+    with pytest.raises(pipeline_config.ConfigError, match='logdir'):
+        pipeline_config.load()
+
+
+def test_only_nircam_gets_a_modules_argument():
+    """The MIRI and NIRISS stage-1 drivers reject -m."""
+    config = pipeline_config.load()
+    for instrument in ('miri', 'niriss'):
+        plan = rp.resolve('2221' if instrument == 'miri' else '4147',
+                          '002' if instrument == 'miri' else '012',
+                          instrument)
+        reduce_command = dict(rp._local_commands(plan, config))['reduce']
+        assert '-m' not in reduce_command
+    nircam = dict(rp._local_commands(rp.resolve('2221', '001', 'nircam'),
+                                     config))['reduce']
+    assert '-m' in nircam
