@@ -1761,10 +1761,13 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
         # the FIT (they de-saturate the core before the wing fit), so reusing a
         # catalog built under a different config would silently ship the wrong
         # (e.g. pre-recovery) photometry.  A legacy cache with no SATRECOV stamp
-        # is treated as a mismatch whenever a signature is requested.
+        # was built by the pre-signature (no-recovery) pipeline, so it reads as
+        # "off" -- a non-recovery re-run keeps it (no needless rebuild); only a
+        # recovery run (or a different recovery config) rebuilds.
         if recovery_signature is None:
             return True
-        return str(tbl.meta.get('SATRECOV', '')) == str(recovery_signature)
+        cached_sig = str(tbl.meta.get('SATRECOV', '')) or "off"
+        return cached_sig == str(recovery_signature)
 
     extended_filename = filename.replace(
         '.fits', f'{file_suffix}_extended_satstar_catalog.fits')

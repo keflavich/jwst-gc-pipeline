@@ -1398,11 +1398,20 @@ def _satstar_recovery_signature(options):
     stamped into the per-exposure satstar catalog (meta key ``SATRECOV``) and
     checked when that cache is reused, so toggling recovery forces a refit
     instead of silently returning a pre-recovery catalog.  Keep it stable for a
-    fixed config: only the fields that change the recovered flux belong here."""
+    fixed config: only the fields that change the recovered flux belong here.
+
+    Returns ``"off"`` when NO recovery is requested (the dilation is irrelevant
+    then).  A legacy cache with no stamp was built by the pre-signature pipeline,
+    which had no recovery, so it is treated as ``"off"`` on read -- that way a
+    plain non-recovery re-run does NOT needlessly rebuild every field's satstar
+    catalogs; only a recovery run rebuilds a legacy (or differently-configured)
+    cache."""
+    zf = bool(getattr(options, 'satstar_zeroframe_recover', False))
+    ramp = bool(getattr(options, 'satstar_ramp_recover', False))
+    if not zf and not ramp:
+        return "off"
     return "zf%d_ramp%d_dil%d" % (
-        int(bool(getattr(options, 'satstar_zeroframe_recover', False))),
-        int(bool(getattr(options, 'satstar_ramp_recover', False))),
-        int(getattr(options, 'satstar_zeroframe_dilate', 3)))
+        int(zf), int(ramp), int(getattr(options, 'satstar_zeroframe_dilate', 3)))
 
 
 def _fill_saturated_pixels(filename, data, dqarr, was_sat, finite_model,
