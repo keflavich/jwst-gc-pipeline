@@ -93,7 +93,8 @@ def build_field(fieldname, outdir=None, only=None, verbose=True):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    group = parser.add_mutually_exclusive_group(required=True)
+    # Not required at the group level: --list is a valid invocation on its own.
+    group = parser.add_mutually_exclusive_group()
     group.add_argument('--field', help='field name from the registry')
     group.add_argument('--all', action='store_true',
                        help='every field in the registry')
@@ -112,6 +113,8 @@ def main(argv=None):
     if args.list:
         print('\n'.join(known_fields()))
         return 0
+    if not args.all and not args.field:
+        parser.error('one of --field, --all or --list is required')
 
     targets = known_fields() if args.all else (args.field,)
     if args.outdir and len(targets) > 1:
