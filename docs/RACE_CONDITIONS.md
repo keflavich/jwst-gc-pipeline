@@ -23,8 +23,8 @@ os.replace(tmp, path)
 ```
 
 `.tmp{pid}` rather than a fixed `.tmp`, so two writers do not collide in the
-temp file either. `merge_catalogs.py:1966-1971` (the consolidated satstar cache)
-and `versioning/prov_sidecar.py:64-72` are the implementations to copy.
+temp file either. `merge_catalogs.py::load_satstar_catalog` (the consolidated satstar cache)
+and `prov_sidecar.py::write_sidecar` are the implementations to copy.
 
 The corollary: **a missing input is not a measurement.** Code that reads a
 shared file must distinguish "the file is not there" from "the file says zero",
@@ -39,10 +39,10 @@ module exists to remove.*
 |---|---|---|---|
 | Import storm | `submit_cataloging_perframe_phase.sbatch` | dozens of tasks import the same modules off shared storage at once; some die ~30 s in | fixed — random 1–25 s stagger, plus a retry gated on the import signature |
 | Metadata coherence | same, finalize mode | a finalize lists the marker directory before Lustre has settled and crashes on a marker that does exist | fixed — 180 s settle before the strict verify |
-| All-filter merge | `merge_catalogs.py:3022`, `submit_merge.sbatch` | N array tasks each ran the all-filter merge: N writers of one file, most reading inputs their siblings had not written yet | fixed — an array task stops after its own filter; the all-filter merge is a separate job with `afterok` |
-| Per-frame product names | `saturated_star_finding.py:4442`, `crowdsource_catalogs_long.py:1741` | concurrent runs differing only by post-processing options wrote the same filenames | fixed — the iteration label is part of the name |
-| Offsets / consensus tables | `astrometry_checkpoint.py:612-616, 890-892` | see below | **open** |
-| PSF grid cache | `crowdsource_catalogs_long.py:2144-2150, 2251-2255` | see below | **open** |
+| All-filter merge | `merge_catalogs.py::main`, `submit_merge.sbatch` | N array tasks each ran the all-filter merge: N writers of one file, most reading inputs their siblings had not written yet | fixed — an array task stops after its own filter; the all-filter merge is a separate job with `afterok` |
+| Per-frame product names | `saturated_star_finding.py::remove_saturated_stars`, `crowdsource_catalogs_long.py::load_or_make_satstar_catalog` | concurrent runs differing only by post-processing options wrote the same filenames | fixed — the iteration label is part of the name |
+| Offsets / consensus tables | `astrometry_checkpoint.py::update_offsets_table` | see below | **open** |
+| PSF grid cache | `crowdsource_catalogs_long.py::get_psf_model` | see below | **open** |
 
 ### Open: the offsets and consensus tables
 
@@ -55,7 +55,7 @@ tbl.write(out_path, overwrite=True)                        # rebuild
 
 Between them the table **does not exist**. A concurrent reader in that window —
 another filter's cataloging job resolving its shift, or a reduce job — takes the
-missing-table branch at `unified_alignment.py:284-290` and aligns its frame at
+missing-table branch in `unified_alignment.py::_shift_from_consensus` and aligns its frame at
 **(0, 0)**. It records `table_present=False` and carries on. This is the
 substitute-a-default shape: the frame is silently left on the raw pointing.
 
