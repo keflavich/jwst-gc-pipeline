@@ -20,6 +20,11 @@ slurm:
   # for more than the cap never starts.
   qos: astronomy-dept-b
   partition: hpg-default
+  # Where job logs land.  The submit scripts carry the same path in an #SBATCH
+  # directive, which SLURM reads before any shell runs and so cannot expand a
+  # variable; the runner passes --output explicitly, which overrides it.  The
+  # directory is created if it does not exist.
+  log_dir: /orange/adamginsburg/jwst/logs
 
 # Exported into every job. Values here are read at submit time, so a variable
 # already set in your environment wins.
@@ -43,6 +48,7 @@ stages:
     submit_script:
       nircam: scripts/reduction/submit_reduction.sbatch
       niriss: scripts/reduction/submit_reduction_niriss.sbatch
+      miri: scripts/reduction/submit_reduction_miri.sbatch
     cpus: 16
     memory: 128gb
     walltime: '24:00:00'

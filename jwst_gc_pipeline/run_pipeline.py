@@ -213,10 +213,26 @@ def _sbatch_command(plan, stage_name, config, dependency=None):
                 f'--mem={stage["memory"]}',
                 f'--time={stage["walltime"]}',
                 f'--job-name={name}']
+    command += _log_arguments(slurm, stage_name)
     if dependency:
         command.append(f'--dependency=afterok:{dependency}')
     command += ['--export=ALL', script]
     return command
+
+
+def _log_arguments(slurm, stage_name):
+    """``--output`` for one job, from ``slurm.log_dir``.
+
+    The submit scripts carry a log path in an ``#SBATCH`` directive, which SLURM
+    reads before any shell runs, so it cannot expand a variable.  Passing
+    ``--output`` on the command line overrides the directive, which is how a
+    machine that is not HiPerGator gets its own log directory.
+    """
+    log_dir = (slurm.get('log_dir') or '').strip()
+    if not log_dir:
+        return []
+    os.makedirs(log_dir, exist_ok=True)
+    return [f'--output={os.path.join(log_dir, stage_name)}_%x_%A_%a.out']
 
 
 def _job_name(plan, stage_name):
@@ -242,6 +258,7 @@ def _merge_all_command(plan, config, dependency):
             f'--mem={stage["memory"]}',
             f'--time={stage["walltime"]}',
             f"--job-name={plan['target']}-mergeall",
+            *_log_arguments(slurm, 'mergeall'),
             f'--dependency=afterok:{dependency}',
             '--export=ALL',
             pipeline_config.submit_script(config, 'merge',

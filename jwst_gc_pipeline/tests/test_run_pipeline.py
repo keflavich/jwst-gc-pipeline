@@ -117,7 +117,10 @@ def test_a_cutout_runs_here_rather_than_on_the_queue(capsys):
                     cutout_region='266.535,-28.705,20', dry_run=True)
     out = capsys.readouterr().out
     assert 'scheduler: local' in out
-    assert 'sbatch' not in out
+    # No command submitted.  Matching the bare word would also match a checkout
+    # path that happens to contain it.
+    assert not any(line.strip().startswith('sbatch')
+                   for line in out.splitlines())
     assert '--cutout-region=266.535,-28.705,20' in out
 
 
@@ -197,7 +200,18 @@ def test_an_instrument_with_no_submit_script_says_so():
     driver."""
     config = pipeline_config.load()
     with pytest.raises(pipeline_config.ConfigError, match='no submit script'):
-        pipeline_config.submit_script(config, 'reduce', 'miri')
+        pipeline_config.submit_script(config, 'reduce', 'nirspec')
+
+
+def test_every_instrument_the_runner_drives_can_be_submitted():
+    """Each instrument with a stage-1 driver has a reduce submit script.
+
+    MIRI had a driver and no script, so `run_pipeline --instrument miri` got as
+    far as stage 1 and then refused.
+    """
+    config = pipeline_config.load()
+    for instrument in rp.REDUCE_DRIVERS:
+        assert pipeline_config.submit_script(config, 'reduce', instrument)
 
 
 def test_a_submit_script_that_is_not_there_is_caught(tmp_path, monkeypatch):

@@ -29,9 +29,9 @@
 #SBATCH --output=/orange/adamginsburg/jwst/logs/catalog_%x_%A_%a.out
 
 source ~/.bash_profile 2>/dev/null
-export CRDS_PATH=/orange/adamginsburg/jwst/crds
+export CRDS_PATH=${CRDS_PATH:-/orange/adamginsburg/jwst/crds}
 export GC_ALLOW_DEV="${GC_ALLOW_DEV:-1}"
-export CRDS_SERVER_URL=https://jwst-crds.stsci.edu
+export CRDS_SERVER_URL=${CRDS_SERVER_URL:-https://jwst-crds.stsci.edu}
 export TMPDIR="${SLURM_TMPDIR:-/blue/adamginsburg/adamginsburg/tmp}"
 export TMP="$TMPDIR" TEMP="$TMPDIR"
 mkdir -p "$TMPDIR"
