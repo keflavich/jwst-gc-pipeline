@@ -176,30 +176,52 @@ def internal_astrometry(inv, outdir, max_sources=400000):
         'percentile, and the dotted line marks the bright-decile floor quoted '
         'in the panel. '
         + ('The final panel is the median separation between the same stars '
-           'measured independently in each pair of filters.' if has_cross else ''))
+           'measured independently in each pair of filters; only sources '
+           'independently detected in both bands are counted, since a forced '
+           'or seeded position imported from another band would measure the '
+           'merge radius rather than the astrometry.' if has_cross else ''))
     return FigureResult('D2_astrometry_internal', path, caption, 'astrometry',
                         measurements)
 
 
 def _crossband_separations(inv, filters, max_pairs=200000):
-    """Median same-source separation between every pair of filters (mas)."""
+    """Median same-source separation between every pair of filters (mas).
+
+    Only sources INDEPENDENTLY DETECTED in both filters count.  A row of the
+    merged table can carry a position in a band where nothing was detected --
+    a forced or seeded fit, placed at a position imported from another band --
+    and comparing that against its own source of truth measures the merge
+    radius, not the astrometry.  On W51 the difference is a median of 3.7 mas
+    and an 84th percentile of 623 mas over all rows, against 1.6 and 5.4 mas
+    over independently detected ones.
+    """
     from astropy.coordinates import SkyCoord
     wanted = []
     for filt in filters:
-        wanted += [f'skycoord_{filt}.ra', f'skycoord_{filt}.dec']
+        wanted += [f'skycoord_{filt}.ra', f'skycoord_{filt}.dec',
+                   f'independently_detected_{filt}']
     tbl = loaders.read_columns(inv.crossband_catalog, wanted,
                                label=f'{inv.name} cross-band')
-    present = [f for f in filters
-               if f'skycoord_{f}.ra' in tbl.colnames]
+    # On disk these are ``skycoord_<filt>.ra``/``.dec``; Table.read reassembles
+    # each pair into a single mixin column ``skycoord_<filt>``, so the presence
+    # test has to be against the mixin name, not the on-disk one.
+    present = [f for f in filters if f'skycoord_{f}' in tbl.colnames]
     if len(present) < 2:
         return {}
-    coords = {}
+    coords, detected = {}, {}
+    any_flag = False
     for filt in present:
-        ra = loaders.column(tbl, f'skycoord_{filt}.ra')
-        dec = loaders.column(tbl, f'skycoord_{filt}.dec')
-        coords[filt] = (ra, dec)
+        coords[filt] = (loaders.column(tbl, f'skycoord_{filt}.ra'),
+                        loaders.column(tbl, f'skycoord_{filt}.dec'))
+        col = f'independently_detected_{filt}'
+        if col in tbl.colnames:
+            detected[filt] = loaders.column(tbl, col, fill=0) > 0
+            any_flag = True
+        else:
+            detected[filt] = np.ones(len(tbl), dtype=bool)
     n = len(present)
     img = np.full((n, n), np.nan)
+    p84 = np.full((n, n), np.nan)
     counts = np.zeros((n, n), dtype=int)
     for i, fi in enumerate(present):
         for j, fj in enumerate(present):
@@ -207,8 +229,9 @@ def _crossband_separations(inv, filters, max_pairs=200000):
                 continue
             ra_i, dec_i = coords[fi]
             ra_j, dec_j = coords[fj]
-            good = np.isfinite(ra_i) & np.isfinite(ra_j) & \
-                np.isfinite(dec_i) & np.isfinite(dec_j)
+            good = (np.isfinite(ra_i) & np.isfinite(ra_j) &
+                    np.isfinite(dec_i) & np.isfinite(dec_j) &
+                    detected[fi] & detected[fj])
             if good.sum() < 20:
                 continue
             idx = np.flatnonzero(good)
@@ -221,8 +244,10 @@ def _crossband_separations(inv, filters, max_pairs=200000):
             c_j = SkyCoord(ra_j[idx] * u.deg, dec_j[idx] * u.deg)
             sep = c_i.separation(c_j).to(u.mas).value
             img[i, j] = img[j, i] = float(np.median(sep))
+            p84[i, j] = p84[j, i] = float(np.percentile(sep, 84))
             counts[i, j] = counts[j, i] = idx.size
-    return dict(filters=present, median_sep_mas=img, n_pairs=counts)
+    return dict(filters=present, median_sep_mas=img, p84_sep_mas=p84,
+                n_pairs=counts, independent_only=bool(any_flag))
 
 
 def absolute_astrometry(inv, outdir, anchor=None):

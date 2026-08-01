@@ -262,6 +262,39 @@ def test_weak_background_correlation_blames_the_subtraction_when_it_should(tmp_p
     assert 'mosaic is close to flat' in render(False)
 
 
+def test_crossband_separations_use_only_independent_detections(tmp_path):
+    """A seeded position imported from another band measures the merge radius."""
+    from astropy.coordinates import SkyCoord
+    import astropy.units as u
+    from jwst_gc_pipeline.diagnostics import astrometry_figs
+
+    n = 400
+    rng = np.random.default_rng(0)
+    ra = 266.5 + rng.uniform(0, 0.01, n)
+    dec = -28.7 + rng.uniform(0, 0.01, n)
+    # First half: genuinely independent, agreeing to ~1 mas.  Second half: one band's
+    # position is a seed displaced by 300 mas, and is flagged as not
+    # independently detected.
+    offset = np.where(np.arange(n) < n // 2, 1.0, 300.0) / 3.6e6
+    indep = np.arange(n) < n // 2
+
+    tbl = Table({'independently_detected_f182m': indep.astype(int),
+                 'independently_detected_f212n': indep.astype(int)})
+    tbl['skycoord_f182m'] = SkyCoord(ra * u.deg, dec * u.deg)
+    tbl['skycoord_f212n'] = SkyCoord((ra + offset) * u.deg, dec * u.deg)
+    path = str(tmp_path / 'cross.fits')
+    tbl.write(path)
+
+    inv = FieldInventory(name='t', basepath=str(tmp_path),
+                         filters=('f182m', 'f212n'), crossband_catalog=path)
+    got = astrometry_figs._crossband_separations(inv, ['f182m', 'f212n'])
+    assert got['independent_only'] is True
+    sep = got['median_sep_mas'][0, 1]
+    # ~1 mas if the gate works; ~150 mas if the seeded half leaks in.
+    assert sep < 5.0, sep
+    assert got['n_pairs'][0, 1] == n // 2
+
+
 def test_writeup_writes_measurements_json(tmp_path):
     results = [_result('D1_overview', 'overview',
                        dict(n_sources={'f182m': 5}, area_arcsec2={},

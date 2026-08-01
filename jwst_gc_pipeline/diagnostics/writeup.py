@@ -320,20 +320,36 @@ class Writeup:
             body.append('\n\n')
 
         if cross and cross.get('filters'):
-            names = cross['filters']
             img = np.asarray(cross['median_sep_mas'], dtype=float)
             finite = img[np.isfinite(img)]
+            tail = np.asarray(cross.get('p84_sep_mas', []), dtype=float)
+            tail = tail[np.isfinite(tail)] if tail.size else tail
             if finite.size:
                 body.append(
                     'The same stars measured independently in different '
                     'filters agree to a median of '
                     f'{_fmt(float(np.median(finite)), 2)}\\,\\mas{{}}, with the '
                     f'worst filter pair at {_fmt(float(np.max(finite)), 2)}'
-                    '\\,\\mas{}. Because the two measurements share no '
-                    'detector pixels, no distortion solution and no PSF, this '
-                    'is a stringent internal check: it bounds the systematic '
-                    'floor of the astrometry in a way that the '
-                    'within-filter scatter, which shares all of those, cannot. ')
+                    '\\,\\mas{}')
+                if tail.size:
+                    body.append(
+                        f' and a typical 84th percentile of '
+                        f'{_fmt(float(np.median(tail)), 1)}\\,\\mas{{}}')
+                body.append(
+                    '. Because the two measurements share no detector pixels, '
+                    'no distortion solution and no PSF, this is a stringent '
+                    'internal check: it bounds the systematic floor of the '
+                    'astrometry in a way that the within-filter scatter, which '
+                    'shares all of those, cannot. ')
+                if cross.get('independent_only'):
+                    body.append(
+                        'Only sources independently detected in both bands are '
+                        'counted. This matters more than it sounds: a merged '
+                        'row can carry a position in a band where nothing was '
+                        'detected, seeded from another band, and including '
+                        'those measures the merge radius instead of the '
+                        'astrometry --- on a field of this kind it inflates the '
+                        'apparent disagreement by two orders of magnitude. ')
                 if float(np.max(finite)) > 30:
                     body.append(
                         'The worst pair exceeds 30\\,\\mas{}, which is larger '
