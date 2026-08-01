@@ -367,6 +367,16 @@ def run_pipeline(proposal, obsid, cutout_region=None, instrument='nircam',
 
     scheduler = config.get('scheduler')
     if cutout_region:
+        # The cutout reaches the cataloging command only.  Without that stage it
+        # would be accepted and then ignored, and the run would reduce the whole
+        # observation -- hours, on the queue, when minutes were asked for.
+        if 'catalog' not in stages:
+            raise ValueError(
+                f"--cutout-region needs the catalog stage: it restricts the "
+                f"cataloging, and stage 1 always reduces the whole "
+                f"observation.  Asked for stages {list(stages)}.  Reduce first "
+                f"(--stages reduce), then run the cutout "
+                f"(--stages catalog --cutout-region ...).")
         scheduler = (config.get('cutout') or {}).get('scheduler', 'local')
 
     print(f"{plan['target']} proposal {plan['proposal']} observation "

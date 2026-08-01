@@ -354,6 +354,18 @@ def test_a_multi_filter_cutout_says_it_is_not_minutes(capsys):
     assert '--filters F410M keeps it to minutes' in capsys.readouterr().out
 
 
+def test_a_cutout_without_the_catalog_stage_is_refused():
+    """The cutout reaches the cataloging command only.
+
+    Accepted alongside `--stages reduce` it would be silently ignored, and the
+    run would reduce the whole observation -- hours on the queue when minutes
+    were asked for.
+    """
+    with pytest.raises(ValueError, match='needs the catalog stage'):
+        rp.run_pipeline('2221', '001', filters=['F410M'],
+                        cutout_region='266.535,-28.705,20',
+                        stages=('reduce',), dry_run=True)
+
 # --------------------------------------------------------------------------
 # Where the logs go.
 # --------------------------------------------------------------------------
