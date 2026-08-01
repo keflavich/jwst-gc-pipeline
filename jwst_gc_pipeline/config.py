@@ -144,6 +144,9 @@ def apply_crds_environment(config=None):
     Returns what CRDS ends up with, for logging.
     """
     for key, value in environment(config if config is not None else load()).items():
-        if key.startswith('CRDS_'):
-            os.environ.setdefault(key, value)
+        # `not os.environ.get`, rather than setdefault: an exported-but-empty
+        # CRDS_PATH counts as set, and jwst would fall back to ~/crds_cache and
+        # download tens of GB into a quota-limited home directory.
+        if key.startswith('CRDS_') and not os.environ.get(key):
+            os.environ[key] = value
     return {key: os.environ[key] for key in os.environ if key.startswith('CRDS_')}

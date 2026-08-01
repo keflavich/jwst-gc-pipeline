@@ -29,7 +29,9 @@ import datetime
 # Before importing jwst: CRDS reads its cache path when jwst loads.  config.yaml
 # supplies the default; an exported CRDS_PATH wins.
 from jwst_gc_pipeline.config import apply_crds_environment
-apply_crds_environment()
+# Printed because the cache decides which reference files -- and so which
+# distortion and filter-offset solutions -- this run uses.
+print(f"CRDS: {apply_crds_environment()}")
 
 from jwst.pipeline import calwebb_image3
 from jwst.pipeline import Detector1Pipeline, Image2Pipeline

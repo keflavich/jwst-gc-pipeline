@@ -58,7 +58,9 @@ import datetime
 # supplies the default; an exported CRDS_PATH wins.  The per-target cache
 # selection further down replaces it once the target is known.
 from jwst_gc_pipeline.config import apply_crds_environment
-apply_crds_environment()
+# Printed because the cache decides which reference files -- and so which
+# distortion and filter-offset solutions -- this run uses.
+print(f"CRDS: {apply_crds_environment()}")
 
 from jwst.pipeline import calwebb_image3
 from jwst.pipeline import Detector1Pipeline, Image2Pipeline
@@ -218,17 +220,11 @@ def main(filtername, Observations=None, regionname='sgrc',
     # The field's data directory comes from the registry (fields.yaml `roots:`
     # plus the field's `root:`), so a field on a tree other than /orange reduces
     # where it lives.
+    # GC_BASEPATH_OVERRIDE is deliberately NOT applied here.  Besides the CRDS
+    # and reference-catalog problem the MIRI driver notes, NIRISS reads
+    # {basepath}/niriss/{FILTER}/pipeline/ and stage_scratch_basepath.sh stages
+    # only {FILTER}/pipeline, so a staged scratch tree would hold no inputs.
     basepath = field_registry.basepath(regionname)
-    # Same scratch redirect as the NIRCam and cataloging drivers: with a scratch
-    # tree staged, a re-reduction writes there and leaves released products
-    # alone.  output_dir below derives from basepath, so it follows.  Empty ->
-    # normal.
-    from jwst_gc_pipeline.scratch_basepath import apply_basepath_override
-    _bp0 = basepath
-    basepath = apply_basepath_override(basepath)
-    if basepath != _bp0:
-        print(f"GC_BASEPATH_OVERRIDE active (NIRISS reduction): basepath -> "
-              f"{basepath}", flush=True)
     fwhm_tbl = Table.read(f'{basepath}/reduction/fwhm_table_niriss.ecsv')
     row = fwhm_tbl[fwhm_tbl['Filter'] == filtername]
     if len(row) == 0:
@@ -258,7 +254,7 @@ def main(filtername, Observations=None, regionname='sgrc',
     # Instrument-namespaced output dir, under the field's own directory, so a
     # scratch reduction (GC_BASEPATH_OVERRIDE) writes to scratch.  The niriss/
     # level keeps NIRISS F480M/F356W clear of the NIRCam {region}/{FILTER} trees.
-    output_dir = f'{basepath}/niriss/{filtername}/pipeline/'
+    output_dir = f'{basepath}niriss/{filtername}/pipeline/'
     if not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
     os.chdir(output_dir)

@@ -30,7 +30,9 @@ import datetime
 # supplies the default; an exported CRDS_PATH wins.  The per-target cache
 # selection further down replaces it once the target is known.
 from jwst_gc_pipeline.config import apply_crds_environment
-apply_crds_environment()
+# Printed because the cache decides which reference files -- and so which
+# distortion and filter-offset solutions -- this run uses.
+print(f"CRDS: {apply_crds_environment()}")
 
 from jwst.pipeline import calwebb_image3
 from jwst.pipeline import Detector1Pipeline, Image2Pipeline
@@ -273,17 +275,12 @@ def main(filtername, Observations=None, regionname='brick',
 
     wavelength = int(filtername[1:4])
 
+    # GC_BASEPATH_OVERRIDE is deliberately NOT applied here.  The NIRCam and
+    # cataloging drivers honour it, but for MIRI the scratch tree would also
+    # capture the CRDS cache (chosen from basepath below) and the reference
+    # catalog, neither of which stage_scratch_basepath.sh stages -- so a scratch
+    # reduction would build an empty CRDS cache and run with no absolute tie.
     basepath = field_registry.basepath(regionname)
-    # Same scratch redirect as the NIRCam and cataloging drivers: with a scratch
-    # tree staged, a re-reduction writes there and leaves released products
-    # alone.  output_dir below derives from basepath, so it follows.  Empty ->
-    # normal.
-    from jwst_gc_pipeline.scratch_basepath import apply_basepath_override
-    _bp0 = basepath
-    basepath = apply_basepath_override(basepath)
-    if basepath != _bp0:
-        print(f"GC_BASEPATH_OVERRIDE active (MIRI reduction): basepath -> "
-              f"{basepath}", flush=True)
     from jwst_gc_pipeline.reduction.fwhm import fwhm_table_path
     fwhm_tbl = Table.read(fwhm_table_path(basepath))
     row = fwhm_tbl[fwhm_tbl['Filter'] == filtername]
@@ -335,7 +332,7 @@ def main(filtername, Observations=None, regionname='brick',
     # in a subdirectory of the base directory called `Stage3`
     # Under the field's own directory, so a scratch reduction
     # (GC_BASEPATH_OVERRIDE) writes to scratch instead of the released tree.
-    output_dir = f'{basepath}/{filtername}/pipeline/'
+    output_dir = f'{basepath}{filtername}/pipeline/'
     if not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
     os.chdir(output_dir)
