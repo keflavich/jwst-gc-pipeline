@@ -18,6 +18,21 @@ modeling, paper figures) remains in `brick2221`.
 to run them, a worked end-to-end example, the data layout, what a new dataset
 needs, and how much of it runs off HiPerGator.
 
+## Running it
+
+One command reduces, catalogs and merges an observation:
+
+```bash
+python -m jwst_gc_pipeline.run_pipeline --proposal 2221 --obsid 001
+```
+
+- [`jwst_gc_pipeline/fields.yaml`](jwst_gc_pipeline/fields.yaml) — every target
+  the pipeline knows about. Adding one is an edit here; see
+  [`docs/FIELDS.md`](docs/FIELDS.md).
+- [`jwst_gc_pipeline/config.yaml`](jwst_gc_pipeline/config.yaml) — where and how
+  it runs: account, QOS, per-stage resources, fan-out. Ships with HiPerGator's
+  settings; copy it and set `GC_PIPELINE_CONFIG` to run elsewhere.
+
 ## Layout
 
 - `jwst_gc_pipeline.reduction` — pipeline stages
@@ -117,8 +132,9 @@ For each field/program:
 - Set up a `crds/` directory under your project's working directory (e.g.
   `/orange/adamginsburg/<field>/crds`).
 - Provide a region file for selecting reference stars.
-- Configure the field-name → proposal-ID mappings used by
-  `merge_catalogs` and `align_to_catalogs`.
+- Register the field in
+  [`jwst_gc_pipeline/fields.yaml`](jwst_gc_pipeline/fields.yaml): its data root,
+  observation numbers, filters and reference catalog. All three stages read it.
 - **Declare the field's alignment in
   [`jwst_gc_pipeline/reduction/alignment_config.py`](jwst_gc_pipeline/reduction/alignment_config.py)**
   (reference frame + shift source). A NIRCam field with no entry gets

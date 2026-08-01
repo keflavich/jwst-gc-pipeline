@@ -100,30 +100,21 @@ DETECTOR_TOKEN = 'nis'
 INSTRUMENT_PRODUCT_TOKEN = 'niriss'
 
 # Reference catalog configuration by proposal and field.  Paths relative to basepath.
-REFERENCE_ASTROMETRIC_CATALOG_CANDIDATES_BY_FIELD = {
-    # Sgr C, program 4147 obs 012.  Same absolute frame as the NIRCam 4147/012
-    # reduction: the Gaia DR3 + VIRAC2 seed (PM-propagated to obs epoch ~2023.72).
-    # NIRISS obs epoch is 2024.49 (2024-06-28); the ~0.8 yr difference is a
-    # few-mas PM error at VIRAC2 proper motions -- acceptable for a first-light
-    # tie, refined later by the cataloging m2 checkpoint.  Built by
-    # build_gaia_virac2_refcat_byquery.py (ra=266.171 dec=-29.442).
-    '4147': {
-        '012': (
-            'catalogs/gaia_virac2_refcat_epoch2023.72.fits',
-        ),
-    },
-}
+# Which reference catalogs this instrument's observations may tie to is
+# registered in jwst_gc_pipeline/fields.yaml.  See docs/FIELDS.md.
 
 
 def get_reference_astrometric_catalog_path(basepath, proposal_id, field, explicit_refcat=None):
     if explicit_refcat is not None:
         return explicit_refcat
-    if proposal_id in REFERENCE_ASTROMETRIC_CATALOG_CANDIDATES_BY_FIELD:
-        if field in REFERENCE_ASTROMETRIC_CATALOG_CANDIDATES_BY_FIELD[proposal_id]:
-            for relpath in REFERENCE_ASTROMETRIC_CATALOG_CANDIDATES_BY_FIELD[proposal_id][field]:
-                candidate = f'{basepath}/{relpath}'
-                if os.path.exists(candidate):
-                    return candidate
+    try:
+        candidates = field_registry.reference_catalog_candidates(
+            proposal_id, field, basepath=basepath, instrument='niriss')
+    except (field_registry.FieldRegistryError, KeyError):
+        candidates = []
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
     twomass = f'{basepath}/catalogs/twomass.fits'
     if os.path.exists(twomass):
         return twomass

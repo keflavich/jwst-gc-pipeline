@@ -76,71 +76,21 @@ from jwst_gc_pipeline import fields as field_registry
 
 # Reference catalog configuration by proposal and field.
 # Paths are relative to basepath.
-REFERENCE_ASTROMETRIC_CATALOG_CANDIDATES_BY_FIELD = {
-    # Program 3958 MIRI fields.  obs 001/002 are the SICKLE; obs 003 is the
-    # BRICK (routed to the brick/ tree -- see field_to_reg_mapping below).
-    # Paths are relative to basepath, which is sickle/ for 001/002 and brick/
-    # for 003, so 003 must point at the brick's NIRCam refcat (f405n-based),
-    # NOT the sickle f210m catalog (which does not exist under brick/).
-    '3958': {
-        # Repointed 2026-07-16: GNS/VVV bootstraps (2MASS-tied) -> Gaia-DR3+VIRAC2 seed
-        # (epoch 2024.64, same frame as 3958/007 NIRCam). CAVEAT: MIRI is thermal-IR;
-        # VIRAC2 is NIR Ks -- bright stars overlap but verify the MIRI-only tie.
-        '001': (
-            'catalogs/pipeline_based_nircam-f210m_reference_astrometric_catalog.fits',
-            'catalogs/gaia_virac2_refcat_epoch2024.64.fits',
-        ),
-        '002': (
-            'catalogs/pipeline_based_nircam-f210m_reference_astrometric_catalog.fits',
-            'catalogs/gaia_virac2_refcat_epoch2024.64.fits',
-        ),
-        # obs 003 == brick field: align to the brick NIRCam absolute refcat.
-        # NOTE 2026-06-16: the previous crowdsource_based_nircam-f405n_reference_
-        # astrometric_catalog.fits DOES NOT EXIST under brick/catalogs/, so this
-        # silently fell back to twomass (sparse/poor in the crowded GC).  Use the
-        # existing F182M absolute reference (per user); twomass kept as last
-        # resort only.
-        '003': (
-            'catalogs/pipeline_based_nircam-f182m_reference_astrometric_catalog.fits',
-            'catalogs/twomass.fits',
-        ),
-    },
-    '2221': {
-        '001': (
-            'catalogs/pipeline_based_nircam-f182m_reference_astrometric_catalog.fits',
-            'catalogs/twomass.fits',
-        ),
-        '002': (
-            'catalogs/pipeline_based_nircam-f182m_reference_astrometric_catalog.fits',
-            'catalogs/twomass.fits',
-        ),
-    },
-    # 2526 obs 021 == the "G0" CMZ cloud-c filament F770W pointing; routed into
-    # the cloudc/ tree.  cloudc/catalogs has NO pipeline_based_nircam-f182m
-    # refcat (unlike sickle/brick), so that first candidate silently fell through
-    # to sparse twomass.  cloudc's NIRCam absolute frame is the Gaia DR3 + VIRAC2
-    # seed (gaia_virac2_refcat_epoch2023.30.fits, the same frame cloudc NIRCam
-    # 2221/002 aligns to); use it first, keeping the pipeline_based-* name (in
-    # case it is ever built) and twomass as fallbacks.
-    '2526': {
-        '021': (
-            'catalogs/gaia_virac2_refcat_epoch2023.30.fits',
-            'catalogs/pipeline_based_nircam-f182m_reference_astrometric_catalog.fits',
-            'catalogs/twomass.fits',
-        ),
-    },
-}
+# Which reference catalogs this instrument's observations may tie to is
+# registered in jwst_gc_pipeline/fields.yaml.  See docs/FIELDS.md.
 
 
 def get_reference_astrometric_catalog_path(basepath, proposal_id, field, explicit_refcat=None):
     if explicit_refcat is not None:
         return explicit_refcat
-    if proposal_id in REFERENCE_ASTROMETRIC_CATALOG_CANDIDATES_BY_FIELD:
-        if field in REFERENCE_ASTROMETRIC_CATALOG_CANDIDATES_BY_FIELD[proposal_id]:
-            for relpath in REFERENCE_ASTROMETRIC_CATALOG_CANDIDATES_BY_FIELD[proposal_id][field]:
-                candidate = f'{basepath}/{relpath}'
-                if os.path.exists(candidate):
-                    return candidate
+    try:
+        candidates = field_registry.reference_catalog_candidates(
+            proposal_id, field, basepath=basepath, instrument='miri')
+    except (field_registry.FieldRegistryError, KeyError):
+        candidates = []
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
     twomass = f'{basepath}/catalogs/twomass.fits'
     if os.path.exists(twomass):
         return twomass

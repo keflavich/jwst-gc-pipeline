@@ -106,124 +106,6 @@ from jwst_gc_pipeline import fields as field_registry
 
 # Reference catalog configuration by proposal and field.
 # Paths are relative to basepath.
-REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD = {
-    '2221': {
-        # obs 001 = Brick. Re-anchored 2026-07-11 to the Gaia-tied seed (Gaia DR3 +
-        # VIRAC2 fill, per-star PM-propagated to epoch 2022.70; obs epoch 2022.655,
-        # 0.045 yr * 5.6 mas/yr = 0.25 mas -- negligible).  This retires the LAST
-        # remaining crowdsource-F405N bootstrap entry (VVV-DR4/2MASS frame, ~90 mas
-        # off Gaia) -- the frame that silently propagated into the NIRSpec 6927 MSA
-        # plan v11 target list (measured TA(Gaia)-vs-plan mismatch (+47,+73) mas).
-        # RELEASED CATALOGS MUST STATE THEIR FRAME + EPOCH (see stage_release.py).
-        '001': 'catalogs/gaia_virac2_refcat_epoch2022.70.fits',
-        # obs 002 = Cloud C. Re-anchored 2026-06-22 to the Gaia-tied seed (Gaia DR3 +
-        # VIRAC2 fill, per-star PM-propagated to obs epoch 2023.30). Audit found the old
-        # F405N crowdsource bootstrap (VVV-DR4/2MASS frame) was ~+22 mas RA / ~+90 mas Dec
-        # off Gaia.  Built by build_gaia_virac2_refcat_byquery.py (ra=266.588 dec=-28.583).
-        '002': 'catalogs/gaia_virac2_refcat_epoch2023.30.fits',
-    },
-    '1182': {
-        # obs 004 = brick. Re-anchored 2026-06 to the Gaia-tied seed
-        # (Gaia DR3 + VIRAC2 fill, epoch 2022.70). Replaces the F405N
-        # self-bootstrap, which inherited the VVV-DR4 (2MASS) frame ~24 mas
-        # off Gaia. VIRAC2 is Gaia-tied (~5 mas) with contiguous footprint.
-        '004': 'catalogs/gaia_virac2_refcat_epoch2022.70.fits',
-        # obs 002 = w51 short-wave coverage; use Gaia (W51 is in the disk)
-        '002': 'catalogs/gaia_refcat.fits',
-    },
-    '3958': {
-        # sickle (GC field). Repointed 2026-07-16 GNS-bootstrap (2MASS-tied) -> Gaia-DR3+
-        # VIRAC2 seed, PM-propagated to obs epoch 2024.64. NOTE: sickle is MIRI+NIRCam;
-        # VIRAC2 is NIR so the NIRCam tie is clean; verify MIRI-only bands separately.
-        '007': 'catalogs/gaia_virac2_refcat_epoch2024.64.fits',
-    },
-    '5365': {
-        # Sgr B2 (GC field). Switched 2026-06-18 from the VVV-tied crowdsource F405N
-        # bootstrap (crowdsource deprecated) to the GC reference-frame policy: Gaia DR3
-        # + VIRAC2 NIR fill, per-star PM-propagated (VIRAC2 from 2014.0, Gaia from 2016.0)
-        # to the obs epoch 2024.685. Built by build_gaia_virac2_refcat_byquery.py.
-        '001': 'catalogs/gaia_virac2_refcat_epoch2024.68.fits',
-    },
-    '6151': {
-        # w51 main NIRCam pointing -- Gaia DR3 (disk field, not GC)
-        '001': 'catalogs/gaia_refcat.fits',
-    },
-    '2092': {
-        # cloudef 002 (Cloud E) + 005 (Cloud F). Repointed 2026-07-16 VVV-bootstrap
-        # (2MASS-tied, measured ~80-160 mas off Gaia) -> Gaia-DR3+VIRAC2 seed, PM-propagated
-        # to obs epoch 2023.21. VIRAC2 covers these (outside GNS but inside VIRAC footprint).
-        '002': 'catalogs/gaia_virac2_refcat_epoch2023.21.fits',
-        '005': 'catalogs/gaia_virac2_refcat_epoch2023.21.fits',
-    },
-    '4147': {
-        # obs 012 = Sgr C.  Re-anchored 2026-07-16 to the Gaia-tied seed (Gaia
-        # DR3 + VIRAC2 fill, PM-propagated to obs epoch 2023.725).  Replaces the
-        # F212N self-bootstrap tied to raw VVV (II/376/vvv4, no PM, ~tens of mas
-        # off Gaia) -- Sgr C is inside the VIRAC2 bulge footprint (same region as
-        # sgrb2), so it follows the GC policy.  Built by
-        # build_gaia_virac2_refcat_byquery.py (ra=266.171 dec=-29.442).
-        '012': 'catalogs/gaia_virac2_refcat_epoch2023.72.fits',
-    },
-    '2045': {
-        # arches (001) + quintuplet (003). Repointed 2026-07-16 GNS-bootstrap (2MASS-tied)
-        # -> Gaia-DR3+VIRAC2 seed. VIRAC2 (deep NIR, Gaia-tied) IS usable in the inner GC
-        # (the "Gaia unusable" note applied to Gaia-alone; VIRAC2 supplies the density).
-        # Different obs epochs: arches 2023.64, quintuplet 2024.62.
-        '001': 'catalogs/gaia_virac2_refcat_epoch2023.64.fits',
-        '003': 'catalogs/gaia_virac2_refcat_epoch2024.62.fits',
-    },
-    '1939': {
-        # sgra: inner GC. Repointed 2026-07-16 GNS-bootstrap -> Gaia-DR3+VIRAC2 seed
-        # (epoch 2022.72). VIRAC2 supplies density where Gaia-alone is too sparse.
-        '001': 'catalogs/gaia_virac2_refcat_epoch2022.72.fits',
-    },
-    '2211': {
-        # gc2211. Repointed 2026-07-16 GNS-bootstrap -> Gaia-DR3+VIRAC2 seed (epoch 2023.71).
-        # The wide-band saturation that made Gaia-alone unusable is handled by VIRAC2's deep
-        # NIR density (Ks, Gaia-tied) -- same depth argument as GNS but on the Gaia frame.
-        '023': 'catalogs/gaia_virac2_refcat_epoch2023.71.fits',
-        '046': 'catalogs/gaia_virac2_refcat_epoch2023.71.fits',
-        '049': 'catalogs/gaia_virac2_refcat_epoch2023.71.fits',
-        '050': 'catalogs/gaia_virac2_refcat_epoch2023.71.fits',
-        # obs 028 (F150W, different/offset FOV) is SOUTH of the main gc2211 seed footprint
-        # (obs028 Dec -29.19..-29.10 vs main seed -29.05..-28.81), so it needs its OWN seed.
-        # Dedicated Gaia-DR3+VIRAC2 seed at the obs028 center (266.365,-29.144, r=0.10).
-        '028': 'catalogs/gaia_virac2_refcat_epoch2023.71_o028.fits',
-    },
-    # Westerlund 1 / Westerlund 2 main pointings: Gaia DR3 is the
-    # astrometric reference (outside GC, no GNS/VVV needed).
-    '1905': {
-        '001': 'catalogs/gaia_refcat.fits',
-    },
-    '3523': {
-        '005': 'catalogs/gaia_refcat.fits',
-    },
-    # --- Globular clusters (Jay Anderson co-I programs; added 2026-06-30) ---
-    # Non-GC clusters outside the VIRAC2/VVV footprint -> pure Gaia DR3 frame
-    # (PM-propagated to obs epoch). Built by build_gc_gaia_refcat.py.
-    '1334': {  # Weisz ERS; M92 (halo GC)
-        '001': 'catalogs/gaia_refcat.fits',
-    },
-    '1979': {  # Bedin; NGC6397 (o001), M-4 (o002), M-4-shift (o003)
-        '001': 'catalogs/gaia_refcat.fits',
-        '002': 'catalogs/gaia_refcat.fits',
-        '003': 'catalogs/gaia_refcat.fits',
-    },
-    '8322': {  # Haeberle oMEGACat; Omega Cen (NGC5139)
-        '001': 'catalogs/gaia_refcat.fits',
-    },
-    '12587': {  # Haeberle oMEGACat; Omega Cen (NGC5139)
-        '001': 'catalogs/gaia_refcat.fits',
-    },
-    # --- NGC 6334 (Cat's Paw SFR; extended emission; galactic plane l=351) ---
-    # Gaia DR3 + VIRAC2 fill (VVV bulge footprint), PM-propagated to obs epoch.
-    '7213': {  # Cheng; NGC6334_I_N (proprietary), epoch 2026.30
-        '001': 'catalogs/gaia_virac2_refcat_epoch2026.30.fits',
-    },
-    '6778': {  # Garcia Marin; SF_reg_1, epoch 2024.68
-        '001': 'catalogs/gaia_virac2_refcat_epoch2024.68.fits',
-    },
-}
 
 # Module restrictions per proposal/field/filter for single-module datasets
 # Sickle is NRCB-only (SUB640 subarray) but detectors differ by wavelength:
@@ -246,58 +128,45 @@ MODULES_BY_PROPOSAL_FIELD_FILTER = {
 # us hand a different refcat to one specific filter (e.g. brick-1182
 # F115W tweakreg, where the F405N-based refcat has poor blue-star
 # overlap).  Lookup precedence is filter > field default.
-REFERENCE_ASTROMETRIC_CATALOG_BY_FILTER = {
-    '1182': {
-        '004': {
-            # F115W (bluest/sharpest SW) anchored directly to the Gaia-tied seed
-            # (Gaia DR3 + VIRAC2). Was the F200W self-bootstrap (VVV-DR4 frame).
-            'F115W': 'catalogs/gaia_virac2_refcat_epoch2022.70.fits',
-        },
-    },
-}
+# Which reference catalog each observation ties to is registered in
+# jwst_gc_pipeline/fields.yaml, alongside everything else about a field.
+# See docs/FIELDS.md.
 
 
 def get_reference_astrometric_catalog_path(basepath, proposal_id, field, filtername=None):
-    if filtername is not None:
-        override = (REFERENCE_ASTROMETRIC_CATALOG_BY_FILTER
-                    .get(proposal_id, {}).get(field, {}).get(filtername.upper()))
-        if override is not None:
-            return f'{basepath}/{override}'
-    if proposal_id not in REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD:
-        raise KeyError(f"No reference catalog mapping configured for proposal_id={proposal_id}")
-    if field not in REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD[proposal_id]:
-        raise KeyError(f"No reference catalog mapping configured for proposal_id={proposal_id} field={field}")
-    relpath = REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD[proposal_id][field]
-    return f'{basepath}/{relpath}'
+    """Where this observation's absolute reference catalog lives.
+
+    Registered in fields.yaml; the error names the block to add for a field
+    that has none yet.
+    """
+    return field_registry.reference_catalog_path(
+        proposal_id, field, filtername=filtername, basepath=basepath)
 
 
 def get_existing_reference_astrometric_catalog_path(basepath, proposal_id, field, filtername=None):
-    if filtername is not None:
-        override = (REFERENCE_ASTROMETRIC_CATALOG_BY_FILTER
-                    .get(proposal_id, {}).get(field, {}).get(filtername.upper()))
-        if override is not None:
-            path = f'{basepath}/{override}'
-            if os.path.exists(path):
-                return path
-    if proposal_id not in REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD:
+    """The registered reference catalog, once its file is confirmed on disk.
+
+    ``None`` when the observation has no entry: the caller then runs without
+    abs_refcat realignment, which is correct for a field that ties in imaging.
+
+    A registered catalog whose FILE is absent raises.  Returning None there
+    would run Image3's first pass with no realignment and ship the field
+    off-frame with no error -- the quiet failure the VIRAC2 repoint exists to
+    prevent.  The seeds live outside the repo, so a typo or a missing build
+    must abort.
+    """
+    try:
+        path = field_registry.reference_catalog_path(
+            proposal_id, field, filtername=filtername, basepath=basepath)
+    except (field_registry.FieldRegistryError, KeyError):
         return None
-    if field not in REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD[proposal_id]:
-        return None
-    path = f"{basepath}/{REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD[proposal_id][field]}"
     if os.path.exists(path):
         return path
-    # FAIL LOUD: this field IS wired to a specific reference catalog but the file is
-    # missing.  Silently returning None here makes Image3 run first-pass WITHOUT
-    # abs_refcat realignment -> the field ships OFF-FRAME with no error (the exact
-    # quiet-off-frame-release failure the VIRAC2 repoint is meant to prevent).  The
-    # gaia_virac2_refcat_epoch<obs> seeds live outside the repo, so a typo/missing build
-    # must abort, not degrade.
     raise FileNotFoundError(
         f"Configured reference astrometric catalog is MISSING: {path} "
         f"(proposal_id={proposal_id} field={field}). Build the seed "
-        f"(build_gaia_virac2_refcat_byquery.py) or fix the wiring in "
-        f"REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD before reducing -- refusing to run "
-        f"first-pass off-frame.")
+        f"(build_gaia_virac2_refcat_byquery.py) or fix the entry in "
+        f"fields.yaml before reducing -- refusing to run first-pass off-frame.")
 
 
 def _module_group(module):
@@ -396,27 +265,13 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
     # Once tested, destreak can be re-enabled for those fields.  Until
     # then they run with do_destreak=False.
     # ------------------------------------------------------------------
-    EXTENDED_EMISSION_FIELDS = ('w51', 'sickle', 'wd2', 'ngc6334')
-    if do_destreak and regionname in EXTENDED_EMISSION_FIELDS:
-        print(f"Region {regionname} is extended-emission-dominated and has no "
-              f"background map yet; forcing do_destreak=False to avoid "
-              f"outlier_detection coverage holes.", flush=True)
-        do_destreak = False
-
-    # Sickle policy (user 2026-06-17, [[sickle...]]): the SHORT-wave filters USE
-    # destreak ("the streaks are worse than the destreak artifacts" for SW),
-    # while the LONG-wave filters stay nodestreak/align.  This overrides the
-    # extended-emission force above PER FILTER for sickle so SW -> *_destreak_crf
-    # and LW -> *_align_crf (the suffixes the cataloging --each-suffix consumes).
-    if regionname == 'sickle':
-        _sw_destreak = filtername.upper() in (
-            'F070W', 'F090W', 'F115W', 'F140M', 'F150W', 'F162M', 'F164N',
-            'F182M', 'F187N', 'F200W', 'F210M', 'F212N')
-        do_destreak = _sw_destreak
-        print(f"Sickle per-filter destreak policy: {filtername} -> "
-              f"do_destreak={do_destreak} "
-              f"({'SW=destreak' if _sw_destreak else 'LW=align/nodestreak'})",
-              flush=True)
+    from jwst_gc_pipeline.reduction.destreak_policy import destreaks
+    _was = do_destreak
+    do_destreak = destreaks(regionname, filtername, do_destreak)
+    if _was and not do_destreak:
+        print(f"Region {regionname} filter {filtername}: destreak off "
+              f"(see reduction/destreak_policy.py); the working copy is a "
+              f"plain _cal -> _align.fits copy.", flush=True)
 
     wavelength = int(filtername[1:4])
 
@@ -1181,7 +1036,7 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
     from jwst_gc_pipeline.reduction.unified_alignment import (
         resolve_shift, warn_or_raise_if_stale, write_alignment_header)
     _shift = resolve_shift(fn, proposal_id, field, filtername, module, basepath,
-                           refname=field_registry.reference_catalog(str(proposal_id)),
+                           refname=field_registry.reference_frame(str(proposal_id)),
                            use_average=use_average)
     rashift = _shift.ra_quantity
     decshift = _shift.dec_quantity
@@ -1286,7 +1141,7 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
                 dra_onsky_mas=rashift.value * _cosd_prov * 1000.0,
                 ddec_onsky_mas=decshift.value * 1000.0,
                 method='offsets-table (histogram-stacked tie)',
-                references=field_registry.reference_catalog(proposal_id) or 'n/a',
+                references=field_registry.reference_frame(proposal_id) or 'n/a',
                 table_name=_prov_tbl or 'hardcoded/none'):
             align_fits[1].header[_k] = (_v, _c)
         align_fits.writeto(fn, overwrite=True)
