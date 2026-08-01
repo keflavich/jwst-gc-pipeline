@@ -4435,7 +4435,8 @@ def _find_zeroframe_for(filename):
 
 
 def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
-                           file_suffix='', deblend_with_zeroframe=False, **kwargs):
+                           file_suffix='', deblend_with_zeroframe=False,
+                           recovery_signature=None, **kwargs):
     """
     ``file_suffix`` is inserted into the output filenames *before* the
     ``_satstar_{catalog,model,residual}`` suffix so that concurrent runs
@@ -4498,6 +4499,12 @@ def remove_saturated_stars(filename, save_suffix='_unsatstar', overwrite=True,
     satstar_table = get_saturated_stars(fh, **kwargs)
     if satstar_table is not None:
         satstar_table.meta.update(header)
+        # Stamp the saturated-core recovery config so load_or_make_satstar_catalog
+        # can tell whether a cached catalog matches this run's recovery settings
+        # (see _satstar_recovery_signature); without it a recovery toggle silently
+        # reuses a stale catalog.
+        if recovery_signature is not None:
+            satstar_table.meta['SATRECOV'] = str(recovery_signature)
         print("Finished get_saturated_stars", flush=True)
 
         satstar_catalog_filename = filename.replace(".fits", f'{file_suffix}_satstar_catalog.fits')
