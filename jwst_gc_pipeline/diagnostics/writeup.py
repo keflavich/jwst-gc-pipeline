@@ -47,6 +47,61 @@ def _fmt(value, digits=2, unit=''):
     return f'{value:.{digits}f}{unit}'
 
 
+def _span(values, digits=2, unit='', low_first=True):
+    """Describe a per-filter dict as a range, or as one value if there is one.
+
+    Fields here run from two filters to fourteen, and the fixed phrasing
+    "from X (F322W2) to X (F322W2)" that a range template produces for a
+    single-filter field reads as a mistake.
+    """
+    finite = {k: v for k, v in (values or {}).items()
+              if v is not None and np.isfinite(v)}
+    if not finite:
+        return None
+    if len(finite) == 1:
+        (name, value), = finite.items()
+        return f'{_fmt(value, digits, unit)} in {name.upper()}'
+    lo = min(finite, key=finite.get)
+    hi = max(finite, key=finite.get)
+    first, second = (lo, hi) if low_first else (hi, lo)
+    return (f'{_fmt(finite[first], digits, unit)} in {first.upper()} to '
+            f'{_fmt(finite[second], digits, unit)} in {second.upper()}')
+
+
+def _dominant_scale(values, scales):
+    """Split a per-filter dict by magnitude scale.
+
+    Returns ``(subset, label, excluded)`` where *subset* holds the filters on
+    the most common scale.  A field can mix scales -- a band absent from the
+    cross-band merge has no zero-point and falls back to instrumental -- and
+    quoting a range across both would compare numbers that are not on the same
+    axis.
+    """
+    values = {k: v for k, v in (values or {}).items()
+              if v is not None and np.isfinite(v)}
+    if not values or not scales:
+        return values, None, []
+    tally = {}
+    for filt in values:
+        tally.setdefault(scales.get(filt), []).append(filt)
+    label = max(tally, key=lambda k: len(tally[k]))
+    keep = set(tally[label])
+    excluded = sorted(set(values) - keep)
+    return {k: v for k, v in values.items() if k in keep}, label, excluded
+
+
+def _magscale(results, keys=('D4_photometry_precision', 'D1_overview')):
+    """Whether the magnitudes in this document are calibrated or instrumental."""
+    for key in keys:
+        res = results.get(key)
+        if res is None:
+            continue
+        label = res.measurements.get('maglabel')
+        if label:
+            return label
+    return None
+
+
 def _esc(text):
     """Escape the LaTeX specials that appear in file and column names."""
     return (str(text).replace('\\', r'\textbackslash{}')
@@ -186,14 +241,19 @@ class Writeup:
                     'the field; the qfit and propagated-error diagnostics '
                     'below should be read with that in mind. ')
         turn_txt = ''
-        if turn:
-            worst = min(turn, key=lambda k: turn[k])
-            best = max(turn, key=lambda k: turn[k])
+        span = _span(turn, 2)
+        if span:
+            scale = _magscale(self.results)
             turn_txt = (
-                f'Number counts turn over between {_fmt(turn[worst], 2)} '
-                f'({worst.upper()}) and {_fmt(turn[best], 2)} '
-                f'({best.upper()}) magnitudes, which is the practical '
+                f'Number counts turn over at {span}, which is the practical '
                 'completeness limit of each band. ')
+            if scale and 'instrumental' in scale:
+                turn_txt += (
+                    'These magnitudes are instrumental: this field has no '
+                    'cross-band merge from which to recover a photometric '
+                    'zero-point, so the scale is '
+                    r'$-2.5\log_{10}(\mathrm{flux})$ in image units and only '
+                    'differences within a band are meaningful. ')
         return (
             '\\section{Overview}\n'
             f'{self._ref("D1_overview")} orients the rest of the document. '
@@ -220,15 +280,12 @@ class Writeup:
             finite = {k: v for k, v in floors.items() if v is not None
                       and np.isfinite(v)}
             body.append('\\subsection{Repeatability}\n')
-            if finite:
-                best = min(finite, key=finite.get)
-                worst = max(finite, key=finite.get)
+            span = _span(finite, 2, '\\,\\mas{}')
+            if span:
                 body.append(
                     f'{self._ref("D2_astrometry_internal")} shows the '
                     'exposure-to-exposure scatter of each source about its '
-                    'merged position. The bright-end floor ranges from '
-                    f'{_fmt(finite[best], 2)}\\,\\mas{{}} in {best.upper()} to '
-                    f'{_fmt(finite[worst], 2)}\\,\\mas{{}} in {worst.upper()}. '
+                    f'merged position. The bright-end floor is {span}. '
                     'This floor is the single-exposure centroiding precision '
                     'convolved with whatever residual frame-to-frame '
                     'misregistration survived alignment; it is an upper limit '
@@ -242,13 +299,24 @@ class Writeup:
                         'residual in that band rather than at measurement '
                         'noise. ')
             n_zero = sum(zeros.values()) if zeros else 0
+            n_src = sum((self._m('D2_astrometry_internal', 'n_sources',
+                                 default={}) or {}).values())
             if n_zero:
+                frac = 100.0 * n_zero / max(n_src, 1)
                 body.append(
-                    f'\\ {n_zero:,} sources report a scatter of identically '
-                    'zero. These are forced or seeded fits whose position was '
-                    'copied from a fixed seed and never measured per exposure, '
-                    'so their zero is an absence of measurement rather than '
-                    'perfect precision; they are excluded from the curves. ')
+                    f'\\ {n_zero:,} measurements ({frac:.0f} per cent) report a '
+                    'scatter far below any achievable centroiding precision, '
+                    'in most cases identically zero. These are forced or '
+                    'seeded fits whose position was copied from a fixed seed '
+                    'and never re-measured per exposure, so the value is the '
+                    'absence of a measurement rather than a perfect one; they '
+                    'are excluded from the curves and from the floor above. ')
+                if frac > 30:
+                    body.append(
+                        'At this fraction the exclusion is not a detail: most '
+                        'of the catalogue carries no independent positional '
+                        'measurement, and the quoted floor describes the '
+                        'minority that does. ')
             body.append('\n\n')
 
         if cross and cross.get('filters'):
@@ -401,26 +469,45 @@ class Writeup:
         ratio = self._m('D4_photometry_precision', 'err_ratio', default={}) or {}
         finite_depth = {k: v for k, v in depth.items()
                         if v is not None and np.isfinite(v)}
-        if finite_depth:
-            deepest = max(finite_depth, key=finite_depth.get)
+        scales = self._m('D4_photometry_precision', 'scales', default={}) or {}
+        on_scale, scale, off_scale = _dominant_scale(finite_depth, scales)
+        depth_span = _span(on_scale, 2, ' mag', low_first=False)
+        if depth_span:
             body.append(
                 '\\subsection{Precision and depth}\n'
                 f'{self._ref("D4_photometry_precision")} shows the fractional '
                 'flux uncertainty against brightness. The '
                 r'$5\sigma$ depth --- where the median '
-                r'$\sigma_F/F$ reaches $0.2$ --- is deepest in '
-                f'{deepest.upper()} at {_fmt(finite_depth[deepest], 2)} mag, '
-                f'and the full range across filters is '
-                f'{_fmt(min(finite_depth.values()), 2)} to '
-                f'{_fmt(max(finite_depth.values()), 2)} mag. ')
+                r'$\sigma_F/F$ reaches $0.2$ --- runs from '
+                f'{depth_span}')
+            if scale and 'instrumental' in scale:
+                body.append(
+                    ', on the instrumental scale: no cross-band merge exists '
+                    'for this field, so no photometric zero-point could be '
+                    'recovered and the numbers are comparable within this '
+                    'field only. ')
+            else:
+                body.append('. ')
+            if off_scale:
+                body.append(
+                    'The depth of ' +
+                    ', '.join(f.upper() for f in off_scale) +
+                    ' is not quoted alongside these: '
+                    + ('that band is' if len(off_scale) == 1 else
+                       'those bands are') +
+                    ' absent from the cross-band merge, so no zero-point '
+                    'could be recovered and the panel is on an instrumental '
+                    'scale that is not comparable with the rest. ')
         if ratio:
-            worst = max(ratio, key=ratio.get)
             median_ratio = float(np.median(list(ratio.values())))
             body.append(
                 'The uncertainty propagated from the exposure-to-exposure '
-                'scatter exceeds the fitter\'s formal covariance by a median '
-                f'factor of {_fmt(median_ratio, 2)}, worst in '
-                f'{worst.upper()} at {_fmt(ratio[worst], 2)}. ')
+                'scatter differs from the fitter\'s formal covariance by a '
+                f'median factor of {_fmt(median_ratio, 2)}')
+            span = _span(ratio, 2, low_first=False)
+            if span and len(ratio) > 1:
+                body.append(f' ({span})')
+            body.append('. ')
             if median_ratio > 1.5:
                 body.append(
                     'A ratio well above unity means the exposures disagree by '
@@ -459,11 +546,10 @@ class Writeup:
             body.append(
                 '\\subsection{Fit quality}\n'
                 f'{self._ref("D5_photometry_quality")} shows the normalised '
-                'PSF-fit residual. Median qfit ranges from '
-                f'{_fmt(min(meds.values()), 3)} to {_fmt(max(meds.values()), 3)} '
-                f'across filters; the fraction of sources above the '
-                f'vetting threshold peaks at {100 * bad[worst]:.1f} per cent in '
-                f'{worst.upper()}. ')
+                f'PSF-fit residual. Median qfit is {_span(meds, 3)}; the '
+                'fraction of sources above the vetting threshold '
+                + ('peaks at ' if len(bad) > 1 else 'is ')
+                + f'{100 * bad[worst]:.1f} per cent in {worst.upper()}. ')
             if max(bad.values()) > 0.3:
                 body.append(
                     'Where that fraction is large the catalogue is dominated '
@@ -518,15 +604,12 @@ class Writeup:
             excess = {k: v['bright_excess_local']
                       for k, v in per_filter.items()
                       if np.isfinite(v.get('bright_excess_local', np.nan))}
-            if meds:
-                hi = max(meds, key=meds.get)
+            span = _span(meds, 3, ' image units')
+            if span:
                 body.append(
                     '\\subsection{Distributions}\n'
                     f'{self._ref("D6_background_distributions")} shows both '
-                    'estimators. The median annulus background ranges from '
-                    f'{_fmt(min(meds.values()), 3)} to '
-                    f'{_fmt(max(meds.values()), 3)} image units, highest in '
-                    f'{hi.upper()}. ')
+                    f'estimators. The median annulus background is {span}. ')
             n_ms = sum(1 for v in has_ms.values() if v)
             if n_ms == 0:
                 body.append(
@@ -561,8 +644,6 @@ class Writeup:
             rhos = {k: v['spearman'] for k, v in corr.items()
                     if np.isfinite(v.get('spearman', np.nan))}
             if rhos:
-                best = max(rhos, key=rhos.get)
-                worst = min(rhos, key=rhos.get)
                 median_rho = float(np.median(list(rhos.values())))
                 body.append(
                     '\\subsection{Spatial structure}\n'
@@ -571,10 +652,10 @@ class Writeup:
                     'emission built entirely out of the star catalogue; the '
                     'right column sets the same per-source value against the '
                     'drizzled mosaic sampled at each star. The rank '
-                    f'correlation between them has a median of '
-                    f'{_fmt(median_rho, 3)} across filters, from '
-                    f'{_fmt(rhos[worst], 3)} ({worst.upper()}) to '
-                    f'{_fmt(rhos[best], 3)} ({best.upper()}). ')
+                    f'correlation between them is {_span(rhos, 3)}')
+                if len(rhos) > 1:
+                    body.append(f', with a median of {_fmt(median_rho, 3)}')
+                body.append('. ')
                 if median_rho > 0.6:
                     body.append(
                         'A correlation that strong means the per-source '
@@ -596,14 +677,34 @@ class Writeup:
                         'fitting residuals of neighbouring stars, which in a '
                         'crowded field contribute to the same aperture. ')
                 else:
-                    body.append(
-                        'That is weak enough to say the per-source background '
-                        'in this field is not primarily tracking the extended '
-                        'emission. In a field whose mosaic is close to flat '
-                        'this is the expected result --- there is little '
-                        'diffuse structure to correlate with --- and the '
-                        'mosaic panel should be inspected before reading '
-                        'anything further into it. ')
+                    presub = self._m('D7_background_spatial',
+                                     'background_presubtracted', default=False)
+                    if presub:
+                        body.append(
+                            'That is weak, and the reason is visible in which '
+                            'column had to be used. These catalogues predate '
+                            'the residual-footprint background, so the only '
+                            'available estimator is the annulus one --- and '
+                            'these are late-stage products, whose fitted '
+                            'image had a smoothed background removed before '
+                            'the annulus was ever evaluated. The column '
+                            'therefore measures the residual of that '
+                            'subtraction rather than the sky, and a weak '
+                            'correlation with the mosaic is what a successful '
+                            'subtraction looks like, not a failure to detect '
+                            'the emission. Re-cataloguing would supply the '
+                            'stage-invariant column and make this test '
+                            'meaningful for the field. ')
+                    else:
+                        body.append(
+                            'That is weak enough to say the per-source '
+                            'background in this field is not primarily '
+                            'tracking the extended emission. In a field whose '
+                            'mosaic is close to flat this is the expected '
+                            'result --- there is little diffuse structure to '
+                            'correlate with --- and the mosaic panel should be '
+                            'inspected before reading anything further into '
+                            'it. ')
                 spread = max(rhos.values()) - min(rhos.values())
                 if spread > 0.4:
                     body.append(

@@ -107,6 +107,7 @@ def overview(inv, outdir, max_sources=400000):
         median_density=float(np.nanmedian(density[density > 0]))
         if np.isfinite(density).any() else np.nan,
         turnover=turnovers,
+        maglabel=per_filter[richest]['maglabel'],
         richest_filter=richest)
     caption = (
         f'Overview of {inv.name}. Left: source surface density in '

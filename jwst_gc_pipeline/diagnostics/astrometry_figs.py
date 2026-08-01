@@ -58,6 +58,13 @@ REFERENCE_MARGIN_ARCSEC = 120.0
 
 MAS = 3.6e6  # degrees -> milliarcsec
 
+# A per-exposure centroid scatter below this is not a measurement.  JWST
+# centroiding does not repeat to ten microarcseconds; a value this small means
+# the position was copied from a fixed seed (a forced or seeded refit) and
+# never re-measured per exposure, so the "scatter" is the absence of one.
+# Counting these as a precision floor would report a fabricated 0.00 mas.
+MIN_MEASURABLE_SCATTER_MAS = 0.01
+
 
 def internal_astrometry(inv, outdir, max_sources=400000):
     """Per-exposure repeatability and inter-filter positional agreement."""
@@ -81,17 +88,17 @@ def internal_astrometry(inv, outdir, max_sources=400000):
         sra = loaders.column(tbl, 'std_ra') * MAS
         sdec = loaders.column(tbl, 'std_dec') * MAS
         nmatch = loaders.column(tbl, 'nmatch')
-        zero = (sra == 0) & (sdec == 0)
-        sra[zero] = np.nan
-        sdec[zero] = np.nan
         scatter = np.hypot(sra, sdec) / np.sqrt(2.0)
+        unmeasured = scatter < MIN_MEASURABLE_SCATTER_MAS
+        scatter[unmeasured] = np.nan
+        n_unmeasured = int(unmeasured.sum())
         if scatter.size > max_sources:
             rng = np.random.default_rng(0)
             pick = rng.choice(scatter.size, max_sources, replace=False)
             mag, scatter, nmatch = mag[pick], scatter[pick], nmatch[pick]
         per_filter[filt] = dict(mag=mag, scatter=scatter, nmatch=nmatch,
                                 maglabel=maglabel,
-                                n_zero=int(zero.sum()), n=len(tbl))
+                                n_zero=n_unmeasured, n=len(tbl))
 
     has_cross = inv.has_crossband and len(filters) > 1
     npanels = len(filters) + (1 if has_cross else 0)

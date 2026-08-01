@@ -54,6 +54,12 @@ def photometric_precision(inv, outdir, max_sources=400000):
     colors = style.filter_colors(filters)
     depths = {}
     err_ratio = {}
+    maglabel_seen = None
+    # The magnitude scale can differ BETWEEN filters of one field: a band that
+    # is absent from the cross-band merge has no recoverable zero-point and
+    # falls back to instrumental.  Recording it per filter is what stops the
+    # write-up quoting a depth range that spans two different scales.
+    scales = {}
 
     for ax, filt in zip(axes, filters):
         tbl = loaders.read_columns(
@@ -64,6 +70,8 @@ def photometric_precision(inv, outdir, max_sources=400000):
         ferr = loaders.column(tbl, 'flux_err')
         fprop = loaders.column(tbl, 'flux_err_prop')
         mag, maglabel = loaders.magnitudes(flux, zps.get(filt))
+        maglabel_seen = maglabel_seen or maglabel
+        scales[filt] = maglabel
         with np.errstate(divide='ignore', invalid='ignore'):
             frac = np.where(flux > 0, ferr / flux, np.nan)
             frac_prop = np.where(flux > 0, fprop / flux, np.nan)
@@ -121,7 +129,8 @@ def photometric_precision(inv, outdir, max_sources=400000):
         r'the $5\sigma$ depth. A propagated-to-formal ratio above unity means '
         'the exposures disagree by more than the fit covariance predicts.')
     return FigureResult('D4_photometry_precision', path, caption, 'photometry',
-                        dict(depth=depths, err_ratio=err_ratio))
+                        dict(depth=depths, err_ratio=err_ratio,
+                             maglabel=maglabel_seen, scales=scales))
 
 
 def _crossing(x, y, level):

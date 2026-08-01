@@ -218,6 +218,50 @@ def test_writeup_reports_a_weak_background_correlation_as_such(tmp_path):
     assert 'not primarily tracking the extended' in render(0.1)
 
 
+def test_span_reads_naturally_for_one_filter():
+    """"from X (F1) to X (F1)" reads as a bug; a single filter gets one value."""
+    assert writeup._span({'f322w2': 2.5}, 2, ' mag') == '2.50 mag in F322W2'
+    two = writeup._span({'f182m': 1.0, 'f212n': 3.0}, 1)
+    assert two == '1.0 in F182M to 3.0 in F212N'
+    assert writeup._span({'f182m': np.nan}, 2) is None
+    assert writeup._span({}, 2) is None
+
+
+def test_dominant_scale_splits_mixed_magnitude_scales():
+    """A band with no zero-point must not be averaged in with calibrated ones."""
+    depth = {'f182m': 24.7, 'f405n': 19.7, 'f770w': -3.9}
+    scales = {'f182m': 'Vega mag', 'f405n': 'Vega mag',
+              'f770w': 'instrumental'}
+    keep, label, excluded = writeup._dominant_scale(depth, scales)
+    assert set(keep) == {'f182m', 'f405n'}
+    assert label == 'Vega mag'
+    assert excluded == ['f770w']
+
+
+def test_depth_range_excludes_the_uncalibrated_band(tmp_path):
+    results = [_result('D4_photometry_precision', 'photometry',
+                       dict(depth={'f182m': 24.7, 'f770w': -3.9},
+                            err_ratio={},
+                            scales={'f182m': 'Vega mag',
+                                    'f770w': 'instrumental'}))]
+    text = writeup.Writeup(_inv(), results, str(tmp_path)).render()
+    assert '-3.90' not in text
+    assert 'F770W' in text and 'absent from the cross-band merge' in text
+
+
+def test_weak_background_correlation_blames_the_subtraction_when_it_should(tmp_path):
+    """A pre-subtracted stage explains a weak correlation; a flat field does not."""
+    def render(presub):
+        results = [_result('D7_background_spatial', 'background',
+                           dict(correlations={'f212n': dict(spearman=0.15,
+                                                            n=1000)},
+                                background_presubtracted=presub))]
+        return writeup.Writeup(_inv(), results, str(tmp_path)).render()
+
+    assert 'what a successful subtraction looks like' in render(True)
+    assert 'mosaic is close to flat' in render(False)
+
+
 def test_writeup_writes_measurements_json(tmp_path):
     results = [_result('D1_overview', 'overview',
                        dict(n_sources={'f182m': 5}, area_arcsec2={},

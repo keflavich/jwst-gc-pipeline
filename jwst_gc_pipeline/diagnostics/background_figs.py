@@ -72,8 +72,12 @@ def _read_background(inv, filt):
         modelsub = loaders.column(tbl, 'modelsub_bkg')
     ra = loaders.column(tbl, 'skycoord.ra')
     dec = loaders.column(tbl, 'skycoord.dec')
+    # Whether the fitted image had a smoothed background removed first.  This
+    # decides what local_bkg is measuring at all, so it has to travel with the
+    # numbers rather than be inferred later from the filename.
+    resbgsub = 'resbgsub' in inv.per_filter_catalogs[filt]
     return dict(local=local, modelsub=modelsub, mag=mag, maglabel=maglabel,
-                ra=ra, dec=dec, n=len(tbl))
+                ra=ra, dec=dec, n=len(tbl), resbgsub=resbgsub)
 
 
 def background_distributions(inv, outdir, max_sources=400000):
@@ -189,13 +193,18 @@ def background_spatial(inv, outdir, max_filters=6, downsample=8):
 
     fig, axes = style.panel_grid(2 * len(filters), ncols=2, panel=(3.0, 2.6))
     correlations = {}
+    presubtracted = []
 
     for row, filt in enumerate(filters):
         ax_map, ax_corr = axes[2 * row], axes[2 * row + 1]
         d = _read_background(inv, filt)
-        values = d['modelsub'] if np.isfinite(d['modelsub']).any() else d['local']
-        which = ('mean_modelsub_bkg' if np.isfinite(d['modelsub']).any()
-                 else 'local_bkg')
+        uses_modelsub = bool(np.isfinite(d['modelsub']).any())
+        values = d['modelsub'] if uses_modelsub else d['local']
+        which = 'mean_modelsub_bkg' if uses_modelsub else 'local_bkg'
+        # local_bkg on a stage whose image was already background-subtracted
+        # measures the residual of that subtraction, not the sky.
+        if not uses_modelsub and d.get('resbgsub'):
+            presubtracted.append(filt)
         # min_count=5: a cell median built from one or two stars is noise, and
         # a map of noise looks exactly like a map of fine structure.
         img, extent = style.binned_median_image(d['ra'], d['dec'], values,
@@ -250,7 +259,8 @@ def background_spatial(inv, outdir, max_filters=6, downsample=8):
         'emission rather than a fitting artefact.')
     return FigureResult('D7_background_spatial', path, caption, 'background',
                         dict(correlations=correlations,
-                             filters=list(filters), map_bins=MAP_BINS))
+                             filters=list(filters), map_bins=MAP_BINS,
+                             background_presubtracted=bool(presubtracted)))
 
 
 def _mosaic_at_sources(mosaic_path, d, downsample=8):
