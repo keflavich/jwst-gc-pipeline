@@ -3315,25 +3315,11 @@ def _astrom_checkpoint_refcat(basepath):
 def _astrom_offsets_channel(proposal_id, field):
     """Which offsets table THIS field is aligned from, per ``alignment_config``.
 
-    Returns ``'locked'`` / ``'consensus'`` / ``'none'``.  ``'none'`` means the
-    field takes no table-driven correction at all (an unconfigured field, or one
-    whose whole tie is a recorded constant), so writing a correction for it would
-    produce a table nothing reads.
+    Thin delegate: the mapping lives in ``alignment_config.offsets_channel`` so
+    the re-tie loop can ask the same question without importing this module.
     """
-    from jwst_gc_pipeline.reduction.alignment_config import (
-        RECORDED_BULK, TABLE_CONSENSUS, TABLE_LOCKED, resolve,
-    )
-    cfg = resolve(proposal_id, field)
-    if cfg is None:
-        return 'none'
-    if cfg.source == TABLE_CONSENSUS:
-        return 'consensus'
-    if cfg.source == TABLE_LOCKED:
-        return 'locked'
-    if cfg.source == RECORDED_BULK:
-        # bulk is a constant; only the per-exposure term is table-driven
-        return 'consensus' if cfg.consensus_jitter else 'none'
-    return 'none'
+    from jwst_gc_pipeline.reduction.alignment_config import offsets_channel
+    return offsets_channel(proposal_id, field)
 
 
 def _astrom_find_offsets_table(basepath, proposal_id, field=None):
