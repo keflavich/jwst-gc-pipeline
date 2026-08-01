@@ -131,3 +131,19 @@ def environment(config):
     for key, value in (config.get('environment') or {}).items():
         out[key] = os.environ.get(key) or str(value)
     return out
+
+
+def apply_crds_environment(config=None):
+    """Point CRDS at a cache, before ``jwst`` is imported.
+
+    The reduce drivers call this at import time: ``jwst`` reads ``CRDS_PATH``
+    when it loads, so setting it afterwards is too late.  A value already
+    exported -- by ``run_pipeline``, by a submit script, or by hand -- wins over
+    the configured one, so a machine with its own cache needs no edit here.
+
+    Returns what CRDS ends up with, for logging.
+    """
+    for key, value in environment(config if config is not None else load()).items():
+        if key.startswith('CRDS_'):
+            os.environ.setdefault(key, value)
+    return {key: os.environ[key] for key in os.environ if key.startswith('CRDS_')}

@@ -26,9 +26,11 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 import datetime
 
-# do this before importing webb
-os.environ["CRDS_PATH"] = "/orange/adamginsburg/jwst/brick/crds/"
-os.environ["CRDS_SERVER_URL"] = "https://jwst-crds.stsci.edu"
+# Before importing jwst: CRDS reads its cache path when jwst loads.  config.yaml
+# supplies the default; an exported CRDS_PATH wins.  The per-target cache
+# selection further down replaces it once the target is known.
+from jwst_gc_pipeline.config import apply_crds_environment
+apply_crds_environment()
 
 from jwst.pipeline import calwebb_image3
 from jwst.pipeline import Detector1Pipeline, Image2Pipeline
@@ -272,6 +274,16 @@ def main(filtername, Observations=None, regionname='brick',
     wavelength = int(filtername[1:4])
 
     basepath = field_registry.basepath(regionname)
+    # Same scratch redirect as the NIRCam and cataloging drivers: with a scratch
+    # tree staged, a re-reduction writes there and leaves released products
+    # alone.  output_dir below derives from basepath, so it follows.  Empty ->
+    # normal.
+    from jwst_gc_pipeline.scratch_basepath import apply_basepath_override
+    _bp0 = basepath
+    basepath = apply_basepath_override(basepath)
+    if basepath != _bp0:
+        print(f"GC_BASEPATH_OVERRIDE active (MIRI reduction): basepath -> "
+              f"{basepath}", flush=True)
     from jwst_gc_pipeline.reduction.fwhm import fwhm_table_path
     fwhm_tbl = Table.read(fwhm_table_path(basepath))
     row = fwhm_tbl[fwhm_tbl['Filter'] == filtername]
@@ -309,7 +321,7 @@ def main(filtername, Observations=None, regionname='brick',
     crds_mapdir = os.path.join(crds_path, 'mappings', 'jwst')
     if os.path.isdir(crds_mapdir) and not os.access(crds_mapdir, os.W_OK):
         print(f"CRDS cache {crds_path} is not writable; using shared brick cache instead")
-        crds_path = "/orange/adamginsburg/jwst/brick/crds/"
+        crds_path = f"{field_registry.basepath('brick')}crds/"
     else:
         os.makedirs(crds_mapdir, exist_ok=True)
     os.environ["CRDS_PATH"] = crds_path
@@ -321,7 +333,9 @@ def main(filtername, Observations=None, regionname='brick',
 
     # Files created in this notebook will be saved
     # in a subdirectory of the base directory called `Stage3`
-    output_dir = f'/orange/adamginsburg/jwst/{regionname}/{filtername}/pipeline/'
+    # Under the field's own directory, so a scratch reduction
+    # (GC_BASEPATH_OVERRIDE) writes to scratch instead of the released tree.
+    output_dir = f'{basepath}/{filtername}/pipeline/'
     if not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
     os.chdir(output_dir)
@@ -679,7 +693,7 @@ def fix_alignment(fn, proposal_id=None, regionname='brick', field=None, basepath
     if field is None:
         field = mod.meta.observation.observation_number
     if basepath is None:
-        basepath = f'/orange/adamginsburg/jwst/{regionname}'
+        basepath = field_registry.basepath(regionname)
 
     # 2026-06-11: the historical "Brick/CloudC" shift (-3.895", +1.28") was
     # measured offset-histogram-stacking the final mosaics against the NIRCam
