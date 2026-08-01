@@ -938,3 +938,171 @@ def test_build_virac2_offsets_parses_whole_vgroup_token():
             == parse_vgroup("f182m_nrcb3_visit001_vgroup7101_exp00003_m3_daophot_basic.fits"))
     # a non-digit token is kept whole, not truncated to its digit prefix
     assert parse_vgroup("f2550w_mirimage_visit001_vgroup0020210b_exp00001_m3_daophot_basic.fits") == "0020210b"
+
+
+# ---------------------------------------------------------------------------
+# module-FAMILY rows vs per-DETECTOR corrections (the sgrc/cloudc divergence)
+# ---------------------------------------------------------------------------
+
+def _module_family_csv(tmp_path):
+    """sgrc/cloudc/cloudef shape AFTER --per-module rebuild: the table HAS a
+    Module column, but its values are module FAMILIES -- SW filters carry
+    nrca/nrcb, LW filters nrcalong/nrcblong.  The m2 consensus meanwhile emits
+    one correction per DETECTOR (nrca1..nrca4)."""
+    rows = []
+    for filt, mods in (("F115W", ("nrca", "nrcb")),
+                       ("F405N", ("nrcalong", "nrcblong"))):
+        for mod in mods:
+            for e in (1, 2):
+                rows.append(dict(Visit="jw04147012001", Exposure=e,
+                                 Filter=filt, Module=mod,
+                                 **{"dra (arcsec)": 0.0, "ddec (arcsec)": 0.0}))
+    path = str(tmp_path / "Offsets_JWST_Brick4147_VIRAC2locked.csv")
+    Table(rows).write(path, overwrite=True)
+    return path
+
+
+def _detector_corrections(dets, filt="F115W", ddec=400.0, exposure=1):
+    return [dict(visit="jw04147012001", exposure=exposure, module=m,
+                 filtername=filt, dra_onsky_mas=0.0, ddec_onsky_mas=ddec,
+                 dec_deg=DEC_TEST) for m in dets]
+
+
+def test_refuses_detector_corrections_on_module_family_table(tmp_path):
+    """4 detectors of one module all match its single family row and are SUMMED.
+
+    The Module column EXISTS, so _assert_module_granularity returns early -- this
+    is the case that guard could not see, and it is what made sgrc's table run
+    away (185.7 -> 525.7 -> 1678.5 mas over three re-tie iterations).
+    """
+    path = _module_family_csv(tmp_path)
+    before = open(path).read()
+    corr = _detector_corrections(("nrca1", "nrca2", "nrca3", "nrca4"))
+    with pytest.raises(OffsetsTableUpdateError,
+                       match="(?i)more than one correction"):
+        update_offsets_table(path, corr, "m2")
+    assert open(path).read() == before
+
+
+def test_pooling_collapses_detectors_to_the_family_row(tmp_path):
+    """Pooled corrections apply 1:1, and the pooled value is the MEDIAN."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        pool_corrections_to_table_granularity)
+    path = _module_family_csv(tmp_path)
+    # residuals that largely cancel: median 3, sum 12 -- the whole point
+    corr = []
+    for m, d in (("nrca1", 1.0), ("nrca2", 5.0), ("nrca3", 3.0), ("nrca4", 3.0)):
+        corr.extend(_detector_corrections((m,), ddec=d))
+    pooled = pool_corrections_to_table_granularity(corr, path)
+    assert len(pooled) == 1
+    assert pooled[0]["ddec_onsky_mas"] == pytest.approx(3.0)
+    assert pooled[0]["module"] == "nrca"
+    assert "median of 4" in pooled[0]["source"]
+    out = update_offsets_table(path, pooled, "m2")
+    hit = out[(out["Module"] == "nrca") & (out["Exposure"] == 1)]
+    assert len(hit) == 1
+    assert hit[0]["ddec (arcsec)"] == pytest.approx(0.003)
+    # the other module's row is untouched
+    other = out[(out["Module"] == "nrcb") & (out["Exposure"] == 1)]
+    assert other[0]["ddec (arcsec)"] == pytest.approx(0.0)
+
+
+def test_pooled_sum_would_have_been_four_times_the_median(tmp_path):
+    """Pin the actual divergence factor: summing 4 detectors over-corrects ~4x."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        pool_corrections_to_table_granularity)
+    path = _module_family_csv(tmp_path)
+    corr = _detector_corrections(("nrca1", "nrca2", "nrca3", "nrca4"), ddec=10.0)
+    summed = sum(c["ddec_onsky_mas"] for c in corr)
+    pooled = pool_corrections_to_table_granularity(corr, path)
+    assert summed == pytest.approx(40.0)
+    assert pooled[0]["ddec_onsky_mas"] == pytest.approx(10.0)
+
+
+def test_lw_correction_does_not_leak_onto_the_sw_row(tmp_path):
+    """_module_variants maps 'nrcalong' -> {'nrcalong', 'nrca'} (READ semantics).
+
+    In the WRITE direction that adds an LW correction to the SW nrca row as
+    well.  The apply path must resolve the module against the values the table
+    carries FOR THIS FILTER, so an F405N correction can only touch LW rows.
+    """
+    path = _module_family_csv(tmp_path)
+    out = update_offsets_table(path, _detector_corrections(
+        ("nrcalong",), filt="F405N", ddec=400.0), "m2")
+    lw = out[(out["Module"] == "nrcalong") & (out["Exposure"] == 1)]
+    sw = out[(out["Module"] == "nrca") & (out["Exposure"] == 1)]
+    assert lw[0]["ddec (arcsec)"] == pytest.approx(0.4)
+    assert sw[0]["ddec (arcsec)"] == pytest.approx(0.0)
+
+
+def test_bare_module_token_on_an_lw_filter_hits_the_long_row(tmp_path):
+    """cloudef's checkpoint emits module='nrcb' (the CLI token) for LW filters.
+
+    The family is unambiguous once the filter is known -- F405N rows are all
+    LW -- so it must land on nrcblong, never on the SW nrcb row.
+    """
+    path = _module_family_csv(tmp_path)
+    out = update_offsets_table(path, _detector_corrections(
+        ("nrcb",), filt="F405N", ddec=400.0), "m2")
+    lw = out[(out["Module"] == "nrcblong") & (out["Exposure"] == 1)]
+    sw = out[(out["Module"] == "nrcb") & (out["Exposure"] == 1)]
+    assert lw[0]["ddec (arcsec)"] == pytest.approx(0.4)
+    assert sw[0]["ddec (arcsec)"] == pytest.approx(0.0)
+
+
+def test_pooling_is_a_noop_at_matching_granularity(tmp_path):
+    """A table whose rows ARE detectors keeps every correction distinct."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        pool_corrections_to_table_granularity)
+    rows = [dict(Visit="jw04147012001", Exposure=1, Filter="F115W", Module=m,
+                 **{"dra (arcsec)": 0.0, "ddec (arcsec)": 0.0})
+            for m in ("nrca1", "nrca2", "nrca3", "nrca4")]
+    path = str(tmp_path / "Offsets_JWST_Brick4147_VIRAC2locked.csv")
+    Table(rows).write(path, overwrite=True)
+    corr = _detector_corrections(("nrca1", "nrca2", "nrca3", "nrca4"), ddec=7.0)
+    pooled = pool_corrections_to_table_granularity(corr, path)
+    assert len(pooled) == 4
+    assert [c["module"] for c in pooled] == ["nrca1", "nrca2", "nrca3", "nrca4"]
+    out = update_offsets_table(path, pooled, "m2")
+    assert all(r["ddec (arcsec)"] == pytest.approx(0.007) for r in out)
+
+
+def test_different_exposures_are_never_pooled_together(tmp_path):
+    """Pooling groups by the MATCHED ROW SET, so exposures stay independent."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        pool_corrections_to_table_granularity)
+    path = _module_family_csv(tmp_path)
+    corr = (_detector_corrections(("nrca1", "nrca2"), ddec=10.0, exposure=1)
+            + _detector_corrections(("nrca1", "nrca2"), ddec=30.0, exposure=2))
+    pooled = pool_corrections_to_table_granularity(corr, path)
+    assert len(pooled) == 2
+    by_exp = {c["exposure"]: c["ddec_onsky_mas"] for c in pooled}
+    assert by_exp[1] == pytest.approx(10.0)
+    assert by_exp[2] == pytest.approx(30.0)
+
+
+def test_bulk_correction_composes_with_per_exposure_ones(tmp_path):
+    """A whole-visit bulk tie touches every row and must NOT trip the guard.
+
+    ``exposure=None, module=None`` is the consensus->reference shift; it is
+    broad by design and composes with each exposure's jitter (that is exactly
+    the BULK-row + jitter-row sum lookup_consensus_offset performs).  Treating
+    it as a collision would refuse every real checkpoint: sgrc F212N/F360M/
+    F480M and cloudc F182M all carry one.
+    """
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        pool_corrections_to_table_granularity)
+    path = _module_family_csv(tmp_path)
+    bulk = dict(visit="jw04147012001", exposure=None, module=None,
+                filtername="F115W", dra_onsky_mas=0.0, ddec_onsky_mas=100.0,
+                dec_deg=DEC_TEST, source="m2 consensus->reference")
+    corr = [bulk] + _detector_corrections(("nrca1", "nrca2"), ddec=10.0)
+    pooled = pool_corrections_to_table_granularity(corr, path)
+    assert len(pooled) == 2                    # bulk passed through + 1 pooled
+    assert any(c["module"] is None for c in pooled)
+    out = update_offsets_table(path, pooled, "m2")   # must not raise
+    # exposure 1 nrca got bulk + pooled jitter; exposure 2 nrca got bulk only
+    e1 = out[(out["Module"] == "nrca") & (out["Exposure"] == 1)][0]
+    e2 = out[(out["Module"] == "nrca") & (out["Exposure"] == 2)][0]
+    assert e1["ddec (arcsec)"] == pytest.approx(0.110)
+    assert e2["ddec (arcsec)"] == pytest.approx(0.100)

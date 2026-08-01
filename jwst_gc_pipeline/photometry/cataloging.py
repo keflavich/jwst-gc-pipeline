@@ -3570,6 +3570,45 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
               f"(no correction implied)", flush=True)
         return
 
+    _field = str(getattr(options, 'field', ''))
+    _channel = _astrom_offsets_channel(proposal_id, _field)
+
+    # POOL to the target table's granularity BEFORE the floor and before the
+    # apply.  The visit consensus emits one correction per DETECTOR
+    # (visit_consensus.exposure_key key[2] is 'nrca1'...), but a module-locked
+    # table's rows are module FAMILIES ('nrca'/'nrcalong'), so all four
+    # detectors of a module land on ONE row and update_offsets_table ADDS them.
+    # Each part is legal under the magnitude ceiling; their sum is not a
+    # measurement.  That is the sgrc/cloudc divergence of 2026-07-30..08-01
+    # (sgrc F115W: 45 detector corrections onto 12 rows, table accumulating
+    # 185.7 -> 525.7 -> 1678.5 mas over three re-tie iterations).
+    #
+    # A family row can only express the module-COMMON shift, so pool with the
+    # MEDIAN.  Doing it before the floor is what makes the loop converge: four
+    # SIAF-class detector residuals that largely cancel pool to a sub-floor
+    # module shift and the checkpoint PASSES, instead of writing their sum and
+    # re-measuring a larger residual next iteration.
+    #
+    # Only the LOCKED channel needs this.  seed_offsets_table_from_consensus
+    # keys natively by (visit, filter, exposure, module, vgroup), so a consensus
+    # table gives every detector its own row -- pooling there would throw away
+    # resolution the table has.
+    if _channel == 'locked':
+        _pool_path = _astrom_find_offsets_table(basepath, proposal_id, _field)
+        if _pool_path is not None and os.path.exists(_pool_path):
+            from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+                pool_corrections_to_table_granularity)
+            _n_before = len(corrections)
+            corrections = pool_corrections_to_table_granularity(
+                corrections, _pool_path)
+            if len(corrections) != _n_before:
+                print(f"astrom checkpoint [{merge_label}] {filt}/{module}: "
+                      f"pooled {_n_before} per-detector correction(s) to "
+                      f"{len(corrections)} at the granularity of "
+                      f"{os.path.basename(_pool_path)} (module-family rows "
+                      f"cannot express a per-detector shift; summing them is "
+                      f"what made sgrc diverge)", flush=True)
+
     # Actionability floor: per-detector residuals of ~2.4-3.3 mas (measured,
     # brick-1182 F115W V12 cycle-3, 2026-07-15) are SIAF/DVA-class systematics
     # that the module-locked offsets tables cannot express -- applying their
@@ -3595,8 +3634,6 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
 
     # m2 measured a real misalignment: im0 is wrong.
     assert merge_label in CORRECTION_STAGES
-    _field = str(getattr(options, 'field', ''))
-    _channel = _astrom_offsets_channel(proposal_id, _field)
     if _channel == 'none':
         raise RuntimeError(
             f"astrom checkpoint [{merge_label}] {filt}/{module}: measured "
