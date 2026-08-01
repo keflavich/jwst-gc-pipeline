@@ -1223,12 +1223,26 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
 # provenance header stamping (used by fix_alignment at re-apply time)
 # ---------------------------------------------------------------------------
 
+#: Words that mean "someone meant to fill this in".  A tripwire value belongs in
+#: source, where it can stop a run; stamped into a product it becomes the
+#: provenance, and it outlives the run that wrote it.
+_PLACEHOLDER_WORDS = ('BUG', 'TODO', 'FIXME', 'XXX', 'PLACEHOLDER', 'UNKNOWN')
+
+
 def provenance_header_cards(stage, dra_onsky_mas, ddec_onsky_mas, method,
                             references, table_name):
     """FITS header cards recording WHY the current RAOFFSET/DEOFFSET are what
     they are.  ``fix_alignment`` stamps these when it (re-)applies a corrected
     offsets table — the header of every aligned frame then carries the full
     provenance of its astrometric fix."""
+    upper = str(references).upper()
+    if any(word in upper for word in _PLACEHOLDER_WORDS):
+        raise ValueError(
+            f"refusing to stamp {references!r} as the astrometric reference "
+            f"frame (APROVRF): it reads as a placeholder.  Give the frame the "
+            f"exposure was tied to, from the resolved shift "
+            f"(AlignmentShift.reference_frame, declared in "
+            f"reduction/alignment_config.py), or 'n/a'.")
     return [
         ("APROVST", str(stage), "astrometry-fix stage (checkpoint)"),
         ("APROVMT", str(method)[:48], "offset measurement method"),

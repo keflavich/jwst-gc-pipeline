@@ -55,7 +55,12 @@ fields:
             - catalogs/twomass.fits
           '001': catalogs/gaia_virac2_refcat_epoch2022.70.fits
         nvisits: 2
-        reference_frame: THIS_IS_A_BUG_IF_YOU_USE_THIS
+        # No frame token.  2221 aligns from the locked offsets table declared in
+        # reduction/alignment_config.py, which is also where its frame (VIRAC2)
+        # is declared.  The token here names a legacy per-proposal table
+        # filename; for 2221 that filename would be the retired F405ref table,
+        # so leaving it out is deliberate.  resolve_shift raises if anything
+        # tries to build that filename.
         obsids:
           nircam: ['001']
           miri: ['002']
@@ -80,7 +85,12 @@ fields:
             - catalogs/twomass.fits
           '002': catalogs/gaia_virac2_refcat_epoch2023.30.fits
         nvisits: 2
-        reference_frame: THIS_IS_A_BUG_IF_YOU_USE_THIS
+        # No frame token.  2221 aligns from the locked offsets table declared in
+        # reduction/alignment_config.py, which is also where its frame (VIRAC2)
+        # is declared.  The token here names a legacy per-proposal table
+        # filename; for 2221 that filename would be the retired F405ref table,
+        # so leaving it out is deliberate.  resolve_shift raises if anything
+        # tries to build that filename.
         obsids:
           nircam: ['002']
           miri: ['001']
