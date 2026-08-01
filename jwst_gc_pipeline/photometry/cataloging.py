@@ -104,6 +104,50 @@ class MergedcatMosaicError(RuntimeError):
     """
 
 
+def write_table_atomic(table, path, **kwargs):
+    """Write a table so concurrent writers of the same path cannot collide.
+
+    The per-frame fan-out runs NSHARDS (16) tasks per phase, and several caches
+    are keyed by (filter, module) rather than by shard -- so every shard
+    independently rebuilds and writes the SAME path.  ``overwrite=True`` is not
+    enough: astropy's FITS table writer implements overwrite by unlinking the
+    file and then calling ``writeto`` WITHOUT the flag, so between the unlink
+    and the open another shard can recreate the file and the loser dies with
+
+        OSError: File ...crossband_seed_manual.fits already exists.
+                 If you mean to replace it then use the argument "overwrite=True"
+
+    -- an error message that names the flag the caller already passed.  A reader
+    can equally catch the file mid-write and get
+    ``IORegistryError: Format could not be identified``.
+
+    Observed 2026-08-01: quintuplet m7 lost shards 2/4/7 to the OSError (a
+    dropped exposure aborts the phase, and the afterok finalize then never
+    runs), and arches m3 shard 13 lost a frame to the truncated-read form on
+    ``*_i2dseed.fits``.  Both cost a full phase.
+
+    Write to a PID-and-shard-unique temp file in the destination directory,
+    then ``os.replace`` -- atomic on POSIX within one filesystem, so a reader
+    sees either the old file or the new one and never a partial one, and N
+    concurrent writers of equivalent content all succeed.
+    """
+    directory = os.path.dirname(path) or '.'
+    tag = os.environ.get('SLURM_ARRAY_TASK_ID', os.environ.get('SLURM_JOB_ID', ''))
+    # KEEP THE EXTENSION: astropy sniffs the format from it, so a temp name
+    # ending in '.tmp12345' fails with "Format could not be identified" -- the
+    # same error this helper exists to prevent (caught by the concurrency test).
+    root, ext = os.path.splitext(os.path.basename(path))
+    tmp = os.path.join(directory, f'.{root}.tmp{os.getpid()}{tag}{ext}')
+    try:
+        table.write(tmp, overwrite=True, **kwargs)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+    return path
+
+
 MERGEDCAT_MOSAIC_OVERRIDE_ENV = 'ALLOW_MISSING_MERGEDCAT_MOSAIC'
 
 
@@ -2537,7 +2581,8 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
     seed['n_filt_confirmed'] = np.array(nfilt, dtype='i4')
     seed['confirming_filters'] = np.array(confl)
     out = f'{cut_bp}/catalogs/crossband_seed_manual{_obssuf}.fits'
-    seed.write(out, overwrite=True)
+    # every m7 shard rebuilds this same path -- see write_table_atomic
+    write_table_atomic(seed, out)
     print(f"[m7] wrote STRINGENT crossband seed {out} (n={len(seed)} confirmed in "
           f">={min_filters} filters @ {max_sep_mas:g} mas, SNR>{snr_min}, qfit<{qfit_max}; "
           f"from {n} good m6 detections across {len(flist)} filters)", flush=True)
@@ -2989,7 +3034,8 @@ def _build_i2d_augmented_seed(detection_i2d_path, prev_vetted_path, filtername, 
     out['skycoord'] = all_sky
     out['flux'] = all_flux
     outpath = vetted_to_i2dseed(prev_vetted_path)
-    out.write(outpath, overwrite=True)
+    # keyed by (filter, module), not by shard -- see write_table_atomic
+    write_table_atomic(out, outpath)
     print(f"[{label}] i2d-augmented seed: {len(prev_sky)} prev + {n_new} new i2d "
           f"-> {len(out)} ({os.path.basename(outpath)})", flush=True)
     return outpath
