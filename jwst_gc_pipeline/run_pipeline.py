@@ -194,8 +194,7 @@ def _job_environment(plan, stage_name, config):
     return environ
 
 
-def _sbatch_command(plan, stage_name, config, dependency=None,
-                    dry_run=False):
+def _sbatch_command(plan, stage_name, config, dependency=None):
     """One `sbatch` invocation, as a list of arguments."""
     stage = pipeline_config.stage(config, stage_name)
     slurm = config.get('slurm') or {}
@@ -214,15 +213,14 @@ def _sbatch_command(plan, stage_name, config, dependency=None,
                 f'--mem={stage["memory"]}',
                 f'--time={stage["walltime"]}',
                 f'--job-name={name}']
-    command += _log_arguments(slurm, stage_name, array=count > 1,
-                              dry_run=dry_run)
+    command += _log_arguments(slurm, stage_name, array=count > 1)
     if dependency:
         command.append(f'--dependency=afterok:{dependency}')
     command += ['--export=ALL', script]
     return command
 
 
-def _log_arguments(slurm, stage_name, array=False, dry_run=False):
+def _log_arguments(slurm, stage_name, array=False):
     """``--output`` for one job, from ``slurm.log_dir``.
 
     The submit scripts carry a log path in an ``#SBATCH`` directive, which SLURM
@@ -232,20 +230,36 @@ def _log_arguments(slurm, stage_name, array=False, dry_run=False):
 
     ``%a`` is the array task, and SLURM writes ``4294967294`` for it on a job
     that is not an array, so it is used only when there is one.
+
+    Builds the argument and nothing else; :func:`_make_log_dir` does the
+    creating, once, at submission.
     """
     log_dir = (slurm.get('log_dir') or '').strip()
     if not log_dir:
         return []
-    if not dry_run:
-        try:
-            os.makedirs(log_dir, exist_ok=True)
-        except OSError as problem:
-            raise pipeline_config.ConfigError(
-                f'slurm.log_dir {log_dir!r} cannot be created ({problem}).  '
-                f'SLURM refuses a job whose log has nowhere to go; point it '
-                f'somewhere writable or remove the key.')
     task = '%A_%a' if array else '%j'
     return [f'--output={os.path.join(log_dir, stage_name)}_%x_{task}.out']
+
+
+def _make_log_dir(slurm):
+    """Create ``slurm.log_dir`` before the first submission.
+
+    SLURM refuses a job whose log has nowhere to go, and it refuses it at
+    submit, so this is worth failing on early and by name.  Called only when
+    something is really being submitted: building a command must not touch the
+    filesystem, or ``--dry-run`` would create directories on a machine that has
+    none of this.
+    """
+    log_dir = (slurm.get('log_dir') or '').strip()
+    if not log_dir:
+        return
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+    except OSError as problem:
+        raise pipeline_config.ConfigError(
+            f'slurm.log_dir {log_dir!r} cannot be created ({problem}).  '
+            f'SLURM refuses a job whose log has nowhere to go; point it '
+            f'somewhere writable or remove the key.')
 
 
 def _job_name(plan, stage_name):
@@ -259,7 +273,7 @@ def _job_name(plan, stage_name):
     return (f"{plan['target']}{plan['proposal']}-o{plan['obsid']}-{stage_name}")
 
 
-def _merge_all_command(plan, config, dependency, dry_run=False):
+def _merge_all_command(plan, config, dependency):
     """The single job that combines the filters, after the merge array."""
     stage = pipeline_config.stage(config, 'merge')
     slurm = config.get('slurm') or {}
@@ -271,7 +285,7 @@ def _merge_all_command(plan, config, dependency, dry_run=False):
             f'--mem={stage["memory"]}',
             f'--time={stage["walltime"]}',
             f"--job-name={plan['target']}-mergeall",
-            *_log_arguments(slurm, 'mergeall', dry_run=dry_run),
+            *_log_arguments(slurm, 'mergeall'),
             f'--dependency=afterok:{dependency}',
             '--export=ALL',
             pipeline_config.submit_script(config, 'merge',
@@ -396,12 +410,13 @@ def _run_local(plan, config, cutout_region, stages, dry_run):
 
 
 def _submit_slurm(plan, config, stages, dry_run):
+    if not dry_run:
+        _make_log_dir(config.get('slurm') or {})
     submitted, dependency = {}, None
     for name in STAGES:
         if name not in stages:
             continue
-        command = _sbatch_command(plan, name, config, dependency,
-                                  dry_run=dry_run)
+        command = _sbatch_command(plan, name, config, dependency)
         environ = dict(os.environ)
         environ.update(_job_environment(plan, name, config))
         print(f'\n=== {name} ===\n{" ".join(command)}', flush=True)
@@ -418,8 +433,7 @@ def _submit_slurm(plan, config, stages, dry_run):
         submitted[name] = dependency
         if name == 'merge' and pipeline_config.stage(
                 config, 'merge').get('fan_out') == 'program-filter':
-            tail = _merge_all_command(plan, config, dependency,
-                                      dry_run=dry_run)
+            tail = _merge_all_command(plan, config, dependency)
             tail_env = dict(os.environ)
             tail_env.update(_job_environment(plan, 'merge', config))
             tail_env.pop('MERGE_SINGLEFIELDS', None)

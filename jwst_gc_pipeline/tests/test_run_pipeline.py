@@ -367,8 +367,8 @@ def test_log_dir_reaches_the_submitted_job(capsys):
 def test_an_array_job_logs_per_task_and_a_single_job_does_not():
     """SLURM writes 4294967294 for %a on a job that is not an array."""
     slurm = {'log_dir': '/tmp'}
-    array = rp._log_arguments(slurm, 'catalog', array=True, dry_run=True)[0]
-    single = rp._log_arguments(slurm, 'mergeall', array=False, dry_run=True)[0]
+    array = rp._log_arguments(slurm, 'catalog', array=True)[0]
+    single = rp._log_arguments(slurm, 'mergeall', array=False)[0]
     assert array.endswith('_%x_%A_%a.out')
     assert single.endswith('_%x_%j.out')
 
@@ -377,17 +377,24 @@ def test_no_log_dir_leaves_the_scripts_own_directive_alone():
     assert rp._log_arguments({}, 'reduce') == []
 
 
-def test_a_dry_run_creates_nothing(tmp_path):
-    """--dry-run prints commands; it must not touch the filesystem."""
+def test_building_a_command_creates_nothing(tmp_path):
+    """--dry-run prints commands, so building one must not touch the disk.
+
+    It also runs on machines that have none of these directories."""
     absent = tmp_path / 'not-yet' / 'logs'
-    rp._log_arguments({'log_dir': str(absent)}, 'reduce', dry_run=True)
+    rp._log_arguments({'log_dir': str(absent)}, 'reduce')
     assert not absent.exists()
 
 
 def test_an_uncreatable_log_dir_says_so():
     with pytest.raises(pipeline_config.ConfigError, match='log_dir'):
-        rp._log_arguments({'log_dir': '/proc/definitely/not/writable'},
-                          'reduce')
+        rp._make_log_dir({'log_dir': '/proc/definitely/not/writable'})
+
+
+def test_the_log_dir_is_made_at_submission(tmp_path):
+    made = tmp_path / 'logs'
+    rp._make_log_dir({'log_dir': str(made)})
+    assert made.is_dir()
 
 
 def test_a_misspelled_slurm_key_is_rejected(tmp_path, monkeypatch):
