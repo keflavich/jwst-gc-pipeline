@@ -1733,7 +1733,8 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
                                  file_suffix='',
                                  seed_gate_image=None, seed_gate_wcs=None,
                                  deblend_with_zeroframe=False,
-                                 partner_sky=None):
+                                 partner_sky=None,
+                                 recovery_signature=None):
     """
     ``file_suffix`` is inserted into the satstar output filenames before
     the ``_satstar_catalog`` / ``_satstar_model`` / ``_satstar_residual``
@@ -1753,15 +1754,43 @@ def load_or_make_satstar_catalog(filename, path_prefix, use_merged_psf_for_merge
     # force a refit: the cached catalog predates the override and must be redone.
     if flux_overrides or flux_drops:
         overwrite = True
+
+    def _cache_ok(tbl):
+        # A cached satstar catalog is valid only if it was built with the SAME
+        # saturated-core recovery config as this run.  --satstar-*-recover change
+        # the FIT (they de-saturate the core before the wing fit), so reusing a
+        # catalog built under a different config would silently ship the wrong
+        # (e.g. pre-recovery) photometry.  A legacy cache with no SATRECOV stamp
+        # was built by the pre-signature (no-recovery) pipeline, so it reads as
+        # "off" -- a non-recovery re-run keeps it (no needless rebuild); only a
+        # recovery run (or a different recovery config) rebuilds.
+        if recovery_signature is None:
+            return True
+        cached_sig = str(tbl.meta.get('SATRECOV', '')) or "off"
+        return cached_sig == str(recovery_signature)
+
     extended_filename = filename.replace(
         '.fits', f'{file_suffix}_extended_satstar_catalog.fits')
     if os.path.exists(extended_filename) and not overwrite:
-        return Table.read(extended_filename)
+        _c = Table.read(extended_filename)
+        if _cache_ok(_c):
+            return _c
+        print(f"Rebuilding satstar catalog: {os.path.basename(extended_filename)} "
+              f"recovery config {_c.meta.get('SATRECOV', '')!r} != "
+              f"{recovery_signature!r}", flush=True)
+        overwrite = True
     satstar_filename = filename.replace('.fits', f'{file_suffix}_satstar_catalog.fits')
     if os.path.exists(satstar_filename) and not overwrite:
-        return Table.read(satstar_filename)
+        _c = Table.read(satstar_filename)
+        if _cache_ok(_c):
+            return _c
+        print(f"Rebuilding satstar catalog: {os.path.basename(satstar_filename)} "
+              f"recovery config {_c.meta.get('SATRECOV', '')!r} != "
+              f"{recovery_signature!r}", flush=True)
+        overwrite = True
 
     remove_saturated_stars(filename, overwrite=overwrite, path_prefix=path_prefix,
+                           recovery_signature=recovery_signature,
                            use_merged_psf_for_merged=use_merged_psf_for_merged,
                            outside_star_pixels=outside_star_pixels,
                            outside_star_fit_box=outside_star_fit_box,

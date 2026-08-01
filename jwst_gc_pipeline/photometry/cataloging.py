@@ -1392,6 +1392,28 @@ def _resolve_each_suffix(options, filtername):
     return default
 
 
+def _satstar_recovery_signature(options):
+    """A compact string identifying the saturated-core RECOVERY configuration
+    that ``_fill_saturated_pixels`` applies before the satstar wing fit.  It is
+    stamped into the per-exposure satstar catalog (meta key ``SATRECOV``) and
+    checked when that cache is reused, so toggling recovery forces a refit
+    instead of silently returning a pre-recovery catalog.  Keep it stable for a
+    fixed config: only the fields that change the recovered flux belong here.
+
+    Returns ``"off"`` when NO recovery is requested (the dilation is irrelevant
+    then).  A legacy cache with no stamp was built by the pre-signature pipeline,
+    which had no recovery, so it is treated as ``"off"`` on read -- that way a
+    plain non-recovery re-run does NOT needlessly rebuild every field's satstar
+    catalogs; only a recovery run rebuilds a legacy (or differently-configured)
+    cache."""
+    zf = bool(getattr(options, 'satstar_zeroframe_recover', False))
+    ramp = bool(getattr(options, 'satstar_ramp_recover', False))
+    if not zf and not ramp:
+        return "off"
+    return "zf%d_ramp%d_dil%d" % (
+        int(zf), int(ramp), int(getattr(options, 'satstar_zeroframe_dilate', 3)))
+
+
 def _fill_saturated_pixels(filename, data, dqarr, was_sat, finite_model,
                            filled, options):
     """Replace the saturated pixels, best available method first.
@@ -1896,7 +1918,17 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
         # Opt-in via --deblend-satstars; auto-degrades to legacy where the frame
         # has no sibling _ramp.fits ZEROFRAME.  See gc2211-zeroframe-satcore-deblend.
         deblend_with_zeroframe=bool(getattr(options, 'deblend_satstars', False)),
-        partner_sky=_partner_sky)
+        partner_sky=_partner_sky,
+        # Saturated-core recovery signature: the satstar CATALOG is cached
+        # skip-if-exists, but --satstar-zeroframe-recover / --satstar-ramp-recover
+        # change the FIT (they de-saturate the core data before the wing fit).
+        # Without keying the cache on that config, a re-catalog toggling recovery
+        # silently reuses the pre-recovery catalog and the recovery never reaches
+        # the merged/m8 photometry.  Stamp+check this signature so a config change
+        # forces a rebuild.  (Diagnosed on brick 2026-07: a full recovery re-run
+        # left the m8 satstar mags byte-identical because the 07-25 caches were
+        # reused.)
+        recovery_signature=_satstar_recovery_signature(options))
     ext_model = filename.replace('.fits', f'{satstar_file_suffix}_extended_satstar_model.fits')
     sat_model = filename.replace('.fits', f'{satstar_file_suffix}_satstar_model.fits')
     if os.path.exists(ext_model):
