@@ -16,18 +16,17 @@ answer to "what frame is this tied to?" and outlives the run that wrote it.
 These tests fail if a placeholder returns to the registry.  The complementary
 guard is in ``provenance_header_cards``, which refuses to stamp one.
 """
-import re
+import os
 
 import pytest
 import yaml
 
 from jwst_gc_pipeline import fields as field_registry
 from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
-    provenance_header_cards)
+    looks_like_placeholder, provenance_header_cards)
 
-#: Words that mean "someone meant to fill this in".
-_PLACEHOLDER = re.compile(r'\b(?:BUG|TODO|FIXME|XXX|PLACEHOLDER|UNKNOWN)\b',
-                          re.IGNORECASE)
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))))
 
 
 def _strings(node, trail=()):
@@ -47,7 +46,7 @@ def test_registry_holds_no_placeholder_values():
         registry = yaml.safe_load(fh)
     offenders = [f"{'.'.join(trail)}: {value!r}"
                  for trail, value in _strings(registry)
-                 if _PLACEHOLDER.search(value)]
+                 if looks_like_placeholder(value)]
     assert not offenders, (
         "placeholder value(s) in fields.yaml:\n  " + "\n  ".join(offenders)
         + "\n\nThe registry is read as data and its values are written into "
@@ -79,3 +78,34 @@ def test_provenance_accepts_a_real_frame():
         method='offsets-table', references='VIRAC2',
         table_name='offsets.csv'))
     assert cards['APROVRF'] == 'VIRAC2'
+
+
+@pytest.mark.parametrize('value,placeholder', [
+    ('THIS_IS_A_BUG_IF_YOU_USE_THIS', True),   # the string this guard exists for
+    ('FIXME_MEASURE_THIS', True),
+    ('XXX_PLACEHOLDER_XXX', True),
+    ('unknown', True),
+    ('VIRAC2', False),
+    ('Gaia', False),
+    ('GNS', False),
+    ('n/a', False),
+    ('DEBUG', False),                          # one word, not the word BUG
+])
+def test_what_counts_as_a_placeholder(value, placeholder):
+    """Sentinels are written between underscores, so a word-boundary match
+    would find none of them: `_` is a word character."""
+    assert looks_like_placeholder(value) is placeholder
+
+
+def test_the_guard_catches_the_string_it_was_written_for():
+    """Run the guard's own predicate over the registry as it was before this
+    change: it has to find both 2221 rows."""
+    import subprocess
+    before = subprocess.run(
+        ['git', 'show', 'origin/main:jwst_gc_pipeline/fields.yaml'],
+        capture_output=True, text=True, cwd=REPO_ROOT)
+    if before.returncode != 0:
+        pytest.skip('origin/main is not fetched here')
+    caught = [value for _, value in _strings(yaml.safe_load(before.stdout))
+              if looks_like_placeholder(value)]
+    assert len(caught) == 2 and all('BUG' in value for value in caught)

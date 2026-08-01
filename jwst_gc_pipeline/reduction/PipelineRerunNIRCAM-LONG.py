@@ -1059,6 +1059,14 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
     _prov_tbl = _shift.prov_table          # offsets table actually consumed
     _prov_row_stage = _shift.prov_stage    # checkpoint stage that last corrected it
     _frame_gen = _shift.frame_generation   # this frame's WCS-generation stamp
+    # Check the frame token before anything is written.  The provenance stamp
+    # below refuses a placeholder, and it sits between the GWCS save and the
+    # RAOFFSET write -- raising there would leave the shift baked in with no
+    # RAOFFSET, which the idempotency guard reads as "not yet aligned".
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        assert_not_placeholder)
+    assert_not_placeholder(_shift.reference_frame,
+                           f'the astrometric reference frame for {fn}')
     print(f"Shift for {fn} is {_shift}")
     align_fits = fits.open(fn)
     if 'RAOFFSET' in align_fits[1].header:
@@ -1161,7 +1169,9 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
                 # that was just resolved.  alignment_config declares it per
                 # (proposal, observation); the registry's per-proposal token is
                 # for naming a legacy table file, not for provenance.
-                references=_shift.reference_frame or 'n/a',
+                # 'NONE' spelt as unified_alignment spells it in ALIGNREF, which
+                # records the same value from the same shift.
+                references=_shift.reference_frame or 'NONE',
                 table_name=_prov_tbl or 'hardcoded/none'):
             align_fits[1].header[_k] = (_v, _c)
         align_fits.writeto(fn, overwrite=True)
