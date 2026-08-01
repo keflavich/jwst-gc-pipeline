@@ -129,10 +129,26 @@ run_pipeline() {
 # startup imports, ~30 s in -- never hours into the science).
 IMPORT_RACE_RE='ModuleNotFoundError|ImportError|PackageNotFoundError|MetadataNotFound|bad magic number|marshal data too short'
 
-start_s=$SECONDS
-run_pipeline
-rc=$?
-if [ $rc -ne 0 ]; then
+# One retry is not enough when the whole campaign is resident: a re-tie wave
+# starts 16 shards per field across six fields at once, they all import against
+# the same conda env on the same NFS mount, and the retry lands back in the same
+# storm.  Observed repeatedly (2026-07-31/08-01) -- e.g. sgrb2 shard 14 logged
+# "matches import-race signature (elapsed=0s); retrying once" and the retry hit
+# the identical ModuleNotFoundError.  Each loss costs a whole re-tie iteration,
+# because one dead shard leaves the afterok finalize permanently unsatisfied.
+#
+# Retry up to IMPORT_RACE_RETRIES times with exponential backoff plus jitter, so
+# successive attempts spread out instead of re-colliding.  The gate is unchanged:
+# ONLY the import-race signature retries; a genuine science failure still fails
+# fast on the first attempt.
+IMPORT_RACE_RETRIES=${IMPORT_RACE_RETRIES:-3}
+
+attempt=0
+while : ; do
+    start_s=$SECONDS
+    run_pipeline
+    rc=$?
+    [ $rc -eq 0 ] && break
     elapsed=$(( SECONDS - start_s ))
     race=0
     if [ -s "$RUNLOG" ]; then
@@ -140,15 +156,22 @@ if [ $rc -ne 0 ]; then
     elif [ "$elapsed" -le 120 ]; then
         race=1
     fi
-    if [ "$race" -eq 1 ]; then
-        echo "PERFRAME $MODE: rc=$rc matches import-race signature (elapsed=${elapsed}s); retrying once."
-        sleep $(( (RANDOM % 30) + 10 ))
-        run_pipeline
-        rc=$?
-    else
+    if [ "$race" -ne 1 ]; then
         echo "PERFRAME $MODE: rc=$rc is not the import race (elapsed=${elapsed}s); NOT retrying."
+        break
     fi
-fi
+    attempt=$(( attempt + 1 ))
+    if [ "$attempt" -gt "$IMPORT_RACE_RETRIES" ]; then
+        echo "PERFRAME $MODE: rc=$rc still the import race after ${IMPORT_RACE_RETRIES} retries;"
+        echo "  giving up.  This strands the afterok finalize -- rerun this shard and"
+        echo "  re-point the finalize (scontrol update jobid=<fin> dependency=...)."
+        break
+    fi
+    backoff=$(( (1 << (attempt - 1)) * 30 + (RANDOM % 30) ))
+    echo "PERFRAME $MODE: rc=$rc matches import-race signature (elapsed=${elapsed}s);" \
+         "retry ${attempt}/${IMPORT_RACE_RETRIES} in ${backoff}s."
+    sleep "$backoff"
+done
 rm -f "$RUNLOG"
 echo "PERFRAME $MODE done: phase=$PHASE rc=$rc"
 exit $rc
