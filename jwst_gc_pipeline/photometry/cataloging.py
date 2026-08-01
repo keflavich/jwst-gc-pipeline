@@ -69,6 +69,7 @@ from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
 import os
 import re
 import types
+import uuid
 import traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from astropy.io import fits
@@ -126,25 +127,37 @@ def write_table_atomic(table, path, **kwargs):
     runs), and arches m3 shard 13 lost a frame to the truncated-read form on
     ``*_i2dseed.fits``.  Both cost a full phase.
 
-    Write to a PID-and-shard-unique temp file in the destination directory,
-    then ``os.replace`` -- atomic on POSIX within one filesystem, so a reader
-    sees either the old file or the new one and never a partial one, and N
+    Write to a UNIQUE temp file in the destination directory, then
+    ``os.replace`` -- atomic on POSIX within one filesystem, so a reader sees
+    either the old file or the new one and never a partial one, and N
     concurrent writers of equivalent content all succeed.
+
+    The temp name must be unique per WRITER, not merely per path.  A shared
+    staging name is strictly worse than the race it replaces: two writers then
+    interleave inside one temp file and ``os.replace`` publishes the mixture as
+    a well-formed FITS file with wrong contents -- silent, where the unlink race
+    at least raises.  ``uuid4`` rather than the PID alone, because a PID repeats
+    freely across nodes on a shared filesystem and the helper must be safe
+    outside an array job too (interactive rerun, manual finalize, two people
+    debugging one field).
     """
     directory = os.path.dirname(path) or '.'
-    tag = os.environ.get('SLURM_ARRAY_TASK_ID', os.environ.get('SLURM_JOB_ID', ''))
     # KEEP THE EXTENSION: astropy sniffs the format from it, so a temp name
     # ending in '.tmp12345' fails with "Format could not be identified" -- the
     # same error this helper exists to prevent (caught by the concurrency test).
     root, ext = os.path.splitext(os.path.basename(path))
-    tmp = os.path.join(directory, f'.{root}.tmp{os.getpid()}{tag}{ext}')
+    tmp = os.path.join(directory, f'.{root}.tmp{os.getpid()}{uuid.uuid4().hex[:8]}{ext}')
+    published = False
     try:
         table.write(tmp, overwrite=True, **kwargs)
         os.replace(tmp, path)
-    except BaseException:
-        if os.path.exists(tmp):
+        published = True
+    finally:
+        # try/finally, not `except BaseException` -- same cleanup without
+        # catching KeyboardInterrupt/SystemExit (repo rule: specific exceptions
+        # only).  os.replace consumed the temp file on the success path.
+        if not published and os.path.exists(tmp):
             os.remove(tmp)
-        raise
     return path
 
 
@@ -2684,10 +2697,13 @@ def _combine_per_obs_vetted(vetted_path, merged_path, combined_path,
             + '\n'.join(detail)) from ex
     if len(tables) > 1 and 'skycoord' in combined.colnames:
         combined = _dedup_combined_vetted(combined)
-    root, ext = os.path.splitext(combined_path)   # keep ext: astropy sniffs it
-    staging = f'{root}.tmp{ext}'
-    combined.write(staging, overwrite=True)
-    os.replace(staging, combined_path)
+    # Was a hand-rolled temp+replace whose staging name carried no PID/shard
+    # tag, so every concurrent writer of this path used the IDENTICAL temp
+    # file -- two writers interleaved inside it and os.replace published the
+    # mixture as a well-formed FITS file with wrong contents.  Silent, and
+    # worse than the unlink race, which at least raises.  The destination is
+    # also deliberately removed just above, widening the window.
+    write_table_atomic(combined, combined_path)
     print(f"{label}: combined {len(siblings)} per-obs vetted -> "
           f"{os.path.basename(combined_path)} ({len(combined)} all-obs sources)",
           flush=True)
