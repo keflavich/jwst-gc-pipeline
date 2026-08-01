@@ -1,0 +1,9 @@
+gc2211	F200W	NRCA1	/orange/adamginsburg/jwst/gc2211/F200W/pipeline/jw02211023001_02201_00001_nrca1_destreak_jw02211-o023_20260515t014922_image3_00001_crf.fits	/orange/adamginsburg/jwst/gc2211/psfs/
+brick	F200W	NRCA1	/orange/adamginsburg/jwst/brick/F200W/pipeline/jw01182004001_04101_00001_nrca1_destreak_o004_crf.fits	/orange/adamginsburg/jwst/brick/psfs/
+brick	F115W	NRCA1	/orange/adamginsburg/jwst/brick/F115W/pipeline/jw01182004001_02101_00001_nrca1_destreak_o004_crf.fits	/orange/adamginsburg/jwst/brick/psfs/
+brick	F212N	NRCA1	/orange/adamginsburg/jwst/brick/F212N/pipeline/jw02221001001_05101_00001_nrca1_destreak_o001_crf.fits	/orange/adamginsburg/jwst/brick/psfs/
+brick	F405N	NRCALONG	/orange/adamginsburg/jwst/brick/F405N/pipeline/jw02221001001_03101_00001_nrcalong_destreak_o001_crf.fits	/orange/adamginsburg/jwst/brick/psfs/
+ngc6334	F200W	NRCA1	/orange/adamginsburg/jwst/ngc6334/F200W/pipeline/jw06778001001_02105_00001_nrca1_align_o001_crf.fits	/orange/adamginsburg/jwst/ngc6334/psfs/
+ngc6334	F405N	NRCALONG	/orange/adamginsburg/jwst/ngc6334/F405N/pipeline/jw07213001001_02101_00001_nrcalong_align_o001_crf.fits	/orange/adamginsburg/jwst/ngc6334/psfs/
+sgra	F212N	NRCA1	/orange/adamginsburg/jwst/sgra/F212N/pipeline/jw01939001001_02103_00001_nrca1_destreak_o001_crf.fits	/orange/adamginsburg/jwst/sgra/psfs/
+m92	F150W	NRCA1	/orange/adamginsburg/jwst/m92/F150W/pipeline/jw01334001001_04101_00001_nrca1_destreak_o001_crf.fits	/orange/adamginsburg/jwst/m92/psfs/
