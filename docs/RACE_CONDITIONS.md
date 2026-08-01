@@ -26,8 +26,8 @@ os.replace(tmp, path)
 temp file either. [`jwst_gc_pipeline/atomic_io.py`](../jwst_gc_pipeline/atomic_io.py)
 packages this as `atomic_write`, along with `locked` for a read-modify-write and
 `keep_a_copy` for a backup that leaves the original in place;
-`merge_catalogs.py:1966-1971` (the consolidated satstar cache) and
-`versioning/prov_sidecar.py:64-72` are the same pattern written out by hand.
+`merge_catalogs.py::load_satstar_catalog` (the consolidated satstar cache) and
+`prov_sidecar.py::write_sidecar` are the same pattern written out by hand.
 
 The corollary: **a missing input is not a measurement.** Code that reads a
 shared file must distinguish "the file is not there" from "the file says zero",
@@ -42,10 +42,10 @@ module exists to remove.*
 |---|---|---|---|
 | Import storm | `submit_cataloging_perframe_phase.sbatch` | dozens of tasks import the same modules off shared storage at once; some die ~30 s in | fixed — random 1–25 s stagger, plus a retry gated on the import signature |
 | Metadata coherence | same, finalize mode | a finalize lists the marker directory before Lustre has settled and crashes on a marker that does exist | fixed — 180 s settle before the strict verify |
-| All-filter merge | `merge_catalogs.py:3022`, `submit_merge.sbatch` | N array tasks each ran the all-filter merge: N writers of one file, most reading inputs their siblings had not written yet | fixed — an array task stops after its own filter; the all-filter merge is a separate job with `afterok` |
-| Per-frame product names | `saturated_star_finding.py:4442`, `crowdsource_catalogs_long.py:1741` | concurrent runs differing only by post-processing options wrote the same filenames | fixed — the iteration label is part of the name |
-| Offsets / consensus tables | `astrometry_checkpoint.py` | see below | fixed — atomic write, backup by copy, and a lock across the read-modify-write |
-| PSF grid cache | `crowdsource_catalogs_long.py:2144-2150, 2251-2255` | see below | **open** |
+| All-filter merge | `merge_catalogs.py::main`, `submit_merge.sbatch` | N array tasks each ran the all-filter merge: N writers of one file, most reading inputs their siblings had not written yet | fixed — an array task stops after its own filter; the all-filter merge is a separate job with `afterok` |
+| Per-frame product names | `saturated_star_finding.py::remove_saturated_stars`, `crowdsource_catalogs_long.py::load_or_make_satstar_catalog` | concurrent runs differing only by post-processing options wrote the same filenames | fixed — the iteration label is part of the name |
+| Offsets / consensus tables | `astrometry_checkpoint.py::update_offsets_table` | see below | fixed — atomic write, backup by copy, and a lock across the read-modify-write |
+| PSF grid cache | `crowdsource_catalogs_long.py::get_psf_model` | see below | **open** |
 
 ### Fixed: the offsets and consensus tables
 
@@ -58,9 +58,10 @@ tbl.write(out_path, overwrite=True)                        # rebuild
 
 Between those two calls the table **did not exist**. A concurrent reader in that
 window — another filter's cataloging job resolving its shift, or a reduce job —
-takes the missing-table branch at `unified_alignment.py:284-290` and aligns its
-frame at **(0, 0)**, records `table_present=False`, and carries on. Small
-window, invisible failure: the frame is silently left on the raw pointing.
+takes the missing-table branch in `unified_alignment.py::_shift_from_consensus`
+and aligns its frame at **(0, 0)**, records `table_present=False`, and carries
+on. Small window, invisible failure: the frame is silently left on the raw
+pointing.
 
 There was a second problem in the same place. `update_offsets_table` reads the
 table, corrects rows, and writes it back, with nothing serialising that against
