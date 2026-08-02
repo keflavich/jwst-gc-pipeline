@@ -75,14 +75,20 @@ def _slice_refs(full, box):
 
 
 def inject_one(frame_sci, frame_dq, frame_var, full_refs, grid, x, y, flux_img,
-               photmjsr, gain_med, ngroups, tgroup, f_bf, local_bkg_rate_e):
+               photmjsr, gain_med, ngroups, tgroup, f_bf, local_bkg_rate_e,
+               ewr=None):
     """Forward-model one star and add it onto the frame in place. Returns
-    (sat_area, group0_lost)."""
+    (sat_area, group0_lost). ``ewr``=(rcent,ratio) applies the empirical real/STPSF
+    wing profile so injected wings match the frame (so the recovery's wing-selfcal
+    is appropriate -- see empirical_wings.py)."""
     ny, nx = frame_sci.shape
     x0 = max(0, int(round(x)) - STAMP); x1 = min(nx, int(round(x)) + STAMP + 1)
     y0 = max(0, int(round(y)) - STAMP); y1 = min(ny, int(round(y)) + STAMP + 1)
     yy, xx = np.mgrid[y0:y1, x0:x1]
     stamp = np.clip(grid.evaluate(xx, yy, flux_img, x, y), 0, None)   # MJy/sr
+    if ewr is not None:
+        from jwst_gc_pipeline.photometry.empirical_wings import apply_wing_ratio
+        stamp = np.clip(apply_wing_ratio(stamp, xx, yy, x, y, ewr[0], ewr[1]), 0, None)
     # true count-rate scene (e-/s): star + local background
     rate_e = stamp / photmjsr * gain_med + local_bkg_rate_e
     cutrefs = _slice_refs(full_refs, (y0, y1, x0, x1))     # slice preloaded refs
@@ -123,7 +129,7 @@ def baseline_unsat(sci, err, dq, grid, inj, band, pixar_sr, fwhm_pix):
 
 
 def run(crf, band, detector, field, psfs, out, f_bf=0.3, n_stars=200,
-        mag_lo=8.5, mag_hi=14.5, seed=0):
+        mag_lo=8.5, mag_hi=14.5, seed=0, empirical_wings=True):
     os.makedirs(out, exist_ok=True)
     rng = np.random.default_rng(seed)
     fh = fits.open(crf)
@@ -151,13 +157,20 @@ def run(crf, band, detector, field, psfs, out, f_bf=0.3, n_stars=200,
     rng.shuffle(mags)
     local_bkg_rate_e = np.nanmedian(np.clip(sci, 0, None)) / photmjsr * gain_med
     full_refs = sfm.load_detector_refs(detector)      # load CRDS refs ONCE (full det)
+    ewr = None
+    if empirical_wings:
+        from jwst_gc_pipeline.photometry.empirical_wings import measure_empirical_wing_ratio
+        rcent, ratio = measure_empirical_wing_ratio(sci, dq, grid, fwhm_pix=fwhm_pix)
+        ewr = (rcent, ratio) if rcent is not None else None
+        print(f'[inj] empirical wings: {"measured" if ewr else "UNAVAILABLE -> STPSF wings"}',
+              flush=True)
 
     inj = []
     for x, y, mag in zip(xs, ys, mags):
         flux_img = float(art.mag_to_imflux(mag, band, pixar_sr))
         sa, g0 = inject_one(sci, dq, var, full_refs, grid,
                             x, y, flux_img, photmjsr, gain_med, ngroups, tgroup,
-                            f_bf, local_bkg_rate_e)
+                            f_bf, local_bkg_rate_e, ewr=ewr)
         inj.append((x, y, mag, flux_img, sa, g0))
     inj = Table(rows=inj, names=('x', 'y', 'mag_inj', 'flux_inj', 'sat_area', 'g0lost'))
     print(f'[inj] injected {len(inj)} stars; sat_area range {inj["sat_area"].min()}'
