@@ -926,16 +926,25 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
                    else "histogram" if res_a is not None else "none")
 
     # Per-tile check D (``grid``) requires a DENSE reference.  Measured against a
-    # Gaia-ONLY refcat (no VIRAC2 component, ``dense=False`` -- e.g. w51/sgrc,
-    # outside the VVV footprint) each small tile pairs the wrong sparse stars and
-    # returns arcsecond-scale NOISE in every tile (24/28 "coherent" w51 tiles land
-    # at 16-58 arcsec, not the true 40 mas), so it cannot see a seam and MUST NOT
-    # gate -- gating on it strands the bulk-sentinel Gaia tie the reducer needs.
-    # In that regime the corroborating second check is the same-star matched-pair
-    # refinement, which itself REFUSES unless the global tie is verified-small
-    # (GlobalTieNotVerifiedError), so the sign-off is still multi-check, never a
-    # single number.  A DENSE (VIRAC2) reference keeps the per-tile gate intact --
-    # that is the brick-1182 half-mosaic-seam protection.
+    # Gaia-ONLY refcat (no VIRAC2 component, ``dense=False`` -- e.g. w51, outside
+    # the VVV footprint, whose refcat is a pure gaia_refcat.fits) each small tile
+    # pairs the wrong sparse stars and returns arcsecond-scale NOISE in every tile
+    # (24/28 "coherent" w51 tiles land at 16-58 arcsec, not the true 40 mas), so it
+    # cannot see a seam and MUST NOT gate -- gating on it strands the bulk-sentinel
+    # Gaia tie the reducer needs.  In that regime the corroborating second check is
+    # the same-star matched-pair refinement, which itself REFUSES unless the global
+    # tie is verified-small (GlobalTieNotVerifiedError), so the sign-off keeps its
+    # COUNT of independent checks (never a single number).
+    #
+    # COVERAGE GAP (Gaia-only only): D is the sole SPATIAL check; vs_full, the
+    # sweep, and the same-star refinement are all GLOBAL statistics over the whole
+    # field.  So for a Gaia-only reference there is no per-region seam check, and a
+    # half-mosaic seam that a global bulk hides would pass here (matched-pair stats
+    # are structurally weak at a localized sub-population displaced beyond the match
+    # radius -- see the brick F182M matched-pair blind-spot).  On these fields seam
+    # coverage moves to the release-time interframe-overlap gate / manual QC; it is
+    # NOT recovered here.  A DENSE (VIRAC2) reference keeps the per-tile gate intact
+    # -- that is the brick-1182 half-mosaic-seam protection, unchanged.
     per_tile_ok = bool(grid.get("clean")) if dense else (same_star is not None)
     apply_ok = bool(res_a is not None and res_a.get("ok")
                     and per_tile_ok and cross_gross_ok)
