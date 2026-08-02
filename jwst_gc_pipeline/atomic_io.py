@@ -9,8 +9,6 @@ The tools for the shapes described in ``docs/RACE_CONDITIONS.md``:
   what this pipeline writes.
 * :func:`locked` — serialise a read-modify-write, so two tasks correcting the
   same table do not each read the original and drop one another's change.
-* :func:`publish_into` — for a writer that names its own output files and so
-  cannot be handed a temporary path.
 
 The lock is a file created with ``O_EXCL``, which is atomic on Lustre (where the
 survey lives) and needs no ``flock`` mount option.  It records who holds it, so a
