@@ -94,13 +94,24 @@ Recovered − injected mag (+ve = recovered too faint), median per saturation re
    not charge migration at f_bf=0.3. (Charge migration may still drive the #210
    *footprint* sensitivity — a different metric — and/or need a larger f_bf.)
 
-**Critical caveat (unresolved).** The absolute magnitude (~1 mag hard-sat) depends
-on (a) forward-model realism — does it remove the right amount of flux? — and
-(b) whether injected stars receive the same **wing self-calibration** as production
-stars. The paper's continuity fix reached ~0.11 mag residual, so a +1.16 mag
-hard-sat bias is either a real deep-regime failure the continuity metric never
-probed, OR a harness artifact (injected stars not wing-self-calibrated). Resolving
-this is the top next step.
+**Caveat RESOLVED 2026-08-02 — the +1 mag bias is REAL recovery under-correction.**
+Two checks:
+- *Wing-truth* (`wing_truth_check.py`): the forward model PRESERVES the true PSF
+  amplitude in the surviving unsaturated wings — forward/true = 0.96–1.00 in every
+  annulus up to hard saturation. So the injected star carries the true flux; the
+  harness is not over-suppressing.
+- *Wing-selfcal engaged but under-corrects*: the recovery ran wing self-cal (9
+  real-star calibrators on the injected brick F200W frame), but the truth/masked
+  ratio grows with mask radius — r5≈1.10, r15≈1.59, r18≈1.95, **r27≈4.0** — while
+  the recovery applied only a **median 1.096×** correction. Deep/hard stars (large
+  mask radii) are therefore under-corrected by exactly the amount of the measured
+  +0.5–1.2 mag bias.
+
+**So the injection harness has diagnosed a specific, fixable RECOVERY deficiency:**
+wing self-cal applies a near-global (median) correction, but the masked-core bias
+scales steeply with saturation depth (mask radius). The fix belongs in
+`apply_wing_selfcal` — apply a per-star, mask-radius-dependent correction, not a
+single median. This is the likely origin of the CMD "hook."
 
 ## 5. Status / next steps
 1. [ ] `saturation_forward_model.py` — the physics above, CRDS-driven (this doc's §2).

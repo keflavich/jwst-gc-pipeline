@@ -102,6 +102,26 @@ def inject_one(frame_sci, frame_dq, frame_var, full_refs, grid, x, y, flux_img,
     return sat_area, g0lost
 
 
+def baseline_unsat(sci, err, dq, grid, inj, band, pixar_sr, fwhm_pix):
+    """Unsaturated baseline: forced PSF photometry at the injected positions of
+    the UNSATURATED stars (sat_area==0). dmag should be ~0 -- validates the
+    harness end (injection+recovery unbiased where nothing saturates)."""
+    from photutils.psf import PSFPhotometry
+    from astropy.table import Table as _T
+    sel = np.asarray(inj['sat_area']) == 0
+    if sel.sum() < 3:
+        return np.full(len(inj), np.nan)
+    init = _T({'x_0': np.asarray(inj['x'])[sel], 'y_0': np.asarray(inj['y'])[sel]})
+    phot = PSFPhotometry(psf_model=grid, fit_shape=(5, 5),
+                         aperture_radius=max(3, 2 * fwhm_pix))
+    badmask = (dq & (P['DO_NOT_USE'] | P['SATURATED'])) != 0
+    res = phot(np.nan_to_num(sci), error=err, mask=badmask, init_params=init)
+    rec_mag = art.imflux_to_mag(np.asarray(res['flux_fit'], float), band, pixar_sr)
+    out = np.full(len(inj), np.nan)
+    out[np.where(sel)[0]] = rec_mag - np.asarray(inj['mag_inj'])[sel]
+    return out
+
+
 def run(crf, band, detector, field, psfs, out, f_bf=0.3, n_stars=200,
         mag_lo=8.5, mag_hi=14.5, seed=0):
     os.makedirs(out, exist_ok=True)
@@ -191,6 +211,17 @@ def run(crf, band, detector, field, psfs, out, f_bf=0.3, n_stars=200,
     inj['mag_rec'] = rec_mag
     inj['dmag'] = inj['mag_rec'] - inj['mag_inj']       # +ve = recovered too faint
     inj['sep_mas'] = sep_mas
+    # unsaturated baseline (forced daophot-style fit; should be ~0)
+    try:
+        inj['dmag_baseline'] = baseline_unsat(sci, err, dq, grid, inj, band,
+                                              pixar_sr, fwhm_pix)
+        _b = inj['dmag_baseline'][np.isfinite(inj['dmag_baseline'])]
+        if len(_b):
+            print(f'[inj] unsat baseline: N={len(_b)} dmag_med={np.median(_b)*1000:+.0f}mmag '
+                  f'(should be ~0)', flush=True)
+    except (ValueError, RuntimeError, KeyError) as e:
+        print(f'[inj] baseline skipped: {e}', flush=True)
+        inj['dmag_baseline'] = np.full(len(inj), np.nan)
     inj.write(f'{out}/inj_recovery_{field}_{band}_{detector}.ecsv', overwrite=True)
     print(f'[inj] matched {int(ok.sum())}/{len(inj)} within 0.15"', flush=True)
 
