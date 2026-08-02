@@ -358,10 +358,14 @@ def test_a_multi_filter_cutout_says_it_is_not_minutes(capsys):
 # Where the logs go.
 # --------------------------------------------------------------------------
 
-def test_log_dir_reaches_the_submitted_job(capsys):
+def test_log_dir_reaches_the_submitted_job(capsys, monkeypatch):
+    # A site copy is exported by anyone following GETTING_STARTED, and this
+    # test is about the wiring, not about one site's path.
+    monkeypatch.delenv(pipeline_config.ENV_VAR, raising=False)
+    configured = pipeline_config.load()['slurm']['log_dir']
     rp.run_pipeline('2221', '001', filters=['F410M'], dry_run=True)
     out = capsys.readouterr().out
-    assert '--output=/orange/adamginsburg/jwst/logs/reduce_%x_' in out
+    assert f'--output={configured}/reduce_%x_' in out
 
 
 def test_an_array_job_logs_per_task_and_a_single_job_does_not():

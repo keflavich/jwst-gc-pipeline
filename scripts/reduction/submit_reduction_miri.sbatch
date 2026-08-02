@@ -46,12 +46,16 @@ PROPOSAL=${PROPOSAL:-2221}
 FIELD=${FIELD:-002}
 TARGET=${TARGET:-brick}
 # Reuse existing *_cal.fits (-s) if SKIP=1; SKIP=0 re-fits ramps from uncal.
-SKIP=${SKIP:-1}
+# 0 like the NIRISS submitter: a first reduction of an observation has no _cal
+# files to reuse, and SKIP=1 would silently skip Detector1 and Image2.
+SKIP=${SKIP:-0}
 FILTERS=${FILTERS:-"F2550W"}
 
 PIPE_ROOT=${PIPE_ROOT:-}
 if [ -n "$PIPE_ROOT" ]; then
-    export PYTHONPATH="$PIPE_ROOT:$PYTHONPATH"
+    # ${PYTHONPATH:+:...} so an unset PYTHONPATH leaves no trailing
+    # colon, which would put the cwd on sys.path.
+    export PYTHONPATH="$PIPE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
     PIPE="$PIPE_ROOT/jwst_gc_pipeline/reduction/PipelineMIRI.py"
 else
     PIPE="$(python -c 'import os,jwst_gc_pipeline as p; print(os.path.join(os.path.dirname(p.__file__),"reduction","PipelineMIRI.py"))')"

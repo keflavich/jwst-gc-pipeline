@@ -258,8 +258,16 @@ def _make_log_dir(slurm):
     except OSError as problem:
         raise pipeline_config.ConfigError(
             f'slurm.log_dir {log_dir!r} cannot be created ({problem}).  '
-            f'SLURM refuses a job whose log has nowhere to go; point it '
-            f'somewhere writable or remove the key.')
+            f'SLURM refuses a job whose log has nowhere to go; point '
+            f'slurm.log_dir somewhere writable.')
+    # makedirs(exist_ok=True) succeeds on a directory that exists and is not
+    # writable, which is the off-site case: the shipped path is there and
+    # belongs to someone else.
+    if not os.access(log_dir, os.W_OK):
+        raise pipeline_config.ConfigError(
+            f'slurm.log_dir {log_dir!r} exists but is not writable.  SLURM '
+            f'refuses a job whose log has nowhere to go; point slurm.log_dir '
+            f'somewhere writable.')
 
 
 def _job_name(plan, stage_name):
