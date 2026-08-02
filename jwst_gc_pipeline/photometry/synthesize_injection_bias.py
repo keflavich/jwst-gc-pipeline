@@ -102,7 +102,10 @@ def main():
     fig, axes = plt.subplots(nrow, ncol, figsize=(5 * ncol, 4 * nrow), squeeze=False)
     for k, (field, filt, det) in enumerate(fields):
         a = axes[k // ncol][k % ncol]
-        for fbf, c in [(0.0, 'tab:blue'), (0.3, 'tab:red')]:
+        _cmap = {0.0: 'tab:blue', 0.3: 'tab:red', 0.5: 'tab:green',
+                 1.0: 'tab:orange', 2.0: 'tab:purple'}
+        for fbf in sorted(ROOTS):
+            c = _cmap.get(fbf, 'tab:gray')
             t = per_run.get((field, filt, det, fbf))
             if t is None or not len(t):
                 continue
