@@ -24,6 +24,14 @@ need every filter present in one job.
 Every job. `config.yaml` sets both, and every script under `scripts/` bakes them
 into its `#SBATCH` lines; if you write a new submitter, copy those two lines.
 
+Being in the QOS is not the same as being on the account. Without membership,
+`sbatch` answers `Invalid account or account/partition combination specified`
+— ask the group's admin to add you. To see what you have:
+
+```bash
+sacctmgr show assoc user=$USER format=account,qos
+```
+
 | QOS | limit across everything you have running | wall |
 |---|---|---|
 | `astronomy-dept-b` | cpu 6336, mem 49500 G | 4 days |
@@ -61,8 +69,8 @@ because the merge covers every proposal of the target.
 Delay comes from large-CPU node scarcity. A 32-CPU ask waits for a node with 32
 free cores; a 2-CPU ask backfills into the small holes that open constantly. So
 the way to get a run moving is to shrink `--cpus-per-task`, even at the cost of
-more jobs and more wall-clock each. Memory asks are cheap to schedule against,
-so keep them generous and stay clear of an OOM kill.
+more jobs and more wall-clock each. Memory is not what you are queueing for, so
+leave `--mem` alone: the scripts already ask 128 gb, which is generous.
 
 That is why cataloging has several submitters that do the same science at
 different granularities.
@@ -119,13 +127,19 @@ sbatch --array=0-5 --export=ALL --job-name=brick2221-o001-catalog \
        scripts/reduction/submit_cataloging.sbatch
 ```
 
-One filter per task, 32 cpu each; drop `--cpus-per-task` for a field that does
-not need it. Each task runs `m12`…`m6`. **No task sees more than one filter, so
+One filter per task, 32 cpu each. `PARALLEL_WORKERS` defaults to the
+allocation and forks one worker per frame, so cores past the frame count sit
+idle — pass `--cpus-per-task=8` for a field with few exposures per filter.
+
+Each task runs `m12`…`m6`. **No task sees more than one filter, so
 no task runs `m7` or `m8`** — the cross-band catalog needs
 `submit_cataloging_m7.sbatch` afterwards, or stream 2, which submits it for you.
 
 This is what `run_pipeline` submits (`config.yaml`, `stages.catalog.fan_out:
 filter`), so the one-command path also needs that follow-up.
+
+NIRISS has its own cataloging submitter,
+`scripts/reduction/submit_cataloging_niriss.sbatch`, taking the same variables.
 
 ### Stream 2 — per-filter chain, then the cross-band job
 
@@ -191,7 +205,8 @@ and `run_pipeline` does both:
 2. one job, after the array, that reads every filter's part-1 output.
 
 4 cpu, 64 gb, 8 h. Submitting only the array leaves the all-filter catalogs
-unwritten. `--merge-workers` (default 4) must not exceed `--cpus-per-task`. To
+unwritten. `--merge-workers` (default 4) above `--cpus-per-task` oversubscribes
+the allocation rather than failing, so it runs slower rather than crashing. To
 see the index → `(program, filter)` map and the array bounds — this runs nothing
 and prints:
 
@@ -241,10 +256,11 @@ A job that shows `COMPLETED` while its work failed is usually a status read
 through a pipe.
 
 **`TMPDIR`.** The reduce, catalog, merge, m7 and m8 scripts point it at
-node-local `$SLURM_TMPDIR`. `submit_cataloging_perframe_phase.sbatch` does not,
-so a stream-3 run inherits whatever the submitting shell had — set it there.
-Left at `/tmp`, a run fills the node's root filesystem and wedges it for
-everyone else on that node.
+node-local `$SLURM_TMPDIR`, falling back to a scratch path on `/blue`.
+`submit_cataloging_perframe_phase.sbatch` sets it for its own run log only, so a
+stream-3 run inherits whatever the submitting shell had — set it there. If that
+is `/tmp`, the run fills the node's root filesystem and wedges it for everyone
+else on that node.
 
 ## Watching a run
 
@@ -263,7 +279,10 @@ What the pending reasons mean here:
 | `Resources` | the nodes that fit this ask are all busy — a smaller ask backfills sooner |
 | `QOSGrpCpuLimit` | the department's aggregate is saturated. Under `astronomy-dept-b` this is other people's jobs, not the 10-CPU cap, which rejects at submit rather than queueing |
 
-Logs land in `/orange/adamginsburg/jwst/logs`. Array scripts name them
-`<stage>_<jobname>_<jobid>_<task>.out`; the m7 and m8 scripts use `<jobid>`
-alone. A non-array job submitted to an array script writes `4294967294` where
-the task number goes — that is SLURM's "no value".
+Logs land in `/orange/adamginsburg/jwst/logs`, hard-coded in every
+`#SBATCH --output` line — that is the line to change on another machine, since
+SLURM reads it before any shell runs and fails the job at start if the path is
+not writable. Array scripts name them `<stage>_<jobname>_<jobid>_<task>.out`;
+the m7 and m8 scripts drop the task suffix and keep the rest. A non-array job
+submitted to an array script writes `4294967294` where the task number goes —
+that is SLURM's "no value".
