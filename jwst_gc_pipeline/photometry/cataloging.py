@@ -108,6 +108,9 @@ class MergedcatMosaicError(RuntimeError):
     """
 
 
+MERGEDCAT_MOSAIC_OVERRIDE_ENV = 'ALLOW_MISSING_MERGEDCAT_MOSAIC'
+
+
 def _handle_mergedcat_mosaic_failure(phase, module, filt, ex):
     """Fail-closed handler for a failed mergedcat residual / model i2d build.
 
