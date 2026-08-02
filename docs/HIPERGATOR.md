@@ -35,7 +35,7 @@ sacctmgr show assoc user=$USER format=account,qos
 | QOS | limit across everything you have running | wall |
 |---|---|---|
 | `astronomy-dept-b` | cpu 6336, mem 49500 G | 4 days |
-| `adamginsburg` | **cpu 10, mem 80000 M** | |
+| `adamginsburg` | **cpu 10, mem 80000 M** | no limit set |
 
 Both carry `DenyOnLimit`, so a job that would exceed the limit is **rejected
 when you submit it** — `sbatch` prints
@@ -77,13 +77,21 @@ different granularities.
 
 ## Stage 1 — reduce
 
-`submit_reduction.sbatch` (NIRCam), `submit_reduction_niriss.sbatch`,
-`submit_reduction_miri.sbatch`. One array task per filter; 16 cpu, 128 gb, 24 h.
+`submit_reduction.sbatch` (NIRCam) and `submit_reduction_niriss.sbatch`, plus
+`submit_reduction_miri.sbatch` once #236 lands. One array task per filter;
+16 cpu, 128 gb, 24 h.
+
+The scripts default to Sgr C, so name the observation you mean — a copied
+example that sets only `--job-name` reduces Sgr C under a brick job name:
 
 ```bash
-sbatch --array=0-3 --job-name=brick2221-o001-reduce \
+export PROPOSAL=2221 FIELD=001 TARGET=brick
+export FILTERS="F182M F187N F212N F405N"
+sbatch --array=0-3 --export=ALL --job-name=brick2221-o001-reduce \
        scripts/reduction/submit_reduction.sbatch
 ```
+
+`--array` runs 0 to N-1 for N filters.
 
 `SKIP=1` (the config's `skip_step1and2`, `-s` on the driver) reuses the
 `*_cal.fits` on disk. `SKIP=0` re-fits the ramps from `*_uncal`, downloading them
@@ -97,12 +105,16 @@ separately, if you want to halve a task by hand.
 ## Stage 2 — catalog
 
 `scripts/reduction/README.md` calls these **streams**, and this page uses the
-same names. All three fit the same frames the same way; they differ in how the
-work is cut up, and in whether the cross-band passes happen.
+same names. The monolith and the three streams fit the same frames the same way;
+they differ in how the work is cut up, and in whether the cross-band passes
+happen. Each takes the same five variables — `PROPOSAL`, `FIELD`, `TARGET`,
+`EACH_SUFFIX`, `MODULES` — which travel together or the script exits 64.
 
 ### The monolith — one task, every filter
 
 ```bash
+export PROPOSAL=2221 FIELD=001 TARGET=brick MODULES=merged
+export EACH_SUFFIX=destreak_o001_crf
 export FILTERS="F182M,F187N,F212N,F405N,F410M,F466N"   # commas: one task, all filters
 sbatch --export=ALL --job-name=brick2221-o001-catalog \
        scripts/reduction/submit_cataloging.sbatch
@@ -123,6 +135,9 @@ the FWHM of a filter called `all`.
 ### Stream 1 — per-filter array
 
 ```bash
+export PROPOSAL=2221 FIELD=001 TARGET=brick MODULES=merged
+export EACH_SUFFIX=destreak_o001_crf
+export FILTERS="F182M F187N F212N F405N F410M F466N"   # spaces: one per task
 sbatch --array=0-5 --export=ALL --job-name=brick2221-o001-catalog \
        scripts/reduction/submit_cataloging.sbatch
 ```
