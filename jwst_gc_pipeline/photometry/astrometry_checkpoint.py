@@ -49,6 +49,7 @@ from .visit_consensus import (
     measure_reference_tie, pick_reference_anchor_filter, select_reliable_stars,
 )
 from .astrometry_offsets import measure_offset, local_residual_map
+from ..atomic_io import atomic_write, keep_a_copy, locked
 
 # Stages at which a measured shift is EXPECTED to be possible and is CORRECTED
 # (the first checkpoint after the first per-frame photometry).  At every later
@@ -478,7 +479,19 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
 
     Returns the corrected Table.  Raises ``OffsetsTableUpdateError`` when a
     correction matches no row or the corrected table fails validation.
+
+    Read-modify-write, under a lock on ``offsets_path``: the table is shared by
+    every filter of a proposal, so two filters' checkpoints correcting it at
+    once would each read the original and the second write would drop the
+    first's correction.
     """
+    with locked(offsets_path):
+        return _update_offsets_table(offsets_path, corrections, stage,
+                                     out_path=out_path, backup=backup)
+
+
+def _update_offsets_table(offsets_path, corrections, stage, out_path=None,
+                          backup=True):
     from ..reduction.validate_offsets_table import (
         CollapsedOffsetsTableError, assert_offsets_table_sane)
 
@@ -611,9 +624,12 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
     out_path = out_path or offsets_path
     if backup and os.path.exists(out_path):
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        backup_path = f"{out_path}.pre_{stage}_{stamp}"
-        os.replace(out_path, backup_path)
-    tbl.write(out_path, overwrite=True)
+        # A COPY.  Moving the table aside and then rebuilding it leaves a window
+        # with no table at all, and a reader in that window resolves its shift
+        # from the no-table branch -- which means (0, 0).
+        keep_a_copy(out_path, f"{out_path}.pre_{stage}_{stamp}")
+    with atomic_write(out_path) as tmp_path:
+        tbl.write(tmp_path, overwrite=True)
     return tbl
 
 
@@ -741,6 +757,15 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
         basepath, "offsets",
         f"Offsets_JWST_Brick{proposal_id}_consensus.csv")
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    # Read-modify-write on a table shared by every filter of the proposal, so
+    # hold it for the whole upsert (see docs/RACE_CONDITIONS.md).
+    with locked(out_path):
+        return _seed_offsets_table_from_consensus(
+            proposal_id, field, corrections, stage, out_path, base_stamp_for)
+
+
+def _seed_offsets_table_from_consensus(proposal_id, field, corrections, stage,
+                                       out_path, base_stamp_for):
     now = _utcnow_iso()
 
     # index any existing rows by key so corrections ADD-or-INSERT (upsert)
@@ -886,10 +911,12 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
             f"0.5\" (mas-scale expected): {big}")
     tbl = Table(rows)
     if existed:
-        # keep a backup of the pre-merge table (mirrors update_offsets_table)
+        # keep a COPY of the pre-merge table (mirrors update_offsets_table): the
+        # table must never be absent, or a concurrent reader aligns at (0, 0).
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        os.replace(out_path, f"{out_path}.pre_{stage}_{stamp}")
-    tbl.write(out_path, overwrite=True)
+        keep_a_copy(out_path, f"{out_path}.pre_{stage}_{stamp}")
+    with atomic_write(out_path) as tmp_path:
+        tbl.write(tmp_path, overwrite=True)
     return out_path
 
 
