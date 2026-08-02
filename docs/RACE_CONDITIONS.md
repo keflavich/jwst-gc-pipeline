@@ -29,7 +29,8 @@ The tag matters as much as the `os.replace`. With a fixed `.tmp`, N writers
 share one temp path, interleave inside it, and `os.replace` publishes the
 mixture — a well-formed file with wrong contents, which is worse than the
 partial read the rule exists to prevent. A bare pid is not a tag either: this
-storage is shared, and two tasks on different nodes can hold the same pid.
+storage is shared and written from many nodes, and pids repeat both across nodes
+and over time on one — hence the `uuid4`.
 
 `overwrite=True` is not a substitute. astropy's FITS table writer implements it
 by unlinking the file and then opening it *without* the flag, so a second writer

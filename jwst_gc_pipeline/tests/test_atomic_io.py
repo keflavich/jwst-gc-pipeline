@@ -113,3 +113,19 @@ def test_an_astropy_table_round_trips(tmp_path, name):
         assert tmp.endswith(os.path.splitext(name)[1])
         table.write(tmp)
     assert list(Table.read(str(path))['visit']) == [1, 2]
+
+
+def test_two_writers_never_share_a_temporary(tmp_path):
+    """Pids repeat across nodes and over time, so the pid alone is not a tag.
+
+    Two writers on one temporary interleave inside it and `os.replace` publishes
+    the mixture -- a well-formed file with wrong contents, and nothing raises.
+    """
+    path = str(tmp_path / 'offsets.csv')
+    seen = set()
+    for _ in range(50):
+        with atomic_write(path) as tmp:      # same pid every time
+            open(tmp, 'w').write('rows\n')
+        seen.add(tmp)
+    assert len(seen) == 50
+    assert all(name.endswith('.csv') for name in seen)

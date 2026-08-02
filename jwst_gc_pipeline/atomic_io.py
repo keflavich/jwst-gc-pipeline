@@ -74,16 +74,21 @@ def locked(path, timeout=DEFAULT_TIMEOUT, poll=0.2):
 def atomic_write(path):
     """Yield a temporary path to write, and move it onto ``path`` on success.
 
-    The temporary keeps the original **suffix** and carries the pid before it:
-    ``offsets.csv`` is written as ``offsets.tmp1234.csv``.  The suffix matters
-    because ``Table.write`` infers its format from the file name, and a name
-    ending in ``.tmp1234`` raises ``IORegistryError`` instead of writing a CSV.
-    The pid matters so two writers do not collide in the temporary either.
+    The temporary keeps the original **suffix** and carries a per-writer tag
+    before it: ``offsets.csv`` is written as ``offsets.tmp1234a1b2c3d4.csv``.
+
+    The suffix matters because ``Table.write`` infers its format from the file
+    name, and a name ending in ``.tmp1234`` raises ``IORegistryError`` instead
+    of writing a CSV.  The tag matters because two writers sharing one temporary
+    interleave inside it, and ``os.replace`` then publishes the mixture -- a
+    well-formed file with wrong contents, which nothing raises on.  ``uuid4``
+    and not the pid alone: these paths are on shared storage written from many
+    nodes, and pids repeat both across nodes and over time on one.
 
     A body that raises leaves ``path`` untouched and removes the temporary.
     """
     root, suffix = os.path.splitext(path)
-    tmp = f'{root}.tmp{os.getpid()}{suffix}'
+    tmp = f'{root}.tmp{os.getpid()}{uuid.uuid4().hex[:8]}{suffix}'
     try:
         yield tmp
     except BaseException:
