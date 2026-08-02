@@ -110,6 +110,9 @@ BANDS = {
 VEGA_ZEROPOINT_JY = {
     'F212N': 674.83167374035,
     'F200W': 757.65380461946,
+    'F115W': 1746.1178757573,     # SVO JWST/NIRCam.* ZeroPoint (Vega, Jy)
+    'F150W': 1172.057562686,
+    'F405N': 206.96939908611,
 }
 
 PSF_DIR = '/blue/adamginsburg/adamginsburg/jwst/brick/psfs'
