@@ -57,7 +57,7 @@ module exists to remove.*
 | Per-frame product names | `saturated_star_finding.py::remove_saturated_stars`, `crowdsource_catalogs_long.py::load_or_make_satstar_catalog` | concurrent runs differing only by post-processing options wrote the same filenames | fixed — the iteration label is part of the name |
 | Per-phase seed caches | `atomic_io.py::write_table_atomic` | several caches are keyed by (filter, module) rather than by shard, so every shard of a phase rebuilt and wrote the same path | fixed — temp sibling named for the writer, then `os.replace` |
 | Offsets / consensus tables | `astrometry_checkpoint.py::update_offsets_table` | see below | **open** |
-| PSF grid cache | `crowdsource_catalogs_long.py::get_psf_model` | see below | **open** |
+| PSF grid cache | `crowdsource_catalogs_long.py::get_psf_model` | see below | fixed — built in a private directory, moved into the cache when finished |
 
 ### Open: the offsets and consensus tables
 
@@ -86,7 +86,7 @@ left brick-1182 visit-001 about 20″ off (`CLAUDE.md`).
 
 Fix: write atomically as above, and take a lock across the read-modify-write.
 
-### Open: the PSF grid cache
+### Fixed: the PSF grid cache
 
 ```python
 if os.path.exists(_psf_fn):
@@ -95,15 +95,19 @@ if os.path.exists(_psf_fn):
 nrc.psf_grid(..., save=True, outdir=_psf_outdir)   # writes in place
 ```
 
-`psf_grid(save=True)` writes the FITS directly into the shared cache directory,
-so the file exists from the moment it is created until it is complete. A
-concurrent task that checks in that window sees it and reads a truncated file.
+`psf_grid(save=True)` names its own output files, so it cannot be handed a
+temporary path. It used to write them straight into the shared cache, where each
+file exists from creation until complete — and a concurrent task checking
+`os.path.exists` in that window reads a truncated grid.
 
-The same window costs work: array tasks starting together all miss the cache,
-all build the same grid (17–20 minutes, ~300 GB peak each), and all write the
-same filename.
+The build now goes into a private `.building-<host>-<pid>/` inside the cache,
+and each finished file is moved into place with `os.replace`
+(`atomic_io.publish_into`), so a file a reader can see is a file that is done.
 
-Fix: build into a temp sibling and `os.replace` into the cache.
+The window costs work as well as correctness: array tasks starting together all
+miss the cache, all build the same grid (17–20 minutes, ~300 GB peak each), and
+all write the same name. Publishing atomically does not stop the duplicated
+work — only the corrupt read.
 
 ## Races that are structural, not bugs
 

@@ -9,6 +9,8 @@ The tools for the shapes described in ``docs/RACE_CONDITIONS.md``:
   what this pipeline writes.
 * :func:`locked` — serialise a read-modify-write, so two tasks correcting the
   same table do not each read the original and drop one another's change.
+* :func:`publish_into` — for a writer that names its own output files and so
+  cannot be handed a temporary path.
 
 The lock is a file created with ``O_EXCL``, which is atomic on Lustre (where the
 survey lives) and needs no ``flock`` mount option.  It records who holds it, so a
@@ -27,6 +29,17 @@ import time
 DEFAULT_TIMEOUT = 120.0
 
 
+def _writer_tag():
+    """Something no two writers share, for a temporary name.
+
+    A pid is not enough twice over: this storage is shared between nodes, which
+    can hold the same pid at once, and a pid is reused over time on one node.
+    ``uuid4`` settles both.  (:func:`locked` records host, pid and job instead —
+    that name is read by a person diagnosing a stale lock, not compared.)
+    """
+    return f'{os.getpid()}{uuid.uuid4().hex[:8]}'
+
+
 class LockTimeout(RuntimeError):
     """Someone else has held the lock for longer than the timeout allows."""
 
@@ -39,8 +52,8 @@ def locked(path, timeout=DEFAULT_TIMEOUT, poll=0.2):
     the body raises.
     """
     lock_path = f'{path}.lock'
-    holder = f'{socket.gethostname()} pid {os.getpid()} ' \
-             f'job {os.environ.get("SLURM_JOB_ID", "-")}'
+    holder = (f'{socket.gethostname()} pid {os.getpid()} '
+              f'job {os.environ.get("SLURM_JOB_ID", "-")}')
     deadline = time.monotonic() + timeout
     while True:
         try:
@@ -88,13 +101,18 @@ def atomic_write(path):
     A body that raises leaves ``path`` untouched and removes the temporary.
     """
     root, suffix = os.path.splitext(path)
-    tmp = f'{root}.tmp{os.getpid()}{uuid.uuid4().hex[:8]}{suffix}'
+    tmp = f'{root}.tmp{_writer_tag()}{suffix}'
     try:
         yield tmp
     except BaseException:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(tmp)
         raise
+    if not os.path.exists(tmp):
+        raise FileNotFoundError(
+            f'nothing was written to {tmp}, so there is nothing to move onto '
+            f'{path}.  The body of `with atomic_write(...) as tmp` has to write '
+            f'to tmp, not to the original path.')
     os.replace(tmp, path)
 
 
@@ -155,6 +173,42 @@ def write_table_atomic(table, path, **kwargs):
 
 
 MERGEDCAT_MOSAIC_OVERRIDE_ENV = 'ALLOW_MISSING_MERGEDCAT_MOSAIC'
+
+
+@contextlib.contextmanager
+def publish_into(directory):
+    """Yield a private directory whose files land in ``directory`` at the end.
+
+    For a writer that names its own output files — ``psf_grid(save=True,
+    outdir=...)`` — so it cannot be handed a temporary path.  It writes into a
+    private subdirectory instead, and each finished file is moved into place
+    with ``os.replace``, so a concurrent reader's ``os.path.exists`` check is
+    never true for a file that is still being written.
+
+    Publication is atomic **per file**, not per set: a reader can see some of a
+    build's grids and not the rest.  That is sufficient here because every
+    consumer resolves one ``(filter, detector)`` grid and loads exactly that
+    path, and the one place that wants a whole channel rebuilds when any of its
+    grids is missing.  A consumer that enumerated the cache and assumed a
+    complete set would need a directory rename instead.
+
+    A body that raises leaves ``directory`` untouched; the private directory and
+    whatever is in it are removed.  A killed process leaves its
+    ``.building-<host>-<pid>/`` behind — debris rather than corruption, since
+    readers only ever see published names, but PSF grids are large and it is
+    safe to delete.
+    """
+    building = os.path.join(directory, f'.building-{_writer_tag()}')
+    os.makedirs(building, exist_ok=True)
+    try:
+        yield building
+    except BaseException:
+        shutil.rmtree(building, ignore_errors=True)
+        raise
+    for name in sorted(os.listdir(building)):
+        os.replace(os.path.join(building, name),
+                   os.path.join(directory, name))
+    shutil.rmtree(building, ignore_errors=True)
 
 
 def keep_a_copy(path, backup_path):

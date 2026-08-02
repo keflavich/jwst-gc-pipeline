@@ -6,12 +6,13 @@ a reader that finds no offsets table aligns its frame at (0, 0) and says nothing
 """
 import multiprocessing
 import os
+import pathlib
 import time
 
 import pytest
 
 from jwst_gc_pipeline.atomic_io import (LockTimeout, atomic_write, keep_a_copy,
-                                        locked)
+                                        locked, publish_into)
 
 
 def test_a_reader_never_sees_a_partial_file(tmp_path):
@@ -129,3 +130,63 @@ def test_two_writers_never_share_a_temporary(tmp_path):
         seen.add(tmp)
     assert len(seen) == 50
     assert all(name.endswith('.csv') for name in seen)
+# --- a writer that names its own files --------------------------------------
+
+def test_files_appear_in_the_cache_only_when_finished(tmp_path):
+    """psf_grid(save=True) names its own output, so it cannot be handed a
+    temporary path; it gets a private directory instead."""
+    cache = tmp_path / 'psfs'
+    cache.mkdir()
+    with publish_into(str(cache)) as build_dir:
+        (pathlib.Path(build_dir) / 'nrca1_f405n_grid.fits').write_text('half')
+        # mid-build: nothing a reader checks for is there yet
+        assert list(cache.glob('*.fits')) == []
+    assert [p.name for p in cache.glob('*.fits')] == ['nrca1_f405n_grid.fits']
+    assert list(cache.glob('.building-*')) == []
+
+
+def test_an_abandoned_build_leaves_the_cache_alone(tmp_path):
+    cache = tmp_path / 'psfs'
+    cache.mkdir()
+    (cache / 'existing.fits').write_text('good')
+    with pytest.raises(RuntimeError):
+        with publish_into(str(cache)) as build_dir:
+            (pathlib.Path(build_dir) / 'partial.fits').write_text('half')
+            raise RuntimeError('MAST timed out')
+    assert [p.name for p in cache.iterdir()] == ['existing.fits']
+
+
+def test_a_writer_tag_is_more_than_a_pid():
+    """Shared storage across nodes, and pid reuse over time on one."""
+    from jwst_gc_pipeline.atomic_io import _writer_tag
+    tags = {_writer_tag() for _ in range(50)}      # same pid throughout
+    assert len(tags) == 50
+    assert all(tag.startswith(str(os.getpid())) for tag in tags)
+
+
+def test_the_lock_file_names_a_person_readable_holder(tmp_path):
+    """The lock is read by someone deciding whether it is stale, so it carries
+    host/pid/job rather than the uniqueness token."""
+    import socket
+    path = str(tmp_path / 'offsets.csv')
+    with locked(path):
+        held = open(f'{path}.lock').read()
+    assert socket.gethostname() in held and str(os.getpid()) in held
+
+
+def test_the_temporary_and_the_build_dir_both_carry_it(tmp_path):
+    with atomic_write(str(tmp_path / 'offsets.csv')) as tmp:
+        assert os.path.basename(tmp).startswith('offsets.tmp')
+        open(tmp, 'w').write('rows\n')
+    cache = tmp_path / 'psfs'
+    cache.mkdir()
+    with publish_into(str(cache)) as build_dir:
+        assert os.path.basename(build_dir).startswith('.building-')
+
+
+def test_writing_nothing_says_so(tmp_path):
+    """os.replace on a temporary that was never written raises FileNotFoundError
+    naming two paths and no cause."""
+    with pytest.raises(FileNotFoundError, match='nothing was written'):
+        with atomic_write(str(tmp_path / 'offsets.csv')):
+            pass
