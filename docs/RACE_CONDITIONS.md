@@ -16,7 +16,7 @@ not at all.
 writer**, then `os.replace`, which is atomic within a filesystem: a reader sees
 either the old file or the new one, never a partial one and never nothing.
 
-For an astropy Table, call `cataloging.py::write_table_atomic`, which does this.
+For an astropy Table, call `atomic_io.py::write_table_atomic`, which does this.
 By hand it is:
 
 ```python
@@ -54,7 +54,7 @@ module exists to remove.*
 | Metadata coherence | same, finalize mode | a finalize lists the marker directory before Lustre has settled and crashes on a marker that does exist | fixed — 180 s settle before the strict verify |
 | All-filter merge | `merge_catalogs.py::main`, `submit_merge.sbatch` | N array tasks each ran the all-filter merge: N writers of one file, most reading inputs their siblings had not written yet | fixed — an array task stops after its own filter; the all-filter merge is a separate job with `afterok` |
 | Per-frame product names | `saturated_star_finding.py::remove_saturated_stars`, `crowdsource_catalogs_long.py::load_or_make_satstar_catalog` | concurrent runs differing only by post-processing options wrote the same filenames | fixed — the iteration label is part of the name |
-| Per-phase seed caches | `cataloging.py::write_table_atomic` | several caches are keyed by (filter, module) rather than by shard, so every shard of a phase rebuilt and wrote the same path | fixed — temp sibling named for the writer, then `os.replace` |
+| Per-phase seed caches | `atomic_io.py::write_table_atomic` | several caches are keyed by (filter, module) rather than by shard, so every shard of a phase rebuilt and wrote the same path | fixed — temp sibling named for the writer, then `os.replace` |
 | Offsets / consensus tables | `astrometry_checkpoint.py::update_offsets_table` | see below | **open** |
 | PSF grid cache | `crowdsource_catalogs_long.py::get_psf_model` | see below | **open** |
 
