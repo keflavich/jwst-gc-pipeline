@@ -361,7 +361,7 @@ def test_a_cutout_without_the_catalog_stage_is_refused():
     run would reduce the whole observation -- hours on the queue when minutes
     were asked for.
     """
-    with pytest.raises(ValueError, match='needs the catalog stage'):
+    with pytest.raises(rp.CutoutStageError, match='needs the catalog stage'):
         rp.run_pipeline('2221', '001', filters=['F410M'],
                         cutout_region='266.535,-28.705,20',
                         stages=('reduce',), dry_run=True)
@@ -462,3 +462,13 @@ def test_the_refusals_print_a_message_rather_than_a_traceback(capsys,
     with pytest.raises(SystemExit):
         rp.main()
     assert 'needs the catalog stage' in capsys.readouterr().err
+
+
+def test_a_cutout_keeps_the_default_stage_set(capsys):
+    """The documented one-liner passes no stages, so merge is in the set; it is
+    dropped with a note rather than refused."""
+    rp.run_pipeline('2221', '001', filters=['F410M'],
+                    cutout_region='266.535,-28.705,20', dry_run=True)
+    out = capsys.readouterr().out
+    assert 'a cutout stops after cataloging' in out.lower()
+    assert '=== merge ===' not in out

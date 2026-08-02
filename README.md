@@ -31,16 +31,21 @@ python -m jwst_gc_pipeline.run_pipeline --proposal 2221 --obsid 001
 On a SLURM cluster each stage is submitted to wait on the one before; otherwise
 they run here, in order. `--dry-run` prints the commands and submits nothing.
 
-To try reduction and photometry on a small piece first, give it a region — a
-DS9 region file, or `ra,dec,size` (or `ra,dec,width,height`) in arcseconds. This
-runs in your shell and takes minutes:
+To try the photometry on a small piece first, give it a region — a DS9 region
+file, or `ra,dec,size` (or `ra,dec,width,height`) in arcseconds. The cutout
+restricts **cataloging**; stage 1 always reduces the whole observation, so
+reduce one filter first and then catalog a corner of it:
 
 ```bash
+# once, and not quick: a full Image3 of this filter
 python -m jwst_gc_pipeline.run_pipeline --proposal 2221 --obsid 001 \
-       --filters F410M --cutout-region 266.5350,-28.7050,20
-```
+       --filters F410M --stages reduce
 
-A cutout stops after cataloging.
+# minutes, in your shell
+python -m jwst_gc_pipeline.run_pipeline --proposal 2221 --obsid 001 \
+       --filters F410M --stages catalog \
+       --cutout-region 266.5350,-28.7050,20
+```
 
 From Python, the same thing:
 

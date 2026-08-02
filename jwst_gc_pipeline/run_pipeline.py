@@ -383,9 +383,9 @@ def run_pipeline(proposal, obsid, cutout_region=None, instrument='nircam',
                 f"--cutout-region needs the catalog stage: it restricts the "
                 f"cataloging, and stage 1 always reduces the whole "
                 f"observation.  Asked for stages {list(stages)}.  Reduce first "
-                f"(--stages reduce), then run the cutout "
-                f"(--stages catalog --cutout-region ...).")
-        if 'merge' in stages and tuple(stages) != tuple(STAGES):
+                f"WITHOUT the region (--stages reduce, on its own), then "
+                f"catalog with it (--stages catalog --cutout-region ...).")
+        if 'merge' in stages and set(stages) != set(STAGES):
             # Asked for by name.  A cutout writes under cutouts/<label>/, which
             # the merge does not read, so it would run on nothing.  (Left in the
             # default set, it is dropped with a note below -- the documented
