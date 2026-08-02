@@ -113,6 +113,30 @@ scales steeply with saturation depth (mask radius). The fix belongs in
 `apply_wing_selfcal` — apply a per-star, mask-radius-dependent correction, not a
 single median. This is the likely origin of the CMD "hook."
 
+## 4c. f_bf calibration — NEGATIVE result (2026-08-02)
+
+Injected into gc2211 (NGROUPS=2) at f_bf ∈ {0, 0.5, 1, 2}, recovered at fit_shape
+31 vs 81. R = flux₈₁/flux₃₁ (`calibrate_fbf.py`):
+
+| f_bf | R(81/31) | N |
+|---|---|---|
+| 0.0 | 1.007 | 90 |
+| 0.5 | 1.010 | 83 |
+| 1.0 | 1.009 | 77 |
+| 2.0 | 1.014 | 79 |
+
+Target (real gc2211, #210 matched-r_core) = **1.10–1.18**. The modelled
+nearest-neighbour charge migration is **flat in f_bf** and never approaches the
+real value — injected gc2211 stars behave brick-like (R≈1.0), NOT like real
+gc2211 (R≈1.1–1.18). Consistent with the fleet (f_bf 0→0.3 moved recovery bias
+only 3–4 mmag). **Conclusion:** charge migration *as modelled* is not the driver
+of the #210 footprint sensitivity; that sensitivity is a **real-data effect** the
+forward model does not reproduce — most likely PSF-wing **model mismatch** (STPSF
+theoretical wings vs the real, broader wings — the Jay empirical-PSF-wing work),
+and/or real charge migration that is stronger/longer-range than a 4-neighbour
+spill. So f_bf stays a nuisance knob (kept small); the recovery-bias story (§4b)
+is driven by wing-selfcal under-correction, not charge migration.
+
 ## 5. Status / next steps
 1. [ ] `saturation_forward_model.py` — the physics above, CRDS-driven (this doc's §2).
 2. [ ] injection+recovery driver (extend `artificial_stars.py` path) → recovered/injected vs sat-depth.
