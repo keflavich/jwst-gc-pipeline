@@ -99,6 +99,25 @@ def test_allowed_entries_still_match():
                        + "\n  ".join(stale))
 
 
+#: Which tree each field lives on.  The `localdata` check below cannot notice a
+#: blue<->orange flip for brick or cloudc, because /orange/.../brick is a symlink
+#: into the blue tree -- so the two fields that have one are exactly the two it
+#: is blind to.  Pin them here instead, so moving a field has to be deliberate.
+EXPECTED_ROOTS = {
+    'arches': 'orange', 'brick': 'blue', 'cloudc': 'blue',
+    'cloudef': 'orange', 'gc2211': 'orange', 'm4': 'orange', 'm92': 'orange',
+    'ngc6334': 'orange', 'ngc6397': 'orange', 'omegacen': 'orange',
+    'quintuplet': 'orange', 'sgra': 'orange', 'sgrb2': 'orange',
+    'sgrc': 'orange', 'sickle': 'orange', 'w51': 'orange', 'wd1': 'orange',
+    'wd2': 'orange',
+}
+
+
+def test_every_field_keeps_its_registered_tree():
+    registered = {f.name: f.root for f in field_registry.FIELDS}
+    assert registered == EXPECTED_ROOTS
+
+
 def test_registry_basepath_names_the_field():
     """Every registered field resolves to a directory named for it."""
     for field in field_registry.FIELDS:

@@ -141,7 +141,9 @@ def apply_crds_environment(config=None):
     exported -- by ``run_pipeline``, by a submit script, or by hand -- wins over
     the configured one, so a machine with its own cache needs no edit here.
 
-    Returns what CRDS ends up with, for logging.
+    Returns the cache and server it settled on, for logging.  Only those two:
+    ``CRDS_USERNAME`` and ``CRDS_PASSWORD`` are also real CRDS variables, and a
+    SLURM log is a wider audience than the process.
     """
     for key, value in environment(config if config is not None else load()).items():
         # `not os.environ.get`, rather than setdefault: an exported-but-empty
@@ -149,4 +151,5 @@ def apply_crds_environment(config=None):
         # download tens of GB into a quota-limited home directory.
         if key.startswith('CRDS_') and not os.environ.get(key):
             os.environ[key] = value
-    return {key: os.environ[key] for key in os.environ if key.startswith('CRDS_')}
+    return {key: os.environ[key] for key in ('CRDS_PATH', 'CRDS_SERVER_URL')
+            if key in os.environ}

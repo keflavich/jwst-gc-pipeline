@@ -1019,6 +1019,11 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
                 filtername = [x for x in filters if 'W' not in x][0]
     if field is None:
         field = mod.meta.observation.observation_number
+    if proposal_id is None:
+        # `mod` is open just above; without this the registry lookup below
+        # reports "proposal None ... known observations: []", which names the
+        # wrong problem.
+        proposal_id = mod.meta.observation.program_number
     if basepath is None:
         # Every in-pipeline caller passes basepath.  Reaching here means an
         # ad-hoc call, so name the field from the registry rather than guessing
