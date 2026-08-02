@@ -66,10 +66,18 @@ def build_valid_mask(sci, dq, fwhm_pix):
     return ~bad
 
 
-def inject_one(frame_sci, frame_dq, frame_var, refs, grid, x, y, flux_img,
+def _slice_refs(full, box):
+    y0, y1, x0, x1 = box
+    return dict(gain=full['gain'][y0:y1, x0:x1],
+                fullwell=full['fullwell'][y0:y1, x0:x1],
+                coeffs=full['coeffs'][:, y0:y1, x0:x1],
+                detector=full['detector'])
+
+
+def inject_one(frame_sci, frame_dq, frame_var, full_refs, grid, x, y, flux_img,
                photmjsr, gain_med, ngroups, tgroup, f_bf, local_bkg_rate_e):
     """Forward-model one star and add it onto the frame in place. Returns
-    (sat_area, group0_lost, injected_total_flux_img)."""
+    (sat_area, group0_lost)."""
     ny, nx = frame_sci.shape
     x0 = max(0, int(round(x)) - STAMP); x1 = min(nx, int(round(x)) + STAMP + 1)
     y0 = max(0, int(round(y)) - STAMP); y1 = min(ny, int(round(y)) + STAMP + 1)
@@ -77,8 +85,7 @@ def inject_one(frame_sci, frame_dq, frame_var, refs, grid, x, y, flux_img,
     stamp = np.clip(grid.evaluate(xx, yy, flux_img, x, y), 0, None)   # MJy/sr
     # true count-rate scene (e-/s): star + local background
     rate_e = stamp / photmjsr * gain_med + local_bkg_rate_e
-    box = (y0, y1, x0, x1)
-    cutrefs = sfm.load_detector_refs(refs['detector'], box=box)
+    cutrefs = _slice_refs(full_refs, (y0, y1, x0, x1))     # slice preloaded refs
     sim = sfm.simulate_cal(rate_e, cutrefs, ngroups=ngroups, tgroup=tgroup,
                            f_bf=f_bf)
     # star-only cal contribution (subtract the background we added in)
@@ -95,8 +102,8 @@ def inject_one(frame_sci, frame_dq, frame_var, refs, grid, x, y, flux_img,
     return sat_area, g0lost
 
 
-def run(crf, band, detector, field, psfs, out, f_bf=0.3, n_stars=60,
-        mag_lo=9.0, mag_hi=18.0, seed=0):
+def run(crf, band, detector, field, psfs, out, f_bf=0.3, n_stars=200,
+        mag_lo=8.5, mag_hi=14.5, seed=0):
     os.makedirs(out, exist_ok=True)
     rng = np.random.default_rng(seed)
     fh = fits.open(crf)
@@ -123,11 +130,12 @@ def run(crf, band, detector, field, psfs, out, f_bf=0.3, n_stars=60,
     mags = np.linspace(mag_lo, mag_hi, len(xs))
     rng.shuffle(mags)
     local_bkg_rate_e = np.nanmedian(np.clip(sci, 0, None)) / photmjsr * gain_med
+    full_refs = sfm.load_detector_refs(detector)      # load CRDS refs ONCE (full det)
 
     inj = []
     for x, y, mag in zip(xs, ys, mags):
         flux_img = float(art.mag_to_imflux(mag, band, pixar_sr))
-        sa, g0 = inject_one(sci, dq, var, sfm.load_detector_refs(detector), grid,
+        sa, g0 = inject_one(sci, dq, var, full_refs, grid,
                             x, y, flux_img, photmjsr, gain_med, ngroups, tgroup,
                             f_bf, local_bkg_rate_e)
         inj.append((x, y, mag, flux_img, sa, g0))
