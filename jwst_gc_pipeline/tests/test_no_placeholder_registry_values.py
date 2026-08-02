@@ -16,17 +16,12 @@ answer to "what frame is this tied to?" and outlives the run that wrote it.
 These tests fail if a placeholder returns to the registry.  The complementary
 guard is in ``provenance_header_cards``, which refuses to stamp one.
 """
-import os
-
 import pytest
 import yaml
 
 from jwst_gc_pipeline import fields as field_registry
 from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
     looks_like_placeholder, provenance_header_cards)
-
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__))))
 
 
 def _strings(node, trail=()):
@@ -98,14 +93,27 @@ def test_what_counts_as_a_placeholder(value, placeholder):
 
 
 def test_the_guard_catches_the_string_it_was_written_for():
-    """Run the guard's own predicate over the registry as it was before this
-    change: it has to find both 2221 rows."""
-    import subprocess
-    before = subprocess.run(
-        ['git', 'show', 'origin/main:jwst_gc_pipeline/fields.yaml'],
-        capture_output=True, text=True, cwd=REPO_ROOT)
-    if before.returncode != 0:
-        pytest.skip('origin/main is not fetched here')
-    caught = [value for _, value in _strings(yaml.safe_load(before.stdout))
+    """The predicate, run over the registry as it stood when the guard was
+    written.  Both 2221 rows have to be caught.
+
+    Inline rather than read from git: a test that reads `origin/main` passes on
+    this branch and fails on the branch it creates, the moment the sentinel is
+    gone from main -- and skips silently in a shallow checkout, which turns a
+    broken assertion into no test at all.
+    """
+    as_it_was = yaml.safe_load("""
+    fields:
+      brick:
+        observations:
+          '2221':
+            reference_frame: THIS_IS_A_BUG_IF_YOU_USE_THIS
+          '1182':
+            reference_frame: VIRAC2
+      cloudc:
+        observations:
+          '2221':
+            reference_frame: THIS_IS_A_BUG_IF_YOU_USE_THIS
+    """)
+    caught = [value for _, value in _strings(as_it_was)
               if looks_like_placeholder(value)]
-    assert len(caught) == 2 and all('BUG' in value for value in caught)
+    assert caught == ['THIS_IS_A_BUG_IF_YOU_USE_THIS'] * 2
