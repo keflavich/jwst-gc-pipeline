@@ -32,8 +32,8 @@ On a SLURM cluster each stage is submitted to wait on the one before; otherwise
 they run here, in order. `--dry-run` prints the commands and submits nothing.
 
 To try reduction and photometry on a small piece first, give it a region — a
-DS9 region file, or RA, Dec and a size in arcseconds. This runs in your shell
-and takes minutes:
+DS9 region file, or `ra,dec,size` (or `ra,dec,width,height`) in arcseconds. This
+runs in your shell and takes minutes:
 
 ```bash
 python -m jwst_gc_pipeline.run_pipeline --proposal 2221 --obsid 001 \
@@ -56,18 +56,19 @@ Under the field's directory (`fields.yaml` says where each field lives):
 | | |
 |---|---|
 | `<FILTER>/pipeline/*-merged_i2d.fits` | the mosaic for one filter |
-| `<FILTER>/*_resbgsub_m*_daophot_basic.fits` | per-exposure catalogs, one per fitting pass |
-| `catalogs/basic_merged_indivexp_photometry_tables_merged*.fits` | the multi-wavelength catalog |
+| `<FILTER>/*_m*_daophot_basic.fits` | per-exposure catalogs, one per fitting pass (the later passes carry a `resbgsub` token, the earlier ones do not) |
+| `catalogs/basic_merged_indivexp_photometry_tables_merged.fits` | the multi-wavelength catalog |
 
-The deepest catalog — `..._resbgsub_m8_dedup.fits`, which fits every band at
-each source's position even where that band did not detect it — needs the
-cross-band passes, and those need every filter cataloged in **one** job. The
-default submits one job per filter, so it produces the merged catalog above but
-not the cross-band one.
+A deeper catalog exists:
+`catalogs/basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_dedup.fits`,
+which fits every band at each source's position even where that band detected
+nothing. It comes from the `m7` and `m8` passes inside **cataloging**, which need
+every filter in one job — and the default submits one job per filter, so a plain
+run writes the first file and not this one.
 [`scripts/reduction/submit_cataloging_chain.sh`](scripts/reduction/submit_cataloging_chain.sh)
 runs the per-filter jobs and then the cross-band pass over all of them.
 
-## The two files you edit
+## The files you edit
 
 - **[`jwst_gc_pipeline/fields.yaml`](jwst_gc_pipeline/fields.yaml)** — every
   target: its data directory, observations, filters, and reference catalog.
@@ -77,12 +78,11 @@ runs the per-filter jobs and then the cross-band pass over all of them.
   how it runs: account, QOS, per-stage CPUs, memory, walltime, and how far each
   stage fans out. It ships with HiPerGator's settings; copy it and point
   `GC_PIPELINE_CONFIG` at your copy to run elsewhere.
-
-A NIRCam field also declares how it is aligned — which absolute frame, and where
-its shifts come from — in
-[`reduction/alignment_config.py`](jwst_gc_pipeline/reduction/alignment_config.py).
-A field with no entry is reduced at the raw `assign_wcs` pointing and says so in
-the log.
+- A NIRCam field also declares how it is aligned — which absolute frame, and
+  where its shifts come from — in
+  [`reduction/alignment_config.py`](jwst_gc_pipeline/reduction/alignment_config.py).
+  A field with no entry is reduced at the raw telescope pointing and says so in
+  the log.
 
 ## The three stages
 
@@ -91,6 +91,10 @@ the log.
 | **reduce** | JWST's `calwebb_image3` mosaicking, one filter at a time. Each exposure's WCS is corrected to the reference frame first, so the mosaic and the per-exposure products inherit the same astrometry. | `reduction/PipelineRerunNIRCAM-LONG.py`, `PipelineMIRI.py`, `PipelineRerunNIRISS.py` |
 | **catalog** | PSF photometry on every exposure, in five numbered passes (`m12`, `m3`…`m6`): detect, fit, subtract, re-seed on the residual. Saturated stars are fitted and removed here. Two further passes, `m7` and `m8`, work across bands and need every filter in one job. | `photometry/crowdsource_catalogs_long.py` → `photometry/cataloging.py` |
 | **merge** | Combines each filter's per-exposure catalogs into one catalog per filter, then those into the multi-wavelength catalog. | `photometry/merge_catalogs.py` |
+
+MIRI reduces locally: it has a driver but no reduce submit script, so
+`--instrument miri` under a SLURM config stops at stage 1 and says so. Its
+cataloging and merge stages do have scripts.
 
 [`PHOTOMETRY_PIPELINE_BRIEF.md`](PHOTOMETRY_PIPELINE_BRIEF.md) describes each
 pass and its parameters; [`PHOTOMETRY_PIPELINE.md`](PHOTOMETRY_PIPELINE.md) has
@@ -105,15 +109,17 @@ breaking either produces a catalog that looks right and is not:
    (`photometry.astrometry_offsets.measure_offset`), and map it per tile — one
    number for a whole field hides half a field being wrong. Matching each source
    to its nearest neighbour and taking the median fails silently against a dense
-   reference catalog. Refining a small offset has its own rules; read
-   `CLAUDE.md` before trusting a number.
+   reference catalog. Refining a small offset against a dense catalog has its
+   own rules — see "⚠ Histogram-stacking is density-immune" in
+   [`CLAUDE.md`](CLAUDE.md) before trusting a number.
 2. Read a frame's **GWCS** — the exact distortion model in its ASDF extension —
    through [`frame_wcs()`](jwst_gc_pipeline/frame_wcs.py). The approximate WCS
    in the FITS header beside it (SIP) is off by 5–8 mas on older products.
 
 Before changing anything that touches alignment, read
 [`reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md`](jwst_gc_pipeline/reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md);
-`CLAUDE.md` states the rules in full, with the failures that produced them.
+[`CLAUDE.md`](CLAUDE.md) states the rules in full, with the failures that
+produced them.
 
 ## The rest of the package
 
