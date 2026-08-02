@@ -19,8 +19,12 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from astropy.table import Table, vstack
 
-ROOTS = {0.0: '/blue/adamginsburg/adamginsburg/tmp/satinject_fleet/fbf0.0',
-         0.3: '/blue/adamginsburg/adamginsburg/tmp/satinject_fleet/fbf0.3'}
+import json as _json
+# ROOTS maps an f_bf label -> fleet output dir. Override via SYN_ROOTS env
+# (JSON, e.g. '{"2.0": "/.../final"}').
+ROOTS = {float(k): v for k, v in _json.loads(os.environ.get('SYN_ROOTS', _json.dumps(
+    {'0.0': '/blue/adamginsburg/adamginsburg/tmp/satinject_fleet/fbf0.0',
+     '0.3': '/blue/adamginsburg/adamginsburg/tmp/satinject_fleet/fbf0.3'}))).items()}
 OUT = os.environ.get('SYN_OUT', '/blue/adamginsburg/adamginsburg/tmp/satinject_fleet/synthesis')
 REGIMES = [(1, 30, 'mild'), (30, 150, 'moderate'), (150, 500, 'deep'), (500, 1e9, 'hard')]
 
