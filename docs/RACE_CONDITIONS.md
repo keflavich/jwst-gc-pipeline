@@ -12,19 +12,32 @@ not at all.
 
 ## The rule
 
-**Never write a shared path in place.** Write a temp sibling, then `os.replace`,
-which is atomic within a filesystem: a reader sees either the old file or the
-new one, never a partial one and never nothing.
+**Never write a shared path in place.** Write a temp sibling **named for the
+writer**, then `os.replace`, which is atomic within a filesystem: a reader sees
+either the old file or the new one, never a partial one and never nothing.
+
+For an astropy Table, call `cataloging.py::write_table_atomic`, which does this.
+By hand it is:
 
 ```python
-tmp = f'{path}.tmp{os.getpid()}'
+tmp = os.path.join(directory, f'.{root}.tmp{os.getpid()}{uuid4().hex[:8]}{ext}')
 table.write(tmp, overwrite=True, format='fits')
 os.replace(tmp, path)
 ```
 
-`.tmp{pid}` rather than a fixed `.tmp`, so two writers do not collide in the
-temp file either. `merge_catalogs.py::load_satstar_catalog` (the consolidated satstar cache)
-and `prov_sidecar.py::write_sidecar` are the implementations to copy.
+The tag matters as much as the `os.replace`. With a fixed `.tmp`, N writers
+share one temp path, interleave inside it, and `os.replace` publishes the
+mixture — a well-formed file with wrong contents, which is worse than the
+partial read the rule exists to prevent. A bare pid is not a tag either: this
+storage is shared, and two tasks on different nodes can hold the same pid.
+
+`overwrite=True` is not a substitute. astropy's FITS table writer implements it
+by unlinking the file and then opening it *without* the flag, so a second writer
+that recreates the file in between kills the first with "File ... already
+exists".
+
+`merge_catalogs.py::load_satstar_catalog` (the consolidated satstar cache) and
+`prov_sidecar.py::write_sidecar` are the same pattern written out by hand.
 
 The corollary: **a missing input is not a measurement.** Code that reads a
 shared file must distinguish "the file is not there" from "the file says zero",
@@ -41,6 +54,7 @@ module exists to remove.*
 | Metadata coherence | same, finalize mode | a finalize lists the marker directory before Lustre has settled and crashes on a marker that does exist | fixed — 180 s settle before the strict verify |
 | All-filter merge | `merge_catalogs.py::main`, `submit_merge.sbatch` | N array tasks each ran the all-filter merge: N writers of one file, most reading inputs their siblings had not written yet | fixed — an array task stops after its own filter; the all-filter merge is a separate job with `afterok` |
 | Per-frame product names | `saturated_star_finding.py::remove_saturated_stars`, `crowdsource_catalogs_long.py::load_or_make_satstar_catalog` | concurrent runs differing only by post-processing options wrote the same filenames | fixed — the iteration label is part of the name |
+| Per-phase seed caches | `cataloging.py::write_table_atomic` | several caches are keyed by (filter, module) rather than by shard, so every shard of a phase rebuilt and wrote the same path | fixed — temp sibling named for the writer, then `os.replace` |
 | Offsets / consensus tables | `astrometry_checkpoint.py::update_offsets_table` | see below | **open** |
 | PSF grid cache | `crowdsource_catalogs_long.py::get_psf_model` | see below | **open** |
 
