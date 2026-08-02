@@ -175,6 +175,37 @@ harness measures the true recovery bias. This ties directly to
 `scripts/analysis/wing_calibration/` (stack_psf_2d.py) and the Jay empirical-wing
 effort. Deferred to a decision.
 
+## 4e. #2 real-data audit (2026-08-02) — wing-selfcal is well-behaved where real stars live
+
+`audit_wingcal.py`: 8 real brick F200W exposures, get_saturated_stars (current
+code), cross-match the SAME real satstars across frames (284 stars in ≥3 frames,
+1426 detections), test whether the wing-selfcal-CORRECTED flux depends on the
+per-frame mask radius (it shouldn't — true flux is constant).
+
+| rmask (px) | N | raw (mmag) | corrected (mmag) |
+|---|---|---|---|
+| 0–5 | 1317 | +0 | +0 |
+| 5–8 | 48 | −0 | −2 |
+| 8–12 | 56 | −4 | +0 |
+| >12 | ~few | — | — |
+
+- **Real brick F200W satstars mostly have small mask radii (rmask ≤ 12).** The
+  applied correction is modest there (~1.1–1.3×), and the corrected flux is
+  **cross-frame FLAT vs rmask** (median 0/−2/0 mmag; slope −1.3 mmag/px, tiny).
+  So the wing-selfcal is **well-behaved on real stars in the regime they occupy.**
+- The **deep regime (rmask 15–30)** — where the injection showed the +1 mag
+  artifact and the correction reaches 2.2–2.75× — is populated by only a
+  **handful** of extreme real stars, too few to audit robustly.
+
+**Resolution of the whole thread:** (a) the masked-core FIT is unbiased; (b) the
+wing-selfcal correction is well-behaved and cross-frame-consistent for the bulk
+of real saturated stars; (c) the dramatic +1 mag injection biases were the
+**STPSF-narrow-wing injection artifact**, not real recovery error. The residual
+risk is confined to the **rarest, most extreme stars** (rmask>15, large/uncertain
+correction), which neither the STPSF injection nor the sparse real sample can
+probe — that alone would need faithful 2-D empirical-PSF injection or a
+deep-saturation-rich field.
+
 ## 5. Status / next steps
 1. [ ] `saturation_forward_model.py` — the physics above, CRDS-driven (this doc's §2).
 2. [ ] injection+recovery driver (extend `artificial_stars.py` path) → recovered/injected vs sat-depth.
