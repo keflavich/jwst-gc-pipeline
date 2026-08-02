@@ -186,8 +186,16 @@ def load_mosaic(path, downsample=4):
 
 def sample_mosaic(path, coords, downsample=4):
     """Mosaic surface brightness at each of *coords* (NaN off the footprint)."""
+    from astropy.wcs import NoConvergence
     data, wcs, _header = load_mosaic(path, downsample=downsample)
-    x, y = wcs.world_to_pixel(coords)
+    try:
+        x, y = wcs.world_to_pixel(coords)
+    except NoConvergence:
+        # The inverse WCS did not converge for these coordinates (the m8
+        # all_world2pix failure mode, issue #187).  Treat every source as off
+        # the footprint so the mosaic panel blanks rather than taking the whole
+        # figure down with it.
+        return np.full(len(coords), np.nan, dtype=float)
     xi = np.round(x).astype(int)
     yi = np.round(y).astype(int)
     inside = ((xi >= 0) & (xi < data.shape[1]) &

@@ -35,7 +35,7 @@ import astropy.units as u
 from jwst_gc_pipeline.diagnostics import loaders, style
 from jwst_gc_pipeline.diagnostics.figures import FigureResult, save
 from jwst_gc_pipeline.photometry.astrometry_offsets import (
-    KDTreeReference, measure_offset, measure_offset_grid)
+    KDTreeReference, measure_offset, measure_offset_grid, WINDOW_EDGE_FRACTION)
 
 # Tiles across the field for the per-tile offset map.  12x12 is the floor the
 # release checklist asks for: the brick-1182 F200W seam was a ~90 mas residual
@@ -255,7 +255,12 @@ def absolute_astrometry(inv, outdir, anchor=None):
     plt = style.use_style()
     if not inv.reference_catalogs or not inv.measured_filters:
         return None
-    refpath = sorted(inv.reference_catalogs.items())[0][1]
+    from astropy.coordinates import SkyCoord
+    # The reference is picked by registry order, not string order, so a field
+    # with several registered references does not silently prefer one by
+    # alphabet; the choice and the discards are recorded.
+    ref_items = list(inv.reference_catalogs.items())
+    ref_key, refpath = ref_items[0]
     reftbl = loaders.read_columns(refpath, ['skycoord.ra', 'skycoord.dec',
                                             'ra', 'dec', 'source'],
                                   label=f'{inv.name} reference')
@@ -267,17 +272,21 @@ def absolute_astrometry(inv, outdir, anchor=None):
     fig, axes = style.panel_grid(len(filters) + 1, panel=(2.8, 2.5))
     colors = style.filter_colors(filters)
     bulk = {}
-    # One KD-tree for the whole field.  measure_offset accepts a prebuilt
-    # KDTreeReference in place of a SkyCoord and then reuses it for every one
-    # of the 144 tiles instead of re-pairing against the raw catalogue.
-    ref_tree = None
 
-    for ax, filt in zip(axes, filters):
+    # PASS 1: read every filter's usable coordinates and accumulate the field
+    # footprint.  The KD-tree is cropped to the UNION of all filters' bounds,
+    # not the first filter's -- otherwise any band whose footprint extends past
+    # the first band's box (SW vs LW, or a second-proposal band) loses reference
+    # coverage at its edges and its edge tiles fail as "too sparse", which the
+    # prose would misread as sparsity rather than missing reference.
+    per_filter = {}
+    rmin = dmin = np.inf
+    rmax = dmax = -np.inf
+    for filt in filters:
         tbl = loaders.read_columns(inv.per_filter_catalogs[filt],
                                    ['skycoord.ra', 'skycoord.dec', 'flux',
                                     'qfit', 'is_saturated'],
                                    label=f'{inv.name} {filt}')
-        from astropy.coordinates import SkyCoord
         ra = loaders.column(tbl, 'skycoord.ra')
         dec = loaders.column(tbl, 'skycoord.dec')
         usable = np.isfinite(ra) & np.isfinite(dec)
@@ -287,9 +296,7 @@ def absolute_astrometry(inv, outdir, anchor=None):
         if (usable & ~sat).sum() > 200:
             usable &= ~sat
         if usable.sum() < 200:
-            ax.text(0.5, 0.5, 'too few sources', ha='center', va='center',
-                    transform=ax.transAxes, fontsize=7)
-            ax.set_title(filt.upper())
+            per_filter[filt] = None
             continue
         idx = np.flatnonzero(usable)
         n_used = idx.size
@@ -298,9 +305,36 @@ def absolute_astrometry(inv, outdir, anchor=None):
                 idx, MAX_TIE_SOURCES, replace=False))
             n_used = MAX_TIE_SOURCES
         coords = SkyCoord(ra[idx] * u.deg, dec[idx] * u.deg)
-        if ref_tree is None:
-            ref_tree = KDTreeReference(_crop_reference(ref, coords))
-        result = measure_offset(coords, ref_tree, context=f'{inv.name}/{filt}')
+        per_filter[filt] = (coords, int(n_used))
+        rmin = min(rmin, float(coords.ra.deg.min()))
+        rmax = max(rmax, float(coords.ra.deg.max()))
+        dmin = min(dmin, float(coords.dec.deg.min()))
+        dmax = max(dmax, float(coords.dec.deg.max()))
+
+    if not np.isfinite(rmin):
+        return None
+    # A four-corner SkyCoord of the union box; _crop_reference reads its
+    # min/max, so this crops the reference to the union footprint.
+    union_coords = SkyCoord([rmin, rmax, rmin, rmax] * u.deg,
+                            [dmin, dmin, dmax, dmax] * u.deg)
+    ref_tree = KDTreeReference(_crop_reference(ref, union_coords))
+
+    # PASS 2: measure and draw per filter against the shared, union-cropped tree.
+    for ax, filt in zip(axes, filters):
+        got = per_filter.get(filt)
+        if got is None:
+            ax.text(0.5, 0.5, 'too few sources', ha='center', va='center',
+                    transform=ax.transAxes, fontsize=7)
+            ax.set_title(filt.upper())
+            continue
+        coords, n_used = got
+        # confirm_windows: an unconfirmed SWEPT bulk peak can be footprint
+        # geometry rather than a real tie (issue #158).  The write-up escalates
+        # a swept bulk to a "grossly shifted" verdict, so the peak has to be
+        # confirmed before it earns that; the cost is one or two extra
+        # measurements and only on a swept result.
+        result = measure_offset(coords, ref_tree, context=f'{inv.name}/{filt}',
+                                confirm_windows=True)
         bounds = (float(coords.ra.deg.min()), float(coords.ra.deg.max()),
                   float(coords.dec.deg.min()), float(coords.dec.deg.max()))
         grid = measure_offset_grid(coords, ref_tree, nx=GRID_N, ny=GRID_N,
@@ -308,6 +342,7 @@ def absolute_astrometry(inv, outdir, anchor=None):
                                    context=f'{inv.name}/{filt}')
         bulk[filt] = _tie_record(result, grid)
         bulk[filt]['n_sources_used'] = int(n_used)
+        bulk[filt]['reference'] = ref_key
         _draw_grid(ax, grid, bounds)
         ax.set_title(filt.upper())
         if result is not None:
@@ -338,7 +373,9 @@ def absolute_astrometry(inv, outdir, anchor=None):
         'reference suffers; the per-tile map is shown because a bulk offset '
         'near zero does not by itself mean the field is registered.')
     return FigureResult('D3_astrometry_absolute', path, caption, 'astrometry',
-                        dict(reference=refpath, bulk=bulk, grid_n=GRID_N))
+                        dict(reference=refpath, reference_key=ref_key,
+                             references_available=[k for k, _ in ref_items],
+                             bulk=bulk, grid_n=GRID_N))
 
 
 def _crop_reference(ref, coords, margin_arcsec=REFERENCE_MARGIN_ARCSEC):
@@ -384,39 +421,71 @@ _refcoords = _coords_from
 _catcoords = _coords_from
 
 
+def _tile_trustworthy(c):
+    """A tile whose offset describes the DATA, not the search window.
+
+    Excluded: tiles that only tied after the window was swept (``swept``), and
+    tiles whose peak rides the edge of the window (``window_edge_fraction`` >=
+    ``WINDOW_EDGE_FRACTION``) -- in both the offset is a property of the window,
+    which is exactly the ``measure_offset`` blind spot (see its docstring).
+    """
+    return bool(c.get('ok') and not c.get('swept')
+                and float(c.get('window_edge_fraction', 0.0)) < WINDOW_EDGE_FRACTION)
+
+
 def _tie_record(result, grid):
-    """Flatten a measure_offset / measure_offset_grid pair into plain numbers."""
+    """Flatten a measure_offset / measure_offset_grid pair into plain numbers.
+
+    The per-tile statistics are computed on the residual ABOUT THE BULK TIE,
+    not on the raw tile offsets: the tile map exists to expose spatially varying
+    registration errors that the whole-field number cannot, so it must be made
+    independent of that whole-field shift.  A clean 60 mas bulk tie with a
+    perfectly flat map otherwise reads as a 60 mas "locally displaced region".
+    The raw (bulk-inclusive) offsets are kept alongside for reference.
+    """
     rec = dict(bulk=None, tiles=None)
+    bulk_dra = bulk_ddec = 0.0
     if result is not None:
         rec['bulk'] = {k: (float(v) if isinstance(v, (int, float, np.floating))
                            else v)
                        for k, v in result.items() if k != 'windows'}
+        if result.get('dra') is not None:
+            bulk_dra, bulk_ddec = float(result['dra']), float(result['ddec'])
     if grid:
         all_cells = grid.get('cells', [])
-        # A tile whose tie was only found by widening the search window has,
-        # by definition, no true pairs at the nominal window.  Its peak is a
-        # property of the widened window as much as of the data, so it is
-        # counted but kept out of the statistics that describe the field.
-        cells = [c for c in all_cells if c.get('ok') and not c.get('swept')]
+        n_ok = sum(1 for c in all_cells if c.get('ok'))
+        cells = [c for c in all_cells if _tile_trustworthy(c)]
         swept = [c for c in all_cells if c.get('ok') and c.get('swept')]
+        edge = [c for c in all_cells if c.get('ok') and not c.get('swept')
+                and float(c.get('window_edge_fraction', 0.0)) >= WINDOW_EDGE_FRACTION]
+        # Tiles that found NO coherent tie at all (contrast failure): counted so
+        # the fractions in the write-up add up.
+        n_no_tie = len(all_cells) - n_ok
+        common = dict(n_measured=len(cells), n_total=len(all_cells),
+                      n_swept=len(swept), n_window_edge=len(edge),
+                      n_no_tie=int(n_no_tie))
         if cells:
-            offs = np.array([c['off'] for c in cells], dtype=float)
+            # residual about the bulk tie (the field-independent quantity)
+            res_off = np.array([np.hypot(c['dra'] - bulk_dra, c['ddec'] - bulk_ddec)
+                                for c in cells], dtype=float)
+            raw_off = np.array([c['off'] for c in cells], dtype=float)
             cons = np.array([c['contrast'] for c in cells], dtype=float)
             rec['tiles'] = dict(
-                n_measured=len(cells), n_total=len(all_cells),
-                n_swept=len(swept),
-                median_off_mas=float(np.median(offs)),
+                **common,
+                median_off_mas=float(np.median(res_off)),
                 # p95 as well as the maximum: one edge tile with an odd peak
                 # should not be able to speak for the field, and the gap
                 # between the two says whether a large "worst" is structural
                 # or a single outlier.
-                p95_off_mas=float(np.percentile(offs, 95)),
-                worst_off_mas=float(np.max(offs)),
-                n_above_50mas=int(np.sum(offs > 50.0)),
-                median_contrast=float(np.median(cons)))
-        elif swept:
-            rec['tiles'] = dict(n_measured=0, n_total=len(all_cells),
-                                n_swept=len(swept))
+                p95_off_mas=float(np.percentile(res_off, 95)),
+                worst_off_mas=float(np.max(res_off)),
+                n_above_50mas=int(np.sum(res_off > 50.0)),
+                median_contrast=float(np.median(cons)),
+                bulk_off_mas=float(np.hypot(bulk_dra, bulk_ddec)),
+                raw_median_off_mas=float(np.median(raw_off)),
+                raw_worst_off_mas=float(np.max(raw_off)))
+        else:
+            rec['tiles'] = dict(**common)
     return rec
 
 
@@ -429,8 +498,10 @@ def _draw_grid(ax, grid, bounds):
     field sizes a degree axis is all shared leading digits.
     """
     all_cells = (grid or {}).get('cells', [])
-    cells = [c for c in all_cells if c.get('ok') and not c.get('swept')]
-    swept = [c for c in all_cells if c.get('ok') and c.get('swept')]
+    cells = [c for c in all_cells if _tile_trustworthy(c)]
+    # marked, not drawn: swept OR window-edge-riding -- an arrow would be the
+    # widened/edge window's artefact, not a tie.
+    swept = [c for c in all_cells if c.get('ok') and not _tile_trustworthy(c)]
     r0, r1, d0, d1 = bounds
     rc, dc = 0.5 * (r0 + r1), 0.5 * (d0 + d1)
     cosdec = max(np.cos(np.radians(dc)), 1e-6)

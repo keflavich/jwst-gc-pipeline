@@ -15,11 +15,13 @@ mosaic
     ``<FILT>/pipeline/jw<prop>-o<obs>_t*_<instr>_*-<filt>-<module>_i2d.fits``
 
 Higher merge stage wins, then ``resbgsub`` over the plain token, then the
-``merged`` module over a single-module product, then mtime.  Files carrying
-a post-hoc suffix (``_qualcuts``, ``_vetted``, ``_allcols``, ``_dedup``,
-``_o<obsid>``, ...) are *not* the canonical product and are skipped, with
-the sole exception that ``_dedup`` is preferred at m8 because the m8
-de-duplication is part of the merge rather than a filter applied after it.
+``merged`` module over a single-module product, then a per-proposal
+``_j<proposal>`` collision-fix variant over the un-tokenized collision
+product, then mtime.  Files matching ``_DERIVATIVE_RE`` (``_qualcuts``,
+``_vetted``, ``_allcols``, ``_i2dseed``, ...) are post-hoc derivatives and
+are skipped.  ``_dedup`` is *not* in that list: it is a merge-stage product,
+matched by ``_CROSSBAND_RE`` and *preferred* at m8 (the m8 de-duplication is
+part of the merge, not a filter applied after it).
 """
 
 import os
@@ -37,8 +39,13 @@ _CROSSBAND_RE = re.compile(
     r'^basic_(?P<module>[a-z0-9-]+)_indivexp_photometry_tables_merged'
     r'(?P<resbg>_resbgsub)?(?:_m(?P<stage>\d+))?(?P<dedup>_dedup)?\.fits$')
 
+# The module token can carry a per-proposal ``_j<proposal>`` suffix (e.g.
+# ``nrca_j7213``), the products written by the shared-filter-collision fix.
+# Without the optional ``_j\d+`` the module group ``[a-z0-9-]+`` cannot match
+# the underscore and those products are invisible, leaving only the
+# un-tokenized collision product on disk to be picked.
 _PERFILTER_RE = re.compile(
-    r'^(?P<filt>f\d{3}[a-z]\d?)_(?P<module>[a-z0-9-]+)_indivexp_merged'
+    r'^(?P<filt>f\d{3}[a-z]\d?)_(?P<module>[a-z0-9-]+(?:_j\d+)?)_indivexp_merged'
     r'(?P<resbg>_resbgsub)?_m(?P<stage>\d+)_dao_basic\.fits$')
 
 
@@ -47,8 +54,27 @@ def _rank(match, path):
     stage = int(match.group('stage') or 0)
     resbg = 1 if match.group('resbg') else 0
     dedup = 1 if (match.groupdict().get('dedup') and stage >= 8) else 0
-    module = 1 if match.group('module') == 'merged' else 0
-    return (stage, dedup, resbg, module, os.path.getmtime(path))
+    module = match.group('module') if 'module' in match.groupdict() else ''
+    merged = 1 if module == 'merged' else 0
+    # Prefer a per-proposal collision-fix variant over the un-tokenized
+    # collision product it was written to replace.
+    jtok = 1 if '_j' in (module or '') else 0
+    return (stage, dedup, resbg, merged, jtok, os.path.getmtime(path))
+
+
+def _module_siblings(catdir, filt, chosen_module):
+    """Per-filter module tokens on disk for *filt*, excluding *chosen_module*."""
+    if not os.path.isdir(catdir):
+        return set()
+    mods = set()
+    for name in os.listdir(catdir):
+        if _DERIVATIVE_RE.search(name):
+            continue
+        m = _PERFILTER_RE.match(name)
+        if m is not None and m.group('filt') == filt:
+            mods.add(m.group('module'))
+    mods.discard(chosen_module)
+    return mods
 
 
 def _best(catdir, regex, **constraints):
@@ -179,6 +205,18 @@ def inventory(fieldname):
         hit = _best(catdir, _PERFILTER_RE, filt=filt)
         if hit is not None:
             inv.per_filter_catalogs[filt] = hit[0]
+            chosen_mod = hit[1].group('module')
+            # If the picked catalogue is a single module and other modules for
+            # the same filter exist on disk, the write-up would describe part of
+            # the field as if it were the whole; say so.
+            if chosen_mod != 'merged':
+                sibs = _module_siblings(catdir, filt, chosen_mod)
+                if sibs:
+                    inv.notes.append(
+                        f'{filt.upper()}: no merged-module catalogue; using '
+                        f'module {chosen_mod!r}, which covers part of the field '
+                        f'only. Other modules on disk '
+                        f'({", ".join(sorted(sibs))}) were not combined.')
         mosaic = _mosaic_for(basepath, filt, proposals)
         if mosaic is not None:
             inv.mosaics[filt] = mosaic

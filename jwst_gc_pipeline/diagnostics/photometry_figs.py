@@ -98,8 +98,14 @@ def photometric_precision(inv, outdir, max_sources=400000):
             if cp.size:
                 ax.plot(cp, pp[50], color=colors[filt], lw=1.2, ls='--',
                         label='propagated')
-            ratio = np.nanmedian(frac_prop[good_p] / frac[good_p])
-            err_ratio[filt] = float(ratio)
+            # The ratio divides by the FORMAL error, so both must be positive:
+            # gate on good (frac>0) as well as good_p, or a flux_err==0 row
+            # contributes inf and np.nanmedian keeps it -- which prints a dash
+            # while median_ratio>1.5 still fires the "use the propagated error"
+            # paragraph attached to that dash.
+            g = good & good_p
+            if g.any():
+                err_ratio[filt] = float(np.nanmedian(frac_prop[g] / frac[g]))
         ax.axhline(0.2, color='0.4', lw=0.8, ls=':')
         depth = _crossing(centres, pct[50], 0.2) if centres.size else np.nan
         depths[filt] = depth

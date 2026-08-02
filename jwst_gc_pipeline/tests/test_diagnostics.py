@@ -320,3 +320,111 @@ def test_latex_specials_in_filenames_are_escaped(tmp_path):
     inv.crossband_catalog = '/tmp/basic_merged_m8_dedup.fits'
     text = writeup.Writeup(inv, [], str(tmp_path)).render()
     assert 'basic\\_merged\\_m8\\_dedup.fits' in text
+
+
+# ------------------------------------------------- review-fix regressions
+
+def test_crossband_without_independence_flag_is_an_upper_bound(tmp_path):
+    """Finding 1: when there is no independent-detection flag the fallback
+    counts seeded positions, so the number is a contaminated upper bound and
+    must not be sold as a systematic floor."""
+    def render(indep_only):
+        cross = dict(filters=['f182m', 'f212n'],
+                     median_sep_mas=np.array([[np.nan, 99.0], [99.0, np.nan]]),
+                     p84_sep_mas=np.array([[np.nan, 380.0], [380.0, np.nan]]),
+                     independent_only=indep_only)
+        results = [_result('D2_astrometry_internal', 'astrometry',
+                           dict(floors_mas={'f212n': 2.8}, crossband=cross,
+                                n_zero_scatter={}, n_sources={}))]
+        return writeup.Writeup(_inv(), results, str(tmp_path)).render()
+
+    contaminated = render(False)
+    assert 'upper bound' in contaminated
+    assert 'bounds \nthe systematic floor' not in contaminated
+    assert 'stringent internal check' not in contaminated
+    clean = render(True)
+    assert 'stringent internal check' in clean
+    assert 'upper bound' not in clean
+
+
+def test_tie_record_uses_residual_about_bulk_and_excludes_window_tiles():
+    """Findings 2 and 3: the tile statistic is the residual about the bulk tie,
+    and swept / window-edge / no-tie tiles are separated out."""
+    from jwst_gc_pipeline.diagnostics import astrometry_figs as A
+
+    result = dict(dra=60.0, ddec=0.0, contrast=20.0, ok=True, swept=False,
+                  off=60.0, window_edge_fraction=0.1)
+
+    def cell(dra, ddec, **kw):
+        d = dict(dra=dra, ddec=ddec, off=float(np.hypot(dra, ddec)),
+                 contrast=15.0, ok=True, swept=False, window_edge_fraction=0.0,
+                 ix=0, iy=0)
+        d.update(kw)
+        return d
+
+    cells = [cell(60, 0), cell(62, 0), cell(58, 0),          # 3 trustworthy
+             cell(500, 0, window_edge_fraction=0.95),        # rides the window
+             cell(700, 0, swept=True),                       # swept
+             dict(ok=False)]                                 # no coherent tie
+    rec = A._tie_record(result, dict(cells=cells))
+    t = rec['tiles']
+    assert (t['n_measured'], t['n_window_edge'], t['n_swept'], t['n_no_tie']) \
+        == (3, 1, 1, 1)
+    # residual about the 60 mas bulk is ~0, not ~60
+    assert t['median_off_mas'] < 5 and t['worst_off_mas'] < 5
+    # the raw (bulk-inclusive) offset is kept for reference
+    assert t['raw_median_off_mas'] > 55
+
+
+def test_implications_tracer_bullet_is_gated_on_presubtracted(tmp_path):
+    """Finding 6: the 'usable as a diffuse-emission tracer' claim must not
+    appear when the column is a subtraction residual."""
+    def render(presub):
+        results = [_result('D7_background_spatial', 'background',
+                           dict(correlations={'f212n': dict(spearman=0.7, n=1000),
+                                              'f182m': dict(spearman=0.7, n=1000)},
+                                background_presubtracted=presub))]
+        return writeup.Writeup(_inv(), results, str(tmp_path)).render()
+
+    assert 'in its own right' in render(False)
+    assert 'in its own right' not in render(True)
+
+
+def test_qfit_fraction_is_not_the_rejected_fraction(tmp_path):
+    """Finding 7: 'fraction above qfit=0.2' is not the fraction that fails
+    vetting, and the text must say so and drop 'dominated by'."""
+    results = [_result('D5_photometry_quality', 'photometry',
+                       dict(qfit={'f212n': dict(median=0.1, frac_above_warn=0.78)},
+                            census={}))]
+    text = writeup.Writeup(_inv(), results, str(tmp_path)).render()
+    assert 'qfit above 0.2' in text
+    assert 'not the fraction rejected by vetting' in text
+    assert 'dominated by sources whose profile' not in text
+
+
+def test_build_notes_section_distinguishes_error_from_gap(tmp_path):
+    """Finding 10: omitted figures are a visible section, and a build error is
+    told apart from a missing product."""
+    doc = writeup.Writeup(
+        _inv(), [], str(tmp_path),
+        failures={'D7_background_spatial': 'no applicable data products',
+                  'D3_astrometry_absolute': 'NoConvergence: inverse WCS failed'})
+    text = doc.render()
+    assert 'Omitted figures' in text
+    assert 'no applicable data products' in text
+    assert 'build error' in text and 'NoConvergence' in text
+
+
+def test_perfilter_regex_matches_proposal_tokened_module():
+    """Finding 5: the _j<proposal> collision-fix products must be visible."""
+    m = inv_mod._PERFILTER_RE.match(
+        'f200w_nrca_j7213_indivexp_merged_resbgsub_m6_dao_basic.fits')
+    assert m is not None
+    assert m.group('module') == 'nrca_j7213'
+
+
+def test_module_siblings_flags_partial_field_coverage(catdir):
+    """Finding 5: a single-module pick with other modules on disk is flagged."""
+    _touch(os.path.join(catdir, 'f200w_nrca_indivexp_merged_m6_dao_basic.fits'))
+    _touch(os.path.join(catdir, 'f200w_nrcb_indivexp_merged_m6_dao_basic.fits'))
+    assert inv_mod._module_siblings(catdir, 'f200w', 'nrcb') == {'nrca'}

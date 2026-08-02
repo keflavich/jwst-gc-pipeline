@@ -112,10 +112,14 @@ def _esc(text):
 class Writeup:
     """Assemble the document for one field."""
 
-    def __init__(self, inv, results, outdir):
+    def __init__(self, inv, results, outdir, failures=None):
         self.inv = inv
         self.results = {r.key: r for r in results if r is not None}
         self.outdir = outdir
+        # {figure key: reason} for figures that were not built.  Rendered as a
+        # visible document section so an omitted figure is apparent to a reader
+        # of the PDF, not only to whoever lists the directory.
+        self.failures = dict(failures or {})
 
     # ------------------------------------------------------------------ util
 
@@ -335,27 +339,40 @@ class Writeup:
                     body.append(
                         f' and a typical 84th percentile of '
                         f'{_fmt(float(np.median(tail)), 1)}\\,\\mas{{}}')
-                body.append(
-                    '. Because the two measurements share no detector pixels, '
-                    'no distortion solution and no PSF, this is a stringent '
-                    'internal check: it bounds the systematic floor of the '
-                    'astrometry in a way that the within-filter scatter, which '
-                    'shares all of those, cannot. ')
                 if cross.get('independent_only'):
                     body.append(
-                        'Only sources independently detected in both bands are '
-                        'counted. This matters more than it sounds: a merged '
-                        'row can carry a position in a band where nothing was '
-                        'detected, seeded from another band, and including '
-                        'those measures the merge radius instead of the '
-                        'astrometry --- on a field of this kind it inflates the '
-                        'apparent disagreement by two orders of magnitude. ')
-                if float(np.max(finite)) > 30:
+                        '. Because the two measurements share no detector '
+                        'pixels, no distortion solution and no PSF, and because '
+                        'only sources independently detected in both bands are '
+                        'counted, this is a stringent internal check: it bounds '
+                        'the systematic floor of the astrometry in a way that '
+                        'the within-filter scatter, which shares all of those, '
+                        'cannot. ')
+                    if float(np.max(finite)) > 30:
+                        body.append(
+                            'The worst pair exceeds 30\\,\\mas{}, which is '
+                            'larger than the repeatability floor and therefore '
+                            'indicates a filter-dependent systematic --- a '
+                            'distortion or filter-offset term --- rather than '
+                            'random error. ')
+                else:
+                    # No independent-detection flag: the fallback counts every
+                    # merged row, including bands where a position was seeded
+                    # from another band at the merge radius.  The number is then
+                    # a contaminated upper bound, not a floor, and must be
+                    # labelled as such rather than presented as a precision.
                     body.append(
-                        'The worst pair exceeds 30\\,\\mas{}, which is larger '
-                        'than the repeatability floor and therefore indicates '
-                        'a filter-dependent systematic --- a distortion or '
-                        'filter-offset term --- rather than random error. ')
+                        '. This catalogue carries no independent-detection '
+                        'flag, so every merged row is included --- and a merged '
+                        'row can hold a position in a band where nothing was '
+                        'detected, seeded from another band at the merge '
+                        'radius. The value above is therefore a contaminated '
+                        '\\emph{upper bound}, not a systematic floor: it is '
+                        'dominated by those seeded positions and, on a field of '
+                        'this kind, sits an order of magnitude or more above '
+                        'the true inter-filter agreement (which the '
+                        'per-exposure repeatability above bounds far better). '
+                        'It should not be read as a precision. ')
             body.append('\n\n')
 
         body.append(self._figure('D2_astrometry_internal'))
@@ -364,7 +381,7 @@ class Writeup:
         if bulk:
             body.append('\\subsection{Absolute tie}\n')
             offs, swept, weak, tiles = [], [], [], []
-            n_swept_tiles = n_total_tiles = 0
+            n_swept_tiles = n_total_tiles = n_notie_tiles = 0
             for filt, rec in bulk.items():
                 b = rec.get('bulk') or {}
                 if b.get('dra') is not None:
@@ -374,8 +391,13 @@ class Writeup:
                 if b.get('ok') is False:
                     weak.append(filt)
                 t = rec.get('tiles') or {}
-                n_swept_tiles += t.get('n_swept', 0)
+                # n_swept here counts both swept and window-edge tiles: both are
+                # excluded because their offset is a property of the window.
+                n_swept_tiles += t.get('n_swept', 0) + t.get('n_window_edge', 0)
+                n_notie_tiles += t.get('n_no_tie', 0)
                 n_total_tiles += t.get('n_total', 0)
+                # These tile statistics are the residual ABOUT THE BULK TIE, not
+                # the raw offsets (see _tie_record).
                 if t.get('worst_off_mas') is not None:
                     tiles.append((filt, t['worst_off_mas'], t['median_off_mas'],
                                   t.get('p95_off_mas', np.nan),
@@ -396,7 +418,9 @@ class Writeup:
                 n_big = sum(t[4] for t in tiles)
                 n_meas = sum(t[5] for t in tiles)
                 body.append(
-                    'Mapped per tile, the median tile offset across filters is '
+                    'Mapped per tile and measured as the residual about the '
+                    'bulk tie (so it is independent of the whole-field shift), '
+                    'the median tile residual across filters is '
                     f'{_fmt(med_of_med, 1)}\\,\\mas{{}}')
                 if p95s:
                     body.append(
@@ -429,17 +453,24 @@ class Writeup:
                     body.append(
                         'No tile departs far enough from the bulk value to '
                         'indicate a locally displaced region. ')
-            if n_swept_tiles and n_total_tiles:
-                frac = 100.0 * n_swept_tiles / n_total_tiles
-                body.append(
-                    f'{n_swept_tiles} of {n_total_tiles} tiles across all '
-                    f'filters ({frac:.0f} per cent) reached a tie only after '
-                    'the search window was widened. Those tiles hold too few '
-                    'sources for a coherent peak at the nominal window, so '
-                    'their offsets are excluded from the numbers above and '
-                    'are marked rather than drawn in the figure; a high '
-                    'fraction means the map is sparse, not that the field is '
-                    'misregistered. ')
+            if n_total_tiles:
+                if n_swept_tiles:
+                    frac = 100.0 * n_swept_tiles / n_total_tiles
+                    body.append(
+                        f'{n_swept_tiles} of {n_total_tiles} tiles across all '
+                        f'filters ({frac:.0f} per cent) tied only by widening '
+                        'the search window or with a peak riding the window '
+                        'edge, so their offset is a property of the window '
+                        'rather than the data; they are excluded from the '
+                        'numbers above and marked rather than drawn. ')
+                if n_notie_tiles:
+                    body.append(
+                        f'A further {n_notie_tiles} found no coherent peak at '
+                        'all. ')
+                if n_swept_tiles or n_notie_tiles:
+                    body.append(
+                        'A high excluded fraction means the map is sparse, not '
+                        'that the field is misregistered. ')
             if swept:
                 body.append(
                     'The tie in ' + ', '.join(f.upper() for f in swept) +
@@ -564,17 +595,20 @@ class Writeup:
                 '\\subsection{Fit quality}\n'
                 f'{self._ref("D5_photometry_quality")} shows the normalised '
                 f'PSF-fit residual. Median qfit is {_span(meds, 3)}; the '
-                'fraction of sources above the vetting threshold '
+                'fraction of sources with qfit above 0.2 '
                 + ('peaks at ' if len(bad) > 1 else 'is ')
-                + f'{100 * bad[worst]:.1f} per cent in {worst.upper()}. ')
+                + f'{100 * bad[worst]:.1f} per cent in {worst.upper()}. '
+                'This is not the fraction rejected by vetting: the qfit\\,=\\,0.2 '
+                'cut is only one arm of a disjunction that also keeps '
+                'bright-isolated and sky-clean sources, so the rejected '
+                'fraction is smaller. ')
             if max(bad.values()) > 0.3:
                 body.append(
-                    'Where that fraction is large the catalogue is dominated '
-                    'by sources whose profile the model does not reproduce, '
-                    'which in these fields is normally blending rather than a '
-                    'defective PSF: the qfit distribution rises towards the '
-                    'faint end where neighbours are unresolved, not towards '
-                    'the bright end where a bad PSF model would show. ')
+                    'Where a large share of sources sit above qfit\\,=\\,0.2 it '
+                    'is normally blending rather than a defective PSF: the qfit '
+                    'distribution rises towards the faint end where neighbours '
+                    'are unresolved, not towards the bright end where a bad PSF '
+                    'model would show. ')
         if census:
             sat = {k: 100.0 * v.get('is_saturated', 0) / max(v['total'], 1)
                    for k, v in census.items()}
@@ -722,6 +756,21 @@ class Writeup:
                             'correlate with --- and the mosaic panel should be '
                             'inspected before reading anything further into '
                             'it. ')
+                # The pre-subtracted caveat is a property of the ESTIMATOR, not
+                # of one correlation bin: if local_bkg is a subtraction residual
+                # here, the "usable as a diffuse-emission tracer" reading does
+                # not hold at any rho, so state it whenever the strong/partial
+                # branches (which do not otherwise mention it) were taken.
+                presub = self._m('D7_background_spatial',
+                                 'background_presubtracted', default=False)
+                if presub and median_rho > 0.3:
+                    body.append(
+                        'This must be read against the estimator: on these '
+                        'products \\code{local\\_bkg} is the residual of a '
+                        'background subtraction, not the sky itself, so it is '
+                        'stage-dependent and the diffuse-emission-tracer reading '
+                        'above does not carry over to a field catalogued after '
+                        'the residual-footprint column was introduced. ')
                 spread = max(rhos.values()) - min(rhos.values())
                 if spread > 0.4:
                     body.append(
@@ -795,7 +844,13 @@ class Writeup:
         corr = self._m('D7_background_spatial', 'correlations', default={}) or {}
         rhos = [v['spearman'] for v in corr.values()
                 if np.isfinite(v.get('spearman', np.nan))]
-        if rhos and float(np.median(rhos)) > 0.5:
+        # Gate on the SAME flag as the background section: if local_bkg is a
+        # subtraction residual on these products, a strong rank correlation does
+        # not make it a usable diffuse-emission tracer, and the two sections
+        # must not contradict each other.
+        presub = self._m('D7_background_spatial', 'background_presubtracted',
+                         default=False)
+        if rhos and float(np.median(rhos)) > 0.5 and not presub:
             items.append(
                 'The per-source background column is usable as a '
                 'diffuse-emission tracer in its own right, sampled wherever '
@@ -847,6 +902,28 @@ class Writeup:
 
     # ------------------------------------------------------------------ build
 
+    def build_notes_section(self):
+        """Visible list of figures that were not built, and why.
+
+        A missing data product is a gap; an exception is a fault. They are
+        distinguished so that a coding bug does not read the same as 'no data'.
+        """
+        if not self.failures:
+            return ''
+        lines = ['\\section{Omitted figures}\n',
+                 'The following figures are not included. A missing data '
+                 'product leaves a gap in coverage; an error is a fault in the '
+                 'build, and the two are separated here.\n',
+                 '\\begin{itemize}\n']
+        for key, why in self.failures.items():
+            if str(why).startswith('no applicable'):
+                tag = 'no applicable data products'
+            else:
+                tag = f'\\textbf{{build error}} --- \\code{{{_esc(why)}}}'
+            lines.append(f'  \\item \\code{{{_esc(key)}}}: {tag}\n')
+        lines.append('\\end{itemize}\n\n')
+        return ''.join(lines)
+
     def render(self):
         return (self.header()
                 + self.introduction()
@@ -855,6 +932,7 @@ class Writeup:
                 + self.photometry_section()
                 + self.background_section()
                 + self.implications()
+                + self.build_notes_section()
                 + self.reproducibility()
                 + '\\end{document}\n')
 

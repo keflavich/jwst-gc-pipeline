@@ -21,11 +21,23 @@ import traceback
 import warnings
 from datetime import datetime
 
+from astropy.wcs import NoConvergence
+
 from jwst_gc_pipeline.diagnostics import (astrometry_figs, background_figs,
                                           overview_figs, photometry_figs,
                                           project, writeup)
 from jwst_gc_pipeline.diagnostics.inventory import inventory, known_fields
 from jwst_gc_pipeline.version import __version__ as PIPELINE_VERSION
+
+# A builder failure should take out only its own figure, not the field.  The
+# tuple lists the exceptions that mean "this figure could not be built from the
+# data": data-shape (ValueError/KeyError/IndexError/TypeError/AttributeError),
+# I/O (OSError), numeric (ArithmeticError/RuntimeError/MemoryError), and the
+# astropy WCS non-convergence (NoConvergence derives straight from Exception and
+# is raised by the world_to_pixel path used to sample a mosaic -- issue #187).
+_BUILDER_ERRORS = (ValueError, KeyError, IndexError, TypeError, AttributeError,
+                   OSError, RuntimeError, MemoryError, ArithmeticError,
+                   NoConvergence)
 
 # (key, callable) in the order they appear in the document.
 BUILDERS = (
@@ -59,8 +71,7 @@ def build_field(fieldname, outdir=None, only=None, verbose=True):
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter('always')
                 result = builder(inv, outdir)
-        except (ValueError, KeyError, IndexError, TypeError, OSError,
-                RuntimeError, MemoryError, ArithmeticError) as exc:
+        except _BUILDER_ERRORS as exc:
             failures[key] = f'{type(exc).__name__}: {exc}'
             if verbose:
                 print(f'      failed: {failures[key]}', file=sys.stderr)
@@ -77,17 +88,34 @@ def build_field(fieldname, outdir=None, only=None, verbose=True):
         if verbose:
             print(f'      -> {os.path.basename(result.path)}')
 
-    doc = writeup.Writeup(inv, results, outdir)
+    _write_build_notes(outdir, fieldname, failures)
+
+    if not results:
+        # Nothing was built.  Do NOT write a main.tex: an empty document with a
+        # title, abstract and an empty table looks finished and asserts that the
+        # field was characterised.  The BUILD_NOTES.md above is the record.
+        if verbose:
+            print('      no figures built; skipping main.tex')
+        return inv, results, failures, None, outdir
+
+    doc = writeup.Writeup(inv, results, outdir, failures=failures)
     tex = doc.write()
-    if failures:
-        with open(os.path.join(outdir, 'BUILD_NOTES.md'), 'w') as fh:
-            fh.write(f'# Build notes for {fieldname}\n\n')
-            fh.write(f'Generated {datetime.now().isoformat(timespec="seconds")} '
-                     f'with pipeline {PIPELINE_VERSION}.\n\n')
-            fh.write('Figures not included in the document, and why:\n\n')
-            for key, why in failures.items():
-                fh.write(f'- `{key}`: {why}\n')
-    return inv, results, failures, tex
+    return inv, results, failures, tex, outdir
+
+
+def _write_build_notes(outdir, fieldname, failures):
+    if not failures:
+        return
+    os.makedirs(outdir, exist_ok=True)
+    with open(os.path.join(outdir, 'BUILD_NOTES.md'), 'w') as fh:
+        fh.write(f'# Build notes for {fieldname}\n\n')
+        fh.write(f'Generated {datetime.now().isoformat(timespec="seconds")} '
+                 f'with pipeline {PIPELINE_VERSION}.\n\n')
+        fh.write('Figures not included in the document, and why '
+                 '(a build error is a fault; "no applicable data products" is '
+                 'a coverage gap):\n\n')
+        for key, why in failures.items():
+            fh.write(f'- `{key}`: {why}\n')
 
 
 def main(argv=None):
@@ -124,12 +152,14 @@ def main(argv=None):
     summary = []
     for fieldname in targets:
         print(f'== {fieldname}', flush=True)
-        inv, results, failures, tex = build_field(
+        inv, results, failures, tex, outdir = build_field(
             fieldname, outdir=args.outdir, only=args.only)
-        outdir = os.path.dirname(tex)
-        if not results and args.skip_empty:
-            print('   no figures; skipping git scaffolding')
-            summary.append((fieldname, 0, len(failures), 'skipped'))
+        if not results:
+            # No main.tex was written (build_field returns tex=None): never
+            # scaffold or commit an empty field into a finished-looking project.
+            print(f'   no figures ({len(failures)} skipped); no document '
+                  f'written -> {outdir}')
+            summary.append((fieldname, 0, len(failures), 'no figures'))
             continue
         status = 'git disabled'
         if not args.no_git:
