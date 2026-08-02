@@ -40,6 +40,9 @@ from jwst_gc_pipeline.photometry.naming import (
     _iteration_token, _bgsub_token,
     residual_to_smoothed_bg_i2d, smoothed_bg_to_detection_i2d, vetted_to_i2dseed)
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS, mopt
+# Lives in atomic_io with the rest of the shared-file tools; imported here
+# because every call site in this module and its tests names it.
+from jwst_gc_pipeline.atomic_io import write_table_atomic
 from jwst_gc_pipeline.photometry.residual_background import (
     local_bkg_column_name, measure_footprint_background)
 from jwst_gc_pipeline.photometry.psf_fitting import (
@@ -103,65 +106,6 @@ class MergedcatMosaicError(RuntimeError):
     ``--cutout-region`` runs.  Set ``ALLOW_MISSING_MERGEDCAT_MOSAIC=1`` to
     downgrade this back to a warning.
     """
-
-
-def write_table_atomic(table, path, **kwargs):
-    """Write a table so concurrent writers of the same path cannot collide.
-
-    The per-frame fan-out runs NSHARDS (16) tasks per phase, and several caches
-    are keyed by (filter, module) rather than by shard -- so every shard
-    independently rebuilds and writes the SAME path.  ``overwrite=True`` is not
-    enough: astropy's FITS table writer implements overwrite by unlinking the
-    file and then calling ``writeto`` WITHOUT the flag, so between the unlink
-    and the open another shard can recreate the file and the loser dies with
-
-        OSError: File ...crossband_seed_manual.fits already exists.
-                 If you mean to replace it then use the argument "overwrite=True"
-
-    -- an error message that names the flag the caller already passed.  A reader
-    can equally catch the file mid-write and get
-    ``IORegistryError: Format could not be identified``.
-
-    Observed 2026-08-01: quintuplet m7 lost shards 2/4/7 to the OSError (a
-    dropped exposure aborts the phase, and the afterok finalize then never
-    runs), and arches m3 shard 13 lost a frame to the truncated-read form on
-    ``*_i2dseed.fits``.  Both cost a full phase.
-
-    Write to a UNIQUE temp file in the destination directory, then
-    ``os.replace`` -- atomic on POSIX within one filesystem, so a reader sees
-    either the old file or the new one and never a partial one, and N
-    concurrent writers of equivalent content all succeed.
-
-    The temp name must be unique per WRITER, not merely per path.  A shared
-    staging name is strictly worse than the race it replaces: two writers then
-    interleave inside one temp file and ``os.replace`` publishes the mixture as
-    a well-formed FITS file with wrong contents -- silent, where the unlink race
-    at least raises.  ``uuid4`` rather than the PID alone, because a PID repeats
-    freely across nodes on a shared filesystem and the helper must be safe
-    outside an array job too (interactive rerun, manual finalize, two people
-    debugging one field).
-    """
-    directory = os.path.dirname(path) or '.'
-    # KEEP THE EXTENSION: astropy sniffs the format from it, so a temp name
-    # ending in '.tmp12345' fails with "Format could not be identified" -- the
-    # same error this helper exists to prevent (caught by the concurrency test).
-    root, ext = os.path.splitext(os.path.basename(path))
-    tmp = os.path.join(directory, f'.{root}.tmp{os.getpid()}{uuid.uuid4().hex[:8]}{ext}')
-    published = False
-    try:
-        table.write(tmp, overwrite=True, **kwargs)
-        os.replace(tmp, path)
-        published = True
-    finally:
-        # try/finally, not `except BaseException` -- same cleanup without
-        # catching KeyboardInterrupt/SystemExit (repo rule: specific exceptions
-        # only).  os.replace consumed the temp file on the success path.
-        if not published and os.path.exists(tmp):
-            os.remove(tmp)
-    return path
-
-
-MERGEDCAT_MOSAIC_OVERRIDE_ENV = 'ALLOW_MISSING_MERGEDCAT_MOSAIC'
 
 
 def _handle_mergedcat_mosaic_failure(phase, module, filt, ex):

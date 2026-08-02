@@ -49,6 +49,7 @@ from .visit_consensus import (
     measure_reference_tie, pick_reference_anchor_filter, select_reliable_stars,
 )
 from .astrometry_offsets import measure_offset, local_residual_map
+from ..atomic_io import atomic_write, keep_a_copy, locked
 
 # Stages at which a measured shift is EXPECTED to be possible and is CORRECTED
 # (the first checkpoint after the first per-frame photometry).  At every later
@@ -801,146 +802,157 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
 
     Returns the corrected Table.  Raises ``OffsetsTableUpdateError`` when a
     correction matches no row or the corrected table fails validation.
+    Read-modify-write, under a lock on ``offsets_path``: the table is shared by
+    every filter of a proposal, so two filters' checkpoints correcting it at
+    once would each read the original, and the second write would drop the
+    first's correction.  The lock is taken in place rather than by a wrapper
+    delegating to a private function -- moving that boundary lets another
+    branch's new parameter and the block that reads it end up in different
+    functions, with no merge conflict to say so.
     """
-    from ..reduction.validate_offsets_table import (
-        CollapsedOffsetsTableError, assert_offsets_table_sane)
+    with locked(offsets_path):
+        from ..reduction.validate_offsets_table import (
+            CollapsedOffsetsTableError, assert_offsets_table_sane)
 
-    # materialise first: the checks below iterate `corrections` before the apply
-    # loop does, and a generator would be consumed by them -- leaving the update
-    # a silent no-op that still writes a table and a backup.
-    corrections = list(corrections)
+        # materialise first: the checks below iterate `corrections` before the apply
+        # loop does, and a generator would be consumed by them -- leaving the update
+        # a silent no-op that still writes a table and a backup.
+        corrections = list(corrections)
 
-    # magnitude ceiling FIRST: fail before touching the table at all, so a
-    # spurious measurement cannot be half-applied or leave a backup behind.
-    _assert_correction_magnitudes(corrections, offsets_path)
+        # magnitude ceiling FIRST: fail before touching the table at all, so a
+        # spurious measurement cannot be half-applied or leave a backup behind.
+        _assert_correction_magnitudes(corrections, offsets_path)
 
-    tbl = Table.read(offsets_path)
-    # `pool=True` performs the collapse the guard below names.  Off by default,
-    # so this function stays strict for every existing caller; the m2 checkpoint
-    # pools explicitly before the actionability floor (it needs the pooled
-    # magnitudes to decide whether to stop at all), and the recovery scripts
-    # opt in with --pool.  Without this the guard's remedy named a function no
-    # script called.
-    if pool:
-        corrections = pool_corrections_to_table_granularity(
-            corrections, offsets_path, tbl=tbl)
-    # all three granularity checks: a correction set must map 1:1 onto the
-    # table's rows in EVERY dimension it is keyed by, or legal-sized corrections
-    # sum.  The first two name the missing COLUMN (the actionable diagnosis);
-    # the third is the general row-wise backstop that also catches a column
-    # present at the WRONG granularity (family rows vs detector corrections).
-    _assert_module_granularity(corrections, tbl, offsets_path)
-    _assert_vgroup_granularity(corrections, tbl, offsets_path)
-    _assert_one_correction_per_row(corrections, tbl, offsets_path)
-    # both column conventions exist: 'dra'/'ddec' (generate_offsets_table) and
-    # 'dra (arcsec)'/'ddec (arcsec)' (the VIRAC2locked tables fix_alignment reads)
-    dra_col = "dra (arcsec)" if "dra (arcsec)" in tbl.colnames else "dra"
-    ddec_col = "ddec (arcsec)" if "ddec (arcsec)" in tbl.colnames else "ddec"
-    if dra_col not in tbl.colnames or ddec_col not in tbl.colnames:
-        raise OffsetsTableUpdateError(
-            f"{offsets_path} has no dra/ddec columns ({tbl.colnames})")
-    for col, fill in (("prov_stage", ""), ("prov_date", ""), ("prov_source", "")):
-        if col not in tbl.colnames:
-            tbl[col] = np.full(len(tbl), fill, dtype="U64")
-    for col in ("prov_dra_added_mas", "prov_ddec_added_mas"):
-        if col not in tbl.colnames:
-            tbl[col] = np.zeros(len(tbl))
-
-    visit_numbers = np.array([int(str(v)[-3:]) for v in tbl["Visit"]])
-    now = _utcnow_iso()
-    for corr in corrections:
-        if corr.get("exposure") is not None and "Exposure" not in tbl.colnames:
-            # a per-VISIT (module-locked) table cannot express a single-exposure
-            # correction -- applying it to the visit row would shift EVERY
-            # exposure of the visit.  Refuse; the table must first be extended
-            # to per-exposure rows (build_virac2_locked_perexp-style).
+        tbl = Table.read(offsets_path)
+        # `pool=True` performs the collapse the guard below names.  Off by default,
+        # so this function stays strict for every existing caller; the m2 checkpoint
+        # pools explicitly before the actionability floor (it needs the pooled
+        # magnitudes to decide whether to stop at all), and the recovery scripts
+        # opt in with --pool.  Without this the guard's remedy named a function no
+        # script called.
+        if pool:
+            corrections = pool_corrections_to_table_granularity(
+                corrections, offsets_path, tbl=tbl)
+        # all three granularity checks: a correction set must map 1:1 onto the
+        # table's rows in EVERY dimension it is keyed by, or legal-sized corrections
+        # sum.  The first two name the missing COLUMN (the actionable diagnosis);
+        # the third is the general row-wise backstop that also catches a column
+        # present at the WRONG granularity (family rows vs detector corrections).
+        _assert_module_granularity(corrections, tbl, offsets_path)
+        _assert_vgroup_granularity(corrections, tbl, offsets_path)
+        _assert_one_correction_per_row(corrections, tbl, offsets_path)
+        # both column conventions exist: 'dra'/'ddec' (generate_offsets_table) and
+        # 'dra (arcsec)'/'ddec (arcsec)' (the VIRAC2locked tables fix_alignment reads)
+        dra_col = "dra (arcsec)" if "dra (arcsec)" in tbl.colnames else "dra"
+        ddec_col = "ddec (arcsec)" if "ddec (arcsec)" in tbl.colnames else "ddec"
+        if dra_col not in tbl.colnames or ddec_col not in tbl.colnames:
             raise OffsetsTableUpdateError(
-                f"correction for exposure {corr['exposure']} of visit "
-                f"{corr['visit']} cannot be applied to the per-visit table "
-                f"{offsets_path} (no Exposure column) -- extend the table to "
-                f"per-exposure rows first")
-        # VGROUP narrowing (and everything else) lives in _match_rows, so the
-        # guards above narrow EXACTLY the way this loop does.  ``vgroup_key`` --
-        # NOT ``is not None`` -- because exposure_key stringifies a missing
-        # VGROUP meta to the literal "None", which would otherwise narrow
-        # against a token no row can ever carry ("matches NO row").
-        idx = _match_rows(corr, tbl, visit_numbers)
-        match = np.zeros(len(tbl), dtype=bool)
-        match[idx] = True
-        wanted_vgroup = vgroup_key(corr.get("vgroup"))
-        if (not wanted_vgroup and "Vgroup" in tbl.colnames
-                and corr.get("exposure") is not None and match.sum() > 1):
-            # a per-EXPOSURE correction that does not know its vgroup, on a table
-            # that does: the shift would be ADDED to every group's row.  That is
-            # the accumulation _assert_vgroup_granularity refuses in the mirror
-            # case (table cannot express it); refuse it here too.
-            spans = {vgroup_key(g) for g in tbl["Vgroup"][match]}
-            if len(spans - {""}) > 1:
+                f"{offsets_path} has no dra/ddec columns ({tbl.colnames})")
+        for col, fill in (("prov_stage", ""), ("prov_date", ""), ("prov_source", "")):
+            if col not in tbl.colnames:
+                tbl[col] = np.full(len(tbl), fill, dtype="U64")
+        for col in ("prov_dra_added_mas", "prov_ddec_added_mas"):
+            if col not in tbl.colnames:
+                tbl[col] = np.zeros(len(tbl))
+
+        visit_numbers = np.array([int(str(v)[-3:]) for v in tbl["Visit"]])
+        now = _utcnow_iso()
+        for corr in corrections:
+            if corr.get("exposure") is not None and "Exposure" not in tbl.colnames:
+                # a per-VISIT (module-locked) table cannot express a single-exposure
+                # correction -- applying it to the visit row would shift EVERY
+                # exposure of the visit.  Refuse; the table must first be extended
+                # to per-exposure rows (build_virac2_locked_perexp-style).
                 raise OffsetsTableUpdateError(
-                    f"correction {corr} carries NO visit group but matches rows "
-                    f"from {sorted(spans)} in {offsets_path} -- applying it would "
-                    f"add the same shift to every group's row.  The exposure "
-                    f"number restarts per visit group, so the correction must "
-                    f"name its group (visit_consensus.exposure_key carries it as "
-                    f"key[4]).")
-        if match.sum() == 0:
+                    f"correction for exposure {corr['exposure']} of visit "
+                    f"{corr['visit']} cannot be applied to the per-visit table "
+                    f"{offsets_path} (no Exposure column) -- extend the table to "
+                    f"per-exposure rows first")
+            # VGROUP narrowing (and everything else) lives in _match_rows, so the
+            # guards above narrow EXACTLY the way this loop does.  ``vgroup_key`` --
+            # NOT ``is not None`` -- because exposure_key stringifies a missing
+            # VGROUP meta to the literal "None", which would otherwise narrow
+            # against a token no row can ever carry ("matches NO row").
+            idx = _match_rows(corr, tbl, visit_numbers)
+            match = np.zeros(len(tbl), dtype=bool)
+            match[idx] = True
+            wanted_vgroup = vgroup_key(corr.get("vgroup"))
+            if (not wanted_vgroup and "Vgroup" in tbl.colnames
+                    and corr.get("exposure") is not None and match.sum() > 1):
+                # a per-EXPOSURE correction that does not know its vgroup, on a table
+                # that does: the shift would be ADDED to every group's row.  That is
+                # the accumulation _assert_vgroup_granularity refuses in the mirror
+                # case (table cannot express it); refuse it here too.
+                spans = {vgroup_key(g) for g in tbl["Vgroup"][match]}
+                if len(spans - {""}) > 1:
+                    raise OffsetsTableUpdateError(
+                        f"correction {corr} carries NO visit group but matches rows "
+                        f"from {sorted(spans)} in {offsets_path} -- applying it would "
+                        f"add the same shift to every group's row.  The exposure "
+                        f"number restarts per visit group, so the correction must "
+                        f"name its group (visit_consensus.exposure_key carries it as "
+                        f"key[4]).")
+            if match.sum() == 0:
+                raise OffsetsTableUpdateError(
+                    f"correction {corr} matches NO row in {offsets_path} -- refusing "
+                    f"a partial application (this is how silent curation errors start)")
+            cosd = max(np.cos(np.radians(float(corr["dec_deg"]))), 1e-6)
+            dra_add = (float(corr["dra_onsky_mas"]) / 1000.0) / cosd
+            ddec_add = float(corr["ddec_onsky_mas"]) / 1000.0
+            tbl[dra_col][idx] = np.asarray(tbl[dra_col][idx], dtype=float) + dra_add
+            tbl[ddec_col][idx] = np.asarray(tbl[ddec_col][idx], dtype=float) + ddec_add
+            tbl["prov_stage"][idx] = str(stage)
+            tbl["prov_date"][idx] = now
+            tbl["prov_dra_added_mas"][idx] = (
+                np.asarray(tbl["prov_dra_added_mas"][idx], dtype=float)
+                + float(corr["dra_onsky_mas"]))
+            tbl["prov_ddec_added_mas"][idx] = (
+                np.asarray(tbl["prov_ddec_added_mas"][idx], dtype=float)
+                + float(corr["ddec_onsky_mas"]))
+            tbl["prov_source"][idx] = str(corr.get("source", "astrometry_checkpoint"))[:64]
+
+        # CUMULATIVE drift bound.  The per-correction ceiling cannot see creep that
+        # accumulates across successive calls -- five legal 0.4" corrections over
+        # five re-tie iterations is 2" of silent drift, and cloudef reached 105" this
+        # way.  The prov_* columns already accumulate, so the check is nearly free.
+        # Bounded at the BULK limit: a row may legitimately carry a whole-visit
+        # guide-star fix of arcseconds, but never more than a swept peak could mean.
+        drift_limit = _positive_env_float("ASTROM_MAX_BULK_CORRECTION_ARCSEC",
+                                          MAX_BULK_CORRECTION_ARCSEC)
+        drift = np.hypot(np.asarray(tbl["prov_dra_added_mas"], dtype=float),
+                         np.asarray(tbl["prov_ddec_added_mas"], dtype=float)) / 1000.0
+        over = np.where(drift > drift_limit)[0]
+        if len(over):
+            worst = [(str(tbl["Visit"][i]), str(tbl["Filter"][i]),
+                      round(float(drift[i]), 3)) for i in over[:6]]
             raise OffsetsTableUpdateError(
-                f"correction {corr} matches NO row in {offsets_path} -- refusing "
-                f"a partial application (this is how silent curation errors start)")
-        cosd = max(np.cos(np.radians(float(corr["dec_deg"]))), 1e-6)
-        dra_add = (float(corr["dra_onsky_mas"]) / 1000.0) / cosd
-        ddec_add = float(corr["ddec_onsky_mas"]) / 1000.0
-        tbl[dra_col][idx] = np.asarray(tbl[dra_col][idx], dtype=float) + dra_add
-        tbl[ddec_col][idx] = np.asarray(tbl[ddec_col][idx], dtype=float) + ddec_add
-        tbl["prov_stage"][idx] = str(stage)
-        tbl["prov_date"][idx] = now
-        tbl["prov_dra_added_mas"][idx] = (
-            np.asarray(tbl["prov_dra_added_mas"][idx], dtype=float)
-            + float(corr["dra_onsky_mas"]))
-        tbl["prov_ddec_added_mas"][idx] = (
-            np.asarray(tbl["prov_ddec_added_mas"][idx], dtype=float)
-            + float(corr["ddec_onsky_mas"]))
-        tbl["prov_source"][idx] = str(corr.get("source", "astrometry_checkpoint"))[:64]
+                f"{len(over)} row(s) of {os.path.basename(offsets_path)} have "
+                f"accumulated more than {drift_limit}\" of correction across all "
+                f"writes (prov_dra/ddec_added_mas) -- runaway feedback, not a "
+                f"measurement.  NOT writing.  (visit, filter, |accumulated|\"): "
+                f"{worst}")
 
-    # CUMULATIVE drift bound.  The per-correction ceiling cannot see creep that
-    # accumulates across successive calls -- five legal 0.4" corrections over
-    # five re-tie iterations is 2" of silent drift, and cloudef reached 105" this
-    # way.  The prov_* columns already accumulate, so the check is nearly free.
-    # Bounded at the BULK limit: a row may legitimately carry a whole-visit
-    # guide-star fix of arcseconds, but never more than a swept peak could mean.
-    drift_limit = _positive_env_float("ASTROM_MAX_BULK_CORRECTION_ARCSEC",
-                                      MAX_BULK_CORRECTION_ARCSEC)
-    drift = np.hypot(np.asarray(tbl["prov_dra_added_mas"], dtype=float),
-                     np.asarray(tbl["prov_ddec_added_mas"], dtype=float)) / 1000.0
-    over = np.where(drift > drift_limit)[0]
-    if len(over):
-        worst = [(str(tbl["Visit"][i]), str(tbl["Filter"][i]),
-                  round(float(drift[i]), 3)) for i in over[:6]]
-        raise OffsetsTableUpdateError(
-            f"{len(over)} row(s) of {os.path.basename(offsets_path)} have "
-            f"accumulated more than {drift_limit}\" of correction across all "
-            f"writes (prov_dra/ddec_added_mas) -- runaway feedback, not a "
-            f"measurement.  NOT writing.  (visit, filter, |accumulated|\"): "
-            f"{worst}")
+        # collapsed-visit / sanity validation BEFORE anything is written.  A table
+        # WE just corrected must not carry the collapse signature -- raise, don't warn
+        # (that signature is exactly the curation failure this checkpoint exists to
+        # prevent from ever being applied again).
+        try:
+            assert_offsets_table_sane(tbl, context=os.path.basename(offsets_path),
+                                      raise_on_issue=True)
+        except CollapsedOffsetsTableError as ex:
+            raise OffsetsTableUpdateError(
+                f"corrected offsets table failed validation; NOT writing:\n{ex}") from ex
 
-    # collapsed-visit / sanity validation BEFORE anything is written.  A table
-    # WE just corrected must not carry the collapse signature -- raise, don't warn
-    # (that signature is exactly the curation failure this checkpoint exists to
-    # prevent from ever being applied again).
-    try:
-        assert_offsets_table_sane(tbl, context=os.path.basename(offsets_path),
-                                  raise_on_issue=True)
-    except CollapsedOffsetsTableError as ex:
-        raise OffsetsTableUpdateError(
-            f"corrected offsets table failed validation; NOT writing:\n{ex}") from ex
-
-    out_path = out_path or offsets_path
-    if backup and os.path.exists(out_path):
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        backup_path = f"{out_path}.pre_{stage}_{stamp}"
-        os.replace(out_path, backup_path)
-    tbl.write(out_path, overwrite=True)
-    return tbl
+        out_path = out_path or offsets_path
+        if backup and os.path.exists(out_path):
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            # A COPY.  Moving the table aside and then rebuilding it leaves a
+            # window with no table at all, and a reader in that window resolves
+            # its shift from the no-table branch -- which means (0, 0).
+            keep_a_copy(out_path, f"{out_path}.pre_{stage}_{stamp}")
+        with atomic_write(out_path) as tmp_path:
+            tbl.write(tmp_path, overwrite=True)
+        return tbl
 
 
 BULK_EXPOSURE = -1     # sentinel Exposure for the per-visit consensus->reference row
@@ -1068,155 +1080,160 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
         f"Offsets_JWST_Brick{proposal_id}_consensus.csv")
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     now = _utcnow_iso()
+    # Same shared-table read-modify-write as update_offsets_table, and the
+    # lock is taken in place for the same reason.
+    with locked(out_path):
 
-    # index any existing rows by key so corrections ADD-or-INSERT (upsert)
-    existed = os.path.exists(out_path)
-    bykey = {}
-    if existed:
-        for r in Table.read(out_path):
-            row = {c: r[c] for c in r.colnames}
-            # normalise the round-tripped cell ONCE (masked/'--'/int64 -> canonical
-            # string) so the key, the migration below and the written column all
-            # agree on one representation.
-            row["Vgroup"] = vgroup_key(row.get("Vgroup"))
-            key = (str(r["Visit"]), str(r["Filter"]), int(r["Exposure"]),
-                   str(r["Module"]), row["Vgroup"])
-            bykey[key] = row
+        # index any existing rows by key so corrections ADD-or-INSERT (upsert)
+        existed = os.path.exists(out_path)
+        bykey = {}
+        if existed:
+            for r in Table.read(out_path):
+                row = {c: r[c] for c in r.colnames}
+                # normalise the round-tripped cell ONCE (masked/'--'/int64 -> canonical
+                # string) so the key, the migration below and the written column all
+                # agree on one representation.
+                row["Vgroup"] = vgroup_key(row.get("Vgroup"))
+                key = (str(r["Visit"]), str(r["Filter"]), int(r["Exposure"]),
+                       str(r["Module"]), row["Vgroup"])
+                bykey[key] = row
 
-    # Resolve every correction's identity ONCE: its upsert key, and the key the
-    # SAME physical exposure carried before the Vgroup column existed.
-    prepared = []
-    for corr in corrections:
-        visit = int(str(corr["visit"])[-3:])
-        visit_tok = assert_visit_token(
-            f"jw0{proposal_id}{field}{visit:03d}",
-            f"seed_offsets_table_from_consensus({os.path.basename(out_path)})")
-        # A consensus->reference correction is the per-VISIT bulk tie (whole
-        # visit onto VIRAC2) -- it carries exposure=None AND module=None.  Store
-        # it under the sentinel (BULK_EXPOSURE, BULK_MODULE) row so fix_alignment
-        # applies it to EVERY exposure of the visit/filter (lookup_consensus_
-        # offset sums bulk + per-exposure jitter).  Writing it to a real
-        # exposure/module would either miss most frames or double-shift one.
-        is_bulk = corr.get("exposure") is None and corr.get("module") is None
-        exposure = BULK_EXPOSURE if is_bulk else int(corr["exposure"])
-        module = BULK_MODULE if is_bulk else str(corr["module"])
-        # VGROUP is part of the identity (exposure numbers restart per group);
-        # BULK rows are visit-wide and carry the sentinel "" instead.  Canonicalise
-        # here so a missing meta ("None" from exposure_key) cannot be written into
-        # the column as a literal token nothing will ever match.
-        vgroup = "" if is_bulk else vgroup_key(corr.get("vgroup"))
-        key = (visit_tok, corr["filtername"], exposure, module, vgroup)
-        prepared.append((corr, visit_tok, exposure, module, vgroup, key))
+        # Resolve every correction's identity ONCE: its upsert key, and the key the
+        # SAME physical exposure carried before the Vgroup column existed.
+        prepared = []
+        for corr in corrections:
+            visit = int(str(corr["visit"])[-3:])
+            visit_tok = assert_visit_token(
+                f"jw0{proposal_id}{field}{visit:03d}",
+                f"seed_offsets_table_from_consensus({os.path.basename(out_path)})")
+            # A consensus->reference correction is the per-VISIT bulk tie (whole
+            # visit onto VIRAC2) -- it carries exposure=None AND module=None.  Store
+            # it under the sentinel (BULK_EXPOSURE, BULK_MODULE) row so fix_alignment
+            # applies it to EVERY exposure of the visit/filter (lookup_consensus_
+            # offset sums bulk + per-exposure jitter).  Writing it to a real
+            # exposure/module would either miss most frames or double-shift one.
+            is_bulk = corr.get("exposure") is None and corr.get("module") is None
+            exposure = BULK_EXPOSURE if is_bulk else int(corr["exposure"])
+            module = BULK_MODULE if is_bulk else str(corr["module"])
+            # VGROUP is part of the identity (exposure numbers restart per group);
+            # BULK rows are visit-wide and carry the sentinel "" instead.  Canonicalise
+            # here so a missing meta ("None" from exposure_key) cannot be written into
+            # the column as a literal token nothing will ever match.
+            vgroup = "" if is_bulk else vgroup_key(corr.get("vgroup"))
+            key = (visit_tok, corr["filtername"], exposure, module, vgroup)
+            prepared.append((corr, visit_tok, exposure, module, vgroup, key))
 
-    # MIGRATION of pre-Vgroup rows.  A row written before this column existed
-    # keys as "" (no vgroup), while the correction for the same physical exposure
-    # now carries a real one -- so the exact key MISSES and the upsert would
-    # INSERT a second row, silently orphaning whatever the old row had already
-    # accumulated (the arches consensus table, the only one on disk, is exactly
-    # this case: 85 per-exposure rows with no Vgroup).  Adopt the old row and
-    # backfill its Vgroup instead.  If TWO groups would claim the same legacy row
-    # it is a genuine blend of two pointings that cannot be split -- refuse
-    # rather than guess which one inherits the accumulated shift.
-    claims = {}
-    for _c, visit_tok, exposure, module, vgroup, key in prepared:
-        if not vgroup or key in bykey:
-            continue
-        legacy = (visit_tok, key[1], exposure, module, "")
-        if legacy in bykey:
-            claims.setdefault(legacy, set()).add(vgroup)
-    for legacy, vgs in sorted(claims.items()):
-        if len(vgs) > 1:
+        # MIGRATION of pre-Vgroup rows.  A row written before this column existed
+        # keys as "" (no vgroup), while the correction for the same physical exposure
+        # now carries a real one -- so the exact key MISSES and the upsert would
+        # INSERT a second row, silently orphaning whatever the old row had already
+        # accumulated (the arches consensus table, the only one on disk, is exactly
+        # this case: 85 per-exposure rows with no Vgroup).  Adopt the old row and
+        # backfill its Vgroup instead.  If TWO groups would claim the same legacy row
+        # it is a genuine blend of two pointings that cannot be split -- refuse
+        # rather than guess which one inherits the accumulated shift.
+        claims = {}
+        for _c, visit_tok, exposure, module, vgroup, key in prepared:
+            if not vgroup or key in bykey:
+                continue
+            legacy = (visit_tok, key[1], exposure, module, "")
+            if legacy in bykey:
+                claims.setdefault(legacy, set()).add(vgroup)
+        for legacy, vgs in sorted(claims.items()):
+            if len(vgs) > 1:
+                raise OffsetsTableUpdateError(
+                    f"{os.path.basename(out_path)} row {legacy[:4]} was written "
+                    f"before the Vgroup column existed and now has corrections from "
+                    f"{sorted(vgs)} -- it BLENDED those visit groups into one row, so "
+                    f"there is no way to say which group its accumulated shift "
+                    f"belongs to.  Rebuild the table (or move it aside and re-seed) "
+                    f"before applying per-vgroup corrections.")
+            vgroup = vgs.pop()
+            row = bykey.pop(legacy)
+            row["Vgroup"] = vgroup
+            bykey[legacy[:4] + (vgroup,)] = row
+            kept = tuple(_finite_float(row.get(c))
+                         for c in ("prov_dra_added_mas", "prov_ddec_added_mas"))
+            print(f"[consensus] migrated pre-Vgroup row {legacy[:4]} -> "
+                  f"Vgroup={vgroup} (keeps its accumulated "
+                  f"{kept[0]:+.2f},{kept[1]:+.2f} mas)", flush=True)
+
+        for corr, visit_tok, exposure, module, vgroup, key in prepared:
+            cosd = max(np.cos(np.radians(float(corr["dec_deg"]))), 1e-6)
+            dra_add = (float(corr["dra_onsky_mas"]) / 1000.0) / cosd
+            ddec_add = float(corr["ddec_onsky_mas"]) / 1000.0
+            if key in bykey:
+                row = bykey[key]
+                row["dra (arcsec)"] = float(row["dra (arcsec)"]) + dra_add
+                row["ddec (arcsec)"] = float(row["ddec (arcsec)"]) + ddec_add
+                row["prov_dra_added_mas"] = (float(row.get("prov_dra_added_mas", 0.0))
+                                             + float(corr["dra_onsky_mas"]))
+                row["prov_ddec_added_mas"] = (float(row.get("prov_ddec_added_mas", 0.0))
+                                              + float(corr["ddec_onsky_mas"]))
+                row["prov_stage"] = str(stage)
+                row["prov_date"] = now
+                row["prov_source"] = str(corr.get("source", "m2 visit-consensus"))[:64]
+                # REFRESH the genlock base stamp on upsert: the cumulative row's shift
+                # is applied to THIS iteration's crf generation, so the base must track
+                # it.  Keeping the first iteration's stamp would make the genlock guard
+                # compare a later shift against a stale base if a jwst/CRDS bump landed
+                # mid-loop (safe only while the generation is constant across the loop).
+                if base_stamp_for is not None:
+                    stamp = base_stamp_for.get(
+                        (visit_tok, corr["filtername"], exposure, module)) or {}
+                    for k in ("calver", "crds_ctx", "dvacorr"):
+                        row[f"base_{k}"] = str(stamp.get(k, ""))
+            else:
+                row = {
+                    "Filter": corr["filtername"], "Module": module, "Visit": visit_tok,
+                    "Exposure": exposure, "Vgroup": vgroup,
+                    "dra (arcsec)": dra_add, "ddec (arcsec)": ddec_add,
+                    "prov_stage": str(stage), "prov_date": now,
+                    "prov_dra_added_mas": float(corr["dra_onsky_mas"]),
+                    "prov_ddec_added_mas": float(corr["ddec_onsky_mas"]),
+                    "prov_source": str(corr.get("source", "m2 visit-consensus seed"))[:64],
+                }
+                if base_stamp_for is not None:
+                    stamp = base_stamp_for.get(
+                        (visit_tok, corr["filtername"], exposure, module)) or {}
+                    for k in ("calver", "crds_ctx", "dvacorr"):
+                        row[f"base_{k}"] = str(stamp.get(k, ""))
+                bykey[key] = row
+
+        rows = list(bykey.values())
+        # NB: the visit-collapse guard (assert_offsets_table_sane / flag_collapsed_
+        # visits) does NOT apply here.  It compares per-visit MEDIAN offsets against a
+        # 20 mas tol to catch the brick-1182 curation signature (a visit's real ~arcsec
+        # BULK offset overwritten by another's).  Consensus shifts are mas-scale, so
+        # any two visits agree within 20 mas by construction -- flagging that would be
+        # a category error.  A sparse per-exposure consensus table has two failure
+        # modes worth guarding instead:
+        keys = [(str(r["Visit"]), str(r["Filter"]), int(r["Exposure"]), str(r["Module"]),
+                 vgroup_key(r.get("Vgroup", ""))) for r in rows]
+        dups = sorted({k for k in keys if keys.count(k) > 1})
+        if dups:
+            # duplicate (visit,filter,exposure,module) -> lookup_consensus_offset
+            # would raise; refuse to write an ambiguous table.
             raise OffsetsTableUpdateError(
-                f"{os.path.basename(out_path)} row {legacy[:4]} was written "
-                f"before the Vgroup column existed and now has corrections from "
-                f"{sorted(vgs)} -- it BLENDED those visit groups into one row, so "
-                f"there is no way to say which group its accumulated shift "
-                f"belongs to.  Rebuild the table (or move it aside and re-seed) "
-                f"before applying per-vgroup corrections.")
-        vgroup = vgs.pop()
-        row = bykey.pop(legacy)
-        row["Vgroup"] = vgroup
-        bykey[legacy[:4] + (vgroup,)] = row
-        kept = tuple(_finite_float(row.get(c))
-                     for c in ("prov_dra_added_mas", "prov_ddec_added_mas"))
-        print(f"[consensus] migrated pre-Vgroup row {legacy[:4]} -> "
-              f"Vgroup={vgroup} (keeps its accumulated "
-              f"{kept[0]:+.2f},{kept[1]:+.2f} mas)", flush=True)
-
-    for corr, visit_tok, exposure, module, vgroup, key in prepared:
-        cosd = max(np.cos(np.radians(float(corr["dec_deg"]))), 1e-6)
-        dra_add = (float(corr["dra_onsky_mas"]) / 1000.0) / cosd
-        ddec_add = float(corr["ddec_onsky_mas"]) / 1000.0
-        if key in bykey:
-            row = bykey[key]
-            row["dra (arcsec)"] = float(row["dra (arcsec)"]) + dra_add
-            row["ddec (arcsec)"] = float(row["ddec (arcsec)"]) + ddec_add
-            row["prov_dra_added_mas"] = (float(row.get("prov_dra_added_mas", 0.0))
-                                         + float(corr["dra_onsky_mas"]))
-            row["prov_ddec_added_mas"] = (float(row.get("prov_ddec_added_mas", 0.0))
-                                          + float(corr["ddec_onsky_mas"]))
-            row["prov_stage"] = str(stage)
-            row["prov_date"] = now
-            row["prov_source"] = str(corr.get("source", "m2 visit-consensus"))[:64]
-            # REFRESH the genlock base stamp on upsert: the cumulative row's shift
-            # is applied to THIS iteration's crf generation, so the base must track
-            # it.  Keeping the first iteration's stamp would make the genlock guard
-            # compare a later shift against a stale base if a jwst/CRDS bump landed
-            # mid-loop (safe only while the generation is constant across the loop).
-            if base_stamp_for is not None:
-                stamp = base_stamp_for.get(
-                    (visit_tok, corr["filtername"], exposure, module)) or {}
-                for k in ("calver", "crds_ctx", "dvacorr"):
-                    row[f"base_{k}"] = str(stamp.get(k, ""))
-        else:
-            row = {
-                "Filter": corr["filtername"], "Module": module, "Visit": visit_tok,
-                "Exposure": exposure, "Vgroup": vgroup,
-                "dra (arcsec)": dra_add, "ddec (arcsec)": ddec_add,
-                "prov_stage": str(stage), "prov_date": now,
-                "prov_dra_added_mas": float(corr["dra_onsky_mas"]),
-                "prov_ddec_added_mas": float(corr["ddec_onsky_mas"]),
-                "prov_source": str(corr.get("source", "m2 visit-consensus seed"))[:64],
-            }
-            if base_stamp_for is not None:
-                stamp = base_stamp_for.get(
-                    (visit_tok, corr["filtername"], exposure, module)) or {}
-                for k in ("calver", "crds_ctx", "dvacorr"):
-                    row[f"base_{k}"] = str(stamp.get(k, ""))
-            bykey[key] = row
-
-    rows = list(bykey.values())
-    # NB: the visit-collapse guard (assert_offsets_table_sane / flag_collapsed_
-    # visits) does NOT apply here.  It compares per-visit MEDIAN offsets against a
-    # 20 mas tol to catch the brick-1182 curation signature (a visit's real ~arcsec
-    # BULK offset overwritten by another's).  Consensus shifts are mas-scale, so
-    # any two visits agree within 20 mas by construction -- flagging that would be
-    # a category error.  A sparse per-exposure consensus table has two failure
-    # modes worth guarding instead:
-    keys = [(str(r["Visit"]), str(r["Filter"]), int(r["Exposure"]), str(r["Module"]),
-             vgroup_key(r.get("Vgroup", ""))) for r in rows]
-    dups = sorted({k for k in keys if keys.count(k) > 1})
-    if dups:
-        # duplicate (visit,filter,exposure,module) -> lookup_consensus_offset
-        # would raise; refuse to write an ambiguous table.
-        raise OffsetsTableUpdateError(
-            f"consensus table {os.path.basename(out_path)} has duplicate "
-            f"(visit,filter,exposure,module) rows: {dups}")
-    big = [(k, r["dra (arcsec)"], r["ddec (arcsec)"]) for k, r in zip(keys, rows)
-           if abs(float(r["dra (arcsec)"])) > 0.5 or abs(float(r["ddec (arcsec)"])) > 0.5]
-    if big:
-        # a consensus (internal-jitter) fix is mas-scale; > 0.5" means the
-        # upstream per-exposure measurement is wrong -- do NOT bake it in.
-        raise OffsetsTableUpdateError(
-            f"consensus table {os.path.basename(out_path)} has |offset| > "
-            f"0.5\" (mas-scale expected): {big}")
-    tbl = Table(rows)
-    if existed:
-        # keep a backup of the pre-merge table (mirrors update_offsets_table)
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        os.replace(out_path, f"{out_path}.pre_{stage}_{stamp}")
-    tbl.write(out_path, overwrite=True)
-    return out_path
+                f"consensus table {os.path.basename(out_path)} has duplicate "
+                f"(visit,filter,exposure,module) rows: {dups}")
+        big = [(k, r["dra (arcsec)"], r["ddec (arcsec)"]) for k, r in zip(keys, rows)
+               if abs(float(r["dra (arcsec)"])) > 0.5 or abs(float(r["ddec (arcsec)"])) > 0.5]
+        if big:
+            # a consensus (internal-jitter) fix is mas-scale; > 0.5" means the
+            # upstream per-exposure measurement is wrong -- do NOT bake it in.
+            raise OffsetsTableUpdateError(
+                f"consensus table {os.path.basename(out_path)} has |offset| > "
+                f"0.5\" (mas-scale expected): {big}")
+        tbl = Table(rows)
+        if existed:
+            # A COPY, as in update_offsets_table: the table must never be
+            # absent, or a concurrent reader aligns at (0, 0).
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            keep_a_copy(out_path, f"{out_path}.pre_{stage}_{stamp}")
+        with atomic_write(out_path) as tmp_path:
+            tbl.write(tmp_path, overwrite=True)
+        return out_path
 
 
 # ---------------------------------------------------------------------------
