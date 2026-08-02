@@ -1,155 +1,139 @@
 # jwst-gc-pipeline
 
-A JWST photometry pipeline for crowded fields, originally developed for
-NIRCam and MIRI observations of the Galactic Center (the Brick, Sgr B2,
-Cloud C, Sgr A*, and similar fields). The pipeline is field-agnostic and
-suitable for reduction and processing of any crowded JWST Galactic Center
-program.
+JWST imaging photometry for crowded fields. It reduces the exposures, ties them
+to an absolute astrometric frame, fits PSF photometry exposure by exposure, and
+merges the results into one multi-wavelength catalog. It was built for NIRCam,
+MIRI and NIRISS observations of the Galactic Center — the Brick, Sgr B2,
+Cloud C, Sgr A\* and their neighbours — and works on any field you register.
 
-This package was extracted from
-[brick-jwst-2221](https://github.com/keflavich/brick-jwst-2221) so that the
-generic pipeline code could be shared with other Galactic Center JWST
-projects, while the Brick-specific science analysis (ice analyses, CO
-modeling, paper figures) remains in `brick2221`.
+## Install
 
-## Getting started
+```bash
+git clone https://github.com/keflavich/jwst-gc-pipeline.git
+cd jwst-gc-pipeline
+pip install -e .
+```
 
-**[GETTING_STARTED.md](GETTING_STARTED.md)** — install, the three stages and how
-to run them, a worked end-to-end example, the data layout, what a new dataset
-needs, and how much of it runs off HiPerGator.
+**[GETTING_STARTED.md](GETTING_STARTED.md)** covers the rest: the reference data
+each stage needs, a worked end-to-end example, and what changes when you run
+somewhere other than HiPerGator (UF's HPC cluster, where this was written).
 
-## Running it
+## Run it
 
-One command reduces, catalogs and merges an observation:
+The exposures have to be on disk already — this reduces and measures them, it
+does not fetch them. Then one command reduces, catalogs and merges an
+observation:
 
 ```bash
 python -m jwst_gc_pipeline.run_pipeline --proposal 2221 --obsid 001
 ```
 
-- [`jwst_gc_pipeline/fields.yaml`](jwst_gc_pipeline/fields.yaml) — every target
-  the pipeline knows about. Adding one is an edit here; see
-  [`docs/FIELDS.md`](docs/FIELDS.md).
-- [`jwst_gc_pipeline/config.yaml`](jwst_gc_pipeline/config.yaml) — where and how
-  it runs: account, QOS, per-stage resources, fan-out. Ships with HiPerGator's
-  settings; copy it and set `GC_PIPELINE_CONFIG` to run elsewhere.
+On a SLURM cluster each stage is submitted to wait on the one before; otherwise
+they run here, in order. `--dry-run` prints the commands and submits nothing.
 
-## Layout
+To try the photometry on a small piece first, give it a region — a DS9 region
+file, or `ra,dec,size` (or `ra,dec,width,height`) in arcseconds. The cutout
+restricts **cataloging**; stage 1 always reduces the whole observation, so
+reduce one filter first and then catalog a corner of it:
 
-- `jwst_gc_pipeline.reduction` — pipeline stages
-  - `PipelineRerunNIRCAM-LONG.py` — the NIRCam `calwebb_image3` runner (handles
-    both long- and short-wavelength filters; the astrometric tie is applied
-    per-exposure, with TweakRegStep skipped — see below)
-  - `PipelineMIRI.py`, `PipelineRerunNIRISS.py` — the MIRI and NIRISS runners
-  - `alignment_config.py` — **the per-field alignment registry**: which absolute
-    reference frame and which shift source each `(proposal, observation)` uses
-  - `unified_alignment.py` — resolves that declaration for one exposure
-    (`resolve_shift`) and writes the alignment header cards; the one path every
-    NIRCam field goes through. The GWCS shift itself is applied by the runner
-    (`adjust_wcs` in `PipelineRerunNIRCAM-LONG.fix_alignment`).
-  - `validate_offsets_table.py` — offsets-table sanity guards
-    (`flag_collapsed_visits` / `assert_offsets_table_sane`)
-  - `build_virac2_offsets.py`, `build_gaia_virac2_refcat.py`,
-    `build_gaia_virac2_refcat_byquery.py` — reference-catalog and offsets-table
-    builders
-  - `bulk_offset_step0.py` — measures **and** verifies a field's bulk offset;
-    importable, tested, and run by hand via
-    `scripts/reduction/step0_bulk_offset.py`; wiring it into the reduction is
-    pending
-  - `destreak.py` — percentile-subtraction destriper for NIRCam horizontal
-    quadrants
-  - `align_to_catalogs.py` — generic catalog matching. The post-resample mosaic
-    realign (`realign_to_catalog` / `realign_to_vvv`) was retired 2026-07-11 and
-    both names now raise `NotImplementedError`.
-  - `saturated_star_finding.py` — saturated-star detection, PSF fitting and
-    removal (driven from the cataloging stage)
-  - `satstar_deblend.py` — ZEROFRAME core deblending for crowded fields
-  - `dva_correction.py`, `static_placement_correction.py`, `fits_wcs_sync.py` —
-    inter-detector DVA, SIAF placement, and FITS↔GWCS header sync
-  - `filtering.py` — filter / FWHM / instrument utilities
-  - `make_merged_psf.py` — gridded PSF construction (deprecated; scheduled for removal)
-  - `run_notebook.py` — utilities
+```bash
+# once, and not quick: a full Image3 of this filter
+python -m jwst_gc_pipeline.run_pipeline --proposal 2221 --obsid 001 \
+       --filters F410M --stages reduce
 
-- `jwst_gc_pipeline.photometry` — catalog-level processing
-  - `crowdsource_catalogs_long.py` — CLI / `main()` for both short and long
-    filters, plus shared helpers (`obs_token`, seed resolution, satstar glue).
-    The crowdsource fitter itself now lives in `photometry/legacy/`.
-  - `cataloging.py` — the PSF-photometry pipeline (explicit m12→m8 sequence of
-    single-pass detect/fit/reseed stages); the default path. See
-    `PHOTOMETRY_PIPELINE.md`.
-  - `manual_defaults.py` — single source of truth for the tunable defaults
-  - `astrometry_checkpoint.py`, `visit_consensus.py`, `astrometry_offsets.py` —
-    the in-pipeline astrometry failsafe ladder. See
-    `photometry/ASTROMETRY_CHECKPOINTS.md`.
-  - `measure_offsets.py` — the dense-NN-median guard
-    (`assert_sparse_reference_for_nn_median`) and offset measurement helpers
-  - `interframe_overlap.py`, `registration_gate.py` — registration gates
-  - `make_reftable.py` — astrometric reference table construction
-  - `merge_catalogs.py` — multi-wavelength catalog merger
-  - `forced_fill.py` — the m8 forced cross-band fill
+# minutes, in your shell
+python -m jwst_gc_pipeline.run_pipeline --proposal 2221 --obsid 001 \
+       --filters F410M --stages catalog \
+       --cutout-region 266.5350,-28.7050,20
+```
 
-The default PSF-photometry pipeline is implemented in `cataloging.py` and
-documented in [`PHOTOMETRY_PIPELINE.md`](PHOTOMETRY_PIPELINE.md). Pass
-`--legacy-iterations` to use the old `IterativePSFPhotometry` path instead.
+From Python, the same thing:
 
-- `jwst_gc_pipeline.astrometry_gdc` — geometric-distortion-correction
-  experiments (`stdgdc.py`, `gdc_wcs.py`, `distortion_floor_diagnostic.py`)
-- `jwst_gc_pipeline.cmz` — CMZ-wide products: catalog assembly, HiPS, HATS,
-  coverage MOCs
-- `jwst_gc_pipeline.versioning` — product versioning / provenance verdicts. See
-  `versioning/VERSIONING_PROVENANCE.md`.
-- `jwst_gc_pipeline.plotting` — generic plotting helpers
-  - `plot_tools.py` — color-color, color-magnitude, extinction-vector
-    templates
-- `jwst_gc_pipeline.data` — small reference tables (FWHM lookup tables)
+```python
+from jwst_gc_pipeline.run_pipeline import run_pipeline
+run_pipeline(proposal=2221, obsid=1)
+```
 
-## Reduction process
+## What comes out
 
-1. `PipelineRerunNIRCAM-LONG.py` — run JWST `calwebb_image3` (optionally
-   Detector1/Image2 first, with non-default settings). Per exposure it calls
-   `destreak.destreak` to write the working copy. On the
-   `EXTENDED_EMISSION_FIELDS` (`w51`, `sickle`, `wd2`, `ngc6334`), however,
-   destreaking is forced off and the working copy is a plain `_cal` → `_align.fits` copy.
-   **sickle overrides that per filter**: its SW filters destreak
-   (`*_destreak_*_crf`), its LW filters take the plain copy (`*_align_*_crf`) —
-   the suffixes `--each-suffix` then has to match. Then `fix_alignment`,
-   which resolves this exposure's shift through
-   `unified_alignment.resolve_shift` (driven by `alignment_config.py`) and bakes
-   it into the GWCS. `TweakRegStep` is **skipped**: the tie is applied
-   per-exposure, exactly once, so the `_crf` frames and the `_i2d` mosaic both
-   inherit it.
-2. `crowdsource_catalogs_long.py` → `cataloging.run_manual_pipeline` — the
-   per-filter photometry stages (m12 → m6), the cross-band m7 merge and the m8
-   forced fill. Saturated-star fitting/removal
-   (`saturated_star_finding.remove_saturated_stars`) runs **here**, in the
-   cataloging stage. The same module handles short- and long-wavelength filters.
-3. `merge_catalogs.py` — merge multi-wavelength catalogs.
-   `make_reftable.py` builds the **F405N**-based reference table (it switched from
-   F410M on 2023-06-28) and is called from `merge_catalogs`.
+Under the field's directory (`fields.yaml` says where each field lives):
 
-## Setup
+| | |
+|---|---|
+| `<FILTER>/pipeline/*-merged_i2d.fits` | the mosaic for one filter |
+| `<FILTER>/*_m*_daophot_basic.fits` | per-exposure catalogs, one per fitting pass (the later passes carry a `resbgsub` token, the earlier ones do not) |
+| `catalogs/basic_merged_indivexp_photometry_tables_merged.fits` | the multi-wavelength catalog |
 
-For each field/program:
-- Set up a `crds/` directory under your project's working directory (e.g.
-  `/orange/adamginsburg/<field>/crds`).
-- Provide a region file for selecting reference stars.
-- Register the field in
-  [`jwst_gc_pipeline/fields.yaml`](jwst_gc_pipeline/fields.yaml): its data root,
-  observation numbers, filters and reference catalog. All three stages read it.
-- **Declare the field's alignment in
-  [`jwst_gc_pipeline/reduction/alignment_config.py`](jwst_gc_pipeline/reduction/alignment_config.py)**
-  (reference frame + shift source). A NIRCam field with no entry gets
-  `(0, 0)`; `resolve_shift` prints `NO CONFIGURED ALIGNMENT …` and returns
-  `configured=False`. The run continues regardless of that flag, so read the log.
+A deeper catalog exists:
+`catalogs/basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_dedup.fits`,
+which fits every band at each source's position even where that band detected
+nothing. It comes from the `m7` and `m8` passes inside **cataloging**, which need
+every filter in one job — and the default submits one job per filter, so a plain
+run writes the first file and not this one.
+[`scripts/reduction/submit_cataloging_chain.sh`](scripts/reduction/submit_cataloging_chain.sh)
+runs the per-filter jobs and then the cross-band pass over all of them.
 
-## Astrometric WCS corrections
+## The files you edit
 
-Before touching any alignment / WCS code, read
-[`jwst_gc_pipeline/reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md`](jwst_gc_pipeline/reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md).
-It documents which files get WCS corrections, the reproducible `_cal` → mosaic/catalog
-path, how double-correction is prevented, and the rule that per-exposure GWCS shifts
-use `jwst.tweakreg.utils.adjust_wcs` (resampled-image GWCS has no STScI shifter).
-`CLAUDE.md` carries the hard rules (never NN-median against a dense catalog; read
-the GWCS, not the SIP header).
+- **[`jwst_gc_pipeline/fields.yaml`](jwst_gc_pipeline/fields.yaml)** — every
+  target: its data directory, observations, filters, and reference catalog.
+  Adding a target is an edit here and nothing else; running an unregistered one
+  prints the block to paste. See [`docs/FIELDS.md`](docs/FIELDS.md).
+- **[`jwst_gc_pipeline/config.yaml`](jwst_gc_pipeline/config.yaml)** — where and
+  how it runs: account, QOS, per-stage CPUs, memory, walltime, and how far each
+  stage fans out. It ships with HiPerGator's settings; copy it and point
+  `GC_PIPELINE_CONFIG` at your copy to run elsewhere.
+- A NIRCam field also declares how it is aligned — which absolute frame, and
+  where its shifts come from — in
+  [`reduction/alignment_config.py`](jwst_gc_pipeline/reduction/alignment_config.py).
+  A field with no entry is reduced at the raw telescope pointing and says so in
+  the log.
+
+## The three stages
+
+| | what it does | driver |
+|---|---|---|
+| **reduce** | JWST's `calwebb_image3` mosaicking, one filter at a time. Each exposure's WCS is corrected to the reference frame first, so the mosaic and the per-exposure products inherit the same astrometry. | `reduction/PipelineRerunNIRCAM-LONG.py`, `PipelineMIRI.py`, `PipelineRerunNIRISS.py` |
+| **catalog** | PSF photometry on every exposure, in five numbered passes (`m12`, `m3`…`m6`): detect, fit, subtract, re-seed on the residual. Saturated stars are fitted and removed here. Two further passes, `m7` and `m8`, work across bands and need every filter in one job. | `photometry/crowdsource_catalogs_long.py` → `photometry/cataloging.py` |
+| **merge** | Combines each filter's per-exposure catalogs into one catalog per filter, then those into the multi-wavelength catalog. | `photometry/merge_catalogs.py` |
+
+MIRI reduces locally: it has a driver but no reduce submit script, so
+`--instrument miri` under a SLURM config stops at stage 1 and says so. Its
+cataloging and merge stages do have scripts.
+
+[`PHOTOMETRY_PIPELINE_BRIEF.md`](PHOTOMETRY_PIPELINE_BRIEF.md) describes each
+pass and its parameters; [`PHOTOMETRY_PIPELINE.md`](PHOTOMETRY_PIPELINE.md) has
+the flags and filenames.
+
+## Astrometry
+
+Crowded-field astrometry has two rules that this package enforces in code, and
+breaking either produces a catalog that looks right and is not:
+
+1. Measure an offset by **stacking all pairwise offsets and taking the peak**
+   (`photometry.astrometry_offsets.measure_offset`), and map it per tile — one
+   number for a whole field hides half a field being wrong. Matching each source
+   to its nearest neighbour and taking the median fails silently against a dense
+   reference catalog. Refining a small offset against a dense catalog has its
+   own rules — see "⚠ Histogram-stacking is density-immune" in
+   [`CLAUDE.md`](CLAUDE.md) before trusting a number.
+2. Read a frame's **GWCS** — the exact distortion model in its ASDF extension —
+   through [`frame_wcs()`](jwst_gc_pipeline/frame_wcs.py). The approximate WCS
+   in the FITS header beside it (SIP) is off by 5–8 mas on older products.
+
+Before changing anything that touches alignment, read
+[`reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md`](jwst_gc_pipeline/reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md);
+[`CLAUDE.md`](CLAUDE.md) states the rules in full, with the failures that
+produced them.
+
+## The rest of the package
+
+`jwst_gc_pipeline.cmz` assembles survey-wide products across the Central
+Molecular Zone; `versioning` decides whether a product needs regenerating;
+`plotting` has color-magnitude and extinction templates.
+
+To work on the pipeline itself, `pip install -e '.[test]'` and run
+`pytest jwst_gc_pipeline tests`.
 
 ## License
 

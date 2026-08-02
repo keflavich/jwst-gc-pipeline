@@ -44,6 +44,14 @@ class NotRegisteredError(KeyError):
     """The observation is absent from fields.yaml."""
 
 
+class CutoutStageError(ValueError):
+    """A cutout was asked for alongside stages it cannot restrict.
+
+    Caught in ``main`` and printed on its own, because the message says which
+    stages to ask for instead and a traceback buries that.
+    """
+
+
 def _normalise_obsid(obsid):
     """``1`` and ``'1'`` and ``'001'`` all mean observation 001."""
     text = str(obsid).strip()
@@ -367,7 +375,35 @@ def run_pipeline(proposal, obsid, cutout_region=None, instrument='nircam',
 
     scheduler = config.get('scheduler')
     if cutout_region:
+        # The cutout reaches the cataloging command only.  Anywhere else it
+        # would be accepted and then ignored: the run would reduce the whole
+        # observation -- hours, on the queue, when minutes were asked for.
+        if 'catalog' not in stages:
+            raise CutoutStageError(
+                f"--cutout-region needs the catalog stage: it restricts the "
+                f"cataloging, and stage 1 always reduces the whole "
+                f"observation.  Asked for stages {list(stages)}.  Reduce first "
+                f"WITHOUT the region (--stages reduce, on its own), then "
+                f"catalog with it (--stages catalog --cutout-region ...).")
+        if 'merge' in stages and set(stages) != set(STAGES):
+            # Asked for by name.  A cutout writes under cutouts/<label>/, which
+            # the merge does not read, so it would run on nothing.  (Left in the
+            # default set, it is dropped with a note below -- the documented
+            # one-liner passes no stages at all.)
+            raise CutoutStageError(
+                f"--cutout-region cannot run the merge: a cutout writes under "
+                f"cutouts/<label>/, which the merge does not read.  Asked for "
+                f"stages {list(stages)}.  Use --stages reduce,catalog (or "
+                f"--stages catalog if the frames are already reduced).")
         scheduler = (config.get('cutout') or {}).get('scheduler', 'local')
+        if scheduler != 'local':
+            # Only the local path threads cutout_region into the command; a
+            # submitted job would run the whole observation.
+            raise CutoutStageError(
+                f"--cutout-region needs cutout.scheduler: local in "
+                f"{config['source']}, which says {scheduler!r}.  A submitted "
+                f"job carries no cutout and would catalog the whole "
+                f"observation.")
 
     print(f"{plan['target']} proposal {plan['proposal']} observation "
           f"{plan['obsid']} ({plan['instrument']})")
@@ -384,6 +420,10 @@ def run_pipeline(proposal, obsid, cutout_region=None, instrument='nircam',
                   f"{plan['target']} ({', '.join(proposals)}), so it runs "
                   f"{len(every)} tasks rather than one per filter of this "
                   f"observation")
+
+    if cutout_region and 'merge' in stages:
+        print("  note: a cutout stops after cataloging.  It writes under "
+              "cutouts/<label>/, which the merge does not read.")
 
     if cutout_region and len(plan['filters']) > 1:
         print(f"  note: this cutout runs {len(plan['filters'])} filters one "
@@ -492,7 +532,7 @@ def main(argv=None):
                      stages=chosen,
                      dry_run=args.dry_run, config_path=args.config)
     except (NotRegisteredError, fields.FieldRegistryError,
-            pipeline_config.ConfigError) as problem:
+            pipeline_config.ConfigError, CutoutStageError) as problem:
         # These say what to add to which file; a traceback buries that.
         message = problem.args[0] if problem.args else str(problem)
         print(f'\n{message}\n', file=sys.stderr)

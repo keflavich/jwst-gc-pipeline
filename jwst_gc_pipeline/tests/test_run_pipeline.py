@@ -354,6 +354,18 @@ def test_a_multi_filter_cutout_says_it_is_not_minutes(capsys):
     assert '--filters F410M keeps it to minutes' in capsys.readouterr().out
 
 
+def test_a_cutout_without_the_catalog_stage_is_refused():
+    """The cutout reaches the cataloging command only.
+
+    Accepted alongside `--stages reduce` it would be silently ignored, and the
+    run would reduce the whole observation -- hours on the queue when minutes
+    were asked for.
+    """
+    with pytest.raises(rp.CutoutStageError, match='needs the catalog stage'):
+        rp.run_pipeline('2221', '001', filters=['F410M'],
+                        cutout_region='266.535,-28.705,20',
+                        stages=('reduce',), dry_run=True)
+
 # --------------------------------------------------------------------------
 # Where the logs go.
 # --------------------------------------------------------------------------
@@ -422,3 +434,41 @@ def test_only_nircam_gets_a_modules_argument():
     nircam = dict(rp._local_commands(rp.resolve('2221', '001', 'nircam'),
                                      config))['reduce']
     assert '-m' in nircam
+
+
+def test_a_cutout_alongside_an_explicit_merge_is_refused():
+    with pytest.raises(rp.CutoutStageError, match='cannot run the merge'):
+        rp.run_pipeline('2221', '001', filters=['F410M'],
+                        cutout_region='266.535,-28.705,20',
+                        stages=('catalog', 'merge'), dry_run=True)
+
+
+def test_a_cutout_on_a_queue_scheduler_is_refused(tmp_path, monkeypatch):
+    """Only the local path threads the region into the command."""
+    mine = tmp_path / 'c.yaml'
+    mine.write_text('cutout:\n  scheduler: slurm\n')
+    monkeypatch.setenv(pipeline_config.ENV_VAR, str(mine))
+    with pytest.raises(rp.CutoutStageError, match='cutout.scheduler'):
+        rp.run_pipeline('2221', '001', filters=['F410M'],
+                        cutout_region='266.535,-28.705,20', dry_run=True)
+
+
+def test_the_refusals_print_a_message_rather_than_a_traceback(capsys,
+                                                              monkeypatch):
+    monkeypatch.setattr('sys.argv',
+                        ['run_pipeline', '--proposal', '2221', '--obsid',
+                         '001', '--stages', 'reduce', '--cutout-region',
+                         '266.535,-28.705,20', '--dry-run'])
+    with pytest.raises(SystemExit):
+        rp.main()
+    assert 'needs the catalog stage' in capsys.readouterr().err
+
+
+def test_a_cutout_keeps_the_default_stage_set(capsys):
+    """The documented one-liner passes no stages, so merge is in the set; it is
+    dropped with a note rather than refused."""
+    rp.run_pipeline('2221', '001', filters=['F410M'],
+                    cutout_region='266.535,-28.705,20', dry_run=True)
+    out = capsys.readouterr().out
+    assert 'a cutout stops after cataloging' in out.lower()
+    assert '=== merge ===' not in out
