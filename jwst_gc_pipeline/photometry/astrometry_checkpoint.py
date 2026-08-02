@@ -809,12 +809,20 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
     first's correction.
     """
     with locked(offsets_path):
+        # `pool` MUST be forwarded.  This function is the public wrapper that
+        # takes the lock; the body -- including the `if pool:` block -- lives in
+        # _update_offsets_table.  Dropping the argument here leaves that block
+        # reading an unbound name, so EVERY call raises NameError.  The two
+        # branches that create this hazard (the pool parameter, and the
+        # wrapper/body split) touch different lines and merge without conflict,
+        # so nothing but a test run catches it.
         return _update_offsets_table(offsets_path, corrections, stage,
-                                     out_path=out_path, backup=backup)
+                                     out_path=out_path, backup=backup,
+                                     pool=pool)
 
 
 def _update_offsets_table(offsets_path, corrections, stage, out_path=None,
-                          backup=True):
+                          backup=True, pool=False):
     from ..reduction.validate_offsets_table import (
         CollapsedOffsetsTableError, assert_offsets_table_sane)
 

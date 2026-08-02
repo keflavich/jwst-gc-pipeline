@@ -17,6 +17,7 @@ import os
 import shutil
 import socket
 import time
+import uuid
 
 #: How long to wait for a lock before giving up.  Long enough for a table write
 #: (well under a second) with room for a loaded filesystem; short enough that a
@@ -71,16 +72,23 @@ def locked(path, timeout=DEFAULT_TIMEOUT, poll=0.2):
 def atomic_write(path):
     """Yield a temporary path to write, and move it onto ``path`` on success.
 
-    The temporary keeps the original **suffix** and carries the pid before it:
-    ``offsets.csv`` is written as ``offsets.tmp1234.csv``.  The suffix matters
-    because ``Table.write`` infers its format from the file name, and a name
-    ending in ``.tmp1234`` raises ``IORegistryError`` instead of writing a CSV.
-    The pid matters so two writers do not collide in the temporary either.
+    The temporary keeps the original **suffix** and carries a unique token
+    before it: ``offsets.csv`` is written as ``offsets.tmp1234abcd1234.csv``.
+    The suffix matters because ``Table.write`` infers its format from the file
+    name, and a name ending in ``.tmp1234`` raises ``IORegistryError`` instead
+    of writing a CSV.
+
+    The token must be unique per WRITER, not merely per path, or two writers
+    interleave inside one temporary and ``os.replace`` publishes the mixture --
+    a well-formed file with wrong contents, which is worse than the collision
+    it replaces because nothing raises.  A pid alone is not enough here: these
+    paths live on a SHARED filesystem written by many SLURM nodes at once, and
+    pids repeat freely across nodes.  Hence the uuid as well.
 
     A body that raises leaves ``path`` untouched and removes the temporary.
     """
     root, suffix = os.path.splitext(path)
-    tmp = f'{root}.tmp{os.getpid()}{suffix}'
+    tmp = f'{root}.tmp{os.getpid()}{uuid.uuid4().hex[:8]}{suffix}'
     try:
         yield tmp
     except BaseException:

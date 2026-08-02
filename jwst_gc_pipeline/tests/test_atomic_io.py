@@ -113,3 +113,22 @@ def test_an_astropy_table_round_trips(tmp_path, name):
         assert tmp.endswith(os.path.splitext(name)[1])
         table.write(tmp)
     assert list(Table.read(str(path))['visit']) == [1, 2]
+
+
+def test_temp_name_is_unique_per_writer_not_just_per_pid(tmp_path, monkeypatch):
+    """A pid-only temporary is not unique on a shared filesystem.
+
+    These paths are written by many SLURM nodes at once and pids repeat freely
+    across nodes, so two writers could land on the SAME temporary, interleave
+    inside it, and have os.replace publish the mixture -- a well-formed file
+    with wrong contents, worse than the collision it replaces because nothing
+    raises.  Pin that the token varies even with the pid held fixed.
+    """
+    monkeypatch.setattr(os, 'getpid', lambda: 4242)
+    seen = []
+    for _ in range(6):
+        with atomic_write(str(tmp_path / 'offsets.csv')) as tmp:
+            seen.append(os.path.basename(tmp))
+            open(tmp, 'w').write('a,b\n1,2\n')
+    assert len(set(seen)) == len(seen), f'temporary name reused: {seen}'
+    assert all(n.endswith('.csv') for n in seen), seen
