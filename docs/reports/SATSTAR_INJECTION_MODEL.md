@@ -68,6 +68,40 @@ Chosen to span background × crowding × filter-width × NGROUPS (charge_migrati
 
 Low-background globulars isolate the crowding/PSF axis from the diffuse-background axis; the GC fields add the background + deep-saturation axes; gc2211 is the charge-migration-OFF extreme.
 
+## 4b. First fleet results (10/18 runs; F200W+F212N across brick/gc2211/ngc6334/sgra)
+
+Recovered − injected mag (+ve = recovered too faint), median per saturation regime:
+
+| field | filt | NG | mild | moderate | deep | hard |
+|---|---|---|---|---|---|---|
+| brick | F200W | 7 | – | +59 (4.5σ) | +521 | **+1161 (14σ)** |
+| ngc6334 | F200W | 7 | +182 | +151 | +314 | +720 |
+| brick | F212N | 7 | +60 | – | +148 | – |
+| sgra | F212N | 7 | +28 | +43 | +77 | −20 |
+| gc2211 | F200W | 2 | +41 | +33 | +33 | +91 (all ±500–840 scatter) |
+
+**Findings.**
+1. **Recovery is biased FAINT and the bias GROWS with saturation depth** — clean and
+   high-significance in brick/ngc6334 F200W (up to ~1.16 mag for hard-saturated).
+   Narrow-band (F212N) is milder (saturates less). This is a clear, previously
+   unquantified bias-vs-regime signal.
+2. **gc2211 (NGROUPS=2, super-saturated wide-band)** has a small median bias but
+   ENORMOUS scatter (±0.5–0.8 mag) and no clean trend — that regime is recovered
+   imprecisely rather than cleanly biased.
+3. **Charge migration (f_bf 0 vs 0.3) barely moves the recovered-flux bias**
+   (#210 test: 3–4 mmag shift for BOTH NGROUPS=2 and 7). So the depth-dependent
+   faint bias is driven by **saturation flux-loss + wing-extrapolation shortfall**,
+   not charge migration at f_bf=0.3. (Charge migration may still drive the #210
+   *footprint* sensitivity — a different metric — and/or need a larger f_bf.)
+
+**Critical caveat (unresolved).** The absolute magnitude (~1 mag hard-sat) depends
+on (a) forward-model realism — does it remove the right amount of flux? — and
+(b) whether injected stars receive the same **wing self-calibration** as production
+stars. The paper's continuity fix reached ~0.11 mag residual, so a +1.16 mag
+hard-sat bias is either a real deep-regime failure the continuity metric never
+probed, OR a harness artifact (injected stars not wing-self-calibrated). Resolving
+this is the top next step.
+
 ## 5. Status / next steps
 1. [ ] `saturation_forward_model.py` — the physics above, CRDS-driven (this doc's §2).
 2. [ ] injection+recovery driver (extend `artificial_stars.py` path) → recovered/injected vs sat-depth.
