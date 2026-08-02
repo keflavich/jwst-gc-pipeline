@@ -153,6 +153,8 @@ def main(argv=None):
     p.add_argument("--visit-level-only", action="store_true",
                    help="apply only visit-level (reference-tie) corrections")
     p.add_argument("--apply", action="store_true")
+    p.add_argument("--pool", action="store_true",
+                   help="Pool per-detector corrections to the granularity of the offsets table before applying them (module-family rows cannot express a per-detector shift, and un-pooled corrections are SUMMED onto the shared row).  This is what the one-correction-per-row refusal asks for.")
     p.add_argument("--mark-stale", action="store_true")
     args = p.parse_args(argv)
 
@@ -229,7 +231,7 @@ def main(argv=None):
             tbl.write(tp, overwrite=True)
             print(f"   table extended to per-exposure rows "
                   f"(original -> {os.path.basename(backup)})")
-        update_offsets_table(tp, corrs, "m2cycle2")
+        update_offsets_table(tp, corrs, "m2cycle2", pool=args.pool)
         print(f"   APPLIED -> {tp} (backup + provenance columns written)")
 
     if args.apply and args.mark_stale and args.basepath:

@@ -365,8 +365,10 @@ def _assert_one_correction_per_row(corrections, tbl, offsets_path):
         f"N-fold over-correction whose parts are each legal under the magnitude "
         f"ceiling.  The correction set is finer-grained than the table's rows "
         f"(typically per-DETECTOR corrections against module-FAMILY rows).  "
-        f"Pool them to the table's granularity first "
-        f"(pool_corrections_to_table_granularity) or rebuild the table at the "
+        f"Pool them to the table's granularity first -- pass pool=True to "
+        f"update_offsets_table, or --pool to "
+        f"scripts/reduction/apply_m2_checkpoint_corrections.py / "
+        f"run_astrometry_checkpoint.py -- or rebuild the table at the "
         f"corrections' granularity.  {'; '.join(detail)}")
 
 
@@ -389,10 +391,34 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
     converge: four detector residuals of a few mas that largely cancel pool to a
     sub-floor module shift, and the checkpoint passes instead of writing their
     sum.  Summing them is what made sgrc diverge.
+
+    Pooling is deliberately NARROW.  It only ever collapses detectors of ONE
+    module family, and only when each contributes at most one correction:
+
+    * ACROSS families is refused.  "the four detectors sit at fixed SIAF
+      positions within it" is the whole justification, and it does not extend
+      to medianing module A against module B -- the A/B seam is a systematic
+      this project tracks separately.  Refusing also keeps
+      ``_assert_module_granularity``'s Module-less refusal intact: on a table
+      with no Module column every module lands on the same row, so the group
+      spans families and pooling stops rather than quietly applying an
+      A/B-averaged shift.  (sgrb2's VIRAC2locked table is exactly this shape
+      and is a live ``locked`` field.)
+    * REPEATED modules within a group are refused.  Two corrections for the
+      same module on one row are not detectors of that module, they are two
+      physically distinct things the table cannot tell apart -- e.g. sgrb2's
+      records carry corrections with no vgroup at all against a Vgroup-less
+      table, so two pointings collide.  Pooling must not absorb what the
+      vgroup guard exists to stop.
     """
     if tbl is None:
         tbl = Table.read(offsets_path)
     corrections = list(corrections)
+    # Magnitude ceiling BEFORE the median.  Pooling cannot inflate a correction
+    # past the ceiling (median <= max), so the risk runs the other way: a
+    # detector whose measurement blew up is averaged out of existence and the
+    # operator never learns the measurement failed.  Check the MEMBERS.
+    _assert_correction_magnitudes(corrections, offsets_path)
     visit_numbers = np.array([int(str(v)[-3:]) for v in tbl["Visit"]])
     groups = {}
     order = []
@@ -424,54 +450,117 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
                     f"pooling cannot resolve a partial overlap.")
             seen[i] = key
 
+    if stat not in _POOL_STATS:
+        # `agg = np.median if stat == "median" else np.mean` silently degraded a
+        # typo to the LESS robust statistic, and the statistic is the whole
+        # point: members 1,1,1,100 give 1.0 as "median" and 25.75 as "medain".
+        raise ValueError(f"pool stat must be one of {sorted(_POOL_STATS)}, "
+                         f"got {stat!r}")
+    agg = _POOL_STATS[stat]
+
     out = list(bulk)
     for key in order:
         members = groups[key]
         if len(members) == 1:
             out.append(members[0])
             continue
-        agg = np.median if stat == "median" else np.mean
+        mods = sorted(str(c.get("module")) for c in members)
+        _assert_poolable(members, mods, key, tbl, offsets_path)
         dra = float(agg([float(c["dra_onsky_mas"]) for c in members]))
         ddec = float(agg([float(c["ddec_onsky_mas"]) for c in members]))
-        mods = sorted({str(c.get("module")) for c in members})
+        # Dispersion, so a bimodal group is visible rather than pooling to a
+        # meaningless middle with no trace.  Peak-to-peak of the 2-D residual
+        # magnitudes; carried in `source` AND returned on the dict for the
+        # checkpoint record (`source` is truncated to 64 chars on write).
+        mags = [float(np.hypot(c["dra_onsky_mas"], c["ddec_onsky_mas"]))
+                for c in members]
+        spread = float(np.ptp(mags))
+        _assert_pool_spread(spread, members, mods, offsets_path)
         pooled = dict(members[0])
         pooled["dra_onsky_mas"] = dra
         pooled["ddec_onsky_mas"] = ddec
         pooled["dec_deg"] = float(np.mean([float(c["dec_deg"]) for c in members]))
         pooled["module"] = _pooled_module_label(mods, tbl, key)
         pooled["pooled_from"] = mods
+        pooled["pooled_n"] = len(members)
+        pooled["pooled_spread_mas"] = spread
+        pooled["pooled_stat"] = stat
         pooled["source"] = (f"{members[0].get('source', 'astrometry_checkpoint')}"
-                            f" [{stat} of {len(members)}: {','.join(mods)}]")
+                            f" [{stat} of {len(members)}, ptp {spread:.2f}mas: "
+                            f"{','.join(mods)}]")
         out.append(pooled)
     return out
+
+
+# dra and ddec are aggregated INDEPENDENTLY, which is the component-wise median
+# and not the geometric (2-D) median.  For the N<=4 groups this pooler is built
+# for the two differ negligibly, and the component-wise form has the property
+# that matters here -- it cannot exceed the component-wise max, so it can never
+# sum.  Revisit if groups ever get large.
+_POOL_STATS = {"median": np.median, "mean": np.mean}
+
+# Refuse a group whose members disagree by more than this; they are not one
+# shift seen four times, and their middle means nothing.  Generous by default:
+# real per-detector SIAF/DVA spread is a few mas, and the sgrb2 groups measured
+# on 2026-08-01 ran 1.7-3.4 mas peak-to-peak.
+MAX_POOL_SPREAD_MAS = 50.0
+
+
+def _assert_poolable(members, mods, row_key, tbl, offsets_path):
+    """Refuse a group pooling cannot legitimately collapse.  See the pooler."""
+    families = {_module_family(m) for m in mods if m and m != "None"}
+    if len(families) > 1:
+        raise OffsetsTableUpdateError(
+            f"cannot pool corrections for {os.path.basename(offsets_path)}: "
+            f"{len(members)} corrections spanning module families "
+            f"{sorted(families)} land on the same row(s) {row_key} "
+            f"(modules {mods}).  Pooling collapses the DETECTORS of one module, "
+            f"whose fixed SIAF positions within it make their spread a "
+            f"distortion-class systematic -- that argument does not extend to "
+            f"medianing module A against module B, and the A/B seam is tracked "
+            f"separately.  A table with no Module column always lands here, "
+            f"which is correct: rebuild it per-module "
+            f"(build_virac2_offsets --per-module) so corrections map 1:1.")
+    if len(set(mods)) != len(mods):
+        dupes = sorted({m for m in mods if mods.count(m) > 1})
+        raise OffsetsTableUpdateError(
+            f"cannot pool corrections for {os.path.basename(offsets_path)}: "
+            f"module(s) {dupes} contribute MORE THAN ONE correction to the same "
+            f"row(s) {row_key}.  Two corrections for one module are not its "
+            f"detectors -- they are two physically distinct things the table "
+            f"cannot tell apart (typically two visit groups against a "
+            f"Vgroup-less table).  Pooling must not absorb what the vgroup "
+            f"guard exists to stop; extend the table to carry Vgroup.")
+
+
+def _assert_pool_spread(spread, members, mods, offsets_path):
+    limit = _positive_env_float("ASTROM_MAX_POOL_SPREAD_MAS", MAX_POOL_SPREAD_MAS)
+    if spread <= limit:
+        return
+    raise OffsetsTableUpdateError(
+        f"cannot pool corrections for {os.path.basename(offsets_path)}: "
+        f"{len(members)} corrections for modules {mods} disagree by "
+        f"{spread:.1f} mas peak-to-peak (limit {limit} mas, "
+        f"ASTROM_MAX_POOL_SPREAD_MAS).  That is not one shift measured several "
+        f"times, so their middle is not a measurement of anything -- one "
+        f"detector's tie has probably failed.  Inspect the checkpoint record.")
 
 
 def _pooled_module_label(mods, tbl, row_key):
     """The module token the pooled correction should carry.
 
     Prefer the table's own value for the row(s) it lands on -- that is by
-    construction the granularity the table expresses.  Fall back to the common
-    prefix of the pooled detector names.
+    construction the granularity the table expresses.  Fall back to the shared
+    family of the pooled detector names, which ``_assert_poolable`` has already
+    established is unique (so this can no longer mislabel a cross-family pool
+    with one arbitrary member's name).
     """
     if "Module" in tbl.colnames and row_key:
         vals = sorted({str(tbl["Module"][i]) for i in row_key})
         if len(vals) == 1:
             return vals[0]
-    stripped = sorted({m.strip("1234") for m in mods if m and m != "None"})
-    return stripped[0] if len(stripped) == 1 else (mods[0] if mods else None)
-
-
-def _is_bulk_correction(corr):
-    """A whole-visit tie: ``exposure=None, module=None`` (consensus->reference).
-
-    It is broad BY DESIGN -- it names no exposure and no module, so on a
-    per-exposure table it lands on every row of the visit, and that IS the
-    intent (a visit-wide shift plus each exposure's jitter; cf. the BULK
-    sentinel row + jitter row that ``lookup_consensus_offset`` sums).  So it is
-    exempt from the one-correction-per-row guard and from pooling: it does not
-    compete with a per-exposure correction, it composes with it.
-    """
-    return corr.get("exposure") is None and corr.get("module") is None
+    families = sorted({_module_family(m) for m in mods if m and m != "None"})
+    return families[0] if families else None
 
 
 def _module_family(module):
@@ -497,7 +586,22 @@ def _apply_module_rows(corr_module, present):
     ``nrcblong``), so the table itself says which token this correction's
     family means here.  An exact row value always wins, so a table rebuilt at
     detector granularity keeps 1:1 matching with no change here.
+
+    The single-channel-per-filter assumption is ENFORCED here rather than
+    merely documented: no table on disk currently mixes them, but
+    ``_module_family('nrcalong') == 'nrca'``, so if one ever did, a bare
+    ``'nrca'`` correction would fan onto the ``nrcalong`` row -- the mirror
+    image of the LW->SW leak this function exists to close.
     """
+    long_rows = {p for p in present if str(p).endswith("long")}
+    if long_rows and long_rows != set(present):
+        raise OffsetsTableUpdateError(
+            f"offsets rows for one filter mix LW and SW module tokens "
+            f"({sorted(present)}).  Write-direction matching resolves a "
+            f"correction's family against the row values present for its "
+            f"filter, which is only unambiguous while a filter's rows are all "
+            f"one channel; here a bare 'nrca' correction could not be told "
+            f"from an 'nrcalong' one.  Split the filter's rows by channel.")
     m = str(corr_module)
     if m in present:
         return {m}
@@ -675,7 +779,7 @@ def _module_variants(module):
 
 
 def update_offsets_table(offsets_path, corrections, stage, out_path=None,
-                         backup=True):
+                         backup=True, pool=False):
     """Apply measured on-sky corrections to an offsets table, with provenance.
 
     ``corrections``: list of dicts with keys
@@ -711,6 +815,15 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
     _assert_correction_magnitudes(corrections, offsets_path)
 
     tbl = Table.read(offsets_path)
+    # `pool=True` performs the collapse the guard below names.  Off by default,
+    # so this function stays strict for every existing caller; the m2 checkpoint
+    # pools explicitly before the actionability floor (it needs the pooled
+    # magnitudes to decide whether to stop at all), and the recovery scripts
+    # opt in with --pool.  Without this the guard's remedy named a function no
+    # script called.
+    if pool:
+        corrections = pool_corrections_to_table_granularity(
+            corrections, offsets_path, tbl=tbl)
     # all three granularity checks: a correction set must map 1:1 onto the
     # table's rows in EVERY dimension it is keyed by, or legal-sized corrections
     # sum.  The first two name the missing COLUMN (the actionable diagnosis);

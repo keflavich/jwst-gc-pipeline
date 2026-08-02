@@ -1106,3 +1106,133 @@ def test_bulk_correction_composes_with_per_exposure_ones(tmp_path):
     e2 = out[(out["Module"] == "nrca") & (out["Exposure"] == 2)][0]
     assert e1["ddec (arcsec)"] == pytest.approx(0.110)
     assert e2["ddec (arcsec)"] == pytest.approx(0.100)
+
+
+# --- pooling refusals: what pooling must NOT silently absorb -----------------
+
+def _pool(corr, path, **kw):
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        pool_corrections_to_table_granularity)
+    return pool_corrections_to_table_granularity(corr, path, **kw)
+
+
+def test_pooling_refuses_to_average_across_module_families(tmp_path):
+    """A Module-LESS table lands every module on one row (sgrb2's shape).
+
+    Pooling there would convert _assert_module_granularity's actionable
+    "rebuild the table --per-module" refusal into a silent A/B-averaged shift.
+    The justification for pooling is that detectors sit at fixed SIAF positions
+    WITHIN one module; it does not extend to medianing module A against B.
+    """
+    path = _module_less_csv(tmp_path)
+    before = open(path).read()
+    corr = _detector_corrections(("nrca1", "nrca2", "nrcb1", "nrcb2"))
+    with pytest.raises(OffsetsTableUpdateError,
+                       match="(?i)module families|per-module"):
+        _pool(corr, path)
+    with pytest.raises(OffsetsTableUpdateError):
+        update_offsets_table(path, corr, "m2", pool=True)
+    assert open(path).read() == before
+
+
+def test_pooling_refuses_repeated_module_in_one_group(tmp_path):
+    """Two corrections for ONE module on one row are not its detectors.
+
+    They are two physically distinct things the table cannot tell apart --
+    typically two visit groups against a Vgroup-less table (sgrb2's records
+    carry no vgroup at all).  Pooling must not absorb what the vgroup guard
+    exists to stop.
+    """
+    path = _module_family_csv(tmp_path)
+    corr = _detector_corrections(("nrca1",), ddec=10.0) + \
+        _detector_corrections(("nrca1",), ddec=90.0)
+    with pytest.raises(OffsetsTableUpdateError,
+                       match="(?i)more than one correction|Vgroup"):
+        _pool(corr, path)
+
+
+def test_magnitude_ceiling_sees_members_not_the_median(tmp_path):
+    """A blown-up detector must stop the run, not be averaged out of existence.
+
+    median <= max, so pooling cannot inflate past the ceiling -- the risk runs
+    the other way.  Un-pooled this raises; pooled it used to become 2.5 mas.
+    """
+    path = _module_family_csv(tmp_path)
+    corr = []
+    for m, d in (("nrca1", 2.0), ("nrca2", 2.0), ("nrca3", 3.0),
+                 ("nrca4", 30000.0)):
+        corr.extend(_detector_corrections((m,), ddec=d))
+    with pytest.raises(OffsetsTableUpdateError, match="(?i)magnitude limit"):
+        _pool(corr, path)
+
+
+def test_pooling_refuses_a_bimodal_group(tmp_path, monkeypatch):
+    """A group whose members disagree wildly has no meaningful middle."""
+    monkeypatch.setenv("ASTROM_MAX_POOL_SPREAD_MAS", "20")
+    path = _module_family_csv(tmp_path)
+    corr = []
+    for m, d in (("nrca1", 1.0), ("nrca2", 1.0), ("nrca3", 100.0),
+                 ("nrca4", 100.0)):
+        corr.extend(_detector_corrections((m,), ddec=d))
+    with pytest.raises(OffsetsTableUpdateError, match="(?i)peak-to-peak"):
+        _pool(corr, path)
+
+
+def test_pooled_entry_carries_its_dispersion(tmp_path):
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        pool_corrections_to_table_granularity)
+    path = _module_family_csv(tmp_path)
+    corr = []
+    for m, d in (("nrca1", 1.0), ("nrca2", 5.0), ("nrca3", 3.0), ("nrca4", 3.0)):
+        corr.extend(_detector_corrections((m,), ddec=d))
+    pooled = pool_corrections_to_table_granularity(corr, path)[0]
+    assert pooled["pooled_n"] == 4
+    assert pooled["pooled_spread_mas"] == pytest.approx(4.0)
+    assert pooled["pooled_stat"] == "median"
+    assert "ptp 4.00mas" in pooled["source"]
+
+
+def test_unknown_pool_stat_raises_rather_than_becoming_the_mean(tmp_path):
+    path = _module_family_csv(tmp_path)
+    corr = _detector_corrections(("nrca1", "nrca2"), ddec=10.0)
+    with pytest.raises(ValueError, match="(?i)pool stat"):
+        _pool(corr, path, stat="medain")
+
+
+def test_partial_row_set_overlap_is_refused(tmp_path):
+    """Two corrections whose matched row-sets overlap but differ cannot pool."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        pool_corrections_to_table_granularity)
+    rows = [dict(Visit="jw04147012001", Exposure=1, Filter="F115W", Module=m,
+                 **{"dra (arcsec)": 0.0, "ddec (arcsec)": 0.0})
+            for m in ("nrca", "nrca1")]
+    path = str(tmp_path / "Offsets_JWST_Brick4147_VIRAC2locked.csv")
+    Table(rows).write(path, overwrite=True)
+    # 'nrca1' matches its exact row only; a bare 'nrca' matches the family row
+    # only -- but 'nrca2' (absent) falls back to BOTH by family.
+    corr = _detector_corrections(("nrca1",)) + _detector_corrections(("nrca2",))
+    with pytest.raises(OffsetsTableUpdateError,
+                       match="(?i)row-sets|partial overlap"):
+        pool_corrections_to_table_granularity(corr, path)
+
+
+def test_mixed_channel_rows_for_one_filter_are_refused(tmp_path):
+    """The single-channel-per-filter invariant is enforced, not just assumed."""
+    rows = [dict(Visit="jw04147012001", Exposure=1, Filter="F115W", Module=m,
+                 **{"dra (arcsec)": 0.0, "ddec (arcsec)": 0.0})
+            for m in ("nrca", "nrcalong")]
+    path = str(tmp_path / "Offsets_JWST_Brick4147_VIRAC2locked.csv")
+    Table(rows).write(path, overwrite=True)
+    with pytest.raises(OffsetsTableUpdateError, match="(?i)mix LW and SW"):
+        update_offsets_table(path, _detector_corrections(("nrca1",)), "m2")
+
+
+def test_update_offsets_table_pool_flag_applies_the_collapse(tmp_path):
+    """pool=True performs the collapse the guard's message names."""
+    path = _module_family_csv(tmp_path)
+    corr = _detector_corrections(("nrca1", "nrca2", "nrca3", "nrca4"), ddec=10.0)
+    with pytest.raises(OffsetsTableUpdateError):
+        update_offsets_table(path, corr, "m2")            # strict by default
+    out = update_offsets_table(path, corr, "m2", pool=True)
+    hit = out[(out["Module"] == "nrca") & (out["Exposure"] == 1)]
+    assert hit[0]["ddec (arcsec)"] == pytest.approx(0.010)   # median, not 4x

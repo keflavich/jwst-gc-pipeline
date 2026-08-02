@@ -3344,6 +3344,54 @@ def _astrom_checkpoint_refcat(basepath):
     return None
 
 
+def _record_pooling(record, pooled, n_before, offsets_path):
+    """Persist what pooling collapsed into the checkpoint record on disk.
+
+    The record is written before the corrections are pooled, and a pooled
+    correction's membership otherwise survives only in its ``source`` string --
+    which ``update_offsets_table`` truncates to 64 characters, shorter than a
+    real 8-detector member list.  Re-write the record (both the timestamped
+    file and ``*_latest.json``) with a ``pooling`` section so the provenance of
+    an applied shift is recoverable afterwards.
+    """
+    groups = [{'module': c.get('module'),
+               'filtername': c.get('filtername'),
+               'exposure': c.get('exposure'),
+               'vgroup': c.get('vgroup'),
+               'pooled_from': c.get('pooled_from'),
+               'n': c.get('pooled_n'),
+               'stat': c.get('pooled_stat'),
+               'spread_mas': c.get('pooled_spread_mas'),
+               'dra_onsky_mas': c.get('dra_onsky_mas'),
+               'ddec_onsky_mas': c.get('ddec_onsky_mas')}
+              for c in pooled if c.get('pooled_from')]
+    record['pooling'] = {'n_before': int(n_before), 'n_after': len(pooled),
+                         'offsets_table': offsets_path, 'groups': groups}
+    path = record.get('record_path')
+    if not path:
+        return
+    import json as _json
+    targets = [path]
+    _latest = re.sub(r'_\d{8}T\d{6}Z\.json$', '_latest.json', path)
+    if _latest != path and os.path.exists(_latest):
+        targets.append(_latest)
+    for tgt in targets:
+        # A record we cannot re-write must not abort a run whose science is
+        # already decided; say so instead.  Specific errors only (repo rule).
+        try:
+            with open(tgt) as fh:
+                doc = _json.load(fh)
+            doc['pooling'] = record['pooling']
+            tmp = f'{tgt}.tmp{os.getpid()}'
+            with open(tmp, 'w') as fh:
+                _json.dump(doc, fh, indent=2, default=str)
+            os.replace(tmp, tgt)
+        except (OSError, ValueError) as ex:
+            print(f"astrom checkpoint: could not record pooling provenance in "
+                  f"{os.path.basename(tgt)}: {type(ex).__name__}: {ex}",
+                  flush=True)
+
+
 def _astrom_offsets_channel(proposal_id, field):
     """Which offsets table THIS field is aligned from, per ``alignment_config``.
 
@@ -3608,6 +3656,11 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
                       f"{os.path.basename(_pool_path)} (module-family rows "
                       f"cannot express a per-detector shift; summing them is "
                       f"what made sgrc diverge)", flush=True)
+                # Persist WHAT was pooled into the checkpoint record.  The
+                # membership otherwise survives only in the correction's
+                # `source`, which update_offsets_table truncates to 64 chars --
+                # and a real 8-detector member list is longer than that.
+                _record_pooling(record, corrections, _n_before, _pool_path)
 
     # Actionability floor: per-detector residuals of ~2.4-3.3 mas (measured,
     # brick-1182 F115W V12 cycle-3, 2026-07-15) are SIAF/DVA-class systematics
