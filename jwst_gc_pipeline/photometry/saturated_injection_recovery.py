@@ -157,20 +157,32 @@ def run(crf, band, detector, field, psfs, out, f_bf=0.3, n_stars=60,
     if cat is None or not len(cat):
         raise SystemExit('[inj] recovery returned no satstars')
 
-    # match recovered -> injected (sky)
+    # match recovered -> injected (sky). match_to_catalog_sky forbids NaN in the
+    # catalog, and some recovered satstars have unmeasurable (NaN) skycoord_fit,
+    # so match only against the finite-position subset and map indices back.
     from jwst_gc_pipeline.frame_wcs import frame_wcs
     w = frame_wcs(fh).gwcs
     ra_i, dec_i = w(inj['x'].astype(float), inj['y'].astype(float))
-    sc_i = SkyCoord(ra_i * u.deg, dec_i * u.deg)
-    sc_r = SkyCoord(cat['skycoord_fit'])
-    idx, sep, _ = sc_i.match_to_catalog_sky(sc_r)
-    ok = sep.arcsec < 0.15
-    rec_flux = np.asarray(cat['flux_fit'][idx], float)
-    rec_mag = art.imflux_to_mag(rec_flux, band, pixar_sr)
+    sc_i_all = SkyCoord(np.asarray(ra_i, float) * u.deg, np.asarray(dec_i, float) * u.deg)
+    sc_r_all = SkyCoord(cat['skycoord_fit'])
+    fin_r = np.isfinite(sc_r_all.ra.deg) & np.isfinite(sc_r_all.dec.deg)
+    fin_i = np.isfinite(sc_i_all.ra.deg) & np.isfinite(sc_i_all.dec.deg)
+    rec_mag = np.full(len(inj), np.nan)
+    sep_mas = np.full(len(inj), np.nan)
+    if fin_r.sum() and fin_i.sum():
+        cat_fin = cat[fin_r]
+        idx, sep, _ = sc_i_all[fin_i].match_to_catalog_sky(sc_r_all[fin_r])
+        rf = np.asarray(cat_fin['flux_fit'][idx], float)
+        rm = art.imflux_to_mag(rf, band, pixar_sr)
+        ii = np.where(fin_i)[0]
+        rec_mag[ii] = rm
+        sep_mas[ii] = sep.mas
+    ok = sep_mas < 150.0   # 0.15"
+    rec_mag = np.where(ok, rec_mag, np.nan)
     inj['matched'] = ok
-    inj['mag_rec'] = np.where(ok, rec_mag, np.nan)
+    inj['mag_rec'] = rec_mag
     inj['dmag'] = inj['mag_rec'] - inj['mag_inj']       # +ve = recovered too faint
-    inj['sep_mas'] = sep.mas
+    inj['sep_mas'] = sep_mas
     inj.write(f'{out}/inj_recovery_{field}_{band}_{detector}.ecsv', overwrite=True)
     print(f'[inj] matched {int(ok.sum())}/{len(inj)} within 0.15"', flush=True)
 
