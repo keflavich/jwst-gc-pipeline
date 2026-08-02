@@ -36,10 +36,17 @@
 #SBATCH --time=08:00:00
 #SBATCH --output=/orange/adamginsburg/jwst/logs/merge_%x_%A_%a.out
 
+# ~/.bash_profile sources ~/.bashrc, which exports CRDS_PATH and STPSF_PATH on
+# this account -- so sourcing it OVERWRITES whatever the caller set, and a bare
+# ${VAR:-default} below would then read .bashrc's value rather than the caller's.
+# Remember what the caller passed, first.
+_caller_CRDS_PATH=${CRDS_PATH:-}
+_caller_CRDS_SERVER_URL=${CRDS_SERVER_URL:-}
+_caller_STPSF_PATH=${STPSF_PATH:-}
 source ~/.bash_profile 2>/dev/null
-export CRDS_PATH=${CRDS_PATH:-/orange/adamginsburg/jwst/crds}
-export CRDS_SERVER_URL=${CRDS_SERVER_URL:-https://jwst-crds.stsci.edu}
-export STPSF_PATH=${STPSF_PATH:-/orange/adamginsburg/jwst/stpsf-data}
+export CRDS_PATH=${_caller_CRDS_PATH:-${CRDS_PATH:-/orange/adamginsburg/jwst/crds}}
+export CRDS_SERVER_URL=${_caller_CRDS_SERVER_URL:-${CRDS_SERVER_URL:-https://jwst-crds.stsci.edu}}
+export STPSF_PATH=${_caller_STPSF_PATH:-${STPSF_PATH:-/orange/adamginsburg/jwst/stpsf-data}}
 # The entry points refuse to run on a checkout that is not on a release tag.
 # The live merge runs from the working tree, so permit it; the products are
 # stamped with a dev tag and can never be mistaken for a release.

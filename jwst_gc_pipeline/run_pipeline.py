@@ -220,6 +220,15 @@ def _sbatch_command(plan, stage_name, config, dependency=None):
     return command
 
 
+def _log_dir(slurm):
+    """``slurm.log_dir``, with ``~`` expanded.
+
+    sbatch does not expand it: a literal ``~/logs`` reaches SLURM as a relative
+    directory named ``~``.
+    """
+    return os.path.expanduser((slurm.get('log_dir') or '').strip())
+
+
 def _log_arguments(slurm, stage_name, array=False):
     """``--output`` for one job, from ``slurm.log_dir``.
 
@@ -234,7 +243,7 @@ def _log_arguments(slurm, stage_name, array=False):
     Builds the argument and nothing else; :func:`_make_log_dir` does the
     creating, once, at submission.
     """
-    log_dir = (slurm.get('log_dir') or '').strip()
+    log_dir = _log_dir(slurm)
     if not log_dir:
         return []
     task = '%A_%a' if array else '%j'
@@ -250,7 +259,7 @@ def _make_log_dir(slurm):
     filesystem, or ``--dry-run`` would create directories on a machine that has
     none of this.
     """
-    log_dir = (slurm.get('log_dir') or '').strip()
+    log_dir = _log_dir(slurm)
     if not log_dir:
         return
     try:

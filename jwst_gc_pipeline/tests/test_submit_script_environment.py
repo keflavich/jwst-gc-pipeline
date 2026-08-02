@@ -32,11 +32,18 @@ def _exports(text, name):
 def test_a_submit_script_defers_to_an_exported_value(script):
     text = script.read_text()
     for name, default in SHIPPED_DEFAULTS.items():
+        wanted = '${_caller_%s:-${%s:-%s}}' % (name, name, default)
         for value in _exports(text, name):
-            assert value == '${%s:-%s}' % (name, default), (
-                f'{script.name}: `export {name}={value}` overwrites what the '
-                f'caller exported.  Write `export {name}=${{{name}:-{default}}}` '
-                f'so config.yaml and an interactive override still win.')
+            assert value == wanted, (
+                f'{script.name}: `export {name}={value}` does not keep what the '
+                f'caller exported.  Write `export {name}={wanted}`: the caller '
+                f'first, then whatever ~/.bash_profile set, then the shipped '
+                f'default.')
+        if _exports(text, name):
+            assert f'_caller_{name}=${{{name}:-}}' in text, (
+                f'{script.name}: {name} is read back after `source '
+                f'~/.bash_profile`, which exports it on this account, so the '
+                f'caller\'s value has to be saved before that line.')
 
 
 #: Submitters that never load a JWST reference file, so they need no cache.

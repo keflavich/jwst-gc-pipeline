@@ -28,10 +28,16 @@
 #SBATCH --time=96:00:00
 #SBATCH --output=/orange/adamginsburg/jwst/logs/catalog_%x_%A_%a.out
 
+# ~/.bash_profile sources ~/.bashrc, which exports CRDS_PATH and STPSF_PATH on
+# this account -- so sourcing it OVERWRITES whatever the caller set, and a bare
+# ${VAR:-default} below would then read .bashrc's value rather than the caller's.
+# Remember what the caller passed, first.
+_caller_CRDS_PATH=${CRDS_PATH:-}
+_caller_CRDS_SERVER_URL=${CRDS_SERVER_URL:-}
 source ~/.bash_profile 2>/dev/null
-export CRDS_PATH=${CRDS_PATH:-/orange/adamginsburg/jwst/crds}
+export CRDS_PATH=${_caller_CRDS_PATH:-${CRDS_PATH:-/orange/adamginsburg/jwst/crds}}
 export GC_ALLOW_DEV="${GC_ALLOW_DEV:-1}"
-export CRDS_SERVER_URL=${CRDS_SERVER_URL:-https://jwst-crds.stsci.edu}
+export CRDS_SERVER_URL=${_caller_CRDS_SERVER_URL:-${CRDS_SERVER_URL:-https://jwst-crds.stsci.edu}}
 export TMPDIR="${SLURM_TMPDIR:-/blue/adamginsburg/adamginsburg/tmp}"
 export TMP="$TMPDIR" TEMP="$TMPDIR"
 mkdir -p "$TMPDIR"
