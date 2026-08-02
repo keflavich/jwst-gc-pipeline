@@ -137,6 +137,44 @@ and/or real charge migration that is stronger/longer-range than a 4-neighbour
 spill. So f_bf stays a nuisance knob (kept small); the recovery-bias story (§4b)
 is driven by wing-selfcal under-correction, not charge migration.
 
+## 4d. CORRECTION (2026-08-02) — §4b was wrong; the bias is a harness/wing issue, and it's UNRESOLVED
+
+The wing-selfcal ON/OFF test (`test_wingcal_onoff.py`, brick F200W, 11 hard stars):
+
+| regime | bias wingcal ON | bias wingcal OFF |
+|---|---|---|
+| hard | **+1161 mmag** | **+6 mmag** |
+| deep | +521 | −48 |
+| moderate | +9 | −56 |
+
+**The masked-core FIT itself is unbiased** (wingcal OFF ≈ 0). The entire
+depth-growing bias enters through the **wing-selfcal correction** (÷ a ratio that
+reaches ~4× at r≈27 px, with ±3× scatter). So §4b's "real recovery
+under-correction" was the wrong reading — the correction is *over*-doing it here,
+and there is no `apply_wing_selfcal` "median-vs-per-star" bug (it already
+interpolates per rmask).
+
+**But whether that over-correction is REAL (a genuine deep-star failure = the CMD
+hook) or a HARNESS ARTIFACT is not cleanly resolved:**
+- STPSF-wing injections truly need ratio≈1 but the recovery applies ~4× → they
+  are over-corrected → but that under-represents real stars (real wings *are*
+  broad, so real stars genuinely need a large correction).
+- A crude radial ×1.5 "empirical wing" boost (`empirical_wings.py`) did NOT fix
+  it (hard +1656, N=9 thin) — a radial surface-brightness boost does not
+  reproduce the wing-selfcal's integrated *flux* ratio (~4×).
+
+**What is solid:** (a) the core fit is unbiased; (b) the deep-star bias lives in
+the wing-selfcal correction at large mask radius, where its ratio is large and
+NOISY (±3×). That noisy large-r extrapolation is the prime suspect for the hook.
+
+**To resolve needs a FAITHFUL empirical-PSF injection** — inject a full 2-D
+empirical PSF stacked from the frame's real bright unsaturated stars (the same
+population the wingcal calibrates on), not a radial approximation. Then the
+injected stars reproduce the real masked-fit/truth ratio by construction and the
+harness measures the true recovery bias. This ties directly to
+`scripts/analysis/wing_calibration/` (stack_psf_2d.py) and the Jay empirical-wing
+effort. Deferred to a decision.
+
 ## 5. Status / next steps
 1. [ ] `saturation_forward_model.py` — the physics above, CRDS-driven (this doc's §2).
 2. [ ] injection+recovery driver (extend `artificial_stars.py` path) → recovered/injected vs sat-depth.
