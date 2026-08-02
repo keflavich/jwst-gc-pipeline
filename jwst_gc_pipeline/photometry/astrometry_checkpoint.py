@@ -1223,12 +1223,46 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
 # provenance header stamping (used by fix_alignment at re-apply time)
 # ---------------------------------------------------------------------------
 
+#: Words that mean "someone meant to fill this in".  A tripwire value belongs in
+#: source, where it can stop a run; stamped into a product it becomes the
+#: provenance, and it outlives the run that wrote it.
+PLACEHOLDER_WORDS = frozenset(
+    ('BUG', 'TODO', 'FIXME', 'XXX', 'PLACEHOLDER', 'UNKNOWN'))
+
+#: Sentinels are written ``THIS_IS_A_BUG_IF_YOU_USE_THIS``, so the words have to
+#: be found between underscores.  Splitting on non-alphanumerics does that, and
+#: keeps ``DEBUG`` (one token, not the word ``BUG``) legitimate.
+_WORD_SEPARATOR = re.compile(r'[^A-Za-z0-9]+')
+
+
+def looks_like_placeholder(value):
+    """Whether a value reads as "fill this in later" rather than as data."""
+    return bool(PLACEHOLDER_WORDS.intersection(
+        token.upper() for token in _WORD_SEPARATOR.split(str(value)) if token))
+
+
+def assert_not_placeholder(value, what):
+    """Raise unless ``value`` is something a product can record.
+
+    Called before anything is written, so a tripwire that reaches a product
+    stops the run at the start rather than between two writes.
+    """
+    if looks_like_placeholder(value):
+        raise ValueError(
+            f"refusing to record {value!r} as {what}: it reads as a "
+            f"placeholder.  Give the frame the exposure was tied to, from the "
+            f"resolved shift (AlignmentShift.reference_frame, declared in "
+            f"reduction/alignment_config.py), or 'n/a'.")
+
+
 def provenance_header_cards(stage, dra_onsky_mas, ddec_onsky_mas, method,
                             references, table_name):
     """FITS header cards recording WHY the current RAOFFSET/DEOFFSET are what
     they are.  ``fix_alignment`` stamps these when it (re-)applies a corrected
     offsets table — the header of every aligned frame then carries the full
     provenance of its astrometric fix."""
+    assert_not_placeholder(references, 'the astrometric reference frame '
+                                       '(APROVRF)')
     return [
         ("APROVST", str(stage), "astrometry-fix stage (checkpoint)"),
         ("APROVMT", str(method)[:48], "offset measurement method"),

@@ -413,11 +413,13 @@ def test_an_observation_with_no_catalog_names_the_block_to_add(monkeypatch):
 def test_a_proposal_cannot_have_two_reference_frames(monkeypatch):
     """The frame token names the offsets table, which is per proposal, so two
     fields sharing a proposal must agree rather than one winning silently."""
+    # 2045 is arches and quintuplet, so this keeps the case the registry really
+    # has: two fields declaring the same proposal, which must agree.
     other = F.Field('other', root='orange', observations=(
-        F.Obs(proposal='2221', reference_frame='Gaia'),))
+        F.Obs(proposal='2045', reference_frame='Gaia'),))
     monkeypatch.setattr(F, 'FIELDS', F.FIELDS + (other,))
     with pytest.raises(F.FieldRegistryError, match='more than one reference frame'):
-        F.reference_frame('2221')
+        F.reference_frame('2045')
 
 
 def test_a_registry_loaded_from_elsewhere_uses_its_own_roots(tmp_path):

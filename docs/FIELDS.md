@@ -50,7 +50,7 @@ shuffling the file and comparing.
 | `nvisits` | How many visits the observation has. |
 | `filters` | The filters to catalog and merge, lowercase. |
 | `niriss_filters` | NIRISS reuses NIRCam filter names on a different pixel scale, so its filters and products are kept apart. |
-| `reference_frame` | The astrometric frame token (`VIRAC2`, `Gaia`), which names the offsets table and arms the realignment gate. Keyed per proposal: two fields sharing a proposal must agree, and the loader raises if they disagree. |
+| `reference_frame` | The astrometric frame token (`VIRAC2`, `Gaia`), used to name a per-proposal offsets table, `offsets/Offsets_JWST_Brick<proposal>_<token>[_average].csv`, on the fallback path taken when the proposal has no locked table. Keyed per proposal: two fields sharing a proposal must agree, and the loader raises if they disagree. **Leave it out** when the proposal aligns from a table declared in `reduction/alignment_config.py` — that is where the frame a product records comes from, and an absent token makes `resolve_shift` refuse to build the fallback filename rather than name a table that should not be used. |
 | `reference_catalog` | Observation number → the catalog file the astrometry ties TO, relative to the field directory. Per observation, because different observations of one proposal sit at different epochs. MIRI and NIRISS may list several candidates and take the first present on disk. |
 | `reference_catalog_by_filter` | The rare per-filter override of the above: observation → filter → file. |
 | `offsets_table` | Path to the measured astrometric offsets, relative to the field's directory. Measured from the data once and then fixed. |
