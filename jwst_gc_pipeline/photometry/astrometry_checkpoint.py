@@ -1250,16 +1250,24 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                                 f"LATE stage (solution was supposed to be frozen; "
                                 f"no m2 baseline record found)")
                 else:
-                    # apply_ok is False only for a genuinely bad VIRAC tie now:
-                    # no coherent dense peak, per-tile not clean, or a GROSS
-                    # sparse split (spurious peak). A fine ~5-10 mas Gaia-sparse
-                    # split no longer lands here (gc-gaia-frame-not-catalog).
+                    # apply_ok is False only for a genuinely bad tie now: no
+                    # coherent dense peak, a GROSS sparse split (spurious peak),
+                    # or -- per reference regime -- the gating check failed. Point
+                    # the investigator at the check that actually gated: per-tile
+                    # cleanliness for a DENSE reference, the same-star refinement
+                    # for a Gaia-only one (where per-tile is noise, not a signal).
+                    if ref_tie.get("reference_dense", True):
+                        gate = f"per-tile clean={ref_tie['per_tile'].get('clean')}"
+                    else:
+                        gate = ("same-star refined="
+                                f"{ref_tie.get('same_star') is not None} "
+                                "[Gaia-only ref: per-tile map is noise, not gating]")
                     unverified.append(
                         f"{vctx}: consensus->reference offset {off:.2f} mas but the "
-                        f"VIRAC tie is not trustworthy "
+                        f"tie is not trustworthy "
                         f"(cross-ref sep={ref_tie['cross_reference'].get('sep_mas'):.1f} mas, "
                         f"gross_ok={ref_tie.get('cross_reference_gross_ok')}, "
-                        f"per-tile clean={ref_tie['per_tile'].get('clean')}, "
+                        f"{gate}, "
                         f"swept={ref_tie.get('swept')}) -- NOT applying; investigate")
 
         visits.append(dict(

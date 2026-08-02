@@ -230,19 +230,26 @@ def save_step0_record(path, record):
 
 def measure_bulk_offset(catalog_coords, ref_coords_all, ref_coords_sparse,
                         filtername=None, catalog_mag=None, ref_mag=None,
-                        context=''):
+                        dense=True, context=''):
     """Measure the bulk offset with the sanctioned estimator.
 
     Thin wrapper over
     :func:`~jwst_gc_pipeline.photometry.visit_consensus.measure_reference_tie`
     so there is exactly one implementation of "how do we measure an offset" in
     the codebase.  Returns its result dict unchanged.
+
+    ``dense`` MUST be forwarded from ``load_reference_catalog(...)['dense']``: a
+    Gaia-only reference (``dense=False``) cannot gate on the per-tile map (it is
+    noise against a sparse catalog), so ``measure_reference_tie`` falls back to
+    the same-star check.  Leaving it True on a Gaia-only field reproduces the
+    stranded-bulk bug on the reducer side (apply_ok=False for a real, coherent
+    tie).
     """
     from jwst_gc_pipeline.photometry.visit_consensus import measure_reference_tie
     return measure_reference_tie(
         catalog_coords, ref_coords_all, ref_coords_sparse,
         filtername=filtername, consensus_mag=catalog_mag, ref_mag=ref_mag,
-        context=context or 'step0 bulk')
+        dense=dense, context=context or 'step0 bulk')
 
 
 def verify_recorded_bulk(recorded_mas, measured_mas, tol_mas=None, context=''):
@@ -286,7 +293,8 @@ def verify_recorded_bulk(recorded_mas, measured_mas, tol_mas=None, context=''):
 def step0_bulk_offset(catalog_coords, ref_coords_all, ref_coords_sparse,
                       frame_paths, basepath, proposal_id, field, filtername,
                       recorded_mas=None, reference_id='VIRAC2',
-                      catalog_mag=None, ref_mag=None, force=False, visit=None):
+                      catalog_mag=None, ref_mag=None, force=False, visit=None,
+                      dense=True):
     """Run step 0 for one (field, filter).
 
     ``recorded_mas`` is the bulk offset already on record (on-sky mas), or None
@@ -329,12 +337,18 @@ def step0_bulk_offset(catalog_coords, ref_coords_all, ref_coords_sparse,
 
     tie = measure_bulk_offset(catalog_coords, ref_coords_all, ref_coords_sparse,
                               filtername=filtername, catalog_mag=catalog_mag,
-                              ref_mag=ref_mag, context=context)
+                              ref_mag=ref_mag, dense=dense, context=context)
     measured = (float(tie.get('dra_mas', float('nan'))),
                 float(tie.get('ddec_mas', float('nan'))))
     apply_ok = bool(tie.get('apply_ok'))
     bulk_source = str(tie.get('bulk_source', ''))
 
+    # Which check gates apply_ok depends on the reference: a DENSE (VIRAC2) ref
+    # gates on the per-tile map; a Gaia-only ref (dense=False) gates on the
+    # same-star refinement (the per-tile map is noise there).
+    _gate_hint = ("the per-tile map and the sweep result" if dense else
+                  "the same-star refinement (was the tie small enough to refine, "
+                  "or did it sweep?) and the sweep result")
     if recorded_mas is None:
         mode = 'measure'
         sep = None
@@ -344,8 +358,8 @@ def step0_bulk_offset(catalog_coords, ref_coords_all, ref_coords_sparse,
                 f"did not sign off (apply_ok=False) on "
                 f"({measured[0]:+.1f},{measured[1]:+.1f}) mas. An unverified bulk tie "
                 f"must not be recorded -- a spurious or window-limited peak here "
-                f"propagates into every downstream product. Check the per-tile map "
-                f"and the sweep result before recording anything.")
+                f"propagates into every downstream product. Check {_gate_hint} "
+                f"before recording anything.")
         print(f"[step0] {context}: MEASURED bulk offset "
               f"({measured[0]:+.1f},{measured[1]:+.1f}) mas via {bulk_source}. "
               f"Record it in alignment_config.py to apply it.")
@@ -359,11 +373,11 @@ def step0_bulk_offset(catalog_coords, ref_coords_all, ref_coords_sparse,
                 f"measurement ({measured[0]:+.1f},{measured[1]:+.1f}) mas, so it "
                 f"cannot confirm the recorded tie "
                 f"({recorded_mas[0]:+.1f},{recorded_mas[1]:+.1f}) mas either. "
-                f"apply_ok is False when the per-tile map is not clean -- which is "
-                f"exactly the 'bulk reads ~0 while half the mosaic is shifted' case "
-                f"this step exists to catch, so treating a close separation as a "
-                f"pass would defeat the check. Inspect the per-tile map and the "
-                f"sweep result. ({ALLOW_FAIL_ENV}=1 to override deliberately.)")
+                f"On a dense reference apply_ok is False when the per-tile map is "
+                f"not clean -- exactly the 'bulk reads ~0 while half the mosaic is "
+                f"shifted' case this step exists to catch, so treating a close "
+                f"separation as a pass would defeat the check. Inspect {_gate_hint}. "
+                f"({ALLOW_FAIL_ENV}=1 to override deliberately.)")
             if os.environ.get(ALLOW_FAIL_ENV) == '1':
                 warnings.warn(_msg)
             else:
