@@ -213,10 +213,61 @@ def _sbatch_command(plan, stage_name, config, dependency=None):
                 f'--mem={stage["memory"]}',
                 f'--time={stage["walltime"]}',
                 f'--job-name={name}']
+    command += _log_arguments(slurm, stage_name, array=count > 1)
     if dependency:
         command.append(f'--dependency=afterok:{dependency}')
     command += ['--export=ALL', script]
     return command
+
+
+def _log_arguments(slurm, stage_name, array=False):
+    """``--output`` for one job, from ``slurm.log_dir``.
+
+    The submit scripts carry a log path in an ``#SBATCH`` directive, which SLURM
+    reads before any shell runs, so it cannot expand a variable.  Passing
+    ``--output`` on the command line overrides the directive, which is how a
+    machine that is not HiPerGator gets its own log directory.
+
+    ``%a`` is the array task, and SLURM writes ``4294967294`` for it on a job
+    that is not an array, so it is used only when there is one.
+
+    Builds the argument and nothing else; :func:`_make_log_dir` does the
+    creating, once, at submission.
+    """
+    log_dir = (slurm.get('log_dir') or '').strip()
+    if not log_dir:
+        return []
+    task = '%A_%a' if array else '%j'
+    return [f'--output={os.path.join(log_dir, stage_name)}_%x_{task}.out']
+
+
+def _make_log_dir(slurm):
+    """Create ``slurm.log_dir`` before the first submission.
+
+    SLURM refuses a job whose log has nowhere to go, and it refuses it at
+    submit, so this is worth failing on early and by name.  Called only when
+    something is really being submitted: building a command must not touch the
+    filesystem, or ``--dry-run`` would create directories on a machine that has
+    none of this.
+    """
+    log_dir = (slurm.get('log_dir') or '').strip()
+    if not log_dir:
+        return
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+    except OSError as problem:
+        raise pipeline_config.ConfigError(
+            f'slurm.log_dir {log_dir!r} cannot be created ({problem}).  '
+            f'SLURM refuses a job whose log has nowhere to go; point '
+            f'slurm.log_dir somewhere writable.')
+    # makedirs(exist_ok=True) succeeds on a directory that exists and is not
+    # writable, which is the off-site case: the shipped path is there and
+    # belongs to someone else.
+    if not os.access(log_dir, os.W_OK):
+        raise pipeline_config.ConfigError(
+            f'slurm.log_dir {log_dir!r} exists but is not writable.  SLURM '
+            f'refuses a job whose log has nowhere to go; point slurm.log_dir '
+            f'somewhere writable.')
 
 
 def _job_name(plan, stage_name):
@@ -242,6 +293,7 @@ def _merge_all_command(plan, config, dependency):
             f'--mem={stage["memory"]}',
             f'--time={stage["walltime"]}',
             f"--job-name={plan['target']}-mergeall",
+            *_log_arguments(slurm, 'mergeall'),
             f'--dependency=afterok:{dependency}',
             '--export=ALL',
             pipeline_config.submit_script(config, 'merge',
@@ -255,8 +307,11 @@ def _local_commands(plan, config, cutout_region=None):
     reduce_stage = pipeline_config.stage(config, 'reduce')
     reduce_command = [
         python, os.path.join(REPO_ROOT, REDUCE_DRIVERS[plan['instrument']]),
-        '-p', plan['proposal'], '-d', plan['obsid'],
-        '-f', filters, '-m', _modules_for(plan, reduce_stage)]
+        '-p', plan['proposal'], '-d', plan['obsid'], '-f', filters]
+    if plan['instrument'] == 'nircam':
+        # Only NIRCam has modules to choose between.  The MIRI and NIRISS
+        # drivers are single-detector and reject -m.
+        reduce_command += ['-m', _modules_for(plan, reduce_stage)]
     if reduce_stage.get('skip_step1and2', True):
         reduce_command.append('-s')
 
@@ -363,6 +418,8 @@ def _run_local(plan, config, cutout_region, stages, dry_run):
 
 
 def _submit_slurm(plan, config, stages, dry_run):
+    if not dry_run:
+        _make_log_dir(config.get('slurm') or {})
     submitted, dependency = {}, None
     for name in STAGES:
         if name not in stages:

@@ -63,6 +63,11 @@ KNOWN_KEYS = {'scheduler', 'slurm', 'environment', 'python', 'stages',
 KNOWN_STAGE_KEYS = {'submit_script', 'cpus', 'memory', 'walltime', 'fan_out',
                     'skip_step1and2', 'modules'}
 
+#: Keys the runner reads out of the ``slurm`` block.  A misspelled one is
+#: ignored rather than obeyed -- ``logdir:`` would leave logs at whatever the
+#: submit scripts' own #SBATCH directive says -- so reject it here.
+KNOWN_SLURM_KEYS = {'account', 'qos', 'partition', 'log_dir'}
+
 
 def _validate(config):
     unknown = set(config) - KNOWN_KEYS
@@ -70,6 +75,11 @@ def _validate(config):
         raise ConfigError(
             f'unknown top-level key(s) {sorted(unknown)}; this file sets '
             f'{sorted(KNOWN_KEYS - {"source"})}')
+    odd_slurm = set(config.get('slurm') or {}) - KNOWN_SLURM_KEYS
+    if odd_slurm:
+        raise ConfigError(
+            f'slurm: unknown key(s) {sorted(odd_slurm)}; it sets '
+            f'{sorted(KNOWN_SLURM_KEYS)}')
     if config.get('scheduler') not in ('slurm', 'local'):
         raise ConfigError(
             f"scheduler is {config.get('scheduler')!r}; it must be 'slurm' or "

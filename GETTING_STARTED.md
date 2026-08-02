@@ -386,9 +386,13 @@ paths you have to patch.
 A portability layer was proposed in #98 and closed unmerged; `scratch_basepath.py`
 still refers to it.
 
-The SLURM scripts carry HiPerGator specifics throughout — partition names, the
-CRDS cache path, one absolute conda path. Treat them as worked examples to
-adapt.
+The SLURM scripts take `CRDS_PATH`, `CRDS_SERVER_URL`, `STPSF_PATH` and
+`PYTHON` from the environment when they are set, so `config.yaml` supplies those
+and no edit is needed. What is still written into the scripts is the partition
+name and the `#SBATCH --output=` log path — SLURM reads directives before any
+shell runs, so a variable there is never expanded. `slurm.log_dir` in
+`config.yaml` covers the log path for anything the runner submits, by passing
+`--output` on the command line; a script you submit by hand uses the directive.
 
 ---
 

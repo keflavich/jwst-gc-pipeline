@@ -117,7 +117,10 @@ def test_a_cutout_runs_here_rather_than_on_the_queue(capsys):
                     cutout_region='266.535,-28.705,20', dry_run=True)
     out = capsys.readouterr().out
     assert 'scheduler: local' in out
-    assert 'sbatch' not in out
+    # No command submitted.  Matching the bare word would also match a checkout
+    # path that happens to contain it.
+    assert not any(line.strip().startswith('sbatch')
+                   for line in out.splitlines())
     assert '--cutout-region=266.535,-28.705,20' in out
 
 
@@ -197,7 +200,18 @@ def test_an_instrument_with_no_submit_script_says_so():
     driver."""
     config = pipeline_config.load()
     with pytest.raises(pipeline_config.ConfigError, match='no submit script'):
-        pipeline_config.submit_script(config, 'reduce', 'miri')
+        pipeline_config.submit_script(config, 'reduce', 'nirspec')
+
+
+def test_every_instrument_the_runner_drives_can_be_submitted():
+    """Each instrument with a stage-1 driver has a reduce submit script.
+
+    MIRI had a driver and no script, so `run_pipeline --instrument miri` got as
+    far as stage 1 and then refused.
+    """
+    config = pipeline_config.load()
+    for instrument in rp.REDUCE_DRIVERS:
+        assert pipeline_config.submit_script(config, 'reduce', instrument)
 
 
 def test_a_submit_script_that_is_not_there_is_caught(tmp_path, monkeypatch):
@@ -338,3 +352,73 @@ def test_the_banner_reports_where_output_actually_goes(monkeypatch, capsys):
 def test_a_multi_filter_cutout_says_it_is_not_minutes(capsys):
     rp.run_pipeline('2221', '001', cutout_region='1,2,3', dry_run=True)
     assert '--filters F410M keeps it to minutes' in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------
+# Where the logs go.
+# --------------------------------------------------------------------------
+
+def test_log_dir_reaches_the_submitted_job(capsys, monkeypatch):
+    # A site copy is exported by anyone following GETTING_STARTED, and this
+    # test is about the wiring, not about one site's path.
+    monkeypatch.delenv(pipeline_config.ENV_VAR, raising=False)
+    configured = pipeline_config.load()['slurm']['log_dir']
+    rp.run_pipeline('2221', '001', filters=['F410M'], dry_run=True)
+    out = capsys.readouterr().out
+    assert f'--output={configured}/reduce_%x_' in out
+
+
+def test_an_array_job_logs_per_task_and_a_single_job_does_not():
+    """SLURM writes 4294967294 for %a on a job that is not an array."""
+    slurm = {'log_dir': '/tmp'}
+    array = rp._log_arguments(slurm, 'catalog', array=True)[0]
+    single = rp._log_arguments(slurm, 'mergeall', array=False)[0]
+    assert array.endswith('_%x_%A_%a.out')
+    assert single.endswith('_%x_%j.out')
+
+
+def test_no_log_dir_leaves_the_scripts_own_directive_alone():
+    assert rp._log_arguments({}, 'reduce') == []
+
+
+def test_building_a_command_creates_nothing(tmp_path):
+    """--dry-run prints commands, so building one must not touch the disk.
+
+    It also runs on machines that have none of these directories."""
+    absent = tmp_path / 'not-yet' / 'logs'
+    rp._log_arguments({'log_dir': str(absent)}, 'reduce')
+    assert not absent.exists()
+
+
+def test_an_uncreatable_log_dir_says_so():
+    with pytest.raises(pipeline_config.ConfigError, match='log_dir'):
+        rp._make_log_dir({'log_dir': '/proc/definitely/not/writable'})
+
+
+def test_the_log_dir_is_made_at_submission(tmp_path):
+    made = tmp_path / 'logs'
+    rp._make_log_dir({'log_dir': str(made)})
+    assert made.is_dir()
+
+
+def test_a_misspelled_slurm_key_is_rejected(tmp_path, monkeypatch):
+    """`logdir:` would be ignored, and the logs would silently go elsewhere."""
+    mine = tmp_path / 'c.yaml'
+    mine.write_text('slurm:\n  logdir: /tmp/somewhere\n')
+    monkeypatch.setenv(pipeline_config.ENV_VAR, str(mine))
+    with pytest.raises(pipeline_config.ConfigError, match='logdir'):
+        pipeline_config.load()
+
+
+def test_only_nircam_gets_a_modules_argument():
+    """The MIRI and NIRISS stage-1 drivers reject -m."""
+    config = pipeline_config.load()
+    for instrument in ('miri', 'niriss'):
+        plan = rp.resolve('2221' if instrument == 'miri' else '4147',
+                          '002' if instrument == 'miri' else '012',
+                          instrument)
+        reduce_command = dict(rp._local_commands(plan, config))['reduce']
+        assert '-m' not in reduce_command
+    nircam = dict(rp._local_commands(rp.resolve('2221', '001', 'nircam'),
+                                     config))['reduce']
+    assert '-m' in nircam
