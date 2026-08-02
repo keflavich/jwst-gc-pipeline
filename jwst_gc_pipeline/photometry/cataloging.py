@@ -3344,6 +3344,54 @@ def _astrom_checkpoint_refcat(basepath):
     return None
 
 
+def _record_pooling(record, pooled, n_before, offsets_path):
+    """Persist what pooling collapsed into the checkpoint record on disk.
+
+    The record is written before the corrections are pooled, and a pooled
+    correction's membership otherwise survives only in its ``source`` string --
+    which ``update_offsets_table`` truncates to 64 characters, shorter than a
+    real 8-detector member list.  Re-write the record (both the timestamped
+    file and ``*_latest.json``) with a ``pooling`` section so the provenance of
+    an applied shift is recoverable afterwards.
+    """
+    groups = [{'module': c.get('module'),
+               'filtername': c.get('filtername'),
+               'exposure': c.get('exposure'),
+               'vgroup': c.get('vgroup'),
+               'pooled_from': c.get('pooled_from'),
+               'n': c.get('pooled_n'),
+               'stat': c.get('pooled_stat'),
+               'spread_mas': c.get('pooled_spread_mas'),
+               'dra_onsky_mas': c.get('dra_onsky_mas'),
+               'ddec_onsky_mas': c.get('ddec_onsky_mas')}
+              for c in pooled if c.get('pooled_from')]
+    record['pooling'] = {'n_before': int(n_before), 'n_after': len(pooled),
+                         'offsets_table': offsets_path, 'groups': groups}
+    path = record.get('record_path')
+    if not path:
+        return
+    import json as _json
+    targets = [path]
+    _latest = re.sub(r'_\d{8}T\d{6}Z\.json$', '_latest.json', path)
+    if _latest != path and os.path.exists(_latest):
+        targets.append(_latest)
+    for tgt in targets:
+        # A record we cannot re-write must not abort a run whose science is
+        # already decided; say so instead.  Specific errors only (repo rule).
+        try:
+            with open(tgt) as fh:
+                doc = _json.load(fh)
+            doc['pooling'] = record['pooling']
+            tmp = f'{tgt}.tmp{os.getpid()}'
+            with open(tmp, 'w') as fh:
+                _json.dump(doc, fh, indent=2, default=str)
+            os.replace(tmp, tgt)
+        except (OSError, ValueError) as ex:
+            print(f"astrom checkpoint: could not record pooling provenance in "
+                  f"{os.path.basename(tgt)}: {type(ex).__name__}: {ex}",
+                  flush=True)
+
+
 def _astrom_offsets_channel(proposal_id, field):
     """Which offsets table THIS field is aligned from, per ``alignment_config``.
 
@@ -3570,6 +3618,50 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
               f"(no correction implied)", flush=True)
         return
 
+    _field = str(getattr(options, 'field', ''))
+    _channel = _astrom_offsets_channel(proposal_id, _field)
+
+    # POOL to the target table's granularity BEFORE the floor and before the
+    # apply.  The visit consensus emits one correction per DETECTOR
+    # (visit_consensus.exposure_key key[2] is 'nrca1'...), but a module-locked
+    # table's rows are module FAMILIES ('nrca'/'nrcalong'), so all four
+    # detectors of a module land on ONE row and update_offsets_table ADDS them.
+    # Each part is legal under the magnitude ceiling; their sum is not a
+    # measurement.  That is the sgrc/cloudc divergence of 2026-07-30..08-01
+    # (sgrc F115W: 45 detector corrections onto 12 rows, table accumulating
+    # 185.7 -> 525.7 -> 1678.5 mas over three re-tie iterations).
+    #
+    # A family row can only express the module-COMMON shift, so pool with the
+    # MEDIAN.  Doing it before the floor is what makes the loop converge: four
+    # SIAF-class detector residuals that largely cancel pool to a sub-floor
+    # module shift and the checkpoint PASSES, instead of writing their sum and
+    # re-measuring a larger residual next iteration.
+    #
+    # Only the LOCKED channel needs this.  seed_offsets_table_from_consensus
+    # keys natively by (visit, filter, exposure, module, vgroup), so a consensus
+    # table gives every detector its own row -- pooling there would throw away
+    # resolution the table has.
+    if _channel == 'locked':
+        _pool_path = _astrom_find_offsets_table(basepath, proposal_id, _field)
+        if _pool_path is not None and os.path.exists(_pool_path):
+            from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+                pool_corrections_to_table_granularity)
+            _n_before = len(corrections)
+            corrections = pool_corrections_to_table_granularity(
+                corrections, _pool_path)
+            if len(corrections) != _n_before:
+                print(f"astrom checkpoint [{merge_label}] {filt}/{module}: "
+                      f"pooled {_n_before} per-detector correction(s) to "
+                      f"{len(corrections)} at the granularity of "
+                      f"{os.path.basename(_pool_path)} (module-family rows "
+                      f"cannot express a per-detector shift; summing them is "
+                      f"what made sgrc diverge)", flush=True)
+                # Persist WHAT was pooled into the checkpoint record.  The
+                # membership otherwise survives only in the correction's
+                # `source`, which update_offsets_table truncates to 64 chars --
+                # and a real 8-detector member list is longer than that.
+                _record_pooling(record, corrections, _n_before, _pool_path)
+
     # Actionability floor: per-detector residuals of ~2.4-3.3 mas (measured,
     # brick-1182 F115W V12 cycle-3, 2026-07-15) are SIAF/DVA-class systematics
     # that the module-locked offsets tables cannot express -- applying their
@@ -3595,8 +3687,6 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
 
     # m2 measured a real misalignment: im0 is wrong.
     assert merge_label in CORRECTION_STAGES
-    _field = str(getattr(options, 'field', ''))
-    _channel = _astrom_offsets_channel(proposal_id, _field)
     if _channel == 'none':
         raise RuntimeError(
             f"astrom checkpoint [{merge_label}] {filt}/{module}: measured "

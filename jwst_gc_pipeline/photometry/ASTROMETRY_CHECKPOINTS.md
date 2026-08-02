@@ -139,10 +139,40 @@ passes AND D is clean (`apply_ok`).  Anything else is recorded as
   keyed `(visit, exposure, module)`, but the apply loop skips module narrowing on a
   table with no `Module` column — so every detector's correction for one exposure
   lands on the SAME row, additively (8 × 0.4″ → +3.2″, each part legal). Such a
-  correction set is now refused. As of 2026-07-30, cloudc's table (built
-  `--per-module`) and **sgrc's** both have a populated `Module` column, so the
-  guard returns early for them; **brick's two tables (1182, 2221), cloudef's and
-  gc2211's lack the column**, so those are the ones the guard protects.
+  correction set is refused. It protects the tables with **no `Module` column**:
+  brick's two (1182, 2221), gc2211's, sgra's and **sgrb2's**.
+* **One-correction-per-row refusal** (`_assert_one_correction_per_row`). Having a
+  `Module` column is NOT the same as having it at the corrections' granularity,
+  and the guard above returns early whenever the column merely exists. cloudc's,
+  sgrc's, cloudef's and quintuplet's tables hold module **families**
+  (`nrca`/`nrcb`/`nrcalong`/`nrcblong`) while the consensus emits one correction
+  per **detector** (`nrca1`…), so four corrections landed on one row and were
+  summed — sgrc's table ran 185.7 → 525.7 → 1678.5 mas over three re-tie
+  iterations this way (2026-07-30/08-01). This guard checks the rows the apply
+  loop would actually touch, so it sees a column present at the wrong
+  granularity. Whole-visit bulk ties (`exposure=None, module=None`) are exempt:
+  they are broad by design and compose with each exposure's jitter, exactly as
+  `lookup_consensus_offset` sums a BULK row and a jitter row.
+* **Pooling** (`pool_corrections_to_table_granularity`) is the remedy the refusal
+  names — the m2 checkpoint applies it automatically on the `locked` channel
+  before the actionability floor, and `update_offsets_table(..., pool=True)` /
+  `--pool` on `apply_m2_checkpoint_corrections.py` and
+  `run_astrometry_checkpoint.py` expose it to the recovery tooling. It takes the
+  **median** of the corrections sharing a row, because a family row can only
+  express the module-common shift; the per-detector spread is a
+  distortion/DVA-class systematic the row has no freedom to remove. Pooling
+  before the floor is what makes the loop converge — residuals that largely
+  cancel pool to a sub-floor shift and the checkpoint PASSES instead of writing
+  their sum. It is deliberately narrow and **refuses** rather than guessing:
+  across module families (so a `Module`-less table still gets the actionable
+  "rebuild `--per-module`" refusal instead of a silent A/B average), a module
+  contributing twice to one row (two vgroups against a `Vgroup`-less table), a
+  group whose members disagree by more than `ASTROM_MAX_POOL_SPREAD_MAS`
+  (50 mas), and any member over the magnitude ceiling — which is checked on the
+  **members**, since `median ≤ max` means pooling would otherwise average a
+  blown-up detector out of existence. What was collapsed is written to the
+  checkpoint record under `pooling` (the correction's `source` is truncated to
+  64 characters, shorter than a real member list).
 * Stale im0 mosaics are RENAMED `*_i2d_im0_badastrom.fits` and kept intact (+ a
   `.why.json` sidecar and a ledger in `astrometry_checkpoints/`).
 * `fix_alignment` stamps `APROVST/APROVMT/APROVDR/APROVDD/APROVRF/APROVTB/
