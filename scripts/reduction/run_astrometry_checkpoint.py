@@ -68,6 +68,8 @@ def main(argv=None):
     p.add_argument("--apply", action="store_true",
                    help="apply implied corrections to --offsets-table "
                         "(correction stages only)")
+    p.add_argument("--pool", action="store_true",
+                   help="Pool per-detector corrections to the granularity of the offsets table before applying them (module-family rows cannot express a per-detector shift, and un-pooled corrections are SUMMED onto the shared row).  This is what the one-correction-per-row refusal asks for.")
     p.add_argument("--mark-stale", action="store_true",
                    help="with --apply: stale-tag the filter's im0 _i2d mosaics "
                         "(renamed *_im0_badastrom.fits)")
@@ -159,7 +161,8 @@ def main(argv=None):
             return 1
         if not args.offsets_table:
             p.error("--apply needs --offsets-table")
-        update_offsets_table(args.offsets_table, corrections, args.stage)
+        update_offsets_table(args.offsets_table, corrections, args.stage,
+                             pool=args.pool)
         print(f"offsets table corrected: {args.offsets_table} "
               f"({len(corrections)} corrections; backup kept)")
         if args.mark_stale and args.basepath and args.filtername:
