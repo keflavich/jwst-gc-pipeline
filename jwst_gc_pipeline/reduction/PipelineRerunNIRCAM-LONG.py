@@ -26,9 +26,12 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 import datetime
 
-# do this before importing webb
-os.environ["CRDS_PATH"] = "/orange/adamginsburg/jwst/crds/"
-os.environ["CRDS_SERVER_URL"] = "https://jwst-crds.stsci.edu"
+# Before importing jwst: CRDS reads its cache path when jwst loads.  config.yaml
+# supplies the default; an exported CRDS_PATH wins.
+from jwst_gc_pipeline.config import apply_crds_environment
+# Printed because the cache decides which reference files -- and so which
+# distortion and filter-offset solutions -- this run uses.
+print(f"CRDS: {apply_crds_environment()}")
 
 from jwst.pipeline import calwebb_image3
 from jwst.pipeline import Detector1Pipeline, Image2Pipeline
@@ -275,7 +278,10 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
 
     wavelength = int(filtername[1:4])
 
-    basepath = f'/orange/adamginsburg/jwst/{regionname}/'
+    # The field's data directory comes from the registry (fields.yaml `roots:`
+    # plus the field's `root:`), so a field on a tree other than /orange reduces
+    # where it lives.
+    basepath = field_registry.basepath(regionname)
     # Non-destructive experimental reduction: same GC_BASEPATH_OVERRIDE redirect as
     # the cataloging driver (jwst_gc_pipeline.scratch_basepath).  With a scratch
     # tree staged (stage_scratch_basepath.sh, MODE=reduce) with symlinks to the
@@ -489,7 +495,7 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         else:
             raise ValueError(f"Mismatch: Did not find any NIRCam asn files for module {module} for field {field} in {output_dir}")
 
-        crds_dir = os.getenv("CRDS_PATH") or f'/orange/adamginsburg/jwst/{regionname}/crds'
+        crds_dir = os.getenv("CRDS_PATH") or os.path.join(basepath, 'crds')
         mapping = crds.rmap.load_mapping(f'{crds_dir}/mappings/jwst/jwst_nircam_pars-tweakregstep_0003.rmap')
         print(f"Mapping: {mapping.todict()['selections']}")
         print(f"Filtername: {filtername}")
@@ -1013,8 +1019,18 @@ def fix_alignment(fn, proposal_id=None, module=None, field=None, basepath=None, 
                 filtername = [x for x in filters if 'W' not in x][0]
     if field is None:
         field = mod.meta.observation.observation_number
+    if proposal_id is None:
+        # `mod` is open just above; without this the registry lookup below
+        # reports "proposal None ... known observations: []", which names the
+        # wrong problem.
+        proposal_id = mod.meta.observation.program_number
     if basepath is None:
-        basepath = f'/orange/adamginsburg/jwst/{field}'
+        # Every in-pipeline caller passes basepath.  Reaching here means an
+        # ad-hoc call, so name the field from the registry rather than guessing
+        # a path: the guess used to be the observation number, which is a
+        # directory that never exists.
+        basepath = field_registry.basepath(
+            field_registry.target_for_obsid(proposal_id, field))
     if module is None:
         module = 'nrc' + mod.meta.instrument.module.lower()
 
@@ -1290,7 +1306,7 @@ if __name__ == "__main__":
     if proposal_id == '2221':
         print("Running notebooks")
         from run_notebook import run_notebook
-        basepath = '/orange/adamginsburg/jwst/brick/'
+        basepath = field_registry.basepath('brick')
         if 'merge' in modules:
             run_notebook(f'{basepath}/notebooks/BrA_Separation_nrca.ipynb')
             run_notebook(f'{basepath}/notebooks/BrA_Separation_nrcb.ipynb')

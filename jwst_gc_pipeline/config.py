@@ -131,3 +131,25 @@ def environment(config):
     for key, value in (config.get('environment') or {}).items():
         out[key] = os.environ.get(key) or str(value)
     return out
+
+
+def apply_crds_environment(config=None):
+    """Point CRDS at a cache, before ``jwst`` is imported.
+
+    The reduce drivers call this at import time: ``jwst`` reads ``CRDS_PATH``
+    when it loads, so setting it afterwards is too late.  A value already
+    exported -- by ``run_pipeline``, by a submit script, or by hand -- wins over
+    the configured one, so a machine with its own cache needs no edit here.
+
+    Returns the cache and server it settled on, for logging.  Only those two:
+    ``CRDS_USERNAME`` and ``CRDS_PASSWORD`` are also real CRDS variables, and a
+    SLURM log is a wider audience than the process.
+    """
+    for key, value in environment(config if config is not None else load()).items():
+        # `not os.environ.get`, rather than setdefault: an exported-but-empty
+        # CRDS_PATH counts as set, and jwst would fall back to ~/crds_cache and
+        # download tens of GB into a quota-limited home directory.
+        if key.startswith('CRDS_') and not os.environ.get(key):
+            os.environ[key] = value
+    return {key: os.environ[key] for key in ('CRDS_PATH', 'CRDS_SERVER_URL')
+            if key in os.environ}
