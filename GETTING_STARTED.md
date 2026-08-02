@@ -398,6 +398,9 @@ shell runs, so a variable there is never expanded. `slurm.log_dir` in
 
 ## Where to go next
 
+- [`docs/HIPERGATOR.md`](docs/HIPERGATOR.md) — the account and queue to use, the
+  four ways to split a cataloging run across the cluster, and which one to pick
+  when jobs are sitting pending.
 - [`PHOTOMETRY_PIPELINE_BRIEF.md`](PHOTOMETRY_PIPELINE_BRIEF.md) — what each
   photometry stage does, and the parameters it uses. Read this next.
 - [`PHOTOMETRY_PIPELINE.md`](PHOTOMETRY_PIPELINE.md) — flags, filenames, output
