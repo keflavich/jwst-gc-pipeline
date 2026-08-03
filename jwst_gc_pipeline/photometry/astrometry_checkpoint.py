@@ -1326,26 +1326,41 @@ def _m2_reference_tie_baseline(record_dir, filtername, visit):
     (+6.70,-7.54) [histogram] vs m3 same-star (+1.11,-5.77), 2026-07-19).  Falls
     back to ``vs_full`` only for legacy records that predate the reported-bulk
     field.
+
+    Returns ``(None, reason)``-style information via the second element of the
+    tuple: ``(baseline, m2_rejected)``.  ``m2_rejected`` is True when m2 measured
+    a tie but REFUSED it (``apply_ok`` False -- no coherent dense peak, a gross
+    sparse-Gaia split, or a failed per-tile/same-star gate).  A refused tie is a
+    rejected measurement, not a freeze point: nothing was applied, so there is no
+    frozen value for a later stage to have moved away from.  Reading it as a
+    baseline turns an IMPROVEMENT into a regression -- w51 F140M (2026-08-02): m2
+    rejected a 7827 mas swept-histogram peak (``apply_ok=False``,
+    ``per_tile clean=False``, ``swept=True``) and said so in ``unverified``; m3
+    then measured a clean 32 mas SAME-STAR tie (``apply_ok=True``,
+    ``swept=False``) and raised "consensus->reference MOVED 7794.98 mas since the
+    m2 freeze", blocking the field because the measurement got better.
     """
     if not record_dir:
-        return None
+        return None, False
     path = os.path.join(record_dir, f"checkpoint_m2_{filtername}_latest.json")
     if not os.path.exists(path):
-        return None
+        return None, False
     with open(path) as fh:
         rec = json.load(fh)
     for v in rec.get("visits", []):
         if str(v.get("visit")) != str(visit):
             continue
         rt = v.get("reference_tie") or {}
+        if rt.get("apply_ok") is False:
+            return None, True
         dra, ddec = rt.get("dra_mas"), rt.get("ddec_mas")
         if dra is not None and ddec is not None \
                 and np.isfinite(dra) and np.isfinite(ddec):
-            return float(dra), float(ddec)
+            return (float(dra), float(ddec)), False
         vf = rt.get("vs_full") or {}   # legacy record without the reported bulk
         if "dra" in vf and "ddec" in vf:
-            return float(vf["dra"]), float(vf["ddec"])
-    return None
+            return (float(vf["dra"]), float(vf["ddec"])), False
+    return None, False
 
 
 def _m2_exposure_baseline(record_dir, filtername, visit):
@@ -1661,7 +1676,8 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                         # which every later stage necessarily re-measures
                         # (brick V12 F182M: m2 10.09 mas PASS, m3 10.31 mas ->
                         # false REGRESSION, 2026-07-16).
-                        base = _m2_reference_tie_baseline(record_dir, filt, visit)
+                        base, m2_rejected = _m2_reference_tie_baseline(
+                            record_dir, filt, visit)
                         if base is not None:
                             delta = float(np.hypot(ref_tie["dra_mas"] - base[0],
                                                    ref_tie["ddec_mas"] - base[1]))
@@ -1677,6 +1693,23 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                                       f"tie unchanged since m2 (delta "
                                       f"{delta:.2f} mas <= "
                                       f"{STAGE_STABILITY_TOL_MAS})", flush=True)
+                        elif m2_rejected:
+                            # m2 measured a tie and REFUSED it as untrustworthy.
+                            # Nothing was frozen, so nothing can have moved; this
+                            # is the first trustworthy measurement of the tie.
+                            # UNVERIFIED (so all_verified holds it at the release
+                            # gate), not a regression -- see w51 F140M above.
+                            unverified.append(
+                                f"{vctx}: consensus->reference offset {off:.2f} mas -- m2 "
+                                f"MEASURED but REFUSED its own tie (untrustworthy), so no "
+                                f"frozen baseline exists and this is the first trustworthy "
+                                f"measurement, not a movement. The field's ABSOLUTE tie is "
+                                f"what needs investigating, not a late-stage shift "
+                                f"(bulk_source={ref_tie.get('bulk_source')}, "
+                                f"swept={ref_tie.get('swept')})")
+                            print(f"ASTROM CHECKPOINT [{stage}] UNVERIFIED "
+                                  f"(m2 refused its own tie): {vctx} "
+                                  f"consensus->reference {off:.2f} mas", flush=True)
                         else:
                             failures.append(
                                 f"{vctx}: consensus->reference offset {off:.2f} mas at a "

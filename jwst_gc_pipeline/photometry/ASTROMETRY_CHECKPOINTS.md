@@ -46,6 +46,24 @@ the m4–m8 chain over a defect m2 had already handled.  The exposure's own data
 quality is the thing to investigate; a frozen-solution regression is not what
 happened.
 
+The **consensus→reference** tie is gated the same way, with the same distinction:
+
+| m2 state | frozen-stage verdict |
+|---|---|
+| tie applied (`apply_ok: true`) | delta vs the reported bulk; > tol ⇒ `AstrometryRegressionError` |
+| tie measured but **refused** (`apply_ok: false` — no coherent dense peak, gross sparse-Gaia split, failed per-tile / same-star gate) | **UNVERIFIED**. A refused tie is a rejected measurement, not a freeze point, so a later stage cannot have moved away from it. The field's *absolute* tie is the thing to investigate |
+| no m2 record at all | `AstrometryRegressionError` — fail closed |
+
+w51 F140M (2026-08-02) is the case: m2 measured a **7827 mas** consensus→reference
+offset, judged it untrustworthy (`per_tile clean: false`, `swept: true`, a
+window-limited histogram peak), refused to apply it, and recorded it in
+`unverified`.  m3 then measured a clean **32 mas** same-star tie
+(`apply_ok: true`, `swept: false`) and raised
+`consensus->reference MOVED 7794.98 mas since the m2 freeze` — the field was
+blocked because the measurement got *better*.  Note the failure only fires in
+that direction: w51 F162M and F182M, whose m3 ties were *also* refused, passed,
+because a refused m3 tie never reaches the baseline comparison at all.
+
 Stage-name mapping: the user-facing plan's "m1 pass" = the repo's m12 phase
 (iter1+iter2); its merge is labeled **m2** — that is the correcting
 checkpoint.  "m2..m5" of the plan = merge tokens m3..m6 here.  "m6

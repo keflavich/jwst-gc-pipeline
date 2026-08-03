@@ -626,6 +626,45 @@ def test_frozen_baseline_legacy_vs_full_fallback(tmp_path, monkeypatch):
                              context="test")
 
 
+def test_frozen_stage_m2_refused_its_own_tie_is_unverified(tmp_path, monkeypatch):
+    """m2 MEASURED a reference tie and REFUSED it (apply_ok False -- untrustworthy).
+    A refused tie is a rejected measurement, not a freeze point, so m3's clean tie
+    cannot have 'moved' away from it -> UNVERIFIED, no raise.
+
+    w51 F140M (2026-08-02): m2 rejected a 7827 mas swept-histogram peak
+    (per_tile clean=False, swept=True) and recorded it in `unverified`; m3 then
+    measured a clean 32 mas SAME-STAR tie and raised 'MOVED 7794.98 mas since the
+    m2 freeze' -- blocking the field because the measurement got BETTER."""
+    rec_path = os.path.join(str(tmp_path), "checkpoint_m2_F212N_latest.json")
+    with open(rec_path, "w") as fh:
+        json.dump(dict(visits=[dict(visit="001", reference_tie=dict(
+            apply_ok=False, dra_mas=-7694.2, ddec_mas=1436.1,
+            off_mas=7827.1, swept=True))]), fh)
+    _patch_consensus_and_tie(monkeypatch, dra_now=-30.8, ddec_now=9.8)
+    rec = run_visit_checkpoint([_tiny_visit_table()], "m3", refcat=_DUMMY_REFCAT,
+                               filtername="F212N", record_dir=str(tmp_path),
+                               context="test")
+    assert rec["passed"]
+    assert rec["failures"] == []
+    # still held by the release gate's all_verified check
+    assert not rec["all_verified"]
+    assert any("REFUSED its own tie" in u for u in rec["unverified"])
+
+
+def test_frozen_stage_m2_applied_tie_still_gates(tmp_path, monkeypatch):
+    """The exemption is only for a REFUSED tie.  An m2 tie that WAS applied
+    remains a real frozen baseline, and moving away from it still raises."""
+    rec_path = os.path.join(str(tmp_path), "checkpoint_m2_F212N_latest.json")
+    with open(rec_path, "w") as fh:
+        json.dump(dict(visits=[dict(visit="001", reference_tie=dict(
+            apply_ok=True, dra_mas=10.0, ddec_mas=0.0))]), fh)
+    _patch_consensus_and_tie(monkeypatch, dra_now=40.0, ddec_now=0.0)
+    with pytest.raises(AstrometryRegressionError):
+        run_visit_checkpoint([_tiny_visit_table()], "m3", refcat=_DUMMY_REFCAT,
+                             filtername="F212N", record_dir=str(tmp_path),
+                             context="test")
+
+
 # ---------------------------------------------------------------------------
 # frozen-stage PER-EXPOSURE DELTA gate (regression = a single exposure MOVED
 # since the m2 freeze, NOT a nonzero absolute vs-consensus offset).  Reproduces
