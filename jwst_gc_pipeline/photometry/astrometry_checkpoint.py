@@ -1384,6 +1384,41 @@ def _m2_exposure_baseline(record_dir, filtername, visit):
     return out
 
 
+def _m2_skipped_exposures(record_dir, filtername, visit):
+    """Set of exposure-key tuples m2 DELIBERATELY left out of its consensus.
+
+    ``build_visit_consensus`` drops an exposure with too few reliable stars and
+    records it in ``consensus['skipped']``.  Such an exposure never received a
+    frozen solution, so at a frozen stage it has no ``_m2_exposure_baseline``
+    entry -- indistinguishable, from the baseline map alone, from a frame that
+    appeared out of nowhere after the freeze.  The two need opposite verdicts:
+    an unexplained new frame is a REGRESSION (the solution was supposed to be
+    frozen), while an m2-skipped one is a known, recorded exclusion whose first
+    measurement happens at m3 and therefore cannot have "moved" since m2.
+
+    Observed on arches F212N (2026-08-02): a snowball storm in exposure 4 (JUMP_DET
+    1.2% -> 7.6%, 261 blobs >100 px vs 9) cut its source count ~31% on all eight
+    detectors, so m2 skipped all eight; m3 then measured them 12-18 mas off the
+    consensus and raised ``AstrometryRegressionError``, killing the m4-m8 chain
+    over a data-quality defect m2 had already found, reported, and worked around.
+    """
+    if not record_dir:
+        return set()
+    path = os.path.join(record_dir, f"checkpoint_m2_{filtername}_latest.json")
+    if not os.path.exists(path):
+        return set()
+    with open(path) as fh:
+        rec = json.load(fh)
+    out = set()
+    for v in rec.get("visits", []):
+        if str(v.get("visit")) != str(visit):
+            continue
+        cons = v.get("consensus") or {}
+        for key in cons.get("skipped", []) or []:
+            out.add(tuple(key))
+    return out
+
+
 def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                          basepath=None, record_dir=None, context="",
                          consensus_kwargs=None):
@@ -1455,6 +1490,10 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
         # scatter that m2 already tolerated.
         exp_baseline = ({} if correcting
                         else _m2_exposure_baseline(record_dir, filt, visit))
+        # An exposure m2 deliberately skipped has no baseline BY CONSTRUCTION;
+        # that absence is not evidence the frozen solution moved.
+        m2_skipped = (set() if correcting
+                      else _m2_skipped_exposures(record_dir, filt, visit))
         # issue #158 backstop: an ALIAS reads antisymmetric across the modules of
         # an exposure, where real jitter is common-mode.  Never emit corrections
         # from an antisymmetric set -- they are the footprint geometry, not a
@@ -1565,6 +1604,23 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                                   f"{STAGE_STABILITY_TOL_MAS}; absolute "
                                   f"{res['off']:.2f} mas is intrinsic scatter)",
                                   flush=True)
+                    elif tuple(exp["key"]) in m2_skipped:
+                        # m2 EXCLUDED this exposure from its consensus (too few
+                        # reliable stars -- a data-quality defect m2 found and
+                        # recorded).  It never got a frozen solution, so its
+                        # first vs-consensus measurement lands here and cannot
+                        # be a movement.  Report it as UNVERIFIED so the release
+                        # gate's all_verified check still holds it, and let the
+                        # frozen chain run: raising here re-punishes a defect
+                        # that is already handled (arches F212N exposure 4).
+                        unverified.append(
+                            msg + " [m2 SKIPPED this exposure from its consensus"
+                            " (too few reliable stars); no frozen baseline"
+                            " exists, so this is its first measurement, not a"
+                            " movement -- the exposure's own data quality is"
+                            " the thing to investigate]")
+                        print(f"ASTROM CHECKPOINT [{stage}] UNVERIFIED "
+                              f"(m2-skipped): {msg}", flush=True)
                     else:
                         # No m2 baseline for this exposure (new/renamed frame at
                         # a frozen stage): the solution was supposed to be frozen

@@ -25,6 +25,27 @@ pipeline.
 | **m3, m4, m5, m6** | same measurement | **RED FLAG**: the solution is frozen after m2; positions come from the same crf GWCS, so a shift here is a real defect (centroiding systematics, seed drag, stale frame). `AstrometryRegressionError`, blocking |
 | **m7 cross-band merge** | cross-filter agreement: anchor = filter nearest VIRAC2 Ks (2.149 µm); every filter vs anchor < **5 mas** bulk; matched-pair local residual map, no significant **2″** cell > **15 mas** (error bars mandatory) | `CrossFilterAstrometryError`, blocking, before the merge pools positions |
 
+### What the frozen (m3–m6) per-exposure gate compares against
+
+The gate is a **movement** check, not an absolute-magnitude one: an exposure fails
+only when its vs-consensus offset moved since the m2 freeze by more than
+`STAGE_STABILITY_TOL_MAS`.  An exposure with no m2 baseline is judged by *why* it
+has none:
+
+| m2 state | frozen-stage verdict |
+|---|---|
+| recorded in m2's `exposures` | delta vs that baseline; > tol ⇒ `AstrometryRegressionError` |
+| recorded in m2's `consensus.skipped` (too few reliable stars — m2 found and reported the defect) | **UNVERIFIED**, not a failure. It never had a frozen solution, so this is its first measurement and cannot be a movement. `all_verified` goes false, so the release gate still holds it |
+| absent for no recorded reason (new or renamed frame after the freeze) | `AstrometryRegressionError` — fail closed |
+
+The middle row exists because of arches F212N (2026-08-02): a snowball storm in
+exposure 4 (JUMP_DET 1.2 % → 7.6 %, 261 blobs > 100 px vs 9) cut its source count
+~31 % on all eight detectors, m2 skipped all eight and said so in
+`consensus.skipped`, and m3 then read them 12–18 mas off the consensus and killed
+the m4–m8 chain over a defect m2 had already handled.  The exposure's own data
+quality is the thing to investigate; a frozen-solution regression is not what
+happened.
+
 Stage-name mapping: the user-facing plan's "m1 pass" = the repo's m12 phase
 (iter1+iter2); its merge is labeled **m2** — that is the correcting
 checkpoint.  "m2..m5" of the plan = merge tokens m3..m6 here.  "m6

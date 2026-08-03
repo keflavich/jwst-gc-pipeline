@@ -706,6 +706,51 @@ def test_frozen_perexposure_no_m2_baseline_raises(tmp_path, monkeypatch):
                              context="test")
 
 
+def _write_m2_skipped(record_dir, skipped_keys, exp_offsets=(), visit="001",
+                      filt="F212N"):
+    """m2 record whose consensus deliberately EXCLUDED ``skipped_keys``."""
+    exps = [dict(key=list(k), dra=dra, ddec=ddec) for k, dra, ddec in exp_offsets]
+    rec = dict(visits=[dict(visit=visit, exposures=exps,
+                            consensus=dict(skipped=[list(k)
+                                                    for k in skipped_keys]))])
+    with open(os.path.join(record_dir, f"checkpoint_m2_{filt}_latest.json"),
+              "w") as fh:
+        json.dump(rec, fh)
+
+
+def test_frozen_perexposure_m2_skipped_is_unverified_not_regression(
+        tmp_path, monkeypatch):
+    """m2 SKIPPED the exposure from its consensus (too few reliable stars), so it
+    has no frozen baseline by construction.  m3 measures it 16 mas off: that is
+    its FIRST measurement, not a movement -> UNVERIFIED, no raise.
+
+    arches F212N (2026-08-02): a snowball storm cut exposure 4's source count ~31%
+    on all eight detectors, m2 skipped all eight and said so, and m3 then killed
+    the m4-m8 chain over the defect m2 had already handled."""
+    _write_m2_skipped(str(tmp_path), [_K])
+    _patch_consensus_exposures(monkeypatch, [_exp(_K, -4.9, 15.3, misaligned=True)])
+    rec = run_visit_checkpoint([_tiny_visit_table()], "m3", refcat=None,
+                               filtername="F212N", record_dir=str(tmp_path),
+                               context="test")
+    assert rec["passed"]
+    assert rec["failures"] == []
+    # still held by the release gate's all_verified check
+    assert not rec["all_verified"]
+    assert any("m2 SKIPPED this exposure" in u for u in rec["unverified"])
+
+
+def test_frozen_perexposure_unrelated_skip_still_raises(tmp_path, monkeypatch):
+    """The skip list excuses only the exposures IN it.  A different exposure with
+    no baseline is still an unexplained frozen-stage frame -> raise."""
+    other = ("001", 9, "nrcb3", "F212N")
+    _write_m2_skipped(str(tmp_path), [other])
+    _patch_consensus_exposures(monkeypatch, [_exp(_K, 3.0, 0.0, misaligned=True)])
+    with pytest.raises(AstrometryRegressionError):
+        run_visit_checkpoint([_tiny_visit_table()], "m3", refcat=None,
+                             filtername="F212N", record_dir=str(tmp_path),
+                             context="test")
+
+
 def test_m2_perexposure_scatter_still_corrects_not_raises(tmp_path, monkeypatch):
     """At m2 (correcting) the same 2.6 mas misaligned exposure is a CORRECTION,
     never a raise -- the frozen delta gate only governs m3+."""
