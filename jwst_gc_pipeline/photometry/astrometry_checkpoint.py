@@ -49,6 +49,8 @@ from .visit_consensus import (
     measure_reference_tie, pick_reference_anchor_filter, select_reliable_stars,
 )
 from .astrometry_offsets import measure_offset, local_residual_map
+from .consensus_catalog import (pool_visit_consensi,
+                                 write_filter_consensus)
 from ..atomic_io import atomic_write, keep_a_copy, locked
 
 # Stages at which a measured shift is EXPECTED to be possible and is CORRECTED
@@ -1666,8 +1668,35 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
             exposures=exp_records,
             reference_tie=_jsonable(ref_tie)))
 
+    # Persist the filter's consensus.  build_visit_consensus measures one
+    # (visit, filter) at a time because detecting a misaligned exposure means
+    # comparing it against its OWN visit's exposures; pooling those into one
+    # per-filter catalog is what the rest of the pipeline ties to, and until
+    # now it was discarded when this function returned.
+    consensus_catalog_path = None
+    if basepath and stage == 'm2':
+        per_visit = {v['visit']: v['consensus'] for v in visits
+                     if v.get('consensus') is not None}
+        if per_visit:
+            try:
+                pooled = pool_visit_consensi(per_visit)
+                consensus_catalog_path = write_filter_consensus(
+                    basepath, filtername or 'unknown', pooled)
+                print(f"ASTROM CHECKPOINT [{stage}]: wrote per-filter consensus "
+                      f"{consensus_catalog_path} ({len(pooled)} stars, "
+                      f"{pooled.meta['NVISITS']} visits)", flush=True)
+            except (ValueError, OSError) as ex:
+                # Not fatal: the catalog is a product of the checkpoint, not an
+                # input to it, and the alignment decisions above are already
+                # made.  Loud, because a missing one breaks the reference-filter
+                # tie later.
+                print(f"ASTROM CHECKPOINT [{stage}]: could NOT write the "
+                      f"per-filter consensus: {type(ex).__name__}: {ex}",
+                      flush=True)
+
     passed = not failures
     record = dict(stage=stage, filtername=filtername, context=context,
+                  consensus_catalog=consensus_catalog_path,
                   date=_utcnow_iso(), correcting=correcting, visits=visits,
                   corrections=corrections, failures=failures,
                   unverified=unverified, passed=passed,

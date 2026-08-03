@@ -61,7 +61,7 @@ def main(argv=None):
                    help="FILTER=path vetted merged catalog (crossfilter mode)")
     p.add_argument("--crossfilter", action="store_true")
     p.add_argument("--refcat", default=None,
-                   help="gaia+virac2 seed refcat FITS (build_gaia_virac2_refcat)")
+                   help="gaia+virac2 seed refcat FITS (build_gaia_virac2_refcat_byquery)")
     p.add_argument("--basepath", default=None)
     p.add_argument("--record-dir", default=None)
     p.add_argument("--offsets-table", default=None)

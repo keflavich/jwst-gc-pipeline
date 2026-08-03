@@ -50,7 +50,6 @@ ALLOWLIST = {
     # the guard itself (nthneighbor=2 self-spacing measurement)
     "jwst_gc_pipeline/photometry/measure_offsets.py",
     # reference-catalog builders (guarded internally / sparse Gaia tie)
-    "jwst_gc_pipeline/reduction/build_gaia_virac2_refcat.py",
     "jwst_gc_pipeline/reduction/build_gaia_virac2_refcat_byquery.py",
     # post-verified-tie FINE refinement only: coord_shift's match+median runs on positions
     # already coarse-tied to <SEARCH of VIRAC2 by the swept, guarded measure_offset (nearest

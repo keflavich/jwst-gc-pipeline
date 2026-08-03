@@ -30,6 +30,14 @@ Stage-name mapping: the user-facing plan's "m1 pass" = the repo's m12 phase
 checkpoint.  "m2..m5" of the plan = merge tokens m3..m6 here.  "m6
 cross-filter" = the m7 cross-band merge.
 
+## The per-filter JWST consensus catalog
+
+The consensus is MEASURED per `(visit, filter)` -- detecting that one exposure
+is misaligned means comparing it against its own visit's other exposures -- and
+then POOLED across visits into one catalog per filter, written at m2 as
+`catalogs/<filter>_consensus.fits`.  That catalog is what the rest of the
+pipeline ties to; see [`../../docs/JWST_CONSENSUS_CATALOG.md`](../../docs/JWST_CONSENSUS_CATALOG.md).
+
 ## The consensus measurement (`visit_consensus.py`)
 
 1. Reliable-star cut per exposure catalog (qfit ≤ 0.1, S/N ≥ 10, excluding

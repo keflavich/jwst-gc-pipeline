@@ -967,7 +967,7 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
 
 
 def load_reference_catalog(path):
-    """Load a gaia+virac2 seed refcat (build_gaia_virac2_refcat.py output) and
+    """Load a gaia+virac2 seed refcat (build_gaia_virac2_refcat_byquery.py output) and
     split it into the full (dense) and Gaia-only (sparse) SkyCoord sets."""
     ref = Table.read(path)
     if "skycoord" in ref.colnames:

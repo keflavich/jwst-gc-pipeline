@@ -539,7 +539,7 @@ def check_image_catalog_match(items, tol_mas=SAME_RUN_TOL_MAS):
 # deprecated crowdsource/VVV/2MASS frame (which is ~20-90 mas off Gaia and silently
 # propagated into the NIRSpec 6927 MSA plan). We enforce it astrometrically: the catalog
 # bulk offset vs the field's Gaia-tied refcat must be < FRAME_TOL_MAS. Per-field refcat =
-# the Gaia-tied seed used by the reduction (REFERENCE_ASTROMETRIC_CATALOG_BY_FIELD).
+# the Gaia-tied seed used by the reduction (fields.yaml `reference_catalog:`).
 FRAME_TOL_MAS = 15.0
 FRAME_REFCAT = {
     # field: the Gaia-tied refcat the reduction was (re)anchored to. Extend as confirmed.
