@@ -302,6 +302,10 @@ table.gcm-t td.filt { font-family: var(--mono); font-weight: 600; }
 a.gcm-back { font-family: var(--mono); font-size: .7rem; color: var(--accent);
              text-decoration: none; margin-left: auto; }
 a.gcm-back:hover { text-decoration: underline; }
+.gcm-wu { display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem;
+          font-size: .8rem; }
+.gcm-wu a { color: var(--accent); }
+.gcm-wu-fig { font-weight: 600; }
 /* --- expandable evidence ------------------------------------------------ */
 .gcm-ev { margin-top: .45rem; }
 .gcm-ev > summary { cursor: pointer; font-family: var(--mono); font-size: .68rem;
@@ -593,6 +597,27 @@ def _figure_links(figs, figure_base='figures'):
             f'<ul>{items}</ul></div>')
 
 
+def _writeup_links(wu):
+    """Link into the field's diagnostic writeup, at the figure that shows THIS.
+
+    The writeup carries a fixed D1..D8 figure set for every field, so a finding
+    can point at the one that shows it rather than at a directory listing.
+    """
+    if not wu:
+        return ''
+    bits = []
+    fig = wu.get('figure')
+    if fig:
+        bits.append(f'<a class="gcm-wu-fig" href="{esc(fig["href"])}">'
+                    f'{esc(fig["name"].split("_")[0])} — {esc(fig["label"])}</a>')
+    if wu.get('main'):
+        bits.append(f'<a href="{esc(wu["main"])}">full diagnostic writeup (PDF)</a>')
+    if not bits:
+        return ''
+    return (f'<div class="gcm-wu"><span class="gcm-sub-h">Diagnostic writeup</span>'
+            f'{" · ".join(bits)}</div>')
+
+
 def _evidence_block(v, figure_base='figures'):
     ev = v.get('evidence') or {}
     cause = (f'<div class="gcm-cause">{esc(v["cause"])}</div>'
@@ -620,10 +645,11 @@ def _evidence_block(v, figure_base='figures'):
                  if drawings else '')
     table = _evidence_table(ev.get('rows'))
     figs = _figure_links(ev.get('figures'), figure_base)
-    if not (cause or draw_html or table or figs):
+    wu = _writeup_links(ev.get('writeup'))
+    if not (cause or draw_html or table or figs or wu):
         return ''
     return (f'<details class="gcm-ev"><summary>what is affected, and why</summary>'
-            f'<div class="gcm-ev-body">{cause}{draw_html}{table}{figs}</div>'
+            f'<div class="gcm-ev-body">{cause}{draw_html}{wu}{table}{figs}</div>'
             f'</details>')
 
 

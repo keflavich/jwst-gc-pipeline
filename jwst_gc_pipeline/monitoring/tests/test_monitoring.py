@@ -813,3 +813,51 @@ def test_quiver_marks_flagged_exposures_and_labels_scale():
     assert svg.startswith('<svg')
     assert 'opacity="0.95"' in svg and 'opacity="0.35"' in svg
     assert 'mas' in svg
+
+
+def test_writeup_links_resolve_against_the_served_symlink_name(tmp_path):
+    """The served copy carries a `diagnostics-<field>` symlink, so linking by
+    that name resolves with no extra publishing step."""
+    from jwst_gc_pipeline.monitoring import figures
+    d = tmp_path / 'diagnostic_writeup' / 'figures'
+    os.makedirs(d)
+    (tmp_path / 'diagnostic_writeup' / 'main.pdf').write_text('pdf')
+    for stem in ('D1_overview', 'D2_astrometry_internal', 'D3_astrometry_absolute'):
+        (d / f'{stem}.pdf').write_text('x')
+    wu = figures.writeup(str(tmp_path), 'diagnostics-brick')
+    assert wu['main'] == 'diagnostics-brick/main.pdf'
+    assert wu['figures']['D3']['href'] == \
+        'diagnostics-brick/figures/D3_astrometry_absolute.pdf'
+    assert 'D8' not in wu['figures']          # absent figures are not invented
+
+
+def test_writeup_absent_is_none(tmp_path):
+    from jwst_gc_pipeline.monitoring import figures
+    assert figures.writeup(str(tmp_path), 'diagnostics-x') is None
+
+
+@pytest.mark.parametrize('name,code', [
+    ('astrometry-worst-tile-F115W-v1', 'D3'),   # longest key wins over 'astrometry'
+    ('astrometry-misaligned-F115W', 'D2'),
+    ('satstar-all-rejected-F405N', 'D8'),
+    ('crds-context-mixed', 'D3'),
+    ('unreduced-F150W', 'D1'),
+    ('log-error', None),
+])
+def test_finding_maps_to_the_figure_that_shows_it(name, code):
+    from jwst_gc_pipeline.monitoring import figures
+    assert figures.figure_for_finding(name) == code
+
+
+def test_writeup_link_renders_in_the_evidence_block():
+    v = {'name': 'astrometry-misaligned-F115W', 'severity': 'fail',
+         'summary': 's', 'detail': '', 'source': '', 'cause': '',
+         'evidence': {'writeup': {
+             'main': 'diagnostics-brick/main.pdf',
+             'figure': {'href': 'diagnostics-brick/figures/D2_astrometry_internal.pdf',
+                        'name': 'D2_astrometry_internal.pdf',
+                        'label': 'internal astrometric repeatability'}}}}
+    html = render.render_page([_entry(verdicts=[v])], standalone=True)
+    assert 'diagnostics-brick/figures/D2_astrometry_internal.pdf' in html
+    assert 'internal astrometric repeatability' in html
+    assert 'full diagnostic writeup' in html

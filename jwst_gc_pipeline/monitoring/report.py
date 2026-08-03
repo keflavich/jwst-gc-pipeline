@@ -93,13 +93,23 @@ def build_entries(targets=None, instrument='nircam', cutout_label=None,
                                           list(run.get('per_filter') or {}))
             if target == _paper.PAPER_FIELD:
                 found += _figures.paper_figures(_paper.PAPER_DIR)
+            # The per-field diagnostic writeup.  The served copy carries a
+            # `diagnostics-<field>` symlink to it, so linking by that name
+            # resolves with no extra publishing step.
+            wu = _figures.writeup(run['basepath'], f'diagnostics-{target}')
             for v in verdicts:
-                if v['severity'] not in ('fail', 'warn') or not found:
+                if v['severity'] not in ('fail', 'warn'):
                     continue
-                want = (v.get('evidence') or {}).get('filter')
-                picks = [f for f in found if want and f['filter'] == want][:6]
                 v.setdefault('evidence', {})
-                v['evidence']['figures'] = picks or found[:4]
+                if found:
+                    want = v['evidence'].get('filter')
+                    picks = [f for f in found if want and f['filter'] == want][:6]
+                    v['evidence']['figures'] = picks or found[:4]
+                if wu:
+                    code = _figures.figure_for_finding(v['name'])
+                    v['evidence']['writeup'] = {
+                        'main': wu['main'],
+                        'figure': wu['figures'].get(code) if code else None}
             anchor = f"f-{run['target']}-{run['proposal']}-o{run['obsid']}"
             if cutout_label:
                 anchor += f'-{cutout_label}'

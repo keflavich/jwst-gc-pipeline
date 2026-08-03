@@ -86,6 +86,88 @@ def paper_figures(paper_dir, max_total=12):
 
 
 # --------------------------------------------------------------------------
+# The per-field diagnostic writeup
+# --------------------------------------------------------------------------
+
+#: Each field carries a ``diagnostic_writeup/`` -- a compiled ``main.pdf`` plus a
+#: fixed set of figures D1..D8.  Because the set is fixed and the same for every
+#: field, a finding can be pointed at the figure that actually shows it instead of
+#: dumping a directory listing.  Order matters: the first matching substring wins.
+WRITEUP_DIR = 'diagnostic_writeup'
+WRITEUP_FIGURES = {
+    'D1': ('D1_overview', 'field overview'),
+    'D2': ('D2_astrometry_internal', 'internal astrometric repeatability'),
+    'D3': ('D3_astrometry_absolute', 'absolute tie to the reference frame'),
+    'D4': ('D4_photometry_precision', 'photometric precision and depth'),
+    'D5': ('D5_photometry_quality', 'fit quality'),
+    'D6': ('D6_background_distributions', 'background distributions'),
+    'D7': ('D7_background_spatial', 'background, spatial'),
+    'D8': ('D8_color_diagrams', 'colour diagrams'),
+}
+
+#: Which writeup figure answers which finding.  Matched against the check name,
+#: longest key first, so ``astrometry-worst-tile`` beats ``astrometry``.
+FINDING_FIGURE = {
+    'astrometry-worst-tile': 'D3',
+    'astrometry-tile-contrast': 'D3',
+    'astrometry-tie-unapplied': 'D3',
+    'astrometry-tie-gross': 'D3',
+    'astrometry-misaligned': 'D2',
+    'astrometry-scatter': 'D2',
+    'astrometry-consensus': 'D2',
+    'astrometry-swept': 'D3',
+    'astrometry-unverified': 'D3',
+    'satstar-all-rejected': 'D8',
+    'paper-certifiers-absent': 'D8',
+    'unreduced': 'D1',
+    'filteroffset-module-mismatch': 'D3',
+    'crds-context-mixed': 'D3',
+    'ladder-gap': 'D1',
+    'ambiguous-catalogs': 'D1',
+}
+
+
+def writeup(base, link_base=None):
+    """The field's diagnostic writeup: ``{main, figures: {code: href}}``.
+
+    ``link_base`` is what the page should link to.  The served copy carries a
+    ``diagnostics-<field>`` symlink into this directory, so passing that name
+    yields hrefs that resolve with no extra publishing step; passing ``None``
+    falls back to absolute paths, which are still useful on a shell.
+    """
+    d = os.path.join(base, WRITEUP_DIR)
+    if not os.path.isdir(d):
+        return None
+    prefix = link_base.rstrip('/') if link_base else d
+    out = {'dir': d, 'main': None, 'figures': {}, 'mtime': None}
+
+    main = os.path.join(d, 'main.pdf')
+    if os.path.exists(main):
+        out['main'] = f'{prefix}/main.pdf'
+        out['mtime'] = os.path.getmtime(main)
+
+    figdir = os.path.join(d, 'figures')
+    try:
+        names = os.listdir(figdir)
+    except OSError:
+        names = []
+    for code, (stem, label) in WRITEUP_FIGURES.items():
+        hit = next((n for n in names if n.startswith(stem)), None)
+        if hit:
+            out['figures'][code] = {'href': f'{prefix}/figures/{hit}',
+                                    'name': hit, 'label': label}
+    return out if (out['main'] or out['figures']) else None
+
+
+def figure_for_finding(name):
+    """The writeup figure code that shows this finding, or ``None``."""
+    for key in sorted(FINDING_FIGURE, key=len, reverse=True):
+        if name.startswith(key):
+            return FINDING_FIGURE[key]
+    return None
+
+
+# --------------------------------------------------------------------------
 # Drawn diagnostics (inline SVG, no dependencies, no external requests)
 # --------------------------------------------------------------------------
 

@@ -69,6 +69,14 @@ blocked:
 * a **per-exposure offset quiver** coloured by detector, with flagged exposures
   solid — one colour pointing away means one chip, a general fan means the frame.
 
+Each field also carries a **diagnostic writeup** (`<field>/diagnostic_writeup/`):
+a compiled `main.pdf` plus a fixed figure set D1–D8. Because the set is the same
+for every field, a finding links to the figure that actually shows it rather than
+to a directory listing — misalignment → D2 (internal repeatability), per-tile and
+WCS-provenance findings → D3 (absolute tie), saturation → D8 (colour diagrams).
+Links are written as `diagnostics-<field>/figures/D3_....pdf`, which is the
+symlink name the served copy carries, so they resolve with no extra publishing.
+
 Diagnostics that already exist on disk (`astrometry_diag/`, `audit_plots/`,
 `figures/`, `pngs/`, and the paper's `outputs/*/figures/`) are **linked**, not
 embedded — they are megabytes. `--publish-dir` hardlinks them into `figures/` so
