@@ -225,6 +225,21 @@ def test_overlapping_field_all_merged_passes(tmp_path, monkeypatch):
     assert res["PASS"] is True
 
 
+def test_merged_only_field_is_gated_and_labelled(tmp_path, monkeypatch):
+    """brick keeps no per-module mosaics, so the geometry cannot be measured.
+    That is 'merged-only', not 'unknown': the merged mosaic is all there is and
+    gating it is both the only option and the right one."""
+    monkeypatch.setattr(rf, "BASE", str(tmp_path))
+    for filt in ("F187N", "F212N"):
+        p = _pipeline(tmp_path, "brick", filt)
+        _mosaic_file(p / _name("02221", "001", filt.lower(), "merged"), 266.5, -28.5)
+    _stub_checks(monkeypatch, passing=True)
+    res = rf.scan_field("brick", verbose=False, images_only=True)
+    assert res["geometry"] == "merged-only"
+    assert list(res["views"]) == ["merged"]
+    assert res["PASS"] is True
+
+
 def test_no_mosaics_is_unverified_not_pass(tmp_path, monkeypatch):
     monkeypatch.setattr(rf, "BASE", str(tmp_path))
     res = rf.scan_field("nowhere", verbose=False, images_only=True)

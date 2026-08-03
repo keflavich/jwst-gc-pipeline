@@ -390,14 +390,18 @@ def field_module_geometry(field, observations=None, verbose=False):
       between them is exactly where the misregistration this script exists to
       catch would live, so a band in this field needs its MERGED mosaic to be
       fully gated.
-    * ``'unknown'`` — no band had both modules readable.
+    * ``'merged-only'`` — no per-module mosaics were kept, so the geometry cannot
+      be measured from disk.  The merged mosaic is all there is, and gating it is
+      both the only option and the right one (brick, w51's single-module bands).
+    * ``'unknown'`` — both modules exist but no band had both readable.
     """
     inv = field_band_mosaics(field, observations=observations)
     fams = set()
     for mods in inv.values():
         fams.update(module_family(t) for t in mods if t != "merged")
     if not fams:
-        return dict(mode="unknown", families=[], evidence={})
+        mode = "merged-only" if any("merged" in m for m in inv.values()) else "unknown"
+        return dict(mode=mode, families=[], evidence={})
     if len(fams) == 1:
         return dict(mode="single-module", families=sorted(fams), evidence={})
     evidence, seen = {}, False
@@ -540,15 +544,19 @@ def scan_field(field, verbose=True, images_only=False, observations=None):
             if paths:
                 views[f"module-{fam}"] = paths
     else:
-        # overlapping (or unknown geometry): merged is the object to gate
+        # overlapping / merged-only / unknown: merged is the object to gate
         merged = {f: m["merged"] for f, m in inv.items() if "merged" in m}
         if merged:
             views["merged"] = merged
+        why = {"overlapping": "this field's modules overlap",
+               "merged-only": "no per-module mosaics were kept, so the module "
+                              "geometry could not be measured",
+               "unknown": "this field's module geometry could not be measured"}
         for filt, mods in sorted(inv.items()):
             if "merged" not in mods:
                 ungated.append(
-                    f"{filt}: no merged mosaic, but this field's modules "
-                    f"{'overlap' if geom['mode'] == 'overlapping' else 'have unknown geometry'}"
+                    f"{filt}: no merged mosaic, and "
+                    f"{why.get(geom['mode'], geom['mode'])}"
                     f" -- the inter-module seam of this band is NOT covered here "
                     f"(present: {sorted(mods)})")
         # Only when something is ungated is it worth also running the per-module
