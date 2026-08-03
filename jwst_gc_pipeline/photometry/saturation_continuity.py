@@ -153,7 +153,8 @@ DEGENERATE_PAIRS = [('f405n', 'f410m'), ('f182m', 'f187n')]
 
 
 def degenerate_pair_flatness(cat, bandA, bandB, binwidth=0.25, min_n=20,
-                             ref_percentiles=(40.0, 75.0), include_flags=True):
+                             ref_percentiles=(40.0, 75.0), include_flags=True,
+                             science_only=False):
     """Max deviation of the binned median color from its faint-plateau value.
 
     Bins mag_B in ``binwidth`` steps; the reference plateau is the median
@@ -163,8 +164,15 @@ def degenerate_pair_flatness(cat, bandA, bandB, binwidth=0.25, min_n=20,
     plateau| over bins BRIGHTER than the plateau with n >= min_n.
 
     ``include_flags=True`` scans all rows including ``replaced_saturated``
-    ones (the released catalog must be flat through the satstar regime);
-    forced-filled rows are always excluded.
+    ones; forced-filled rows are always excluded.  ``include_flags=False``
+    additionally drops ``replaced_saturated`` (recovered-satstar) rows.
+
+    ``science_only=True`` certifies the shipped SCIENCE subset -- the rows a
+    user analyses after cutting every saturation flag: it drops
+    ``is_saturated`` AND ``replaced_saturated`` (in either band) on top of the
+    always-dropped forced-filled rows (and so overrides ``include_flags``).
+    The recovered/deep-core satstar rows stay in the released table under their
+    flags; this metric asks only whether the UNFLAGGED photometry is flat.
 
     Returns dict(metric, plateau, worst_bin, bins).
     """
@@ -174,7 +182,11 @@ def degenerate_pair_flatness(cat, bandA, bandB, binwidth=0.25, min_n=20,
     ok = (np.isfinite(magA) & np.isfinite(magB)
           & ~_get(cat, f'forced_filled_{bandA}', False, n).astype(bool)
           & ~_get(cat, f'forced_filled_{bandB}', False, n).astype(bool))
-    if not include_flags:
+    if science_only:
+        for band in (bandA, bandB):
+            ok &= (~_get(cat, f'is_saturated_{band}', False, n).astype(bool)
+                   & ~_get(cat, f'replaced_saturated_{band}', False, n).astype(bool))
+    elif not include_flags:
         ok &= (~_get(cat, f'replaced_saturated_{bandA}', False, n).astype(bool)
                & ~_get(cat, f'replaced_saturated_{bandB}', False, n).astype(bool))
     if ok.sum() < 10 * min_n:

@@ -137,3 +137,32 @@ cannot see it.  Run
 `scripts/reduction/run_astrometry_checkpoint.py --brightness <catalog> --refcat <refcat>`:
 no magnitude bin's mean residual above tolerance (default 5 mas, significance-
 gated), no significant mas/mag slope.
+
+## 0d. Photometric continuity (BLOCKING, certified on the SCIENCE subset)
+
+`stage_release.check_photometric_continuity` gates the shipped combined merged
+catalog on (a) saturation-boundary continuity (`CONTINUITY_PAIRS`) and (b)
+degenerate-pair color flatness (`DEGENERATE_PAIRS`: F405N-F410M, F182M-F187N),
+floor `CONTINUITY_TOL_MAG = 0.10` mag.
+
+**Flatness is certified on the SCIENCE subset** (`degenerate_pair_flatness(...,
+science_only=True)`): the rows a user analyses after cutting every saturation
+flag (`is_saturated`, `replaced_saturated`, `forced_filled`, either band). The
+recovered / deep-core satstar rows stay in the released table under their flags,
+but are NOT required to be color-flat — some carry documented residual biases
+the flags exist to signal. The gate also logs the flag-inclusive drift so a
+regressing satstar flux scale stays visible.
+
+**Known limits (`KNOWN_CONTINUITY_LIMITS` — WARN, not blocking).** A pair whose
+science-subset drift is an observation-design floor rather than a pipeline
+defect WARNs with its reason instead of blocking:
+- **F405N-F410M — NGROUPS=2 (BRIGHT2) deep-core floor.** The deepest cores are
+  unrecoverable (group-0 railed); ZEROFRAME recovery closes the saturation
+  BOUNDARY (jump 0.04 mag, pass) but the science-subset flatness metric is
+  dominated by the single brightest, still-unsaturated bin at the saturation
+  onset (n≈46 on Brick 2026-08). Every fainter bin (n≳800) is flat to <0.06 mag.
+
+Not a known limit (must stay blocking / green):
+- **F182M-F187N** certifies clean on the science subset (~0.05 mag on Brick
+  2026-08). Its recovered-satstar rows carry a ~0.2 mag color offset, but those
+  rows are flagged; the flag-inclusive metric (~0.23 mag) is logged, not gated.

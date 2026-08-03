@@ -10,7 +10,8 @@ import pytest
 from astropy.table import Table
 
 from jwst_gc_pipeline.photometry.saturation_continuity import (
-    saturation_continuity, assert_saturation_continuity)
+    saturation_continuity, assert_saturation_continuity,
+    degenerate_pair_flatness)
 
 
 def _cat(jump=0.0, n=4000, seed=1):
@@ -42,3 +43,56 @@ def test_jump_detected_and_fails():
     assert np.isfinite(r['metric']) and abs(r['metric'] - 0.4) < 0.1
     with pytest.raises(AssertionError):
         assert_saturation_continuity(_cat(jump=0.4), [('a', 'b')], threshold=0.10)
+
+
+def _flatcat(bright_dev=0.0, bright_flag='is_saturated', n=8000, seed=3):
+    """Color-flat locus at 0.5 for mag_B >= 13; the bright end (mag_B < 13)
+    carries ``bright_dev`` and is tagged with ``bright_flag`` in band A only.
+    This is the release picture: a bright regime that is off-locus but flagged,
+    so the SCIENCE subset (flags cut) must read flat while the flag-inclusive
+    metric sees the offset."""
+    rng = np.random.default_rng(seed)
+    magB = rng.uniform(9.5, 19, n)
+    bright = magB < 13
+    color = 0.5 + rng.normal(0, 0.03, n) + np.where(bright, bright_dev, 0.0)
+    t = Table({
+        'mag_vega_a': magB + color,
+        'mag_vega_b': magB,
+        'is_saturated_a': np.zeros(n, bool),
+        'is_saturated_b': np.zeros(n, bool),
+        'replaced_saturated_a': np.zeros(n, bool),
+        'replaced_saturated_b': np.zeros(n, bool),
+        'forced_filled_a': np.zeros(n, bool),
+        'forced_filled_b': np.zeros(n, bool),
+    })
+    t[f'{bright_flag}_a'] = bright
+    return t
+
+
+def test_science_subset_ignores_flagged_bright_offset():
+    # deep-core / recovered rows are flagged and off-locus; science subset is flat
+    cat = _flatcat(bright_dev=0.4, bright_flag='is_saturated')
+    r_full = degenerate_pair_flatness(cat, 'a', 'b', include_flags=True)
+    r_sci = degenerate_pair_flatness(cat, 'a', 'b', science_only=True)
+    assert r_full['metric'] >= 0.10          # flag-inclusive sees the offset
+    assert r_sci['metric'] < 0.05            # science subset is flat
+
+
+def test_science_subset_also_drops_replaced_saturated():
+    cat = _flatcat(bright_dev=0.3, bright_flag='replaced_saturated')
+    r_full = degenerate_pair_flatness(cat, 'a', 'b', include_flags=True)
+    r_sci = degenerate_pair_flatness(cat, 'a', 'b', science_only=True)
+    assert r_full['metric'] >= 0.10
+    assert r_sci['metric'] < 0.05
+
+
+def test_science_subset_catches_unflagged_drift():
+    # a drift in UNFLAGGED stars must still fail the science gate
+    cat = _flatcat(bright_dev=0.0)
+    n = len(cat)
+    # push a mid-mag unflagged bump into band A
+    magB = np.asarray(cat['mag_vega_b'])
+    bump = (magB >= 14) & (magB < 15)
+    cat['mag_vega_a'][bump] += 0.3
+    r_sci = degenerate_pair_flatness(cat, 'a', 'b', science_only=True)
+    assert r_sci['metric'] >= 0.10
