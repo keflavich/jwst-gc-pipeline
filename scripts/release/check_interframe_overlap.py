@@ -934,9 +934,33 @@ def check_filter(field, filt, refcat=None, verbose=True, observations=None):
 
 
 def field_filters(field):
-    fs = sorted({os.path.basename(os.path.dirname(os.path.dirname(p)))
-                 for p in glob.glob(f"{BASE}/{field}/*/pipeline/")})
-    return [f for f in fs if f.upper().startswith("F")]
+    """Filters this field actually HAS products for.
+
+    Enumerating by directory alone counts a `<field>/<FILT>/pipeline/` that was
+    created and never populated.  ``check_filter`` then reports "NO crf frames
+    matched -- cannot verify" and, fail-closed, the whole field exits 2.  An
+    empty directory is not a band that failed verification; it is not a band.
+
+    w51 (2026-08-03) carries four such leftovers -- F115W, F200W, F212N, F356W,
+    every one of them containing zero files -- and they alone were enough to
+    block a field whose eleven real NIRCam bands all pass.
+
+    The fail-closed intent is kept for the case it was written for: a directory
+    that holds products but whose crf glob matches nothing is a REAL mismatch
+    (wrong suffix, half-finished reduction) and still blocks.
+    """
+    out = []
+    for p in sorted(glob.glob(f"{BASE}/{field}/*/pipeline/")):
+        filt = os.path.basename(os.path.dirname(os.path.dirname(p)))
+        if not filt.upper().startswith("F"):
+            continue
+        if not glob.glob(os.path.join(p, "*.fits")):
+            print(f"  {field} {filt}: empty pipeline directory, no products at "
+                  f"all -- not a band, skipping (not a verification failure)",
+                  flush=True)
+            continue
+        out.append(filt)
+    return out
 
 
 def main(argv=None):
