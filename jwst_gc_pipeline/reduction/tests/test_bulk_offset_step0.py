@@ -53,6 +53,56 @@ def field(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# dense threading (Gaia-only reducer path) -- see fix/gaia-only-per-tile-gate
+# ---------------------------------------------------------------------------
+
+def test_step0_forwards_dense_to_the_estimator(field, monkeypatch):
+    """step0_bulk_offset must thread ``dense`` down to measure_bulk_offset -- else
+    a Gaia-only field silently runs the per-tile gate (noise) and its real,
+    coherent bulk tie is rejected (apply_ok=False), stranding the reducer's only
+    absolute Gaia tie."""
+    bp, frames = field
+    seen = {}
+
+    def spy(*args, **kwargs):
+        seen['dense'] = kwargs.get('dense')
+        return {'dra_mas': 420.0, 'ddec_mas': -130.0,
+                'apply_ok': True, 'bulk_source': 'same-star'}
+
+    monkeypatch.setattr(s0, 'measure_bulk_offset', spy)
+    s0.step0_bulk_offset(None, None, None, frames, bp, '9999', '001', 'F187N',
+                         dense=False)
+    assert seen['dense'] is False
+
+
+def test_measure_bulk_offset_signs_off_on_a_gaia_only_reference():
+    """Integration: the real measure_bulk_offset wrapper, given ``dense=False``
+    for a Gaia-only reference (full == sparse), signs off a coherent small tie via
+    the same-star check -- whereas ``dense=True`` (per-tile gate on the sparse ref)
+    would reject the same data.  This is the reducer-side mirror of
+    test_gaia_only_reference_per_tile_does_not_gate."""
+    from astropy import units as u
+    from astropy.coordinates import SkyCoord
+    rng = np.random.default_rng(3)
+    ra0, dec0 = 290.9, 14.5
+    cosd = np.cos(np.radians(dec0))
+    ra = ra0 + rng.uniform(0, 90.0, 400) / 3600.0 / cosd
+    dec = dec0 + rng.uniform(0, 90.0, 400) / 3600.0
+    # consensus sits 10 mas west of the (Gaia-only) reference
+    cons = SkyCoord(ra=(ra - 10.0 / 3.6e6 / cosd) * u.deg, dec=dec * u.deg,
+                    frame='icrs')
+    ref = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame='icrs')  # full == sparse
+
+    tie_sparse = s0.measure_bulk_offset(cons, ref, ref, dense=False,
+                                        context='gaia-only')
+    tie_dense = s0.measure_bulk_offset(cons, ref, ref, dense=True,
+                                       context='gaia-only-dense')
+    assert tie_sparse['apply_ok']                       # same-star signs off
+    assert not tie_dense['apply_ok']                    # per-tile gate (noise) blocks
+    assert tie_sparse['dra_mas'] == pytest.approx(10.0, abs=2.0)
+
+
+# ---------------------------------------------------------------------------
 # verify_recorded_bulk
 # ---------------------------------------------------------------------------
 

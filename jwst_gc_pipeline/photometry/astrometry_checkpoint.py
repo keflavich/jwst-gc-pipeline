@@ -1579,7 +1579,8 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
             ref_tie = measure_reference_tie(
                 cons["coords"], refcat["all"], refcat["sparse"],
                 filtername=filt, consensus_mag=cons.get("mag"),
-                ref_mag=refcat.get("mag"), context=vctx)
+                ref_mag=refcat.get("mag"), dense=refcat.get("dense", True),
+                context=vctx)
             off = ref_tie["off_mas"]
             if np.isfinite(off) and off > REFERENCE_APPLY_MIN_MAS:
                 if ref_tie["apply_ok"]:
@@ -1626,16 +1627,24 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                                 f"LATE stage (solution was supposed to be frozen; "
                                 f"no m2 baseline record found)")
                 else:
-                    # apply_ok is False only for a genuinely bad VIRAC tie now:
-                    # no coherent dense peak, per-tile not clean, or a GROSS
-                    # sparse split (spurious peak). A fine ~5-10 mas Gaia-sparse
-                    # split no longer lands here (gc-gaia-frame-not-catalog).
+                    # apply_ok is False only for a genuinely bad tie now: no
+                    # coherent dense peak, a GROSS sparse split (spurious peak),
+                    # or -- per reference regime -- the gating check failed. Point
+                    # the investigator at the check that actually gated: per-tile
+                    # cleanliness for a DENSE reference, the same-star refinement
+                    # for a Gaia-only one (where per-tile is noise, not a signal).
+                    if ref_tie.get("reference_dense", True):
+                        gate = f"per-tile clean={ref_tie['per_tile'].get('clean')}"
+                    else:
+                        gate = ("same-star refined="
+                                f"{ref_tie.get('same_star') is not None} "
+                                "[Gaia-only ref: per-tile map is noise, not gating]")
                     unverified.append(
                         f"{vctx}: consensus->reference offset {off:.2f} mas but the "
-                        f"VIRAC tie is not trustworthy "
+                        f"tie is not trustworthy "
                         f"(cross-ref sep={ref_tie['cross_reference'].get('sep_mas'):.1f} mas, "
                         f"gross_ok={ref_tie.get('cross_reference_gross_ok')}, "
-                        f"per-tile clean={ref_tie['per_tile'].get('clean')}, "
+                        f"{gate}, "
                         f"swept={ref_tie.get('swept')}) -- NOT applying; investigate")
 
         visits.append(dict(
@@ -1720,6 +1729,7 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
         anchor_tie = measure_reference_tie(
             anchor_coords, refcat["all"], refcat["sparse"],
             filtername=anchor_filter, ref_mag=refcat.get("mag"),
+            dense=refcat.get("dense", True),
             context=f"{context} anchor {anchor_filter}")
 
     filters = []
@@ -1737,8 +1747,12 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                 f"({anchor_tie['cross_reference'].get('sep_mas'):.1f} mas > "
                 f"{anchor_tie.get('cross_reference_gross_tol_mas')} mas) -- "
                 f"VIRAC tie likely a spurious/window-limited peak")
-        elif not anchor_tie["per_tile"].get("clean"):
-            failures.append(f"anchor {anchor_filter}: per-tile reference map not clean")
+        elif not anchor_tie.get("per_tile_ok"):
+            # DENSE reference: per-tile map D; Gaia-ONLY reference: same-star
+            # refinement A' (measure_reference_tie picks the right one per regime).
+            detail = ("per-tile reference map not clean" if anchor_tie.get("reference_dense", True)
+                      else "same-star tie could not be refined (Gaia-only reference)")
+            failures.append(f"anchor {anchor_filter}: {detail}")
 
     for filt, tbl in sorted(catalogs_by_filter.items()):
         if filt == anchor_filter:

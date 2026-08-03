@@ -297,6 +297,78 @@ def test_gross_sparse_disagreement_still_blocks():
     assert not tie["apply_ok"]
 
 
+def test_gaia_only_reference_per_tile_does_not_gate():
+    """VIRAC2-absent fields (w51/sgrc): the refcat is Gaia-ONLY, so the per-tile
+    check D is measured against a SPARSE catalog and returns noise -- its grid is
+    not 'clean' (starved tiles), which under the dense gate would strand the bulk
+    Gaia tie the reducer needs.  With ``dense=False`` the per-tile check is
+    replaced by the same-star refinement, so a coherent, same-star-verified tie
+    APPLIES; with ``dense=True`` the same starved grid still (correctly) blocks."""
+    ra, dec = _field(n=400)
+    cons = SkyCoord(ra=(ra - 10.0 / 3.6e6 / COSD) * u.deg, dec=dec * u.deg,
+                    frame="icrs")
+    # Gaia-only reference: full == sparse == the real stars, no dense filler.
+    ref = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs")
+
+    tie_dense = measure_reference_tie(cons, ref, ref, context="gaia-only-dense",
+                                      grid_nx=6, grid_ny=6, dense=True)
+    tie_sparse = measure_reference_tie(cons, ref, ref, context="gaia-only-sparse",
+                                       grid_nx=6, grid_ny=6, dense=False)
+
+    # the shared, sparse per-tile grid is not clean (starved tiles)
+    assert not tie_dense["per_tile"].get("clean")
+    # dense gate: per-tile blocks -> the bug that stranded the w51 bulk sentinel
+    assert not tie_dense["apply_ok"]
+    # Gaia-only regime: same-star refinement carries the sign-off -> applies
+    assert tie_sparse["vs_full"]["ok"]
+    assert tie_sparse["same_star"] is not None
+    assert tie_sparse["per_tile_ok"]
+    assert tie_sparse["apply_ok"]
+    assert tie_sparse["dra_mas"] == pytest.approx(10.0, abs=2.0)
+
+
+def test_gaia_only_reference_still_needs_samestar():
+    """``dense=False`` does NOT wave the tie through: a gross offset that only the
+    SWEEP finds cannot be same-star refined (ambiguous pairs) -> no corroborating
+    second check -> must NOT apply.  Prevents a single-number (histogram) sign-off."""
+    ra, dec = _field(n=400)
+    cons = SkyCoord(ra=(ra - 20.0 / 3600.0 / COSD) * u.deg, dec=dec * u.deg,
+                    frame="icrs")   # 20" -> res_a swept, same_star None
+    ref = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs")
+    tie = measure_reference_tie(cons, ref, ref, context="gaia-only-swept",
+                                grid_nx=6, grid_ny=6, dense=False)
+    assert tie["same_star"] is None
+    assert not tie["per_tile_ok"]
+    assert not tie["apply_ok"]
+
+
+def test_load_reference_catalog_dense_flag(tmp_path):
+    """A source-tagged gaia+virac2 refcat is DENSE; an all-Gaia one, or one with
+    no source column (w51 gaia_refcat.fits), is Gaia-only (``dense=False``)."""
+    from jwst_gc_pipeline.photometry.visit_consensus import load_reference_catalog
+    ra, dec = _field(n=50)
+
+    def _write(cols, name):
+        t = Table()
+        t["RA"] = ra
+        t["DEC"] = dec
+        for k, v in cols.items():
+            t[k] = v
+        p = tmp_path / name
+        t.write(p, overwrite=True)
+        return str(p)
+
+    n = len(ra)
+    mixed = _write({"source": ["GAIA"] * (n // 2) + ["VIRAC2"] * (n - n // 2)},
+                   "mixed.fits")
+    allgaia = _write({"source": ["GAIA"] * n}, "allgaia.fits")
+    nosrc = _write({}, "nosrc.fits")
+
+    assert load_reference_catalog(mixed)["dense"] is True
+    assert load_reference_catalog(allgaia)["dense"] is False
+    assert load_reference_catalog(nosrc)["dense"] is False
+
+
 def test_unmeasurable_sparse_does_not_block():
     """Extreme-sparse GC regime (arches/quintuplet/sgra): too few Gaia stars to
     form a coherent sparse peak -> sep_mas is nan.  An UNMEASURABLE cross-check

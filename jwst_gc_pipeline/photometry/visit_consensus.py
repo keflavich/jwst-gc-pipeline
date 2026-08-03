@@ -800,7 +800,7 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
                           filtername=None, consensus_mag=None, ref_mag=None,
                           agree_tol_mas=REFERENCE_AGREE_TOL_MAS,
                           gross_tol_mas=REFERENCE_CROSSCHECK_GROSS_MAS,
-                          grid_nx=6, grid_ny=6, context=""):
+                          grid_nx=6, grid_ny=6, dense=True, context=""):
     """Tie the visit consensus to the absolute reference with MULTIPLE
     independent checks.  No single number signs off (CLAUDE.md).
 
@@ -840,10 +840,15 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
       on-sky mas, sign = correction to ADD to the consensus to land on the
       reference); ``bulk_source`` = ``"same-star"`` or ``"histogram"``;
       ``same_star`` = the refined matched-pair result (or None);
-      ``apply_ok`` — True when A is coherent, D is clean, and the sparse cross-
-      check does not GROSSLY disagree (C within ``gross_tol_mas``).  The fine
-      cross-reference agreement (``cross_reference['agree']``, ``agree_tol_mas``)
-      is reported for diagnostics but does NOT gate apply_ok.
+      ``apply_ok`` — True when A is coherent, the sparse cross-check does not
+      GROSSLY disagree (C within ``gross_tol_mas``), and the per-tile check
+      passes.  With a DENSE (``dense=True``) reference the per-tile check is D
+      (``per_tile['clean']``).  With a Gaia-ONLY reference (``dense=False``) D is
+      pure noise (see the per-tile note below) and is replaced by the same-star
+      matched-pair refinement (A') succeeding -- still multi-check, since A'
+      refuses unless the global tie is verified-small.  The fine cross-reference
+      agreement (``cross_reference['agree']``, ``agree_tol_mas``) is reported for
+      diagnostics but does NOT gate apply_ok.
       An offset must never be APPLIED on a single check.
     """
     res_a = measure_offset(consensus_coords, ref_coords_all, sweep=True,
@@ -919,14 +924,34 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
     bulk_source = ("same-star" if same_star is not None
                    else "histogram" if res_a is not None else "none")
 
-    # apply_ok gates on the VIRAC (dense) tie + per-tile cleanliness + a GROSS
-    # sparse cross-check only.  Gaia sparseness must never block a good VIRAC tie.
+    # Per-tile check D (``grid``) requires a DENSE reference.  Measured against a
+    # Gaia-ONLY refcat (no VIRAC2 component, ``dense=False`` -- e.g. w51, outside
+    # the VVV footprint, whose refcat is a pure gaia_refcat.fits) each small tile
+    # pairs the wrong sparse stars and returns arcsecond-scale NOISE in every tile
+    # (24/28 "coherent" w51 tiles land at 16-58 arcsec, not the true 40 mas), so it
+    # cannot see a seam and MUST NOT gate -- gating on it strands the bulk-sentinel
+    # Gaia tie the reducer needs.  In that regime the corroborating second check is
+    # the same-star matched-pair refinement, which itself REFUSES unless the global
+    # tie is verified-small (GlobalTieNotVerifiedError), so the sign-off keeps its
+    # COUNT of independent checks (never a single number).
+    #
+    # COVERAGE GAP (Gaia-only only): D is the sole SPATIAL check; vs_full, the
+    # sweep, and the same-star refinement are all GLOBAL statistics over the whole
+    # field.  So for a Gaia-only reference there is no per-region seam check, and a
+    # half-mosaic seam that a global bulk hides would pass here (matched-pair stats
+    # are structurally weak at a localized sub-population displaced beyond the match
+    # radius -- see the brick F182M matched-pair blind-spot).  On these fields seam
+    # coverage moves to the release-time interframe-overlap gate / manual QC; it is
+    # NOT recovered here.  A DENSE (VIRAC2) reference keeps the per-tile gate intact
+    # -- that is the brick-1182 half-mosaic-seam protection, unchanged.
+    per_tile_ok = bool(grid.get("clean")) if dense else (same_star is not None)
     apply_ok = bool(res_a is not None and res_a.get("ok")
-                    and grid.get("clean") and cross_gross_ok)
+                    and per_tile_ok and cross_gross_ok)
     out = dict(vs_full=res_a, vs_sparse=res_b, cross_reference=agree,
                cross_reference_gross_ok=cross_gross_ok,
                cross_reference_gross_tol_mas=gross_tol_mas,
-               per_tile=grid, flux_matched=fluxmatched, same_star=same_star,
+               per_tile=grid, per_tile_ok=per_tile_ok, reference_dense=bool(dense),
+               flux_matched=fluxmatched, same_star=same_star,
                bulk_source=bulk_source, apply_ok=apply_ok)
     if bulk is not None:
         out.update(dra_mas=bulk["dra"], ddec_mas=bulk["ddec"],
@@ -953,8 +978,14 @@ def load_reference_catalog(path):
                           frame="icrs")
     source = np.asarray(ref["source"]).astype(str) if "source" in ref.colnames else None
     if source is not None:
-        sparse = coords[np.char.startswith(np.char.upper(source), "GAIA")]
+        is_gaia = np.char.startswith(np.char.upper(source), "GAIA")
+        sparse = coords[is_gaia]
+        # A refcat is DENSE only if it actually carries a non-Gaia (VIRAC2)
+        # component.  A source-tagged file that happens to be all-Gaia, or one
+        # with no source column at all (below), is Gaia-only: full == sparse.
+        dense = bool((~is_gaia).any())
     else:
         sparse = coords
+        dense = False   # Gaia-only refcat (no VIRAC2 dense component)
     mag = np.asarray(ref["refmag"], dtype=float) if "refmag" in ref.colnames else None
-    return dict(all=coords, sparse=sparse, mag=mag, table=ref)
+    return dict(all=coords, sparse=sparse, mag=mag, table=ref, dense=dense)

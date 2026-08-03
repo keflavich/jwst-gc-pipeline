@@ -307,7 +307,8 @@ def main(argv=None):
             args.proposal, args.field, filt, recorded_mas=recorded,
             visit=(str(args.visit).zfill(3) if args.visit else None),
             reference_id=(cfg.reference_frame if cfg else 'unknown'),
-            ref_mag=ref.get('mag'), force=args.force)
+            ref_mag=ref.get('mag'), force=args.force,
+            dense=ref.get('dense', True))
     except BulkOffsetVerificationError as ex:
         print(f"\nSTEP 0 FAILED\n{ex}", file=sys.stderr)
         return 1
