@@ -89,10 +89,15 @@ def test_science_subset_also_drops_replaced_saturated():
 def test_science_subset_catches_unflagged_drift():
     # a drift in UNFLAGGED stars must still fail the science gate
     cat = _flatcat(bright_dev=0.0)
-    n = len(cat)
     # push a mid-mag unflagged bump into band A
     magB = np.asarray(cat['mag_vega_b'])
     bump = (magB >= 14) & (magB < 15)
     cat['mag_vega_a'][bump] += 0.3
     r_sci = degenerate_pair_flatness(cat, 'a', 'b', science_only=True)
     assert r_sci['metric'] >= 0.10
+    # The metric only scans bins BRIGHTER than the 40th percentile of mag_B, so
+    # the bump must fall inside that range to be seen. _flatcat flags mag_B<13
+    # is_saturated, which cuts a third of the rows and lifts p_lo above 15 -- pin
+    # that the failing bin IS the 14-15 bump so the test cannot silently stop
+    # exercising it if the plateau window moves.
+    assert 14.0 <= r_sci['worst_bin']['magB_lo'] < 15.0

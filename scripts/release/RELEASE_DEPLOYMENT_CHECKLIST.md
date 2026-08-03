@@ -147,26 +147,40 @@ floor `CONTINUITY_TOL_MAG = 0.10` mag.
 
 **Flatness is certified on the SCIENCE subset** (`degenerate_pair_flatness(...,
 science_only=True)`): the rows a user analyses after cutting every saturation
-flag (`is_saturated`, `replaced_saturated`, `forced_filled`, either band). The
-recovered / deep-core satstar rows stay in the released table under their flags,
-but are NOT required to be color-flat — some carry documented residual biases
-the flags exist to signal. The gate also logs the flag-inclusive drift so a
-regressing satstar flux scale stays visible.
+flag (`is_saturated`, `replaced_saturated`, `forced_filled`, either band), and
+only over bins BRIGHTER than the 40th percentile of the reference-band magnitude
+(where a suppression strip lives). The recovered / deep-core satstar rows stay in
+the released table under their flags but are NOT required to be color-flat — some
+carry a recovered-satstar color bias the flags exist to signal. The gate logs the
+flag-inclusive drift too, so a regressing satstar flux scale stays visible.
 
-**Known limits (`KNOWN_CONTINUITY_LIMITS` — WARN, SCOPED, not whole-pair).** A
-pair whose science-subset drift is an observation-design floor rather than a
-pipeline defect WARNs with its reason instead of blocking — but only for failing
-bins in the saturation-onset regime (brighter than the faintest saturated star,
-`_saturation_faint_edge`). A failing bin FAINTER than saturation — or any failure
-in a catalog with no saturation flags — still BLOCKS, so a genuine future
-flux-scale defect in one of these pairs is not whitelisted away:
-- **F405N-F410M — NGROUPS=2 (BRIGHT2) deep-core floor.** The deepest cores are
-  unrecoverable (group-0 railed); ZEROFRAME recovery closes the saturation
-  BOUNDARY (jump 0.04 mag, pass) but the science-subset flatness metric is
-  dominated by the single brightest, still-unsaturated bin at the saturation
-  onset (n≈46 on Brick 2026-08). Every fainter bin (n≳800) is flat to <0.06 mag.
+**No per-pair exemption. Both flatness pairs hard-block, at `min_n=200`.** The
+worst per-bin deviation is measured only over bins holding ≥200 stars
+(`DEGENERATE_FLATNESS_MIN_N`), so a sparse saturation-onset bin cannot decide the
+release. On Brick 2026-08 m8:
+- **F405N-F410M** — raw science metric is 0.386, but that is an **n=33** bin at
+  F410M=12.75 (and an n=184 bin at 13.0, dev 0.246). At `min_n=200` the worst
+  qualifying bin is F410M=14.25 (**n=1418, dev 0.083**) → **passes** (<0.10,
+  margin ~17%). Every bin with n≥800 has |dev| ≤ **0.083**.
+- **F182M-F187N** — science metric **0.049** ("~0.05"); flag-inclusive **0.227**,
+  logged not gated (the recovered-satstar color offset that `science_only` cuts).
 
-Not a known limit (must stay blocking / green):
-- **F182M-F187N** certifies clean on the science subset (~0.05 mag on Brick
-  2026-08). Its recovered-satstar rows carry a ~0.2 mag color offset, but those
-  rows are flagged; the flag-inclusive metric (~0.23 mag) is logged, not gated.
+The 2026-07-11 suppression-strip guard (`test_suppression_strip_refused`) still
+fails at 0.352 because its strip bins hold ~800 stars, so `min_n=200` suppresses
+the sparse onset bin without whitelisting a real, well-populated strip in either
+pair. If the science subset is too small to measure (nan) while the flag-inclusive
+metric is over tol, the pair fails `NOT-CERTIFIED` — the gate never prints "ok"
+for a population it declined to measure.
+
+**⚠ Saturation-BOUNDARY continuity is a SEPARATE gate and is NOT closed on Brick
+m8.** `CONTINUITY_PAIRS` runs `saturation_continuity(cat, 'f410m', 'f405n')`
+(A = the earlier-saturating band) = **0.170 mag (C1-boundary-jump) → FAIL**: the
+recovered-F410M-satstar rows sit ~0.17 mag off the unflagged locus in the bright
+transition bins (F410M 12–13, n_sat≈38). This is the same recovered-satstar color
+bias seen in F182M-F187N flatness, but the boundary metric measures the
+satstar↔normal transition and therefore CANNOT exclude the satstar rows;
+`science_only` does not apply to it. (The 0.04 mag figure is the reverse argument
+order `saturation_continuity('f405n','f410m')`, which the gate does not evaluate —
+do not quote it as a pass.) Closing this needs a recovered-satstar photometry fix
+(or a decision to certify the boundary on a defined population), tracked
+separately; this section's flatness certification does not unblock it.

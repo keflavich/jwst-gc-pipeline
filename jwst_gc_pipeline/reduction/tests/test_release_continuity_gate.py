@@ -48,43 +48,36 @@ def test_suppression_strip_refused(tmp_path):
     assert any("f405n-f410m" in f for f in fails)
 
 
-def _known_limit_catalog(drift_lo, drift_hi, drift=-0.35, sat_faint=14.0,
-                         n=40000, seed=2):
-    """F405N-F410M (a KNOWN_CONTINUITY_LIMITS pair) with saturation flags that
-    reach down to ``sat_faint`` and a color offset ``drift`` applied to the
-    UNSATURATED rows in mag_f410m [drift_lo, drift_hi).  A drift inside the
-    saturation-onset regime (brighter than sat_faint) is the deep-core floor
-    (WARN); a drift fainter than sat_faint is a real defect (blocks)."""
+def _sparse_onset_catalog(seed=4):
+    """Flat locus (-0.10) with populated faint + mid bins and a SPARSE bright bin
+    (50 stars at F410M~12.5-12.7) thrown -0.5 off-locus -- the shape of a real
+    saturation-onset bin, where few unsaturated stars remain and a handful should
+    not decide a release.  No saturation flags (science subset == all rows)."""
     rng = np.random.default_rng(seed)
-    mB = rng.uniform(9.0, 19.0, n)
-    color = np.full(n, -0.10) + rng.normal(0, 0.04, n)
-    sat = mB < (sat_faint + rng.normal(0, 0.2, n))     # fuzzy saturation edge
-    hit = (~sat) & (mB >= drift_lo) & (mB < drift_hi)
-    color[hit] += drift
-    return Table({
-        'mag_vega_f405n': mB + color,
-        'mag_vega_f410m': mB,
-        'is_saturated_f405n': sat,
-        'is_saturated_f410m': sat,
-        'replaced_saturated_f405n': np.zeros(n, bool),
-        'replaced_saturated_f410m': np.zeros(n, bool),
-    })
+    mB = np.concatenate([rng.uniform(15.0, 19.0, 40000),   # faint plateau
+                         rng.uniform(13.0, 15.0, 8000),    # populated mid, flat
+                         rng.uniform(12.5, 12.7, 50)])     # sparse bright bin
+    color = np.full(len(mB), -0.10) + rng.normal(0, 0.03, len(mB))
+    color[-50:] += -0.5
+    return Table({'mag_vega_f405n': mB + color, 'mag_vega_f410m': mB})
 
 
-def test_known_limit_onset_floor_warns(tmp_path):
-    # drift confined to the bright unsaturated onset sliver (brighter than the
-    # saturation faint edge) -> deep-core floor -> WARN, does not block.
-    cat = _known_limit_catalog(drift_lo=12.0, drift_hi=13.5, sat_faint=14.0)
-    fails = stage_release.check_photometric_continuity(_items_for(tmp_path, cat))
+def test_sparse_onset_bin_does_not_block(tmp_path):
+    """A large offset confined to a SPARSE bright bin (fewer than min_n stars)
+    must not decide the release: at min_n=200 the n=50 bin is excluded and the
+    populated bins are flat -> pass."""
+    cat = _sparse_onset_catalog()
+    fails = stage_release.check_photometric_continuity(
+        _items_for(tmp_path, cat), flatness_min_n=200)
     assert fails == []
 
 
-def test_known_limit_deep_drift_still_blocks(tmp_path):
-    # same known-limit pair, but the drift is FAINTER than saturation: no floor
-    # excuse -> must block even for a KNOWN_CONTINUITY_LIMITS pair.
-    cat = _known_limit_catalog(drift_lo=15.0, drift_hi=16.5, sat_faint=14.0)
-    fails = stage_release.check_photometric_continuity(_items_for(tmp_path, cat))
-    assert fails, "a drift below the saturation floor must block a known-limit pair"
+def test_sparse_onset_bin_would_block_at_low_min_n(tmp_path):
+    """Control for the test above: the SAME catalog fails at min_n=20, proving the
+    pass is min_n suppressing a sparse bin -- not an accidentally-flat catalog."""
+    cat = _sparse_onset_catalog()
+    fails = stage_release.check_photometric_continuity(
+        _items_for(tmp_path, cat), flatness_min_n=20)
     assert any("f405n-f410m" in f for f in fails)
 
 

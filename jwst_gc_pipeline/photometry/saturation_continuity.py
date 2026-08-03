@@ -26,8 +26,10 @@ PASS: metric < 0.05 mag (goal) / < 0.10 mag (certification floor).
 A discontinuity means saturation-handled photometry is on a different flux
 scale than normal photometry — the CMD breaks at the saturation boundary.
 
-Current status (Brick, 2026-07-09 catalogs): only f200w-f212n passes the
-0.10 floor (C1 = 0.094).
+Current status (Brick 2026-08 m8, post-ZEROFRAME-recovery): degenerate-pair
+flatness passes on the science subset at min_n=200 (F405N-F410M 0.083,
+F182M-F187N 0.049); saturation-boundary continuity f410m-f405n is 0.170
+(recovered-F410M-satstar color bias in the bright transition) and still fails.
 """
 import numpy as np
 
