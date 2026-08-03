@@ -159,7 +159,7 @@ def check_astrometry(run):
                         'data': [[e.get('visit'), e.get('detector'),
                                   e.get('dra'), e.get('ddec'), e.get('off'),
                                   e.get('contrast'), e.get('npairs'),
-                                  e.get('window_arcsec')] for e in bad[:60]],
+                                  e.get('window_arcsec')] for e in bad[:40]],
                         'total': len(bad)},
                     'filter': filt}))
         elif n_exp:

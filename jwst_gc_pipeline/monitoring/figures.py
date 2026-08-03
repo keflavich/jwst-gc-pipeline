@@ -260,16 +260,36 @@ def quiver_svg(exposures, size=190, scale_mas=None):
              f'stroke="rgba(128,140,148,.3)" stroke-width="1"/>',
              f'<line x1="{half}" y1="0" x2="{half}" y2="{size}" '
              f'stroke="rgba(128,140,148,.3)" stroke-width="1"/>']
-    for e in pts[:400]:
+
+    # Only FLAGGED exposures get a vector and a tooltip.  The aligned ones sit
+    # within a couple of mas of the origin, so their "vectors" are sub-pixel
+    # stubs that add nothing to read -- but one <line> + <circle> + <title> each
+    # is what took a 192-exposure filter to 92 kB of markup.  They are drawn as
+    # bare dots instead, which is all they contribute: the background the
+    # outliers stand against.
+    dots, flagged = [], []
+    for e in pts[:600]:
+        (flagged if e.get('misaligned') else dots).append(e)
+
+    by_colour = {}
+    for e in dots:
+        colour = f'hsl({hues.get(e.get("detector") or "?", 200)} 60% 45%)'
+        by_colour.setdefault(colour, []).append(
+            (half + e['dra'] * k, half - e['ddec'] * k))
+    for colour, xy in by_colour.items():
+        marks = ''.join(f'M{x:.0f} {y:.0f}h1' for x, y in xy)
+        parts.append(f'<path d="{marks}" stroke="{colour}" stroke-width="1.6" '
+                     f'opacity=".35" fill="none" stroke-linecap="round"/>')
+
+    for e in flagged[:80]:
         x = half + e['dra'] * k
         y = half - e['ddec'] * k
         colour = f'hsl({hues.get(e.get("detector") or "?", 200)} 60% 45%)'
-        opacity = '0.95' if e.get('misaligned') else '0.35'
         parts.append(
             f'<line x1="{half}" y1="{half}" x2="{x:.1f}" y2="{y:.1f}" '
-            f'stroke="{colour}" stroke-width="1.1" opacity="{opacity}"/>'
+            f'stroke="{colour}" stroke-width="1.1" opacity="0.95"/>'
             f'<circle cx="{x:.1f}" cy="{y:.1f}" r="1.7" fill="{colour}" '
-            f'opacity="{opacity}"><title>{e.get("detector") or "?"} '
+            f'opacity="0.95"><title>{e.get("detector") or "?"} '
             f'visit {e.get("visit")}: dRA {e["dra"]:.1f}, dDec {e["ddec"]:.1f} mas'
             f'</title></circle>')
     legend = ' '.join(

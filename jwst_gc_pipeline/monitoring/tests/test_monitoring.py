@@ -805,14 +805,30 @@ def test_evidence_renders_as_a_disclosure_and_stays_self_contained():
         assert forbidden not in html
 
 
-def test_quiver_marks_flagged_exposures_and_labels_scale():
+def test_quiver_gives_vectors_only_to_flagged_exposures():
+    """Aligned exposures sit within a couple of mas of the origin, so their
+    vectors are sub-pixel stubs — but one line+circle+title each is what took a
+    192-exposure filter to 92 kB of markup. They are drawn as bare dots."""
     from jwst_gc_pipeline.monitoring import figures
     svg = figures.quiver_svg([
         {'detector': 'nrca1', 'dra': 20.0, 'ddec': 0.0, 'misaligned': True},
         {'detector': 'nrcb1', 'dra': 0.5, 'ddec': 0.5, 'misaligned': False}])
     assert svg.startswith('<svg')
-    assert 'opacity="0.95"' in svg and 'opacity="0.35"' in svg
-    assert 'mas' in svg
+    assert svg.count('<title>') == 1            # only the flagged one
+    assert '<path' in svg                       # the aligned dots
+    assert 'mas' in svg                         # scale label
+
+
+def test_quiver_stays_small_on_a_full_filter():
+    """The size regression this guards against: 192 exposures must not produce
+    tens of kB of markup."""
+    from jwst_gc_pipeline.monitoring import figures
+    exposures = [{'detector': f'nrc{"ab"[i % 2]}{i % 4 + 1}', 'visit': '1',
+                  'dra': 0.4, 'ddec': -0.3, 'misaligned': False}
+                 for i in range(192)]
+    svg = figures.quiver_svg(exposures)
+    assert len(svg) < 12000, len(svg)
+    assert svg.count('<title>') == 0
 
 
 def test_writeup_links_resolve_against_the_served_symlink_name(tmp_path):
