@@ -57,6 +57,18 @@ def test_directory_with_products_but_no_crf_is_still_reported(tmp_path, monkeypa
     assert cio.field_filters("w51") == ["F444W"]
 
 
+def test_half_finished_reduction_no_fits_is_still_reported(tmp_path, monkeypatch):
+    """The case where ``os.listdir`` and ``*.fits`` diverge: a reduction that
+    wrote its association files and died before any FITS.  It HAS files and zero
+    ``.fits`` -- a real half-finished mismatch that must still block, not be
+    dropped as an empty leftover."""
+    monkeypatch.setattr(cio, "BASE", str(tmp_path))
+    p = _pipeline(tmp_path, "w51", "F250M")
+    (p / "jw06151001001_03109_00001_nrca1_asn.json").write_bytes(b"{}")
+
+    assert cio.field_filters("w51") == ["F250M"]
+
+
 def test_non_filter_directories_ignored(tmp_path, monkeypatch):
     monkeypatch.setattr(cio, "BASE", str(tmp_path))
     p = _pipeline(tmp_path, "w51", "F140M")

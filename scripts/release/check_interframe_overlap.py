@@ -946,17 +946,23 @@ def field_filters(field):
     block a field whose eleven real NIRCam bands all pass.
 
     The fail-closed intent is kept for the case it was written for: a directory
-    that holds products but whose crf glob matches nothing is a REAL mismatch
-    (wrong suffix, half-finished reduction) and still blocks.
+    that holds ANY file but whose crf glob matches nothing is a REAL mismatch
+    (wrong suffix, or a half-finished reduction that wrote e.g. only ``_asn.json``
+    before dying) and still blocks.  The emptiness test is therefore ``os.listdir``
+    (nothing at all), NOT ``*.fits`` -- a half-finished run has files and zero
+    ``.fits``, and must reach ``check_filter`` rather than be dropped as "not a
+    band".  Empirically the two coincide today (the four w51 leftovers are truly
+    empty; no archive directory holds files but no ``.fits``), so this keeps code
+    and docstring aligned rather than fixing an observed failure.
     """
     out = []
     for p in sorted(glob.glob(f"{BASE}/{field}/*/pipeline/")):
         filt = os.path.basename(os.path.dirname(os.path.dirname(p)))
         if not filt.upper().startswith("F"):
             continue
-        if not glob.glob(os.path.join(p, "*.fits")):
-            print(f"  {field} {filt}: empty pipeline directory, no products at "
-                  f"all -- not a band, skipping (not a verification failure)",
+        if not os.listdir(p):
+            print(f"  {field} {filt}: empty pipeline directory, nothing at all "
+                  f"-- not a band, skipping (not a verification failure)",
                   flush=True)
             continue
         out.append(filt)
