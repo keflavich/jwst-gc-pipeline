@@ -648,7 +648,51 @@ def test_frozen_stage_m2_refused_its_own_tie_is_unverified(tmp_path, monkeypatch
     assert rec["failures"] == []
     # still held by the release gate's all_verified check
     assert not rec["all_verified"]
-    assert any("REFUSED its own tie" in u for u in rec["unverified"])
+    assert any("m2 MEASURED but REFUSED" in u for u in rec["unverified"])
+
+
+def test_frozen_stage_stable_against_refused_m2_tie_keeps_its_pass(
+        tmp_path, monkeypatch):
+    """A REFUSED m2 tie is still a MEASUREMENT, and a later stage that lands on
+    top of it has proved the solution did not move.
+
+    sgra F212N on disk: m2 refused a 48.49 mas tie (-48.247,-4.890) because its
+    independent checks disagreed; m3 measures (-47.836,-4.926), a delta of
+    0.41 mas, and records all_verified: true.  Discarding the baseline just
+    because m2 declined to APPLY it would convert that verified pass into
+    UNVERIFIED and hand sgra a release-gate block it does not have today."""
+    rec_path = os.path.join(str(tmp_path), "checkpoint_m2_F212N_latest.json")
+    with open(rec_path, "w") as fh:
+        json.dump(dict(visits=[dict(visit="001", reference_tie=dict(
+            apply_ok=False, dra_mas=-48.247, ddec_mas=-4.890,
+            off_mas=48.49, swept=False))]), fh)
+    _patch_consensus_and_tie(monkeypatch, dra_now=-47.836, ddec_now=-4.926)
+    rec = run_visit_checkpoint([_tiny_visit_table()], "m3", refcat=_DUMMY_REFCAT,
+                               filtername="F212N", record_dir=str(tmp_path),
+                               context="test")
+    assert rec["passed"]
+    assert rec["failures"] == []
+    # the whole point: the stability result is KEPT, not discarded
+    assert rec["all_verified"], rec["unverified"]
+
+
+def test_frozen_stage_moved_from_refused_m2_tie_is_unverified_not_failure(
+        tmp_path, monkeypatch):
+    """Moving away from a refused tie is still not a frozen-solution regression
+    -- there was no frozen solution -- but it is not a pass either."""
+    rec_path = os.path.join(str(tmp_path), "checkpoint_m2_F212N_latest.json")
+    with open(rec_path, "w") as fh:
+        json.dump(dict(visits=[dict(visit="001", reference_tie=dict(
+            apply_ok=False, dra_mas=-7694.20, ddec_mas=1436.12,
+            off_mas=7827.1, swept=True))]), fh)
+    _patch_consensus_and_tie(monkeypatch, dra_now=-30.83, ddec_now=9.80)
+    rec = run_visit_checkpoint([_tiny_visit_table()], "m3", refcat=_DUMMY_REFCAT,
+                               filtername="F212N", record_dir=str(tmp_path),
+                               context="test")
+    assert rec["passed"]                      # w51 F140M still unblocks
+    assert rec["failures"] == []
+    assert not rec["all_verified"]
+    assert any("m2 MEASURED but REFUSED" in u for u in rec["unverified"])
 
 
 def test_frozen_stage_m2_applied_tie_still_gates(tmp_path, monkeypatch):

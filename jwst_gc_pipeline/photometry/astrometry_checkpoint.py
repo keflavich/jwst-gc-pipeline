@@ -1351,9 +1351,21 @@ def _m2_reference_tie_baseline(record_dir, filtername, visit):
         if str(v.get("visit")) != str(visit):
             continue
         rt = v.get("reference_tie") or {}
-        if rt.get("apply_ok") is False:
-            return None, True
+        rejected = rt.get("apply_ok") is False
         dra, ddec = rt.get("dra_mas"), rt.get("ddec_mas")
+        if rejected:
+            # A REFUSED tie is still a MEASUREMENT.  Hand the numbers back with
+            # the rejected flag so the caller can compare against them and demote
+            # only on failure -- discarding them throws away a stability result
+            # that exists and passes.  sgra F212N: m2 refused a 48.49 mas tie
+            # (independent checks disagreed) and m3 lands 0.41 mas away, which is
+            # the strongest evidence the solution did not move; an earlier
+            # revision of this function returned None here and turned that
+            # verified PASS into UNVERIFIED.
+            if dra is not None and ddec is not None \
+                    and np.isfinite(dra) and np.isfinite(ddec):
+                return (float(dra), float(ddec)), True
+            return None, True
         if dra is not None and ddec is not None \
                 and np.isfinite(dra) and np.isfinite(ddec):
             return (float(dra), float(ddec)), False
@@ -1681,18 +1693,43 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                         if base is not None:
                             delta = float(np.hypot(ref_tie["dra_mas"] - base[0],
                                                    ref_tie["ddec_mas"] - base[1]))
-                            if delta > STAGE_STABILITY_TOL_MAS:
+                            if delta <= STAGE_STABILITY_TOL_MAS:
+                                # Stable against the m2 measurement, whether or
+                                # not m2 chose to APPLY it.  What m2 froze is the
+                                # crf GWCS, physically; `apply_ok: false` says the
+                                # ABSOLUTE tie is uncertified, not that the
+                                # consensus was free to move.  Two measurements of
+                                # the same quantity agreeing is evidence either
+                                # way, so this keeps sgra F212N's verified pass.
+                                print(f"ASTROM CHECKPOINT [{stage}] STABLE: {vctx} "
+                                      f"tie unchanged since m2 (delta "
+                                      f"{delta:.2f} mas <= "
+                                      f"{STAGE_STABILITY_TOL_MAS}"
+                                      f"{'; m2 apply_ok=False, absolute tie still '
+                                         'uncertified' if m2_rejected else ''})",
+                                      flush=True)
+                            elif m2_rejected:
+                                unverified.append(
+                                    f"{vctx}: consensus->reference moved {delta:.2f} mas "
+                                    f"from a tie m2 MEASURED but REFUSED "
+                                    f"(m2=({base[0]:+.2f},{base[1]:+.2f}) apply_ok=False, "
+                                    f"now=({ref_tie['dra_mas']:+.2f},"
+                                    f"{ref_tie['ddec_mas']:+.2f}) mas). A refused tie is "
+                                    f"not a frozen solution, so this is not a regression "
+                                    f"-- the field's ABSOLUTE tie is what needs "
+                                    f"investigating (bulk_source="
+                                    f"{ref_tie.get('bulk_source')}, "
+                                    f"swept={ref_tie.get('swept')})")
+                                print(f"ASTROM CHECKPOINT [{stage}] UNVERIFIED "
+                                      f"(moved {delta:.2f} mas from an m2-REFUSED "
+                                      f"tie): {vctx}", flush=True)
+                            else:
                                 failures.append(
                                     f"{vctx}: consensus->reference MOVED "
                                     f"{delta:.2f} mas since the m2 freeze "
                                     f"(m2=({base[0]:+.2f},{base[1]:+.2f}), now="
                                     f"({ref_tie['dra_mas']:+.2f},"
                                     f"{ref_tie['ddec_mas']:+.2f}) mas)")
-                            else:
-                                print(f"ASTROM CHECKPOINT [{stage}] STABLE: {vctx} "
-                                      f"tie unchanged since m2 (delta "
-                                      f"{delta:.2f} mas <= "
-                                      f"{STAGE_STABILITY_TOL_MAS})", flush=True)
                         elif m2_rejected:
                             # m2 measured a tie and REFUSED it as untrustworthy.
                             # Nothing was frozen, so nothing can have moved; this
