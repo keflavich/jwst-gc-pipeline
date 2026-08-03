@@ -601,11 +601,14 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
     gdra_deg = (global_result["dra"] / 3.6e6)  # on-sky mas -> deg (Δα·cosδ)
     gddec_deg = (global_result["ddec"] / 3.6e6)
 
-    ia, ib, sep, _ = search_around_sky(a, b, radius_arcsec * u.arcsec)
-    if len(ia) == 0:
+    def _no_pairs():
         return dict(cells=[], n_cells=0, n_measured=0, n_flagged=0,
                     worst_off_mas=float("nan"), worst_sig_off_mas=float("nan"),
                     clean=False)
+
+    ia, ib, sep, _ = search_around_sky(a, b, radius_arcsec * u.arcsec)
+    if len(ia) == 0:
+        return _no_pairs()
     # keep only the NEAREST b for each a (unambiguous association given the
     # verified small tie), then require uniqueness of the b partner
     order = np.lexsort((sep.arcsec, ia))
@@ -616,6 +619,18 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
     b_multi = set(np.unique(ib_n)[b_counts > 1])
     keep = np.array([bi not in b_multi for bi in ib_n])
     ia_n, ib_n = ia_n[keep], ib_n[keep]
+    # The uniqueness filter can remove EVERY pair -- in a crowded field each `b`
+    # can be the nearest partner of more than one `a`, and when that is true of
+    # all of them nothing survives.  The `len(ia) == 0` guard above does not
+    # cover this: pairs WERE found, they were just all ambiguous.  Falling
+    # through leaves `ra_deg` zero-size and `ra_deg.min()` raises
+    # "zero-size array to reduction operation minimum which has no identity",
+    # which crashed the whole --refcat arbiter run of
+    # check_interframe_overlap.py on brick F187N (2026-08-03) after it had
+    # already cleared F182M -- an unhandled exception instead of the "could not
+    # measure this pair" answer the caller is written to handle.
+    if len(ia_n) == 0:
+        return _no_pairs()
 
     cosd = np.cos(np.radians(a[ia_n].dec.value))
     dra = (b[ib_n].ra - a[ia_n].ra).to(u.arcsec).value * cosd * 1000.0 - global_result["dra"]
