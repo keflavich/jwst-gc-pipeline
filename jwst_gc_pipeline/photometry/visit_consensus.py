@@ -846,7 +846,13 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
       (``per_tile['clean']``).  With a Gaia-ONLY reference (``dense=False``) D is
       pure noise (see the per-tile note below) and is replaced by the same-star
       matched-pair refinement (A') succeeding -- still multi-check, since A'
-      refuses unless the global tie is verified-small.  The fine cross-reference
+      refuses unless the global tie is verified-small.  NOTE the two checks that
+      survive on a Gaia-ONLY field (A' and C) are both GLOBAL statistics: D is
+      the only SPATIAL one, so a localized seam -- half a mosaic displaced --
+      is not detected there.  That is a real reduction in coverage, accepted
+      because D against a sparse reference returns noise in every tile rather
+      than catching seams.  Seam cover for those fields is the release-time
+      interframe overlap gate, not this checkpoint.  The fine cross-reference
       agreement (``cross_reference['agree']``, ``agree_tol_mas``) is reported for
       diagnostics but does NOT gate apply_ok.
       An offset must never be APPLIED on a single check.

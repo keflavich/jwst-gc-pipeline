@@ -172,9 +172,6 @@ def write_table_atomic(table, path, **kwargs):
     return path
 
 
-MERGEDCAT_MOSAIC_OVERRIDE_ENV = 'ALLOW_MISSING_MERGEDCAT_MOSAIC'
-
-
 @contextlib.contextmanager
 def publish_into(directory):
     """Yield a private directory whose files land in ``directory`` at the end.
