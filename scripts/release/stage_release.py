@@ -715,7 +715,11 @@ CONTINUITY_PAIRS = [("f182m", "f187n"), ("f410m", "f405n")]
 #
 # KNOWN_CONTINUITY_LIMITS: pairs whose SCIENCE-subset flatness cannot be driven
 # below tol by any reduction change because the residual is an observation-design
-# floor, not a pipeline defect. These WARN (with the reason) instead of blocking.
+# floor, not a pipeline defect. The exemption is SCOPED, not whole-pair: a failing
+# bin only WARNs if it sits in the saturation-onset regime (brighter than the
+# faintest saturated star, _saturation_faint_edge); a failing bin FAINTER than
+# that -- or any failure in a catalog with no saturation flags -- still BLOCKS, so
+# a genuine future flux-scale defect in one of these pairs is not whitelisted away.
 # Brick 2026-08: F405N-F410M NGROUPS=2 (BRIGHT2) leaves the deepest cores
 # unrecoverable (group-0 railed), and the brightest ~one bin of still-unsaturated
 # stars sits in the saturation-onset regime; every fainter bin (n>=800) is flat to
@@ -725,6 +729,33 @@ KNOWN_CONTINUITY_LIMITS = {
     ("f405n", "f410m"): "NGROUPS=2 deep-core saturation floor (unrecoverable by "
                         "design); science subset flat below the saturation onset",
 }
+
+
+def _saturation_faint_edge(cat, bands):
+    """Faintest mag_vega among rows flagged saturated (is_saturated or
+    replaced_saturated) in ANY of ``bands`` -- i.e. how deep into the CMD the
+    saturation regime reaches. Returns None when the catalog carries no
+    saturation flags (nothing saturated -> no floor regime).  Used to scope a
+    KNOWN_CONTINUITY_LIMITS exemption to the saturation-onset regime only: a
+    failing flatness bin FAINTER than this edge has no deep-core-floor excuse."""
+    import numpy as np
+    n = len(cat)
+    faint = None
+    for band in bands:
+        sat = np.zeros(n, bool)
+        for pre in ("is_saturated_", "replaced_saturated_"):
+            col = f"{pre}{band}"
+            if col in cat.colnames:
+                sat |= np.asarray(cat[col], bool)
+        mag = f"mag_vega_{band}"
+        if not sat.any() or mag not in cat.colnames:
+            continue
+        vals = np.asarray(cat[mag], float)[sat]
+        vals = vals[np.isfinite(vals)]
+        if vals.size:
+            edge = float(np.nanmax(vals))
+            faint = edge if faint is None else max(faint, edge)
+    return faint
 
 
 def check_photometric_continuity(items, tol=CONTINUITY_TOL_MAG):
@@ -767,14 +798,27 @@ def check_photometric_continuity(items, tol=CONTINUITY_TOL_MAG):
             r_full = degenerate_pair_flatness(cat, a, b, include_flags=True)
             known = (a, b) in KNOWN_CONTINUITY_LIMITS or (b, a) in KNOWN_CONTINUITY_LIMITS
             ok = not (np.isfinite(r["metric"]) and r["metric"] >= tol)
+            # A KNOWN_CONTINUITY_LIMITS pair is exempt from BLOCKING only for
+            # failing bins inside the saturation-onset regime (brighter than the
+            # faintest saturated star) -- where the deep-core floor lives. A
+            # failing bin FAINTER than saturation, or ANY failure in a catalog
+            # with no saturation flags, has no floor excuse and still blocks.
+            exempt = False
+            if not ok and known:
+                sat_edge = _saturation_faint_edge(cat, (a, b))
+                below_floor = [bn for bn in r["bins"]
+                               if abs(bn["dev"]) >= tol
+                               and (sat_edge is None or bn["magB_lo"] >= sat_edge)]
+                exempt = (sat_edge is not None) and not below_floor
             sci = (f"{r['metric']:.3f}" if np.isfinite(r["metric"]) else "n/a")
             full = (f"{r_full['metric']:.3f}" if np.isfinite(r_full["metric"]) else "n/a")
-            status = "ok" if ok else ("WARN(known-limit)" if known else "FAIL")
+            status = ("ok" if ok else
+                      "WARN(known-limit)" if exempt else "FAIL")
             print(f"  degenerate-pair {a}-{b} [{name}]: science drift {sci} mag "
                   f"vs plateau {r['plateau']:+.3f}  (full-inclusive {full} mag)  "
                   f"{status}", flush=True)
             if not ok:
-                if known:
+                if exempt:
                     reason = (KNOWN_CONTINUITY_LIMITS.get((a, b))
                               or KNOWN_CONTINUITY_LIMITS.get((b, a)))
                     print(f"    known limit, not blocking: {reason}", flush=True)

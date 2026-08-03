@@ -153,9 +153,13 @@ but are NOT required to be color-flat — some carry documented residual biases
 the flags exist to signal. The gate also logs the flag-inclusive drift so a
 regressing satstar flux scale stays visible.
 
-**Known limits (`KNOWN_CONTINUITY_LIMITS` — WARN, not blocking).** A pair whose
-science-subset drift is an observation-design floor rather than a pipeline
-defect WARNs with its reason instead of blocking:
+**Known limits (`KNOWN_CONTINUITY_LIMITS` — WARN, SCOPED, not whole-pair).** A
+pair whose science-subset drift is an observation-design floor rather than a
+pipeline defect WARNs with its reason instead of blocking — but only for failing
+bins in the saturation-onset regime (brighter than the faintest saturated star,
+`_saturation_faint_edge`). A failing bin FAINTER than saturation — or any failure
+in a catalog with no saturation flags — still BLOCKS, so a genuine future
+flux-scale defect in one of these pairs is not whitelisted away:
 - **F405N-F410M — NGROUPS=2 (BRIGHT2) deep-core floor.** The deepest cores are
   unrecoverable (group-0 railed); ZEROFRAME recovery closes the saturation
   BOUNDARY (jump 0.04 mag, pass) but the science-subset flatness metric is
