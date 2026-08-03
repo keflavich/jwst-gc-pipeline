@@ -47,7 +47,8 @@ LINE_CITATION_ALLOWLIST = {
 
 #: Repo prefixes that name a DIFFERENT repository.  A `.py` reference carrying one
 #: of these is not expected to resolve here; anything else must.
-_FOREIGN_PREFIXES = ('brick2221/', 'jwst_rgb/', 'peppar/', 'jwst/', 'stdatamodels/',
+_FOREIGN_PREFIXES = ('brick2221/', 'jwst_rgb/', 'peppar/', 'astrometry_paper/',
+                     'jwst/', 'stdatamodels/',
                      'stcal/', 'gwcs/', 'stpsf/', 'photutils/', 'astropy/',
                      'crowdsource/', 'poppy/', 'synphot/', 'asdf/', 'drizzle/',
                      'crds/', 'numpy/', 'scipy/', '_bench/')

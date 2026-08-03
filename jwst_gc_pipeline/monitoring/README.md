@@ -159,9 +159,9 @@ timestamps, and a sampled timestamp is reported as such.
 
 The Brick astrometry paper (Overleaf `6a521006b63a11a7e0d80fa0`, checked out at
 `<brick>/astrometry_paper`) already validates the release products:
-`scripts/post_recat_validation.py` runs on a SLURM dependency after re-cataloging
+`astrometry_paper/scripts/post_recat_validation.py` runs on a SLURM dependency after re-cataloging
 and writes `outputs/<date>_postrecat/summary.json`, whose `problems` list is the
-verdict, with every threshold pinned in the paper's `config.py`.
+verdict, with every threshold pinned in the paper's `astrometry_paper/config.py`.
 
 The monitor **reports that verdict; it does not re-implement it.** The paper's
 gates (cross-filter vs anchor > 30 mas, p60/p90 mode flip > 10 mas,
@@ -177,7 +177,7 @@ What the monitor adds is the question that script cannot ask about itself:
 * **is a missing certifier being read as a pass?** Saturation continuity and
   degenerate-pair flatness are only recorded when a qualifying merged table was
   found; absent means UNKNOWN.
-* **does the freshness guard bind?** `provenance.check_catalog_freshness` raises on
+* **does the freshness guard bind?** `astrometry_paper/provenance.py::check_catalog_freshness` raises on
   a catalog older than `MIN_CATALOG_DATE`, so the analysis would refuse to run.
 
 Problems are scoped to the run's programme — the paper validates both brick
