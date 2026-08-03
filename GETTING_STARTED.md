@@ -405,6 +405,9 @@ shell runs, so a variable there is never expanded. `slurm.log_dir` in
   photometry stage does, and the parameters it uses. Read this next.
 - [`PHOTOMETRY_PIPELINE.md`](PHOTOMETRY_PIPELINE.md) — flags, filenames, output
   trees, how the work is distributed.
+- [`docs/RACE_CONDITIONS.md`](docs/RACE_CONDITIONS.md) — what breaks when array
+  tasks touch the same file at once, and the rule for writing one. Read it
+  before adding anything that writes a path more than one task can reach.
 - [`jwst_gc_pipeline/reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md`](jwst_gc_pipeline/reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md)
   — required reading before you change anything astrometric. Its rules exist
   because breaking them produced wrong answers that looked right.

@@ -206,6 +206,7 @@ from jwst_gc_pipeline.photometry.psf_paths import (
 # Imported as field_registry: `fields` is a local variable in these
 # drivers (the --field list), and shadowed the module.
 from jwst_gc_pipeline import fields as field_registry
+from jwst_gc_pipeline.atomic_io import publish_into
 
 
 def _seed_table_chunk_subset(seed_table, ww, image_shape,
@@ -2142,6 +2143,10 @@ def get_psf_model(filtername, proposal_id, field,
                 _psf_fn = os.path.join(_psf_outdir,
                     f'{inst_token}_{_cache_detector.lower()}_{filtername.lower()}'
                     f'_fovp101_samp{_samp}_npsf16.fits')
+                # Sound because the writer publishes atomically (atomic_io
+                # .publish_into, below): a grid that exists is a grid that is
+                # finished.  Building straight into this directory would make
+                # this check load a half-written file.
                 if os.path.exists(_psf_fn):
                     print(f"Loading cached PSF grid (skipping MAST/Poppy): {_psf_fn}", flush=True)
                     grid = to_griddedpsfmodel(_psf_fn)
@@ -2246,13 +2251,19 @@ def get_psf_model(filtername, proposal_id, field,
                     # yielding invalid 'NRCALONG'/'NRCBLONG' detector names
                     # that raised on every cold-cache build.
                     _dl_detector = stpsf_detector_for_module(module, filtername, instrument)
-                    if _dl_detector is not None:
-                        nrc.detector = _dl_detector
-                        grid = nrc.psf_grid(num_psfs=16, all_detectors=False, verbose=True, save=True,
-                                           fov_pixels=101, oversample=_psf_oversample, outdir=_psf_outdir)
-                    else:
-                        grid = nrc.psf_grid(num_psfs=16, all_detectors=True, verbose=True, save=True,
-                                           fov_pixels=101, oversample=_psf_oversample, outdir=_psf_outdir)
+                    # Build into a private directory and move the finished grids
+                    # into the shared cache.  psf_grid(save=True) writes in
+                    # place, so the file exists from creation until complete and
+                    # a concurrent task's os.path.exists check reads a truncated
+                    # grid (see docs/RACE_CONDITIONS.md).
+                    with publish_into(_psf_outdir) as _build_dir:
+                        if _dl_detector is not None:
+                            nrc.detector = _dl_detector
+                            grid = nrc.psf_grid(num_psfs=16, all_detectors=False, verbose=True, save=True,
+                                               fov_pixels=101, oversample=_psf_oversample, outdir=_build_dir)
+                        else:
+                            grid = nrc.psf_grid(num_psfs=16, all_detectors=True, verbose=True, save=True,
+                                               fov_pixels=101, oversample=_psf_oversample, outdir=_build_dir)
                     has_downloaded = True
                 except (urllib3.exceptions.ReadTimeoutError, requests.exceptions.ReadTimeout, requests.HTTPError) as ex:
                     # Transient network failure: retry with backoff.  This
