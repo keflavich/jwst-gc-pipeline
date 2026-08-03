@@ -43,6 +43,33 @@ no sweep, so **it cannot detect a >2.5″ overlap offset** (zero pairs → "can'
 not FAIL). Until it is given a sweep / wide window, a passing `registration_failsafes`
 is **not sufficient** — the swept per-visit/overlap check above must also pass.
 
+### What `registration_failsafes --scan` gates, per module geometry
+
+The script decides what to check from the field's **module geometry**, measured
+from the mosaics themselves (shared pixels carrying real data in both modules,
+not touching bounding boxes):
+
+| geometry | example | what is gated |
+|---|---|---|
+| modules **overlap** | brick, cloudc, sgrc, sgrb2, w51, ngc6334 | the **merged** mosaic — the only product where the two modules are combined, so the inter-module seam appears there and nowhere else |
+| modules **disjoint** (adjacent, non-overlapping sky) | arches, quintuplet | **per module**: each module's own mosaic is a complete object, there is no seam, and **every module must pass on its own** |
+| **one module** only | sickle (nrcb) | per module, same as above |
+
+**Exit codes are tri-state and only 0 is a pass:**
+
+| exit | `PASS` | meaning |
+|---|---|---|
+| 0 | `true` | verified |
+| 1 | `false` | a band is locally misregistered — BLOCK |
+| 2 | `null` | **could not verify** — BLOCK |
+
+`PASS: null` means the gate could not reach a verdict: no mosaics on disk, fewer
+than two bands in a channel to cross-match, or — the common one — **a band with
+no merged mosaic in a field whose modules overlap**, whose seam therefore went
+unchecked. Ambiguity is not a pass. As of 2026-08-03 that last case covers
+cloudc F182M, sgrc F115W/F162M, cloudef F162M/F210M and sgrb2 F150W; those bands
+used to be omitted from the scan entirely and the field reported green.
+
 ---
 
 ## 0b. Stage astrometry checkpoints all green (BLOCKING)

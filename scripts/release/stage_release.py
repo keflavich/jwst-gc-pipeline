@@ -1027,6 +1027,15 @@ def main(argv=None):
                   f"--allow-registration-fail AND ALLOW_REGISTRATION_FAIL=1 (dangerous).",
                   file=sys.stderr)
             return 2
+        if rc == 2:
+            print(f"\nREFUSING TO STAGE '{args.field}': local-registration failsafe could "
+                  f"NOT VERIFY the field (see the UNVERIFIED lines above) -- e.g. a band "
+                  f"with no merged mosaic in a field whose modules overlap, so that band's "
+                  f"inter-module seam was never checked. An unverified band is not a passing "
+                  f"band: produce the missing mosaic, or override with "
+                  f"--allow-registration-fail AND ALLOW_REGISTRATION_FAIL=1 (dangerous).",
+                  file=sys.stderr)
+            return 2
         if rc != 0:
             # Fail CLOSED: a failsafe that cannot run is NOT a passing failsafe.
             print(f"\nREFUSING TO STAGE '{args.field}': registration failsafe could not run "

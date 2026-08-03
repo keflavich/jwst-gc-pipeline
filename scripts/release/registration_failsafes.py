@@ -60,6 +60,14 @@ FAIL_MIN_RATIO = 10.0            # a FAIL needs peak/background >= this -- CONFI
                                  # unchanged (no detections removed); only the fail bar rises.
 OFF_MAX = 60.0                   # a VERIFIED cell whose peak offset exceeds this (mas) -> FAIL
 
+OVERLAP_STRIDE = 16              # pixel stride when sampling a mosaic for module overlap
+MIN_OVERLAP_SAMPLES = 50         # sampled positions with real data in BOTH modules before
+                                 # the modules count as overlapping.  At the i2d pixel scale
+                                 # a stride-16 sample is ~0.5"; 50 samples is a few arcsec of
+                                 # genuine shared sky, well under the thinnest real seam
+                                 # measured (sgrc F360M, 279) and far above the 0 that two
+                                 # abutting modules give (arches F212N/F323N).
+
 
 def detect(path, thr=30.0):
     h = fits.open(path); sci = h["SCI"]; w = WCS(sci.header); d = sci.data.astype("float32")
@@ -278,53 +286,194 @@ def field_bands(field):
     return sorted(set(out))
 
 
-def scan_field(field, verbose=True, images_only=False, observations=None):
-    """Run the cross-band + own-catalog failsafes on EVERY band of a field.
+def field_band_mosaics(field, observations=None):
+    """``{FILT: {module_token: path}}`` for every validly-named mosaic on disk.
 
-    Cross-band truth for band F = the pooled detections of all OTHER bands of the field
-    (same stars, JWST-internal registration).  Returns {band: {check: verdict}} and an
-    overall PASS/FAIL.  Detects each band once.
-
-    ``images_only``: gate an IMAGE-ONLY release -- run the reference-free cross-band
-    (image-to-image) check only, and SKIP own-catalog.  An image-only release ships the
-    mosaics without the catalog, so a mosaic<->catalog mismatch (own_catalog FAIL) is not
-    a reason to block; the images can still be internally consistent and shippable.
+    ``field_bands`` lists only the bands that have a ``merged`` mosaic, so a band
+    drizzled per-module and never merged is invisible to it -- and therefore
+    silently ungated.  That is not a rare state: cloudc F182M, sgrc F115W/F162M,
+    cloudef F162M/F210M and sgrb2 F150W are all in it (2026-08-03), and arches
+    and sickle have no merged mosaic in ANY band.  Enumerate by module instead
+    and let the caller decide what it can check with what is present.
     """
-    bands = field_bands(field)
+    out = {}
+    pat = (f"{BASE}/{field}/*/pipeline/"
+           f"jw[0-9][0-9][0-9][0-9][0-9]-o[0-9][0-9][0-9]_t001_nircam_clear-"
+           f"*_i2d.fits")
+    for p in sorted(glob.glob(pat)):
+        m = _MOSAIC_RE.match(os.path.basename(p))
+        if m is None:
+            continue
+        filt = m.group("filt").upper()
+        d = os.path.basename(os.path.dirname(os.path.dirname(p)))   # <field>/<FILT>/pipeline
+        if d.upper() != filt:
+            continue
+        if observations is not None \
+                and f"{m.group('prop')}-{m.group('obs')}" not in observations:
+            continue
+        out.setdefault(filt, {}).setdefault(m.group("module"), p)
+    return out
+
+
+def module_family(token):
+    """``nrca``/``nrcalong`` -> ``'a'``; ``nrcb``/``nrcblong`` -> ``'b'``.
+
+    A field names its per-module mosaics with the SW tokens in both channels
+    (arches writes ``f323n-nrca``, not ``f323n-nrcalong``), so the family, not
+    the token, is what identifies "the same piece of sky".
+    """
+    return "a" if token.startswith("nrca") else "b"
+
+
+def _sampled_valid_sky(path, stride=OVERLAP_STRIDE):
+    """(ra, dec) of stride-sampled pixels that carry real data, plus (wcs, data).
+
+    ``i2d`` mosaics are a rectified plain ``RA---TAN`` grid with no SIP, so
+    ``WCS(header)`` is exact here -- the GWCS rule (ASTROMETRY RULE #2) exempts
+    them explicitly.
+    """
+    with fits.open(path) as hdul:
+        for h in hdul:
+            if h.data is not None and h.data.ndim == 2 and h.header.get("CTYPE1"):
+                data, hdr = np.asarray(h.data), h.header
+                break
+        else:
+            return None
+    ww = WCS(hdr)
+    ys, xs = np.mgrid[0:data.shape[0]:stride, 0:data.shape[1]:stride]
+    good = np.isfinite(data[ys, xs]) & (data[ys, xs] != 0)
+    if not good.any():
+        return None
+    ra, dec = ww.all_pix2world(xs[good].astype(float), ys[good].astype(float), 0)
+    return dict(ra=ra, dec=dec, wcs=ww, data=data)
+
+
+def modules_overlap(path_a, path_b, stride=OVERLAP_STRIDE):
+    """Do the two per-module mosaics share sky where BOTH carry real data?
+
+    Not a bounding-box test: two abutting NIRCam modules drizzled onto their own
+    grids can have boxes that touch or overlap while no pixel holds data from
+    both.  Sample A's real pixels, map them into B, and count the ones that land
+    on real data there.
+
+    Returns ``None`` when either mosaic cannot be read (unknown, not "no").
+    """
+    a = _sampled_valid_sky(path_a, stride)
+    b = _sampled_valid_sky(path_b, stride)
+    if a is None or b is None:
+        return None
+    x, y = b["wcs"].all_world2pix(a["ra"], a["dec"], 0)
+    xi, yi = np.round(x).astype(int), np.round(y).astype(int)
+    inside = ((xi >= 0) & (yi >= 0)
+              & (xi < b["data"].shape[1]) & (yi < b["data"].shape[0]))
+    if inside.any():
+        d = b["data"][yi[inside], xi[inside]]
+        n_both = int((np.isfinite(d) & (d != 0)).sum())
+    else:
+        n_both = 0
+    return dict(n_sampled=int(len(x)), n_in_bbox=int(inside.sum()),
+                n_both=n_both, overlaps=bool(n_both >= MIN_OVERLAP_SAMPLES))
+
+
+def field_module_geometry(field, observations=None, verbose=False):
+    """Whether this field's nrca and nrcb footprints share sky.
+
+    ``mode``:
+
+    * ``'single-module'`` — only one module family was observed (sickle: nrcb
+      only).  There is no inter-module seam, so a per-module gate is complete.
+    * ``'disjoint'`` — both modules observed, no band shows shared data (arches,
+      quintuplet: the two modules image adjacent, non-overlapping sky).  A merged
+      mosaic would add nothing the per-module mosaics do not already carry, so a
+      per-module gate is again complete.
+    * ``'overlapping'`` — some band has real data from both modules.  The seam
+      between them is exactly where the misregistration this script exists to
+      catch would live, so a band in this field needs its MERGED mosaic to be
+      fully gated.
+    * ``'unknown'`` — no band had both modules readable.
+    """
+    inv = field_band_mosaics(field, observations=observations)
+    fams = set()
+    for mods in inv.values():
+        fams.update(module_family(t) for t in mods if t != "merged")
+    if not fams:
+        return dict(mode="unknown", families=[], evidence={})
+    if len(fams) == 1:
+        return dict(mode="single-module", families=sorted(fams), evidence={})
+    evidence, seen = {}, False
+    for filt in sorted(inv):
+        mods = inv[filt]
+        pa = mods.get("nrca") or mods.get("nrcalong")
+        pb = mods.get("nrcb") or mods.get("nrcblong")
+        if not (pa and pb):
+            continue
+        r = modules_overlap(pa, pb)
+        if r is None:
+            continue
+        seen = True
+        evidence[filt] = r
+        if verbose:
+            print(f"  module overlap {field} {filt}: {r['n_both']} shared "
+                  f"samples of {r['n_sampled']} -> "
+                  f"{'OVERLAPPING' if r['overlaps'] else 'disjoint'}", flush=True)
+    if not seen:
+        return dict(mode="unknown", families=sorted(fams), evidence=evidence)
+    mode = ("overlapping" if any(r["overlaps"] for r in evidence.values())
+            else "disjoint")
+    return dict(mode=mode, families=sorted(fams), evidence=evidence)
+
+
+def _channel(f):
+    """SW and LW detect different stellar populations and have independent distortion
+    solutions, so a SW-vs-LW cross-match yields chance pairs -> spurious offsets that
+    false-FAIL an internally-consistent field (e.g. gc2211 F200W vs F277W ~89 mas is an
+    artifact; the within-channel + inter-module audit FLAGS none). Cross-band truth must
+    therefore be pooled WITHIN channel only."""
+    return "SW" if int(f[1:4]) <= 212 else "LW"
+
+
+def _scan_view(field, view, band_paths, verbose, images_only):
+    """Cross-band + own-catalog checks over one coherent set of mosaics.
+
+    A *view* is a set of same-geometry mosaics that can serve as one another's
+    cross-band truth: either every band's ``merged`` mosaic, or every band's
+    mosaic for one module family.  Mixing the two would cross-match a merged
+    mosaic against a single module's, whose non-overlapping parts have no
+    counterpart to find.
+    """
+    bands = sorted(band_paths)
     if len(bands) < 2:
-        return dict(field=field, bands=bands, error="need >=2 bands for cross-band")
+        return dict(view=view, bands=bands, PASS=None,
+                    error=f"need >=2 bands for cross-band, have {len(bands)}",
+                    report={})
     dets = {}
     for b in bands:
-        p = mosaic(field, b, "merged", observations=observations)
-        s, f = detect(p) if p else (None, None)
+        s, f = detect(band_paths[b])
         dets[b] = (s, f)
         if verbose:
-            print(f"  detect {field} {b}: {0 if s is None else len(s)}", flush=True)
-    # SW and LW detect different stellar populations and have independent distortion
-    # solutions, so a SW-vs-LW cross-match yields chance pairs -> spurious offsets that
-    # false-FAIL an internally-consistent field (e.g. gc2211 F200W vs F277W ~89 mas is an
-    # artifact; the within-channel + inter-module audit is FLAGS none). Cross-band truth
-    # must therefore be pooled WITHIN channel only.
-    def channel(f):
-        return "SW" if int(f[1:4]) <= 212 else "LW"
+            print(f"  detect {field} [{view}] {b}: {0 if s is None else len(s)}",
+                  flush=True)
 
-    report, any_fail = {}, False
+    report, any_fail, unchecked = {}, False, []
     for b in bands:
         d, fl = dets[b]
         if d is None:
             report[b] = {"error": "no detections"}; any_fail = True; continue
         others = [dets[o][0] for o in bands
-                  if o != b and dets[o][0] is not None and channel(o) == channel(b)]
+                  if o != b and dets[o][0] is not None and _channel(o) == _channel(b)]
         checks = {}
         if others:
             tru = SkyCoord(np.concatenate([s.ra.deg for s in others]) * u.deg,
                            np.concatenate([s.dec.deg for s in others]) * u.deg)
-            r = per_cell(d, fl, tru, f"{b} vs cross-band"); r.pop("_g", None)
+            r = per_cell(d, fl, tru, f"{b} vs cross-band [{view}]"); r.pop("_g", None)
             checks["cross_band"] = r
+        else:
+            # sole band of its channel in this view: nothing to cross-match against
+            unchecked.append(f"{b}: no other {_channel(b)} band in view {view}")
         if not images_only:
             cat = catalog_sc(field, b)
             if cat is not None:
-                r = per_cell(d, fl, cat, f"{b} vs own-catalog",
+                r = per_cell(d, fl, cat, f"{b} vs own-catalog [{view}]",
                              fail_min_ratio=FAIL_MIN_RATIO); r.pop("_g", None)
                 checks["own_catalog"] = r
         bad = any((not c.get("PASS", True)) for c in checks.values())
@@ -336,8 +485,119 @@ def scan_field(field, verbose=True, images_only=False, observations=None):
                 nu = v.get("n_unconfident_highoff") or 0
                 return s + (f"(unconf={nu})" if nu else "")   # high-off, sub-margin cells
             tags = " ".join(_tag(k, v) for k, v in checks.items())
-            print(f"  {field} {b}: {'FAIL' if bad else 'ok'}  {tags}", flush=True)
-    return dict(field=field, bands=bands, PASS=bool(not any_fail), report=report)
+            print(f"  {field} [{view}] {b}: {'FAIL' if bad else 'ok'}  {tags}",
+                  flush=True)
+    return dict(view=view, bands=bands, PASS=bool(not any_fail), report=report,
+                unchecked=unchecked)
+
+
+def scan_field(field, verbose=True, images_only=False, observations=None):
+    """Run the cross-band + own-catalog failsafes on EVERY band of a field.
+
+    Cross-band truth for band F = the pooled detections of all OTHER bands of the field
+    (same stars, JWST-internal registration).  Detects each band once.
+
+    The mosaics are grouped into *views* according to the field's module geometry:
+
+    * modules that OVERLAP — the seam between them is what this script exists to
+      catch, so the ``merged`` mosaic (the only place the two modules are
+      combined) is the thing that must be checked.  A band with no merged mosaic
+      cannot be fully gated here; it is checked per module for what that is worth
+      and reported as ungated.
+    * modules that are DISJOINT (arches, quintuplet) or a field that used only
+      ONE module (sickle) — there is no seam, the merged mosaic would add nothing,
+      and each module's own mosaic is a complete object.  Gate PER MODULE and
+      require every module to pass on its own.
+
+    ``images_only``: gate an IMAGE-ONLY release -- run the reference-free cross-band
+    (image-to-image) check only, and SKIP own-catalog.  An image-only release ships the
+    mosaics without the catalog, so a mosaic<->catalog mismatch (own_catalog FAIL) is not
+    a reason to block; the images can still be internally consistent and shippable.
+
+    ``PASS`` is tri-state.  ``True``/``False`` are a verified pass/fail; ``None``
+    means the field could not be verified either way -- no mosaics, too few
+    bands, or overlapping modules with a band whose merged mosaic is missing.
+    ``None`` BLOCKS: ambiguity is not a pass.
+    """
+    inv = field_band_mosaics(field, observations=observations)
+    if not inv:
+        return dict(field=field, bands=[], PASS=None,
+                    error="no validly-named mosaics on disk")
+    geom = field_module_geometry(field, observations=observations, verbose=verbose)
+    if verbose:
+        print(f"  {field} module geometry: {geom['mode']} "
+              f"(families {geom['families']})", flush=True)
+
+    views, ungated = {}, []
+    if geom["mode"] in ("disjoint", "single-module"):
+        for fam in geom["families"]:
+            paths = {}
+            for filt, mods in inv.items():
+                cand = [t for t in mods
+                        if t != "merged" and module_family(t) == fam]
+                if cand:
+                    paths[filt] = mods[sorted(cand)[0]]
+            if paths:
+                views[f"module-{fam}"] = paths
+    else:
+        # overlapping (or unknown geometry): merged is the object to gate
+        merged = {f: m["merged"] for f, m in inv.items() if "merged" in m}
+        if merged:
+            views["merged"] = merged
+        for filt, mods in sorted(inv.items()):
+            if "merged" not in mods:
+                ungated.append(
+                    f"{filt}: no merged mosaic, but this field's modules "
+                    f"{'overlap' if geom['mode'] == 'overlapping' else 'have unknown geometry'}"
+                    f" -- the inter-module seam of this band is NOT covered here "
+                    f"(present: {sorted(mods)})")
+        # Only when something is ungated is it worth also running the per-module
+        # views: they cannot see the seam (that is what merged is for), so for a
+        # fully-merged field they would triple the runtime and add nothing.  When
+        # a band HAS no merged mosaic, they are the only look at it available.
+        if ungated:
+            for fam in geom["families"]:
+                paths = {}
+                for filt, mods in inv.items():
+                    cand = [t for t in mods
+                            if t != "merged" and module_family(t) == fam]
+                    if cand:
+                        paths[filt] = mods[sorted(cand)[0]]
+                if len(paths) >= 2:
+                    views[f"module-{fam}"] = paths
+
+    if not views:
+        return dict(field=field, bands=sorted(inv), PASS=None,
+                    geometry=geom["mode"],
+                    error="no view with >=2 bands to cross-match")
+
+    results = {name: _scan_view(field, name, paths, verbose, images_only)
+               for name, paths in sorted(views.items())}
+    # In per-module mode EVERY module must pass on its own -- that is the whole
+    # point of accepting the modules separately.
+    any_fail = any(r.get("PASS") is False for r in results.values())
+    unresolved = [f"view {n}: {r['error']}" for n, r in results.items()
+                  if r.get("PASS") is None]
+    unresolved += ungated
+    for r in results.values():
+        unresolved += r.get("unchecked", [])
+
+    if any_fail:
+        passed = False
+    elif unresolved:
+        passed = None
+    else:
+        passed = True
+    if verbose and unresolved:
+        for u in unresolved:
+            print(f"  {field} UNGATED: {u}", flush=True)
+    return dict(field=field, bands=sorted(inv), geometry=geom["mode"],
+                module_families=geom["families"],
+                overlap_evidence=geom.get("evidence", {}),
+                views=results, PASS=passed, unresolved=unresolved,
+                # flattened single-view report, for callers that read `report`
+                report=(results.get("merged") or
+                        list(results.values())[0]).get("report", {}))
 
 
 def main(argv=None):
@@ -365,9 +625,19 @@ def main(argv=None):
         if args.json:
             json.dump(res, open(args.json, "w"), indent=2, default=str)
         print(json.dumps({"field": res.get("field"), "PASS": res.get("PASS"),
-                          "error": res.get("error")}, default=str))
-        if res.get("error"):
-            return 0    # could not verify (e.g. <2 bands) -> warn, do NOT block
+                          "geometry": res.get("geometry"),
+                          "error": res.get("error"),
+                          "unresolved": res.get("unresolved")}, default=str))
+        # PASS is tri-state and only True is a pass.  `None` (could not verify:
+        # no mosaics, <2 bands, a band with no merged mosaic in an overlapping-
+        # module field) used to return 0 and let staging proceed -- a gate that
+        # goes green because it never ran.  Ambiguity is not a pass; it blocks,
+        # and stage_release's --allow-registration-fail + ALLOW_REGISTRATION_FAIL=1
+        # is the deliberate, two-key way past it.
+        if res.get("PASS") is None:
+            for u in (res.get("unresolved") or [res.get("error") or "unspecified"]):
+                print(f"UNVERIFIED: {u}", file=sys.stderr)
+            return 2    # exit 2 = could-not-verify -> gate blocks staging
         return 0 if res.get("PASS") else 1   # exit 1 = FAIL -> gate blocks staging
 
     det, flux, truths = build_truths(args.field, args.filter, args.xband,
