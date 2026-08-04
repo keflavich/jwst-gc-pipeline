@@ -1314,6 +1314,46 @@ def _group_by_visit_filter(tables):
     return groups
 
 
+def _record_name(stage, filtername):
+    """Single source of truth for a checkpoint record's base name.
+
+    The WRITER keys on ``run_visit_checkpoint``'s ``filtername`` argument, which
+    is ``None`` for a mixed-filter run -> the record is stored under ``_all``.
+    The READERS are handed the per-group ``filt`` parsed from table metadata (a
+    real filter name, never None), so ``_record_name`` alone is not enough to
+    close the gap -- see ``_m2_record_path`` for the fallback the readers use.
+    """
+    return f"checkpoint_{stage}_{filtername or 'all'}"
+
+
+def _m2_record_path(record_dir, filtername):
+    """Resolve the latest m2 record path for a per-group filter, tolerating the
+    writer/reader spelling gap.
+
+    The three m2 baseline readers receive the per-group ``filt`` (e.g. 'F212N'),
+    while the writer may have keyed the record on a ``None`` ``filtername``
+    argument and stored it under ``checkpoint_m2_all``.  A bare
+    ``checkpoint_m2_{filt}`` lookup then MISSES -- and a missed m2 baseline reads
+    as "no m2 record", which at a frozen stage fails closed and stops a healthy
+    field.  Try the exact-filter spelling first; fall back to the ``_all``
+    spelling with a LOUD line so the fallback is never silent.  Returns ``None``
+    when neither exists (a genuine no-baseline).
+    """
+    if not record_dir:
+        return None
+    exact = os.path.join(record_dir, f"{_record_name('m2', filtername)}_latest.json")
+    if os.path.exists(exact):
+        return exact
+    allpath = os.path.join(record_dir, f"{_record_name('m2', None)}_latest.json")
+    if filtername and os.path.exists(allpath):
+        print(f"astrom checkpoint: no m2 baseline for filter {filtername!r} at "
+              f"{os.path.basename(exact)}; falling back to "
+              f"{os.path.basename(allpath)} (the m2 record was written for a None "
+              f"filtername argument -- a mixed-filter run)", flush=True)
+        return allpath
+    return None
+
+
 def _m2_reference_tie_baseline(record_dir, filtername, visit):
     """(dra_mas, ddec_mas) of the m2-frozen consensus->reference tie for this
     (filter, visit), from the latest m2 record; None when unavailable.
@@ -1342,10 +1382,8 @@ def _m2_reference_tie_baseline(record_dir, filtername, visit):
     ``swept=False``) and raised "consensus->reference MOVED 7794.98 mas since the
     m2 freeze", blocking the field because the measurement got better.
     """
-    if not record_dir:
-        return None, False
-    path = os.path.join(record_dir, f"checkpoint_m2_{filtername}_latest.json")
-    if not os.path.exists(path):
+    path = _m2_record_path(record_dir, filtername)
+    if path is None:
         return None, False
     with open(path) as fh:
         rec = json.load(fh)
@@ -1394,10 +1432,8 @@ def _m2_exposure_baseline(record_dir, filtername, visit):
     could NEVER pass a frozen stage, 2026-07-20).
     """
     out = {}
-    if not record_dir:
-        return out
-    path = os.path.join(record_dir, f"checkpoint_m2_{filtername}_latest.json")
-    if not os.path.exists(path):
+    path = _m2_record_path(record_dir, filtername)
+    if path is None:
         return out
     with open(path) as fh:
         rec = json.load(fh)
@@ -1431,10 +1467,8 @@ def _m2_skipped_exposures(record_dir, filtername, visit):
     consensus and raised ``AstrometryRegressionError``, killing the m4-m8 chain
     over a data-quality defect m2 had already found, reported, and worked around.
     """
-    if not record_dir:
-        return set()
-    path = os.path.join(record_dir, f"checkpoint_m2_{filtername}_latest.json")
-    if not os.path.exists(path):
+    path = _m2_record_path(record_dir, filtername)
+    if path is None:
         return set()
     with open(path) as fh:
         rec = json.load(fh)
@@ -1860,7 +1894,7 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                       reference_apply_min_mas=REFERENCE_APPLY_MIN_MAS,
                       stage_stability_tol_mas=STAGE_STABILITY_TOL_MAS))
     if record_dir:
-        _write_record(record_dir, f"checkpoint_{stage}_{filtername or 'all'}", record)
+        _write_record(record_dir, _record_name(stage, filtername), record)
 
     for w in unverified:
         print(f"ASTROM CHECKPOINT [{stage}] COULD NOT VERIFY: {w}", flush=True)

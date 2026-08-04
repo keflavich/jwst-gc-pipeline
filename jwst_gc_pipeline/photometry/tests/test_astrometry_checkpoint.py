@@ -1461,3 +1461,66 @@ def test_no_consensus_catalog_is_written_at_a_frozen_stage(tmp_path):
         _two_visit_tables(), "m3", filtername="F212N",
         basepath=str(tmp_path), record_dir=str(tmp_path), context="test")
     assert record["consensus_catalog"] is None
+
+
+# ---------------------------------------------------------------------------
+# Baseline record-name reader/writer symmetry (#111 item 2)
+#
+# The writer keys the record on run_visit_checkpoint's ``filtername`` argument
+# (None -> "_all"); the readers are handed the per-group ``filt`` parsed from
+# table metadata.  A bare ``checkpoint_m2_{filt}`` reader lookup MISSES a record
+# a filterless run stored under ``_all``, and a missed m2 baseline reads as "no
+# record" -> fail-closed at a frozen stage on a healthy field.
+# ---------------------------------------------------------------------------
+from jwst_gc_pipeline.photometry.astrometry_checkpoint import (   # noqa: E402
+    _record_name, _m2_record_path, _m2_reference_tie_baseline, _write_record)
+
+
+def test_record_name_all_and_filter():
+    assert _record_name("m2", None) == "checkpoint_m2_all"
+    assert _record_name("m2", "F212N") == "checkpoint_m2_F212N"
+    # writer and the exact-filter reader path agree by construction
+    assert _record_name("m3", "F405N") == "checkpoint_m3_F405N"
+
+
+def test_m2_record_path_exact_wins(tmp_path):
+    _write_record(str(tmp_path), _record_name("m2", "F212N"), {"visits": []})
+    _write_record(str(tmp_path), _record_name("m2", None), {"visits": []})
+    got = _m2_record_path(str(tmp_path), "F212N")
+    assert os.path.basename(got) == "checkpoint_m2_F212N_latest.json"
+
+
+def test_m2_record_path_falls_back_to_all(tmp_path, capsys):
+    # only the filterless (_all) record exists -- the reader is handed 'F212N'
+    _write_record(str(tmp_path), _record_name("m2", None), {"visits": []})
+    got = _m2_record_path(str(tmp_path), "F212N")
+    assert os.path.basename(got) == "checkpoint_m2_all_latest.json"
+    assert "falling back" in capsys.readouterr().out       # loud, never silent
+
+
+def test_m2_record_path_none_when_absent(tmp_path):
+    assert _m2_record_path(str(tmp_path), "F212N") is None
+    assert _m2_record_path(None, "F212N") is None
+
+
+def test_reader_reads_all_record_written_by_filterless_run(tmp_path):
+    # end-to-end: a mixed-filter run writes checkpoint_m2_all; a per-group reader
+    # keyed on 'F212N' must still find the frozen bulk via the fallback, not read
+    # None and fail closed.
+    rec = {"visits": [{"visit": "001", "reference_tie":
+                       {"dra_mas": 1.5, "ddec_mas": -2.0, "apply_ok": True}}]}
+    _write_record(str(tmp_path), _record_name("m2", None), rec)
+    baseline, rejected = _m2_reference_tie_baseline(str(tmp_path), "F212N", "001")
+    assert baseline == (1.5, -2.0)
+    assert rejected is False
+
+
+def test_reader_prefers_exact_filter_over_all(tmp_path):
+    _write_record(str(tmp_path), _record_name("m2", None),
+                  {"visits": [{"visit": "001", "reference_tie":
+                               {"dra_mas": 9.9, "ddec_mas": 9.9, "apply_ok": True}}]})
+    _write_record(str(tmp_path), _record_name("m2", "F212N"),
+                  {"visits": [{"visit": "001", "reference_tie":
+                               {"dra_mas": 1.0, "ddec_mas": 2.0, "apply_ok": True}}]})
+    baseline, _ = _m2_reference_tie_baseline(str(tmp_path), "F212N", "001")
+    assert baseline == (1.0, 2.0)                          # exact filter wins

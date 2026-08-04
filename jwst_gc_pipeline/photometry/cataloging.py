@@ -3503,6 +3503,30 @@ def _drop_module_level_duplicates(fns, filt, merge_label, module):
     return [fn for fn in fns if fn not in drop]
 
 
+def _floor_actionable_corrections(corrections, floor_mas, label):
+    """Corrections whose on-sky magnitude ``hypot(dra_onsky_mas, ddec_onsky_mas)``
+    is at least ``floor_mas``.
+
+    Reads the magnitude keys LOUDLY: a ``c.get(key, 0.0)`` default would read
+    magnitude 0 for any correction missing ``dra_onsky_mas`` / ``ddec_onsky_mas``,
+    so EVERY such correction is silently "sub-floor", ``actionable`` is empty, and
+    the checkpoint PASSes applying nothing -- a real misalignment shipped as clean.
+    Raise ``KeyError`` naming the count and first offender rather than let a
+    defaulted magnitude decide the gate.
+    """
+    unreadable = [c for c in corrections
+                  if c.get('dra_onsky_mas') is None
+                  or c.get('ddec_onsky_mas') is None]
+    if unreadable:
+        raise KeyError(
+            f"astrom checkpoint [{label}: {len(unreadable)}/{len(corrections)} "
+            f"correction(s) lack a dra_onsky_mas/ddec_onsky_mas magnitude, so the "
+            f"ASTROM_M2_CORRECTION_FLOOR_MAS filter cannot tell them from sub-floor "
+            f"and would apply nothing. First offender: {unreadable[0]}")
+    return [c for c in corrections
+            if np.hypot(c['dra_onsky_mas'], c['ddec_onsky_mas']) >= floor_mas]
+
+
 def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath,
                                      proposal_id, options, refcat_cache,
                                      context=""):
@@ -3690,9 +3714,8 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     # residual class is known table-inexpressible.
     floor_mas = float(os.environ.get('ASTROM_M2_CORRECTION_FLOOR_MAS', '0') or 0)
     if floor_mas > 0:
-        actionable = [c for c in corrections
-                      if np.hypot(c.get('dra_onsky_mas', 0.0),
-                                  c.get('ddec_onsky_mas', 0.0)) >= floor_mas]
+        actionable = _floor_actionable_corrections(
+            corrections, floor_mas, f"{merge_label}] {filt}/{module}")
         if not actionable:
             print(f"astrom checkpoint [{merge_label}] {filt}/{module}: PASS with "
                   f"{len(corrections)} sub-floor residual(s) "
