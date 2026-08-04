@@ -1326,26 +1326,53 @@ def _m2_reference_tie_baseline(record_dir, filtername, visit):
     (+6.70,-7.54) [histogram] vs m3 same-star (+1.11,-5.77), 2026-07-19).  Falls
     back to ``vs_full`` only for legacy records that predate the reported-bulk
     field.
+
+    Returns ``(None, reason)``-style information via the second element of the
+    tuple: ``(baseline, m2_rejected)``.  ``m2_rejected`` is True when m2 measured
+    a tie but REFUSED it (``apply_ok`` False -- no coherent dense peak, a gross
+    sparse-Gaia split, or a failed per-tile/same-star gate).  A refused tie is a
+    rejected measurement, not a freeze point: nothing was applied, so there is no
+    frozen value for a later stage to have moved away from.  Reading it as a
+    baseline turns an IMPROVEMENT into a regression -- w51 F140M (2026-08-02): m2
+    rejected a 7827 mas swept-histogram peak (``apply_ok=False``,
+    ``per_tile clean=False``, ``swept=True``) and said so in ``unverified``; m3
+    then measured a clean 32 mas SAME-STAR tie (``apply_ok=True``,
+    ``swept=False``) and raised "consensus->reference MOVED 7794.98 mas since the
+    m2 freeze", blocking the field because the measurement got better.
     """
     if not record_dir:
-        return None
+        return None, False
     path = os.path.join(record_dir, f"checkpoint_m2_{filtername}_latest.json")
     if not os.path.exists(path):
-        return None
+        return None, False
     with open(path) as fh:
         rec = json.load(fh)
     for v in rec.get("visits", []):
         if str(v.get("visit")) != str(visit):
             continue
         rt = v.get("reference_tie") or {}
+        rejected = rt.get("apply_ok") is False
         dra, ddec = rt.get("dra_mas"), rt.get("ddec_mas")
+        if rejected:
+            # A REFUSED tie is still a MEASUREMENT.  Hand the numbers back with
+            # the rejected flag so the caller can compare against them and demote
+            # only on failure -- discarding them throws away a stability result
+            # that exists and passes.  sgra F212N: m2 refused a 48.49 mas tie
+            # (independent checks disagreed) and m3 lands 0.41 mas away, which is
+            # the strongest evidence the solution did not move; an earlier
+            # revision of this function returned None here and turned that
+            # verified PASS into UNVERIFIED.
+            if dra is not None and ddec is not None \
+                    and np.isfinite(dra) and np.isfinite(ddec):
+                return (float(dra), float(ddec)), True
+            return None, True
         if dra is not None and ddec is not None \
                 and np.isfinite(dra) and np.isfinite(ddec):
-            return float(dra), float(ddec)
+            return (float(dra), float(ddec)), False
         vf = rt.get("vs_full") or {}   # legacy record without the reported bulk
         if "dra" in vf and "ddec" in vf:
-            return float(vf["dra"]), float(vf["ddec"])
-    return None
+            return (float(vf["dra"]), float(vf["ddec"])), False
+    return None, False
 
 
 def _m2_exposure_baseline(record_dir, filtername, visit):
@@ -1381,6 +1408,41 @@ def _m2_exposure_baseline(record_dir, filtername, visit):
             if key and dra is not None and ddec is not None \
                     and np.isfinite(dra) and np.isfinite(ddec):
                 out[key] = (float(dra), float(ddec))
+    return out
+
+
+def _m2_skipped_exposures(record_dir, filtername, visit):
+    """Set of exposure-key tuples m2 DELIBERATELY left out of its consensus.
+
+    ``build_visit_consensus`` drops an exposure with too few reliable stars and
+    records it in ``consensus['skipped']``.  Such an exposure never received a
+    frozen solution, so at a frozen stage it has no ``_m2_exposure_baseline``
+    entry -- indistinguishable, from the baseline map alone, from a frame that
+    appeared out of nowhere after the freeze.  The two need opposite verdicts:
+    an unexplained new frame is a REGRESSION (the solution was supposed to be
+    frozen), while an m2-skipped one is a known, recorded exclusion whose first
+    measurement happens at m3 and therefore cannot have "moved" since m2.
+
+    Observed on arches F212N (2026-08-02): a snowball storm in exposure 4 (JUMP_DET
+    1.2% -> 7.6%, 261 blobs >100 px vs 9) cut its source count ~31% on all eight
+    detectors, so m2 skipped all eight; m3 then measured them 12-18 mas off the
+    consensus and raised ``AstrometryRegressionError``, killing the m4-m8 chain
+    over a data-quality defect m2 had already found, reported, and worked around.
+    """
+    if not record_dir:
+        return set()
+    path = os.path.join(record_dir, f"checkpoint_m2_{filtername}_latest.json")
+    if not os.path.exists(path):
+        return set()
+    with open(path) as fh:
+        rec = json.load(fh)
+    out = set()
+    for v in rec.get("visits", []):
+        if str(v.get("visit")) != str(visit):
+            continue
+        cons = v.get("consensus") or {}
+        for key in cons.get("skipped", []) or []:
+            out.add(tuple(key))
     return out
 
 
@@ -1455,6 +1517,10 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
         # scatter that m2 already tolerated.
         exp_baseline = ({} if correcting
                         else _m2_exposure_baseline(record_dir, filt, visit))
+        # An exposure m2 deliberately skipped has no baseline BY CONSTRUCTION;
+        # that absence is not evidence the frozen solution moved.
+        m2_skipped = (set() if correcting
+                      else _m2_skipped_exposures(record_dir, filt, visit))
         # issue #158 backstop: an ALIAS reads antisymmetric across the modules of
         # an exposure, where real jitter is common-mode.  Never emit corrections
         # from an antisymmetric set -- they are the footprint geometry, not a
@@ -1565,6 +1631,30 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                                   f"{STAGE_STABILITY_TOL_MAS}; absolute "
                                   f"{res['off']:.2f} mas is intrinsic scatter)",
                                   flush=True)
+                    elif tuple(exp["key"]) in m2_skipped:
+                        # m2 EXCLUDED this exposure from its consensus (too few
+                        # reliable stars -- a data-quality defect m2 found and
+                        # recorded).  It never got a frozen solution, so its
+                        # first vs-consensus measurement lands here and cannot
+                        # be a movement.  Report it as UNVERIFIED so the release
+                        # record's all_verified goes false and item 0b of
+                        # RELEASE_DEPLOYMENT_CHECKLIST.md asks a human to check
+                        # it -- NOTE that is a manual step, not a mechanism:
+                        # all_verified has no non-test reader and
+                        # stage_release.py never opens astrometry_checkpoints/.
+                        # Automating it is its own PR (it refuses 12 of 14
+                        # fields as things stand, so the triage is the work).
+                        # Report it, and let the
+                        # frozen chain run: raising here re-punishes a defect
+                        # that is already handled (arches F212N exposure 4).
+                        unverified.append(
+                            msg + " [m2 SKIPPED this exposure from its consensus"
+                            " (too few reliable stars); no frozen baseline"
+                            " exists, so this is its first measurement, not a"
+                            " movement -- the exposure's own data quality is"
+                            " the thing to investigate]")
+                        print(f"ASTROM CHECKPOINT [{stage}] UNVERIFIED "
+                              f"(m2-skipped): {msg}", flush=True)
                     else:
                         # No m2 baseline for this exposure (new/renamed frame at
                         # a frozen stage): the solution was supposed to be frozen
@@ -1605,22 +1695,66 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                         # which every later stage necessarily re-measures
                         # (brick V12 F182M: m2 10.09 mas PASS, m3 10.31 mas ->
                         # false REGRESSION, 2026-07-16).
-                        base = _m2_reference_tie_baseline(record_dir, filt, visit)
+                        base, m2_rejected = _m2_reference_tie_baseline(
+                            record_dir, filt, visit)
                         if base is not None:
                             delta = float(np.hypot(ref_tie["dra_mas"] - base[0],
                                                    ref_tie["ddec_mas"] - base[1]))
-                            if delta > STAGE_STABILITY_TOL_MAS:
+                            if delta <= STAGE_STABILITY_TOL_MAS:
+                                # Stable against the m2 measurement, whether or
+                                # not m2 chose to APPLY it.  What m2 froze is the
+                                # crf GWCS, physically; `apply_ok: false` says the
+                                # ABSOLUTE tie is uncertified, not that the
+                                # consensus was free to move.  Two measurements of
+                                # the same quantity agreeing is evidence either
+                                # way, so this keeps sgra F212N's verified pass.
+                                note = ("; m2 apply_ok=False, absolute tie still "
+                                        "uncertified" if m2_rejected else "")
+                                print(f"ASTROM CHECKPOINT [{stage}] STABLE: {vctx} "
+                                      f"tie unchanged since m2 (delta "
+                                      f"{delta:.2f} mas <= "
+                                      f"{STAGE_STABILITY_TOL_MAS}{note})",
+                                      flush=True)
+                            elif m2_rejected:
+                                unverified.append(
+                                    f"{vctx}: consensus->reference moved {delta:.2f} mas "
+                                    f"from a tie m2 MEASURED but REFUSED "
+                                    f"(m2=({base[0]:+.2f},{base[1]:+.2f}) apply_ok=False, "
+                                    f"now=({ref_tie['dra_mas']:+.2f},"
+                                    f"{ref_tie['ddec_mas']:+.2f}) mas). A refused tie is "
+                                    f"not a frozen solution, so this is not a regression "
+                                    f"-- the field's ABSOLUTE tie is what needs "
+                                    f"investigating (bulk_source="
+                                    f"{ref_tie.get('bulk_source')}, "
+                                    f"swept={ref_tie.get('swept')})")
+                                print(f"ASTROM CHECKPOINT [{stage}] UNVERIFIED "
+                                      f"(moved {delta:.2f} mas from an m2-REFUSED "
+                                      f"tie): {vctx}", flush=True)
+                            else:
                                 failures.append(
                                     f"{vctx}: consensus->reference MOVED "
                                     f"{delta:.2f} mas since the m2 freeze "
                                     f"(m2=({base[0]:+.2f},{base[1]:+.2f}), now="
                                     f"({ref_tie['dra_mas']:+.2f},"
                                     f"{ref_tie['ddec_mas']:+.2f}) mas)")
-                            else:
-                                print(f"ASTROM CHECKPOINT [{stage}] STABLE: {vctx} "
-                                      f"tie unchanged since m2 (delta "
-                                      f"{delta:.2f} mas <= "
-                                      f"{STAGE_STABILITY_TOL_MAS})", flush=True)
+                        elif m2_rejected:
+                            # m2 measured a tie and REFUSED it as untrustworthy.
+                            # Nothing was frozen, so nothing can have moved; this
+                            # is the first trustworthy measurement of the tie.
+                            # UNVERIFIED, not a regression -- see w51 F140M
+                            # above.  all_verified goes false, which today is a
+                            # MANUAL checklist item (0b), not an enforced gate.
+                            unverified.append(
+                                f"{vctx}: consensus->reference offset {off:.2f} mas -- m2 "
+                                f"MEASURED but REFUSED its own tie (untrustworthy), so no "
+                                f"frozen baseline exists and this is the first trustworthy "
+                                f"measurement, not a movement. The field's ABSOLUTE tie is "
+                                f"what needs investigating, not a late-stage shift "
+                                f"(bulk_source={ref_tie.get('bulk_source')}, "
+                                f"swept={ref_tie.get('swept')})")
+                            print(f"ASTROM CHECKPOINT [{stage}] UNVERIFIED "
+                                  f"(m2 refused its own tie): {vctx} "
+                                  f"consensus->reference {off:.2f} mas", flush=True)
                         else:
                             failures.append(
                                 f"{vctx}: consensus->reference offset {off:.2f} mas at a "

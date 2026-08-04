@@ -626,6 +626,120 @@ def test_frozen_baseline_legacy_vs_full_fallback(tmp_path, monkeypatch):
                              context="test")
 
 
+def test_frozen_stage_m2_refused_its_own_tie_is_unverified(tmp_path, monkeypatch):
+    """m2 MEASURED a reference tie and REFUSED it (apply_ok False -- untrustworthy).
+    A refused tie is a rejected measurement, not a freeze point, so m3's clean tie
+    cannot have 'moved' away from it -> UNVERIFIED, no raise.
+
+    w51 F140M (2026-08-02): m2 rejected a 7827 mas swept-histogram peak
+    (per_tile clean=False, swept=True) and recorded it in `unverified`; m3 then
+    measured a clean 32 mas SAME-STAR tie and raised 'MOVED 7794.98 mas since the
+    m2 freeze' -- blocking the field because the measurement got BETTER."""
+    rec_path = os.path.join(str(tmp_path), "checkpoint_m2_F212N_latest.json")
+    with open(rec_path, "w") as fh:
+        json.dump(dict(visits=[dict(visit="001", reference_tie=dict(
+            apply_ok=False, dra_mas=-7694.2, ddec_mas=1436.1,
+            off_mas=7827.1, swept=True))]), fh)
+    _patch_consensus_and_tie(monkeypatch, dra_now=-30.8, ddec_now=9.8)
+    rec = run_visit_checkpoint([_tiny_visit_table()], "m3", refcat=_DUMMY_REFCAT,
+                               filtername="F212N", record_dir=str(tmp_path),
+                               context="test")
+    assert rec["passed"]
+    assert rec["failures"] == []
+    # still held by the release gate's all_verified check
+    assert not rec["all_verified"]
+    assert any("m2 MEASURED but REFUSED" in u for u in rec["unverified"])
+
+
+def test_frozen_stage_stable_against_refused_m2_tie_keeps_its_pass(
+        tmp_path, monkeypatch):
+    """A REFUSED m2 tie is still a MEASUREMENT, and a later stage that lands on
+    top of it has proved the solution did not move.
+
+    sgra F212N on disk: m2 refused a 48.49 mas tie (-48.247,-4.890) because its
+    independent checks disagreed; m3 measures (-47.836,-4.926), a delta of
+    0.41 mas, and records all_verified: true.  Discarding the baseline just
+    because m2 declined to APPLY it would convert that verified pass into
+    UNVERIFIED and hand sgra a release-gate block it does not have today."""
+    rec_path = os.path.join(str(tmp_path), "checkpoint_m2_F212N_latest.json")
+    with open(rec_path, "w") as fh:
+        json.dump(dict(visits=[dict(visit="001", reference_tie=dict(
+            apply_ok=False, dra_mas=-48.247, ddec_mas=-4.890,
+            off_mas=48.49, swept=False))]), fh)
+    _patch_consensus_and_tie(monkeypatch, dra_now=-47.836, ddec_now=-4.926)
+    rec = run_visit_checkpoint([_tiny_visit_table()], "m3", refcat=_DUMMY_REFCAT,
+                               filtername="F212N", record_dir=str(tmp_path),
+                               context="test")
+    assert rec["passed"]
+    assert rec["failures"] == []
+    # the whole point: the stability result is KEPT, not discarded
+    assert rec["all_verified"], rec["unverified"]
+
+
+def test_frozen_stage_moved_from_refused_m2_tie_reports_delta_and_m2_value(
+        tmp_path, monkeypatch):
+    """Moving away from a refused tie is not a frozen-solution regression, but it
+    is not a silent pass either: the DELTA and m2's own value must both reach the
+    message, or the operator cannot tell how far it moved or from what.
+
+    Asserting on those numbers is what makes this a guard for the current
+    revision -- a test that only checks "is unverified" passes on the previous
+    one too, and so cannot tell the two apart."""
+    rec_path = os.path.join(str(tmp_path), "checkpoint_m2_F212N_latest.json")
+    with open(rec_path, "w") as fh:
+        json.dump(dict(visits=[dict(visit="001", reference_tie=dict(
+            apply_ok=False, dra_mas=-7694.20, ddec_mas=1436.12,
+            off_mas=7827.1, swept=True))]), fh)
+    _patch_consensus_and_tie(monkeypatch, dra_now=-30.83, ddec_now=9.80)
+    rec = run_visit_checkpoint([_tiny_visit_table()], "m3", refcat=_DUMMY_REFCAT,
+                               filtername="F212N", record_dir=str(tmp_path),
+                               context="test")
+    assert rec["passed"]                      # w51 F140M still unblocks
+    assert rec["failures"] == []
+    assert not rec["all_verified"]
+    msg = "\n".join(rec["unverified"])
+    assert "m2 MEASURED but REFUSED" in msg
+    assert "moved 7794.9" in msg, msg          # the delta itself
+    assert "-7694.20,+1436.12" in msg, msg     # what it moved away FROM
+
+
+def test_frozen_stage_refused_m2_tie_with_no_usable_numbers(tmp_path, monkeypatch):
+    """m2 refused the tie AND recorded no finite dra/ddec, so there is nothing to
+    compare against.
+
+    This is the branch that survives when the baseline is unusable.  It is
+    distinct from the moved-from-refused case above, which DOES have numbers --
+    without a fixture that yields a null baseline nothing exercises it, and
+    replacing its body with an unconditional raise leaves the suite green."""
+    rec_path = os.path.join(str(tmp_path), "checkpoint_m2_F212N_latest.json")
+    with open(rec_path, "w") as fh:
+        json.dump(dict(visits=[dict(visit="001", reference_tie=dict(
+            apply_ok=False, dra_mas=None, ddec_mas=None,
+            off_mas=7827.1, swept=True))]), fh)
+    _patch_consensus_and_tie(monkeypatch, dra_now=-30.83, ddec_now=9.80)
+    rec = run_visit_checkpoint([_tiny_visit_table()], "m3", refcat=_DUMMY_REFCAT,
+                               filtername="F212N", record_dir=str(tmp_path),
+                               context="test")
+    assert rec["passed"]
+    assert rec["failures"] == []
+    assert not rec["all_verified"]
+    assert any("first trustworthy measurement" in u for u in rec["unverified"])
+
+
+def test_frozen_stage_m2_applied_tie_still_gates(tmp_path, monkeypatch):
+    """The exemption is only for a REFUSED tie.  An m2 tie that WAS applied
+    remains a real frozen baseline, and moving away from it still raises."""
+    rec_path = os.path.join(str(tmp_path), "checkpoint_m2_F212N_latest.json")
+    with open(rec_path, "w") as fh:
+        json.dump(dict(visits=[dict(visit="001", reference_tie=dict(
+            apply_ok=True, dra_mas=10.0, ddec_mas=0.0))]), fh)
+    _patch_consensus_and_tie(monkeypatch, dra_now=40.0, ddec_now=0.0)
+    with pytest.raises(AstrometryRegressionError):
+        run_visit_checkpoint([_tiny_visit_table()], "m3", refcat=_DUMMY_REFCAT,
+                             filtername="F212N", record_dir=str(tmp_path),
+                             context="test")
+
+
 # ---------------------------------------------------------------------------
 # frozen-stage PER-EXPOSURE DELTA gate (regression = a single exposure MOVED
 # since the m2 freeze, NOT a nonzero absolute vs-consensus offset).  Reproduces
@@ -702,6 +816,51 @@ def test_frozen_perexposure_no_m2_baseline_raises(tmp_path, monkeypatch):
     _patch_consensus_exposures(monkeypatch, [_exp(_K, 3.0, 0.0, misaligned=True)])
     with pytest.raises(AstrometryRegressionError):
         run_visit_checkpoint([_tiny_visit_table()], "m4", refcat=None,
+                             filtername="F212N", record_dir=str(tmp_path),
+                             context="test")
+
+
+def _write_m2_skipped(record_dir, skipped_keys, exp_offsets=(), visit="001",
+                      filt="F212N"):
+    """m2 record whose consensus deliberately EXCLUDED ``skipped_keys``."""
+    exps = [dict(key=list(k), dra=dra, ddec=ddec) for k, dra, ddec in exp_offsets]
+    rec = dict(visits=[dict(visit=visit, exposures=exps,
+                            consensus=dict(skipped=[list(k)
+                                                    for k in skipped_keys]))])
+    with open(os.path.join(record_dir, f"checkpoint_m2_{filt}_latest.json"),
+              "w") as fh:
+        json.dump(rec, fh)
+
+
+def test_frozen_perexposure_m2_skipped_is_unverified_not_regression(
+        tmp_path, monkeypatch):
+    """m2 SKIPPED the exposure from its consensus (too few reliable stars), so it
+    has no frozen baseline by construction.  m3 measures it 16 mas off: that is
+    its FIRST measurement, not a movement -> UNVERIFIED, no raise.
+
+    arches F212N (2026-08-02): a snowball storm cut exposure 4's source count ~31%
+    on all eight detectors, m2 skipped all eight and said so, and m3 then killed
+    the m4-m8 chain over the defect m2 had already handled."""
+    _write_m2_skipped(str(tmp_path), [_K])
+    _patch_consensus_exposures(monkeypatch, [_exp(_K, -4.9, 15.3, misaligned=True)])
+    rec = run_visit_checkpoint([_tiny_visit_table()], "m3", refcat=None,
+                               filtername="F212N", record_dir=str(tmp_path),
+                               context="test")
+    assert rec["passed"]
+    assert rec["failures"] == []
+    # still held by the release gate's all_verified check
+    assert not rec["all_verified"]
+    assert any("m2 SKIPPED this exposure" in u for u in rec["unverified"])
+
+
+def test_frozen_perexposure_unrelated_skip_still_raises(tmp_path, monkeypatch):
+    """The skip list excuses only the exposures IN it.  A different exposure with
+    no baseline is still an unexplained frozen-stage frame -> raise."""
+    other = ("001", 9, "nrcb3", "F212N")
+    _write_m2_skipped(str(tmp_path), [other])
+    _patch_consensus_exposures(monkeypatch, [_exp(_K, 3.0, 0.0, misaligned=True)])
+    with pytest.raises(AstrometryRegressionError):
+        run_visit_checkpoint([_tiny_visit_table()], "m3", refcat=None,
                              filtername="F212N", record_dir=str(tmp_path),
                              context="test")
 
