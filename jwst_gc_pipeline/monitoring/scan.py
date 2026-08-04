@@ -533,9 +533,12 @@ def astrometry_checkpoints(base, filters=None, ambiguous_filters=()):
                 # point is.  A single scalar cannot distinguish "one bad corner"
                 # from "a gradient across the mosaic", and those have different
                 # causes.
-                # NOTE the key inconsistency upstream: a cell records its offset
-                # as `off`, while the `worst_off_cell` summary uses `off_mas`.
-                # Reading only one of them silently yields an empty map.
+                # NOTE the key inconsistency upstream (issue #267): a
+                # measure_offset_grid cell records its offset as `off`, a
+                # local_residual_map cell as `off_mas`, and the `worst_off_cell`
+                # summary as `off_mas`.  Reading only one silently yields an
+                # empty map -- and a derived claim that the field is flat.  This
+                # is a workaround; the fix belongs in astrometry_offsets.
                 'cells': [{'ix': c.get('ix'), 'iy': c.get('iy'),
                            'off_mas': _finite(c.get('off', c.get('off_mas'))),
                            'dra': _finite(c.get('dra')),
