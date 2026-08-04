@@ -66,10 +66,9 @@ def _assert_same(leg, uni, atol=1e-12):
     # cloudef 2092 obs002: visit 002 shifted onto visit 001, visit 001 untouched
     ('jw02092002002_02101_00003_nrcb3_destreak.fits', '2092', '002', 'F480M'),
     ('jw02092002001_02101_00003_nrcb3_destreak.fits', '2092', '002', 'F480M'),
-    # sickle 3958: per-filter GNS tie, including the catch-all filter
-    ('jw03958007001_02101_00001_nrcalong_destreak.fits', '3958', '007', 'F187N'),
-    ('jw03958007001_02101_00001_nrcalong_destreak.fits', '3958', '007', 'F480M'),
-    ('jw03958007001_02101_00001_nrcalong_destreak.fits', '3958', '007', 'F212N'),
+    # sickle 3958 lived here (per-filter GNS tie, catch-all filter included)
+    # until 2026-08-04.  It is now VIRAC2/TABLE_LOCKED, so it is no longer a
+    # "no table needed" field -- see test_sickle_is_locked_on_virac2 below.
     # M4 / M92: arcsecond-scale Gaia ties, per (visit, filter)
     ('jw01979002001_02101_00002_nrcb1_destreak.fits', '1979', '002', 'F150W2'),
     ('jw01979003001_02101_00002_nrcb1_destreak.fits', '1979', '003', 'F322W2'),
@@ -225,6 +224,7 @@ def test_w51_consensus_reference_frame_is_gaia_not_virac(tmp_path):
     ('2045', '003', 'quintuplet', ac.TABLE_LOCKED, 'F212N'),
     ('5365', '001', 'sgrb2', ac.TABLE_LOCKED, 'F212N'),
     ('2092', '005', 'cloudef obs005', ac.TABLE_LOCKED, 'F210M'),
+    ('3958', '007', 'sickle', ac.TABLE_LOCKED, 'F210M'),
 ])
 def test_campaign_fields_are_now_tied(proposal, field, target, source, ref_filter):
     """These four fell through the old ``else`` and got (0,0) with no trace, so
@@ -241,6 +241,26 @@ def test_campaign_fields_are_now_tied(proposal, field, target, source, ref_filte
     assert cfg.source == source
     assert cfg.reference_frame == ac.VIRAC2
     assert cfg.reference_filter == ref_filter
+
+
+def test_sickle_is_locked_on_virac2_not_recorded_on_gns():
+    """sickle was the last GC field tied in the GNS frame while ``refnames``
+    already called it VIRAC2.  GC policy is that GC fields tie to VIRAC2.
+
+    It is TABLE_LOCKED rather than RECORDED_BULK because the route for an
+    already-tied field is to BUILD the VIRAC2 table -- step 0 refuses to record a
+    fresh tie for a field that already has one ("the field is tied; this (visit,
+    band) is not").  The old GNS constants are deliberately NOT carried over:
+    re-using them against VIRAC2 would bake the (+71.74, -70.09) mas frame
+    difference in as if it were an astrometry correction.
+    """
+    cfg = ac.resolve('3958', '007')
+    assert cfg.reference_frame == ac.VIRAC2
+    assert cfg.source == ac.TABLE_LOCKED
+    # nothing may survive from the GNS entry -- a leftover recorded_bulk would be
+    # applied on top of the table it replaced.
+    assert not cfg.recorded_bulk
+    assert 'VIRAC2locked' in ac.offsets_table_path('/b', '3958', '007')
 
 
 def test_two_observations_of_one_proposal_can_use_different_tables():
@@ -383,6 +403,12 @@ def test_bulk_plus_jitter_equals_total_everywhere(tmp_path):
     _write_locked(bp, '2221',
                   rows=[('jw02221001001', 'F212N', 1, 'nrcb3', 0.10, -0.20),
                         ('jw02221001001', 'F212N', 2, 'nrcb3', 0.13, -0.17)],
+                  colnames=('Visit', 'Filter', 'Exposure', 'Module',
+                            'dra (arcsec)', 'ddec (arcsec)'))
+    # sickle is TABLE_LOCKED as of 2026-08-04, so the invariant needs its table
+    # here too -- it used to be a recorded-bulk field that needed none.
+    _write_locked(bp, '3958',
+                  rows=[('jw03958007001', 'F187N', 1, 'nrcb', -0.0179, -0.1031)],
                   colnames=('Visit', 'Filter', 'Exposure', 'Module',
                             'dra (arcsec)', 'ddec (arcsec)'))
     cases = [

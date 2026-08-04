@@ -87,9 +87,15 @@ def test_gather_refuses_two_catalogs_claiming_one_frame(tmp_path, monkeypatch):
 
 
 def test_gather_refuses_when_nothing_matched(tmp_path):
-    """An empty glob previously produced an empty table and a silent no-op."""
+    """An empty glob previously produced an empty table and a silent no-op.
+
+    The type is NoPerFrameCatalogsError, not WrongObservationError: "this module
+    has no catalogs" and "these catalogs belong to another observation" need
+    telling apart WITHOUT sniffing the message, because lock_filter may skip the
+    first (an unobserved module) and must never skip the second.
+    """
     (tmp_path / 'F200W').mkdir()
-    with pytest.raises(bvo.WrongObservationError, match='(?i)no per-frame catalogs'):
+    with pytest.raises(bvo.NoPerFrameCatalogsError, match='(?i)no per-frame catalogs'):
         bvo._gather('f200w', str(tmp_path), 'F200W', '_m3', ['nrca1'],
                     prop='2211', field='050')
 

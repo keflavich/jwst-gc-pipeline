@@ -291,7 +291,7 @@ around the visit consensus, re-measured every re-tie iteration.
 | 2211 | all | VIRAC2 | `TABLE_LOCKED` | F200W | gc2211 |
 | 2092 | 005 | VIRAC2 | `TABLE_LOCKED` | F210M | cloudef obs 005 |
 | 2092 | 002 | VIRAC2 | `RECORDED_BULK` + jitter | F210M | cloudef obs 002 |
-| 3958 | 007 | **GNS** | `RECORDED_BULK` + jitter | F210M | sickle; GNS numbers kept verbatim pending re-measurement against VIRAC2 |
+| 3958 | 007 | VIRAC2 | `TABLE_LOCKED` | F210M | sickle; re-tied to VIRAC2 2026-08-04, GNS numbers deliberately NOT carried over |
 | 1979 | all | **Gaia** | `RECORDED_BULK` | — | M4 (o002 + o003), halo cluster outside VVV |
 | 1334 | all | **Gaia** | `RECORDED_BULK` | — | M92 (o001), pure per-visit shift |
 
@@ -336,21 +336,31 @@ the exception: the m2 checkpoint writes it.)
 |---|---|---|
 | Gaia/VIRAC2 (brick/cloudc) | `Offsets_JWST_Brick<pid>_VIRAC2[locked].csv` | `build_gaia_virac2_refcat_byquery.py` (seed refcat) + `build_virac2_offsets.py` |
 | VIRAC2/Gaia, checkpoint-authored | `Offsets_JWST_Brick<pid>_consensus.csv` | `astrometry_checkpoint.seed_offsets_table_from_consensus` / `update_offsets_table` |
-| **GNS (sickle, prop 3958)** | `Offsets_JWST_Brick3958_GNS.csv` | `brick2221/reduction/build_sickle_gns_offsets.py` (in **brick-jwst-2221** — region-specific) |
+| VIRAC2 (sickle, prop 3958) | `Offsets_JWST_Brick3958_VIRAC2locked.csv` | `build_virac2_offsets.py` (REGION `'sickle'`) |
+| ~~GNS (sickle, prop 3958)~~ | ~~`Offsets_JWST_Brick3958_GNS.csv`~~ | superseded 2026-08-04 — see below |
 
-**Sickle → GNS:** a 2026-06-20 audit found sickle catalogs sit at the **raw
-`assign_wcs` frame** (`RAOFFSET=0`, no offsets table for 3958) — ~91 mas off the
-GNS reference the mosaics are tied to. The user chose the GNS frame.
+**Sickle → VIRAC2 (2026-08-04):** sickle was the last GC field whose recorded
+bulk sat in the GNS frame while `refnames` already called it VIRAC2. GC policy is
+that GC fields tie to VIRAC2, so it now has a `build_virac2_offsets` REGION entry
+and a per-exposure `Offsets_JWST_Brick3958_VIRAC2locked.csv` (120 rows, 5 filters
+× 24 exposures), declared `TABLE_LOCKED` — the same class as sgrc / quintuplet /
+sgrb2.
+
+The route was to BUILD the table rather than blank the recorded bulk and let step
+0 re-measure: step 0 refuses to record a fresh tie for a field that is already
+tied ("the field is tied; this (visit, band) is not", RC=4).
+
+The measured GNS→VIRAC2 frame shift is **(+71.74, −70.09) mas** (std 1.5 / 1.45,
+range < 4.8 mas across all five filters) — a coherent frame offset. The old GNS
+numbers are deliberately NOT carried over: re-using them against VIRAC2 would
+bake the frame difference in as if it were an astrometry correction.
+
+*Historical:* a 2026-06-20 audit found sickle catalogs at the **raw `assign_wcs`
+frame** (`RAOFFSET=0`, no offsets table for 3958), ~91 mas off the GNS reference
+the mosaics were tied to, and the GNS frame was chosen at the time.
 `brick2221/reduction/build_sickle_gns_offsets.py` (in the **brick-jwst-2221**
-repo, where sickle-specific code lives) measures the per-filter bulk sickle→GNS
-correction and writes the per-frame table in the `shift_individual_catalog`
-convention (`dra_table = corr_dRA_onsky / cos(dec)`). Its output
-`Offsets_JWST_Brick3958_GNS.csv` is dropped into the sickle data tree's
-`offsets/` dir and consumed by `fix_alignment` like any other table.
-`brick2221/shellscripts/sickle_gns_reduce_retry.sh` is the companion submitter
-that re-reduces sickle with the GNS table. Sickle's shift is declared in
-`alignment_config.py` (proposal 3958, obs 007) as `RECORDED_BULK` in the GNS
-frame with `consensus_jitter=True`.
+repo) built `Offsets_JWST_Brick3958_GNS.csv`, which is retained on disk but no
+longer read.
 
 **MIRI registration** is a separate, manual pre-step with its own path. The
 sickle MIRI frames are registered to the NIRCam
