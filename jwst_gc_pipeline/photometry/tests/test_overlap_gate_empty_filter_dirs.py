@@ -37,7 +37,8 @@ def _declare(monkeypatch, *filts):
     """Pin the fields.yaml declared-filter set the gate sees, so the on-disk
     enumeration logic is tested independently of the live registry."""
     declared = {f.upper() for f in filts}
-    monkeypatch.setattr(cio.fields, "declared_filters", lambda field: declared)
+    monkeypatch.setattr(cio.fields, "declared_filters",
+                        lambda field, *a, **kw: declared)
 
 
 def test_empty_filter_dir_is_not_a_band(tmp_path, monkeypatch):
@@ -123,6 +124,62 @@ def test_unreadable_dir_is_reported_not_skipped(tmp_path, monkeypatch):
 
     monkeypatch.setattr(os, "listdir", boom)
     assert cio.field_filters("w51") == ["F115W"]
+
+
+def test_niriss_only_band_is_not_a_missing_nircam_directory(tmp_path, monkeypatch):
+    """``field_filters`` enumerates the NIRCam/MIRI ``{FILTER}/pipeline/`` tree.
+
+    A band declared for NIRISS alone reduces to a different layout, so it can
+    NEVER have a directory here -- reporting it as "declared, never reduced"
+    would block a correct field with no reduction able to clear it.  sgrc is the
+    live case: it declares F158M/F200W/F356W for NIRISS only.  A gate a correct
+    field cannot pass is a gate that teaches people to use the override.
+    """
+    monkeypatch.setattr(cio, "BASE", str(tmp_path))
+    p = _pipeline(tmp_path, "sgrc", "F212N")
+    (p / "jw04147012001_03109_00001_nrca1_destreak_o012_crf.fits").write_bytes(b"x")
+
+    # The real registry, not a pinned set: this is a claim about fields.yaml.
+    got = set(cio.field_filters("sgrc"))
+    niriss_only = (cio.fields.declared_filters("sgrc", instruments=("niriss",))
+                   - cio.fields.declared_filters("sgrc"))
+    assert {"F158M", "F200W", "F356W"} <= niriss_only, (
+        "sgrc's NIRISS-only declaration changed; update this test")
+    assert not (got & niriss_only), (
+        f"NIRISS-only bands reported against the NIRCam tree: {got & niriss_only}")
+
+
+def test_declared_filters_default_excludes_niriss():
+    """The union is the defect; the default must be NIRCam+MIRI only."""
+    nircam_miri = cio.fields.declared_filters("sgrc")
+    niriss = cio.fields.declared_filters("sgrc", instruments=("niriss",))
+    both = cio.fields.declared_filters("sgrc",
+                                       instruments=("nircam", "miri", "niriss"))
+    assert niriss - nircam_miri, "sgrc no longer has a NIRISS-only band"
+    assert both == nircam_miri | niriss
+    # F480M is declared for both, so it must survive the narrowing.
+    assert "F480M" in nircam_miri and "F480M" in niriss
+
+
+def test_on_disk_names_keep_their_directory_casing(tmp_path, monkeypatch):
+    """The returned name is a PATH COMPONENT, not just a label.
+
+    ``check_filter`` globs ``{BASE}/{field}/{filt}/pipeline/...`` with it, so
+    normalising a lower-case directory to upper case would make that glob match
+    nothing and the field would block with "no crf frames" -- a correct field
+    failing a gate no reduction can clear, which is the same anti-pattern as the
+    NIRISS union above.  A declared band matches case-insensitively regardless.
+    """
+    monkeypatch.setattr(cio, "BASE", str(tmp_path))
+    _declare(monkeypatch, "F140M")
+    p = _pipeline(tmp_path, "w51", "f140m")      # lower-case on disk, declared
+    (p / "jw_x_crf.fits").write_bytes(b"x")
+
+    out = cio.field_filters("w51")
+    assert out == ["f140m"], out                 # usable as a path component
+    # and it was recognised as the declared band, so it is NOT also appended as
+    # "declared with no directory at all".
+    assert "F140M" not in out
 
 
 def test_non_filter_directories_ignored(tmp_path, monkeypatch):

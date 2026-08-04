@@ -963,8 +963,24 @@ def field_filters(field):
     blocks; skipping it would route around the "declared but nothing there"
     check.  The four w51 leftovers (F115W/F200W/F212N/F356W) are undeclared, so
     this changes no verdict today; it keeps fail-closed for the declared case.
+
+    "Declared" here means declared FOR THE INSTRUMENTS THIS TREE HOLDS -- NIRCam
+    and MIRI.  NIRISS declares its bands separately and reduces to a different
+    layout, so a NIRISS-only band can never have a directory here; counting one
+    as "declared, never reduced" would block a correct field with no reduction
+    able to clear it (sgrc declares F158M/F200W/F356W for NIRISS alone).  A gate
+    a correct field cannot pass is a gate that teaches people to use the
+    override.
+
+    Names read off disk keep their DIRECTORY casing; the declared names appended
+    below are upper-cased.  That mixed provenance is deliberate: the returned
+    name is used as a PATH COMPONENT (``check_filter`` globs
+    ``{BASE}/{field}/{filt}/pipeline/...``), so upper-casing a lower-case
+    directory would make its glob match nothing and block a correct field.  The
+    appended declared names have no directory to match by construction, which is
+    exactly what makes them block.  Consumers comparing by name upper-case first.
     """
-    declared = {f.upper() for f in fields.declared_filters(field)}
+    declared = fields.declared_filters(field)   # NIRCam + MIRI, upper-cased
     out = []
     for p in sorted(glob.glob(f"{BASE}/{field}/*/pipeline/")):
         filt = os.path.basename(os.path.dirname(os.path.dirname(p)))
