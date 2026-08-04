@@ -95,7 +95,11 @@ h2 { border-bottom:1px solid var(--border); padding-bottom:.3rem; margin-top:2re
         gap:1rem; }
 .card { background:var(--panel); border:1px solid var(--border); border-radius:8px;
         overflow:hidden; }
-.card img { width:100%; display:block; background:#000; }
+/* fixed thumbnail aspect so the grid stays aligned whatever shape the field
+   is -- `contain` letterboxes (against the black background) rather than
+   cropping, because a portrait field's cluster is not necessarily centred. */
+.card img { width:100%; display:block; background:#000;
+            aspect-ratio:2/1; object-fit:contain; }
 .card .body { padding:.8rem 1rem; }
 .preview { width:100%; border:1px solid var(--border); border-radius:8px;
            margin:1rem 0; background:#000; }

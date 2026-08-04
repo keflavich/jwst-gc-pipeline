@@ -133,6 +133,8 @@ def main(argv=None):
     parser.add_argument("--asinh-a", type=float, default=0.03)
     parser.add_argument("--max-width", type=int, default=3000,
                         help="web JPEG max width in px")
+    parser.add_argument("--max-height", type=int, default=3000,
+                        help="web JPEG max height in px")
     parser.add_argument("--max-axis", type=int, default=8000,
                         help="cap (px) on the longest axis of the common grid "
                              "built when a filter has several mosaics to coadd")
@@ -190,10 +192,12 @@ def main(argv=None):
     img.save(png_path)
     print(f"wrote {png_path}  ({img.width}x{img.height})")
 
-    if img.width > args.max_width:
-        scale = args.max_width / img.width
-        web = img.resize((args.max_width, int(img.height * scale)),
-                         Image.LANCZOS)
+    # bound BOTH axes: a portrait field (arches is ~1:2.2 on sky) is under the
+    # width cap while still being 5000 px tall, i.e. a multi-MB "web" JPEG.
+    scale = min(1.0, args.max_width / img.width, args.max_height / img.height)
+    if scale < 1.0:
+        web = img.resize((max(1, round(img.width * scale)),
+                          max(1, round(img.height * scale))), Image.LANCZOS)
     else:
         web = img
     jpg_path = out_dir / f"{stem}.jpg"
