@@ -24,6 +24,8 @@ import html
 import os
 import time
 
+from . import skyview
+
 # --------------------------------------------------------------------------
 # Wavelength -> hue, so a filter chip is tinted by what it actually observes.
 # --------------------------------------------------------------------------
@@ -339,7 +341,7 @@ a.gcm-back:hover { text-decoration: underline; }
 .gcm-figs ul { margin: .2rem 0 0; padding-left: 1.1rem; font-size: .78rem; }
 .gcm-figs a { color: var(--accent); }
 @media (prefers-reduced-motion: reduce) { .gcm * { transition: none !important; } }
-"""
+""" + skyview.CSS
 
 
 # --------------------------------------------------------------------------
@@ -837,7 +839,8 @@ _JS = """
 
 def render_page(entries, cutouts=(), title='JWST-GC pipeline monitor',
                 subtitle='', standalone=False, show_skip=False,
-                generated=None, unattributed_jobs=(), figure_base='figures'):
+                generated=None, unattributed_jobs=(), figure_base='figures',
+                footprints=None, roman=None):
     """The whole page.
 
     ``entries`` is the list built by ``report.build_entries`` -- one per
@@ -887,6 +890,8 @@ ladder in run order — reduction (unc·cal·red·i2d) then cataloging
 name cannot be attributed to this observation. Click a card for the detail.</p>
 {unattr}
 <div class="gcm-grid">{cards}</div></section>
+
+{skyview.section(footprints, roman)}
 
 {_cutouts_block(cutouts)}
 

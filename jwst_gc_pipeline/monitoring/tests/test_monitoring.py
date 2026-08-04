@@ -313,10 +313,62 @@ def _entry(**kw):
 
 
 def test_page_is_self_contained():
-    """A strict CSP blocks every external request, so the page must make none."""
+    """No third-party assets, and nothing fetched before the reader asks.
+
+    The page carries its own CSS and JS inline. The opt-in sky view is the one
+    exception and is scoped: Aladin Lite is referenced by a RELATIVE path (a
+    same-origin copy that publish() links in, not a CDN), and it is only
+    fetched when the reader clicks -- so a page under a strict CSP renders
+    completely and simply cannot expand that one panel.
+    """
     html = render.render_page([_entry()], standalone=True)
-    for forbidden in ('http://', 'https://', '<link', 'src=', '@import'):
+    for forbidden in ('<link', '@import', '<script src', 'cdn.', 'unpkg',
+                      'jsdelivr', 'aladin.cds.unistra.fr'):
         assert forbidden not in html, forbidden
+    # any absolute URL that IS present must be our own host, and must be a HiPS
+    # tile base -- image data for the opt-in view, never code
+    import re as _re
+    for url in set(_re.findall(r'https?://[^\s"\']+', html)):
+        assert url.startswith('https://starformation.astro.ufl.edu/'), url
+        assert not url.endswith('.js'), url
+
+
+def test_sky_view_defaults_to_the_jwst_layers_only():
+    """The page is a JWST pipeline monitor; Roman geometry is context."""
+    from jwst_gc_pipeline.monitoring import skyview
+    html = skyview.section({'program': '10678', 'title': 't', 'n_planned': 139,
+                            'n_observed': 0, 'pa_v3': 87.0,
+                            'pa_v3_range': [79.0, 95.0]})
+    state = _re_search_state(html)
+    assert state['nircam'] == 'true' and state['miri'] == 'true'
+    # observed is on despite being empty, so the first executed visit shows up
+    assert state['observed'] == 'true'
+    assert state['spring'] == 'false' and state['autumn'] == 'false'
+    assert state['target'] == 'false'
+
+
+def _re_search_state(html):
+    import re as _re
+    m = _re.search(r'var on = \{(.*?)\}', html, _re.S)
+    assert m, 'default layer state not found'
+    return dict(_re.findall(r'(\w+):\s*(true|false)', m.group(1)))
+
+
+def test_sky_view_keeps_the_observed_toggle_when_nothing_is_observed():
+    """'nothing observed yet' is an answer; hiding the toggle is not."""
+    from jwst_gc_pipeline.monitoring import skyview
+    html = skyview.section({'program': '10678', 'title': 't', 'n_planned': 139,
+                            'n_observed': 0, 'pa_v3': 87.0,
+                            'pa_v3_range': [79.0, 95.0]})
+    assert 'lyr-observed' in html
+    assert 'none yet' in html
+
+
+def test_sky_view_without_data_says_how_to_generate_it():
+    from jwst_gc_pipeline.monitoring import skyview
+    html = skyview.section(None)
+    assert 'build_footprints.py' in html
+    assert 'gcm-aladin' not in html
 
 
 def test_page_defines_both_themes_with_the_toggle_winning():

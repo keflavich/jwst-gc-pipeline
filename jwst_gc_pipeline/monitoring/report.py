@@ -7,7 +7,8 @@ other module takes that shape as given.
 import os
 import time
 
-from . import checks, figures as _figures, jobs as _jobs, paper as _paper, render, scan
+from . import (checks, figures as _figures, jobs as _jobs, paper as _paper,
+               render, scan, skyview)
 
 #: Where the per-field pages and the JSON snapshot are written by default.
 DEFAULT_OUTDIR = os.environ.get('GC_MONITOR_OUTDIR',
@@ -151,6 +152,11 @@ def write_report(outdir=DEFAULT_OUTDIR, targets=None, instrument='nircam',
     """
     entries, unattributed = build_entries(targets, instrument, cutout_label,
                                           log_dir=log_dir)
+    # Footprint geometry for the sky view.  Absent is fine -- the section says
+    # how to generate it rather than vanishing.
+    footprints = skyview.load_footprints(
+        os.path.join(outdir, skyview.FOOTPRINTS_JSON))
+    roman = skyview.load_footprints(os.path.join(outdir, 'roman_gbtds.json'))
     cutouts = collect_cutouts(targets) if with_cutouts else []
     generated = time.time()
 
@@ -165,11 +171,11 @@ def write_report(outdir=DEFAULT_OUTDIR, targets=None, instrument='nircam',
     render.write_html(aggregate, render.render_page(
         entries, cutouts, subtitle=subtitle, standalone=True,
         show_skip=show_skip, generated=generated,
-        unattributed_jobs=unattributed))
+        unattributed_jobs=unattributed, footprints=footprints, roman=roman))
     render.write_html(fragment, render.render_page(
         entries, cutouts, subtitle=subtitle, standalone=False,
         show_skip=show_skip, generated=generated,
-        unattributed_jobs=unattributed))
+        unattributed_jobs=unattributed, footprints=footprints, roman=roman))
 
     # Link every figure the pages reference into <outdir>/figures/ under its
     # basename, so the relative hrefs resolve wherever the page is served from.
@@ -306,6 +312,16 @@ def publish(outdir, publish_dir, index_from='monitor.html'):
             done[f'diagnostics-{target}'] = 'sym'
         except OSError:
             done[f'diagnostics-{target}'] = None
+
+    # Sky-view assets: the footprint data and a same-origin copy of Aladin Lite,
+    # so the page depends on no third-party CDN.
+    for name in (skyview.FOOTPRINTS_JSON, 'roman_gbtds.json'):
+        src = os.path.join(outdir, name)
+        if os.path.exists(src):
+            done[name] = _link(src, os.path.join(publish_dir, name))
+    if os.path.exists(skyview.ALADIN_SOURCE):
+        done[skyview.ALADIN_LOCAL] = _link(
+            skyview.ALADIN_SOURCE, os.path.join(publish_dir, skyview.ALADIN_LOCAL))
 
     src_index = os.path.join(outdir, index_from)
     if os.path.exists(src_index):
