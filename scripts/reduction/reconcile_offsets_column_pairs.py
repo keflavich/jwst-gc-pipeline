@@ -69,10 +69,14 @@ TOL_ARCSEC = 1e-4
 #: copying over it destroys it.
 SKIP = {
     "sickle": (
-        "issue #270: the +78/-77 mas m2 correction in 'dra (arcsec)' was measured "
-        "against crf that never received the VIRAC2 tie, so the AUTHORITATIVE pair "
-        "is the wrong one here and the plain pair still holds the clean built "
-        "values. Rebuild the table (build_virac2_offsets) instead of reconciling."),
+        "RESOLVED 2026-08-04 by reverting, not reconciling -- kept here as the "
+        "worked example. Its +78/-77 mas m2 correction in 'dra (arcsec)' was "
+        "measured against crf that never received the VIRAC2 tie (#270), so the "
+        "AUTHORITATIVE pair held the WRONG values and the stale plain pair held "
+        "the clean built ones. Reconciling would have destroyed the only good "
+        "copy. The 24 F187N rows were reverted to the plain pair and their "
+        "provenance cleared; both pairs now agree, so this entry is inert. Leave "
+        "it: the next field in this state needs the same judgement."),
 }
 
 
