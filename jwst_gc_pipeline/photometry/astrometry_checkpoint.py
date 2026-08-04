@@ -416,6 +416,12 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
     """
     if tbl is None:
         tbl = Table.read(offsets_path)
+        if "Visit" not in tbl.colnames:
+            # every granularity guard below narrows on Visit; without it they die
+            # on KeyError, which is the wrong class to escape a guarded writer.
+            raise OffsetsTableUpdateError(
+                f"{offsets_path} has no Visit column ({tbl.colnames}) -- a "
+                f"correction cannot be matched to a row without one")
     corrections = list(corrections)
     # Magnitude ceiling BEFORE the median.  Pooling cannot inflate a correction
     # past the ceiling (median <= max), so the risk runs the other way: a
@@ -781,6 +787,152 @@ def _module_variants(module):
     return {m, m.strip("1234"), m.replace("long", "")}
 
 
+#: The two column conventions an offsets table can carry, most-authoritative
+#: first.  ``dra``/``ddec`` is generate_offsets_table's; ``dra (arcsec)``/
+#: ``ddec (arcsec)`` is what the VIRAC2locked tables carry and what
+#: ``unified_alignment`` actually reads.  ``build_virac2_offsets`` writes both,
+#: the second as a COPY of the first, so a builder-shaped table starts with them
+#: equal and they are two names for one quantity thereafter.
+_DRA_COLUMN_PAIRS = (("dra (arcsec)", "ddec (arcsec)"), ("dra", "ddec"))
+
+#: A disagreement this large between the two pairs is a real divergence rather
+#: than float round-trip through CSV.  0.1 mas; the tightest gate in the tree is
+#: 2 mas.
+COLUMN_PAIR_TOL_ARCSEC = 1e-4
+
+
+def _column_pairs(tbl):
+    """Every ``(dra, ddec)`` column pair this table actually carries."""
+    return [(d, c) for d, c in _DRA_COLUMN_PAIRS
+            if d in tbl.colnames and c in tbl.colnames]
+
+
+#: How closely ``(arcsec) - plain`` must match the accumulated ``prov_*`` for the
+#: divergence to count as EXPLAINED.  What this absorbs is float round-trip
+#: through CSV, nothing physical: measured across all ten live locked tables the
+#: two agree to 0.000000 mas, so 0.5 mas is six orders of margin over the only
+#: error source there is.
+PROV_EXPLAINS_TOL_MAS = 0.5
+
+#: Lower bound on cos(dec) over the fields this runs on -- all Galactic Centre or
+#: nearer the equator, so |dec| < 30 deg.  Used to BOUND the RA-axis check: the
+#: apply loop divides on-sky mas by cos(dec) and dec_deg is not stored per row,
+#: so the exact factor is unrecoverable but confined to [COS_DEC_MIN, 1].
+COS_DEC_MIN = np.cos(np.radians(30.0))
+
+
+def _row_label(tbl, i):
+    for col in ("Visit", "Filter"):
+        if col not in tbl.colnames:
+            return f"row {i}"
+    return f"row {i} ({tbl['Visit'][i]} {tbl['Filter'][i]})"
+
+
+def _heal_column_pairs(tbl, offsets_path, rows=None):
+    """Re-sync a table's duplicate columns, or refuse if the gap is unexplained.
+
+    Only the ``(arcsec)`` pair was ever written, so on every table on disk
+    ``dra``/``ddec`` is the AS-BUILT value and ``dra (arcsec)``/``ddec (arcsec)``
+    is as-built + everything applied.  That is not a guess: across all ten live
+    ``*_VIRAC2locked.csv`` tables,
+
+        max | ((arcsec) - plain)*1000 - prov_*_added_mas |  =  0.000000 mas
+
+    so the gap is exactly the recorded provenance.  When that identity holds the
+    plain pair carries no information the ``(arcsec)`` pair lacks, and the two can
+    be re-synced by proof rather than by assumption -- loudly, and with the
+    caller's usual ``.pre_<stage>`` backup taken before anything is written.
+
+    Refusing instead would stop the m2 checkpoint on EVERY locked-channel field:
+    all ten live tables diverge (brick x2, cloudc, cloudef, gc2211, quintuplet,
+    sgra, sgrb2, sgrc, sickle), no caller catches OffsetsTableUpdateError, and it
+    would take the campaign down rather than protect it.
+
+    A gap the provenance does NOT explain is a different thing -- something
+    edited one pair by hand, or applied a correction outside this function -- and
+    that still refuses, because healing it would assert the ``(arcsec)`` pair is
+    right when nothing on record says so.
+
+    Both axes are checked before anything is written, because both are written.
+    Dec is exact (prov and ddec are both on-sky); RA is bounded, since the apply
+    loop divided by a cos(dec) this function cannot recover exactly.
+
+    ``rows``: restrict to these row indices (the ones a correction will touch).
+    A field with one stale filter and ten clean ones must be able to recover
+    filter by filter; a table-wide refusal blocks the eleven together and breaks
+    the natural recovery path, since ``build_virac2_offsets`` merges field-safely
+    and rebuilding one filter re-equalises only its own rows.
+    """
+    pairs = _column_pairs(tbl)
+    if len(pairs) < 2:
+        return 0
+    (da, ca), (db, cb) = pairs[0], pairs[1]
+    d_gap = np.asarray(tbl[da], dtype=float) - np.asarray(tbl[db], dtype=float)
+    c_gap = np.asarray(tbl[ca], dtype=float) - np.asarray(tbl[cb], dtype=float)
+    diverged = ((np.abs(d_gap) > COLUMN_PAIR_TOL_ARCSEC)
+                | (np.abs(c_gap) > COLUMN_PAIR_TOL_ARCSEC))
+    if rows is not None:
+        scope = np.zeros(len(tbl), dtype=bool)
+        scope[np.asarray(list(rows), dtype=int)] = True
+        diverged &= scope
+    bad = np.where(diverged)[0]
+    if not len(bad):
+        return 0
+
+    prov_d = (np.asarray(tbl["prov_dra_added_mas"], dtype=float)
+              if "prov_dra_added_mas" in tbl.colnames else np.zeros(len(tbl)))
+    prov_c = (np.asarray(tbl["prov_ddec_added_mas"], dtype=float)
+              if "prov_ddec_added_mas" in tbl.colnames else np.zeros(len(tbl)))
+    # DEC is exact: prov is on-sky mas and ddec is an on-sky arcsec offset, no
+    # cos(dec) between them.
+    dec_bad = np.abs(c_gap * 1000.0 - prov_c) > PROV_EXPLAINS_TOL_MAS
+
+    # RA needs a BOUND rather than an equality.  The apply loop divides the
+    # on-sky mas by cos(dec) to get the coordinate offset, and dec_deg is not
+    # stored per row, so the exact factor is unrecoverable -- but it is confined
+    # to [cos(dec_max), 1], which for these fields is a ~14% window.  That is far
+    # tighter than needed to reject a hand-edited RA gap against a recorded zero,
+    # and the heal WRITES this column, so it has to be checked: without it a row
+    # whose Dec gap is explained and whose RA gap is not gets its dra silently
+    # overwritten.
+    lo = np.minimum(prov_d / 1000.0, prov_d / 1000.0 / COS_DEC_MIN)
+    hi = np.maximum(prov_d / 1000.0, prov_d / 1000.0 / COS_DEC_MIN)
+    slack = PROV_EXPLAINS_TOL_MAS / 1000.0
+    ra_bad = (d_gap < lo - slack) | (d_gap > hi + slack)
+
+    rogue = np.where(diverged & (dec_bad | ra_bad))[0]
+    if len(rogue):
+        i = int(rogue[0])
+        if dec_bad[i]:
+            axis, gap_i, prov_i, col_a, col_b, expect = (
+                "Dec", c_gap[i], prov_c[i], ca, cb,
+                f"prov_ddec_added_mas {prov_c[i]:.2f} mas")
+        else:
+            axis, gap_i, prov_i, col_a, col_b, expect = (
+                "RA", d_gap[i], prov_d[i], da, db,
+                f"prov_dra_added_mas {prov_d[i]:.2f} mas, i.e. a coordinate gap "
+                f"in [{lo[i] * 1000:.2f}, {hi[i] * 1000:.2f}] mas after the "
+                f"cos(dec) the apply loop divided by")
+        raise OffsetsTableUpdateError(
+            f"{os.path.basename(offsets_path)}: {len(rogue)} row(s) have "
+            f"'{col_a}' disagreeing with '{col_b}' by more than the recorded "
+            f"provenance explains on the {axis} axis -- {_row_label(tbl, i)}: "
+            f"gap {gap_i * 1000:.2f} mas vs {expect}. Something changed one pair "
+            f"outside update_offsets_table, so which one is right is not on "
+            f"record. NOT writing.")
+
+    worst = int(bad[np.argmax(np.abs(c_gap[bad]))])
+    print(f"  {os.path.basename(offsets_path)}: re-syncing '{db}'/'{cb}' from "
+          f"'{da}'/'{ca}' on {len(bad)} row(s) -- only the '(arcsec)' pair was "
+          f"ever written, and the gap matches prov_*_added_mas exactly, so the "
+          f"plain pair is the as-built value and carries nothing the other lacks. "
+          f"Worst {_row_label(tbl, worst)}: {c_gap[worst] * 1000:.1f} mas.",
+          flush=True)
+    tbl[db][bad] = np.asarray(tbl[da], dtype=float)[bad]
+    tbl[cb][bad] = np.asarray(tbl[ca], dtype=float)[bad]
+    return int(len(bad))
+
+
 def update_offsets_table(offsets_path, corrections, stage, out_path=None,
                          backup=True, pool=False):
     """Apply measured on-sky corrections to an offsets table, with provenance.
@@ -826,6 +978,14 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
         _assert_correction_magnitudes(corrections, offsets_path)
 
         tbl = Table.read(offsets_path)
+        if "Visit" not in tbl.colnames:
+            # every granularity guard below narrows on Visit; without it they die
+            # on KeyError, which is the wrong class to escape a guarded writer.
+            # Three real tables carry both column pairs and no Visit column
+            # (brick's _average / _F405ref_average / _VVV_average).
+            raise OffsetsTableUpdateError(
+                f"{offsets_path} has no Visit column ({tbl.colnames}) -- a "
+                f"correction cannot be matched to a row without one")
         # `pool=True` performs the collapse the guard below names.  Off by default,
         # so this function stays strict for every existing caller; the m2 checkpoint
         # pools explicitly before the actionability floor (it needs the pooled
@@ -844,10 +1004,11 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
         _assert_vgroup_granularity(corrections, tbl, offsets_path)
         _assert_one_correction_per_row(corrections, tbl, offsets_path)
         # both column conventions exist: 'dra'/'ddec' (generate_offsets_table) and
-        # 'dra (arcsec)'/'ddec (arcsec)' (the VIRAC2locked tables fix_alignment reads)
-        dra_col = "dra (arcsec)" if "dra (arcsec)" in tbl.colnames else "dra"
-        ddec_col = "ddec (arcsec)" if "ddec (arcsec)" in tbl.colnames else "ddec"
-        if dra_col not in tbl.colnames or ddec_col not in tbl.colnames:
+        # 'dra (arcsec)'/'ddec (arcsec)' (the VIRAC2locked tables fix_alignment
+        # reads).  A builder-shaped table carries BOTH, and every pair present is
+        # written -- see the apply loop.
+        pairs = _column_pairs(tbl)
+        if not pairs:
             raise OffsetsTableUpdateError(
                 f"{offsets_path} has no dra/ddec columns ({tbl.colnames})")
         for col, fill in (("prov_stage", ""), ("prov_date", ""), ("prov_source", "")):
@@ -856,9 +1017,28 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
         for col in ("prov_dra_added_mas", "prov_ddec_added_mas"):
             if col not in tbl.colnames:
                 tbl[col] = np.zeros(len(tbl))
+        # An INT offset column truncates every fractional correction to zero and,
+        # once one pair is float and the other is not, locks the table into a
+        # permanent disagreement no write can clear.  Coerce before anything is
+        # compared or applied.  (The truncation itself predates this: both pairs
+        # truncated identically, so nothing noticed.)
+        for _dc, _cc in pairs:
+            for _col in (_dc, _cc):
+                if tbl[_col].dtype.kind != "f":
+                    tbl[_col] = np.asarray(tbl[_col], dtype=float)
 
         visit_numbers = np.array([int(str(v)[-3:]) for v in tbl["Visit"]])
         now = _utcnow_iso()
+        # Re-sync the duplicate columns on the rows these corrections will touch,
+        # BEFORE applying anything -- adding the same increment to both pairs
+        # preserves an existing gap rather than closing it.  Scoped to touched
+        # rows so a field with one stale filter and ten clean ones recovers filter
+        # by filter instead of being blocked as a whole.
+        _touched = set()
+        for corr in corrections:
+            _touched.update(int(i) for i in _match_rows(corr, tbl, visit_numbers))
+        _heal_column_pairs(tbl, offsets_path, rows=_touched)
+
         for corr in corrections:
             if corr.get("exposure") is not None and "Exposure" not in tbl.colnames:
                 # a per-VISIT (module-locked) table cannot express a single-exposure
@@ -901,8 +1081,20 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
             cosd = max(np.cos(np.radians(float(corr["dec_deg"]))), 1e-6)
             dra_add = (float(corr["dra_onsky_mas"]) / 1000.0) / cosd
             ddec_add = float(corr["ddec_onsky_mas"]) / 1000.0
-            tbl[dra_col][idx] = np.asarray(tbl[dra_col][idx], dtype=float) + dra_add
-            tbl[ddec_col][idx] = np.asarray(tbl[ddec_col][idx], dtype=float) + ddec_add
+            # Write EVERY column pair the table carries, not just the one the
+            # reducer reads.  A builder-shaped table holds both conventions --
+            # build_virac2_offsets ends with `t['dra (arcsec)'] = t['dra']`, a
+            # COPY -- and correcting only `dra (arcsec)` leaves `dra` frozen at
+            # the pre-correction value.  They then disagree silently and without
+            # limit: cloudc and cloudef reached ~7.9 and ~7.3 ARCSEC of
+            # divergence across their bulk repairs, on 95 and 96 of their rows.
+            # fix_alignment reads the `(arcsec)` pair so the reductions were
+            # right, but the plain pair is the validator's fallback and the first
+            # thing a person reads, and two columns holding one quantity with
+            # only one maintained is how curation errors start.
+            for _dc, _cc in _column_pairs(tbl):
+                tbl[_dc][idx] = np.asarray(tbl[_dc][idx], dtype=float) + dra_add
+                tbl[_cc][idx] = np.asarray(tbl[_cc][idx], dtype=float) + ddec_add
             tbl["prov_stage"][idx] = str(stage)
             tbl["prov_date"][idx] = now
             tbl["prov_dra_added_mas"][idx] = (
