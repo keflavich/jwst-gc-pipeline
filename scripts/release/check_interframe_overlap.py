@@ -52,6 +52,7 @@ from astropy.table import Table
 from astropy.wcs import WCS
 from photutils.detection import find_peaks
 
+from jwst_gc_pipeline import fields
 from jwst_gc_pipeline.frame_wcs import frame_wcs
 from jwst_gc_pipeline.photometry.interframe_overlap import (
     overlap_offset_grid, pairwise_overlap_offsets, DEFAULT_OVERLAP_TOL_MAS)
@@ -954,16 +955,41 @@ def field_filters(field):
     band".  Empirically the two coincide today (the four w51 leftovers are truly
     empty; no archive directory holds files but no ``.fits``), so this keeps code
     and docstring aligned rather than fixing an observed failure.
+
+    An empty directory is skipped ONLY when the band is NOT declared for the
+    field in ``fields.yaml``.  A DECLARED band with an empty directory is a
+    reduction that produced nothing -- indistinguishable on disk from a
+    just-``mkdir``'d run -- and must still reach ``check_filter`` so the field
+    blocks; skipping it would route around the "declared but nothing there"
+    check.  The four w51 leftovers (F115W/F200W/F212N/F356W) are undeclared, so
+    this changes no verdict today; it keeps fail-closed for the declared case.
     """
+    declared = {f.upper() for f in fields.declared_filters(field)}
     out = []
     for p in sorted(glob.glob(f"{BASE}/{field}/*/pipeline/")):
         filt = os.path.basename(os.path.dirname(os.path.dirname(p)))
         if not filt.upper().startswith("F"):
             continue
-        if not os.listdir(p):
+        try:
+            empty = not os.listdir(p)
+        except OSError as exc:
+            # glob proved the dir existed a moment ago; if it is now unreadable
+            # or gone we cannot determine emptiness -- report it, do not skip
+            # (fail-closed): let check_filter decide rather than silently drop.
+            print(f"  {field} {filt}: cannot read pipeline directory ({exc}) "
+                  f"-- reporting, not skipping (fail-closed)", flush=True)
+            out.append(filt)
+            continue
+        if empty:
+            if filt.upper() in declared:
+                print(f"  {field} {filt}: DECLARED band with an empty pipeline "
+                      f"directory -- reduction produced nothing (blocks)",
+                      flush=True)
+                out.append(filt)
+                continue
             print(f"  {field} {filt}: empty pipeline directory, nothing at all "
-                  f"-- not a band, skipping (not a verification failure)",
-                  flush=True)
+                  f"-- undeclared, not a band, skipping (not a verification "
+                  f"failure)", flush=True)
             continue
         out.append(filt)
     return out

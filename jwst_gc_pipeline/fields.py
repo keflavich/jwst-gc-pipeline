@@ -202,6 +202,25 @@ def obs_filters(instrument='nircam'):
             for f in FIELDS if any(o.filters for o in f.observations)}
 
 
+def declared_filters(target):
+    """Every filter ``fields.yaml`` declares for ``target``, upper-cased, across
+    all of its observations and instruments (NIRCam and MIRI share the per-obs
+    ``filters`` list; NIRISS is separate).  Empty set for an unregistered target.
+
+    Used to tell a real band whose reduction produced nothing (declared, must
+    block) from an undeclared leftover directory (skip): a name absent here was
+    never expected on disk, so an empty directory for it is not a band.
+    """
+    fobj = BY_NAME.get(target)
+    if fobj is None:
+        return set()
+    out = set()
+    for o in fobj.observations:
+        out |= {f.upper() for f in o.filters}
+        out |= {f.upper() for f in o.niriss_filters}
+    return out
+
+
 def glob_obsid(target, proposal, instrument='nircam'):
     """The observation number to build a filename glob from, or ``None``.
 

@@ -15,6 +15,7 @@ directory that HOLDS products but whose crf glob matches nothing is a real
 mismatch (wrong suffix, half-finished reduction) and still has to block.
 """
 import importlib.util
+import os
 import pathlib
 
 
@@ -67,6 +68,35 @@ def test_half_finished_reduction_no_fits_is_still_reported(tmp_path, monkeypatch
     (p / "jw06151001001_03109_00001_nrca1_asn.json").write_bytes(b"{}")
 
     assert cio.field_filters("w51") == ["F250M"]
+
+
+def test_declared_band_with_empty_dir_still_blocks(tmp_path, monkeypatch):
+    """A DECLARED band (in fields.yaml) whose directory is empty is a reduction
+    that produced nothing -- it must reach check_filter and block, not be dropped
+    as a leftover. F140M is declared for w51; F115W is not."""
+    monkeypatch.setattr(cio, "BASE", str(tmp_path))
+    _pipeline(tmp_path, "w51", "F140M")      # declared, empty -> must block
+    _pipeline(tmp_path, "w51", "F115W")      # undeclared, empty -> skipped
+
+    assert cio.field_filters("w51") == ["F140M"]
+
+
+def test_unreadable_dir_is_reported_not_skipped(tmp_path, monkeypatch):
+    """glob proves the dir existed a moment ago; if os.listdir then raises
+    (removed / re-permissioned mid-scan) we cannot determine emptiness, so the
+    band is reported (fail-closed), never silently skipped."""
+    monkeypatch.setattr(cio, "BASE", str(tmp_path))
+    _pipeline(tmp_path, "w51", "F115W")      # undeclared; would normally be skippable
+
+    real_listdir = os.listdir
+
+    def boom(path):
+        if "F115W" in str(path):
+            raise OSError("permission denied")
+        return real_listdir(path)
+
+    monkeypatch.setattr(os, "listdir", boom)
+    assert cio.field_filters("w51") == ["F115W"]
 
 
 def test_non_filter_directories_ignored(tmp_path, monkeypatch):
