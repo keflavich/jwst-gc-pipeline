@@ -260,3 +260,106 @@ def test_main_exit_code_is_tristate(monkeypatch, passed, expect):
                                  unresolved=["F182M: no merged mosaic"]
                                  if passed is None else []))
     assert rf.main(["--field", "arches", "--scan"]) == expect
+
+
+# ---------------------------------------------------------------------------
+# review findings 1, 2 and 4 -- which must land together (see the sickle test)
+# ---------------------------------------------------------------------------
+
+def test_disjoint_field_still_gates_its_merged_mosaic(tmp_path, monkeypatch):
+    """m92/gc2211/sgra shape: modules disjoint, but merged mosaics exist and SHIP.
+
+    Gating only per-module opened zero of them. A merged drizzle that places
+    module B at the wrong offset, or writes a wrong output WCS, is invisible in
+    the per-module views -- and it is the merged product that ships."""
+    monkeypatch.setattr(rf, "BASE", str(tmp_path))
+    for filt, ra in (("F090W", 266.0), ("F150W", 266.0)):
+        p = _pipeline(tmp_path, "m92", filt)
+        _mosaic_file(p / _name("01234", "001", filt.lower(), "nrca"), ra, -28.0)
+        _mosaic_file(p / _name("01234", "001", filt.lower(), "nrcb"), ra + 0.1, -28.0)
+        _mosaic_file(p / _name("01234", "001", filt.lower(), "merged"), ra, -28.0)
+    seen = _stub_checks(monkeypatch, passing=True)
+    res = rf.scan_field("m92", verbose=False, images_only=True)
+    assert res["geometry"] == "disjoint"
+    assert "merged" in res["views"], res["views"]
+    assert any("merged" in n for n in seen), seen
+
+
+def test_disjoint_field_without_merged_is_unchanged(tmp_path, monkeypatch):
+    """arches/quintuplet: no merged mosaic exists, so the merged view is empty
+    and the disjoint branch behaves exactly as before."""
+    monkeypatch.setattr(rf, "BASE", str(tmp_path))
+    for filt in ("F212N", "F187N"):
+        p = _pipeline(tmp_path, "arches", filt)
+        _mosaic_file(p / _name("02045", "001", filt.lower(), "nrca"), 266.0, -28.0)
+        _mosaic_file(p / _name("02045", "001", filt.lower(), "nrcb"), 266.1, -28.0)
+    _stub_checks(monkeypatch, passing=True)
+    res = rf.scan_field("arches", verbose=False, images_only=True)
+    assert sorted(res["views"]) == ["module-a", "module-b"]
+
+
+def test_sole_band_with_passing_own_catalog_is_not_blocked(tmp_path, monkeypatch):
+    """Finding 2. A field with one band per channel (a property of its observing
+    program, not a defect) whose own-catalog check RAN and PASSED must not exit
+    2 -- no re-reduction can ever give it a second SW or LW band, so a gate it
+    cannot pass only teaches people to use the override."""
+    monkeypatch.setattr(rf, "BASE", str(tmp_path))
+    for filt in ("F212N", "F405N"):          # one SW, one LW
+        p = _pipeline(tmp_path, "sgra", filt)
+        _mosaic_file(p / _name("04147", "001", filt.lower(), "merged"), 266.5, -28.5)
+    _stub_checks(monkeypatch, passing=True)   # catalog_sc stubbed to None below
+    from astropy.coordinates import SkyCoord
+    import astropy.units as u
+    monkeypatch.setattr(rf, "catalog_sc",
+                        lambda field, filt: SkyCoord([266.5] * u.deg, [-28.5] * u.deg))
+    res = rf.scan_field("sgra", verbose=False, images_only=False)
+    assert res["PASS"] is True, res.get("unresolved")
+
+
+def test_errored_check_is_not_counted_as_a_pass(tmp_path, monkeypatch):
+    """Finding 4. `per_cell` returns dict(error=...) with no PASS key for "too
+    few pairs"; `.get("PASS", True)` read that as a pass. Reachable on gc2211,
+    whose SW view pools mosaics 13.5 arcmin apart."""
+    monkeypatch.setattr(rf, "BASE", str(tmp_path))
+    for filt in ("F150W", "F200W"):
+        p = _pipeline(tmp_path, "gc2211", filt)
+        _mosaic_file(p / _name("02211", "023", filt.lower(), "merged"), 266.5, -28.5)
+    _stub_checks(monkeypatch, passing=True)
+    monkeypatch.setattr(rf, "per_cell",
+                        lambda *a, **k: dict(label="x", error="too few pairs"))
+    res = rf.scan_field("gc2211", verbose=False, images_only=True)
+    assert res["PASS"] is None, res
+    assert any("could not be evaluated" in u for u in res["unresolved"])
+
+
+def test_single_module_one_merged_band_is_ungated_not_blocking(tmp_path, monkeypatch):
+    """The reason findings 1 and 4 must land TOGETHER -- sickle.
+
+    sickle is nrcb-only with ONE merged mosaic across five bands. Fix 1 gives it
+    a merged view containing a single band, whose cross-band truth ("all OTHER
+    bands") is empty. Fix 1 alone -> that view passes vacuously, reintroducing
+    the silent pass one layer up. Fix 4 alone -> it returns something falsy and
+    sickle blocks on a band that is not defective, only unverifiable. Together,
+    it is classified `unchecked`, which is the honest answer."""
+    monkeypatch.setattr(rf, "BASE", str(tmp_path))
+    for filt in ("F187N", "F335M", "F470N"):
+        p = _pipeline(tmp_path, "sickle", filt)
+        _mosaic_file(p / _name("03958", "007", filt.lower(), "nrcb"), 266.5, -28.8)
+    p = _pipeline(tmp_path, "sickle", "F210M")
+    _mosaic_file(p / _name("03958", "007", "f210m", "nrcb"), 266.5, -28.8)
+    _mosaic_file(p / _name("03958", "007", "f210m", "merged"), 266.5, -28.8)
+
+    _stub_checks(monkeypatch, passing=True)
+    res = rf.scan_field("sickle", verbose=False, images_only=True)
+    assert res["geometry"] == "single-module"
+    assert "merged" in res["views"]
+    # The one-band merged view is caught by the view-level guard rather than the
+    # per-band one, but the outcome is what matters: it is CLASSIFIED, not passed
+    # vacuously.  Without fix 4 this same view would have returned an errored
+    # check read as PASS, which is the silent pass reintroduced one layer up.
+    assert any("merged" in u and "need >=2 bands" in u
+               for u in res["unresolved"]), res["unresolved"]
+    assert res["PASS"] is None
+    # and the per-module bands were still gated normally
+    assert "module-b" in res["views"]
+    assert res["views"]["module-b"]["PASS"] is True

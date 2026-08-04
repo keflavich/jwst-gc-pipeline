@@ -462,7 +462,13 @@ def _scan_view(field, view, band_paths, verbose, images_only):
     for b in bands:
         d, fl = dets[b]
         if d is None:
-            report[b] = {"error": "no detections"}; any_fail = True; continue
+            # An unreadable/empty mosaic is NOT "locally misregistered" -- calling
+            # it FAIL makes stage_release print a diagnosis that is simply wrong
+            # about the file.  Could-not-verify, per this script's own tri-state.
+            report[b] = {"error": "no detections"}
+            unchecked.append(f"{b}: no detections in view {view} (mosaic empty, "
+                             f"truncated, or unreadable)")
+            continue
         others = [dets[o][0] for o in bands
                   if o != b and dets[o][0] is not None and _channel(o) == _channel(b)]
         checks = {}
@@ -471,16 +477,34 @@ def _scan_view(field, view, band_paths, verbose, images_only):
                            np.concatenate([s.dec.deg for s in others]) * u.deg)
             r = per_cell(d, fl, tru, f"{b} vs cross-band [{view}]"); r.pop("_g", None)
             checks["cross_band"] = r
-        else:
-            # sole band of its channel in this view: nothing to cross-match against
-            unchecked.append(f"{b}: no other {_channel(b)} band in view {view}")
         if not images_only:
             cat = catalog_sc(field, b)
             if cat is not None:
                 r = per_cell(d, fl, cat, f"{b} vs own-catalog [{view}]",
                              fail_min_ratio=FAIL_MIN_RATIO); r.pop("_g", None)
                 checks["own_catalog"] = r
-        bad = any((not c.get("PASS", True)) for c in checks.values())
+        # A check that MATCHED NOTHING is not a pass.  ``per_cell`` returns
+        # ``dict(error=...)`` with no ``PASS`` key for "too few pairs" / "missing
+        # detections", and ``.get("PASS", True)`` used to read those as passes --
+        # the same silent-pass hole this script exists to close, one level down.
+        # Reachable: gc2211's SW view pools F150W (o028) and F200W (o023) mosaics
+        # 13.5 arcmin apart, so there are zero pairs to match.
+        errored = {k: c for k, c in checks.items() if "error" in c}
+        for k, c in errored.items():
+            unchecked.append(f"{b}: {k} could not be evaluated in view {view} "
+                             f"({c['error']})")
+        graded = {k: c for k, c in checks.items() if k not in errored}
+        # Only when NOTHING graded is the band unchecked.  Appending on an empty
+        # `others` regardless would block six fields (arches, quintuplet, sgra,
+        # gc2211, m4, ngc6397) that have one band per channel as a property of
+        # their observing programs -- no re-reduction can ever give them a second
+        # SW or LW band, and their own-catalog check runs and passes.  A gate a
+        # correct field cannot pass teaches people to reach for the override.
+        if not graded:
+            unchecked.append(f"{b}: no check available in view {view} "
+                             f"(sole {_channel(b)} band"
+                             f"{', no own-catalog' if images_only else ''})")
+        bad = any((not c.get("PASS", True)) for c in graded.values())
         report[b] = checks
         any_fail = any_fail or bad
         if verbose:
@@ -543,6 +567,17 @@ def scan_field(field, verbose=True, images_only=False, observations=None):
                     paths[filt] = mods[sorted(cand)[0]]
             if paths:
                 views[f"module-{fam}"] = paths
+        # The per-module views account for the module IMAGES, but the merged
+        # product also SHIPS, and a merged drizzle that places module B at the
+        # wrong offset -- or writes a wrong output WCS -- is invisible in them.
+        # Gating only per-module opened zero merged mosaics for m92 (4 bands),
+        # gc2211 (3) and sgra (2), all of which the previous gate did open.
+        # This went unnoticed because arches and quintuplet, the two fields the
+        # disjoint branch was written for, have NO merged mosaics at all, so
+        # there the dict comes back empty and nothing changes.
+        merged = {f: m["merged"] for f, m in inv.items() if "merged" in m}
+        if merged:
+            views["merged"] = merged
     else:
         # overlapping / merged-only / unknown: merged is the object to gate
         merged = {f: m["merged"] for f, m in inv.items() if "merged" in m}
