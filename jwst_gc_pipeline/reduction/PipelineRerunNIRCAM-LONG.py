@@ -777,10 +777,23 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         # into place.  member['expname'] already carries the _align/_destreak
         # suffix (set in the destreak/align loop above), so the target name matches
         # what cataloging --each-suffix consumes.
+        #
+        # ORDER MATTERS: outlier_detection is the ONLY step that emits product-named
+        # crf, so when it is skipped THIS run wrote none and any on disk are
+        # leftovers from an older reduction.  Copying those forward overwrites the
+        # per-exposure crf with a previous generation's WCS while refreshing their
+        # mtime -- invisible to every mtime-based staleness check, and cataloging
+        # then photometers the old alignment.  sickle hit exactly this (#270): 96
+        # product crf from 2026-06-27 (its last run with outlier_detection on) were
+        # copied over the per-exposure names on every iteration of the VIRAC2 retie,
+        # so all 96 carried one constant GNS RAOFFSET while their aligned
+        # `_destreak.fits` inputs carried the new per-exposure VIRAC2 tie ~200 mas
+        # away.  The loop re-measured the same ~110 mas gap every iteration and
+        # could not converge.  So test skip_outlier_detection FIRST.
         _prod_name = asn_data['products'][0]['name']
         _prod_crf = sorted(glob(os.path.join(
             output_dir, f'{_prod_name}_*_o{field}_crf.fits')))
-        if _prod_crf:
+        if _prod_crf and not skip_outlier_detection:
             def _crf_key(fn):
                 # (EXPSTART, DETECTOR): SW filters read nrcb1-4 SIMULTANEOUSLY, so
                 # EXPSTART alone collides across the 4 detectors of one exposure --
@@ -826,6 +839,18 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
             # upstream -- members already carry the final WCS), so the correct crf
             # is just the member frame itself: same SCI/ERR/WCS, DQ WITHOUT the
             # spurious OUTLIER flags.  Copy each member -> its per-exposure crf name.
+            #
+            # Reached whether or not product-named crf happen to sit in output_dir:
+            # if they do, they are an older reduction's and the branch above
+            # deliberately declines them.  This is the only correct source for the
+            # crf on a skip_outlier_detection run.
+            if _prod_crf:
+                print(f"  {len(_prod_crf)} product-named crf are on disk but "
+                      f"outlier_detection is SKIPPED, so THIS run wrote none -- they "
+                      f"are an EARLIER reduction's and carry its WCS. NOT copying "
+                      f"them forward (#270); writing crf from this run's aligned "
+                      f"member frames instead. First stale file: "
+                      f"{os.path.basename(_prod_crf[0])}", flush=True)
             if skymatch_method:
                 print("  WARNING: --skymatch-method set WITH outlier_detection "
                       "skipped: the per-exposure crf are copied from the PRE-skymatch "
