@@ -1637,7 +1637,14 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                         # recorded).  It never got a frozen solution, so its
                         # first vs-consensus measurement lands here and cannot
                         # be a movement.  Report it as UNVERIFIED so the release
-                        # gate's all_verified check still holds it, and let the
+                        # record's all_verified goes false and item 0b of
+                        # RELEASE_DEPLOYMENT_CHECKLIST.md asks a human to check
+                        # it -- NOTE that is a manual step, not a mechanism:
+                        # all_verified has no non-test reader and
+                        # stage_release.py never opens astrometry_checkpoints/.
+                        # Automating it is its own PR (it refuses 12 of 14
+                        # fields as things stand, so the triage is the work).
+                        # Report it, and let the
                         # frozen chain run: raising here re-punishes a defect
                         # that is already handled (arches F212N exposure 4).
                         unverified.append(
@@ -1701,12 +1708,12 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                                 # consensus was free to move.  Two measurements of
                                 # the same quantity agreeing is evidence either
                                 # way, so this keeps sgra F212N's verified pass.
+                                note = ("; m2 apply_ok=False, absolute tie still "
+                                        "uncertified" if m2_rejected else "")
                                 print(f"ASTROM CHECKPOINT [{stage}] STABLE: {vctx} "
                                       f"tie unchanged since m2 (delta "
                                       f"{delta:.2f} mas <= "
-                                      f"{STAGE_STABILITY_TOL_MAS}"
-                                      f"{'; m2 apply_ok=False, absolute tie still '
-                                         'uncertified' if m2_rejected else ''})",
+                                      f"{STAGE_STABILITY_TOL_MAS}{note})",
                                       flush=True)
                             elif m2_rejected:
                                 unverified.append(
@@ -1734,8 +1741,9 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                             # m2 measured a tie and REFUSED it as untrustworthy.
                             # Nothing was frozen, so nothing can have moved; this
                             # is the first trustworthy measurement of the tie.
-                            # UNVERIFIED (so all_verified holds it at the release
-                            # gate), not a regression -- see w51 F140M above.
+                            # UNVERIFIED, not a regression -- see w51 F140M
+                            # above.  all_verified goes false, which today is a
+                            # MANUAL checklist item (0b), not an enforced gate.
                             unverified.append(
                                 f"{vctx}: consensus->reference offset {off:.2f} mas -- m2 "
                                 f"MEASURED but REFUSED its own tie (untrustworthy), so no "

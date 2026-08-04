@@ -35,7 +35,22 @@ has none:
 | m2 state | frozen-stage verdict |
 |---|---|
 | recorded in m2's `exposures` | delta vs that baseline; > tol ⇒ `AstrometryRegressionError` |
-| recorded in m2's `consensus.skipped` (too few reliable stars — m2 found and reported the defect) | **UNVERIFIED**, not a failure. It never had a frozen solution, so this is its first measurement and cannot be a movement. `all_verified` goes false, so the release gate still holds it |
+| recorded in m2's `consensus.skipped` (too few reliable stars — m2 found and reported the defect) | **UNVERIFIED**, not a failure. It never had a frozen solution, so this is its first measurement and cannot be a movement. `all_verified` goes false — see the caveat below |
+
+> ⚠ **`all_verified` is not an enforced gate.** It is written into the checkpoint
+> JSON and has **no non-test reader**; `stage_release.py` never opens
+> `astrometry_checkpoints/`. Item 0b of `RELEASE_DEPLOYMENT_CHECKLIST.md` asks a
+> human to check it. So routing something to `unverified` rather than `failures`
+> converts an automatic `AstrometryRegressionError` into a manual checklist item,
+> which is a real reduction in enforcement — worth knowing when reading the tables
+> above. Automating the walk is its own change: the naive rule (`passed is not
+> True or all_verified is not True` over every `*_latest.json`) refuses 12 of 14
+> fields today, so the triage of those records is the actual deliverable, and the
+> gate additionally needs a run token (records carry only `date`, and brick holds
+> 89 `checkpoint_m2_*` files), a scope rule for stale `_latest` records from
+> abandoned runs, and an assertion that each record's tolerances match the module
+> defaults — w51's 60 records were written at `stage_stability_tol_mas: 20.0`
+> against a module value of 2.0.
 | absent for no recorded reason (new or renamed frame after the freeze) | `AstrometryRegressionError` — fail closed |
 
 The middle row exists because of arches F212N (2026-08-02): a snowball storm in
@@ -51,7 +66,8 @@ The **consensus→reference** tie is gated the same way, with the same distincti
 | m2 state | frozen-stage verdict |
 |---|---|
 | tie applied (`apply_ok: true`) | delta vs the reported bulk; > tol ⇒ `AstrometryRegressionError` |
-| tie measured but **refused** (`apply_ok: false` — no coherent dense peak, gross sparse-Gaia split, failed per-tile / same-star gate) | **UNVERIFIED**. A refused tie is a rejected measurement, not a freeze point, so a later stage cannot have moved away from it. The field's *absolute* tie is the thing to investigate |
+| tie measured but **refused** (`apply_ok: false` — no coherent dense peak, gross sparse-Gaia split, failed per-tile / same-star gate), and the later stage lands **within** tol of it | **STABLE**. A refused tie is still a *measurement*: two readings of the same quantity agreeing is evidence the solution did not move. `apply_ok: false` says the *absolute* tie is uncertified, not that the consensus was free to move — so the pass is kept and the message notes the tie remains uncertified. (sgra F212N: m2 refused 48.49 mas, m3 reads 48.09 — a 0.41 mas delta) |
+| tie measured but **refused**, and the later stage lands **beyond** tol | **UNVERIFIED**. It moved, but away from something that was never applied, so this is not a frozen-solution regression. The delta and m2's value are both named in the message; the field's *absolute* tie is the thing to investigate |
 | no m2 record at all | `AstrometryRegressionError` — fail closed |
 
 w51 F140M (2026-08-02) is the case: m2 measured a **7827 mas** consensus→reference

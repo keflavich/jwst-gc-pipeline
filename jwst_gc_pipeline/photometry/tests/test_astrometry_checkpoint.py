@@ -676,10 +676,15 @@ def test_frozen_stage_stable_against_refused_m2_tie_keeps_its_pass(
     assert rec["all_verified"], rec["unverified"]
 
 
-def test_frozen_stage_moved_from_refused_m2_tie_is_unverified_not_failure(
+def test_frozen_stage_moved_from_refused_m2_tie_reports_delta_and_m2_value(
         tmp_path, monkeypatch):
-    """Moving away from a refused tie is still not a frozen-solution regression
-    -- there was no frozen solution -- but it is not a pass either."""
+    """Moving away from a refused tie is not a frozen-solution regression, but it
+    is not a silent pass either: the DELTA and m2's own value must both reach the
+    message, or the operator cannot tell how far it moved or from what.
+
+    Asserting on those numbers is what makes this a guard for the current
+    revision -- a test that only checks "is unverified" passes on the previous
+    one too, and so cannot tell the two apart."""
     rec_path = os.path.join(str(tmp_path), "checkpoint_m2_F212N_latest.json")
     with open(rec_path, "w") as fh:
         json.dump(dict(visits=[dict(visit="001", reference_tie=dict(
@@ -692,7 +697,33 @@ def test_frozen_stage_moved_from_refused_m2_tie_is_unverified_not_failure(
     assert rec["passed"]                      # w51 F140M still unblocks
     assert rec["failures"] == []
     assert not rec["all_verified"]
-    assert any("m2 MEASURED but REFUSED" in u for u in rec["unverified"])
+    msg = "\n".join(rec["unverified"])
+    assert "m2 MEASURED but REFUSED" in msg
+    assert "moved 7794.9" in msg, msg          # the delta itself
+    assert "-7694.20,+1436.12" in msg, msg     # what it moved away FROM
+
+
+def test_frozen_stage_refused_m2_tie_with_no_usable_numbers(tmp_path, monkeypatch):
+    """m2 refused the tie AND recorded no finite dra/ddec, so there is nothing to
+    compare against.
+
+    This is the branch that survives when the baseline is unusable.  It is
+    distinct from the moved-from-refused case above, which DOES have numbers --
+    without a fixture that yields a null baseline nothing exercises it, and
+    replacing its body with an unconditional raise leaves the suite green."""
+    rec_path = os.path.join(str(tmp_path), "checkpoint_m2_F212N_latest.json")
+    with open(rec_path, "w") as fh:
+        json.dump(dict(visits=[dict(visit="001", reference_tie=dict(
+            apply_ok=False, dra_mas=None, ddec_mas=None,
+            off_mas=7827.1, swept=True))]), fh)
+    _patch_consensus_and_tie(monkeypatch, dra_now=-30.83, ddec_now=9.80)
+    rec = run_visit_checkpoint([_tiny_visit_table()], "m3", refcat=_DUMMY_REFCAT,
+                               filtername="F212N", record_dir=str(tmp_path),
+                               context="test")
+    assert rec["passed"]
+    assert rec["failures"] == []
+    assert not rec["all_verified"]
+    assert any("first trustworthy measurement" in u for u in rec["unverified"])
 
 
 def test_frozen_stage_m2_applied_tie_still_gates(tmp_path, monkeypatch):
