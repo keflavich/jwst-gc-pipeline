@@ -108,7 +108,7 @@ def _sat_unflg_clean(cat, bandA, bandB):
 
 
 def _metric_str(cat, bandA, bandB):
-    r = saturation_continuity(cat, bandA, bandB)
+    r = saturation_continuity(cat, band_sat=bandA, band_ref=bandB)
     if not np.isfinite(r['metric']):
         return f"C={r['kind']}", r
     return f"C={r['metric']:.2f} ({r['kind'].split('-')[0]})", r

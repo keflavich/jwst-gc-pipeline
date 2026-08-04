@@ -2,14 +2,15 @@
 
 Definition
 ----------
-For a band pair (A = band that saturates, B = reference band), using rows
-CLEAN in B (independently_detected, not replaced_saturated, not
-forced_filled):
+For a DIRECTIONAL band pair (``band_sat`` = the band that saturates, whose
+``replaced_saturated`` photometry is under test; ``band_ref`` = the reference
+band), using rows CLEAN in ``band_ref`` (independently_detected, not
+replaced_saturated, not forced_filled):
 
-  color = mag_vega_A - mag_vega_B
-  In 0.5-mag bins of mag_B, split rows into
-     SAT   = replaced_saturated_A
-     UNFLG = no saturation flags in A
+  color = mag_vega_{band_sat} - mag_vega_{band_ref}
+  In 0.5-mag bins of mag_{band_ref}, split rows into
+     SAT   = replaced_saturated_{band_sat}
+     UNFLG = no saturation flags in band_sat
   TRANSITION bins: both classes have n >= 10 AND each is >= 20% of the bin
   (these straddle the saturation boundary; brighter bins have broken UNFLG
   rows, fainter SAT rows are phantoms, so neither is a fair comparison).
@@ -18,9 +19,13 @@ forced_filled):
   C1 = max |jump| over transition bins.
 
   Fallback when no transition bin exists (weakly-saturating bands): C2 =
-  max |median(color|SAT) - locus(mag_B)| over SAT bins with n >= 10
+  max |median(color|SAT) - locus(mag_{band_ref})| over SAT bins with n >= 10
   brightward of boundary+1, where locus = robust linear fit of median UNFLG
-  color over mag_B in [boundary+0.5, boundary+3.0].
+  color over mag_{band_ref} in [boundary+0.5, boundary+3.0].
+
+The pair is NOT order-symmetric: swapping band_sat/band_ref measures a
+different SAT population in a different binning variable and returns a
+plausible-but-different number (see ``saturation_continuity``).
 
 PASS: metric < 0.05 mag (goal) / < 0.10 mag (certification floor).
 A discontinuity means saturation-handled photometry is on a different flux
@@ -49,34 +54,58 @@ def _filled(col, fill):
         return np.asarray(col)
 
 
-def saturation_continuity(cat, bandA, bandB, binwidth=0.5, min_n=10,
+def saturation_continuity(cat, band_sat, band_ref, binwidth=0.5, min_n=10,
                           min_frac=0.20, frac_boundary=0.25):
-    """Return dict(metric, kind, worst_bin, bins) for pair (A, B)."""
+    """Saturation-boundary photometric continuity for a DIRECTIONAL band pair.
+
+    The two arguments are NOT interchangeable, and calling with them swapped
+    returns a plausible-but-different number rather than an error (this is how a
+    reverse-order 0.042 once reached the release checklist against a true 0.170).
+    The names now say which is which:
+
+    - ``band_sat`` — the band whose SATURATED / ``replaced_saturated`` photometry
+      is under test.  ``SAT`` rows are ``replaced_saturated_{band_sat}``; the
+      metric asks whether their color matches the unflagged locus across the
+      saturation boundary.  For a degenerate pair this is the EARLIER-saturating
+      (broader / more sensitive) band — e.g. F410M in the (F410M, F405N) pair.
+    - ``band_ref`` — the reference band the color is binned in (``mag_ref``) and
+      whose rows are cut to clean, independently-detected, unsaturated ones.
+
+    Swapping them measures a DIFFERENT SAT population in a DIFFERENT binning
+    variable (``replaced_saturated_{band_ref}`` binned in ``mag_sat``), so both
+    orders can return a finite metric.  ``CONTINUITY_PAIRS`` fixes the order as
+    ``(band_sat, band_ref)``; pass by keyword at call sites so the direction is
+    explicit where it is easy to get wrong.
+
+    Returns ``dict(metric, kind, worst_bin, bins)``; ``worst_bin``/``bins`` keep
+    the historical keys ``magB_lo`` (low edge of the ``mag_ref`` bin), ``n_sat``,
+    ``n_unflg``, ``frac``, ``jump``.
+    """
     n = len(cat)
-    magA = _get(cat, f'mag_vega_{bandA}', np.nan, n).astype(float)
-    magB = _get(cat, f'mag_vega_{bandB}', np.nan, n).astype(float)
-    repA = _get(cat, f'replaced_saturated_{bandA}', False, n).astype(bool)
-    ffA = _get(cat, f'forced_filled_{bandA}', False, n).astype(bool)
-    satA = _get(cat, f'is_saturated_{bandA}', False, n).astype(bool)
-    cleanB = (np.isfinite(magB)
-              & _get(cat, f'independently_detected_{bandB}', True, n).astype(bool)
-              & ~_get(cat, f'replaced_saturated_{bandB}', False, n).astype(bool)
-              & ~_get(cat, f'forced_filled_{bandB}', False, n).astype(bool)
-              & ~_get(cat, f'is_saturated_{bandB}', False, n).astype(bool))
-    ok = np.isfinite(magA) & cleanB
-    color = magA - magB
-    SAT = ok & repA
-    UNFLG = ok & ~repA & ~ffA & ~satA
+    mag_sat = _get(cat, f'mag_vega_{band_sat}', np.nan, n).astype(float)
+    mag_ref = _get(cat, f'mag_vega_{band_ref}', np.nan, n).astype(float)
+    rep_sat = _get(cat, f'replaced_saturated_{band_sat}', False, n).astype(bool)
+    ff_sat = _get(cat, f'forced_filled_{band_sat}', False, n).astype(bool)
+    issat_sat = _get(cat, f'is_saturated_{band_sat}', False, n).astype(bool)
+    clean_ref = (np.isfinite(mag_ref)
+                 & _get(cat, f'independently_detected_{band_ref}', True, n).astype(bool)
+                 & ~_get(cat, f'replaced_saturated_{band_ref}', False, n).astype(bool)
+                 & ~_get(cat, f'forced_filled_{band_ref}', False, n).astype(bool)
+                 & ~_get(cat, f'is_saturated_{band_ref}', False, n).astype(bool))
+    ok = np.isfinite(mag_sat) & clean_ref
+    color = mag_sat - mag_ref
+    SAT = ok & rep_sat
+    UNFLG = ok & ~rep_sat & ~ff_sat & ~issat_sat
     if SAT.sum() < min_n:
         return dict(metric=np.nan, kind='no-sat-population', worst_bin=None, bins=[])
 
-    lo = np.floor(np.nanmin(magB[SAT | UNFLG]) * 2) / 2
-    hi = np.ceil(np.nanmax(magB[SAT | UNFLG]) * 2) / 2
+    lo = np.floor(np.nanmin(mag_ref[SAT | UNFLG]) * 2) / 2
+    hi = np.ceil(np.nanmax(mag_ref[SAT | UNFLG]) * 2) / 2
     edges = np.arange(lo, hi, binwidth)
 
     bins, boundary = [], None
     for e in edges:
-        inb = (magB >= e) & (magB < e + binwidth)
+        inb = (mag_ref >= e) & (mag_ref < e + binwidth)
         ns, nu = int((SAT & inb).sum()), int((UNFLG & inb).sum())
         tot = ns + nu
         if tot == 0:
@@ -98,21 +127,21 @@ def saturation_continuity(cat, bandA, bandB, binwidth=0.5, min_n=10,
 
     # C2 fallback: locus-referenced satstar offset
     if boundary is None:
-        boundary = np.percentile(magB[SAT], 75)
+        boundary = np.percentile(mag_ref[SAT], 75)
     pts = [(b['magB_lo'] + binwidth / 2,
-            np.median(color[UNFLG & (magB >= b['magB_lo'])
-                            & (magB < b['magB_lo'] + binwidth)]), b['n_unflg'])
+            np.median(color[UNFLG & (mag_ref >= b['magB_lo'])
+                            & (mag_ref < b['magB_lo'] + binwidth)]), b['n_unflg'])
            for b in bins
            if boundary + 0.5 <= b['magB_lo'] <= boundary + 3.0
            and b['n_unflg'] >= 50]
     if len(pts) < 2:
         return dict(metric=np.nan, kind='no-locus', worst_bin=None, bins=bins)
-    x, y, n = map(np.array, zip(*pts))
-    locus = np.poly1d(np.polyfit(x, y, 1, w=np.sqrt(n)))
+    x, y, w = map(np.array, zip(*pts))
+    locus = np.poly1d(np.polyfit(x, y, 1, w=np.sqrt(w)))
     offs = []
     for b in bins:
         if b['n_sat'] >= min_n and b['magB_lo'] + binwidth <= boundary + 1.0:
-            inb = (magB >= b['magB_lo']) & (magB < b['magB_lo'] + binwidth)
+            inb = (mag_ref >= b['magB_lo']) & (mag_ref < b['magB_lo'] + binwidth)
             off = float(np.median(color[SAT & inb])
                         - locus(b['magB_lo'] + binwidth / 2))
             offs.append((abs(off), dict(b, jump=off)))
@@ -123,14 +152,18 @@ def saturation_continuity(cat, bandA, bandB, binwidth=0.5, min_n=10,
 
 
 def assert_saturation_continuity(cat, pairs, threshold=0.10):
-    """Regression-test entry point: raises AssertionError listing failures."""
+    """Regression-test entry point: raises AssertionError listing failures.
+
+    ``pairs`` are DIRECTIONAL ``(band_sat, band_ref)`` tuples (see
+    ``saturation_continuity``); they are passed by keyword so the order is not
+    silently reversible."""
     fails = []
-    for a, b in pairs:
-        r = saturation_continuity(cat, a, b)
+    for band_sat, band_ref in pairs:
+        r = saturation_continuity(cat, band_sat=band_sat, band_ref=band_ref)
         if np.isfinite(r['metric']) and r['metric'] >= threshold:
             w = r['worst_bin']
-            fails.append(f"{a} vs {b}: {r['metric']:.3f} mag ({r['kind']}) "
-                         f"at mag_{b}={w['magB_lo']:.1f} "
+            fails.append(f"{band_sat} vs {band_ref}: {r['metric']:.3f} mag "
+                         f"({r['kind']}) at mag_{band_ref}={w['magB_lo']:.1f} "
                          f"(n_sat={w['n_sat']}, n_unflg={w['n_unflg']})")
     assert not fails, ('saturation-boundary photometric discontinuity '
                        f'>= {threshold} mag:\n  ' + '\n  '.join(fails))

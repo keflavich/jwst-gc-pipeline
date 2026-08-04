@@ -704,7 +704,11 @@ def check_catalog_on_frame(items, field, tol_mas=FRAME_TOL_MAS):
 # than normal photometry (the CMD breaks at the boundary) -- the exact defect class
 # of the 2026-07 satstar campaign. Certifiers: photometry/saturation_continuity.py.
 CONTINUITY_TOL_MAG = 0.10
-# (A, B) with A = the earlier-saturating band, B = its later-saturating reference.
+# DIRECTIONAL (band_sat, band_ref): band_sat = the earlier-saturating band whose
+# replaced_saturated photometry is under test; band_ref = the reference band the
+# color is binned in. saturation_continuity is NOT order-symmetric -- a reversed
+# pair returns a plausible-but-different number (a reversed 0.042 once reached the
+# checklist against a true 0.170), so it is called with band_sat=/band_ref= below.
 CONTINUITY_PAIRS = [("f182m", "f187n"), ("f410m", "f405n")]
 
 # Degenerate-pair flatness is certified on the SCIENCE subset (science_only=True):
@@ -759,7 +763,7 @@ def check_photometric_continuity(items, tol=CONTINUITY_TOL_MAG,
         for a, b in CONTINUITY_PAIRS:
             if a not in have or b not in have:
                 continue
-            r = saturation_continuity(cat, a, b)
+            r = saturation_continuity(cat, band_sat=a, band_ref=b)
             ok = not (np.isfinite(r["metric"]) and r["metric"] >= tol)
             print(f"  continuity {a}-{b} [{name}]: "
                   + (f"{r['metric']:.3f} mag ({r['kind']})" if np.isfinite(r["metric"])

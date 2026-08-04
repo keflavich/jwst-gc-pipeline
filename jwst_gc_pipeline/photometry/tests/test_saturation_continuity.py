@@ -45,6 +45,24 @@ def test_jump_detected_and_fails():
         assert_saturation_continuity(_cat(jump=0.4), [('a', 'b')], threshold=0.10)
 
 
+def test_saturation_continuity_is_directional():
+    """Interface + directionality regression, not a guard against human misuse
+    (that isn't unit-testable). Pins that (a) the ``band_sat=``/``band_ref=``
+    keywords exist and the positional order is (band_sat, band_ref), and (b) the
+    metric is genuinely order-dependent: 'a' carries the replaced_saturated
+    population and 'b' does not, so the reversed order has no SAT population --
+    'no-sat-population', not a mirror-image metric. The names make that
+    order-dependence readable at the call site; the metric itself was already
+    directional before the rename."""
+    cat = _cat(jump=0.4)
+    fwd = saturation_continuity(cat, band_sat='a', band_ref='b')
+    rev = saturation_continuity(cat, band_sat='b', band_ref='a')
+    assert np.isfinite(fwd['metric']) and abs(fwd['metric'] - 0.4) < 0.1
+    assert rev['kind'] == 'no-sat-population'
+    # positional and keyword forms agree (positional order is band_sat, band_ref)
+    assert saturation_continuity(cat, 'a', 'b')['metric'] == fwd['metric']
+
+
 def _flatcat(bright_dev=0.0, bright_flag='is_saturated', n=8000, seed=3):
     """Color-flat locus at 0.5 for mag_B >= 13; the bright end (mag_B < 13)
     carries ``bright_dev`` and is tagged with ``bright_flag`` in band A only.
