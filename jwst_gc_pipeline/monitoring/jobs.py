@@ -290,8 +290,15 @@ def scan_log(path, tail_bytes=TAIL_BYTES, head_bytes=HEAD_BYTES):
     chunks = []
     try:
         with open(path, 'rb') as fh:
-            chunks.append(fh.read(min(head_bytes, size)))
-            if size > head_bytes + tail_bytes:
+            if size <= head_bytes + tail_bytes:
+                # Small enough to read whole.  The previous form read only the
+                # head here and skipped the tail entirely, leaving every log
+                # between head_bytes and head_bytes+tail_bytes scanned for just
+                # its first 8 kB -- 60% of this log directory, and the band the
+                # F150W2 PSF-grid failure falls in, so a dead run reported green.
+                chunks.append(fh.read())
+            else:
+                chunks.append(fh.read(head_bytes))
                 fh.seek(-tail_bytes, os.SEEK_END)
                 chunks.append(fh.read())
     except OSError:
@@ -332,14 +339,17 @@ def log_job_name(filename):
     return m.group('jobname') if m else None
 
 
-def log_belongs_to(filename, target, obsid=None):
-    """Does this log belong to ``target`` (and ``obsid``, when it names one)?
+def log_belongs_to(filename, target, obsid=None, proposal=None):
+    """Does this log belong to ``target`` (and ``proposal``/``obsid``)?
 
     A substring match on the field name is not enough: every gc2211 observation
     shares the string ``gc2211``, so an ``o050`` failure would be reported
-    against ``o023`` as well.  When the log's job name carries an observation the
-    match must agree; when it does not, the log is field-level and shown for
-    every observation, which is the truthful reading of a name that omits it.
+    against ``o023`` as well.  The OBSERVATION ID alone is not enough either --
+    ngc6334 is ``[('6778','001'), ('7213','001')]``, two proposals with the same
+    obsid, so pinning on obsid puts 6778's failures on 7213's card.  Both are
+    compared when the job name carries them; when it does not, the log is
+    field-level and shown for every observation, which is the truthful reading
+    of a name that omits them.
     """
     name = log_job_name(filename)
     if name is None:
@@ -347,12 +357,17 @@ def log_belongs_to(filename, target, obsid=None):
     parsed = parse_job_name(name)
     if not parsed or parsed.get('target') != target:
         return False
-    if obsid is None or parsed.get('obsid') is None:
-        return True
-    return str(parsed['obsid']).lstrip('0') == str(obsid).lstrip('0')
+    if (obsid is not None and parsed.get('obsid') is not None
+            and str(parsed['obsid']).lstrip('0') != str(obsid).lstrip('0')):
+        return False
+    if (proposal is not None and parsed.get('proposal') is not None
+            and str(parsed['proposal']) != str(proposal)):
+        return False
+    return True
 
 
-def logs_for_target(target, log_dir=None, limit=12, max_age_days=30, obsid=None):
+def logs_for_target(target, log_dir=None, limit=12, max_age_days=30,
+                    obsid=None, proposal=None):
     """The newest log files whose job name resolves to ``target`` (and ``obsid``).
 
     Logs are named ``<stage>_<jobname>_<jobid>[_<arrayidx>].out`` by the submit
@@ -370,7 +385,7 @@ def logs_for_target(target, log_dir=None, limit=12, max_age_days=30, obsid=None)
     try:
         names = [n for n in os.listdir(log_dir)
                  if n.endswith(('.out', '.log')) and target in n
-                 and log_belongs_to(n, target, obsid)]
+                 and log_belongs_to(n, target, obsid, proposal)]
     except OSError:
         return []
     found = []

@@ -24,6 +24,7 @@ pass.
 """
 import glob
 import importlib.util
+import re
 import json
 import os
 import sys
@@ -46,6 +47,12 @@ def paper_config(paper_dir=None):
     Loaded by path rather than by ``import config`` so it cannot collide with any
     other ``config`` module on the path.  It is stdlib-only, so this is cheap and
     cannot drag in astropy.
+
+    NOTE this EXECUTES a ``.py`` file from a data directory.  That is acceptable
+    here because the directory is an internal checkout the same user writes, and
+    it is the only way to read the pinned constants without duplicating them --
+    but it is code execution, not parsing, and should not be pointed at a tree
+    someone else can write.
     """
     path = os.path.join(paper_dir or PAPER_DIR, 'config.py')
     if not os.path.exists(path):
@@ -227,3 +234,44 @@ def age_days(stamp):
     if when.tzinfo is None:
         when = when.replace(tzinfo=timezone.utc)
     return (datetime.now(timezone.utc) - when).total_seconds() / 86400.0
+
+
+#: The paper's gates, read from its own source rather than retyped.  Two of these
+#: live in ``post_recat_validation.py`` rather than ``config.py``; that module
+#: imports astropy and the pipeline, so its constants are read textually instead
+#: of by importing it -- the alternative is a second copy of the numbers here,
+#: which is the thing the whole package refuses to do.
+_GATE_DEFAULTS = {'mode_flip_tol_mas': 10.0, 'anchor_tol_mas': 30.0,
+                  'continuity_tol_mag': 0.10}
+
+_GATE_PATTERNS = {
+    'mode_flip_tol_mas': re.compile(r'MODE_FLIP_TOL_MAS\s*=\s*([\d.]+)'),
+    'anchor_tol_mas': re.compile(r'\[.off.\]\s*>\s*([\d.]+)'),
+}
+
+
+def gate_values(paper_dir=None):
+    """``{gate: value}`` for the paper's post-recat gates.
+
+    Falls back to the documented defaults when the source cannot be read, and
+    says so via ``source`` -- a page that silently invented a threshold would be
+    worse than one that admits it is quoting the documented value.
+    """
+    out = dict(_GATE_DEFAULTS)
+    out['source'] = 'defaults'
+    path = os.path.join(paper_dir or PAPER_DIR,
+                        'scripts', 'post_recat_validation.py')
+    try:
+        with open(path) as fh:
+            text = fh.read()
+    except OSError:
+        return out
+    for key, rx in _GATE_PATTERNS.items():
+        m = rx.search(text)
+        if m:
+            out[key] = float(m.group(1))
+            out['source'] = os.path.basename(path)
+    cfg = paper_config(paper_dir)
+    if cfg is not None and getattr(cfg, 'CONTINUITY_TOL_MAG', None):
+        out['continuity_tol_mag'] = float(cfg.CONTINUITY_TOL_MAG)
+    return out

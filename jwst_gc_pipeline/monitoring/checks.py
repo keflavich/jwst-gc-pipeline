@@ -40,8 +40,6 @@ SAFETY_OVERRIDES = (
 #: says so rather than implying an enforced gate.
 CONSENSUS_SCATTER_WARN_MAS = 10 * EXPOSURE_CONSENSUS_TOL_MAS
 
-#: Days after which an unfinished ladder is called stalled rather than running.
-STALE_DAYS = 14
 
 SEVERITIES = ('fail', 'warn', 'info', 'skip')
 
@@ -173,8 +171,8 @@ def check_astrometry(run):
         if contrast is not None and contrast < DEFAULT_MIN_CONTRAST:
             out.append(_verdict(
                 f'astrometry-contrast-{filt}', 'fail',
-                f'{filt}: lowest offset-peak contrast {contrast:.1f} '
-                f'< {DEFAULT_MIN_CONTRAST}',
+                f'{filt}: lowest offset-peak contrast {contrast:.2f} '
+                f'< {DEFAULT_MIN_CONTRAST:g}',
                 'A low peak contrast means the offset histogram found no real tie. '
                 'It does NOT mean "no offset": a shift larger than the search window '
                 'has zero true pairs inside it, so a gross misalignment reads as low '
@@ -218,8 +216,14 @@ def check_astrometry(run):
                 cells = visit.get('cells') or []
                 over = [c for c in cells
                         if (c.get('off_mas') or 0) > LOCAL_CELL_TOL_MAS]
+                # Derive the grid from the cells rather than assuming 6x6:
+                # on any other grid a hard-coded edge INVERTS the edge-vs-interior
+                # attribution, which is the thing this evidence block is for.
+                xs = [c.get('ix') for c in cells if c.get('ix') is not None]
+                ys = [c.get('iy') for c in cells if c.get('iy') is not None]
+                max_ix, max_iy = (max(xs) if xs else 0), (max(ys) if ys else 0)
                 edge = [c for c in over
-                        if c.get('ix') in (0, 5) or c.get('iy') in (0, 5)]
+                        if c.get('ix') in (0, max_ix) or c.get('iy') in (0, max_iy)]
                 on_edge = over and len(edge) == len(over)
                 out.append(_verdict(
                     f'astrometry-worst-tile-{filt}-v{visit.get("visit")}', 'warn',
@@ -272,7 +276,7 @@ def check_astrometry(run):
             if tile_contrast is not None and tile_contrast < DEFAULT_MIN_CONTRAST:
                 out.append(_verdict(
                     f'astrometry-tile-contrast-{filt}-v{visit.get("visit")}', 'fail',
-                    f'{label}: weakest tile peak contrast {tile_contrast:.0f} '
+                    f'{label}: weakest tile peak contrast {tile_contrast:.2f} '
                     f'< {DEFAULT_MIN_CONTRAST:g}',
                     'At least one tile has no real tie, so its offset is noise.',
                     value=tile_contrast, threshold=DEFAULT_MIN_CONTRAST, source=src))
@@ -337,15 +341,19 @@ def check_provenance(run):
         return out
     for phase, rec in sorted(prov.items()):
         tags = rec.get('tags') or {}
+        ambiguous = rec.get('scope') == 'ambiguous'
         if rec.get('n_distinct', 0) > 1:
             listing = ', '.join(f'{t} ({n})' for t, n in
                                 sorted(tags.items(), key=lambda kv: -kv[1]))
             out.append(_verdict(
-                f'provenance-mixed-{phase}', 'fail',
+                f'provenance-mixed-{phase}', 'warn' if ambiguous else 'fail',
                 f'{phase}: products come from {rec["n_distinct"]} different '
-                f'pipeline tags',
+                f'pipeline tags' + (' (unattributed)' if ambiguous else ''),
                 f'{listing}.  Image and catalog must be deployed from the SAME '
-                f'pipeline run; a mixed-tag set is not releasable as one product.',
+                f'pipeline run; a mixed-tag set is not releasable as one product.'
+                + ('  NOTE: the sidecars carry no observation token and this '
+                   'field has several observations, so the mix may span them '
+                   'rather than sitting inside this one.' if ambiguous else ''),
                 value=rec['n_distinct'], threshold=1,
                 source=f'catalogs/*{phase}*.prov.json',
                 cause=(
@@ -430,6 +438,59 @@ def check_products(run):
                     'data': [['crf frames', crf],
                              ['destreak_/align_ working copies', 0]],
                     'total': 2}}))
+
+        # Saturated stars: all-rejected is NOT the same as none-present.  A filter
+        # whose current stage produced zero satstar catalogs but many rejected
+        # files still ships saturated photometry -- carried over from an earlier
+        # stage -- so the product mixes generations.  Measured on brick: F405N and
+        # F410M have 0 catalogs / 48 rejected each while the m8 merge reports
+        # thousands of replaced_saturated rows.
+        sat = rows.get('satstar_frames') or {}
+        if sat.get('rejected') and not sat.get('accepted'):
+            out.append(_verdict(
+                f'satstar-all-rejected-{filt}', 'fail',
+                f'{filt}: 0 satstar catalogs but {sat["rejected"]} rejected frames',
+                'Every saturated-star fit at this stage was rejected, so any '
+                'saturated photometry in the merged catalog came from an earlier '
+                'stage and the shipped product mixes generations. A '
+                'present/absent count of satstar products cannot see this.',
+                value=0, threshold=sat['rejected'],
+                source=f'{filt}/pipeline/*_satstar_{{catalog,rejected}}.fits',
+                cause=(
+                    'Every saturated-star fit was rejected at this stage — usually '
+                    'a too-tight gate (wing-fit tolerance, core radius, or a PSF '
+                    'model that does not match the saturated profile). Because the '
+                    'merge falls back to whatever satstar products already existed, '
+                    'the shipped catalog keeps the OLD generation and looks '
+                    'complete. Compare replaced_saturated counts in the merged '
+                    'catalog against these zeros before trusting bright-end '
+                    'photometry.'),
+                evidence={'rows': {
+                    'columns': ['satstar product', 'count'],
+                    'data': [['accepted catalogs', sat.get('accepted', 0)],
+                             ['rejected', sat.get('rejected', 0)],
+                             ['wingcal calibrators', sat.get('wingcal', 0)]],
+                    'total': 3}}))
+
+        # A later merge present while an EARLIER phase is absent.  Anchor on the
+        # LAST present phase and look at everything before it -- the previous
+        # form anchored on the first present phase and inspected only what came
+        # after, so the cleanest instance of the very thing it checks for
+        # (m12 missing, m3..m7 present) was silent.
+        order = ('m12', 'm3', 'm4', 'm5', 'm6', 'm7')
+        present = [p for p in order if (rows.get(p) or {}).get('n')]
+        if present:
+            last = order.index(present[-1])
+            holes = [p for p in order[:last] if not (rows.get(p) or {}).get('n')]
+            if holes:
+                out.append(_verdict(
+                    f'ladder-gap-{filt}', 'warn',
+                    f'{filt}: phase(s) {", ".join(holes)} missing below '
+                    f'{present[-1]}, which is present',
+                    'A later merge exists without its input phase on disk. Either '
+                    'the intermediate was cleaned up, or the later product is '
+                    'stale and predates a rerun that has not reached it yet.',
+                    value=len(holes), threshold=0, source='catalogs/'))
 
         # Saturated stars: all-rejected is NOT the same as none-present.  A filter
         # whose current stage produced zero satstar catalogs but many rejected
@@ -708,7 +769,8 @@ def check_jobs(run, jobs_for_target, log_scans):
 
 #: A post-recat verdict older than this is reported as aged: the analysis runs on a
 #: SLURM dependency after re-cataloging, so a verdict that has not been refreshed in
-#: weeks is describing an older state of the tree.  Monitor-owned, not a paper gate.
+#: weeks is describing an older state of the tree.  MONITOR-OWNED heuristic, not a
+#: paper gate -- like CONSENSUS_SCATTER_WARN_MAS, and labelled as such on the page.
 PAPER_VERDICT_AGE_WARN_DAYS = 14
 
 
@@ -809,7 +871,8 @@ def check_paper(run, paper_summary):
             'paper-verdict-age', 'warn',
             f'paper validation last ran {age:.0f} days ago ({generated[:10]})',
             'It runs on a SLURM dependency after re-cataloging, so a long gap means '
-            'it has not seen the recent runs.',
+            'it has not seen the recent runs. This is a monitor heuristic, not a '
+            'paper gate.',
             value=round(age, 1), threshold=PAPER_VERDICT_AGE_WARN_DAYS, source=src))
 
     # An ABSENT certifier is unknown, not passing.  The paper's validation only

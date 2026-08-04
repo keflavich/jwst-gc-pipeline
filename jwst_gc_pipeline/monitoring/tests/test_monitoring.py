@@ -877,3 +877,167 @@ def test_writeup_link_renders_in_the_evidence_block():
     assert 'diagnostics-brick/figures/D2_astrometry_internal.pdf' in html
     assert 'internal astrometric repeatability' in html
     assert 'full diagnostic writeup' in html
+
+
+# --------------------------------------------------------------------------
+# Review fixes
+# --------------------------------------------------------------------------
+
+def test_mid_size_log_is_not_blind_between_head_and_tail(tmp_path):
+    """The band 8 kB < size <= 8 kB + 400 kB used to be scanned for its first
+    8 kB only, with the tail branch skipped entirely -- 60% of the real log
+    directory, and where the F150W2 PSF failure sits, so a dead run read green.
+    """
+    log = tmp_path / 'catalog_m41979-o002-cut5-F150W2_1_0.out'
+    filler = 'manual [m12]: fitting frames with 8 parallel workers\n'
+    body = (filler * 3000                                   # ~150 kB of noise
+            + 'ValueError: Failed to download PSF after 11 attempts\n'
+            + filler * 100)
+    log.write_text(body)
+    size = log.stat().st_size
+    assert jobs.HEAD_BYTES < size <= jobs.HEAD_BYTES + jobs.TAIL_BYTES, size
+    # the error sits well past the head window
+    assert body.index('Failed to download PSF') > jobs.HEAD_BYTES
+
+    got = jobs.scan_log(str(log))
+    assert got['worst'] == 'error'
+    assert 'psf-build' in got['hits']
+
+
+def test_huge_log_still_reads_head_and_tail_only(tmp_path):
+    """Above the band the file must NOT be slurped whole -- these reach GB."""
+    log = tmp_path / 'catalog_x_1_0.out'
+    head = 'CATALOG start: brick\n'
+    middle = 'x' * (jobs.HEAD_BYTES + jobs.TAIL_BYTES + 50_000)
+    log.write_text(head + 'Traceback (most recent call last)\n' + middle
+                   + '\nCATALOG done: filter=F212N rc=0\n')
+    got = jobs.scan_log(str(log))
+    assert 'start' in got['hits'] and 'done' in got['hits']
+
+
+def test_logs_pin_on_proposal_not_just_observation():
+    """ngc6334 is [('6778','001'), ('7213','001')] -- two proposals, one obsid,
+    so pinning on obsid alone puts 6778's failures on 7213's card."""
+    log = 'catalog_ngc63346778-o001-cut5-F182M_1_0.out'
+    assert jobs.log_belongs_to(log, 'ngc6334', '001', '6778')
+    assert not jobs.log_belongs_to(log, 'ngc6334', '001', '7213')
+
+
+def test_unglobbed_observation_cannot_make_a_filter_ambiguous():
+    """wd1 registers o001 and o003 with identical filter lists but globs only
+    001; counting o003 flagged all 11 filters on the largest field."""
+    assert scan.shared_filters('wd1') == set()
+    # the genuinely shared cases still fire
+    assert scan.shared_filters('ngc6334') == {'F200W', 'F470N'}
+    assert scan.shared_filters('gc2211') == {'F150W', 'F200W', 'F277W'}
+
+
+def test_unpinned_provenance_is_marked_ambiguous_not_asserted_as_fail():
+    """Every other unpinned count is marked ambiguous; this one used to be the
+    single unpinned number that still asserted a failure."""
+    run = _run(multi_obs=True,
+               provenance={'m7': {'tags': {'a': 3, 'b': 2}, 'n_sidecars': 5,
+                                  'n_distinct': 2, 'n_dirty': 0,
+                                  'scope': 'ambiguous'}})
+    bad = [v for v in checks.check_provenance(run) if 'mixed' in v['name']]
+    assert bad and bad[0]['severity'] == 'warn'
+    assert 'unattributed' in bad[0]['summary']
+    # a single-observation field still fails
+    run = _run(provenance={'m7': {'tags': {'a': 3, 'b': 2}, 'n_sidecars': 5,
+                                  'n_distinct': 2, 'n_dirty': 0, 'scope': 'obs'}})
+    assert [v for v in checks.check_provenance(run)
+            if 'mixed' in v['name']][0]['severity'] == 'fail'
+
+
+def test_edge_attribution_uses_the_actual_grid_not_a_hard_coded_six():
+    """On a non-6x6 grid a hard-coded edge inverts the edge-vs-interior
+    attribution, which is what the evidence block is selling."""
+    # 4x4 grid, the over-tolerance cells all on its real edge (ix or iy in 0,3)
+    cells = [{'ix': i % 4, 'iy': i // 4, 'off_mas': 2.0} for i in range(16)]
+    for c in cells:
+        if c['ix'] in (0, 3) or c['iy'] in (0, 3):
+            c['off_mas'] = 40.0
+    run = _run(astrometry={'F212N': {
+        'n_exposures': 4, 'n_misaligned': 0, 'attributable': True, 'mtime': 1,
+        'path': '/x/c.json',
+        'visits': [_visit(worst_tile_mas=40.0, cells=cells)]}})
+    v = [x for x in checks.check_astrometry(run) if 'worst-tile' in x['name']][0]
+    assert 'on the mosaic EDGE' in v['cause']
+
+
+def test_publish_refuses_to_link_a_path_onto_itself(tmp_path):
+    """publish(outdir, outdir) used to remove the page and symlink it to itself."""
+    from jwst_gc_pipeline.monitoring import report
+    out = tmp_path / 'out'
+    os.makedirs(out)
+    (out / 'monitor.html').write_text('page')
+    linked = report.publish(str(out), str(out))
+    assert linked['monitor.html'] == 'same'
+    assert (out / 'monitor.html').read_text() == 'page'
+    assert not os.path.islink(out / 'monitor.html')
+
+
+def test_no_numeric_gate_literals_in_the_rendered_page_or_checks():
+    """The page's footer claims it cannot drift from the gates it reports.
+
+    test_thresholds_are_imported_not_copied asserts identity for three constants
+    but does not scan for literals, which is how two inlined paper gates (`> 10`,
+    `> 30`) passed CI while the footer said otherwise.
+    """
+    import inspect
+    import re as _re
+    from jwst_gc_pipeline.monitoring import render as _render
+    banned = {'10', '30', '15', '5', '0.10', '0.05', '2.0', '100'}
+    offenders = []
+    for mod in (_render,):
+        for line in inspect.getsource(mod).splitlines():
+            if line.lstrip().startswith('#') or '"""' in line:
+                continue
+            for m in _re.finditer(r'[<>]\s*=?\s*([\d.]+)\b', line):
+                if m.group(1) in banned:
+                    offenders.append(line.strip()[:90])
+    assert not offenders, 'numeric gate literals in render: ' + '; '.join(offenders)
+
+
+def test_paper_gates_are_read_from_the_paper_not_retyped(tmp_path):
+    from jwst_gc_pipeline.monitoring import paper
+    scripts = tmp_path / 'scripts'
+    os.makedirs(scripts)
+    (scripts / 'post_recat_validation.py').write_text(
+        'MODE_FLIP_TOL_MAS = 7.5\n'
+        'if rec["vs_anchor"]["off"] > 25:\n    pass\n')
+    got = paper.gate_values(str(tmp_path))
+    assert got['mode_flip_tol_mas'] == 7.5
+    assert got['anchor_tol_mas'] == 25.0
+    assert got['source'] == 'post_recat_validation.py'
+
+
+def test_paper_gates_fall_back_and_say_so(tmp_path):
+    """A page that silently invented a threshold would be worse than one quoting
+    the documented value and admitting it."""
+    from jwst_gc_pipeline.monitoring import paper
+    got = paper.gate_values(str(tmp_path / 'nope'))
+    assert got['source'] == 'defaults'
+    assert got['mode_flip_tol_mas'] == 10.0
+
+
+@pytest.mark.parametrize('present,expect', [
+    (('m3', 'm4', 'm5', 'm6', 'm7'), ['m12']),
+    (('m4', 'm5', 'm6', 'm7'), ['m12', 'm3']),
+    (('m7',), ['m12', 'm3', 'm4', 'm5', 'm6']),
+    (('m12', 'm4', 'm5', 'm6', 'm7'), ['m3']),
+    (('m12', 'm3', 'm4', 'm5', 'm6', 'm7'), []),
+])
+def test_ladder_gap_sees_a_missing_first_phase(present, expect):
+    """Anchoring on the FIRST present phase made the cleanest instance of this
+    check -- m12 absent, everything above it present -- silent."""
+    rows = {p: {'n': 1 if p in present else 0}
+            for p in ('m12', 'm3', 'm4', 'm5', 'm6', 'm7')}
+    rows['crf'] = {'n': 0}
+    rows['reduced'] = {'n': 0}
+    got = [v for v in checks.check_products(_run(per_filter={'F212N': rows}))
+           if v['name'] == 'ladder-gap-F212N']
+    if not expect:
+        assert not got
+    else:
+        assert got and all(p in got[0]['summary'] for p in expect)

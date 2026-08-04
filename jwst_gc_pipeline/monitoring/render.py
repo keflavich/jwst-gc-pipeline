@@ -691,7 +691,7 @@ def _cutouts_block(cutouts):
         return ''
     rows = []
     for cut in sorted(cutouts, key=lambda c: (c['target'], c['label'])):
-        filters = ' '.join(f'{k}:{v}' for k, v in sorted(cut['filters'].items()))
+        filters = ' '.join(f'{esc(k)}:{v}' for k, v in sorted(cut['filters'].items()))
         flags = []
         if cut.get('n_empty'):
             flags.append(f'<span class="gcm-chip fail">{cut["n_empty"]} zero-byte'
@@ -736,6 +736,12 @@ def _paper_block(summary):
     if not bands:
         return '<p class="gcm-empty">No per-band validation records.</p>'
     fresh = {f'{r["program"]}/{r["band"]}': r for r in summary.get('freshness') or []}
+    # The paper's gates, read from the paper -- not retyped here.  The footer
+    # claims this page cannot drift from the gates it reports; two inline
+    # literals were the exception that made the claim false.
+    from .paper import gate_values
+    gates = gate_values()
+    flip_tol, anchor_tol = gates['mode_flip_tol_mas'], gates['anchor_tol_mas']
     rows = []
     for key in sorted(bands):
         rec = bands[key]
@@ -756,8 +762,8 @@ def _paper_block(summary):
 <td class="n">{'—' if rec.get('vs_virac_p60') is None else f"{rec['vs_virac_p60']:.1f}"}</td>
 <td class="n">{'—' if rec.get('vs_virac_p90') is None else f"{rec['vs_virac_p90']:.1f}"}</td>
 <td class="n">{'—' if rec.get('contrast_p60') is None else f"{rec['contrast_p60']:.0f}"}</td>
-<td class="n" style="{'color:var(--fail);font-weight:600' if (flip or 0) > 10 else ''}">{'—' if flip is None else f'{flip:.1f}'}</td>
-<td class="n" style="{'color:var(--fail);font-weight:600' if (anchor or 0) > 30 else ''}">{'—' if anchor is None else f'{anchor:.1f}'}</td>
+<td class="n" style="{'color:var(--fail);font-weight:600' if (flip or 0) > flip_tol else ''}">{'—' if flip is None else f'{flip:.1f}'}</td>
+<td class="n" style="{'color:var(--fail);font-weight:600' if (anchor or 0) > anchor_tol else ''}">{'—' if anchor is None else f'{anchor:.1f}'}</td>
 <td class="z">{esc((rec.get('mtime') or '')[:16])}</td>
 <td style="white-space:normal">{''.join(flags)}</td></tr>""")
 
@@ -769,8 +775,9 @@ def _paper_block(summary):
 <p class="gcm-note" style="margin:.2rem 0 .5rem">
   From <code>{esc(os.path.basename(summary.get('postrecat_dir') or ''))}/summary.json</code>,
   written {esc(str(generated)[:16])} by the paper's own
-  <code>post_recat_validation.py</code>. Its gates (vs-anchor &gt; 30 mas, mode flip
-  &gt; 10 mas, degenerate-pair drift ≥ 0.10 mag) are applied there, with the
+  <code>post_recat_validation.py</code>. Its gates (vs-anchor &gt; {anchor_tol:g} mas,
+  mode flip &gt; {flip_tol:g} mas, degenerate-pair drift ≥ {gates['continuity_tol_mag']:g} mag)
+  are applied there, with the
   sanctioned window-swept offset histogram over the full vetted catalogs —
   nothing on this page recomputes them.</p>
 <div class="gcm-scroll"><table class="gcm-t">

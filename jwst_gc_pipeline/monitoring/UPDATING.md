@@ -46,7 +46,11 @@ of `/orange` and `/blue` and does not need a login shell.
 
 ### Walltime
 
-A cold scan of the whole archive takes **5–10 minutes** (NFS metadata, plus a
+A cold scan of the whole archive took **14 m 17 s wall / 6.4 s user** when
+measured on a cold NFS metadata cache — essentially all of it directory-listing
+latency, not computation. A warm one is ~25 s. **Do not set the interval below
+the cold-start cost**; hourly leaves ample margin. Earlier drafts of this file
+said 5–10 minutes, which was a warm-ish measurement (NFS metadata, plus a
 bounded sample of FITS headers per filter); a warm one takes **~25 s**. The
 40-minute walltime above is deliberate headroom — a scan killed part-way through
 writing would leave a truncated page, and because the served copies are

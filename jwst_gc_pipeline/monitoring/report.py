@@ -75,8 +75,9 @@ def build_entries(targets=None, instrument='nircam', cutout_label=None,
             if with_logs:
                 # Scoped to the observation: a gc2211 o050 crash must not be
                 # reported against o023, which shares only the field name.
-                for path in _jobs.logs_for_target(target, log_dir=log_dir,
-                                                  limit=8, obsid=run['obsid']):
+                for path in _jobs.logs_for_target(
+                        target, log_dir=log_dir, limit=8,
+                        obsid=run['obsid'], proposal=run['proposal']):
                     got = _jobs.scan_log(path)
                     if got:
                         log_scans.append(got)
@@ -84,8 +85,11 @@ def build_entries(targets=None, instrument='nircam', cutout_label=None,
             # that does not (the older 'brick-catalog' shape) is shown on every
             # observation of the field, marked by its name_kind, rather than
             # pinned to an observation it may not belong to.
+            # Same pin as the logs: obsid alone puts ngc6334's 6778 jobs on the
+            # 7213 card, since both observations are o001.
             mine = [j for j in target_jobs
-                    if j.get('obsid') in (None, run['obsid'])]
+                    if j.get('obsid') in (None, run['obsid'])
+                    and j.get('proposal') in (None, run['proposal'])]
             verdicts = checks.run_checks(run, mine, log_scans, paper_summary)
             # Offer the diagnostics that already exist for this field, preferring
             # ones whose filename names the finding's filter.
@@ -213,6 +217,10 @@ def _link(src, dst):
     (``open(path, 'w')``), which keeps the inode -- so the published copy tracks
     every regeneration with no second copy and no re-publish step.
     """
+    # Publishing into the output directory itself would remove the page and then
+    # symlink it to itself -- a one-character scrontab typo losing the report.
+    if os.path.realpath(src) == os.path.realpath(dst):
+        return 'same'
     try:
         if os.path.lexists(dst):
             os.remove(dst)

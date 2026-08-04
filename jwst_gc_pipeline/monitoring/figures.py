@@ -20,7 +20,18 @@ Coverage is uneven and that is reported rather than hidden: brick has ~1250
 figures, gc2211 has none.  A field with no diagnostics says so.
 """
 import glob
+import html
 import os
+
+
+def _esc(text):
+    """Escape a value bound into SVG markup.
+
+    Detector names and visit ids are internal provenance strings, so this is
+    hygiene rather than exposure -- but everything else in the package routes
+    through an escape, and one unescaped path is how that stops being true.
+    """
+    return html.escape('' if text is None else str(text), quote=True)
 
 #: Directories under a field that hold diagnostic imagery, most specific first.
 FIGURE_DIRS = ('astrometry_diag', 'audit_plots', 'figures', 'pngs',
@@ -289,11 +300,12 @@ def quiver_svg(exposures, size=190, scale_mas=None):
             f'<line x1="{half}" y1="{half}" x2="{x:.1f}" y2="{y:.1f}" '
             f'stroke="{colour}" stroke-width="1.1" opacity="0.95"/>'
             f'<circle cx="{x:.1f}" cy="{y:.1f}" r="1.7" fill="{colour}" '
-            f'opacity="0.95"><title>{e.get("detector") or "?"} '
-            f'visit {e.get("visit")}: dRA {e["dra"]:.1f}, dDec {e["ddec"]:.1f} mas'
-            f'</title></circle>')
+            f'opacity="0.95"><title>{_esc(e.get("detector") or "?")} '
+            f'visit {_esc(e.get("visit"))}: dRA {e["dra"]:.1f}, '
+            f'dDec {e["ddec"]:.1f} mas</title></circle>')
     legend = ' '.join(
-        f'<tspan fill="hsl({hues[d]} 60% 45%)">{d}</tspan>' for d in detectors[:8])
+        f'<tspan fill="hsl({hues[d]} 60% 45%)">{_esc(d)}</tspan>'
+        for d in detectors[:8])
     parts.append(f'<text x="4" y="{size - 4}" font-size="8" '
                  f'font-family="ui-monospace,monospace">{legend}</text>')
     parts.append(f'<text x="4" y="11" font-size="8" fill="rgba(128,140,148,.9)" '

@@ -49,9 +49,11 @@ _REDUCED_SUFFIXES = ('destreak', 'align')
 #: missing is itself a finding.
 CATALOG_PHASES = ('m12', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8')
 
-#: Stages whose per-filter product is written with ``resbgsub`` in the name (the
-#: residual-background-subtracted iteration); m3/m4 predate it.
-_RESBGSUB_FROM = 'm5'
+#: Phases whose per-filter product is written with ``resbgsub`` in the name (the
+#: residual-background-subtracted iteration); m3/m4 predate it.  An explicit set,
+#: not a ``>= 'm5'`` compare -- that is lexicographic over phase NAMES, so a
+#: future ``m10`` would sort below ``m5`` and silently lose its bg token.
+_RESBGSUB_PHASES = frozenset({'m5', 'm6', 'm7', 'm8'})
 
 
 class ScanError(ValueError):
@@ -172,6 +174,14 @@ def shared_filters(target, instrument='nircam'):
         # list).  Expanding them is the whole point: those five observations all
         # write F150W catalogs into one directory under one name.
         for obsid in obs.obsids.get(instrument, ()):
+            # An observation the reduction never globs cannot have written a
+            # catalog, so it cannot make one ambiguous.  wd1 registers o001 and
+            # o003 with identical filter lists but globs only 001; counting o003
+            # flags all 11 of its filters, and crying wolf on the largest field
+            # trains the reader past the marker that protects cloudef, gc2211
+            # and ngc6334.
+            if not is_globbed(target, obs.proposal, obsid, instrument):
+                continue
             token = (obs.proposal, obsid)
             for filt in obs.filters:
                 key = filt.upper()
@@ -379,7 +389,7 @@ def _catalog_phase_patterns(catdir, filt):
     for phase in CATALOG_PHASES:
         if phase == 'm8':
             continue                      # m8 is cross-band only, handled separately
-        bg = 'resbgsub_' if phase >= _RESBGSUB_FROM else ''
+        bg = 'resbgsub_' if phase in _RESBGSUB_PHASES else ''
         out[phase] = os.path.join(
             catdir, f'{low}_*_indivexp_merged_{bg}{phase.replace("m12", "m2")}_dao_basic.fits')
     return out
@@ -675,7 +685,7 @@ def frame_provenance(base, filt, proposal, obsid, each_suffix_variant=None,
 # Provenance
 # --------------------------------------------------------------------------
 
-def provenance(base, phases=('m7', 'm8')):
+def provenance(base, phases=('m7', 'm8'), multi_obs=False):
     """Pipeline tags recorded in the ``*.prov.json`` sidecars, per phase.
 
     Every stage output carries a sidecar naming the pipeline tag that produced
@@ -704,7 +714,12 @@ def provenance(base, phases=('m7', 'm8')):
                 dirty += 1
         if tags:
             out[phase] = {'tags': dict(tags), 'n_sidecars': sum(tags.values()),
-                          'n_dirty': dirty, 'n_distinct': len(tags)}
+                          'n_dirty': dirty, 'n_distinct': len(tags),
+                          # Sidecars are globbed without an observation pin --
+                          # the per-filter names carry none.  Marked like every
+                          # other unpinned count rather than being the one
+                          # unpinned number that still asserts a failure.
+                          'scope': 'ambiguous' if multi_obs else 'obs'}
     return out
 
 
@@ -836,7 +851,7 @@ def scan_observation(target, proposal, obsid, instrument='nircam',
         'headers': headers,
         'crossband': _crossband_stages(base, proposal, obsid),
         'astrometry': astrometry_checkpoints(base, use, ambiguous_filters),
-        'provenance': provenance(base),
+        'provenance': provenance(base, multi_obs=multi_obs),
     }
 
 
