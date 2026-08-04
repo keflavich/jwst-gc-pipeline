@@ -492,60 +492,6 @@ def check_products(run):
                     'stale and predates a rerun that has not reached it yet.',
                     value=len(holes), threshold=0, source='catalogs/'))
 
-        # Saturated stars: all-rejected is NOT the same as none-present.  A filter
-        # whose current stage produced zero satstar catalogs but many rejected
-        # files still ships saturated photometry -- carried over from an earlier
-        # stage -- so the product mixes generations.  Measured on brick: F405N and
-        # F410M have 0 catalogs / 48 rejected each while the m8 merge reports
-        # thousands of replaced_saturated rows.
-        sat = rows.get('satstar_frames') or {}
-        if sat.get('rejected') and not sat.get('accepted'):
-            out.append(_verdict(
-                f'satstar-all-rejected-{filt}', 'fail',
-                f'{filt}: 0 satstar catalogs but {sat["rejected"]} rejected frames',
-                'Every saturated-star fit at this stage was rejected, so any '
-                'saturated photometry in the merged catalog came from an earlier '
-                'stage and the shipped product mixes generations. A '
-                'present/absent count of satstar products cannot see this.',
-                value=0, threshold=sat['rejected'],
-                source=f'{filt}/pipeline/*_satstar_{{catalog,rejected}}.fits',
-                cause=(
-                    'Every saturated-star fit was rejected at this stage — usually '
-                    'a too-tight gate (wing-fit tolerance, core radius, or a PSF '
-                    'model that does not match the saturated profile). Because the '
-                    'merge falls back to whatever satstar products already existed, '
-                    'the shipped catalog keeps the OLD generation and looks '
-                    'complete. Compare replaced_saturated counts in the merged '
-                    'catalog against these zeros before trusting bright-end '
-                    'photometry.'),
-                evidence={'rows': {
-                    'columns': ['satstar product', 'count'],
-                    'data': [['accepted catalogs', sat.get('accepted', 0)],
-                             ['rejected', sat.get('rejected', 0)],
-                             ['wingcal calibrators', sat.get('wingcal', 0)]],
-                    'total': 3}}))
-
-        # a later cataloging phase present while an earlier one is absent
-        seen = [(p, (rows.get(p) or {}).get('n', 0))
-                for p in ('m12', 'm3', 'm4', 'm5', 'm6', 'm7')]
-        present = [p for p, n in seen if n]
-        if present:
-            first = seen.index((present[0], dict(seen)[present[0]]))
-            gaps = [p for p, n in seen[first:] if not n and p != present[-1]]
-            holes = [p for p in gaps if any(
-                n for q, n in seen if q in ('m12', 'm3', 'm4', 'm5', 'm6', 'm7')
-                and ('m12', 'm3', 'm4', 'm5', 'm6', 'm7').index(q) >
-                ('m12', 'm3', 'm4', 'm5', 'm6', 'm7').index(p))]
-            if holes:
-                out.append(_verdict(
-                    f'ladder-gap-{filt}', 'warn',
-                    f'{filt}: phase(s) {", ".join(holes)} missing below a phase '
-                    f'that ran',
-                    'A later merge exists without its input phase on disk. Either '
-                    'the intermediate was cleaned up, or the later product is stale '
-                    'and predates a rerun.',
-                    source='catalogs/'))
-
     # One verdict for the whole run, not one per filter x phase: on a field like
     # gc2211 that would be ~30 identical rows and bury everything else.
     shared = [f for f in sorted(per_filter)
@@ -923,8 +869,28 @@ def run_checks(run, jobs_for_target=(), log_scans=(), paper_summary=None):
                 + check_paper(run, paper_summary)
                 + check_jobs(run, list(jobs_for_target), list(log_scans)))
     order = {s: i for i, s in enumerate(SEVERITIES)}
-    verdicts.sort(key=lambda v: (order.get(v['severity'], 9), v['name']))
+    verdicts.sort(key=lambda v: (order.get(v['severity'], 9),
+                                 _rank(v['name']), v['name']))
     return verdicts
+
+
+#: Findings that gate a RELEASE sort ahead of per-filter diagnostics of the same
+#: severity.  Sorting by name alone put "image and catalog must come from the same
+#: run" at position 14 of 14 on the flagship field -- last line of the longest
+#: list -- because 'p' sorts after 'a'.  Severity ordering alone cannot express
+#: "this one is about shipping".
+_PRIORITY_PREFIXES = ('paper-problem', 'paper-verdict-outdated',
+                      'paper-catalog-missing', 'provenance-mixed',
+                      'provenance-dirty', 'unreduced', 'satstar-all-rejected',
+                      'filteroffset-module-mismatch', 'crds-context-mixed')
+
+
+def _rank(name):
+    """Sort rank within a severity: release-gating findings first."""
+    for i, prefix in enumerate(_PRIORITY_PREFIXES):
+        if name.startswith(prefix):
+            return i
+    return len(_PRIORITY_PREFIXES)
 
 
 def worst_severity(verdicts):

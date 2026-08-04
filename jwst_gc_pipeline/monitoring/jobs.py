@@ -291,12 +291,15 @@ def scan_log(path, tail_bytes=TAIL_BYTES, head_bytes=HEAD_BYTES):
     try:
         with open(path, 'rb') as fh:
             if size <= head_bytes + tail_bytes:
+                # Bounded read, not fh.read(): `size` came from an earlier stat,
+                # so an appending writer would otherwise decide how much is
+                # pulled in.  Identical for a static file.
                 # Small enough to read whole.  The previous form read only the
                 # head here and skipped the tail entirely, leaving every log
                 # between head_bytes and head_bytes+tail_bytes scanned for just
                 # its first 8 kB -- 60% of this log directory, and the band the
                 # F150W2 PSF-grid failure falls in, so a dead run reported green.
-                chunks.append(fh.read())
+                chunks.append(fh.read(head_bytes + tail_bytes))
             else:
                 chunks.append(fh.read(head_bytes))
                 fh.seek(-tail_bytes, os.SEEK_END)

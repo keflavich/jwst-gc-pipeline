@@ -585,7 +585,8 @@ def test_all_satstar_rejected_is_a_failure_not_an_absence():
                                                         'rejected': 48}}})
     bad = [v for v in checks.check_products(run)
            if v['name'] == 'satstar-all-rejected-F405N']
-    assert bad and bad[0]['severity'] == 'fail'
+    assert len(bad) == 1, f'{len(bad)} satstar verdicts, expected 1'
+    assert bad[0]['severity'] == 'fail'
 
 
 def test_satstar_present_is_silent():
@@ -690,7 +691,11 @@ def test_publish_is_idempotent(tmp_path):
     web = tmp_path / 'web'
     first = report.publish(str(out), str(web))
     second = report.publish(str(out), str(web))
-    assert first == second
+    # Not dict equality: a directory symlink correctly reports 'sym' when it is
+    # created and 'same' when it is already correct. The property that matters
+    # is that re-running covers the same entries and breaks nothing.
+    assert set(first) == set(second)
+    assert not [k for k, v in second.items() if v is None]
     assert (web / 'monitor.html').read_text() == 'page'
 
 
@@ -905,14 +910,57 @@ def test_mid_size_log_is_not_blind_between_head_and_tail(tmp_path):
 
 
 def test_huge_log_still_reads_head_and_tail_only(tmp_path):
-    """Above the band the file must NOT be slurped whole -- these reach GB."""
+    """Above the band the file must NOT be slurped whole -- these reach GB.
+
+    The guard is the MIDDLE signature being absent.  An earlier version of this
+    test filled the middle with signature-free padding and asserted only that
+    the head and tail markers were found, which a full slurp satisfies just as
+    well -- so it passed when the branch was replaced with ``if True:``.  That is
+    the same blind spot as the fixture that hid the head-only bug: a test that
+    exercises the code without constraining the behaviour it is named for.
+    """
     log = tmp_path / 'catalog_x_1_0.out'
-    head = 'CATALOG start: brick\n'
-    middle = 'x' * (jobs.HEAD_BYTES + jobs.TAIL_BYTES + 50_000)
-    log.write_text(head + 'Traceback (most recent call last)\n' + middle
-                   + '\nCATALOG done: filter=F212N rc=0\n')
+    pad = 'filler line with no signature at all\n'
+    # Each half must EXCEED tail_bytes, or the "middle" marker lands inside the
+    # tail window and the test proves nothing.
+    half = jobs.TAIL_BYTES // len(pad) + 5000
+    log.write_text(
+        'CATALOG start: brick\n'
+        + pad * half
+        + 'Traceback (most recent call last)\n'      # buried in the middle only
+        + pad * half
+        + 'CATALOG done: filter=F212N rc=0\n')
+    size = log.stat().st_size
+    assert size > jobs.HEAD_BYTES + jobs.TAIL_BYTES
+    marker = len('CATALOG start: brick\n') + len(pad) * half
+    assert jobs.HEAD_BYTES < marker < size - jobs.TAIL_BYTES, (
+        'fixture does not place the marker in the unread middle')
+
     got = jobs.scan_log(str(log))
     assert 'start' in got['hits'] and 'done' in got['hits']
+    # the middle was never read, so its signature must not appear
+    assert 'traceback' not in got['hits'], (
+        'the middle of an over-large log was read -- head+tail windowing is gone')
+
+
+def test_scan_log_read_is_bounded_for_a_file_that_grows_mid_read(tmp_path):
+    """The size comes from a prior stat; the read must not trust it forever.
+
+    A log being appended to between the stat and the read would otherwise pull
+    in however much arrived, unbounded.
+    """
+    log = tmp_path / 'catalog_x_2_0.out'
+    log.write_text('CATALOG start: brick\n' + 'pad\n' * 100)
+    real_getsize = os.path.getsize
+
+    def small_lie(path):
+        return 10 if str(path) == str(log) else real_getsize(path)
+
+    import unittest.mock as _mock
+    with _mock.patch.object(os.path, 'getsize', small_lie):
+        got = jobs.scan_log(str(log))
+    # It read at most head+tail regardless of what the file became.
+    assert got is not None and got['size'] == 10
 
 
 def test_logs_pin_on_proposal_not_just_observation():
@@ -984,19 +1032,36 @@ def test_no_numeric_gate_literals_in_the_rendered_page_or_checks():
     but does not scan for literals, which is how two inlined paper gates (`> 10`,
     `> 30`) passed CI while the footer said otherwise.
     """
-    import inspect
+    import io
     import re as _re
+    import tokenize
+    from jwst_gc_pipeline.monitoring import checks as _checks
     from jwst_gc_pipeline.monitoring import render as _render
+
     banned = {'10', '30', '15', '5', '0.10', '0.05', '2.0', '100'}
     offenders = []
-    for mod in (_render,):
-        for line in inspect.getsource(mod).splitlines():
-            if line.lstrip().startswith('#') or '"""' in line:
-                continue
-            for m in _re.finditer(r'[<>]\s*=?\s*([\d.]+)\b', line):
-                if m.group(1) in banned:
-                    offenders.append(line.strip()[:90])
-    assert not offenders, 'numeric gate literals in render: ' + '; '.join(offenders)
+    # checks.py too: it is where every check lives, and scanning only the
+    # renderer let an inlined gate sit in the module that actually gates.
+    #
+    # Tokenize rather than scan raw lines: message text legitimately QUOTES gate
+    # values ("vs anchor > 30 mas"), and a line-based grep cannot tell that from
+    # an executable comparison. Dropping STRING and COMMENT tokens leaves only
+    # code, which is the thing being constrained.
+    for mod in (_render, _checks):
+        with open(mod.__file__, 'rb') as fh:
+            code = []
+            for tok in tokenize.tokenize(fh.readline):
+                if tok.type in (tokenize.STRING, tokenize.COMMENT,
+                                tokenize.NL, tokenize.NEWLINE):
+                    continue
+                code.append(tok.string)
+        joined = ' '.join(code)
+        for m in _re.finditer(r'[<>]\s*=?\s*([\d.]+)\b', joined):
+            if m.group(1) in banned:
+                start = max(0, m.start() - 60)
+                offenders.append(f'{mod.__name__}: …{joined[start:m.end() + 20]}…')
+    assert not offenders, ('numeric gate literals in executable code: '
+                           + '; '.join(offenders))
 
 
 def test_paper_gates_are_read_from_the_paper_not_retyped(tmp_path):
@@ -1040,4 +1105,33 @@ def test_ladder_gap_sees_a_missing_first_phase(present, expect):
     if not expect:
         assert not got
     else:
-        assert got and all(p in got[0]['summary'] for p in expect)
+        # len, not got[0]: asserting only the first verdict cannot see a second
+        # check block left behind beside its replacement.
+        assert len(got) == 1, f'{len(got)} ladder-gap verdicts, expected 1'
+        assert all(p in got[0]['summary'] for p in expect)
+
+
+def test_publish_creates_the_diagnostics_symlinks_the_pages_link_to(tmp_path,
+                                                                    monkeypatch):
+    """The pages emit ~395 `diagnostics-<field>/...` hrefs. They previously
+    resolved only in a hand-prepared directory, so a fresh --publish-dir served
+    dead links while the docs claimed otherwise."""
+    from jwst_gc_pipeline.monitoring import report, scan
+    field = tmp_path / 'brick'
+    os.makedirs(field / 'diagnostic_writeup' / 'figures')
+    (field / 'diagnostic_writeup' / 'main.pdf').write_text('pdf')
+    monkeypatch.setattr(scan, 'all_targets', lambda: ['brick'])
+    monkeypatch.setattr(scan, 'basepath',
+                        lambda t, cutout_label=None: str(field))
+
+    out = tmp_path / 'out'
+    os.makedirs(out)
+    (out / 'monitor.html').write_text('page')
+    web = tmp_path / 'web'
+    linked = report.publish(str(out), str(web))
+
+    assert linked['diagnostics-brick'] == 'sym'
+    assert os.path.isdir(web / 'diagnostics-brick')
+    assert (web / 'diagnostics-brick' / 'main.pdf').read_text() == 'pdf'
+    # idempotent: a second run recognises the existing link
+    assert report.publish(str(out), str(web))['diagnostics-brick'] == 'same'

@@ -761,7 +761,7 @@ def _paper_block(summary):
 <td class="filt">{esc(key)}</td>
 <td class="n">{'—' if rec.get('vs_virac_p60') is None else f"{rec['vs_virac_p60']:.1f}"}</td>
 <td class="n">{'—' if rec.get('vs_virac_p90') is None else f"{rec['vs_virac_p90']:.1f}"}</td>
-<td class="n">{'—' if rec.get('contrast_p60') is None else f"{rec['contrast_p60']:.0f}"}</td>
+<td class="n">{'—' if rec.get('contrast_p60') is None else f"{rec['contrast_p60']:.2f}"}</td>
 <td class="n" style="{'color:var(--fail);font-weight:600' if (flip or 0) > flip_tol else ''}">{'—' if flip is None else f'{flip:.1f}'}</td>
 <td class="n" style="{'color:var(--fail);font-weight:600' if (anchor or 0) > anchor_tol else ''}">{'—' if anchor is None else f'{anchor:.1f}'}</td>
 <td class="z">{esc((rec.get('mtime') or '')[:16])}</td>

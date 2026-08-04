@@ -280,6 +280,33 @@ def publish(outdir, publish_dir, index_from='monitor.html'):
                 os.path.join(figdir, name),
                 os.path.join(publish_dir, 'figures', name))
 
+    # The diagnostic-writeup symlinks the pages link into.  These previously
+    # existed only in the live web directory, made out of band, so a fresh
+    # --publish-dir had ~395 dead `diagnostics-<field>/...` links while the docs
+    # said they resolved with no extra step.  Creating them here makes that true.
+    for target in scan.all_targets():
+        try:
+            wu_dir = os.path.join(scan.basepath(target), _figures.WRITEUP_DIR)
+        except scan.ScanError:
+            continue
+        if not os.path.isdir(wu_dir):
+            continue
+        link = os.path.join(publish_dir, f'diagnostics-{target}')
+        if os.path.islink(link) or os.path.exists(link):
+            try:
+                if os.path.realpath(link) == os.path.realpath(wu_dir):
+                    done[f'diagnostics-{target}'] = 'same'
+                    continue
+                os.remove(link)
+            except OSError:
+                continue
+        try:
+            # A directory cannot be hardlinked, so this one is always a symlink.
+            os.symlink(os.path.abspath(wu_dir), link)
+            done[f'diagnostics-{target}'] = 'sym'
+        except OSError:
+            done[f'diagnostics-{target}'] = None
+
     src_index = os.path.join(outdir, index_from)
     if os.path.exists(src_index):
         done['index.html'] = _link(src_index, os.path.join(publish_dir, 'index.html'))

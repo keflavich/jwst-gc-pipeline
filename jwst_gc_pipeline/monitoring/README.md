@@ -114,8 +114,7 @@ These are not stylistic choices; each one is a bug the monitor must not have.
 `REFERENCE_CROSSCHECK_GROSS_MAS`, `DEFAULT_MIN_CONTRAST` all come from
 `visit_consensus` / `astrometry_checkpoint` / `astrometry_offsets`. A monitor
 carrying its own copy of “5 mas” drifts away from the gate it claims to watch and
-then reports green on a run the pipeline would have refused. The one
-two monitor-owned numbers — `CONSENSUS_SCATTER_WARN_MAS` and
+then reports green on a run the pipeline would have refused. The two monitor-owned numbers — `CONSENSUS_SCATTER_WARN_MAS` and
 `PAPER_VERDICT_AGE_WARN_DAYS` — are each labelled in the page as monitor
 heuristics, not pipeline gates. A test greps the renderer for numeric gate
 literals, because asserting identity for a few imported constants does not stop
