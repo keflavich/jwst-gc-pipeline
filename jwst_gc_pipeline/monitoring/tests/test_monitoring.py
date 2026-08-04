@@ -1292,6 +1292,21 @@ def test_cross_filesystem_publish_copies_rather_than_symlinks(tmp_path,
     assert dst.read_bytes() == b'\x89PNG-data'
 
 
+def test_fragment_stays_whole_while_the_page_set_splits(tmp_path, monkeypatch):
+    """The fragment is published as a single-file artifact: `fields/x.html` is
+    not a document that exists there, so a card linking to one would 404."""
+    from jwst_gc_pipeline.monitoring import report
+    monkeypatch.setattr(report, 'build_entries',
+                        lambda *a, **kw: ([_entry()], []))
+    monkeypatch.setattr(report, 'collect_cutouts', lambda *a, **kw: [])
+    out = report.write_report(outdir=str(tmp_path), per_field=True)
+
+    aggregate = open(out['aggregate']).read()
+    fragment = open(out['fragment']).read()
+    assert 'href="fields/' in aggregate and '<h2>Detail</h2>' not in aggregate
+    assert 'href="fields/' not in fragment and '<h2>Detail</h2>' in fragment
+
+
 def test_an_existing_symlink_is_replaced_by_a_copy(tmp_path, monkeypatch):
     """A symlink to src resolves to src, so the 'same file, nothing to do' guard
     matched it and left it in place — the switch from symlinking to copying then

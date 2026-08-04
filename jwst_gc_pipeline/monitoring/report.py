@@ -194,7 +194,14 @@ def write_report(outdir=DEFAULT_OUTDIR, targets=None, instrument='nircam',
                  detail_href=detail_href if per_field else None)
 
     render.write_html(aggregate, render.render_page(standalone=True, **front))
-    render.write_html(fragment, render.render_page(standalone=False, **front))
+
+    # The fragment is published as a single-file artifact, so it cannot split:
+    # `fields/<target>.html` is not a document that exists there, and a card
+    # linking to one would 404. It keeps the detail inline and the same-page
+    # anchors that go with it -- bigger, but whole.
+    render.write_html(fragment, render.render_page(
+        standalone=False,
+        **dict(front, include_detail=True, detail_href=None)))
 
     # Link every figure the pages reference into <outdir>/figures/ under its
     # basename, so the relative hrefs resolve wherever the page is served from.
