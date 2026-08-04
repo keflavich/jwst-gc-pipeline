@@ -1556,9 +1556,14 @@ def test_the_view_opens_on_an_all_sky_background():
     nothing. Whatever leads this list has to cover the whole sky."""
     from jwst_gc_pipeline.monitoring import skyview
     first_url = skyview.SURVEYS[0][1]
+    # A HiPS named by ID must be one that exists; `P/Spitzer/GLIMPSE360` matched
+    # nothing at the CDS MOCServer, so that button selected a survey that has
+    # never been served under that name and simply did nothing.
+    assert all(len(entry) == 3 for entry in skyview.SURVEYS)
+    assert 'P/Spitzer/GLIMPSE360' not in [u for _n, u, _t in skyview.SURVEYS]
     assert not first_url.startswith('http'), (
         'the opening background is a specific HiPS, not an all-sky survey')
-    assert any(url.startswith('http') for _n, url in skyview.SURVEYS), (
+    assert any(url.startswith('http') for _n, url, _note in skyview.SURVEYS), (
         'the survey imagery should still be reachable, just not as the default')
 
 

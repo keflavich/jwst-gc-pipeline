@@ -67,12 +67,21 @@ COLOR_TARGET_AREA = '#ff6b6b'
 #: order ~8); opening on it at a 1.6 deg field showed a black rectangle, because
 #: there is nothing there to draw at that scale.  It is worth having, but as a
 #: choice you zoom into, not as the default.
+#:
+#: IDs checked against the CDS MOCServer rather than copied: ``P/DSS2/color``,
+#: ``P/2MASS/color`` and ``P/allWISE/color`` resolve (to ``CDS/P/...``), but
+#: ``P/Spitzer/GLIMPSE360`` matches nothing at all -- that button named a HiPS
+#: that has never existed under that ID.  GLIMPSE360 is served by IPAC.
+#:
+#: The third element is an optional note for the reader: the CMZ mosaic has no
+#: tiles below order 8, so it is blank until you are zoomed in past ~10'.
 SURVEYS = (
-    ('DSS', 'P/DSS2/color'),
-    ('2MASS', 'P/2MASS/color'),
-    ('GLIMPSE', 'P/Spitzer/GLIMPSE360'),
-    ('WISE', 'P/allWISE/color'),
-    ('JWST CMZ', 'https://starformation.astro.ufl.edu/avm_images/jwst_cmz_hips/'),
+    ('DSS', 'P/DSS2/color', ''),
+    ('2MASS', 'P/2MASS/color', ''),
+    ('GLIMPSE', 'IPAC/P/GLIMPSE360', ''),
+    ('WISE', 'P/allWISE/color', ''),
+    ('JWST CMZ', 'https://starformation.astro.ufl.edu/avm_images/jwst_cmz_hips/',
+     'the survey mosaic — zoom in past ~10′ for it to appear'),
 )
 
 
@@ -736,10 +745,14 @@ def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
 
     observed_cls = 'gcm-sky-empty' if not n_observed else ''
 
-    surveys = ''.join(
-        f'<button class="gcm-sky-btn survey{" on" if i == 0 else ""}" '
-        f'data-survey="{_esc(url)}">{_esc(name)}</button>'
-        for i, (name, url) in enumerate(SURVEYS))
+    def _survey_button(index, name, url, note):
+        title = f' title="{_esc(note)}"' if note else ''
+        return (f'<button class="gcm-sky-btn survey'
+                f'{" on" if index == 0 else ""}"{title} '
+                f'data-survey="{_esc(url)}">{_esc(name)}</button>')
+
+    surveys = ''.join(_survey_button(i, *entry)
+                      for i, entry in enumerate(SURVEYS))
 
     static_svg, static_info = static_map(footprints, roman, frame_name)
     if not static_svg:
