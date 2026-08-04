@@ -806,9 +806,17 @@ def _column_pairs(tbl):
 
 
 #: How closely ``(arcsec) - plain`` must match the accumulated ``prov_*`` for the
-#: divergence to count as EXPLAINED.  Measured across all ten live locked tables,
-#: the two agree to 0.000000 mas, so this is generous by any measure.
+#: divergence to count as EXPLAINED.  What this absorbs is float round-trip
+#: through CSV, nothing physical: measured across all ten live locked tables the
+#: two agree to 0.000000 mas, so 0.5 mas is six orders of margin over the only
+#: error source there is.
 PROV_EXPLAINS_TOL_MAS = 0.5
+
+#: Lower bound on cos(dec) over the fields this runs on -- all Galactic Centre or
+#: nearer the equator, so |dec| < 30 deg.  Used to BOUND the RA-axis check: the
+#: apply loop divides on-sky mas by cos(dec) and dec_deg is not stored per row,
+#: so the exact factor is unrecoverable but confined to [COS_DEC_MIN, 1].
+COS_DEC_MIN = np.cos(np.radians(30.0))
 
 
 def _row_label(tbl, i):
@@ -843,6 +851,10 @@ def _heal_column_pairs(tbl, offsets_path, rows=None):
     that still refuses, because healing it would assert the ``(arcsec)`` pair is
     right when nothing on record says so.
 
+    Both axes are checked before anything is written, because both are written.
+    Dec is exact (prov and ddec are both on-sky); RA is bounded, since the apply
+    loop divided by a cos(dec) this function cannot recover exactly.
+
     ``rows``: restrict to these row indices (the ones a correction will touch).
     A field with one stale filter and ten clean ones must be able to recover
     filter by filter; a table-wide refusal blocks the eleven together and breaks
@@ -869,21 +881,43 @@ def _heal_column_pairs(tbl, offsets_path, rows=None):
               if "prov_dra_added_mas" in tbl.colnames else np.zeros(len(tbl)))
     prov_c = (np.asarray(tbl["prov_ddec_added_mas"], dtype=float)
               if "prov_ddec_added_mas" in tbl.colnames else np.zeros(len(tbl)))
-    # the RA gap is a coordinate difference; prov is on-sky, so undo the cos(dec)
-    # the apply loop divided by.  dec_deg is not stored per row, so compare the
-    # DEC axis (no cos factor) and require the RA axis only to be consistent in
-    # magnitude -- Dec alone is enough to tell "explained" from "hand-edited".
-    unexplained = np.abs(c_gap * 1000.0 - prov_c) > PROV_EXPLAINS_TOL_MAS
-    rogue = np.where(diverged & unexplained)[0]
+    # DEC is exact: prov is on-sky mas and ddec is an on-sky arcsec offset, no
+    # cos(dec) between them.
+    dec_bad = np.abs(c_gap * 1000.0 - prov_c) > PROV_EXPLAINS_TOL_MAS
+
+    # RA needs a BOUND rather than an equality.  The apply loop divides the
+    # on-sky mas by cos(dec) to get the coordinate offset, and dec_deg is not
+    # stored per row, so the exact factor is unrecoverable -- but it is confined
+    # to [cos(dec_max), 1], which for these fields is a ~14% window.  That is far
+    # tighter than needed to reject a hand-edited RA gap against a recorded zero,
+    # and the heal WRITES this column, so it has to be checked: without it a row
+    # whose Dec gap is explained and whose RA gap is not gets its dra silently
+    # overwritten.
+    lo = np.minimum(prov_d / 1000.0, prov_d / 1000.0 / COS_DEC_MIN)
+    hi = np.maximum(prov_d / 1000.0, prov_d / 1000.0 / COS_DEC_MIN)
+    slack = PROV_EXPLAINS_TOL_MAS / 1000.0
+    ra_bad = (d_gap < lo - slack) | (d_gap > hi + slack)
+
+    rogue = np.where(diverged & (dec_bad | ra_bad))[0]
     if len(rogue):
         i = int(rogue[0])
+        if dec_bad[i]:
+            axis, gap_i, prov_i, col_a, col_b, expect = (
+                "Dec", c_gap[i], prov_c[i], ca, cb,
+                f"prov_ddec_added_mas {prov_c[i]:.2f} mas")
+        else:
+            axis, gap_i, prov_i, col_a, col_b, expect = (
+                "RA", d_gap[i], prov_d[i], da, db,
+                f"prov_dra_added_mas {prov_d[i]:.2f} mas, i.e. a coordinate gap "
+                f"in [{lo[i] * 1000:.2f}, {hi[i] * 1000:.2f}] mas after the "
+                f"cos(dec) the apply loop divided by")
         raise OffsetsTableUpdateError(
             f"{os.path.basename(offsets_path)}: {len(rogue)} row(s) have "
-            f"'{ca}' disagreeing with '{cb}' by more than the recorded "
-            f"provenance explains -- {_row_label(tbl, i)}: gap "
-            f"{c_gap[i] * 1000:.2f} mas vs prov_ddec_added_mas {prov_c[i]:.2f} "
-            f"mas. Something changed one pair outside update_offsets_table, so "
-            f"which one is right is not on record. NOT writing.")
+            f"'{col_a}' disagreeing with '{col_b}' by more than the recorded "
+            f"provenance explains on the {axis} axis -- {_row_label(tbl, i)}: "
+            f"gap {gap_i * 1000:.2f} mas vs {expect}. Something changed one pair "
+            f"outside update_offsets_table, so which one is right is not on "
+            f"record. NOT writing.")
 
     worst = int(bad[np.argmax(np.abs(c_gap[bad]))])
     print(f"  {os.path.basename(offsets_path)}: re-syncing '{db}'/'{cb}' from "

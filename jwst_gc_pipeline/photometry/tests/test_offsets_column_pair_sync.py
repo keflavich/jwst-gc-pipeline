@@ -194,3 +194,54 @@ def test_round_trip_noise_is_not_called_divergence(tmp_path):
     against a tree whose tightest real gate is 2 mas."""
     p = _table(tmp_path, diverge=1e-9)
     update_offsets_table(p, [_corr(2)], stage="m2")   # must not raise
+
+
+def _table_ra_only(tmp_path, ra_gap, prov_dra):
+    """A row whose DEC pairs agree but whose RA pairs do not."""
+    t = Table()
+    t["Visit"] = ["jw02092005001"] * 4
+    t["Exposure"] = [1, 2, 3, 4]
+    t["Filter"] = ["F360M"] * 4
+    t["Module"] = ["nrcblong"] * 4
+    t["dra"] = np.array([0.10, 0.11, 0.12, 0.13])
+    t["ddec"] = np.array([-0.20, -0.21, -0.22, -0.23])
+    t["dra (arcsec)"] = t["dra"] + ra_gap
+    t["ddec (arcsec)"] = t["ddec"]                      # Dec agrees exactly
+    t["prov_stage"] = ["m2"] * 4
+    t["prov_date"] = ["2026-08-03T00:00:00Z"] * 4
+    t["prov_source"] = ["test"] * 4
+    t["prov_dra_added_mas"] = np.full(4, prov_dra)
+    t["prov_ddec_added_mas"] = np.zeros(4)
+    p = tmp_path / "Offsets_JWST_Brick2092_VIRAC2locked.csv"
+    t.write(p, format="ascii.csv", overwrite=True)
+    return str(p)
+
+
+def test_an_RA_only_gap_the_provenance_does_not_explain_is_refused(tmp_path):
+    """The heal writes BOTH columns, so both must be proved first.
+
+    A row whose Dec gap is explained (here: zero) and whose RA gap is not would
+    otherwise have its `dra` silently overwritten -- the case the Dec-only
+    precondition let through.
+    """
+    p = _table_ra_only(tmp_path, ra_gap=0.050, prov_dra=0.0)   # 50 mas, prov says 0
+    with pytest.raises(OffsetsTableUpdateError) as exc:
+        update_offsets_table(p, [_corr(2)], stage="m2")
+    msg = str(exc.value)
+    assert "RA axis" in msg
+    assert "prov_dra_added_mas" in msg
+    assert "NOT writing" in msg
+
+
+def test_an_RA_gap_inside_the_cosdec_bound_is_healed(tmp_path):
+    """The bound is a window, not an equality: the apply loop divided on-sky mas
+    by a cos(dec) this function cannot recover, so any coordinate gap between
+    prov/1000 and prov/1000/COS_DEC_MIN is explained."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import COS_DEC_MIN
+    prov = 50.0
+    mid = 0.5 * (prov / 1000.0 + prov / 1000.0 / COS_DEC_MIN)
+    p = _table_ra_only(tmp_path, ra_gap=mid, prov_dra=prov)
+    update_offsets_table(p, [_corr(2)], stage="m2")            # must not raise
+    t = Table.read(p, format="ascii.csv")
+    assert float(t["dra"][1]) == pytest.approx(float(t["dra (arcsec)"][1]),
+                                               abs=1e-12)
