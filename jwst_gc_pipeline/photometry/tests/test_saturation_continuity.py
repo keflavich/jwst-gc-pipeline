@@ -46,10 +46,14 @@ def test_jump_detected_and_fails():
 
 
 def test_saturation_continuity_is_directional():
-    """band_sat and band_ref are not interchangeable. 'a' carries the
-    replaced_saturated population and 'b' does not, so the reversed order has no
-    SAT population to measure -- 'no-sat-population', not a mirror-image metric.
-    This is the argument-order trap the band_sat/band_ref naming guards against."""
+    """Interface + directionality regression, not a guard against human misuse
+    (that isn't unit-testable). Pins that (a) the ``band_sat=``/``band_ref=``
+    keywords exist and the positional order is (band_sat, band_ref), and (b) the
+    metric is genuinely order-dependent: 'a' carries the replaced_saturated
+    population and 'b' does not, so the reversed order has no SAT population --
+    'no-sat-population', not a mirror-image metric. The names make that
+    order-dependence readable at the call site; the metric itself was already
+    directional before the rename."""
     cat = _cat(jump=0.4)
     fwd = saturation_continuity(cat, band_sat='a', band_ref='b')
     rev = saturation_continuity(cat, band_sat='b', band_ref='a')

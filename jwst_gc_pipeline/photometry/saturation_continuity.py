@@ -2,14 +2,15 @@
 
 Definition
 ----------
-For a band pair (A = band that saturates, B = reference band), using rows
-CLEAN in B (independently_detected, not replaced_saturated, not
-forced_filled):
+For a DIRECTIONAL band pair (``band_sat`` = the band that saturates, whose
+``replaced_saturated`` photometry is under test; ``band_ref`` = the reference
+band), using rows CLEAN in ``band_ref`` (independently_detected, not
+replaced_saturated, not forced_filled):
 
-  color = mag_vega_A - mag_vega_B
-  In 0.5-mag bins of mag_B, split rows into
-     SAT   = replaced_saturated_A
-     UNFLG = no saturation flags in A
+  color = mag_vega_{band_sat} - mag_vega_{band_ref}
+  In 0.5-mag bins of mag_{band_ref}, split rows into
+     SAT   = replaced_saturated_{band_sat}
+     UNFLG = no saturation flags in band_sat
   TRANSITION bins: both classes have n >= 10 AND each is >= 20% of the bin
   (these straddle the saturation boundary; brighter bins have broken UNFLG
   rows, fainter SAT rows are phantoms, so neither is a fair comparison).
@@ -18,9 +19,13 @@ forced_filled):
   C1 = max |jump| over transition bins.
 
   Fallback when no transition bin exists (weakly-saturating bands): C2 =
-  max |median(color|SAT) - locus(mag_B)| over SAT bins with n >= 10
+  max |median(color|SAT) - locus(mag_{band_ref})| over SAT bins with n >= 10
   brightward of boundary+1, where locus = robust linear fit of median UNFLG
-  color over mag_B in [boundary+0.5, boundary+3.0].
+  color over mag_{band_ref} in [boundary+0.5, boundary+3.0].
+
+The pair is NOT order-symmetric: swapping band_sat/band_ref measures a
+different SAT population in a different binning variable and returns a
+plausible-but-different number (see ``saturation_continuity``).
 
 PASS: metric < 0.05 mag (goal) / < 0.10 mag (certification floor).
 A discontinuity means saturation-handled photometry is on a different flux
