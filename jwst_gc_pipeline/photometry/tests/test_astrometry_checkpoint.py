@@ -1282,6 +1282,9 @@ def test_m2_checkpoint_actually_writes_the_per_filter_consensus(tmp_path):
     assert (np.asarray(written["n_visits"]) == 2).sum() > 0.5 * len(written)
     # and the precision of the thing other filters will tie to is stated
     assert np.isfinite(np.asarray(written["scatter_mas"])).any()
+    # build_visit_consensus does return a per-star magnitude (its docstring
+    # used to omit it); refmag must not come out an all-NaN column
+    assert np.isfinite(np.asarray(written["refmag"])).any()
 
 
 def test_the_consensus_catalog_carries_the_observation_token(tmp_path):

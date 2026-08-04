@@ -306,6 +306,7 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
     -------
     dict with:
       ``coords`` : SkyCoord — consensus positions (component-mean frames)
+      ``mag`` : ndarray — per-star consensus magnitude
       ``nexp`` : ndarray — exposures contributing per star
       ``scatter_mas`` : ndarray — per-star rms scatter of contributing positions
       ``exposures`` : list of per-exposure dicts:
