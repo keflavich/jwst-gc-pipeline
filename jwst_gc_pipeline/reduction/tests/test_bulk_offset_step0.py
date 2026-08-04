@@ -365,7 +365,11 @@ def test_widening_the_tolerance_does_not_cache_a_pass(field, monkeypatch):
     ('1182', '004', s0.BULK_IN_TABLE),
     ('4147', '012', s0.BULK_IN_TABLE),
     ('6151', '001', s0.BULK_IN_TABLE),
-    ('3958', '007', s0.BULK_RECORDED),
+    # sickle moved GNS/RECORDED_BULK -> VIRAC2/TABLE_LOCKED on 2026-08-04, so its
+    # tie now lives in Offsets_JWST_Brick3958_VIRAC2locked.csv like the other GC
+    # fields.  Kept in this list on the other side of the line precisely because
+    # it crossed it.
+    ('3958', '007', s0.BULK_IN_TABLE),
     ('2092', '002', s0.BULK_RECORDED),
     ('9999', '001', s0.BULK_NONE),
 ])
