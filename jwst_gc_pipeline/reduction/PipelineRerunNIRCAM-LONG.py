@@ -91,6 +91,140 @@ def _stamp_imaging_product(path):
     _vstamp.try_stamp_product(path, 'imaging')
 
 
+#: Slack on the "written by this Image3 call" test, seconds.  Covers NFS mtime
+#: granularity and compute-node/fileserver clock skew; far below the 736-908 h
+#: gaps the sickle leftovers showed.
+CRF_FRESH_SLACK_S = 60.0
+
+
+def _crf_key(path):
+    """``(EXPSTART, DETECTOR)`` -- the 1:1 identity of a frame.
+
+    SW filters read nrcb1-4 SIMULTANEOUSLY, so EXPSTART alone collides across the
+    four detectors of one exposure; the detector disambiguates (LW nrcblong is
+    1:1 on EXPSTART alone).
+    """
+    h = fits.getheader(path)
+    es = h.get('EXPSTART')
+    det = h.get('DETECTOR')
+    if (es is None or det is None) and len(fits.open(path)) > 1:
+        h1 = fits.getheader(path, 1)
+        es = es if es is not None else h1.get('EXPSTART')
+        det = det if det is not None else h1.get('DETECTOR')
+    return (round(float(es), 6), str(det))
+
+
+def write_per_exposure_crf(output_dir, prod_name, members, field,
+                           image3_started, skymatch_method=None):
+    """Put this run's crf under the per-exposure names cataloging globs for.
+
+    outlier_detection names its CR-flagged crf after the asn PRODUCT
+    (``jw0<prop>-o<field>_t001_nircam_clear-<filt>-<module>_<N>_o<field>_crf.fits``)
+    while cataloging globs PER-EXPOSURE names carrying the destreak/align suffix.
+    Those never matched, so a corrected re-reduction's crf silently never reached
+    cataloging.  Map product-named crf onto per-exposure names by
+    ``(EXPSTART, DETECTOR)`` and copy them into place.
+
+    FRESHNESS, not a flag.  Only product crf written by THIS Image3 call are
+    eligible.  The earlier form tested ``not skip_outlier_detection``, which
+    answers "did this run TRY to write product crf" rather than "are these files
+    this run's" -- so with outlier detection enabled a leftover from a run with
+    larger asn membership could still map onto a current member and be copied.
+    Comparing mtimes against ``image3_started`` covers both branches with one
+    rule: a skip run yields no fresh files by construction, so this subsumes the
+    flag rather than adding to it.
+
+    That is the sickle failure (#270): 264 product crf from 2026-06-27 -- its last
+    run with outlier_detection on -- were copied over the per-exposure names on
+    every iteration of the VIRAC2 re-tie, byte-identical to the quarantined
+    originals and 246 mas from the member frames the run had just produced.  The
+    loop re-measured the same gap every iteration and could not converge.
+
+    When no fresh product crf exist, the correct source is the member frame
+    itself: tweakreg is skipped on that path (alignment happened upstream, so
+    members already carry the final WCS), giving the same SCI/ERR/WCS with a DQ
+    that lacks the spurious OUTLIER flags.
+
+    Every crf written gets a provenance sidecar.  Without one a monitor comparing
+    tags per field/filter cannot see crf at all, which is why a 246 mas
+    image-vs-photometry split sat undetected until an unrelated loop failed to
+    converge.
+    """
+    prod_crf = sorted(glob(os.path.join(
+        output_dir, f'{prod_name}_*_o{field}_crf.fits')))
+    fresh, stale = [], []
+    for path in prod_crf:
+        try:
+            (fresh if os.path.getmtime(path) >= image3_started - CRF_FRESH_SLACK_S
+             else stale).append(path)
+        except OSError as exc:
+            print(f"  WARNING: cannot stat {os.path.basename(path)} ({exc}); "
+                  f"treating it as stale", flush=True)
+            stale.append(path)
+
+    if stale:
+        print(f"  WARNING: {len(stale)} product-named crf in {output_dir} predate "
+              f"this Image3 call -- they are an EARLIER reduction's and carry its "
+              f"WCS. NOT copying them forward (#270). First: "
+              f"{os.path.basename(stale[0])}", flush=True)
+
+    def _emit(src, target):
+        shutil.copy(src, target)
+        _stamp_imaging_product(target)
+
+    if fresh:
+        targ_by_key = {}
+        for expname in members:
+            mb = os.path.basename(expname)
+            target = os.path.join(output_dir,
+                                  mb.replace('.fits', f'_o{field}_crf.fits'))
+            cal_path = (expname if os.path.exists(expname)
+                        else os.path.join(output_dir, mb))
+            try:
+                targ_by_key[_crf_key(cal_path)] = target
+            except (FileNotFoundError, OSError, TypeError, ValueError):
+                print(f"  WARNING: cannot read EXPSTART/DETECTOR of {mb}; "
+                      f"skipping its crf mapping", flush=True)
+        n = 0
+        for pc in fresh:
+            try:
+                target = targ_by_key.get(_crf_key(pc))
+            except (FileNotFoundError, OSError, TypeError, ValueError):
+                target = None
+            if target is None:
+                print(f"  WARNING: product crf {os.path.basename(pc)} has no "
+                      f"per-exposure cal match; per-exposure crf NOT written",
+                      flush=True)
+                continue
+            _emit(pc, target)
+            n += 1
+            print(f"  crf rename: {os.path.basename(pc)} -> "
+                  f"{os.path.basename(target)}", flush=True)
+        return n
+
+    if skymatch_method:
+        print("  WARNING: --skymatch-method set with no fresh product crf: the "
+              "per-exposure crf are copied from the PRE-skymatch member frames "
+              "(skymatch's subtraction is applied in-memory and only reaches the "
+              "resampled i2d, not these copies).", flush=True)
+    n = 0
+    for expname in members:
+        mb = os.path.basename(expname)
+        src = (expname if os.path.exists(expname)
+               else os.path.join(output_dir, mb))
+        target = os.path.join(output_dir,
+                              mb.replace('.fits', f'_o{field}_crf.fits'))
+        if not os.path.exists(src):
+            print(f"  WARNING: member frame {mb} missing; crf NOT written",
+                  flush=True)
+            continue
+        _emit(src, target)
+        n += 1
+    print(f"  wrote {n} per-exposure crf as copies of this run's aligned member "
+          f"frames (no OUTLIER flags added)", flush=True)
+    return n
+
+
 # see 'destreak410.ipynb' for tests of this
 medfilt_size = {'F410M': 15, 'F405N': 256, 'F466N': 55,
                 'F182M': 55, 'F187N': 512, 'F212N': 512,
@@ -740,6 +874,9 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
                                         'match_down': False}
             print(f"Running skymatch skymethod={skymatch_method} subtract=True ({module})")
         print(f"Running tweakreg ({module})")
+        # when Image3 started, so the crf writer can tell the product-named crf
+        # THIS call emitted from an earlier run's leftovers -- see #271.
+        _image3_t0 = datetime.datetime.now().timestamp()
         calwebb_image3.Image3Pipeline.call(
             asn_file_each,
             steps=image3_steps,
@@ -747,117 +884,13 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
             save_results=True)
         print(f"DONE running {asn_file_each}")
 
-        # CRF NAMING FIX (port of PipelineMIRI 2026-06-20): outlier_detection in
-        # Image3 names the CR-flagged crfs after the asn PRODUCT
-        #   jw0{prop}-o{field}_t001_nircam_clear-{filt}-{module}_<N>_o{field}_crf.fits
-        # but the manual cataloging globs PER-EXPOSURE crf with the destreak/align
-        # suffix
-        #   jw0{prop}{field}{visit}_..._{module}_{align|destreak}_o{field}_crf.fits .
-        # Those never matched, so a corrected re-reduction's crf (e.g. the skymatch
-        # background fix) silently never reached cataloging -- the per-exposure
-        # *_{align|destreak}_o{field}_crf.fits stayed at the OLD reduction's mtime.
-        # Map product-named crf -> per-exposure names by EXPSTART (1:1) and copy
-        # into place.  member['expname'] already carries the _align/_destreak
-        # suffix (set in the destreak/align loop above), so the target name matches
-        # what cataloging --each-suffix consumes.
-        #
-        # ORDER MATTERS: outlier_detection is the ONLY step that emits product-named
-        # crf, so when it is skipped THIS run wrote none and any on disk are
-        # leftovers from an older reduction.  Copying those forward overwrites the
-        # per-exposure crf with a previous generation's WCS while refreshing their
-        # mtime -- invisible to every mtime-based staleness check, and cataloging
-        # then photometers the old alignment.  sickle hit exactly this (#270): 96
-        # product crf from 2026-06-27 (its last run with outlier_detection on) were
-        # copied over the per-exposure names on every iteration of the VIRAC2 retie,
-        # so all 96 carried one constant GNS RAOFFSET while their aligned
-        # `_destreak.fits` inputs carried the new per-exposure VIRAC2 tie ~200 mas
-        # away.  The loop re-measured the same ~110 mas gap every iteration and
-        # could not converge.  So test skip_outlier_detection FIRST.
-        _prod_name = asn_data['products'][0]['name']
-        _prod_crf = sorted(glob(os.path.join(
-            output_dir, f'{_prod_name}_*_o{field}_crf.fits')))
-        if _prod_crf and not skip_outlier_detection:
-            def _crf_key(fn):
-                # (EXPSTART, DETECTOR): SW filters read nrcb1-4 SIMULTANEOUSLY, so
-                # EXPSTART alone collides across the 4 detectors of one exposure --
-                # the detector disambiguates (LW nrcblong is 1:1 on EXPSTART alone).
-                h = fits.getheader(fn)
-                es = h.get('EXPSTART')
-                det = h.get('DETECTOR')
-                if (es is None or det is None) and len(fits.open(fn)) > 1:
-                    h1 = fits.getheader(fn, 1)
-                    es = es if es is not None else h1.get('EXPSTART')
-                    det = det if det is not None else h1.get('DETECTOR')
-                return (round(float(es), 6), str(det))
-            _targ_by_es = {}
-            for member in asn_data['products'][0]['members']:
-                _mb = os.path.basename(member['expname'])
-                _target = os.path.join(
-                    output_dir, _mb.replace('.fits', f'_o{field}_crf.fits'))
-                _cal_path = (member['expname'] if os.path.exists(member['expname'])
-                             else os.path.join(output_dir, _mb))
-                try:
-                    _targ_by_es[_crf_key(_cal_path)] = _target
-                except (FileNotFoundError, OSError, TypeError, ValueError):
-                    print(f"  WARNING: cannot read EXPSTART/DETECTOR of {_mb}; "
-                          f"skipping its crf mapping", flush=True)
-            for _pc in _prod_crf:
-                try:
-                    _target = _targ_by_es.get(_crf_key(_pc))
-                except (FileNotFoundError, OSError, TypeError, ValueError):
-                    _target = None
-                if _target is None:
-                    print(f"  WARNING: product crf {os.path.basename(_pc)} has no "
-                          f"per-exposure cal match; per-exposure crf NOT written",
-                          flush=True)
-                    continue
-                shutil.copy(_pc, _target)
-                print(f"  crf rename: {os.path.basename(_pc)} -> "
-                      f"{os.path.basename(_target)}", flush=True)
-        elif skip_outlier_detection:
-            # outlier_detection is the step that emits the CR-flagged crf; with it
-            # skipped (#161) Image3 writes none, so cataloging's per-exposure
-            # *_o{field}_crf.fits glob would starve (or silently reuse a stale
-            # reduction's crf).  tweakreg is also skip=True here (alignment was done
-            # upstream -- members already carry the final WCS), so the correct crf
-            # is just the member frame itself: same SCI/ERR/WCS, DQ WITHOUT the
-            # spurious OUTLIER flags.  Copy each member -> its per-exposure crf name.
-            #
-            # Reached whether or not product-named crf happen to sit in output_dir:
-            # if they do, they are an older reduction's and the branch above
-            # deliberately declines them.  This is the only correct source for the
-            # crf on a skip_outlier_detection run.
-            if _prod_crf:
-                print(f"  {len(_prod_crf)} product-named crf are on disk but "
-                      f"outlier_detection is SKIPPED, so THIS run wrote none -- they "
-                      f"are an EARLIER reduction's and carry its WCS. NOT copying "
-                      f"them forward (#270); writing crf from this run's aligned "
-                      f"member frames instead. First stale file: "
-                      f"{os.path.basename(_prod_crf[0])}", flush=True)
-            if skymatch_method:
-                print("  WARNING: --skymatch-method set WITH outlier_detection "
-                      "skipped: the per-exposure crf are copied from the PRE-skymatch "
-                      "member frames (skymatch's subtraction is applied in-memory and "
-                      "only reaches the resampled i2d, not these copies).", flush=True)
-            _n_crf = 0
-            for member in asn_data['products'][0]['members']:
-                _mb = os.path.basename(member['expname'])
-                _src = (member['expname'] if os.path.exists(member['expname'])
-                        else os.path.join(output_dir, _mb))
-                _target = os.path.join(
-                    output_dir, _mb.replace('.fits', f'_o{field}_crf.fits'))
-                if not os.path.exists(_src):
-                    print(f"  WARNING: member frame {_mb} missing; crf NOT written",
-                          flush=True)
-                    continue
-                shutil.copy(_src, _target)
-                _n_crf += 1
-            print(f"  outlier_detection skipped: wrote {_n_crf} per-exposure crf as "
-                  f"copies of the aligned member frames (no OUTLIER flags added)",
-                  flush=True)
-        else:
-            print(f"  (no product-named crf {_prod_name}_*_o{field}_crf.fits found; "
-                  f"assuming crf already per-exposure named)", flush=True)
+        write_per_exposure_crf(
+            output_dir=output_dir,
+            prod_name=asn_data['products'][0]['name'],
+            members=[m['expname'] for m in asn_data['products'][0]['members']],
+            field=field,
+            image3_started=_image3_t0,
+            skymatch_method=skymatch_method)
 
         print("After tweakreg step, checking WCS headers:")
         for member in asn_data['products'][0]['members']:

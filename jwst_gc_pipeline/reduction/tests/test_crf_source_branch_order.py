@@ -1,103 +1,171 @@
-"""A skip_outlier_detection run must never copy an OLDER run's product crf.
+"""A run must never publish an OLDER run's product crf as its per-exposure crf.
 
-``outlier_detection`` is the only Image3 step that emits product-named crf
-(``jw0<prop>-o<field>_t001_nircam_clear-<filt>-<module>_<N>_o<field>_crf.fits``).
-With it skipped (#161) the current run writes none, so any on disk are leftovers
-from a previous reduction -- carrying that reduction's WCS.
+``outlier_detection`` names its CR-flagged crf after the asn PRODUCT while
+cataloging globs per-exposure names, so the reduction copies one onto the other.
+The eligibility test used to be ``not skip_outlier_detection`` -- "did this run
+TRY to write product crf" -- which is a proxy for what actually matters, "are
+these files this run's".
 
-The CRF-naming block copied them forward whenever the glob matched, which
-refreshes their mtime while leaving a previous generation's alignment inside.
-Nothing downstream can see that: every staleness check in the tree is
-mtime-based.
+sickle (#270) is the case: 264 product crf from 2026-06-27, its last run with
+outlier_detection enabled, were copied over the per-exposure names on every
+iteration of the VIRAC2 re-tie. Byte-identical to the quarantined originals, and
+246 mas from the member frames the run had just produced, against a 30 mas
+tolerance.
 
-sickle (#270) is the case that exposed it. 96 product crf from 2026-06-27 -- its
-last run with outlier_detection enabled -- were copied over the per-exposure
-names on every iteration of the VIRAC2 re-tie, so all 96 carried a single
-constant GNS ``RAOFFSET`` while their aligned ``_destreak.fits`` inputs carried
-the new per-exposure VIRAC2 tie ~200 mas away. m2 re-measured the same ~110 mas
-gap each iteration and the loop could not converge.
-
-These tests read the source rather than driving Image3, which needs CRDS, real
-exposures and ~30 min. What went wrong was a BRANCH ORDER, and branch order is
-exactly what source inspection can pin.
+These test BEHAVIOUR -- what ends up in the per-exposure crf -- rather than the
+shape of the branch. The previous version of this file inspected the source with
+``ast``, and the review demonstrated that it rejected a correct restructuring
+while accepting two broken variants (guard kept with an empty body; guard kept
+while the fallback ALSO copied the stale product crf).
 """
-import ast
+import importlib.util
+import os
 import pathlib
 
+import numpy as np
+import pytest
+from astropy.io import fits
 
-SRC = (pathlib.Path(__file__).resolve().parents[1]
-       / "PipelineRerunNIRCAM-LONG.py")
-
-
-def _crf_branch():
-    """The ``if _prod_crf ...`` chain that chooses the per-exposure crf source."""
-    tree = ast.parse(SRC.read_text())
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.If):
-            continue
-        names = {n.id for n in ast.walk(node.test) if isinstance(n, ast.Name)}
-        if "_prod_crf" in names:
-            return node
-    raise AssertionError("could not find the _prod_crf branch")
+# The driver's filename carries a hyphen, so it cannot be imported by name.
+_SRC = (pathlib.Path(__file__).resolve().parents[1]
+        / "PipelineRerunNIRCAM-LONG.py")
+_SPEC = importlib.util.spec_from_file_location("pipeline_rerun_nircam_long", _SRC)
+pr = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(pr)
 
 
-def test_product_crf_are_only_used_when_outlier_detection_ran():
-    """The copy-forward branch must be guarded by ``not skip_outlier_detection``.
-
-    Without the guard, a run that emitted no product crf still copies whatever
-    older ones are lying in output_dir.
-    """
-    branch = _crf_branch()
-    names = {n.id for n in ast.walk(branch.test) if isinstance(n, ast.Name)}
-    assert "skip_outlier_detection" in names, (
-        "the product-crf copy branch does not consult skip_outlier_detection -- "
-        "it will copy an older reduction's crf forward whenever any are on disk")
-
-    # and specifically NEGATED: `_prod_crf and not skip_outlier_detection`
-    negated = any(isinstance(n, ast.UnaryOp) and isinstance(n.op, ast.Not)
-                  and any(isinstance(x, ast.Name)
-                          and x.id == "skip_outlier_detection"
-                          for x in ast.walk(n))
-                  for n in ast.walk(branch.test))
-    assert negated, (
-        "skip_outlier_detection appears in the test but is not negated; the copy "
-        "branch must fire only when outlier_detection actually ran")
+EXPSTART = 60545.5031
+DETECTOR = 'NRCB1'
 
 
-def test_skip_outlier_detection_still_has_its_own_crf_source():
-    """The fallback that copies the aligned member frames must survive.
-
-    It is the ONLY correct source on a skip_outlier_detection run -- and it has
-    to be reachable even when product crf are present, which is precisely the
-    stale case.
-    """
-    branch = _crf_branch()
-    tests = []
-    node = branch
-    while node.orelse and len(node.orelse) == 1 and isinstance(node.orelse[0], ast.If):
-        node = node.orelse[0]
-        tests.append(node.test)
-    assert any(isinstance(t, ast.Name) and t.id == "skip_outlier_detection"
-               for t in tests), (
-        "the elif that writes crf from the aligned member frames is gone")
+def _frame(path, value, expstart=EXPSTART, detector=DETECTOR, mtime=None):
+    """A one-pixel FITS frame whose SCI value identifies which generation it is."""
+    hdu = fits.PrimaryHDU()
+    hdu.header['EXPSTART'] = expstart
+    hdu.header['DETECTOR'] = detector
+    sci = fits.ImageHDU(np.full((2, 2), float(value), dtype='float32'), name='SCI')
+    fits.HDUList([hdu, sci]).writeto(path, overwrite=True)
+    if mtime is not None:
+        os.utime(path, (mtime, mtime))
+    return str(path)
 
 
-def test_the_stale_case_is_reported_not_silent():
-    """Declining stale product crf must SAY so.
-
-    Silently doing the right thing here is nearly as bad as doing the wrong
-    thing: the 96 files stay on disk looking like current products, and the next
-    person to grep for them has no note explaining why they are ignored.
-    """
-    src = SRC.read_text()
-    assert "EARLIER reduction's and carry its WCS" in src, (
-        "no message when stale product crf are declined")
+def _value(path):
+    with fits.open(path) as h:
+        return float(h['SCI'].data[0, 0])
 
 
-def test_the_sickle_incident_is_recorded_at_the_branch():
-    """Whoever reorders this next needs the reason in front of them."""
-    src = SRC.read_text()
-    i = src.index("_prod_crf = sorted(")
-    context = src[max(0, i - 2000):i]
-    assert "#270" in context, "the branch lost its pointer to the incident"
-    assert "ORDER MATTERS" in context
+PROD = 'jw03958-o007_t001_nircam_clear-f187n-nrcb'
+MEMBER = 'jw03958007001_03102_00001_nrcb1_destreak.fits'
+TARGET = 'jw03958007001_03102_00001_nrcb1_destreak_o007_crf.fits'
+
+
+def test_a_stale_product_crf_is_not_published(tmp_path):
+    """The sickle failure. A product crf older than this Image3 call is a previous
+    generation's and must not become this run's photometry input."""
+    member = _frame(tmp_path / MEMBER, value=2.0, mtime=2_000_000)
+    _frame(tmp_path / f'{PROD}_0_o007_crf.fits', value=1.0, mtime=1_000_000)
+
+    n = pr.write_per_exposure_crf(
+        output_dir=str(tmp_path), prod_name=PROD, members=[member],
+        field='007', image3_started=1_900_000)
+
+    assert n == 1
+    assert _value(tmp_path / TARGET) == 2.0, "the stale product crf was published"
+
+
+def test_a_fresh_product_crf_is_published(tmp_path):
+    """The normal outlier_detection path still works: a product crf this call
+    wrote IS the right source, because it carries the CR flags."""
+    member = _frame(tmp_path / MEMBER, value=2.0, mtime=2_000_000)
+    _frame(tmp_path / f'{PROD}_0_o007_crf.fits', value=3.0, mtime=2_000_100)
+
+    n = pr.write_per_exposure_crf(
+        output_dir=str(tmp_path), prod_name=PROD, members=[member],
+        field='007', image3_started=2_000_000)
+
+    assert n == 1
+    assert _value(tmp_path / TARGET) == 3.0
+
+
+def test_freshness_covers_the_outlier_detection_enabled_path(tmp_path):
+    """The reason freshness beats the flag: with outlier detection ENABLED, a
+    leftover from a run with different asn membership still maps onto a current
+    member by (EXPSTART, DETECTOR).  The old `not skip_outlier_detection` test
+    would have copied it; the mtime test declines it."""
+    member = _frame(tmp_path / MEMBER, value=2.0, mtime=2_000_000)
+    _frame(tmp_path / f'{PROD}_7_o007_crf.fits', value=9.0, mtime=1_000_000)
+
+    pr.write_per_exposure_crf(
+        output_dir=str(tmp_path), prod_name=PROD, members=[member],
+        field='007', image3_started=1_900_000)
+
+    assert _value(tmp_path / TARGET) == 2.0
+
+
+def test_the_slack_tolerates_clock_skew(tmp_path):
+    """A product crf written a few seconds BEFORE the recorded start (NFS mtime
+    granularity, node/fileserver skew) is still this run's."""
+    member = _frame(tmp_path / MEMBER, value=2.0, mtime=2_000_000)
+    _frame(tmp_path / f'{PROD}_0_o007_crf.fits', value=3.0,
+           mtime=2_000_000 - pr.CRF_FRESH_SLACK_S / 2)
+
+    pr.write_per_exposure_crf(
+        output_dir=str(tmp_path), prod_name=PROD, members=[member],
+        field='007', image3_started=2_000_000)
+
+    assert _value(tmp_path / TARGET) == 3.0
+
+
+def test_the_stale_case_is_reported_as_a_WARNING(tmp_path, capsys):
+    """Triage greps for WARNING.  A line saying a previous generation's data was
+    found in the output directory must not be the one that is missed."""
+    member = _frame(tmp_path / MEMBER, value=2.0, mtime=2_000_000)
+    _frame(tmp_path / f'{PROD}_0_o007_crf.fits', value=1.0, mtime=1_000_000)
+
+    pr.write_per_exposure_crf(
+        output_dir=str(tmp_path), prod_name=PROD, members=[member],
+        field='007', image3_started=1_900_000)
+
+    out = capsys.readouterr().out
+    assert 'WARNING' in out
+    assert 'predate this Image3 call' in out
+    assert '#270' in out
+
+
+def test_every_written_crf_gets_a_provenance_stamp(tmp_path, monkeypatch):
+    """crf carried no provenance at all, which is why a 246 mas
+    image-vs-photometry split sat undetected until an unrelated loop failed."""
+    stamped = []
+    monkeypatch.setattr(pr, '_stamp_imaging_product', stamped.append)
+    member = _frame(tmp_path / MEMBER, value=2.0, mtime=2_000_000)
+
+    pr.write_per_exposure_crf(
+        output_dir=str(tmp_path), prod_name=PROD, members=[member],
+        field='007', image3_started=1_900_000)
+
+    assert stamped == [str(tmp_path / TARGET)]
+
+
+def test_a_missing_member_is_reported_not_silent(tmp_path, capsys):
+    pr.write_per_exposure_crf(
+        output_dir=str(tmp_path), prod_name=PROD,
+        members=[str(tmp_path / 'absent_destreak.fits')],
+        field='007', image3_started=1_900_000)
+    assert 'WARNING' in capsys.readouterr().out
+
+
+def test_a_fresh_product_crf_with_no_member_match_is_not_guessed(tmp_path, capsys):
+    """Different EXPSTART: there is no member this belongs to, so nothing is
+    written rather than something being written to the wrong name."""
+    member = _frame(tmp_path / MEMBER, value=2.0, mtime=2_000_000)
+    _frame(tmp_path / f'{PROD}_0_o007_crf.fits', value=3.0,
+           expstart=EXPSTART + 1.0, mtime=2_000_100)
+
+    n = pr.write_per_exposure_crf(
+        output_dir=str(tmp_path), prod_name=PROD, members=[member],
+        field='007', image3_started=2_000_000)
+
+    assert n == 0
+    assert not os.path.exists(tmp_path / TARGET)
+    assert 'no per-exposure cal match' in capsys.readouterr().out
