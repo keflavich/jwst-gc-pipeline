@@ -202,6 +202,42 @@ def obs_filters(instrument='nircam'):
             for f in FIELDS if any(o.filters for o in f.observations)}
 
 
+#: The instruments that share a field's per-observation ``filters`` list and
+#: live in the same ``{BASE}/{field}/{FILTER}/pipeline/`` tree.  NIRISS declares
+#: its bands separately AND reduces to a different layout, so a caller that
+#: enumerates that tree must not be handed NIRISS names.
+NIRCAM_MIRI = ('nircam', 'miri')
+
+
+def declared_filters(target, instruments=NIRCAM_MIRI):
+    """Filters ``fields.yaml`` declares for ``target``, upper-cased, across all
+    of its observations.  Empty set for an unregistered target.
+
+    Instrument-aware, and the default is deliberate.  NIRCam and MIRI share the
+    per-obs ``filters`` list and the ``{FILTER}/pipeline/`` layout; NIRISS has
+    its own ``niriss_filters`` list and its own layout.  Unioning them makes a
+    NIRISS-only band look like a NIRCam band whose directory is missing --
+    sgrc declares F158M/F200W/F356W for NIRISS and none of them can ever have a
+    NIRCam pipeline directory, so a caller enumerating that tree would block
+    sgrc at release with no reduction able to clear it.
+
+    Used to tell a real band whose reduction produced nothing (declared, must
+    block) from an undeclared leftover directory (skip): a name absent here was
+    never expected on disk, so an empty directory for it is not a band.
+    """
+    fobj = BY_NAME.get(target)
+    if fobj is None:
+        return set()
+    want = set(instruments)
+    out = set()
+    for o in fobj.observations:
+        if want & set(NIRCAM_MIRI):
+            out |= {f.upper() for f in o.filters}
+        if 'niriss' in want:
+            out |= {f.upper() for f in o.niriss_filters}
+    return out
+
+
 def glob_obsid(target, proposal, instrument='nircam'):
     """The observation number to build a filename glob from, or ``None``.
 

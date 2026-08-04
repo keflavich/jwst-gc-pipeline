@@ -52,6 +52,7 @@ from astropy.table import Table
 from astropy.wcs import WCS
 from photutils.detection import find_peaks
 
+from jwst_gc_pipeline import fields
 from jwst_gc_pipeline.frame_wcs import frame_wcs
 from jwst_gc_pipeline.photometry.interframe_overlap import (
     overlap_offset_grid, pairwise_overlap_offsets, DEFAULT_OVERLAP_TOL_MAS)
@@ -934,9 +935,90 @@ def check_filter(field, filt, refcat=None, verbose=True, observations=None):
 
 
 def field_filters(field):
-    fs = sorted({os.path.basename(os.path.dirname(os.path.dirname(p)))
-                 for p in glob.glob(f"{BASE}/{field}/*/pipeline/")})
-    return [f for f in fs if f.upper().startswith("F")]
+    """Filters this field actually HAS products for.
+
+    Enumerating by directory alone counts a `<field>/<FILT>/pipeline/` that was
+    created and never populated.  ``check_filter`` then reports "NO crf frames
+    matched -- cannot verify" and, fail-closed, the whole field exits 2.  An
+    empty directory is not a band that failed verification; it is not a band.
+
+    w51 (2026-08-03) carries four such leftovers -- F115W, F200W, F212N, F356W,
+    every one of them containing zero files -- and they alone were enough to
+    block a field whose eleven real NIRCam bands all pass.
+
+    The fail-closed intent is kept for the case it was written for: a directory
+    that holds ANY file but whose crf glob matches nothing is a REAL mismatch
+    (wrong suffix, or a half-finished reduction that wrote e.g. only ``_asn.json``
+    before dying) and still blocks.  The emptiness test is therefore ``os.listdir``
+    (nothing at all), NOT ``*.fits`` -- a half-finished run has files and zero
+    ``.fits``, and must reach ``check_filter`` rather than be dropped as "not a
+    band".  Empirically the two coincide today (the four w51 leftovers are truly
+    empty; no archive directory holds files but no ``.fits``), so this keeps code
+    and docstring aligned rather than fixing an observed failure.
+
+    An empty directory is skipped ONLY when the band is NOT declared for the
+    field in ``fields.yaml``.  A DECLARED band with an empty directory is a
+    reduction that produced nothing -- indistinguishable on disk from a
+    just-``mkdir``'d run -- and must still reach ``check_filter`` so the field
+    blocks; skipping it would route around the "declared but nothing there"
+    check.  The four w51 leftovers (F115W/F200W/F212N/F356W) are undeclared, so
+    this changes no verdict today; it keeps fail-closed for the declared case.
+
+    "Declared" here means declared FOR THE INSTRUMENTS THIS TREE HOLDS -- NIRCam
+    and MIRI.  NIRISS declares its bands separately and reduces to a different
+    layout, so a NIRISS-only band can never have a directory here; counting one
+    as "declared, never reduced" would block a correct field with no reduction
+    able to clear it (sgrc declares F158M/F200W/F356W for NIRISS alone).  A gate
+    a correct field cannot pass is a gate that teaches people to use the
+    override.
+
+    Names read off disk keep their DIRECTORY casing; the declared names appended
+    below are upper-cased.  That mixed provenance is deliberate: the returned
+    name is used as a PATH COMPONENT (``check_filter`` globs
+    ``{BASE}/{field}/{filt}/pipeline/...``), so upper-casing a lower-case
+    directory would make its glob match nothing and block a correct field.  The
+    appended declared names have no directory to match by construction, which is
+    exactly what makes them block.  Consumers comparing by name upper-case first.
+    """
+    declared = fields.declared_filters(field)   # NIRCam + MIRI, upper-cased
+    out = []
+    for p in sorted(glob.glob(f"{BASE}/{field}/*/pipeline/")):
+        filt = os.path.basename(os.path.dirname(os.path.dirname(p)))
+        if not filt.upper().startswith("F"):
+            continue
+        try:
+            empty = not os.listdir(p)
+        except OSError as exc:
+            # glob proved the dir existed a moment ago; if it is now unreadable
+            # or gone we cannot determine emptiness -- report it, do not skip
+            # (fail-closed): let check_filter decide rather than silently drop.
+            print(f"  {field} {filt}: cannot read pipeline directory ({exc}) "
+                  f"-- reporting, not skipping (fail-closed)", flush=True)
+            out.append(filt)
+            continue
+        if empty:
+            if filt.upper() in declared:
+                print(f"  {field} {filt}: DECLARED band with an empty pipeline "
+                      f"directory -- reduction produced nothing (blocks)",
+                      flush=True)
+                out.append(filt)
+                continue
+            print(f"  {field} {filt}: empty pipeline directory, nothing at all "
+                  f"-- undeclared, not a band, skipping (not a verification "
+                  f"failure)", flush=True)
+            continue
+        out.append(filt)
+    # Declared but NO pipeline directory at all -- the same "declared but nothing
+    # there" class as an empty declared directory, one step further out (the loop
+    # above only sees directories that exist).  A band the registry declares and
+    # the archive never reduced must be noticed at release time, so report it and
+    # let check_filter block.  (cloudef F2100W/F770W, sgrc F158M/F200W/F356W on the
+    # 2026-08 archive.)  Undeclared missing directories are simply not bands.
+    for filt in sorted(declared - {f.upper() for f in out}):
+        print(f"  {field} {filt}: DECLARED band with no pipeline directory at all "
+              f"-- never reduced (blocks)", flush=True)
+        out.append(filt)
+    return out
 
 
 def main(argv=None):
