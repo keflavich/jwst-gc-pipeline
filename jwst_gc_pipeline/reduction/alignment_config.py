@@ -163,13 +163,12 @@ class FieldAlignment:
 # ---------------------------------------------------------------------------
 # The configuration
 # ---------------------------------------------------------------------------
-# NOTE ON GC FIELDS AND GNS: sickle (3958) is a Galactic Centre field whose
-# recorded bulk is currently in the GNS frame, while ``refnames`` already calls
-# it VIRAC2 -- a live inconsistency inherited from the old dispatch.  Policy is
-# that GC fields tie to VIRAC2, so this entry is slated for re-measurement
-# against VIRAC2 by pipeline step 0.  Until that measurement exists the recorded
-# GNS numbers are kept EXACTLY as they were applied, so this refactor changes no
-# pixel; ``reference_frame`` records the truth (GNS) rather than the aspiration.
+# RESOLVED 2026-08-04 -- GC FIELDS AND GNS: sickle (3958) was the last field whose
+# recorded bulk sat in the GNS frame while ``refnames`` already called it VIRAC2.
+# Policy is that GC fields tie to VIRAC2; that tie is now BUILT (a per-exposure
+# ``Offsets_JWST_Brick3958_VIRAC2locked.csv``) rather than re-measured by step 0,
+# because step 0 refuses to record a fresh tie for a field that already has one.
+# The 3958 entry below is now TABLE_LOCKED on VIRAC2 and no longer aspirational.
 
 ALIGNMENT_CONFIG = (
 
@@ -276,22 +275,37 @@ ALIGNMENT_CONFIG = (
     ),
     FieldAlignment(
         proposal='3958', fields=('007',),
-        reference_frame=GNS, source=RECORDED_BULK,
-        visit_key='full', dec_ref_deg=-28.805,
-        consensus_jitter=True, reference_filter='F210M',
-        recorded_bulk={
-            (ANY, 'F187N'): BulkEntry(-89.7, -34.2, onsky_mas=True),
-            (ANY, 'F210M'): BulkEntry(-88.5, -34.5, onsky_mas=True),
-            (ANY, 'F335M'): BulkEntry(-89.5, -33.2, onsky_mas=True),
-            (ANY, 'F470N'): BulkEntry(-91.4, -33.9, onsky_mas=True),
-            (ANY, 'F480M'): BulkEntry(-90.6, -33.1, onsky_mas=True),
-            (ANY, ANY): BulkEntry(-90.0, -34.0, onsky_mas=True),
-        },
-        notes=('sickle NIRCam. Audit 2026-06-20: had NO per-exposure alignment '
-               '(fell through to the else), leaving catalogs ~90 mas off the '
-               'GNS-tied mosaics. Single field translation, constant across '
-               'filters/exposures to <3 mas. SLATED for VIRAC2 re-measurement '
-               '(GC policy) -- see module docstring.'),
+        reference_frame=VIRAC2, source=TABLE_LOCKED,
+        reference_filter='F210M',
+        notes=('sickle NIRCam (observation 007; the 3958 MIRI data are obs 001 '
+               'and are NOT covered by this entry). Carried out the VIRAC2 '
+               're-measurement this module\'s docstring slated it for: GC policy '
+               'is that GC fields tie to VIRAC2, and this field was the last one '
+               'still recorded in the GNS frame while ``refnames`` already called '
+               'it VIRAC2.\n'
+               '\n'
+               'Same class as sgrc/quintuplet/sgrb2: sickle now has a '
+               'build_virac2_offsets REGION entry, so its authored table is '
+               'Offsets_JWST_Brick3958_VIRAC2locked.csv (120 rows, 5 filters, '
+               '24 exposures each, builder-shaped, per-exposure). LOCKED rather '
+               'than RECORDED_BULK because a per-exposure table exists: the '
+               'route to VIRAC2 for an already-tied field is to BUILD the VIRAC2 '
+               'table, not to blank the recorded bulk and re-measure -- step 0 '
+               'refuses the latter ("the field is tied; this (visit, band) is '
+               'not"), which is what an empty ``recorded_bulk`` attempt hit.\n'
+               '\n'
+               'The former GNS bulk was per-filter and near-constant -- F187N '
+               '(-89.7,-34.2), F210M (-88.5,-34.5), F335M (-89.5,-33.2), F470N '
+               '(-91.4,-33.9), F480M (-90.6,-33.1), default (-90.0,-34.0) mas, '
+               'agreeing across filters to <3 mas. Those numbers are deliberately '
+               'NOT carried over: they are GNS-frame values and re-using them '
+               'against VIRAC2 would bake in the frame difference as if it were '
+               'an astrometry correction. The measured GNS->VIRAC2 frame shift is '
+               '(+71.74,-70.09) mas (std 1.5/1.45, range <4.8 mas across all five '
+               'filters) -- a coherent frame offset, not a per-filter defect.\n'
+               '\n'
+               'Unlike the previous GNS entry, this DOES change pixels -- sickle '
+               'needs re-reduction and re-cataloging.'),
     ),
     FieldAlignment(
         proposal='1979', fields=None,

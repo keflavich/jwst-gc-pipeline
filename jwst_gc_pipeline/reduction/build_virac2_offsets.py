@@ -133,16 +133,62 @@ def detect_i2d_sources(i2d_path, thr=80.0, fwhm=2.5):
     return SkyCoord(w.pixel_to_world(t['xcentroid'], t['ycentroid']))
 
 
+#: Mosaic products ``coarse_from_i2d`` will tie on, in preference order.  A
+#: two-module field must be tied on ``merged`` -- that is the only product the
+#: inter-module seam lives in -- so it always comes first.
+MOSAIC_PREFERENCE = ('merged', 'nrca', 'nrcb', 'nrcalong', 'nrcblong')
+
+
+def mosaic_candidates(stem):
+    """``(label, path)`` mosaics to try for a filter, most preferred first.
+
+    A SINGLE-MODULE field never produces a ``-merged`` mosaic -- there is nothing
+    to merge -- so requiring one refuses the whole build for a field that is
+    perfectly measurable.  sickle (3958/007) is nrcb-only and has ``-nrcb``
+    science mosaics for all five bands.
+    """
+    return [(m, f"{stem}-{m}_i2d.fits") for m in MOSAIC_PREFERENCE]
+
+
+def perframe_matches(basename, mtag):
+    """Is ``basename`` the per-frame catalog for merge tag ``mtag``?
+
+    The ``exp*`` glob wildcard swallows any suffix between the exposure number
+    and the merge tag, so globbing for ``_m3`` also matches the GROUPED-fit
+    variant ``..._exp00001_group_m3_daophot_basic.fits``.  Both then claim the
+    same frame and the duplicate check aborts the build, reporting them as "a
+    stale duplicate from before the per-frame names carried the observation
+    token" -- which they are not; they are two legitimate products of the same
+    exposure.  Require the exposure number to be followed IMMEDIATELY by the
+    merge tag.  Only sickle carries ``group_`` per-frame catalogs today
+    (sgrc/cloudc/brick have none), which is why the over-match went unseen.
+    """
+    return bool(re.search(rf'_exp\d+{re.escape(mtag)}_daophot_basic\.fits$',
+                          basename))
+
+
 def coarse_from_i2d(filt, rc, ref):
     """Per-FILTER coarse bulk tie measured on the drizzled mosaic (clean) vs VIRAC2.
     This seeds every visit of the filter; the per-visit/per-exposure fine NN then
     resolves the <SEARCH residual.  Returns (dra, ddec) arcsec to ADD, or None."""
     sub = rc['filts'][filt][0]
-    i2d = (f"{rc['basepath']}/{sub}/pipeline/"
-           f"jw0{rc['proposal']}-o{rc['field']}_t001_nircam_clear-{filt}-merged_i2d.fits")
-    if not os.path.exists(i2d):
-        print(f"  [coarse] no i2d for {filt}: {i2d}")
+    stem = (f"{rc['basepath']}/{sub}/pipeline/"
+            f"jw0{rc['proposal']}-o{rc['field']}_t001_nircam_clear-{filt}")
+    # Prefer `-merged` where it exists; fall back to a single module mosaic only
+    # when merged is absent, and say which was used.
+    candidates = mosaic_candidates(stem)
+    i2d = mod = None
+    for name, path in candidates:
+        if os.path.exists(path):
+            i2d, mod = path, name
+            break
+    if i2d is None:
+        print(f"  [coarse] no i2d for {filt}: tried "
+              f"{', '.join(n for n, _ in candidates)} under {stem}-*_i2d.fits")
         return None
+    if mod != 'merged':
+        print(f"  [coarse] {filt}: no merged mosaic; tying on the {mod} mosaic "
+              f"(single-module field)")
     sc = detect_i2d_sources(i2d)
     # ONE call: coarse_xcorr -> measure_offset sweeps the window internally (narrow->wide,
     # density-immune) and flags `swept` when the tie only appeared after widening (the
@@ -245,6 +291,25 @@ REGION = {
                        basepath='/orange/adamginsburg/jwst/quintuplet',
                        filts={'f212n': ('F212N', 2024.617, '_m3'),
                               'f323n': ('F323N', 2024.617, '_m3')}),
+    # sickle (3958/007).  The last GC field still tied in the GNS frame while
+    # ``refnames`` already called it VIRAC2 -- the live inconsistency
+    # alignment_config's module docstring slated for re-measurement.  Registering
+    # it here is what makes that possible: step 0 refuses to measure a fresh tie
+    # for a field that is already tied ("routing that to MEASURE would record a
+    # new tie for a field that already has one"), so the route to VIRAC2 is to
+    # BUILD the VIRAC2 table, not to blank the recorded bulk and re-measure.
+    # Epoch from EXPSTART of its own NIRCam frames: MJD 60545.503 -> 2024.643,
+    # which agrees with the refcat already on disk
+    # (catalogs/gaia_virac2_refcat_epoch2024.64.fits).
+    # NIRCam is observation 007 and single-module (nrcb only); the 3958 MIRI data
+    # are observation 001 and are NOT tied here -- this builder ties NIRCam.
+    'sickle': dict(proposal='3958', field='007',
+                   basepath='/orange/adamginsburg/jwst/sickle',
+                   filts={'f187n': ('F187N', 2024.643, '_m3'),
+                          'f210m': ('F210M', 2024.643, '_m3'),
+                          'f335m': ('F335M', 2024.643, '_m3'),
+                          'f470n': ('F470N', 2024.643, '_m3'),
+                          'f480m': ('F480M', 2024.643, '_m3')}),
     # gc2211 (2211): FIVE observations of one proposal reduced into ONE directory
     # tree, so it needs one region key per observation -- ``field`` is what makes a
     # region, and Offsets_JWST_Brick2211_VIRAC2locked.csv already separates them by
@@ -607,6 +672,9 @@ def _gather(filt, base, sub, mtag, dets, prop=None, field=None, otag=''):
         for f in sorted(glob.glob(f'{base}/{sub}/{filt}_{det}{otag}'
                                   f'_visit*_vgroup*_exp*{mtag}_daophot_basic.fits')):
             b = os.path.basename(f)
+            # The glob over-matches the grouped-fit variant; see perframe_matches.
+            if not perframe_matches(b, mtag):
+                continue
             vis3 = b.split('_visit')[1][:3]; exp = int(re.search(r'_exp(\d+)', b).group(1))
             vgr = parse_vgroup(b)
             ra, dec, ra0, de0, crf = load_siaf(f)
@@ -767,8 +835,27 @@ def lock_filter(filt, rc, per_module=False):
     rows = []
     for modlabel, gdets in sorted(groups.items()):
         print(f"  --- module '{modlabel}': {gdets} ---", flush=True)
-        byve, byv, coarse = _gather(filt, base, sub, mtag, gdets, prop, field, otag)
+        try:
+            byve, byv, coarse = _gather(filt, base, sub, mtag, gdets, prop, field,
+                                        otag)
+        except WrongObservationError as ex:
+            # A SINGLE-MODULE field has no catalogs for the module it never
+            # observed, and that is not an error -- sickle (3958/007) is nrcb
+            # only, so globbing nrca1..4 legitimately finds nothing and used to
+            # abort the whole build.  Skip a module with NO frames at all; every
+            # other WrongObservationError (wrong observation, duplicate frame)
+            # still propagates, because those mean the frames we DID find are
+            # untrustworthy.
+            if 'no per-frame catalogs' not in str(ex):
+                raise
+            print(f"  --- module '{modlabel}': no per-frame catalogs; this field "
+                  f"did not observe it, skipping ---", flush=True)
+            continue
         rows.extend(_solve(byve, byv, coarse, c_ra, c_dec, ref, filt, modlabel=modlabel))
+    if not rows:
+        raise WrongObservationError(
+            f"{filt}: no module produced a tie -- every module was skipped for "
+            f"want of per-frame catalogs. Nothing to lock.")
     return rows
 
 
