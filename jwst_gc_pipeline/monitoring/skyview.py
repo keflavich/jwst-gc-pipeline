@@ -62,13 +62,17 @@ COLOR_SPRING = '#1E90FF'
 COLOR_AUTUMN = '#FF8C00'
 COLOR_TARGET_AREA = '#ff6b6b'
 
-#: Backgrounds worth having here.  The survey's own imagery first.
+#: Backgrounds worth having here.  The first is the one the view opens on, so it has to be all-sky.  The survey's
+#: own imagery is a CMZ-only HiPS (``hips_initial_fov`` 0.077 deg, no tiles below
+#: order ~8); opening on it at a 1.6 deg field showed a black rectangle, because
+#: there is nothing there to draw at that scale.  It is worth having, but as a
+#: choice you zoom into, not as the default.
 SURVEYS = (
-    ('JWST CMZ', 'https://starformation.astro.ufl.edu/avm_images/jwst_cmz_hips/'),
     ('DSS', 'P/DSS2/color'),
     ('2MASS', 'P/2MASS/color'),
-    ('WISE', 'P/allWISE/color'),
     ('GLIMPSE', 'P/Spitzer/GLIMPSE360'),
+    ('WISE', 'P/allWISE/color'),
+    ('JWST CMZ', 'https://starformation.astro.ufl.edu/avm_images/jwst_cmz_hips/'),
 )
 
 
@@ -733,8 +737,7 @@ def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
     observed_cls = 'gcm-sky-empty' if not n_observed else ''
 
     surveys = ''.join(
-        f'<button class="gcm-sky-btn survey{" on" if i == 0 else ""}" disabled '
-        f'title="interactive view only" '
+        f'<button class="gcm-sky-btn survey{" on" if i == 0 else ""}" '
         f'data-survey="{_esc(url)}">{_esc(name)}</button>'
         for i, (name, url) in enumerate(SURVEYS))
 
@@ -1042,12 +1045,21 @@ interactive view adds sky imagery you can pan across.
       note.textContent = 'Sky imagery could not be loaded (' + what +
         '). The footprint map above is unaffected.';
     }}
+    loading = false;
     if (loadBtn) {{ loadBtn.disabled = false; loadBtn.textContent = 'retry'; }}
   }}
 
-  if (loadBtn) {{ loadBtn.addEventListener('click', function () {{
-    loadBtn.disabled = true;
-    loadBtn.textContent = 'loading…';
+  var aladin = null;          // the live view, once there is one
+  var wanted = null;          // a background asked for before it existed
+  var loading = false;
+
+  function loadInteractive() {{
+    if (aladin || loading) {{ return; }}
+    loading = true;
+    if (loadBtn) {{
+      loadBtn.disabled = true;
+      loadBtn.textContent = 'loading…';
+    }}
     if (note) {{ note.textContent = ''; }}
     var s = document.createElement('script');
     s.src = ALADIN_SRC;
@@ -1069,7 +1081,31 @@ interactive view adds sky imagery you can pan across.
       }});
     }};
     document.body.appendChild(s);
-  }}); }}
+  }}
+
+  if (loadBtn) {{ loadBtn.addEventListener('click', loadInteractive); }}
+
+  // Background buttons are live from the start.  They used to be disabled until
+  // the interactive view existed, which meant the row a reader sees first was a
+  // row of dead controls -- and the thing they select is exactly the reason to
+  // load that view, so asking for one is a perfectly good way to ask for it.
+  function applySurvey(target) {{
+    if (!aladin) {{
+      wanted = target;
+      loadInteractive();
+      return;
+    }}
+    aladin.setImageSurvey(target.indexOf('http') === 0 ? A.HiPS(target) : target);
+  }}
+
+  document.querySelectorAll('#gcm-sky-ui button.survey').forEach(function (b) {{
+    b.addEventListener('click', function () {{
+      document.querySelectorAll('#gcm-sky-ui button.survey')
+        .forEach(function (o) {{ o.classList.remove('on'); }});
+      b.classList.add('on');
+      applySurvey(b.dataset.survey);
+    }});
+  }});
 
   function start(fp) {{
     // Aladin measures its container at init, so it has to be visible first --
@@ -1078,18 +1114,24 @@ interactive view adds sky imagery you can pan across.
     // it with, so no failure between here and there can empty the panel.
     if (aladinDiv) {{ aladinDiv.classList.remove('gcm-sky-off'); }}
     return A.init.then(function () {{
-      var aladin = A.aladin('#gcm-aladin', {{
-        survey: {json.dumps(SURVEYS[0][1])},
+      // Open on whichever background was asked for, so a click on '2MASS' that
+      // triggered this load arrives as 2MASS rather than as the default.
+      aladin = A.aladin('#gcm-aladin', {{
+        survey: wanted || {json.dumps(SURVEYS[0][1])},
         target: '0 0', fov: 1.6, cooFrame: 'galactic'
       }});
+      if (wanted && wanted.indexOf('http') === 0) {{
+        // A HiPS given by URL has to be built, not named.
+        aladin.setImageSurvey(A.HiPS(wanted));
+      }}
+      wanted = null;
       if (svg) {{ svg.classList.add('gcm-sky-off'); }}
       if (loadBtn) {{
         loadBtn.textContent = 'interactive view loaded';
         loadBtn.disabled = true;
       }}
+      // Pan/zoom belongs to Aladin now; the static map's reset does nothing.
       if (resetBtn) {{ resetBtn.disabled = true; }}
-      document.querySelectorAll('#gcm-sky-ui button[disabled]')
-        .forEach(function (b) {{ b.disabled = false; b.removeAttribute('title'); }});
 
       function layer(name, color, width) {{
         var ov = A.graphicOverlay({{ color: color, lineWidth: width || 1.2,
@@ -1124,15 +1166,6 @@ interactive view adds sky imagery you can pan across.
 
       applyLayers();
 
-      document.querySelectorAll('#gcm-sky-ui button.survey').forEach(function (b) {{
-        b.onclick = function () {{
-          document.querySelectorAll('#gcm-sky-ui button.survey')
-            .forEach(function (o) {{ o.classList.remove('on'); }});
-          b.classList.add('on');
-          var t = b.dataset.survey;
-          aladin.setImageSurvey(t.indexOf('http') === 0 ? A.HiPS(t) : t);
-        }};
-      }});
     }}).catch(function (e) {{
       restore();
       fail(describe(e));

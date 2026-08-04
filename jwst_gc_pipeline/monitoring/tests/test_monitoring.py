@@ -1532,6 +1532,53 @@ def test_roman_toggles_are_not_dead_without_aladin():
     assert 'disabled' not in spring
 
 
+def test_the_emitted_javascript_parses():
+    """~250 lines of JavaScript are emitted from a Python f-string, where every
+    brace is doubled. A slip there produces a page that renders perfectly and
+    whose every control is dead, which no assertion about the markup can see."""
+    import shutil
+    import subprocess
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('node not available')
+    from jwst_gc_pipeline.monitoring import skyview
+    html = skyview.section(_fp(planned=_POINTINGS), _ROMAN)
+    script = re.search(r'<script>(.*)</script>', html, re.S).group(1)
+    done = subprocess.run([node, '--check', '-'], input=script,
+                          capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+
+
+def test_the_view_opens_on_an_all_sky_background():
+    """The survey's own CMZ HiPS declares hips_initial_fov = 0.077 deg and has
+    no low-order tiles, so opening on it at the panel's 1.6 deg field drew a
+    black rectangle — the imagery worked exactly as configured and showed
+    nothing. Whatever leads this list has to cover the whole sky."""
+    from jwst_gc_pipeline.monitoring import skyview
+    first_url = skyview.SURVEYS[0][1]
+    assert not first_url.startswith('http'), (
+        'the opening background is a specific HiPS, not an all-sky survey')
+    assert any(url.startswith('http') for _n, url in skyview.SURVEYS), (
+        'the survey imagery should still be reachable, just not as the default')
+
+
+def test_background_buttons_work_before_the_viewer_exists():
+    """They were disabled until someone loaded the interactive view, so the row
+    every reader sees first was a row of dead controls — and the background they
+    pick is exactly the reason to load that view."""
+    from jwst_gc_pipeline.monitoring import skyview
+    html = skyview.section(_fp(planned=_POINTINGS))
+    row = html[html.index('Background'):html.index('Legend')]
+    assert 'survey' in row
+    assert 'disabled' not in row, 'background buttons are inert on arrival'
+    # Clicking one before the viewer exists must remember the choice and load.
+    assert 'function applySurvey(' in html
+    assert 'wanted = target;' in html
+    assert 'loadInteractive();' in html
+    # ...and the load must honour it rather than opening on the default.
+    assert 'survey: wanted ||' in html
+
+
 def test_roman_layers_start_hidden():
     """Roman is context on a JWST monitor: drawn, but off until asked for."""
     from jwst_gc_pipeline.monitoring import skyview
