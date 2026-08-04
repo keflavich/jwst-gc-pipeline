@@ -4,9 +4,12 @@ Generate a web-preview RGB image for a staged release field from its science
 mosaics.  Default channels are the short-wavelength trio R=F212N, G=F187N,
 B=F182M, which share a common pixel grid (no reprojection needed); pass
 ``--filters`` to override (2 or 3 filters; with 2, green is synthesized as the
-mean of the other two).  ``--reproject`` reprojects all channels onto the first
-channel's WCS (needed when mixing pixel scales, e.g. SW + LW).  ``--observation``
-selects one pointing of a multi-pointing field (images/<obs>/<filter>/).
+mean of the other two).  Channels that are not already on one pixel grid (SW + LW, or a
+module-split field with several mosaics per filter) are resampled onto a common
+grid built from the union of every channel -- automatically, because the
+alternative is a silent wrong-scale crop.  ``--reproject`` forces that even when
+the grids already match.  ``--observation`` selects one pointing of a
+multi-pointing field (images/<obs>/<filter>/).
 
 A field staged as several mosaics per filter (module-split fields such as
 arches/quintuplet, which ship ``-nrca_i2d`` + ``-nrcb_i2d`` instead of a single
@@ -74,6 +77,25 @@ def _mosaic_header(paths, max_axis):
     return header
 
 
+def _grid_signature(path):
+    """``(|cdelt1|, naxis1, naxis2)`` -- enough to tell two grids apart."""
+    header = fits.getheader(path, "SCI")
+    wcs = WCS(header, relax=True)
+    return (round(abs(wcs.wcs.cdelt[0]), 12), header["NAXIS1"], header["NAXIS2"])
+
+
+def grids_differ(paths):
+    """True when the inputs are not all on one pixel grid.
+
+    Without a common grid, the channels are combined by cropping to the smallest
+    shape, which for a SW/LW pair silently takes a corner of the finer image at
+    the wrong scale -- a preview that looks plausible and is wrong.  Detecting it
+    is what lets ``main`` imply ``--reproject`` instead of relying on the
+    operator to remember it.
+    """
+    return len({_grid_signature(p) for p in paths}) > 1
+
+
 def load_science(field_dir, filt, observation=None, ref_header=None,
                  max_axis=8000):
     paths = science_paths(field_dir, filt, observation)
@@ -116,7 +138,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--field", default="cloudc")
-    parser.add_argument("--version", default="v1.0-2026.06")
+    # same reason as stage_release: the old default wrote into the OLDEST
+    # frozen release tree whenever it was forgotten
+    parser.add_argument("--version", required=True,
+                        help="release version directory, e.g. v1.2-2026.08")
     parser.add_argument("--release-root",
                         default="/orange/adamginsburg/jwst/releases")
     parser.add_argument("--filters", nargs="+", metavar="FILT",
@@ -125,7 +150,9 @@ def main(argv=None):
     parser.add_argument("--observation", default=None,
                         help="pointing of a multi-pointing field (e.g. o023)")
     parser.add_argument("--reproject", action="store_true",
-                        help="reproject channels onto the first channel's grid")
+                        help="force resampling onto a common grid even when every "
+                             "channel is already on the same one (mixed pixel "
+                             "scales and multi-mosaic filters imply it anyway)")
     parser.add_argument("--low-percentile", type=float, default=40.0,
                         help="black point percentile")
     parser.add_argument("--high-percentile", type=float, default=99.8,
@@ -136,8 +163,7 @@ def main(argv=None):
     parser.add_argument("--max-height", type=int, default=3000,
                         help="web JPEG max height in px")
     parser.add_argument("--max-axis", type=int, default=8000,
-                        help="cap (px) on the longest axis of the common grid "
-                             "built when a filter has several mosaics to coadd")
+                        help="cap (px) on the longest axis of the common grid")
     args = parser.parse_args(argv)
 
     if len(args.filters) not in (2, 3):
@@ -145,21 +171,27 @@ def main(argv=None):
 
     field_dir = field_release_dir(args.field, args.version, args.release_root)
 
-    # A filter staged as several mosaics (one per module) has to be coadded onto
-    # a common grid, and every other channel must then land on that same grid --
-    # so it implies --reproject even when the pixel scales already match.
-    multi = any(len(science_paths(field_dir, f, args.observation)) > 1
-                for f in args.filters)
+    paths_by_filter = {f: science_paths(field_dir, f, args.observation)
+                       for f in args.filters}
+    all_paths = [p for f in args.filters for p in paths_by_filter[f]]
+    # A filter staged as several mosaics (one per module) has to be coadded, and
+    # channels on different pixel grids have to be resampled -- either way every
+    # channel must land on ONE grid, so both imply --reproject.  Relying on the
+    # operator to pass it left a silent wrong-scale crop one forgotten flag away.
+    multi = any(len(v) > 1 for v in paths_by_filter.values())
+    need_common = args.reproject or multi or grids_differ(all_paths)
 
-    # load channels; with --reproject, all are resampled onto the first's WCS
-    ref_header = None
-    loaded = []
-    for f in args.filters:
-        data, hdr = load_science(field_dir, f, args.observation, ref_header,
-                                 max_axis=args.max_axis)
-        loaded.append(data)
-        if (args.reproject or multi) and ref_header is None:
-            ref_header = hdr
+    # The common grid is built from the union of EVERY channel's mosaics, not
+    # from whichever filter was named first.  Taking the first channel's native
+    # header meant --max-axis only capped anything when a multi-mosaic filter
+    # happened to lead: with a single-mosaic filter first, a later coadd was
+    # resampled onto an uncapped native grid -- exactly the allocation the cap
+    # exists to prevent -- and the finest channel was rendered at the coarsest
+    # channel's scale.
+    ref_header = _mosaic_header(all_paths, args.max_axis) if need_common else None
+    loaded = [load_science(field_dir, f, args.observation, ref_header,
+                           max_axis=args.max_axis)[0]
+              for f in args.filters]
 
     stretched = [stretch(c, args.low_percentile, args.high_percentile,
                          args.asinh_a) for c in loaded]

@@ -153,3 +153,109 @@ def test_science_paths_returns_every_module_mosaic(tmp_path):
     # a field WITH a merged mosaic still prefers it, alone
     (d / 'jw02045-o001_t001_nircam_clear-f212n-merged_i2d.fits').touch()
     assert len(mpr.science_paths(pathlib.Path(str(tmp_path)), 'F212N', None)) == 1
+
+
+# NOTE: the gate-honesty checks that used to live here (a check with no PASS key
+# is not a pass; a field where nothing could be compared is not green) were
+# superseded on main by the per-module/view rework in
+# registration_failsafes.scan_field, which makes could-not-verify BLOCK rather
+# than warn.  They are covered by
+# jwst_gc_pipeline/photometry/tests/test_registration_per_module_gate.py
+# (test_errored_check_is_not_counted_as_a_pass, test_no_mosaics_is_unverified_not_pass,
+# test_sole_band_with_passing_own_catalog_is_not_blocked).
+
+
+# ---- README describes what is actually staged ----
+def _sr():
+    return _load('stage_release', os.path.join(_REL, 'stage_release.py'))
+
+
+def _readme_images_section(tmp_path, srcs, kinds=()):
+    sr = _sr()
+    items = [{'category': 'image', 'kind': k or 'science', 'src': s, 'filter': 'F212N'}
+             for s, k in zip(srcs, list(kinds) + ['science'] * len(srcs))]
+    sr.write_readme(tmp_path, 'testfield', 'v9.9', items, 'copy')
+    text = (tmp_path / 'README.md').read_text()
+    return text.split('## Images')[1].split('##')[0]
+
+
+def test_readme_calls_out_a_module_split_field(tmp_path):
+    section = _readme_images_section(tmp_path, [
+        '/x/jw02045-o001_t001_nircam_clear-f212n-nrca_i2d.fits',
+        '/x/jw02045-o001_t001_nircam_clear-f212n-nrcb_i2d.fits'])
+    assert 'nrca' in section and 'nrcb' in section
+    assert 'per-module' in section
+
+
+def test_readme_does_not_call_miri_a_module_split(tmp_path):
+    """sgrb2 has a merged mosaic in all ten NIRCam filters PLUS MIRI; keying off
+    'anything but merged' told its readers it had no full-field mosaic."""
+    section = _readme_images_section(tmp_path, [
+        '/x/jw05365-o001_t001_nircam_clear-f182m-merged_i2d.fits',
+        '/x/jw05365-o002-998_t001_miri_clear-f770w-mirimage_data_i2d.fits'])
+    assert 'per-module' not in section
+    assert 'MIRI science mosaic' in section
+
+
+def test_readme_omits_residual_model_lines_when_none_staged(tmp_path):
+    section = _readme_images_section(
+        tmp_path, ['/x/jw05365-o001_t001_nircam_clear-f182m-merged_i2d.fits'])
+    assert 'residual' not in section and 'PSF model' not in section
+
+
+def test_readme_says_image_only_when_no_catalogs(tmp_path):
+    sr = _sr()
+    sr.write_readme(tmp_path, 'testfield', 'v9.9',
+                    [{'category': 'image', 'kind': 'science', 'filter': 'F182M',
+                      'src': '/x/jw05365-o001_t001_nircam_clear-f182m-merged_i2d.fits'}],
+                    'copy')
+    assert 'image-only release: no catalogs' in (tmp_path / 'README.md').read_text()
+
+
+# ---- staging guards ----
+def test_image_only_fields_declare_skip_catalogs():
+    """An image-only field's status must not depend on the operator remembering
+    --images-only: sgra's uncertified catalogs include the held F115W band."""
+    sr = _sr()
+    for field in ('sgra', 'arches', 'quintuplet', 'sickle'):
+        assert sr.FIELDS[field].get('skip_catalogs') is True, field
+
+
+def test_version_is_required():
+    sr = _sr()
+    with pytest.raises(SystemExit):
+        sr.main(['--field', 'sgra'])
+
+
+def test_refuses_to_stage_into_an_older_version(tmp_path, capsys, monkeypatch):
+    sr = _sr()
+    for name in ('v1.0-2026.06', 'v2.0-2027.01'):
+        (tmp_path / name).mkdir()
+    monkeypatch.setattr(sr, 'build_manifest',
+                        lambda *a, **k: [{'category': 'image', 'kind': 'science',
+                                          'filter': 'F212N', 'iteration': None,
+                                          'observation': None, 'instrument': 'NIRCam',
+                                          'src': '/x/a.fits', 'dest': 'images/F212N/a.fits',
+                                          'size_bytes': 1}])
+    rc = sr.main(['--field', 'sgra', '--stage', '--release-root', str(tmp_path),
+                  '--version', 'v1.0-2026.06'])
+    assert rc == 2
+    assert 'REFUSING TO STAGE' in capsys.readouterr().err
+
+
+# ---- preview grids ----
+def test_grids_differ_detects_a_mixed_scale_pair(tmp_path):
+    from astropy.io import fits
+    import numpy as np
+    mpr = _load('make_preview_rgb', os.path.join(_REL, 'make_preview_rgb.py'))
+    paths = []
+    for name, cdelt in (('sw.fits', 1e-5), ('lw.fits', 2e-5)):
+        hdu = fits.ImageHDU(np.zeros((4, 4), dtype='float32'), name='SCI')
+        hdu.header.update({'CTYPE1': 'RA---TAN', 'CTYPE2': 'DEC--TAN',
+                           'CRVAL1': 266.4, 'CRVAL2': -28.9, 'CRPIX1': 2, 'CRPIX2': 2,
+                           'CDELT1': -cdelt, 'CDELT2': cdelt})
+        path = tmp_path / name
+        fits.HDUList([fits.PrimaryHDU(), hdu]).writeto(path)
+        paths.append(str(path))
+    assert mpr.grids_differ(paths) is True
+    assert mpr.grids_differ(paths[:1]) is False

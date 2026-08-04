@@ -168,7 +168,8 @@ def _version_dropdown(field, active_version, all_versions):
             + "".join(opts) + "</select></label>")
 
 
-def render_field_page(field, manifest, preview_rel, preview_channels=None, all_versions=None):
+def render_field_page(field, manifest, preview_rel, preview_channels=None,
+                      all_versions=None, preview_version=None):
     files = manifest["files"]
     images = [f for f in files if f["category"] == "image"]
     catalogs = [f for f in files if f["category"] == "catalog"]
@@ -196,7 +197,16 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None, all_v
                f"B={preview_channels[2]})." if preview_channels else "Preview.")
         out.append(f"<img class=preview src='{html.escape(preview_rel)}' "
                    f"alt='{html.escape(field)} preview'>")
-        out.append(f"<div class=muted>{html.escape(cap)} "
+        # Attribute the preview's version whenever it is not this page's. The
+        # fallback exists so a re-stage does not blank the card, but "the same
+        # mosaics under a new version" is not always true: cloudc, sgrc and wd1
+        # all re-drizzled their preview bands between v1.0 and v1.1 (two of them
+        # to a byte-different file of identical size). An older preview is still
+        # a fair illustration; presenting it as this release's is not.
+        stale = (preview_version and preview_version != manifest["version"])
+        provenance = (f" Preview rendered from the {preview_version} mosaics, "
+                      f"not {manifest['version']}'s." if stale else "")
+        out.append(f"<div class=muted>{html.escape(cap)}{html.escape(provenance)} "
                    "Full-resolution images below.</div>")
 
     if multi:
@@ -510,12 +520,14 @@ def main(argv=None):
         # falling off the latest version would blank the field's card on the index.
         preview_rel = None
         preview_channels = None
+        preview_version = None
         previews = []
         for v in versions:
-            vdir = field_release_dir(field, v, args.release_root)
+            vdir = latest_dir if v == latest else field_release_dir(field, v, args.release_root)
             previews = sorted((vdir / "preview").glob("*.jpg")) \
                 if (vdir / "preview").is_dir() else []
             if previews:
+                preview_version = v
                 if v != latest:
                     print(f"  {field}: no preview in {latest}, using {v}'s")
                 break
@@ -531,7 +543,8 @@ def main(argv=None):
             manifest = json.loads(
                 (field_release_dir(field, v, args.release_root) / "MANIFEST.json").read_text())
             page = render_field_page(field, manifest, preview_rel, preview_channels,
-                                     all_versions=versions)
+                                     all_versions=versions,
+                                     preview_version=preview_version)
             fname = f"{field}.html" if v == latest else f"{field}.{v}.html"
             (out_dir / fname).write_text(page)
             if v == latest:
