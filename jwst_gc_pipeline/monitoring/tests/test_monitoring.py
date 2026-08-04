@@ -1272,6 +1272,158 @@ def test_static_map_absent_when_nothing_is_drawable():
     assert skyview.static_map({}) == ('', {})
 
 
+def test_cross_filesystem_publish_copies_rather_than_symlinks(tmp_path,
+                                                              monkeypatch):
+    """A symlink whose target leaves the served tree is not a file a web server
+    will hand out — Apache returns 403 for every one. That fails silently in the
+    worst way: the pages are fine and only the figures they link to vanish."""
+    from jwst_gc_pipeline.monitoring import report
+    src = tmp_path / 'fig.png'
+    src.write_bytes(b'\x89PNG-data')
+    dst = tmp_path / 'out' / 'fig.png'
+    dst.parent.mkdir()
+
+    def no_hardlinks(a, b):
+        raise OSError(18, 'Invalid cross-device link')
+    monkeypatch.setattr(report.os, 'link', no_hardlinks)
+
+    assert report._link(str(src), str(dst)) == 'copy'
+    assert not dst.is_symlink()
+    assert dst.read_bytes() == b'\x89PNG-data'
+
+
+class _Stat(object):
+    def __init__(self, dev, size, mtime):
+        self.st_dev, self.st_size, self.st_mtime = dev, size, mtime
+
+
+def test_unchanged_copy_is_not_recopied():
+    """~110 MB of figures re-copied on an hourly refresh would be most of the
+    job's cost."""
+    from jwst_gc_pipeline.monitoring import report
+    same = _Stat(7, 100, 1000.0)
+    assert report._copy_is_current(same, _Stat(9, 100, 1000.0), 9)
+
+
+@pytest.mark.parametrize('dst_stat,dst_dev,why', [
+    (_Stat(7, 100, 1000.0), 7, 'same filesystem — relink instead'),
+    (_Stat(9, 101, 1000.0), 9, 'size changed'),
+    (_Stat(9, 100, 1001.0), 9, 'mtime changed'),
+])
+def test_copy_is_refreshed_when_it_must_be(dst_stat, dst_dev, why):
+    """The same-filesystem case is the important one: skipping the relink there
+    is exactly the stale-page bug publish() exists to prevent."""
+    from jwst_gc_pipeline.monitoring import report
+    assert not report._copy_is_current(_Stat(7, 100, 1000.0), dst_stat, dst_dev), why
+
+
+_ROMAN = {
+    'tiles': {'Tile 1': {'spring': [[[266.5, -29.6], [266.6, -29.6],
+                                     [266.6, -29.5], [266.5, -29.5]]],
+                         'autumn': [[[266.7, -29.6], [266.8, -29.6],
+                                     [266.8, -29.5], [266.7, -29.5]]]}},
+    'target_area': [[266.4, -29.7], [266.9, -29.7], [266.9, -29.2]],
+}
+
+
+def test_roman_toggles_are_not_dead_without_aladin():
+    """The Roman buttons used to map to empty static groups, so before anyone
+    loaded 1.8 MB of Aladin a click toggled the button's own styling and nothing
+    else — a live-looking control that did nothing."""
+    from jwst_gc_pipeline.monitoring import skyview
+    svg, info = skyview.static_map(_fp(planned=_POINTINGS), _ROMAN)
+    assert info['n_roman'] == 3                    # 1 spring + 1 autumn + area
+    for group in ('stat-spring', 'stat-autumn', 'stat-target'):
+        assert 'id="%s"' % group in svg
+    html = skyview.section(_fp(planned=_POINTINGS), _ROMAN)
+    for group in ('stat-spring', 'stat-autumn', 'stat-target'):
+        assert "'%s'" % group in html              # reachable from STATIC_GROUPS
+    # and the buttons must not be inert
+    spring = html[html.index('id="lyr-spring"'):html.index('id="lyr-autumn"')]
+    assert 'disabled' not in spring
+
+
+def test_roman_layers_start_hidden():
+    """Roman is context on a JWST monitor: drawn, but off until asked for."""
+    from jwst_gc_pipeline.monitoring import skyview
+    svg, _ = skyview.static_map(_fp(planned=_POINTINGS), _ROMAN)
+    for group in ('stat-spring', 'stat-autumn', 'stat-target'):
+        block = svg[svg.index('id="%s"' % group):]
+        assert 'gcm-sky-off' in block[:block.index('>')]
+    for group in ('stat-nircam', 'stat-miri'):
+        block = svg[svg.index('id="%s"' % group):]
+        assert 'gcm-sky-off' not in block[:block.index('>')]
+
+
+def test_zoom_out_reaches_the_roman_tiles():
+    """Roman's tiles lie outside the JWST bounding box that sets the home view,
+    so a 3x zoom-out ceiling let you enable a layer you could never see."""
+    from jwst_gc_pipeline.monitoring import skyview
+    with_roman = skyview.section(_fp(planned=_POINTINGS), _ROMAN)
+    without = skyview.section(_fp(planned=_POINTINGS))
+    assert 'var ZOOM_OUT_MAX = 8;' in with_roman
+    assert 'var ZOOM_OUT_MAX = 3;' in without
+
+
+def test_map_is_drawn_in_galactic_coordinates():
+    """A Galactic-centre survey read in RA/Dec runs diagonally across the grid;
+    in l/b the tiled strip runs along it."""
+    from jwst_gc_pipeline.monitoring import skyview
+    pytest.importorskip('astropy')
+    svg, info = skyview.static_map(_fp(planned=_POINTINGS))
+    assert info['frame'] == 'galactic'
+    assert 'l ' in svg and 'b ' in svg           # native graticule labels
+    assert 'RA ' in svg and 'Dec ' in svg        # equatorial overlay labels
+    assert 'Galactic longitude increasing left' in svg
+
+
+def test_galactic_frame_reshapes_the_map():
+    """The survey tiles along the plane, so the drawn aspect ratio is a check
+    that the transform actually happened rather than silently no-opping."""
+    from jwst_gc_pipeline.monitoring import skyview
+    pytest.importorskip('astropy')
+    fp = _fp(planned=_POINTINGS)
+    gal = skyview.static_map(fp)[1]
+    icrs = skyview.static_map(fp, frame_name='icrs')[1]
+    assert icrs['frame'] == 'icrs'
+    assert abs(gal['height'] - icrs['height']) > 1.0
+
+
+def test_frame_falls_back_to_icrs_without_astropy(monkeypatch):
+    """Losing astropy must cost the Galactic frame, not the map."""
+    from jwst_gc_pipeline.monitoring import skyview
+    monkeypatch.setattr(skyview, '_transform',
+                        lambda pairs, src, dst: list(pairs) if src == dst else None)
+    svg, info = skyview.static_map(_fp(planned=_POINTINGS), _ROMAN)
+    assert info['frame'] == 'icrs'
+    assert info['overlay_grid'] is False         # no second graticule
+    assert info['n_nircam'] == 2                 # but the footprints are drawn
+    assert '<svg' in svg
+
+
+def test_front_page_leads_with_the_map_then_the_cards():
+    """Requested layout: the visual overview first, then the status boxes."""
+    from jwst_gc_pipeline.monitoring import render
+    html = render.render_page([_entry()], footprints=_fp(planned=_POINTINGS),
+                              include_detail=False,
+                              detail_href=lambda e: 'fields/x.html')
+    assert html.index('Sky view') < html.index('id="overview"')
+    assert '<h2>Detail</h2>' not in html
+    assert 'href="fields/x.html"' in html
+
+
+def test_field_pages_carry_the_detail_and_not_the_map():
+    """The map is ~100 kB of identical geometry; 18 copies of it is the cost of
+    putting it on every field page."""
+    from jwst_gc_pipeline.monitoring import render
+    html = render.render_page([_entry()], footprints=_fp(planned=_POINTINGS),
+                              include_skyview=False,
+                              home_href='../monitor.html#overview')
+    assert '<svg id="gcm-sky-static"' not in html
+    assert '<h2>Detail</h2>' in html
+    assert 'href="../monitor.html#overview"' in html
+
+
 def test_layer_toggles_drive_both_views():
     """One set of buttons drives the static groups and, after the upgrade, the
     Aladin overlays. If the two used different ids the toggles would silently
