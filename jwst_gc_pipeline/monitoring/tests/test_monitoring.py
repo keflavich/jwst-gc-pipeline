@@ -6,6 +6,7 @@ separation, ambiguity) and not about whatever happens to be on disk today.
 """
 import json
 import os
+import re
 
 import pytest
 
@@ -1200,13 +1201,463 @@ def _fp(**kw):
     return base
 
 
-def test_preload_overlay_can_actually_hide():
+#: Two pointings, one of which has no MIRI parallel — enough geometry to give
+#: the static map a real bounding box and to tell the two layers apart.
+_POINTINGS = [
+    {'target': 'GC_1', 'number': '1', 'ra': 266.16, 'dec': -29.47,
+     'filters': {'ShortFilter': 'F212N', 'LongFilter': 'F480M'},
+     'nircam': [[[266.14, -29.52], [266.14, -29.50],
+                 [266.16, -29.50], [266.16, -29.52]]],
+     'miri': [[[266.20, -29.40], [266.20, -29.38],
+               [266.22, -29.38], [266.22, -29.40]]]},
+    {'target': 'GC_2', 'number': '2', 'ra': 266.30, 'dec': -29.30,
+     'nircam': [[[266.28, -29.32], [266.28, -29.30],
+                 [266.30, -29.30], [266.30, -29.32]]]},
+]
+
+
+def test_hiding_beats_an_author_display():
     """`hidden` alone does not hide an element with an author `display`: origin
-    beats specificity, so the overlay stayed over the map and swallowed every
-    pointer and wheel event — the view looked loaded but could not be panned."""
+    beats specificity, so the old full-bleed overlay stayed over the map and
+    swallowed every pointer and wheel event — the view looked loaded but could
+    not be panned. The overlay is gone; what replaced it must still be able to
+    win that fight, and nothing may reintroduce the overlay."""
     from jwst_gc_pipeline.monitoring import skyview
-    assert '.gcm-sky-msg[hidden] { display: none; }' in skyview.CSS
-    assert '.gcm-sky-ui[hidden] { display: none; }' in skyview.CSS
+    assert '.gcm-sky-off { display: none !important; }' in skyview.CSS
+    assert 'gcm-sky-msg' not in skyview.CSS
+    assert 'gcm-sky-msg' not in skyview.section(_fp())
+
+
+def test_static_map_needs_no_network():
+    """The point of the static map: it renders where fetches are blocked (a
+    published artifact, a file:// path, no network). Anything it has to fetch
+    defeats it, so the SVG must reference no URL at all."""
+    from jwst_gc_pipeline.monitoring import skyview
+    svg, info = skyview.static_map(_fp(planned=_POINTINGS))
+    assert svg.startswith('<svg')
+    assert info['n_nircam'] == 2 and info['n_miri'] == 1
+    for token in ('http', 'fetch(', '<script', 'src=', 'url('):
+        assert token not in svg
+
+
+def test_static_map_orientation_is_north_up_east_left():
+    """Every other image of this field is shown north-up/east-left; a map that
+    silently mirrors the sky would make a real astrometric offset look like the
+    wrong sign."""
+    from jwst_gc_pipeline.monitoring import skyview
+    frame = skyview._frame_for(_fp(planned=_POINTINGS))
+    here = frame.xy(frame.ra0, frame.dec0)
+    east = frame.xy(frame.ra0 + 0.01, frame.dec0)
+    north = frame.xy(frame.ra0, frame.dec0 + 0.01)
+    assert east[0] < here[0]            # increasing RA moves left
+    assert north[1] < here[1]           # increasing Dec moves up (SVG y down)
+
+
+def test_static_map_survives_junk_geometry():
+    """A footprint file with a truncated vertex or a null coordinate must lose
+    that polygon, not the page."""
+    from jwst_gc_pipeline.monitoring import skyview
+    junk = [{'target': 'x', 'nircam': [[[266.1, -29.1], [266.2]],
+                                       [[266.1, None], [266.2, -29.2],
+                                        [266.3, -29.3]]],
+             'miri': [[[266.1, -29.1], [266.2, -29.2], [266.3, -29.3],
+                       [266.4, -29.4]]]}]
+    svg, info = skyview.static_map({'planned': junk + _POINTINGS})
+    assert info['n_nircam'] == 2            # the junk pointing contributes none
+    assert '<svg' in svg
+
+
+def test_static_map_absent_when_nothing_is_drawable():
+    from jwst_gc_pipeline.monitoring import skyview
+    assert skyview.static_map({'planned': []}) == ('', {})
+    assert skyview.static_map({}) == ('', {})
+
+
+def test_cross_filesystem_publish_copies_rather_than_symlinks(tmp_path,
+                                                              monkeypatch):
+    """A symlink whose target leaves the served tree is not a file a web server
+    will hand out — Apache returns 403 for every one. That fails silently in the
+    worst way: the pages are fine and only the figures they link to vanish."""
+    from jwst_gc_pipeline.monitoring import report
+    src = tmp_path / 'fig.png'
+    src.write_bytes(b'\x89PNG-data')
+    dst = tmp_path / 'out' / 'fig.png'
+    dst.parent.mkdir()
+
+    def no_hardlinks(a, b):
+        raise OSError(18, 'Invalid cross-device link')
+    monkeypatch.setattr(report.os, 'link', no_hardlinks)
+
+    assert report._link(str(src), str(dst)) == 'copy'
+    assert not dst.is_symlink()
+    assert dst.read_bytes() == b'\x89PNG-data'
+
+
+_DEPLOY_SH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__))))),
+    'scripts', 'monitoring', 'deploy_monitor.sh')
+
+
+def _run_deploy(tmp_path, dest, extra_env=None):
+    """Run deploy_monitor.sh with ssh and rsync replaced by recording stubs."""
+    import subprocess
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir(exist_ok=True)
+    log = tmp_path / 'calls.log'
+    for tool in ('ssh', 'rsync'):
+        stub = bin_dir / tool
+        stub.write_text('#!/bin/bash\necho "%s $*" >> "%s"\nexit 0\n'
+                        % (tool, log))
+        stub.chmod(0o755)
+    src = tmp_path / 'pub'
+    src.mkdir(exist_ok=True)
+    (src / 'index.html').write_text('<html>')
+    env = dict(os.environ, PATH='%s:%s' % (bin_dir, os.environ['PATH']),
+               MONITOR_WEB_DIR=dest, MONITOR_WEB_HOST='testhost')
+    env.update(extra_env or {})
+    done = subprocess.run(['bash', _DEPLOY_SH, str(src)], env=env,
+                          capture_output=True, text=True)
+    calls = log.read_text() if log.exists() else ''
+    return done.returncode, calls, done.stderr
+
+
+@pytest.mark.parametrize('dest', [
+    '/h/x/htdocs/jwst-gc',            # the public data-release landing page
+    '/h/x/htdocs',
+    '/h/x/htdocs/jwst-gc/monitors',
+])
+def test_deploy_refuses_a_destination_that_is_not_the_monitor_dir(tmp_path, dest):
+    """The guard is the only thing standing between an rsync --delete and the
+    public data-release page, and it was pure string logic with no test."""
+    rc, calls, err = _run_deploy(tmp_path, dest)
+    assert rc == 2
+    assert 'rsync' not in calls, 'refused, but rsync ran anyway'
+    assert 'refusing' in err
+
+
+def test_deploy_accepts_the_monitor_dir(tmp_path):
+    rc, calls, _err = _run_deploy(tmp_path, '/h/x/htdocs/jwst-gc/monitor')
+    assert rc == 0
+    assert 'rsync' in calls and '--copy-links' in calls and '--delete' in calls
+
+
+def test_deploy_reports_a_missing_page_set_above_the_findings_code(tmp_path):
+    """refresh_monitor.sh reads 1 as 'the archive has failing runs'. A deploy
+    failure is not that, so it must not land in the same bucket."""
+    import subprocess
+    empty = tmp_path / 'empty'
+    empty.mkdir()
+    done = subprocess.run(
+        ['bash', _DEPLOY_SH, str(empty)],
+        env=dict(os.environ, MONITOR_WEB_DIR='/h/x/htdocs/jwst-gc/monitor'),
+        capture_output=True, text=True)
+    assert done.returncode > 1
+    assert 'index.html' in done.stderr
+
+
+def _publish_a_page_set(tmp_path, monkeypatch, entry):
+    """A written-out page set plus its publish directory, as a reader gets it."""
+    from jwst_gc_pipeline.monitoring import report
+    monkeypatch.setattr(report, 'build_entries', lambda *a, **kw: ([entry], []))
+    monkeypatch.setattr(report, 'collect_cutouts', lambda *a, **kw: [])
+    out = tmp_path / 'out'
+    web = tmp_path / 'web'
+    report.write_report(outdir=str(out), per_field=True)
+    # The assets the pages link to, made real so a resolving href can be told
+    # from a merely well-formed one.
+    (out / 'figures').mkdir(exist_ok=True)
+    (out / 'figures' / 'fig.png').write_bytes(b'PNG')
+    wu = tmp_path / 'writeup'
+    (wu / 'figures').mkdir(parents=True)
+    (wu / 'main.pdf').write_bytes(b'%PDF')
+    (wu / 'figures' / 'D2_astrometry_internal.pdf').write_bytes(b'%PDF')
+    monkeypatch.setattr(report.scan, 'all_targets', lambda: ['brick'])
+    monkeypatch.setattr(report.scan, 'basepath', lambda t: str(tmp_path))
+    monkeypatch.setattr(report._figures, 'WRITEUP_DIR', 'writeup')
+    report.publish(str(out), str(web))
+    return web
+
+
+def _dead_links(root):
+    """Every relative href/src on every page, resolved against ITS OWN dir."""
+    dead = []
+    for base, _dirs, files in os.walk(root):
+        for name in files:
+            if not name.endswith('.html'):
+                continue
+            page = os.path.join(base, name)
+            with open(page) as fh:
+                body = fh.read()
+            for href in set(re.findall(r'(?:href|src)="([^"]+)"', body)):
+                if (href.startswith(('http://', 'https://', 'mailto:', 'data:',
+                                     '#')) or not href.strip()):
+                    continue
+                target = os.path.normpath(
+                    os.path.join(base, href.split('#')[0]))
+                if not os.path.exists(target):
+                    dead.append((os.path.relpath(page, root), href))
+    return dead
+
+
+def test_no_page_links_to_a_file_that_is_not_there(tmp_path, monkeypatch):
+    """Walk every href on every published page and stat it **relative to that
+    page's own directory**.
+
+    This is the check that had already missed the same bug twice.  Both times
+    the links were well-formed and pointed one directory too high: the per-field
+    pages sit in ``fields/`` and emitted ``figures/...`` and
+    ``diagnostics-<target>/...``, which are correct only at the publish root.
+    Asserting that the *symlink exists* — which the older test did — cannot see
+    it, because the symlink was fine and the href never reached it.
+    """
+    from jwst_gc_pipeline.monitoring import figures as _figures
+    entry = _entry(verdicts=[{
+        'name': 'astrometry.exposure_consensus', 'severity': 'fail',
+        'summary': 's', 'detail': 'd', 'value': 1, 'threshold': 2,
+        'source': 'x',
+        'evidence': {
+            'figures': [{'name': 'fig.png', 'dir': '/somewhere',
+                         'path': '/somewhere/fig.png', 'filter': 'F200W'}],
+            'writeup': {
+                'main': 'diagnostics-brick/main.pdf',
+                'figure': {'name': 'D2_astrometry_internal.pdf',
+                           'label': 'astrometry internal',
+                           'href': 'diagnostics-brick/figures/'
+                                   'D2_astrometry_internal.pdf'}}}}])
+    web = _publish_a_page_set(tmp_path, monkeypatch, entry)
+
+    # The fixture has to actually exercise both kinds of link, or a green run
+    # would only mean the page had nothing to get wrong.
+    pages = [p for p in os.listdir(os.path.join(str(web), 'fields'))]
+    assert pages, 'no per-field page was written'
+    field_html = open(os.path.join(str(web), 'fields', pages[0])).read()
+    assert 'figures/fig.png' in field_html
+    assert 'diagnostics-brick/main.pdf' in field_html
+
+    assert _dead_links(str(web)) == []
+
+
+def test_fragment_stays_whole_while_the_page_set_splits(tmp_path, monkeypatch):
+    """The fragment is published as a single-file artifact: `fields/x.html` is
+    not a document that exists there, so a card linking to one would 404."""
+    from jwst_gc_pipeline.monitoring import report
+    monkeypatch.setattr(report, 'build_entries',
+                        lambda *a, **kw: ([_entry()], []))
+    monkeypatch.setattr(report, 'collect_cutouts', lambda *a, **kw: [])
+    out = report.write_report(outdir=str(tmp_path), per_field=True)
+
+    aggregate = open(out['aggregate']).read()
+    fragment = open(out['fragment']).read()
+    assert 'href="fields/' in aggregate and '<h2>Detail</h2>' not in aggregate
+    assert 'href="fields/' not in fragment and '<h2>Detail</h2>' in fragment
+
+
+def test_an_existing_symlink_is_replaced_by_a_copy(tmp_path, monkeypatch):
+    """A symlink to src resolves to src, so the 'same file, nothing to do' guard
+    matched it and left it in place — the switch from symlinking to copying then
+    never converted the symlinks already on disk, and they kept 403-ing."""
+    from jwst_gc_pipeline.monitoring import report
+    src = tmp_path / 'fig.png'
+    src.write_bytes(b'PNG')
+    dst = tmp_path / 'out' / 'fig.png'
+    dst.parent.mkdir()
+    dst.symlink_to(src)
+    monkeypatch.setattr(report.os, 'link',
+                        lambda a, b: (_ for _ in ()).throw(OSError(18, 'xdev')))
+
+    assert report._link(str(src), str(dst)) == 'copy'
+    assert not dst.is_symlink()
+    assert dst.read_bytes() == b'PNG'
+
+
+def test_publishing_onto_itself_is_still_a_no_op(tmp_path):
+    """The guard that rewrite protects: a one-character scrontab typo pointing
+    --publish-dir at --outdir must not remove the report and link it to itself."""
+    from jwst_gc_pipeline.monitoring import report
+    src = tmp_path / 'monitor.html'
+    src.write_text('page')
+    assert report._link(str(src), str(src)) == 'same'
+    assert src.read_text() == 'page'
+
+
+class _Stat(object):
+    def __init__(self, dev, size, mtime):
+        self.st_dev, self.st_size, self.st_mtime = dev, size, mtime
+
+
+def test_unchanged_copy_is_not_recopied():
+    """~110 MB of figures re-copied on an hourly refresh would be most of the
+    job's cost."""
+    from jwst_gc_pipeline.monitoring import report
+    same = _Stat(7, 100, 1000.0)
+    assert report._copy_is_current(same, _Stat(9, 100, 1000.0), 9)
+
+
+@pytest.mark.parametrize('dst_stat,dst_dev,why', [
+    (_Stat(7, 100, 1000.0), 7, 'same filesystem — relink instead'),
+    (_Stat(9, 101, 1000.0), 9, 'size changed'),
+    (_Stat(9, 100, 1001.0), 9, 'mtime changed'),
+])
+def test_copy_is_refreshed_when_it_must_be(dst_stat, dst_dev, why):
+    """The same-filesystem case is the important one: skipping the relink there
+    is exactly the stale-page bug publish() exists to prevent."""
+    from jwst_gc_pipeline.monitoring import report
+    assert not report._copy_is_current(_Stat(7, 100, 1000.0), dst_stat, dst_dev), why
+
+
+_ROMAN = {
+    'tiles': {'Tile 1': {'spring': [[[266.5, -29.6], [266.6, -29.6],
+                                     [266.6, -29.5], [266.5, -29.5]]],
+                         'autumn': [[[266.7, -29.6], [266.8, -29.6],
+                                     [266.8, -29.5], [266.7, -29.5]]]}},
+    'target_area': [[266.4, -29.7], [266.9, -29.7], [266.9, -29.2]],
+}
+
+
+def test_roman_toggles_are_not_dead_without_aladin():
+    """The Roman buttons used to map to empty static groups, so before anyone
+    loaded 1.8 MB of Aladin a click toggled the button's own styling and nothing
+    else — a live-looking control that did nothing."""
+    from jwst_gc_pipeline.monitoring import skyview
+    svg, info = skyview.static_map(_fp(planned=_POINTINGS), _ROMAN)
+    assert info['n_roman'] == 3                    # 1 spring + 1 autumn + area
+    for group in ('stat-spring', 'stat-autumn', 'stat-target'):
+        assert 'id="%s"' % group in svg
+    html = skyview.section(_fp(planned=_POINTINGS), _ROMAN)
+    for group in ('stat-spring', 'stat-autumn', 'stat-target'):
+        assert "'%s'" % group in html              # reachable from STATIC_GROUPS
+    # and the buttons must not be inert
+    spring = html[html.index('id="lyr-spring"'):html.index('id="lyr-autumn"')]
+    assert 'disabled' not in spring
+
+
+def test_roman_layers_start_hidden():
+    """Roman is context on a JWST monitor: drawn, but off until asked for."""
+    from jwst_gc_pipeline.monitoring import skyview
+    svg, _ = skyview.static_map(_fp(planned=_POINTINGS), _ROMAN)
+    for group in ('stat-spring', 'stat-autumn', 'stat-target'):
+        block = svg[svg.index('id="%s"' % group):]
+        assert 'gcm-sky-off' in block[:block.index('>')]
+    for group in ('stat-nircam', 'stat-miri'):
+        block = svg[svg.index('id="%s"' % group):]
+        assert 'gcm-sky-off' not in block[:block.index('>')]
+
+
+def test_zoom_out_reaches_the_roman_tiles():
+    """Roman's tiles lie outside the JWST bounding box that sets the home view,
+    so a 3x zoom-out ceiling let you enable a layer you could never see."""
+    from jwst_gc_pipeline.monitoring import skyview
+    with_roman = skyview.section(_fp(planned=_POINTINGS), _ROMAN)
+    without = skyview.section(_fp(planned=_POINTINGS))
+    assert 'var ZOOM_OUT_MAX = 8;' in with_roman
+    assert 'var ZOOM_OUT_MAX = 3;' in without
+
+
+def test_map_is_drawn_in_galactic_coordinates():
+    """A Galactic-centre survey read in RA/Dec runs diagonally across the grid;
+    in l/b the tiled strip runs along it."""
+    from jwst_gc_pipeline.monitoring import skyview
+    pytest.importorskip('astropy')
+    svg, info = skyview.static_map(_fp(planned=_POINTINGS))
+    assert info['frame'] == 'galactic'
+    assert 'l ' in svg and 'b ' in svg           # native graticule labels
+    assert 'RA ' in svg and 'Dec ' in svg        # equatorial overlay labels
+    assert 'Galactic longitude increasing left' in svg
+
+
+def test_galactic_frame_reshapes_the_map():
+    """The survey tiles along the plane, so the drawn aspect ratio is a check
+    that the transform actually happened rather than silently no-opping."""
+    from jwst_gc_pipeline.monitoring import skyview
+    pytest.importorskip('astropy')
+    fp = _fp(planned=_POINTINGS)
+    gal = skyview.static_map(fp)[1]
+    icrs = skyview.static_map(fp, frame_name='icrs')[1]
+    assert icrs['frame'] == 'icrs'
+    assert abs(gal['height'] - icrs['height']) > 1.0
+
+
+def test_frame_falls_back_to_icrs_without_astropy(monkeypatch):
+    """Losing astropy must cost the Galactic frame, not the map."""
+    from jwst_gc_pipeline.monitoring import skyview
+    monkeypatch.setattr(skyview, '_transform',
+                        lambda pairs, src, dst: list(pairs) if src == dst else None)
+    svg, info = skyview.static_map(_fp(planned=_POINTINGS), _ROMAN)
+    assert info['frame'] == 'icrs'
+    assert info['overlay_grid'] is False         # no second graticule
+    assert info['n_nircam'] == 2                 # but the footprints are drawn
+    assert '<svg' in svg
+
+
+def test_front_page_leads_with_the_map_then_the_cards():
+    """Requested layout: the visual overview first, then the status boxes."""
+    from jwst_gc_pipeline.monitoring import render
+    html = render.render_page([_entry()], footprints=_fp(planned=_POINTINGS),
+                              include_detail=False,
+                              detail_href=lambda e: 'fields/x.html')
+    assert html.index('Sky view') < html.index('id="overview"')
+    assert '<h2>Detail</h2>' not in html
+    assert 'href="fields/x.html"' in html
+
+
+def test_field_pages_carry_the_detail_and_not_the_map():
+    """The map is ~100 kB of identical geometry; 18 copies of it is the cost of
+    putting it on every field page."""
+    from jwst_gc_pipeline.monitoring import render
+    html = render.render_page([_entry()], footprints=_fp(planned=_POINTINGS),
+                              include_skyview=False,
+                              home_href='../monitor.html#overview')
+    assert '<svg id="gcm-sky-static"' not in html
+    assert '<h2>Detail</h2>' in html
+    assert 'href="../monitor.html#overview"' in html
+
+
+def test_layer_toggles_drive_both_views():
+    """One set of buttons drives the static groups and, after the upgrade, the
+    Aladin overlays. If the two used different ids the toggles would silently
+    stop working the moment the interactive view loaded."""
+    from jwst_gc_pipeline.monitoring import skyview
+    html = skyview.section(_fp(planned=_POINTINGS))
+    for button, group in (('lyr-nircam', 'stat-nircam'),
+                          ('lyr-miri', 'stat-miri'),
+                          ('lyr-observed', 'stat-obs-nircam')):
+        assert 'id="%s"' % button in html
+        assert 'id="%s"' % group in html
+    assert 'STATIC_GROUPS' in html
+
+
+def test_the_map_is_hidden_only_once_there_is_a_view_to_replace_it():
+    """Hiding the map before `A.init` meant any failure in between left a black
+    box. Worse, a synchronous throw there — `A` undefined, or `A.init` not a
+    thenable because the script was truncated — happens while *evaluating*
+    `A.init.then`, so it escapes the inner handler entirely; checking only the
+    text after `function start(` could not see that."""
+    from jwst_gc_pipeline.monitoring import skyview
+    html = skyview.section(_fp(planned=_POINTINGS))
+    start = html.index('function start(')
+    body = html[start:]
+    # The hide must sit after A.init resolves, not before it is even called.
+    assert body.index("A.init") < body.index("svg.classList.add('gcm-sky-off')")
+
+    # Both failure paths restore, and the outer one is *outside* start().
+    assert html.count('function restore()') == 1
+    assert body.count('restore();') >= 1                  # inner .catch
+    outer = html[:start]
+    assert '.then(start).catch(' in outer
+    assert outer.index('.then(start).catch(') < outer.index('restore();') \
+        if 'restore();' in outer else True
+    assert 'restore();' in outer, 'the outer handler must restore too'
+
+
+def test_wheel_zoom_does_not_hijack_page_scroll_unarmed():
+    """A page-long report that eats the wheel whenever the cursor crosses a
+    figure is worse than a map that needs one click first."""
+    from jwst_gc_pipeline.monitoring import skyview
+    html = skyview.section(_fp(planned=_POINTINGS))
+    assert 'if (!armed) { return; }' in html
+    assert html.index('if (!armed) { return; }') < html.index('ev.preventDefault()',
+                                                              html.index('wheel'))
 
 
 @pytest.mark.parametrize('bad', [

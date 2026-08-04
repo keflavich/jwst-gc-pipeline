@@ -40,11 +40,13 @@ def build_parser():
     parser.add_argument('--json', dest='json_path', default=None,
                         help='also write the scan+verdicts as JSON')
     parser.add_argument('--publish-dir', default=None,
-                        help='hardlink the generated pages into this directory '
-                             '(symlink if it is on another filesystem), and point '
-                             'index.html at the aggregate page. Safe to re-run: '
-                             'relinking is what keeps the published copy correct '
-                             'if the writer ever changes to an atomic rename.')
+                        help='hardlink the generated pages and their figures '
+                             'into this directory (copy where a hardlink is '
+                             'impossible -- a symlink out of a served tree is '
+                             'not servable), and point index.html at the '
+                             'aggregate page. Safe to re-run: relinking is what '
+                             'keeps the published copy correct if the writer '
+                             'ever changes to an atomic rename.')
 
     sub = parser.add_subparsers(dest='command')
     probe_p = sub.add_parser('probe', help='plan / submit the 5-arcsec probe cutouts')

@@ -433,7 +433,14 @@ def _severity_chip(tally):
     return ''.join(parts)
 
 
-def _card(entry):
+def _card(entry, href=None):
+    """One overview card.
+
+    ``href`` is where the card's detail lives.  On the front page that is
+    another *document* (``fields/<target>.html``), not an anchor on the same
+    one: carrying every field's detail on the overview page is what made it a
+    2 MB scroll that had to be fully parsed before the first card appeared.
+    """
     run = entry['run']
     tally = entry['tally']
     worst = entry['worst']
@@ -444,7 +451,7 @@ def _card(entry):
     job_chip = (f'<span class="gcm-chip run">{len(active)} in queue</span>'
                 if active else '')
     return f"""
-<a class="gcm-card sev-{esc(worst)}" href="#{esc(anchor)}">
+<a class="gcm-card sev-{esc(worst)}" href="{esc(href or ('#' + anchor))}">
   <div class="gcm-card-top">
     <span class="gcm-card-name">{esc(run['target'])}</span>
     <span class="gcm-card-obs">{esc(run['proposal'])}/o{esc(run['obsid'])}</span>
@@ -599,28 +606,35 @@ def _figure_links(figs, figure_base='figures'):
             f'<ul>{items}</ul></div>')
 
 
-def _writeup_links(wu):
+def _writeup_links(wu, asset_prefix=''):
     """Link into the field's diagnostic writeup, at the figure that shows THIS.
 
     The writeup carries a fixed D1..D8 figure set for every field, so a finding
     can point at the one that shows it rather than at a directory listing.
+
+    ``build_entries`` bakes these hrefs relative to the *publish root*
+    (``diagnostics-<target>/...``), so a page in a subdirectory needs the same
+    prefix as every other asset.  Without it a field page asks for
+    ``fields/diagnostics-brick/...`` and gets a 404 -- which is exactly what it
+    did, on all 36 pages at once.
     """
     if not wu:
         return ''
     bits = []
     fig = wu.get('figure')
     if fig:
-        bits.append(f'<a class="gcm-wu-fig" href="{esc(fig["href"])}">'
+        bits.append(f'<a class="gcm-wu-fig" href="{esc(asset_prefix + fig["href"])}">'
                     f'{esc(fig["name"].split("_")[0])} — {esc(fig["label"])}</a>')
     if wu.get('main'):
-        bits.append(f'<a href="{esc(wu["main"])}">full diagnostic writeup (PDF)</a>')
+        bits.append(f'<a href="{esc(asset_prefix + wu["main"])}">'
+                    f'full diagnostic writeup (PDF)</a>')
     if not bits:
         return ''
     return (f'<div class="gcm-wu"><span class="gcm-sub-h">Diagnostic writeup</span>'
             f'{" · ".join(bits)}</div>')
 
 
-def _evidence_block(v, figure_base='figures'):
+def _evidence_block(v, figure_base='figures', asset_prefix=''):
     ev = v.get('evidence') or {}
     cause = (f'<div class="gcm-cause">{esc(v["cause"])}</div>'
              if v.get('cause') else '')
@@ -647,7 +661,7 @@ def _evidence_block(v, figure_base='figures'):
                  if drawings else '')
     table = _evidence_table(ev.get('rows'))
     figs = _figure_links(ev.get('figures'), figure_base)
-    wu = _writeup_links(ev.get('writeup'))
+    wu = _writeup_links(ev.get('writeup'), asset_prefix)
     if not (cause or draw_html or table or figs or wu):
         return ''
     return (f'<details class="gcm-ev"><summary>what is affected, and why</summary>'
@@ -655,7 +669,8 @@ def _evidence_block(v, figure_base='figures'):
             f'</details>')
 
 
-def _checks_block(verdicts, show_skip=False, figure_base='figures'):
+def _checks_block(verdicts, show_skip=False, figure_base='figures',
+                  asset_prefix=''):
     items = [v for v in verdicts if show_skip or v['severity'] != 'skip']
     if not items:
         return '<p class="gcm-empty">Nothing to report.</p>'
@@ -668,7 +683,7 @@ def _checks_block(verdicts, show_skip=False, figure_base='figures'):
         out.append(f"""<li class="gcm-check {esc(v['severity'])}">
 <span class="gcm-check-sev">{esc(_SEV_LABEL.get(v['severity'], v['severity']))}</span>
 <div><div>{esc(v['summary'])}</div>{detail}{src}
-{_evidence_block(v, figure_base)}</div></li>""")
+{_evidence_block(v, figure_base, asset_prefix)}</div></li>""")
     return f'<ul class="gcm-checks">{"".join(out)}</ul>'
 
 
@@ -709,12 +724,12 @@ def _cutouts_block(cutouts):
 <td style="white-space:normal">{''.join(flags)}</td></tr>""")
     return f"""
 <section class="gcm-sec"><h2>Cutout runs</h2>
-<p class="gcm-note">Every <code>--cutout-region</code> run on disk: the shared
+<p class="gcm-note">Every cutout run on disk: the shared
 <code>monitor5as</code> probes plus the hand-made experiment cutouts. A cutout run
-stops after m6 — m7/m8 need more than one filter — so "catalogs" here counts
-per-filter products only. A cutout tree is small enough to stat exhaustively, so
-these rows also flag <em>zero-byte</em> products and orphan <code>tmp*</code>
-files — a write that died mid-flight leaves both, and a count-based ladder reads
+stops after m6 — m7 and m8 need more than one filter — so "catalogs" here counts
+per-filter products only. These rows also flag <em>zero-byte</em> products and
+orphan <code>tmp*</code> files: a write that died mid-flight leaves both, and a
+count-based ladder reads
 them as finished work.</p>
 <div class="gcm-scroll"><table class="gcm-t">
 <thead><tr><th>field</th><th>label</th><th>frames</th><th>catalogs</th>
@@ -791,7 +806,8 @@ def _paper_block(summary):
   Photometric certifiers: {cert_bits}.</p>"""
 
 
-def _field_section(entry, show_skip=False, figure_base='figures'):
+def _field_section(entry, show_skip=False, figure_base='figures',
+                   home_href='#overview', asset_prefix=''):
     run = entry['run']
     anchor = entry['anchor']
     label = f"{run['target']} · {run['proposal']}/o{run['obsid']}"
@@ -802,7 +818,7 @@ def _field_section(entry, show_skip=False, figure_base='figures'):
   <div class="gcm-field-head">
     <h3>{esc(label)}</h3>
     <span class="path">{esc(run['basepath'])}</span>
-    <a class="gcm-back" href="#overview">back to overview</a>
+    <a class="gcm-back" href="{esc(home_href)}">back to overview</a>
   </div>
   <div class="gcm-field-body">
     <div><h4 class="gcm-sub-h">Stage ladder</h4>{_ladder_html(run, with_key=True)}</div>
@@ -813,7 +829,7 @@ def _field_section(entry, show_skip=False, figure_base='figures'):
      f'{_paper_block(entry.get("paper"))}</div>' if entry.get('paper') else ''}
     <div><h4 class="gcm-sub-h">Queue</h4>{_jobs_block(entry.get('jobs') or [])}</div>
     <div><h4 class="gcm-sub-h">Findings</h4>
-      {_checks_block(entry['verdicts'], show_skip, figure_base)}</div>
+      {_checks_block(entry['verdicts'], show_skip, figure_base, asset_prefix)}</div>
   </div>
 </section>"""
 
@@ -839,13 +855,36 @@ _JS = """
 
 def render_page(entries, cutouts=(), title='JWST-GC pipeline monitor',
                 subtitle='', standalone=False, show_skip=False,
-                generated=None, unattributed_jobs=(), figure_base='figures',
-                footprints=None, roman=None, asset_prefix=''):
+                generated=None, unattributed_jobs=(), figure_base=None,
+                footprints=None, roman=None, asset_prefix='',
+                include_detail=True, include_skyview=True,
+                detail_href=None, home_href='#overview'):
     """The whole page.
 
     ``entries`` is the list built by ``report.build_entries`` -- one per
     observation, already carrying its verdicts, jobs and roll-up.
+
+    The page is assembled from parts rather than being one fixed layout,
+    because the front page and the per-field pages want different ones:
+
+    * front page -- ``include_detail=False`` with a ``detail_href`` callable.
+      The sky map leads, then the status cards, and each card is a link to
+      another document.  Every field's tables, evidence blocks and figures used
+      to be inlined below the cards, which made the entry point to the whole
+      monitor the single largest file it produces.
+    * per-field page -- ``include_skyview=False``.  The map is ~100 kB of inline
+      geometry and is identical on all 18 of them; it belongs on the page whose
+      job is the overview.
     """
+    # Every relative asset href on this page hangs off ONE prefix.  They used to
+    # be independent -- `asset_prefix` for the sky view, a separate
+    # `figure_base` defaulting to 'figures' for the evidence links -- and the
+    # per-field pages passed the first and left the second at its default, so
+    # every figure resolved as `fields/figures/...` and 404'd.  Deriving it
+    # removes the way for the two to disagree.
+    if figure_base is None:
+        figure_base = asset_prefix + 'figures'
+
     generated = generated or time.time()
     total = len(entries)
     n_fail = sum(1 for e in entries if e['worst'] == 'fail')
@@ -854,9 +893,11 @@ def render_page(entries, cutouts=(), title='JWST-GC pipeline monitor',
     n_jobs = sum(len([j for j in (e.get('jobs') or [])
                       if j.get('state') in ('RUNNING', 'PENDING')]) for e in entries)
 
-    cards = ''.join(_card(e) for e in entries)
-    details = ''.join(_field_section(e, show_skip, figure_base)
-                      for e in entries)
+    cards = ''.join(_card(e, detail_href(e) if detail_href else None)
+                    for e in entries)
+    details = ''.join(_field_section(e, show_skip, figure_base, home_href,
+                                     asset_prefix)
+                      for e in entries) if include_detail else ''
 
     unattr = ''
     if unattributed_jobs:
@@ -864,6 +905,16 @@ def render_page(entries, cutouts=(), title='JWST-GC pipeline monitor',
         unattr = (f'<p class="gcm-note">{len(unattributed_jobs)} queued job(s) could '
                   f'not be attributed to a registered field: <code>{esc(names)}</code>. '
                   f'They are listed here rather than folded into a field\'s count.</p>')
+
+    sky = (skyview.section(footprints, roman,
+                           aladin_src=asset_prefix + skyview.ALADIN_LOCAL,
+                           data_url=asset_prefix + skyview.FOOTPRINTS_JSON,
+                           roman_url=asset_prefix + skyview.ROMAN_JSON)
+           if include_skyview else '')
+    detail_sec = (f'<section class="gcm-sec"><h2>Detail</h2>{details}</section>'
+                  if include_detail else '')
+    card_note = ('Click a card for that field’s own page.' if detail_href
+                 else 'Click a card for the detail.')
 
     stamp = time.strftime('%Y-%m-%d %H:%M %Z', time.localtime(generated))
     body = f"""
@@ -883,30 +934,24 @@ def render_page(entries, cutouts=(), title='JWST-GC pipeline monitor',
 </div></header>
 
 <div class="gcm-wrap">
+{sky}
+
 <section class="gcm-sec" id="overview"><h2>Overview</h2>
 <p class="gcm-note">One card per registered observation. The bar is the stage
 ladder in run order — reduction (unc·cal·red·i2d) then cataloging
 (m12→m8). Solid = every filter has it, pale = some do, hatched = the product
-name cannot be attributed to this observation. Click a card for the detail.</p>
+name cannot be attributed to this observation. {card_note}</p>
 {unattr}
 <div class="gcm-grid">{cards}</div></section>
 
-{skyview.section(footprints, roman,
-                 aladin_src=asset_prefix + skyview.ALADIN_LOCAL,
-                 data_url=asset_prefix + skyview.FOOTPRINTS_JSON,
-                 roman_url=asset_prefix + skyview.ROMAN_JSON)}
-
 {_cutouts_block(cutouts)}
 
-<section class="gcm-sec"><h2>Detail</h2>{details}</section>
+{detail_sec}
 
 <footer class="gcm-foot">
-Generated {esc(stamp)} by <code>python -m jwst_gc_pipeline.monitoring</code>.
-Thresholds are imported from the modules that enforce them
-(<code>visit_consensus</code>, <code>astrometry_checkpoint</code>,
-<code>astrometry_offsets</code>), so this page cannot drift away from the gates it
-reports. Astrometric offsets are read from the pipeline's own m2 checkpoint
-records — nothing here re-measures an offset.
+Generated {esc(stamp)}. Every number here is read from what the pipeline
+recorded — the tolerances are the ones the pipeline itself enforces, and no
+offset is re-measured for this page.
 </footer>
 </div>
 <script>{_JS}</script>

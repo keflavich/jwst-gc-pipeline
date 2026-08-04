@@ -85,7 +85,7 @@ hidden: brick has ~1250 figures, gc2211 has none.
 
 ## Sky view
 
-An Aladin Lite panel showing where the survey plans to observe and what it has.
+A footprint map showing where the survey plans to observe and what it has.
 Footprints come from APT program **10678** — *The JWST/NIRCam Legacy Survey of
 the Galactic Center* (Schoedel, Cycle 5, Flight Ready): 139 pointings, NIRCam
 prime with MIRI coordinated parallels, ~64′×75′ over the GC.
@@ -116,21 +116,88 @@ parallel is projected through that *same* attitude, which is what puts it where
 the parallel actually observes; and `PA_V3` is a **range** (79–95°) until each
 visit is scheduled, so the midpoint is used and the range is stated on the page.
 
-Aladin Lite loads lazily on first click, from a same-origin copy `publish()`
-links in — no third-party CDN, and the 1.8 MB script is not paid for by readers
-who never open the panel. HiPS tiles are unavoidably remote; where they are
-blocked (an artifact's CSP, a `file://` page) the panel says so.
+The panel draws the footprints **twice**, by two routes with different
+dependencies:
+
+* a **static map** — an inline SVG on a TAN tangent plane, built at render time
+  by `skyview.static_map`. No script, no fetch, no tiles: ~100 kB of geometry
+  that is part of the HTML, so it renders in a published artifact, from a
+  `file://` path, and offline. Per-pointing hover, drag to pan,
+  click-then-scroll to zoom, adaptive angular scale bar.
+* the **interactive view** — Aladin Lite over HiPS imagery, loaded on request
+  from a same-origin copy `publish()` links in. No third-party CDN, and the
+  1.8 MB script is not paid for by readers who never ask for it.
+
+Drawn in **Galactic coordinates** (`skyview.DEFAULT_FRAME`), with an RA/Dec
+graticule dashed over the l/b one. This is a Galactic-centre survey: in l/b the
+tiled strip runs along a grid line rather than diagonally across one, and the
+drawn field is 1000×557 instead of 1000×1232 — it fits the panel because it is
+in the frame the survey was planned in. Without astropy the transform is
+unavailable and the map falls back to ICRS rather than disappearing.
+
+Every layer, Roman included, is drawn in the static map. Roman used to be
+Aladin-only, which left its three toggles doing nothing at all until someone
+loaded 1.8 MB of script — live-looking buttons that were inert. Roman's tiles
+also lie outside the JWST bounding box that sets the home view, so the zoom-out
+ceiling rises from 3× to 8× when they are present; otherwise you could enable a
+layer you had no way to bring into view.
+
+HiPS tiles are unavoidably remote, so the interactive route is what a strict
+content-security policy blocks — a published artifact cannot run it, and neither
+can a `file://` page. When it fails the static map stays up and a note beside it
+says which part was unavailable. The layer toggles drive both routes, so a view
+built on the static map survives the upgrade.
+
+## Page structure
+
+Three kinds of page, because one 2 MB scroll made the monitor's entry point its
+slowest document:
+
+| page | holds | does not hold |
+|---|---|---|
+| `monitor.html` | the sky map **first**, then one status card per observation, then the cutout summary | any field's detail |
+| `fields/<target>.html` | that field's stage table, astrometry checkpoint, provenance, queue and findings | the sky map (~100 kB, identical on all 18) |
+| `monitor_<label>.html` | the same split for a cutout label | — |
+
+A card on the front page is a link to `fields/<target>.html#<anchor>`; the
+anchor picks out the observation within the field. `--no-per-field` turns the
+split off, and then the front page keeps its detail inline rather than linking
+to pages that were never written.
 
 ## Publishing
 
-`--publish-dir` hardlinks the generated pages into a web directory (symlink if it
-is on another filesystem) and points `index.html` at the aggregate page. The
-`*_fragment.html` outputs are body fragments for the artifact publisher — no
-doctype, charset or viewport — so they are deliberately not served.
+**Two web servers**, and they want different things:
+
+| | path | URL | how |
+|---|---|---|---|
+| dev | `/orange/adamginsburg/web/public/jwst-gc` | `https://data.rc.ufl.edu/pub/adamginsburg/jwst-gc/` | `--publish-dir`, served directly |
+| deployment | `starformation:.../htdocs/jwst-gc/monitor` | `https://starformation.astro.ufl.edu/jwst-gc/monitor/` | `scripts/monitoring/deploy_monitor.sh` |
+
+The dev path is *served as written* — the URL is `/pub/`, not `/public/`. The
+deployment host is a separate machine with its own filesystem, so getting there
+is an rsync; that script dereferences the `diagnostics-<field>` symlinks and
+refuses any destination not ending in `/monitor`, because
+`htdocs/jwst-gc/index.html` is the public data-release landing page. See
+`UPDATING.md`.
+
+`--publish-dir` hardlinks the generated pages into a web directory and points
+`index.html` at the aggregate page. The `*_fragment.html` outputs are body
+fragments for the artifact publisher — no doctype, charset or viewport — so they
+are deliberately not served.
 
 A hardlink rather than a copy because `render.write_html` rewrites a page **in
 place** (`open(path, 'w')`), which keeps the inode: the served copy tracks every
 regeneration with no second copy and no separate publish step.
+
+Across filesystems — about half the figures live on `/blue` while the output is
+on `/orange` — a hardlink is impossible and the fallback is a **copy, not a
+symlink**. A symlink whose target leaves the served tree is not a file a web
+server will hand out: Apache at data.rc.ufl.edu returns 403 for every one of
+them, and it fails in the worst way, with the pages fine and only their figures
+missing. An unchanged copy is left alone (`_copy_is_current`), so the hourly
+refresh does not re-copy ~110 MB; that skip is deliberately restricted to the
+cross-filesystem case, since skipping a same-filesystem relink is the stale-page
+bug below.
 
 Re-run it after every generation anyway. That is not redundant — it costs nothing
 when the inode is unchanged, and it is what keeps the served copy correct if the
