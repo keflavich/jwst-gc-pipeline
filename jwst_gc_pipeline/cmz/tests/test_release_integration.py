@@ -259,3 +259,88 @@ def test_grids_differ_detects_a_mixed_scale_pair(tmp_path):
         paths.append(str(path))
     assert mpr.grids_differ(paths) is True
     assert mpr.grids_differ(paths[:1]) is False
+
+
+# ---- on-sky overview panel ----
+def _fo():
+    return _load('field_overview', os.path.join(_REL, 'field_overview.py'))
+
+
+def _geom(name, lon0, lat0, size=0.05):
+    """One square footprint near the Galactic Centre, in ICRS degrees."""
+    from astropy.coordinates import SkyCoord
+    import astropy.units as u
+    corners = [(lon0, lat0), (lon0 + size, lat0), (lon0 + size, lat0 + size),
+               (lon0, lat0 + size)]
+    icrs = [SkyCoord(l * u.deg, b * u.deg, frame='galactic').icrs for l, b in corners]
+    return {'field': name, 'href': f'{name}.html',
+            'polys': [[(float(c.ra.deg), float(c.dec.deg)) for c in icrs]]}
+
+
+def test_section_is_empty_without_geometry():
+    """No footprints -> the index must look exactly as it always did, not like a
+    broken widget."""
+    assert _fo().section([]) == ''
+
+
+def test_every_field_is_a_link_in_the_static_map():
+    fo = _fo()
+    html_out = fo.section([_geom('brick', 0.2, 0.0), _geom('sgrc', -0.5, -0.1)])
+    assert html_out.count('class="ov-field"') == 2
+    # once in the map, once in the legend -- the legend is what keeps the
+    # click-through usable if the SVG cannot render
+    assert html_out.count('href="brick.html"') == 2
+    assert html_out.count('href="sgrc.html"') == 2
+
+
+def test_static_map_needs_no_script_to_navigate():
+    """The <a> elements are plain links: JS off, strict CSP, file:// all work."""
+    fo = _fo()
+    svg = fo.static_svg([_geom('brick', 0.2, 0.0)], 'galactic')
+    assert svg.startswith('<svg') and '<a class="ov-field" href="brick.html"' in svg
+    assert 'script' not in svg
+
+
+def test_galactic_longitudes_wrap_at_180():
+    """The CMZ straddles l = 0; on a 0..360 axis it would split into two clumps
+    at opposite ends of the map."""
+    fo = _fo()
+    framed, frame = fo.to_galactic([_geom('x', -0.4, 0.0)['polys'][0]])
+    assert frame == 'galactic'
+    assert all(-1.0 < lon < 1.0 for lon, _ in framed[0])
+
+
+def test_labels_are_pushed_apart_when_they_would_overlap():
+    fo = _fo()
+    out = fo._spread_labels([[100.0, 50.0, 40.0], [110.0, 50.0, 40.0],
+                             [900.0, 50.0, 40.0]])
+    assert out[0][1] == 50.0
+    assert out[1][1] >= 50.0 + fo.LABEL_DY        # collides -> moved down
+    assert out[2][1] == 50.0                      # far away -> untouched
+
+
+def test_collect_drops_a_field_whose_mosaics_cannot_be_read(tmp_path):
+    fo = _fo()
+    (tmp_path / 'images' / 'F212N').mkdir(parents=True)
+    (tmp_path / 'images' / 'F212N' / 'not-a-mosaic_i2d.fits').write_text('garbage')
+    assert fo.collect([('broken', tmp_path, 'broken.html')]) == []
+
+
+def test_overview_sits_between_the_gc_section_and_the_next_group():
+    mw = _make_webpage()
+    fields = [{'field': 'brick', 'version': 'v1', 'group': None, 'preview': None,
+               'n_images': 1, 'n_catalogs': 0},
+              {'field': 'w51', 'version': 'v1', 'group': 'galactic_plane',
+               'preview': None, 'n_images': 1, 'n_catalogs': 0}]
+    page = mw.render_index(fields, overview_html='<section class=overview>MAP</section>')
+    gc = page.index('>Galactic Center<')
+    panel = page.index('class=overview')
+    plane = page.index('>Galactic Plane<')
+    assert gc < panel < plane
+
+
+def test_overview_is_omitted_when_absent():
+    mw = _make_webpage()
+    page = mw.render_index([{'field': 'brick', 'version': 'v1', 'group': None,
+                             'preview': None, 'n_images': 1, 'n_catalogs': 0}])
+    assert 'class=overview' not in page
