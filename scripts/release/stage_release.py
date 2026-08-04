@@ -999,6 +999,32 @@ def stage(items, field, version, release_root, mode, do_checksum):
 def write_readme(field_dir, field, version, items, mode):
     images = [it for it in items if it["category"] == "image"]
     catalogs = [it for it in items if it["category"] == "catalog"]
+    # describe the mosaics ACTUALLY staged: a module-split field (arches,
+    # quintuplet, sickle) ships `-nrca_i2d`/`-nrcb_i2d`, not `-merged_i2d`, and
+    # a README promising the latter sends users looking for a file that is not
+    # there.
+    modules = sorted({m.group(1) for m in
+                      (re.search(r"-(merged|nrca|nrcb|nrcalong|nrcblong|mirimage)"
+                                 r"(?:_data)?_i2d\.fits$", os.path.basename(it["src"]))
+                       for it in images) if m})
+    if modules and modules != ["merged"]:
+        science_lines = [
+            "- `*-{" + ",".join(modules) + "}_i2d.fits` : science mosaic (drizzled)",
+            "",
+            "  This field has no single full-field NIRCam mosaic for every filter:",
+            "  `nrca`/`nrcb` (`nrcalong`/`nrcblong`) are per-module mosaics and",
+            "  `mirimage` is MIRI, so a filter may ship more than one image.",
+        ]
+    else:
+        science_lines = ["- `*-merged_i2d.fits`        : science mosaic (drizzled)"]
+    kinds = {it.get("kind") for it in images}
+    if "residual" in kinds:
+        science_lines.append(
+            "- `*_residual_i2d.fits`      : PSF-photometry residual "
+            "(highest merge iteration)")
+    if "model" in kinds:
+        science_lines.append(
+            "- `*_model_i2d.fits`         : PSF model image (highest merge iteration)")
     lines = [
         f"# JWST Galactic Center survey -- {field} -- release {version}",
         "",
@@ -1010,13 +1036,14 @@ def write_readme(field_dir, field, version, items, mode):
         "",
         "## Images (`images/<FILTER>/`)",
         "",
-        "- `*-merged_i2d.fits`        : science mosaic (drizzled)",
-        "- `*_residual_i2d.fits`      : PSF-photometry residual (highest merge iteration)",
-        "- `*_model_i2d.fits`         : PSF model image (highest merge iteration)",
+        *science_lines,
         "",
         f"{len(images)} image files across "
         f"{len({it['filter'] for it in images})} filters.",
         "",
+    ]
+    # an image-only release ships no catalogs/ directory at all
+    lines += ([
         "## Catalogs (`catalogs/`)",
         "",
         "- `basic_merged_indivexp_photometry_tables_merged_*` : final merged photometry",
@@ -1024,6 +1051,14 @@ def write_readme(field_dir, field, version, items, mode):
         "- `*_dao_basic_vetted.fits` : per-filter vetted catalogs.",
         "- `seed_union_iter3_*.fits` : seed source list.",
         "",
+    ] if catalogs else [
+        "## Catalogs",
+        "",
+        "**This is an image-only release: no catalogs are shipped.** The mosaics",
+        "are current, but the photometry catalogs for this field are not yet",
+        "certified. They will follow in a later release.",
+        "",
+    ]) + [
         "## Astrometric frame and epoch (READ BEFORE TARGETING)",
         "",
         "- **Reference frame:** Gaia DR3 (via the Gaia+VIRAC2 per-field reference",
