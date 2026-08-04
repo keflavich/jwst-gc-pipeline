@@ -277,7 +277,13 @@ def _link(src, dst):
     """
     # Publishing into the output directory itself would remove the page and then
     # link it to itself -- a one-character scrontab typo losing the report.
-    if os.path.realpath(src) == os.path.realpath(dst):
+    #
+    # `and not islink`: an existing SYMLINK to src also has src's realpath, so
+    # the bare comparison reported 'same' and left it alone -- which meant the
+    # switch from symlinking to copying never converted the symlinks already on
+    # disk, and they kept on 403-ing.
+    if (os.path.realpath(src) == os.path.realpath(dst)
+            and not os.path.islink(dst)):
         return 'same'
     # An unchanged copy is left alone: re-copying ~110 MB of figures on an
     # hourly refresh would be most of the job's cost, all of it pointless.

@@ -1292,6 +1292,34 @@ def test_cross_filesystem_publish_copies_rather_than_symlinks(tmp_path,
     assert dst.read_bytes() == b'\x89PNG-data'
 
 
+def test_an_existing_symlink_is_replaced_by_a_copy(tmp_path, monkeypatch):
+    """A symlink to src resolves to src, so the 'same file, nothing to do' guard
+    matched it and left it in place — the switch from symlinking to copying then
+    never converted the symlinks already on disk, and they kept 403-ing."""
+    from jwst_gc_pipeline.monitoring import report
+    src = tmp_path / 'fig.png'
+    src.write_bytes(b'PNG')
+    dst = tmp_path / 'out' / 'fig.png'
+    dst.parent.mkdir()
+    dst.symlink_to(src)
+    monkeypatch.setattr(report.os, 'link',
+                        lambda a, b: (_ for _ in ()).throw(OSError(18, 'xdev')))
+
+    assert report._link(str(src), str(dst)) == 'copy'
+    assert not dst.is_symlink()
+    assert dst.read_bytes() == b'PNG'
+
+
+def test_publishing_onto_itself_is_still_a_no_op(tmp_path):
+    """The guard that rewrite protects: a one-character scrontab typo pointing
+    --publish-dir at --outdir must not remove the report and link it to itself."""
+    from jwst_gc_pipeline.monitoring import report
+    src = tmp_path / 'monitor.html'
+    src.write_text('page')
+    assert report._link(str(src), str(src)) == 'same'
+    assert src.read_text() == 'page'
+
+
 class _Stat(object):
     def __init__(self, dev, size, mtime):
         self.st_dev, self.st_size, self.st_mtime = dev, size, mtime
