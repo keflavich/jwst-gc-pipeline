@@ -85,7 +85,7 @@ hidden: brick has ~1250 figures, gc2211 has none.
 
 ## Sky view
 
-An Aladin Lite panel showing where the survey plans to observe and what it has.
+A footprint map showing where the survey plans to observe and what it has.
 Footprints come from APT program **10678** — *The JWST/NIRCam Legacy Survey of
 the Galactic Center* (Schoedel, Cycle 5, Flight Ready): 139 pointings, NIRCam
 prime with MIRI coordinated parallels, ~64′×75′ over the GC.
@@ -116,12 +116,38 @@ parallel is projected through that *same* attitude, which is what puts it where
 the parallel actually observes; and `PA_V3` is a **range** (79–95°) until each
 visit is scheduled, so the midpoint is used and the range is stated on the page.
 
-Aladin Lite loads lazily on first click, from a same-origin copy `publish()`
-links in — no third-party CDN, and the 1.8 MB script is not paid for by readers
-who never open the panel. HiPS tiles are unavoidably remote; where they are
-blocked (an artifact's CSP, a `file://` page) the panel says so.
+The panel draws the footprints **twice**, by two routes with different
+dependencies:
+
+* a **static map** — an inline SVG on a TAN tangent plane, built at render time
+  by `skyview.static_map`. No script, no fetch, no tiles: ~87 kB of geometry
+  that is part of the HTML, so it renders in a published artifact, from a
+  `file://` path, and offline. North up, east left, RA/Dec graticule with a
+  Galactic one over it when astropy is importable, per-pointing hover, drag to
+  pan and click-then-scroll to zoom.
+* the **interactive view** — Aladin Lite over HiPS imagery, loaded on request
+  from a same-origin copy `publish()` links in. No third-party CDN, and the
+  1.8 MB script is not paid for by readers who never ask for it.
+
+HiPS tiles are unavoidably remote, so the interactive route is what a strict
+content-security policy blocks — a published artifact cannot run it, and neither
+can a `file://` page. When it fails the static map stays up and a note beside it
+says which part was unavailable. The layer toggles drive both routes, so a view
+built on the static map survives the upgrade.
 
 ## Publishing
+
+Two steps, because **nothing on HiPerGator is web-served**. `--publish-dir`
+assembles the page set there; `scripts/monitoring/deploy_monitor.sh` rsyncs it to
+the Apache docroot on the `starformation` host, which is where a browser can
+reach it:
+
+> **https://starformation.astro.ufl.edu/jwst-gc/monitor/**
+
+The deploy dereferences the `diagnostics-<field>` symlinks (they point into
+`/orange` and `/blue`, which the web host cannot see) and refuses any destination
+not ending in `/monitor`, because `htdocs/jwst-gc/index.html` is the public
+data-release landing page. See `UPDATING.md`.
 
 `--publish-dir` hardlinks the generated pages into a web directory (symlink if it
 is on another filesystem) and points `index.html` at the aggregate page. The

@@ -1200,13 +1200,110 @@ def _fp(**kw):
     return base
 
 
-def test_preload_overlay_can_actually_hide():
+#: Two pointings, one of which has no MIRI parallel — enough geometry to give
+#: the static map a real bounding box and to tell the two layers apart.
+_POINTINGS = [
+    {'target': 'GC_1', 'number': '1', 'ra': 266.16, 'dec': -29.47,
+     'filters': {'ShortFilter': 'F212N', 'LongFilter': 'F480M'},
+     'nircam': [[[266.14, -29.52], [266.14, -29.50],
+                 [266.16, -29.50], [266.16, -29.52]]],
+     'miri': [[[266.20, -29.40], [266.20, -29.38],
+               [266.22, -29.38], [266.22, -29.40]]]},
+    {'target': 'GC_2', 'number': '2', 'ra': 266.30, 'dec': -29.30,
+     'nircam': [[[266.28, -29.32], [266.28, -29.30],
+                 [266.30, -29.30], [266.30, -29.32]]]},
+]
+
+
+def test_hiding_beats_an_author_display():
     """`hidden` alone does not hide an element with an author `display`: origin
-    beats specificity, so the overlay stayed over the map and swallowed every
-    pointer and wheel event — the view looked loaded but could not be panned."""
+    beats specificity, so the old full-bleed overlay stayed over the map and
+    swallowed every pointer and wheel event — the view looked loaded but could
+    not be panned. The overlay is gone; what replaced it must still be able to
+    win that fight, and nothing may reintroduce the overlay."""
     from jwst_gc_pipeline.monitoring import skyview
-    assert '.gcm-sky-msg[hidden] { display: none; }' in skyview.CSS
-    assert '.gcm-sky-ui[hidden] { display: none; }' in skyview.CSS
+    assert '.gcm-sky-off { display: none !important; }' in skyview.CSS
+    assert 'gcm-sky-msg' not in skyview.CSS
+    assert 'gcm-sky-msg' not in skyview.section(_fp())
+
+
+def test_static_map_needs_no_network():
+    """The point of the static map: it renders where fetches are blocked (a
+    published artifact, a file:// path, no network). Anything it has to fetch
+    defeats it, so the SVG must reference no URL at all."""
+    from jwst_gc_pipeline.monitoring import skyview
+    svg, info = skyview.static_map(_fp(planned=_POINTINGS))
+    assert svg.startswith('<svg')
+    assert info['n_nircam'] == 2 and info['n_miri'] == 1
+    for token in ('http', 'fetch(', '<script', 'src=', 'url('):
+        assert token not in svg
+
+
+def test_static_map_orientation_is_north_up_east_left():
+    """Every other image of this field is shown north-up/east-left; a map that
+    silently mirrors the sky would make a real astrometric offset look like the
+    wrong sign."""
+    from jwst_gc_pipeline.monitoring import skyview
+    frame = skyview._frame_for(_fp(planned=_POINTINGS))
+    here = frame.xy(frame.ra0, frame.dec0)
+    east = frame.xy(frame.ra0 + 0.01, frame.dec0)
+    north = frame.xy(frame.ra0, frame.dec0 + 0.01)
+    assert east[0] < here[0]            # increasing RA moves left
+    assert north[1] < here[1]           # increasing Dec moves up (SVG y down)
+
+
+def test_static_map_survives_junk_geometry():
+    """A footprint file with a truncated vertex or a null coordinate must lose
+    that polygon, not the page."""
+    from jwst_gc_pipeline.monitoring import skyview
+    junk = [{'target': 'x', 'nircam': [[[266.1, -29.1], [266.2]],
+                                       [[266.1, None], [266.2, -29.2],
+                                        [266.3, -29.3]]],
+             'miri': [[[266.1, -29.1], [266.2, -29.2], [266.3, -29.3],
+                       [266.4, -29.4]]]}]
+    svg, info = skyview.static_map({'planned': junk + _POINTINGS})
+    assert info['n_nircam'] == 2            # the junk pointing contributes none
+    assert '<svg' in svg
+
+
+def test_static_map_absent_when_nothing_is_drawable():
+    from jwst_gc_pipeline.monitoring import skyview
+    assert skyview.static_map({'planned': []}) == ('', {})
+    assert skyview.static_map({}) == ('', {})
+
+
+def test_layer_toggles_drive_both_views():
+    """One set of buttons drives the static groups and, after the upgrade, the
+    Aladin overlays. If the two used different ids the toggles would silently
+    stop working the moment the interactive view loaded."""
+    from jwst_gc_pipeline.monitoring import skyview
+    html = skyview.section(_fp(planned=_POINTINGS))
+    for button, group in (('lyr-nircam', 'stat-nircam'),
+                          ('lyr-miri', 'stat-miri'),
+                          ('lyr-observed', 'stat-obs-nircam')):
+        assert 'id="%s"' % button in html
+        assert 'id="%s"' % group in html
+    assert 'STATIC_GROUPS' in html
+
+
+def test_interactive_failure_leaves_the_static_map_up():
+    """The failure path must restore the static map: a failed upgrade that
+    leaves the panel emptier than before the click is worse than no button."""
+    from jwst_gc_pipeline.monitoring import skyview
+    html = skyview.section(_fp(planned=_POINTINGS))
+    tail = html[html.index('function start('):]
+    assert "svg.classList.remove('gcm-sky-off')" in tail
+    assert "aladinDiv.classList.add('gcm-sky-off')" in tail
+
+
+def test_wheel_zoom_does_not_hijack_page_scroll_unarmed():
+    """A page-long report that eats the wheel whenever the cursor crosses a
+    figure is worse than a map that needs one click first."""
+    from jwst_gc_pipeline.monitoring import skyview
+    html = skyview.section(_fp(planned=_POINTINGS))
+    assert 'if (!armed) { return; }' in html
+    assert html.index('if (!armed) { return; }') < html.index('ev.preventDefault()',
+                                                              html.index('wheel'))
 
 
 @pytest.mark.parametrize('bad', [
