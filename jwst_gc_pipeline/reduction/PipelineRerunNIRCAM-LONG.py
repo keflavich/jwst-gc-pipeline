@@ -944,12 +944,18 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
             tweakreg_parameters['searchrad'] = 0.05
             print(f"Reference catalog is {abs_refcat} with version {reftblversion}")
         else:
-            print(f"No configured reference catalog found for proposal_id={proposal_id} field={field} in {basepath}. Running first-pass without abs_refcat realignment.")
+            print(f"No configured reference catalog found for proposal_id={proposal_id} "
+                  f"field={field} in {basepath}.  TweakRegStep is skipped either way; "
+                  f"this only means the run records no reference frame.  The applied "
+                  f"tie comes from the offsets table.")
 
         if abs_refcat is not None:
             tweakreg_parameters.update({'abs_refcat': abs_refcat,})
 
-        print("Running Image3Pipeline with tweakreg (merged)")
+        # 'with tweakreg' names the STEP that is configured, not one that runs:
+        # tweakreg_parameters carries skip=True on every NIRCam path.
+        print("Running Image3Pipeline on the merged association "
+              "(tweakreg configured but skipped; the tie is already baked in)")
         calwebb_image3.Image3Pipeline.call(
             asn_file_merged,
             steps={'tweakreg': tweakreg_parameters,},

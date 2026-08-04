@@ -1236,3 +1236,66 @@ def test_update_offsets_table_pool_flag_applies_the_collapse(tmp_path):
     out = update_offsets_table(path, corr, "m2", pool=True)
     hit = out[(out["Module"] == "nrca") & (out["Exposure"] == 1)]
     assert hit[0]["ddec (arcsec)"] == pytest.approx(0.010)   # median, not 4x
+
+
+# ---------------------------------------------------------------------------
+# the per-filter consensus catalog the m2 checkpoint persists
+# ---------------------------------------------------------------------------
+
+def _two_visit_tables():
+    """Two visits of one filter, both aligned, sharing the same true stars."""
+    ra, dec = _field()
+    tables = []
+    for visit in ("001", "002"):
+        for e in range(1, 5):
+            tables.append(_exposure_table(ra, dec, visit=visit, exposure=e))
+    return tables
+
+
+def test_m2_checkpoint_actually_writes_the_per_filter_consensus(tmp_path):
+    """The end-to-end wiring, not pool_visit_consensi called directly.
+
+    The first cut of this feature handed the pooler the JSON *summary* of each
+    visit (star count, median scatter) instead of the consensus itself, so
+    every real run printed "could NOT write the per-filter consensus" and the
+    file was never produced.  Unit tests that call the pooler with well-formed
+    input cannot see that.
+    """
+    from jwst_gc_pipeline.photometry.consensus_catalog import consensus_path
+
+    record = run_visit_checkpoint(
+        _two_visit_tables(), "m2", filtername="F212N",
+        basepath=str(tmp_path), record_dir=str(tmp_path), context="test")
+
+    assert record["consensus_catalog_error"] is None, \
+        record["consensus_catalog_error"]
+    path = record["consensus_catalog"]
+    assert path == consensus_path(str(tmp_path), "F212N")
+    assert os.path.exists(path)
+
+    written = Table.read(path)
+    assert written.meta["FILTER"] == "F212N"
+    assert written.meta["CONSTYPE"] == "per-filter JWST consensus"
+    assert written.meta["NVISITS"] == 2
+    assert len(written) >= 50
+    # both visits saw the same stars, so most rows must be pooled ones
+    assert (np.asarray(written["n_visits"]) == 2).sum() > 0.5 * len(written)
+    # and the precision of the thing other filters will tie to is stated
+    assert np.isfinite(np.asarray(written["scatter_mas"])).any()
+
+
+def test_the_consensus_catalog_carries_the_observation_token(tmp_path):
+    """ngc6334's two proposals share catalogs/ and a filter list."""
+    record = run_visit_checkpoint(
+        _two_visit_tables(), "m2", filtername="F200W",
+        basepath=str(tmp_path), record_dir=str(tmp_path), context="test",
+        obs_token="_j7213")
+    assert record["consensus_catalog"].endswith("f200w_j7213_consensus.fits")
+
+
+def test_no_consensus_catalog_is_written_at_a_frozen_stage(tmp_path):
+    """m3+ is frozen; the reference is what m2 froze, not a fresh one."""
+    record = run_visit_checkpoint(
+        _two_visit_tables(), "m3", filtername="F212N",
+        basepath=str(tmp_path), record_dir=str(tmp_path), context="test")
+    assert record["consensus_catalog"] is None

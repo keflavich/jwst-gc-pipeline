@@ -3527,6 +3527,7 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
         AstrometryCorrectionRequiredError, AstrometryRegressionError,
         CORRECTION_STAGES, find_i2d_for_filter, mark_i2d_stale,
         run_visit_checkpoint, update_offsets_table)
+    from jwst_gc_pipeline.photometry.consensus_catalog import consensus_obs_token
 
     if os.environ.get('ASTROM_CHECKPOINT', '1') == '0':
         return
@@ -3612,7 +3613,14 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     try:
         record = run_visit_checkpoint(
             tables, merge_label, refcat=refcat, filtername=filt,
-            basepath=cut_bp, context=context or f"{filt}/{module}")
+            basepath=cut_bp, context=context or f"{filt}/{module}",
+            # ngc6334's two proposals and cloudef's two obsids share a target
+            # directory AND a filter list, so the per-filter consensus catalog
+            # this writes needs the same disambiguator every other per-obs
+            # product carries.
+            obs_token=consensus_obs_token(
+                getattr(options, 'proposal_id', None),
+                getattr(options, 'field', None)))
     except AstrometryRegressionError:
         if warn_only:
             traceback.print_exc()

@@ -1,8 +1,10 @@
 # Realigning the catalogs to the JWST reference-filter consensus
 
 **Instructions for the agent picking this up.** The machinery this depends on
-(`photometry/consensus_catalog.py`, the m2 checkpoint writing
-`catalogs/<filter>_consensus.fits`) is on `main`; read
+is `photometry/consensus_catalog.py` plus the m2 checkpoint writing
+`catalogs/<filter>[_obstoken]_consensus.fits`, and
+`scripts/reduction/promote_reference_consensus.py`. Check it is on `main`
+before starting — it landed in PR #264. Read
 [`JWST_CONSENSUS_CATALOG.md`](JWST_CONSENSUS_CATALOG.md) first.
 
 ## What you are doing, and what you are not
@@ -39,16 +41,33 @@ products built from them.
 ## Order of work
 
 **1. Confirm the inputs exist.** For the field, every filter needs
-`catalogs/<filter>_consensus.fits` from a completed m2 checkpoint, and
-`catalogs/jwst_reference_consensus.fits` must exist
-(`consensus_catalog.promote_reference_filter`). If the reference filter's
-consensus is missing, stop — do not fall back to VIRAC2 silently.
+`catalogs/<filter>[_obstoken]_consensus.fits` from a completed m2 checkpoint.
+Then run
+
+```
+python scripts/reduction/promote_reference_consensus.py \
+    --basepath <field dir> --field-name <field> --proposal-id <prop>
+```
+
+to write `catalogs/jwst_reference[_obstoken]_consensus.fits`. It refuses if the
+chosen filter's consensus is not there — do not work around that by promoting a
+different filter, and do not fall back to VIRAC2 silently.
+
+Note the **observation token**: a target directory shared by two proposals
+(ngc6334 6778/7213) or two obsids (cloudef/2092) has one reference catalog per
+observation, not one per directory. Pass `--proposal-id`/`--obsid` so you
+promote and read the right one.
 
 **2. Measure, before changing anything.** For each non-reference filter, run
 `consensus_catalog.tie_to_reference_consensus` and record: offset, contrast,
 `window_edge_fraction`, number of pairs. Write these to a table and **look at
 them before applying any of them**. This is the first time these numbers exist;
 they are the evidence for what a sane tolerance is.
+
+The reference catalog now states its own precision — `scatter_mas` and `err_mas`
+per row, `n_visits` and `n_exposures` for redundancy. Use them: a tie tolerance
+cannot be tighter than the reference it is measured against, and restricting to
+rows with `n_visits >= 2` is the cheap way to drop the least-supported half.
 
 Expect them to be small. If any filter reads more than a few tens of mas, that
 is a finding about the existing VIRAC2 ties, not a routine correction — report

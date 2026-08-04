@@ -284,7 +284,7 @@ around the visit consensus, re-measured every re-tie iteration.
 | 1182 | 004 | VIRAC2 | `TABLE_LOCKED` | — | brick, top-half visit-001 fix |
 | 2221 | 001, 002 | VIRAC2 | `TABLE_LOCKED` | — | brick / cloudc |
 | 4147 | all | VIRAC2 | `TABLE_LOCKED` | F212N | sgrc |
-| 6151 | all | **Gaia** | `TABLE_CONSENSUS` | F200W | w51 (outside the VVV footprint) |
+| 6151 | all | **Gaia** | `TABLE_CONSENSUS` | F210M | w51 (outside the VVV footprint); was F200W, which 6151 does not observe |
 | 2045 | 001 | VIRAC2 | `TABLE_CONSENSUS` | F212N | arches |
 | 2045 | 003 | VIRAC2 | `TABLE_LOCKED` | F212N | quintuplet |
 | 5365 | all | VIRAC2 | `TABLE_LOCKED` | F212N | sgrb2 |
