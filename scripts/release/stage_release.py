@@ -769,19 +769,29 @@ def check_photometric_continuity(items, tol=CONTINUITY_TOL_MAG,
         for a, b in DEGENERATE_PAIRS:
             if a not in have or b not in have:
                 continue
-            # Blocking metric: the shipped science subset (all saturation flags cut).
+            # Blocking metric: the shipped science subset (all saturation flags
+            # cut), at flatness_min_n so a sparse saturation-onset bin cannot
+            # decide the release.
             r = degenerate_pair_flatness(cat, a, b, science_only=True,
                                          min_n=flatness_min_n)
             # Informational: full-inclusive drift (recovered/deep-core rows kept),
-            # so a regressing satstar flux scale is still visible in the log.
-            r_full = degenerate_pair_flatness(cat, a, b, include_flags=True,
-                                              min_n=flatness_min_n)
+            # so a regressing satstar flux scale is still visible in the log. This
+            # is a DIAGNOSTIC, not a blocker, and a satstar flux-scale offset lives
+            # in exactly the sparse bins flatness_min_n suppresses -- so it is
+            # measured at the default min_n, NOT flatness_min_n, or it would hide
+            # the very thing it exists to show.
+            r_full = degenerate_pair_flatness(cat, a, b, include_flags=True)
             sci_finite = np.isfinite(r["metric"])
             full_finite = np.isfinite(r_full["metric"])
             over = sci_finite and r["metric"] >= tol
-            # Fail-open guard: if the science subset was too small to measure but
-            # the flag-inclusive metric is measurable and over tol, do not pass.
-            not_certified = (not sci_finite) and full_finite and (r_full["metric"] >= tol)
+            # Fail-open guard: never pass a population we declined to measure. If
+            # the science subset is unmeasurable (too few rows at flatness_min_n),
+            # the pair is NOT-CERTIFIED unless the flag-inclusive metric is itself
+            # measurable AND clean (a larger, flatter population vouches for it).
+            # Both-unmeasurable therefore blocks -- a small catalog with a real
+            # strip no longer slips through the raised min_n.
+            not_certified = (not sci_finite) and (
+                (not full_finite) or (r_full["metric"] >= tol))
             ok = not (over or not_certified)
             wb = r["worst_bin"]
             sci = (f"{r['metric']:.3f} @{b}={wb['magB_lo']:.2f}(n={wb['n']})"
@@ -789,15 +799,16 @@ def check_photometric_continuity(items, tol=CONTINUITY_TOL_MAG,
             full = (f"{r_full['metric']:.3f}" if full_finite else "n/a")
             status = "ok" if ok else ("NOT-CERTIFIED" if not_certified else "FAIL")
             print(f"  degenerate-pair {a}-{b} [{name}]: science drift {sci} mag "
-                  f"vs plateau {r['plateau']:+.3f}  (full-inclusive {full} mag)  "
+                  f"vs plateau {r['plateau']:+.3f}  (full-inclusive {full} mag @min_n=default)  "
                   f"{status}", flush=True)
             if over:
                 fails.append(f"{a}-{b} degenerate-pair science drift "
                              f"{r['metric']:.3f} mag [{name}]")
             elif not_certified:
+                _why = (f"flag-inclusive drift {r_full['metric']:.3f} mag"
+                        if full_finite else "flag-inclusive also unmeasurable")
                 fails.append(f"{a}-{b} degenerate-pair science subset unmeasurable "
-                             f"(<10*{flatness_min_n} rows) but flag-inclusive drift "
-                             f"{r_full['metric']:.3f} mag [{name}]")
+                             f"(<10*{flatness_min_n} rows); {_why} [{name}]")
     return fails
 
 

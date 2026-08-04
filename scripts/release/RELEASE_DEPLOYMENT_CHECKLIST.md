@@ -165,19 +165,31 @@ release. On Brick 2026-08 m8:
 - **F182M-F187N** — science metric **0.049** ("~0.05"); flag-inclusive **0.227**,
   logged not gated (the recovered-satstar color offset that `science_only` cuts).
 
+The flag-inclusive figures the gate logs (**F405N-F410M 0.333, F182M-F187N 0.227**)
+are computed at the DEFAULT `min_n`, not `min_n=200`: they are a satstar
+flux-scale diagnostic, and such an offset lives in exactly the sparse bins
+`min_n=200` suppresses, so measuring them at 200 would hide what they exist to
+show (W51 m8: F405N-F410M flag-inclusive is 2.01 at the default min_n, 0.01 at
+200). These match the numbers `scripts/analysis/regenerate_satstar_cmds.py`
+annotates the published CMDs with.
+
 The 2026-07-11 suppression-strip guard (`test_suppression_strip_refused`) still
 fails at 0.352 because its strip bins hold ~800 stars, so `min_n=200` suppresses
 the sparse onset bin without whitelisting a real, well-populated strip in either
-pair. If the science subset is too small to measure (nan) while the flag-inclusive
-metric is over tol, the pair fails `NOT-CERTIFIED` — the gate never prints "ok"
-for a population it declined to measure.
+pair. The gate never prints "ok" for a population it declined to measure: if the
+science subset is too small to measure at `min_n=200` (nan), the pair fails
+`NOT-CERTIFIED` unless the flag-inclusive metric is itself measurable AND clean —
+so a small catalog carrying a real strip (both metrics nan) still **blocks**
+rather than slipping through the raised floor.
 
 **⚠ Saturation-BOUNDARY continuity is a SEPARATE gate and is NOT closed on Brick
 m8.** `CONTINUITY_PAIRS` runs `saturation_continuity(cat, 'f410m', 'f405n')`
-(A = the earlier-saturating band) = **0.170 mag (C1-boundary-jump) → FAIL**: the
-recovered-F410M-satstar rows sit ~0.17 mag off the unflagged locus in the bright
-transition bins (F410M 12–13, n_sat≈38). This is the same recovered-satstar color
-bias seen in F182M-F187N flatness, but the boundary metric measures the
+(A = the saturated/`replaced_saturated` band, B = the reference binned in
+`mag_B`) = **0.170 mag (C1-boundary-jump) → FAIL**: the recovered-F410M-satstar
+rows sit ~0.17 mag off the unflagged locus in the two bright transition bins
+**F405N 12.0–13.0** (the binning band is B = F405N; n_sat≈38, jumps −0.170 /
+−0.154). This is the same recovered-satstar color bias seen in F182M-F187N
+flatness, but the boundary metric measures the
 satstar↔normal transition and therefore CANNOT exclude the satstar rows;
 `science_only` does not apply to it. (The 0.04 mag figure is the reverse argument
 order `saturation_continuity('f405n','f410m')`, which the gate does not evaluate —

@@ -81,6 +81,60 @@ def test_sparse_onset_bin_would_block_at_low_min_n(tmp_path):
     assert any("f405n-f410m" in f for f in fails)
 
 
+def _strip_catalog(n, drift=-0.35, seed=1):
+    """N-row F405N-F410M table, flat locus -0.10 with a -drift suppression strip
+    over F410M 12.2-13.3, no saturation flags (science subset == all rows)."""
+    rng = np.random.default_rng(seed)
+    mB = rng.uniform(12.0, 18.0, n)
+    color = np.full(n, -0.10) + rng.normal(0, 0.05, n)
+    color[(mB > 12.2) & (mB < 13.3)] += drift
+    return Table({'mag_vega_f405n': mB + color, 'mag_vega_f410m': mB})
+
+
+def test_small_catalog_with_strip_still_blocks(tmp_path):
+    """R1: a catalog too small for the min_n=200 science floor (nan) but with a
+    real strip the flag-inclusive metric CAN measure must not pass -- it fails
+    NOT-CERTIFIED, not 'ok'."""
+    cat = _strip_catalog(1500)          # < 10*200 rows -> science nan
+    fails = stage_release.check_photometric_continuity(_items_for(tmp_path, cat))
+    assert any("f405n-f410m" in f and "unmeasurable" in f for f in fails)
+
+
+def test_both_unmeasurable_strip_blocks(tmp_path):
+    """R1: when BOTH science and flag-inclusive are unmeasurable (very small
+    catalog), the pair still blocks -- a gate never passes a population it
+    declined to measure."""
+    cat = _strip_catalog(150)           # both metrics nan
+    fails = stage_release.check_photometric_continuity(_items_for(tmp_path, cat))
+    assert any("f405n-f410m" in f and "unmeasurable" in f for f in fails)
+
+
+def test_informational_metric_uses_default_min_n(tmp_path, capsys):
+    """R2: the LOGGED flag-inclusive drift is a satstar flux-scale diagnostic and
+    must be computed at the default min_n, not min_n=200 -- a satstar offset lives
+    in exactly the sparse bins min_n=200 suppresses. Science subset is flat (the
+    flagged sparse offset is cut) so the gate passes, but the log must still show
+    the offset."""
+    rng = np.random.default_rng(7)
+    mB = np.concatenate([rng.uniform(15.0, 19.0, 40000),
+                         rng.uniform(13.0, 15.0, 8000),
+                         rng.uniform(12.4, 12.6, 50)])   # sparse bright bin
+    color = np.full(len(mB), -0.10) + rng.normal(0, 0.03, len(mB))
+    color[-50:] += -0.6
+    rs = np.zeros(len(mB), bool)
+    rs[-50:] = True                                      # flagged recovered-satstar
+    cat = Table({'mag_vega_f405n': mB + color, 'mag_vega_f410m': mB,
+                 'replaced_saturated_f405n': rs, 'replaced_saturated_f410m': rs})
+    fails = stage_release.check_photometric_continuity(_items_for(tmp_path, cat))
+    assert fails == []                                   # science subset is flat
+    line = [l for l in capsys.readouterr().out.splitlines()
+            if "degenerate-pair f405n-f410m" in l][-1]
+    # flag-inclusive at the default min_n sees the sparse offset (~0.6); at
+    # min_n=200 it would read ~0.00 and hide it.
+    full = float(line.split("full-inclusive")[1].split("mag")[0])
+    assert full > 0.3
+
+
 def test_no_merged_table_returns_none(tmp_path):
     assert stage_release.check_photometric_continuity([]) is None
     # ecsv-only shipment: gate reads only the fits combined table
