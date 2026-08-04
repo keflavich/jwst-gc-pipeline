@@ -24,9 +24,12 @@ Two things are easy to get wrong here and are done deliberately:
   the page can say the footprints rotate within it rather than implying a
   precision the plan does not have.
 
-Observed footprints come from the APT ``VisitStatus`` entries, so "what has been
-observed" is read from the program rather than assumed — today that is an empty
-list, and the page renders an empty layer rather than omitting the toggle.
+Observed footprints come from the APT ``VisitStatus`` entries -- which live at
+``JwstProposal/VisitStatuses``, a ROOT child, not inside ``Observation``; reading
+them from the obvious place silently pins the observed count at zero forever.
+They carry only a ``VisitId``, so they are matched to observations by the
+observation number embedded in it.  Today every visit reads ``IMPLEMENTATION``,
+so the layer is empty -- and it renders empty rather than being omitted.
 
     python scripts/monitoring/build_footprints.py 10678 --out footprints.json
 """
@@ -47,20 +50,39 @@ NIRCAM_APERTURES = ('NRCA1_FULL', 'NRCA2_FULL', 'NRCA3_FULL', 'NRCA4_FULL',
                     'NRCB1_FULL', 'NRCB2_FULL', 'NRCB3_FULL', 'NRCB4_FULL')
 #: The aperture APT's target coordinate refers to; the attitude is anchored here.
 NIRCAM_ANCHOR = 'NRCALL_FULL'
-MIRI_APERTURES = ('MIRIM_FULL',)
+#: The ILLUMINATED imaging field, not MIRIM_FULL.  MIRIM_FULL is the whole
+#: 1032x1024 detector (123" x 121") and includes the coronagraph/Lyot region,
+#: which a FULL-subarray MiriImaging exposure does not image.  MIRIM_ILLUM is
+#: 83" x 118" -- drawing MIRIM_FULL overstates the parallel's sky coverage by
+#: ~30% in one axis.
+MIRI_APERTURES = ('MIRIM_ILLUM',)
 
 
-def fetch_apt(program, dest):
-    """Download the APT file, unless it is already there."""
+def fetch_apt(program, dest, force=False):
+    """Download the APT file, unless a USABLE copy is already there.
+
+    "Usable" means it opens as a zip: a truncated download is still >10 kB and
+    the size check alone made every later run fail on the same corrupt file
+    until a human deleted it.  ``force`` re-downloads regardless, which is what
+    picking up newly-executed visits needs -- otherwise the cache silently
+    pins the answer to whenever the file was first fetched.
+    """
     import urllib.request
-    if os.path.exists(dest) and os.path.getsize(dest) > 10_000:
-        return dest
+    if not force and os.path.exists(dest) and os.path.getsize(dest) > 10_000:
+        if zipfile.is_zipfile(dest):
+            return dest
+        print(f'{dest} is not a readable zip; re-downloading', file=sys.stderr)
     os.makedirs(os.path.dirname(os.path.abspath(dest)) or '.', exist_ok=True)
     with urllib.request.urlopen(APT_URL.format(program=program), timeout=120) as fh:
         data = fh.read()
     with open(dest, 'wb') as out:
         out.write(data)
     return dest
+
+
+#: Statuses that mean a visit actually ran.  A Flight Ready program reads
+#: IMPLEMENTATION for every visit, which is "planned", not "observed".
+EXECUTED_STATUSES = ('executed', 'archived', 'completed', 'flight', 'succeeded')
 
 
 def _tag(elem):
@@ -72,7 +94,7 @@ _SEXA = re.compile(r'^\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([+-]?[\d.]+)\s+'
 
 
 def parse_sexagesimal(value):
-    """``'17 44 38.8689 -29 28 41.23'`` -> ``(266.9119…, -29.4781…)`` degrees."""
+    """``'17 44 38.8689 -29 28 41.23'`` -> ``(266.161954, -29.478119)`` degrees."""
     m = _SEXA.match(value)
     if not m:
         raise ValueError(f'unparseable coordinate {value!r}')
@@ -97,6 +119,30 @@ def parse_apt(xml_path):
         if name and coord:
             targets[name] = parse_sexagesimal(coord)
 
+    # VisitStatus elements live at JwstProposal/VisitStatuses/VisitStatus -- a
+    # SIBLING of DataRequests, not a descendant of Observation.  Scanning inside
+    # each Observation (the obvious reading) can never reach one, so the observed
+    # count was structurally pinned at 0 and would have stayed there forever
+    # however far the program progressed.  VisitId is 11 digits:
+    # <5 program><3 observation><3 visit>, so the observation number is digits
+    # 5..8 -- the status carries no target name, so it must be mapped by number.
+    executed_obs = set()
+    for elem in root.iter():
+        if _tag(elem) != 'VisitStatus':
+            continue
+        status = (elem.attrib.get('Status') or '').strip().lower()
+        visit_id = (elem.attrib.get('VisitId') or '').strip()
+        if status in EXECUTED_STATUSES and len(visit_id) >= 8:
+            executed_obs.add(visit_id[5:8].lstrip('0') or '0')
+    # VisitExecutions is the element that records actual execution; empty in a
+    # Flight Ready program, but read so this does not need revisiting later.
+    for elem in root.iter():
+        if _tag(elem) != 'VisitExecution':
+            continue
+        visit_id = (elem.attrib.get('VisitId') or '').strip()
+        if len(visit_id) >= 8:
+            executed_obs.add(visit_id[5:8].lstrip('0') or '0')
+
     observations, observed = [], []
     for elem in root.iter():
         if _tag(elem) != 'Observation':
@@ -116,26 +162,29 @@ def parse_apt(xml_path):
                 orient = (_deg(lo), _deg(hi))
         filters = [(_tag(c), (c.text or '').strip()) for c in elem.iter()
                    if _tag(c) in ('ShortFilter', 'LongFilter')]
+        # Every observation dithers.  Only the NOMINAL position is drawn; the
+        # real covered area is slightly larger, and FULLBOX exists precisely to
+        # fill the module gap the drawn outline shows as a hole.  Recorded so
+        # the page can say so instead of implying the outline is the coverage.
+        dither = {}
+        for c in elem.iter():
+            if _tag(c) in ('PrimaryDitherType', 'SubpixelDitherType',
+                           'PrimaryDithers', 'DitherSize'):
+                dither[_tag(c)] = (c.text or '').strip()
         number = (kids.get('Number').text or '').strip() \
             if kids.get('Number') is not None else ''
         parallel = ((kids.get('CoordinatedParallelSet').text or '').strip()
                     if kids.get('CoordinatedParallelSet') is not None else '')
         observations.append({
             'number': number, 'target': name, 'instrument': instrument,
-            'orient': orient, 'filters': dict(filters), 'parallel': parallel})
+            'orient': orient, 'filters': dict(filters), 'parallel': parallel,
+            'dither': dither})
 
-        # An observation counts as OBSERVED only if APT records a visit that
-        # actually executed.  Read, not assumed: the whole point of the separate
-        # layer is that it fills in on its own as the program runs.
-        for sub in elem.iter():
-            if _tag(sub) != 'VisitStatus':
-                continue
-            status = (sub.attrib.get('Status') or '').strip().lower()
-            if status in ('executed', 'archived', 'completed'):
-                observed.append({'number': number, 'target': name,
-                                 'status': status})
+        if (number.lstrip('0') or '0') in executed_obs:
+            observed.append({'number': number, 'target': name,
+                             'status': 'executed'})
     return {'targets': targets, 'observations': observations,
-            'observed': observed}
+            'observed': observed, 'n_visit_status': len(executed_obs)}
 
 
 def _deg(text):
@@ -192,7 +241,11 @@ def build(program, apt_path, pa_v3=None):
     planned, observed = [], []
     for obs in parsed['observations']:
         if obs['instrument'] != 'NIRCAM':
-            continue                      # the MIRI half is the parallel
+            # The other 139 Observation elements are text-only entries under
+            # LinkingRequirements/SameOrientLink, not a MIRI half -- this program
+            # has no separate MIRI Observation; MIRI rides as the coordinated
+            # parallel of each NIRCam observation.
+            continue
         coord = targets.get(obs['target'])
         if coord is None:
             continue
@@ -207,7 +260,13 @@ def build(program, apt_path, pa_v3=None):
                'miri': list(miri.values())}
         (observed if obs['target'] in observed_targets else planned).append(rec)
 
+    dithers = {}
+    for o in parsed['observations']:
+        for k, v in (o.get('dither') or {}).items():
+            dithers.setdefault(k, set()).add(v)
+
     return {'program': str(program),
+            'dither': {k: sorted(v) for k, v in dithers.items()},
             'title': 'JWST/NIRCam Legacy Survey of the Galactic Center',
             'pa_v3': pa_v3, 'pa_v3_range': [lo, hi],
             'n_planned': len(planned), 'n_observed': len(observed),
@@ -222,6 +281,10 @@ def main(argv=None):
     ap.add_argument('program', nargs='?', default='10678')
     ap.add_argument('--apt', default=None, help='existing .aptx (else download)')
     ap.add_argument('--out', default='footprints.json')
+    ap.add_argument('--force', action='store_true',
+                    help='re-download the APT file and re-extract, rather than '
+                         'reusing a cached copy (needed to pick up visits that '
+                         'have executed since)')
     ap.add_argument('--pa-v3', type=float, default=None,
                     help='override the PA_V3 used (default: midpoint of the '
                          'program OrientRange)')
@@ -229,11 +292,11 @@ def main(argv=None):
 
     workdir = os.path.dirname(os.path.abspath(args.out)) or '.'
     aptx = args.apt or os.path.join(workdir, f'{args.program}.aptx')
-    fetch_apt(args.program, aptx)
+    fetch_apt(args.program, aptx, force=args.force)
 
     xml_name = f'{args.program}.xml'
     xml_path = os.path.join(workdir, xml_name)
-    if not os.path.exists(xml_path):
+    if args.force or not os.path.exists(xml_path):
         with zipfile.ZipFile(aptx) as zf:
             zf.extract(xml_name, workdir)
 

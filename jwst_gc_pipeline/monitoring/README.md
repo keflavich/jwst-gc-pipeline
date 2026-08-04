@@ -83,6 +83,44 @@ embedded — they are megabytes. `--publish-dir` hardlinks them into `figures/` 
 the relative links resolve on the served copy. Coverage is uneven and is not
 hidden: brick has ~1250 figures, gc2211 has none.
 
+## Sky view
+
+An Aladin Lite panel showing where the survey plans to observe and what it has.
+Footprints come from APT program **10678** — *The JWST/NIRCam Legacy Survey of
+the Galactic Center* (Schoedel, Cycle 5, Flight Ready): 139 pointings, NIRCam
+prime with MIRI coordinated parallels, ~64′×75′ over the GC.
+
+```bash
+python scripts/monitoring/build_footprints.py 10678 --out <outdir>/footprints.json
+```
+
+downloads the APT file, parses the targets and `OrientRange`, and projects
+aperture corners through the observatory attitude with `pysiaf`. Re-run it when
+the program changes — the observed layer fills in from the APT visit status, so
+it updates as visits execute.
+
+Three JWST layers, each its own colour and toggle:
+
+| layer | why separate |
+|---|---|
+| planned NIRCam | the prime, 8 SW detectors per pointing |
+| planned MIRI ∥ | lands ~7.5′ from the prime, so it covers **different sky** — one colour would imply contiguous coverage the survey does not have |
+| observed | read from the APT visit status; empty today, rendered as "none yet" with its toggle **on** so the first executed visit appears without anyone enabling it |
+
+Roman GBTDS spring/autumn tiles and the target-area polygon are available but
+**off by default** — this is a JWST monitor and the Roman geometry is context.
+
+Two things the geometry does deliberately: the attitude is anchored on
+`NRCALL_FULL` (the aperture APT's target coordinate refers to) and the MIRI
+parallel is projected through that *same* attitude, which is what puts it where
+the parallel actually observes; and `PA_V3` is a **range** (79–95°) until each
+visit is scheduled, so the midpoint is used and the range is stated on the page.
+
+Aladin Lite loads lazily on first click, from a same-origin copy `publish()`
+links in — no third-party CDN, and the 1.8 MB script is not paid for by readers
+who never open the panel. HiPS tiles are unavoidably remote; where they are
+blocked (an artifact's CSP, a `file://` page) the panel says so.
+
 ## Publishing
 
 `--publish-dir` hardlinks the generated pages into a web directory (symlink if it

@@ -840,7 +840,7 @@ _JS = """
 def render_page(entries, cutouts=(), title='JWST-GC pipeline monitor',
                 subtitle='', standalone=False, show_skip=False,
                 generated=None, unattributed_jobs=(), figure_base='figures',
-                footprints=None, roman=None):
+                footprints=None, roman=None, asset_prefix=''):
     """The whole page.
 
     ``entries`` is the list built by ``report.build_entries`` -- one per
@@ -891,7 +891,10 @@ name cannot be attributed to this observation. Click a card for the detail.</p>
 {unattr}
 <div class="gcm-grid">{cards}</div></section>
 
-{skyview.section(footprints, roman)}
+{skyview.section(footprints, roman,
+                 aladin_src=asset_prefix + skyview.ALADIN_LOCAL,
+                 data_url=asset_prefix + skyview.FOOTPRINTS_JSON,
+                 roman_url=asset_prefix + skyview.ROMAN_JSON)}
 
 {_cutouts_block(cutouts)}
 

@@ -202,7 +202,13 @@ def write_report(outdir=DEFAULT_OUTDIR, targets=None, instrument='nircam',
                 title=f'{target} · jwst-gc pipeline monitor',
                 subtitle=f'{target} · '
                          f'{time.strftime("%Y-%m-%d %H:%M %Z", time.localtime(generated))}',
-                standalone=True, show_skip=show_skip, generated=generated))
+                standalone=True, show_skip=show_skip, generated=generated,
+                # ../ because the per-field pages live in fields/ while the
+                # assets sit beside the aggregate page.  Without these the
+                # per-field pages told the reader to generate a file that was
+                # already sitting next to them.
+                footprints=footprints, roman=roman,
+                asset_prefix='../'))
             field_paths[target] = path
 
     return {'aggregate': aggregate, 'fragment': fragment, 'fields': field_paths,

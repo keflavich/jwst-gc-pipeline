@@ -37,6 +37,10 @@ ALADIN_LOCAL = 'aladin.js'
 
 #: Written next to the page by ``report.write_report``.
 FOOTPRINTS_JSON = 'footprints.json'
+#: Roman GBTDS context geometry.  FETCHED, not inlined: its three layers are all
+#: off by default, so inlining ~25 kB into every page charges every reader for
+#: something almost nobody turns on.
+ROMAN_JSON = 'roman_gbtds.json'
 
 #: Layer colours.  JWST uses the page's own accent family; Roman keeps the
 #: blue/orange of the source page so the two are recognisably the same layers.
@@ -104,6 +108,12 @@ CSS = """
 .gcm-sky-msg { position: absolute; inset: 0; display: flex; align-items: center;
                justify-content: center; text-align: center; padding: 2rem;
                color: #9fb4bc; font-size: .85rem; line-height: 1.6; z-index: 5; }
+/* An author `display` beats the UA's [hidden]{display:none} on origin, so
+   setting the attribute alone left this overlay covering the map and
+   swallowing every pointer and wheel event -- the view looked loaded but could
+   not be panned or zoomed.  This rule is what makes `hidden` work here. */
+.gcm-sky-msg[hidden] { display: none; }
+.gcm-sky-ui[hidden] { display: none; }
 .gcm-sky-msg a { color: var(--accent); }
 .gcm-sky-load { display: inline-block; cursor: pointer; margin-top: .6rem;
                 padding: .35rem .8rem; border-radius: 3px;
@@ -115,24 +125,52 @@ CSS = """
 """
 
 
+def _safe_num(value, default=None):
+    """A float, or ``default``.  The sky view must never take the page down.
+
+    ``render_page`` calls this section unguarded, so a ``footprints.json`` whose
+    schema has drifted -- a null ``pa_v3``, a one-element range, a string where a
+    number belongs -- would raise during formatting and lose ``monitor.html``
+    entirely: every pipeline check discarded for a decorative panel.
+    """
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return default
+    return out if out == out else default          # NaN -> default
+
+
 def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
-            data_url=FOOTPRINTS_JSON):
+            data_url=FOOTPRINTS_JSON, roman_url=ROMAN_JSON):
     """The whole sky-view section, or a note when there is no footprint data."""
-    if not footprints:
+    if not isinstance(footprints, dict) or not footprints:
         return ('<section class="gcm-sec" id="skyview"><h2>Sky view</h2>'
                 '<p class="gcm-empty">No footprint data — run '
                 '<code>scripts/monitoring/build_footprints.py</code> to generate '
                 '<code>footprints.json</code>.</p></section>')
 
-    n_planned = footprints.get('n_planned', 0)
-    n_observed = footprints.get('n_observed', 0)
-    lo, hi = (footprints.get('pa_v3_range') or [None, None])[:2]
-    pa_note = (f"PA_V3 {footprints.get('pa_v3', 0):.0f}°"
-               + (f" (program allows {lo:.0f}–{hi:.0f}°)"
+    n_planned = _safe_num(footprints.get('n_planned'), 0) or 0
+    n_observed = _safe_num(footprints.get('n_observed'), 0) or 0
+    n_planned, n_observed = int(n_planned), int(n_observed)
+    rng = footprints.get('pa_v3_range') or []
+    lo = _safe_num(rng[0]) if len(rng) > 0 else None
+    hi = _safe_num(rng[1]) if len(rng) > 1 else None
+    pa = _safe_num(footprints.get('pa_v3'))
+    pa_note = ((f'PA_V3 {pa:.0f}°' if pa is not None else 'PA_V3 unrecorded')
+               + (f' (program allows {lo:.0f}–{hi:.0f}°)'
                   if lo is not None and hi is not None else ''))
+    dither = footprints.get('dither') or {}
+    dither_note = ''
+    if dither.get('PrimaryDitherType'):
+        dither_note = (
+            f" Each pointing dithers "
+            f"({'/'.join(dither.get('PrimaryDitherType', []))}"
+            f"{', ' + '/'.join(dither.get('PrimaryDithers', [])) if dither.get('PrimaryDithers') else ''})"
+            f" and only the nominal position is drawn — the real covered area is"
+            f" a little larger, and a FULLBOX pattern exists precisely to fill"
+            f" the inter-module gap the outline shows as a hole.")
 
     observed_cls = 'gcm-sky-empty' if not n_observed else ''
-    roman_json = json.dumps(roman or {})
 
     surveys = ''.join(
         f'<button class="gcm-sky-btn survey{" on" if i == 0 else ""}" '
@@ -145,10 +183,13 @@ def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
 <em>{_esc(footprints.get('title'))}</em>: {n_planned} planned pointings, NIRCam
 prime with MIRI as a coordinated parallel. The MIRI parallel sits ~7.5′ from the
 prime, so it covers <em>different sky</em> — it is a separate layer for that
-reason, not for tidiness. {_esc(pa_note)}; the footprints rotate within that
-range until each visit is scheduled, so treat the exact corners as indicative.
-Observed pointings come from the APT visit status: <strong>{n_observed}</strong>
-so far.</p>
+reason, not for tidiness. {_esc(pa_note)}. The angle is not fixed until each visit is
+scheduled, and the program notes it may request the 180° flip — so treat these
+as <em>indicative</em>: across the allowed range alone the MIRI parallel moves
+~125″ (about the width of a NIRCam module), and a flip moves it ~15′. The NIRCam
+layer draws the eight SW detectors; the LW arrays cover the same two modules
+without the intra-module gaps.{dither_note} Observed pointings are read from the
+APT visit status: <strong>{n_observed}</strong> so far.</p>
 
 <div class="gcm-sky-wrap">
   <div id="gcm-aladin"></div>
@@ -218,7 +259,8 @@ so far.</p>
 (function () {{
   var DATA_URL = {json.dumps(data_url)};
   var ALADIN_SRC = {json.dumps(aladin_src)};
-  var ROMAN = {roman_json};
+  var ROMAN_URL = {json.dumps(roman_url)};
+  var ROMAN = {{}};
   var C = {json.dumps({'nircam': COLOR_NIRCAM_PLANNED, 'miri': COLOR_MIRI_PLANNED,
                        'observed': COLOR_OBSERVED, 'spring': COLOR_SPRING,
                        'autumn': COLOR_AUTUMN, 'target': COLOR_TARGET_AREA})};
@@ -227,6 +269,13 @@ so far.</p>
   var msg = document.getElementById('gcm-sky-msg');
   var ui = document.getElementById('gcm-sky-ui');
   if (!btn) {{ return; }}
+
+  function describe(e) {{
+    // aladin.js throws a bare string ('WebGL2 not supported by your browser'),
+    // so e.message is undefined for the most likely real failure.
+    if (!e) {{ return 'unknown error'; }}
+    return (typeof e === 'string') ? e : (e.message || String(e));
+  }}
 
   function fail(what) {{
     // Say which part is unavailable and where it does work, rather than
@@ -249,8 +298,15 @@ so far.</p>
       fetch(DATA_URL).then(function (r) {{
         if (!r.ok) {{ throw new Error('http ' + r.status); }}
         return r.json();
+      }}).then(function (fp) {{
+        // Roman is context and every one of its layers is off by default, so a
+        // failure to load it must not stop the JWST view from rendering.
+        return fetch(ROMAN_URL)
+          .then(function (r) {{ return r.ok ? r.json() : {{}}; }})
+          .catch(function () {{ return {{}}; }})
+          .then(function (rm) {{ ROMAN = rm || {{}}; return fp; }});
       }}).then(start).catch(function (e) {{
-        fail('the footprint data could not be loaded (' + e.message + ')');
+        fail('the footprint data could not be loaded (' + describe(e) + ')');
       }});
     }};
     document.body.appendChild(s);
@@ -332,6 +388,10 @@ so far.</p>
           aladin.setImageSurvey(t.indexOf('http') === 0 ? A.HiPS(t) : t);
         }};
       }});
+    }}).catch(function (e) {{
+      // Without this the most likely failure -- no WebGL2 -- leaves the panel
+      // on "loading…" forever with no explanation.
+      fail('Aladin could not start (' + describe(e) + ')');
     }});
   }}
 }})();

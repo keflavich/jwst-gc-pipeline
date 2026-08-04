@@ -1187,3 +1187,95 @@ def test_publish_creates_the_diagnostics_symlinks_the_pages_link_to(tmp_path,
     assert (web / 'diagnostics-brick' / 'main.pdf').read_text() == 'pdf'
     # idempotent: a second run recognises the existing link
     assert report.publish(str(out), str(web))['diagnostics-brick'] == 'same'
+
+
+# --------------------------------------------------------------------------
+# Sky view — defects found by adversarial verification
+# --------------------------------------------------------------------------
+
+def _fp(**kw):
+    base = {'program': '10678', 'title': 't', 'n_planned': 139, 'n_observed': 0,
+            'pa_v3': 87.0, 'pa_v3_range': [79.0, 95.0]}
+    base.update(kw)
+    return base
+
+
+def test_preload_overlay_can_actually_hide():
+    """`hidden` alone does not hide an element with an author `display`: origin
+    beats specificity, so the overlay stayed over the map and swallowed every
+    pointer and wheel event — the view looked loaded but could not be panned."""
+    from jwst_gc_pipeline.monitoring import skyview
+    assert '.gcm-sky-msg[hidden] { display: none; }' in skyview.CSS
+    assert '.gcm-sky-ui[hidden] { display: none; }' in skyview.CSS
+
+
+@pytest.mark.parametrize('bad', [
+    {'pa_v3': None},
+    {'pa_v3': '87'},
+    {'pa_v3_range': [79.0]},
+    {'pa_v3_range': None},
+    {'n_planned': None},
+    {'n_observed': 'lots'},
+    {'pa_v3': float('nan')},
+])
+def test_schema_drift_cannot_take_the_page_down(bad):
+    """render_page calls the sky view unguarded, so a formatting error there
+    loses monitor.html — every pipeline check discarded for a decorative panel."""
+    from jwst_gc_pipeline.monitoring import skyview
+    html = skyview.section(_fp(**bad))
+    assert 'gcm-sky' in html
+    # and the whole page still renders
+    page = render.render_page([_entry()], standalone=True, footprints=_fp(**bad))
+    assert '</html>' in page
+
+
+def test_roman_geometry_is_fetched_not_inlined():
+    """All three Roman layers are off by default; inlining ~25 kB charges every
+    reader for something almost nobody turns on."""
+    from jwst_gc_pipeline.monitoring import skyview
+    roman = {'tiles': {'Tile 1': {'spring': [[[1, 2]]] * 18, 'autumn': []}}}
+    html = skyview.section(_fp(), roman=roman)
+    assert 'roman_gbtds.json' in html
+    assert '"Tile 1"' not in html          # not embedded
+
+
+def test_embedded_json_cannot_close_the_script_element():
+    """A '</script>' inside embedded data ends the block early: the whole IIFE
+    never runs, so the button is inert with no message — the black-box outcome
+    the module exists to avoid."""
+    from jwst_gc_pipeline.monitoring import skyview
+    html = skyview.section(_fp(title='a</script><h1>PWNED</h1>'))
+    assert '<h1>PWNED</h1>' not in html
+    # the script block that defines the loader must survive intact
+    assert html.count('</script>') == 1
+
+
+def test_aladin_start_failure_is_reported():
+    """A.init rejects on a browser without WebGL2, and throws a BARE STRING, so
+    e.message is undefined for the most likely real failure."""
+    from jwst_gc_pipeline.monitoring import skyview
+    html = skyview.section(_fp())
+    assert '.catch(' in html
+    assert 'describe(' in html
+    assert "typeof e === 'string'" in html
+
+
+def test_per_field_pages_reference_assets_one_level_up():
+    """Per-field pages live in fields/; without the prefix they told the reader
+    to generate a file that was already sitting beside them."""
+    from jwst_gc_pipeline.monitoring import skyview
+    html = skyview.section(_fp(), aladin_src='../aladin.js',
+                           data_url='../footprints.json',
+                           roman_url='../roman_gbtds.json')
+    assert '"../footprints.json"' in html
+    assert '"../aladin.js"' in html
+
+
+def test_page_states_the_pa_uncertainty_and_the_dither():
+    """'indicative' was too weak: across the allowed range the MIRI parallel
+    moves ~125", and only the nominal dither position is drawn."""
+    from jwst_gc_pipeline.monitoring import skyview
+    html = skyview.section(_fp(dither={'PrimaryDitherType': ['FULLBOX'],
+                                       'PrimaryDithers': ['6TIGHT']}))
+    assert '125' in html and '180' in html
+    assert 'FULLBOX' in html and 'nominal position is drawn' in html

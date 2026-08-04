@@ -76,11 +76,26 @@ Worth re-running after a pipeline change that could affect cataloging, since a
 5-arcsec run exercises the whole per-exposure chain (m12→m6) per field in minutes.
 Not worth putting on a timer — nothing changes between runs unless the code does.
 
+## Refreshing the footprints
+
+The sky view reads `footprints.json`, which is generated from the APT file, not
+scanned from disk — so the hourly refresh does **not** update it:
+
+```bash
+python scripts/monitoring/build_footprints.py 10678 \
+    --out /orange/adamginsburg/jwst/monitor/footprints.json
+```
+
+Worth re-running when the program's plan changes, and to pick up visits as they
+execute (the observed layer comes from the APT visit status). Not worth putting
+on a timer — a Flight Ready program's pointings do not move between runs.
+
 ## What the schedule does NOT do
 
 * It does not re-run the astrometry paper's validation. That has its own SLURM
   dependency after re-cataloging; the monitor reports its age and flags a verdict
   whose catalogs have since been rewritten.
+* It does not regenerate the survey footprints (see above).
 * It does not re-measure any astrometry. Every number comes from records the
   pipeline already wrote.
 
