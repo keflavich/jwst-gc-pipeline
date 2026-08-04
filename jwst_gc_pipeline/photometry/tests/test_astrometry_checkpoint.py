@@ -1515,6 +1515,32 @@ def test_reader_reads_all_record_written_by_filterless_run(tmp_path):
     assert rejected is False
 
 
+def test_all_record_does_not_leak_a_different_filters_tie(tmp_path):
+    # a mixed-filter (_all) record holds a separate (visit, filter) entry per
+    # filter; the reference-tie reader must return THIS filter's tie, not the
+    # alphabetically-first visit entry.
+    rec = {"visits": [
+        {"visit": "001", "filtername": "F212N", "reference_tie":
+         {"dra_mas": 1.0, "ddec_mas": 2.0, "apply_ok": True}},
+        {"visit": "001", "filtername": "F480M", "reference_tie":
+         {"dra_mas": 99.0, "ddec_mas": -99.0, "apply_ok": True}}]}
+    _write_record(str(tmp_path), _record_name("m2", None), rec)   # only the _all record
+    f212, _ = _m2_reference_tie_baseline(str(tmp_path), "F212N", "001")
+    f480, _ = _m2_reference_tie_baseline(str(tmp_path), "F480M", "001")
+    assert f212 == (1.0, 2.0)
+    assert f480 == (99.0, -99.0)
+
+
+def test_legacy_entry_without_filtername_still_matches_by_visit(tmp_path):
+    # a record whose visit entries predate the filtername stamp must still resolve
+    # by visit alone (backward compatible; a per-filter record has one filter).
+    rec = {"visits": [{"visit": "001", "reference_tie":
+                       {"dra_mas": 3.0, "ddec_mas": 4.0, "apply_ok": True}}]}
+    _write_record(str(tmp_path), _record_name("m2", "F212N"), rec)
+    baseline, _ = _m2_reference_tie_baseline(str(tmp_path), "F212N", "001")
+    assert baseline == (3.0, 4.0)
+
+
 def test_reader_prefers_exact_filter_over_all(tmp_path):
     _write_record(str(tmp_path), _record_name("m2", None),
                   {"visits": [{"visit": "001", "reference_tie":

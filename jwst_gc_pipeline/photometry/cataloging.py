@@ -3507,22 +3507,29 @@ def _floor_actionable_corrections(corrections, floor_mas, label):
     """Corrections whose on-sky magnitude ``hypot(dra_onsky_mas, ddec_onsky_mas)``
     is at least ``floor_mas``.
 
-    Reads the magnitude keys LOUDLY: a ``c.get(key, 0.0)`` default would read
+    Reads the magnitude LOUDLY: a ``c.get(key, 0.0)`` default would read
     magnitude 0 for any correction missing ``dra_onsky_mas`` / ``ddec_onsky_mas``,
     so EVERY such correction is silently "sub-floor", ``actionable`` is empty, and
     the checkpoint PASSes applying nothing -- a real misalignment shipped as clean.
-    Raise ``KeyError`` naming the count and first offender rather than let a
-    defaulted magnitude decide the gate.
+    A ``nan`` magnitude reaches the same place by a different door: ``nan >= floor``
+    is False, so a non-finite correction is also silently dropped.  Raise
+    ``ValueError`` naming the count and first offender for either an absent/None or
+    a non-finite on-sky magnitude, rather than let an unreadable value decide the
+    gate.
     """
-    unreadable = [c for c in corrections
-                  if c.get('dra_onsky_mas') is None
-                  or c.get('ddec_onsky_mas') is None]
-    if unreadable:
-        raise KeyError(
-            f"astrom checkpoint [{label}: {len(unreadable)}/{len(corrections)} "
-            f"correction(s) lack a dra_onsky_mas/ddec_onsky_mas magnitude, so the "
-            f"ASTROM_M2_CORRECTION_FLOOR_MAS filter cannot tell them from sub-floor "
-            f"and would apply nothing. First offender: {unreadable[0]}")
+    def _unreadable(c):
+        dra, ddec = c.get('dra_onsky_mas'), c.get('ddec_onsky_mas')
+        if dra is None or ddec is None:
+            return True
+        return not (np.isfinite(dra) and np.isfinite(ddec))
+    bad = [c for c in corrections if _unreadable(c)]
+    if bad:
+        raise ValueError(
+            f"astrom checkpoint [{label}: {len(bad)}/{len(corrections)} "
+            f"correction(s) have no readable dra_onsky_mas/ddec_onsky_mas "
+            f"magnitude (absent, None, or non-finite), so the "
+            f"ASTROM_M2_CORRECTION_FLOOR_MAS filter cannot tell them from "
+            f"sub-floor and would apply nothing. First offender: {bad[0]}")
     return [c for c in corrections
             if np.hypot(c['dra_onsky_mas'], c['ddec_onsky_mas']) >= floor_mas]
 

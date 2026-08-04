@@ -26,7 +26,7 @@ def test_filters_below_floor():
 
 def test_raises_on_missing_key():
     corrs = [_corr(5.0, 5.0), {'vgroup': 3}]           # second lacks both keys
-    with pytest.raises(KeyError) as exc:
+    with pytest.raises(ValueError) as exc:
         _floor_actionable_corrections(corrs, 4.0, "m2] F212N/merged")
     assert "1/2" in str(exc.value)                      # names the count
     assert "F212N" in str(exc.value)                    # names the label
@@ -34,8 +34,17 @@ def test_raises_on_missing_key():
 
 def test_raises_on_none_valued_key():
     corrs = [_corr(None, 2.0)]                          # present but unreadable
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError):
         _floor_actionable_corrections(corrs, 4.0, "m2] F405N/merged")
+
+
+def test_raises_on_nonfinite_magnitude():
+    # nan reaches the same silent-sub-floor hole (nan >= floor is False)
+    for bad in (np.nan, np.inf):
+        with pytest.raises(ValueError):
+            _floor_actionable_corrections([_corr(bad, 2.0)], 4.0, "lbl")
+        with pytest.raises(ValueError):
+            _floor_actionable_corrections([_corr(2.0, bad)], 4.0, "lbl")
 
 
 def test_all_below_floor_returns_empty_not_raise():
@@ -46,5 +55,5 @@ def test_all_below_floor_returns_empty_not_raise():
 def test_a_missing_key_does_not_read_as_zero_magnitude():
     # the whole point: a missing-key correction must NOT be silently sub-floor
     corrs = [{'vgroup': 1}]                             # no on-sky magnitude
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError):
         _floor_actionable_corrections(corrs, 4.0, "lbl")

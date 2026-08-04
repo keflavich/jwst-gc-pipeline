@@ -1354,6 +1354,24 @@ def _m2_record_path(record_dir, filtername):
     return None
 
 
+def _visit_entry_matches(v, visit, filtername):
+    """Does a record's per-(visit, filter) entry match this reader's request?
+
+    Match on visit AND on ``filtername`` when the entry carries one.  An ``_all``
+    (mixed-filter) m2 record holds a SEPARATE entry per filter for the same visit
+    (``run_visit_checkpoint`` groups by ``(visit, filter)`` and stamps each entry
+    with ``filtername``), so a bare visit match would hand filter X's reader
+    filter Y's numbers -- the alphabetically-first entry for that visit.  Legacy
+    entries with no ``filtername`` field fall back to visit-only matching, which
+    is the pre-existing behaviour for a per-filter record (all its entries are the
+    requested filter anyway).
+    """
+    if str(v.get("visit")) != str(visit):
+        return False
+    vf = v.get("filtername")
+    return vf is None or str(vf) == str(filtername)
+
+
 def _m2_reference_tie_baseline(record_dir, filtername, visit):
     """(dra_mas, ddec_mas) of the m2-frozen consensus->reference tie for this
     (filter, visit), from the latest m2 record; None when unavailable.
@@ -1388,7 +1406,7 @@ def _m2_reference_tie_baseline(record_dir, filtername, visit):
     with open(path) as fh:
         rec = json.load(fh)
     for v in rec.get("visits", []):
-        if str(v.get("visit")) != str(visit):
+        if not _visit_entry_matches(v, visit, filtername):
             continue
         rt = v.get("reference_tie") or {}
         rejected = rt.get("apply_ok") is False
@@ -1438,7 +1456,7 @@ def _m2_exposure_baseline(record_dir, filtername, visit):
     with open(path) as fh:
         rec = json.load(fh)
     for v in rec.get("visits", []):
-        if str(v.get("visit")) != str(visit):
+        if not _visit_entry_matches(v, visit, filtername):
             continue
         for e in v.get("exposures", []) or []:
             key = tuple(e.get("key", []) or [])
@@ -1474,7 +1492,7 @@ def _m2_skipped_exposures(record_dir, filtername, visit):
         rec = json.load(fh)
     out = set()
     for v in rec.get("visits", []):
-        if str(v.get("visit")) != str(visit):
+        if not _visit_entry_matches(v, visit, filtername):
             continue
         cons = v.get("consensus") or {}
         for key in cons.get("skipped", []) or []:
