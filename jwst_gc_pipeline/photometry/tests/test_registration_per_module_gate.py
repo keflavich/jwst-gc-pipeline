@@ -285,6 +285,44 @@ def test_disjoint_field_still_gates_its_merged_mosaic(tmp_path, monkeypatch):
     assert any("merged" in n for n in seen), seen
 
 
+def test_single_module_field_with_one_merged_mosaic_still_passes(tmp_path, monkeypatch):
+    """sickle: five bands on one module, and ONE of them also has a merged mosaic.
+
+    A one-band merged view cannot be cross-band-checked against anything, and
+    admitting it is not neutral -- it lands in `unresolved` and the field verdict
+    becomes None, which BLOCKS.  No re-reduction short of producing four more
+    merged mosaics could clear that, so a correct field would be permanently
+    unstageable.  Drop the view instead; the module view still gates every band.
+    """
+    monkeypatch.setattr(rf, "BASE", str(tmp_path))
+    for filt in ("F187N", "F210M", "F335M", "F470N", "F480M"):
+        p = _pipeline(tmp_path, "sickle", filt)
+        _mosaic_file(p / _name("03958", "007", filt.lower(), "nrcb"), 266.57, -28.80)
+    # exactly one band also kept a merged product from an older generation
+    p = _pipeline(tmp_path, "sickle", "F210M")
+    _mosaic_file(p / _name("03958", "007", "f210m", "merged"), 266.57, -28.80)
+
+    _stub_checks(monkeypatch, passing=True)
+    res = rf.scan_field("sickle", verbose=False, images_only=True)
+    assert "merged" not in res["views"], res["views"]
+    assert res["PASS"] is True, res
+    assert not res.get("unchecked"), res.get("unchecked")
+
+
+def test_two_band_merged_view_on_a_disjoint_field_is_still_gated(tmp_path, monkeypatch):
+    """The drop is at <2 bands, not at 'single module' -- two merged mosaics are
+    cross-checkable and must still be gated."""
+    monkeypatch.setattr(rf, "BASE", str(tmp_path))
+    for filt in ("F090W", "F150W"):
+        p = _pipeline(tmp_path, "sgra", filt)
+        _mosaic_file(p / _name("01939", "001", filt.lower(), "nrcb"), 266.4, -29.0)
+        _mosaic_file(p / _name("01939", "001", filt.lower(), "merged"), 266.4, -29.0)
+    seen = _stub_checks(monkeypatch, passing=True)
+    res = rf.scan_field("sgra", verbose=False, images_only=True)
+    assert "merged" in res["views"], res["views"]
+    assert any("merged" in n for n in seen), seen
+
+
 def test_disjoint_field_without_merged_is_unchanged(tmp_path, monkeypatch):
     """arches/quintuplet: no merged mosaic exists, so the merged view is empty
     and the disjoint branch behaves exactly as before."""
@@ -332,15 +370,21 @@ def test_errored_check_is_not_counted_as_a_pass(tmp_path, monkeypatch):
     assert any("could not be evaluated" in u for u in res["unresolved"])
 
 
-def test_single_module_one_merged_band_is_ungated_not_blocking(tmp_path, monkeypatch):
+def test_single_module_one_merged_band_is_dropped_not_blocking(tmp_path, monkeypatch):
     """The reason findings 1 and 4 must land TOGETHER -- sickle.
 
-    sickle is nrcb-only with ONE merged mosaic across five bands. Fix 1 gives it
-    a merged view containing a single band, whose cross-band truth ("all OTHER
-    bands") is empty. Fix 1 alone -> that view passes vacuously, reintroducing
-    the silent pass one layer up. Fix 4 alone -> it returns something falsy and
-    sickle blocks on a band that is not defective, only unverifiable. Together,
-    it is classified `unchecked`, which is the honest answer."""
+    sickle is nrcb-only with ONE merged mosaic across its bands. Fix 1 gives it a
+    merged view containing a single band, whose cross-band truth ("all OTHER
+    bands") is empty. Fix 1 alone -> that view passes vacuously, reintroducing the
+    silent pass one layer up. Fix 4 alone -> it returns something falsy, the view
+    lands in `unresolved`, and sickle BLOCKS on a band that is not defective, only
+    unverifiable -- which no re-reduction could clear.
+
+    Neither is right, because there is no "not covered, and that is fine" verdict
+    to classify it INTO: `unresolved` blocks and so does `ungated`.  So the
+    distinction is made when the view is BUILT -- a <2-band merged view is not a
+    view and is dropped, with a printed line so the drop is not silent.
+    """
     monkeypatch.setattr(rf, "BASE", str(tmp_path))
     for filt in ("F187N", "F335M", "F470N"):
         p = _pipeline(tmp_path, "sickle", filt)
@@ -352,14 +396,10 @@ def test_single_module_one_merged_band_is_ungated_not_blocking(tmp_path, monkeyp
     _stub_checks(monkeypatch, passing=True)
     res = rf.scan_field("sickle", verbose=False, images_only=True)
     assert res["geometry"] == "single-module"
-    assert "merged" in res["views"]
-    # The one-band merged view is caught by the view-level guard rather than the
-    # per-band one, but the outcome is what matters: it is CLASSIFIED, not passed
-    # vacuously.  Without fix 4 this same view would have returned an errored
-    # check read as PASS, which is the silent pass reintroduced one layer up.
-    assert any("merged" in u and "need >=2 bands" in u
-               for u in res["unresolved"]), res["unresolved"]
-    assert res["PASS"] is None
-    # and the per-module bands were still gated normally
+    assert "merged" not in res["views"], res["views"]
+    # every band is still gated, on the module view
     assert "module-b" in res["views"]
+    assert res["views"]["module-b"]["bands"] == ["F187N", "F210M", "F335M", "F470N"]
+    assert res["PASS"] is True, res
+    assert not res["unresolved"], res["unresolved"]
     assert res["views"]["module-b"]["PASS"] is True

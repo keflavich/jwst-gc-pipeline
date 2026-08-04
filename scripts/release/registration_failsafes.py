@@ -533,9 +533,13 @@ def scan_field(field, verbose=True, images_only=False, observations=None):
       cannot be fully gated here; it is checked per module for what that is worth
       and reported as ungated.
     * modules that are DISJOINT (arches, quintuplet) or a field that used only
-      ONE module (sickle) — there is no seam, the merged mosaic would add nothing,
-      and each module's own mosaic is a complete object.  Gate PER MODULE and
-      require every module to pass on its own.
+      ONE module (sickle) — there is no seam to catch, and each module's own
+      mosaic is a complete object, so the gate is PER MODULE and every module
+      must pass on its own.  The merged mosaic is gated TOO where one exists:
+      it is not needed for the seam, but it SHIPS, and a merged drizzle that
+      places module B at the wrong offset is invisible in the per-module views.
+      A merged view covering fewer than 2 bands is dropped rather than gated —
+      it has nothing to cross-band-check against — and the drop is printed.
 
     ``images_only``: gate an IMAGE-ONLY release -- run the reference-free cross-band
     (image-to-image) check only, and SKIP own-catalog.  An image-only release ships the
@@ -543,9 +547,16 @@ def scan_field(field, verbose=True, images_only=False, observations=None):
     a reason to block; the images can still be internally consistent and shippable.
 
     ``PASS`` is tri-state.  ``True``/``False`` are a verified pass/fail; ``None``
-    means the field could not be verified either way -- no mosaics, too few
-    bands, or overlapping modules with a band whose merged mosaic is missing.
-    ``None`` BLOCKS: ambiguity is not a pass.
+    means the field could not be verified either way -- no mosaics, no view with
+    >=2 bands, a check that errored, or overlapping modules with a band whose
+    merged mosaic is missing.  ``None`` BLOCKS: ambiguity is not a pass.
+
+    There is deliberately NO "not covered here, and that is fine" verdict: every
+    view admitted is gated, and anything that cannot be gated is either dropped
+    before it becomes a view (the <2-band merged case above) or reported as
+    ungated, which blocks.  The distinction is made when the view is BUILT, not
+    when it is judged, because by judging time a view that cannot be checked is
+    indistinguishable from one that failed to be.
     """
     inv = field_band_mosaics(field, observations=observations)
     if not inv:
@@ -576,8 +587,20 @@ def scan_field(field, verbose=True, images_only=False, observations=None):
         # disjoint branch was written for, have NO merged mosaics at all, so
         # there the dict comes back empty and nothing changes.
         merged = {f: m["merged"] for f, m in inv.items() if "merged" in m}
-        if merged:
+        # >= 2, the same bar the per-module views below use.  A view with ONE band
+        # cannot serve as its own cross-band truth, so it is not a view -- and
+        # admitting it is not neutral: it lands in `unresolved` and the field
+        # verdict becomes None, which BLOCKS.  sickle is the case: one merged
+        # mosaic, five bands passing on the module view, and no re-reduction short
+        # of producing four more merged mosaics could clear it.  A gate a correct
+        # field cannot pass is a gate that teaches people to use the override.
+        if len(merged) >= 2:
             views["merged"] = merged
+        elif merged:
+            print(f"  {field}: only {sorted(merged)} has a merged mosaic -- a "
+                  f"one-band merged view cannot be cross-band-checked against "
+                  f"anything, so it is not gated here (the module views below "
+                  f"still gate every band)", flush=True)
     else:
         # overlapping / merged-only / unknown: merged is the object to gate
         merged = {f: m["merged"] for f, m in inv.items() if "merged" in m}
