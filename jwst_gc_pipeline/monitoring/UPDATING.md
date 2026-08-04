@@ -99,12 +99,45 @@ on a timer — a Flight Ready program's pointings do not move between runs.
 * It does not re-measure any astrometry. Every number comes from records the
   pipeline already wrote.
 
-## If the served copy stops updating
+## Getting it in front of a browser
 
-The published files are **hardlinks**, and they track regeneration only because
-`render.write_html` rewrites in place, preserving the inode. If someone changes
-that to an atomic write (temp + rename), the inode changes and the old links
-freeze at stale content *while still looking live*. Re-running with
+`--publish-dir` assembles the page set on HiPerGator. **Nothing on HiPerGator is
+web-served** — Apache runs on a separate host, `starformation`, whose docroot is
+`/h/cnswww-starformation.astro/starformation.astro.ufl.edu/htdocs`. So there is a
+second step, and it is a copy rather than a link because the two are different
+filesystems:
+
+```bash
+scripts/monitoring/deploy_monitor.sh --dry-run     # see what would move
+scripts/monitoring/deploy_monitor.sh               # ~190 MB the first time
+```
+
+That serves the aggregate page at
+
+> **https://starformation.astro.ufl.edu/jwst-gc/monitor/**
+
+with per-field pages at `.../monitor/fields/<field>.html`.
+
+Two constraints the script encodes, both easy to get wrong by hand:
+
+* `htdocs/jwst-gc/index.html` is the **public data-release landing page**. The
+  monitor goes in the `monitor/` subdirectory; rsyncing to `jwst-gc/` itself
+  replaces the release page with an internal status report. The script refuses a
+  destination that does not end in `/monitor`.
+* the `diagnostics-<field>` entries are symlinks into `/orange` and `/blue`,
+  which do not exist on the web host. The sync dereferences them, which is what
+  makes the click-through to the diagnostic figures work off-site.
+
+The published page is public and unauthenticated. It quotes job-log excerpts,
+absolute paths, and QA verdicts; nothing there is proprietary, but it is not
+linked from the release index either.
+
+## If the published copy stops updating
+
+The files in `--publish-dir` are **hardlinks**, and they track regeneration only
+because `render.write_html` rewrites in place, preserving the inode. If someone
+changes that to an atomic write (temp + rename), the inode changes and the old
+links freeze at stale content *while still looking live*. Re-running with
 `--publish-dir` repairs it — which is why the refresh script always passes it,
 even though it is usually a no-op.
 
@@ -115,4 +148,6 @@ stat -c '%i %n' /orange/adamginsburg/jwst/monitor/monitor.html \
                 /orange/adamginsburg/web/public/jwst-gc/monitor.html
 ```
 
-Two identical inode numbers means the served page is the generated page.
+Two identical inode numbers means the published page is the generated page. The
+copy on the web host is a *copy*: it is only as fresh as the last
+`deploy_monitor.sh`, so the refresh cron should run that too.
