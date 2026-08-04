@@ -155,8 +155,26 @@ done
 # --- final: full cataloging (m3..m7) now that im0 is self-consistent ---
 echo "=================  FULL CATALOGING (m3..m7)  ================="
 unset ASTROM_CHECKPOINT_APPLY   # m3+ must be a FROZEN solution; no more corrections
+# Named explicitly rather than left to inheritance.  The chain re-runs m12 and m2
+# runs inside it, so this value decides whether the checkpoint raises -- and a
+# variable that changes a gate's verdict should be visible at the call site
+# rather than reaching the job by a route the reader has to reconstruct.  It also
+# makes this invocation symmetric with the m12 one above.
+#
+# NOT a fix for a propagation failure: the value already arrives.
+# submit_cataloging_perframe.sh's --export list begins with ALL, so the job
+# inherits the submitting environment plus the named variables, and `export` at
+# the top of this script is sufficient on its own.  Verified directly:
+#
+#   $ export ASTROM_M2_CORRECTION_FLOOR_MAS=4.0
+#   $ sbatch --export="ALL,PROPOSAL=p,FIELD=f" --wrap='echo "FLOOR=[$ASTROM_M2_CORRECTION_FLOOR_MAS]"'
+#   FLOOR=[4.0] PROPOSAL=[p]
+#
+# cloudef obs005's m3..m7 chain died here on 2026-08-04, and this is NOT why --
+# see #281.  Do not treat this line as having closed that.
 PROPOSAL=$PROPOSAL FIELD=$FIELD TARGET=$TARGET MODULES=$MODULES \
     EACH_SUFFIX=$EACH_SUFFIX FILTERS="$FILTERS" MAX_GROUP_SIZE=$MAX_GROUP_SIZE \
     PIPE_ROOT=$PIPE_ROOT \
+    ASTROM_M2_CORRECTION_FLOOR_MAS=$ASTROM_M2_CORRECTION_FLOOR_MAS \
     bash "$HERE/submit_cataloging_perframe.sh"
 echo "Submitted full cataloging chain for $TARGET $PROPOSAL/$FIELD."
