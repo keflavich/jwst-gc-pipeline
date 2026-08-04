@@ -992,6 +992,16 @@ def field_filters(field):
                   f"failure)", flush=True)
             continue
         out.append(filt)
+    # Declared but NO pipeline directory at all -- the same "declared but nothing
+    # there" class as an empty declared directory, one step further out (the loop
+    # above only sees directories that exist).  A band the registry declares and
+    # the archive never reduced must be noticed at release time, so report it and
+    # let check_filter block.  (cloudef F2100W/F770W, sgrc F158M/F200W/F356W on the
+    # 2026-08 archive.)  Undeclared missing directories are simply not bands.
+    for filt in sorted(declared - {f.upper() for f in out}):
+        print(f"  {field} {filt}: DECLARED band with no pipeline directory at all "
+              f"-- never reduced (blocks)", flush=True)
+        out.append(filt)
     return out
 
 
