@@ -52,10 +52,20 @@ fi
 # Fail the JOB only if the generator itself broke (rc >= 2) or could not run at
 # all (rc 127/126).  rc 1 means "the archive has failing runs", which is the
 # monitor working correctly.
-for rc in "$fields_rc" "$cutout_rc" "$deploy_rc"; do
+# rc 1 from the GENERATOR means "the archive has failing runs", which is the
+# monitor working correctly. Anything higher is the generator itself breaking.
+for rc in "$fields_rc" "$cutout_rc"; do
     if [ "$rc" -gt 1 ]; then
         echo "FATAL: monitor generator exited $rc" >&2
         exit "$rc"
     fi
 done
+
+# The deploy has no such convention -- ANY non-zero is a real failure, and it
+# gets its own message. Folding it into the loop above both swallowed its rc 1
+# and, when it did trip, blamed the generator for a step it never ran.
+if [ "$deploy_rc" -ne 0 ]; then
+    echo "FATAL: deploy_monitor.sh exited $deploy_rc" >&2
+    exit "$deploy_rc"
+fi
 exit 0

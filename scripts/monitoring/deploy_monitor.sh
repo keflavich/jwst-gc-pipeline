@@ -41,9 +41,12 @@ case "$DEST" in
     exit 2 ;;
 esac
 
+# Exit codes are read by refresh_monitor.sh, which treats 1 as "the archive has
+# failing runs" -- a monitor finding, not a job failure. Nothing here is that,
+# so every failure of this script exits >= 2 and is loud.
 if [[ ! -f "$SRC/index.html" ]]; then
   echo "no index.html in $SRC -- run the monitor with --publish-dir first" >&2
-  exit 1
+  exit 3
 fi
 
 ssh "$HOST" "mkdir -p '$DEST'"
@@ -53,8 +56,21 @@ ssh "$HOST" "mkdir -p '$DEST'"
 #           removed fields and stale figures there is safe.
 rsync -rlptz --copy-links --delete --human-readable $DRY \
       "$SRC/" "$HOST:$DEST/"
+rc=$?
+
+# 23 is "some files could not be transferred", which --copy-links returns for a
+# single dangling symlink -- one missing writeup directory would otherwise fail
+# the whole refresh. Report it, keep the pages that did land, and do not make it
+# the caller's failure.
+if [[ $rc -eq 23 ]]; then
+  echo "WARNING: some files were not transferred (rsync 23), most likely a" \
+       "dangling diagnostics symlink. The pages themselves are deployed." >&2
+  rc=0
+fi
+[[ $rc -ne 0 ]] && exit $rc
 
 if [[ -z "$DRY" ]]; then
   ssh "$HOST" "chmod -R a+rX '$DEST'"
   echo "deployed -> $URL"
 fi
+exit 0

@@ -333,7 +333,7 @@ def publish(outdir, publish_dir, index_from='monitor.html'):
     replaces the inode and would otherwise leave the web copy frozen at whatever
     it linked to first -- a stale dashboard that still looks live.
 
-    Returns ``{path: 'hard'|'sym'|None}``.
+    Returns ``{path: 'hard'|'copy'|'same'|None}``.
     """
     import fnmatch
 

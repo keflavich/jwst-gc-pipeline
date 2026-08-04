@@ -47,9 +47,10 @@ ALADIN_LOCAL = 'aladin.js'
 
 #: Written next to the page by ``report.write_report``.
 FOOTPRINTS_JSON = 'footprints.json'
-#: Roman GBTDS context geometry.  FETCHED, not inlined: its three layers are all
-#: off by default, so inlining ~25 kB into every page charges every reader for
-#: something almost nobody turns on.
+#: Roman GBTDS context geometry.  The static map draws these layers directly
+#: (~14 kB), so their toggles work without the interactive view; this file is
+#: still fetched for the interactive view, which wants the full-precision
+#: polygons rather than the map's rounded ones.
 ROMAN_JSON = 'roman_gbtds.json'
 
 #: Layer colours.  JWST uses the page's own accent family; Roman keeps the
@@ -118,10 +119,9 @@ CSS = """
 /* Hiding is done with this class, not the `hidden` attribute: an author
    `display` beats the UA's [hidden]{display:none} on origin, and the version of
    this panel that relied on the attribute left an overlay covering the map,
-   swallowing every pointer and wheel event.  A class that carries !important
-   cannot lose that fight. */
+   swallowing every pointer and wheel event.  !important puts this above any
+   normal author `display`; only another !important could still override it. */
 .gcm-sky-off { display: none !important; }
-.gcm-sky-ui[hidden] { display: none; }
 
 .gcm-sky-static { position: absolute; inset: 0; width: 100%; height: 100%;
                   touch-action: none; cursor: grab;
@@ -416,6 +416,26 @@ def _grid_line(frame, points):
     return path, (labelled[-1] if labelled else None)
 
 
+def _spread(lines, min_sep=26.0):
+    """Drop labels that would land on top of one another.
+
+    Lines of constant longitude and latitude can leave the drawn box within a
+    few units of each other, and two graticules doubles the chance; the labels
+    then overprint into something unreadable. Dropping one is better than
+    stacking both -- the line is still there and still on a round value.
+    """
+    out, placed = [], []
+    for path, label, text in lines:
+        if label is not None:
+            if any(abs(label[0] - x) < min_sep and abs(label[1] - y) < min_sep
+                   for x, y in placed):
+                label = None
+            else:
+                placed.append(label)
+        out.append((path, label, text))
+    return out
+
+
 def _bbox_sky(frame):
     """The map's plane bounding box back on the sky, as ``(lon, lat)`` corners.
 
@@ -488,8 +508,12 @@ def _graticule(frame, grid_frame, map_frame):
     while value <= lat_hi:
         path, label = line([(v, value) for v in span(lon_lo, lon_hi)])
         if path:
-            lines.append((path, label,
-                          '%s %+g' % (spec['lat_label'], round(value, 4)) + DEG))
+            # `%+g` renders the equator as "+0", which reads as a rounded small
+            # positive number rather than as the plane itself.
+            shown = round(value, 4)
+            text = ('%s 0' % spec['lat_label'] if shown == 0
+                    else '%s %+g' % (spec['lat_label'], shown))
+            lines.append((path, label, text + DEG))
         value += lat_step
     return lines
 
@@ -594,13 +618,19 @@ def static_map(footprints, roman=None, frame_name=DEFAULT_FRAME):
     other = 'icrs' if frame_name == 'galactic' else 'galactic'
 
     grid = []
-    for path, label, text in _graticule(frame, frame_name, frame_name):
+    native = _graticule(frame, frame_name, frame_name)
+    overlay = _graticule(frame, other, frame_name)
+    # Native labels get priority; the overlay's then have to avoid both those
+    # and each other, so the two graticules cannot print over one another.
+    native = _spread(native)
+    overlay = _spread(native + overlay)[len(native):]
+    for path, label, text in native:
         grid.append('<path class="gcm-grid-eq" d="%s"/>' % path)
         if label is not None:
             grid.append('<text class="gcm-grid-lab" x="%s" y="%s">%s</text>'
                         % (_num(label[0] + 3), _num(label[1] - 3), _esc(text)))
     gal = []
-    for path, label, text in _graticule(frame, other, frame_name):
+    for path, label, text in overlay:
         gal.append('<path class="gcm-grid-gal" d="%s"/>' % path)
         if label is not None:
             gal.append('<text class="gcm-grid-lab gcm-grid-lab-gal" x="%s" '
@@ -655,7 +685,7 @@ def static_map(footprints, roman=None, frame_name=DEFAULT_FRAME):
             if frame_name == 'galactic' else 'north up, east left')
     svg = ('<svg id="gcm-sky-static" class="gcm-sky-static" '
            'viewBox="0 0 %s %s" preserveAspectRatio="xMidYMid meet" '
-           'role="img" aria-label="Survey footprints on the sky, %s">'
+           'role="group" aria-label="Survey footprints on the sky, %s">'
            '<g id="gcm-sky-pan">%s%s%s%s%s%s%s%s%s</g>%s</svg>'
            % (_num(frame.width), _num(frame.height), _esc(axes),
               ''.join(grid), ''.join(gal), spring, autumn, target,
@@ -718,7 +748,9 @@ def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
     drawn_frame = static_info.get('frame', 'icrs')
     spec = _FRAMES[drawn_frame]
     other = _FRAMES['icrs' if drawn_frame == 'galactic' else 'galactic']
-    grid_note = ('Grid: %s/%s solid%s'
+    axes_note = ('Galactic coordinates, <em>l</em> increasing left'
+                 if drawn_frame == 'galactic' else 'North up, east left')
+    grid_note = ('grid %s/%s solid%s'
                  % (spec['lon_label'], spec['lat_label'],
                     (', %s/%s dashed' % (other['lon_label'], other['lat_label']))
                     if static_info.get('overlay_grid') else ''))
@@ -734,14 +766,14 @@ def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
 <p class="gcm-note">Program {_esc(footprints.get('program'))},
 <em>{_esc(footprints.get('title'))}</em>: {n_planned} planned pointings, NIRCam
 prime with MIRI as a coordinated parallel. The MIRI parallel sits ~7.5′ from the
-prime, so it covers <em>different sky</em> — it is a separate layer for that
-reason, not for tidiness. {_esc(pa_note)}. The angle is not fixed until each visit is
-scheduled, and the program notes it may request the 180° flip — so treat these
-as <em>indicative</em>: across the allowed range alone the MIRI parallel moves
-~125″ (about the width of a NIRCam module), and a flip moves it ~15′. The NIRCam
-layer draws the eight SW detectors; the LW arrays cover the same two modules
-without the intra-module gaps.{dither_note} Observed pointings are read from the
-APT visit status: <strong>{n_observed}</strong> so far.</p>
+prime and so covers <em>different sky</em>, which is why it is drawn separately.
+{_esc(pa_note)} — not fixed until each visit is scheduled, and the program may yet
+request the 180° flip, so these positions are <em>indicative</em>: across the
+allowed range alone the MIRI parallel moves ~125″, about the width of a NIRCam
+module, and a flip moves it ~15′. The NIRCam layer draws the eight short-wave
+detectors; the long-wave arrays cover the same two modules without the
+intra-module gaps.{dither_note} <strong>{n_observed}</strong> pointings observed
+so far, from the APT visit status.</p>
 
 <div class="gcm-sky-wrap">
   <div id="gcm-aladin" class="gcm-sky-off"></div>
@@ -804,14 +836,9 @@ APT visit status: <strong>{n_observed}</strong> so far.</p>
   </div>
 </div>
 
-<p class="gcm-sky-foot"><strong>Static map</strong> — inline SVG, built into this
-page. No script, no fetch, no image tiles: it renders in a published artifact,
-from a <code>file://</code> path, and with no network at all. North up, east
-left; {grid_note}; hover a pointing for its target and filters. Drag to pan;
-click the map, then scroll to zoom. The <strong>interactive view</strong> swaps
-in Aladin Lite over HiPS imagery — 1.8 MB of script from this page's own
-directory plus remote tiles, which is what a strict content-security policy
-blocks.
+<p class="gcm-sky-foot">{axes_note}; {grid_note}. Hover a pointing for its
+target and filters. Drag to pan; click the map, then scroll to zoom. The
+interactive view adds sky imagery you can pan across.
 <button class="gcm-sky-load" id="gcm-sky-reset" type="button">reset view</button>
 <button class="gcm-sky-load" id="gcm-sky-load" type="button">load interactive view</button>
 <span class="gcm-sky-note" id="gcm-sky-note"></span></p>
@@ -998,12 +1025,22 @@ blocks.
     return (typeof e === 'string') ? e : (e.message || String(e));
   }}
 
+  function restore() {{
+    // Put the map back and take Aladin's container away.  Called from BOTH
+    // failure paths: a synchronous throw inside start() -- `A` undefined, or
+    // `A.init` not a thenable because the script was truncated -- happens while
+    // evaluating `A.init.then` and so escapes past the inner handler to the
+    // outer one, which used to report a fetch failure over a black box.
+    if (aladinDiv) {{ aladinDiv.classList.add('gcm-sky-off'); }}
+    if (svg) {{ svg.classList.remove('gcm-sky-off'); }}
+  }}
+
   function fail(what) {{
-    // The static map stays up, so this is a note beside it, not an overlay
-    // across it: the reader keeps a working footprint map either way.
+    // The map stays up, so this is a note beside it, not an overlay across it:
+    // the reader keeps a working footprint map either way.
     if (note) {{
-      note.innerHTML = 'Interactive view unavailable — ' + what +
-        '. The static map above needs no network and is unaffected.';
+      note.textContent = 'Sky imagery could not be loaded (' + what +
+        '). The footprint map above is unaffected.';
     }}
     if (loadBtn) {{ loadBtn.disabled = false; loadBtn.textContent = 'retry'; }}
   }}
@@ -1014,7 +1051,7 @@ blocks.
     if (note) {{ note.textContent = ''; }}
     var s = document.createElement('script');
     s.src = ALADIN_SRC;
-    s.onerror = function () {{ fail('the Aladin script could not be loaded'); }};
+    s.onerror = function () {{ fail('the viewer could not be loaded'); }};
     s.onload = function () {{
       fetch(DATA_URL).then(function (r) {{
         if (!r.ok) {{ throw new Error('http ' + r.status); }}
@@ -1027,22 +1064,25 @@ blocks.
           .catch(function () {{ return {{}}; }})
           .then(function (rm) {{ ROMAN = rm || {{}}; return fp; }});
       }}).then(start).catch(function (e) {{
-        fail('the footprint data could not be loaded (' + describe(e) + ')');
+        restore();
+        fail(describe(e));
       }});
     }};
     document.body.appendChild(s);
   }}); }}
 
   function start(fp) {{
-    // Aladin measures its container at init, so the swap has to happen first:
-    // initialising into a display:none div yields a 0x0 canvas.
-    if (svg) {{ svg.classList.add('gcm-sky-off'); }}
+    // Aladin measures its container at init, so it has to be visible first --
+    // initialising into a display:none div yields a 0x0 canvas.  The map stays
+    // up underneath and is hidden only once there is a working view to replace
+    // it with, so no failure between here and there can empty the panel.
     if (aladinDiv) {{ aladinDiv.classList.remove('gcm-sky-off'); }}
-    A.init.then(function () {{
+    return A.init.then(function () {{
       var aladin = A.aladin('#gcm-aladin', {{
         survey: {json.dumps(SURVEYS[0][1])},
         target: '0 0', fov: 1.6, cooFrame: 'galactic'
       }});
+      if (svg) {{ svg.classList.add('gcm-sky-off'); }}
       if (loadBtn) {{
         loadBtn.textContent = 'interactive view loaded';
         loadBtn.disabled = true;
@@ -1094,11 +1134,8 @@ blocks.
         }};
       }});
     }}).catch(function (e) {{
-      // Put the static map back: a failed upgrade must not leave the panel
-      // emptier than it was before the click.
-      if (aladinDiv) {{ aladinDiv.classList.add('gcm-sky-off'); }}
-      if (svg) {{ svg.classList.remove('gcm-sky-off'); }}
-      fail('Aladin could not start (' + describe(e) + ')');
+      restore();
+      fail(describe(e));
     }});
   }}
 }})();

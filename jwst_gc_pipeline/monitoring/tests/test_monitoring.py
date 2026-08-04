@@ -6,6 +6,7 @@ separation, ambiguity) and not about whatever happens to be on disk today.
 """
 import json
 import os
+import re
 
 import pytest
 
@@ -1292,6 +1293,151 @@ def test_cross_filesystem_publish_copies_rather_than_symlinks(tmp_path,
     assert dst.read_bytes() == b'\x89PNG-data'
 
 
+_DEPLOY_SH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__))))),
+    'scripts', 'monitoring', 'deploy_monitor.sh')
+
+
+def _run_deploy(tmp_path, dest, extra_env=None):
+    """Run deploy_monitor.sh with ssh and rsync replaced by recording stubs."""
+    import subprocess
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir(exist_ok=True)
+    log = tmp_path / 'calls.log'
+    for tool in ('ssh', 'rsync'):
+        stub = bin_dir / tool
+        stub.write_text('#!/bin/bash\necho "%s $*" >> "%s"\nexit 0\n'
+                        % (tool, log))
+        stub.chmod(0o755)
+    src = tmp_path / 'pub'
+    src.mkdir(exist_ok=True)
+    (src / 'index.html').write_text('<html>')
+    env = dict(os.environ, PATH='%s:%s' % (bin_dir, os.environ['PATH']),
+               MONITOR_WEB_DIR=dest, MONITOR_WEB_HOST='testhost')
+    env.update(extra_env or {})
+    done = subprocess.run(['bash', _DEPLOY_SH, str(src)], env=env,
+                          capture_output=True, text=True)
+    calls = log.read_text() if log.exists() else ''
+    return done.returncode, calls, done.stderr
+
+
+@pytest.mark.parametrize('dest', [
+    '/h/x/htdocs/jwst-gc',            # the public data-release landing page
+    '/h/x/htdocs',
+    '/h/x/htdocs/jwst-gc/monitors',
+])
+def test_deploy_refuses_a_destination_that_is_not_the_monitor_dir(tmp_path, dest):
+    """The guard is the only thing standing between an rsync --delete and the
+    public data-release page, and it was pure string logic with no test."""
+    rc, calls, err = _run_deploy(tmp_path, dest)
+    assert rc == 2
+    assert 'rsync' not in calls, 'refused, but rsync ran anyway'
+    assert 'refusing' in err
+
+
+def test_deploy_accepts_the_monitor_dir(tmp_path):
+    rc, calls, _err = _run_deploy(tmp_path, '/h/x/htdocs/jwst-gc/monitor')
+    assert rc == 0
+    assert 'rsync' in calls and '--copy-links' in calls and '--delete' in calls
+
+
+def test_deploy_reports_a_missing_page_set_above_the_findings_code(tmp_path):
+    """refresh_monitor.sh reads 1 as 'the archive has failing runs'. A deploy
+    failure is not that, so it must not land in the same bucket."""
+    import subprocess
+    empty = tmp_path / 'empty'
+    empty.mkdir()
+    done = subprocess.run(
+        ['bash', _DEPLOY_SH, str(empty)],
+        env=dict(os.environ, MONITOR_WEB_DIR='/h/x/htdocs/jwst-gc/monitor'),
+        capture_output=True, text=True)
+    assert done.returncode > 1
+    assert 'index.html' in done.stderr
+
+
+def _publish_a_page_set(tmp_path, monkeypatch, entry):
+    """A written-out page set plus its publish directory, as a reader gets it."""
+    from jwst_gc_pipeline.monitoring import report
+    monkeypatch.setattr(report, 'build_entries', lambda *a, **kw: ([entry], []))
+    monkeypatch.setattr(report, 'collect_cutouts', lambda *a, **kw: [])
+    out = tmp_path / 'out'
+    web = tmp_path / 'web'
+    report.write_report(outdir=str(out), per_field=True)
+    # The assets the pages link to, made real so a resolving href can be told
+    # from a merely well-formed one.
+    (out / 'figures').mkdir(exist_ok=True)
+    (out / 'figures' / 'fig.png').write_bytes(b'PNG')
+    wu = tmp_path / 'writeup'
+    (wu / 'figures').mkdir(parents=True)
+    (wu / 'main.pdf').write_bytes(b'%PDF')
+    (wu / 'figures' / 'D2_astrometry_internal.pdf').write_bytes(b'%PDF')
+    monkeypatch.setattr(report.scan, 'all_targets', lambda: ['brick'])
+    monkeypatch.setattr(report.scan, 'basepath', lambda t: str(tmp_path))
+    monkeypatch.setattr(report._figures, 'WRITEUP_DIR', 'writeup')
+    report.publish(str(out), str(web))
+    return web
+
+
+def _dead_links(root):
+    """Every relative href/src on every page, resolved against ITS OWN dir."""
+    dead = []
+    for base, _dirs, files in os.walk(root):
+        for name in files:
+            if not name.endswith('.html'):
+                continue
+            page = os.path.join(base, name)
+            with open(page) as fh:
+                body = fh.read()
+            for href in set(re.findall(r'(?:href|src)="([^"]+)"', body)):
+                if (href.startswith(('http://', 'https://', 'mailto:', 'data:',
+                                     '#')) or not href.strip()):
+                    continue
+                target = os.path.normpath(
+                    os.path.join(base, href.split('#')[0]))
+                if not os.path.exists(target):
+                    dead.append((os.path.relpath(page, root), href))
+    return dead
+
+
+def test_no_page_links_to_a_file_that_is_not_there(tmp_path, monkeypatch):
+    """Walk every href on every published page and stat it **relative to that
+    page's own directory**.
+
+    This is the check that had already missed the same bug twice.  Both times
+    the links were well-formed and pointed one directory too high: the per-field
+    pages sit in ``fields/`` and emitted ``figures/...`` and
+    ``diagnostics-<target>/...``, which are correct only at the publish root.
+    Asserting that the *symlink exists* — which the older test did — cannot see
+    it, because the symlink was fine and the href never reached it.
+    """
+    from jwst_gc_pipeline.monitoring import figures as _figures
+    entry = _entry(verdicts=[{
+        'name': 'astrometry.exposure_consensus', 'severity': 'fail',
+        'summary': 's', 'detail': 'd', 'value': 1, 'threshold': 2,
+        'source': 'x',
+        'evidence': {
+            'figures': [{'name': 'fig.png', 'dir': '/somewhere',
+                         'path': '/somewhere/fig.png', 'filter': 'F200W'}],
+            'writeup': {
+                'main': 'diagnostics-brick/main.pdf',
+                'figure': {'name': 'D2_astrometry_internal.pdf',
+                           'label': 'astrometry internal',
+                           'href': 'diagnostics-brick/figures/'
+                                   'D2_astrometry_internal.pdf'}}}}])
+    web = _publish_a_page_set(tmp_path, monkeypatch, entry)
+
+    # The fixture has to actually exercise both kinds of link, or a green run
+    # would only mean the page had nothing to get wrong.
+    pages = [p for p in os.listdir(os.path.join(str(web), 'fields'))]
+    assert pages, 'no per-field page was written'
+    field_html = open(os.path.join(str(web), 'fields', pages[0])).read()
+    assert 'figures/fig.png' in field_html
+    assert 'diagnostics-brick/main.pdf' in field_html
+
+    assert _dead_links(str(web)) == []
+
+
 def test_fragment_stays_whole_while_the_page_set_splits(tmp_path, monkeypatch):
     """The fragment is published as a single-file artifact: `fields/x.html` is
     not a document that exists there, so a card linking to one would 404."""
@@ -1481,14 +1627,27 @@ def test_layer_toggles_drive_both_views():
     assert 'STATIC_GROUPS' in html
 
 
-def test_interactive_failure_leaves_the_static_map_up():
-    """The failure path must restore the static map: a failed upgrade that
-    leaves the panel emptier than before the click is worse than no button."""
+def test_the_map_is_hidden_only_once_there_is_a_view_to_replace_it():
+    """Hiding the map before `A.init` meant any failure in between left a black
+    box. Worse, a synchronous throw there — `A` undefined, or `A.init` not a
+    thenable because the script was truncated — happens while *evaluating*
+    `A.init.then`, so it escapes the inner handler entirely; checking only the
+    text after `function start(` could not see that."""
     from jwst_gc_pipeline.monitoring import skyview
     html = skyview.section(_fp(planned=_POINTINGS))
-    tail = html[html.index('function start('):]
-    assert "svg.classList.remove('gcm-sky-off')" in tail
-    assert "aladinDiv.classList.add('gcm-sky-off')" in tail
+    start = html.index('function start(')
+    body = html[start:]
+    # The hide must sit after A.init resolves, not before it is even called.
+    assert body.index("A.init") < body.index("svg.classList.add('gcm-sky-off')")
+
+    # Both failure paths restore, and the outer one is *outside* start().
+    assert html.count('function restore()') == 1
+    assert body.count('restore();') >= 1                  # inner .catch
+    outer = html[:start]
+    assert '.then(start).catch(' in outer
+    assert outer.index('.then(start).catch(') < outer.index('restore();') \
+        if 'restore();' in outer else True
+    assert 'restore();' in outer, 'the outer handler must restore too'
 
 
 def test_wheel_zoom_does_not_hijack_page_scroll_unarmed():
