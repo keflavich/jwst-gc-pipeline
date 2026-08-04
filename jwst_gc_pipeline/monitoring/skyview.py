@@ -183,6 +183,92 @@ STATIC_PAD = 0.045
 GRID_SAMPLES = 33
 
 
+DEG = '°'
+
+#: The frames the static map can be drawn in. The footprint file is always ICRS;
+#: anything else is a transform away, and needs astropy.
+_FRAMES = {
+    'galactic': {'astropy': 'galactic', 'lon': 'l', 'lat': 'b',
+                 'lon_label': 'l', 'lat_label': 'b', 'wrap': 180.0},
+    'icrs': {'astropy': 'icrs', 'lon': 'ra', 'lat': 'dec',
+             'lon_label': 'RA', 'lat_label': 'Dec', 'wrap': 360.0},
+}
+
+#: Draw in Galactic coordinates by default. This is a Galactic-centre survey:
+#: in l/b the tiled strip runs along a grid line instead of diagonally across
+#: one, and every conversation about where the survey goes is already in l/b.
+DEFAULT_FRAME = 'galactic'
+
+
+def _transform(pairs, src, dst):
+    """``[(lon, lat)]`` from frame ``src`` to frame ``dst``, in degrees.
+
+    Returns ``None`` -- not an empty list -- when astropy is unavailable, so a
+    caller can tell "nothing to convert" from "cannot convert" and fall back to
+    the untransformed frame instead of silently drawing an empty map.
+    """
+    if src == dst:
+        return list(pairs)
+    if not pairs:
+        return []
+    try:
+        from astropy.coordinates import SkyCoord
+        import astropy.units as u
+    except ImportError:
+        return None
+    a, b = _FRAMES[src], _FRAMES[dst]
+    coord = SkyCoord(**{a['lon']: [p[0] for p in pairs] * u.deg,
+                        a['lat']: [p[1] for p in pairs] * u.deg},
+                     frame=a['astropy']).transform_to(b['astropy'])
+    lon = getattr(coord, b['lon'])
+    if b['wrap'] == 180.0:
+        lon = lon.wrap_at(180 * u.deg)
+    return list(zip([float(v) for v in lon.deg],
+                    [float(v) for v in getattr(coord, b['lat']).deg]))
+
+
+def _reframe(footprints, frame):
+    """``(footprints in`` ``frame``, the frame actually used)``.
+
+    Every vertex goes through **one** vectorised transform rather than one call
+    per polygon: 5000 vertices as 5000 SkyCoord round trips would dominate the
+    whole page build.
+    """
+    if frame == 'icrs' or not isinstance(footprints, dict):
+        return footprints, 'icrs'
+    flat, index = [], []
+    for group in ('planned', 'observed'):
+        for i, pointing in enumerate(footprints.get(group) or []):
+            if not isinstance(pointing, dict):
+                continue
+            for key in ('nircam', 'miri'):
+                for j, poly in enumerate(pointing.get(key) or []):
+                    for k, vertex in enumerate(poly or []):
+                        if len(vertex) < 2:
+                            continue
+                        lon, lat = _safe_num(vertex[0]), _safe_num(vertex[1])
+                        if lon is None or lat is None:
+                            continue
+                        index.append((group, i, key, j, k))
+                        flat.append((lon, lat))
+    moved = _transform(flat, 'icrs', frame)
+    if moved is None:                     # no astropy: draw it in ICRS instead
+        return footprints, 'icrs'
+    out = dict(footprints)
+    for group in ('planned', 'observed'):
+        out[group] = [dict(p) if isinstance(p, dict) else p
+                      for p in (footprints.get(group) or [])]
+        for pointing in out[group]:
+            if isinstance(pointing, dict):
+                for key in ('nircam', 'miri'):
+                    if pointing.get(key):
+                        pointing[key] = [[list(v) for v in (poly or [])]
+                                         for poly in pointing[key]]
+    for (group, i, key, j, k), value in zip(index, moved):
+        out[group][i][key][j][k] = [value[0], value[1]]
+    return out, frame
+
+
 def _circ_mean_deg(values):
     """Mean of angles in degrees, wrap-safe.
 
@@ -330,119 +416,136 @@ def _grid_line(frame, points):
     return path, (labelled[-1] if labelled else None)
 
 
-def _equatorial_grid(frame):
-    """RA/Dec graticule lines as ``(path, label_xy, text)`` triples."""
-    corners = [(frame.xmin, frame.ymin), (frame.xmax, frame.ymin),
-               (frame.xmin, frame.ymax), (frame.xmax, frame.ymax)]
-    # Invert the plane bbox back to sky by sampling: the field is small, so the
-    # corner sky coordinates bound the graticule range closely enough.
+def _bbox_sky(frame):
+    """The map's plane bounding box back on the sky, as ``(lon, lat)`` corners.
+
+    Inverse gnomonic. The graticule needs to know what range of sky the drawn
+    area covers; over a degree the corners bound it closely enough.
+    """
     rad = math.pi / 180.0
-    sky = []
-    for x, y in corners:
+    out = []
+    for x, y in ((frame.xmin, frame.ymin), (frame.xmax, frame.ymin),
+                 (frame.xmin, frame.ymax), (frame.xmax, frame.ymax),
+                 ((frame.xmin + frame.xmax) / 2, (frame.ymin + frame.ymax) / 2)):
         xi, eta = -x * rad, y * rad
         rho = math.hypot(xi, eta)
         if rho == 0:
-            sky.append((frame.ra0, frame.dec0))
+            out.append((frame.ra0, frame.dec0))
             continue
         c = math.atan(rho)
-        dec = math.asin(math.cos(c) * math.sin(frame.dec0 * rad)
+        lat = math.asin(math.cos(c) * math.sin(frame.dec0 * rad)
                         + eta * math.sin(c) * math.cos(frame.dec0 * rad) / rho)
-        ra = frame.ra0 * rad + math.atan2(
+        lon = frame.ra0 * rad + math.atan2(
             xi * math.sin(c),
             rho * math.cos(frame.dec0 * rad) * math.cos(c)
             - eta * math.sin(frame.dec0 * rad) * math.sin(c))
-        sky.append((math.degrees(ra) % 360.0, math.degrees(dec)))
-    ra_lo, ra_hi = min(s[0] for s in sky), max(s[0] for s in sky)
-    dec_lo, dec_hi = min(s[1] for s in sky), max(s[1] for s in sky)
-    lines = []
-    ra_step = _nice_step(ra_hi - ra_lo)
-    dec_step = _nice_step(dec_hi - dec_lo)
-    ra_val = math.ceil(ra_lo / ra_step) * ra_step
-    while ra_val <= ra_hi:
-        pts = [(ra_val, dec_lo + (dec_hi - dec_lo) * i / (GRID_SAMPLES - 1.0))
-               for i in range(GRID_SAMPLES)]
-        path, label = _grid_line(frame, pts)
-        if path:
-            lines.append((path, label, '%g°' % round(ra_val, 4)))
-        ra_val += ra_step
-    dec_val = math.ceil(dec_lo / dec_step) * dec_step
-    while dec_val <= dec_hi:
-        pts = [(ra_lo + (ra_hi - ra_lo) * i / (GRID_SAMPLES - 1.0), dec_val)
-               for i in range(GRID_SAMPLES)]
-        path, label = _grid_line(frame, pts)
-        if path:
-            lines.append((path, label, '%+g°' % round(dec_val, 4)))
-        dec_val += dec_step
-    return lines
+        out.append((math.degrees(lon), math.degrees(lat)))
+    return out
 
 
-def _galactic_grid(frame):
-    """Galactic graticule, or ``[]`` when astropy is unavailable.
+def _graticule(frame, grid_frame, map_frame):
+    """Lines of constant longitude and latitude, as ``(path, label_xy, text)``.
 
-    A Galactic-centre survey is planned, described and argued about in *l, b*;
-    an RA/Dec-only map makes "does this strip follow the plane" a question the
-    reader has to do trigonometry to answer.
+    ``grid_frame`` is the frame whose grid this is; ``map_frame`` is the frame
+    the map itself is drawn in. When they differ the lines are generated in the
+    grid's own coordinates and transformed onto the map, which is what makes the
+    second graticule curve across the first instead of paralleling it.
     """
-    try:
-        from astropy.coordinates import SkyCoord
-        import astropy.units as u
-    except ImportError:
-        return []
-    # Sample the drawn area itself rather than trusting a bbox inversion.
-    ras, decs = [], []
-    for fx in (0.0, 0.5, 1.0):
-        for fy in (0.0, 0.5, 1.0):
-            x = frame.xmin + (frame.xmax - frame.xmin) * fx
-            y = frame.ymin + (frame.ymax - frame.ymin) * fy
-            rad = math.pi / 180.0
-            xi, eta = -x * rad, y * rad
-            rho = math.hypot(xi, eta)
-            if rho == 0:
-                ras.append(frame.ra0)
-                decs.append(frame.dec0)
-                continue
-            c = math.atan(rho)
-            dec = math.asin(math.cos(c) * math.sin(frame.dec0 * rad)
-                            + eta * math.sin(c) * math.cos(frame.dec0 * rad) / rho)
-            ra = frame.ra0 * rad + math.atan2(
-                xi * math.sin(c),
-                rho * math.cos(frame.dec0 * rad) * math.cos(c)
-                - eta * math.sin(frame.dec0 * rad) * math.sin(c))
-            ras.append(math.degrees(ra) % 360.0)
-            decs.append(math.degrees(dec))
-    corners = SkyCoord(ra=ras * u.deg, dec=decs * u.deg).galactic
-    l_vals = [float(v) for v in corners.l.wrap_at(180 * u.deg).deg]
-    b_vals = [float(v) for v in corners.b.deg]
-    l_lo, l_hi = min(l_vals), max(l_vals)
-    b_lo, b_hi = min(b_vals), max(b_vals)
-    l_step, b_step = _nice_step(l_hi - l_lo), _nice_step(b_hi - b_lo)
+    corners = _bbox_sky(frame)
+    if grid_frame != map_frame:
+        corners = _transform(corners, map_frame, grid_frame)
+        if corners is None:                  # no astropy: no overlay graticule
+            return []
+    spec = _FRAMES[grid_frame]
+    lons = [c[0] for c in corners]
+    if spec['wrap'] == 360.0 and max(lons) - min(lons) > 180.0:
+        lons = [(v - 360.0 if v > 180.0 else v) for v in lons]
+    lon_lo, lon_hi = min(lons), max(lons)
+    lat_lo, lat_hi = min(c[1] for c in corners), max(c[1] for c in corners)
+    lon_step = _nice_step(lon_hi - lon_lo)
+    lat_step = _nice_step(lat_hi - lat_lo)
 
-    def to_equatorial(ll, bb):
-        icrs = SkyCoord(l=list(ll) * u.deg, b=list(bb) * u.deg,
-                        frame='galactic').icrs
-        return list(zip([float(v) for v in icrs.ra.deg],
-                        [float(v) for v in icrs.dec.deg]))
+    def line(points):
+        if grid_frame != map_frame:
+            points = _transform(points, grid_frame, map_frame)
+            if points is None:
+                return '', None
+        return _grid_line(frame, points)
+
+    def span(lo, hi):
+        return [lo + (hi - lo) * i / (GRID_SAMPLES - 1.0)
+                for i in range(GRID_SAMPLES)]
 
     lines = []
-    value = math.ceil(l_lo / l_step) * l_step
-    while value <= l_hi:
-        span = [b_lo + (b_hi - b_lo) * i / (GRID_SAMPLES - 1.0)
-                for i in range(GRID_SAMPLES)]
-        path, label = _grid_line(frame,
-                                 to_equatorial([value] * len(span), span))
+    value = math.ceil(lon_lo / lon_step) * lon_step
+    while value <= lon_hi:
+        path, label = line([(value, v) for v in span(lat_lo, lat_hi)])
         if path:
-            lines.append((path, label, 'l %g°' % round(value, 4)))
-        value += l_step
-    value = math.ceil(b_lo / b_step) * b_step
-    while value <= b_hi:
-        span = [l_lo + (l_hi - l_lo) * i / (GRID_SAMPLES - 1.0)
-                for i in range(GRID_SAMPLES)]
-        path, label = _grid_line(frame,
-                                 to_equatorial(span, [value] * len(span)))
+            lines.append((path, label,
+                          '%s %g' % (spec['lon_label'], round(value, 4)) + DEG))
+        value += lon_step
+    value = math.ceil(lat_lo / lat_step) * lat_step
+    while value <= lat_hi:
+        path, label = line([(v, value) for v in span(lon_lo, lon_hi)])
         if path:
-            lines.append((path, label, 'b %+g°' % round(value, 4)))
-        value += b_step
+            lines.append((path, label,
+                          '%s %+g' % (spec['lat_label'], round(value, 4)) + DEG))
+        value += lat_step
     return lines
+
+
+def _reframe_polys(polys, frame_name):
+    """``[[(lon, lat), ...], ...]`` from ICRS into ``frame_name``.
+
+    One vectorised transform for the whole set. Returns the input unchanged when
+    the transform is unavailable, which is the same fallback ``_reframe`` makes:
+    an untransformed overlay is wrong, but a *missing* one is invisible, and the
+    frame fallback applies to the whole map at once.
+    """
+    if frame_name == 'icrs':
+        return [[tuple(v[:2]) for v in (poly or []) if len(v) >= 2]
+                for poly in polys]
+    flat, shape = [], []
+    for poly in polys:
+        kept = [v for v in (poly or []) if len(v) >= 2]
+        shape.append(len(kept))
+        flat.extend((v[0], v[1]) for v in kept)
+    moved = _transform(flat, 'icrs', frame_name)
+    if moved is None:
+        return [[tuple(v[:2]) for v in (poly or []) if len(v) >= 2]
+                for poly in polys]
+    out, at = [], 0
+    for count in shape:
+        out.append(moved[at:at + count])
+        at += count
+    return out
+
+
+def _roman_polys(roman):
+    """``(spring, autumn, target)`` polygon lists from the Roman GBTDS file."""
+    spring, autumn, target = [], [], []
+    if not isinstance(roman, dict):
+        return spring, autumn, target
+    tiles = roman.get('tiles')
+    if isinstance(tiles, dict):
+        for tile in tiles.values():
+            if not isinstance(tile, dict):
+                continue
+            spring.extend(tile.get('spring') or [])
+            autumn.extend(tile.get('autumn') or [])
+    if roman.get('target_area'):
+        target.append(roman['target_area'])
+    return spring, autumn, target
+
+
+def _plain_layer(frame, polys, color, fill_opacity, layer_id, label, width=1.2):
+    """A single group of polygons with no per-item titles."""
+    path = _polys_path(frame, polys)
+    return ('<g id="%s" class="gcm-lyr gcm-sky-off" data-label="%s" stroke="%s" '
+            'fill="%s" fill-opacity="%s" stroke-width="%s" '
+            'vector-effect="non-scaling-stroke">%s</g>'
+            % (layer_id, _esc(label), color, color, fill_opacity, width,
+               ('<path d="%s"/>' % path) if path else ''))
 
 
 def _pointing_title(pointing):
@@ -474,28 +577,30 @@ def _layer(frame, pointings, key, color, fill_opacity, layer_id, label):
                         fill_opacity, ''.join(body))), count
 
 
-def static_map(footprints):
+def static_map(footprints, roman=None, frame_name=DEFAULT_FRAME):
     """The footprints as a self-contained inline SVG.
 
     Returns ``(svg, info)``; ``svg`` is ``''`` when there is nothing drawable,
     in which case the caller should say so rather than showing an empty box.
+    ``info['frame']`` is the frame actually drawn, which is ICRS rather than the
+    requested one when astropy is missing.
     """
-    frame = _frame_for(footprints)
+    data, frame_name = _reframe(footprints, frame_name)
+    frame = _frame_for(data)
     if frame is None:
         return '', {}
-    planned = [p for p in (footprints.get('planned') or [])
-               if isinstance(p, dict)]
-    observed = [p for p in (footprints.get('observed') or [])
-                if isinstance(p, dict)]
+    planned = [p for p in (data.get('planned') or []) if isinstance(p, dict)]
+    observed = [p for p in (data.get('observed') or []) if isinstance(p, dict)]
+    other = 'icrs' if frame_name == 'galactic' else 'galactic'
 
     grid = []
-    for path, label, text in _equatorial_grid(frame):
+    for path, label, text in _graticule(frame, frame_name, frame_name):
         grid.append('<path class="gcm-grid-eq" d="%s"/>' % path)
         if label is not None:
             grid.append('<text class="gcm-grid-lab" x="%s" y="%s">%s</text>'
                         % (_num(label[0] + 3), _num(label[1] - 3), _esc(text)))
     gal = []
-    for path, label, text in _galactic_grid(frame):
+    for path, label, text in _graticule(frame, other, frame_name):
         gal.append('<path class="gcm-grid-gal" d="%s"/>' % path)
         if label is not None:
             gal.append('<text class="gcm-grid-lab gcm-grid-lab-gal" x="%s" '
@@ -511,6 +616,20 @@ def static_map(footprints):
     obs_m, n_obs_m = _layer(frame, observed, 'miri', COLOR_OBSERVED,
                             '.18', 'stat-obs-miri', 'observed MIRI')
 
+    # Roman is drawn here too, not only in the interactive view. It used to be
+    # Aladin-only, which made its three toggles do nothing at all until someone
+    # loaded 1.8 MB of script -- they looked like live buttons and were not.
+    spring_p, autumn_p, target_p = _roman_polys(roman)
+    n_roman = len(spring_p) + len(autumn_p) + len(target_p)
+    reframed = _reframe_polys(spring_p + autumn_p + target_p, frame_name)
+    spring = _plain_layer(frame, reframed[:len(spring_p)], COLOR_SPRING, '.05',
+                          'stat-spring', 'Roman GBTDS spring')
+    autumn = _plain_layer(frame, reframed[len(spring_p):len(spring_p) + len(autumn_p)],
+                          COLOR_AUTUMN, '.05', 'stat-autumn', 'Roman GBTDS autumn')
+    target = _plain_layer(frame, reframed[len(spring_p) + len(autumn_p):],
+                          COLOR_TARGET_AREA, '0', 'stat-target',
+                          'JWST target area', width=2.0)
+
     # The HUD is rendered at zoom 1 here so it exists without JavaScript, and
     # rewritten by the viewer's zoom handler: the bar has to stay a real angular
     # length (it grows on screen as you zoom in) while its label and the compass
@@ -524,27 +643,35 @@ def static_map(footprints):
         '<text id="gcm-sky-barlab" x="%s" y="%s">1′</text>'
         '<g id="gcm-sky-compass">'
         '<path d="M52 62 V26 M52 62 H16" vector-effect="non-scaling-stroke"/>'
-        '<text x="52" y="20" text-anchor="middle">N</text>'
-        '<text x="10" y="66" text-anchor="end">E</text></g></g>'
-        % (_num(bar_y), _num(bar), _num(28), _num(bar_y - 7)))
+        '<text x="52" y="20" text-anchor="middle">%s</text>'
+        '<text x="10" y="66" text-anchor="end">%s</text></g></g>'
+        % (_num(bar_y), _num(bar), _num(28), _num(bar_y - 7),
+           # The axes are whatever the map's frame is, so the compass must say
+           # so: labelling a Galactic map N/E would name the wrong directions.
+           _esc(_FRAMES[frame_name]['lat_label'] + '+'),
+           _esc(_FRAMES[frame_name]['lon_label'] + '+')))
 
+    axes = ('Galactic longitude increasing left, latitude up'
+            if frame_name == 'galactic' else 'north up, east left')
     svg = ('<svg id="gcm-sky-static" class="gcm-sky-static" '
            'viewBox="0 0 %s %s" preserveAspectRatio="xMidYMid meet" '
-           'role="img" aria-label="Survey footprints on the sky, north up, '
-           'east left">'
-           '<g id="gcm-sky-pan">%s%s%s%s%s%s</g>%s</svg>'
-           % (_num(frame.width), _num(frame.height),
-              ''.join(grid), ''.join(gal), nircam, miri, obs_n, obs_m, hud))
+           'role="img" aria-label="Survey footprints on the sky, %s">'
+           '<g id="gcm-sky-pan">%s%s%s%s%s%s%s%s%s</g>%s</svg>'
+           % (_num(frame.width), _num(frame.height), _esc(axes),
+              ''.join(grid), ''.join(gal), spring, autumn, target,
+              nircam, miri, obs_n, obs_m, hud))
     info = {'n_nircam': n_nircam, 'n_miri': n_miri,
-            'n_observed': n_obs_n + n_obs_m,
+            'n_observed': n_obs_n + n_obs_m, 'n_roman': n_roman,
             'width': frame.width, 'height': frame.height,
             'scale': frame.scale,          # SVG user units per degree
-            'galactic': bool(gal)}
+            'frame': frame_name, 'axes': axes,
+            'overlay_grid': bool(gal)}
     return svg, info
 
 
 def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
-            data_url=FOOTPRINTS_JSON, roman_url=ROMAN_JSON):
+            data_url=FOOTPRINTS_JSON, roman_url=ROMAN_JSON,
+            frame_name=DEFAULT_FRAME):
     """The whole sky-view section, or a note when there is no footprint data."""
     if not isinstance(footprints, dict) or not footprints:
         return ('<section class="gcm-sec" id="skyview"><h2>Sky view</h2>'
@@ -581,15 +708,26 @@ def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
         f'data-survey="{_esc(url)}">{_esc(name)}</button>'
         for i, (name, url) in enumerate(SURVEYS))
 
-    static_svg, static_info = static_map(footprints)
+    static_svg, static_info = static_map(footprints, roman, frame_name)
     if not static_svg:
         static_svg = ('<div class="gcm-sky-nostatic">Footprint data contains no '
                       'drawable polygons.</div>')
     view_w = _safe_num(static_info.get('width'), 1000.0)
     view_h = _safe_num(static_info.get('height'), 1000.0)
     frame_scale = _safe_num(static_info.get('scale'), 0.0)
-    grid_note = ('Grid: RA/Dec solid, Galactic dashed'
-                 if static_info.get('galactic') else 'Grid: RA/Dec')
+    drawn_frame = static_info.get('frame', 'icrs')
+    spec = _FRAMES[drawn_frame]
+    other = _FRAMES['icrs' if drawn_frame == 'galactic' else 'galactic']
+    grid_note = ('Grid: %s/%s solid%s'
+                 % (spec['lon_label'], spec['lat_label'],
+                    (', %s/%s dashed' % (other['lon_label'], other['lat_label']))
+                    if static_info.get('overlay_grid') else ''))
+    spring_p, autumn_p, _target_p = _roman_polys(roman)
+    n_spring, n_autumn = len(spring_p), len(autumn_p)
+    # Enough zoom-out to reach the Roman tiles, which sit outside the JWST
+    # bounding box that sets the home view; a little more when they are absent
+    # would only show empty sky.
+    zoom_out_max = 8 if static_info.get('n_roman') else 3
 
     return f"""
 <section class="gcm-sec gcm-sky" id="skyview"><h2>Sky view — survey footprints</h2>
@@ -636,14 +774,13 @@ APT visit status: <strong>{n_observed}</strong> so far.</p>
     <div class="gcm-sky-sec">
       <div class="gcm-sky-lab">Roman GBTDS (context)</div>
       <div class="gcm-sky-row">
-        <button class="gcm-sky-btn" id="lyr-spring" disabled
-                title="interactive view only"
-                style="color:{COLOR_SPRING}">spring</button>
-        <button class="gcm-sky-btn" id="lyr-autumn" disabled
-                title="interactive view only"
-                style="color:{COLOR_AUTUMN}">autumn</button>
-        <button class="gcm-sky-btn" id="lyr-target" disabled
-                title="interactive view only"
+        <button class="gcm-sky-btn" id="lyr-spring"
+                style="color:{COLOR_SPRING}">spring
+          <span class="gcm-sky-count">{n_spring}</span></button>
+        <button class="gcm-sky-btn" id="lyr-autumn"
+                style="color:{COLOR_AUTUMN}">autumn
+          <span class="gcm-sky-count">{n_autumn}</span></button>
+        <button class="gcm-sky-btn" id="lyr-target"
                 style="color:{COLOR_TARGET_AREA}">target area</button>
       </div>
     </div>
@@ -697,7 +834,8 @@ blocks.
   var STATIC_GROUPS = {{
     nircam: ['stat-nircam'], miri: ['stat-miri'],
     observed: ['stat-obs-nircam', 'stat-obs-miri'],
-    spring: [], autumn: [], target: []
+    spring: ['stat-spring'], autumn: ['stat-autumn'],
+    target: ['stat-target']
   }};
 
   var svg = document.getElementById('gcm-sky-static');
@@ -742,6 +880,10 @@ blocks.
   // keeps the angular scale bar truthful; the HUD text and the compass are
   // counter-scaled below so they stay a constant size on screen.
   var HOME = [0, 0, VIEW[0], VIEW[1]];
+  // Roman's tiles lie outside the JWST bounding box that sets the home
+  // view, so enabling that layer has to be followed by zooming out far
+  // enough to reach it.
+  var ZOOM_OUT_MAX = {zoom_out_max};
   var vb = HOME.slice();
   var armed = false;                 // wheel zooms only after a click on the map
   var BARS = [[600, '10′'], [300, '5′'], [120, '2′'], [60, '1′'],
@@ -830,7 +972,7 @@ blocks.
       ev.preventDefault();
       var at = toUser(ev);
       var f = ev.deltaY > 0 ? 1.15 : 1 / 1.15;
-      var w = Math.min(Math.max(vb[2] * f, HOME[2] / 60), HOME[2] * 3);
+      var w = Math.min(Math.max(vb[2] * f, HOME[2] / 60), HOME[2] * ZOOM_OUT_MAX);
       var h = w * HOME[3] / HOME[2];
       vb[0] = at[0] - (at[0] - vb[0]) * (w / vb[2]);
       vb[1] = at[1] - (at[1] - vb[1]) * (h / vb[3]);

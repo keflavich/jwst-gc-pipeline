@@ -433,7 +433,14 @@ def _severity_chip(tally):
     return ''.join(parts)
 
 
-def _card(entry):
+def _card(entry, href=None):
+    """One overview card.
+
+    ``href`` is where the card's detail lives.  On the front page that is
+    another *document* (``fields/<target>.html``), not an anchor on the same
+    one: carrying every field's detail on the overview page is what made it a
+    2 MB scroll that had to be fully parsed before the first card appeared.
+    """
     run = entry['run']
     tally = entry['tally']
     worst = entry['worst']
@@ -444,7 +451,7 @@ def _card(entry):
     job_chip = (f'<span class="gcm-chip run">{len(active)} in queue</span>'
                 if active else '')
     return f"""
-<a class="gcm-card sev-{esc(worst)}" href="#{esc(anchor)}">
+<a class="gcm-card sev-{esc(worst)}" href="{esc(href or ('#' + anchor))}">
   <div class="gcm-card-top">
     <span class="gcm-card-name">{esc(run['target'])}</span>
     <span class="gcm-card-obs">{esc(run['proposal'])}/o{esc(run['obsid'])}</span>
@@ -791,7 +798,8 @@ def _paper_block(summary):
   Photometric certifiers: {cert_bits}.</p>"""
 
 
-def _field_section(entry, show_skip=False, figure_base='figures'):
+def _field_section(entry, show_skip=False, figure_base='figures',
+                   home_href='#overview'):
     run = entry['run']
     anchor = entry['anchor']
     label = f"{run['target']} · {run['proposal']}/o{run['obsid']}"
@@ -802,7 +810,7 @@ def _field_section(entry, show_skip=False, figure_base='figures'):
   <div class="gcm-field-head">
     <h3>{esc(label)}</h3>
     <span class="path">{esc(run['basepath'])}</span>
-    <a class="gcm-back" href="#overview">back to overview</a>
+    <a class="gcm-back" href="{esc(home_href)}">back to overview</a>
   </div>
   <div class="gcm-field-body">
     <div><h4 class="gcm-sub-h">Stage ladder</h4>{_ladder_html(run, with_key=True)}</div>
@@ -840,11 +848,25 @@ _JS = """
 def render_page(entries, cutouts=(), title='JWST-GC pipeline monitor',
                 subtitle='', standalone=False, show_skip=False,
                 generated=None, unattributed_jobs=(), figure_base='figures',
-                footprints=None, roman=None, asset_prefix=''):
+                footprints=None, roman=None, asset_prefix='',
+                include_detail=True, include_skyview=True,
+                detail_href=None, home_href='#overview'):
     """The whole page.
 
     ``entries`` is the list built by ``report.build_entries`` -- one per
     observation, already carrying its verdicts, jobs and roll-up.
+
+    The page is assembled from parts rather than being one fixed layout,
+    because the front page and the per-field pages want different ones:
+
+    * front page -- ``include_detail=False`` with a ``detail_href`` callable.
+      The sky map leads, then the status cards, and each card is a link to
+      another document.  Every field's tables, evidence blocks and figures used
+      to be inlined below the cards, which made the entry point to the whole
+      monitor the single largest file it produces.
+    * per-field page -- ``include_skyview=False``.  The map is ~100 kB of inline
+      geometry and is identical on all 18 of them; it belongs on the page whose
+      job is the overview.
     """
     generated = generated or time.time()
     total = len(entries)
@@ -854,9 +876,10 @@ def render_page(entries, cutouts=(), title='JWST-GC pipeline monitor',
     n_jobs = sum(len([j for j in (e.get('jobs') or [])
                       if j.get('state') in ('RUNNING', 'PENDING')]) for e in entries)
 
-    cards = ''.join(_card(e) for e in entries)
-    details = ''.join(_field_section(e, show_skip, figure_base)
-                      for e in entries)
+    cards = ''.join(_card(e, detail_href(e) if detail_href else None)
+                    for e in entries)
+    details = ''.join(_field_section(e, show_skip, figure_base, home_href)
+                      for e in entries) if include_detail else ''
 
     unattr = ''
     if unattributed_jobs:
@@ -864,6 +887,16 @@ def render_page(entries, cutouts=(), title='JWST-GC pipeline monitor',
         unattr = (f'<p class="gcm-note">{len(unattributed_jobs)} queued job(s) could '
                   f'not be attributed to a registered field: <code>{esc(names)}</code>. '
                   f'They are listed here rather than folded into a field\'s count.</p>')
+
+    sky = (skyview.section(footprints, roman,
+                           aladin_src=asset_prefix + skyview.ALADIN_LOCAL,
+                           data_url=asset_prefix + skyview.FOOTPRINTS_JSON,
+                           roman_url=asset_prefix + skyview.ROMAN_JSON)
+           if include_skyview else '')
+    detail_sec = (f'<section class="gcm-sec"><h2>Detail</h2>{details}</section>'
+                  if include_detail else '')
+    card_note = ('Click a card for that field’s own page.' if detail_href
+                 else 'Click a card for the detail.')
 
     stamp = time.strftime('%Y-%m-%d %H:%M %Z', time.localtime(generated))
     body = f"""
@@ -883,22 +916,19 @@ def render_page(entries, cutouts=(), title='JWST-GC pipeline monitor',
 </div></header>
 
 <div class="gcm-wrap">
+{sky}
+
 <section class="gcm-sec" id="overview"><h2>Overview</h2>
 <p class="gcm-note">One card per registered observation. The bar is the stage
 ladder in run order — reduction (unc·cal·red·i2d) then cataloging
 (m12→m8). Solid = every filter has it, pale = some do, hatched = the product
-name cannot be attributed to this observation. Click a card for the detail.</p>
+name cannot be attributed to this observation. {card_note}</p>
 {unattr}
 <div class="gcm-grid">{cards}</div></section>
 
-{skyview.section(footprints, roman,
-                 aladin_src=asset_prefix + skyview.ALADIN_LOCAL,
-                 data_url=asset_prefix + skyview.FOOTPRINTS_JSON,
-                 roman_url=asset_prefix + skyview.ROMAN_JSON)}
-
 {_cutouts_block(cutouts)}
 
-<section class="gcm-sec"><h2>Detail</h2>{details}</section>
+{detail_sec}
 
 <footer class="gcm-foot">
 Generated {esc(stamp)} by <code>python -m jwst_gc_pipeline.monitoring</code>.

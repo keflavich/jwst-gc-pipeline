@@ -5,6 +5,7 @@ registered observation of one field, optionally inside a cutout subtree.  Every
 other module takes that shape as given.
 """
 import os
+import shutil
 import time
 
 from . import (checks, figures as _figures, jobs as _jobs, paper as _paper,
@@ -168,14 +169,32 @@ def write_report(outdir=DEFAULT_OUTDIR, targets=None, instrument='nircam',
     aggregate = os.path.join(outdir, f'{stem}.html')
     fragment = os.path.join(outdir, f'{stem}_fragment.html')
 
-    render.write_html(aggregate, render.render_page(
-        entries, cutouts, subtitle=subtitle, standalone=True,
-        show_skip=show_skip, generated=generated,
-        unattributed_jobs=unattributed, footprints=footprints, roman=roman))
-    render.write_html(fragment, render.render_page(
-        entries, cutouts, subtitle=subtitle, standalone=False,
-        show_skip=show_skip, generated=generated,
-        unattributed_jobs=unattributed, footprints=footprints, roman=roman))
+    suffix = f'_{cutout_label}' if cutout_label else ''
+
+    def detail_href(entry):
+        """Where a card on the front page points.
+
+        Per *field*, not per observation, because that is the page that exists;
+        the anchor picks out the observation within it. ``per_field=False``
+        turns this off, and then the cards fall back to same-page anchors --
+        which is why the front page keeps its detail in that mode.
+        """
+        return (f'fields/{entry["run"]["target"]}{suffix}.html'
+                f'#{entry["anchor"]}')
+
+    front = dict(entries=entries, cutouts=cutouts, subtitle=subtitle,
+                 show_skip=show_skip, generated=generated,
+                 unattributed_jobs=unattributed, footprints=footprints,
+                 roman=roman,
+                 # The front page is the overview: map, then status cards, then
+                 # a link out per field. Inlining 18 fields' tables and evidence
+                 # below the cards made the monitor's entry point its largest
+                 # and slowest document.
+                 include_detail=not per_field,
+                 detail_href=detail_href if per_field else None)
+
+    render.write_html(aggregate, render.render_page(standalone=True, **front))
+    render.write_html(fragment, render.render_page(standalone=False, **front))
 
     # Link every figure the pages reference into <outdir>/figures/ under its
     # basename, so the relative hrefs resolve wherever the page is served from.
@@ -196,7 +215,7 @@ def write_report(outdir=DEFAULT_OUTDIR, targets=None, instrument='nircam',
         for entry in entries:
             by_field.setdefault(entry['run']['target'], []).append(entry)
         for target, group in by_field.items():
-            path = os.path.join(outdir, 'fields', f'{target}{"_" + cutout_label if cutout_label else ""}.html')
+            path = os.path.join(outdir, 'fields', f'{target}{suffix}.html')
             render.write_html(path, render.render_page(
                 group, [c for c in cutouts if c['target'] == target],
                 title=f'{target} · jwst-gc pipeline monitor',
@@ -208,7 +227,12 @@ def write_report(outdir=DEFAULT_OUTDIR, targets=None, instrument='nircam',
                 # per-field pages told the reader to generate a file that was
                 # already sitting next to them.
                 footprints=footprints, roman=roman,
-                asset_prefix='../'))
+                asset_prefix='../',
+                # The map is ~100 kB of identical inline geometry; carrying it
+                # on all 18 field pages costs more than it tells anyone reading
+                # about one field.
+                include_skyview=False,
+                home_href=f'../monitor{suffix}.html#overview'))
             field_paths[target] = path
 
     return {'aggregate': aggregate, 'fragment': fragment, 'fields': field_paths,
@@ -222,17 +246,54 @@ def write_report(outdir=DEFAULT_OUTDIR, targets=None, instrument='nircam',
 _PUBLISH_GLOBS = ('monitor*.html', 'monitor*.json')
 
 
+def _copy_is_current(src_stat, dst_stat, dst_dev):
+    """Is ``dst`` already the copy ``_link`` would make?
+
+    Only ever true across filesystems. On the same one a hardlink is nearly
+    free, and relinking is the whole point of re-running ``publish`` -- skipping
+    it there would reintroduce the stale-page bug that function exists to
+    prevent, because a rewritten page can keep both its size and its second.
+    """
+    return (src_stat.st_dev != dst_dev
+            and src_stat.st_size == dst_stat.st_size
+            and src_stat.st_mtime == dst_stat.st_mtime)   # copy2 preserves it
+
+
 def _link(src, dst):
-    """Hardlink ``src`` to ``dst``; fall back to a symlink across filesystems.
+    """Hardlink ``src`` to ``dst``; **copy** across filesystems.
 
     A hardlink is preferred because the renderer rewrites a page in place
     (``open(path, 'w')``), which keeps the inode -- so the published copy tracks
     every regeneration with no second copy and no re-publish step.
+
+    The cross-filesystem fallback is a copy rather than a symlink because a
+    published directory is served by a web server, and a symlink whose target
+    leaves the served tree is not a file the server will hand out: Apache at
+    data.rc.ufl.edu returns **403** for every one of these. That failure is
+    silent in exactly the wrong way -- the pages are fine and only the figures
+    they link to are missing -- so the figure links looked correct and 403'd.
+    Roughly half the figures come from ``/blue`` while the output lives on
+    ``/orange``, so this is the normal case, not the exotic one.
     """
     # Publishing into the output directory itself would remove the page and then
-    # symlink it to itself -- a one-character scrontab typo losing the report.
+    # link it to itself -- a one-character scrontab typo losing the report.
     if os.path.realpath(src) == os.path.realpath(dst):
         return 'same'
+    # An unchanged copy is left alone: re-copying ~110 MB of figures on an
+    # hourly refresh would be most of the job's cost, all of it pointless.
+    #
+    # ONLY when a hardlink is impossible. On the same filesystem, relinking is
+    # nearly free and is the whole point of re-running publish -- skipping it
+    # there would reintroduce the stale-page bug this function exists to avoid,
+    # since a rewritten page can keep its size and its second.
+    if not os.path.islink(dst) and os.path.isfile(dst):
+        try:
+            if _copy_is_current(
+                    os.stat(src), os.stat(dst),
+                    os.stat(os.path.dirname(os.path.abspath(dst))).st_dev):
+                return 'copy'
+        except OSError:
+            pass
     try:
         if os.path.lexists(dst):
             os.remove(dst)
@@ -244,9 +305,9 @@ def _link(src, dst):
     except OSError:
         pass
     try:
-        os.symlink(os.path.abspath(src), dst)
-        return 'sym'
-    except OSError:
+        shutil.copy2(src, dst)
+        return 'copy'
+    except (OSError, shutil.SameFileError):
         return None
 
 

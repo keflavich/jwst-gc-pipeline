@@ -101,11 +101,20 @@ on a timer — a Flight Ready program's pointings do not move between runs.
 
 ## Getting it in front of a browser
 
-`--publish-dir` assembles the page set on HiPerGator. **Nothing on HiPerGator is
-web-served** — Apache runs on a separate host, `starformation`, whose docroot is
-`/h/cnswww-starformation.astro/starformation.astro.ufl.edu/htdocs`. So there is a
-second step, and it is a copy rather than a link because the two are different
-filesystems:
+There are **two** web servers.
+
+**Dev** — `/orange/adamginsburg/web/public/` is served directly at
+`https://data.rc.ufl.edu/pub/adamginsburg/` (the URL says `/pub/`, not
+`/public/`). `--publish-dir` alone puts the monitor at
+
+> https://data.rc.ufl.edu/pub/adamginsburg/jwst-gc/
+
+with no further step. Use it for work in progress.
+
+**Deployment** — `starformation.astro.ufl.edu` is a separate host with its own
+filesystem, docroot
+`/h/cnswww-starformation.astro/starformation.astro.ufl.edu/htdocs`. Getting there
+is a copy rather than a link:
 
 ```bash
 scripts/monitoring/deploy_monitor.sh --dry-run     # see what would move
@@ -127,6 +136,14 @@ Two constraints the script encodes, both easy to get wrong by hand:
 * the `diagnostics-<field>` entries are symlinks into `/orange` and `/blue`,
   which do not exist on the web host. The sync dereferences them, which is what
   makes the click-through to the diagnostic figures work off-site.
+
+**A symlink is not servable.** Apache returns **403** for a symlink whose target
+leaves the served tree, which on the dev server means anything pointing into
+`/blue`. `publish()` therefore *copies* figures it cannot hardlink, but the
+`diagnostics-<field>` entries are directory symlinks and stay symlinks — so on
+the **dev** URL those writeup links 403 while every figure resolves. They work on
+the deployment URL, because the rsync dereferences them. If the dev copy needs
+them, copy the writeup directories in by hand.
 
 The published page is public and unauthenticated. It quotes job-log excerpts,
 absolute paths, and QA verdicts; nothing there is proprietary, but it is not
