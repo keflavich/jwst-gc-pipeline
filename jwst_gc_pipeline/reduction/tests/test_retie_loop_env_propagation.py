@@ -4,24 +4,20 @@
 that closes the astrometry checkpoint, and the full m3..m7 chain once it has
 converged.  The full chain **re-runs m12**, so m2 runs inside it too.
 
-``ASTROM_M2_CORRECTION_FLOOR_MAS`` was passed only to the first.  A field that
-converged at 4.0 mas was therefore re-judged at the default 0 (strict 2 mas),
-found the same sub-floor residuals the loop had deliberately declined, and
-raised -- with ``ASTROM_CHECKPOINT_APPLY`` unset (correctly, m3+ is frozen) it
-could not even correct them.  Every downstream phase then went
-``DependencyNeverSatisfied``.
+``ASTROM_M2_CORRECTION_FLOOR_MAS`` was named only on the first.  It reached the
+second anyway -- ``submit_cataloging_perframe.sh``'s ``--export`` list begins
+with ``ALL`` and the loop exports the variable -- so this is about legibility,
+not propagation: a value that decides whether a gate raises should be visible at
+the call site, and the two invocations should be symmetric.
 
-cloudef obs005 was the first field to reach that line, and it failed on 3
-F162M/nrca residuals it had passed at 4.0 mas one job earlier.
-
-``export`` at the top of the loop does not cover this: the submit script builds
-an explicit ``--export`` list for sbatch, so only variables named at the call
-site reach the job.
+These tests pin the naming.  They cannot tell whether the value ARRIVES; that was
+settled by probe (``sbatch --export="ALL,..." --wrap='echo $VAR'`` returns the
+exported value) and is recorded in the script's comment.
 """
 import re
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 LOOP = REPO_ROOT / 'scripts' / 'reduction' / 'run_field_retie_loop.sh'
 
 #: Variables that must reach BOTH cataloging invocations.  Each one changes what

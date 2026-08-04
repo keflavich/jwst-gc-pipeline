@@ -155,18 +155,23 @@ done
 # --- final: full cataloging (m3..m7) now that im0 is self-consistent ---
 echo "=================  FULL CATALOGING (m3..m7)  ================="
 unset ASTROM_CHECKPOINT_APPLY   # m3+ must be a FROZEN solution; no more corrections
-# The floor MUST be passed here too, not just to the m12 loop above.  The chain
-# re-runs m12, and m2 runs inside it -- so a field that converged at
-# ASTROM_M2_CORRECTION_FLOOR_MAS=4.0 gets re-judged at the default 0 (strict 2
-# mas), finds the same sub-floor residuals the loop deliberately declined, and
-# raises.  With ASTROM_CHECKPOINT_APPLY unset (correctly -- m3+ is frozen) it
-# cannot even correct them, so it just dies and every downstream phase goes
-# DependencyNeverSatisfied.
+# Named explicitly rather than left to inheritance.  The chain re-runs m12 and m2
+# runs inside it, so this value decides whether the checkpoint raises -- and a
+# variable that changes a gate's verdict should be visible at the call site
+# rather than reaching the job by a route the reader has to reconstruct.  It also
+# makes this invocation symmetric with the m12 one above.
 #
-# `export` at the top is not enough: submit_cataloging_perframe.sh builds an
-# explicit --export list for sbatch, so only the variables named here reach the
-# job.  cloudef obs005 was the first field to reach this line and it failed on
-# 3 F162M/nrca residuals it had already passed at 4.0 mas one job earlier.
+# NOT a fix for a propagation failure: the value already arrives.
+# submit_cataloging_perframe.sh's --export list begins with ALL, so the job
+# inherits the submitting environment plus the named variables, and `export` at
+# the top of this script is sufficient on its own.  Verified directly:
+#
+#   $ export ASTROM_M2_CORRECTION_FLOOR_MAS=4.0
+#   $ sbatch --export="ALL,PROPOSAL=p,FIELD=f" --wrap='echo "FLOOR=[$ASTROM_M2_CORRECTION_FLOOR_MAS]"'
+#   FLOOR=[4.0] PROPOSAL=[p]
+#
+# cloudef obs005's m3..m7 chain died here on 2026-08-04, and this is NOT why --
+# see #281.  Do not treat this line as having closed that.
 PROPOSAL=$PROPOSAL FIELD=$FIELD TARGET=$TARGET MODULES=$MODULES \
     EACH_SUFFIX=$EACH_SUFFIX FILTERS="$FILTERS" MAX_GROUP_SIZE=$MAX_GROUP_SIZE \
     PIPE_ROOT=$PIPE_ROOT \
