@@ -27,7 +27,9 @@ FIELDS = {
     # sickle (3958/007): footprint measured from its own o007 i2d mosaics --
     # centre (266.5733, -28.8009), extent 2.07 x 0.89 arcmin (single module,
     # nrcb only).  5 arcmin square is generous margin on a field that small, and
-    # the centre dec agrees with alignment_config's dec_ref_deg = -28.805.
+    # -28.8009 agrees with the field's own mosaics; alignment_config no longer
+    # carries a dec_ref_deg for 3958 (that key is RECORDED_BULK-only and sickle is
+    # now TABLE_LOCKED).
     'sickle': (SkyCoord(266.5733, -28.8009, unit='deg'), 5 * u.arcmin, 5 * u.arcmin),
 }
 BASE = '/orange/adamginsburg/jwst'

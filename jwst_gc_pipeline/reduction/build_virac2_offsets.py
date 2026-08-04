@@ -46,6 +46,7 @@ refuses a mismatch, so another observation's tie stays out of this one's table.
 Usage:  python -m jwst_gc_pipeline.reduction.build_virac2_offsets --region <key> [filt ...]
 """
 import sys, glob, os, re, argparse
+from datetime import datetime
 import numpy as np
 import astropy.units as u
 from astropy.table import Table, vstack
@@ -133,21 +134,37 @@ def detect_i2d_sources(i2d_path, thr=80.0, fwhm=2.5):
     return SkyCoord(w.pixel_to_world(t['xcentroid'], t['ycentroid']))
 
 
-#: Mosaic products ``coarse_from_i2d`` will tie on, in preference order.  A
-#: two-module field must be tied on ``merged`` -- that is the only product the
-#: inter-module seam lives in -- so it always comes first.
-MOSAIC_PREFERENCE = ('merged', 'nrca', 'nrcb', 'nrcalong', 'nrcblong')
+#: Per-module mosaic labels, i.e. everything that is not ``merged``.
+MODULE_MOSAICS = ('nrca', 'nrcb', 'nrcalong', 'nrcblong')
 
 
-def mosaic_candidates(stem):
-    """``(label, path)`` mosaics to try for a filter, most preferred first.
+def mosaic_candidates(stem, n_modules=2):
+    """``(label, path)`` mosaics that EXIST for a filter, best first.
 
-    A SINGLE-MODULE field never produces a ``-merged`` mosaic -- there is nothing
-    to merge -- so requiring one refuses the whole build for a field that is
-    perfectly measurable.  sickle (3958/007) is nrcb-only and has ``-nrcb``
-    science mosaics for all five bands.
+    ``merged`` is preferred only when the build actually has **two or more
+    modules**: there it is the one product the inter-module seam lives in, so it
+    is the only correct seed.  On a SINGLE-module field a ``-merged`` product
+    cannot be a merge -- there is nothing to merge -- so it can only be a
+    leftover from an earlier generation, and preferring it is backwards.
+
+    sickle is exactly that case and it is not hypothetical: its
+    ``f210m-merged_i2d.fits`` is dated **2026-04-19** against a current
+    ``f210m-nrcb_i2d.fits`` from **2026-08-04**, and the two disagree by ~120 mas
+    in ddec.  The seed is not free -- running the fine step from each gives bulk
+    (-0.0190, -0.1071) vs (-0.0210, -0.0902), so ~17 mas of the F210M answer is
+    decided by which mosaic seeds it.
+
+    Otherwise take the NEWEST mosaic on disk, which is the generation the rest of
+    the products came from.
     """
-    return [(m, f"{stem}-{m}_i2d.fits") for m in MOSAIC_PREFERENCE]
+    cands = [(m, f"{stem}-{m}_i2d.fits") for m in ('merged',) + MODULE_MOSAICS]
+    present = [(m, p) for m, p in cands if os.path.exists(p)]
+    if not present:
+        return []
+    if n_modules >= 2 and present[0][0] == 'merged':
+        return present
+    # newest first; ties broken by the fixed order above so the choice is stable
+    return sorted(present, key=lambda mp: -os.path.getmtime(mp[1]))
 
 
 def perframe_matches(basename, mtag):
@@ -167,28 +184,29 @@ def perframe_matches(basename, mtag):
                           basename))
 
 
-def coarse_from_i2d(filt, rc, ref):
+def coarse_from_i2d(filt, rc, ref, n_modules=2):
     """Per-FILTER coarse bulk tie measured on the drizzled mosaic (clean) vs VIRAC2.
-    This seeds every visit of the filter; the per-visit/per-exposure fine NN then
-    resolves the <SEARCH residual.  Returns (dra, ddec) arcsec to ADD, or None."""
+    This seeds every visit of the filter; the per-visit/per-exposure fine same-star
+    pass then resolves the <SEARCH residual.  Returns (dra, ddec) arcsec, or None.
+
+    ``n_modules`` is how many modules this build actually has catalogs for; it
+    decides whether ``merged`` is the right seed -- see ``mosaic_candidates``.
+    """
     sub = rc['filts'][filt][0]
     stem = (f"{rc['basepath']}/{sub}/pipeline/"
             f"jw0{rc['proposal']}-o{rc['field']}_t001_nircam_clear-{filt}")
-    # Prefer `-merged` where it exists; fall back to a single module mosaic only
-    # when merged is absent, and say which was used.
-    candidates = mosaic_candidates(stem)
-    i2d = mod = None
-    for name, path in candidates:
-        if os.path.exists(path):
-            i2d, mod = path, name
-            break
-    if i2d is None:
-        print(f"  [coarse] no i2d for {filt}: tried "
-              f"{', '.join(n for n, _ in candidates)} under {stem}-*_i2d.fits")
+    candidates = mosaic_candidates(stem, n_modules=n_modules)
+    if not candidates:
+        print(f"  [coarse] no i2d for {filt}: nothing matches {stem}-*_i2d.fits")
         return None
-    if mod != 'merged':
-        print(f"  [coarse] {filt}: no merged mosaic; tying on the {mod} mosaic "
-              f"(single-module field)")
+    mod, i2d = candidates[0]
+    # SAY which mosaic and how old.  The seed decides ~17 mas of the answer on
+    # sickle, so "which generation did this come from" has to be in the log.
+    stamp = datetime.fromtimestamp(os.path.getmtime(i2d)).strftime('%Y-%m-%d')
+    others = ', '.join(f"{m}({datetime.fromtimestamp(os.path.getmtime(p)):%Y-%m-%d})"
+                       for m, p in candidates[1:]) or 'none'
+    print(f"  [coarse] {filt}: seeding on {os.path.basename(i2d)} [{mod}, {stamp}]; "
+          f"also present: {others}", flush=True)
     sc = detect_i2d_sources(i2d)
     # ONE call: coarse_xcorr -> measure_offset sweeps the window internally (narrow->wide,
     # density-immune) and flags `swept` when the tie only appeared after widening (the
@@ -302,9 +320,21 @@ REGION = {
     # which agrees with the refcat already on disk
     # (catalogs/gaia_virac2_refcat_epoch2024.64.fits).
     # NIRCam is observation 007 and single-module (nrcb only); the 3958 MIRI data
-    # are observation 001 and are NOT tied here -- this builder ties NIRCam.
+    # are observations 001 and 002 (fields.yaml) and are NOT tied here -- this
+    # builder ties NIRCam.
     'sickle': dict(proposal='3958', field='007',
                    basepath='/orange/adamginsburg/jwst/sickle',
+                   # NIRCam obs 007 is B-module only.  DECLARED, not inferred: it
+                   # is what authorises skipping module A, and it is what tells
+                   # coarse_from_i2d that a `-merged` product here can only be a
+                   # leftover generation (sickle's f210m-merged is 2026-04-19
+                   # against a 2026-08-04 nrcb).  Matches the reducer's
+                   # MODULES_BY_PROPOSAL_FIELD_FILTER['3958']['007'].
+                   #
+                   # BOTH keys are needed: module_key() keeps the full detector
+                   # name for LW, so 'nrcb' alone would skip every long-wavelength
+                   # filter -- three of sickle's five.
+                   modules=('nrcb', 'nrcblong'),
                    filts={'f187n': ('F187N', 2024.643, '_m3'),
                           'f210m': ('F210M', 2024.643, '_m3'),
                           'f335m': ('F335M', 2024.643, '_m3'),
@@ -517,23 +547,69 @@ def virac2(epoch, cachepath):
                     (dec + pd * dt / 3.6e6) * u.deg)
 
 
-def coord_shift(ra, dec, ref):
+def coord_shift(ra, dec, ref, peak=(0.0, 0.0)):
     """clipped-median Δα/Δδ COORDINATE offset (arcsec, NO cosδ) to ADD to (ra,dec) to land
-    on ref -- the convention adjust_wcs(delta_ra/delta_dec) consumes.  Clip is on-sky."""
+    on ref -- the convention adjust_wcs(delta_ra/delta_dec) consumes.  Clip is on-sky.
+
+    SAME-STAR, not nearest-neighbour.  This was ``match_to_catalog_sky`` + clipped
+    median, i.e. a NN median against a reference whose median nearest-neighbour
+    spacing is **1.10"** (sickle's own ``refcache/virac2.fits``, n=26922, no
+    magnitude cut; a Ks<15 cut only reaches ~1.4").  That is below the 3" the
+    dense-reference guard draws the line at, and it is not a rounding correction:
+    on F480M the fine step moved the tie by (-52.3, -39.3) mas, ~65 mas of a
+    ~105 mas answer.
+
+    Injection on the real F480M consensus (PR #268 review) showed the NN form
+    under-recovering by 1.8 / 2.4 / 9.7 mas at 50 / 100 / 200 mas and collapsing
+    at 300 -- degrading THROUGH the search radius rather than at it.  That
+    degradation needs real crowding plus a real unmatched-source background; it
+    does not reproduce in a synthetic field, where ``CLIP_MAS`` alone keeps the NN
+    median honest.  What DOES reproduce, and is the mechanism, is that the nearest
+    neighbour is chosen by sky distance while the right counterpart is the one
+    nearest the EXPECTED offset -- see
+    ``test_the_counterpart_is_chosen_by_expected_offset_not_sky_distance``.
+
+    So: take EVERY pair within ``SEARCH`` (``search_around_sky``), express each as
+    an offset relative to the already-verified ``peak``, and for each source keep
+    the single pair closest to that peak.  Pairs further than ``CLIP_MAS`` from
+    the peak are dropped and the median of what remains is the refinement.
+
+    With ``peak`` left at zero this reduces to selecting the nearest counterpart
+    again, so callers that have a verified tie must pass it.
+
+    ``peak`` is the coordinate-frame offset (arcsec) already applied to
+    ``(ra, dec)``; callers that pre-shift onto the tie leave it at zero.
+    """
     sc = SkyCoord(ra * u.deg, dec * u.deg)
-    idx, sep, _ = sc.match_to_catalog_sky(ref)
-    m = sep < SEARCH
-    if m.sum() < 15:
+    ia, ib, _, _ = search_around_sky(sc, ref, SEARCH)
+    if len(ia) == 0:
         return None
-    a = sc[m]; b = ref[idx[m]]
-    dra_c = (b.ra - a.ra).to(u.arcsec).value
-    ddec_c = (b.dec - a.dec).to(u.arcsec).value
-    md, mdd = np.median(dra_c), np.median(ddec_c)
-    cl = np.hypot((dra_c - md) * np.cos(np.radians(-28.7)), ddec_c - mdd) * 1000. < CLIP_MAS
-    n = int(cl.sum())
-    return (float(np.median(dra_c[cl])), float(np.median(ddec_c[cl])),
-            mad_std(dra_c[cl] * np.cos(np.radians(-28.7))) * 1000.0 / np.sqrt(n),  # arcsec->mas
-            mad_std(ddec_c[cl]) * 1000.0 / np.sqrt(n), n)
+    cosd = np.cos(np.radians(-28.7))
+    dra_c = (ref.ra[ib] - sc.ra[ia]).to(u.arcsec).value
+    ddec_c = (ref.dec[ib] - sc.dec[ia]).to(u.arcsec).value
+    # distance of each PAIR from the expected offset -- this selection is what
+    # makes the counterpart the same star rather than the nearest neighbour.
+    off = np.hypot((dra_c - peak[0]) * cosd, ddec_c - peak[1]) * 1000.0
+    keep = off < CLIP_MAS
+    if int(keep.sum()) < 15:
+        return None
+    ia, dra_c, ddec_c, off = ia[keep], dra_c[keep], ddec_c[keep], off[keep]
+    # one pair per source, the closest to the peak.  Without this a crowded source
+    # contributes several times and the median is weighted by local density.
+    order = np.argsort(off)
+    seen = np.zeros(len(sc), dtype=bool)
+    take = np.zeros(len(ia), dtype=bool)
+    for j in order:
+        if not seen[ia[j]]:
+            seen[ia[j]] = True
+            take[j] = True
+    dra_c, ddec_c = dra_c[take], ddec_c[take]
+    n = int(len(dra_c))
+    if n < 15:
+        return None
+    return (float(np.median(dra_c)), float(np.median(ddec_c)),
+            mad_std(dra_c * cosd) * 1000.0 / np.sqrt(n),  # arcsec->mas
+            mad_std(ddec_c) * 1000.0 / np.sqrt(n), n)
 
 
 def build_consensus(frames):
@@ -629,6 +705,18 @@ class WrongObservationError(RuntimeError):
     """A globbed catalog belongs to a different observation than the region."""
 
 
+class NoPerFrameCatalogsError(RuntimeError):
+    """A module produced NO per-frame catalogs at all.
+
+    Distinct from WrongObservationError on purpose.  A single-module field simply
+    did not observe the other module and skipping it is correct; a two-module
+    field that has merely not finished cataloging module A must NOT be skipped,
+    or the build silently locks a table covering only module B and the gap
+    resurfaces much later as a match=0 raise at apply time.  Which of the two it
+    is comes from the region's declared ``modules``, not from this exception.
+    """
+
+
 def _gather(filt, base, sub, mtag, dets, prop=None, field=None, otag=''):
     """Collect per-(visit,vgroup,exp) and per-visit SIAF positions + legacy coarse.
 
@@ -715,7 +803,7 @@ def _gather(filt, base, sub, mtag, dets, prop=None, field=None, otag=''):
             f"observation has not been cataloged yet, or the region needs "
             f"otag=True so the glob picks its own per-frame products.")
     if not byve:
-        raise WrongObservationError(
+        raise NoPerFrameCatalogsError(
             f"{filt}: no per-frame catalogs for {expect or 'this region'} matched "
             f"{base}/{sub}/{filt}_<det>{otag}_visit*_vgroup*_exp*{mtag}_daophot_basic.fits")
     return byve, byv, coarse
@@ -814,10 +902,16 @@ def lock_filter(filt, rc, per_module=False):
           f"[{'PER-MODULE' if per_module else 'module-locked'}] ===", flush=True)
     ref = virac2(ep, cache)
     dets = SW_DETS if _is_sw(filt) else LW_DETS
+    # How many modules does this region actually have?  Decides whether `merged`
+    # is the right coarse seed -- on a single-module field a `-merged` product
+    # cannot be a merge, only a leftover generation.
+    declared = rc.get('modules')
+    n_modules = (len(declared) if declared is not None
+                 else len({module_key(d) for d in dets}))
     # PER-FILTER coarse bulk tie, measured ONCE on the clean drizzled mosaic vs VIRAC2.
-    # Seeds every visit; the per-visit/per-exposure fine NN below resolves the residual
-    # (including any per-module <SEARCH difference).  FAIL LOUD if the mosaic tie is dirty.
-    i2d_coarse = coarse_from_i2d(filt, rc, ref)
+    # Seeds every visit; the per-visit/per-exposure fine same-star pass below resolves
+    # the residual (including any per-module <SEARCH difference).  FAIL LOUD if dirty.
+    i2d_coarse = coarse_from_i2d(filt, rc, ref, n_modules=n_modules)
     if i2d_coarse is None:
         raise SystemExit(f"[FAIL] {filt}: could not measure a clean i2d coarse tie; "
                          f"refusing to write a lock table (would re-perpetuate ~0).")
@@ -834,26 +928,34 @@ def lock_filter(filt, rc, per_module=False):
         groups.setdefault(module_key(det), []).append(det)
     rows = []
     for modlabel, gdets in sorted(groups.items()):
+        # Skipping a module must be AUTHORISED by the region's declaration, not
+        # inferred from an empty glob.  A two-module field that has merely not
+        # finished cataloging module A would otherwise lock a table covering only
+        # B, and the gap resurfaces much later as a match=0 raise at apply time.
+        if declared is not None and modlabel not in declared:
+            print(f"  --- module '{modlabel}': not among this region's declared "
+                  f"modules {tuple(declared)}; not observed, skipping ---",
+                  flush=True)
+            continue
         print(f"  --- module '{modlabel}': {gdets} ---", flush=True)
         try:
             byve, byv, coarse = _gather(filt, base, sub, mtag, gdets, prop, field,
                                         otag)
-        except WrongObservationError as ex:
-            # A SINGLE-MODULE field has no catalogs for the module it never
-            # observed, and that is not an error -- sickle (3958/007) is nrcb
-            # only, so globbing nrca1..4 legitimately finds nothing and used to
-            # abort the whole build.  Skip a module with NO frames at all; every
-            # other WrongObservationError (wrong observation, duplicate frame)
-            # still propagates, because those mean the frames we DID find are
-            # untrustworthy.
-            if 'no per-frame catalogs' not in str(ex):
+        except NoPerFrameCatalogsError:
+            if declared is not None:
+                # DECLARED and yet empty: this field does have the module and its
+                # cataloging has not finished.  Locking now writes a table missing
+                # it entirely, so refuse.
                 raise
-            print(f"  --- module '{modlabel}': no per-frame catalogs; this field "
-                  f"did not observe it, skipping ---", flush=True)
+            print(f"  --- module '{modlabel}': no per-frame catalogs, and this "
+                  f"region declares no module list, so an unobserved module "
+                  f"cannot be told from an unfinished catalog run; skipping. Add "
+                  f"'modules' to the REGION entry to make this explicit ---",
+                  flush=True)
             continue
         rows.extend(_solve(byve, byv, coarse, c_ra, c_dec, ref, filt, modlabel=modlabel))
     if not rows:
-        raise WrongObservationError(
+        raise NoPerFrameCatalogsError(
             f"{filt}: no module produced a tie -- every module was skipped for "
             f"want of per-frame catalogs. Nothing to lock.")
     return rows
