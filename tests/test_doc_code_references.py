@@ -47,7 +47,37 @@ LINE_CITATION_ALLOWLIST = {
 
 #: Repo prefixes that name a DIFFERENT repository.  A `.py` reference carrying one
 #: of these is not expected to resolve here; anything else must.
-_FOREIGN_PREFIXES = ('brick2221/', 'jwst_rgb/', 'peppar/', 'astrometry_paper/',
+#: ``astrometry_paper/`` is unlike the other foreign prefixes: its checkout sits
+#: at a known, env-overridable path, so a reference into it can be RESOLVED
+#: rather than merely exempted.  It is deliberately NOT in _FOREIGN_PREFIXES --
+#: _resolves_in_paper checks it, and only falls back to exemption when the
+#: checkout is absent (CI, or a machine without the paper).
+_PAPER_PREFIX = 'astrometry_paper/'
+
+
+def _paper_dir():
+    try:
+        from jwst_gc_pipeline.monitoring.paper import PAPER_DIR
+    except ImportError:
+        return None
+    return PAPER_DIR if os.path.isdir(PAPER_DIR) else None
+
+
+def _resolves_in_paper(path):
+    """A ``astrometry_paper/x.py`` reference, checked against the real checkout.
+
+    Returns True when it resolves OR when the checkout is unavailable to check;
+    False only when the checkout exists and the file does not.
+    """
+    if not path.startswith(_PAPER_PREFIX):
+        return False
+    root = _paper_dir()
+    if root is None:
+        return True                       # cannot check; treat as foreign
+    return os.path.exists(os.path.join(root, path[len(_PAPER_PREFIX):]))
+
+
+_FOREIGN_PREFIXES = ('brick2221/', 'jwst_rgb/', 'peppar/',
                      'jwst/', 'stdatamodels/',
                      'stcal/', 'gwcs/', 'stpsf/', 'photutils/', 'astropy/',
                      'crowdsource/', 'poppy/', 'synphot/', 'asdf/', 'drizzle/',
@@ -785,6 +815,12 @@ def test_named_py_files_exist(docs, tracked_paths):
         for lineno, line in enumerate(_strip_code_blocks(text), 1):
             for m in pat.finditer(line):
                 path = m.group(1)
+                if path.startswith(_PAPER_PREFIX):
+                    if _resolves_in_paper(path):
+                        continue
+                    offenders.append(
+                        f'{doc}:{lineno}: `{path}` (not in {_paper_dir()})')
+                    continue
                 if (path.startswith(_FOREIGN_PREFIXES)
                         or _resolves(path, tracked_paths, doc)):
                     continue
