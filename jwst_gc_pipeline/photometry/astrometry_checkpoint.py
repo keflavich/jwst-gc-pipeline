@@ -779,6 +779,61 @@ def _module_variants(module):
     return {m, m.strip("1234"), m.replace("long", "")}
 
 
+#: The two column conventions an offsets table can carry, most-authoritative
+#: first.  ``dra``/``ddec`` is generate_offsets_table's; ``dra (arcsec)``/
+#: ``ddec (arcsec)`` is what the VIRAC2locked tables carry and what
+#: ``unified_alignment`` actually reads.  ``build_virac2_offsets`` writes both,
+#: the second as a COPY of the first, so a builder-shaped table starts with them
+#: equal and they are two names for one quantity thereafter.
+_DRA_COLUMN_PAIRS = (("dra (arcsec)", "ddec (arcsec)"), ("dra", "ddec"))
+
+#: A disagreement this large between the two pairs is a real divergence rather
+#: than float round-trip through CSV.  0.1 mas; the tightest gate in the tree is
+#: 2 mas.
+COLUMN_PAIR_TOL_ARCSEC = 1e-4
+
+
+def _column_pairs(tbl):
+    """Every ``(dra, ddec)`` column pair this table actually carries."""
+    return [(d, c) for d, c in _DRA_COLUMN_PAIRS
+            if d in tbl.colnames and c in tbl.colnames]
+
+
+def _assert_column_pairs_agree(tbl, offsets_path):
+    """Refuse to correct a table whose duplicate columns already disagree.
+
+    Adding the same increment to both pairs preserves an existing difference
+    rather than healing it, so a table that arrives already diverged would keep
+    its divergence forever with a fresh provenance date on top -- exactly the
+    "looks maintained, isn't" state this guard exists to stop.
+
+    Diverged tables exist on disk today (cloudc ~7.9", cloudef ~7.3" across 95
+    and 96 rows) because corrections were written to ``(arcsec)`` alone.  They
+    have to be reconciled once, deliberately, not silently papered over on the
+    next write: the ``(arcsec)`` pair is the one the reducer read, so it is the
+    one the pixels agree with.
+    """
+    pairs = _column_pairs(tbl)
+    if len(pairs) < 2:
+        return
+    (da, ca), (db, cb) = pairs[0], pairs[1]
+    dd = np.abs(np.asarray(tbl[da], dtype=float) - np.asarray(tbl[db], dtype=float))
+    cc = np.abs(np.asarray(tbl[ca], dtype=float) - np.asarray(tbl[cb], dtype=float))
+    bad = np.where((dd > COLUMN_PAIR_TOL_ARCSEC) | (cc > COLUMN_PAIR_TOL_ARCSEC))[0]
+    if not len(bad):
+        return
+    worst = int(np.argmax(np.maximum(dd, cc)))
+    raise OffsetsTableUpdateError(
+        f"{os.path.basename(offsets_path)}: {len(bad)} of {len(tbl)} rows have "
+        f"'{da}'/'{ca}' disagreeing with '{db}'/'{cb}' (worst "
+        f"{1000 * max(dd[worst], cc[worst]):.1f} mas, row {worst}: "
+        f"{tbl['Visit'][worst]} {tbl['Filter'][worst]}). These are two names for "
+        f"ONE quantity; a table where they differ has had corrections applied to "
+        f"only one of them. Reconcile it first -- '{da}' is what "
+        f"unified_alignment reads, so it is the pair the reduced pixels agree "
+        f"with -- then re-run. NOT writing.")
+
+
 def update_offsets_table(offsets_path, corrections, stage, out_path=None,
                          backup=True, pool=False):
     """Apply measured on-sky corrections to an offsets table, with provenance.
@@ -842,12 +897,14 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
         _assert_vgroup_granularity(corrections, tbl, offsets_path)
         _assert_one_correction_per_row(corrections, tbl, offsets_path)
         # both column conventions exist: 'dra'/'ddec' (generate_offsets_table) and
-        # 'dra (arcsec)'/'ddec (arcsec)' (the VIRAC2locked tables fix_alignment reads)
-        dra_col = "dra (arcsec)" if "dra (arcsec)" in tbl.colnames else "dra"
-        ddec_col = "ddec (arcsec)" if "ddec (arcsec)" in tbl.colnames else "ddec"
-        if dra_col not in tbl.colnames or ddec_col not in tbl.colnames:
+        # 'dra (arcsec)'/'ddec (arcsec)' (the VIRAC2locked tables fix_alignment
+        # reads).  A builder-shaped table carries BOTH, and every pair present is
+        # written -- see the apply loop.
+        pairs = _column_pairs(tbl)
+        if not pairs:
             raise OffsetsTableUpdateError(
                 f"{offsets_path} has no dra/ddec columns ({tbl.colnames})")
+        _assert_column_pairs_agree(tbl, offsets_path)
         for col, fill in (("prov_stage", ""), ("prov_date", ""), ("prov_source", "")):
             if col not in tbl.colnames:
                 tbl[col] = np.full(len(tbl), fill, dtype="U64")
@@ -899,8 +956,20 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
             cosd = max(np.cos(np.radians(float(corr["dec_deg"]))), 1e-6)
             dra_add = (float(corr["dra_onsky_mas"]) / 1000.0) / cosd
             ddec_add = float(corr["ddec_onsky_mas"]) / 1000.0
-            tbl[dra_col][idx] = np.asarray(tbl[dra_col][idx], dtype=float) + dra_add
-            tbl[ddec_col][idx] = np.asarray(tbl[ddec_col][idx], dtype=float) + ddec_add
+            # Write EVERY column pair the table carries, not just the one the
+            # reducer reads.  A builder-shaped table holds both conventions --
+            # build_virac2_offsets ends with `t['dra (arcsec)'] = t['dra']`, a
+            # COPY -- and correcting only `dra (arcsec)` leaves `dra` frozen at
+            # the pre-correction value.  They then disagree silently and without
+            # limit: cloudc and cloudef reached ~7.9 and ~7.3 ARCSEC of
+            # divergence across their bulk repairs, on 95 and 96 of their rows.
+            # fix_alignment reads the `(arcsec)` pair so the reductions were
+            # right, but the plain pair is the validator's fallback and the first
+            # thing a person reads, and two columns holding one quantity with
+            # only one maintained is how curation errors start.
+            for _dc, _cc in _column_pairs(tbl):
+                tbl[_dc][idx] = np.asarray(tbl[_dc][idx], dtype=float) + dra_add
+                tbl[_cc][idx] = np.asarray(tbl[_cc][idx], dtype=float) + ddec_add
             tbl["prov_stage"][idx] = str(stage)
             tbl["prov_date"][idx] = now
             tbl["prov_dra_added_mas"][idx] = (
