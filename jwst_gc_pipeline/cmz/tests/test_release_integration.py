@@ -4,6 +4,7 @@ These live in scripts/release (not importable as a package), so import them from
 their file paths.
 """
 import importlib.util
+import math
 import os
 
 import pytest
@@ -344,3 +345,152 @@ def test_overview_is_omitted_when_absent():
     page = mw.render_index([{'field': 'brick', 'version': 'v1', 'group': None,
                              'preview': None, 'n_images': 1, 'n_catalogs': 0}])
     assert 'class=overview' not in page
+
+
+# ---- overview geometry, against real FITS rather than synthetic dicts ----
+def _write_mosaic(path, crval=(266.4, -28.94), cdelt=1.0e-5, shape=(64, 64)):
+    """A staged-looking i2d: rectified plain TAN, SCI extension, no SIP."""
+    from astropy.io import fits
+    import numpy as np
+    path.parent.mkdir(parents=True, exist_ok=True)
+    hdu = fits.ImageHDU(np.zeros(shape, dtype='float32'), name='SCI')
+    hdu.header.update({'CTYPE1': 'RA---TAN', 'CTYPE2': 'DEC--TAN',
+                       'CRVAL1': crval[0], 'CRVAL2': crval[1],
+                       'CRPIX1': shape[1] / 2, 'CRPIX2': shape[0] / 2,
+                       'CDELT1': -cdelt, 'CDELT2': cdelt})
+    fits.HDUList([fits.PrimaryHDU(), hdu]).writeto(path, overwrite=True)
+
+
+def test_footprint_polys_reads_the_real_corners(tmp_path):
+    """The synthetic-geometry tests all pass with a broken glob or a wrong HDU
+    name; this one does not."""
+    fo = _fo()
+    _write_mosaic(tmp_path / 'images' / 'F212N' /
+                  'jw01939-o001_t001_nircam_clear-f212n-merged_i2d.fits')
+    polys = fo.footprint_polys(tmp_path)
+    assert len(polys) == 1 and len(polys[0]) == 4
+    ras = [p[0] for p in polys[0]]
+    decs = [p[1] for p in polys[0]]
+    assert min(ras) < 266.4 < max(ras) and min(decs) < -28.94 < max(decs)
+    # calc_footprint spans pixel centres 0.5..N+0.5, i.e. 63 px at 1e-5 deg/px
+    assert abs((max(decs) - min(decs)) - 63 * 1.0e-5) < 1e-7
+
+
+def test_residual_and_model_images_are_not_drawn(tmp_path):
+    """A field stages residual/model i2d beside the science mosaic; including
+    them triples the polygons and draws each field three times over."""
+    fo = _fo()
+    base = tmp_path / 'images' / 'F212N'
+    _write_mosaic(base / 'x-f212n-merged_i2d.fits')
+    _write_mosaic(base / 'x-f212n-merged_resbgsub_m7_daophot_basic_mergedcat_residual_i2d.fits')
+    _write_mosaic(base / 'x-f212n-merged_resbgsub_m7_daophot_basic_mergedcat_model_i2d.fits')
+    assert len(fo.footprint_polys(tmp_path)) == 1
+
+
+def test_a_broken_wcs_does_not_shrink_every_other_field(tmp_path):
+    """A CDELT typo parses as a valid TAN and yields a ~190 deg footprint;
+    `_projection` mins/maxes over every corner, so one such polygon rescales the
+    map until the real fields are sub-pixel."""
+    fo = _fo()
+    good, bad = tmp_path / 'good', tmp_path / 'bad'
+    _write_mosaic(good / 'images' / 'F212N' / 'a_i2d.fits')
+    _write_mosaic(bad / 'images' / 'F212N' / 'b_i2d.fits', cdelt=10.0)
+    assert fo.footprint_polys(bad) == []          # dropped, with a printed reason
+    geoms = fo.collect([('good', good, 'good.html'), ('bad', bad, 'bad.html')])
+    assert [g['field'] for g in geoms] == ['good']
+    _, _, (width, height) = fo._projection(
+        [dict(g, polys=fo.to_galactic(g['polys'])[0]) for g in geoms], 'galactic')
+    assert width > 100 and height > 10            # the good field still has area
+
+
+def test_usable_poly_rejects_what_would_break_the_build():
+    """math.ceil(nan) in the graticule raises and nothing above main() catches
+    it, so one non-finite corner would cost the whole index.html."""
+    fo = _fo()
+    ok = [(266.40, -28.94), (266.41, -28.94), (266.41, -28.93), (266.40, -28.93)]
+    assert fo.usable_poly(ok) is True
+    assert fo.usable_poly([(float('nan'), -28.94)] + ok[1:]) is False
+    assert fo.usable_poly([(float('inf'), -28.94)] + ok[1:]) is False
+    assert fo.usable_poly([(0.0, -80.0), (190.0, -80.0),
+                           (190.0, 80.0), (0.0, 80.0)]) is False
+    # and the section survives the degenerate single-footprint case
+    assert '<svg' in fo.section([{'field': 'x', 'href': 'x.html', 'polys': [ok]}])
+
+
+def test_longitude_runs_right_to_left():
+    """Galactic maps put increasing l to the LEFT; a mirrored map is wrong and
+    looks entirely plausible."""
+    fo = _fo()
+    geoms = [dict(g, polys=fo.to_galactic(g['polys'])[0])
+             for g in (_geom('left', 0.5, 0.0), _geom('right', -0.5, 0.0))]
+    project, _, _ = fo._projection(geoms, 'galactic')
+    x_high_l, _ = project(0.5, 0.0)
+    x_low_l, _ = project(-0.5, 0.0)
+    assert x_high_l < x_low_l
+
+
+def test_projection_compresses_longitude_by_cos_lat():
+    """Tested AT HIGH LATITUDE on purpose: at the CMZ's |b| < 0.2 deg,
+    cos(lat) ~ 1, so dropping the term entirely changes nothing measurable and
+    an equal-scale assertion there passes either way."""
+    fo = _fo()
+    geoms = [{'field': 'a', 'href': 'a.html',
+              'polys': [[(0.0, 59.9), (0.4, 59.9), (0.4, 60.1), (0.0, 60.1)]]}]
+    project, _, _ = fo._projection(geoms, 'galactic')
+    dx = abs(project(0.0, 60.0)[0] - project(0.1, 60.0)[0])
+    dy = abs(project(0.0, 60.0)[1] - project(0.0, 60.1)[1])
+    # a degree of longitude at b = 60 subtends cos(60) = 0.5 of a degree of arc
+    assert abs((dx / 0.1) / (dy / 0.1) - math.cos(math.radians(60.0))) < 0.02
+
+
+def test_aladin_payload_carries_icrs_not_galactic():
+    """Aladin works in ICRS; handing it the Galactic polygons puts every
+    footprint tens of degrees from where the HiPS shows the field."""
+    import json as _json
+    import re as _re
+    fo = _fo()
+    geom = _geom('brick', 0.2, 0.0)
+    out = fo.section([geom])
+    payload = _json.loads(_re.search(
+        r'<script id=ov-data type="application/json">(.*?)</script>', out, _re.S).group(1))
+    assert payload['fields'][0]['polys'] == [[list(pt) for pt in geom['polys'][0]]]
+    assert payload['fields'][0]['polys'][0][0][0] > 200            # an RA, not an l
+
+
+def test_a_field_name_cannot_break_out_of_the_json_payload():
+    fo = _fo()
+    out = fo.section([{'field': '</script><img src=x onerror=alert(1)>',
+                       'href': 'x.html',
+                       'polys': [_geom('x', 0.2, 0.0)['polys'][0]]}])
+    assert '</script><img' not in out
+    assert '\\u003c/script' in out or '\\u003cscript' in out
+    # exactly the two script elements the panel emits, both properly closed
+    assert out.count('<script') == 2 and out.count('</script>') == 2
+
+
+def test_aladin_failure_removes_the_overlay_it_added():
+    """`.ov-aladin` is position:absolute;inset:0 over the map. Left behind after
+    a failure it covers every field link while the status says the map is fine."""
+    fo = _fo()
+    out = fo.section([_geom('brick', 0.2, 0.0)])
+    assert 'function teardown()' in out
+    # fail() must tear down; and the host must not be created before the loader
+    # can catch a throw from A.init
+    fail_body = out.split('function fail(msg) {')[1].split('}')[0]
+    assert 'teardown();' in fail_body
+    assert 'Promise.resolve(A && A.init)' in out
+
+
+def test_survey_switcher_is_wired_to_every_listed_survey():
+    """SURVEYS was serialised into the page with only entry 0 ever read."""
+    fo = _fo()
+    out = fo.section([_geom('brick', 0.2, 0.0)])
+    assert 'data.surveys.forEach' in out and 'setImageSurvey' in out
+    for name, _ in fo.SURVEYS:
+        assert name in out
+
+
+def test_aladin_source_is_pinned():
+    """`latest` lets a third party change the API under a published page."""
+    fo = _fo()
+    assert '/latest/' not in fo.ALADIN_JS

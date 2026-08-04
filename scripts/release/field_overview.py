@@ -21,9 +21,11 @@ frame-WCS rule in CLAUDE.md explicitly exempts.  Only headers are read.
 
 Drawn in **Galactic** coordinates: the CMZ fields span l ~ -0.6..+0.7, b ~ -0.15..+0.1,
 so in l/b they lie along a grid line instead of diagonally across one, and the
-panel can be a wide strip rather than mostly blank sky.  Without astropy the
-module degrades to ICRS and labels the axes it actually has, rather than
-claiming Galactic and drawing something else.
+panel can be a wide strip rather than mostly blank sky.  ``to_galactic`` falls
+back to ICRS and labels the axes it actually has rather than claiming Galactic
+and drawing something else -- though in practice ``footprint_polys`` needs
+astropy too, so a build without it produces no panel at all rather than an ICRS
+one.
 """
 import glob
 import html
@@ -41,7 +43,10 @@ SURVEYS = (
     ('DSS', 'P/DSS2/color'),
 )
 
-ALADIN_JS = 'https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js'
+#: PINNED, not `latest`: this is a third-party script the live index loads, and
+#: `latest` lets the API change under a published page (the upgrade path already
+#: has to survive `A.init` not being a promise -- see the loader).
+ALADIN_JS = 'https://aladin.cds.unistra.fr/AladinLite/api/v3/3.6.2/aladin.js'
 
 #: Distinguishable at small size against a dark background, in a fixed order so
 #: a field keeps its colour between builds (the index is regenerated often).
@@ -59,6 +64,36 @@ SVG_H_MAX = 460.0
 #: leftmost longitude tick is half off the canvas and the axis title sits on the
 #: ticks.
 MARGIN_LEFT, MARGIN_RIGHT, MARGIN_TOP, MARGIN_BOTTOM = 42.0, 26.0, 18.0, 40.0
+
+
+#: A single JWST mosaic is arcminutes across.  Anything wider than this is a
+#: broken WCS, not a footprint.
+MAX_FOOTPRINT_DEG = 5.0
+
+
+def usable_poly(poly):
+    """Is this a polygon a real mosaic could have produced?
+
+    Two ways a header parses cleanly and still yields nonsense:
+
+    * **non-finite corners** -- ``math.ceil(nan)`` in the graticule raises, and
+      nothing above ``main()`` catches it, so ``index.html`` is never written:
+      one bad file would cost the whole site build;
+    * **an implausible extent** -- a CDELT typo gives a footprint hundreds of
+      degrees across, and ``_projection`` takes a raw min/max over every corner,
+      so ONE such polygon rescales the map until every real field is sub-pixel.
+    """
+    if not all(math.isfinite(v) for pt in poly for v in pt):
+        return False
+    return _extent_deg(poly) <= MAX_FOOTPRINT_DEG
+
+
+def _extent_deg(poly):
+    """Angular size of a polygon's bounding box, degrees (RA scaled by cos dec)."""
+    ras = [p[0] for p in poly]
+    decs = [p[1] for p in poly]
+    span_ra = (max(ras) - min(ras)) * math.cos(math.radians(sum(decs) / len(decs)))
+    return max(abs(span_ra), max(decs) - min(decs))
 
 
 def _science_mosaics(field_dir):
@@ -90,7 +125,16 @@ def footprint_polys(field_dir):
             continue
         if corners is None or len(corners) < 3:
             continue
-        polys.append([(float(a), float(d)) for a, d in corners])
+        poly = [(float(a), float(d)) for a, d in corners]
+        if not usable_poly(poly):
+            # a readable-but-WRONG header must cost this mosaic its outline, not
+            # the panel (or the whole build) -- and must say so rather than
+            # vanishing quietly
+            print(f"  overview: {os.path.basename(path)} has an unusable "
+                  f"footprint (non-finite, or {_extent_deg(poly):.1f} deg "
+                  f"across) -- skipped")
+            continue
+        polys.append(poly)
     return polys
 
 
@@ -132,6 +176,17 @@ def collect(entries):
         if polys:
             out.append({'field': field, 'href': href, 'polys': polys})
     return out
+
+
+def _json_for_script(obj):
+    """JSON safe to inline in a ``<script>`` element.
+
+    ``json.dumps`` escapes neither ``<`` nor ``/``, so a field name or href
+    containing ``</script>`` closes the element early and the remainder of the
+    payload is parsed as HTML.  ``\\u003c`` is still valid JSON and cannot start
+    a tag.
+    """
+    return json.dumps(obj).replace('<', '\\u003c')
 
 
 def _mean_point(polys):
@@ -214,14 +269,15 @@ def _spread_labels(labels):
     for index in range(len(labels)):
         x, y, half = labels[index]
         for _ in range(len(labels)):        # bounded: one pass per label, at most
-            moved = False
-            for other_x, other_y, other_half in labels[:index]:
-                if (abs(x - other_x) < half + other_half
-                        and abs(y - other_y) < LABEL_DY):
-                    y = other_y + LABEL_DY
-                    moved = True
-            if not moved:
+            # clear the LOWEST colliding neighbour, not whichever came last in
+            # the list -- taking the last one can leave the label still overlapping
+            # an earlier one it had already been pushed past
+            below = [other_y for other_x, other_y, other_half in labels[:index]
+                     if abs(x - other_x) < half + other_half
+                     and abs(y - other_y) < LABEL_DY]
+            if not below:
                 break
+            y = max(below) + LABEL_DY
         labels[index] = [x, y, half]
     return labels
 
@@ -294,7 +350,10 @@ CSS = """
                   background:transparent; color:inherit; }
 .ov-live button:hover { border-color:var(--muted); }
 .ov-aladin { position:absolute; inset:0; }
-.ov-msg { padding:.4rem 1rem .8rem; color:var(--muted); font-size:.8rem; }
+.ov-surveys { display:inline-flex; flex-wrap:wrap; gap:.3rem; margin-left:.6rem; }
+.ov-surveys[hidden] { display:none; }
+.ov-surveys button { font-size:.75rem; padding:.15rem .5rem; }
+.ov-surveys button.on { border-color:var(--accent); color:var(--accent); }
 """
 
 
@@ -303,8 +362,11 @@ def static_svg(geoms, frame):
     project, bounds, (width, height) = _projection(geoms, frame)
     svg_w = width + MARGIN_LEFT + MARGIN_RIGHT
     svg_h = height + MARGIN_TOP + MARGIN_BOTTOM
+    # No role="img": that makes the subtree presentational, which would strip
+    # the nine field links (and their labels) out of the accessibility tree --
+    # the click-through this panel exists for.
     parts = [f'<svg viewBox="0 0 {svg_w:.1f} {svg_h:.1f}" '
-             f'role="img" aria-label="Footprints of the released fields on sky" '
+             f'aria-label="Footprints of the released fields on sky" '
              f'xmlns="http://www.w3.org/2000/svg">']
     parts += _graticule(project, bounds, (width, height), frame)
     # place every label first, so the de-collision sees them all
@@ -338,6 +400,9 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
     Returning ``''`` rather than an empty frame matters: a release built where
     astropy is unavailable, or before any field is staged, should look like the
     index always did, not like a broken widget.
+
+    ``surveys`` are the Aladin background layers, first one being the default;
+    they are reachable through the switcher the loader builds.
     """
     if not geoms:
         return ''
@@ -355,7 +420,11 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
         f'{html.escape(g["field"])}</a>'
         for i, g in enumerate(reframed))
 
-    payload = json.dumps({
+    # `json.dumps` escapes neither "<" nor "/", so a field name or href
+    # containing "</script>" would close this <script> element early and the
+    # remainder of the payload would be parsed as HTML.  Escaping "<" as \u003c
+    # is still valid JSON and cannot start a tag.
+    payload = _json_for_script({
         'fields': [{'field': g['field'], 'href': g['href'],
                     # Aladin works in ICRS, so it gets the ORIGINAL sky polygons
                     'polys': geoms[i]['polys'],
@@ -375,21 +444,80 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
 <div class=ov-stage id=ov-stage>{static_svg(reframed, frame)}</div>
 <div class=ov-legend>{legend}</div>
 <div class=ov-live><button type=button id=ov-load>Load interactive sky view
-(Aladin Lite, ~1.8&nbsp;MB)</button> <span id=ov-status class=muted></span></div>
+(Aladin Lite, ~1.8&nbsp;MB)</button> <span id=ov-status class=muted></span>
+<span id=ov-surveys class=ov-surveys hidden></span></div>
 <script id=ov-data type="application/json">{payload}</script>
 <script>
 (function () {{
   var btn = document.getElementById('ov-load');
   var status = document.getElementById('ov-status');
   var stage = document.getElementById('ov-stage');
+  var surveyBar = document.getElementById('ov-surveys');
   if (!btn || !stage) {{ return; }}
   var data;
   try {{ data = JSON.parse(document.getElementById('ov-data').textContent); }}
   catch (err) {{ btn.disabled = true; return; }}
+  var host = null;
+  function teardown() {{
+    // Whatever went wrong, the static SVG must be visible and clickable again.
+    // `host` is position:absolute;inset:0 over the map, so leaving it behind
+    // covers every field link with an opaque, half-initialised panel -- while
+    // the status line claims the map is unaffected.
+    if (host && host.parentNode) {{ host.parentNode.removeChild(host); }}
+    host = null;
+  }}
   function fail(msg) {{
+    teardown();
     status.textContent = msg;
     btn.disabled = false;
     btn.textContent = 'Retry interactive sky view';
+  }}
+  function build() {{
+    if (typeof A === 'undefined') {{ fail('Aladin Lite did not load.'); return; }}
+    host = document.createElement('div');
+    host.className = 'ov-aladin';
+    stage.appendChild(host);
+    var aladin = A.aladin(host, {{
+      survey: data.surveys[0].id, projection: 'AIT', cooFrame: 'galactic',
+      target: 'galactic 0 0', fov: 1.8, showReticle: false,
+      showCooGrid: true, showFullscreenControl: false
+    }});
+    var cat = A.catalog({{name: 'released fields', sourceSize: 14, onClick: 'showPopup'}});
+    aladin.addCatalog(cat);
+    data.fields.forEach(function (f) {{
+      var ov = A.graphicOverlay({{color: f.color, lineWidth: 2, name: f.field}});
+      aladin.addOverlay(ov);
+      var lon = 0, lat = 0, n = 0;
+      f.polys.forEach(function (poly) {{
+        ov.add(A.polygon(poly));
+        poly.forEach(function (pt) {{ lon += pt[0]; lat += pt[1]; n += 1; }});
+      }});
+      if (n) {{ cat.addSources([A.source(lon / n, lat / n, {{field: f.field, href: f.href}})]); }}
+    }});
+    aladin.on('objectClicked', function (src) {{
+      if (src && src.data && src.data.href) {{ window.location.href = src.data.href; }}
+    }});
+    // the background switcher: without it the other entries in SURVEYS are
+    // serialised into the page and never reachable
+    if (surveyBar) {{
+      surveyBar.innerHTML = '';
+      surveyBar.hidden = false;
+      data.surveys.forEach(function (s, i) {{
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = s.name;
+        if (i === 0) {{ b.className = 'on'; }}
+        b.addEventListener('click', function () {{
+          Array.prototype.forEach.call(surveyBar.children,
+                                       function (o) {{ o.className = ''; }});
+          b.className = 'on';
+          aladin.setImageSurvey(s.id.indexOf('http') === 0 ? A.HiPS(s.id) : s.id);
+        }});
+        surveyBar.appendChild(b);
+      }});
+    }}
+    status.textContent = 'click a field to open its release page';
+    btn.textContent = 'Interactive sky view loaded';
   }}
   btn.addEventListener('click', function () {{
     btn.disabled = true;
@@ -402,45 +530,19 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
            + 'security policy). The map above is unaffected.');
     }};
     script.onload = function () {{
-      if (typeof A === 'undefined' || !A.init) {{ fail('Aladin Lite did not initialise.'); return; }}
-      A.init.then(function () {{
-        var host = document.createElement('div');
-        host.className = 'ov-aladin';
-        // the static SVG stays in the DOM underneath; if Aladin throws we
-        // remove the host and the reader is back where they started
-        stage.appendChild(host);
-        var aladin;
-        try {{
-          aladin = A.aladin(host, {{
-            survey: data.surveys[0].id, projection: 'AIT', cooFrame: 'galactic',
-            target: 'galactic 0 0', fov: 1.8, showReticle: false,
-            showCooGrid: true, showFullscreenControl: false
-          }});
-        }} catch (err) {{
-          stage.removeChild(host);
-          fail('This browser could not start Aladin Lite (' + err + '). The map above is unaffected.');
-          return;
-        }}
-        var cat = A.catalog({{name: 'released fields', sourceSize: 14, onClick: 'showPopup'}});
-        aladin.addCatalog(cat);
-        data.fields.forEach(function (f) {{
-          var ov = A.graphicOverlay({{color: f.color, lineWidth: 2, name: f.field}});
-          aladin.addOverlay(ov);
-          var lon = 0, lat = 0, n = 0;
-          f.polys.forEach(function (poly) {{
-            ov.add(A.polygon(poly));
-            poly.forEach(function (pt) {{ lon += pt[0]; lat += pt[1]; n += 1; }});
-          }});
-          if (n) {{ cat.addSources([A.source(lon / n, lat / n, {{field: f.field, href: f.href}})]); }}
+      // A.init is documented as a promise, but this script is fetched from a
+      // third party: if it is absent, or truthy-but-not-thenable, `A.init.then`
+      // throws SYNCHRONOUSLY here -- outside any catch -- and the button stays
+      // disabled on "loading..." forever. Promise.resolve normalises it and the
+      // try/catch covers a throw from A itself.
+      try {{
+        Promise.resolve(A && A.init).then(build).catch(function (err) {{
+          fail('Aladin Lite failed to start (' + err + '). The map above is unaffected.');
         }});
-        aladin.on('objectClicked', function (src) {{
-          if (src && src.data && src.data.href) {{ window.location.href = src.data.href; }}
-        }});
-        status.textContent = 'click a field to open its release page';
-        btn.textContent = 'Interactive sky view loaded';
-      }}).catch(function (err) {{
-        fail('Aladin Lite failed to start (' + err + '). The map above is unaffected.');
-      }});
+      }} catch (err) {{
+        fail('This browser could not start Aladin Lite (' + err + '). '
+             + 'The map above is unaffected.');
+      }}
     }};
     document.head.appendChild(script);
   }});
