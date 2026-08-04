@@ -74,6 +74,42 @@ FIELDS = {
         "data_dir": Path("/orange/adamginsburg/jwst/sgrc"),
         "proposal_prefix": "jw04147-o012_t001_nircam_clear",
     },
+    # arches / quintuplet: the two GC starburst clusters (JWST 2045, o001 & o003).
+    # The reduction drizzles these per module, so there is no `-merged_i2d`; the
+    # canonical science products are the NRCA and NRCB mosaics (both current: the
+    # last m2 offsets correction was 2026-07-31, these were drizzled 2026-08-01).
+    # Cataloging is still running, so image-only. `make_preview_rgb.py` coadds the
+    # two modules onto a common grid for the preview.
+    "arches": {
+        "data_dir": Path("/orange/adamginsburg/jwst/arches"),
+        "proposal_prefix": "jw02045-o001_t001_nircam_clear",
+        "no_auto_images": True, "skip_catalogs": True,
+        "nircam": [
+            {"filter": "F212N", "src": "/orange/adamginsburg/jwst/arches/F212N/pipeline/jw02045-o001_t001_nircam_clear-f212n-nrca_i2d.fits"},
+            {"filter": "F212N", "src": "/orange/adamginsburg/jwst/arches/F212N/pipeline/jw02045-o001_t001_nircam_clear-f212n-nrcb_i2d.fits"},
+            {"filter": "F323N", "src": "/orange/adamginsburg/jwst/arches/F323N/pipeline/jw02045-o001_t001_nircam_clear-f323n-nrca_i2d.fits"},
+            {"filter": "F323N", "src": "/orange/adamginsburg/jwst/arches/F323N/pipeline/jw02045-o001_t001_nircam_clear-f323n-nrcb_i2d.fits"},
+        ],
+    },
+    "quintuplet": {
+        "data_dir": Path("/orange/adamginsburg/jwst/quintuplet"),
+        "proposal_prefix": "jw02045-o003_t001_nircam_clear",
+        "no_auto_images": True, "skip_catalogs": True,
+        "nircam": [
+            {"filter": "F212N", "src": "/orange/adamginsburg/jwst/quintuplet/F212N/pipeline/jw02045-o003_t001_nircam_clear-f212n-nrca_i2d.fits"},
+            {"filter": "F212N", "src": "/orange/adamginsburg/jwst/quintuplet/F212N/pipeline/jw02045-o003_t001_nircam_clear-f212n-nrcb_i2d.fits"},
+            {"filter": "F323N", "src": "/orange/adamginsburg/jwst/quintuplet/F323N/pipeline/jw02045-o003_t001_nircam_clear-f323n-nrca_i2d.fits"},
+            {"filter": "F323N", "src": "/orange/adamginsburg/jwst/quintuplet/F323N/pipeline/jw02045-o003_t001_nircam_clear-f323n-nrcb_i2d.fits"},
+        ],
+    },
+    # sgra: Sgr A* (JWST 1939). Image-only: F212N + F405N mosaics are current;
+    # F115W's mosaics were stale-tagged (*_im0_badastrom) by the m2 astrometry
+    # checkpoint on 2026-07-28 when it corrected the offsets table, so that band
+    # is held until it is re-drizzled. Catalogs are not certified yet.
+    "sgra": {
+        "data_dir": Path("/orange/adamginsburg/jwst/sgra"),
+        "proposal_prefix": "jw01939-o001_t001_nircam_clear",
+    },
     "brick": {
         "data_dir": Path("/orange/adamginsburg/jwst/brick"),
         "proposal_prefix": ["jw01182-o004_t001_nircam_clear",

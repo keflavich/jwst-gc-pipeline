@@ -94,3 +94,62 @@ def test_cmz_explorer_optional_layers_omitted():
     assert 'A.catalogHiPS' not in html
     assert 'A.MOCFromURL' not in html
     assert 'cmz/hips/CMZ_color' in html
+
+
+# ---- webpage preview selection ----
+def _fake_release(root, field, version, with_preview):
+    """Minimal on-disk release: MANIFEST.json (+ an optional preview jpg)."""
+    import json
+    d = os.path.join(root, version, field)
+    os.makedirs(d, exist_ok=True)
+    json.dump({'version': version, 'built': '2026-08-04T00:00:00Z', 'files': [],
+               'globus_https_base': 'https://example.invalid',
+               'globus_collection_id': '00000000-0000-0000-0000-000000000000',
+               'release_path': f'/releases/{version}/{field}'},
+              open(os.path.join(d, 'MANIFEST.json'), 'w'))
+    if with_preview:
+        p = os.path.join(d, 'preview')
+        os.makedirs(p, exist_ok=True)
+        # 1x1 JPEG is enough: make_webpage only copies the file
+        open(os.path.join(p, f'{field}_rgb_f212n_f187n_f182m.jpg'), 'wb').write(b'\xff\xd8\xff\xd9')
+
+
+def test_preview_falls_back_to_an_older_version(tmp_path):
+    """A re-stage that ships no preview/ of its own must not blank the card:
+    the newest version that HAS a preview supplies it."""
+    mw = _make_webpage()
+    root, out = str(tmp_path / 'rel'), str(tmp_path / 'site')
+    _fake_release(root, 'testfield', 'v1.0-2026.06', with_preview=True)
+    _fake_release(root, 'testfield', 'v1.1-2026.07', with_preview=False)
+    mw.main(['--fields', 'testfield', '--release-root', root, '--out', out])
+    index = open(os.path.join(out, 'index.html')).read()
+    assert 'assets/testfield.jpg' in index
+    assert os.path.isfile(os.path.join(out, 'assets', 'testfield.jpg'))
+    # the channels are still parsed from the preview filename
+    assert 'R=F212N' in open(os.path.join(out, 'testfield.html')).read()
+
+
+def test_no_preview_anywhere_leaves_the_card_thumbless(tmp_path):
+    mw = _make_webpage()
+    root, out = str(tmp_path / 'rel'), str(tmp_path / 'site')
+    _fake_release(root, 'testfield', 'v1.0-2026.06', with_preview=False)
+    mw.main(['--fields', 'testfield', '--release-root', root, '--out', out])
+    assert 'assets/testfield.jpg' not in open(os.path.join(out, 'index.html')).read()
+
+
+# ---- RGB preview: module-split fields ----
+def test_science_paths_returns_every_module_mosaic(tmp_path):
+    """arches/quintuplet stage one mosaic per module; all of them must be
+    returned so load_science can coadd them (picking one would show half the
+    field)."""
+    mpr = _load('make_preview_rgb', os.path.join(_REL, 'make_preview_rgb.py'))
+    import pathlib
+    d = tmp_path / 'images' / 'F212N'
+    d.mkdir(parents=True)
+    for mod in ('nrca', 'nrcb'):
+        (d / f'jw02045-o001_t001_nircam_clear-f212n-{mod}_i2d.fits').touch()
+    got = mpr.science_paths(pathlib.Path(str(tmp_path)), 'F212N', None)
+    assert len(got) == 2 and got == sorted(got)
+    # a field WITH a merged mosaic still prefers it, alone
+    (d / 'jw02045-o001_t001_nircam_clear-f212n-merged_i2d.fits').touch()
+    assert len(mpr.science_paths(pathlib.Path(str(tmp_path)), 'F212N', None)) == 1

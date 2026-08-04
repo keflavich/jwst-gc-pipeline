@@ -8,6 +8,11 @@ mean of the other two).  ``--reproject`` reprojects all channels onto the first
 channel's WCS (needed when mixing pixel scales, e.g. SW + LW).  ``--observation``
 selects one pointing of a multi-pointing field (images/<obs>/<filter>/).
 
+A field staged as several mosaics per filter (module-split fields such as
+arches/quintuplet, which ship ``-nrca_i2d`` + ``-nrcb_i2d`` instead of a single
+``-merged_i2d``) is coadded onto one common grid automatically; that grid's
+longest axis is capped by ``--max-axis``.
+
 Writes into ``<release>/<version>/<field>/preview/``:
     <field>[_<obs>]_rgb_<R>_<G>_<B>.png   full resolution
     <field>[_<obs>]_rgb_<R>_<G>_<B>.jpg   web-downsampled (<= --max-width px)
@@ -20,6 +25,7 @@ import glob
 from pathlib import Path
 
 import numpy as np
+from astropy import units as u
 from astropy.io import fits
 from astropy.visualization import AsinhStretch
 from astropy.wcs import WCS
@@ -28,7 +34,12 @@ from PIL import Image
 from stage_release import field_release_dir
 
 
-def science_path(field_dir, filt, observation):
+def science_paths(field_dir, filt, observation):
+    """Every science mosaic staged for one filter, sorted.
+
+    Most fields stage a single full-field ``-merged_i2d``; module-split fields
+    (arches/quintuplet: ``-nrca_i2d`` + ``-nrcb_i2d``) stage one mosaic per
+    module, and those are coadded onto a common grid by ``load_science``."""
     # observation doubles as a subdir selector ("o023", or "MIRI")
     sub = field_dir / "images"
     if observation:
@@ -38,19 +49,58 @@ def science_path(field_dir, filt, observation):
     if not matches:
         raise FileNotFoundError(f"no science mosaic for {filt} "
                                 f"(sub={observation}) in {field_dir}")
-    return matches[0]
+    return sorted(matches)
 
 
-def load_science(field_dir, filt, observation=None, ref_header=None):
-    path = science_path(field_dir, filt, observation)
-    data = fits.getdata(path, "SCI").astype("float32")
+def science_path(field_dir, filt, observation):
+    return science_paths(field_dir, filt, observation)[0]
+
+
+def _mosaic_header(paths, max_axis):
+    """Common celestial grid covering every input, capped at ``max_axis`` px."""
+    from reproject.mosaicking import find_optimal_celestial_wcs
+    headers = [fits.getheader(p, "SCI") for p in paths]
+    wcs_list = [((h["NAXIS2"], h["NAXIS1"]), WCS(h, relax=True)) for h in headers]
+    wcs_out, shape_out = find_optimal_celestial_wcs(wcs_list)
+    # cap the output size: a preview never needs the native grid of a
+    # multi-module mosaic (which can be tens of thousands of px across)
+    scale = max(shape_out) / max_axis
+    if scale > 1:
+        wcs_out, shape_out = find_optimal_celestial_wcs(
+            wcs_list, resolution=abs(wcs_out.wcs.cdelt[0]) * scale * u.deg)
+    header = wcs_out.to_header()
+    header["NAXIS"] = 2
+    header["NAXIS1"], header["NAXIS2"] = shape_out[1], shape_out[0]
+    return header
+
+
+def load_science(field_dir, filt, observation=None, ref_header=None,
+                 max_axis=8000):
+    paths = science_paths(field_dir, filt, observation)
+    if len(paths) == 1 and ref_header is None:
+        path = paths[0]
+        return (fits.getdata(path, "SCI").astype("float32"),
+                fits.getheader(path, "SCI"))
     if ref_header is None:
-        return data, fits.getheader(path, "SCI")
-    # reproject onto the reference WCS
+        ref_header = _mosaic_header(paths, max_axis)
+    ref_wcs = WCS(ref_header, relax=True)
+    shape_out = (ref_header["NAXIS2"], ref_header["NAXIS1"])
+    if len(paths) == 1:
+        # reproject onto the reference WCS
+        from reproject import reproject_interp
+        out, _ = reproject_interp(
+            (fits.getdata(paths[0], "SCI").astype("float32"),
+             WCS(fits.getheader(paths[0], "SCI"), relax=True)),
+            ref_wcs, shape_out=shape_out)
+        return out.astype("float32"), ref_header
+    # several mosaics for one filter (per-module fields) -> coadd them
     from reproject import reproject_interp
-    out, _ = reproject_interp((data, WCS(fits.getheader(path, "SCI"))),
-                              WCS(ref_header),
-                              shape_out=(ref_header["NAXIS2"], ref_header["NAXIS1"]))
+    from reproject.mosaicking import reproject_and_coadd
+    out, _ = reproject_and_coadd(
+        [(fits.getdata(p, "SCI").astype("float32"),
+          WCS(fits.getheader(p, "SCI"), relax=True)) for p in paths],
+        ref_wcs, shape_out=shape_out, reproject_function=reproject_interp,
+        combine_function="mean", match_background=False)
     return out.astype("float32"), ref_header
 
 
@@ -83,6 +133,9 @@ def main(argv=None):
     parser.add_argument("--asinh-a", type=float, default=0.03)
     parser.add_argument("--max-width", type=int, default=3000,
                         help="web JPEG max width in px")
+    parser.add_argument("--max-axis", type=int, default=8000,
+                        help="cap (px) on the longest axis of the common grid "
+                             "built when a filter has several mosaics to coadd")
     args = parser.parse_args(argv)
 
     if len(args.filters) not in (2, 3):
@@ -90,13 +143,20 @@ def main(argv=None):
 
     field_dir = field_release_dir(args.field, args.version, args.release_root)
 
+    # A filter staged as several mosaics (one per module) has to be coadded onto
+    # a common grid, and every other channel must then land on that same grid --
+    # so it implies --reproject even when the pixel scales already match.
+    multi = any(len(science_paths(field_dir, f, args.observation)) > 1
+                for f in args.filters)
+
     # load channels; with --reproject, all are resampled onto the first's WCS
     ref_header = None
     loaded = []
     for f in args.filters:
-        data, hdr = load_science(field_dir, f, args.observation, ref_header)
+        data, hdr = load_science(field_dir, f, args.observation, ref_header,
+                                 max_axis=args.max_axis)
         loaded.append(data)
-        if args.reproject and ref_header is None:
+        if (args.reproject or multi) and ref_header is None:
             ref_header = hdr
 
     stretched = [stretch(c, args.low_percentile, args.high_percentile,

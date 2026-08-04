@@ -501,11 +501,20 @@ def main(argv=None):
         latest = versions[0]
         latest_dir = field_release_dir(field, latest, args.release_root)
 
-        # preview from the latest version
+        # Preview from the latest version that HAS one -- a re-stage that ships the
+        # same mosaics under a new version usually has no preview/ of its own, and
+        # falling off the latest version would blank the field's card on the index.
         preview_rel = None
         preview_channels = None
-        previews = sorted((latest_dir / "preview").glob("*.jpg")) \
-            if (latest_dir / "preview").is_dir() else []
+        previews = []
+        for v in versions:
+            vdir = field_release_dir(field, v, args.release_root)
+            previews = sorted((vdir / "preview").glob("*.jpg")) \
+                if (vdir / "preview").is_dir() else []
+            if previews:
+                if v != latest:
+                    print(f"  {field}: no preview in {latest}, using {v}'s")
+                break
         if previews:
             shutil.copy2(previews[0], assets / f"{field}.jpg")
             preview_rel = f"assets/{field}.jpg"
