@@ -284,7 +284,7 @@ around the visit consensus, re-measured every re-tie iteration.
 | 1182 | 004 | VIRAC2 | `TABLE_LOCKED` | — | brick, top-half visit-001 fix |
 | 2221 | 001, 002 | VIRAC2 | `TABLE_LOCKED` | — | brick / cloudc |
 | 4147 | all | VIRAC2 | `TABLE_LOCKED` | F212N | sgrc |
-| 6151 | all | **Gaia** | `TABLE_CONSENSUS` | F200W | w51 (outside the VVV footprint) |
+| 6151 | all | **Gaia** | `TABLE_CONSENSUS` | F210M | w51 (outside the VVV footprint); was F200W, which 6151 does not observe |
 | 2045 | 001 | VIRAC2 | `TABLE_CONSENSUS` | F212N | arches |
 | 2045 | 003 | VIRAC2 | `TABLE_LOCKED` | F212N | quintuplet |
 | 5365 | all | VIRAC2 | `TABLE_LOCKED` | F212N | sgrb2 |
@@ -334,7 +334,7 @@ the exception: the m2 checkpoint writes it.)
 
 | reference frame | offsets table | builder |
 |---|---|---|
-| Gaia/VIRAC2 (brick/cloudc) | `Offsets_JWST_Brick<pid>_VIRAC2[locked].csv` | `build_gaia_virac2_refcat.py` (seed refcat) + `build_virac2_offsets.py` |
+| Gaia/VIRAC2 (brick/cloudc) | `Offsets_JWST_Brick<pid>_VIRAC2[locked].csv` | `build_gaia_virac2_refcat_byquery.py` (seed refcat) + `build_virac2_offsets.py` |
 | VIRAC2/Gaia, checkpoint-authored | `Offsets_JWST_Brick<pid>_consensus.csv` | `astrometry_checkpoint.seed_offsets_table_from_consensus` / `update_offsets_table` |
 | **GNS (sickle, prop 3958)** | `Offsets_JWST_Brick3958_GNS.csv` | `brick2221/reduction/build_sickle_gns_offsets.py` (in **brick-jwst-2221** — region-specific) |
 
@@ -424,7 +424,7 @@ band-aid split is gone.)
 - Gaia DR3 reference epoch = **2016.0**.
 - VIRAC2 (VizieR II/387) reference epoch = **2014.0** (Smith+2025: *"fixed at the
   reference epoch, 2014.0"*).
-- The seed refcat (`build_gaia_virac2_refcat.py`) propagates each to the F115W
+- The seed refcat (`build_gaia_virac2_refcat_byquery.py`) propagates each to the F115W
   observation epoch **2022.70** with per-source PM. `GAIA_EPOCH`/`VIRAC2_EPOCH`
   constants live at the top of that script.
 

@@ -306,6 +306,7 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
     -------
     dict with:
       ``coords`` : SkyCoord — consensus positions (component-mean frames)
+      ``mag`` : ndarray — per-star consensus magnitude
       ``nexp`` : ndarray — exposures contributing per star
       ``scatter_mas`` : ndarray — per-star rms scatter of contributing positions
       ``exposures`` : list of per-exposure dicts:
@@ -973,7 +974,7 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
 
 
 def load_reference_catalog(path):
-    """Load a gaia+virac2 seed refcat (build_gaia_virac2_refcat.py output) and
+    """Load a gaia+virac2 seed refcat (build_gaia_virac2_refcat_byquery.py output) and
     split it into the full (dense) and Gaia-only (sparse) SkyCoord sets."""
     ref = Table.read(path)
     if "skycoord" in ref.colnames:

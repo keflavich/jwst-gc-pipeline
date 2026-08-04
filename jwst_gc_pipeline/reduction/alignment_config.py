@@ -204,9 +204,16 @@ ALIGNMENT_CONFIG = (
     FieldAlignment(
         proposal='6151', fields=None,
         reference_frame=GAIA, source=TABLE_CONSENSUS,
-        reference_filter='F200W',
+        reference_filter='F210M',
         notes=('w51. Same class as sgrc; outside the VVV/VIRAC2 footprint, so the '
-               'bulk sentinel ties the consensus to gaia_refcat.fits.'),
+               'bulk sentinel ties the consensus to gaia_refcat.fits. '
+               'reference_filter was F200W, which 6151 does not observe at all '
+               '(f140m f162m f182m f187n f210m f335m f360m f405n f410m f480m + '
+               'MIRI) -- a band whose consensus cannot define the frame because '
+               'it does not exist.  F210M is both present and what '
+               'consensus_catalog.reference_filter ranks first for this list; '
+               'test_reference_filter_agrees_with_alignment_config now keeps the '
+               'two from drifting apart again.'),
     ),
     FieldAlignment(
         proposal='2045', fields=('001',),

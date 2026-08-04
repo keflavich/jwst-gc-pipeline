@@ -1,6 +1,6 @@
 """Small shared astrometry helpers (masked->NaN coercion + PM propagation).
 
-Factored out of ``reduction/build_gaia_virac2_refcat.py``,
+Factored out of ``reduction/build_gaia_virac2_refcat_byquery.py``,
 ``reduction/build_gaia_virac2_refcat_byquery.py``, and
 ``photometry/generate_offsets_table.py``, which each carried a byte-identical
 copy of ``farr``/``prop`` (drift risk: any change to the PM-propagation formula

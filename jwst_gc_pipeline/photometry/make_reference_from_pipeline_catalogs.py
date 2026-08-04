@@ -16,12 +16,17 @@ propagated from the 2014.0 reference epoch to --ref-epoch (the JWST obs epoch).
 
 NOTE: this script does NOT (any longer) emit
 pipeline_based_nircam-{filter}_reference_astrometric_catalog.{ecsv,fits}.  Older
-versions did, and PipelineMIRI's REFERENCE_ASTROMETRIC_CATALOG_CANDIDATES_BY_FIELD
-still lists those pipeline_based-* names as its first f210m/f182m candidate --
-which is why they exist under some trees (sickle f210m, brick f182m) but are
-absent under others (e.g. cloudc), where alignment then falls through to the next
-candidate.  Consumers of THIS script must expect the nircam_bootstrapped_to_*
-names above.
+versions did, and five observations still REGISTER those names in fields.yaml as
+their first candidate (brick 2221/3958 f182m, sickle 3958 f210m) -- which is why
+the files exist under those trees and not under others, where
+``reference_catalog_path`` falls through to the next registered candidate.
+Consumers of THIS script must expect the nircam_bootstrapped_to_* names above.
+
+This script is also SUPERSEDED for the GC fields by
+``photometry/consensus_catalog.py``, which builds the same kind of thing --
+a JWST catalog denser than VIRAC2, used to anchor the other filters -- from the
+per-filter consensus the astrometry checkpoints already compute, rather than
+from a separate bootstrap run.  See docs/JWST_CONSENSUS_CATALOG.md.
 """
 
 from __future__ import annotations

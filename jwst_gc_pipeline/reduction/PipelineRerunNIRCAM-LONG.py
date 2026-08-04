@@ -149,14 +149,22 @@ def get_reference_astrometric_catalog_path(basepath, proposal_id, field, filtern
 def get_existing_reference_astrometric_catalog_path(basepath, proposal_id, field, filtername=None):
     """The registered reference catalog, once its file is confirmed on disk.
 
-    ``None`` when the observation has no entry: the caller then runs without
-    abs_refcat realignment, which is correct for a field that ties in imaging.
+    NOTE ON WHAT THIS IS FOR.  TweakRegStep is skipped on every NIRCam path
+    here (``tweakreg_parameters['skip'] = True``), so this catalog does NOT
+    realign anything during Image3.  NIRCam's absolute tie is applied per
+    exposure by ``fix_alignment`` from an offsets table, and that TABLE is what
+    the catalog produced: ``build_virac2_offsets.py`` measures the per-visit
+    consensus against this file to make it, and the m2 astrometry checkpoint
+    re-ties against it.  It is read here so the run records which reference it
+    belongs to, and so a field wired to a catalog that was never built stops
+    before producing products whose provenance names a missing file.
 
-    A registered catalog whose FILE is absent raises.  Returning None there
-    would run Image3's first pass with no realignment and ship the field
-    off-frame with no error -- the quiet failure the VIRAC2 repoint exists to
-    prevent.  The seeds live outside the repo, so a typo or a missing build
-    must abort.
+    ``None`` when the observation has no entry in fields.yaml -- a field whose
+    absolute zero point is set some other way.
+
+    A registered catalog whose FILE is absent raises: the seeds live outside
+    the repo, so a typo or a not-yet-run build must abort rather than reduce
+    with an unverifiable frame.
     """
     try:
         path = field_registry.reference_catalog_path(
@@ -641,8 +649,9 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
             reftbl.meta['filename'] = abs_refcat
         else:
             print(f"No absolute reference catalog configured for proposal_id="
-                  f"{proposal_id} field={field}; skipping refcat realignment (mosaic "
-                  f"still produced; absolute zero point unset).", flush=True)
+                  f"{proposal_id} field={field}.  TweakRegStep is skipped either "
+                  f"way; this only means the run records no reference frame.  "
+                  f"The applied tie comes from the offsets table.", flush=True)
             reftbl = None
             reftblversion = None
 
@@ -659,6 +668,10 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         print(f"Reference catalog is {abs_refcat} with version {reftblversion}")
 
         tweakreg_parameters.update({'abs_refcat': abs_refcat})
+        # TweakRegStep is retired for NIRCam: the tie is applied per exposure by
+        # fix_alignment, exactly once, so the _crf frames and the _i2d mosaic
+        # inherit the same solution.  abs_refcat is set anyway so the step's
+        # parameters record which reference the run belongs to.
         tweakreg_parameters.update({'skip': True})
 
         if regionname in ('brick', 'cloudc'):
@@ -675,8 +688,10 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
                 reftbl.meta['filename'] = abs_refcat
             else:
                 print(f"No absolute reference catalog configured for proposal_id="
-                      f"{proposal_id} field={field}; skipping refcat realignment (mosaic "
-                      f"still produced; absolute zero point unset).", flush=True)
+                      f"{proposal_id} field={field}.  TweakRegStep is skipped "
+                      f"either way; this only means the run records no reference "
+                      f"frame.  The applied tie comes from the offsets table.",
+                      flush=True)
                 reftbl = None
                 reftblversion = None
 
@@ -692,6 +707,8 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
             tweakreg_parameters['searchrad'] = 0.05
             print(f"Reference catalog is {abs_refcat} with version {reftblversion}")
             tweakreg_parameters.update({'abs_refcat': abs_refcat})
+            # Retired for NIRCam -- see the note at the other skip site: the tie
+            # is applied per exposure by fix_alignment, not here.
             tweakreg_parameters.update({'skip': True})
 
         # skymatch: OFF by default (skymatch_method=None) -- historically left
@@ -927,12 +944,18 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
             tweakreg_parameters['searchrad'] = 0.05
             print(f"Reference catalog is {abs_refcat} with version {reftblversion}")
         else:
-            print(f"No configured reference catalog found for proposal_id={proposal_id} field={field} in {basepath}. Running first-pass without abs_refcat realignment.")
+            print(f"No configured reference catalog found for proposal_id={proposal_id} "
+                  f"field={field} in {basepath}.  TweakRegStep is skipped either way; "
+                  f"this only means the run records no reference frame.  The applied "
+                  f"tie comes from the offsets table.")
 
         if abs_refcat is not None:
             tweakreg_parameters.update({'abs_refcat': abs_refcat,})
 
-        print("Running Image3Pipeline with tweakreg (merged)")
+        # 'with tweakreg' names the STEP that is configured, not one that runs:
+        # tweakreg_parameters carries skip=True on every NIRCam path.
+        print("Running Image3Pipeline on the merged association "
+              "(tweakreg configured but skipped; the tie is already baked in)")
         calwebb_image3.Image3Pipeline.call(
             asn_file_merged,
             steps={'tweakreg': tweakreg_parameters,},

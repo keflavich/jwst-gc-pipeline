@@ -49,6 +49,8 @@ from .visit_consensus import (
     measure_reference_tie, pick_reference_anchor_filter, select_reliable_stars,
 )
 from .astrometry_offsets import measure_offset, local_residual_map
+from .consensus_catalog import (pool_visit_consensi,
+                                 write_filter_consensus)
 from ..atomic_io import atomic_write, keep_a_copy, locked
 
 # Stages at which a measured shift is EXPECTED to be possible and is CORRECTED
@@ -1448,7 +1450,7 @@ def _m2_skipped_exposures(record_dir, filtername, visit):
 
 def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                          basepath=None, record_dir=None, context="",
-                         consensus_kwargs=None):
+                         consensus_kwargs=None, obs_token=""):
     """Run the per-(visit, filter) consensus checkpoint over per-frame catalogs.
 
     Parameters
@@ -1464,6 +1466,12 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
     record_dir : str or None
         Where to write the checkpoint record
         (default ``{basepath}/astrometry_checkpoints``).
+    obs_token : str
+        Per-observation filename disambiguator (``crowdsource_catalogs_long.obs_token``)
+        for the per-filter consensus catalog this writes at m2.  Fields that
+        share a target directory across proposals or obsids (ngc6334 6778/7213,
+        cloudef 2092 obs 002/005) MUST pass it or the second run overwrites the
+        first field's reference catalog.
 
     Returns
     -------
@@ -1488,6 +1496,11 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
     consensus_kwargs = dict(consensus_kwargs or {})
 
     visits = []
+    # The consensus catalogs THEMSELVES, keyed by visit.  `visits` below carries
+    # a JSON-able SUMMARY of each (star count, median scatter, ...) for the
+    # record file; the summary has no positions in it, so pooling must read
+    # these instead.
+    consensus_by_visit = {}
     corrections = []
     failures = []      # MEASURED shifts -- blocking at a late stage
     unverified = []    # could-not-verify -- loud warnings, audited by the gate
@@ -1781,6 +1794,7 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                         f"{gate}, "
                         f"swept={ref_tie.get('swept')}) -- NOT applying; investigate")
 
+        consensus_by_visit[visit] = cons
         visits.append(dict(
             visit=visit, filtername=filt,
             consensus=dict(
@@ -1800,8 +1814,43 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
             exposures=exp_records,
             reference_tie=_jsonable(ref_tie)))
 
+    # Persist the filter's consensus.  build_visit_consensus measures one
+    # (visit, filter) at a time because detecting a misaligned exposure means
+    # comparing it against its OWN visit's exposures; pooling those into one
+    # per-filter catalog is what the rest of the pipeline ties to, and until
+    # now it was discarded when this function returned.
+    consensus_catalog_path = None
+    if basepath and stage == 'm2' and consensus_by_visit:
+        filt_for_file = filtername or next(
+            (v.get('filtername') for v in visits if v.get('filtername')), None)
+        try:
+            pooled = pool_visit_consensi(consensus_by_visit, context=context)
+            consensus_catalog_path = write_filter_consensus(
+                basepath, filt_for_file, pooled, obs_token=obs_token)
+            print(f"ASTROM CHECKPOINT [{stage}]: wrote per-filter consensus "
+                  f"{consensus_catalog_path} ({len(pooled)} stars, "
+                  f"{pooled.meta['NVISITS']} visits, worst inter-visit "
+                  f"{pooled.meta['IVMAXMAS']:.1f} mas)", flush=True)
+        except (ValueError, TypeError, OSError) as ex:
+            # Not fatal: the catalog is a product of the checkpoint, not an
+            # input to it, and the alignment decisions above are already
+            # made.  Loud, because a missing one breaks the reference-filter
+            # tie later, and recorded in `consensus_catalog_error` so the
+            # release gate can see it without scraping stdout.
+            consensus_catalog_path = None
+            consensus_catalog_error = f"{type(ex).__name__}: {ex}"
+            print(f"ASTROM CHECKPOINT [{stage}]: could NOT write the "
+                  f"per-filter consensus: {consensus_catalog_error}",
+                  flush=True)
+        else:
+            consensus_catalog_error = None
+    else:
+        consensus_catalog_error = None
+
     passed = not failures
     record = dict(stage=stage, filtername=filtername, context=context,
+                  consensus_catalog=consensus_catalog_path,
+                  consensus_catalog_error=consensus_catalog_error,
                   date=_utcnow_iso(), correcting=correcting, visits=visits,
                   corrections=corrections, failures=failures,
                   unverified=unverified, passed=passed,

@@ -44,6 +44,7 @@ from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
     CORRECTION_STAGES, find_i2d_for_filter, mark_i2d_stale,
     run_crossfilter_checkpoint, run_visit_checkpoint, update_offsets_table,
 )
+from jwst_gc_pipeline.photometry.consensus_catalog import consensus_obs_token
 from jwst_gc_pipeline.photometry.visit_consensus import load_reference_catalog
 
 
@@ -61,9 +62,14 @@ def main(argv=None):
                    help="FILTER=path vetted merged catalog (crossfilter mode)")
     p.add_argument("--crossfilter", action="store_true")
     p.add_argument("--refcat", default=None,
-                   help="gaia+virac2 seed refcat FITS (build_gaia_virac2_refcat)")
+                   help="gaia+virac2 seed refcat FITS (build_gaia_virac2_refcat_byquery)")
     p.add_argument("--basepath", default=None)
     p.add_argument("--record-dir", default=None)
+    p.add_argument("--proposal-id", default=None,
+                   help="proposal id, for the per-observation filename token of "
+                        "the m2 per-filter consensus catalog (see obs_token)")
+    p.add_argument("--obsid", default=None,
+                   help="observation id, ditto")
     p.add_argument("--offsets-table", default=None)
     p.add_argument("--apply", action="store_true",
                    help="apply implied corrections to --offsets-table "
@@ -148,7 +154,8 @@ def main(argv=None):
 
     record = run_visit_checkpoint(
         tables, args.stage, refcat=refcat, filtername=args.filtername,
-        basepath=args.basepath, record_dir=args.record_dir, context="cli")
+        basepath=args.basepath, record_dir=args.record_dir, context="cli",
+        obs_token=consensus_obs_token(args.proposal_id, args.obsid))
 
     corrections = record["corrections"]
     print(json.dumps(dict(passed=record["passed"],
