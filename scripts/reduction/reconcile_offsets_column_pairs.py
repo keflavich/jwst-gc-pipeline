@@ -17,12 +17,22 @@ further behind.  On the 2026-08 archive:
     sickle     120        24            95.6 mas
     sgrc        96         7             6.1 mas
 
+and on all ten live locked tables the gap equals the accumulated provenance
+EXACTLY -- ``max |((arcsec) - plain)*1000 - prov_*_added_mas| = 0.000000 mas`` --
+so ``dra``/``ddec`` is provably the as-built value and ``dra (arcsec)`` is
+as-built plus everything applied.
+
 The reductions are unaffected -- ``unified_alignment`` reads ``dra (arcsec)`` --
 which is exactly why that pair is AUTHORITATIVE here: it is the one the reduced
 pixels, the drizzled mosaics and the catalogs on disk all agree with.  This
 script copies it onto the plain pair.  It never averages the two and never
 prefers the plain pair, because doing either would assert a tie that no product
 on disk was built from.
+
+Since 2026-08-04 ``update_offsets_table`` heals the same divergence in place, on
+the rows a correction touches, when that provenance identity holds -- so this
+script is for a deliberate whole-table pass rather than a prerequisite for the
+campaign to run.
 
 The direction is not configurable for that reason.  If a table ever needs the
 other direction, that is a re-reduction, not a column edit.
@@ -48,7 +58,12 @@ from datetime import datetime, timezone
 import numpy as np
 from astropy.table import Table
 
-BASE = os.environ.get("JWST_BASE", "/orange/adamginsburg/jwst")
+from jwst_gc_pipeline.atomic_io import locked, write_table_atomic
+
+#: Same redirect convention as the rest of the tree (scratch_basepath.py), so a
+#: run pointed at scratch does not edit the real tree.
+BASE = os.environ.get("GC_BASEPATH_OVERRIDE",
+                      os.environ.get("JWST_BASE", "/orange/adamginsburg/jwst"))
 
 #: (authoritative, stale).  NOT a preference order -- a direction.  The reducer
 #: reads the first, so it is what every product on disk was built from.
@@ -80,9 +95,24 @@ SKIP = {
 }
 
 
+#: Snapshots, not live tables.  ``*_backup.csv`` and anything carrying a
+#: ``.pre_``/``.contaminated``/``.old`` marker records what the table looked like
+#: at a past decision point; rewriting those destroys the record they exist to
+#: keep.  brick/offsets holds two (`_SPLITAPPLIED_backup`, `_PREF410MSPLIT_backup`)
+#: and a dry run counted one of them toward what --apply would write.
+SNAPSHOT_MARKERS = ("_backup", ".pre_", ".contaminated", ".old", ".removed_",
+                    "_bak", "preclean")
+
+
+def is_snapshot(path):
+    name = os.path.basename(path)
+    return any(m in name for m in SNAPSHOT_MARKERS)
+
+
 def find_tables(field):
-    """Every VIRAC2locked/consensus offsets table for a field."""
-    return sorted(glob.glob(f"{BASE}/{field}/offsets/Offsets_JWST_*.csv"))
+    """Every LIVE VIRAC2locked/consensus offsets table for a field."""
+    return sorted(p for p in glob.glob(f"{BASE}/{field}/offsets/Offsets_JWST_*.csv")
+                  if not is_snapshot(p))
 
 
 def diverged_rows(tbl):
@@ -145,11 +175,22 @@ def reconcile(path, apply=False):
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     backup = f"{path}.pre_colreconcile_{stamp}"
-    shutil.copy2(path, backup)
 
-    for auth, stale in zip(AUTHORITATIVE, STALE):
-        tbl[stale] = np.asarray(tbl[auth], dtype=float)
-    tbl.write(path, format="ascii.csv", overwrite=True)
+    # Under the SAME lock update_offsets_table takes, and re-read inside it: the
+    # retie loops write these tables while this runs, and a read-then-write window
+    # lets a concurrent m2 correction be overwritten wholesale.
+    with locked(path):
+        tbl = Table.read(path, format="ascii.csv")
+        res = diverged_rows(tbl)
+        if res is None:
+            return 0
+        bad, _, _ = res
+        if not len(bad):
+            return 0
+        shutil.copy2(path, backup)
+        for auth, stale in zip(AUTHORITATIVE, STALE):
+            tbl[stale] = np.asarray(tbl[auth], dtype=float)
+        write_table_atomic(tbl, path, format="ascii.csv", overwrite=True)
 
     # Re-read and verify rather than trusting the write: this edits the file the
     # reducer consumes, and a silent partial write here is the failure class the
@@ -185,6 +226,14 @@ def main(argv=None):
                         for d in glob.glob(f"{BASE}/*/offsets"))
     else:
         fields = [args.field]
+        # A typo'd field silently reported "0 rows would be rewritten" and exited
+        # 0.  For a tool gating a live astrometry edit, "I found nothing" and "you
+        # named something that does not exist" must not look the same.
+        if not os.path.isdir(f"{BASE}/{args.field}"):
+            known = sorted(os.path.basename(os.path.dirname(d))
+                           for d in glob.glob(f"{BASE}/*/offsets"))
+            raise SystemExit(f"unknown field {args.field!r} under {BASE}. "
+                             f"Fields with an offsets/ dir: {', '.join(known)}")
 
     total = 0
     skipped = 0

@@ -24,7 +24,7 @@ from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
     OffsetsTableUpdateError, update_offsets_table)
 
 
-def _table(tmp_path, both_pairs=True, diverge=0.0):
+def _table(tmp_path, both_pairs=True, diverge=0.0, prov=None):
     t = Table()
     t["Visit"] = ["jw02092005001"] * 4
     t["Exposure"] = [1, 2, 3, 4]
@@ -34,7 +34,14 @@ def _table(tmp_path, both_pairs=True, diverge=0.0):
     t["ddec"] = np.array([-0.20, -0.21, -0.22, -0.23])
     if both_pairs:
         t["dra (arcsec)"] = t["dra"] + diverge
-        t["ddec (arcsec)"] = t["ddec"]
+        t["ddec (arcsec)"] = t["ddec"] + diverge
+    if prov is not None:
+        # the divergence as the provenance records it: on-sky mas on the Dec axis
+        t["prov_stage"] = ["m2"] * 4
+        t["prov_date"] = ["2026-08-03T00:00:00Z"] * 4
+        t["prov_source"] = ["test"] * 4
+        t["prov_dra_added_mas"] = np.full(4, prov)
+        t["prov_ddec_added_mas"] = np.full(4, prov)
     p = tmp_path / "Offsets_JWST_Brick2092_VIRAC2locked.csv"
     t.write(p, format="ascii.csv", overwrite=True)
     return str(p)
@@ -92,30 +99,94 @@ def test_a_single_pair_table_still_works(tmp_path):
     assert after["ddec"][2] == pytest.approx(before["ddec"][2] - 0.020, abs=1e-9)
 
 
-def test_an_already_diverged_table_is_refused(tmp_path):
-    """Adding the same increment to both pairs PRESERVES a pre-existing gap.
+def test_an_explained_divergence_is_HEALED_not_refused(tmp_path, capsys):
+    """The gap equals the accumulated provenance on every table on disk
+    (0.000000 mas across all ten), so the plain pair is provably the as-built
+    value and carries nothing the (arcsec) pair lacks.  Re-sync it by proof.
 
-    A table that arrives diverged would keep its divergence forever with a fresh
-    provenance date on top -- 'looks maintained, isn't'.  The diverged tables on
-    disk (cloudc, cloudef) have to be reconciled deliberately, and the message
-    has to say which pair the pixels agree with.
-    """
-    p = _table(tmp_path, diverge=0.05)          # 50 mas apart
+    Refusing instead would stop the m2 checkpoint on EVERY locked-channel field
+    -- all ten live tables diverge, and no caller catches the exception."""
+    p = _table(tmp_path, diverge=0.050, prov=50.0)     # 50 mas, and prov says 50
+    update_offsets_table(p, [_corr(2)], stage="m2")
+    t = Table.read(p, format="ascii.csv")
+    # the TOUCHED row (Exposure == 2) is healed and then corrected; the others are
+    # out of scope by design -- see test_healing_is_scoped_to_the_rows...
+    assert float(t["ddec"][1]) == pytest.approx(float(t["ddec (arcsec)"][1]),
+                                                abs=1e-12)
+    assert "re-syncing" in capsys.readouterr().out
+
+
+def test_an_UNEXPLAINED_divergence_is_still_refused(tmp_path):
+    """A gap the provenance does not account for means something edited one pair
+    outside this function, so which one is right is not on record."""
+    p = _table(tmp_path, diverge=0.050, prov=5.0)      # 50 mas gap, prov says 5
     with pytest.raises(OffsetsTableUpdateError) as exc:
         update_offsets_table(p, [_corr(2)], stage="m2")
     msg = str(exc.value)
-    assert "disagree" in msg
-    assert "unified_alignment reads" in msg
+    assert "more than the recorded provenance explains" in msg
     assert "NOT writing" in msg
 
 
 def test_the_refusal_leaves_the_table_alone(tmp_path):
     """A guard that half-writes is worse than no guard."""
-    p = _table(tmp_path, diverge=0.05)
+    p = _table(tmp_path, diverge=0.050, prov=5.0)
     before = open(p).read()
     with pytest.raises(OffsetsTableUpdateError):
         update_offsets_table(p, [_corr(2)], stage="m2")
     assert open(p).read() == before
+
+
+def test_healing_is_scoped_to_the_rows_a_correction_touches(tmp_path):
+    """sgrb2 has ONE stale filter and ten clean ones; sgrc blocks eight filters
+    over seven rows.  A table-wide sweep blocks them together and breaks the
+    recovery path, since rebuilding one filter re-equalises only its own rows."""
+    p = _table(tmp_path, diverge=0.050, prov=50.0)
+    before = Table.read(p, format="ascii.csv")
+    update_offsets_table(p, [_corr(2)], stage="m2")   # touches Exposure == 2 only
+    after = Table.read(p, format="ascii.csv")
+    # the untouched rows keep their divergence rather than being swept
+    for row in (0, 2, 3):
+        assert after["ddec"][row] == pytest.approx(before["ddec"][row], abs=1e-12)
+        assert abs(float(after["ddec"][row])
+                   - float(after["ddec (arcsec)"][row])) > 1e-9
+
+
+def test_an_integer_offset_column_cannot_lock_the_table(tmp_path):
+    """With dra int64 and dra (arcsec) float, one write gives 0 vs 0.0114 and
+    every later write is refused forever.  Coerce before comparing or applying."""
+    t = Table()
+    t["Visit"] = ["jw02092005001"] * 4
+    t["Exposure"] = [1, 2, 3, 4]
+    t["Filter"] = ["F360M"] * 4
+    t["Module"] = ["nrcblong"] * 4
+    t["dra"] = np.zeros(4, dtype=np.int64)
+    t["ddec"] = np.zeros(4, dtype=np.int64)
+    t["dra (arcsec)"] = np.zeros(4, dtype=float)
+    t["ddec (arcsec)"] = np.zeros(4, dtype=float)
+    p = str(tmp_path / "Offsets_JWST_Brick2092_VIRAC2locked.csv")
+    t.write(p, format="ascii.csv", overwrite=True)
+
+    update_offsets_table(p, [_corr(2)], stage="m2")
+    after = Table.read(p, format="ascii.csv")
+    assert after["ddec"][1] == pytest.approx(-0.020, abs=1e-9)
+    assert np.allclose(np.asarray(after["ddec"], dtype=float),
+                       np.asarray(after["ddec (arcsec)"], dtype=float), atol=1e-12)
+
+
+def test_a_table_without_Visit_raises_the_right_exception(tmp_path):
+    """Three real tables carry both pairs and no Visit column; a KeyError is the
+    wrong class to escape from a guarded writer."""
+    t = Table()
+    t["Exposure"] = [1, 2]
+    t["Filter"] = ["F360M"] * 2
+    t["dra"] = np.zeros(2)
+    t["ddec"] = np.zeros(2)
+    t["dra (arcsec)"] = np.zeros(2)
+    t["ddec (arcsec)"] = np.zeros(2)
+    p = str(tmp_path / "Offsets_JWST_Brick2221_average.csv")
+    t.write(p, format="ascii.csv", overwrite=True)
+    with pytest.raises(OffsetsTableUpdateError, match="no Visit column"):
+        update_offsets_table(p, [_corr(2)], stage="m2")
 
 
 def test_round_trip_noise_is_not_called_divergence(tmp_path):
