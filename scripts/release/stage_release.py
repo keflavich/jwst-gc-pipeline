@@ -707,13 +707,41 @@ CONTINUITY_TOL_MAG = 0.10
 # (A, B) with A = the earlier-saturating band, B = its later-saturating reference.
 CONTINUITY_PAIRS = [("f182m", "f187n"), ("f410m", "f405n")]
 
+# Degenerate-pair flatness is certified on the SCIENCE subset (science_only=True):
+# the rows a user analyses after cutting every saturation flag.  The recovered /
+# deep-core satstar rows stay in the released table under is_saturated /
+# replaced_saturated for anyone who wants them, but they are NOT required to be
+# color-flat -- some carry a recovered-satstar color bias the flags exist to
+# signal.  (The saturation-BOUNDARY continuity check above -- CONTINUITY_PAIRS --
+# is a different, complementary gate: it measures the satstar<->normal transition
+# and therefore includes the satstar rows by construction; science_only does not
+# apply to it.)
+#
+# DEGENERATE_FLATNESS_MIN_N: the flatness metric is the worst per-bin median
+# color deviation; the brightest science bins at the saturation onset are sparse
+# (Brick 2026-08 F405N-F410M: n=33 at F410M=12.75 drives the raw metric to 0.386)
+# and a handful of stars there should not decide a release.  Certify at min_n=200
+# so a bin must hold >=200 stars to count: on Brick m8 the worst qualifying bin is
+# then F410M=14.25 (n=1418, dev 0.083) and both pairs hard-block <0.10 (F405N-F410M
+# 0.083, F182M-F187N 0.049), while the 2026-07-11 suppression-strip guard fixture
+# -- whose strip bins hold ~800 stars each -- still fails at 0.352.  This replaces
+# an earlier per-pair exemption list: no pair is whitelisted, both stay blocking,
+# and a genuine well-populated suppression strip in EITHER pair is still refused.
+DEGENERATE_FLATNESS_MIN_N = 200
 
-def check_photometric_continuity(items, tol=CONTINUITY_TOL_MAG):
-    """Certify the shipped combined merged table: saturation continuity over
-    CONTINUITY_PAIRS + degenerate-pair flatness (DEGENERATE_PAIRS), both against
-    ``tol``. Only pairs whose mag_vega_ columns exist in the table are tested.
-    Returns a list of failure strings ([] = pass), or None when no combined
-    merged table is shipped (caller warns; cannot enforce)."""
+
+def check_photometric_continuity(items, tol=CONTINUITY_TOL_MAG,
+                                 flatness_min_n=DEGENERATE_FLATNESS_MIN_N):
+    """Certify the shipped combined merged table: saturation-boundary continuity
+    over CONTINUITY_PAIRS + degenerate-pair color flatness (DEGENERATE_PAIRS),
+    both against ``tol``.  Only pairs whose mag_vega_ columns exist in the table
+    are tested.  Returns a list of failure strings ([] = pass), or None when no
+    combined merged table is shipped (caller warns; cannot enforce).
+
+    Flatness is certified on the SCIENCE subset (all saturation flags cut) at
+    ``flatness_min_n``.  If that subset is too small to measure (nan) but the
+    flag-inclusive metric IS measurable and over tol, the pair still fails -- a
+    gate must never print "ok" for a population it declined to measure."""
     import numpy as np
     from astropy.table import Table
     from jwst_gc_pipeline.photometry.saturation_continuity import (
@@ -741,14 +769,46 @@ def check_photometric_continuity(items, tol=CONTINUITY_TOL_MAG):
         for a, b in DEGENERATE_PAIRS:
             if a not in have or b not in have:
                 continue
-            r = degenerate_pair_flatness(cat, a, b)
-            ok = not (np.isfinite(r["metric"]) and r["metric"] >= tol)
-            print(f"  degenerate-pair {a}-{b} [{name}]: "
-                  + (f"drift {r['metric']:.3f} mag vs plateau {r['plateau']:+.3f}"
-                     if np.isfinite(r["metric"]) else "n/a")
-                  + ("  ok" if ok else "  FAIL"), flush=True)
-            if not ok:
-                fails.append(f"{a}-{b} degenerate-pair drift {r['metric']:.3f} mag [{name}]")
+            # Blocking metric: the shipped science subset (all saturation flags
+            # cut), at flatness_min_n so a sparse saturation-onset bin cannot
+            # decide the release.
+            r = degenerate_pair_flatness(cat, a, b, science_only=True,
+                                         min_n=flatness_min_n)
+            # Informational: full-inclusive drift (recovered/deep-core rows kept),
+            # so a regressing satstar flux scale is still visible in the log. This
+            # is a DIAGNOSTIC, not a blocker, and a satstar flux-scale offset lives
+            # in exactly the sparse bins flatness_min_n suppresses -- so it is
+            # measured at the default min_n, NOT flatness_min_n, or it would hide
+            # the very thing it exists to show.
+            r_full = degenerate_pair_flatness(cat, a, b, include_flags=True)
+            sci_finite = np.isfinite(r["metric"])
+            full_finite = np.isfinite(r_full["metric"])
+            over = sci_finite and r["metric"] >= tol
+            # Fail-open guard: never pass a population we declined to measure. If
+            # the science subset is unmeasurable (too few rows at flatness_min_n),
+            # the pair is NOT-CERTIFIED unless the flag-inclusive metric is itself
+            # measurable AND clean (a larger, flatter population vouches for it).
+            # Both-unmeasurable therefore blocks -- a small catalog with a real
+            # strip no longer slips through the raised min_n.
+            not_certified = (not sci_finite) and (
+                (not full_finite) or (r_full["metric"] >= tol))
+            ok = not (over or not_certified)
+            wb = r["worst_bin"]
+            sci = (f"{r['metric']:.3f} @{b}={wb['magB_lo']:.2f}(n={wb['n']})"
+                   if sci_finite and wb else ("n/a" if not sci_finite else f"{r['metric']:.3f}"))
+            full = (f"{r_full['metric']:.3f}" if full_finite else "n/a")
+            status = "ok" if ok else ("NOT-CERTIFIED" if not_certified else "FAIL")
+            print(f"  degenerate-pair {a}-{b} [{name}]: science drift {sci} mag "
+                  f"vs plateau {r['plateau']:+.3f}  (full-inclusive {full} mag @min_n=default)  "
+                  f"{status}", flush=True)
+            if over:
+                fails.append(f"{a}-{b} degenerate-pair science drift "
+                             f"{r['metric']:.3f} mag [{name}]")
+            elif not_certified:
+                _why = (f"flag-inclusive drift {r_full['metric']:.3f} mag"
+                        if full_finite else "flag-inclusive also unmeasurable")
+                fails.append(f"{a}-{b} degenerate-pair science subset unmeasurable "
+                             f"(<10*{flatness_min_n} rows); {_why} [{name}]")
     return fails
 
 

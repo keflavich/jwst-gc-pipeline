@@ -137,3 +137,62 @@ cannot see it.  Run
 `scripts/reduction/run_astrometry_checkpoint.py --brightness <catalog> --refcat <refcat>`:
 no magnitude bin's mean residual above tolerance (default 5 mas, significance-
 gated), no significant mas/mag slope.
+
+## 0d. Photometric continuity (BLOCKING, certified on the SCIENCE subset)
+
+`stage_release.check_photometric_continuity` gates the shipped combined merged
+catalog on (a) saturation-boundary continuity (`CONTINUITY_PAIRS`) and (b)
+degenerate-pair color flatness (`DEGENERATE_PAIRS`: F405N-F410M, F182M-F187N),
+floor `CONTINUITY_TOL_MAG = 0.10` mag.
+
+**Flatness is certified on the SCIENCE subset** (`degenerate_pair_flatness(...,
+science_only=True)`): the rows a user analyses after cutting every saturation
+flag (`is_saturated`, `replaced_saturated`, `forced_filled`, either band), and
+only over bins BRIGHTER than the 40th percentile of the reference-band magnitude
+(where a suppression strip lives). The recovered / deep-core satstar rows stay in
+the released table under their flags but are NOT required to be color-flat — some
+carry a recovered-satstar color bias the flags exist to signal. The gate logs the
+flag-inclusive drift too, so a regressing satstar flux scale stays visible.
+
+**No per-pair exemption. Both flatness pairs hard-block, at `min_n=200`.** The
+worst per-bin deviation is measured only over bins holding ≥200 stars
+(`DEGENERATE_FLATNESS_MIN_N`), so a sparse saturation-onset bin cannot decide the
+release. On Brick 2026-08 m8:
+- **F405N-F410M** — raw science metric is 0.386, but that is an **n=33** bin at
+  F410M=12.75 (and an n=184 bin at 13.0, dev 0.246). At `min_n=200` the worst
+  qualifying bin is F410M=14.25 (**n=1418, dev 0.083**) → **passes** (<0.10,
+  margin ~17%). Every bin with n≥800 has |dev| ≤ **0.083**.
+- **F182M-F187N** — science metric **0.049** ("~0.05"); flag-inclusive **0.227**,
+  logged not gated (the recovered-satstar color offset that `science_only` cuts).
+
+The flag-inclusive figures the gate logs (**F405N-F410M 0.333, F182M-F187N 0.227**)
+are computed at the DEFAULT `min_n`, not `min_n=200`: they are a satstar
+flux-scale diagnostic, and such an offset lives in exactly the sparse bins
+`min_n=200` suppresses, so measuring them at 200 would hide what they exist to
+show (W51 m8: F405N-F410M flag-inclusive is 2.01 at the default min_n, 0.01 at
+200). These match the numbers `scripts/analysis/regenerate_satstar_cmds.py`
+annotates the published CMDs with.
+
+The 2026-07-11 suppression-strip guard (`test_suppression_strip_refused`) still
+fails at 0.352 because its strip bins hold ~800 stars, so `min_n=200` suppresses
+the sparse onset bin without whitelisting a real, well-populated strip in either
+pair. The gate never prints "ok" for a population it declined to measure: if the
+science subset is too small to measure at `min_n=200` (nan), the pair fails
+`NOT-CERTIFIED` unless the flag-inclusive metric is itself measurable AND clean —
+so a small catalog carrying a real strip (both metrics nan) still **blocks**
+rather than slipping through the raised floor.
+
+**⚠ Saturation-BOUNDARY continuity is a SEPARATE gate and is NOT closed on Brick
+m8.** `CONTINUITY_PAIRS` runs `saturation_continuity(cat, 'f410m', 'f405n')`
+(A = the saturated/`replaced_saturated` band, B = the reference binned in
+`mag_B`) = **0.170 mag (C1-boundary-jump) → FAIL**: the recovered-F410M-satstar
+rows sit ~0.17 mag off the unflagged locus in the two bright transition bins
+**F405N 12.0–13.0** (the binning band is B = F405N; n_sat≈38, jumps −0.170 /
+−0.154). This is the same recovered-satstar color bias seen in F182M-F187N
+flatness, but the boundary metric measures the
+satstar↔normal transition and therefore CANNOT exclude the satstar rows;
+`science_only` does not apply to it. (The 0.04 mag figure is the reverse argument
+order `saturation_continuity('f405n','f410m')`, which the gate does not evaluate —
+do not quote it as a pass.) Closing this needs a recovered-satstar photometry fix
+(or a decision to certify the boundary on a defined population), tracked
+separately; this section's flatness certification does not unblock it.
