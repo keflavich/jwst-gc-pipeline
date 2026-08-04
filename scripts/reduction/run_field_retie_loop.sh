@@ -155,8 +155,21 @@ done
 # --- final: full cataloging (m3..m7) now that im0 is self-consistent ---
 echo "=================  FULL CATALOGING (m3..m7)  ================="
 unset ASTROM_CHECKPOINT_APPLY   # m3+ must be a FROZEN solution; no more corrections
+# The floor MUST be passed here too, not just to the m12 loop above.  The chain
+# re-runs m12, and m2 runs inside it -- so a field that converged at
+# ASTROM_M2_CORRECTION_FLOOR_MAS=4.0 gets re-judged at the default 0 (strict 2
+# mas), finds the same sub-floor residuals the loop deliberately declined, and
+# raises.  With ASTROM_CHECKPOINT_APPLY unset (correctly -- m3+ is frozen) it
+# cannot even correct them, so it just dies and every downstream phase goes
+# DependencyNeverSatisfied.
+#
+# `export` at the top is not enough: submit_cataloging_perframe.sh builds an
+# explicit --export list for sbatch, so only the variables named here reach the
+# job.  cloudef obs005 was the first field to reach this line and it failed on
+# 3 F162M/nrca residuals it had already passed at 4.0 mas one job earlier.
 PROPOSAL=$PROPOSAL FIELD=$FIELD TARGET=$TARGET MODULES=$MODULES \
     EACH_SUFFIX=$EACH_SUFFIX FILTERS="$FILTERS" MAX_GROUP_SIZE=$MAX_GROUP_SIZE \
     PIPE_ROOT=$PIPE_ROOT \
+    ASTROM_M2_CORRECTION_FLOOR_MAS=$ASTROM_M2_CORRECTION_FLOOR_MAS \
     bash "$HERE/submit_cataloging_perframe.sh"
 echo "Submitted full cataloging chain for $TARGET $PROPOSAL/$FIELD."
