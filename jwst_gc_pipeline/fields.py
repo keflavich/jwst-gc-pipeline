@@ -238,6 +238,34 @@ def declared_filters(target, instruments=NIRCAM_MIRI):
     return out
 
 
+def filter_observation_count(target, filtername, instrument='nircam'):
+    """How many ``(proposal, observation)`` pairs of ``target`` declare
+    ``filtername``.
+
+    The per-frame catalog basename carries an observation token only on files
+    written since that token was introduced.  A pre-token basename is ambiguous
+    ONLY when more than one observation could have produced it -- gc2211 has one
+    proposal over five observations that all image F200W, so an untokened
+    ``f200w_..._visit001_...`` could be any of them.  ngc6334 F090W is the
+    opposite case: 6778 declares it and 7213 does not, so every F090W catalog on
+    disk is 6778's whatever its name, and discarding the untokened ones would
+    throw away real exposures (nrca exists ONLY under the pre-token name).
+
+    Returns 0 for an unregistered target or a filter nothing declares.
+    """
+    fobj = BY_NAME.get(target)
+    if fobj is None:
+        return 0
+    want = str(filtername or '').upper()
+    n = 0
+    for o in fobj.observations:
+        names = {f.upper() for f in (o.niriss_filters if instrument == 'niriss'
+                                     else o.filters)}
+        if want in names:
+            n += len(o.obsids.get(instrument, ()) or ('',))
+    return n
+
+
 def glob_obsid(target, proposal, instrument='nircam'):
     """The observation number to build a filename glob from, or ``None``.
 

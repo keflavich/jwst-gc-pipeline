@@ -13,6 +13,8 @@ once already:
 So the accept-list is tested at each stage against all four real name shapes.
 """
 import os
+
+from jwst_gc_pipeline import fields
 import types
 
 import pytest
@@ -123,7 +125,7 @@ def _mixed_gc2211():
 
 def test_tokened_run_keeps_only_its_own_observation():
     kept = _drop_foreign_obs_duplicates(_mixed_gc2211(), "_o023",
-                                        "f200w", "m2", "nrcb")
+                                        "f200w", "m2", "nrcb", "gc2211")
     assert kept == [_name(filt="f200w", tok="_o023")]
 
 
@@ -131,30 +133,34 @@ def test_untokened_run_drops_the_tokened_siblings():
     """Otherwise a run that writes pre-token names still ingests every
     observation's tokened catalogs beside it."""
     kept = _drop_foreign_obs_duplicates(_mixed_gc2211(), "",
-                                        "f200w", "m2", "nrcb")
+                                        "f200w", "m2", "nrcb", "gc2211")
     assert kept == [_name(filt="f200w", tok="")]
 
 
 def test_proposal_token_form_separates_the_two_ngc6334_proposals():
     """ngc6334's 6778 and 7213 share a directory, a filter list AND obsid 001,
     so the disambiguator is the PROPOSAL (`_j6778`), not `_o001`."""
-    fns = [_name(filt="f090w", tok=t) for t in ("_j6778", "_j7213", "")]
-    assert _drop_foreign_obs_duplicates(fns, "_j7213", "f090w", "m2", "nrcb") \
-        == [_name(filt="f090w", tok="_j7213")]
-    assert _drop_foreign_obs_duplicates(fns, "_j6778", "f090w", "m2", "nrcb") \
-        == [_name(filt="f090w", tok="_j6778")]
+    fns = [_name(filt="f200w", tok=t) for t in ("_j6778", "_j7213", "")]
+    assert _drop_foreign_obs_duplicates(fns, "_j7213", "f200w", "m2", "nrcb",
+                                        "ngc6334") \
+        == [_name(filt="f200w", tok="_j7213")]
+    assert _drop_foreign_obs_duplicates(fns, "_j6778", "f200w", "m2", "nrcb",
+                                        "ngc6334") \
+        == [_name(filt="f200w", tok="_j6778")]
 
 
 def test_nothing_is_dropped_when_the_directory_holds_one_observation():
     fns = [_name(filt="f200w", tok="_o023", exp=e) for e in (1, 2, 3)]
-    assert _drop_foreign_obs_duplicates(fns, "_o023", "f200w", "m2", "nrcb") == fns
+    assert _drop_foreign_obs_duplicates(fns, "_o023", "f200w", "m2", "nrcb",
+                                        "gc2211") == fns
 
 
 def test_the_drop_is_reported(capsys):
     """It narrows the checkpoint's input, so it may not happen silently."""
-    _drop_foreign_obs_duplicates(_mixed_gc2211(), "_o023", "f200w", "m2", "nrcb")
+    _drop_foreign_obs_duplicates(_mixed_gc2211(), "_o023", "f200w", "m2",
+                                 "nrcb", "gc2211")
     out = capsys.readouterr().out
-    assert "excluded 3 foreign-observation per-frame catalog(s)" in out
+    assert "excluded 3 duplicate per-frame catalog(s)" in out
     assert "o046" in out and "o050" in out and "<untokened>" in out
     assert "_o023" in out
 
@@ -169,9 +175,9 @@ def test_checkpoint_passes_its_own_token_to_the_filter(tmp_path, capsys):
     _run_astrometry_stage_checkpoint(
         "m2", "nrcb", "f200w", str(tmp_path), str(tmp_path), "2211",
         types.SimpleNamespace(cutout_region="", proposal_id="2211",
-                              field="023"), {}, context="test")
+                              field="023", target="gc2211"), {}, context="test")
     out = capsys.readouterr().out
-    assert "excluded 2 foreign-observation per-frame catalog(s)" in out
+    assert "excluded 2 duplicate per-frame catalog(s)" in out
     # nothing of this observation is left, so the checkpoint cannot run -- it
     # must say so rather than measure the neighbours.
     assert "NO per-frame catalogs matched" in out
@@ -224,3 +230,48 @@ def test_m2_missing_inputs_does_not_raise(tmp_path):
     """m2 is the CORRECTING stage, not a frozen one -- unchanged behaviour."""
     _layout(tmp_path, "m2", perframe=False, merged=True)
     _run(tmp_path, "m2")        # must not raise
+
+
+# --------------------------------------------------------------------------
+# A filter imaged by ONE observation: the pre-token names are this run's own
+# exposures, not a foreign observation's (issue #259 review).
+# --------------------------------------------------------------------------
+def _pf(filt, det, tok, exp, stage="m2"):
+    t = f"_{tok}" if tok else ""
+    return (f"/x/{filt.lower()}_{det}{t}_visit001_vgroup02201"
+            f"_exp{exp:05d}_{stage}_daophot_basic.fits")
+
+
+def test_single_observation_filter_keeps_its_untokened_catalogs():
+    """ngc6334 F090W is declared by 6778 and NOT by 7213, so every F090W
+    catalog on disk is 6778's whatever its name.  Its nrca detectors exist ONLY
+    under the pre-token name: dropping them would build the consensus from nrcb
+    alone and PASS, which is worse than the duplicate it avoids."""
+    fns = [_pf("F090W", "nrcb1", "j6778", 1), _pf("F090W", "nrcb1", None, 1),
+           _pf("F090W", "nrca1", None, 1), _pf("F090W", "nrca2", None, 2)]
+    kept = _drop_foreign_obs_duplicates(
+        fns, "j6778", "F090W", "m2", "all", "ngc6334")
+    dets = sorted(os.path.basename(f).split("_")[1] for f in kept)
+    assert dets == ["nrca1", "nrca2", "nrcb1"], kept
+    # the tokened copy wins where both spellings name the same exposure
+    assert _pf("F090W", "nrcb1", "j6778", 1) in kept
+    assert _pf("F090W", "nrcb1", None, 1) not in kept
+
+
+def test_shared_filter_still_drops_untokened():
+    """gc2211 images F200W in five observations that all use VISIT=001, so an
+    untokened basename cannot say which one wrote it and must go."""
+    fns = [_pf("F200W", "nrcb1", "o023", 1), _pf("F200W", "nrcb1", "o046", 1),
+           _pf("F200W", "nrcb1", None, 1)]
+    kept = _drop_foreign_obs_duplicates(
+        fns, "o023", "F200W", "m2", "all", "gc2211")
+    assert kept == [_pf("F200W", "nrcb1", "o023", 1)], kept
+
+
+def test_shared_filter_of_the_same_field_is_decided_per_filter():
+    """ngc6334 F200W IS shared (6778 and 7213 both image it -- the collision the
+    `_j` token was introduced for), while F090W is not.  The rule is per
+    filter, not per field."""
+    assert fields.filter_observation_count("ngc6334", "F090W") == 1
+    assert fields.filter_observation_count("ngc6334", "F200W") == 2
+    assert fields.filter_observation_count("gc2211", "F200W") == 5
