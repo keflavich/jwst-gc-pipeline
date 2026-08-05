@@ -1077,6 +1077,31 @@ def ramp_recover_saturated(data, dq, ramp_sci, ramp_groupdq=None, *,
     return recovered, rim_mask, deep_core_mask, Kglobal
 
 
+def stamp_seed_kinds(source_records, seed_kinds):
+    """Stamp per-component seed provenance onto deblended source records.
+
+    ``find_saturated_stars`` resolves one ``seed_kind`` (dqsat / peak /
+    subfloor / partner) per connected COMPONENT, in ``np.arange(nsource) + 1``
+    label order, so ``seed_kinds[label - 1]`` is that component's kind.
+    ``build_deblended_source_records`` stamps ``'label'`` (= component index +
+    1) on every record it emits, including the extra records produced when one
+    component deblends into several stars.  Deliberate semantics: all stars
+    deblended out of one component inherit that component's seed kind -- the
+    provenance is a property of the seed, and the deblender does not
+    re-classify the individual stars.
+
+    Records already carrying an explicit ``seed_kind`` are left alone, and a
+    record whose label falls outside ``seed_kinds`` falls back to ``'dqsat'``.
+    ``seed_kind`` is a diagnostic column; nothing photometric reads it.
+    """
+    for rec in source_records:
+        lbl = int(rec.get('label', 0)) - 1
+        rec.setdefault('seed_kind',
+                       seed_kinds[lbl] if 0 <= lbl < len(seed_kinds)
+                       else 'dqsat')
+    return source_records
+
+
 def _refine_coms_by_data(coms, data, sources, shift_warn_thresh_pix=3.0,
                          unrecoverable=None):
     """Refine DQ_SATURATED-mask centroids using the cluster bounding-box
@@ -2047,8 +2072,10 @@ def get_saturated_stars(fitsdata, path_prefix='/orange/adamginsburg/jwst/w51/psf
             saturated, sources, coms, _sizes_by_label, zeroframe, data,
             _fwhm_pix_db, daophot_xy=deblend_daophot_xy,
             confirm_xy=deblend_confirm_xy)
-        for _r in source_records:
-            _r.setdefault('seed_kind', 'dqsat')
+        # Inherit each record's PARENT COMPONENT seed kind via its stamped
+        # label; the bare 'dqsat' default reported every deblended seed as DQ
+        # even when it came from the peak / subfloor / partner logic (#212).
+        stamp_seed_kinds(source_records, _seed_kinds)
         print(f"satstar ZEROFRAME deblend: {len(coms)} components -> "
               f"{len(source_records)} star seeds", flush=True)
     else:
