@@ -813,10 +813,18 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
 
     Checks
     ------
-    A. ``measure_offset`` vs the FULL (dense VIRAC2) reference, histogram + sweep.
-       DETECTS the tie and handles large offsets, but its peak is biased several
-       mas against a dense reference, so the reported bulk is refined same-star
-       (see below).
+    A. ``measure_offset`` vs the FULL (dense VIRAC2) reference, histogram +
+       sweep + window confirmation (``confirm_windows=True``).  DETECTS the tie
+       and handles large offsets, but its peak is biased several mas against a
+       dense reference, so the reported bulk is refined same-star (see below).
+       A SWEPT peak must reproduce at independent wider windows or it is
+       recorded as a window-edge alias (``vs_full['alias_rejected']``, ``ok``
+       False) rather than as an unexplained large tie -- w51 F140M m2 read
+       7827 mas with ``window_edge_fraction`` 0.78 and a peak that scaled with
+       every window (3"->2790, 10"->7827, 30"->19052, 60"->34766) while m3
+       read 32 mas same-star (issue #257).  A genuine large offset reads the
+       same at every window that can contain it and survives (brick-1182 v001,
+       ``test_true_large_offset_survives_confirmation``).
     A'. same-star bulk: once A verifies a small tie, a single-cell
        ``local_residual_map`` matched-pair residual gives the UNBIASED bulk offset
        (the reported ``dra_mas``/``ddec_mas``). Falls back to A for a large/unverified
@@ -858,9 +866,19 @@ def measure_reference_tie(consensus_coords, ref_coords_all, ref_coords_sparse,
       diagnostics but does NOT gate apply_ok.
       An offset must never be APPLIED on a single check.
     """
+    # confirm_windows: a SWEPT reference tie is either a real gross shift (it
+    # reads the same at every window that can contain it) or a footprint-geometry
+    # alias riding the window edge (it scales with the window).  Without the
+    # confirmation both look identical in the record -- w51 carried a 7.8"
+    # ``bulk_source: histogram`` tie with ``window_consistent: null`` for want of
+    # the probe (issue #257).  Only a MEASURED disagreement rejects, so a genuine
+    # large tie is untouched, and the probe only ever runs on a swept peak, so the
+    # ordinary small tie is numerically identical.
     res_a = measure_offset(consensus_coords, ref_coords_all, sweep=True,
+                           confirm_windows=True,
                            context=f"{context} vs full-ref")
     res_b = measure_offset(consensus_coords, ref_coords_sparse, sweep=True,
+                           confirm_windows=True,
                            context=f"{context} vs sparse-ref")
     # fine cross-check (diagnostic) + gross cross-check (the only one that gates)
     agree = agree_across_references(consensus_coords, ref_coords_all,
