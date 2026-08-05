@@ -279,17 +279,32 @@ def _make_figure(path, ctr, Uc, Vc, Ug, Vg, nstar, fc, wc, fg, wg):
     import matplotlib.pyplot as plt
     XX, YY = np.meshgrid(ctr, ctr)
     fig, axs = plt.subplots(1, 2, figsize=(11, 5.2), sharex=True, sharey=True)
+    # Data-driven arrow scale, SHARED by both panels so CRDS and Jay are directly comparable.
+    # With scale_units='xy' the arrow length in pixels is (residual mas / scale), so a hand-set
+    # scale=3 made a ~0.4 mas vector 0.13 px long -- invisible on a 2048 px axis.  Instead size the
+    # WORST vector across both panels to ~0.9 of the grid spacing so arrows are clearly visible
+    # without overrunning neighbouring cells.
+    grid = float(ctr[1] - ctr[0]) if len(ctr) > 1 else 256.0
+    vmax = max(float(np.nanmax(np.hypot(Uc, Vc))), float(np.nanmax(np.hypot(Ug, Vg))), 1e-6)
+    scale = vmax / (0.9 * grid)                        # mas per pixel
+    q = None
     for ax, U, V, ttl, fl, wo in [
             (axs[0], Uc, Vc, 'CRDS / SIAF', fc, wc),
             (axs[1], Ug, Vg, 'Jay STDGDC', fg, wg)]:
         mag = np.hypot(U, V)
-        q = ax.quiver(XX, YY, U, V, mag, scale=3.0, scale_units='xy',
-                      angles='xy', cmap='viridis', clim=(0, 0.35))
+        q = ax.quiver(XX, YY, U, V, mag, scale=scale, scale_units='xy',
+                      angles='xy', cmap='viridis', clim=(0, 0.35),
+                      width=0.006, headwidth=4, headlength=5)
         ax.set_title(f'{ttl}\nbinned floor {fl:.3f} mas, worst {wo:.3f} mas')
         ax.set_xlabel('detector x (px)')
         ax.set_aspect('equal')
         ax.set_xlim(0, 2048)
         ax.set_ylim(0, 2048)
+    # labelled reference arrow (a round value near the worst vector), below the panels so it does
+    # not collide with the two-line titles
+    key = round(vmax, 2) if vmax >= 0.1 else round(vmax, 3)
+    axs[0].quiverkey(q, 0.0, -0.16, key, f'reference: {key} mas', labelpos='E',
+                     coordinates='axes', fontproperties={'size': 8})
     axs[0].set_ylabel('detector y (px)')
     cb = fig.colorbar(q, ax=axs, fraction=0.04, pad=0.02)
     cb.set_label('|binned same-star residual| (mas)')
