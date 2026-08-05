@@ -21,13 +21,17 @@ from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
     AstrometryRegressionError,
 )
 from jwst_gc_pipeline.photometry.cataloging import (
-    _drop_module_level_duplicates, _perframe_catalog_re,
-    _run_astrometry_stage_checkpoint,
+    _drop_foreign_obs_duplicates, _drop_module_level_duplicates,
+    _perframe_catalog_re, _run_astrometry_stage_checkpoint,
 )
 
 
-def _name(det="nrcb1", exp=1, seg="", label="m2", chunk=None, filt="f212n"):
-    parts = [filt, det, "visit001", "vgroup02101", f"exp{exp:05d}"]
+def _name(det="nrcb1", exp=1, seg="", label="m2", chunk=None, filt="f212n",
+          tok=""):
+    parts = [filt, det]
+    if tok:
+        parts.append(tok.lstrip("_"))
+    parts += ["visit001", "vgroup02101", f"exp{exp:05d}"]
     if seg:
         parts.append(seg)
     parts.append(label)
@@ -97,6 +101,80 @@ def test_bare_module_dropped_only_for_its_own_module():
            *[_name(det=f"nrcb{i}", filt="f212n") for i in (1, 2, 3, 4)]]
     kept = _drop_module_level_duplicates(fns, "f212n", "m2", "nrcb")
     assert any("_nrca_visit" in os.path.basename(f) for f in kept)
+
+
+# ---------------------------------------------------------------------------
+# catalogs belonging to another observation / proposal in the same directory
+# ---------------------------------------------------------------------------
+#
+# The glob is `{filt}_*visit*_vgroup*_exp*`, so the `*` swallows the detector
+# AND the per-observation token.  gc2211's five observations share a directory,
+# VISIT=001 and the same (vgroup, exp) tuples; ngc6334's 6778 and 7213 share a
+# directory, a filter list and obsid 001; and every field carries pre-token
+# copies of its own frames.  `exposure_key` carries no obs/proposal, so every
+# one of those neighbours collides -- issue #259 (gc2211 F200W: 592 files ->
+# 192 keys, all duplicated 2-5x).
+
+def _mixed_gc2211():
+    """One exposure of one detector, as written by three gc2211 runs plus the
+    pre-token name."""
+    return [_name(filt="f200w", tok=t) for t in ("_o023", "_o046", "_o050", "")]
+
+
+def test_tokened_run_keeps_only_its_own_observation():
+    kept = _drop_foreign_obs_duplicates(_mixed_gc2211(), "_o023",
+                                        "f200w", "m2", "nrcb")
+    assert kept == [_name(filt="f200w", tok="_o023")]
+
+
+def test_untokened_run_drops_the_tokened_siblings():
+    """Otherwise a run that writes pre-token names still ingests every
+    observation's tokened catalogs beside it."""
+    kept = _drop_foreign_obs_duplicates(_mixed_gc2211(), "",
+                                        "f200w", "m2", "nrcb")
+    assert kept == [_name(filt="f200w", tok="")]
+
+
+def test_proposal_token_form_separates_the_two_ngc6334_proposals():
+    """ngc6334's 6778 and 7213 share a directory, a filter list AND obsid 001,
+    so the disambiguator is the PROPOSAL (`_j6778`), not `_o001`."""
+    fns = [_name(filt="f090w", tok=t) for t in ("_j6778", "_j7213", "")]
+    assert _drop_foreign_obs_duplicates(fns, "_j7213", "f090w", "m2", "nrcb") \
+        == [_name(filt="f090w", tok="_j7213")]
+    assert _drop_foreign_obs_duplicates(fns, "_j6778", "f090w", "m2", "nrcb") \
+        == [_name(filt="f090w", tok="_j6778")]
+
+
+def test_nothing_is_dropped_when_the_directory_holds_one_observation():
+    fns = [_name(filt="f200w", tok="_o023", exp=e) for e in (1, 2, 3)]
+    assert _drop_foreign_obs_duplicates(fns, "_o023", "f200w", "m2", "nrcb") == fns
+
+
+def test_the_drop_is_reported(capsys):
+    """It narrows the checkpoint's input, so it may not happen silently."""
+    _drop_foreign_obs_duplicates(_mixed_gc2211(), "_o023", "f200w", "m2", "nrcb")
+    out = capsys.readouterr().out
+    assert "excluded 3 foreign-observation per-frame catalog(s)" in out
+    assert "o046" in out and "o050" in out and "<untokened>" in out
+    assert "_o023" in out
+
+
+def test_checkpoint_passes_its_own_token_to_the_filter(tmp_path, capsys):
+    """End-to-end wiring: the token the checkpoint names its consensus catalog
+    with is the token the foreign-observation filter uses."""
+    (tmp_path / "F200W").mkdir(parents=True)
+    (tmp_path / "catalogs").mkdir(parents=True)
+    for tok in ("_o046", "_o050"):
+        (tmp_path / "F200W" / _name(filt="f200w", tok=tok)).touch()
+    _run_astrometry_stage_checkpoint(
+        "m2", "nrcb", "f200w", str(tmp_path), str(tmp_path), "2211",
+        types.SimpleNamespace(cutout_region="", proposal_id="2211",
+                              field="023"), {}, context="test")
+    out = capsys.readouterr().out
+    assert "excluded 2 foreign-observation per-frame catalog(s)" in out
+    # nothing of this observation is left, so the checkpoint cannot run -- it
+    # must say so rather than measure the neighbours.
+    assert "NO per-frame catalogs matched" in out
 
 
 # ---------------------------------------------------------------------------

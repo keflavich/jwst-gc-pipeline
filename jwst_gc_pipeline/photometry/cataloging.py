@@ -3451,6 +3451,11 @@ def _astrom_find_offsets_table(basepath, proposal_id, field=None):
 
 _DETECTOR_TOKEN_RE = re.compile(r'_(nrc[ab](?:[1-4]|long)?)_visit')
 
+# The per-observation / per-proposal disambiguator that `obs_token` inserts
+# between the detector and the visit number (`_o023`, `_j6778`).  Names written
+# before that token existed carry nothing there.
+_OBS_TOKEN_RE = re.compile(r'_(o\d{3}|j\d{4,5})_visit')
+
 # What may legitimately sit between the 5-digit exposure number and the stage
 # label in a per-frame catalog name.  Empty is the plain per-frame fit;
 # `resbgsub` is the residual-background-subtracted variant used from m5 on.
@@ -3500,6 +3505,61 @@ def _drop_module_level_duplicates(fns, filt, merge_label, module):
               f"{len(drop)} stale MODULE-level per-frame catalog(s) "
               f"({sorted({_DETECTOR_TOKEN_RE.search(f).group(1) for f in drop})}) "
               f"superseded by per-detector catalogs", flush=True)
+    return [fn for fn in fns if fn not in drop]
+
+
+def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module):
+    """Drop per-frame catalogs belonging to a DIFFERENT observation/proposal.
+
+    The checkpoint's glob is ``{filt}_*visit*_vgroup*_exp*`` -- the ``*`` after
+    the filter swallows the detector AND the per-observation token, so a run of
+    gc2211/o023 also matches ``f200w_nrcb1_o046_visit001_...`` and
+    ``f200w_nrcb1_visit001_...``.  Those are different exposures of a different
+    observation (or the same exposures under the pre-token name), but
+    ``exposure_key`` carries no obs/proposal, and gc2211's five observations all
+    use VISIT=001 with the same ``(vgroup, exp)`` tuples -- so they land on one
+    key and ``build_visit_consensus`` raises ``DuplicateExposureError`` (issue
+    #259).  Measured on the real trees: gc2211 F200W 592 files -> 192 keys,
+    every key duplicated 2-5x; F277W 196 -> 48; ngc6334 F090W 180 -> 120, where
+    the second copy is the SAME 6778 exposures under their pre-token name.
+
+    Both directions matter:
+
+    - a TOKENED run keeps only the basenames carrying its own token;
+    - an UNTOKENED run drops every basename carrying any token, or a run
+      predating ``obs_token`` still ingests the tokened files beside it.
+
+    A pre-token basename cannot say which observation wrote it, so a tokened run
+    drops it rather than guess -- for gc2211 those legacy names are a different
+    observation's exposures, and for ngc6334 F090W they are this proposal's own
+    exposures already present under the tokened name.  Where only the legacy
+    copy exists (ngc6334 F090W nrca), the checkpoint loses those frames until
+    they are rewritten with the token; the alternative is measuring an exposure
+    twice.
+
+    This narrows the checkpoint's input to one observation, which is what the
+    visit consensus is defined over.  A field deliberately pooling two
+    observations into one consensus would be narrowed too, so the drop is
+    printed and ``DuplicateExposureError`` is kept as the backstop.
+    """
+    token = str(obs_token or '').lstrip('_')
+    drop = []
+    for fn in fns:
+        m = _OBS_TOKEN_RE.search(os.path.basename(fn))
+        found = m.group(1) if m else ''
+        if found != token:
+            drop.append(fn)
+    if drop:
+        foreign = sorted({(_OBS_TOKEN_RE.search(os.path.basename(f)).group(1)
+                           if _OBS_TOKEN_RE.search(os.path.basename(f))
+                           else '<untokened>') for f in drop})
+        print(f"astrom checkpoint [{merge_label}] {filt}/{module}: excluded "
+              f"{len(drop)} foreign-observation per-frame catalog(s) "
+              f"({foreign}) -- this run is "
+              f"{('_' + token) if token else '<untokened>'}, and the "
+              f"obs-blind glob matches every observation in the directory",
+              flush=True)
+    drop = set(drop)
     return [fn for fn in fns if fn not in drop]
 
 
@@ -3583,6 +3643,15 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     # m5/m6/m7 and every frozen-stage gate silently becomes a no-op.  Hence the
     # explicit allow-list (empty or `resbgsub`), which also rejects the
     # `resbgsub_group` combination.
+    #
+    # The `*` after the filter also swallows the per-observation token, so the
+    # glob is obs-BLIND: see _drop_foreign_obs_duplicates, applied below.
+    #
+    # Computed here (rather than at the run_visit_checkpoint call) because the
+    # foreign-observation filter needs it too; it handles the ngc6334 case where
+    # the disambiguator is the proposal, not the obsid.
+    _obs_token = consensus_obs_token(getattr(options, 'proposal_id', None),
+                                     getattr(options, 'field', None))
     base = f"{cut_bp}/{filt.upper()}/{filt.lower()}_*visit*_vgroup*_exp*"
     fns = sorted(set(
         glob.glob(f"{base}_{merge_label}_daophot_basic.fits")
@@ -3594,6 +3663,8 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
         print(f"astrom checkpoint [{merge_label}] {filt}/{module}: ignoring "
               f"{len(rejected)} non-canonical per-frame catalog(s) (e.g. "
               f"{os.path.basename(rejected[0])})", flush=True)
+    fns = _drop_foreign_obs_duplicates(fns, _obs_token, filt, merge_label,
+                                       module)
     if not fns:
         # A frozen stage with no inputs is not a pass -- it is the gate silently
         # ceasing to exist, which is how the `_group_` duplication survived so
@@ -3649,9 +3720,7 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
             # directory AND a filter list, so the per-filter consensus catalog
             # this writes needs the same disambiguator every other per-obs
             # product carries.
-            obs_token=consensus_obs_token(
-                getattr(options, 'proposal_id', None),
-                getattr(options, 'field', None)))
+            obs_token=_obs_token)
     except AstrometryRegressionError:
         if warn_only:
             traceback.print_exc()
