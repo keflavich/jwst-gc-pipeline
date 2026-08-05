@@ -130,10 +130,12 @@ def _measure_one_mosaic(sky, i2d_path, radii_arcsec, primary_radius_arcsec,
     Returns a dict of per-star arrays (length == len(sky)); stars off this
     mosaic have NaN flux and coverage 0.
     """
-    with fits.open(i2d_path) as hdul:
-        sci = hdul['SCI'].data.astype(float)
+    # Keep native dtype (i2d SCI/ERR are float32) -- do NOT upcast to float64;
+    # these mosaics are multi-GB and this runs inside the memory-bound merge.
+    with fits.open(i2d_path, memmap=False) as hdul:
+        sci = np.asarray(hdul['SCI'].data, dtype=np.float32)
         try:
-            err = hdul['ERR'].data.astype(float)
+            err = np.asarray(hdul['ERR'].data, dtype=np.float32)
         except KeyError:
             err = None
         ww = WCS(hdul['SCI'].header)
@@ -165,7 +167,7 @@ def _measure_one_mosaic(sky, i2d_path, radii_arcsec, primary_radius_arcsec,
     yi = np.clip(np.round(y[inb]).astype(int), 0, ny - 1)
     res['core_sat'][inb] = ~finite[yi, xi]
 
-    # local background from annulus (sigma-clipped median, per pixel, MJy/sr)
+    # local background from annulus (plain median, no sigma clip; per pixel, MJy/sr)
     ann = CircularAnnulus(pos, r_in=ann_in_arcsec / pixscale_as,
                           r_out=ann_out_arcsec / pixscale_as)
     annst = ApertureStats(sci, ann, mask=~finite, sigma_clip=None)
@@ -335,7 +337,7 @@ def build_aperture_correction_table(catalog, filtername=None,
         clean &= np.isfinite(snr) & (snr >= min_snr)
 
     # isolation: drop stars with a neighbour within isolation_arcsec
-    if skycoord_col in catalog.colnames and isolation_arcsec:
+    if skycoord_col in catalog.colnames and isolation_arcsec and len(catalog) > 1:
         sky = SkyCoord(catalog[skycoord_col])
         idx, sep2d, _ = sky.match_to_catalog_sky(sky, nthneighbor=2)
         clean &= sep2d.arcsec > isolation_arcsec
@@ -401,7 +403,8 @@ def select_reference_stars(catalog, snr_min=50.0, isolation_arcsec=3.0,
         else:
             qthr = max_qfit
         keep &= np.isfinite(q) & (q <= qthr)
-    if isolation_arcsec and skycoord_col in catalog.colnames and keep.any():
+    if isolation_arcsec and skycoord_col in catalog.colnames and keep.any() \
+            and len(catalog) > 1:
         sky = SkyCoord(catalog[skycoord_col])
         # nearest neighbour in the FULL catalog (not just the kept subset)
         idx, sep2d, _ = sky.match_to_catalog_sky(sky, nthneighbor=2)
@@ -410,33 +413,66 @@ def select_reference_stars(catalog, snr_min=50.0, isolation_arcsec=3.0,
 
 
 def build_reference_apcorr(ref_catalog, i2d_paths, filtername,
-                           snr_min=50.0, isolation_arcsec=3.0,
-                           radii_arcsec=RADII_ARCSEC, **sel_kw):
+                           snr_min=50.0, isolation_ladder=(2.0, 1.0, 0.6, 0.4, 0.3),
+                           min_ref_stars=200, ann_in_arcsec=None,
+                           ann_out_arcsec=None, radii_arcsec=RADII_ARCSEC,
+                           **sel_kw):
     """Contamination-free curve-of-growth apcorr from isolated unsaturated stars.
 
     ``ref_catalog`` is a photometry catalog (e.g. the merged daophot catalog)
-    with ``skycoord`` + flux/quality columns.  Selects clean isolated unsaturated
-    stars (``select_reference_stars``), measures aperture photometry on the i2d,
-    and builds the aperture-correction table -- the definitive version that the
-    crowding-limited satstar-derived table (``build_aperture_correction_table``
-    on the satstar catalog) cannot give in dense wide bands.
+    with ``skycoord`` + flux/quality columns.  In the very crowded GC/globular
+    fields there are essentially no stars isolated beyond ~0.3-0.5", so the
+    isolation radius is stepped DOWN through ``isolation_ladder`` until at least
+    ``min_ref_stars`` clean unsaturated stars survive; the achieved isolation and
+    the radius range it makes trustworthy (aperture + sky annulus inside the
+    isolation radius) are recorded in the table meta.  The curve of growth is
+    therefore reliable only out to ~ the achieved isolation radius -- beyond that
+    (the "total") no isolated empirical measurement is possible in these fields
+    and a theoretical PSF must be used.
     """
-    keep = select_reference_stars(ref_catalog, snr_min=snr_min,
-                                  isolation_arcsec=isolation_arcsec, **sel_kw)
     scol = 'skycoord' if 'skycoord' in ref_catalog.colnames else 'skycoord_fit'
+    achieved_iso, keep = None, None
+    for iso in isolation_ladder:
+        k = select_reference_stars(ref_catalog, snr_min=snr_min,
+                                   isolation_arcsec=iso, skycoord_col=scol,
+                                   **sel_kw)
+        if int(k.sum()) >= min_ref_stars:
+            achieved_iso, keep = iso, k
+            break
+    if keep is None:                       # even the loosest rung is too sparse
+        achieved_iso = isolation_ladder[-1]
+        keep = select_reference_stars(ref_catalog, snr_min=snr_min,
+                                      isolation_arcsec=achieved_iso,
+                                      skycoord_col=scol, **sel_kw)
+    # keep the annulus INSIDE the isolation radius so neighbours never enter the
+    # sky annulus; aperture stays well inside the annulus
+    if ann_out_arcsec is None:
+        ann_out_arcsec = max(0.20, achieved_iso - 0.02)
+    if ann_in_arcsec is None:
+        ann_in_arcsec = max(0.15, ann_out_arcsec - 0.10)
+    # only trust radii inside the sky annulus (contamination-free); normalise the
+    # curve of growth to the largest such radius, NOT the crowding-contaminated
+    # outer radii
+    radii_reliable = tuple(r for r in sorted(radii_arcsec) if r <= ann_in_arcsec)
+    if len(radii_reliable) < 2:
+        radii_reliable = tuple(sorted(radii_arcsec)[:2])
     ref = ref_catalog[keep].copy()
     ref.meta.setdefault('filter', filtername)
     ref = measure_aperture_photometry(ref, i2d_paths, filtername=filtername,
-                                      radii_arcsec=radii_arcsec,
+                                      radii_arcsec=radii_reliable,
+                                      ann_in_arcsec=ann_in_arcsec,
+                                      ann_out_arcsec=ann_out_arcsec,
                                       skycoord_col=scol)
     # already geometrically isolated + unsaturated -> don't re-cut on isolation
     tbl = build_aperture_correction_table(ref, filtername=filtername,
-                                          radii_arcsec=radii_arcsec,
+                                          radii_arcsec=radii_reliable,
                                           isolation_arcsec=0.0,
                                           skycoord_col=scol)
     tbl.meta['source'] = 'reference_unsaturated_isolated'
     tbl.meta['snr_min'] = float(snr_min)
-    tbl.meta['isolation_arcsec'] = float(isolation_arcsec)
+    tbl.meta['isolation_arcsec'] = float(achieved_iso)
+    tbl.meta['annulus_arcsec'] = f'{ann_in_arcsec:.3f},{ann_out_arcsec:.3f}'
+    tbl.meta['reliable_max_radius_arcsec'] = float(ann_in_arcsec)
     tbl.meta['n_reference_stars'] = int(keep.sum())
     return tbl
 

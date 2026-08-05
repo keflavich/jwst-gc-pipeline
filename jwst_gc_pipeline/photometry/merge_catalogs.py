@@ -1895,8 +1895,13 @@ def load_satstar_catalog(filtername, target='brick',
             print(f"Using saturated star catalog {primary_matches[0]}")
             _cat = apply_pooled_wingcal(Table.read(primary_matches[0]),
                                         filtername, basepath=basepath)
+            # cache_path=None: NEVER rewrite the raw pipeline satstar product on
+            # a read path.  Persisting the wingcal-divided flux_fit would make the
+            # next read's apply_pooled_wingcal see wingcal_ratio!=1 and wipe the
+            # wingcal_pooled provenance flag.  Aperture columns are added in
+            # memory here (recomputed each read for this branch).
             return _ensure_satstar_aperture_photometry(
-                _cat, filtername, target, basepath, cache_path=primary_matches[0])
+                _cat, filtername, target, basepath, cache_path=None)
 
     # Require an ITERATION TOKEN (_m12/_m3.../_m7) in the satstar filename.  The
     # current pipeline always writes one (..._crf[_resbgsub]_m<N>_satstar_catalog).
