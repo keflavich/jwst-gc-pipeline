@@ -245,3 +245,34 @@ def test_an_RA_gap_inside_the_cosdec_bound_is_healed(tmp_path):
     t = Table.read(p, format="ascii.csv")
     assert float(t["dra"][1]) == pytest.approx(float(t["dra (arcsec)"][1]),
                                                abs=1e-12)
+
+
+def test_an_all_empty_provenance_column_read_back_as_int_is_retyped(tmp_path):
+    """Clearing provenance leaves columns that CSV round-trips to masked int64.
+
+    A table of bare commas comes back as int64, and the next write then dies
+    mid-apply with `invalid literal for int() with base 10: 'm2'`.  Creating the
+    columns only when ABSENT left the int64 in place -- this took sickle's
+    VIRAC2 re-tie down on its first iteration.
+    """
+    t = Table()
+    t["Visit"] = ["jw02092005001"] * 4
+    t["Exposure"] = [1, 2, 3, 4]
+    t["Filter"] = ["F360M"] * 4
+    t["Module"] = ["nrcblong"] * 4
+    t["dra"] = np.array([0.10, 0.11, 0.12, 0.13])
+    t["ddec"] = np.array([-0.20, -0.21, -0.22, -0.23])
+    t["prov_stage"] = [""] * 4
+    t["prov_date"] = [""] * 4
+    t["prov_source"] = [""] * 4
+    t["prov_dra_added_mas"] = np.zeros(4)
+    t["prov_ddec_added_mas"] = np.zeros(4)
+    p = str(tmp_path / "Offsets_JWST_Brick2092_VIRAC2locked.csv")
+    t.write(p, format="ascii.csv", overwrite=True)
+
+    # the shape the round-trip actually produces
+    assert Table.read(p, format="ascii.csv")["prov_stage"].dtype.kind not in "US"
+
+    update_offsets_table(p, [_corr(2)], stage="m2")      # must not raise
+    after = Table.read(p, format="ascii.csv")
+    assert str(after["prov_stage"][1]) == "m2"

@@ -1010,7 +1010,16 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
             raise OffsetsTableUpdateError(
                 f"{offsets_path} has no dra/ddec columns ({tbl.colnames})")
         for col, fill in (("prov_stage", ""), ("prov_date", ""), ("prov_source", "")):
-            if col not in tbl.colnames:
+            # Re-type as well as create.  An ALL-EMPTY provenance column does not
+            # survive a CSV round-trip as text: astropy reads a column of bare
+            # commas back as masked int64, and the next write then dies on
+            #     ValueError: invalid literal for int() with base 10: 'm2'
+            # halfway through the apply loop.  That is reachable from ordinary
+            # curation -- clearing provenance on a table whose corrections were
+            # withdrawn leaves exactly this shape, and it took sickle's re-tie
+            # down on its first iteration.  Creating only when absent left the
+            # int64 column in place.
+            if col not in tbl.colnames or tbl[col].dtype.kind not in "US":
                 tbl[col] = np.full(len(tbl), fill, dtype="U64")
         for col in ("prov_dra_added_mas", "prov_ddec_added_mas"):
             if col not in tbl.colnames:
