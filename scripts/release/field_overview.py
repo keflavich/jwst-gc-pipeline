@@ -46,7 +46,7 @@ SURVEYS = (
 #: PINNED, not `latest`: this is a third-party script the live index loads, and
 #: `latest` lets the API change under a published page (the upgrade path already
 #: has to survive `A.init` not being a promise -- see the loader).
-ALADIN_JS = 'https://aladin.cds.unistra.fr/AladinLite/api/v3/3.6.2/aladin.js'
+ALADIN_JS = 'https://aladin.cds.unistra.fr/AladinLite/api/v3/3.8.2/aladin.js'
 
 #: Distinguishable at small size against a dark background, in a fixed order so
 #: a field keeps its colour between builds (the index is regenerated often).
@@ -506,12 +506,34 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
         var b = document.createElement('button');
         b.type = 'button';
         b.textContent = s.name;
+        b.setAttribute('aria-pressed', i === 0 ? 'true' : 'false');
         if (i === 0) {{ b.className = 'on'; }}
         b.addEventListener('click', function () {{
-          Array.prototype.forEach.call(surveyBar.children,
-                                       function (o) {{ o.className = ''; }});
+          var previous = surveyBar.querySelector('button.on');
+          Array.prototype.forEach.call(surveyBar.children, function (o) {{
+            o.className = ''; o.setAttribute('aria-pressed', 'false');
+          }});
           b.className = 'on';
-          aladin.setImageSurvey(s.id.indexOf('http') === 0 ? A.HiPS(s.id) : s.id);
+          b.setAttribute('aria-pressed', 'true');
+          // A layer swap that throws, or one whose HiPS never resolves, used to
+          // look exactly like a dead button: the highlight moved and nothing
+          // else happened. Say what went wrong, and put the highlight back on
+          // the layer that is actually showing so the UI does not lie.
+          try {{
+            var layer = s.id.indexOf('http') === 0 ? A.HiPS(s.id) : s.id;
+            if (aladin.setBaseImageLayer) {{ aladin.setBaseImageLayer(layer); }}
+            else {{ aladin.setImageSurvey(layer); }}
+            status.textContent = 'background: ' + s.name;
+          }} catch (err) {{
+            if (window.console) {{ console.error('ov: survey switch failed', s, err); }}
+            b.className = '';
+            b.setAttribute('aria-pressed', 'false');
+            if (previous) {{
+              previous.className = 'on';
+              previous.setAttribute('aria-pressed', 'true');
+            }}
+            status.textContent = 'could not switch to ' + s.name + ' (' + err + ')';
+          }}
         }});
         surveyBar.appendChild(b);
       }});
