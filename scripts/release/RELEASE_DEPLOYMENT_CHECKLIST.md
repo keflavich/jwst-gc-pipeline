@@ -239,12 +239,32 @@ four hold, else it FAILS:
    jump (~0.30) still blocks.
 
 The waiver (pair, metric, kind, NGROUPS, ceiling, reason) is recorded on the
-catalog item and therefore in **MANIFEST.json**, so a shipped catalog carries a
-machine-readable record that the boundary gate was waived — not only a log line.
+catalog item and therefore in **MANIFEST.json** (per-catalog `continuity_waivers`
+plus a top-level `continuity_gate: "waived"`), and `write_readme` emits a
+plain-text "Known photometric limitations" section — so a shipped catalog carries
+a durable record that the boundary gate was waived, not only a log line.
 
-Measured (2026-08): **brick 0.170, NGROUPS=2, C1 → WARN** (gate green). **cloudc
-2.84, NGROUPS=2 → FAIL** (gross, above the ceiling). **w51 0.577, NGROUPS=5 → FAIL**
-(not the railed regime). This is **PROVISIONAL** — saturated-star recovery
-photometry improvement is under active investigation; remove the entry once the
-recovered deep-core flux scale is fixed. The biased rows stay in the catalog under
-`replaced_saturated` for anyone who cuts them.
+Measured (2026-08), and what actually stops each field:
+
+| field | metric | kind | NGROUPS | verdict |
+|---|---|---|---|---|
+| brick | 0.170 | C1 | 2 | **WARN** (gate green) |
+| w51 | 0.577 | C1 | 5 | FAIL — condition 3 (not the railed regime) |
+| cloudc | 2.841 | C1 | **None** | FAIL — condition 3 (F410M mosaic quarantined `_i2d_im0_badastrom`, no shippable readout → fail-closed) |
+
+Note this is **not** a demonstration that "every condition is needed" on real data:
+today only the NGROUPS check separates the three fields, and cloudc is stopped by
+the **missing-mosaic fail-closed** path, not the ceiling. The `C1`-kind guard and
+the 0.25 ceiling (condition 4) cover failure modes the current fields do not
+contain — they are exercised by the synthetic tests (a `C2-locus-offset`, a gross
+0.8-mag break, a 0.30-mag regression). Stated plainly: this is a hypothesis-driven
+guard set, not a set each validated against a real counter-example.
+
+This is **PROVISIONAL**. The NGROUPS→railed-core direction is a *hypothesis the
+current data cannot test* — n=3 confounded fields, and the one NGROUPS>2 field that
+measures the pair (w51, 0.577) is 3.4× worse than brick's 0.170, while brick's own
+F182M–F187N sits at 0.043 under the same BRIGHT2 readout. The exit path is a
+per-row `railed_at_group0` flag from the reduction, which would let the boundary be
+certified on the recoverable population and retire this entry. Remove the entry
+once the recovered deep-core flux scale is fixed. The biased rows stay in the
+catalog under `replaced_saturated` for anyone who cuts them.

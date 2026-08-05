@@ -312,3 +312,53 @@ def test_ngroups_noninteger_header_fails_closed(tmp_path):
                   "src": str(p)})
     fails = stage_release.check_photometric_continuity(items)
     assert any("f410m-f405n continuity" in f for f in fails)
+
+
+@pytest.mark.parametrize("ng", [0, -3])
+def test_ngroups_nonpositive_does_not_exempt(tmp_path, ng):
+    # a bogus NGROUPS<=0 must not satisfy the readout condition (1 <= ng <= max)
+    items = _boundary_items(tmp_path, _boundary_cat(0.17), ngroups=ng)
+    fails = stage_release.check_photometric_continuity(items)
+    assert any("f410m-f405n continuity" in f for f in fails)
+
+
+@pytest.mark.parametrize("order", [["N/A", 2], [2, "N/A"]])
+def test_unparseable_mosaic_beside_real_one_fails_closed(tmp_path, order):
+    # an F410M mosaic whose NGROUPS cannot be parsed must DEFEAT the readout
+    # judgement (return None), not be dropped so a 2-group sibling grants it.
+    items = _items_for(tmp_path, _boundary_cat(0.17))
+    for i, ng in enumerate(order):
+        src = str(tmp_path / f"f410m_{i}_i2d.fits")
+        fits.PrimaryHDU(header=fits.Header({"NGROUPS": ng})).writeto(src, overwrite=True)
+        items.append({"category": "image", "kind": "science", "filter": "F410M",
+                      "src": src})
+    fails = stage_release.check_photometric_continuity(items)
+    assert any("f410m-f405n continuity" in f for f in fails)
+
+
+def test_readme_emits_known_limitation_when_waived(tmp_path):
+    # a waiver recorded on an item must surface as plain text a downloader reads,
+    # not only a MANIFEST.json key.
+    cat_item = {"category": "catalog", "kind": "catalog_full", "filter": None,
+                "src": str(tmp_path / "cat.fits"),
+                "continuity_waivers": [dict(
+                    pair="f410m-f405n", metric=0.1698, kind="C1-boundary-jump",
+                    ngroups=2, ceiling_mag=0.25, reason="railed deep-core floor")]}
+    img_item = {"category": "image", "kind": "science", "filter": "F410M",
+                "src": str(tmp_path / "f410m_merged_i2d.fits")}
+    stage_release.write_readme(tmp_path, "brick", "vTEST", [cat_item, img_item],
+                               "symlink")
+    readme = (tmp_path / "README.md").read_text()
+    assert "Known photometric limitations" in readme
+    assert "F410M-F405N" in readme and "0.1698" in readme
+    assert "replaced_saturated" in readme
+
+
+def test_readme_no_limitation_section_when_clean(tmp_path):
+    img_item = {"category": "image", "kind": "science", "filter": "F410M",
+                "src": str(tmp_path / "f410m_merged_i2d.fits")}
+    cat_item = {"category": "catalog", "kind": "catalog_full", "filter": None,
+                "src": str(tmp_path / "cat.fits")}
+    stage_release.write_readme(tmp_path, "brick", "vTEST", [cat_item, img_item],
+                               "symlink")
+    assert "Known photometric limitations" not in (tmp_path / "README.md").read_text()
