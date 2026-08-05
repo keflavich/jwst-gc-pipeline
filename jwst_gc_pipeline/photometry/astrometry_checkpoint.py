@@ -26,7 +26,12 @@ Implements the failsafe ladder around the cataloging iterations:
   must agree with the anchor to < ``CROSSFILTER_TOL_MAS`` (5 mas) bulk, and no
   ``LOCAL_CELL_SIZE_ARCSEC`` (2") cell may carry a significant local offset >
   ``LOCAL_CELL_TOL_MAS`` (15 mas) — significance REQUIRED (error bars; one
-  star is not a measurement).
+  star is not a measurement).  Alongside those two GATES it also MEASURES the
+  coherent, position-dependent part of each filter-to-anchor residual
+  (``measure_residual_field``), which neither gate can see and which is the
+  scale of the field's astrometric floor: on the Brick, 0.5 mas between two LW
+  filters, 1.4 mas between two SW filters and 2.5 mas across the SW/LW split,
+  at a per-cell SEM of 0.05–0.19 mas.  Recorded, printed, never gates.
 
 Every checkpoint writes a machine-readable record under
 ``{basepath}/astrometry_checkpoints/`` so the release gate can audit the full
@@ -70,6 +75,18 @@ CROSSFILTER_TOL_MAS = 5.0
 LOCAL_CELL_TOL_MAS = 15.0
 LOCAL_CELL_SIZE_ARCSEC = 2.0
 LOCAL_CELL_MIN_STARS = 10
+
+# Cross-filter residual FIELD (measurement only, never gates).  The 2"/15 mas
+# local map above is a blend/gross-patch detector: at 2" cells a GC field gives
+# ~10-30 stars per cell, so the per-cell SEM is several mas and a coherent
+# few-mas field across the FOV is not significant in any single cell.  The
+# field measurement uses cells large enough that the SEM drops far below the
+# signal, so a smooth position-dependent filter-to-filter difference becomes
+# visible.  On the Brick this is 0.5 mas (LW-LW), 1.4 mas (SW-SW) and 2.5 mas
+# (SW-LW) rms at a median cell SEM of 0.05-0.19 mas -- i.e. 10-50 sigma, and
+# invisible to both the 5 mas bulk gate and the 15 mas cell gate.
+CROSSFILTER_FIELD_CELL_ARCSEC = 45.0
+CROSSFILTER_FIELD_MIN_STARS = 40
 
 STALE_TAG = "_im0_badastrom.fits"
 
@@ -2128,7 +2145,9 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                                tol_mas=CROSSFILTER_TOL_MAS,
                                cell_arcsec=LOCAL_CELL_SIZE_ARCSEC,
                                cell_tol_mas=LOCAL_CELL_TOL_MAS,
-                               cell_min_stars=LOCAL_CELL_MIN_STARS):
+                               cell_min_stars=LOCAL_CELL_MIN_STARS,
+                               field_cell_arcsec=CROSSFILTER_FIELD_CELL_ARCSEC,
+                               field_min_stars=CROSSFILTER_FIELD_MIN_STARS):
     """Cross-filter astrometry agreement at the cross-band merge.
 
     The filter closest in wavelength to VIRAC2 Ks anchors the absolute frame
@@ -2209,6 +2228,24 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                     min_stars=cell_min_stars, tol_mas=cell_tol_mas,
                     context=fctx)
                 frec["local"] = _jsonable_local(local)
+                # Coherent position-dependent term (measurement only, never
+                # gates -- see measure_residual_field).  The bulk gate above
+                # and the 2" cell gate below are both blind to it.
+                field = measure_residual_field(coords, anchor_coords, bulk,
+                                               cell_arcsec=field_cell_arcsec,
+                                               min_stars=field_min_stars,
+                                               context=fctx)
+                frec["field"] = _jsonable(field)
+                if field is not None:
+                    print(f"ASTROM CROSSFILTER FIELD: {fctx}: coherent "
+                          f"{field['coherent_mas']:.2f} mas rms over "
+                          f"{field['n_cells']} x {field_cell_arcsec:.0f}\" cells "
+                          f"(cell SEM {field['median_sem_mas']:.2f} mas, max "
+                          f"{field['max_mas']:.2f}); a linear tie would leave "
+                          f"{field['rms_after_affine_mas']:.2f} mas "
+                          f"(gradient {field['gradient_mas_per_arcmin']:.2f} "
+                          f"mas/arcmin) -- MEASUREMENT ONLY, not a gate",
+                          flush=True)
                 if local["n_flagged"]:
                     worst = max((c for c in local["cells"] if c["flagged"]),
                                 key=lambda c: c["off_mas"])
@@ -2228,7 +2265,9 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                   tolerances=dict(crossfilter_tol_mas=tol_mas,
                                   local_cell_tol_mas=cell_tol_mas,
                                   local_cell_size_arcsec=cell_arcsec,
-                                  local_cell_min_stars=cell_min_stars))
+                                  local_cell_min_stars=cell_min_stars,
+                                  field_cell_arcsec=field_cell_arcsec,
+                                  field_min_stars=field_min_stars))
     if record_dir:
         _write_record(record_dir, "checkpoint_m7_crossfilter", record)
     if failures:
@@ -2279,6 +2318,87 @@ def _jsonable_local(local):
     out = _jsonable({k: v for k, v in local.items() if k != "cells"})
     out["cells"] = [_jsonable(c) for c in local["cells"]]
     return out
+
+
+def measure_residual_field(coords, anchor_coords, bulk,
+                           cell_arcsec=CROSSFILTER_FIELD_CELL_ARCSEC,
+                           min_stars=CROSSFILTER_FIELD_MIN_STARS,
+                           context=""):
+    """The COHERENT, position-dependent part of a catalog-to-catalog residual.
+
+    ``measure_offset`` reduces a whole field to two numbers, and the tie applied
+    to the frames is that same rigid translation — so anything that varies
+    across the FOV survives the tie by construction.  This measures what
+    survives: same-star matched-pair residuals binned into ``cell_arcsec``
+    cells (``local_residual_map``), bulk removed, then
+
+    * ``rms_mas``            — cell-to-cell rms of the residual field;
+    * ``median_sem_mas``     — the median per-cell standard error, i.e. how much
+      of ``rms_mas`` could be counting noise;
+    * ``coherent_mas``       — ``sqrt(rms^2 - <sem^2>)``, the noise-deconvolved
+      field amplitude.  This is the number to quote;
+    * ``affine_*``           — a 6-parameter (translation+linear) fit over the
+      FOV, the part a linear tie would remove, with ``rms_after_affine_mas``
+      left over and ``gradient_mas_per_arcmin`` the linear term's size.
+
+    Diagnostic only: nothing here raises, and the caller must not gate on it.
+    The point is that a coherent field of a few mas is presently invisible —
+    it passes the 5 mas bulk gate (the bulk is ~0) and the 15 mas/2" cell gate
+    (a 2" cell has too few stars to make a few-mas offset significant).
+
+    ``bulk`` is the ``measure_offset`` result used to pre-align the two
+    catalogs; ``local_residual_map`` refuses to run without a verified small
+    global tie, which is the guard that keeps this on the sanctioned side of
+    ASTROMETRY RULE #1 (a real global tie already exists, so nearest-partner
+    pairing is the right star).
+
+    Returns ``None`` when fewer than 6 cells are populated — a field cannot be
+    fitted, let alone reported, from that.
+    """
+    local = local_residual_map(coords, anchor_coords, bulk,
+                               cell_arcsec=cell_arcsec, min_stars=min_stars,
+                               tol_mas=np.inf, context=context)
+    cells = [c for c in local["cells"] if c["n"] >= min_stars]
+    if len(cells) < 6:
+        return None
+
+    d = np.array([[c["dra_mas"], c["ddec_mas"]] for c in cells], dtype=float)
+    sem = np.array([float(np.hypot(c["dra_sem"], c["ddec_sem"])) for c in cells])
+    ra0 = np.array([float(c["ra0"]) for c in cells])
+    dec0 = np.array([float(c["dec0"]) for c in cells])
+    # The FIELD is what is left once the bulk is gone; the bulk is the tie's job.
+    d = d - np.median(d, axis=0)
+    off = np.hypot(d[:, 0], d[:, 1])
+    ms = float((sem ** 2).mean())
+    rms = float(np.sqrt((off ** 2).mean()))
+
+    cosd = float(np.cos(np.radians(dec0.mean())))
+    x = (ra0 - ra0.mean()) * cosd * 3600.0
+    y = (dec0 - dec0.mean()) * 3600.0
+    n = len(cells)
+    design = np.zeros((2 * n, 6))
+    design[:n, 0] = 1.0; design[:n, 1] = x; design[:n, 2] = y
+    design[n:, 3] = 1.0; design[n:, 4] = x; design[n:, 5] = y
+    obs = np.concatenate([d[:, 0], d[:, 1]])
+    par, *_ = np.linalg.lstsq(design, obs, rcond=None)
+    resid = obs - design @ par
+    rms_after = float(np.sqrt((resid ** 2).mean()))
+    # |d(residual)/d(position)|, reported per arcmin so it can be read against
+    # the ~2.2 x 4.4 arcmin NIRCam module footprint.
+    grad = 60.0 * float(np.hypot(np.hypot(par[1], par[2]),
+                                 np.hypot(par[4], par[5])) / np.sqrt(2.0))
+
+    return dict(
+        n_cells=n, cell_arcsec=float(cell_arcsec), min_stars=int(min_stars),
+        median_n_per_cell=float(np.median([c["n"] for c in cells])),
+        rms_mas=rms, median_sem_mas=float(np.median(sem)),
+        coherent_mas=float(np.sqrt(max(rms ** 2 - ms, 0.0))),
+        max_mas=float(off.max()),
+        rms_after_affine_mas=rms_after,
+        affine_absorbed_fraction=float(
+            1.0 - (resid ** 2).mean() / (obs ** 2).mean()) if (obs ** 2).mean() else 0.0,
+        gradient_mas_per_arcmin=grad,
+    )
 
 
 def _write_record(record_dir, name, record):

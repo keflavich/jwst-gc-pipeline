@@ -881,13 +881,18 @@ def test_m2_perexposure_scatter_still_corrects_not_raises(tmp_path, monkeypatch)
 # ---------------------------------------------------------------------------
 
 def _crossfilter_catalogs(n=6000, extent=60.0, second_offset_mas=0.0,
-                          patch=None, seed=5):
+                          patch=None, seed=5, gradient_mas_per_arcmin=0.0):
     rng = np.random.default_rng(seed)
     x = rng.uniform(0, extent, n)
     y = rng.uniform(0, extent, n)
     ra = RA0 + x / 3600.0 / COSD
     dec = DEC0 + y / 3600.0
     dra = np.full(n, second_offset_mas)
+    if gradient_mas_per_arcmin:
+        # a smooth ramp across the field: bulk ~0, no single 2" cell far off,
+        # but the field is coherently tilted -- the term neither the 5 mas bulk
+        # gate nor the 15 mas cell gate can see
+        dra = dra + gradient_mas_per_arcmin * (x - x.mean()) / 60.0
     if patch:
         lo_x, hi_x, lo_y, hi_y, dra_mas = patch
         inside = (x >= lo_x) & (x < hi_x) & (y >= lo_y) & (y < hi_y)
@@ -937,6 +942,37 @@ def test_crossfilter_local_patch_fails(tmp_path, monkeypatch):
                                    cell_min_stars=15, cell_arcsec=5.0,
                                    context="test")
     assert "local" in str(exc.value)
+
+
+def test_crossfilter_residual_field_sees_what_the_gates_cannot(tmp_path):
+    """A 3 mas/arcmin ramp passes BOTH gates and is reported by the field."""
+    cats = _crossfilter_catalogs(n=20000, gradient_mas_per_arcmin=3.0)
+    record = run_crossfilter_checkpoint(cats, record_dir=str(tmp_path),
+                                        cell_min_stars=15,
+                                        field_cell_arcsec=10.0,
+                                        field_min_stars=40, context="test")
+    # both existing gates are blind to it
+    assert record["passed"], record["failures"]
+
+    field = [f for f in record["filters"] if f["filtername"] != record["anchor_filter"]][0]["field"]
+    assert field is not None
+    # the ramp spans 60" = 1 arcmin, so ~3 mas peak-to-peak -> ~0.9 mas rms
+    assert field["coherent_mas"] > 5 * field["median_sem_mas"]
+    assert 0.5 < field["coherent_mas"] < 1.5, field
+    assert 2.0 < field["gradient_mas_per_arcmin"] < 4.0, field
+    # a linear term is exactly what an affine tie would remove
+    assert field["rms_after_affine_mas"] < 0.3 * field["rms_mas"], field
+
+
+def test_crossfilter_residual_field_flat_when_there_is_no_field(tmp_path):
+    cats = _crossfilter_catalogs(n=20000)
+    record = run_crossfilter_checkpoint(cats, record_dir=str(tmp_path),
+                                        cell_min_stars=15,
+                                        field_cell_arcsec=10.0,
+                                        field_min_stars=40, context="test")
+    field = [f for f in record["filters"] if f["filtername"] != record["anchor_filter"]][0]["field"]
+    assert field is not None
+    assert field["coherent_mas"] < 0.3, field
 
 
 def test_crossfilter_single_filter_skips(tmp_path):
