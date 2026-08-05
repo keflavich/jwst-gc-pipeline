@@ -11,7 +11,9 @@ Two hazards, both observed on sickle:
    F210M from 2026-04-19 / jwst_1535.pmap beside four bands from 2026-06-27 /
    jwst_1537.pmap.
 
-These run on synthetic trees -- no archive files are touched.
+The four gate tests run on synthetic trees.  The last one is a pre-stage preflight
+against the real config and is opt-in (``STAGE_RELEASE_ARCHIVE_CHECK=1``); it only
+stats paths.  Nothing here writes to the archive.
 """
 import importlib.util
 import json
