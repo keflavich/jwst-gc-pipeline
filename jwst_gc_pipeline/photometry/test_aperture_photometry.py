@@ -130,3 +130,94 @@ def test_apcorr_table_shape(tmp_path):
                 'apcorr_mag', 'ratio_mad', 'n_stars')) <= set(tbl.colnames)
     # ratio at the reference (largest) radius is 1.0 by construction
     assert abs(float(tbl['flux_ratio_to_total'][-1]) - 1.0) < 1e-6
+
+
+def test_aperture_photometry_enabled_toggle(monkeypatch):
+    monkeypatch.delenv('SATSTAR_APERTURE_PHOT', raising=False)
+    assert ap.aperture_photometry_enabled()
+    for off in ('0', 'false', 'FALSE', 'no', 'off', 'Off'):
+        monkeypatch.setenv('SATSTAR_APERTURE_PHOT', off)
+        assert not ap.aperture_photometry_enabled()
+    for on in ('1', 'true', 'yes', 'anything'):
+        monkeypatch.setenv('SATSTAR_APERTURE_PHOT', on)
+        assert ap.aperture_photometry_enabled()
+
+
+def _touch_i2d(pipe, name):
+    import os
+    os.makedirs(pipe, exist_ok=True)
+    fits.HDUList([fits.PrimaryHDU()]).writeto(f'{pipe}/{name}', overwrite=True)
+
+
+def test_find_i2d_mosaics_rejects_and_prunes(tmp_path):
+    base = str(tmp_path / 'faketarget')
+    pipe = f'{base}/F200W/pipeline'
+    keep_merged = 'jw09999-o001_t001_nircam_clear-f200w-merged_i2d.fits'
+    keep_nrcb2 = 'jw09999-o002_t001_nircam_clear-f200w-nrcb_i2d.fits'
+    for n in (keep_merged, keep_nrcb2,
+              'jw09999-o001_t001_nircam_clear-f200w-merged_residual_i2d.fits',
+              'jw09999-o001_t001_nircam_clear-f200w-merged-reproject_i2d.fits',
+              'jw09999-o001_t001_nircam_clear-f200w-merged_m3_daophot_basic_mergedcat_residual_i2d.fits',
+              'jw09999-o001_t001_nircam_clear-f200w-nrca_i2d.fits'):  # pruned: o001 has merged
+        _touch_i2d(pipe, n)
+    got = {__import__('os').path.basename(p)
+           for p in ap.find_i2d_mosaics('f200w', 'faketarget', base)}
+    assert got == {keep_merged, keep_nrcb2}
+
+
+def test_add_aperture_photometry_disabled(monkeypatch, tmp_path):
+    monkeypatch.setenv('SATSTAR_APERTURE_PHOT', 'false')
+    t = Table({'skycoord_fit': SkyCoord([1.0], [2.0], unit='deg')})
+    out = ap.add_aperture_photometry(t, 'f200w', 'faketarget', str(tmp_path))
+    assert not ap.has_aperture_columns(out)
+
+
+def test_add_aperture_photometry_bad_mosaic_is_nonfatal(tmp_path):
+    # a mosaic with no SCI extension must be caught, not crash the merge
+    base = str(tmp_path / 'faketarget')
+    pipe = f'{base}/F200W/pipeline'
+    _touch_i2d(pipe, 'jw09999-o001_t001_nircam_clear-f200w-merged_i2d.fits')
+    t = Table({'skycoord_fit': SkyCoord([266.0], [-28.0], unit='deg')})
+    out = ap.add_aperture_photometry(t, 'f200w', 'faketarget', base)
+    assert not ap.has_aperture_columns(out)   # graceful: KeyError('SCI') caught
+
+
+def test_select_reference_stars_cuts():
+    n = 50
+    rng = np.random.default_rng(1)
+    t = Table()
+    t['skycoord'] = SkyCoord(266.0 + rng.uniform(0, 0.1, n),
+                             -28.0 + rng.uniform(0, 0.1, n), unit='deg')
+    t['flux'] = np.full(n, 1000.0)
+    t['flux_err'] = np.full(n, 1.0)          # SNR 1000
+    t['group_size'] = np.ones(n, int)
+    t['nmatch'] = np.full(n, 3)
+    t['qfit'] = np.zeros(n)
+    t['is_saturated'] = np.zeros(n, bool)
+    t['is_saturated'][:10] = True            # 10 saturated -> excluded
+    keep = ap.select_reference_stars(t, snr_min=100, isolation_arcsec=0.0)
+    assert keep.sum() == 40
+    t['flux_err'][10:20] = 1000.0            # SNR 1 -> excluded
+    keep = ap.select_reference_stars(t, snr_min=100, isolation_arcsec=0.0)
+    assert keep.sum() == 30
+
+
+def test_build_reference_apcorr_synthetic(tmp_path, monkeypatch):
+    monkeypatch.setattr(ap, '_vega_zeropoint_jy', lambda f: 3631.0 * u.Jy)
+    # 60 isolated bright unsaturated stars on a synthetic mosaic
+    rng = np.random.default_rng(3)
+    xs = rng.uniform(40, 160, 60); ys = rng.uniform(40, 160, 60)
+    pos = list(zip(xs, ys))
+    path, w = _make_i2d(tmp_path, pos, [800.0] * len(pos), nx=200, ny=200)
+    sky = w.pixel_to_world(xs, ys)
+    cat = Table({'skycoord': sky, 'flux': np.full(60, 1e4),
+                 'flux_err': np.full(60, 10.0), 'group_size': np.ones(60, int),
+                 'nmatch': np.full(60, 3), 'qfit': np.zeros(60),
+                 'is_saturated': np.zeros(60, bool)})
+    tbl = ap.build_reference_apcorr(cat, [path], 'f200w', snr_min=50,
+                                    isolation_ladder=(0.0,), min_ref_stars=10,
+                                    radii_arcsec=(0.05, 0.10, 0.20, 0.30))
+    assert tbl.meta['n_reference_stars'] == 60
+    assert 'i2d_mosaics' in tbl.meta and tbl.meta['recentered'] is True
+    # enclosed flux increases with radius, =1 at the reference radius
+    assert abs(float(tbl['flux_ratio_to_total'][-1]) - 1.0) < 1e-6

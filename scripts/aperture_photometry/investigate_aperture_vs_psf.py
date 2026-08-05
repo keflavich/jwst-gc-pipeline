@@ -29,10 +29,8 @@ import astropy.units as u
 
 from jwst_gc_pipeline.photometry import aperture_photometry as apm
 
-OUT = os.environ.get(
-    'APINV_OUT',
-    '/blue/adamginsburg/adamginsburg/tmp/claude-3663/-orange-adamginsburg-jwst/'
-    '81778923-7a53-4903-85de-4e1a21cfef0f/scratchpad/wt-apphot/docs/reports/apphot')
+OUT = os.environ.get('APINV_OUT', os.path.abspath(os.path.join(
+    os.path.dirname(__file__), '..', '..', 'docs', 'reports', 'apphot')))
 
 # (target, filter, short-regime label)
 MATRIX = [
@@ -52,15 +50,18 @@ MATRIX = [
 
 def _frame_pixel_area_deg2(target, filtername, i2d_pix_area):
     """crf/frame pixel solid angle for flux_fit->Jy.  The satstar PSF fits run
-    on the per-exposure frames; use one frame's WCS.  Falls back to the i2d
-    pixel area (native detector scale mosaics match the frame scale closely)."""
+    on the per-exposure frames; read the frame's PIXAR_A2 keyword (arcsec^2/pix)
+    -- NOT a WCS, so no SIP header is parsed.  Falls back to the i2d pixel area
+    (native detector-scale mosaics match the frame scale closely)."""
     pipe = f'/orange/adamginsburg/jwst/{target}/{filtername.upper()}/pipeline'
     cands = sorted(glob.glob(f'{pipe}/*_crf.fits')
                    + glob.glob(f'{pipe}/*_cal.fits'))
     for fn in cands[:1]:
         try:
             with fits.open(fn) as h:
-                return WCS(h['SCI'].header).proj_plane_pixel_area().to(u.deg**2)
+                a2 = h['SCI'].header.get('PIXAR_A2', h[0].header.get('PIXAR_A2'))
+            if a2:
+                return (float(a2) * u.arcsec**2).to(u.deg**2)
         except (OSError, KeyError):
             continue
     return i2d_pix_area

@@ -1856,9 +1856,9 @@ def _ensure_satstar_aperture_photometry(cat, filtername, target, basepath,
     """
     if cat is None:
         return cat
-    if os.environ.get('SATSTAR_APERTURE_PHOT', '1') == '0':
-        return cat
     from jwst_gc_pipeline.photometry import aperture_photometry as _apphot
+    if not _apphot.aperture_photometry_enabled():
+        return cat
     if _apphot.has_aperture_columns(cat):
         return cat
     cat = _apphot.add_aperture_photometry(cat, filtername, target, basepath)

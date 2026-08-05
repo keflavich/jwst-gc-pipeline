@@ -87,7 +87,9 @@ def find_i2d_mosaics(filtername, target, basepath):
     pats = []
     try:
         proj = _project_for_target_filter(target, filtername)
-    except KeyError:
+    except (KeyError, AttributeError):
+        # KeyError: filter not in the target's map; AttributeError: target not in
+        # the registry at all (returns None).  Fall back to the generic globs.
         proj = None
     if inst == 'nircam' and proj is not None and target in project_obsnum \
             and proj in project_obsnum[target]:
@@ -102,7 +104,8 @@ def find_i2d_mosaics(filtername, target, basepath):
     # are NOT the science mosaic: pipeline residual/model images, downselected
     # catalogs, filtered/reprojected variants, and per-iteration products.
     _reject = ('residual', 'model', 'mergedcat', 'smoothed', '_data_',
-               'medfilt', 'reprj', 'resbgsub', 'downsel', 'daophot', '_cat')
+               'medfilt', 'reprj', 'reproj', 'reproject', 'resbgsub', 'downsel',
+               'daophot', '_cat', 'blur', 'seed', 'starsub', 'unsatstar')
     seen, out = set(), []
     for p in pats:
         for m in sorted(glob.glob(p)):
@@ -120,7 +123,19 @@ def find_i2d_mosaics(filtername, target, basepath):
             if m not in seen:
                 seen.add(m)
                 out.append(m)
-    return out
+    # Prefer the module-merged mosaic over per-module (-nrca/-nrcb) mosaics of the
+    # SAME observation: they are the same data, and the merged one avoids
+    # measuring each star on two half-depth tiles.  Keep per-module mosaics only
+    # for observations that have no merged product (e.g. gc2211 o050 nrcb-only).
+    def _obs(b):
+        mm = re.search(r'(jw\d+-o\d+)_t001', b)
+        return mm.group(1) if mm else b
+    merged_obs = {_obs(os.path.basename(m)) for m in out
+                  if f'-{filt_l}-merged_i2d' in os.path.basename(m)}
+    pruned = [m for m in out
+              if not (re.search(rf'-{filt_l}-nrc[ab]_i2d', os.path.basename(m))
+                      and _obs(os.path.basename(m)) in merged_obs)]
+    return pruned
 
 
 def _measure_one_mosaic(sky, i2d_path, radii_arcsec, primary_radius_arcsec,
@@ -294,13 +309,22 @@ def measure_aperture_photometry(catalog, i2d_paths, filtername=None,
     return cat
 
 
+def aperture_photometry_enabled():
+    """Whether aperture photometry is on (default yes).  Any of 0/false/no/off
+    (case-insensitive) via ``SATSTAR_APERTURE_PHOT`` disables it."""
+    return os.environ.get('SATSTAR_APERTURE_PHOT', '1').strip().lower() \
+        not in ('0', 'false', 'no', 'off')
+
+
 def add_aperture_photometry(catalog, filtername, target, basepath, **kwargs):
     """Convenience: locate the i2d mosaic(s) and add aperture columns.
 
     Returns the catalog unchanged (with a log message) if disabled by
-    ``SATSTAR_APERTURE_PHOT=0`` or if no mosaic is found.
+    ``SATSTAR_APERTURE_PHOT`` or if no mosaic is found.  A missing/corrupt mosaic
+    or an SVO outage is caught and logged (aperture photometry is a diagnostic
+    add-on and must never abort the merge).
     """
-    if os.environ.get('SATSTAR_APERTURE_PHOT', '1') == '0':
+    if not aperture_photometry_enabled():
         return catalog
     i2ds = find_i2d_mosaics(filtername, target, basepath)
     if not i2ds:
@@ -309,8 +333,19 @@ def add_aperture_photometry(catalog, filtername, target, basepath, **kwargs):
         return catalog
     log.info(f"aperture_photometry: measuring {filtername} from "
              f"{len(i2ds)} mosaic(s)")
-    return measure_aperture_photometry(catalog, i2ds, filtername=filtername,
-                                       **kwargs)
+    from requests.exceptions import RequestException
+    try:
+        return measure_aperture_photometry(catalog, i2ds, filtername=filtername,
+                                           **kwargs)
+    except (OSError, KeyError, ValueError, RequestException) as ex:
+        # OSError: truncated/unreadable i2d; KeyError: missing SCI extension or
+        # unknown SVO filter; ValueError: bad WCS/shape; RequestException: SVO
+        # zeropoint service outage.  Aperture photometry is a diagnostic add-on
+        # and must never abort the merge.
+        log.warning(f"aperture_photometry: measurement failed for "
+                    f"{target}/{filtername} ({type(ex).__name__}: {ex}); "
+                    f"leaving catalog without aperture columns")
+        return catalog
 
 
 def build_aperture_correction_table(catalog, filtername=None,
@@ -448,6 +483,9 @@ def build_reference_apcorr(ref_catalog, i2d_paths, filtername,
     (the "total") no isolated empirical measurement is possible in these fields
     and a theoretical PSF must be used.
     """
+    # isolation is controlled by isolation_ladder here; forbid the collision with
+    # select_reference_stars' own isolation_arcsec (older calling convention).
+    sel_kw.pop('isolation_arcsec', None)
     scol = 'skycoord' if 'skycoord' in ref_catalog.colnames else 'skycoord_fit'
     achieved_iso, keep = None, None
     last_iso, last_k = None, None
@@ -498,6 +536,11 @@ def build_reference_apcorr(ref_catalog, i2d_paths, filtername,
     # the measured radii
     tbl.meta['reliable_max_radius_arcsec'] = float(max(radii_reliable))
     tbl.meta['n_reference_stars'] = int(keep.sum())
+    # provenance: which mosaic(s) the curve of growth was measured on (the source
+    # catalog is recorded by the caller, which knows its path)
+    tbl.meta['i2d_mosaics'] = ','.join(os.path.basename(p) for p in i2d_paths)
+    tbl.meta['recentered'] = True
+    tbl.meta.pop('min_snr', None)     # inherited-but-unused knob; snr_min is the live one
     return tbl
 
 

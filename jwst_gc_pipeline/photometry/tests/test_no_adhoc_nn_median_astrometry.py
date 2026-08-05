@@ -63,6 +63,12 @@ ALLOWLIST = {
     # positional offset is derived, so the collapse this guard exists to catch
     # cannot occur.
     "scripts/satstar_deblend/collect_correction_data.py",
+    # No astrometry: match_to_catalog_sky(nthneighbor=2) measures a star's
+    # nearest-neighbour SEPARATION only, used to SELECT isolated reference stars
+    # (reject crowded ones) for the aperture curve of growth; the medians taken
+    # are of FLUX-RATIO (enclosed-energy) columns, never positions.  No offset or
+    # WCS correction is derived, so the dense-NN-median collapse cannot occur.
+    "jwst_gc_pipeline/photometry/aperture_photometry.py",
     "jwst_gc_pipeline/photometry/generate_offsets_table.py",  # guarded voff()
     "jwst_gc_pipeline/photometry/make_reference_from_pipeline_catalogs.py",  # guarded bootstrap
     # cross-band source association for catalog merging / dedup (NOT astrometry)

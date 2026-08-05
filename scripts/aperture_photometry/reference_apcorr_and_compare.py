@@ -37,10 +37,8 @@ from photutils.aperture import CircularAperture, aperture_photometry
 
 from jwst_gc_pipeline.photometry import aperture_photometry as apm
 
-OUT = os.environ.get(
-    'APREF_OUT',
-    '/blue/adamginsburg/adamginsburg/tmp/claude-3663/-orange-adamginsburg-jwst/'
-    '81778923-7a53-4903-85de-4e1a21cfef0f/scratchpad/wt-apphot/docs/reports/apphot')
+OUT = os.environ.get('APREF_OUT', os.path.abspath(os.path.join(
+    os.path.dirname(__file__), '..', '..', 'docs', 'reports', 'apphot')))
 
 # Rob's Table (aper radius = FWHM; AperCorr = flux fraction within it from
 # synthetic PSFs, i.e. EE(FWHM)/EE(infinity)).
@@ -55,20 +53,34 @@ COG_RADII = (0.05, 0.075, 0.10, 0.125, 0.15, 0.175, 0.20, 0.25)
 
 
 def find_main_catalog(target, filtername):
+    """The CURRENT canonical merged photometry catalog for a target/filter.
+
+    Prefer the latest processing phase (highest ``[resbgsub_]m<N>_dao_basic``);
+    the ``*iterative*`` products are earlier/experimental and were superseded by
+    the m<N> dao_basic chain (e.g. brick F200W iter2 is May/Jun, resbgsub_m7 is
+    the current July product), so they must NOT be picked.  Skip the derived
+    variant suffixes (allcols/vetted/i2dseed).
+    """
+    import re as _re
     cdir = f'/orange/adamginsburg/jwst/{target}/catalogs'
-    pats = [f'{cdir}/{filtername.lower()}_merged_indivexp_merged*iterative*.fits',
-            f'{cdir}/{filtername.lower()}_merged_indivexp_merged*allcols*.fits',
-            f'{cdir}/{filtername.lower()}_merged_indivexp_merged*dao*.fits']
-    for p in pats:
-        for fn in sorted(glob.glob(p), key=os.path.getsize, reverse=True):
-            if any(t in fn for t in ('satstar', 'reference', 'apcorr')):
-                continue
-            try:
-                cols = Table.read(fn, memmap=True).colnames
-            except (OSError, ValueError):
-                continue
-            if all(c in cols for c in REQUIRED):
-                return fn
+    cands = []
+    for fn in glob.glob(f'{cdir}/{filtername.lower()}_merged_indivexp_merged*dao_basic.fits'):
+        b = os.path.basename(fn)
+        if any(t in b for t in ('satstar', 'reference', 'apcorr',
+                                 'allcols', 'vetted', 'i2dseed', 'seed')):
+            continue
+        m = _re.search(r'_m(\d+)_dao_basic', b)
+        phase = int(m.group(1)) if m else -1
+        resbg = 1 if 'resbgsub' in b else 0
+        cands.append((phase, resbg, fn))
+    # highest phase first, resbgsub preferred at equal phase
+    for phase, resbg, fn in sorted(cands, reverse=True):
+        try:
+            cols = Table.read(fn, memmap=True).colnames
+        except (OSError, ValueError):
+            continue
+        if all(c in cols for c in REQUIRED):
+            return fn
     return None
 
 
@@ -133,6 +145,7 @@ def run(target, filtername):
     # small-aperture flux ratios scatter and the median biases low
     tbl = apm.build_reference_apcorr(cat, i2ds, filtername, snr_min=150.0,
                                      radii_arcsec=COG_RADII, min_ref_stars=200)
+    tbl.meta['main_catalog'] = os.path.basename(mcat)   # provenance
     path = f'{base}/catalogs/{filtername.lower()}_satstar_apcorr_refstars.ecsv'
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tbl.write(path, overwrite=True, format='ascii.ecsv')
