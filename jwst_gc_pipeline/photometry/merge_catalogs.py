@@ -940,6 +940,48 @@ def combine_singleframe_chunked(tbls, n_chunks=8, halo=2.0 * u.arcsec,
     return merged
 
 
+def invalid_crossfilter_match(sep, mutual_matches, max_offset):
+    """Base rows whose per-filter match is NOT a detection of that row.
+
+    The cross-filter gather in ``merge_catalogs`` is a plain
+    ``basecrds.match_to_catalog_sky(crds)``: every base row takes its nearest
+    source in the filter, so ONE filter source can be claimed by arbitrarily
+    many base rows.  A row's match is real only when the source is within
+    ``max_offset`` AND the match is mutual (that source's own nearest base row
+    is this row).  Everything else is another star's measurement.
+    """
+    return np.asarray(sep > max_offset) | ~np.asarray(mutual_matches, dtype=bool)
+
+
+def blank_unmatched_skycoord(sc, invalid):
+    """Return ``sc`` with the ``invalid`` rows' ra/dec set to NaN.
+
+    Every scalar column of a cross-filter match is masked for the rows
+    ``invalid_crossfilter_match`` selects, but the ``skycoord_<filter>`` mixin
+    used to escape that masking and keep the borrowed source's position.  On
+    brick 2221-o001 that left 65% of rows carrying a position that was not
+    their own -- one F212N source reused as the position of up to 20 different
+    stars, median 0.25" and up to 1.3" away.  It put a spurious second lobe in
+    the JWST-VIRAC offset cloud and inflated the apparent frame tie from
+    0.6 mas (same-star) to 17 mas (JWST-GC/data-qa#1).
+
+    NaN rather than a mask: a SkyCoord mixin's mask does not survive the FITS
+    round-trip, but NaN does, and every consumer already handles it --
+    ``crowdsource_catalogs_long._resolve_seed_skycoords`` leaves a NaN row for
+    the next candidate column and falls back to ``skycoord_ref``, and
+    ``plotting/plot_tools.py`` selects on ``~flux_<filter>.mask`` first.
+    """
+    invalid = np.asarray(invalid, dtype=bool)
+    if not invalid.any():
+        return sc
+    ra = np.asarray(sc.ra.deg, dtype=float).copy()
+    dec = np.asarray(sc.dec.deg, dtype=float).copy()
+    ra[invalid] = np.nan
+    dec[invalid] = np.nan
+    return SkyCoord(ra=ra * u.deg, dec=dec * u.deg,
+                    frame=sc.frame.replicate_without_data())
+
+
 def _oksep_sep_cols(colnames):
     """Non-wide ``sep_*`` columns actually present in a merged table.
 
@@ -1057,10 +1099,22 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
             basetable.add_column(name=f"id_{wl}", col=matches)
             matchtb = tbl[matches]
             badsep = sep > max_offset
+            # ``sep_{wl}`` / ``id_{wl}`` above stay unmasked ON PURPOSE: they are
+            # the provenance of the rejection (how far away the claimed source
+            # was, and which one), and the release QA reads them to decide which
+            # rows carry a real per-filter position.
+            invalid = invalid_crossfilter_match(sep, mutual_matches, max_offset)
             for cn in matchtb.colnames:
                 if isinstance(matchtb[cn], SkyCoord):
                     matchtb.rename_column(cn, f"{cn}_{wl}")
-                    matchtb[f'mask_{wl}'] = badsep
+                    matchtb[f"{cn}_{wl}"] = blank_unmatched_skycoord(
+                        matchtb[f"{cn}_{wl}"], invalid)
+                    # mask_{wl} must use the SAME condition as the scalar
+                    # columns below.  It used to be ``badsep`` alone, so a
+                    # non-mutual row had a masked flux but mask_{wl}=False;
+                    # forced_fill.py keys on mask_{wl} and therefore skipped
+                    # exactly the rows whose photometry it needed to fill.
+                    matchtb[f'mask_{wl}'] = invalid
                 else:
                     matchtb[f'{cn}_{wl}'] = MaskedColumn(data=matchtb[cn], name=f'{cn}_{wl}')
                     matchtb[f'{cn}_{wl}'].mask[badsep] = True

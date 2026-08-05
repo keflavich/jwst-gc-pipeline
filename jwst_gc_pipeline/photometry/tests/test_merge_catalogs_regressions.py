@@ -722,3 +722,68 @@ def test_oksep_sep_cols_from_actual_columns():
     # narrow/medium bands present in the TABLE are used (f480m was invisible
     # to the old brick-filternames iteration); wide (w) bands stay excluded
     assert MC._oksep_sep_cols(cols) == ['sep_f405n', 'sep_f410m', 'sep_f480m']
+
+
+# ---------------------------------------------------------------------------
+# Cross-filter gather: skycoord_<filter> must not carry a borrowed position.
+# ---------------------------------------------------------------------------
+class TestCrossFilterMatchValidity:
+    """merge_catalogs Phase B -- ``basecrds.match_to_catalog_sky(crds)`` is
+    one-to-many, so a single filter source is the nearest neighbour of many
+    base rows.  Scalar columns are masked for the losers; the SkyCoord mixin
+    used not to be, so those rows shipped another star's position.
+
+    Measured on the brick 2221-o001 m8 catalog (JWST-GC/data-qa#1): 65% of
+    rows had ``sep_f212n`` beyond the 0.10" ``max_offset`` yet a finite
+    ``skycoord_f212n``, one source serving as the position of up to 20 rows
+    (median 0.25", max 1.3").  The release QA nearest-neighbour-matched VIRAC2
+    into that column and reported a 17 mas frame tie with a bimodal offset
+    cloud; the same-star tie is 0.6 mas.
+    """
+
+    def test_invalid_flags_far_and_nonmutual(self):
+        sep = np.array([0.01, 0.5, 0.01, 0.5]) * u.arcsec
+        mutual = np.array([True, True, False, False])
+        invalid = MC.invalid_crossfilter_match(sep, mutual, 0.10 * u.arcsec)
+        # only the near AND mutual row survives
+        np.testing.assert_array_equal(invalid, [False, True, True, True])
+
+    def test_blank_unmatched_skycoord_nans_only_invalid_rows(self):
+        sc = SkyCoord([10.0, 10.1, 10.2] * u.deg, [-20.0, -20.1, -20.2] * u.deg)
+        out = MC.blank_unmatched_skycoord(sc, np.array([False, True, False]))
+        assert np.isfinite(out.ra.deg[0]) and np.isfinite(out.ra.deg[2])
+        assert np.isnan(out.ra.deg[1]) and np.isnan(out.dec.deg[1])
+        # untouched rows keep their exact value, and the frame is preserved
+        assert out.ra.deg[0] == sc.ra.deg[0]
+        assert out.frame.name == sc.frame.name
+        # no invalid rows -> returned unchanged
+        same = MC.blank_unmatched_skycoord(sc, np.zeros(3, dtype=bool))
+        np.testing.assert_allclose(same.ra.deg, sc.ra.deg)
+
+    def test_one_source_claimed_by_many_base_rows_keeps_one_position(self):
+        """The actual failure mode: several base rows share one nearest
+        filter source.  Exactly the mutual, within-max_offset row may keep it.
+        """
+        max_offset = 0.10 * u.arcsec
+        # one filter detection, and four base rows at 0.02"/0.2"/0.5"/1.0"
+        # from it along Dec -- the brick pattern (median borrow 0.25").
+        src = SkyCoord([266.5] * u.deg, [-28.7] * u.deg)
+        offsets_arcsec = np.array([0.02, 0.2, 0.5, 1.0])
+        base = SkyCoord(np.full(4, 266.5) * u.deg,
+                        (-28.7 + offsets_arcsec / 3600.0) * u.deg)
+
+        matches, sep, _ = base.match_to_catalog_sky(src)
+        reverse_matches, _, _ = src.match_to_catalog_sky(base)
+        mutual = (reverse_matches[matches] == np.arange(len(matches)))
+        # every base row gathers the SAME single source -> the bug's premise
+        np.testing.assert_array_equal(matches, [0, 0, 0, 0])
+
+        invalid = MC.invalid_crossfilter_match(sep, mutual, max_offset)
+        gathered = MC.blank_unmatched_skycoord(src[matches], invalid)
+
+        finite = np.isfinite(gathered.ra.deg)
+        assert finite.sum() == 1, \
+            f"{finite.sum()} rows kept a position; only the mutual match may"
+        assert finite[0], "the 0.02\" mutual match is the one that should survive"
+        # and the rows that lost it are exactly the ones a consumer must skip
+        np.testing.assert_array_equal(invalid, [False, True, True, True])
