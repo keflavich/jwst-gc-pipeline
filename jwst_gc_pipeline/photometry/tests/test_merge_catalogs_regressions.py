@@ -787,3 +787,71 @@ class TestCrossFilterMatchValidity:
         assert finite[0], "the 0.02\" mutual match is the one that should survive"
         # and the rows that lost it are exactly the ones a consumer must skip
         np.testing.assert_array_equal(invalid, [False, True, True, True])
+
+
+class TestGatherCrossFilterColumns:
+    """The gather must blank a rejected match CONSISTENTLY across every column it writes.
+
+    Pins both halves of the fix.  Reverting ``mask_{wl} = invalid`` to ``mask_{wl} = badsep``
+    used to leave all 40 tests passing even though it changes what ships on ~65% of the table:
+    forced_fill keys on mask_{wl}, so the mask decides which rows get their photometry refilled.
+    """
+
+    @staticmethod
+    def _gather(n=6, non_mutual=(2,), far=(4,)):
+        """One master row per source, all matched 1:1, except the rows named as non-mutual
+        (close but claimed by another master row) and far (beyond max_offset)."""
+        tbl = Table()
+        tbl['skycoord'] = SkyCoord(np.linspace(266.4, 266.5, n) * u.deg,
+                                   np.linspace(-29.0, -28.9, n) * u.deg)
+        tbl['flux'] = np.arange(n, dtype=float) + 1.0
+        matches = np.arange(n)
+        sep = np.full(n, 0.01) * u.arcsec
+        sep[list(far)] = 0.5 * u.arcsec
+        mutual = np.ones(n, dtype=bool)
+        mutual[list(non_mutual)] = False
+        out = MC.gather_crossfilter_columns(tbl, matches, sep, mutual,
+                                            0.10 * u.arcsec, 'f405n')
+        return out, matches, sep, mutual
+
+    def test_mask_matches_the_scalar_columns(self):
+        out, _, _, _ = self._gather()
+        mask = np.asarray(out['mask_f405n'], dtype=bool)
+        flux_mask = np.asarray(out['flux_f405n'].mask, dtype=bool)
+        # the load-bearing assertion: mask_{wl} is NOT badsep alone.  Row 2 is close but
+        # non-mutual, so a badsep-only mask would read False while its flux is masked.
+        assert mask[2], "non-mutual row must be masked (badsep alone would miss it)"
+        assert mask[4], "beyond-max_offset row must be masked"
+        np.testing.assert_array_equal(mask, flux_mask)
+        assert mask.sum() == 2 and not mask[[0, 1, 3, 5]].any()
+
+    def test_skycoord_blanked_on_exactly_the_masked_rows(self):
+        out, _, _, _ = self._gather()
+        mask = np.asarray(out['mask_f405n'], dtype=bool)
+        finite = np.isfinite(out['skycoord_f405n'].ra.deg)
+        np.testing.assert_array_equal(finite, ~mask)
+
+    def test_valid_rows_keep_their_own_values(self):
+        out, matches, _, _ = self._gather()
+        keep = ~np.asarray(out['mask_f405n'], dtype=bool)
+        np.testing.assert_allclose(np.asarray(out['flux_f405n'])[keep],
+                                   (np.arange(6.0) + 1.0)[keep])
+
+
+def test_blanked_skycoord_falls_through_to_skycoord_ref():
+    """This PR puts NaN into a column that never had it, so assert the consumer's behaviour
+    directly rather than trusting the docstring: a blanked skycoord_<filt> must fall through to
+    skycoord_ref, NOT become a (0,0) sentinel or a NaN seed position."""
+    from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import _resolve_seed_skycoords
+    t = Table()
+    t['skycoord_f410m'] = SkyCoord([266.5, np.nan, 266.7] * u.deg,
+                                   [-28.7, np.nan, -28.9] * u.deg)
+    t['skycoord_ref'] = SkyCoord([266.4, 266.6, 266.8] * u.deg,
+                                 [-28.6, -28.8, -29.0] * u.deg)
+    out = _resolve_seed_skycoords(Table(t, copy=True), ww=None,
+                                  preferred_skycoord_col='skycoord_f410m')
+    ra = np.asarray(out['skycoord'].ra.deg)
+    dec = np.asarray(out['skycoord'].dec.deg)
+    assert np.isclose(ra[1], 266.6) and np.isclose(dec[1], -28.8)   # fell through to ref
+    np.testing.assert_allclose(ra[[0, 2]], [266.5, 266.7])           # others keep per-filter
+    assert np.all(np.isfinite(ra)) and not np.any((ra == 0) & (dec == 0))

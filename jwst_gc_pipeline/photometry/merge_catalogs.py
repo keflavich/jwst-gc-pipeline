@@ -982,6 +982,42 @@ def blank_unmatched_skycoord(sc, invalid):
                     frame=sc.frame.replicate_without_data())
 
 
+def gather_crossfilter_columns(tbl, matches, sep, mutual_matches, max_offset, wl):
+    """Gather filter ``wl``'s rows onto the master list and suffix every column with ``_wl``.
+
+    ``matches`` indexes ``tbl`` per master row (from a one-to-many
+    ``match_to_catalog_sky``), so the SAME source can appear on many rows.  Rows that
+    ``invalid_crossfilter_match`` rejects are blanked consistently across ALL of the gathered
+    columns -- scalars masked, the SkyCoord NaN'd, and ``mask_{wl}`` set -- so no consumer can
+    read one as valid while another says it is not.  Factored out of ``merge_catalogs`` so this
+    (the part that decides what ships) is testable without the merge's file I/O.
+    """
+    matchtb = tbl[matches]
+    badsep = sep > max_offset
+    invalid = invalid_crossfilter_match(sep, mutual_matches, max_offset)
+    for cn in list(matchtb.colnames):
+        if isinstance(matchtb[cn], SkyCoord):
+            matchtb.rename_column(cn, f"{cn}_{wl}")
+            matchtb[f"{cn}_{wl}"] = blank_unmatched_skycoord(matchtb[f"{cn}_{wl}"], invalid)
+            # mask_{wl} must use the SAME condition as the scalar columns below.  It used to be
+            # ``badsep`` alone, so a non-mutual row had a masked flux but mask_{wl}=False --
+            # and forced_fill.py keys on mask_{wl}, so it skipped exactly the rows whose
+            # photometry it needed to fill.  NOTE the column's meaning changes downstream:
+            # forced_fill CLEARS mask_{wl} on any row it successfully fills, so on a shipped m8
+            # catalog mask_{wl} reads "still un-measured AFTER the fill", not "the merge
+            # rejected this match".  ``sep_{wl}`` is the durable record of the latter.
+            matchtb[f'mask_{wl}'] = invalid
+        else:
+            matchtb[f'{cn}_{wl}'] = MaskedColumn(data=matchtb[cn], name=f'{cn}_{wl}')
+            matchtb[f'{cn}_{wl}'].mask[badsep] = True
+            # mask non-mutual matches
+            matchtb[f'{cn}_{wl}'].mask[~mutual_matches] = True
+            if hasattr(matchtb[cn], 'meta'):
+                matchtb[f'{cn}_{wl}'].meta = matchtb[cn].meta
+            matchtb.remove_column(cn)
+    return matchtb
+
+
 def _oksep_sep_cols(colnames):
     """Non-wide ``sep_*`` columns actually present in a merged table.
 
@@ -1097,32 +1133,12 @@ def merge_catalogs(tbls, catalog_type='crowdsource', module='nrca',
 
             basetable.add_column(name=f"sep_{wl}", col=sep)
             basetable.add_column(name=f"id_{wl}", col=matches)
-            matchtb = tbl[matches]
-            badsep = sep > max_offset
             # ``sep_{wl}`` / ``id_{wl}`` above stay unmasked ON PURPOSE: they are
             # the provenance of the rejection (how far away the claimed source
             # was, and which one), and the release QA reads them to decide which
             # rows carry a real per-filter position.
-            invalid = invalid_crossfilter_match(sep, mutual_matches, max_offset)
-            for cn in matchtb.colnames:
-                if isinstance(matchtb[cn], SkyCoord):
-                    matchtb.rename_column(cn, f"{cn}_{wl}")
-                    matchtb[f"{cn}_{wl}"] = blank_unmatched_skycoord(
-                        matchtb[f"{cn}_{wl}"], invalid)
-                    # mask_{wl} must use the SAME condition as the scalar
-                    # columns below.  It used to be ``badsep`` alone, so a
-                    # non-mutual row had a masked flux but mask_{wl}=False;
-                    # forced_fill.py keys on mask_{wl} and therefore skipped
-                    # exactly the rows whose photometry it needed to fill.
-                    matchtb[f'mask_{wl}'] = invalid
-                else:
-                    matchtb[f'{cn}_{wl}'] = MaskedColumn(data=matchtb[cn], name=f'{cn}_{wl}')
-                    matchtb[f'{cn}_{wl}'].mask[badsep] = True
-                    # mask non-mutual matches
-                    matchtb[f'{cn}_{wl}'].mask[~mutual_matches] = True
-                    if hasattr(matchtb[cn], 'meta'):
-                        matchtb[f'{cn}_{wl}'].meta = matchtb[cn].meta
-                    matchtb.remove_column(cn)
+            matchtb = gather_crossfilter_columns(tbl, matches, sep, mutual_matches,
+                                                 max_offset, wl)
 
             print(f"Max flux in tbl for {wl}: {tbl['flux'].max()}; in jy={np.nanmax(np.array(tbl['flux_jy']))}; mag={np.nanmin(np.array(tbl['mag_ab']))}")
             print(f"merging tables step: max flux for {wl} is {matchtb['flux_'+wl].max()} {matchtb['flux_jy_'+wl].max()} {matchtb['mag_ab_'+wl].min()}")
