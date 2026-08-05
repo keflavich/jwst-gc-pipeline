@@ -23,7 +23,7 @@ pipeline.
 |---|---|---|
 | **m2** (after the m12 merge — first per-frame catalogs) | per-(visit, filter) consensus; every exposure re-measured vs the consensus (tol **2 mas**); consensus tied to VIRAC2/Gaia with the multi-check ladder | **CORRECT**: offsets table updated (provenance columns, validated, backed up), im0 `_i2d` mosaics stale-tagged `*_im0_badastrom.fits`, run STOPS (`AstrometryCorrectionRequiredError`) — the crf frames must be regenerated before any further cataloging |
 | **m3, m4, m5, m6** | same measurement | **RED FLAG**: the solution is frozen after m2; positions come from the same crf GWCS, so a shift here is a real defect (centroiding systematics, seed drag, stale frame). `AstrometryRegressionError`, blocking |
-| **m7 cross-band merge** | cross-filter agreement: anchor = filter nearest VIRAC2 Ks (2.149 µm); every filter vs anchor < **5 mas** bulk; matched-pair local residual map, no significant **2″** cell > **15 mas** (error bars mandatory) | `CrossFilterAstrometryError`, blocking, before the merge pools positions |
+| **m7 cross-band merge** | cross-filter agreement: anchor = filter nearest VIRAC2 Ks (2.149 µm); every filter vs anchor < **5 mas** bulk; matched-pair local residual map, no significant **2″** cell > **15 mas** (error bars mandatory). Plus a recorded, non-gating **residual-field** measurement (below) | `CrossFilterAstrometryError`, blocking, before the merge pools positions |
 
 ### What the frozen (m3–m6) per-exposure gate compares against
 
@@ -84,6 +84,46 @@ Stage-name mapping: the user-facing plan's "m1 pass" = the repo's m12 phase
 (iter1+iter2); its merge is labeled **m2** — that is the correcting
 checkpoint.  "m2..m5" of the plan = merge tokens m3..m6 here.  "m6
 cross-filter" = the m7 cross-band merge.
+
+## The cross-filter residual field (m7, measurement only)
+
+Alongside its two gates the m7 checkpoint MEASURES the coherent,
+position-dependent part of each filter-to-anchor residual
+(`measure_residual_field`), stored as `filters[i]["field"]` in
+`checkpoint_m7_crossfilter_*.json` and printed as one `ASTROM CROSSFILTER
+FIELD:` line per filter. **Nothing gates on it**; the two tolerances above are
+unchanged.
+
+It exists because both gates are structurally blind to that term:
+
+* `CROSSFILTER_TOL_MAS = 5.0` is on the **bulk**, which is ~0 for a field whose
+  mean is zero by construction;
+* `LOCAL_CELL_TOL_MAS = 15.0` at `LOCAL_CELL_SIZE_ARCSEC = 2.0` does not merely
+  fail to reach significance — at GC densities a 2″ cell holds ~1 star against
+  `LOCAL_CELL_MIN_STARS = 10`, so the map returns `n_cells = 0`, and
+  `run_crossfilter_checkpoint` reads only `n_flagged`, so an **empty map is
+  indistinguishable from a clean one**. An injection sweep on Brick geometry
+  never trips it at any amplitude up to 30 mas/arcmin.
+
+New `tolerances` keys: `field_cell_arcsec` (45″) and `field_min_stars` (40) —
+cells large enough to hold hundreds of stars, so the per-cell SEM falls far
+below the signal.
+
+Every amplitude in the `field` block is **per-component** (per axis), recorded
+as `rms_convention`; the only 2-D vector magnitude is `max_cell_off_mas`. Keys:
+`rms_mas`, `median_sem_mas`, `coherent_mas` (= `sqrt(rms² − <sem²>)`, the
+number to quote), `rms_after_affine_mas`, `affine_absorbed_fraction` with its
+`affine_absorbed_chance` (`6/(2n)`) and `affine_absorbed_adjusted`,
+`gradient_mas_per_arcmin` (Frobenius norm of the fitted 2×2 Jacobian),
+`n_pairs` / `matched_fraction` / `match_radius_mas`, and
+`n_cells` / `n_cells_in_bbox` / `n_cells_dropped`.
+
+Brick m7, 45″ cells, per-component rms: F212N/F187N 0.54, F405N/F466N 0.51,
+F182M/F187N 0.98, F212N/F182M 1.40, F212N/F405N 2.50, F182M/F466N 2.53,
+F212N/F200W 3.42, F182M/F115W 4.47 mas — 7–45× the per-cell SEM. This is the
+field-wide astrometric floor; see issue #296 for what causes it and #299 for
+the correction.
+
 
 ## The per-filter JWST consensus catalog
 

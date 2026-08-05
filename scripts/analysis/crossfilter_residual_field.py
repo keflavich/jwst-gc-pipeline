@@ -21,23 +21,39 @@ dense catalog: ``local_residual_map`` refuses to run until ``measure_offset``
 has verified a small global tie, which is what makes the nearest partner the
 right star (ASTROMETRY RULE #1).
 
-Result on the Brick (m7 vetted, S/N>20, qfit<0.1, saturated dropped, 45" cells)::
+Result on the Brick (m7 vetted, S/N>20, qfit<0.1, saturated dropped, 45" cells,
+32 cells).  Every amplitude is PER-COMPONENT rms -- the convention
+``measure_residual_field`` records in ``rms_convention`` -- and ``absorbed`` is
+the dof-corrected fraction against a 9% chance level::
 
-    pair             channels   bulk   FOV rms   after affine   cell SEM   gradient
-    F405N vs F466N   LW-LW      0.51      0.51           0.30       0.11   0.41 mas/'
-    F212N vs F182M   SW-SW      0.17      1.40           1.21       0.05   0.86 mas/'
-    F212N vs F405N   SW-LW      0.84      2.50           1.68       0.19   1.60 mas/'
-    F182M vs F466N   SW-LW      0.71      2.53           1.58       0.23   1.35 mas/'
+    pair             channels   bulk    rms   after   SEM   absorbed   |J|   matched
+    F212N vs F187N   SW-SW      0.85   0.54    0.47  0.03        14%  0.27      0.64
+    F405N vs F466N   LW-LW      0.51   0.51    0.30  0.06        60%  0.45      0.69
+    F182M vs F187N   SW-SW      0.86   0.98    0.78  0.02        29%  0.88      0.13
+    F212N vs F182M   SW-SW      0.17   1.40    1.21  0.03        18%  0.94      0.97
+    F212N vs F405N   SW-LW      0.84   2.50    1.68  0.11        50%  2.31      0.58
+    F182M vs F466N   SW-LW      0.71   2.53    1.58  0.13        57%  2.00      0.10
+    F212N vs F200W   SW-SW      0.81   3.42    2.27  0.08        51%  3.27      0.85
+    F182M vs F115W   SW-SW      1.96   4.47    2.18  0.08        74%  5.36      0.28
 
-Read that as: the BULK tie between any two filters is sub-mas -- global
-alignment is excellent -- while the same two catalogs disagree by 0.5-2.5 mas
-rms as a function of position, at 10-50x the per-cell standard error.  The
-amplitude tracks how different the two optical paths are, and a 6-parameter
-linear fit over the FOV absorbs 25-64% of it.
+Read that as: the BULK tie between any two filters is sub-2 mas -- global
+alignment is excellent -- while the same two catalogs disagree by 0.5-4.5 mas
+rms as a function of position, at 7-45x the per-cell standard error.  A
+6-parameter linear fit over the FOV absorbs 14-74% of it above chance.
+
+The amplitude does NOT simply track the SW/LW split: two same-channel,
+same-detector pairs (F212N/F200W, F182M/F115W) exceed both SW-LW pairs, and
+the largest are those with the widest bandpass separation.  Wavelength
+separation is the better predictor.
+
+Watch the ``matched`` column.  F182M/F466N rests on 10% of the F182M list and
+F182M/F187N on 13%; anything displaced beyond the 300 mas match radius is
+absent from the statistic by construction, so a low fraction is a reason to
+read the number cautiously, not a defect of the pair.
 
 Splitting by brightness gives the same field in every magnitude quartile
-(1.41-1.46 mas rms for F212N vs F182M), so this is a WCS-class term, not a
-flux-dependent centroid systematic.
+(1.37-1.46 mas for F212N vs F182M), so this is a WCS-class term, not a
+flux-dependent centroid systematic.  Cell size does not move it either.
 
 Usage
 -----
@@ -87,7 +103,15 @@ def load(field, band, stage, snr_min=20.0, qfit_max=0.1):
 
 
 def pair_field(a, b, cell, label):
+    """(bulk, field) for one pair; ``field`` is None when the pair is unusable.
+
+    ``local_residual_map`` raises rather than returning on an unverified tie,
+    so a field whose bulk tie fails would traceback out of a survey loop.
+    Check the tie here and report the pair as unmeasurable instead.
+    """
     bulk = measure_offset(a, b, sweep=True, context=label)
+    if bulk is None or not bulk.get("ok") or bulk.get("swept") or bulk["off"] > 100.0:
+        return bulk, None
     field = measure_residual_field(a, b, bulk, cell_arcsec=cell,
                                    min_stars=40, context=label)
     return bulk, field
@@ -111,7 +135,7 @@ def main():
 
     print(f"\n{'pair':24s} {'bulk':>6s} {'ncell':>5s} {'FOV rms':>8s} "
           f"{'coherent':>9s} {'cell SEM':>9s} {'after affine':>13s} "
-          f"{'absorbed':>9s} {'grad mas/arcmin':>16s}")
+          f"{'absorbed*':>10s} {'grad mas/arcmin':>16s}")
     for a, b in itertools.combinations(args.bands, 2):
         bulk, f = pair_field(cat[a][0], cat[b][0], args.cell, f"{a} vs {b}")
         if f is None:
@@ -120,7 +144,7 @@ def main():
         print(f"{a} vs {b:16s} {bulk['off']:6.2f} {f['n_cells']:5d} "
               f"{f['rms_mas']:8.2f} {f['coherent_mas']:9.2f} "
               f"{f['median_sem_mas']:9.2f} {f['rms_after_affine_mas']:13.2f} "
-              f"{100 * f['affine_absorbed_fraction']:8.0f}% "
+              f"{100 * f['affine_absorbed_adjusted']:8.0f}% "
               f"{f['gradient_mas_per_arcmin']:16.2f}")
 
     if args.mag_split and len(args.bands) >= 2:
