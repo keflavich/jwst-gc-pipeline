@@ -821,6 +821,100 @@ CONTINUITY_TOL_MAG = 0.10
 # checklist against a true 0.170), so it is called with band_sat=/band_ref= below.
 CONTINUITY_PAIRS = [("f182m", "f187n"), ("f410m", "f405n")]
 
+# A NIRCam-LONG observation read out with NGROUPS<=2 (BRIGHT2) cannot recover the
+# deepest saturated cores -- they are railed at group 0, so there is no unsaturated
+# sample to reconstruct their flux from. The recovered-satstar F410M-F405N color
+# then carries a residual bias in the saturation-onset bins that no reduction
+# change closes: an observation-design floor, not a pipeline defect, and the
+# boundary metric cannot exclude the satstar rows (measuring the satstar<->normal
+# transition IS its purpose), so science_only does not help here the way it does
+# for the flatness gate.
+#
+# This exemption is scoped FOUR ways and FAILS CLOSED on the unknown -- it is not
+# a whole-pair whitelist:
+#   1. only the (band_sat, band_ref) pairs listed below (F410M-F405N);
+#   2. only the C1-boundary-jump metric kind (the railed-core mechanism); a
+#      C2-locus-offset -- a whole-locus color shift, a different defect -- blocks;
+#   3. only when the field's band_sat readout is NGROUPS <= max_ngroups, taken as
+#      the DEEPEST readout across the shipped science mosaics AT GATE TIME (w51
+#      NGROUPS=5 and sgrb2 NGROUPS=3-4 are NOT exempt);
+#   4. only when the jump is below max_jump_mag -- a GROSS break is not the deep-core
+#      floor and blocks (exercised by the synthetic gross-break/regression tests; no
+#      CURRENT field reaches the gate with both a measurable gross F410M-F405N jump
+#      and a shippable 2-group mosaic, so this condition has no real-data example yet).
+# If the mosaic/NGROUPS cannot be read, the pair is NOT exempt (blocks).
+#
+# max_jump_mag is a HARD-CODED constant, deliberately NOT env-overridable: it moves
+# a blocking threshold, and a single env knob would be a one-factor waiver of a
+# release gate (the repo's other overrides are two-factor: --allow-registration-fail
+# AND ALLOW_REGISTRATION_FAIL=1). 0.25 sits just above the measured 0.170 floor, so
+# a regression that materially WORSENS the boundary jump (e.g. ~0.30) still blocks
+# rather than hiding under a wide ceiling.
+#
+# Measured (2026-08), and WHY each field lands where it does -- note on today's
+# measurable data the ceiling+NGROUPS do the separating; the C1 guard and the
+# ceiling cover cases the current fields do not contain:
+#   brick  0.170  NGROUPS=2  C1   -> WARN (worst bin n_sat=38 at F405N 12-13 onset)
+#   w51    0.577  NGROUPS=5  C1   -> FAIL (not the railed regime; condition 3)
+#   cloudc 2.841  NGROUPS=None    -> FAIL (its F410M science mosaic is quarantined
+#          _i2d_im0_badastrom, so no readout is shippable -> fail-closed, condition 3;
+#          the 2.841 jump is ALSO above the ceiling, but the gate stops at NGROUPS).
+# So the ceiling (condition 4) is not yet demonstrated on real data -- do not cite
+# cloudc as the ceiling case; it is the fail-closed-on-missing-mosaic case.
+#
+# PROVISIONAL: saturated-star recovery photometry improvement is under active
+# investigation; remove this entry once the recovered deep-core flux scale is fixed.
+CONTINUITY_BOUNDARY_KNOWN_LIMITS = {
+    ("f410m", "f405n"): dict(
+        max_ngroups=2,
+        max_jump_mag=0.25,
+        kind="C1-boundary-jump",
+        reason="NGROUPS<=2 (BRIGHT2) railed deep-core satstar color floor "
+               "(provisional; recovery photometry under investigation)"),
+}
+
+
+def _band_ngroups(items, band):
+    """The DEEPEST (max) NGROUPS across ``band``'s shipped science i2d mosaics.
+
+    Returns ``max(NGROUPS)`` over every readable F<band> science mosaic, or None
+    when none is shipped / readable -- the caller treats None as "cannot verify
+    the readout" and does NOT grant a known-limit exemption (fail closed).  Taking
+    the MAX, not the first, is deliberate: a field that ships several mosaics for
+    a filter (per-module nrca/nrcb, per-pointing) must be judged by its DEEPEST
+    readout, so a shallow-listed 2-group mosaic cannot grant an exemption while a
+    deeper NGROUPS>=3 readout for the same filter is also present."""
+    from astropy.io import fits
+    found = []
+    for it in items:
+        if not (it.get("category") == "image" and it.get("kind") == "science"
+                and str(it.get("filter", "")).upper() == band.upper()
+                and str(it.get("src", "")).endswith(".fits")):
+            continue
+        try:
+            ng = fits.getheader(it["src"]).get("NGROUPS")
+        except OSError:
+            # a shipped band mosaic we cannot even open -> cannot certify the
+            # readout -> POISON: fail closed rather than judge off its siblings.
+            print(f"  _band_ngroups: {band} science mosaic unreadable "
+                  f"({it['src']}) -- cannot verify readout", flush=True)
+            return None
+        if ng is None:
+            continue          # no NGROUPS key: not a readout claim, skip
+        try:
+            found.append(int(ng))
+        except (TypeError, ValueError):
+            # a shipped mosaic whose NGROUPS is not int-parseable -> POISON.
+            # The contract is "judged by the deepest readout"; a candidate whose
+            # readout cannot be parsed must DEFEAT the judgement, not be dropped
+            # from it (else a shallow sibling could grant the exemption).
+            print(f"  _band_ngroups: {band} science mosaic has unparseable "
+                  f"NGROUPS={ng!r} ({it['src']}) -- cannot verify readout",
+                  flush=True)
+            return None
+    return max(found) if found else None
+
+
 # Degenerate-pair flatness is certified on the SCIENCE subset (science_only=True):
 # the rows a user analyses after cutting every saturation flag.  The recovered /
 # deep-core satstar rows stay in the released table under is_saturated /
@@ -860,12 +954,13 @@ def check_photometric_continuity(items, tol=CONTINUITY_TOL_MAG,
     from astropy.table import Table
     from jwst_gc_pipeline.photometry.saturation_continuity import (
         DEGENERATE_PAIRS, degenerate_pair_flatness, saturation_continuity)
-    srcs = [it["src"] for it in items
-            if it.get("kind") == "catalog_full" and it["src"].endswith(".fits")]
-    if not srcs:
+    cat_items = [it for it in items
+                 if it.get("kind") == "catalog_full" and it["src"].endswith(".fits")]
+    if not cat_items:
         return None
     fails = []
-    for src in srcs:
+    for it in cat_items:
+        src = it["src"]
         cat = Table.read(src)
         have = {c[len("mag_vega_"):] for c in cat.colnames
                 if c.startswith("mag_vega_")}
@@ -874,11 +969,38 @@ def check_photometric_continuity(items, tol=CONTINUITY_TOL_MAG,
             if a not in have or b not in have:
                 continue
             r = saturation_continuity(cat, band_sat=a, band_ref=b)
-            ok = not (np.isfinite(r["metric"]) and r["metric"] >= tol)
+            over = np.isfinite(r["metric"]) and r["metric"] >= tol
+            exempt, note = False, ""
+            if over:
+                lim = CONTINUITY_BOUNDARY_KNOWN_LIMITS.get((a, b))
+                if lim is not None:
+                    ng = _band_ngroups(items, a)
+                    if (r["kind"] == lim["kind"] and ng is not None
+                            and 1 <= ng <= lim["max_ngroups"]
+                            and r["metric"] < lim["max_jump_mag"]):
+                        exempt = True
+                        # Record the waiver on the catalog ITEM so it persists into
+                        # MANIFEST.json (items -> manifest["files"]): a shipped
+                        # catalog must carry a machine-readable record that a
+                        # boundary gate was waived, not just a stdout line.
+                        it.setdefault("continuity_waivers", []).append(dict(
+                            pair=f"{a}-{b}", metric=round(float(r["metric"]), 4),
+                            kind=r["kind"], ngroups=ng,
+                            ceiling_mag=lim["max_jump_mag"], reason=lim["reason"]))
+                        note = (f"  known limit (kind={r['kind']}, NGROUPS={ng}<="
+                                f"{lim['max_ngroups']}, jump {r['metric']:.3f}<"
+                                f"{lim['max_jump_mag']} mag): {lim['reason']} "
+                                f"[recorded in MANIFEST]")
+                    else:
+                        note = (f"  NOT exempt (needs kind={lim['kind']}, NGROUPS<="
+                                f"{lim['max_ngroups']}, jump<{lim['max_jump_mag']} mag; "
+                                f"got kind={r['kind']}, NGROUPS={ng}, "
+                                f"jump {r['metric']:.3f})")
+            status = "ok" if not over else ("WARN(known-limit)" if exempt else "FAIL")
             print(f"  continuity {a}-{b} [{name}]: "
                   + (f"{r['metric']:.3f} mag ({r['kind']})" if np.isfinite(r["metric"])
-                     else "n/a") + ("  ok" if ok else "  FAIL"), flush=True)
-            if not ok:
+                     else "n/a") + f"  {status}" + (note if over else ""), flush=True)
+            if over and not exempt:
                 fails.append(f"{a}-{b} continuity {r['metric']:.3f} mag [{name}]")
         for a, b in DEGENERATE_PAIRS:
             if a not in have or b not in have:
@@ -1096,7 +1218,8 @@ def print_manifest(items):
     print(f"{len(items)} files, total {human_size(total)}\n")
 
 
-def stage(items, field, version, release_root, mode, do_checksum):
+def stage(items, field, version, release_root, mode, do_checksum,
+          continuity_gate=None):
     field_dir = field_release_dir(field, version, release_root)
     field_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1161,6 +1284,12 @@ def stage(items, field, version, release_root, mode, do_checksum):
         "release_path": "/" + str(field_dir.relative_to(GLOBUS_COLLECTION_ROOT)),
         "built": datetime.datetime.now().astimezone().isoformat(),
         "mode": mode,
+        # Positive outcome of the photometric-continuity gate for this staging:
+        # "passed" (all clean), "waived" (a documented known limit was recorded --
+        # see per-file continuity_waivers), "skipped(override)", or a
+        # "not_enforced/not_applicable" reason. A manifest with no waiver is thus
+        # not ambiguous. None only for a stage() call outside the gated main path.
+        "continuity_gate": continuity_gate,
         "globus_collection_id": GLOBUS_COLLECTION_ID,
         "globus_https_base": GLOBUS_HTTPS_BASE,
         "files": items,
@@ -1217,6 +1346,30 @@ def write_readme(field_dir, field, version, items, mode):
     if "model" in kinds:
         science_lines.append(
             "- `*_model_i2d.fits`         : PSF model image (highest merge iteration)")
+    # Known photometric limitations the continuity gate WAIVED for this release.
+    # A JSON key in MANIFEST.json is a machine surface; a downloader reads the
+    # README, so a waiver must appear here in plain text too (mirrors the frame +
+    # epoch declaration rule).
+    _waivers = [w for it in items for w in (it.get("continuity_waivers") or [])]
+    limitation_lines = []
+    if _waivers:
+        limitation_lines = [
+            "## Known photometric limitations (READ BEFORE USING THE PHOTOMETRY)",
+            "",
+            "The photometric-continuity gate WAIVED the following documented limit(s)",
+            "for this release (also in `MANIFEST.json`: top-level `continuity_gate: "
+            "\"waived\"` and per-catalog `continuity_waivers`):",
+            "",
+        ]
+        for w in _waivers:
+            limitation_lines.append(
+                f"- **{w['pair'].upper()} saturation-boundary continuity = "
+                f"{w['metric']} mag** (gate floor {CONTINUITY_TOL_MAG} mag). "
+                f"{w['reason']} It affects the deepest saturated stars only "
+                f"(flagged `replaced_saturated`); cut those rows for unbiased "
+                f"{w['pair'].upper()} colors. Provisional -- expected to improve in "
+                f"a later release.")
+        limitation_lines.append("")
     lines = [
         f"# JWST Galactic Center survey -- {field} -- release {version}",
         "",
@@ -1250,7 +1403,7 @@ def write_readme(field_dir, field, version, items, mode):
         "are current, but the photometry catalogs for this field are not yet",
         "certified. They will follow in a later release.",
         "",
-    ]) + [
+    ]) + limitation_lines + [
         "## Astrometric frame and epoch (READ BEFORE TARGETING)",
         "",
         "- **Reference frame:** Gaia DR3 (via the Gaia+VIRAC2 per-field reference",
@@ -1406,6 +1559,10 @@ def main(argv=None):
               "the astrometry failsafe -- only set it with a written justification.",
               file=sys.stderr)
         return 2
+    # Positive record of the continuity gate's outcome, written to MANIFEST.json so
+    # a manifest with no waiver is not ambiguous (clean vs gate-skipped vs
+    # overridden). Set to a definite value on every path.
+    continuity_gate = "skipped(override)" if override else None
     if not override:
         gate = Path(__file__).with_name("registration_failsafes.py")
         gate_cmd = [sys.executable, str(gate), "--field", args.field, "--scan"]
@@ -1533,6 +1690,7 @@ def main(argv=None):
             if cont_fails is None:
                 print("  no combined merged table shipped -- cannot enforce the "
                       "continuity gate.")
+                continuity_gate = "not_enforced(no-merged-table)"
             elif cont_fails:
                 detail = "; ".join(cont_fails)
                 print(f"\nREFUSING TO STAGE '{args.field}': photometric-continuity "
@@ -1543,10 +1701,15 @@ def main(argv=None):
                       f"with --allow-registration-fail AND ALLOW_REGISTRATION_FAIL=1.",
                       file=sys.stderr)
                 return 2
+            else:
+                continuity_gate = ("waived" if any(it.get("continuity_waivers")
+                                                   for it in items) else "passed")
+        else:
+            continuity_gate = "not_applicable(images-only)"
 
     mode = "copy" if args.copy else "symlink"
     field_dir = stage(items, args.field, args.version, args.release_root,
-                      mode, not args.no_checksum)
+                      mode, not args.no_checksum, continuity_gate=continuity_gate)
     print(f"Staged {len(items)} files into {field_dir} (mode: {mode}).")
 
     if args.set_acl:

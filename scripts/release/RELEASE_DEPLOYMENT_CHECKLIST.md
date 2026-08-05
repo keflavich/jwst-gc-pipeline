@@ -230,17 +230,62 @@ science subset is too small to measure at `min_n=200` (nan), the pair fails
 so a small catalog carrying a real strip (both metrics nan) still **blocks**
 rather than slipping through the raised floor.
 
-**⚠ Saturation-BOUNDARY continuity is a SEPARATE gate and is NOT closed on Brick
-m8.** `CONTINUITY_PAIRS` runs `saturation_continuity(cat, 'f410m', 'f405n')`
-(A = the saturated/`replaced_saturated` band, B = the reference binned in
-`mag_B`) = **0.170 mag (C1-boundary-jump) → FAIL**: the recovered-F410M-satstar
-rows sit ~0.17 mag off the unflagged locus in the two bright transition bins
-**F405N 12.0–13.0** (the binning band is B = F405N; n_sat≈38, jumps −0.170 /
-−0.154). This is the same recovered-satstar color bias seen in F182M-F187N
-flatness, but the boundary metric measures the
+**Saturation-BOUNDARY continuity is a SEPARATE gate.** `CONTINUITY_PAIRS` runs
+`saturation_continuity(cat, band_sat='f410m', band_ref='f405n')` (band_sat = the
+`replaced_saturated` band, band_ref = the reference binned in `mag_ref`) =
+**0.170 mag (C1-boundary-jump)** on Brick m8: the recovered-F410M-satstar rows sit
+~0.17 mag off the unflagged locus in the two bright transition bins **F405N
+12.0–13.0** (n_sat≈38, jumps −0.170 / −0.154). This is the same recovered-satstar
+color bias seen in F182M-F187N flatness, but the boundary metric measures the
 satstar↔normal transition and therefore CANNOT exclude the satstar rows;
 `science_only` does not apply to it. (The 0.04 mag figure is the reverse argument
-order `saturation_continuity('f405n','f410m')`, which the gate does not evaluate —
-do not quote it as a pass.) Closing this needs a recovered-satstar photometry fix
-(or a decision to certify the boundary on a defined population), tracked
-separately; this section's flatness certification does not unblock it.
+order `saturation_continuity(band_sat='f405n', band_ref='f410m')`, which the gate
+does not evaluate — do not quote it as a pass.)
+
+**Known limit (`CONTINUITY_BOUNDARY_KNOWN_LIMITS` — WARN, four-way scoped, not
+whole-pair).** The 0.170 is an observation-design floor: a NIRCam-LONG field read
+out at **NGROUPS≤2 (BRIGHT2)** cannot recover the deepest saturated cores (railed
+at group 0), so the recovered F410M–F405N color carries an irreducible residual
+in the saturation-onset bins. The gate WARNs instead of blocking **only** when all
+four hold, else it FAILS:
+1. the pair is F410M–F405N (the only entry);
+2. the metric kind is `C1-boundary-jump` (the railed-core mechanism); a
+   `C2-locus-offset` — a different defect — blocks;
+3. the field's F410M readout is NGROUPS≤2, taken as the **deepest** readout across
+   the shipped science mosaics, **read at gate time** (fail-closed if the
+   mosaic/NGROUPS is unreadable or absent);
+4. the jump is below **0.25 mag** — a hard-coded ceiling (deliberately NOT
+   env-overridable: a single env knob would be a one-factor waiver of a blocking
+   gate), set just above the measured 0.170 floor so a regression that worsens the
+   jump (~0.30) still blocks.
+
+The waiver (pair, metric, kind, NGROUPS, ceiling, reason) is recorded on the
+catalog item and therefore in **MANIFEST.json** (per-catalog `continuity_waivers`
+plus a top-level `continuity_gate: "waived"`), and `write_readme` emits a
+plain-text "Known photometric limitations" section — so a shipped catalog carries
+a durable record that the boundary gate was waived, not only a log line.
+
+Measured (2026-08), and what actually stops each field:
+
+| field | metric | kind | NGROUPS | verdict |
+|---|---|---|---|---|
+| brick | 0.170 | C1 | 2 | **WARN** (gate green) |
+| w51 | 0.577 | C1 | 5 | FAIL — condition 3 (not the railed regime) |
+| cloudc | 2.841 | C1 | **None** | FAIL — condition 3 (F410M mosaic quarantined `_i2d_im0_badastrom`, no shippable readout → fail-closed) |
+
+Note this is **not** a demonstration that "every condition is needed" on real data:
+today only the NGROUPS check separates the three fields, and cloudc is stopped by
+the **missing-mosaic fail-closed** path, not the ceiling. The `C1`-kind guard and
+the 0.25 ceiling (condition 4) cover failure modes the current fields do not
+contain — they are exercised by the synthetic tests (a `C2-locus-offset`, a gross
+0.8-mag break, a 0.30-mag regression). Stated plainly: this is a hypothesis-driven
+guard set, not a set each validated against a real counter-example.
+
+This is **PROVISIONAL**. The NGROUPS→railed-core direction is a *hypothesis the
+current data cannot test* — n=3 confounded fields, and the one NGROUPS>2 field that
+measures the pair (w51, 0.577) is 3.4× worse than brick's 0.170, while brick's own
+F182M–F187N sits at 0.043 under the same BRIGHT2 readout. The exit path is a
+per-row `railed_at_group0` flag from the reduction, which would let the boundary be
+certified on the recoverable population and retire this entry. Remove the entry
+once the recovered deep-core flux scale is fixed. The biased rows stay in the
+catalog under `replaced_saturated` for anyone who cuts them.

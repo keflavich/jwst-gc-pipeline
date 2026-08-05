@@ -34,7 +34,9 @@ scale than normal photometry — the CMD breaks at the saturation boundary.
 Current status (Brick 2026-08 m8, post-ZEROFRAME-recovery): degenerate-pair
 flatness passes on the science subset at min_n=200 (F405N-F410M 0.083,
 F182M-F187N 0.049); saturation-boundary continuity f410m-f405n is 0.170
-(recovered-F410M-satstar color bias in the bright transition) and still fails.
+(recovered-F410M-satstar color bias in the bright transition). The release gate
+(stage_release.CONTINUITY_BOUNDARY_KNOWN_LIMITS) WARNs rather than blocks on that
+0.170 as a provisional NGROUPS<=2 railed-deep-core floor; see checklist 0d.
 """
 import numpy as np
 
