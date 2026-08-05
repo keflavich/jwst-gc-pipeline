@@ -136,8 +136,14 @@ FIELDS = {
     },
     # sickle: NIRCam science mosaics + MIRI; catalogs still in progress so they are
     # NOT shipped yet (skip_catalogs). NIRCam is single-module (nrcb only), so the
-    # mosaics are listed explicitly (no_auto_images): F210M has a canonical -merged_,
-    # the rest are -nrcb_. No NIRCam residual/model (cataloging ongoing).
+    # mosaics are listed explicitly (no_auto_images) and ALL FIVE are `-nrcb_`.
+    # F210M used to point at a `-merged_i2d.fits`, which on a single-module field
+    # cannot be a merge -- it was a leftover from an April 2026 generation. The m2
+    # checkpoint quarantined it (`..._im0_badastrom.fits`, 2026-08-05T03:29:26Z), and
+    # v1.1 had already shipped it: v1.1's F210M is DATE 2026-04-19 / jwst_1535.pmap
+    # while its other four bands are 2026-06-27 / jwst_1537.pmap -- a different
+    # reduction generation AND a different CRDS context inside one release.
+    # No NIRCam residual/model (cataloging ongoing).
     "sickle": {
         "data_dir": Path("/orange/adamginsburg/jwst/sickle"),
         "proposal_prefix": "jw03958-o007_t001_nircam_clear",
@@ -147,7 +153,7 @@ FIELDS = {
             {"filter": "F187N",
              "src": "/orange/adamginsburg/jwst/sickle/F187N/pipeline/jw03958-o007_t001_nircam_clear-f187n-nrcb_i2d.fits"},
             {"filter": "F210M",
-             "src": "/orange/adamginsburg/jwst/sickle/F210M/pipeline/jw03958-o007_t001_nircam_clear-f210m-merged_i2d.fits"},
+             "src": "/orange/adamginsburg/jwst/sickle/F210M/pipeline/jw03958-o007_t001_nircam_clear-f210m-nrcb_i2d.fits"},
             {"filter": "F335M",
              "src": "/orange/adamginsburg/jwst/sickle/F335M/pipeline/jw03958-o007_t001_nircam_clear-f335m-nrcb_i2d.fits"},
             {"filter": "F470N",
@@ -328,13 +334,65 @@ def _collect_images(pipeline, prefixes, filt, observation=None):
     return items
 
 
-def discover_miri(field_cfg):
+def _badastrom_sibling(src):
+    """The quarantined twin of a vanished product, when one exists.
+
+    The m2 astrometry checkpoint does not delete a mosaic built on superseded
+    offsets -- it renames it to ``<name>_im0_badastrom.fits`` and writes a
+    ``.why.json`` beside it.  So when an explicitly-listed src has gone missing,
+    that sibling is the record of what happened to it, and naming it in the
+    refusal is what turns "file not found" into "the checkpoint took it".
+    """
+    name = src.name
+    suffix = "_i2d.fits"
+    if name.endswith(suffix):
+        sibling = src.with_name(name[:-len(suffix)] + "_i2d_im0_badastrom.fits")
+    else:
+        sibling = src.with_name(src.stem + "_im0_badastrom" + src.suffix)
+    return sibling if sibling.is_file() else None
+
+
+def _quarantine_note(sibling):
+    """``(date; reason)`` from the checkpoint's ``.why.json``, or ``''``."""
+    why = Path(str(sibling) + ".why.json")
+    if not why.is_file():
+        return ""
+    try:
+        record = json.loads(why.read_text())
+    except (OSError, ValueError):
+        return ""
+    bits = [record.get("date"), record.get("reason")]
+    bits = [b for b in bits if b]
+    return " (" + "; ".join(bits) + ")" if bits else ""
+
+
+def _missing_listed_src(instrument, entry, src):
+    """One line describing an explicitly-listed source file that is not there."""
+    label = f"{instrument} {entry['filter'].upper()}"
+    obs = entry.get("observation")
+    if obs:
+        label += f"/{obs}"
+    detail = f"{label}: listed src does not exist -- {src}"
+    sibling = _badastrom_sibling(src)
+    if sibling is not None:
+        detail += (f"\n      the astrometry checkpoint quarantined it to "
+                   f"{sibling.name}{_quarantine_note(sibling)}")
+    return detail
+
+
+def discover_miri(field_cfg, missing=None):
     """MIRI science mosaics are listed explicitly per field (they vary in
-    location/naming and quality, so they are curated by hand, not auto-found)."""
+    location/naming and quality, so they are curated by hand, not auto-found).
+
+    An entry whose src is absent is recorded in ``missing`` (when a list is
+    passed) rather than being silently dropped -- see ``discover_nircam``.
+    """
     items = []
     for entry in field_cfg.get("miri", []):
         src = Path(entry["src"])
         if not src.is_file():
+            if missing is not None:
+                missing.append(_missing_listed_src("MIRI", entry, src))
             continue
         items.append({
             "category": "image", "kind": "science",
@@ -345,15 +403,26 @@ def discover_miri(field_cfg):
     return items
 
 
-def discover_nircam(field_cfg):
+def discover_nircam(field_cfg, missing=None):
     """Explicitly-listed NIRCam science mosaics (``nircam`` config key, same shape
     as ``miri``).  Use when the auto-discovered ``<prefix>-<filt>-merged_i2d.fits``
     naming does not apply -- e.g. single-module (nrcb-only) fields whose mosaic is
-    ``...-<filt>-nrcb_i2d.fits``.  Routed to images/<FILTER>/ like any NIRCam image."""
+    ``...-<filt>-nrcb_i2d.fits``.  Routed to images/<FILTER>/ like any NIRCam image.
+
+    An entry whose src is absent is recorded in ``missing`` (when a list is passed)
+    rather than being silently dropped.  Skipping it quietly is what let sickle's
+    F210M vanish from the release set: the m2 checkpoint had quarantined the listed
+    ``-merged_i2d.fits`` to ``..._im0_badastrom.fits``, so a re-stage would have
+    shipped four bands where the config asks for five, with nothing printed.  These
+    entries are curated by hand -- an absent one means the config is stale, which is
+    a fact about the release, not a file to skip.
+    """
     items = []
     for entry in field_cfg.get("nircam", []):
         src = Path(entry["src"])
         if not src.is_file():
+            if missing is not None:
+                missing.append(_missing_listed_src("NIRCam", entry, src))
             continue
         items.append({
             "category": "image", "kind": "science",
@@ -871,15 +940,22 @@ def assign_dest(item, field):
     return Path("catalogs") / src_name
 
 
-def build_manifest(field, version, images_only=False):
+def build_manifest(field, version, images_only=False, missing=None):
+    """Deliverable dicts for a field.
+
+    ``missing`` -- pass a list to collect one description per explicitly-listed
+    (``nircam`` / ``miri``) src that is not on disk.  The caller is expected to
+    refuse to stage when it comes back non-empty; the auto-discovered products
+    are not affected (nothing lists them, so nothing can go absent from a list).
+    """
     field_cfg = FIELDS[field]
     items = []
     # auto-discovered per-filter NIRCam mosaics (skip with no_auto_images, e.g.
     # fields whose NIRCam mosaics are listed explicitly via the `nircam` key)
     if not field_cfg.get("miri_only") and not field_cfg.get("no_auto_images"):
         items += discover_images(field_cfg)
-    items += discover_nircam(field_cfg)   # explicit NIRCam list (if any)
-    items += discover_miri(field_cfg)
+    items += discover_nircam(field_cfg, missing=missing)   # explicit NIRCam list (if any)
+    items += discover_miri(field_cfg, missing=missing)
     # catalogs: skip while cataloging is still in progress (skip_catalogs), or for an
     # explicit image-only release (--images-only): ship mosaics without catalogs.
     if not field_cfg.get("miri_only") and not field_cfg.get("skip_catalogs") and not images_only:
@@ -897,6 +973,97 @@ def build_manifest(field, version, images_only=False):
         # re-tied mosaic staged into an otherwise-older release) can override this.
         item.setdefault("version", version)
     return items
+
+
+# ---- generation-span check ---------------------------------------------------------
+# A field's bands are drizzled as one batch, so the science mosaics of one reduction
+# generation carry DATE headers hours apart and a single CRDS_CTX.  Measured over the
+# 19 field/instrument sets in FIELDS on 2026-08-05, every single-generation set spans
+# <= 0.6 d (wd2 0.53 d over 17 filters is the widest), while a genuinely mixed set is
+# an order of magnitude wider: v1.1's shipped sickle set spans 69 d (F210M 2026-04-19
+# / jwst_1535.pmap vs the other four 2026-06-27 / jwst_1537.pmap), ngc6334 24.6 d,
+# wd1 17.8 d.  7 d sits ~10x above the widest single batch and ~2.5x below the
+# narrowest set this leg is meant to separate (wd1), so it does not flag a re-drizzle
+# that ran over a weekend.  The CRDS leg is what catches a mixed set the date leg
+# cannot: w51's 11 bands span only 3.4 d but three CRDS contexts.  Reported per
+# instrument -- NIRCam and MIRI are reduced in separate batches, so a NIRCam-vs-MIRI
+# date gap is expected and is not a complaint.
+GENERATION_SPAN_DAYS = 7.0
+
+
+def _image_provenance(path):
+    """``(DATE, CRDS_CTX)`` from a mosaic's primary header; ``(None, None)`` if the
+    file cannot be opened or carries neither keyword."""
+    from astropy.io import fits
+    try:
+        with fits.open(path) as hdul:
+            header = hdul[0].header
+            return header.get("DATE"), header.get("CRDS_CTX")
+    except (OSError, ValueError):
+        return None, None
+
+
+def _parse_header_date(value):
+    if not value:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def check_generation_span(items, max_span_days=GENERATION_SPAN_DAYS, verbose=True):
+    """Report staged science images that did not come from one reduction generation.
+
+    Returns a list of complaint strings (empty == the set is one generation).  Two
+    independent legs, because they catch different mistakes: a DATE span wider than
+    ``max_span_days`` (one band left behind by a re-drizzle) and more than one
+    CRDS_CTX (bands calibrated against different reference files, which a date span
+    alone can miss when the re-reduction happened to be quick).
+    """
+    by_instrument = {}
+    for it in items:
+        if it.get("category") != "image" or it.get("kind") != "science":
+            continue
+        date, ctx = _image_provenance(it["src"])
+        key = it.get("instrument") or "unknown"
+        by_instrument.setdefault(key, []).append(
+            (it.get("filter") or "?", it.get("observation"), date, ctx, it["src"]))
+
+    complaints = []
+    for instrument in sorted(by_instrument):
+        members = by_instrument[instrument]
+        stamped = [(_parse_header_date(d), f, o, c)
+                   for f, o, d, c, _s in members]
+        stamped = [row for row in stamped if row[0] is not None]
+        contexts = sorted({c for _f, _o, _d, c, _s in members if c})
+        span_days = None
+        if stamped:
+            span_days = (max(r[0] for r in stamped)
+                         - min(r[0] for r in stamped)).total_seconds() / 86400.0
+        if verbose:
+            span_txt = "n/a" if span_days is None else f"{span_days:.2f} d"
+            print(f"  {instrument}: {len(members)} science image(s), DATE span "
+                  f"{span_txt}, CRDS_CTX {', '.join(contexts) or 'n/a'}")
+        if span_days is not None and span_days > max_span_days:
+            oldest = min(stamped, key=lambda r: r[0])
+            newest = max(stamped, key=lambda r: r[0])
+            complaints.append(
+                f"{instrument} DATE span {span_days:.1f} d > {max_span_days:.0f} d "
+                f"({oldest[1]}{('/' + oldest[2]) if oldest[2] else ''} "
+                f"{oldest[0].isoformat()} .. "
+                f"{newest[1]}{('/' + newest[2]) if newest[2] else ''} "
+                f"{newest[0].isoformat()})")
+        if len(contexts) > 1:
+            per_ctx = {}
+            for f, o, _d, c, _s in members:
+                if c:
+                    per_ctx.setdefault(c, []).append(f"{f}{('/' + o) if o else ''}")
+            detail = "; ".join(f"{c}: {', '.join(sorted(v))}"
+                               for c, v in sorted(per_ctx.items()))
+            complaints.append(f"{instrument} spans {len(contexts)} CRDS contexts "
+                              f"({detail})")
+    return complaints
 
 
 def sha256sum(path, chunk=1 << 20):
@@ -1153,13 +1320,54 @@ def main(argv=None):
                              "(a band is locally misregistered). DANGEROUS -- only for "
                              "deliberate overrides; ALSO requires ALLOW_REGISTRATION_FAIL=1 "
                              "in the environment. The default refuses to stage.")
+    parser.add_argument("--refuse-mixed-generations", action="store_true",
+                        help="turn the generation report into a refusal: exit nonzero "
+                             f"when the staged science images span more than "
+                             f"{GENERATION_SPAN_DAYS:.0f} days of DATE, or more than one "
+                             "CRDS_CTX, within an instrument (default: report only)")
     args = parser.parse_args(argv)
 
-    items = build_manifest(args.field, args.version, images_only=args.images_only)
+    # ---- LISTED-SOURCE GATE ---------------------------------------------------------
+    # `nircam`/`miri` entries are curated by hand, so an absent one means the config is
+    # stale -- most often because the m2 astrometry checkpoint quarantined the product
+    # to `..._im0_badastrom.fits` after correcting an offsets table. Dropping it quietly
+    # (the old behaviour) ships a release that is simply short that band, with nothing
+    # printed: sickle's F210M was in exactly that state on 2026-08-05. Refuse, and name
+    # the quarantined sibling so the operator can see what took the file. There is
+    # deliberately no override -- the fix is a one-line config edit, not a flag.
+    missing = []
+    items = build_manifest(args.field, args.version, images_only=args.images_only,
+                           missing=missing)
+    if missing:
+        print(f"\nREFUSING TO STAGE '{args.field}': {len(missing)} explicitly-listed "
+              f"source file(s) are not on disk. Staging would ship a release that is "
+              f"silently short those bands:", file=sys.stderr)
+        for entry in missing:
+            print(f"    - {entry}", file=sys.stderr)
+        print("  Point the field's `nircam`/`miri` entry at the current product, or "
+              "re-drizzle the missing one, then re-run.", file=sys.stderr)
+        return 2
     if not items:
         print(f"No deliverables discovered for field '{args.field}'.", file=sys.stderr)
         return 1
     print_manifest(items)
+
+    # ---- GENERATION-SPAN REPORT -----------------------------------------------------
+    # Everything shipped for a field should come from one reduction generation. A band
+    # four months older than its neighbours is obvious afterwards and invisible at the
+    # time -- v1.1 shipped sickle that way -- so make it visible before the copy.
+    print("GENERATION CHECK (staged science images, per instrument):")
+    span_complaints = check_generation_span(items)
+    if span_complaints:
+        for complaint in span_complaints:
+            print(f"  MIXED GENERATIONS: {complaint}")
+        if args.refuse_mixed_generations:
+            print(f"\nREFUSING TO STAGE '{args.field}': the staged science images are "
+                  f"not from a single reduction generation (see above). Re-drizzle the "
+                  f"lagging band(s) so the whole field comes from one run, or drop "
+                  f"--refuse-mixed-generations to stage anyway.", file=sys.stderr)
+            return 2
+        print("  (report only; pass --refuse-mixed-generations to make this a refusal)")
 
     if not args.stage:
         print("Dry run. Re-run with --stage to build the release tree.")

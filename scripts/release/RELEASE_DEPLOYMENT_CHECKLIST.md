@@ -141,6 +141,27 @@ The absolute arbiter is always VIRAC2 — image↔catalog agreement is only mean
 ## 3. Inter-module (PM-grade)
 - NRCA↔NRCB residual mapped (reference-free overlap); flag `> 15 mas` (spurious PM).
 
+## ⛔ 3b. The staged set is complete and from one generation (BLOCKING)
+
+Both checks run in `stage_release.py` before anything is copied, and both show up in
+a plain dry run (no `--stage` needed).
+
+- **Every explicitly-listed src exists.** `nircam`/`miri` entries in `FIELDS` are
+  curated by hand, so an absent one means the config is stale — usually because the
+  m2 astrometry checkpoint renamed the product to `..._im0_badastrom.fits` (with a
+  `.why.json` beside it) after correcting an offsets table. `discover_nircam` /
+  `discover_miri` used to `continue` past a missing src, which staged a release
+  short that band with nothing printed; they now collect it and `main` REFUSES
+  (rc 2), naming the filter, the path, and the quarantined sibling. No override —
+  the fix is to repoint the entry or re-drizzle.
+- **One reduction generation per field.** `check_generation_span` reads `DATE` and
+  `CRDS_CTX` from every staged science mosaic and reports, per instrument, a `DATE`
+  span `> GENERATION_SPAN_DAYS` (7 d) or more than one `CRDS_CTX`. Report-only by
+  default; `--refuse-mixed-generations` makes it rc 2. NIRCam and MIRI are compared
+  separately (they are reduced in separate batches). v1.1's sickle set trips both
+  legs: F210M 2026-04-19 / `jwst_1535.pmap` against four bands 2026-06-27 /
+  `jwst_1537.pmap`.
+
 ## 4. Catalog provenance
 - Release uses the current complete vetted products
   (`*_resbgsub_m7_dao_basic_vetted`), **not** the stale `*_LOCKED_*` per-filter catalogs
