@@ -45,7 +45,10 @@ SURVEYS = (
 
 #: PINNED, not `latest`: this is a third-party script the live index loads, and
 #: `latest` lets the API change under a published page (the upgrade path already
-#: has to survive `A.init` not being a promise -- see the loader).
+#: has to survive `A.init` not being a promise -- see the loader).  The pin
+#: tracks the version the pattern is OBSERVED working on -- roman_footprint_gc
+#: runs against `latest`, which resolves to this today -- not simply the newest
+#: available; bump it when that page is seen working on a later one.
 ALADIN_JS = 'https://aladin.cds.unistra.fr/AladinLite/api/v3/3.8.2/aladin.js'
 
 #: Distinguishable at small size against a dark background, in a fixed order so
@@ -458,6 +461,8 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
   try {{ data = JSON.parse(document.getElementById('ov-data').textContent); }}
   catch (err) {{ btn.disabled = true; return; }}
   var host = null;
+  var switchSeq = 0;              // a later click supersedes an in-flight one
+  var SWITCH_POLL_MS = 500, SWITCH_TRIES = 16;   // ~8 s for a HiPS to appear
   function teardown() {{
     // Whatever went wrong, the static SVG must be visible and clickable again.
     // `host` is position:absolute;inset:0 over the map, so leaving it behind
@@ -482,6 +487,12 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
       target: 'galactic 0 0', fov: 1.8, showReticle: false,
       showCooGrid: true, showFullscreenControl: false
     }});
+    function currentLayerId() {{
+      try {{
+        var cur = aladin.getBaseImageLayer && aladin.getBaseImageLayer();
+        return (cur && (cur.id || cur.url || cur.name)) || null;
+      }} catch (err) {{ return null; }}
+    }}
     var cat = A.catalog({{name: 'released fields', sourceSize: 14, onClick: 'showPopup'}});
     aladin.addCatalog(cat);
     data.fields.forEach(function (f) {{
@@ -510,30 +521,55 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
         if (i === 0) {{ b.className = 'on'; }}
         b.addEventListener('click', function () {{
           var previous = surveyBar.querySelector('button.on');
+          var seq = ++switchSeq;
           Array.prototype.forEach.call(surveyBar.children, function (o) {{
             o.className = ''; o.setAttribute('aria-pressed', 'false');
           }});
           b.className = 'on';
           b.setAttribute('aria-pressed', 'true');
-          // A layer swap that throws, or one whose HiPS never resolves, used to
-          // look exactly like a dead button: the highlight moved and nothing
-          // else happened. Say what went wrong, and put the highlight back on
-          // the layer that is actually showing so the UI does not lie.
-          try {{
-            var layer = s.id.indexOf('http') === 0 ? A.HiPS(s.id) : s.id;
-            if (aladin.setBaseImageLayer) {{ aladin.setBaseImageLayer(layer); }}
-            else {{ aladin.setImageSurvey(layer); }}
-            status.textContent = 'background: ' + s.name;
-          }} catch (err) {{
-            if (window.console) {{ console.error('ov: survey switch failed', s, err); }}
+          function rollback(msg) {{
             b.className = '';
             b.setAttribute('aria-pressed', 'false');
             if (previous) {{
               previous.className = 'on';
               previous.setAttribute('aria-pressed', 'true');
             }}
-            status.textContent = 'could not switch to ' + s.name + ' (' + err + ')';
+            status.textContent = msg;
           }}
+          var layer;
+          try {{
+            layer = s.id.indexOf('http') === 0 ? A.HiPS(s.id) : s.id;
+            if (aladin.setBaseImageLayer) {{ aladin.setBaseImageLayer(layer); }}
+            else {{ aladin.setImageSurvey(layer); }}
+          }} catch (err) {{
+            if (window.console) {{ console.error('ov: survey switch threw', s, err); }}
+            rollback('could not switch to ' + s.name + ' (' + err + ')');
+            return;
+          }}
+          // The setter is SYNCHRONOUS and returns the layer object -- fetching
+          // the HiPS properties and its tiles is not.  Reporting success on the
+          // next line would claim a background that never arrived, which is the
+          // failure this panel most likely has.  Poll what is actually
+          // displayed instead, and only then say it worked.
+          status.textContent = 'loading ' + s.name + '\\u2026';
+          var tries = 0;
+          (function poll() {{
+            if (seq !== switchSeq) {{ return; }}   // superseded by a later click
+            var showing = currentLayerId();
+            if (showing && String(showing).indexOf(s.id) !== -1) {{
+              status.textContent = 'background: ' + s.name;
+              return;
+            }}
+            if (++tries > SWITCH_TRIES) {{
+              if (window.console) {{
+                console.error('ov: survey never became visible', s, 'showing', showing);
+              }}
+              rollback('could not load ' + s.name + ' -- still showing '
+                       + (showing || 'the previous background'));
+              return;
+            }}
+            setTimeout(poll, SWITCH_POLL_MS);
+          }})();
         }});
         surveyBar.appendChild(b);
       }});

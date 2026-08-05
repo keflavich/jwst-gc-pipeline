@@ -494,3 +494,40 @@ def test_aladin_source_is_pinned():
     """`latest` lets a third party change the API under a published page."""
     fo = _fo()
     assert '/latest/' not in fo.ALADIN_JS
+
+
+def test_emitted_javascript_parses(tmp_path):
+    """The JS is built by an f-string with doubled braces and is only ever
+    asserted as substrings, so a syntax error in the template would ship a page
+    whose interactive panel silently does nothing.  Parse it."""
+    import re
+    import shutil as _shutil
+    import subprocess
+    node = _shutil.which('node') or \
+        '/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/node'
+    if not os.path.isfile(node):
+        pytest.skip('node not available to parse the emitted script')
+    fo = _fo()
+    out = fo.section([_geom('brick', 0.2, 0.0), _geom('sgrc', -0.5, -0.1)])
+    script = re.search(r'<script>\n(.*?)\n</script>', out, re.S).group(1)
+    path = tmp_path / 'emitted.js'
+    path.write_text(script)
+    proc = subprocess.run([node, '--check', str(path)],
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_success_is_not_reported_until_the_layer_is_visible():
+    """setOverlayImageLayer returns the layer object, not a promise: a HiPS that
+    never resolves does not throw, so writing 'background: X' on the next line
+    claims a background that never arrived -- the reported symptom exactly."""
+    fo = _fo()
+    out = fo.section([_geom('brick', 0.2, 0.0)])
+    body = out.split("b.addEventListener('click'")[1]
+    setter = body.index('setBaseImageLayer')
+    success = body.index("'background: '")
+    assert body.index('function poll()') < success, \
+        'success must be reported from the poll, not straight after the setter'
+    assert setter < body.index('currentLayerId()')
+    assert 'getBaseImageLayer' in out          # verified against what is displayed
+    assert 'switchSeq' in out                  # a later click supersedes an older poll
