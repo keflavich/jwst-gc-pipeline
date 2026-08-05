@@ -279,14 +279,15 @@ def _make_figure(path, ctr, Uc, Vc, Ug, Vg, nstar, fc, wc, fg, wg):
     import matplotlib.pyplot as plt
     XX, YY = np.meshgrid(ctr, ctr)
     fig, axs = plt.subplots(1, 2, figsize=(11, 5.2), sharex=True, sharey=True)
-    # Data-driven arrow scale, SHARED by both panels so CRDS and Jay are directly comparable.
-    # With scale_units='xy' the arrow length in pixels is (residual mas / scale), so a hand-set
-    # scale=3 made a ~0.4 mas vector 0.13 px long -- invisible on a 2048 px axis.  Instead size the
-    # WORST vector across both panels to ~0.9 of the grid spacing so arrows are clearly visible
-    # without overrunning neighbouring cells.
+    # FIXED arrow scale, SHARED by both panels, so the two are directly comparable and the length
+    # of any arrow is knowable: 0.1 mas is drawn as exactly ONE grid cell.  (scale_units='xy' ->
+    # arrow length in px = residual_mas / scale.)  This makes even the flat Jay field visible
+    # instead of the earlier data-driven scale where Jay's ~0.1 mas vectors shrank against CRDS's
+    # 0.44 mas ones.  CRDS's large vectors deliberately overrun a cell -- that IS the ~4x-worse
+    # distortion the figure is showing.
     grid = float(ctr[1] - ctr[0]) if len(ctr) > 1 else 256.0
-    vmax = max(float(np.nanmax(np.hypot(Uc, Vc))), float(np.nanmax(np.hypot(Ug, Vg))), 1e-6)
-    scale = vmax / (0.9 * grid)                        # mas per pixel
+    REF_MAS = 0.1
+    scale = REF_MAS / grid                              # mas per pixel: 0.1 mas == one grid cell
     q = None
     for ax, U, V, ttl, fl, wo in [
             (axs[0], Uc, Vc, 'CRDS / SIAF', fc, wc),
@@ -300,11 +301,12 @@ def _make_figure(path, ctr, Uc, Vc, Ug, Vg, nstar, fc, wc, fg, wg):
         ax.set_aspect('equal')
         ax.set_xlim(0, 2048)
         ax.set_ylim(0, 2048)
-    # labelled reference arrow (a round value near the worst vector), below the panels so it does
-    # not collide with the two-line titles
-    key = round(vmax, 2) if vmax >= 0.1 else round(vmax, 3)
-    axs[0].quiverkey(q, 0.0, -0.16, key, f'reference: {key} mas', labelpos='E',
-                     coordinates='axes', fontproperties={'size': 8})
+        # a 0.1 mas scalebar INSIDE each panel (same length on both by construction) so the reader
+        # can read the scale directly and verify the two panels match; a white patch keeps it
+        # legible over the arrows
+        qk = ax.quiverkey(q, 0.16, 0.94, REF_MAS, f'{REF_MAS} mas', labelpos='E',
+                          coordinates='axes', fontproperties={'size': 8})
+        qk.text.set_bbox(dict(facecolor='white', edgecolor='none', alpha=0.8, pad=1))
     axs[0].set_ylabel('detector y (px)')
     cb = fig.colorbar(q, ax=axs, fraction=0.04, pad=0.02)
     cb.set_label('|binned same-star residual| (mas)')
