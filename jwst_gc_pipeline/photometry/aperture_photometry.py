@@ -71,6 +71,32 @@ def _vega_zeropoint_jy(filtername):
     return u.Quantity(_JFILTS.loc[_svo_filter_id(filtername)]['ZeroPoint'], u.Jy)
 
 
+_FILTER_TOKEN = re.compile(r'^f\d{3,4}[a-z]?$')       # e.g. f200w, f405n, f2550w
+
+
+def _is_science_mosaic(basename, filt_l, inst):
+    """True iff ``basename`` is a science i2d mosaic for ``filt_l`` -- an
+    anchored positive test (see find_i2d_mosaics).  Rejects every derived product
+    (residual/model/mergedcat/reproject/resbgsub/_m<N>/downsel/...) by requiring
+    the filter-descriptor segment to contain no non-filter tokens."""
+    m = re.match(rf'^jw\d+-o\d+_t001_{inst}_(.+)_i2d\.fits$', basename)
+    if not m:
+        return False
+    seg = m.group(1)
+    if seg.startswith('clear-'):
+        seg = seg[len('clear-'):]
+    toks = seg.split('-')
+    if filt_l not in toks:
+        return False
+    for t in toks:
+        if t == filt_l or t in ('merged', 'nrca', 'nrcb'):
+            continue
+        if _FILTER_TOKEN.match(t):        # LW dual-filter partner (e.g. f405n-f444w)
+            continue
+        return False                       # any other token -> derived product
+    return True
+
+
 def find_i2d_mosaics(filtername, target, basepath):
     """Return the merged i2d mosaic(s) for a target/filter.
 
@@ -100,27 +126,20 @@ def find_i2d_mosaics(filtername, target, basepath):
         f'{pipe}/jw*-o*_t001_{inst}_clear-{filt_l}-merged_i2d.fits',
         f'{pipe}/jw*-o*_t001_{inst}_*{filt_l}*_i2d.fits',
     ]
-    # Reject derived/intermediate i2d products that share the mosaic naming but
-    # are NOT the science mosaic: pipeline residual/model images, downselected
-    # catalogs, filtered/reprojected variants, and per-iteration products.
-    _reject = ('residual', 'model', 'mergedcat', 'smoothed', '_data_',
-               'medfilt', 'reprj', 'reproj', 'reproject', 'resbgsub', 'downsel',
-               'daophot', '_cat', 'blur', 'seed', 'starsub', 'unsatstar')
+    # POSITIVE match for the science mosaic name (anchored), rather than a
+    # substring reject-list: the segment between `_t001_<inst>_` and `_i2d` must
+    # be exactly a filter descriptor -- `[clear-]<filt>` optionally suffixed with
+    # `-merged` / `-nrca` / `-nrcb`, or an LW dual-filter pair `<filt>-<other>` /
+    # `<other>-<filt>` where <other> is itself a filter token.  Any extra token
+    # (residual, model, mergedcat, reproject, resbgsub, medfilt, _m<N>, downsel,
+    # blur, seed, ...) breaks the match and is rejected -- no substring can slip
+    # through (the `merged-reproject` class that beat the old reject list is now
+    # rejected because `reproject` is not a filter token).
     seen, out = set(), []
     for p in pats:
         for m in sorted(glob.glob(p)):
-            b = os.path.basename(m)
-            # keep only observation-level mosaics (jw<prop>-o<obs>_t001...)
-            if '_t001_' not in b:
-                continue
-            if any(tok in b for tok in _reject):
-                continue
-            # the segment between _t001_ and _i2d must not carry an iteration
-            # token (_m2/_m3...) -- those are catalog-residual products
-            mid = b.split('_t001_', 1)[1].rsplit('_i2d', 1)[0]
-            if re.search(r'_m\d+(_|$)', mid):
-                continue
-            if m not in seen:
+            if m not in seen and _is_science_mosaic(os.path.basename(m),
+                                                    filt_l, inst):
                 seen.add(m)
                 out.append(m)
     # Prefer the module-merged mosaic over per-module (-nrca/-nrcb) mosaics of the
@@ -271,20 +290,44 @@ def measure_aperture_photometry(catalog, i2d_paths, filtername=None,
         log.warning("aperture_photometry: no usable i2d mosaic; skipping")
         return cat
 
-    # zeropoint / magnitudes
+    # zeropoint / magnitudes.  A missing/unknown filter or an SVO outage must
+    # only cost the Vega magnitude, not the whole measurement.
     zp = None
     if filtername is None:
         filtername = cat.meta.get('filter', None)
     if filtername is not None:
-        zp = _vega_zeropoint_jy(filtername)
+        from requests.exceptions import RequestException
+        from astroquery.exceptions import InvalidQueryError, TimeoutError \
+            as AstroqueryTimeoutError
+        try:
+            zp = _vega_zeropoint_jy(filtername)
+        except (KeyError, IndexError, ValueError, RequestException,
+                InvalidQueryError, AstroqueryTimeoutError) as ex:
+            # unknown filter (KeyError/IndexError), or SVO down/slow
+            # (RequestException / astroquery InvalidQueryError / TimeoutError):
+            # cost only the Vega magnitude, keep the aperture flux.
+            log.warning(f"aperture_photometry: Vega zeropoint lookup failed for "
+                        f"{filtername} ({type(ex).__name__}); mag_vega will be NaN")
     flux = best['flux_jy']
     with np.errstate(invalid='ignore', divide='ignore'):
         mag_ab = -2.5 * np.log10(flux) + ABMAG_OFFSET
         mag_vega = (-2.5 * np.log10(flux / zp.to(u.Jy).value)
                     if zp is not None else np.full(n, np.nan))
 
-    cat['aper_flux_jy'] = Column(flux, unit=u.Jy,
-                                 description='i2d circular-aperture flux (bkg-sub, primary radius)')
+    # A saturated/masked core, or an aperture that clipped a mosaic edge/NaN, makes
+    # the aperture flux a LOWER LIMIT (the PSF fit's flux_fit is the trustworthy
+    # value for those).  Expose that as an explicit validity flag rather than
+    # shipping a silently-deficient number.
+    valid = (~best['core_sat']) & (best['cov'] >= 0.98) & np.isfinite(flux) & (flux > 0)
+
+    cat['aper_flux_jy'] = Column(
+        flux, unit=u.Jy,
+        description='i2d circular-aperture flux (bkg-sub, primary radius); RAW, '
+                    'NOT aperture-corrected; a LOWER LIMIT where aper_flux_valid '
+                    'is False (masked/saturated core or incomplete coverage)')
+    cat['aper_flux_valid'] = Column(
+        valid, description='aperture flux is a trustworthy measurement '
+        '(not core-saturated, coverage>=0.98, finite positive); False = lower limit')
     cat['aper_flux_err_jy'] = Column(best['flux_err_jy'], unit=u.Jy)
     cat['aper_mag_vega'] = Column(mag_vega, unit=u.mag)
     cat['aper_mag_ab'] = Column(mag_ab, unit=u.mag)
@@ -417,6 +460,15 @@ def build_aperture_correction_table(catalog, filtername=None,
     tbl.meta['min_snr'] = float(min_snr)
     tbl.meta['isolation_arcsec'] = float(isolation_arcsec)
     tbl.meta['n_clean_stars'] = int(clean.sum())
+    tbl.meta['provenance'] = 'satstar_catalog_curve_of_growth'
+    # The "clean" stars here are the least-saturated members of the SATURATED-STAR
+    # catalog, and in crowded fields the largest-radius reference is neighbour-
+    # contaminated -> this table is a DIAGNOSTIC, not the aperture correction of
+    # record.  Use build_reference_apcorr (isolated unsaturated main-catalog stars)
+    # for a usable apcorr.  ratio_mad does NOT rank reliability across bands here.
+    tbl.meta['warning'] = ('DIAGNOSTIC ONLY: crowding-contaminated at large '
+                           'radius; use *_apcorr_refstars for the aperture '
+                           'correction of record')
     return tbl
 
 
@@ -527,7 +579,11 @@ def build_reference_apcorr(ref_catalog, i2d_paths, filtername,
                                           radii_arcsec=radii_reliable,
                                           isolation_arcsec=0.0,
                                           skycoord_col=scol)
+    # this IS the apcorr of record (isolated unsaturated stars) -- override the
+    # diagnostic provenance/warning that build_aperture_correction_table stamps
     tbl.meta['source'] = 'reference_unsaturated_isolated'
+    tbl.meta['provenance'] = 'reference_unsaturated_isolated'
+    tbl.meta.pop('warning', None)
     tbl.meta['snr_min'] = float(snr_min)
     tbl.meta['isolation_arcsec'] = float(achieved_iso)
     tbl.meta['annulus_arcsec'] = f'{ann_in_arcsec:.3f},{ann_out_arcsec:.3f}'
@@ -544,20 +600,35 @@ def build_reference_apcorr(ref_catalog, i2d_paths, filtername,
     return tbl
 
 
-def apcorr_table_path(filtername, target, basepath, module='', obs_token=''):
-    """Path for the SEPARATE aperture-correction table (not the photometry table)."""
+def apcorr_table_path(filtername, target, basepath, module='', obs_token='',
+                      kind='refstars'):
+    """Path for the SEPARATE aperture-correction table (not the photometry table).
+
+    ``kind='refstars'`` (default) is the aperture correction of record, derived
+    from isolated unsaturated reference stars (``build_reference_apcorr``).
+    ``kind='diagnostic'`` is the satstar-catalog curve of growth, which is
+    crowding-contaminated at large radius and is NOT a usable correction.  The
+    bare ``*_satstar_apcorr.ecsv`` name is retired so nothing reads the
+    contaminated table as if it were the correction.
+    """
     mod = f'_{module}' if module else ''
     tok = obs_token or ''
+    suffix = {'refstars': 'apcorr_refstars',
+              'diagnostic': 'apcorr_diagnostic'}[kind]
     return (f'{basepath}/catalogs/'
-            f'{filtername.lower()}{mod}{tok}_satstar_apcorr.ecsv')
+            f'{filtername.lower()}{mod}{tok}_satstar_{suffix}.ecsv')
 
 
 def write_aperture_correction_table(tbl, filtername, target, basepath,
-                                    module='', obs_token=''):
-    path = apcorr_table_path(filtername, target, basepath, module, obs_token)
+                                    module='', obs_token='', kind=None):
+    if kind is None:
+        kind = ('refstars'
+                if tbl.meta.get('provenance') == 'reference_unsaturated_isolated'
+                else 'diagnostic')
+    path = apcorr_table_path(filtername, target, basepath, module, obs_token, kind)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tbl.write(path, overwrite=True, format='ascii.ecsv')
-    log.info(f"Wrote aperture-correction table {path}")
+    log.info(f"Wrote {kind} aperture-correction table {path}")
     return path
 
 

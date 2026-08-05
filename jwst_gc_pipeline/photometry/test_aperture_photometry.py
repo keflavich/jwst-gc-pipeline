@@ -94,14 +94,19 @@ def test_nan_core_flagged_and_coverage(tmp_path):
 
 def test_offframe_positions_nan(tmp_path):
     pos = [(100, 100)]
-    path, w = _make_i2d(tmp_path, pos, [400.0])
-    # a catalog position far outside the frame
-    off = SkyCoord(10.0 * u.deg, 10.0 * u.deg)
+    path, w = _make_i2d(tmp_path, pos, [400.0], nx=200, ny=200)
+    # a position just BEYOND the array edge: world_to_pixel returns a FINITE but
+    # out-of-range pixel, so this exercises the r_out_pix array-bounds guard
+    # (not just the isfinite check).
+    off = w.pixel_to_world(230, 230)
+    on = w.pixel_to_world(100, 100)
     cat = Table()
-    cat['skycoord_fit'] = SkyCoord([off.ra, w.pixel_to_world(100, 100).ra],
-                                   [off.dec, w.pixel_to_world(100, 100).dec])
+    cat['skycoord_fit'] = SkyCoord([off.ra, on.ra], [off.dec, on.dec])
+    # confirm the off point really is finite-but-out-of-bounds in pixel space
+    ox, oy = w.world_to_pixel(off)
+    assert np.isfinite(ox) and ox > 200
     out = ap.measure_aperture_photometry(cat, [path])
-    assert not np.isfinite(float(out['aper_flux_jy'][0]))   # off-frame
+    assert not np.isfinite(float(out['aper_flux_jy'][0]))   # off-frame (bounds)
     assert np.isfinite(float(out['aper_flux_jy'][1]))       # on-frame
 
 
@@ -221,3 +226,39 @@ def test_build_reference_apcorr_synthetic(tmp_path, monkeypatch):
     assert 'i2d_mosaics' in tbl.meta and tbl.meta['recentered'] is True
     # enclosed flux increases with radius, =1 at the reference radius
     assert abs(float(tbl['flux_ratio_to_total'][-1]) - 1.0) < 1e-6
+
+
+def test_aper_flux_valid_flags_masked_core(tmp_path):
+    # clean star -> valid True; NaN-core star -> valid False (lower limit)
+    path, w = _make_i2d(tmp_path, [(60, 60), (140, 140)], [500.0, 500.0],
+                        nan_core=[((140, 140), 2.5)])
+    cat = _catalog(w, [(60, 60), (140, 140)])
+    out = ap.measure_aperture_photometry(cat, [path])
+    assert 'aper_flux_valid' in out.colnames
+    assert bool(out['aper_flux_valid'][0]) is True      # clean
+    assert bool(out['aper_flux_valid'][1]) is False     # masked core
+    assert bool(out['aper_core_saturated'][1]) is True
+
+
+def test_apcorr_table_provenance_and_path():
+    # diagnostic (satstar-catalog) vs refstars naming + provenance
+    assert ap.apcorr_table_path('f200w', 'brick', '/b', kind='refstars') \
+        .endswith('f200w_satstar_apcorr_refstars.ecsv')
+    assert ap.apcorr_table_path('f200w', 'brick', '/b', kind='diagnostic') \
+        .endswith('f200w_satstar_apcorr_diagnostic.ecsv')
+
+
+def test_is_science_mosaic_positive_matcher():
+    f, inst = 'f200w', 'nircam'
+    good = ['jw01182-o004_t001_nircam_clear-f200w-merged_i2d.fits',
+            'jw02211-o050_t001_nircam_clear-f200w-nrcb_i2d.fits',
+            'jw02221-o001_t001_nircam_f405n-f444w_i2d.fits']  # dual-filter (f405n)
+    bad = ['jw01182-o004_t001_nircam_clear-f200w-merged_residual_i2d.fits',
+           'jw01182-o004_t001_nircam_clear-f200w-merged-reproject_i2d.fits',
+           'jw01182-o004_t001_nircam_clear-f200w-merged_m3_daophot_basic_mergedcat_residual_i2d.fits',
+           'jw01182-o004_t001_nircam_clear-f200w-merged_data_i2d.fits']
+    assert ap._is_science_mosaic(good[0], f, inst)
+    assert ap._is_science_mosaic(good[1], f, inst)
+    assert ap._is_science_mosaic(good[2], 'f405n', inst)
+    for b in bad:
+        assert not ap._is_science_mosaic(b, f, inst), b

@@ -37,10 +37,14 @@ For each star (`skycoord_fit` from the consolidated satstar catalog):
    (`ww.proj_plane_pixel_area()`), the same conversion `merge_catalogs` uses for
    `flux_fit`; magnitudes via the SVO Vega `ZeroPoint` and `ABMAG_OFFSET = 8.90`.
 
-**Columns added to the catalog** (by default): `aper_flux_jy`,
-`aper_flux_err_jy`, `aper_mag_vega`, `aper_mag_ab`, `aper_bkg` (MJy/sr),
-`aper_area_frac`, `aper_core_saturated`, `aper_i2d`, plus the curve of growth
-`aper_flux_jy_r{radius}` / `aper_area_frac_r{radius}`.
+**Columns added to the catalog** (by default): `aper_flux_jy` (raw, NOT
+aperture-corrected; a **lower limit** where the core is masked or coverage is
+incomplete), `aper_flux_valid` (False = lower limit: core-saturated or
+coverage < 0.98), `aper_flux_err_jy`, `aper_mag_vega`, `aper_mag_ab`, `aper_bkg`
+(MJy/sr), `aper_area_frac`, `aper_core_saturated`, `aper_i2d`, plus the curve of
+growth `aper_flux_jy_r{radius}` / `aper_area_frac_r{radius}`. Consumers should
+gate on `aper_flux_valid` (or `aper_core_saturated`) and use the PSF `flux_fit`
+for the flagged rows.
 
 ## 3. Pipeline integration (default per catalog)
 
@@ -50,21 +54,37 @@ consolidated caches are written **with** the aperture columns, and a legacy cach
 without them is backfilled once and atomically rewritten (so later reads are
 fast). Opt out with `SATSTAR_APERTURE_PHOT=0`. The extra `aper_*` columns are
 stripped by `replace_saturated`'s existing column reconciliation, so the merged
-photometry table is unchanged (aperture flux lives with the satstar catalog).
+photometry table is unchanged (aperture flux lives with the satstar catalog). A
+failed/empty measurement is non-fatal (a bad mosaic, missing SCI, or SVO outage
+is caught) and an all-NaN result is **not** cached, so it is retried rather than
+frozen as a false success.
+
+> Caveat (shared-filter fields): where one filter is imaged by two proposals
+> (e.g. NGC 6334 F200W/F470N, jw06778 + jw07213), both merged mosaics are found
+> and each star is measured on the one that best covers it; the two are
+> independently flux-calibrated, but a star straddling both is measured on a
+> single proposal's mosaic, not a combination.
 
 ## 4. Aperture-correction tables (kept SEPARATE from photometry)
 
-`build_aperture_correction_table` derives the curve-of-growth correction from
-**clean** stars (full aperture coverage at every radius, not core-saturated,
-isolated, SNR ≥ threshold): per radius it reports `flux_ratio_to_total`,
-`apcorr_mag = −2.5 log10(ratio)`, the robust scatter (MAD) and N. Written to
-`{basepath}/catalogs/{filter}_satstar_apcorr.ecsv` — a distinct file that is not
-swept up by the `*_satstar_catalog.fits` / `*_daophot_*` globs, so aperture
-corrections never contaminate the photometry tables.
+There are **two** aperture-correction products, both separate files under
+`catalogs/` (never swept up by the `*_satstar_catalog.fits` / `*_daophot_*`
+globs):
 
-> Caveat: a saturated-star catalog's cleanest members are its least-saturated
-> (faint) end; for a fuller optical curve of growth the same routine can be
-> pointed at the main photometry catalog's bright isolated unsaturated stars.
+- **`{filter}_satstar_apcorr_refstars.ecsv` — the aperture correction of record**
+  (§6): `build_reference_apcorr` on isolated, unsaturated, high-SNR **main-catalog**
+  stars.
+- **`{filter}_satstar_apcorr_diagnostic.ecsv` — diagnostic only**:
+  `build_aperture_correction_table` on the least-saturated members of the
+  saturated-star catalog. In crowded fields its large-radius reference is
+  neighbour-contaminated, so its `apcorr_mag` is not a usable correction (F200W
+  reads 2.6 mag vs F212N 0.24 mag in the same field; `ratio_mad` does **not** rank
+  reliability across bands). Its meta carries a `warning` to that effect, and the
+  bare `*_satstar_apcorr.ecsv` name is retired so nothing consumes it as if it
+  were the correction.
+
+Both report, per radius, `flux_ratio_to_total`, `apcorr_mag = −2.5 log10(ratio)`,
+the robust scatter (MAD) and N.
 
 ## 5. Results — aperture vs PSF across the field matrix
 
@@ -93,10 +113,10 @@ under `docs/reports/apphot/`.
    those — the NaN-aware sum + `aper_core_saturated` flag is essential, not
    cosmetic.
 
-2. **The aperture correction is clean for narrow/medium bands** (f212n:
-   0.3″ encloses 0.80 of the 1.0″ flux, a smooth monotonic curve of growth, MAD
-   0.13, 3888 clean stars; f405n similar). These `*_satstar_apcorr.ecsv` tables
-   are directly usable.
+2. **The satstar-derived curve of growth is smooth for narrow/medium bands**
+   (f212n: 0.3″ encloses 0.80 of the 1.0″ flux, MAD 0.13, 3888 clean stars; f405n
+   similar), but even these are diagnostic — the aperture correction of record is
+   the reference-star table (§6), not this satstar-catalog one.
 
 3. **In crowded WIDE bands the large-radius reference is contamination-limited.**
    brick f200w's curve of growth collapses (0.1″ → 0.012 of the 1.0″ flux, MAD up
@@ -208,7 +228,7 @@ radius; 1.0 = perfect.
 | cloudef | f480m | 603 | 0.4″ | 0.96 | 1.00 | agrees |
 | cloudef | f360m | 1097 | 0.4″ | 0.70 | 0.92 | agrees @0.15″ |
 | cloudef | f210m | 499 | 0.4″ | 0.30 | 0.71 | annulus-suppressed |
-| cloudef | f162m | 982 | 0.3″ | 0.29 | — | tight-annulus/SW |
+| cloudef | f162m | 982 | 0.3″ | 0.29 | 0.84 | tight-annulus @0.10″ |
 
 **Reading it.** In the well-populated fields the empirical i2d curve of growth
 agrees with the theoretical PSF to ≈1–11% (brick F200W 0.99/0.99 on 16.5k stars,
@@ -238,7 +258,8 @@ photometry (he via NaN mosaics, we via the `aper_core_saturated` flag + PSF-fit
 ## 8. Status
 1. [x] `aperture_photometry.py` — NaN-aware aperture + curve of growth + apcorr.
 2. [x] wired into `load_satstar_catalog` (default; env opt-out).
-3. [x] separate apcorr tables → `catalogs/{filt}_satstar_apcorr.ecsv`.
+3. [x] separate apcorr tables → `catalogs/{filt}_satstar_apcorr_refstars.ecsv`
+   (of record) + `..._diagnostic.ecsv`; never in the photometry table.
 4. [x] unit tests (synthetic mosaics).
 5. [x] cross-field investigation (11 field/filter combos; job 38760929).
 6. [x] contamination-free apcorr from isolated unsaturated main-catalog stars
