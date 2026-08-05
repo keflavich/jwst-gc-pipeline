@@ -3524,19 +3524,24 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
     every key duplicated 2-5x; F277W 196 -> 48; ngc6334 F090W 180 -> 120, where
     the second copy is the SAME 6778 exposures under their pre-token name.
 
-    Both directions matter:
+    ``obs_token`` here is the token the per-frame WRITER
+    (``crowdsource_catalogs_long.obs_token``) emits, not the one the consensus
+    catalog is named with.  Only a token that was written can be matched; see
+    the call site for what filtering on the consensus token instead costs.
 
-    - a TOKENED run keeps only the basenames carrying its own token;
-    - an UNTOKENED run drops every basename carrying any token, or a run
-      predating ``obs_token`` still ingests the tokened files beside it.
+    Whether a pre-token basename is ambiguous depends on the FILTER, so the
+    registry decides (``filter_observation_count``):
 
-    A pre-token basename cannot say which observation wrote it, so a tokened run
-    drops it rather than guess -- for gc2211 those legacy names are a different
-    observation's exposures, and for ngc6334 F090W they are this proposal's own
-    exposures already present under the tokened name.  Where only the legacy
-    copy exists (ngc6334 F090W nrca), the checkpoint loses those frames until
-    they are rewritten with the token; the alternative is measuring an exposure
-    twice.
+    - **more than one observation images this filter** -- an untokened basename
+      could be any of them, so keep only the basenames carrying this run's
+      token.  gc2211 F200W is this case: the untokened copies are a different
+      observation's exposures.
+    - **exactly one observation images it** -- every catalog in the directory is
+      this run's whatever its name, so keep both spellings and drop an untokened
+      file only where the same exposure is also present under a tokened name.
+      ngc6334 F090W is this case, and its nrca detectors exist ONLY under the
+      pre-token name; discarding them would build a consensus from nrcb alone
+      and PASS, which is worse than the duplicate it avoids.
 
     This narrows the checkpoint's input to one observation, which is what the
     visit consensus is defined over.  A field deliberately pooling two
@@ -3567,18 +3572,37 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
         # from nrcb alone and PASS, which is worse than the duplicate it avoids.
         # Keep both spellings, preferring the tokened copy of any exposure that
         # has one, so the same exposure is still never counted twice.
+        # Compare on an identity with BOTH the token and the chunk suffix
+        # removed.  The checkpoint collapses `_chunk\d+of\d+` itself further
+        # down, so `..._m2_chunk00of02_...` and `..._m2_...` land on one
+        # exposure_key; comparing raw basenames would keep both and reach
+        # DuplicateExposureError by a different route.
+        def _identity(base):
+            m = _OBS_TOKEN_RE.search(base)
+            if m:
+                base = base.replace('_' + m.group(1), '', 1)
+            return re.sub(r'_chunk\d+of\d+', '', base)
+
         tokened = {}
         untokened = {}
         for fn in fns:
             base = os.path.basename(fn)
             m = _OBS_TOKEN_RE.search(base)
-            if m:
-                tokened[base.replace('_' + m.group(1), '', 1)] = fn
-            else:
-                untokened[base] = fn
-        for ident, fn in untokened.items():
+            (tokened if m else untokened).setdefault(_identity(base), []).append(fn)
+        for ident, group in untokened.items():
+            group = sorted(group)
             if ident in tokened:
-                drop.append(fn)
+                drop.extend(group)
+            else:
+                # Same exposure written twice under the same spelling can only
+                # differ by chunking; keep one.
+                drop.extend(group[1:])
+        for ident, group in tokened.items():
+            group = sorted(group)
+            # Two DIFFERENT tokens on a filter only one observation images (or
+            # the same exposure chunked and unchunked) still collide on
+            # exposure_key.  Keep one.
+            drop.extend(group[1:])
     if drop:
         foreign = sorted({(_OBS_TOKEN_RE.search(os.path.basename(f)).group(1)
                            if _OBS_TOKEN_RE.search(os.path.basename(f))
@@ -3589,8 +3613,9 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
                if shared else
                f"{filt} is imaged by ONE observation of {target}, so these are "
                "the same exposures under their pre-token name")
+        noun = "foreign-observation" if shared else "duplicate"
         print(f"astrom checkpoint [{merge_label}] {filt}/{module}: excluded "
-              f"{len(drop)} duplicate per-frame catalog(s) ({foreign}) -- {why}",
+              f"{len(drop)} {noun} per-frame catalog(s) ({foreign}) -- {why}",
               flush=True)
     drop = set(drop)
     return [fn for fn in fns if fn not in drop]
@@ -3652,6 +3677,8 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
         CORRECTION_STAGES, find_i2d_for_filter, mark_i2d_stale,
         run_visit_checkpoint, update_offsets_table)
     from jwst_gc_pipeline.photometry.consensus_catalog import consensus_obs_token
+    from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
+        obs_token as _perframe_obs_token)
 
     if os.environ.get('ASTROM_CHECKPOINT', '1') == '0':
         return
@@ -3680,11 +3707,27 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     # The `*` after the filter also swallows the per-observation token, so the
     # glob is obs-BLIND: see _drop_foreign_obs_duplicates, applied below.
     #
-    # Computed here (rather than at the run_visit_checkpoint call) because the
-    # foreign-observation filter needs it too; it handles the ngc6334 case where
-    # the disambiguator is the proposal, not the obsid.
+    # Two DIFFERENT tokens, and they must not be confused:
+    #
+    # `_obs_token` names the consensus catalog this run WRITES.  Those files are
+    # new, so `consensus_obs_token` gives every observation its own name --
+    # including proposals whose per-frame writer emits nothing, which is why it
+    # falls back to `_o{obsid}` unconditionally.
+    #
+    # `_perframe_token` is what the per-frame catalogs on disk actually SPELL,
+    # and the foreign-observation filter can only match a token that was written.
+    # `crowdsource_catalogs_long.obs_token` is that writer, and it returns '' for
+    # every proposal except 2211/7213/6778.  Filtering on the consensus token
+    # instead asks for `_o001` in a directory where the writer never emitted a
+    # token, which matches nothing and empties the checkpoint's input: measured
+    # on the real trees, wd1 F200W 96 -> 0, wd2 F200W 32 -> 0, cloudef F162M
+    # 72 -> 0, sickle F187N 192 -> 0, silent at m2 and fatal at m3+.  For
+    # gc2211 and ngc6334 -- the fields this filter exists for -- the two helpers
+    # return the same string, so the drop is unchanged there (32 and 120 kept).
     _obs_token = consensus_obs_token(getattr(options, 'proposal_id', None),
                                      getattr(options, 'field', None))
+    _perframe_token = _perframe_obs_token(getattr(options, 'proposal_id', None),
+                                          getattr(options, 'field', None))
     base = f"{cut_bp}/{filt.upper()}/{filt.lower()}_*visit*_vgroup*_exp*"
     fns = sorted(set(
         glob.glob(f"{base}_{merge_label}_daophot_basic.fits")
@@ -3696,7 +3739,7 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
         print(f"astrom checkpoint [{merge_label}] {filt}/{module}: ignoring "
               f"{len(rejected)} non-canonical per-frame catalog(s) (e.g. "
               f"{os.path.basename(rejected[0])})", flush=True)
-    fns = _drop_foreign_obs_duplicates(fns, _obs_token, filt, merge_label,
+    fns = _drop_foreign_obs_duplicates(fns, _perframe_token, filt, merge_label,
                                        module, getattr(options, 'target', None))
     if not fns:
         # A frozen stage with no inputs is not a pass -- it is the gate silently

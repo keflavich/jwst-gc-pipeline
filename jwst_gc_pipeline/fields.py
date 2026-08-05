@@ -238,7 +238,7 @@ def declared_filters(target, instruments=NIRCAM_MIRI):
     return out
 
 
-def filter_observation_count(target, filtername, instrument='nircam'):
+def filter_observation_count(target, filtername, instrument=None):
     """How many ``(proposal, observation)`` pairs of ``target`` declare
     ``filtername``.
 
@@ -251,18 +251,42 @@ def filter_observation_count(target, filtername, instrument='nircam'):
     disk is 6778's whatever its name, and discarding the untokened ones would
     throw away real exposures (nrca exists ONLY under the pre-token name).
 
+    ``instrument`` defaults to the one the filter NAME implies (MIRI bands are
+    counted against MIRI's observations, everything else against NIRCam's);
+    pass it explicitly for NIRISS.
+
     Returns 0 for an unregistered target or a filter nothing declares.
     """
+    from jwst_gc_pipeline.photometry.naming import MIRI_FILTERS
+
     fobj = BY_NAME.get(target)
     if fobj is None:
         return 0
     want = str(filtername or '').upper()
+    # `Observation.filters` is the shared NIRCAM_MIRI list, so the filter NAME is
+    # what says which instrument's observations to count -- the same split
+    # `monitoring.scan` makes.  Counting a MIRI filter against the NIRCam obsids
+    # gets it wrong in both directions (sgrb2 F770W: 1 NIRCam obs vs 3 MIRI;
+    # cloudef F770W: 2 vs 3).  An explicit `instrument` still wins, so a NIRISS
+    # caller can ask for the NIRISS list rather than inherit a NIRCam count for
+    # a band whose name both instruments use.
+    if instrument is None:
+        # MIRI_FILTERS is spelled lower-case; `want` is upper-cased above.
+        instrument = 'miri' if want.lower() in MIRI_FILTERS else 'nircam'
     n = 0
     for o in fobj.observations:
         names = {f.upper() for f in (o.niriss_filters if instrument == 'niriss'
                                      else o.filters)}
-        if want in names:
-            n += len(o.obsids.get(instrument, ()) or ('',))
+        if want not in names:
+            continue
+        # `joint_obsids` is deliberately NOT added: its members are already in
+        # `obsids` (sgrb2 miri lists 001/002/998 and joins 002-998), so adding
+        # it would count the same observation twice.
+        ids = tuple(o.obsids.get(instrument, ()))
+        # A proposal that declares the filter but lists no obsid for this
+        # instrument still counts as one observation: the registry cannot say
+        # how many, and 1 means "not shared", which keeps every catalog.
+        n += len(ids) or 1
     return n
 
 

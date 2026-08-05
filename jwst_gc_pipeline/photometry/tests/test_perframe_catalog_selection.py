@@ -13,11 +13,12 @@ once already:
 So the accept-list is tested at each stage against all four real name shapes.
 """
 import os
-
-from jwst_gc_pipeline import fields
 import types
 
+from jwst_gc_pipeline import fields
+
 import pytest
+from astropy.io.registry import IORegistryError
 
 from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
     AstrometryRegressionError,
@@ -160,14 +161,14 @@ def test_the_drop_is_reported(capsys):
     _drop_foreign_obs_duplicates(_mixed_gc2211(), "_o023", "f200w", "m2",
                                  "nrcb", "gc2211")
     out = capsys.readouterr().out
-    assert "excluded 3 duplicate per-frame catalog(s)" in out
+    assert "excluded 3 foreign-observation per-frame catalog(s)" in out
     assert "o046" in out and "o050" in out and "<untokened>" in out
     assert "_o023" in out
 
 
 def test_checkpoint_passes_its_own_token_to_the_filter(tmp_path, capsys):
-    """End-to-end wiring: the token the checkpoint names its consensus catalog
-    with is the token the foreign-observation filter uses."""
+    """End-to-end wiring, gc2211: the per-frame writer and the consensus namer
+    return the SAME token here, so the filter keeps only o023."""
     (tmp_path / "F200W").mkdir(parents=True)
     (tmp_path / "catalogs").mkdir(parents=True)
     for tok in ("_o046", "_o050"):
@@ -177,7 +178,7 @@ def test_checkpoint_passes_its_own_token_to_the_filter(tmp_path, capsys):
         types.SimpleNamespace(cutout_region="", proposal_id="2211",
                               field="023", target="gc2211"), {}, context="test")
     out = capsys.readouterr().out
-    assert "excluded 2 duplicate per-frame catalog(s)" in out
+    assert "excluded 2 foreign-observation per-frame catalog(s)" in out
     # nothing of this observation is left, so the checkpoint cannot run -- it
     # must say so rather than measure the neighbours.
     assert "NO per-frame catalogs matched" in out
@@ -275,3 +276,81 @@ def test_shared_filter_of_the_same_field_is_decided_per_filter():
     assert fields.filter_observation_count("ngc6334", "F090W") == 1
     assert fields.filter_observation_count("ngc6334", "F200W") == 2
     assert fields.filter_observation_count("gc2211", "F200W") == 5
+
+
+def test_shared_filter_without_a_written_token_keeps_everything():
+    """The filter can only match a token the per-frame WRITER emits.
+
+    ``crowdsource_catalogs_long.obs_token`` returns '' for every proposal except
+    2211/7213/6778, so on wd1/wd2/cloudef/sickle no catalog on disk carries a
+    token at all.  Filtering those directories on the CONSENSUS token (which
+    falls back to ``_o{obsid}`` unconditionally) asks for a spelling that was
+    never written and empties the checkpoint's input -- silent at m2, and
+    ``AstrometryRegressionError`` at m3+.  Measured on the real tree: wd1 F200W
+    96 -> 0, wd2 32 -> 0, cloudef F162M 72 -> 0, sickle F187N 192 -> 0.
+    """
+    fns = [_pf("F200W", f"nrc{m}{i}", None, 1)
+           for m in "ab" for i in (1, 2, 3, 4)]
+    assert fields.filter_observation_count("wd1", "F200W") > 1, "premise: shared"
+    kept = _drop_foreign_obs_duplicates(fns, "", "F200W", "m2", "all", "wd1")
+    assert kept == fns, kept
+
+
+def test_untokened_chunked_and_unchunked_copies_are_deduped():
+    """`_chunk\\d+of\\d+` is collapsed further down the checkpoint, so the two
+    spellings land on ONE ``exposure_key``.  Comparing raw basenames keeps both
+    and reaches ``DuplicateExposureError`` by a different route."""
+    plain = _pf("F212N", "nrcb1", None, 1)
+    chunked = plain.replace("_m2_", "_m2_chunk00of02_")
+    kept = _drop_foreign_obs_duplicates(
+        [plain, chunked], "", "F212N", "m2", "all", "brick")
+    assert len(kept) == 1, kept
+
+
+def test_two_tokens_on_a_single_observation_filter_are_deduped():
+    """A not-shared filter carrying two different tokens still collides on
+    ``exposure_key``; only untokened files used to be considered for dropping."""
+    kept = _drop_foreign_obs_duplicates(
+        [_pf("F090W", "nrcb1", "j6778", 1), _pf("F090W", "nrcb1", "j7213", 1)],
+        "j6778", "F090W", "m2", "all", "ngc6334")
+    assert len(kept) == 1, kept
+
+
+def test_miri_filter_counts_miri_observations_not_nircam():
+    """``Observation.filters`` is the shared NIRCAM_MIRI list, so counting a
+    MIRI band against the NIRCam obsids is wrong in both directions."""
+    assert fields.filter_observation_count("sgrb2", "F770W") == 3   # miri 001/002/998
+    assert fields.filter_observation_count("sgrb2", "F212N") == 1   # nircam 001
+    assert fields.filter_observation_count("cloudef", "F770W") == 3  # miri 004/006/008
+    assert fields.filter_observation_count("cloudef", "F162M") == 2  # nircam 002/005
+
+
+def test_checkpoint_filters_on_the_written_token_not_the_consensus_name(
+        tmp_path, capsys):
+    """End-to-end wiring, wd1: the two tokens DIFFER.
+
+    ``consensus_obs_token('1905', '001')`` is ``_o001`` while the per-frame
+    writer emits '', and no wd1 catalog on disk carries a token.  Filtering on
+    the consensus name matches nothing and the checkpoint reports no inputs;
+    filtering on the written token keeps every frame.
+    """
+    from jwst_gc_pipeline.photometry.consensus_catalog import consensus_obs_token
+    from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import obs_token
+    assert consensus_obs_token("1905", "001") == "_o001"
+    assert obs_token("1905", "001") == ""
+    assert fields.filter_observation_count("wd1", "F200W") > 1, "premise: shared"
+
+    (tmp_path / "F200W").mkdir(parents=True)
+    (tmp_path / "catalogs").mkdir(parents=True)
+    for det in ("nrcb1", "nrcb2"):
+        (tmp_path / "F200W" / _name(filt="f200w", det=det, tok="")).touch()
+    # The files are empty touch()es, so the checkpoint gets past selection and
+    # then fails READING them -- which is the point: it had inputs to read.
+    with pytest.raises(IORegistryError):
+        _run_astrometry_stage_checkpoint(
+            "m2", "nrcb", "f200w", str(tmp_path), str(tmp_path), "1905",
+            types.SimpleNamespace(cutout_region="", proposal_id="1905",
+                                  field="001", target="wd1"), {}, context="test")
+    out = capsys.readouterr().out
+    assert "NO per-frame catalogs matched" not in out, out
+    assert "excluded" not in out, out
