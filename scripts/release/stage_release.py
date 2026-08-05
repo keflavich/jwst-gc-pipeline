@@ -981,11 +981,13 @@ def build_manifest(field, version, images_only=False, missing=None):
 # 19 field/instrument sets in FIELDS on 2026-08-05, every single-generation set spans
 # <= 0.6 d (wd2 0.53 d over 17 filters is the widest), while a genuinely mixed set is
 # an order of magnitude wider: v1.1's shipped sickle set spans 69 d (F210M 2026-04-19
-# / jwst_1535.pmap vs the other four 2026-06-27 / jwst_1537.pmap), wd1 17.8 d, ngc6334
-# 24.6 d.  7 d sits ~10x above the widest single batch and ~2.5x below the narrowest
-# mixed set, so it separates them without flagging a re-drizzle that ran over a
-# weekend.  Reported per instrument: NIRCam and MIRI are reduced in separate batches,
-# so a NIRCam-vs-MIRI date gap is expected and is not a complaint.
+# / jwst_1535.pmap vs the other four 2026-06-27 / jwst_1537.pmap), ngc6334 24.6 d,
+# wd1 17.8 d.  7 d sits ~10x above the widest single batch and ~2.5x below the
+# narrowest set this leg is meant to separate (wd1), so it does not flag a re-drizzle
+# that ran over a weekend.  The CRDS leg is what catches a mixed set the date leg
+# cannot: w51's 11 bands span only 3.4 d but three CRDS contexts.  Reported per
+# instrument -- NIRCam and MIRI are reduced in separate batches, so a NIRCam-vs-MIRI
+# date gap is expected and is not a complaint.
 GENERATION_SPAN_DAYS = 7.0
 
 
