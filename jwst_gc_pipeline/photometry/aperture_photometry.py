@@ -365,6 +365,82 @@ def build_aperture_correction_table(catalog, filtername=None,
     return tbl
 
 
+def select_reference_stars(catalog, snr_min=50.0, isolation_arcsec=3.0,
+                           max_qfit=None, max_group_size=1, min_nmatch=2,
+                           skycoord_col='skycoord', flux_col='flux',
+                           fluxerr_col='flux_err'):
+    """Boolean mask of clean, isolated, UNSATURATED reference stars for a
+    contamination-free curve of growth.
+
+    Selects on: not saturated / not saturation-replaced; high SNR; good fit
+    (``qfit`` below ``max_qfit`` if given, or the 60th percentile of the SNR-cut
+    sample otherwise); un-blended (``group_size <= max_group_size``); detected in
+    ``>= min_nmatch`` frames; and geometrically isolated (nearest neighbour in the
+    FULL catalog farther than ``isolation_arcsec`` -- so the aperture AND its sky
+    annulus are free of other sources).  Missing columns are simply not applied.
+    """
+    n = len(catalog)
+    keep = np.ones(n, bool)
+    for satcol in ('is_saturated', 'replaced_saturated'):
+        if satcol in catalog.colnames:
+            keep &= ~np.asarray(catalog[satcol], bool)
+    if flux_col in catalog.colnames and fluxerr_col in catalog.colnames:
+        f = np.asarray(catalog[flux_col], float)
+        e = np.asarray(catalog[fluxerr_col], float)
+        with np.errstate(invalid='ignore', divide='ignore'):
+            snr = f / e
+        keep &= np.isfinite(snr) & (snr >= snr_min) & (f > 0)
+    if 'group_size' in catalog.colnames:
+        keep &= np.asarray(catalog['group_size'], float) <= max_group_size
+    if 'nmatch' in catalog.colnames:
+        keep &= np.asarray(catalog['nmatch'], float) >= min_nmatch
+    if 'qfit' in catalog.colnames:
+        q = np.asarray(catalog['qfit'], float)
+        if max_qfit is None:
+            qthr = np.nanpercentile(q[keep], 60) if keep.any() else np.inf
+        else:
+            qthr = max_qfit
+        keep &= np.isfinite(q) & (q <= qthr)
+    if isolation_arcsec and skycoord_col in catalog.colnames and keep.any():
+        sky = SkyCoord(catalog[skycoord_col])
+        # nearest neighbour in the FULL catalog (not just the kept subset)
+        idx, sep2d, _ = sky.match_to_catalog_sky(sky, nthneighbor=2)
+        keep &= sep2d.arcsec > isolation_arcsec
+    return keep
+
+
+def build_reference_apcorr(ref_catalog, i2d_paths, filtername,
+                           snr_min=50.0, isolation_arcsec=3.0,
+                           radii_arcsec=RADII_ARCSEC, **sel_kw):
+    """Contamination-free curve-of-growth apcorr from isolated unsaturated stars.
+
+    ``ref_catalog`` is a photometry catalog (e.g. the merged daophot catalog)
+    with ``skycoord`` + flux/quality columns.  Selects clean isolated unsaturated
+    stars (``select_reference_stars``), measures aperture photometry on the i2d,
+    and builds the aperture-correction table -- the definitive version that the
+    crowding-limited satstar-derived table (``build_aperture_correction_table``
+    on the satstar catalog) cannot give in dense wide bands.
+    """
+    keep = select_reference_stars(ref_catalog, snr_min=snr_min,
+                                  isolation_arcsec=isolation_arcsec, **sel_kw)
+    scol = 'skycoord' if 'skycoord' in ref_catalog.colnames else 'skycoord_fit'
+    ref = ref_catalog[keep].copy()
+    ref.meta.setdefault('filter', filtername)
+    ref = measure_aperture_photometry(ref, i2d_paths, filtername=filtername,
+                                      radii_arcsec=radii_arcsec,
+                                      skycoord_col=scol)
+    # already geometrically isolated + unsaturated -> don't re-cut on isolation
+    tbl = build_aperture_correction_table(ref, filtername=filtername,
+                                          radii_arcsec=radii_arcsec,
+                                          isolation_arcsec=0.0,
+                                          skycoord_col=scol)
+    tbl.meta['source'] = 'reference_unsaturated_isolated'
+    tbl.meta['snr_min'] = float(snr_min)
+    tbl.meta['isolation_arcsec'] = float(isolation_arcsec)
+    tbl.meta['n_reference_stars'] = int(keep.sum())
+    return tbl
+
+
 def apcorr_table_path(filtername, target, basepath, module='', obs_token=''):
     """Path for the SEPARATE aperture-correction table (not the photometry table)."""
     mod = f'_{module}' if module else ''
