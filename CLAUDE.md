@@ -200,6 +200,13 @@ misregistered band. Do not stage around it. The `--allow-registration-fail`
 override additionally requires `ALLOW_REGISTRATION_FAIL=1` in the environment — it
 exists only for deliberate, justified overrides, not for making a red gate go green.
 
+`stage_release.py` also **REFUSES to stage** when an explicitly-listed `nircam`/`miri`
+src is not on disk (it used to skip it, which shipped a release silently short that
+band — sickle F210M, 2026-08-05, quarantined to `..._im0_badastrom.fits` by the m2
+checkpoint). There is no override for this one. Alongside it, `check_generation_span`
+reports a staged image set whose `DATE` headers span `> 7 d` or whose `CRDS_CTX`
+differ within an instrument; `--refuse-mixed-generations` promotes that to a refusal.
+
 **⛔ Inter-frame overlap check is BLOCKING and not fully covered by the stock gate.**
 The #1 recurring corruption: two overlapping observations/visits/pointings sit
 >1 pixel (usually >1″) apart, so the overlap region loses all its stars (or doubles
