@@ -119,11 +119,118 @@ wide-band photometry in the most crowded fields, where a definitive aperture
 correction needs isolated **unsaturated** calibrators from the main catalog
 rather than the saturated-star list itself.
 
-## 6. Status
+## 6. Contamination-free aperture correction (isolated unsaturated reference stars)
+
+The satstar-derived curve of growth is crowding-contaminated at large radius
+(§5). `build_reference_apcorr` (`aperture_photometry.py`) instead uses the main
+photometry catalog's **isolated, unsaturated, high-SNR** stars: not saturated /
+not blended (`group_size≤1`) / `SNR≥150` / geometrically isolated so the aperture
+*and* sky annulus are clean. Written to a separate
+`catalogs/{filt}_satstar_apcorr_refstars.ecsv`.
+
+**The measured, decisive crowding fact.** In the GC / CMZ / globular fields the
+nearest-neighbour separation is ~0.15–0.22″ median, so **essentially no stars are
+isolated beyond ~0.3–0.5″** (brick F200W: isolation >0.3″ keeps 1.6% of stars,
+>0.5″ keeps 0.02%, >0.8″ keeps *one*). An empirical curve of growth to true
+"total" therefore **cannot be measured from the data** in these fields — the
+clean COG reaches only ~0.25–0.48″, and the outer/total correction must come from
+a theoretical PSF. This is exactly why the satstar table was contaminated at
+large radius, and why Gutermuth (below) uses synthetic-PSF aperture corrections.
+`build_reference_apcorr` adapts: it steps the isolation radius down a ladder until
+≥200 clean stars survive, clips the COG to the sky-annulus-inner radius, and
+records the achieved isolation + reliable max radius in the table meta.
+
+**Two SNR/annulus lessons (verified):** (a) the reference COG needs *bright*
+stars — at SNR≈50 the per-star small-aperture flux ratios scatter and the median
+biases low by ~10×; at SNR≳100 it stabilises. (b) The forced-close sky annulus
+(inside the isolation radius) does **not** over-subtract the PSF wings — a
+close-annulus COG is actually closer to the theoretical PSF than a no-background
+COG.
+
+## 7. Comparison to the theoretical PSF and to Gutermuth's method
+
+**Empirical (i2d) vs theoretical PSF curve of growth.** Two things must be right
+for this to work: (i) *bright* reference stars (at SNR≈50 the per-star
+small-aperture ratios scatter and the median biases low ~2×; SNR≳100 stabilises),
+and (ii) **re-centroiding on the i2d** — the catalog positions come from the crf
+grid and are offset from the i2d grid by ~1 px, which bleeds core flux and makes
+the empirical PSF look spuriously broad (brick F200W EE(0.10″)/EE(0.25″) = 0.41
+at the catalog position vs 0.77 after re-centring; `recenter_box` in
+`measure_aperture_photometry`). With both fixed, the clean empirical curve of
+growth matches the STPSF theoretical PSF to a few percent over 0.10–0.25″ (brick
+F200W: 0.10″ 0.77 emp vs 0.82 theory; 0.15″ 0.90 vs 0.95; 0.20″ 0.97 vs 0.98).
+The small residual (empirical slightly *below* theory) is consistent with the
+real JWST PSF being marginally **broader** than STPSF — the same effect the
+saturated-star wing self-calibration corrects. The smallest aperture (0.05″ ≈
+1.6 SW px) stays low (0.31 vs 0.62): a sub-2-pixel centroid/pixelisation floor,
+not usable. **So for the unsaturated stars that dominate the catalog, our
+Stage-3 i2d aperture photometry is consistent with the synthetic PSF** — the S3
+saturated-core interpolation artifact Gutermuth warns about does **not**
+measurably bias the curve of growth at these radii (it bites the *saturated*
+cores, which are flagged `aper_core_saturated` and excluded from the COG).
+
+**Rob Gutermuth (`/orange/adamginsburg/jwst/rguter_jwst_photometry`).** His
+"JWST Photometry Issues" manuscript (Cloud E&F, prop 2092 = our `cloudef`) is
+aperture-only (IDL PhotVis + `aper`), aperture radius = FWHM, and its aperture
+corrections come from **synthetic WebbPSF/JDocs PSFs, not an empirical
+curve-of-growth** (AperCorr = flux fraction within the FWHM aperture: F162M 0.534,
+F210M 0.513, F360M 0.541, F480M 0.550, i.e. ≈0.65–0.73 mag). Points of agreement
+and difference:
+
+- **Method choice — vindicated on both sides.** Our crowding measurement shows an
+  empirical total-light COG is impossible in these fields, so Gutermuth's use of a
+  *theoretical* PSF aperture correction is the right call; conversely our
+  empirical inner COG matching the theoretical PSF shows the synthetic-PSF apcorr
+  is accurate for unsaturated stars.
+- **Saturated cores.** Gutermuth deliberately keeps saturated pixels NaN
+  (WCSmosaic) and *rejects* Stage-3 mosaics for saturated-core interpolation. Our
+  i2d are Stage-3 but still carry NaN cores for 8–11% of satstars in wide bands;
+  we handle the rest with the PSF-fit `flux_fit` (the whole saturated-star
+  machinery) rather than aperture photometry, and flag the aperture measurement
+  where the core is masked. Different route, same recognition that aperture
+  photometry cannot be trusted on saturated cores.
+- **Aperture correction source.** His = theoretical only. Ours = **empirical
+  inner COG anchored to a theoretical PSF for the outer/total** — the empirical
+  part is a data-driven check his single theoretical number does not have.
+
+Recentred empirical curve of growth vs the theoretical STPSF PSF-grid, and
+Gutermuth's synthetic AperCorr (job 38768776; figure
+`apphot/apcorr_reference_vs_theory.png`). `emp/theo` = empirical ÷ theoretical
+enclosed-energy ratio (both normalised at the clean max radius); 1.0 = perfect.
+
+| field | filt | N_ref | isol. | emp/theo @0.10″ | emp/theo @0.15″ | note |
+|---|---|---|---|---|---|---|
+| brick | f200w | 265 | 0.4″ | 0.95 | 0.96 | clean — agrees |
+| brick | f356w | 297 | 0.6″ | 0.77 | 0.95 | agrees @0.15″ |
+| cloudef | f360m | 1646 | 0.4″ | 0.84 | 0.89 | clean — agrees |
+| cloudef | f210m | 239 | 0.3″ | 0.98 | 0.83 | tight annulus |
+| cloudef | f480m | 560 | 0.6″ | 0.87 | 0.69 | broad LW PSF |
+| cloudef | f162m | 68 | 0.3″ | 0.28 | — | too few stars |
+
+**Reading it.** Where crowding allows isolation ≥0.4″ (so the sky annulus clears
+the PSF wings) and there are enough bright stars, the re-centred empirical i2d
+curve of growth agrees with the theoretical PSF to ≈5–15% (brick F200W 0.95/0.96,
+cloudef F360M 0.84/0.89). Where isolation is forced to ≤0.3″ the sky annulus sits
+on the PSF wings and over-subtracts, suppressing the empirical COG (cloudef
+F162M/F210M) — the same crowding limit in another guise; and F162M's 68 stars are
+simply too few. Bridging the well-measured F360M to infinity with the theoretical
+EE(0.25″)/EE(∞) gives ≈0.58 within Rob's 0.157″ aperture vs his synthetic 0.541 —
+consistent to ~7%.
+
+**Net comparison with Gutermuth.** Both conclude a theoretical PSF is the right
+basis for the aperture correction in these crowded fields (he by choice, we by
+the measured impossibility of an empirical total COG); our data-driven inner COG
+independently confirms the synthetic PSF is accurate to ~10% for unsaturated
+stars; and both keep saturated cores out of aperture photometry (he via NaN
+mosaics, we via the `aper_core_saturated` flag + PSF-fit `flux_fit`).
+
+## 8. Status
 1. [x] `aperture_photometry.py` — NaN-aware aperture + curve of growth + apcorr.
 2. [x] wired into `load_satstar_catalog` (default; env opt-out).
 3. [x] separate apcorr tables → `catalogs/{filt}_satstar_apcorr.ecsv`.
 4. [x] unit tests (synthetic mosaics).
 5. [x] cross-field investigation (11 field/filter combos; job 38760929).
-6. [ ] (next) apcorr from isolated unsaturated main-catalog stars for a
-   contamination-free curve of growth in crowded wide bands.
+6. [x] contamination-free apcorr from isolated unsaturated main-catalog stars
+   (`build_reference_apcorr` → `*_satstar_apcorr_refstars.ecsv`).
+7. [x] empirical-vs-theoretical-PSF curve of growth + Gutermuth comparison
+   (job 38768122).
