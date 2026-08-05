@@ -596,9 +596,15 @@ def test_each_pointing_gets_its_own_preview(tmp_path):
     assert all(len(s['filters']) == 2 for s in specs)
 
 
-def test_filters_are_ordered_reddest_first():
+def test_plan_assigns_the_reddest_band_to_red(tmp_path):
+    """The name said reddest-first while the assertion exercised chunk_filters,
+    which sorts BLUEST-first -- so inverting the sort inside plan(), the channel
+    assignment this whole change is about, passed the suite untouched."""
     pp = _pp()
-    assert pp.chunk_filters(['F405N', 'F115W', 'F212N']) == [['F115W', 'F212N', 'F405N']]
+    _stage_filters(str(tmp_path), {'': ['F115W', 'F212N', 'F405N', 'F444W']})
+    for spec in pp.plan(tmp_path):
+        waves = [pp.wavelength_um(f) for f in spec['filters']]
+        assert waves == sorted(waves, reverse=True), spec['filters']
     spec = {'pointing': None, 'filters': ['F444W', 'F410M', 'F405N'], 'subdirs': []}
     assert pp.describe(spec) == 'F444W/F410M/F405N'
 
@@ -606,7 +612,7 @@ def test_filters_are_ordered_reddest_first():
 def test_a_trailing_singleton_borrows_instead_of_being_dropped():
     """3+3+1 would leave the last band in a chunk that cannot make an image."""
     pp = _pp()
-    seven = [f'F{100 + 10 * i}W' for i in range(7)]
+    seven = ['F115W', 'F150W', 'F182M', 'F212N', 'F300M', 'F405N', 'F444W']
     chunks = pp.chunk_filters(seven)
     assert [len(c) for c in chunks] == [3, 2, 2]
     assert sorted(f for c in chunks for f in c) == sorted(seven)
@@ -635,22 +641,7 @@ def test_single_preview_field_page_is_unchanged(tmp_path):
                                 ['F405N', 'MEAN', 'F212N'], preview_version='v1',
                                 previews=[('assets/sgra.jpg', 'sgra_rgb_f405n_mean_f212n')])
     assert 'class=previews' not in page
-    assert 'RGB preview (R=F405N' in page
-
-
-def test_every_staged_filter_has_a_wavelength():
-    """A filter missing from FILTER_WAVELENGTH sorts to 99 um -- to the red end,
-    paired with whatever is last.  That is how wd1 got an "F164N/F466N" preview
-    (1.64 um beside 4.66) and wd2 an "F164N/F250M": both bands were simply not
-    in the table.  Any band this repo knows how to stage must be listed."""
-    pp = _pp()
-    sr = _sr()
-    known = set(pp.FILTER_WAVELENGTH)
-    declared = set()
-    for cfg in sr.FIELDS.values():
-        for entry in list(cfg.get('nircam', [])) + list(cfg.get('miri', [])):
-            declared.add(entry['filter'].upper())
-    assert declared <= known, f"no wavelength for {sorted(declared - known)}"
+    assert 'RGB preview - R=F405N, G=mean(F405N,F212N), B=F212N' in page
 
 
 def test_auto_supersedes_previews_left_over_from_an_older_plan(tmp_path):
@@ -683,3 +674,80 @@ def test_planned_stems_match_what_main_writes():
              {'pointing': None, 'filters': ['F444W', 'F410M', 'F405N'], 'subdirs': []}]
     assert mpr.planned_stems('gc2211', specs) == {
         'gc2211_o023_rgb_f277w_mean_f200w', 'gc2211_rgb_f444w_f410m_f405n'}
+
+
+def test_every_filter_dir_in_the_release_tree_has_a_derivable_wavelength():
+    """The previous guard read `stage_release.FIELDS` -- but F164N and F250M are
+    not declared there; they reach a page through the STAGED TREE, which is what
+    plan() reads. Deleting them from the table left that guard green. Assert
+    against the same source plan() uses."""
+    pp = _pp()
+    root = '/orange/adamginsburg/jwst/releases'
+    if not os.path.isdir(root):
+        pytest.skip('release tree not present')
+    seen = set()
+    for version in os.listdir(root):
+        for dirpath, dirnames, _ in os.walk(os.path.join(root, version)):
+            if os.path.basename(dirpath) != 'images':
+                continue
+            for sub in dirnames:
+                if pp.FILTER_DIR_RE.match(sub):
+                    seen.add(sub)
+                else:
+                    inner = os.path.join(dirpath, sub)
+                    if os.path.isdir(inner):
+                        seen.update(n for n in os.listdir(inner)
+                                    if pp.FILTER_DIR_RE.match(n))
+    assert seen, 'no staged filters found -- the walk is wrong, not the tree'
+    for filt in sorted(seen):
+        pp.wavelength_um(filt)          # raises on anything it cannot derive
+
+
+def test_wavelength_is_derived_not_defaulted():
+    pp = _pp()
+    assert pp.wavelength_um('F164N') == 1.64      # was silently 99.0 -> into R
+    assert pp.wavelength_um('F250M') == 2.50
+    assert pp.wavelength_um('F2550W') == 25.50
+    assert pp.wavelength_um('F150W2') == 1.50
+    with pytest.raises(ValueError):
+        pp.wavelength_um('NOTAFILTER')
+
+
+def test_extra_subdirs_are_actually_searched(tmp_path):
+    """Deleting the extra-subdir search from science_paths passed the suite:
+    the MIRI test only checked that 'MIRI' appeared in spec['subdirs'], never
+    that a filter living there can be found."""
+    mpr = _load('make_preview_rgb', os.path.join(_REL, 'make_preview_rgb.py'))
+    import pathlib
+    d = tmp_path / 'images' / 'MIRI' / 'F2550W'
+    d.mkdir(parents=True)
+    (d / 'jw02221-o002_t001_miri_f2550w_i2d.fits').touch()
+    found = mpr.science_paths(pathlib.Path(str(tmp_path)), 'F2550W', None, ['MIRI'])
+    assert len(found) == 1 and found[0].endswith('f2550w_i2d.fits')
+    with pytest.raises(FileNotFoundError):
+        mpr.science_paths(pathlib.Path(str(tmp_path)), 'F2550W', None, [])
+
+
+def test_a_one_band_group_is_skipped_not_fatal(tmp_path, capsys):
+    """A singleton reached `--filters takes 2 or 3` inside the recursive main()
+    and exited 2 -- killing the whole run mid-way and leaving a partial gallery
+    under an 'every band appears' caption."""
+    pp = _pp()
+    _stage_filters(str(tmp_path), {'o023': ['F200W', 'F277W'],
+                                   'MIRI': ['F2550W']})
+    specs = pp.plan(tmp_path)
+    assert [s['pointing'] for s in specs] == ['o023']
+    assert 'cannot make a colour image' in capsys.readouterr().out
+
+
+def test_a_quarantined_band_does_not_enter_the_plan(tmp_path):
+    """A band whose mosaics were stale-tagged leaves the directory behind; on
+    isdir alone it entered the plan and died at render time with
+    FileNotFoundError -- after earlier previews had been written."""
+    pp = _pp()
+    _stage_filters(str(tmp_path), {'': ['F200W', 'F277W']})
+    bad = tmp_path / 'images' / 'F405N'
+    bad.mkdir(parents=True)
+    (bad / 'x-f405n-merged_i2d_im0_badastrom.fits').touch()
+    covered = {f for s in pp.plan(tmp_path) for f in s['filters']}
+    assert covered == {'F200W', 'F277W'}

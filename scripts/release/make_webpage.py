@@ -21,6 +21,8 @@ import urllib.parse
 from pathlib import Path
 
 import field_overview
+import make_preview_rgb
+import preview_plan
 from stage_release import field_release_dir
 
 # Display label per group folder (None = Galactic Center, the default survey).
@@ -243,11 +245,17 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                            f"</figure>")
             out.append("</div>")
         else:
-            cap = (f"RGB preview (R={preview_channels[0]}, G={preview_channels[1]}, "
-                   f"B={preview_channels[2]})." if preview_channels else "Preview.")
+            # `_preview_caption` rather than `preview_channels`: the latter drops
+            # the pointing, so a one-preview multi-pointing field (gc2211, m4)
+            # said "RGB preview (R=F277W ...)" with no hint WHICH of its
+            # pointings -- the omission this whole change exists to fix.
+            cap = (_preview_caption(previews[0][1], field) if previews
+                   else (f"R={preview_channels[0]}, G={preview_channels[1]}, "
+                         f"B={preview_channels[2]}" if preview_channels else "Preview"))
             out.append(f"<img class=preview src='{html.escape(preview_rel)}' "
                        f"alt='{html.escape(field)} preview'>")
-            out.append(f"<div class=muted>{html.escape(cap)}{html.escape(provenance)} "
+            out.append(f"<div class=muted>RGB preview - {html.escape(cap)}."
+                       f"{html.escape(provenance)} "
                        "Full-resolution images below.</div>")
 
     if multi:
@@ -588,10 +596,28 @@ def main(argv=None):
             parts = previews[0].stem.split("_rgb_")
             if len(parts) == 2 and parts[1].count("_") == 2:
                 preview_channels = [c.upper() for c in parts[1].split("_")]
-            # the index card keeps ONE thumbnail; the field page shows them all
-            for src in previews:
-                shutil.copy2(src, assets / f"{src.stem}.jpg")
-                preview_items.append((f"assets/{src.stem}.jpg", src.stem))
+            # The index card keeps ONE thumbnail; the field page shows them all
+            # -- but in PLAN order and restricted to the plan, not whatever the
+            # directory happens to hold. `preview/` is never emptied, so a glob
+            # shows leftovers from an older plan (brick had 5 files for a
+            # 4-preview plan) under a caption claiming the set is complete.
+            by_stem = {src.stem: src for src in previews}
+            # read the plan from the version the previews were rendered from
+            specs = preview_plan.plan(field_release_dir(
+                field, preview_version, args.release_root))
+            planned = make_preview_rgb.planned_stems(field, specs)
+            ordered = [next(iter(make_preview_rgb.planned_stems(field, [spec])))
+                       for spec in specs]
+            for stem in ordered:
+                src = by_stem.get(stem)
+                if src is None:
+                    continue
+                shutil.copy2(src, assets / f"{stem}.jpg")
+                preview_items.append((f"assets/{stem}.jpg", stem))
+            unplanned = sorted(set(by_stem) - planned)
+            if unplanned:
+                print(f"  {field}: {len(unplanned)} preview(s) not in the plan, "
+                      f"not shown: {', '.join(unplanned)}")
 
         # one page per region for the latest (<field>.html) + one per older version
         for v in versions:

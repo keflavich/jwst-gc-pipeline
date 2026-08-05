@@ -231,6 +231,7 @@ def main(argv=None):
         if not specs:
             parser.error(f"no staged filters found under {field_dir}/images")
         print(f"{args.field}: {len(specs)} preview(s) planned")
+        failed = []
         for spec in specs:
             print(f"  -> {preview_plan.describe(spec)}", flush=True)
         for spec in specs:
@@ -247,11 +248,26 @@ def main(argv=None):
                 rest += ["--observation", spec["pointing"]]
             if spec["subdirs"]:
                 rest += ["--extra-subdirs", *spec["subdirs"]]
-            main(rest)
+            if args.reproject:
+                rest.append("--reproject")
+            try:
+                main(rest)
+            except FileNotFoundError as err:
+                # one unrenderable band must not abandon the rest of the plan
+                # AND the prune with it -- that left a partial gallery beside
+                # the old one, under an "every band appears" caption
+                failed.append((preview_plan.describe(spec), str(err)))
+                print(f"  FAILED {preview_plan.describe(spec)}: {err}")
         moved = supersede_unplanned(field_dir / "preview",
                                     planned_stems(args.field, specs))
         for name in moved:
             print(f"  superseded (not in plan): {name}")
+        if failed:
+            print(f"{args.field}: {len(failed)} of {len(specs)} previews could "
+                  f"not be rendered:")
+            for label, err in failed:
+                print(f"  - {label}: {err}")
+            return 1
         return 0
 
     if len(args.filters) not in (2, 3):

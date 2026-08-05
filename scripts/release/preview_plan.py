@@ -26,22 +26,29 @@ brick's F2550W in an image instead of stranding it in a group of one.
 import os
 import re
 
-#: micron, for ordering previews by wavelength and labelling them.  A filter
-#: MISSING from this table sorts to 99 um -- i.e. to the red end, where it gets
-#: paired with whatever happens to be last.  That is how wd1 produced
-#: "F164N/F466N" (1.64 um beside 4.66) and wd2 "F164N/F250M": both bands were
-#: simply absent here.  Keep it complete; `test_every_staged_filter_has_a_wavelength`
-#: fails when a staged band is not listed.
-FILTER_WAVELENGTH = {
-    "F090W": 0.90, "F115W": 1.15, "F140M": 1.40, "F150W": 1.50, "F150W2": 1.50,
-    "F162M": 1.62, "F164N": 1.64, "F182M": 1.82, "F187N": 1.87, "F200W": 2.00, "F210M": 2.10,
-    "F212N": 2.12, "F250M": 2.50, "F277W": 2.77, "F300M": 3.00, "F322W2": 3.22, "F323N": 3.23,
-    "F335M": 3.35, "F356W": 3.56, "F360M": 3.60, "F405N": 4.05, "F410M": 4.10,
-    "F444W": 4.44, "F466N": 4.66, "F470N": 4.70, "F480M": 4.80,
-    # MIRI
-    "F560W": 5.6, "F770W": 7.7, "F1000W": 10.0, "F1130W": 11.3, "F1280W": 12.8,
-    "F1500W": 15.0, "F1800W": 18.0, "F2100W": 21.0, "F2550W": 25.5,
-}
+#: ``F164N`` is 1.64 um, ``F2550W`` is 25.50: the numeric code IS the wavelength
+#: in units of 0.01 um, for every filter this pipeline stages (checked against
+#: the 35-entry table this replaces -- all agreed to <0.02 um).
+#:
+#: It is DERIVED rather than looked up because a hand-maintained table defaulted
+#: a missing filter to 99 um, which sorted it into the RED channel with a bluer
+#: band in blue -- wd1 shipped "R=F164N ... B=F466N" (1.64 um in red, 4.66 in
+#: blue) and wd2 "R=F164N ... B=F250M", on live pages, under captions asserting
+#: the ordering.  A guard test against the field registry did not catch it,
+#: because those filters reach a page through the staged tree and are not in the
+#: registry at all.  Derivation removes the failure mode instead of watching for it.
+_FILTER_CODE_RE = re.compile(r"^F(\d{3,4})[WMN]2?$")
+
+
+def wavelength_um(filt):
+    """Pivot wavelength in micron, from the filter name.  Raises on a name this
+    does not understand -- silently guessing is what put a 1.64 um band in the
+    red channel."""
+    match = _FILTER_CODE_RE.match(str(filt).upper())
+    if match is None:
+        raise ValueError(f"cannot derive a wavelength from filter name {filt!r}")
+    return int(match.group(1)) / 100.0
+
 
 #: A subdir that names a distinct pointing.  Anything else under ``images/``
 #: (in practice ``MIRI``) is the same sky and is pooled with the field.
@@ -56,8 +63,16 @@ def _filter_dirs(root):
     if not os.path.isdir(root):
         return out
     for name in sorted(os.listdir(root)):
-        if FILTER_DIR_RE.match(name) and os.path.isdir(os.path.join(root, name)):
-            out[name] = ""
+        path = os.path.join(root, name)
+        if not (FILTER_DIR_RE.match(name) and os.path.isdir(path)):
+            continue
+        # `isdir` alone is not "this filter is staged": a band whose mosaics were
+        # quarantined (`*_i2d_im0_badastrom.fits`) leaves the directory behind,
+        # and it would enter the plan and then die at render time with
+        # FileNotFoundError -- after earlier previews had already been written.
+        if not any(f.endswith("_i2d.fits") for f in os.listdir(path)):
+            continue
+        out[name] = ""
     return out
 
 
@@ -93,7 +108,7 @@ def chunk_filters(filters, size=3):
     A trailing chunk of one cannot make an image, so it borrows from the chunk
     before it -- 7 filters become 3+2+2, never 3+3+1.
     """
-    ordered = sorted(filters, key=lambda f: (FILTER_WAVELENGTH.get(f, 99.0), f))
+    ordered = sorted(filters, key=lambda f: (wavelength_um(f), f))
     if len(ordered) <= size:
         return [ordered] if ordered else []
     chunks = [ordered[i:i + size] for i in range(0, len(ordered), size)]
@@ -116,11 +131,19 @@ def plan(field_dir):
                     key=lambda kv: (kv[0] is not None, kv[0] or ""))
     for pointing, found in groups:
         extra = sorted({sub for sub in found.values() if sub})
+        if len(found) < 2:
+            # One band cannot make an RGB.  Emitting the spec anyway reached
+            # `--filters takes 2 or 3 filter names` inside the recursive main()
+            # and exited 2 -- taking the whole run with it, mid-way, leaving a
+            # partial gallery under an "every band appears" caption.
+            print(f"  preview plan: skipping {pointing or 'field'} -- only "
+                  f"{sorted(found)} staged, which cannot make a colour image")
+            continue
         for chunk in chunk_filters(list(found)):
             out.append({
                 "pointing": pointing,
                 # reddest first: R, [G], B
-                "filters": sorted(chunk, key=lambda f: -FILTER_WAVELENGTH.get(f, 99.0)),
+                "filters": sorted(chunk, key=lambda f: -wavelength_um(f)),
                 "subdirs": extra,
             })
     return out
