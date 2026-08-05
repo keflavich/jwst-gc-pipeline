@@ -103,12 +103,49 @@ Three JWST layers, each its own colour and toggle:
 
 | layer | why separate |
 |---|---|
-| planned NIRCam | the prime, 8 SW detectors per pointing |
+| planned NIRCam | the prime — **one outline per pointing, covering its whole primary dither** |
 | planned MIRI ∥ | lands ~7.5′ from the prime, so it covers **different sky** — one colour would imply contiguous coverage the survey does not have |
 | observed | read from the APT visit status; empty today, rendered as "none yet" with its toggle **on** so the first executed visit appears without anyone enabling it |
 
-Roman GBTDS spring/autumn tiles and the target-area polygon are available but
-**off by default** — this is a JWST monitor and the Roman geometry is context.
+ACES and the Roman GBTDS spring/autumn tiles are available as context but **off
+by default** — this is a JWST monitor. ACES comes from its real ~655-vertex
+outline (`ACES_footprint.reg`, Galactic, converted to ICRS at build time), not a
+rectangle, because a rectangle would misstate which pointings it covers.
+
+There is no "target area" layer. That polygon is the Roman file's
+`target_area`, which is the **JWST** target area — it was offered under the
+Roman heading, where it read as Roman context and was simply mislabelled.
+
+### The dither pattern is measured, not looked up
+
+Each NIRCam outline is the bounding box of one pointing's whole primary dither,
+built in the anchor aperture's ideal frame (where the offsets are defined) and
+projected out through the attitude. Eight per-detector boxes describe a single
+dither position, and the gaps between them are exactly what FULLBOX exists to
+fill — drawing them separately advertises holes the observation does not leave.
+1112 polygons become 139.
+
+JDox publishes the dither tables only as a download behind a JavaScript-rendered
+page, and **pysiaf does not carry them at all** (`grep -r FULLBOX` over the
+package returns nothing). So `DITHER_HALF_EXTENT` comes from flight data:
+
+* program **2221**'s APT file records `PrimaryDitherType=FULLBOX` with
+  `PrimaryDithers=6TIGHT` — the same pattern 10678 uses (5365, by contrast, is
+  plain `FULLBOX/6`, and its pattern is a different size);
+* its exposures carry 24 `XOFFSET`/`YOFFSET` positions, 6 primary × 4 subpixel;
+* the same subpixel set repeats at each primary, so differencing corresponding
+  exposures recovers the primary grid exactly: **3 × 24.3″ in X, 2 × 10.8″ in
+  Y** → half-extent 24.3″ × 5.4″.
+
+The result checks itself: in that frame the two NIRCam modules are 41.3″ apart
+along X with ~5″ gaps between detectors, and a pattern spanning 48.6″ × 10.8″
+covers both — which is what FULLBOX is for. The drawn box grows 308.3″ → 356.9″
+and 134.7″ → 145.5″; MIRI's 83″ × 118″ illuminated field becomes 131.9″ × 129.4″.
+
+A pattern not in `DITHER_HALF_EXTENT` is **not** treated as zero: those
+pointings fall back to per-detector outlines and the builder says so on stderr,
+because silently drawing one dither position under-states the covered area by
+the width of a module gap.
 
 Two things the geometry does deliberately: the attitude is anchored on
 `NRCALL_FULL` (the aperture APT's target coordinate refers to) and the MIRI
