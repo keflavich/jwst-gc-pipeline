@@ -959,16 +959,21 @@ def blank_unmatched_skycoord(sc, invalid):
     Every scalar column of a cross-filter match is masked for the rows
     ``invalid_crossfilter_match`` selects, but the ``skycoord_<filter>`` mixin
     used to escape that masking and keep the borrowed source's position.  On
-    brick 2221-o001 that left 65% of rows carrying a position that was not
-    their own -- one F212N source reused as the position of up to 20 different
-    stars, median 0.25" and up to 1.3" away.  It put a spurious second lobe in
-    the JWST-VIRAC offset cloud and inflated the apparent frame tie from
-    0.6 mas (same-star) to 17 mas (JWST-GC/data-qa#1).
+    the shipped brick 2221-o001 m8 that left 65-76% of rows (per filter)
+    carrying a position that was not their own, ALL of them finite -- one
+    F405N source reused as the position of up to 45 different stars, median
+    0.44" and as far as 3.1" away.  It put a spurious second lobe in the
+    JWST-VIRAC offset cloud and inflated the apparent frame tie from 0.6 mas
+    (same-star) to 17 mas (JWST-GC/data-qa#1).
 
-    NaN rather than a mask: a SkyCoord mixin's mask does not survive the FITS
-    round-trip, but NaN does, and every consumer already handles it --
+    NaN rather than a mask because a SkyCoord mixin CANNOT be masked at all --
+    ``sc.mask = ...`` raises ``AttributeError: property 'mask' of 'ICRS'
+    object has no setter`` -- so NaN is the only available representation, not
+    a workaround for a serialization limit.  It also survives the FITS
+    round-trip, and every consumer already handles it:
     ``crowdsource_catalogs_long._resolve_seed_skycoords`` leaves a NaN row for
-    the next candidate column and falls back to ``skycoord_ref``, and
+    the next candidate column and falls back to ``skycoord_ref`` (pinned by
+    ``test_blanked_skycoord_falls_through_to_skycoord_ref``), and
     ``plotting/plot_tools.py`` selects on ``~flux_<filter>.mask`` first.
     """
     invalid = np.asarray(invalid, dtype=bool)
