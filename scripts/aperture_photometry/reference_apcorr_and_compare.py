@@ -72,30 +72,51 @@ def find_main_catalog(target, filtername):
     return None
 
 
+def _find_theoretical_psf(target, filtername):
+    """A STPSF/theoretical PSF FITS for this filter.  Prefer the field's own
+    products; the theoretical PSF is field-independent so borrow another field's
+    grid for the same filter as a fallback.  Returns (path, oversample)."""
+    f = filtername.lower(); F = filtername.upper()
+    searches = [
+        (f'/orange/adamginsburg/jwst/{target}/psfs/{F}_*PSFgrid_oversample1.fits', 1),
+        (f'/orange/adamginsburg/jwst/{target}/psfs/nircam_*_{f}_fovp101_samp*.fits', None),
+        (f'/orange/adamginsburg/jwst/*/psfs/{F}_*PSFgrid_oversample1.fits', 1),
+        (f'/orange/adamginsburg/jwst/*/psfs/nircam_*_{f}_fovp101_samp*.fits', None),
+    ]
+    import re as _re
+    for pat, ov in searches:
+        for p in sorted(glob.glob(pat)):
+            if ov is None:
+                m = _re.search(r'samp(\d+)', p)
+                ov = int(m.group(1)) if m else 1
+            return p, ov
+    return None, None
+
+
 def theoretical_cog(target, filtername, radii_arcsec, pixscale_as):
-    """Enclosed-energy curve of growth from the field's STPSF PSF grid
-    (oversample1 = detector sampling), normalised to the grid-box total.
-    Returns dict radius->EE fraction, or None if no grid."""
-    pdir = f'/orange/adamginsburg/jwst/{target}/psfs'
-    g = sorted(glob.glob(f'{pdir}/{filtername.upper()}_*PSFgrid_oversample1.fits'))
-    if not g:
+    """Enclosed-energy curve of growth from a theoretical STPSF PSF, normalised
+    to the largest measured radius later.  Handles merged PSFgrids (oversample in
+    name) and per-detector STPSF cubes (sampN).  Returns dict radius->EE (summed
+    within radius / grid-box total), or None."""
+    path, ov = _find_theoretical_psf(target, filtername)
+    if path is None:
         return None
-    with fits.open(g[0]) as h:
-        cube = np.asarray(h[0].data, float)      # (Ngrid, ny, nx)
+    with fits.open(path) as h:
+        cube = np.asarray(h[0].data, float)
+    if cube.ndim == 2:
+        cube = cube[None]
     psf = np.nanmean(cube, axis=0)
     psf = psf / np.nansum(psf)
     ny, nx = psf.shape
     cy, cx = (ny - 1) / 2, (nx - 1) / 2
     pos = [(cx, cy)]
+    grid_pixscale = pixscale_as / ov        # PSF sampled finer by oversample ov
     tot = np.nansum(psf)
     ee = {}
     for r in radii_arcsec:
-        rp = r / pixscale_as
-        if rp > min(cx, cy):
-            ee[r] = np.nan
-            continue
-        ap = CircularAperture(pos, r=rp)
-        ee[r] = float(aperture_photometry(psf, ap)['aperture_sum'][0] / tot)
+        rp = r / grid_pixscale
+        ee[r] = (float(aperture_photometry(psf, CircularAperture(pos, r=rp))
+                       ['aperture_sum'][0] / tot) if rp <= min(cx, cy) else np.nan)
     return ee
 
 
@@ -108,7 +129,9 @@ def run(target, filtername):
     if mcat is None:
         print(f'[skip] {target}/{filtername}: no main catalog'); return None
     cat = Table.read(mcat)
-    tbl = apm.build_reference_apcorr(cat, i2ds, filtername, snr_min=50.0,
+    # bright reference stars: the curve of growth needs high SNR or the per-star
+    # small-aperture flux ratios scatter and the median biases low
+    tbl = apm.build_reference_apcorr(cat, i2ds, filtername, snr_min=150.0,
                                      radii_arcsec=COG_RADII, min_ref_stars=200)
     path = f'{base}/catalogs/{filtername.lower()}_satstar_apcorr_refstars.ecsv'
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -166,8 +189,16 @@ def main():
         if f in ROB:
             row['rob_aper_as'] = ROB[f]['aper_as']
             row['rob_frac_inf'] = ROB[f]['apcorr_frac']
+            # empirical EE at Rob's aperture radius (normalised to our clean rmax)
+            row['emp_EE_robrad'] = round(_interp(t, ROB[f]['aper_as']), 3)
         rows.append(row)
-    comp = Table(rows)
+    # union of all keys (rows are heterogeneous) so no column is silently dropped
+    allkeys = []
+    for rr in rows:
+        for k in rr:
+            if k not in allkeys:
+                allkeys.append(k)
+    comp = Table({k: [rr.get(k, np.nan) for rr in rows] for k in allkeys})
     comp.write(f'{OUT}/apcorr_reference_vs_theory_vs_rob.ecsv', overwrite=True,
                format='ascii.ecsv')
     comp.pprint_all()

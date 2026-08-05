@@ -413,7 +413,7 @@ def select_reference_stars(catalog, snr_min=50.0, isolation_arcsec=3.0,
 
 
 def build_reference_apcorr(ref_catalog, i2d_paths, filtername,
-                           snr_min=50.0, isolation_ladder=(2.0, 1.0, 0.6, 0.4, 0.3),
+                           snr_min=150.0, isolation_ladder=(2.0, 1.0, 0.6, 0.4, 0.3),
                            min_ref_stars=200, ann_in_arcsec=None,
                            ann_out_arcsec=None, radii_arcsec=RADII_ARCSEC,
                            **sel_kw):
@@ -432,18 +432,17 @@ def build_reference_apcorr(ref_catalog, i2d_paths, filtername,
     """
     scol = 'skycoord' if 'skycoord' in ref_catalog.colnames else 'skycoord_fit'
     achieved_iso, keep = None, None
+    last_iso, last_k = None, None
     for iso in isolation_ladder:
         k = select_reference_stars(ref_catalog, snr_min=snr_min,
                                    isolation_arcsec=iso, skycoord_col=scol,
                                    **sel_kw)
+        last_iso, last_k = iso, k
         if int(k.sum()) >= min_ref_stars:
             achieved_iso, keep = iso, k
             break
     if keep is None:                       # even the loosest rung is too sparse
-        achieved_iso = isolation_ladder[-1]
-        keep = select_reference_stars(ref_catalog, snr_min=snr_min,
-                                      isolation_arcsec=achieved_iso,
-                                      skycoord_col=scol, **sel_kw)
+        achieved_iso, keep = last_iso, last_k   # reuse last computed (no recompute)
     # keep the annulus INSIDE the isolation radius so neighbours never enter the
     # sky annulus; aperture stays well inside the annulus
     if ann_out_arcsec is None:
@@ -472,7 +471,10 @@ def build_reference_apcorr(ref_catalog, i2d_paths, filtername,
     tbl.meta['snr_min'] = float(snr_min)
     tbl.meta['isolation_arcsec'] = float(achieved_iso)
     tbl.meta['annulus_arcsec'] = f'{ann_in_arcsec:.3f},{ann_out_arcsec:.3f}'
-    tbl.meta['reliable_max_radius_arcsec'] = float(ann_in_arcsec)
+    # the curve of growth is normalised to (and reliable out to) the largest
+    # MEASURED radius inside the annulus -- NOT ann_in itself, which is not one of
+    # the measured radii
+    tbl.meta['reliable_max_radius_arcsec'] = float(max(radii_reliable))
     tbl.meta['n_reference_stars'] = int(keep.sum())
     return tbl
 
