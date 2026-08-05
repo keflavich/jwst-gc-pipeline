@@ -531,3 +531,16 @@ def test_success_is_not_reported_until_the_layer_is_visible():
     assert setter < body.index('currentLayerId()')
     assert 'getBaseImageLayer' in out          # verified against what is displayed
     assert 'switchSeq' in out                  # a later click supersedes an older poll
+
+
+def test_verification_is_gated_on_the_getter_being_available():
+    """The SETTER is feature-detected, so an Aladin without `getBaseImageLayer`
+    is explicitly anticipated. Polling there would return null forever and roll
+    every switch back after 8 s -- reporting failure on a background that loaded
+    fine, the same lie pointing the other way."""
+    fo = _fo()
+    out = fo.section([_geom('brick', 0.2, 0.0)])
+    assert "typeof aladin.getBaseImageLayer === 'function'" in out
+    assert 'cannot confirm it loaded' in out
+    # and the id comparison tolerates protocol / trailing-slash differences
+    assert 'function normaliseId' in out

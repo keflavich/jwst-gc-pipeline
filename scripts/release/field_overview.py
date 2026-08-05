@@ -487,9 +487,22 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
       target: 'galactic 0 0', fov: 1.8, showReticle: false,
       showCooGrid: true, showFullscreenControl: false
     }});
+    // Verification is only possible where the view can be READ back.  The
+    // setter is feature-detected, so an Aladin without `getBaseImageLayer` is
+    // explicitly anticipated -- and there `currentLayerId()` would return null
+    // forever, the poll would never match, and every switch would roll back
+    // after 8 s reporting failure on a background that loaded fine.  That is
+    // the same lie as before, pointing the other way, so where the getter is
+    // missing the switch says it could not be verified instead of pretending.
+    var canVerify = typeof aladin.getBaseImageLayer === 'function';
+    function normaliseId(value) {{
+      // a URL id can come back differing by protocol or a trailing slash
+      return String(value == null ? '' : value)
+        .replace(/^https?:/, '').replace(/\\/+$/, '').toLowerCase();
+    }}
     function currentLayerId() {{
       try {{
-        var cur = aladin.getBaseImageLayer && aladin.getBaseImageLayer();
+        var cur = aladin.getBaseImageLayer();
         return (cur && (cur.id || cur.url || cur.name)) || null;
       }} catch (err) {{ return null; }}
     }}
@@ -551,12 +564,18 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
           // next line would claim a background that never arrived, which is the
           // failure this panel most likely has.  Poll what is actually
           // displayed instead, and only then say it worked.
+          if (!canVerify) {{
+            status.textContent = 'switched to ' + s.name
+                                 + ' (this Aladin build cannot confirm it loaded)';
+            return;
+          }}
           status.textContent = 'loading ' + s.name + '\\u2026';
+          var want = normaliseId(s.id);
           var tries = 0;
           (function poll() {{
             if (seq !== switchSeq) {{ return; }}   // superseded by a later click
             var showing = currentLayerId();
-            if (showing && String(showing).indexOf(s.id) !== -1) {{
+            if (showing && normaliseId(showing).indexOf(want) !== -1) {{
               status.textContent = 'background: ' + s.name;
               return;
             }}
