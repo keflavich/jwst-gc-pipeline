@@ -494,3 +494,97 @@ def test_aladin_source_is_pinned():
     """`latest` lets a third party change the API under a published page."""
     fo = _fo()
     assert '/latest/' not in fo.ALADIN_JS
+
+
+# ---- one preview per pointing, and every band in some preview ----
+def _pp():
+    return _load('preview_plan', os.path.join(_REL, 'preview_plan.py'))
+
+
+def _stage_filters(root, layout):
+    """layout: {subdir or '': [FILTER, ...]} under <root>/images/."""
+    for sub, filters in layout.items():
+        for filt in filters:
+            d = os.path.join(root, 'images', sub, filt) if sub else \
+                os.path.join(root, 'images', filt)
+            os.makedirs(d, exist_ok=True)
+            open(os.path.join(d, f'x-{filt.lower()}-merged_i2d.fits'), 'w').close()
+
+
+def test_every_staged_band_appears_in_some_preview(tmp_path):
+    """sgrb2 ships 14 bands; one RGB shows three and silently drops eleven."""
+    pp = _pp()
+    bands = ['F150W', 'F182M', 'F187N', 'F210M', 'F212N', 'F300M', 'F360M',
+             'F405N', 'F410M', 'F466N', 'F480M']
+    _stage_filters(str(tmp_path), {'': bands, 'MIRI': ['F770W', 'F1280W', 'F2550W']})
+    specs = pp.plan(tmp_path)
+    covered = {f for s in specs for f in s['filters']}
+    assert covered == set(bands) | {'F770W', 'F1280W', 'F2550W'}
+    assert len(specs) == 5
+    assert all(2 <= len(s['filters']) <= 3 for s in specs)
+
+
+def test_miri_is_pooled_not_treated_as_a_separate_pointing(tmp_path):
+    """MIRI is the same sky at a longer wavelength.  Left as its own group,
+    brick's single F2550W would be a group of one and never get an image."""
+    pp = _pp()
+    _stage_filters(str(tmp_path), {'': ['F405N', 'F444W', 'F466N'],
+                                   'MIRI': ['F2550W']})
+    specs = pp.plan(tmp_path)
+    assert all(s['pointing'] is None for s in specs)
+    assert 'F2550W' in {f for s in specs for f in s['filters']}
+    assert any('MIRI' in s['subdirs'] for s in specs)
+
+
+def test_each_pointing_gets_its_own_preview(tmp_path):
+    """gc2211 is four separate pointings; one image can only show one of them."""
+    pp = _pp()
+    _stage_filters(str(tmp_path), {'o023': ['F200W', 'F277W'],
+                                   'o028': ['F150W', 'F277W'],
+                                   'o046': ['F200W', 'F277W']})
+    specs = pp.plan(tmp_path)
+    assert sorted(s['pointing'] for s in specs) == ['o023', 'o028', 'o046']
+    # two bands -> the existing R/(G=mean)/B, only expanded spatially
+    assert all(len(s['filters']) == 2 for s in specs)
+
+
+def test_filters_are_ordered_reddest_first():
+    pp = _pp()
+    assert pp.chunk_filters(['F405N', 'F115W', 'F212N']) == [['F115W', 'F212N', 'F405N']]
+    spec = {'pointing': None, 'filters': ['F444W', 'F410M', 'F405N'], 'subdirs': []}
+    assert pp.describe(spec) == 'F444W/F410M/F405N'
+
+
+def test_a_trailing_singleton_borrows_instead_of_being_dropped():
+    """3+3+1 would leave the last band in a chunk that cannot make an image."""
+    pp = _pp()
+    seven = [f'F{100 + 10 * i}W' for i in range(7)]
+    chunks = pp.chunk_filters(seven)
+    assert [len(c) for c in chunks] == [3, 2, 2]
+    assert sorted(f for c in chunks for f in c) == sorted(seven)
+
+
+def test_field_page_shows_every_preview(tmp_path):
+    mw = _make_webpage()
+    manifest = {'version': 'v1', 'built': '2026-08-05T00:00:00Z', 'files': [],
+                'globus_https_base': 'https://example.invalid',
+                'globus_collection_id': '0', 'release_path': '/r'}
+    page = mw.render_field_page(
+        'brick', manifest, 'assets/brick.jpg', None, preview_version='v1',
+        previews=[('assets/brick_rgb_f187n_f182m_f115w.jpg', 'brick_rgb_f187n_f182m_f115w'),
+                  ('assets/brick_rgb_f2550w_mean_f466n.jpg', 'brick_rgb_f2550w_mean_f466n')])
+    assert page.count('class=preview ') == 2
+    assert 'R=F187N, G=F182M, B=F115W' in page
+    assert 'R=F2550W, G=mean(F2550W,F466N), B=F466N' in page
+
+
+def test_single_preview_field_page_is_unchanged(tmp_path):
+    mw = _make_webpage()
+    manifest = {'version': 'v1', 'built': '2026-08-05T00:00:00Z', 'files': [],
+                'globus_https_base': 'https://example.invalid',
+                'globus_collection_id': '0', 'release_path': '/r'}
+    page = mw.render_field_page('sgra', manifest, 'assets/sgra.jpg',
+                                ['F405N', 'MEAN', 'F212N'], preview_version='v1',
+                                previews=[('assets/sgra.jpg', 'sgra_rgb_f405n_mean_f212n')])
+    assert 'class=previews' not in page
+    assert 'RGB preview (R=F405N' in page
