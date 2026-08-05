@@ -345,7 +345,7 @@ def test_sky_view_defaults_to_the_jwst_layers_only():
     # observed is on despite being empty, so the first executed visit shows up
     assert state['observed'] == 'true'
     assert state['spring'] == 'false' and state['autumn'] == 'false'
-    assert state['target'] == 'false'
+    assert state['aces'] == 'false'
 
 
 def _re_search_state(html):
@@ -1511,8 +1511,13 @@ _ROMAN = {
                                      [266.6, -29.5], [266.5, -29.5]]],
                          'autumn': [[[266.7, -29.6], [266.8, -29.6],
                                      [266.8, -29.5], [266.7, -29.5]]]}},
+    # The JWST target area, mislabelled as Roman context in the source file.
+    # It must NOT be drawn — see test_the_jwst_target_area_is_not_a_roman_layer.
     'target_area': [[266.4, -29.7], [266.9, -29.7], [266.9, -29.2]],
 }
+
+#: The true ACES outline is ~700 vertices; three is enough to be drawable.
+_ACES = [[[266.4, -29.4], [266.9, -29.4], [266.9, -28.9], [266.4, -28.9]]]
 
 
 def test_roman_toggles_are_not_dead_without_aladin():
@@ -1520,12 +1525,14 @@ def test_roman_toggles_are_not_dead_without_aladin():
     loaded 1.8 MB of Aladin a click toggled the button's own styling and nothing
     else — a live-looking control that did nothing."""
     from jwst_gc_pipeline.monitoring import skyview
-    svg, info = skyview.static_map(_fp(planned=_POINTINGS), _ROMAN)
-    assert info['n_roman'] == 3                    # 1 spring + 1 autumn + area
-    for group in ('stat-spring', 'stat-autumn', 'stat-target'):
+    svg, info = skyview.static_map(
+        _fp(planned=_POINTINGS, aces=_ACES), _ROMAN)
+    assert info['n_roman'] == 2                    # 1 spring + 1 autumn
+    assert info['n_aces'] == 1
+    for group in ('stat-spring', 'stat-autumn', 'stat-aces'):
         assert 'id="%s"' % group in svg
-    html = skyview.section(_fp(planned=_POINTINGS), _ROMAN)
-    for group in ('stat-spring', 'stat-autumn', 'stat-target'):
+    html = skyview.section(_fp(planned=_POINTINGS, aces=_ACES), _ROMAN)
+    for group in ('stat-spring', 'stat-autumn', 'stat-aces'):
         assert "'%s'" % group in html              # reachable from STATIC_GROUPS
     # and the buttons must not be inert
     spring = html[html.index('id="lyr-spring"'):html.index('id="lyr-autumn"')]
@@ -1587,8 +1594,8 @@ def test_background_buttons_work_before_the_viewer_exists():
 def test_roman_layers_start_hidden():
     """Roman is context on a JWST monitor: drawn, but off until asked for."""
     from jwst_gc_pipeline.monitoring import skyview
-    svg, _ = skyview.static_map(_fp(planned=_POINTINGS), _ROMAN)
-    for group in ('stat-spring', 'stat-autumn', 'stat-target'):
+    svg, _ = skyview.static_map(_fp(planned=_POINTINGS, aces=_ACES), _ROMAN)
+    for group in ('stat-spring', 'stat-autumn', 'stat-aces'):
         block = svg[svg.index('id="%s"' % group):]
         assert 'gcm-sky-off' in block[:block.index('>')]
     for group in ('stat-nircam', 'stat-miri'):
@@ -1782,3 +1789,51 @@ def test_page_states_the_pa_uncertainty_and_the_dither():
                                        'PrimaryDithers': ['6TIGHT']}))
     assert '125' in html and '180' in html
     assert 'FULLBOX' in html and 'nominal position is drawn' in html
+
+
+def test_the_jwst_target_area_is_not_a_roman_layer():
+    """`target_area` in the Roman GBTDS file is the **JWST** target area. It was
+    offered under the Roman heading, where it read as Roman context and was
+    simply mislabelled, so it is not drawn at all."""
+    from jwst_gc_pipeline.monitoring import skyview
+    svg, info = skyview.static_map(_fp(planned=_POINTINGS), _ROMAN)
+    assert info['n_roman'] == 2, 'target_area is still being counted as Roman'
+    assert 'stat-target' not in svg
+    html = skyview.section(_fp(planned=_POINTINGS), _ROMAN)
+    assert 'lyr-target' not in html
+    assert 'target area' not in html
+
+
+def test_aces_is_drawn_from_its_real_outline():
+    """ACES is the obvious comparison for a CMZ survey, and its true coverage is
+    a ~700-vertex polygon — a rectangle would misstate which pointings it
+    covers."""
+    from jwst_gc_pipeline.monitoring import skyview
+    html = skyview.section(_fp(planned=_POINTINGS, aces=_ACES), _ROMAN)
+    assert 'id="lyr-aces"' in html
+    assert "aces: ['stat-aces']" in html
+    # ...and the interactive view has to fill it from the same data.
+    assert '(fp.aces || [])' in html
+
+
+def test_aces_absent_is_an_empty_layer_not_a_broken_page():
+    from jwst_gc_pipeline.monitoring import skyview
+    svg, info = skyview.static_map(_fp(planned=_POINTINGS))
+    assert info['n_aces'] == 0
+    assert 'id="stat-aces"' in svg
+
+
+def test_aladin_container_can_report_its_height():
+    """Aladin measures its container at construction and falls back to a
+    1px-tall canvas when it reads zero — which is what a container that was
+    `display: none` a moment earlier still reports, because the class change has
+    not been through layout. Both halves of that are fixed here."""
+    from jwst_gc_pipeline.monitoring import skyview
+    assert 'height: 100%' in skyview.CSS.split('#gcm-aladin')[1].split('}')[0]
+    html = skyview.section(_fp(planned=_POINTINGS))
+    start = html.index('function start(')
+    body = html[start:]
+    reveal = body.index("aladinDiv.classList.remove('gcm-sky-off')")
+    build = body.index("A.aladin('#gcm-aladin'")
+    frame = body.index('requestAnimationFrame')
+    assert reveal < frame < build, 'construction must wait a frame after reveal'
