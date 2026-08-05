@@ -137,6 +137,44 @@ def load_science(field_dir, filt, observation=None, ref_header=None,
     return out.astype("float32"), ref_header
 
 
+def preview_stem(field, observation, r_name, g_name, b_name):
+    """Filename stem for one preview.  Shared so ``--auto`` can tell which files
+    in ``preview/`` belong to the CURRENT plan and which are left over from an
+    older one."""
+    obs_tag = f"_{observation}" if observation else ""
+    return f"{field}{obs_tag}_rgb_{r_name}_{g_name}_{b_name}".lower()
+
+
+def planned_stems(field, specs):
+    """Every stem ``--auto`` will write for ``specs``."""
+    out = set()
+    for spec in specs:
+        names = list(spec["filters"])
+        if len(names) == 2:
+            names = [names[0], "mean", names[1]]
+        out.add(preview_stem(field, spec["pointing"], *names))
+    return out
+
+
+def supersede_unplanned(preview_dir, keep, suffix=".superseded"):
+    """Rename previews that are not in the current plan, and report them.
+
+    Re-running ``--auto`` after the plan changes would otherwise leave the old
+    images beside the new ones and the page would show both -- wd1 ended up with
+    seven files for a four-preview plan.  Renamed, not deleted: these live in a
+    published tree, and the repo's convention for a superseded product is a
+    suffix (``*_badastrometry_stale``), which is also recoverable if the plan is
+    what is wrong.
+    """
+    moved = []
+    for path in sorted(preview_dir.glob("*.jpg")) + sorted(preview_dir.glob("*.png")):
+        if path.stem in keep:
+            continue
+        path.rename(path.with_name(path.name + suffix))
+        moved.append(path.name)
+    return moved
+
+
 def stretch(channel, low_pct, high_pct, asinh_a):
     finite = channel[np.isfinite(channel) & (channel != 0)]
     lo, hi = np.percentile(finite, [low_pct, high_pct])
@@ -210,6 +248,10 @@ def main(argv=None):
             if spec["subdirs"]:
                 rest += ["--extra-subdirs", *spec["subdirs"]]
             main(rest)
+        moved = supersede_unplanned(field_dir / "preview",
+                                    planned_stems(args.field, specs))
+        for name in moved:
+            print(f"  superseded (not in plan): {name}")
         return 0
 
     if len(args.filters) not in (2, 3):
@@ -262,8 +304,7 @@ def main(argv=None):
 
     out_dir = field_dir / "preview"
     out_dir.mkdir(parents=True, exist_ok=True)
-    obs_tag = f"_{args.observation}" if args.observation else ""
-    stem = f"{args.field}{obs_tag}_rgb_{r_name}_{g_name}_{b_name}".lower()
+    stem = preview_stem(args.field, args.observation, r_name, g_name, b_name)
 
     img = Image.fromarray(rgb8, mode="RGB")
     png_path = out_dir / f"{stem}.png"

@@ -636,3 +636,50 @@ def test_single_preview_field_page_is_unchanged(tmp_path):
                                 previews=[('assets/sgra.jpg', 'sgra_rgb_f405n_mean_f212n')])
     assert 'class=previews' not in page
     assert 'RGB preview (R=F405N' in page
+
+
+def test_every_staged_filter_has_a_wavelength():
+    """A filter missing from FILTER_WAVELENGTH sorts to 99 um -- to the red end,
+    paired with whatever is last.  That is how wd1 got an "F164N/F466N" preview
+    (1.64 um beside 4.66) and wd2 an "F164N/F250M": both bands were simply not
+    in the table.  Any band this repo knows how to stage must be listed."""
+    pp = _pp()
+    sr = _sr()
+    known = set(pp.FILTER_WAVELENGTH)
+    declared = set()
+    for cfg in sr.FIELDS.values():
+        for entry in list(cfg.get('nircam', [])) + list(cfg.get('miri', [])):
+            declared.add(entry['filter'].upper())
+    assert declared <= known, f"no wavelength for {sorted(declared - known)}"
+
+
+def test_auto_supersedes_previews_left_over_from_an_older_plan(tmp_path):
+    """Re-running --auto after the plan changes must not leave both sets on the
+    page: wd1 ended up with seven files for a four-preview plan."""
+    mpr = _load('make_preview_rgb', os.path.join(_REL, 'make_preview_rgb.py'))
+    import pathlib
+    d = pathlib.Path(tmp_path)
+    for stem in ('wd1_rgb_f164n_f150w_f115w',      # in plan
+                 'wd1_rgb_f187n_f150w_f115w'):     # left over
+        (d / f'{stem}.jpg').touch()
+        (d / f'{stem}.png').touch()
+    moved = mpr.supersede_unplanned(d, {'wd1_rgb_f164n_f150w_f115w'})
+    assert sorted(moved) == ['wd1_rgb_f187n_f150w_f115w.jpg',
+                             'wd1_rgb_f187n_f150w_f115w.png']
+    assert (d / 'wd1_rgb_f164n_f150w_f115w.jpg').is_file()      # kept
+    # renamed, not deleted -- these live in a published tree
+    assert (d / 'wd1_rgb_f187n_f150w_f115w.jpg.superseded').is_file()
+    assert not (d / 'wd1_rgb_f187n_f150w_f115w.jpg').exists()
+
+
+def test_planned_stems_match_what_main_writes():
+    """The prune is only safe if it computes the SAME name the renderer does."""
+    mpr = _load('make_preview_rgb', os.path.join(_REL, 'make_preview_rgb.py'))
+    assert mpr.preview_stem('gc2211', 'o023', 'F277W', 'mean', 'F200W') == \
+        'gc2211_o023_rgb_f277w_mean_f200w'
+    assert mpr.preview_stem('brick', None, 'F444W', 'F410M', 'F405N') == \
+        'brick_rgb_f444w_f410m_f405n'
+    specs = [{'pointing': 'o023', 'filters': ['F277W', 'F200W'], 'subdirs': []},
+             {'pointing': None, 'filters': ['F444W', 'F410M', 'F405N'], 'subdirs': []}]
+    assert mpr.planned_stems('gc2211', specs) == {
+        'gc2211_o023_rgb_f277w_mean_f200w', 'gc2211_rgb_f444w_f410m_f405n'}

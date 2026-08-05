@@ -26,11 +26,16 @@ brick's F2550W in an image instead of stranding it in a group of one.
 import os
 import re
 
-#: micron, for ordering previews by wavelength and labelling them.
+#: micron, for ordering previews by wavelength and labelling them.  A filter
+#: MISSING from this table sorts to 99 um -- i.e. to the red end, where it gets
+#: paired with whatever happens to be last.  That is how wd1 produced
+#: "F164N/F466N" (1.64 um beside 4.66) and wd2 "F164N/F250M": both bands were
+#: simply absent here.  Keep it complete; `test_every_staged_filter_has_a_wavelength`
+#: fails when a staged band is not listed.
 FILTER_WAVELENGTH = {
     "F090W": 0.90, "F115W": 1.15, "F140M": 1.40, "F150W": 1.50, "F150W2": 1.50,
-    "F162M": 1.62, "F182M": 1.82, "F187N": 1.87, "F200W": 2.00, "F210M": 2.10,
-    "F212N": 2.12, "F277W": 2.77, "F300M": 3.00, "F322W2": 3.22, "F323N": 3.23,
+    "F162M": 1.62, "F164N": 1.64, "F182M": 1.82, "F187N": 1.87, "F200W": 2.00, "F210M": 2.10,
+    "F212N": 2.12, "F250M": 2.50, "F277W": 2.77, "F300M": 3.00, "F322W2": 3.22, "F323N": 3.23,
     "F335M": 3.35, "F356W": 3.56, "F360M": 3.60, "F405N": 4.05, "F410M": 4.10,
     "F444W": 4.44, "F466N": 4.66, "F470N": 4.70, "F480M": 4.80,
     # MIRI
