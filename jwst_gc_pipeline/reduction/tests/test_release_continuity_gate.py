@@ -146,3 +146,96 @@ def test_missing_bands_is_not_a_failure(tmp_path):
     cat = Table({'mag_vega_f090w': np.linspace(12.0, 18.0, 500)})
     fails = stage_release.check_photometric_continuity(_items_for(tmp_path, cat))
     assert fails == []
+
+
+# ---------------------------------------------------------------------------
+# Saturation-BOUNDARY known limit: the F410M-F405N railed-deep-core floor is
+# WARN (not FAIL) only when TRIPLY scoped -- the F410M readout is NGROUPS<=2 AND
+# the jump is below the deep-core-floor ceiling. Fails closed on the unknown.
+# ---------------------------------------------------------------------------
+from astropy.io import fits   # noqa: E402
+
+
+def _boundary_cat(jump, n=6000, seed=5):
+    """F410M-F405N catalog with a boundary jump: bright stars (mag_f405n < 13)
+    are replaced_saturated in F410M and carry a `jump` color offset, so the
+    saturation_continuity metric reads ~|jump|."""
+    rng = np.random.default_rng(seed)
+    mref = rng.uniform(10.5, 17.0, n)                 # mag_vega_f405n (band_ref)
+    sat = mref < 13.0 + rng.normal(0, 0.3, n)         # replaced_saturated_f410m
+    color = -0.10 + rng.normal(0, 0.05, n) + np.where(sat, jump, 0.0)
+    return Table({
+        'mag_vega_f410m': mref + color, 'mag_vega_f405n': mref,
+        'replaced_saturated_f410m': sat,
+        'is_saturated_f410m': np.zeros(n, bool),
+        'forced_filled_f410m': np.zeros(n, bool),
+        'replaced_saturated_f405n': np.zeros(n, bool),
+        'forced_filled_f405n': np.zeros(n, bool),
+        'is_saturated_f405n': np.zeros(n, bool),
+        'independently_detected_f405n': np.ones(n, bool)})
+
+
+def _mosaic_item(tmp_path, filt, ngroups):
+    p = tmp_path / f"{filt.lower()}_i2d.fits"
+    hdu = fits.PrimaryHDU()
+    if ngroups is not None:
+        hdu.header['NGROUPS'] = ngroups
+    hdu.writeto(p, overwrite=True)
+    return {"category": "image", "kind": "science", "filter": filt.upper(),
+            "src": str(p)}
+
+
+def _boundary_items(tmp_path, cat, ngroups):
+    items = _items_for(tmp_path, cat)
+    if ngroups is not None:
+        items.append(_mosaic_item(tmp_path, "F410M", ngroups))
+    return items
+
+
+def test_boundary_floor_warns_when_2group_and_below_ceiling(tmp_path):
+    # brick-like: ~0.17 mag jump, NGROUPS=2 -> documented railed-core floor, WARN
+    items = _boundary_items(tmp_path, _boundary_cat(0.17), ngroups=2)
+    assert stage_release.check_photometric_continuity(items) == []
+
+
+def test_boundary_gross_break_blocks_even_at_2group(tmp_path):
+    # cloudc-like: a gross jump on a 2-group field is NOT the deep-core floor
+    items = _boundary_items(tmp_path, _boundary_cat(0.8), ngroups=2)
+    fails = stage_release.check_photometric_continuity(items)
+    assert any("f410m-f405n continuity" in f for f in fails)
+
+
+def test_boundary_blocks_when_not_2group(tmp_path):
+    # w51-like: same ~0.17 jump but NGROUPS=5 -> not the railed regime, blocks
+    items = _boundary_items(tmp_path, _boundary_cat(0.17), ngroups=5)
+    fails = stage_release.check_photometric_continuity(items)
+    assert any("f410m-f405n continuity" in f for f in fails)
+
+
+def test_boundary_fails_closed_when_ngroups_unknown(tmp_path):
+    # no F410M science mosaic shipped -> readout cannot be verified -> block
+    items = _boundary_items(tmp_path, _boundary_cat(0.17), ngroups=None)
+    fails = stage_release.check_photometric_continuity(items)
+    assert any("f410m-f405n continuity" in f for f in fails)
+
+
+def test_boundary_exemption_does_not_cover_other_pairs(tmp_path):
+    # F182M-F187N is not a known-limit pair: a boundary break blocks regardless
+    # of readout. Build the jump on that pair with an F182M mosaic at NGROUPS=2.
+    rng = np.random.default_rng(6)
+    n = 6000
+    mref = rng.uniform(10.5, 17.0, n)
+    sat = mref < 13.0 + rng.normal(0, 0.3, n)
+    color = 0.15 + rng.normal(0, 0.05, n) + np.where(sat, 0.17, 0.0)
+    cat = Table({
+        'mag_vega_f182m': mref + color, 'mag_vega_f187n': mref,
+        'replaced_saturated_f182m': sat,
+        'is_saturated_f182m': np.zeros(n, bool),
+        'forced_filled_f182m': np.zeros(n, bool),
+        'replaced_saturated_f187n': np.zeros(n, bool),
+        'forced_filled_f187n': np.zeros(n, bool),
+        'is_saturated_f187n': np.zeros(n, bool),
+        'independently_detected_f187n': np.ones(n, bool)})
+    items = _items_for(tmp_path, cat) + [_mosaic_item(tmp_path, "F182M", 2)]
+    fails = stage_release.check_photometric_continuity(items)
+    assert any("f182m-f187n continuity" in f for f in fails)

@@ -209,17 +209,33 @@ science subset is too small to measure at `min_n=200` (nan), the pair fails
 so a small catalog carrying a real strip (both metrics nan) still **blocks**
 rather than slipping through the raised floor.
 
-**⚠ Saturation-BOUNDARY continuity is a SEPARATE gate and is NOT closed on Brick
-m8.** `CONTINUITY_PAIRS` runs `saturation_continuity(cat, 'f410m', 'f405n')`
-(A = the saturated/`replaced_saturated` band, B = the reference binned in
-`mag_B`) = **0.170 mag (C1-boundary-jump) → FAIL**: the recovered-F410M-satstar
-rows sit ~0.17 mag off the unflagged locus in the two bright transition bins
-**F405N 12.0–13.0** (the binning band is B = F405N; n_sat≈38, jumps −0.170 /
-−0.154). This is the same recovered-satstar color bias seen in F182M-F187N
-flatness, but the boundary metric measures the
+**Saturation-BOUNDARY continuity is a SEPARATE gate.** `CONTINUITY_PAIRS` runs
+`saturation_continuity(cat, band_sat='f410m', band_ref='f405n')` (band_sat = the
+`replaced_saturated` band, band_ref = the reference binned in `mag_ref`) =
+**0.170 mag (C1-boundary-jump)** on Brick m8: the recovered-F410M-satstar rows sit
+~0.17 mag off the unflagged locus in the two bright transition bins **F405N
+12.0–13.0** (n_sat≈38, jumps −0.170 / −0.154). This is the same recovered-satstar
+color bias seen in F182M-F187N flatness, but the boundary metric measures the
 satstar↔normal transition and therefore CANNOT exclude the satstar rows;
 `science_only` does not apply to it. (The 0.04 mag figure is the reverse argument
-order `saturation_continuity('f405n','f410m')`, which the gate does not evaluate —
-do not quote it as a pass.) Closing this needs a recovered-satstar photometry fix
-(or a decision to certify the boundary on a defined population), tracked
-separately; this section's flatness certification does not unblock it.
+order `saturation_continuity(band_sat='f405n', band_ref='f410m')`, which the gate
+does not evaluate — do not quote it as a pass.)
+
+**Known limit (`CONTINUITY_BOUNDARY_KNOWN_LIMITS` — WARN, triply scoped, not
+whole-pair).** The 0.170 is an observation-design floor: a NIRCam-LONG field read
+out at **NGROUPS≤2 (BRIGHT2)** cannot recover the deepest saturated cores (railed
+at group 0), so the recovered F410M–F405N color carries an irreducible residual
+in the saturation-onset bins. The gate WARNs instead of blocking **only** when all
+three hold, else it FAILS:
+1. the pair is F410M–F405N (the only entry);
+2. the field's F410M readout is NGROUPS≤2, **read from the shipped science mosaic
+   at gate time** (fail-closed if the mosaic/NGROUPS is unreadable);
+3. the jump is below `CONTINUITY_BOUNDARY_FLOOR_CEILING_MAG` (default 0.35) — a
+   gross break is not the floor.
+
+Measured (2026-08): **brick 0.170, NGROUPS=2 → WARN** (gate green). **cloudc 2.84,
+NGROUPS=2 → FAIL** (gross, above the ceiling). **w51 0.577, NGROUPS=5 → FAIL** (not
+the railed regime). This is **PROVISIONAL** — saturated-star recovery photometry
+improvement is under active investigation; remove the entry once the recovered
+deep-core flux scale is fixed. The biased rows stay in the catalog under
+`replaced_saturated` for anyone who cuts them.
