@@ -34,25 +34,36 @@ from astropy.visualization import AsinhStretch
 from astropy.wcs import WCS
 from PIL import Image
 
+import preview_plan
 from stage_release import field_release_dir
 
 
-def science_paths(field_dir, filt, observation):
+def science_paths(field_dir, filt, observation, extra_subdirs=()):
     """Every science mosaic staged for one filter, sorted.
 
     Most fields stage a single full-field ``-merged_i2d``; module-split fields
     (arches/quintuplet: ``-nrca_i2d`` + ``-nrcb_i2d``) stage one mosaic per
-    module, and those are coadded onto a common grid by ``load_science``."""
+    module, and those are coadded onto a common grid by ``load_science``.
+
+    ``extra_subdirs`` are further ``images/`` subdirectories to look in when the
+    filter is not at the level selected by ``observation`` -- MIRI is staged
+    under ``images/MIRI/<FILT>`` but is the SAME sky as the NIRCam bands, so a
+    preview spanning both has to search both places.  Searched in order; the
+    first level that has the filter wins, so a pointing's own mosaic is never
+    mixed with another pointing's.
+    """
     # observation doubles as a subdir selector ("o023", or "MIRI")
-    sub = field_dir / "images"
-    if observation:
-        sub = sub / observation
-    matches = (glob.glob(str(sub / filt / "*-merged_i2d.fits"))
-               or glob.glob(str(sub / filt / "*_i2d.fits")))
-    if not matches:
-        raise FileNotFoundError(f"no science mosaic for {filt} "
-                                f"(sub={observation}) in {field_dir}")
-    return sorted(matches)
+    base = field_dir / "images"
+    roots = [base / observation if observation else base]
+    roots += [base / d for d in extra_subdirs]
+    for sub in roots:
+        matches = (glob.glob(str(sub / filt / "*-merged_i2d.fits"))
+                   or glob.glob(str(sub / filt / "*_i2d.fits")))
+        if matches:
+            return sorted(matches)
+    raise FileNotFoundError(f"no science mosaic for {filt} "
+                            f"(sub={observation}, extra={list(extra_subdirs)}) "
+                            f"in {field_dir}")
 
 
 def science_path(field_dir, filt, observation):
@@ -97,8 +108,8 @@ def grids_differ(paths):
 
 
 def load_science(field_dir, filt, observation=None, ref_header=None,
-                 max_axis=8000):
-    paths = science_paths(field_dir, filt, observation)
+                 max_axis=8000, extra_subdirs=()):
+    paths = science_paths(field_dir, filt, observation, extra_subdirs)
     if len(paths) == 1 and ref_header is None:
         path = paths[0]
         return (fits.getdata(path, "SCI").astype("float32"),
@@ -126,6 +137,44 @@ def load_science(field_dir, filt, observation=None, ref_header=None,
     return out.astype("float32"), ref_header
 
 
+def preview_stem(field, observation, r_name, g_name, b_name):
+    """Filename stem for one preview.  Shared so ``--auto`` can tell which files
+    in ``preview/`` belong to the CURRENT plan and which are left over from an
+    older one."""
+    obs_tag = f"_{observation}" if observation else ""
+    return f"{field}{obs_tag}_rgb_{r_name}_{g_name}_{b_name}".lower()
+
+
+def planned_stems(field, specs):
+    """Every stem ``--auto`` will write for ``specs``."""
+    out = set()
+    for spec in specs:
+        names = list(spec["filters"])
+        if len(names) == 2:
+            names = [names[0], "mean", names[1]]
+        out.add(preview_stem(field, spec["pointing"], *names))
+    return out
+
+
+def supersede_unplanned(preview_dir, keep, suffix=".superseded"):
+    """Rename previews that are not in the current plan, and report them.
+
+    Re-running ``--auto`` after the plan changes would otherwise leave the old
+    images beside the new ones and the page would show both -- wd1 ended up with
+    seven files for a four-preview plan.  Renamed, not deleted: these live in a
+    published tree, and the repo's convention for a superseded product is a
+    suffix (``*_badastrometry_stale``), which is also recoverable if the plan is
+    what is wrong.
+    """
+    moved = []
+    for path in sorted(preview_dir.glob("*.jpg")) + sorted(preview_dir.glob("*.png")):
+        if path.stem in keep:
+            continue
+        path.rename(path.with_name(path.name + suffix))
+        moved.append(path.name)
+    return moved
+
+
 def stretch(channel, low_pct, high_pct, asinh_a):
     finite = channel[np.isfinite(channel) & (channel != 0)]
     lo, hi = np.percentile(finite, [low_pct, high_pct])
@@ -149,6 +198,13 @@ def main(argv=None):
                         help="2 or 3 filters (R [G] B); 2 -> green = mean")
     parser.add_argument("--observation", default=None,
                         help="pointing of a multi-pointing field (e.g. o023)")
+    parser.add_argument("--extra-subdirs", nargs="*", default=[], metavar="DIR",
+                        help="further images/ subdirs to search for a filter "
+                             "(e.g. MIRI, which is the same sky as NIRCam)")
+    parser.add_argument("--auto", action="store_true",
+                        help="render EVERY preview the field needs: one per "
+                             "pointing, and enough wavelength triples that each "
+                             "staged filter appears in at least one image")
     parser.add_argument("--reproject", action="store_true",
                         help="force resampling onto a common grid even when every "
                              "channel is already on the same one (mixed pixel "
@@ -166,12 +222,59 @@ def main(argv=None):
                         help="cap (px) on the longest axis of the common grid")
     args = parser.parse_args(argv)
 
+    field_dir = field_release_dir(args.field, args.version, args.release_root)
+
+    if args.auto:
+        # One preview cannot show a four-pointing field, and cannot carry more
+        # than three of a fourteen-band one.  Render the whole plan instead.
+        specs = preview_plan.plan(field_dir)
+        if not specs:
+            parser.error(f"no staged filters found under {field_dir}/images")
+        print(f"{args.field}: {len(specs)} preview(s) planned")
+        failed = []
+        for spec in specs:
+            print(f"  -> {preview_plan.describe(spec)}", flush=True)
+        for spec in specs:
+            rest = ["--field", args.field, "--version", args.version,
+                    "--release-root", args.release_root,
+                    "--filters", *spec["filters"],
+                    "--low-percentile", str(args.low_percentile),
+                    "--high-percentile", str(args.high_percentile),
+                    "--asinh-a", str(args.asinh_a),
+                    "--max-width", str(args.max_width),
+                    "--max-height", str(args.max_height),
+                    "--max-axis", str(args.max_axis)]
+            if spec["pointing"]:
+                rest += ["--observation", spec["pointing"]]
+            if spec["subdirs"]:
+                rest += ["--extra-subdirs", *spec["subdirs"]]
+            if args.reproject:
+                rest.append("--reproject")
+            try:
+                main(rest)
+            except FileNotFoundError as err:
+                # one unrenderable band must not abandon the rest of the plan
+                # AND the prune with it -- that left a partial gallery beside
+                # the old one, under an "every band appears" caption
+                failed.append((preview_plan.describe(spec), str(err)))
+                print(f"  FAILED {preview_plan.describe(spec)}: {err}")
+        moved = supersede_unplanned(field_dir / "preview",
+                                    planned_stems(args.field, specs))
+        for name in moved:
+            print(f"  superseded (not in plan): {name}")
+        if failed:
+            print(f"{args.field}: {len(failed)} of {len(specs)} previews could "
+                  f"not be rendered:")
+            for label, err in failed:
+                print(f"  - {label}: {err}")
+            return 1
+        return 0
+
     if len(args.filters) not in (2, 3):
         parser.error("--filters takes 2 or 3 filter names")
 
-    field_dir = field_release_dir(args.field, args.version, args.release_root)
-
-    paths_by_filter = {f: science_paths(field_dir, f, args.observation)
+    paths_by_filter = {f: science_paths(field_dir, f, args.observation,
+                                        args.extra_subdirs)
                        for f in args.filters}
     all_paths = [p for f in args.filters for p in paths_by_filter[f]]
     # A filter staged as several mosaics (one per module) has to be coadded, and
@@ -190,7 +293,8 @@ def main(argv=None):
     # channel's scale.
     ref_header = _mosaic_header(all_paths, args.max_axis) if need_common else None
     loaded = [load_science(field_dir, f, args.observation, ref_header,
-                           max_axis=args.max_axis)[0]
+                           max_axis=args.max_axis,
+                           extra_subdirs=args.extra_subdirs)[0]
               for f in args.filters]
 
     stretched = [stretch(c, args.low_percentile, args.high_percentile,
@@ -216,8 +320,7 @@ def main(argv=None):
 
     out_dir = field_dir / "preview"
     out_dir.mkdir(parents=True, exist_ok=True)
-    obs_tag = f"_{args.observation}" if args.observation else ""
-    stem = f"{args.field}{obs_tag}_rgb_{r_name}_{g_name}_{b_name}".lower()
+    stem = preview_stem(args.field, args.observation, r_name, g_name, b_name)
 
     img = Image.fromarray(rgb8, mode="RGB")
     png_path = out_dir / f"{stem}.png"

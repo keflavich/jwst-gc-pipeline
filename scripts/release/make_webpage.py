@@ -21,6 +21,8 @@ import urllib.parse
 from pathlib import Path
 
 import field_overview
+import make_preview_rgb
+import preview_plan
 from stage_release import field_release_dir
 
 # Display label per group folder (None = Galactic Center, the default survey).
@@ -104,6 +106,10 @@ h2 { border-bottom:1px solid var(--border); padding-bottom:.3rem; margin-top:2re
 .card .body { padding:.8rem 1rem; }
 .preview { width:100%; border:1px solid var(--border); border-radius:8px;
            margin:1rem 0; background:#000; }
+.previews { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr));
+            gap:1rem; margin:1rem 0; }
+.previews figure { margin:0; }
+.previews .preview { margin:0 0 .35rem; }
 table { width:100%; border-collapse:collapse; font-size:.9rem; margin:.5rem 0 1.5rem; }
 th, td { text-align:left; padding:.4rem .6rem; border-bottom:1px solid var(--border); }
 th { color:var(--muted); font-weight:600; }
@@ -170,8 +176,25 @@ def _version_dropdown(field, active_version, all_versions):
             + "".join(opts) + "</select></label>")
 
 
+def _preview_caption(stem, field):
+    """'R=F444W, G=F410M, B=F405N' (and the pointing) from a preview filename.
+
+    Filenames are ``<field>[_<obs>]_rgb_<R>_<G>_<B>``; a two-filter preview
+    writes ``mean`` for green, which is what it actually is.
+    """
+    head, _, bands = stem.partition("_rgb_")
+    parts = bands.split("_")
+    obs = head[len(field) + 1:] if head.startswith(field + "_") else ""
+    label = ""
+    if len(parts) == 3:
+        r, g, b = (p.upper() for p in parts)
+        label = (f"R={r}, G=mean({r},{b}), B={b}" if g == "MEAN"
+                 else f"R={r}, G={g}, B={b}")
+    return (f"{obs.upper()} - " if obs else "") + (label or stem)
+
+
 def render_field_page(field, manifest, preview_rel, preview_channels=None,
-                      all_versions=None, preview_version=None):
+                      all_versions=None, preview_version=None, previews=()):
     files = manifest["files"]
     images = [f for f in files if f["category"] == "image"]
     catalogs = [f for f in files if f["category"] == "catalog"]
@@ -195,10 +218,6 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
     multi = any(f.get("observation") for f in files)
 
     if preview_rel:
-        cap = (f"RGB preview (R={preview_channels[0]}, G={preview_channels[1]}, "
-               f"B={preview_channels[2]})." if preview_channels else "Preview.")
-        out.append(f"<img class=preview src='{html.escape(preview_rel)}' "
-                   f"alt='{html.escape(field)} preview'>")
         # Attribute the preview's version whenever it is not this page's. The
         # fallback exists so a re-stage does not blank the card, but "the same
         # mosaics under a new version" is not always true: cloudc, sgrc and wd1
@@ -206,10 +225,38 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
         # to a byte-different file of identical size). An older preview is still
         # a fair illustration; presenting it as this release's is not.
         stale = (preview_version and preview_version != manifest["version"])
-        provenance = (f" Preview rendered from the {preview_version} mosaics, "
+        provenance = (f" Rendered from the {preview_version} mosaics, "
                       f"not {manifest['version']}'s." if stale else "")
-        out.append(f"<div class=muted>{html.escape(cap)}{html.escape(provenance)} "
-                   "Full-resolution images below.</div>")
+        # EVERY preview, not just the first. One image cannot show a
+        # multi-pointing field, and cannot carry more than three of the bands a
+        # field like sgrb2 ships -- so a single preview silently hid both the
+        # other pointings and most of the wavelengths.
+        if len(previews) > 1:
+            out.append(f"<p class=muted>{len(previews)} colour previews: one per "
+                       f"pointing, and enough wavelength combinations that every "
+                       f"band below appears in at least one."
+                       f"{html.escape(provenance)}</p>")
+            out.append("<div class=previews>")
+            for rel, stem in previews:
+                cap = _preview_caption(stem, field)
+                out.append(f"<figure><img class=preview src='{html.escape(rel)}' "
+                           f"loading=lazy alt='{html.escape(field)} {html.escape(cap)}'>"
+                           f"<figcaption class=muted>{html.escape(cap)}</figcaption>"
+                           f"</figure>")
+            out.append("</div>")
+        else:
+            # `_preview_caption` rather than `preview_channels`: the latter drops
+            # the pointing, so a one-preview multi-pointing field (gc2211, m4)
+            # said "RGB preview (R=F277W ...)" with no hint WHICH of its
+            # pointings -- the omission this whole change exists to fix.
+            cap = (_preview_caption(previews[0][1], field) if previews
+                   else (f"R={preview_channels[0]}, G={preview_channels[1]}, "
+                         f"B={preview_channels[2]}" if preview_channels else "Preview"))
+            out.append(f"<img class=preview src='{html.escape(preview_rel)}' "
+                       f"alt='{html.escape(field)} preview'>")
+            out.append(f"<div class=muted>RGB preview - {html.escape(cap)}."
+                       f"{html.escape(provenance)} "
+                       "Full-resolution images below.</div>")
 
     if multi:
         out.append("<p class=muted><b>Multi-pointing / multi-epoch field.</b> "
@@ -542,12 +589,35 @@ def main(argv=None):
                 if v != latest:
                     print(f"  {field}: no preview in {latest}, using {v}'s")
                 break
+        preview_items = []
         if previews:
             shutil.copy2(previews[0], assets / f"{field}.jpg")
             preview_rel = f"assets/{field}.jpg"
             parts = previews[0].stem.split("_rgb_")
             if len(parts) == 2 and parts[1].count("_") == 2:
                 preview_channels = [c.upper() for c in parts[1].split("_")]
+            # The index card keeps ONE thumbnail; the field page shows them all
+            # -- but in PLAN order and restricted to the plan, not whatever the
+            # directory happens to hold. `preview/` is never emptied, so a glob
+            # shows leftovers from an older plan (brick had 5 files for a
+            # 4-preview plan) under a caption claiming the set is complete.
+            by_stem = {src.stem: src for src in previews}
+            # read the plan from the version the previews were rendered from
+            specs = preview_plan.plan(field_release_dir(
+                field, preview_version, args.release_root))
+            planned = make_preview_rgb.planned_stems(field, specs)
+            ordered = [next(iter(make_preview_rgb.planned_stems(field, [spec])))
+                       for spec in specs]
+            for stem in ordered:
+                src = by_stem.get(stem)
+                if src is None:
+                    continue
+                shutil.copy2(src, assets / f"{stem}.jpg")
+                preview_items.append((f"assets/{stem}.jpg", stem))
+            unplanned = sorted(set(by_stem) - planned)
+            if unplanned:
+                print(f"  {field}: {len(unplanned)} preview(s) not in the plan, "
+                      f"not shown: {', '.join(unplanned)}")
 
         # one page per region for the latest (<field>.html) + one per older version
         for v in versions:
@@ -555,7 +625,8 @@ def main(argv=None):
                 (field_release_dir(field, v, args.release_root) / "MANIFEST.json").read_text())
             page = render_field_page(field, manifest, preview_rel, preview_channels,
                                      all_versions=versions,
-                                     preview_version=preview_version)
+                                     preview_version=preview_version,
+                                     previews=preview_items)
             fname = f"{field}.html" if v == latest else f"{field}.{v}.html"
             (out_dir / fname).write_text(page)
             if v == latest:
