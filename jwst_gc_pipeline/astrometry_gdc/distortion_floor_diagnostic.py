@@ -279,17 +279,34 @@ def _make_figure(path, ctr, Uc, Vc, Ug, Vg, nstar, fc, wc, fg, wg):
     import matplotlib.pyplot as plt
     XX, YY = np.meshgrid(ctr, ctr)
     fig, axs = plt.subplots(1, 2, figsize=(11, 5.2), sharex=True, sharey=True)
+    # FIXED arrow scale, SHARED by both panels, so the two are directly comparable and the length
+    # of any arrow is knowable: 0.1 mas is drawn as exactly ONE grid cell.  (scale_units='xy' ->
+    # arrow length in px = residual_mas / scale.)  This makes even the flat Jay field visible
+    # instead of the earlier data-driven scale where Jay's ~0.1 mas vectors shrank against CRDS's
+    # 0.44 mas ones.  CRDS's large vectors deliberately overrun a cell -- that IS the ~4x-worse
+    # distortion the figure is showing.
+    grid = float(ctr[1] - ctr[0]) if len(ctr) > 1 else 256.0
+    REF_MAS = 0.1
+    scale = REF_MAS / grid                              # mas per pixel: 0.1 mas == one grid cell
+    q = None
     for ax, U, V, ttl, fl, wo in [
             (axs[0], Uc, Vc, 'CRDS / SIAF', fc, wc),
             (axs[1], Ug, Vg, 'Jay STDGDC', fg, wg)]:
         mag = np.hypot(U, V)
-        q = ax.quiver(XX, YY, U, V, mag, scale=3.0, scale_units='xy',
-                      angles='xy', cmap='viridis', clim=(0, 0.35))
+        q = ax.quiver(XX, YY, U, V, mag, scale=scale, scale_units='xy',
+                      angles='xy', cmap='viridis', clim=(0, 0.35),
+                      width=0.006, headwidth=4, headlength=5)
         ax.set_title(f'{ttl}\nbinned floor {fl:.3f} mas, worst {wo:.3f} mas')
         ax.set_xlabel('detector x (px)')
         ax.set_aspect('equal')
         ax.set_xlim(0, 2048)
         ax.set_ylim(0, 2048)
+        # a 0.1 mas scalebar INSIDE each panel (same length on both by construction) so the reader
+        # can read the scale directly and verify the two panels match; a white patch keeps it
+        # legible over the arrows
+        qk = ax.quiverkey(q, 0.16, 0.94, REF_MAS, f'{REF_MAS} mas', labelpos='E',
+                          coordinates='axes', fontproperties={'size': 8})
+        qk.text.set_bbox(dict(facecolor='white', edgecolor='none', alpha=0.8, pad=1))
     axs[0].set_ylabel('detector y (px)')
     cb = fig.colorbar(q, ax=axs, fraction=0.04, pad=0.02)
     cb.set_label('|binned same-star residual| (mas)')
