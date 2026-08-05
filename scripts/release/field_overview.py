@@ -45,8 +45,11 @@ SURVEYS = (
 
 #: PINNED, not `latest`: this is a third-party script the live index loads, and
 #: `latest` lets the API change under a published page (the upgrade path already
-#: has to survive `A.init` not being a promise -- see the loader).
-ALADIN_JS = 'https://aladin.cds.unistra.fr/AladinLite/api/v3/3.6.2/aladin.js'
+#: has to survive `A.init` not being a promise -- see the loader).  The pin
+#: tracks the version the pattern is OBSERVED working on -- roman_footprint_gc
+#: runs against `latest`, which resolves to this today -- not simply the newest
+#: available; bump it when that page is seen working on a later one.
+ALADIN_JS = 'https://aladin.cds.unistra.fr/AladinLite/api/v3/3.8.2/aladin.js'
 
 #: Distinguishable at small size against a dark background, in a fixed order so
 #: a field keeps its colour between builds (the index is regenerated often).
@@ -458,6 +461,8 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
   try {{ data = JSON.parse(document.getElementById('ov-data').textContent); }}
   catch (err) {{ btn.disabled = true; return; }}
   var host = null;
+  var switchSeq = 0;              // a later click supersedes an in-flight one
+  var SWITCH_POLL_MS = 500, SWITCH_TRIES = 16;   // ~8 s for a HiPS to appear
   function teardown() {{
     // Whatever went wrong, the static SVG must be visible and clickable again.
     // `host` is position:absolute;inset:0 over the map, so leaving it behind
@@ -482,6 +487,25 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
       target: 'galactic 0 0', fov: 1.8, showReticle: false,
       showCooGrid: true, showFullscreenControl: false
     }});
+    // Verification is only possible where the view can be READ back.  The
+    // setter is feature-detected, so an Aladin without `getBaseImageLayer` is
+    // explicitly anticipated -- and there `currentLayerId()` would return null
+    // forever, the poll would never match, and every switch would roll back
+    // after 8 s reporting failure on a background that loaded fine.  That is
+    // the same lie as before, pointing the other way, so where the getter is
+    // missing the switch says it could not be verified instead of pretending.
+    var canVerify = typeof aladin.getBaseImageLayer === 'function';
+    function normaliseId(value) {{
+      // a URL id can come back differing by protocol or a trailing slash
+      return String(value == null ? '' : value)
+        .replace(/^https?:/, '').replace(/\\/+$/, '').toLowerCase();
+    }}
+    function currentLayerId() {{
+      try {{
+        var cur = aladin.getBaseImageLayer();
+        return (cur && (cur.id || cur.url || cur.name)) || null;
+      }} catch (err) {{ return null; }}
+    }}
     var cat = A.catalog({{name: 'released fields', sourceSize: 14, onClick: 'showPopup'}});
     aladin.addCatalog(cat);
     data.fields.forEach(function (f) {{
@@ -506,12 +530,65 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
         var b = document.createElement('button');
         b.type = 'button';
         b.textContent = s.name;
+        b.setAttribute('aria-pressed', i === 0 ? 'true' : 'false');
         if (i === 0) {{ b.className = 'on'; }}
         b.addEventListener('click', function () {{
-          Array.prototype.forEach.call(surveyBar.children,
-                                       function (o) {{ o.className = ''; }});
+          var previous = surveyBar.querySelector('button.on');
+          var seq = ++switchSeq;
+          Array.prototype.forEach.call(surveyBar.children, function (o) {{
+            o.className = ''; o.setAttribute('aria-pressed', 'false');
+          }});
           b.className = 'on';
-          aladin.setImageSurvey(s.id.indexOf('http') === 0 ? A.HiPS(s.id) : s.id);
+          b.setAttribute('aria-pressed', 'true');
+          function rollback(msg) {{
+            b.className = '';
+            b.setAttribute('aria-pressed', 'false');
+            if (previous) {{
+              previous.className = 'on';
+              previous.setAttribute('aria-pressed', 'true');
+            }}
+            status.textContent = msg;
+          }}
+          var layer;
+          try {{
+            layer = s.id.indexOf('http') === 0 ? A.HiPS(s.id) : s.id;
+            if (aladin.setBaseImageLayer) {{ aladin.setBaseImageLayer(layer); }}
+            else {{ aladin.setImageSurvey(layer); }}
+          }} catch (err) {{
+            if (window.console) {{ console.error('ov: survey switch threw', s, err); }}
+            rollback('could not switch to ' + s.name + ' (' + err + ')');
+            return;
+          }}
+          // The setter is SYNCHRONOUS and returns the layer object -- fetching
+          // the HiPS properties and its tiles is not.  Reporting success on the
+          // next line would claim a background that never arrived, which is the
+          // failure this panel most likely has.  Poll what is actually
+          // displayed instead, and only then say it worked.
+          if (!canVerify) {{
+            status.textContent = 'switched to ' + s.name
+                                 + ' (this Aladin build cannot confirm it loaded)';
+            return;
+          }}
+          status.textContent = 'loading ' + s.name + '\\u2026';
+          var want = normaliseId(s.id);
+          var tries = 0;
+          (function poll() {{
+            if (seq !== switchSeq) {{ return; }}   // superseded by a later click
+            var showing = currentLayerId();
+            if (showing && normaliseId(showing).indexOf(want) !== -1) {{
+              status.textContent = 'background: ' + s.name;
+              return;
+            }}
+            if (++tries > SWITCH_TRIES) {{
+              if (window.console) {{
+                console.error('ov: survey never became visible', s, 'showing', showing);
+              }}
+              rollback('could not load ' + s.name + ' -- still showing '
+                       + (showing || 'the previous background'));
+              return;
+            }}
+            setTimeout(poll, SWITCH_POLL_MS);
+          }})();
         }});
         surveyBar.appendChild(b);
       }});
