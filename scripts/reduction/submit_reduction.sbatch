@@ -41,14 +41,58 @@
 #   Multiple reduce/catalog jobs are almost always in flight; a pending job
 #   shows ONLY this static name (the runtime rename below fires at START).
 #   Include the obsid whenever the program has more than one observation.
+# RESOURCES: sized from the measured distribution, not a round number, and NOT
+# from the median alone -- the tails are what kill a campaign.
+#
+# 644 reduce batch steps since 2026-07-01 (sacct MaxRSS, joined to the parent's
+# job name):
+#
+#     mean  7.5 GB          > 16 GB : 64  (9.9%)
+#     worst 57.0 GB         > 32 GB :  9  (1.4%)   all sgrb2 + brick SW
+#                           > 48 GB :  3  (0.5%)   sgrb25365-o001, 57.0 GB
+#                           > 64 GB :  0
+#     longest 10:11 (sgrc4147-o012-reduce-niriss-F200W, only 1.4 GB)
+#     > 6 h : 2             > 12 h : 0
+#
+# The previous 128gb/24h was ~17x the mean and blocks backfill: a 128 GB ask only
+# fits on a node with 128 GB free, so four reduce arrays sat in Priority behind a
+# QOS carrying 5196 running CPUs and 76 pending jobs.
+#
+# 64gb/12h keeps almost all of that benefit -- 64 GB fits far more nodes than 128,
+# which is the actual mechanism -- while clearing BOTH observed worst cases with
+# headroom. A first pass at 32gb/6h would have OOM-killed 9 of 644 and timed out
+# 2, and an OOM at 57 GB does not fail early: it fails ~5 hours in, after the
+# reduce has done most of its work. Trading queue time for a dead job plus a
+# re-queue at the back of the same queue is the wrong direction.
+#
+# A per-field exception does NOT need this file edited. `#SBATCH` directives
+# cannot read a shell variable, but sbatch's own environment can: setting
+# SBATCH_MEM / SBATCH_TIMELIMIT before submitting overrides the directives here,
+# and the wrapper honours REDUCE_MEM / REDUCE_TIME for that purpose --
+#     REDUCE_MEM=96gb REDUCE_TIME=24:00:00 sbatch ... submit_reduction.sbatch
+# Use it for sgrb2 (57 GB observed) if its footprint grows, rather than raising
+# the default for all 644 jobs to cover 3 of them.
+#
+# cpus-per-task stays at 16 deliberately -- the default `adamginsburg` QOS caps
+# cpu=10 and would leave a 16-cpu task permanently QOSGrpCpuLimit, which is why
+# --qos is pinned below.
 #SBATCH --job-name=reduce
 #SBATCH --account=astronomy-dept
 #SBATCH --qos=astronomy-dept-b
 #SBATCH --partition=hpg-default
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=128gb
-#SBATCH --time=24:00:00
+#SBATCH --mem=64gb
+#SBATCH --time=12:00:00
 #SBATCH --output=/orange/adamginsburg/jwst/logs/reduce_%x_%A_%a.out
+
+# Per-field resource override (see the RESOURCES note above).  Exported here so a
+# caller that sets REDUCE_MEM/REDUCE_TIME gets them applied by sbatch itself on
+# any RESUBMIT this script performs; for the initial submission the caller must
+# export SBATCH_MEM/SBATCH_TIMELIMIT or pass --mem/--time.
+export SBATCH_MEM="${REDUCE_MEM:-${SBATCH_MEM:-}}"
+export SBATCH_TIMELIMIT="${REDUCE_TIME:-${SBATCH_TIMELIMIT:-}}"
+[ -z "$SBATCH_MEM" ] && unset SBATCH_MEM
+[ -z "$SBATCH_TIMELIMIT" ] && unset SBATCH_TIMELIMIT
 
 source ~/.bash_profile 2>/dev/null
 export CRDS_PATH=${CRDS_PATH:-/orange/adamginsburg/jwst/crds}
