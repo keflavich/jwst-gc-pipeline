@@ -761,39 +761,53 @@ CONTINUITY_PAIRS = [("f182m", "f187n"), ("f410m", "f405n")]
 # transition IS its purpose), so science_only does not help here the way it does
 # for the flatness gate.
 #
-# This exemption is TRIPLY scoped and FAILS CLOSED on the unknown -- it is not a
-# whole-pair whitelist:
+# This exemption is scoped FOUR ways and FAILS CLOSED on the unknown -- it is not
+# a whole-pair whitelist:
 #   1. only the (band_sat, band_ref) pairs listed below (F410M-F405N);
-#   2. only when the field's band_sat readout is NGROUPS <= max_ngroups, read from
-#      the shipped science mosaic AT GATE TIME (w51 NGROUPS=5 and sgrb2 NGROUPS=3-4
-#      are NOT exempt; their F405N-F410M breaks are a different, real problem);
-#   3. only when the jump is below max_jump_mag -- a GROSS break on a 2-group field
+#   2. only the C1-boundary-jump metric kind (the railed-core mechanism); a
+#      C2-locus-offset -- a whole-locus color shift, a different defect -- blocks;
+#   3. only when the field's band_sat readout is NGROUPS <= max_ngroups, taken as
+#      the DEEPEST readout across the shipped science mosaics AT GATE TIME (w51
+#      NGROUPS=5 and sgrb2 NGROUPS=3-4 are NOT exempt);
+#   4. only when the jump is below max_jump_mag -- a GROSS break on a 2-group field
 #      (cloudc reads 2.84 mag, also BRIGHT2) is not the deep-core floor and blocks.
 # If the mosaic/NGROUPS cannot be read, the pair is NOT exempt (blocks).
 #
-# Measured (2026-08): brick 0.170 mag, NGROUPS=2, worst bin n_sat=38 at the F405N
-# 12-13 saturation onset -> WARN. cloudc 2.84 (NGROUPS=2) -> FAIL (gross). w51
-# 0.577 (NGROUPS=5) -> FAIL (not the railed regime).
+# max_jump_mag is a HARD-CODED constant, deliberately NOT env-overridable: it moves
+# a blocking threshold, and a single env knob would be a one-factor waiver of a
+# release gate (the repo's other overrides are two-factor: --allow-registration-fail
+# AND ALLOW_REGISTRATION_FAIL=1). 0.25 sits just above the measured 0.170 floor, so
+# a regression that materially WORSENS the boundary jump (e.g. ~0.30) still blocks
+# rather than hiding under a wide ceiling.
+#
+# Measured (2026-08): brick 0.170 mag, NGROUPS=2, C1, worst bin n_sat=38 at the
+# F405N 12-13 saturation onset -> WARN. cloudc 2.84 (NGROUPS=2) -> FAIL (gross).
+# w51 0.577 (NGROUPS=5) -> FAIL (not the railed regime).
 #
 # PROVISIONAL: saturated-star recovery photometry improvement is under active
 # investigation; remove this entry once the recovered deep-core flux scale is fixed.
-_BOUNDARY_FLOOR_CEILING_MAG = float(
-    os.environ.get("CONTINUITY_BOUNDARY_FLOOR_CEILING_MAG", "0.35"))
 CONTINUITY_BOUNDARY_KNOWN_LIMITS = {
     ("f410m", "f405n"): dict(
         max_ngroups=2,
-        max_jump_mag=_BOUNDARY_FLOOR_CEILING_MAG,
+        max_jump_mag=0.25,
+        kind="C1-boundary-jump",
         reason="NGROUPS<=2 (BRIGHT2) railed deep-core satstar color floor "
                "(provisional; recovery photometry under investigation)"),
 }
 
 
 def _band_ngroups(items, band):
-    """NGROUPS for ``band``, read from its shipped science i2d mosaic's primary
-    header. Returns an int, or None when no such mosaic is shipped or the header
-    is unreadable/absent -- the caller treats None as "cannot verify the readout"
-    and does NOT grant a known-limit exemption (fail closed)."""
+    """The DEEPEST (max) NGROUPS across ``band``'s shipped science i2d mosaics.
+
+    Returns ``max(NGROUPS)`` over every readable F<band> science mosaic, or None
+    when none is shipped / readable -- the caller treats None as "cannot verify
+    the readout" and does NOT grant a known-limit exemption (fail closed).  Taking
+    the MAX, not the first, is deliberate: a field that ships several mosaics for
+    a filter (per-module nrca/nrcb, per-pointing) must be judged by its DEEPEST
+    readout, so a shallow-listed 2-group mosaic cannot grant an exemption while a
+    deeper NGROUPS>=3 readout for the same filter is also present."""
     from astropy.io import fits
+    found = []
     for it in items:
         if (it.get("category") == "image" and it.get("kind") == "science"
                 and str(it.get("filter", "")).upper() == band.upper()
@@ -802,9 +816,15 @@ def _band_ngroups(items, band):
                 ng = fits.getheader(it["src"]).get("NGROUPS")
             except OSError:
                 continue
-            if ng is not None:
-                return int(ng)
-    return None
+            if ng is None:
+                continue
+            try:
+                found.append(int(ng))
+            except (TypeError, ValueError):
+                # a header whose NGROUPS is not an integer cannot certify the
+                # readout -- skip it rather than crash the staging run
+                continue
+    return max(found) if found else None
 
 
 # Degenerate-pair flatness is certified on the SCIENCE subset (science_only=True):
@@ -846,12 +866,13 @@ def check_photometric_continuity(items, tol=CONTINUITY_TOL_MAG,
     from astropy.table import Table
     from jwst_gc_pipeline.photometry.saturation_continuity import (
         DEGENERATE_PAIRS, degenerate_pair_flatness, saturation_continuity)
-    srcs = [it["src"] for it in items
-            if it.get("kind") == "catalog_full" and it["src"].endswith(".fits")]
-    if not srcs:
+    cat_items = [it for it in items
+                 if it.get("kind") == "catalog_full" and it["src"].endswith(".fits")]
+    if not cat_items:
         return None
     fails = []
-    for src in srcs:
+    for it in cat_items:
+        src = it["src"]
         cat = Table.read(src)
         have = {c[len("mag_vega_"):] for c in cat.colnames
                 if c.startswith("mag_vega_")}
@@ -866,16 +887,27 @@ def check_photometric_continuity(items, tol=CONTINUITY_TOL_MAG,
                 lim = CONTINUITY_BOUNDARY_KNOWN_LIMITS.get((a, b))
                 if lim is not None:
                     ng = _band_ngroups(items, a)
-                    if (ng is not None and ng <= lim["max_ngroups"]
+                    if (r["kind"] == lim["kind"] and ng is not None
+                            and ng <= lim["max_ngroups"]
                             and r["metric"] < lim["max_jump_mag"]):
                         exempt = True
-                        note = (f"  known limit (NGROUPS={ng}<={lim['max_ngroups']}, "
-                                f"jump {r['metric']:.3f}<{lim['max_jump_mag']} mag): "
-                                f"{lim['reason']}")
+                        # Record the waiver on the catalog ITEM so it persists into
+                        # MANIFEST.json (items -> manifest["files"]): a shipped
+                        # catalog must carry a machine-readable record that a
+                        # boundary gate was waived, not just a stdout line.
+                        it.setdefault("continuity_waivers", []).append(dict(
+                            pair=f"{a}-{b}", metric=round(float(r["metric"]), 4),
+                            kind=r["kind"], ngroups=ng,
+                            ceiling_mag=lim["max_jump_mag"], reason=lim["reason"]))
+                        note = (f"  known limit (kind={r['kind']}, NGROUPS={ng}<="
+                                f"{lim['max_ngroups']}, jump {r['metric']:.3f}<"
+                                f"{lim['max_jump_mag']} mag): {lim['reason']} "
+                                f"[recorded in MANIFEST]")
                     else:
-                        note = (f"  NOT exempt (needs NGROUPS<={lim['max_ngroups']} "
-                                f"and jump<{lim['max_jump_mag']} mag; got "
-                                f"NGROUPS={ng}, jump {r['metric']:.3f})")
+                        note = (f"  NOT exempt (needs kind={lim['kind']}, NGROUPS<="
+                                f"{lim['max_ngroups']}, jump<{lim['max_jump_mag']} mag; "
+                                f"got kind={r['kind']}, NGROUPS={ng}, "
+                                f"jump {r['metric']:.3f})")
             status = "ok" if not over else ("WARN(known-limit)" if exempt else "FAIL")
             print(f"  continuity {a}-{b} [{name}]: "
                   + (f"{r['metric']:.3f} mag ({r['kind']})" if np.isfinite(r["metric"])

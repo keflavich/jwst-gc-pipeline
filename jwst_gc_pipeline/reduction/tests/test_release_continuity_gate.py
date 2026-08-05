@@ -239,3 +239,76 @@ def test_boundary_exemption_does_not_cover_other_pairs(tmp_path):
     items = _items_for(tmp_path, cat) + [_mosaic_item(tmp_path, "F182M", 2)]
     fails = stage_release.check_photometric_continuity(items)
     assert any("f182m-f187n continuity" in f for f in fails)
+
+
+def _c2_boundary_cat(offset=0.15, n=8000, seed=3):
+    """SHARP saturation boundary (no mixed bins) -> saturation_continuity falls
+    back to the C2-locus-offset kind rather than a C1 boundary jump."""
+    rng = np.random.default_rng(seed)
+    mref = rng.uniform(10.5, 17.0, n)
+    sat = mref < 13.0                                  # sharp, no fuzz
+    color = -0.10 + rng.normal(0, 0.03, n) + np.where(sat, offset, 0.0)
+    return Table({
+        'mag_vega_f410m': mref + color, 'mag_vega_f405n': mref,
+        'replaced_saturated_f410m': sat,
+        'is_saturated_f410m': np.zeros(n, bool),
+        'forced_filled_f410m': np.zeros(n, bool),
+        'replaced_saturated_f405n': np.zeros(n, bool),
+        'forced_filled_f405n': np.zeros(n, bool),
+        'is_saturated_f405n': np.zeros(n, bool),
+        'independently_detected_f405n': np.ones(n, bool)})
+
+
+def test_boundary_waiver_is_recorded_on_the_catalog_item(tmp_path):
+    # the exemption must leave a machine-readable trace (items -> MANIFEST.json),
+    # not only a stdout line.
+    items = _boundary_items(tmp_path, _boundary_cat(0.17), ngroups=2)
+    assert stage_release.check_photometric_continuity(items) == []
+    cat_item = next(it for it in items if it.get("kind") == "catalog_full")
+    waivers = cat_item.get("continuity_waivers")
+    assert waivers and waivers[0]["pair"] == "f410m-f405n"
+    assert waivers[0]["ngroups"] == 2
+    assert waivers[0]["kind"] == "C1-boundary-jump"
+    assert 0.10 <= waivers[0]["metric"] < 0.25
+
+
+def test_boundary_tightened_ceiling_blocks_a_regression(tmp_path):
+    # a jump of 0.30 (above the measured 0.170 floor) is a regression, not the
+    # floor -- the 0.25 ceiling must block it even at NGROUPS=2.
+    items = _boundary_items(tmp_path, _boundary_cat(0.30), ngroups=2)
+    fails = stage_release.check_photometric_continuity(items)
+    assert any("f410m-f405n continuity" in f for f in fails)
+
+
+def test_boundary_c2_locus_offset_is_not_exempted(tmp_path):
+    # the exemption is for the C1 railed-core boundary jump only; a C2-locus-offset
+    # (a different defect) under the ceiling at NGROUPS=2 must still block.
+    items = _boundary_items(tmp_path, _c2_boundary_cat(0.15), ngroups=2)
+    fails = stage_release.check_photometric_continuity(items)
+    assert any("f410m-f405n continuity" in f for f in fails)
+
+
+@pytest.mark.parametrize("order", [[2, 8], [8, 2]])
+def test_band_ngroups_uses_deepest_mosaic(tmp_path, order):
+    # a field shipping F410M mosaics at NGROUPS 2 AND 8 must be judged by the
+    # DEEPEST (8) -> not the railed regime -> blocks, regardless of item order.
+    items = _items_for(tmp_path, _boundary_cat(0.17))
+    for i, ng in enumerate(order):
+        src = str(tmp_path / f"f410m_{i}_i2d.fits")
+        fits.PrimaryHDU(header=fits.Header({"NGROUPS": ng})).writeto(src, overwrite=True)
+        items.append({"category": "image", "kind": "science", "filter": "F410M",
+                      "src": src})
+    fails = stage_release.check_photometric_continuity(items)
+    assert any("f410m-f405n continuity" in f for f in fails)
+
+
+def test_ngroups_noninteger_header_fails_closed(tmp_path):
+    # a header whose NGROUPS is not int-convertible must not crash and must not
+    # grant an exemption (fail closed -> block).
+    items = _items_for(tmp_path, _boundary_cat(0.17))
+    p = tmp_path / "f410m_bad_i2d.fits"
+    fits.PrimaryHDU(header=fits.Header({"NGROUPS": "BRIGHT2"})).writeto(p, overwrite=True)
+    items.append({"category": "image", "kind": "science", "filter": "F410M",
+                  "src": str(p)})
+    fails = stage_release.check_photometric_continuity(items)
+    assert any("f410m-f405n continuity" in f for f in fails)

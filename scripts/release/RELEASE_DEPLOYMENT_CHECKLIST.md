@@ -221,21 +221,30 @@ satstar↔normal transition and therefore CANNOT exclude the satstar rows;
 order `saturation_continuity(band_sat='f405n', band_ref='f410m')`, which the gate
 does not evaluate — do not quote it as a pass.)
 
-**Known limit (`CONTINUITY_BOUNDARY_KNOWN_LIMITS` — WARN, triply scoped, not
+**Known limit (`CONTINUITY_BOUNDARY_KNOWN_LIMITS` — WARN, four-way scoped, not
 whole-pair).** The 0.170 is an observation-design floor: a NIRCam-LONG field read
 out at **NGROUPS≤2 (BRIGHT2)** cannot recover the deepest saturated cores (railed
 at group 0), so the recovered F410M–F405N color carries an irreducible residual
 in the saturation-onset bins. The gate WARNs instead of blocking **only** when all
-three hold, else it FAILS:
+four hold, else it FAILS:
 1. the pair is F410M–F405N (the only entry);
-2. the field's F410M readout is NGROUPS≤2, **read from the shipped science mosaic
-   at gate time** (fail-closed if the mosaic/NGROUPS is unreadable);
-3. the jump is below `CONTINUITY_BOUNDARY_FLOOR_CEILING_MAG` (default 0.35) — a
-   gross break is not the floor.
+2. the metric kind is `C1-boundary-jump` (the railed-core mechanism); a
+   `C2-locus-offset` — a different defect — blocks;
+3. the field's F410M readout is NGROUPS≤2, taken as the **deepest** readout across
+   the shipped science mosaics, **read at gate time** (fail-closed if the
+   mosaic/NGROUPS is unreadable or absent);
+4. the jump is below **0.25 mag** — a hard-coded ceiling (deliberately NOT
+   env-overridable: a single env knob would be a one-factor waiver of a blocking
+   gate), set just above the measured 0.170 floor so a regression that worsens the
+   jump (~0.30) still blocks.
 
-Measured (2026-08): **brick 0.170, NGROUPS=2 → WARN** (gate green). **cloudc 2.84,
-NGROUPS=2 → FAIL** (gross, above the ceiling). **w51 0.577, NGROUPS=5 → FAIL** (not
-the railed regime). This is **PROVISIONAL** — saturated-star recovery photometry
-improvement is under active investigation; remove the entry once the recovered
-deep-core flux scale is fixed. The biased rows stay in the catalog under
+The waiver (pair, metric, kind, NGROUPS, ceiling, reason) is recorded on the
+catalog item and therefore in **MANIFEST.json**, so a shipped catalog carries a
+machine-readable record that the boundary gate was waived — not only a log line.
+
+Measured (2026-08): **brick 0.170, NGROUPS=2, C1 → WARN** (gate green). **cloudc
+2.84, NGROUPS=2 → FAIL** (gross, above the ceiling). **w51 0.577, NGROUPS=5 → FAIL**
+(not the railed regime). This is **PROVISIONAL** — saturated-star recovery
+photometry improvement is under active investigation; remove the entry once the
+recovered deep-core flux scale is fixed. The biased rows stay in the catalog under
 `replaced_saturated` for anyone who cuts them.
