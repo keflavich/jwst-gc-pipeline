@@ -74,6 +74,47 @@ FIELDS = {
         "data_dir": Path("/orange/adamginsburg/jwst/sgrc"),
         "proposal_prefix": "jw04147-o012_t001_nircam_clear",
     },
+    # arches / quintuplet: the two GC starburst clusters (JWST 2045, o001 & o003).
+    # The reduction drizzles these per module, so there is no `-merged_i2d`; the
+    # canonical science products are the NRCA and NRCB mosaics (both current: the
+    # last m2 offsets correction was 2026-07-31, these were drizzled 2026-08-01).
+    # Cataloging is still running, so image-only. `make_preview_rgb.py` coadds the
+    # two modules onto a common grid for the preview.
+    "arches": {
+        "data_dir": Path("/orange/adamginsburg/jwst/arches"),
+        "proposal_prefix": "jw02045-o001_t001_nircam_clear",
+        "no_auto_images": True, "skip_catalogs": True,
+        "nircam": [
+            {"filter": "F212N", "src": "/orange/adamginsburg/jwst/arches/F212N/pipeline/jw02045-o001_t001_nircam_clear-f212n-nrca_i2d.fits"},
+            {"filter": "F212N", "src": "/orange/adamginsburg/jwst/arches/F212N/pipeline/jw02045-o001_t001_nircam_clear-f212n-nrcb_i2d.fits"},
+            {"filter": "F323N", "src": "/orange/adamginsburg/jwst/arches/F323N/pipeline/jw02045-o001_t001_nircam_clear-f323n-nrca_i2d.fits"},
+            {"filter": "F323N", "src": "/orange/adamginsburg/jwst/arches/F323N/pipeline/jw02045-o001_t001_nircam_clear-f323n-nrcb_i2d.fits"},
+        ],
+    },
+    "quintuplet": {
+        "data_dir": Path("/orange/adamginsburg/jwst/quintuplet"),
+        "proposal_prefix": "jw02045-o003_t001_nircam_clear",
+        "no_auto_images": True, "skip_catalogs": True,
+        "nircam": [
+            {"filter": "F212N", "src": "/orange/adamginsburg/jwst/quintuplet/F212N/pipeline/jw02045-o003_t001_nircam_clear-f212n-nrca_i2d.fits"},
+            {"filter": "F212N", "src": "/orange/adamginsburg/jwst/quintuplet/F212N/pipeline/jw02045-o003_t001_nircam_clear-f212n-nrcb_i2d.fits"},
+            {"filter": "F323N", "src": "/orange/adamginsburg/jwst/quintuplet/F323N/pipeline/jw02045-o003_t001_nircam_clear-f323n-nrca_i2d.fits"},
+            {"filter": "F323N", "src": "/orange/adamginsburg/jwst/quintuplet/F323N/pipeline/jw02045-o003_t001_nircam_clear-f323n-nrcb_i2d.fits"},
+        ],
+    },
+    # sgra: Sgr A* (JWST 1939). Image-only: F212N + F405N mosaics are current;
+    # F115W's mosaics were stale-tagged (*_im0_badastrom) by the m2 astrometry
+    # checkpoint on 2026-07-28 when it corrected the offsets table, so that band
+    # is held until it is re-drizzled. Catalogs are not certified yet.
+    # `skip_catalogs` is what ENFORCES that: without it, a re-stage that forgets
+    # `--images-only` would publish six catalogs including the F115W one, built
+    # against the offsets that same checkpoint corrected by 32-55 mas -- a
+    # catalog with no image beside it, on a superseded solution.
+    "sgra": {
+        "data_dir": Path("/orange/adamginsburg/jwst/sgra"),
+        "proposal_prefix": "jw01939-o001_t001_nircam_clear",
+        "skip_catalogs": True,
+    },
     "brick": {
         "data_dir": Path("/orange/adamginsburg/jwst/brick"),
         "proposal_prefix": ["jw01182-o004_t001_nircam_clear",
@@ -906,10 +947,19 @@ def stage(items, field, version, release_root, mode, do_checksum):
         src = Path(it["src"]).resolve()
         dest = field_dir / it["dest"]
         dest.parent.mkdir(parents=True, exist_ok=True)
-        src_size = src.stat().st_size
-        unchanged = (mode == "copy" and dest.is_file()
-                     and not dest.is_symlink()
-                     and dest.stat().st_size == src_size)
+        src_stat = src.stat()
+        src_size = src_stat.st_size
+        # Size alone is NOT a content proxy on this archive: a re-drizzle of the
+        # same field/filter writes the same-shaped mosaic, so the byte count is
+        # unchanged while the pixels are not (sgrc F182M and wd1 F150W are exactly
+        # that between v1.0 and v1.1 -- identical size, different content). Taking
+        # size as "unchanged" keeps the OLD bytes and republishes the OLD sha256
+        # under a fresh build timestamp. `copy2` preserves mtime, so requiring the
+        # mtime to match too is what makes the skip mean "this is that file".
+        dest_stat = dest.stat() if (dest.is_file() and not dest.is_symlink()) else None
+        unchanged = (mode == "copy" and dest_stat is not None
+                     and dest_stat.st_size == src_size
+                     and abs(dest_stat.st_mtime - src_stat.st_mtime) < 1e-3)
         if not unchanged:
             if dest.exists() or dest.is_symlink():
                 dest.unlink()
@@ -963,6 +1013,43 @@ def stage(items, field, version, release_root, mode, do_checksum):
 def write_readme(field_dir, field, version, items, mode):
     images = [it for it in items if it["category"] == "image"]
     catalogs = [it for it in items if it["category"] == "catalog"]
+    # describe the mosaics ACTUALLY staged: a module-split field (arches,
+    # quintuplet, sickle) ships `-nrca_i2d`/`-nrcb_i2d`, not `-merged_i2d`, and
+    # a README promising the latter sends users looking for a file that is not
+    # there.
+    modules = sorted({m.group(1) for m in
+                      (re.search(r"-(merged|nrca|nrcb|nrcalong|nrcblong|mirimage)"
+                                 r"(?:_data)?_i2d\.fits$", os.path.basename(it["src"]))
+                       for it in images) if m})
+    # `mirimage` is MIRI's normal full-field product, NOT evidence of a
+    # module split -- keying off "anything but merged" claimed sgrb2 (which has a
+    # merged mosaic in all ten NIRCam filters, plus MIRI) had none.  Only a
+    # per-module NIRCam suffix means the split.
+    per_module = sorted(set(modules) & {"nrca", "nrcb", "nrcalong", "nrcblong"})
+    if per_module:
+        science_lines = [
+            "- `*-{" + ",".join(modules) + "}_i2d.fits` : science mosaic (drizzled)",
+            "",
+            "  Some filters here have no single full-field NIRCam mosaic: "
+            + "/".join(f"`{m}`" for m in per_module) + " are per-module",
+            "  mosaics, so those filters ship one image per module."
+            + ("  (`mirimage` is MIRI.)" if "mirimage" in modules else ""),
+        ]
+    elif "mirimage" in modules and "merged" in modules:
+        science_lines = [
+            "- `*-merged_i2d.fits`        : NIRCam science mosaic (drizzled)",
+            "- `*-mirimage_*i2d.fits`     : MIRI science mosaic (drizzled)",
+        ]
+    else:
+        science_lines = ["- `*-merged_i2d.fits`        : science mosaic (drizzled)"]
+    kinds = {it.get("kind") for it in images}
+    if "residual" in kinds:
+        science_lines.append(
+            "- `*_residual_i2d.fits`      : PSF-photometry residual "
+            "(highest merge iteration)")
+    if "model" in kinds:
+        science_lines.append(
+            "- `*_model_i2d.fits`         : PSF model image (highest merge iteration)")
     lines = [
         f"# JWST Galactic Center survey -- {field} -- release {version}",
         "",
@@ -974,13 +1061,14 @@ def write_readme(field_dir, field, version, items, mode):
         "",
         "## Images (`images/<FILTER>/`)",
         "",
-        "- `*-merged_i2d.fits`        : science mosaic (drizzled)",
-        "- `*_residual_i2d.fits`      : PSF-photometry residual (highest merge iteration)",
-        "- `*_model_i2d.fits`         : PSF model image (highest merge iteration)",
+        *science_lines,
         "",
         f"{len(images)} image files across "
         f"{len({it['filter'] for it in images})} filters.",
         "",
+    ]
+    # an image-only release ships no catalogs/ directory at all
+    lines += ([
         "## Catalogs (`catalogs/`)",
         "",
         "- `basic_merged_indivexp_photometry_tables_merged_*` : final merged photometry",
@@ -988,6 +1076,14 @@ def write_readme(field_dir, field, version, items, mode):
         "- `*_dao_basic_vetted.fits` : per-filter vetted catalogs.",
         "- `seed_union_iter3_*.fits` : seed source list.",
         "",
+    ] if catalogs else [
+        "## Catalogs",
+        "",
+        "**This is an image-only release: no catalogs are shipped.** The mosaics",
+        "are current, but the photometry catalogs for this field are not yet",
+        "certified. They will follow in a later release.",
+        "",
+    ]) + [
         "## Astrometric frame and epoch (READ BEFORE TARGETING)",
         "",
         "- **Reference frame:** Gaia DR3 (via the Gaia+VIRAC2 per-field reference",
@@ -1028,7 +1124,15 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--field", default="sgrb2", choices=sorted(FIELDS))
-    parser.add_argument("--version", default="v1.0-2026.06")
+    # No safe default exists: v1.0-2026.06 is a FROZEN release, and `stage()`
+    # unlinks-and-copies without a frozen-version guard, so a forgotten
+    # `--version` used to write into the oldest published tree.  Require it.
+    parser.add_argument("--version", required=True,
+                        help="release version directory, e.g. v1.2-2026.08")
+    parser.add_argument("--allow-older-version", action="store_true",
+                        help="permit staging into a version older than the newest "
+                             "one present under --release-root (re-cutting a frozen "
+                             "release); refused by default")
     parser.add_argument("--release-root",
                         default="/orange/adamginsburg/jwst/releases")
     parser.add_argument("--stage", action="store_true",
@@ -1060,6 +1164,22 @@ def main(argv=None):
     if not args.stage:
         print("Dry run. Re-run with --stage to build the release tree.")
         return 0
+
+    # ---- FROZEN-VERSION GUARD -------------------------------------------------------
+    # A published version is frozen: people cite its checksums.  Staging into one
+    # rewrites files under a fresh `built` timestamp with no record that it
+    # happened.  Refuse to target anything older than the newest version on disk
+    # unless that is explicitly what is wanted.
+    root = Path(args.release_root)
+    existing = sorted(p.name for p in root.iterdir()
+                      if p.is_dir() and p.name.startswith("v")) if root.is_dir() else []
+    if existing and args.version < max(existing) and not args.allow_older_version:
+        print(f"\nREFUSING TO STAGE into '{args.version}': it is older than the newest "
+              f"release on disk ('{max(existing)}'), and a published version is frozen "
+              f"-- its checksums are cited. Stage into '{max(existing)}' or a new "
+              f"version, or pass --allow-older-version if re-cutting it is intended.",
+              file=sys.stderr)
+        return 2
 
     # ---- LOCAL-REGISTRATION GATE ----------------------------------------------------
     # A field-average astrometry check passes over a LOCALIZED several-arcsec seam
