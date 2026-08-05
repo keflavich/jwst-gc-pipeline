@@ -338,9 +338,14 @@ def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
         lists -- is rejected here (``ok`` False, ``alias_rejected`` True); see
         ``WINDOW_EDGE_FRACTION`` and issue #158.  Costs one or two extra
         measurements, and ONLY on a swept result, so the common (small, un-swept)
-        tie is numerically and computationally untouched.  Off by default: the
-        per-visit BULK reference tie legitimately reports a large swept offset
-        that only the widest window can contain, and must keep doing so.
+        tie is numerically and computationally untouched.  Off by default so an
+        arbitrary caller opts in, but the BULK reference tie
+        (``measure_reference_tie``) now opts in: the earlier worry -- that it
+        legitimately reports a large swept offset only the widest window can
+        contain -- is covered by ``confirm_peak_windows`` rejecting only on a
+        MEASURED disagreement, so a genuine gross shift reproduces at the wider
+        probes and survives (``test_true_large_offset_survives_confirmation``,
+        issues #158 and #257).
 
     Returns
     -------
