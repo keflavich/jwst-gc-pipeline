@@ -212,8 +212,12 @@ def confirm_peak_windows(a, b, best, bin_arcsec=0.02, min_pairs=30,
                   3000.0 * max(_window_bin_arcsec(w, bin_arcsec),
                                _window_bin_arcsec(base_w, bin_arcsec)))
         sep = float(np.hypot(res["dra"] - best["dra"], res["ddec"] - best["ddec"]))
+        # ``off_mas`` is the canonical spelling of the offset magnitude in the
+        # records this module emits (issue #267); ``off`` is written alongside
+        # it for the readers and on-disk records that predate the convergence.
         probes.append(dict(window_arcsec=w, dra=res["dra"], ddec=res["ddec"],
-                           off=res["off"], contrast=res["contrast"],
+                           off=res["off"], off_mas=float(res["off"]),
+                           contrast=res["contrast"],
                            npairs=res["npairs"], sep_mas=sep, tol_mas=tol,
                            agrees=bool(sep <= tol)))
     measured = [p for p in probes if p.get("dra") is not None]
@@ -359,6 +363,15 @@ def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
         ``confirm_windows`` / ``window_consistent`` is the gate.
         ``windows`` records every evaluated window so a record can be audited
         after the fact.
+
+        The offset magnitude of THIS dict is ``off`` only, deliberately: three
+        callers refine ``dra``/``ddec`` after the measurement and recompute
+        ``off`` in place (``interframe_overlap._confirm_tie`` callers,
+        ``visit_consensus`` half-bridge), so a mirrored ``off_mas`` here would
+        silently go stale on a refined result.  The mirrored, canonical
+        ``off_mas`` is written on the derived per-cell / per-window RECORDS
+        (``measure_offset_grid`` cells, ``windows`` entries), which nothing
+        mutates after the fact.  See issue #267.
     """
     min_contrast = DEFAULT_MIN_CONTRAST if min_contrast is None else min_contrast
     maxsep_arcsec = maxsep.to(u.arcsec).value if hasattr(maxsep, "to") else float(maxsep)
@@ -382,8 +395,11 @@ def measure_offset(a, b, maxsep=3.0 * u.arcsec, bin_arcsec=0.02, min_pairs=30,
         if res is None:
             evaluated.append(dict(window_arcsec=w, dra=None, ddec=None))
             continue
+        # both spellings of the offset magnitude -- see issue #267; ``off_mas``
+        # is canonical, ``off`` is retained for already-written records
         evaluated.append(dict(window_arcsec=w, dra=res["dra"], ddec=res["ddec"],
-                              off=res["off"], contrast=res["contrast"],
+                              off=res["off"], off_mas=float(res["off"]),
+                              contrast=res["contrast"],
                               npairs=res["npairs"], n_peak=res["n_peak"]))
         if best is None or res["contrast"] > best["contrast"]:
             best = res
@@ -459,6 +475,12 @@ def measure_offset_grid(a, b, nx=6, ny=6, ra_bounds=None, dec_bounds=None,
         worst_off_cell, clean)``.  Each cell gets ``ok`` (contrast AND, if
         ``max_off_mas`` set, magnitude) and ``off_ok``.  ``clean`` is True only
         if every covered cell is ``ok``.
+
+        Each cell's offset magnitude is available as ``off_mas`` (canonical,
+        same spelling as ``local_residual_map`` cells and as the
+        ``worst_off_cell`` summary) and, for back-compatibility with records
+        and readers written before issue #267, also as ``off``.  Both hold the
+        same value; prefer ``off_mas``.
     """
     min_contrast = DEFAULT_MIN_CONTRAST if min_contrast is None else min_contrast
     ra = a.ra.deg
@@ -480,15 +502,25 @@ def measure_offset_grid(a, b, nx=6, ny=6, ra_bounds=None, dec_bounds=None,
                 continue
             contrast_ok = bool(res["ok"])
             off_ok = True if max_off_mas is None else (res["off"] <= max_off_mas)
+            # CELL OFFSET KEY (issue #267): a cell carries the SAME number under
+            # BOTH ``off_mas`` and ``off``.  ``off_mas`` is the canonical name --
+            # it states the unit, it is what the ``worst_off_cell`` summary in
+            # this same return dict uses, and it is what ``local_residual_map``
+            # cells have always used.  ``off`` is kept only so that (a) records
+            # already written to disk under the old spelling and (b) readers
+            # written against them keep working; new readers should use
+            # ``off_mas``.  Writing both is what lets the two spellings converge
+            # without invalidating any recorded checkpoint.
             res.update(ix=i, iy=j, contrast_ok=contrast_ok, off_ok=bool(off_ok),
-                       ok=bool(contrast_ok and off_ok))
+                       ok=bool(contrast_ok and off_ok),
+                       off_mas=float(res["off"]))
             cells.append(res)
     n_ok = sum(1 for c in cells if c["ok"])
-    worst = max(cells, key=lambda c: c["off"], default=None)
+    worst = max(cells, key=lambda c: c["off_mas"], default=None)
     return dict(cells=cells, n_ok=n_ok, n_total=len(cells),
-                worst_off_mas=max((c["off"] for c in cells), default=float("nan")),
+                worst_off_mas=max((c["off_mas"] for c in cells), default=float("nan")),
                 worst_off_cell=(None if worst is None else dict(
-                    ix=worst["ix"], iy=worst["iy"], off_mas=worst["off"],
+                    ix=worst["ix"], iy=worst["iy"], off_mas=worst["off_mas"],
                     contrast=worst["contrast"])),
                 min_contrast_seen=min((c["contrast"] for c in cells), default=float("nan")),
                 clean=bool(cells) and n_ok == len(cells))
@@ -579,6 +611,10 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
         ``dict(ra0, dec0, ix, iy, n, dra_mas, ddec_mas, dra_sem, ddec_sem,
         off_mas, significant, flagged)``.  ``clean`` is True when no cell is
         flagged AND at least one cell was measurable.
+
+        ``off_mas`` is the canonical per-cell offset key, the same one
+        ``measure_offset_grid`` cells now carry (issue #267), so one reader can
+        consume cells from either producer.
     """
     if global_result is None or not global_result.get("ok"):
         raise GlobalTieNotVerifiedError(
