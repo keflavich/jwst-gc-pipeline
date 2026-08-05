@@ -481,6 +481,58 @@ mechanism as `fix_alignment`); idempotency via the `DVACORR` marker keyword
   per-module shift goes stale as VA changes and injects reference noise (see
   the module-lock section above).
 
+---
+
+## Per-(detector, filter) frame correction (`filter_frame_correction.py`, opt-in)
+
+**What it corrects.** The true filter-dependent placement of a NIRCam detector
+varies detector to detector inside a module, and nothing in the chain is keyed
+finely enough to express it: `jwst_nircam_filteroffset` is keyed on
+`(CHANNEL, MODULE)` — four reference files for ten detectors, rows of
+`{filter, pupil, column_offset, row_offset}` with no detector key — and the
+offsets table is keyed on `(visit, exposure, MODULE)`. Jay Anderson's
+per-(detector, filter) STDGDC solutions size what CRDS drops at **1.18–2.11 mas**
+(F115W/F150W/F182M/F200W/F210M vs F212N, per-module mean removed); our own
+catalogs give **1.51–1.89 mas** for F182M across three fields.
+
+**Why it shows up as a field.** In a mosaic, different sky positions are covered
+by different mixes of the four detectors of a module, so a per-detector
+*constant* becomes a position-dependent sky-frame error — issue #296's
+field-wide 2–4 mas floor. Per-star precision is untouched.
+
+**Static in the instrument frame.** De-rotating each observation by its own
+`ROLL_REF` collapses brick jw02221-o001 (89.13°), sgrc jw04147-o012 (91.50°)
+and wd2 jw03523-o005 (141.01°) onto one vector set: a table built from
+brick+sgrc alone predicts wd2 — held out, 52° away in roll — with a 0.41 mas
+residual and 95% of the variance explained. Coefficients therefore ship as a
+static ECSV (`reduction/data/filter_frame_offsets.ecsv`), not a per-field solve.
+
+**Sign.** The stored values are the **correction** — the negative of the
+measured `(filter − anchor)` residual. Applying the residual doubles the error.
+
+**The correction.** A rigid per-detector shift through `adjust_wcs`, same
+mechanism as `fix_alignment` and `dva_correction`; idempotent via `FFRAMCOR`,
+with `FFRAMPND` as the crash flag and `FFRAMANC`/`FFRAMSRC`/`FFRAMFRM` recording
+the anchor, coefficient source and frame. Re-applying onto a *different* anchor
+is refused rather than skipped.
+
+**Policy.**
+- Opt-in: `FILTER_FRAME_CORRECTION=1`. Default off, byte-identical behaviour.
+- The gauge is per-module-mean-zero, so the correction is orthogonal to
+  everything the offsets table expresses: it moves no visit bulk, no module tie
+  and no reference tie. **It does not invalidate an offsets table and does not
+  require a re-tie** — unlike `static_placement_correction`. That is what lets
+  it be the last term applied.
+- **It cannot correct LW.** A LW module has one detector, so the module-mean
+  gauge returns exactly zero. Structural, not a scheduling gap; the SW/LW split
+  belongs to the module-level machinery.
+- Do NOT feed `gdc_filter_offsets` output in as `frame='instrument'`: it is in
+  the detector array frame, which differs from the instrument frame by a parity
+  as well as a rotation. `sky_shift_deg` refuses `frame='detector'` outright.
+
+Solver: `scripts/analysis/solve_filter_frame_offsets.py --write`. Background:
+issue #296; measurement of the term it removes: PR #297.
+
 Shareable technical report on this issue (for STScI / upstream):
 `docs/reports/DVA_INTERDETECTOR_REPORT.md`.
 

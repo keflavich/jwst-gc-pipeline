@@ -10,27 +10,29 @@
 # - {name: n, datatype: int64}
 # - {name: sem_mas, datatype: float64}
 # meta: !!omap
-# - comments: ['Per-(detector, filter) placement offsets onto the JWST 2-micron consensus frame.', 'frame=instrument: on-sky vector rotated
-#       by +ROLL_REF; rotate by -ROLL_REF to apply.', Module-mean removed per module (the gauge that keeps this orthogonal to the offsets
-#       table)., 'F182M: mean of three observations -- brick jw02221-o001 (roll 89.13), sgrc jw04147-o012', '  (roll 91.50), wd2 jw03523-o005
-#       (roll 141.01).  Pairwise agreement after de-rotation', '  94-98 percent explained, per-detector scatter 0.19 mas on a 1.69 mas
-#       signal.', 'F187N: brick jw02221-o001 only (n=1) -- Jay Anderson has no F187N STDGDC solution and', '  no second observation has
-#       been solved yet.  Amplitude 0.55 mas.', 'Solved by scripts/analysis/solve_filter_frame_offsets.py; see issue #296.']
+# - comments: ['Per-(detector, filter) placement CORRECTIONS onto the JWST 2-micron consensus frame.', dx_mas/dy_mas are the correction
+#       to ADD -- the NEGATIVE of the measured, '  (filter - anchor) residual.  Applying the residual doubles the error.', 'frame=instrument:
+#       sky vector rotated by +ROLL_REF; rotate by -ROLL_REF to apply', '  (filter_frame_correction.instrument_to_sky).', 'Module-mean
+#       removed per module, after negation.', 'F182M: mean of three observations -- brick jw02221-o001 (ROLL_REF 89.13),', '  sgrc jw04147-o012
+#       (91.50), wd2 jw03523-o005 (141.01).  A table built from', '  brick+sgrc alone predicts wd2 -- held out, 52 deg away in roll --
+#       with 0.41 mas', '  residual and 95 percent of the variance explained; the opposite rotation gives', '  2.15 mas and explains nothing.',
+#     'F187N: brick jw02221-o001 only (n=1).  Jay Anderson has no F187N STDGDC solution', '  and no second observation has been solved.  Residual
+#       amplitude 0.55 mas.', 'Solved by scripts/analysis/solve_filter_frame_offsets.py --write; see issue #296.']
 # schema: astropy-2.0
 detector filter anchor frame dx_mas dy_mas n sem_mas
-NRCA1 F182M F212N instrument -0.856 0.352 3 0.107
-NRCA2 F182M F212N instrument -0.806 0.273 3 0.148
-NRCA3 F182M F212N instrument 0.691 -0.208 3 0.123
-NRCA4 F182M F212N instrument 1.449 -0.418 3 0.14
-NRCB1 F182M F212N instrument 1.552 -1.456 3 0.178
-NRCB2 F182M F212N instrument 1.298 1.396 3 0.155
-NRCB3 F182M F212N instrument -1.603 -1.792 3 0.143
-NRCB4 F182M F212N instrument -1.425 1.518 3 0.111
-NRCA1 F187N F212N instrument 0.133 -0.432 1 0.09
-NRCA2 F187N F212N instrument -0.275 0.354 1 0.09
-NRCA3 F187N F212N instrument 0.023 -0.44 1 0.09
-NRCA4 F187N F212N instrument 0.184 0.277 1 0.09
-NRCB1 F187N F212N instrument 0.188 -0.163 1 0.09
-NRCB2 F187N F212N instrument 0.378 0.504 1 0.09
-NRCB3 F187N F212N instrument -0.713 -0.829 1 0.09
-NRCB4 F187N F212N instrument -0.117 0.172 1 0.09
+NRCA1 F182M F212N instrument 0.975 -0.352 3 0.11
+NRCA2 F182M F212N instrument 0.925 -0.273 3 0.148
+NRCA3 F182M F212N instrument -0.571 0.208 3 0.108
+NRCA4 F182M F212N instrument -1.33 0.418 3 0.117
+NRCB1 F182M F212N instrument -1.597 1.372 3 0.148
+NRCB2 F182M F212N instrument -1.342 -1.479 3 0.13
+NRCB3 F182M F212N instrument 1.559 1.708 3 0.153
+NRCB4 F182M F212N instrument 1.381 -1.601 3 0.129
+NRCA1 F187N F212N instrument -0.117 0.372 1 0.1
+NRCA2 F187N F212N instrument 0.291 -0.414 1 0.04
+NRCA3 F187N F212N instrument -0.007 0.38 1 0.04
+NRCA4 F187N F212N instrument -0.168 -0.337 1 0.05
+NRCB1 F187N F212N instrument -0.254 0.084 1 0.05
+NRCB2 F187N F212N instrument -0.444 -0.583 1 0.06
+NRCB3 F187N F212N instrument 0.646 0.75 1 0.06
+NRCB4 F187N F212N instrument 0.051 -0.251 1 0.06

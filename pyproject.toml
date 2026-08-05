@@ -61,7 +61,7 @@ include-package-data = true
 [tool.setuptools.packages.find]
 
 [tool.setuptools.package-data]
-"jwst_gc_pipeline.reduction" = ["*.ecsv"]
+"jwst_gc_pipeline.reduction" = ["*.ecsv", "data/*.ecsv"]
 # The field registry; jwst_gc_pipeline.fields reads it at import.
 "jwst_gc_pipeline" = ["fields.yaml", "config.yaml"]
 
