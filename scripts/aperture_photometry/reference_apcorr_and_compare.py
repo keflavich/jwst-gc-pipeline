@@ -195,7 +195,9 @@ def main():
                     row[f'theo_EE_{apm._rtag(rr)}'] = round(th, 3)
                     row[f'emp_over_theo_{apm._rtag(rr)}'] = round(emp / th, 3)
         # satstar-derived (contaminated) apcorr at 0.15" for contrast
-        sp = apm.apcorr_table_path(f, r['target'], f"/orange/adamginsburg/jwst/{r['target']}/")
+        sp = apm.apcorr_table_path(f, r['target'],
+                                   f"/orange/adamginsburg/jwst/{r['target']}/",
+                                   kind='diagnostic')
         if os.path.exists(sp):
             st = Table.read(sp)
             row['satstar_EE_0p15_norm1p0'] = round(_interp(st, 0.15), 3)
