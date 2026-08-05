@@ -124,11 +124,15 @@ def find_i2d_mosaics(filtername, target, basepath):
 
 
 def _measure_one_mosaic(sky, i2d_path, radii_arcsec, primary_radius_arcsec,
-                        ann_in_arcsec, ann_out_arcsec):
+                        ann_in_arcsec, ann_out_arcsec, recenter_box=0):
     """Measure aperture photometry for all positions on one mosaic.
 
     Returns a dict of per-star arrays (length == len(sky)); stars off this
-    mosaic have NaN flux and coverage 0.
+    mosaic have NaN flux and coverage 0.  If ``recenter_box`` > 0, positions are
+    re-centroided on the mosaic within that box (px) before aperture photometry
+    -- essential for a curve of growth, since catalog positions come from the crf
+    grid and are offset from the i2d grid by ~1 px, which bleeds small-aperture
+    flux and makes the empirical PSF look spuriously broad.
     """
     # Keep native dtype (i2d SCI/ERR are float32) -- do NOT upcast to float64;
     # these mosaics are multi-GB and this runs inside the memory-bound merge.
@@ -162,9 +166,20 @@ def _measure_one_mosaic(sky, i2d_path, radii_arcsec, primary_radius_arcsec,
     finite = np.isfinite(sci)
     mjy_to_jy = (1 * u.MJy / u.sr * pix_area).to(u.Jy).value  # per (MJy/sr)*pix
 
+    if recenter_box and recenter_box > 0:
+        from photutils.centroids import centroid_sources, centroid_com
+        # NaN-safe centroiding: zero the non-finite pixels for the fit
+        sci_c = np.where(finite, sci, 0.0)
+        xc, yc = centroid_sources(sci_c, pos[:, 0], pos[:, 1],
+                                  box_size=int(recenter_box),
+                                  centroid_func=centroid_com)
+        ok = np.isfinite(xc) & np.isfinite(yc)
+        pos[ok, 0] = xc[ok]
+        pos[ok, 1] = yc[ok]
+
     # core-saturated: central pixel non-finite
-    xi = np.clip(np.round(x[inb]).astype(int), 0, nx - 1)
-    yi = np.clip(np.round(y[inb]).astype(int), 0, ny - 1)
+    xi = np.clip(np.round(pos[:, 0]).astype(int), 0, nx - 1)
+    yi = np.clip(np.round(pos[:, 1]).astype(int), 0, ny - 1)
     res['core_sat'][inb] = ~finite[yi, xi]
 
     # local background from annulus (plain median, no sigma clip; per pixel, MJy/sr)
@@ -200,11 +215,14 @@ def measure_aperture_photometry(catalog, i2d_paths, filtername=None,
                                 primary_radius_arcsec=PRIMARY_RADIUS_ARCSEC,
                                 ann_in_arcsec=ANNULUS_IN_ARCSEC,
                                 ann_out_arcsec=ANNULUS_OUT_ARCSEC,
-                                skycoord_col='skycoord_fit'):
+                                skycoord_col='skycoord_fit', recenter_box=0):
     """Add i2d aperture-photometry columns to ``catalog`` (returns a copy).
 
     For each star the measurement from the mosaic with the highest primary-radius
     coverage is kept (handles multi-obs targets where mosaics overlap).
+    ``recenter_box`` (px) > 0 re-centroids each source on the mosaic before
+    measuring (needed for curve-of-growth accuracy; off by default so the shipped
+    satstar photometry stays at the catalog position).
     """
     cat = catalog.copy()
     if skycoord_col not in cat.colnames:
@@ -221,7 +239,7 @@ def measure_aperture_photometry(catalog, i2d_paths, filtername=None,
     for path in i2d_paths:
         res, pix_area = _measure_one_mosaic(
             sky, path, radii_arcsec, primary_radius_arcsec,
-            ann_in_arcsec, ann_out_arcsec)
+            ann_in_arcsec, ann_out_arcsec, recenter_box=recenter_box)
         if best is None:
             best = res
             best_i2d[res['inb']] = os.path.basename(path)
@@ -457,11 +475,15 @@ def build_reference_apcorr(ref_catalog, i2d_paths, filtername,
         radii_reliable = tuple(sorted(radii_arcsec)[:2])
     ref = ref_catalog[keep].copy()
     ref.meta.setdefault('filter', filtername)
+    # pin the primary radius to the largest reliable radius so
+    # measure_aperture_photometry does not inject its default 0.30" aperture
+    # (which would fall inside/beyond the sky annulus and skew normalization)
     ref = measure_aperture_photometry(ref, i2d_paths, filtername=filtername,
                                       radii_arcsec=radii_reliable,
+                                      primary_radius_arcsec=max(radii_reliable),
                                       ann_in_arcsec=ann_in_arcsec,
                                       ann_out_arcsec=ann_out_arcsec,
-                                      skycoord_col=scol)
+                                      skycoord_col=scol, recenter_box=5)
     # already geometrically isolated + unsaturated -> don't re-cut on isolation
     tbl = build_aperture_correction_table(ref, filtername=filtername,
                                           radii_arcsec=radii_reliable,
