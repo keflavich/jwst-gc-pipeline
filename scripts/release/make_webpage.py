@@ -20,6 +20,7 @@ import shutil
 import urllib.parse
 from pathlib import Path
 
+import field_overview
 from stage_release import field_release_dir
 
 # Display label per group folder (None = Galactic Center, the default survey).
@@ -144,7 +145,8 @@ def human_size(num_bytes):
 def page_head(title):
     return (f"<!doctype html><html lang=en><head><meta charset=utf-8>"
             f"<meta name=viewport content='width=device-width,initial-scale=1'>"
-            f"<title>{html.escape(title)}</title><style>{CSS}</style></head><body>")
+            f"<title>{html.escape(title)}</title>"
+            f"<style>{CSS}{field_overview.CSS}</style></head><body>")
 
 
 def dl(item):
@@ -449,7 +451,7 @@ def _field_cards(fields_info):
     return out
 
 
-def render_index(fields_info):
+def render_index(fields_info, overview_html=""):
     out = [page_head("JWST Galactic Center survey — data release")]
     out.append("<header><h1>JWST Galactic Center survey</h1>")
     out.append("<div class=muted>Final reduced mosaics, residual/model images, and "
@@ -464,11 +466,19 @@ def render_index(fields_info):
         groups.setdefault(fi.get("group"), []).append(fi)
     if len(groups) <= 1:
         out += _field_cards(fields_info)
+        # the overview maps the Galactic Centre fields, which in the single-group
+        # case is the whole index -- so it still belongs directly after the cards
+        if overview_html:
+            out.append(overview_html)
     else:
         order = sorted(groups, key=lambda g: (g is not None, g or ""))
         for g in order:
             out.append(f"<h2>{html.escape(GROUP_TITLE.get(g, g or 'Other'))}</h2>")
             out += _field_cards(groups[g])
+            # below the Galactic Centre section, above the other groups: the
+            # panel maps CMZ fields only, so it must not float away from them
+            if g is None and overview_html:
+                out.append(overview_html)
     out.append("</main>")
     out.append(footer())
     out.append("</body></html>")
@@ -507,6 +517,7 @@ def main(argv=None):
         return sorted(found, reverse=True)
 
     fields_info = []
+    overview_entries = []          # (field, latest release dir, index-relative href)
     for field in args.fields:
         versions = discover_versions(field)
         if not versions:
@@ -563,6 +574,10 @@ def main(argv=None):
                     "n_images": sum(1 for f in files if f["category"] == "image"),
                     "n_catalogs": sum(1 for f in files if f["category"] == "catalog"),
                 })
+                if manifest.get("group") is None:
+                    # only the Galactic Centre group belongs on a CMZ map; the
+                    # galactic_plane / globular_cluster fields are elsewhere on sky
+                    overview_entries.append((field, latest_dir, f"{field}.html"))
         print(f"wrote {field}.html ({len(versions)} version(s): {', '.join(versions)})")
 
     cmz_explorer_link = None
@@ -572,7 +587,17 @@ def main(argv=None):
         cmz_explorer_link = "cmz_explorer.html"
         print("wrote cmz_explorer.html (Aladin Lite pane)")
 
-    index_html = render_index(fields_info)
+    # The on-sky overview reads each staged mosaic's HEADER only (i2d is a
+    # rectified plain TAN grid, so WCS(header) is exact).  It is decorative: a
+    # field whose mosaics cannot be read is simply left off the map, and if no
+    # field yields geometry the panel is omitted entirely and the index is
+    # exactly what it was before.
+    overview_geoms = field_overview.collect(overview_entries)
+    if overview_entries and not overview_geoms:
+        print("note: no footprints readable -- on-sky overview omitted")
+    overview_html = field_overview.section(overview_geoms)
+
+    index_html = render_index(fields_info, overview_html=overview_html)
     if cmz_explorer_link:
         # surface the explorer at the top of the index (additive; no-op otherwise)
         index_html = index_html.replace(
