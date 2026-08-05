@@ -533,14 +533,15 @@ def astrometry_checkpoints(base, filters=None, ambiguous_filters=()):
                 # point is.  A single scalar cannot distinguish "one bad corner"
                 # from "a gradient across the mosaic", and those have different
                 # causes.
-                # NOTE the key inconsistency upstream (issue #267): a
-                # measure_offset_grid cell records its offset as `off`, a
-                # local_residual_map cell as `off_mas`, and the `worst_off_cell`
-                # summary as `off_mas`.  Reading only one silently yields an
-                # empty map -- and a derived claim that the field is flat.  This
-                # is a workaround; the fix belongs in astrometry_offsets.
+                # `off_mas` is the canonical per-cell offset key: every cell
+                # producer in astrometry_offsets writes it (issue #267).  The
+                # `off` fallback is ONLY for checkpoints recorded before that
+                # change -- those files are never rewritten, so the reader has
+                # to keep tolerating the old spelling.  Reading one spelling
+                # only used to yield an empty map, and with it a derived claim
+                # that the field was flat.
                 'cells': [{'ix': c.get('ix'), 'iy': c.get('iy'),
-                           'off_mas': _finite(c.get('off', c.get('off_mas'))),
+                           'off_mas': _finite(c.get('off_mas', c.get('off'))),
                            'dra': _finite(c.get('dra')),
                            'ddec': _finite(c.get('ddec')),
                            'contrast': _finite(c.get('contrast')),

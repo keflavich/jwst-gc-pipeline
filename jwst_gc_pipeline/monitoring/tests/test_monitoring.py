@@ -473,6 +473,59 @@ def test_checkpoint_nan_is_dropped_not_propagated(tmp_path):
 
 
 # --------------------------------------------------------------------------
+# Per-cell offset key (issue #267)
+# --------------------------------------------------------------------------
+
+def _cells_checkpoint(tmp_path, cells):
+    ckdir = tmp_path / 'astrometry_checkpoints'
+    os.makedirs(ckdir, exist_ok=True)
+    (ckdir / 'checkpoint_m2_F115W_latest.json').write_text(json.dumps({
+        'stage': 'm2', 'date': '2026-01-01T00:00:00Z',
+        'visits': [{'visit': '1',
+                    'consensus': {'consensus_ok': True},
+                    'reference_tie': {'off_mas': 3.0, 'apply_ok': True,
+                                      'per_tile': {'n_ok': 2, 'n_total': 2,
+                                                   'cells': list(cells)}},
+                    'exposures': []}]}))
+    return scan.astrometry_checkpoints(str(tmp_path))['F115W']['visits'][0]
+
+
+def test_monitor_reads_cells_written_with_the_canonical_off_mas_key(tmp_path):
+    """astrometry_offsets writes ``off_mas`` on every per-cell record."""
+    visit = _cells_checkpoint(tmp_path, [
+        {'ix': 0, 'iy': 0, 'off_mas': 4.0, 'dra': 3.0, 'ddec': 2.0,
+         'contrast': 20.0, 'npairs': 900},
+        {'ix': 1, 'iy': 0, 'off_mas': 29.0, 'dra': 29.0, 'ddec': 1.0,
+         'contrast': 18.0, 'npairs': 800}])
+    assert [c['off_mas'] for c in visit['cells']] == [4.0, 29.0]
+
+
+def test_monitor_still_reads_cells_recorded_with_the_historical_off_key(tmp_path):
+    """Checkpoints written before issue #267 carry ``off`` and are never
+    rewritten, so the reader has to keep understanding them.  Reading only the
+    canonical key against such a file yields an empty per-tile map -- and with
+    it a derived "0/N cells exceed tolerance" claim about data that was never
+    read (brick F115W visit 1, where 14/36 cells were over the gate)."""
+    visit = _cells_checkpoint(tmp_path, [
+        {'ix': 0, 'iy': 0, 'off': 4.0, 'dra': 3.0, 'ddec': 2.0,
+         'contrast': 20.0, 'npairs': 900},
+        {'ix': 1, 'iy': 0, 'off': 29.0, 'dra': 29.0, 'ddec': 1.0,
+         'contrast': 18.0, 'npairs': 800}])
+    assert [c['off_mas'] for c in visit['cells']] == [4.0, 29.0]
+    over = [c for c in visit['cells'] if c['off_mas'] > 15.0]
+    assert len(over) == 1, 'a historical record must not read as an empty map'
+
+
+def test_monitor_prefers_the_canonical_key_when_a_record_carries_both(tmp_path):
+    """Post-fix records carry both spellings with the same value; the reader
+    takes the canonical one."""
+    visit = _cells_checkpoint(tmp_path, [
+        {'ix': 0, 'iy': 0, 'off': 7.5, 'off_mas': 7.5, 'dra': 7.0,
+         'ddec': 2.7, 'contrast': 22.0, 'npairs': 950}])
+    assert visit['cells'][0]['off_mas'] == 7.5
+
+
+# --------------------------------------------------------------------------
 # Astrometry-paper verdicts
 # --------------------------------------------------------------------------
 
