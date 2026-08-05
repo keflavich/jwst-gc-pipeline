@@ -1,0 +1,36 @@
+# %ECSV 1.0
+# ---
+# datatype:
+# - {name: detector, datatype: string}
+# - {name: filter, datatype: string}
+# - {name: anchor, datatype: string}
+# - {name: frame, datatype: string}
+# - {name: dx_mas, datatype: float64}
+# - {name: dy_mas, datatype: float64}
+# - {name: n, datatype: int64}
+# - {name: sem_mas, datatype: float64}
+# meta: !!omap
+# - comments: ['Per-(detector, filter) placement offsets onto the JWST 2-micron consensus frame.', 'frame=instrument: on-sky vector rotated
+#       by +ROLL_REF; rotate by -ROLL_REF to apply.', Module-mean removed per module (the gauge that keeps this orthogonal to the offsets
+#       table)., 'F182M: mean of three observations -- brick jw02221-o001 (roll 89.13), sgrc jw04147-o012', '  (roll 91.50), wd2 jw03523-o005
+#       (roll 141.01).  Pairwise agreement after de-rotation', '  94-98 percent explained, per-detector scatter 0.19 mas on a 1.69 mas
+#       signal.', 'F187N: brick jw02221-o001 only (n=1) -- Jay Anderson has no F187N STDGDC solution and', '  no second observation has
+#       been solved yet.  Amplitude 0.55 mas.', 'Solved by scripts/analysis/solve_filter_frame_offsets.py; see issue #296.']
+# schema: astropy-2.0
+detector filter anchor frame dx_mas dy_mas n sem_mas
+NRCA1 F182M F212N instrument -0.856 0.352 3 0.107
+NRCA2 F182M F212N instrument -0.806 0.273 3 0.148
+NRCA3 F182M F212N instrument 0.691 -0.208 3 0.123
+NRCA4 F182M F212N instrument 1.449 -0.418 3 0.14
+NRCB1 F182M F212N instrument 1.552 -1.456 3 0.178
+NRCB2 F182M F212N instrument 1.298 1.396 3 0.155
+NRCB3 F182M F212N instrument -1.603 -1.792 3 0.143
+NRCB4 F182M F212N instrument -1.425 1.518 3 0.111
+NRCA1 F187N F212N instrument 0.133 -0.432 1 0.09
+NRCA2 F187N F212N instrument -0.275 0.354 1 0.09
+NRCA3 F187N F212N instrument 0.023 -0.44 1 0.09
+NRCA4 F187N F212N instrument 0.184 0.277 1 0.09
+NRCB1 F187N F212N instrument 0.188 -0.163 1 0.09
+NRCB2 F187N F212N instrument 0.378 0.504 1 0.09
+NRCB3 F187N F212N instrument -0.713 -0.829 1 0.09
+NRCB4 F187N F212N instrument -0.117 0.172 1 0.09
