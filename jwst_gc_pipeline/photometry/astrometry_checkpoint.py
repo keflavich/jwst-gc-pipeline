@@ -1688,6 +1688,36 @@ def _filter_is_obs_ambiguous(record_dir, filtername):
         return True
 
 
+def _m2_refusal_reason(record_dir, filtername, obs_token=""):
+    """Why there is no m2 baseline, when the reason is a REFUSAL.
+
+    A refused untokened record and a genuinely absent one both reach the
+    caller as ``None``, and the caller then emits the frozen-stage movement
+    failure -- which asserts that the solution moved.  That is a false
+    statement about the data: nothing was measured to have moved, there was
+    simply nothing to compare against.  Naming the refusal lets the message
+    say what happened.
+    """
+    if not (record_dir and obs_token):
+        return None
+    tokened = os.path.join(
+        record_dir, f"{_record_name('m2', filtername, obs_token)}_latest.json")
+    if os.path.exists(tokened):
+        return None
+    for legacy in (os.path.join(record_dir,
+                                f"{_record_name('m2', filtername)}_latest.json"),
+                   os.path.join(record_dir,
+                                f"{_record_name('m2', None)}_latest.json")):
+        if os.path.exists(legacy) and _filter_is_obs_ambiguous(record_dir,
+                                                               filtername):
+            return (f"the untokened m2 record {os.path.basename(legacy)} was "
+                    f"REFUSED for {filtername}{obs_token}: more than one "
+                    f"observation of this field images this filter and an "
+                    f"untokened record body carries no observation identity "
+                    f"(issue #281).  Re-run m2 to write a tokened record")
+    return None
+
+
 def _m2_record_path(record_dir, filtername, obs_token=""):
     """Resolve the latest m2 record path for a per-group filter, tolerating the
     writer/reader spelling gap.
@@ -2155,9 +2185,28 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                         # No m2 baseline for this exposure (new/renamed frame at
                         # a frozen stage): the solution was supposed to be frozen
                         # -- fall back to the absolute-offset failure.
-                        failures.append(
-                            msg + " [no m2 per-exposure baseline: frozen-stage "
-                            "exposure absent from the m2 record]")
+                        _refused = _m2_refusal_reason(record_dir, filt,
+                                                      obs_token)
+                        if _refused:
+                            # NOT a movement.  The frozen-stage text asserts
+                            # the solution moved; nothing here was measured to
+                            # have moved, there was simply nothing to compare
+                            # against.  Still blocking -- an unverifiable
+                            # frozen stage is not a pass, and `all_verified`
+                            # has no non-test reader -- but the message must
+                            # not claim a measurement that was never made.
+                            failures.append(
+                                f"{vctx}: exposure {exp['key']} CANNOT BE "
+                                f"CHECKED against the m2 freeze -- {_refused}. "
+                                f"This is a MISSING BASELINE, not a measured "
+                                f"movement: its current vs-consensus offset is "
+                                f"{res['off']:.2f} mas and no frozen value "
+                                f"exists to compare it to.")
+                        else:
+                            failures.append(
+                                msg + " [no m2 per-exposure baseline: "
+                                "frozen-stage exposure absent from the m2 "
+                                "record]")
 
         # ---- consensus vs absolute reference ------------------------------
         ref_tie = None

@@ -323,7 +323,12 @@ other's baseline — which is not a movement measurement of anything (issue
 `visit` field is `"1"` for both `jw02092002001` and `jw02092005001`.
 
 **Legacy untokened records, and what happens to them.**  Every record written
-before this existed is untokened — 231 of them across 14 directories.  A reader
+before this existed is untokened.  Counted precisely, because two earlier
+numbers in this section disagreed with each other: **80**
+`checkpoint_m2_*_latest.json` across **13** directories, **0** of them tokened
+(638 files including the timestamped history, and symlinked field directories
+resolved — brick and cloudc live under `/blue`, the rest under `/orange`).
+A reader
 that wants `_oNNN` accepts the untokened spelling **only where it cannot be
 another observation's**: where the registry says exactly one observation of this
 field images this filter.  brick's two observations use disjoint filter sets, so

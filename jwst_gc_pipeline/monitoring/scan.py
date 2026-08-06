@@ -169,6 +169,24 @@ def shared_filters(target, instrument='nircam'):
         return set()
     seen, shared = {}, set()
     for obs in field.observations:
+        # `obs.filters` is ONE list per registry entry, shared by NIRCam and
+        # MIRI.  Iterating `obs.obsids[instrument]` while reading it credits
+        # every filter on the entry to whichever instrument is asked, and
+        # sgrb2 is the case: 3 MIRI obsids made all 14 of its filters "shared",
+        # including 11 NIRCam-only bands, while its NIRCam side has exactly one
+        # observation.  Ten sgrb2 records were then refused with a message
+        # false on its own terms -- "more than one observation of this field
+        # images F212N", which is not a MIRI filter at all.
+        #
+        # The registry carries no per-instrument filter list, but the band
+        # names encode wavelength in units of 0.01 um and the split is hard:
+        # MIRI imaging starts at F560W.  Scope by that.
+        def _belongs(filt, inst=instrument):
+            wl = _fields._wavelength_key(filt)[0]
+            if wl >= 10 ** 6:               # unparseable: do not exclude
+                return True
+            return (wl >= 500) if inst == 'miri' else (wl < 500)
+
         # One registry entry can carry SEVERAL observation ids of one proposal
         # (gc2211's 2211 lists o023/o028/o046/o049/o050 against a single filter
         # list).  Expanding them is the whole point: those five observations all
@@ -184,6 +202,8 @@ def shared_filters(target, instrument='nircam'):
                 continue
             token = (obs.proposal, obsid)
             for filt in obs.filters:
+                if not _belongs(filt):
+                    continue
                 key = filt.upper()
                 if key in seen and seen[key] != token:
                     shared.add(key)

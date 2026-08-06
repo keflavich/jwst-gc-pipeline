@@ -56,8 +56,16 @@ def load_corrections(records_dir, obs_token=None):
     # `not obs_token`, not `is None`: an EMPTY token takes the blind glob above,
     # so testing for None let `--obs-token ''` walk straight past the refusal.
     if not obs_token:
-        tokens = {m.group(1) for m in
-                  (_TOKEN_RE.search(os.path.basename(p)) for p in records) if m}
+        # An UNTOKENED record is its own identity, not the absence of one.
+        # Counting only tokened names meant legacy + one tokened gave
+        # len(tokens) == 1 and no refusal -- and that is the state this change
+        # creates on every field at its first tokened run, reachable by the
+        # default invocation.  Measured on a real cloudef F360M pair:
+        # records=2, corrections=42, 3 of 3 targeted rows getting two
+        # corrections summed onto them; with --obs-token _o002, records=1,
+        # corrections=21.
+        tokens = {(m.group(1) if m else '<untokened>') for m in
+                  (_TOKEN_RE.search(os.path.basename(p)) for p in records)}
         if len(tokens) > 1:
             raise SystemExit(
                 f"{records_dir} holds m2 records for more than one observation "
@@ -118,8 +126,16 @@ def load_exposure_universe(records_dir, obs_token=None):
     # `not obs_token`, not `is None`: an EMPTY token takes the blind glob above,
     # so testing for None let `--obs-token ''` walk straight past the refusal.
     if not obs_token:
-        tokens = {m.group(1) for m in
-                  (_TOKEN_RE.search(os.path.basename(p)) for p in records) if m}
+        # An UNTOKENED record is its own identity, not the absence of one.
+        # Counting only tokened names meant legacy + one tokened gave
+        # len(tokens) == 1 and no refusal -- and that is the state this change
+        # creates on every field at its first tokened run, reachable by the
+        # default invocation.  Measured on a real cloudef F360M pair:
+        # records=2, corrections=42, 3 of 3 targeted rows getting two
+        # corrections summed onto them; with --obs-token _o002, records=1,
+        # corrections=21.
+        tokens = {(m.group(1) if m else '<untokened>') for m in
+                  (_TOKEN_RE.search(os.path.basename(p)) for p in records)}
         if len(tokens) > 1:
             raise SystemExit(
                 f"{records_dir} holds m2 records for more than one observation "

@@ -27,11 +27,17 @@ def test_two_observations_do_not_share_a_record_name():
     assert a != b
 
 
-def _write(tmp_path, name, dra):
+def _write(tmp_path, name, dra, corrections=True):
     rec = dict(stage="m2", filtername="F360M", visits=[dict(
         visit="1", filtername="F360M", exposures=[dict(
             key=["1", 1, "nrcblong", "F360M", "02101"], misaligned=True,
             dra=dra, ddec=0.0, ok=True)])])
+    if corrections:
+        # The applier reads THIS list.  Without it every `load_corrections`
+        # assertion is vacuous -- an empty directory also returns ([], []).
+        rec["corrections"] = [dict(visit="1", exposure=1, module="nrcblong",
+                                   filtername="F360M", vgroup="02101",
+                                   dra_onsky_mas=dra, ddec_onsky_mas=0.0)]
     (tmp_path / f"{name}_latest.json").write_text(json.dumps(rec))
 
 
@@ -130,8 +136,36 @@ def test_apply_script_refuses_to_union_two_observations(tmp_path):
     _write(tmp_path, "checkpoint_m2_F360M_o005", 9.0)
     with pytest.raises(SystemExit, match="more than one observation"):
         mod.load_corrections(str(tmp_path))
-    # with a token it reads exactly one
-    assert mod.load_corrections(str(tmp_path), obs_token="_o002") is not None
+    # With a token it reads exactly ONE record's corrections.  `is not None`
+    # was vacuous -- an empty directory returns ([], []) -- which is exactly
+    # why the "applier ignores obs_token" mutant survived.
+    records, corrections = mod.load_corrections(str(tmp_path),
+                                                obs_token="_o002")
+    assert len(records) == 1, records
+    assert corrections and all("_o002" in c["_record"] for c in corrections), \
+        corrections
+
+
+def test_apply_script_refuses_legacy_BESIDE_tokened(tmp_path):
+    """The state this change creates on every field at its FIRST tokened run,
+    and it was not refused: the token census counted tokened names only, so
+    legacy + one tokened gave len(tokens) == 1.  On a real cloudef F360M pair
+    that summed two corrections onto each of 3 of 3 targeted rows."""
+    import importlib.util
+    import pathlib
+    spec = importlib.util.spec_from_file_location(
+        "apply_m2", pathlib.Path(__file__).resolve().parents[3]
+        / "scripts" / "reduction" / "apply_m2_checkpoint_corrections.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    _write(tmp_path, "checkpoint_m2_F360M", 1.0)            # legacy
+    _write(tmp_path, "checkpoint_m2_F360M_o002", 9.0)       # this run's
+    with pytest.raises(SystemExit, match="more than one observation"):
+        mod.load_corrections(str(tmp_path))
+    with pytest.raises(SystemExit, match="more than one observation"):
+        mod.load_exposure_universe(str(tmp_path))
+    records, _ = mod.load_corrections(str(tmp_path), obs_token="_o002")
+    assert len(records) == 1, records
 
 
 @pytest.mark.parametrize("path,filt,ambiguous", [
@@ -141,9 +175,20 @@ def test_apply_script_refuses_to_union_two_observations(tmp_path):
     # longest-match does not fix it either -- 'arches' and 'sickle' tie
     ("/home/arches/runs/sickle/astrometry_checkpoints", "F187N", True),
     ("/orange/adamginsburg/jwst/brick/astrometry_checkpoints", "F212N", False),
-    # sgrb2 registers nircam ['001'] but miri ['001','002','998'], so the
-    # nircam default returned False for all 14 of its genuinely shared filters
-    ("/orange/adamginsburg/jwst/sgrb2/astrometry_checkpoints", "F360M", True),
+    # sgrb2 registers nircam ['001'] but miri ['001','002','998'] -- and ONE
+    # `filters` list shared by both.  Asking for the nircam default returned
+    # False for its genuinely shared MIRI bands; unioning the two instruments
+    # then swung to the opposite error and made all 14 filters ambiguous,
+    # including 11 NIRCam-only ones, refusing 10 records whose NIRCam side has
+    # exactly one observation.  Scoped by band wavelength now (MIRI imaging
+    # starts at F560W), so each side gets its own answer:
+    ("/orange/adamginsburg/jwst/sgrb2/astrometry_checkpoints", "F360M", False),
+    ("/orange/adamginsburg/jwst/sgrb2/astrometry_checkpoints", "F212N", False),
+    ("/orange/adamginsburg/jwst/sgrb2/astrometry_checkpoints", "F770W", True),
+    ("/orange/adamginsburg/jwst/sgrb2/astrometry_checkpoints", "F1280W", True),
+    # ... and the fields the refusal exists for are unchanged
+    ("/orange/adamginsburg/jwst/cloudef/astrometry_checkpoints", "F360M", True),
+    ("/orange/adamginsburg/jwst/gc2211/astrometry_checkpoints", "F200W", True),
     ("/tmp/nowhere/astrometry_checkpoints", "F360M", True),      # fail-closed
 ])
 def test_field_detection_and_ambiguity(path, filt, ambiguous):
@@ -353,3 +398,96 @@ def test_the_crossfilter_record_carries_the_token_too(tmp_path):
     assert "obs_token" in inspect.signature(run_crossfilter_checkpoint).parameters
     src = inspect.getsource(run_crossfilter_checkpoint)
     assert 'f"checkpoint_m7_crossfilter{obs_token}"' in src
+
+
+# ------------------------------------------ the READER call sites, one by one
+
+@pytest.mark.parametrize("reader", [
+    "_m2_exposure_baseline", "_m2_skipped_exposures",
+    "_m2_reference_tie_baseline",
+])
+def test_every_reader_passes_the_token_through(tmp_path, reader, monkeypatch):
+    """Dropping `obs_token` at a reader CALL SITE does not merely read the
+    wrong record -- the refusal is guarded by `if obs_token and not _tok:`, so
+    it turns the entire refusal OFF and silently restores the read-side #281
+    bug.  Three mutants survived the whole suite:
+
+        M3_exposure_baseline_call_drops_token   SURVIVED
+        M4_skipped_call_drops_token             SURVIVED
+        M5_reftie_call_drops_token              SURVIVED
+
+    Each reader is exercised here against a directory holding ONLY the
+    untokened record, on an ambiguous filter: with the token it must refuse
+    (None / empty), without it it would read the legacy record.
+    """
+    import jwst_gc_pipeline.photometry.astrometry_checkpoint as ac
+    monkeypatch.setattr(ac, "_filter_is_obs_ambiguous", lambda *a, **k: True)
+    # a record rich enough that ALL THREE readers find something in it
+    rec = dict(stage="m2", filtername="F360M", visits=[dict(
+        visit="1", filtername="F360M",
+        exposures=[dict(key=["1", 1, "nrcblong", "F360M", "02101"],
+                        misaligned=True, dra=11.0, ddec=0.0, ok=True)],
+        consensus=dict(skipped=[["1", 2, "nrcblong", "F360M", "02101"]]),
+        reference_tie=dict(apply_ok=True, dra_mas=7.0, ddec_mas=-3.0))])
+    (tmp_path / "checkpoint_m2_F360M_latest.json").write_text(json.dumps(rec))
+    fn = getattr(ac, reader)
+    permitted = fn(str(tmp_path), "F360M", "1", "")
+    refused = fn(str(tmp_path), "F360M", "1", "_o002")
+    # the untokened record IS readable, so the un-tokened call finds data ...
+    assert permitted, (reader, permitted)
+    # ... and the tokened call must refuse it rather than read another
+    # observation's numbers
+    assert refused != permitted, (reader, refused, permitted)
+
+
+def test_the_refusal_message_does_not_claim_the_solution_moved(tmp_path, monkeypatch):
+    """A refused untokened record and a genuinely absent one both reach the
+    caller as None, and the caller then emitted the frozen-stage MOVEMENT
+    failure.  Nothing was measured to have moved -- there was nothing to
+    compare against.  Still blocking; just not a false statement about the
+    data."""
+    import jwst_gc_pipeline.photometry.astrometry_checkpoint as ac
+    monkeypatch.setattr(ac, "_filter_is_obs_ambiguous", lambda *a, **k: True)
+    _write(tmp_path, "checkpoint_m2_F360M", 11.0)
+    why = ac._m2_refusal_reason(str(tmp_path), "F360M", "_o002")
+    assert why and "REFUSED" in why, why
+    # ... and a genuinely absent baseline is NOT reported as a refusal
+    assert ac._m2_refusal_reason(str(tmp_path), "F480M", "_o002") is None
+    # ... nor is an unambiguous filter's legacy record
+    monkeypatch.setattr(ac, "_filter_is_obs_ambiguous", lambda *a, **k: False)
+    assert ac._m2_refusal_reason(str(tmp_path), "F360M", "_o002") is None
+
+
+def test_the_m7_crossfilter_record_is_wired_at_the_PRODUCTION_call(tmp_path, monkeypatch):
+    """`run_crossfilter_checkpoint` grew `obs_token` and the CLI wired it, but
+    `cataloging._run_crossfilter_astrom_checkpoint` passed neither a
+    `record_dir` nor a token -- so the pipeline path wrote no record at all,
+    and the previous test string-matched the CALLEE's source rather than
+    asserting at the call site, which is why it could not see that.
+    """
+    import inspect
+    from jwst_gc_pipeline.photometry import cataloging
+    sig = inspect.signature(cataloging._run_crossfilter_astrom_checkpoint)
+    assert "record_dir" in sig.parameters and "obs_token" in sig.parameters
+
+    seen = {}
+
+    def _spy(catalogs, refcat=None, basepath=None, context="",
+             record_dir=None, obs_token="", **kw):
+        seen.update(record_dir=record_dir, obs_token=obs_token)
+        return dict(passed=True)
+
+    import jwst_gc_pipeline.photometry.astrometry_checkpoint as ac
+    monkeypatch.setattr(ac, "run_crossfilter_checkpoint", _spy)
+    from astropy.table import Table
+    paths = {}
+    for filt in ("F212N", "F410M"):
+        fn = tmp_path / f"{filt}.fits"
+        Table({"skycoord_ra": [266.5], "skycoord_dec": [-28.7]}).write(fn)
+        paths[filt] = str(fn)
+    cataloging._run_crossfilter_astrom_checkpoint(
+        paths, str(tmp_path), str(tmp_path), {"refcat": None},
+        context="test", record_dir=str(tmp_path / "recs"),
+        obs_token="_o002")
+    assert seen.get("record_dir", "").endswith("recs"), seen
+    assert seen.get("obs_token") == "_o002", seen
