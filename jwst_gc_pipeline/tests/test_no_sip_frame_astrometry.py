@@ -71,6 +71,12 @@ ALLOWLIST = {
     "jwst_gc_pipeline/photometry/crowdsource_catalogs_long.py",
     "scripts/release/make_preview_rgb.py",
     "scripts/satstar_deblend/run_satstar_compare.py",
+    # aperture photometry reads only the i2d MOSAIC SCI header (rectified,
+    # RA---TAN, no SIP) for the WCS + pixel solid angle; positions come from the
+    # catalog skycoord, never from a per-exposure SIP header.
+    "jwst_gc_pipeline/photometry/aperture_photometry.py",
+    "scripts/aperture_photometry/investigate_aperture_vs_psf.py",
+    "scripts/aperture_photometry/reference_apcorr_and_compare.py",
     # frozen legacy path (see manual-defaults consolidation); not used for
     # release products
     "jwst_gc_pipeline/photometry/legacy/crowdsource_step.py",

@@ -1918,6 +1918,52 @@ def _project_for_target_filter(target, filtername):
     )
 
 
+def _ensure_satstar_aperture_photometry(cat, filtername, target, basepath,
+                                        cache_path=None):
+    """Ensure the consolidated satstar catalog carries i2d aperture photometry.
+
+    Aperture flux (measured on the resampled mosaic) is added BY DEFAULT to
+    every consolidated satstar catalog so it can be compared to the PSF
+    ``flux_fit``.  Disable with ``SATSTAR_APERTURE_PHOT=0``.  On a cache hit that
+    predates this feature the columns are backfilled once and the cache is
+    rewritten atomically, so later reads are fast.  Failures to locate a mosaic
+    are non-fatal (the catalog is returned without aperture columns).
+    """
+    if cat is None:
+        return cat
+    from jwst_gc_pipeline.photometry import aperture_photometry as _apphot
+    if not _apphot.aperture_photometry_enabled():
+        return cat
+    if _apphot.has_aperture_columns(cat):
+        return cat
+    cat = _apphot.add_aperture_photometry(cat, filtername, target, basepath)
+    if not _apphot.has_aperture_columns(cat):
+        return cat
+    # Do NOT persist an all-NaN result as if it succeeded.  DROP the aperture
+    # columns entirely when every aperture flux is NaN (mosaic footprint does not
+    # overlap the catalog, or a WCS mismatch): this makes the result identical to
+    # "not measured", so whichever path writes the cache (this function's
+    # cache_path branch OR the rebuild path in load_satstar_catalog, which calls
+    # us with cache_path=None and writes the cache itself) stores a catalog
+    # WITHOUT aper columns, and the measurement is retried next time rather than
+    # frozen as a false success.
+    import numpy as _np
+    if not _np.any(_np.isfinite(_np.asarray(cat['aper_flux_jy'], float))):
+        print(f"aperture photometry for {target}/{filtername} is all-NaN "
+              f"(no mosaic overlap?); dropping aperture columns so it is retried")
+        cat.remove_columns([c for c in cat.colnames if c.startswith('aper_')])
+        return cat
+    if cache_path is not None:
+        try:
+            tmp = f'{cache_path}.tmp{os.getpid()}'
+            cat.write(tmp, overwrite=True, format='fits')
+            os.replace(tmp, cache_path)
+            print(f"Backfilled aperture photometry into {cache_path}")
+        except OSError as ex:
+            print(f"Could not rewrite satstar cache with aperture cols: {ex}")
+    return cat
+
+
 def load_satstar_catalog(filtername, target='brick',
                          basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
     proj = _project_for_target_filter(target, filtername)
@@ -1938,8 +1984,15 @@ def load_satstar_catalog(filtername, target='brick',
         primary_matches = sorted(glob.glob(primary))
         if len(primary_matches) == 1:
             print(f"Using saturated star catalog {primary_matches[0]}")
-            return apply_pooled_wingcal(Table.read(primary_matches[0]),
+            _cat = apply_pooled_wingcal(Table.read(primary_matches[0]),
                                         filtername, basepath=basepath)
+            # cache_path=None: NEVER rewrite the raw pipeline satstar product on
+            # a read path.  Persisting the wingcal-divided flux_fit would make the
+            # next read's apply_pooled_wingcal see wingcal_ratio!=1 and wipe the
+            # wingcal_pooled provenance flag.  Aperture columns are added in
+            # memory here (recomputed each read for this branch).
+            return _ensure_satstar_aperture_photometry(
+                _cat, filtername, target, basepath, cache_path=None)
 
     # Require an ITERATION TOKEN (_m12/_m3.../_m7) in the satstar filename.  The
     # current pipeline always writes one (..._crf[_resbgsub]_m<N>_satstar_catalog).
@@ -2004,7 +2057,8 @@ def load_satstar_catalog(filtername, target='brick',
                 print(f"Using consolidated satstar catalog {cache} "
                       f"(cache fresh vs {len(fallback)} per-exposure catalogs, "
                       f"dedup radius {_rcur}\", alg {_SATSTAR_DEDUP_ALG})")
-                return cached
+                return _ensure_satstar_aperture_photometry(
+                    cached, filtername, target, basepath, cache_path=cache)
             if str(cached.meta.get('SATDDALG', '')) != _SATSTAR_DEDUP_ALG:
                 print(f"Rebuilding satstar cache {cache}: dedup algorithm changed "
                       f"{cached.meta.get('SATDDALG', 'legacy')!r} -> {_SATSTAR_DEDUP_ALG!r}")
@@ -2033,6 +2087,11 @@ def load_satstar_catalog(filtername, target='brick',
     # C(r).  Applied post-dedup, pre-cache, so the cache holds calibrated
     # fluxes with wingcal_pooled provenance.
     deduped = apply_pooled_wingcal(deduped, filtername, basepath=basepath)
+    # Aperture photometry from the i2d mosaic (added by default; see
+    # _ensure_satstar_aperture_photometry).  Done pre-cache so the cache holds
+    # the aperture columns; cache_path=None here (the cache is written below).
+    deduped = _ensure_satstar_aperture_photometry(
+        deduped, filtername, target, basepath, cache_path=None)
     # record how many per-exposure catalogs this cache was built from, so a
     # later read can detect (and rebuild) when more have since appeared.
     deduped.meta['NSATSRC'] = len(fallback)
