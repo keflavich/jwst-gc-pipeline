@@ -230,3 +230,23 @@ if __name__ == '__main__':
     test_forced_fill_recovers_phantom()
     test_forced_fill_survives_world2pix_nonconvergence()
     print("PASS")
+
+
+def test_fill_targets_are_selected_by_mask_column():
+    """The coupling merge_catalogs' ``mask_{filt}`` change relies on: forced_fill's target set IS
+    the mask column, so widening the mask (badsep -> badsep|non-mutual) is what makes the
+    non-mutual rows get filled at all.  Same table, mask flipped -> opposite outcome.
+    """
+    tbl, prepare_frame, ndet, cjy, zp, atrue = _build()
+    kw = dict(prepare_frame=prepare_frame, frame_arg_builder=lambda fn: {},
+              nsigma=3.0, fit_shape=(5, 5), verbose=False)
+
+    # mask False on the phantoms (what a badsep-only mask does to a close non-mutual row):
+    # nothing is a target, so the row keeps its NaN photometry forever.
+    unmasked = tbl.copy()
+    unmasked['mask_f405n'] = np.zeros(len(tbl), bool)
+    assert ff.forced_fill_band(unmasked, 'f405n', ['frame1'], **kw) == 0
+    assert np.isnan(unmasked['flux_f405n'][ndet])
+
+    # mask True on the same rows -> they become targets and are filled.
+    assert ff.forced_fill_band(tbl.copy(), 'f405n', ['frame1'], **kw) == 2
