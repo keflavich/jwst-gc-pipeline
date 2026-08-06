@@ -39,6 +39,24 @@
 source ~/.bash_profile 2>/dev/null
 export CRDS_PATH=${CRDS_PATH:-/orange/adamginsburg/jwst/crds}
 export CRDS_SERVER_URL=${CRDS_SERVER_URL:-https://jwst-crds.stsci.edu}
+# CRDS transient-outage retries.  The client's own defaults are ONE attempt with
+# a ZERO-second delay (crds.core.config.get_client_retry_count/_delay_seconds),
+# so a single 504 from jwst-crds.stsci.edu kills the whole job -- even when the
+# reference it wants is already in CRDS_PATH.  Observed 2026-08-06 across three
+# consecutive campaign cycles:
+#
+#   cloudc  4 of 4 merged reduces   FileNotFoundError .../pars-tweakregstep_0051.asdf
+#   sgrc    4 of 8 reduce tasks     ClientResponseError 504 .../_0039.asdf
+#   sgrb2   3 of 11 reduce tasks    504 / FileNotFoundError .../_0041,_0056,_0035.asdf
+#
+# Every one of those files was already cached; the server was answering its root
+# at 200 while timing out on file GETs, and recovered within minutes each time.
+# Retrying is provenance-neutral -- same context, same files, same bytes -- so
+# this changes nothing about what a product is calibrated against.  It is NOT a
+# reason to pin CRDS_CONTEXT or set CRDS_READONLY_CACHE; both of those DO change
+# provenance and neither is needed to survive a blip.
+export CRDS_CLIENT_RETRY_COUNT=${CRDS_CLIENT_RETRY_COUNT:-8}
+export CRDS_CLIENT_RETRY_DELAY_SECONDS=${CRDS_CLIENT_RETRY_DELAY_SECONDS:-20}
 export STPSF_PATH=${STPSF_PATH:-/orange/adamginsburg/jwst/stpsf-data}
 # The entry points refuse to run on a checkout that is not on a release tag.
 # The live merge runs from the working tree, so permit it; the products are
