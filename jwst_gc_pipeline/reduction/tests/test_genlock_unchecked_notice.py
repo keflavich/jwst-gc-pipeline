@@ -99,6 +99,55 @@ def test_stamped_table_is_silent(tmp_path, capsys):
     assert "[genlock]" not in capsys.readouterr().out
 
 
+def _base_column_writers(path):
+    """Lines in ``path`` that ASSIGN into a ``base_*`` table column.
+
+    AST, not text.  Two rounds of text matching got this wrong in opposite
+    directions:
+
+    * an ``A or (B and C)`` precedence slip let any double-quoted writer on a
+      line also containing the substring ``COLUMNS`` -- in a trailing comment,
+      even -- pass, so the guard went GREEN on a live writer;
+    * exempting only ``#`` lines meant a DOCSTRING mentioning ``base_calver``
+      reddened it, i.e. the guard forbade the repo from describing the column
+      in prose;
+    * and the most idiomatic stamper of all,
+      ``tbl[f'base_{col}'] = gen[key]``, never spells the literal, so both
+      ``git grep`` and the text walk missed the very shape the note calls the
+      likely home for step 2 of #269.
+
+    An assignment is a syntactic thing, so ask the parser.  Comments,
+    docstrings and the mapping itself are invisible to it for free.
+    """
+    import ast
+    try:
+        tree = ast.parse(path.read_text(errors="replace"))
+    except SyntaxError:
+        return []
+    hits = []
+
+    def _is_base_key(node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value.startswith("base_")
+        if isinstance(node, ast.JoinedStr):          # f"base_{col}"
+            head = node.values[0] if node.values else None
+            return (isinstance(head, ast.Constant)
+                    and isinstance(head.value, str)
+                    and head.value.startswith("base_"))
+        return False
+
+    for node in ast.walk(tree):
+        targets = []
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+            targets = [node.target]
+        for t in targets:
+            if isinstance(t, ast.Subscript) and _is_base_key(t.slice):
+                hits.append(node.lineno)
+    return hits
+
+
 def test_generation_columns_note_matches_reality():
     """The comment claimed the tie builders write base_calver.  Nothing in
     PRODUCTION does -- that claim is why the strong layer read as implemented.
@@ -107,36 +156,62 @@ def test_generation_columns_note_matches_reality():
     branch before `git add` was invisible, and the whole-file self-exclusion of
     `unified_alignment.py` meant a writer added to that file -- the most likely
     home for a stamper, right beside `_GENERATION_COLUMNS` -- was invisible
-    too.  Walk the tree instead, and exclude only the comment LINES that
-    legitimately name the column.
+    too.  It also made the test red in a container with no git on PATH, since
+    `subprocess.run` raises FileNotFoundError before any returncode exists.
+    Walk the tree and parse it instead.
     """
     import pathlib
     repo = pathlib.Path(ua.__file__).resolve().parents[2]
     here = pathlib.Path(__file__).name
     # The package AND scripts/ -- a stamper could as easily be a script.
-    # No `git grep`: it sees only TRACKED files, so this went green on any
-    # branch where the writer had not been `git add`ed yet, and it made the
-    # test red in a container with no git on PATH (subprocess.run raises
-    # FileNotFoundError before any returncode is available).
     sources = [f for d in ("jwst_gc_pipeline", "scripts")
                for f in sorted((repo / d).rglob("*.py"))]
+    # The ONE known writer, and finding it is why this became an AST walk.
+    # `seed_offsets_table_from_consensus` does stamp `row[f"base_{k}"]` -- but
+    # only when its `base_stamp_for` argument is not None, and NO caller in the
+    # repo passes it.  So the strong generation check is dormant because it is
+    # never ARMED, which is a different and more precise statement than
+    # "nothing writes these columns", and neither `git grep` nor the text walk
+    # could see it: the f-string never spells the literal.
+    KNOWN = {"jwst_gc_pipeline/photometry/astrometry_checkpoint.py"}
     writers = []
     for f in sources:
         if f.name == here or "tests" in f.parts:
             continue
-        for lineno, line in enumerate(f.read_text().splitlines(), 1):
-            if "base_calver" not in line:
-                continue
-            # The dormant-layer note and the mapping itself name the column on
-            # purpose.  Everything else is a writer.
-            if line.lstrip().startswith("#") or line.lstrip().startswith("#:"):
-                continue
-            if "('calver', 'base_calver')" in line or '"base_calver"' in line and "COLUMNS" in line:
-                continue
-            writers.append(f"{f.relative_to(repo)}:{lineno}: {line.strip()}")
+        rel = f.relative_to(repo).as_posix()
+        if rel in KNOWN:
+            continue
+        for lineno in _base_column_writers(f):
+            writers.append(f"{rel}:{lineno}")
     assert not writers, (
-        "something now writes base_calver -- the dormant-layer note in "
-        f"_GENERATION_COLUMNS needs updating: {writers}")
+        "something now writes a base_* generation stamp -- the dormant-layer "
+        f"note in _GENERATION_COLUMNS needs updating: {writers}")
+
+
+def test_the_one_known_base_stamp_writer_is_still_unarmed():
+    """The allowlist entry above is not a pardon.
+
+    `seed_offsets_table_from_consensus` writes the stamps, so the moment any
+    caller passes `base_stamp_for` the dormant `_assert_generation_row` layer
+    goes LIVE on real tables -- which is a behaviour change nobody is
+    currently expecting.  Pin the arming, not the writing.
+    """
+    import pathlib
+    import re as _re
+    repo = pathlib.Path(ua.__file__).resolve().parents[2]
+    callers = []
+    for d in ("jwst_gc_pipeline", "scripts"):
+        for f in sorted((repo / d).rglob("*.py")):
+            if "tests" in f.parts:
+                continue
+            for lineno, line in enumerate(
+                    f.read_text(errors="replace").splitlines(), 1):
+                if _re.search(r"base_stamp_for\s*=\s*(?!None)", line):
+                    callers.append(f"{f.relative_to(repo)}:{lineno}: {line.strip()}")
+    assert not callers, (
+        "something now ARMS base_stamp_for, so _assert_generation_row is no "
+        f"longer dormant -- the note and this PR's premise need updating: "
+        f"{callers}")
 
 
 def test_strict_refuses_every_time_not_once_per_process(tmp_path, monkeypatch):
@@ -199,3 +274,22 @@ def test_both_genlock_gates_share_one_convention():
     src = inspect.getsource(ua)
     assert "os.environ.get('GENLOCK_ALLOW_MISMATCH') == '1'" not in src
     assert "_strict_env('GENLOCK_ALLOW_MISMATCH')" in src
+
+
+def test_the_notice_names_the_TABLE_not_just_its_basename(tmp_path, monkeypatch):
+    """brick and cloudc emit an identical line for two different tables when
+    the notice prints only the basename, in a change whose whole subject is
+    log legibility.  Reverting to `os.path.basename` survived the battery."""
+    monkeypatch.delenv("GENLOCK_STRICT", raising=False)
+    ua._GENLOCK_UNCHECKED_REPORTED.clear()
+    sub = tmp_path / "brick" / "offsets"
+    sub.mkdir(parents=True)
+    locked = str(sub / "Offsets_JWST_Brick2221_VIRAC2locked.csv")
+    import io
+    import contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        ua._check_generation(_frame(tmp_path), _table_without_stamps(), locked)
+    out = buf.getvalue()
+    assert locked in out, out
+    assert os.sep in out.split("offsets table ")[1].split(" carries")[0], out

@@ -543,9 +543,18 @@ def _check_generation(fn, offsets_tbl, locked_tbl):
 
 
 #: Generation stamp columns, as ``(table column suffix, generation_stamp key)``.
-#: **No PRODUCTION code in this repository writes these columns.**  A grep for
-#: ``base_calver`` finds this comment and the tests that pin it, and no writer
-#: anywhere, so :func:`_assert_generation_row` --
+#: **No offsets table in this repository is written WITH these columns.**  The
+#: writer exists -- ``astrometry_checkpoint.seed_offsets_table_from_consensus``
+#: stamps ``row[f"base_{k}"]`` -- but only when its ``base_stamp_for`` argument
+#: is not None, and no caller anywhere passes it.  So the layer is dormant
+#: because it is never ARMED, not because nothing can write it.
+#:
+#: An earlier wording here said a grep for ``base_calver`` finds only this
+#: comment.  That was false in a way three successive text-matching guards
+#: could not see, because the writer is an f-string and never spells the
+#: literal; ``test_generation_columns_note_matches_reality`` parses the tree
+#: now, and ``test_the_one_known_base_stamp_writer_is_still_unarmed`` pins the
+#: arming rather than the writing.  :func:`_assert_generation_row` --
 #: the strong generation check -- is DORMANT on every field, and
 #: :func:`_check_generation` says so once per table.  The earlier wording here
 #: claimed "the tie builders write ``base_calver``"; they do not, and that
