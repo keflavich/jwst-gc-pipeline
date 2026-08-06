@@ -91,11 +91,42 @@ def test_keeps_long_detectors():
     assert _drop_module_level_duplicates(fns, "f405n", "m2", "nrcb") == fns
 
 
-def test_long_detector_does_not_supersede_its_bare_module():
-    """`nrcalong` is not a numbered SW detector, so a bare `nrca` catalog has
-    nothing superseding it and must be kept."""
+def test_long_detector_supersedes_its_bare_module():
+    """Issue #298: for an LW filter `nrcalong` IS the detector, so a bare
+    `nrca` catalog can only be the SAME detector written by a run invoked
+    `--modules nrca`.  Keeping both ingests one physical frame twice under two
+    module tokens, and the m2 checkpoint then writes offsets rows under both --
+    which `unified_alignment._read_consensus` resolves to two rows for one
+    frame and refuses to reduce.
+
+    This test previously asserted the opposite.  The reasoning it encoded --
+    "a bare nrca must not be dropped on the strength of an LW catalog with no
+    SW per-detector catalog behind it" -- cannot arise: this function sees ONE
+    filter's catalogs and a filter is imaged by one channel, so a SW filter's
+    glob never contains `nrcalong`.  What that reasoning genuinely protects is
+    covered by test_keeps_bare_module_when_it_is_the_only_one.
+    """
     fns = [_name(det="nrca", filt="f405n"), _name(det="nrcalong", filt="f405n")]
+    kept = _drop_module_level_duplicates(fns, "f405n", "m2", "nrca")
+    assert all("_nrca_visit" not in os.path.basename(f) for f in kept)
+    assert len(kept) == 1
+
+
+def test_long_detector_supersedes_only_its_own_module():
+    """`nrcblong` must not drop a bare `nrca`."""
+    fns = [_name(det="nrca", filt="f405n"), _name(det="nrcblong", filt="f405n")]
     assert _drop_module_level_duplicates(fns, "f405n", "m2", "nrca") == fns
+
+
+def test_cloudef_f360m_shape_is_resolved():
+    """The exact input set that produced issue #298: 8 stale bare-module
+    catalogs beside 16 `long` ones."""
+    fns = ([_name(det="nrcb", filt="f360m", exp=i) for i in range(1, 9)]
+           + [_name(det="nrcblong", filt="f360m", exp=i) for i in range(1, 9)]
+           + [_name(det="nrcalong", filt="f360m", exp=i) for i in range(1, 9)])
+    kept = _drop_module_level_duplicates(fns, "f360m", "m2", "merged")
+    assert len(kept) == 16
+    assert not any("_nrcb_visit" in os.path.basename(f) for f in kept)
 
 
 def test_bare_module_dropped_only_for_its_own_module():

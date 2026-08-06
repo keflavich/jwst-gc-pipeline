@@ -1903,3 +1903,29 @@ def test_the_zero_pair_message_says_matching_failure_not_sparsity(tmp_path):
     assert "not sparsity" in src
     # and it is reached only when n_pairs is 0
     assert "if npairs == 0:" in src
+def test_consensus_writer_refuses_an_aliasing_module_pair(tmp_path):
+    """Issue #298: the same frame under `nrcb` and `nrcblong` resolves to TWO
+    rows at read time, so it must not be written."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        seed_offsets_table_from_consensus)
+    corr = [dict(visit="1", exposure=1, module=m, filtername="F360M",
+                 vgroup="02101", dra_onsky_mas=3.0, ddec_onsky_mas=-2.0,
+                 dec_deg=DEC_TEST, source="m2 visit-consensus")
+            for m in ("nrcb", "nrcblong")]
+    with pytest.raises(OffsetsTableUpdateError, match="aliasing module"):
+        seed_offsets_table_from_consensus(str(tmp_path), "2092", "002", corr,
+                                          stage="m2")
+
+
+def test_consensus_writer_allows_distinct_detectors_of_one_module(tmp_path):
+    """`nrcb3` and `nrcb4` share a family but alias nothing -- a per-detector
+    table must still be writable."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        seed_offsets_table_from_consensus)
+    corr = [dict(visit="1", exposure=1, module=m, filtername="F212N",
+                 vgroup="02101", dra_onsky_mas=3.0, ddec_onsky_mas=-2.0,
+                 dec_deg=DEC_TEST, source="m2 visit-consensus")
+            for m in ("nrcb1", "nrcb2", "nrcb3", "nrcb4")]
+    path = seed_offsets_table_from_consensus(str(tmp_path), "2092", "002",
+                                             corr, stage="m2")
+    assert len(Table.read(path)) == 4

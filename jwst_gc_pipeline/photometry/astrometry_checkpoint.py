@@ -1445,6 +1445,38 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
             raise OffsetsTableUpdateError(
                 f"consensus table {os.path.basename(out_path)} has duplicate "
                 f"(visit,filter,exposure,module) rows: {dups}")
+        # A family COLLISION is as fatal as an exact duplicate and the exact-key
+        # check above cannot see it: ('...','F360M',1,'nrcb','2101') and
+        # ('...','F360M',1,'nrcblong','2101') are distinct keys, but
+        # unified_alignment._read_consensus resolves a frame through
+        # _module_variants, which maps nrcblong -> {nrcblong, nrcb}, so BOTH
+        # match one frame and it refuses to reduce the field (issue #298).
+        # Refuse to WRITE that table -- the alternative is discovering it hours
+        # later, on another field's iteration, with no way to tell which row is
+        # right.  The upstream cause is a stale bare-module per-frame catalog
+        # ingested alongside its `long` counterpart; this is the backstop.
+        # Only a BARE family token aliases.  _module_variants(frame) is
+        # {frame, frame-without-digits, frame-without-long}, so a frame
+        # `nrcb3` matches rows `nrcb3` and `nrcb`, and a frame `nrcblong`
+        # matches `nrcblong` and `nrcb` -- but `nrcb3` and `nrcb4` match
+        # nothing of each other's.  Grouping by family alone would flag every
+        # legitimate per-detector table.
+        fam = {}
+        for k in keys:
+            fam.setdefault((k[0], k[1], k[2], _module_family(k[3]), k[4]),
+                           set()).add(k[3])
+        alias = sorted({(f, tuple(sorted(mods))) for f, mods in fam.items()
+                        if len(mods) > 1 and any(m == f[3] for m in mods)})
+        if alias:
+            raise OffsetsTableUpdateError(
+                f"consensus table {os.path.basename(out_path)} would carry the "
+                f"SAME frame under aliasing module spellings, which "
+                f"unified_alignment resolves to both rows and refuses to read: "
+                f"{alias[:5]}{'...' if len(alias) > 5 else ''} "
+                f"({len(alias)} collision(s)).  This means the checkpoint "
+                f"ingested one physical exposure twice under two module "
+                f"tokens -- check for stale bare-module per-frame catalogs "
+                f"next to their `long` counterparts (issue #298).")
         big = [(k, r["dra (arcsec)"], r["ddec (arcsec)"]) for k, r in zip(keys, rows)
                if abs(float(r["dra (arcsec)"])) > 0.5 or abs(float(r["ddec (arcsec)"])) > 0.5]
         if big:
