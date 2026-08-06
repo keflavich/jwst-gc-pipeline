@@ -94,12 +94,29 @@ _GENLOCK_UNCHECKED_REPORTED = set()
 
 
 def _strict_env(name):
-    """``GENLOCK_STRICT=0``/``false`` must not enable strict mode.
+    """Is the refusal gate ``name`` enabled?
 
-    ``os.environ.get(name)`` is truthy for the string ``"0"``; the sibling gate
-    at :540 correctly compares against ``'1'``.
+    ``os.environ.get(name)`` is truthy for the string ``"0"``, so a bare
+    truthiness test enabled strict mode for ``GENLOCK_STRICT=0``.
+
+    An UNRECOGNISED value raises rather than falling back to off.  This gate
+    exists to refuse; reading ``GENLOCK_STRICT=2`` or ``=strict`` as "disabled"
+    turns a typo into a silently skipped check, which is the failure mode the
+    gate is for.  (The bare-truthiness form it replaces would at least have
+    enabled it.)
     """
-    return str(os.environ.get(name, '')).strip().lower() in ('1', 'true', 'yes', 'on')
+    raw = os.environ.get(name)
+    if raw is None:
+        return False
+    val = str(raw).strip().lower()
+    if val in ('1', 'true', 'yes', 'on'):
+        return True
+    if val in ('', '0', 'false', 'no', 'off'):
+        return False
+    raise RuntimeError(
+        f"{name}={raw!r} is not a recognised on/off value.  Refusing to guess: "
+        f"this is a gate, and reading an unparseable value as 'off' would skip "
+        f"a check silently.  Use 1/true/yes/on or 0/false/no/off.")
 
 
 @dataclass(frozen=True)
@@ -507,8 +524,10 @@ def _check_generation(fn, offsets_tbl, locked_tbl):
                 f"no base_* generation stamps, so the tie is applied WITHOUT a "
                 f"generation check: nothing verifies that the correction was "
                 f"solved on the same WCS generation as the frames it is being "
-                f"applied to.  Rebuild the table with a stamping builder to get "
-                f"a real check (GENLOCK_STRICT=1 to refuse instead).")
+                f"applied to.  NOTHING in this repository writes those "
+                f"columns today, so there is no builder to rebuild with and "
+                f"GENLOCK_STRICT=1 refuses every field rather than enabling a "
+                f"check -- see the note on _GENERATION_COLUMNS.")
         # STRICT must refuse EVERY time.  Memoising before the raise made it
         # refuse at most once per table per process, so anything that caught
         # and retried proceeded silently -- the memo is for the WARNING, which
@@ -555,7 +574,7 @@ def _assert_generation_row(fn, row, frame_gen, offsets_tbl):
             f"{mismatch} (base vs frame). Applying it would stack a stale "
             f"correction on a moved frame. Rebuild the VIRAC2locked table on THIS "
             f"generation (GENLOCK_ALLOW_MISMATCH=1 to override).")
-    if os.environ.get('GENLOCK_ALLOW_MISMATCH') == '1':
+    if _strict_env('GENLOCK_ALLOW_MISMATCH'):
         print("WARNING (override): " + gmsg, flush=True)
     else:
         raise RuntimeError(gmsg)

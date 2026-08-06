@@ -149,3 +149,31 @@ def test_the_docstring_does_not_describe_the_removed_check():
     doc = ua._check_generation.__doc__ or ""
     assert "mtime fallback used when" not in doc
     assert "nothing checks it" in doc or "says so" in doc
+
+
+@pytest.mark.parametrize("value", ["2", "strict", "yes please", "TRUE!"])
+def test_an_unparseable_gate_value_raises_rather_than_disabling(tmp_path, monkeypatch, value):
+    """The bare-truthiness form this replaced would at least have ENABLED
+    strict on `GENLOCK_STRICT=2`.  Reading it as 'off' turns a typo into a
+    silently skipped check, which is what the gate is for."""
+    monkeypatch.setenv("GENLOCK_STRICT", value)
+    with pytest.raises(RuntimeError, match="not a recognised on/off value"):
+        ua._check_generation(_frame(tmp_path), _table_without_stamps(),
+                             str(tmp_path / "tbl.csv"))
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("1", True), ("true", True), ("YES", True), ("on", True),
+    ("0", False), ("false", False), ("no", False), ("off", False), ("", False)])
+def test_recognised_gate_values(value, expected, monkeypatch):
+    monkeypatch.setenv("GENLOCK_STRICT", value)
+    assert ua._strict_env("GENLOCK_STRICT") is expected
+
+
+def test_both_genlock_gates_share_one_convention():
+    """Two parsers in one file is how `GENLOCK_ALLOW_MISMATCH=true` silently
+    fails to override."""
+    import inspect
+    src = inspect.getsource(ua)
+    assert "os.environ.get('GENLOCK_ALLOW_MISMATCH') == '1'" not in src
+    assert "_strict_env('GENLOCK_ALLOW_MISMATCH')" in src
