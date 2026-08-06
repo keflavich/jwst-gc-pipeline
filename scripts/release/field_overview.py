@@ -352,7 +352,22 @@ CSS = """
                   border-radius:4px; border:1px solid var(--border);
                   background:transparent; color:inherit; }
 .ov-live button:hover { border-color:var(--muted); }
-.ov-aladin { position:absolute; inset:0; }
+/* Aladin's OWN stylesheet loads (from aladin.js) after this one and contains
+   `.aladin-container{position:relative}` -- it puts that class on whatever
+   element it is handed.  Equal specificity (0,1,0), later in the cascade, so it
+   WINS: the host stops being absolutely positioned, `inset:0` degrades to plain
+   relative offsets that size nothing, and since every canvas Aladin puts inside
+   is itself absolutely positioned the div computes to height 0.  In the
+   inspector that reads as a 0-tall box with no rule mentioning `height`
+   anywhere, which is exactly what it looked like.
+   So the geometry that matters is set INLINE in `build()`, where no later
+   stylesheet can reach it, and `.ov-stage` is given an explicit pixel height so
+   that a percentage has a definite containing block to resolve against (it is
+   otherwise `height:auto`, sized by the intrinsic ratio of the inline SVG, and
+   a percentage against `auto` is itself `auto` -- i.e. 0 again).
+   These declarations are kept as the documented intent, and as the fallback for
+   an Aladin build that does not claim the container. */
+.ov-aladin { position:absolute; inset:0; width:100%; height:100%; }
 .ov-surveys { display:inline-flex; flex-wrap:wrap; gap:.3rem; margin-left:.6rem; }
 .ov-surveys[hidden] { display:none; }
 .ov-surveys button { font-size:.75rem; padding:.15rem .5rem; }
@@ -463,6 +478,9 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
   var host = null;
   var switchSeq = 0;              // a later click supersedes an in-flight one
   var READY_POLL_MS = 400, READY_TRIES = 25;     // ~10 s for a canvas to appear
+  var MIN_STAGE_PX = 240;         // never hand Aladin a container worth nothing
+  var MIN_CANVAS_PX = 64;         // below this the view exists but is unusable
+  var svg = stage.querySelector('svg');
   var lastGlobalError = null;
   var SWITCH_POLL_MS = 500, SWITCH_TRIES = 16;   // ~8 s for a HiPS to appear
   function teardown() {{
@@ -472,7 +490,18 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
     // the status line claims the map is unaffected.
     if (host && host.parentNode) {{ host.parentNode.removeChild(host); }}
     host = null;
+    // and give the stage its height back to the SVG, or a pinned pixel height
+    // outlives the map it was pinned for and the panel keeps a dead gap.
+    stage.style.height = '';
   }}
+  // The pinned height is a snapshot; the SVG is `width:100%` so its intrinsic
+  // height tracks the viewport. Without this the map keeps its load-time size
+  // and either overflows or leaves a band of background after a resize.
+  window.addEventListener('resize', function () {{
+    if (!host || !svg) {{ return; }}
+    var h = Math.round(svg.getBoundingClientRect().height);
+    stage.style.height = Math.max(h, MIN_STAGE_PX) + 'px';
+  }});
   function fail(msg) {{
     teardown();
     status.textContent = msg;
@@ -483,7 +512,23 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
     if (typeof A === 'undefined') {{ fail('Aladin Lite did not load.'); return; }}
     host = document.createElement('div');
     host.className = 'ov-aladin';
+    // Inline, and in pixels, because Aladin's stylesheet beats the class rule
+    // (see the CSS comment): a class-only host lands in flow at height 0. The
+    // stage is `height:auto` off the SVG's intrinsic ratio, so pin the height it
+    // currently has -- the map keeps the size the static panel already had.
+    var measured = Math.round(stage.getBoundingClientRect().height);
+    stage.style.height = Math.max(measured, MIN_STAGE_PX) + 'px';
+    host.style.position = 'absolute';
+    host.style.top = '0';
+    host.style.left = '0';
+    host.style.width = '100%';
+    host.style.height = '100%';
     stage.appendChild(host);
+    // Flush layout before construction. Aladin measures the container ONCE, as
+    // it is built; reading a height the browser has not laid out yet gives it 0
+    // and it falls back to a 1-pixel canvas -- which would then satisfy any
+    // "is there a canvas" check while showing nothing.
+    void host.offsetHeight;
     var aladin = A.aladin(host, {{
       survey: data.surveys[0].id, projection: 'AIT', cooFrame: 'galactic',
       target: 'galactic 0 0', fov: 1.8, showReticle: false,
@@ -516,12 +561,28 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
     var readyTries = 0;
     (function awaitCanvas() {{
       var canvas = host && host.querySelector && host.querySelector('canvas');
-      if (canvas && canvas.width > 0 && canvas.height > 0) {{ finish(); return; }}
+      // NOT merely "> 0": handed a container it measured as zero, Aladin builds
+      // a 1-pixel fallback canvas.  That passes a non-zero test, so the panel
+      // would report "loaded" for a view zero pixels tall -- the reported
+      // symptom, and the reason this check did not catch it.  Require the
+      // canvas to be laid out at a size a person could use.
+      var box = canvas && canvas.getBoundingClientRect
+        ? canvas.getBoundingClientRect() : null;
+      if (canvas && canvas.width > 1 && canvas.height > 1
+          && box && box.height >= MIN_CANVAS_PX && box.width >= MIN_CANVAS_PX) {{
+        finish(); return;
+      }}
       if (++readyTries > READY_TRIES) {{
         var why = lastGlobalError ? ' (' + lastGlobalError + ')' : '';
-        if (window.console) {{ console.error('ov: aladin never rendered', lastGlobalError); }}
-        fail('The interactive view could not start in this browser' + why
-             + '. Aladin Lite needs WebGL2. The map above is unaffected.');
+        if (window.console) {{
+          console.error('ov: aladin never rendered', lastGlobalError,
+                        'canvas', canvas, 'box', box);
+        }}
+        fail(canvas
+             ? ('The interactive view rendered with no usable size' + why
+                + '. The map above is unaffected.')
+             : ('The interactive view could not start in this browser' + why
+                + '. Aladin Lite needs WebGL2. The map above is unaffected.'));
         return;
       }}
       setTimeout(awaitCanvas, READY_POLL_MS);
