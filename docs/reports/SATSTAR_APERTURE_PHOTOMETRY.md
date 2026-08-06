@@ -56,8 +56,9 @@ fast). Opt out with `SATSTAR_APERTURE_PHOT=0`. The extra `aper_*` columns are
 stripped by `replace_saturated`'s existing column reconciliation, so the merged
 photometry table is unchanged (aperture flux lives with the satstar catalog). A
 failed/empty measurement is non-fatal (a bad mosaic, missing SCI, or SVO outage
-is caught) and an all-NaN result is **not** cached, so it is retried rather than
-frozen as a false success.
+is caught) and an all-NaN result has its aperture columns **dropped** — on both
+the cache-hit and the rebuild path — so the catalog looks "not measured" and the
+measurement is retried rather than frozen as a false success.
 
 > Caveat (shared-filter fields): where one filter is imaged by two proposals
 > (e.g. NGC 6334 F200W/F470N, jw06778 + jw07213), both merged mosaics are found

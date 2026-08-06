@@ -301,11 +301,13 @@ def measure_aperture_photometry(catalog, i2d_paths, filtername=None,
             as AstroqueryTimeoutError
         try:
             zp = _vega_zeropoint_jy(filtername)
-        except (KeyError, IndexError, ValueError, RequestException,
-                InvalidQueryError, AstroqueryTimeoutError) as ex:
-            # unknown filter (KeyError/IndexError), or SVO down/slow
-            # (RequestException / astroquery InvalidQueryError / TimeoutError):
-            # cost only the Vega magnitude, keep the aperture flux.
+        except (KeyError, IndexError, ValueError, ConnectionError,
+                RequestException, InvalidQueryError, AstroqueryTimeoutError) as ex:
+            # unknown filter (KeyError/IndexError), or SVO down/slow (builtin
+            # ConnectionError / RequestException / astroquery InvalidQueryError /
+            # TimeoutError): cost only the Vega magnitude, keep the aperture flux.
+            # (ConnectionError is caught HERE, not by the outer guard, so an SVO
+            # outage keeps the flux regardless of which error flavour it raises.)
             log.warning(f"aperture_photometry: Vega zeropoint lookup failed for "
                         f"{filtername} ({type(ex).__name__}); mag_vega will be NaN")
     flux = best['flux_jy']
@@ -316,32 +318,55 @@ def measure_aperture_photometry(catalog, i2d_paths, filtername=None,
 
     # A saturated/masked core, or an aperture that clipped a mosaic edge/NaN, makes
     # the aperture flux a LOWER LIMIT (the PSF fit's flux_fit is the trustworthy
-    # value for those).  Expose that as an explicit validity flag rather than
-    # shipping a silently-deficient number.
-    valid = (~best['core_sat']) & (best['cov'] >= 0.98) & np.isfinite(flux) & (flux > 0)
+    # value for those).  Require ~COMPLETE coverage: even a handful of masked
+    # pixels in the aperture bias the flux low (measured: cov in [0.98,0.998]
+    # carries a ~1 mag deficit), so the validity threshold is 0.999, i.e. "no
+    # masked pixels", not merely "mostly covered".
+    _COV_VALID = 0.999
+    valid = ((~best['core_sat']) & (best['cov'] >= _COV_VALID)
+             & np.isfinite(flux) & (flux > 0))
+    _vnote = (f'aperture flux is a trustworthy measurement (not core-saturated, '
+              f'coverage>={_COV_VALID} i.e. no masked pixels, finite positive); '
+              f'False = LOWER LIMIT (use PSF flux_fit instead)')
 
     cat['aper_flux_jy'] = Column(
         flux, unit=u.Jy,
         description='i2d circular-aperture flux (bkg-sub, primary radius); RAW, '
                     'NOT aperture-corrected; a LOWER LIMIT where aper_flux_valid '
                     'is False (masked/saturated core or incomplete coverage)')
-    cat['aper_flux_valid'] = Column(
-        valid, description='aperture flux is a trustworthy measurement '
-        '(not core-saturated, coverage>=0.98, finite positive); False = lower limit')
-    cat['aper_flux_err_jy'] = Column(best['flux_err_jy'], unit=u.Jy)
-    cat['aper_mag_vega'] = Column(mag_vega, unit=u.mag)
-    cat['aper_mag_ab'] = Column(mag_ab, unit=u.mag)
+    cat['aper_flux_valid'] = Column(valid, description=_vnote)
+    cat['aper_flux_err_jy'] = Column(
+        best['flux_err_jy'], unit=u.Jy,
+        description='1-sigma error on aper_flux_jy from the mosaic ERR extension')
+    cat['aper_mag_vega'] = Column(
+        mag_vega, unit=u.mag,
+        description='Vega mag from aper_flux_jy (SVO ZeroPoint); RAW, not '
+                    'aperture-corrected; LOWER LIMIT / brighter-biased where '
+                    'aper_flux_valid is False')
+    cat['aper_mag_ab'] = Column(
+        mag_ab, unit=u.mag,
+        description='AB mag from aper_flux_jy (ABMAG_OFFSET=8.90); RAW, not '
+                    'aperture-corrected; follows aper_flux_valid (see aper_flux_jy)')
     cat['aper_bkg'] = Column(best['bkg'], unit=u.MJy / u.sr,
                              description='annulus local sky (per pixel)')
-    cat['aper_area_frac'] = Column(best['cov'],
-                                   description='finite-pixel fraction in primary aperture')
+    cat['aper_area_frac'] = Column(
+        best['cov'],
+        description='finite-pixel fraction in the primary aperture (1.0 = no '
+                    'masked pixels); drives aper_flux_valid')
     cat['aper_core_saturated'] = Column(best['core_sat'],
                                         description='central pixel NaN/masked in mosaic')
-    cat['aper_i2d'] = Column(np.array([str(s) for s in best_i2d]))
+    cat['aper_i2d'] = Column(np.array([str(s) for s in best_i2d]),
+                             description='mosaic the measurement was taken from')
     for r in radii_arcsec:
         tag = _rtag(r)
-        cat[f'aper_flux_jy_r{tag}'] = Column(best[f'cog_{tag}'], unit=u.Jy)
-        cat[f'aper_area_frac_r{tag}'] = Column(best[f'cov_{tag}'])
+        cat[f'aper_flux_jy_r{tag}'] = Column(
+            best[f'cog_{tag}'], unit=u.Jy,
+            description=f'curve-of-growth aperture flux at r={r}" (bkg-sub, RAW); '
+                        f'trustworthy only where aper_area_frac_r{tag}>=0.999 and '
+                        f'not aper_core_saturated (no per-radius validity flag)')
+        cat[f'aper_area_frac_r{tag}'] = Column(
+            best[f'cov_{tag}'],
+            description=f'finite-pixel fraction in the r={r}" aperture')
 
     cat.meta['APER_RAD'] = str(list(radii_arcsec))
     cat.meta['APER_PRIM'] = float(primary_radius_arcsec)

@@ -262,3 +262,35 @@ def test_is_science_mosaic_positive_matcher():
     assert ap._is_science_mosaic(good[2], 'f405n', inst)
     for b in bad:
         assert not ap._is_science_mosaic(b, f, inst), b
+
+
+def test_zeropoint_failure_keeps_flux(tmp_path, monkeypatch):
+    # an SVO outage must cost only mag_vega, not the aperture flux
+    from astroquery.exceptions import InvalidQueryError
+
+    def _boom(filt):
+        raise InvalidQueryError("SVO down")
+    monkeypatch.setattr(ap, '_vega_zeropoint_jy', _boom)
+    path, w = _make_i2d(tmp_path, [(100, 100)], [500.0])
+    cat = _catalog(w, [(100, 100)])
+    out = ap.measure_aperture_photometry(cat, [path], filtername='f200w')
+    assert np.isfinite(float(out['aper_flux_jy'][0]))        # flux kept
+    assert not np.isfinite(float(out['aper_mag_vega'][0]))   # mag_vega NaN
+    assert np.isfinite(float(out['aper_mag_ab'][0]))         # AB needs no zeropoint
+
+
+def test_all_nan_drops_aperture_columns(tmp_path):
+    # a valid mosaic but off-footprint positions -> all-NaN -> columns DROPPED so
+    # nothing (cache-hit OR rebuild path) persists a false success
+    from jwst_gc_pipeline.photometry import merge_catalogs as mc
+    base = str(tmp_path / 'faketarget')
+    pipe = f'{base}/F200W/pipeline'
+    import os
+    os.makedirs(pipe, exist_ok=True)
+    path, w = _make_i2d(tmp_path, [(100, 100)], [500.0])
+    os.replace(path, f'{pipe}/jw09999-o001_t001_nircam_clear-f200w-merged_i2d.fits')
+    off = w.pixel_to_world(5000, 5000)          # far outside the 200x200 mosaic
+    cat = Table({'skycoord_fit': SkyCoord([off.ra], [off.dec])})
+    out = mc._ensure_satstar_aperture_photometry(cat, 'f200w', 'faketarget',
+                                                 base, cache_path=None)
+    assert not ap.has_aperture_columns(out)      # dropped, not a false success

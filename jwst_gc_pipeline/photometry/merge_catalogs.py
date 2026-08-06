@@ -1864,14 +1864,19 @@ def _ensure_satstar_aperture_photometry(cat, filtername, target, basepath,
     cat = _apphot.add_aperture_photometry(cat, filtername, target, basepath)
     if not _apphot.has_aperture_columns(cat):
         return cat
-    # Do NOT persist an all-NaN result as if it succeeded: if every aperture flux
-    # is NaN (e.g. the mosaic footprint does not overlap the catalog, or a WCS
-    # mismatch), leave the cache alone so the measurement is retried next time
-    # rather than frozen as a false success.
+    # Do NOT persist an all-NaN result as if it succeeded.  DROP the aperture
+    # columns entirely when every aperture flux is NaN (mosaic footprint does not
+    # overlap the catalog, or a WCS mismatch): this makes the result identical to
+    # "not measured", so whichever path writes the cache (this function's
+    # cache_path branch OR the rebuild path in load_satstar_catalog, which calls
+    # us with cache_path=None and writes the cache itself) stores a catalog
+    # WITHOUT aper columns, and the measurement is retried next time rather than
+    # frozen as a false success.
     import numpy as _np
     if not _np.any(_np.isfinite(_np.asarray(cat['aper_flux_jy'], float))):
         print(f"aperture photometry for {target}/{filtername} is all-NaN "
-              f"(no mosaic overlap?); not caching so it will be retried")
+              f"(no mosaic overlap?); dropping aperture columns so it is retried")
+        cat.remove_columns([c for c in cat.colnames if c.startswith('aper_')])
         return cat
     if cache_path is not None:
         try:
