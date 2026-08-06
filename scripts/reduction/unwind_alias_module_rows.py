@@ -213,10 +213,21 @@ def main():
         # run above and now, and removing rows by INDEX from a stale read would
         # delete the wrong ones.
         current = Table.read(args.table)
-        if len(current) != len(tbl):
+        # Compare the IDENTITY of every row, not just the count.  A concurrent
+        # writer that substituted a row -- update_offsets_table upserts in
+        # place, so a correction changes a row without changing the length --
+        # would pass a length check, and we drop rows by INDEX.
+        def _ident(t):
+            cols = [c for c in REQUIRED_COLUMNS if c in t.colnames]
+            return [tuple(str(r[c]) for c in cols) for r in t]
+
+        if len(current) != len(tbl) or _ident(current) != _ident(tbl):
             raise SystemExit(
-                f'{args.table} changed under us ({len(tbl)} -> {len(current)} '
-                f'rows) between analysis and write; re-run.')
+                f'{args.table} changed under us between analysis and write '
+                f'({len(tbl)} -> {len(current)} rows; row identities '
+                f'{"differ" if len(current) == len(tbl) else "and count differ"}). '
+                f'Rows are removed by index, so acting on the stale read would '
+                f'delete the wrong ones.  Re-run.')
         backup = f'{args.table}.pre_unwind298_{stamp}'
         keep_a_copy(args.table, backup)
         receipt_path = f'{args.table}.unwind298_{stamp}.json'

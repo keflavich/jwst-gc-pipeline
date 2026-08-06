@@ -208,3 +208,27 @@ def test_no_lock_file_is_left_behind(tmp_path):
     sys.argv = ["x", p, "--apply"]
     uw.main()
     assert not list(tmp_path.glob("*.lock")), list(tmp_path.glob("*.lock"))
+
+
+def test_a_same_length_substitution_is_refused(tmp_path, monkeypatch):
+    """update_offsets_table upserts IN PLACE, so a concurrent correction
+    changes a row without changing the length.  A length-only check would pass
+    it, and we drop rows by index."""
+    import sys
+    p = _write(tmp_path, _table([("nrcb", 1, "02101", 0.011),
+                                 ("nrcblong", 1, "02101", -0.007)]))
+    real_read = uw.Table.read
+    calls = {"n": 0}
+
+    def _substituting_read(path, *a, **k):
+        t = real_read(path, *a, **k)
+        calls["n"] += 1
+        if calls["n"] == 2:                     # the read under the lock
+            t["Exposure"][0] = 7                # same length, different row
+        return t
+
+    monkeypatch.setattr(uw.Table, "read", staticmethod(_substituting_read))
+    sys.argv = ["x", p, "--apply"]
+    with pytest.raises(SystemExit, match="changed under us"):
+        uw.main()
+    assert not list(tmp_path.glob("*.pre_unwind298_*")), "must refuse before writing"
