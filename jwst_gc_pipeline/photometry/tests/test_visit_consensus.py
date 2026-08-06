@@ -780,3 +780,53 @@ def test_restrict_radius_is_tight_enough_to_be_same_star():
     assert default.to(u.arcsec).value <= 0.3, default
     assert vc.RESTRICT_MIN_SURVIVAL >= 0.5
     assert vc.RESTRICT_MAX_TIE_MAS <= 100.0
+
+
+def test_the_tie_precondition_alone_refuses_a_displaced_star_list():
+    """Pins the PRECONDITION, not just the outcome.  A star list that is the
+    right stars but the wrong sky must be refused by the tie check even though
+    the survival fraction would be fine if it were pre-aligned."""
+    from jwst_gc_pipeline.photometry.visit_consensus import (
+        RESTRICT_MAX_TIE_MAS, _restrict_to_same_stars)
+    import astropy.units as u
+    ra, dec = _field(n=400)
+    ref = build_visit_consensus(
+        [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)],
+        context="m2")["coords"]
+    shifted = SkyCoord(ref.ra + (3 * RESTRICT_MAX_TIE_MAS / 3.6e6 / COSD) * u.deg,
+                       ref.dec, frame="icrs")
+    mask, why = _restrict_to_same_stars(ref, shifted, 0.15 * u.arcsec)
+    assert mask is None and "tie to the m2 star list" in why, why
+
+
+def test_the_survival_floor_alone_refuses_a_chance_match():
+    """Pins the SURVIVAL floor.  An unrelated list over the same footprint
+    ties fine at zero offset and must still be refused."""
+    from jwst_gc_pipeline.photometry.visit_consensus import _restrict_to_same_stars
+    import astropy.units as u
+    ra, dec = _field(n=400)
+    ref = build_visit_consensus(
+        [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)],
+        context="m2")["coords"]
+    # 20% real stars (so the tie IS found -- they give a clean peak) plus 80%
+    # unrelated ones.  cloudef's shape: a list that ties but does not match.
+    rng = np.random.default_rng(31337)
+    n_real = len(ref) // 5
+    mixed = SkyCoord(
+        np.concatenate([ref.ra.deg[:n_real],
+                        RA0 + rng.uniform(0, 90.0, len(ref)) / 3600.0 / COSD]) * u.deg,
+        np.concatenate([ref.dec.deg[:n_real],
+                        DEC0 + rng.uniform(0, 90.0, len(ref)) / 3600.0]) * u.deg)
+    mask, why = _restrict_to_same_stars(ref, mixed, 0.15 * u.arcsec)
+    assert mask is None, (mask if mask is None else mask.sum(), why)
+    assert "matched the m2 list" in why, why
+
+
+def test_gate_membership_uses_the_unrestricted_count():
+    """Pins the fix for the 🔴: keying on the restricted count let a displaced
+    exposure LEAVE the gate instead of failing it."""
+    import inspect
+    from jwst_gc_pipeline.photometry import visit_consensus as vc
+    src = inspect.getsource(vc.build_visit_consensus)
+    assert 'e["n_reliable_unrestricted"] >= min_stars' in src, (
+        "usable_idx must key on the unrestricted count")

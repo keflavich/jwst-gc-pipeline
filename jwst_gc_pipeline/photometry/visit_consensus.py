@@ -306,7 +306,8 @@ def _mutual_match_mask(coords, reference, radius):
     return mask
 
 
-def _restrict_to_same_stars(coords, reference, radius, context=""):
+def _restrict_to_same_stars(coords, reference, radius, context="",
+                            reference_tree=None):
     """``(mask, reason)`` -- the same-star restriction, or a refusal.
 
     NOT an ad-hoc nearest-neighbour association.  ``match_to_catalog_sky`` here
@@ -331,7 +332,12 @@ def _restrict_to_same_stars(coords, reference, radius, context=""):
     """
     if reference is None or len(reference) == 0 or len(coords) == 0:
         return None, "no reference star list"
-    tie = measure_offset(coords, reference, sweep=True,
+    # The KD tree over the m2 star list is built ONCE per consensus build and
+    # reused: measure_offset's plain path rebuilds trees on both lists every
+    # call, and against a 130k-star m2 list called once per exposure that
+    # dominated the cost (cloudc F182M: 0.19s of matching became 14.7s, x77).
+    tie = measure_offset(coords, reference_tree if reference_tree is not None
+                         else reference, sweep=True,
                          sweep_windows=PER_EXPOSURE_SWEEP_WINDOWS,
                          context=f"{context} same-star precondition")
     if tie is None or not tie.get("ok"):
@@ -405,6 +411,8 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
             f"visit consensus ({context}): need >= {min_exposures} exposures, "
             f"got {len(exposure_tables)}")
 
+    _restrict_tree = (KDTreeReference(restrict_to)
+                      if restrict_to is not None and len(restrict_to) else None)
     entries = []
     for tbl in exposure_tables:
         keep = select_reliable_stars(tbl, snr_min=snr_min, qfit_max=qfit_max)
@@ -440,7 +448,12 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
             # full set and is reported, never silently applied.
             mask, restrict_refused = _restrict_to_same_stars(
                 coords, restrict_to, restrict_radius,
-                context=f"{context} {exposure_key(tbl)}")
+                context=f"{context} {exposure_key(tbl)}",
+                reference_tree=_restrict_tree)
+            if restrict_refused:
+                print(f"astrom consensus [{context}] {exposure_key(tbl)}: "
+                      f"same-star restriction REFUSED, using the full star "
+                      f"set -- {restrict_refused}", flush=True)
             if mask is not None:
                 coords = coords[mask]
                 _flux_idx = mask

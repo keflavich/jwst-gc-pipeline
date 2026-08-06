@@ -2241,7 +2241,20 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                 # uninteresting.  `restricted` is the count entering the tie,
                 # `unrestricted` what this stage detected before the m2 star
                 # list was applied.
-                same_star_gate=bool(m2_stars is not None),
+                # What ACTUALLY happened, not whether a star list was found.
+                # `m2_stars is not None` was true whenever a catalog existed,
+                # so on cloudef the record asserted the same-star gate ran
+                # against 40,124 stars while it was refused for all 16
+                # exposures -- the record stated the opposite of the run.
+                same_star_gate=(
+                    "applied" if (m2_stars is not None and any(
+                        not e.get("restrict_refused") for e in cons["exposures"]))
+                    else ("refused" if m2_stars is not None else "unavailable")),
+                same_star_refused=[
+                    dict(key=list(e["key"]), reason=e["restrict_refused"])
+                    for e in cons["exposures"] if e.get("restrict_refused")],
+                n_same_star_refused=int(sum(
+                    1 for e in cons["exposures"] if e.get("restrict_refused"))),
                 n_reliable_restricted=int(sum(
                     e["n_reliable"] for e in cons["exposures"])),
                 n_reliable_unrestricted=int(sum(
