@@ -59,8 +59,12 @@ ALLOWLIST = {
     # delta the experiment measures.  Tracked on #154; allowlisted here because
     # the call site is a deliberate fallback, not a SIP-first astrometry read.
     "jwst_gc_pipeline/astrometry_gdc/gdc_wcs.py",
-    # (fits_wcs_sync.py and audit_fits_gwcs_agreement.py were here; both stopped
-    # building a SIP WCS and were removed by test_allowlist_has_no_dead_entries)
+    # writes/verifies the SIP header against the GWCS -- reads SIP on purpose.
+    # NB _SIP_WCS does not currently MATCH this file: it builds
+    # `awcs.WCS(header, relax=True)` at :217, with no 'SCI' token on the line.
+    # "the regex stopped matching" is not "the file stopped reading SIP", which
+    # is why there is no dead-entry test on this guard.
+    "jwst_gc_pipeline/reduction/fits_wcs_sync.py",
     # all astrometry here goes through frame_wcs; the one remaining
     # WCS(fh['SCI'].header, relax=True) is the no-GWCS FALLBACK of the
     # SCI->PRIMARY header copy, whose primary path is sync_header_to_gwcs.
@@ -136,20 +140,6 @@ def test_no_sip_wcs_for_frame_astrometry():
         "If the file genuinely reads an i2d mosaic (rectified, no SIP) or must "
         "read the SIP header on purpose, add it to ALLOWLIST with a justification."
     )
-
-
-def test_allowlist_has_no_dead_entries():
-    """An entry that no longer trips is rot.  The NN-median guard's list was
-    half dead when this check was added to it; keep this one from going the
-    same way."""
-    dead = []
-    for rel in sorted(ALLOWLIST):
-        p = REPO_ROOT / rel
-        if p.is_file() and not _SIP_WCS.search(p.read_text(errors="replace")):
-            dead.append(rel)
-    assert not dead, (
-        "ALLOWLIST entries that no longer build a SIP WCS (remove them):\n  "
-        + "\n  ".join(dead))
 
 
 def test_allowlist_entries_exist():
