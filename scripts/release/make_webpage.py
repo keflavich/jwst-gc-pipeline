@@ -20,10 +20,12 @@ import argparse
 import collections
 import html
 import json
+import os
 import shutil
 import urllib.parse
 from pathlib import Path
 
+import curated_images
 import field_overview
 import release_freshness
 import make_preview_rgb
@@ -198,9 +200,35 @@ def _preview_caption(stem, field):
     return (f"{obs.upper()} - " if obs else "") + (label or stem)
 
 
+def web_jpeg(src, dest, max_px=2200):
+    """Web-sized JPEG of a curated PNG, composited onto black (they carry alpha).
+
+    Skipped when the destination is newer than the source -- these renders are
+    13-147 MB and rebuilding them every page build costs minutes for no change.
+    """
+    from PIL import Image
+    Image.MAX_IMAGE_PIXELS = None
+    if dest.is_file() and dest.stat().st_mtime >= os.path.getmtime(src):
+        return dest
+    img = Image.open(src)
+    if img.mode in ("RGBA", "LA", "P"):
+        img = img.convert("RGBA")
+        flat = Image.new("RGB", img.size, (0, 0, 0))
+        flat.paste(img, mask=img.split()[-1])
+        img = flat
+    else:
+        img = img.convert("RGB")
+    scale = min(1.0, max_px / img.width, max_px / img.height)
+    if scale < 1.0:
+        img = img.resize((max(1, round(img.width * scale)),
+                          max(1, round(img.height * scale))), Image.LANCZOS)
+    img.save(dest, format="JPEG", quality=88, progressive=True)
+    return dest
+
+
 def render_field_page(field, manifest, preview_rel, preview_channels=None,
                       all_versions=None, preview_version=None, previews=(),
-                      superseded=(), reasons=None):
+                      superseded=(), reasons=None, curated=()):
     # A staged image whose SOURCE has since been quarantined as bad-astrometry
     # must not be presented as this field's astrometry. It is withheld from the
     # page, and the withholding is stated -- the point of the release is to be
@@ -242,11 +270,16 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
 
     if withheld_bands or withheld_obs:
         kept = [(rel, stem) for rel, stem in previews if _keep_preview(stem)]
-        if len(kept) != len(previews):
+        if len(kept) != len(previews) and not curated:
             # `assets/<field>.jpg` is a byte COPY of previews[0], so dropping
             # that render from the gallery does not stop it being the page's
             # headline image and the index card's thumbnail.  Re-point at a
             # survivor; only an empty survivor list means no picture at all.
+            #
+            # Skipped when the field has a CURATED image: there `preview_rel` is
+            # the curated render, which has already been through its own
+            # (observation-keyed) withholding upstream, and re-pointing it at a
+            # generated preview would demote the better picture.
             preview_rel = kept[0][0] if kept else None
         previews = kept
     images = [f for f in files if f["category"] == "image"]
@@ -311,6 +344,18 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
 
     multi = any(f.get("observation") for f in files)
 
+    if curated:
+        out.append("<p class=muted>Curated colour images -- the published "
+                   "renders. Tuned stretches, channels chosen far apart, and "
+                   "each program combined with itself.</p>")
+        out.append("<div class=previews>")
+        for rel, cap in curated:
+            out.append(f"<figure><img class=preview src='{html.escape(rel)}' "
+                       f"loading=lazy alt='{html.escape(field)} {html.escape(cap)}'>"
+                       f"<figcaption class=muted>{html.escape(cap)}</figcaption>"
+                       f"</figure>")
+        out.append("</div>")
+
     if preview_rel:
         # Attribute the preview's version whenever it is not this page's. The
         # fallback exists so a re-stage does not blank the card, but "the same
@@ -325,6 +370,11 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
         # multi-pointing field, and cannot carry more than three of the bands a
         # field like sgrb2 ships -- so a single preview silently hid both the
         # other pointings and most of the wavelengths.
+        if previews and curated:
+            out.append("<p class=muted style='margin-top:1.5rem'>Automatically "
+                       "generated previews, one per pointing and enough wavelength "
+                       "combinations that every released band appears in at least "
+                       f"one.{html.escape(provenance)}</p>")
         if len(previews) > 1:
             out.append(f"<p class=muted>{len(previews)} colour previews: one per "
                        f"pointing, and enough wavelength combinations that every "
@@ -683,10 +733,32 @@ def main(argv=None):
                 if v != latest:
                     print(f"  {field}: no preview in {latest}, using {v}'s")
                 break
+        # Curated images first -- the published renders, better than anything the
+        # planner makes. They are independent products, so the superseded-source
+        # withholding (which is about staged mosaics) does not apply to them.
+        curated_items = []
+        for entry in curated_images.for_field(field):
+            dest = assets / f"curated_{entry['stem']}.jpg"
+            try:
+                web_jpeg(entry["file"], dest)
+            except (OSError, ValueError) as err:
+                print(f"  {field}: could not prepare {entry['stem']}: {err}")
+                continue
+            curated_items.append((f"assets/{dest.name}", curated_images.caption(entry)))
+        for gone in curated_images.missing(field):
+            print(f"  {field}: curated image listed but not on disk: "
+                  f"{os.path.basename(gone)}")
+
         preview_items = []
-        if previews:
-            shutil.copy2(previews[0], assets / f"{field}.jpg")
+        if curated_items:
+            # the front page shows the beautified image, not a generated one
+            shutil.copy2(assets / os.path.basename(curated_items[0][0]),
+                         assets / f"{field}.jpg")
             preview_rel = f"assets/{field}.jpg"
+        if previews:
+            if not curated_items:
+                shutil.copy2(previews[0], assets / f"{field}.jpg")
+                preview_rel = f"assets/{field}.jpg"
             parts = previews[0].stem.split("_rgb_")
             if len(parts) == 2 and parts[1].count("_") == 2:
                 preview_channels = [c.upper() for c in parts[1].split("_")]
@@ -727,6 +799,7 @@ def main(argv=None):
             page = render_field_page(field, manifest, preview_rel, preview_channels,
                                      superseded=stale_files,
                                      reasons=stale_reasons,
+                                     curated=curated_items,
                                      all_versions=versions,
                                      preview_version=preview_version,
                                      previews=preview_items)
