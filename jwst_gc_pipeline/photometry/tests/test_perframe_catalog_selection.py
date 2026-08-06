@@ -161,7 +161,7 @@ def test_the_drop_is_reported(capsys):
     _drop_foreign_obs_duplicates(_mixed_gc2211(), "_o023", "f200w", "m2",
                                  "nrcb", "gc2211")
     out = capsys.readouterr().out
-    assert "excluded 3 foreign-observation per-frame catalog(s)" in out
+    assert "excluded 3 of 4 foreign-observation per-frame catalog(s)" in out
     assert "o046" in out and "o050" in out and "<untokened>" in out
     assert "_o023" in out
 
@@ -178,7 +178,7 @@ def test_checkpoint_passes_its_own_token_to_the_filter(tmp_path, capsys):
         types.SimpleNamespace(cutout_region="", proposal_id="2211",
                               field="023", target="gc2211"), {}, context="test")
     out = capsys.readouterr().out
-    assert "excluded 2 foreign-observation per-frame catalog(s)" in out
+    assert "excluded 2 of 2 foreign-observation per-frame catalog(s)" in out
     # nothing of this observation is left, so the checkpoint cannot run -- it
     # must say so rather than measure the neighbours.
     assert "NO per-frame catalogs matched" in out

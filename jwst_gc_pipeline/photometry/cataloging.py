@@ -3533,19 +3533,34 @@ def _resolved_obsid(options):
     returned.
     """
     from jwst_gc_pipeline import fields as _freg
-    field = getattr(options, 'field', None)
-    if field not in (None, ''):
-        return str(field)
     target = getattr(options, 'target', None)
     proposal = getattr(options, 'proposal_id', None)
-    if not target or not proposal:
-        return None
-    known = _freg.BY_NAME.get(str(target))
-    obs = known.observation(str(proposal)) if known is not None else None
-    if obs is None:
-        return None
+    known = _freg.BY_NAME.get(str(target)) if target else None
+    obs = known.observation(str(proposal)) if (known is not None and proposal) else None
     modules = str(getattr(options, 'modules', '') or '').lower()
     instrument = 'miri' if 'mirimage' in modules else 'nircam'
+    field = getattr(options, 'field', None)
+    if field not in (None, ''):
+        # VALIDATE it.  `--field` was taken verbatim, and
+        # `submit_cataloging.sbatch:63` is `FIELD=${FIELD:-012}` -- so a typo
+        # or a stale default produced a `want` that matches nothing on disk,
+        # and the new consequence of that is a silently emptied m2 gate (at
+        # m1/m12/m2 `if not fns:` only prints) or a fatal m5.  An obsid this
+        # target does not have cannot be this run's, so refuse to use it and
+        # keep everything -- a bad `--field` is harmless again.
+        if obs is None:
+            return str(field)          # unregistered target: nothing to check against
+        allowed = ({str(o) for o in obs.obsids.get(instrument, ())}
+                   | {str(j) for j in obs.joint_obsids.get(instrument, ())})
+        if allowed and str(field) not in allowed:
+            print(f"astrom checkpoint: --field {field!r} is not an obsid of "
+                  f"{target}/{proposal} {instrument} ({sorted(allowed)}); "
+                  f"NOT using it to identify this run's per-frame catalogs "
+                  f"(keeping them all).", flush=True)
+            return None
+        return str(field)
+    if obs is None:
+        return None
     joint = obs.joint_obsids.get(instrument, ())
     if joint:
         return str(joint[0]) if len(joint) == 1 else None
@@ -3567,13 +3582,16 @@ def _catalog_source_frame(fn):
     stage.  ``FILENAME`` lives in the ext-1 header, so the rows are never
     needed.  ``.ecsv`` has no such split and falls back to the full read.
 
-    A catalog a killed job left zero-length is the routine failure here, and
-    the two readers raise differently for it: ``fits.getheader`` an
-    ``OSError``, ``Table.read`` an ``IORegistryError`` (it cannot even guess
-    the format).  Both are named; the caller treats "unreadable" as KEEP.
+    A catalog a killed job left zero-length is the routine failure here.
+    Measured, because the obvious guess is wrong: a zero-length ``.fits``
+    raises ``OSError`` from ``fits.getheader`` and never reaches ``Table.read``
+    at all, and a zero-length ``.ecsv`` -- which does -- raises
+    ``InconsistentTableError``, a ``ValueError`` subclass already covered.  An
+    earlier version of this docstring had it the other way round and named
+    ``IORegistryError``, which is unreachable from here.  The caller treats
+    "unreadable" as KEEP.
     """
     from astropy.io import fits
-    from astropy.io.registry import IORegistryError
     if fn.endswith(('.fits', '.fit', '.fits.gz')):
         try:
             return str(fits.getheader(fn, ext=1).get('FILENAME') or '') or None
@@ -3582,7 +3600,7 @@ def _catalog_source_frame(fn):
     try:
         from astropy.table import Table
         return str(Table.read(fn).meta.get('FILENAME') or '') or None
-    except (OSError, ValueError, KeyError, IORegistryError):
+    except (OSError, ValueError, KeyError):
         return None
 
 
@@ -3635,6 +3653,7 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
     # them risks a consensus quietly built from half the detectors.
     shared = n_obs > 1
     drop = []
+    want = None
     if shared:
         # More than one observation of this field images this filter, so a
         # pre-token basename cannot say which one wrote it FROM ITS NAME.
@@ -3663,7 +3682,22 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
         # 8 frames and build the consensus from the other observation's.  The
         # resolution lives in `_resolved_obsid`, which returns None rather than
         # choose.
-        want = f"_o{str(target_obs)}_" if target_obs else None
+        # A JOINT obsid is a SET of observations, not a string.  sgrb2's MIRI
+        # is registered `002-998` and sickle's `001-002`, and `_resolved_obsid`
+        # hands the joint token straight through -- but no crf is ever named
+        # `_o002-998_`; the real names are `_o002_` and `_o998_`.  Tested as a
+        # single substring, `want` matched nothing and every file was dropped:
+        # sgrb2 F770W 60 -> 0, sickle F770W 60 -> 0, silent at m2 and
+        # AstrometryRegressionError at m5, on release-path fields.  That is the
+        # exact failure the comment above records for the consensus-token
+        # variant, reached through a different door.  Decompose and test
+        # MEMBERSHIP.
+        # The joint spelling itself is kept in the set as well: `_SRC_OBS_RE`
+        # accepts `_o002-998_`, so if a product ever IS named that way it
+        # must not be read as foreign to the very run it belongs to.
+        want = ({f"_o{str(target_obs)}_"}
+                | {f"_o{p}_" for p in str(target_obs).split('-') if p}
+                if target_obs else None)
 
         def _identity(base):
             m = _OBS_TOKEN_RE.search(base)
@@ -3695,7 +3729,7 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
                 # one non-crf source name away from biting.
                 m_src = _SRC_OBS_RE.search(os.path.basename(src))
                 if want and m_src:
-                    if m_src.group(0) != want:
+                    if m_src.group(0) not in want:
                         drop.append(fn)
                     continue
                 if want:
@@ -3765,6 +3799,15 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
         foreign = sorted({(_OBS_TOKEN_RE.search(os.path.basename(f)).group(1)
                            if _OBS_TOKEN_RE.search(os.path.basename(f))
                            else '<untokened>') for f in drop})
+        # Say WHAT WAS DEMANDED and how much of the input it cost.  The line
+        # used to name only the filename token, so the loudest failure -- every
+        # catalog dropped -- was silent about its own cause: an operator saw
+        # "excluded 60 ... (['<untokened>'])" with no way to tell that `want`
+        # was a joint token that can never appear in a crf name.  The
+        # unreadable-provenance KEEP path already prints a specific message;
+        # this is the same courtesy on the path that actually removes data.
+        demanded = (f"; this run demanded {sorted(want)}"
+                    if shared and want else "")
         why = ("this run is "
                f"{('_' + token) if token else '<untokened>'}, and the "
                "obs-blind glob matches every observation in the directory"
@@ -3773,8 +3816,14 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
                "the same exposures under their pre-token name")
         noun = "foreign-observation" if shared else "duplicate"
         print(f"astrom checkpoint [{merge_label}] {filt}/{module}: excluded "
-              f"{len(drop)} {noun} per-frame catalog(s) ({foreign}) -- {why}",
-              flush=True)
+              f"{len(drop)} of {len(fns)} {noun} per-frame catalog(s) "
+              f"({foreign}){demanded} -- {why}", flush=True)
+        if shared and len(drop) == len(fns):
+            print(f"astrom checkpoint [{merge_label}] {filt}/{module}: that is "
+                  f"EVERY catalog.  A frozen-stage gate with no inputs is a "
+                  f"silently disabled gate, not a pass -- check that "
+                  f"--field/target_obs names an observation these frames were "
+                  f"actually taken in.", flush=True)
     drop = set(drop)
     return [fn for fn in fns if fn not in drop]
 
