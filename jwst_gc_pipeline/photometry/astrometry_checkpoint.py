@@ -2190,6 +2190,7 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
 
     filters = []
     failures = []
+    unverified = []   # measured nothing -- reported, never a pass on its own
     if anchor_tie is not None:
         if not anchor_tie["vs_full"] or not anchor_tie["vs_full"].get("ok"):
             failures.append(f"anchor {anchor_filter}: no coherent tie to the reference")
@@ -2261,7 +2262,24 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                           f"by chance, |J| {field['gradient_mas_per_arcmin']:.2f} "
                           f"mas/arcmin) -- MEASUREMENT ONLY, not a gate",
                           flush=True)
-                if local["n_flagged"]:
+                if not local["n_cells"]:
+                    # An EMPTY map is not a clean one.  At GC densities a
+                    # `cell_arcsec` cell holds ~1 star against `cell_min_stars`,
+                    # so local_residual_map skips every cell and returns
+                    # n_cells = 0 -- and reading only `n_flagged` below then
+                    # scores that as a pass.  An injection sweep on Brick
+                    # geometry never trips this gate at ANY amplitude up to
+                    # 30 mas/arcmin for exactly that reason (issue #296).
+                    # Report it as UNVERIFIED, not as a failure: the map
+                    # measured nothing, which is a coverage fact about the
+                    # field, not evidence of a misalignment.
+                    unverified.append(
+                        f"{fctx}: local {cell_arcsec}\" cell map is EMPTY "
+                        f"({local['n_cells']} cells; every cell held fewer "
+                        f"than {cell_min_stars} matched stars) -- this filter "
+                        f"pair got NO local check at all, and a pass here is "
+                        f"silence rather than a verified result")
+                elif local["n_flagged"]:
                     worst = max((c for c in local["cells"] if c["flagged"]),
                                 key=lambda c: c["off_mas"])
                     failures.append(
@@ -2277,6 +2295,7 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                   anchor_filter=anchor_filter,
                   anchor_reference_tie=_jsonable(anchor_tie),
                   filters=filters, failures=failures, passed=passed,
+                  unverified=unverified, all_verified=not unverified,
                   tolerances=dict(crossfilter_tol_mas=tol_mas,
                                   local_cell_tol_mas=cell_tol_mas,
                                   local_cell_size_arcsec=cell_arcsec,
@@ -2285,6 +2304,8 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                                   field_min_stars=field_min_stars))
     if record_dir:
         _write_record(record_dir, "checkpoint_m7_crossfilter", record)
+    for w in unverified:
+        print(f"ASTROM CROSSFILTER UNVERIFIED: {w}", flush=True)
     if failures:
         msg = ("CROSS-FILTER ASTROMETRY FAILURE --\n  " + "\n  ".join(failures))
         if _env_flag("ALLOW_CROSSFILTER_ASTROM_FAIL"):

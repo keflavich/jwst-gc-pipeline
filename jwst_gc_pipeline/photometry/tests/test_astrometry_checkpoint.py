@@ -1715,3 +1715,36 @@ def test_reader_prefers_exact_filter_over_all(tmp_path):
                                {"dra_mas": 1.0, "ddec_mas": 2.0, "apply_ok": True}}]})
     baseline, _ = _m2_reference_tie_baseline(str(tmp_path), "F212N", "001")
     assert baseline == (1.0, 2.0)                          # exact filter wins
+
+
+def test_crossfilter_empty_cell_map_is_unverified_not_clean(tmp_path):
+    """A cell map that returns NO cells must not score as a clean one.
+
+    At GC densities a 2" cell holds ~1 star against LOCAL_CELL_MIN_STARS = 10,
+    so local_residual_map skips every cell; reading only n_flagged then scores
+    that silence as a pass, and an injection sweep on Brick geometry never
+    trips the gate at any amplitude (issue #296).
+    """
+    cats = _crossfilter_catalogs(n=400, extent=300.0)   # ~0 stars per 2" cell
+    record = run_crossfilter_checkpoint(cats, record_dir=str(tmp_path),
+                                        cell_arcsec=2.0, cell_min_stars=10,
+                                        context="test")
+    frec = [f for f in record["filters"]
+            if f["filtername"] != record["anchor_filter"]][0]
+    assert frec["local"]["n_cells"] == 0, frec["local"]
+    assert not record["all_verified"]
+    assert any("EMPTY" in w for w in record["unverified"]), record["unverified"]
+    # it is not a FAILURE -- an unmeasurable map is a coverage fact
+    assert record["passed"], record["failures"]
+
+
+def test_crossfilter_populated_cell_map_stays_verified(tmp_path):
+    cats = _crossfilter_catalogs(n=20000, extent=60.0)
+    record = run_crossfilter_checkpoint(cats, record_dir=str(tmp_path),
+                                        cell_arcsec=10.0, cell_min_stars=15,
+                                        context="test")
+    frec = [f for f in record["filters"]
+            if f["filtername"] != record["anchor_filter"]][0]
+    assert frec["local"]["n_cells"] > 0
+    assert record["all_verified"], record["unverified"]
+    assert record["passed"]
