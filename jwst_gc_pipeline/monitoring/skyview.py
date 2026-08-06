@@ -7,7 +7,10 @@ pipeline monitor is about the JWST survey and the Roman geometry is context.
 
 Three JWST layers, deliberately separate:
 
-* **planned NIRCam** -- the prime instrument's 8 SW detectors per pointing;
+* **planned NIRCam** -- one outline per pointing, covering that pointing's whole
+  primary dither pattern.  The eight detectors are not drawn separately: the
+  gaps between them are exactly what FULLBOX exists to fill, so eight outlines
+  would advertise holes the observation does not leave;
 * **planned MIRI** -- the coordinated parallel, which lands ~7.5' away from the
   prime and so covers *different sky*.  Drawing it in the NIRCam colour would
   suggest the survey covers a contiguous area it does not;
@@ -60,15 +63,28 @@ COLOR_MIRI_PLANNED = '#a78bfa'
 COLOR_OBSERVED = '#4ade80'
 COLOR_SPRING = '#1E90FF'
 COLOR_AUTUMN = '#FF8C00'
-COLOR_TARGET_AREA = '#ff6b6b'
+COLOR_ACES = '#ff6b6b'
 
-#: Backgrounds worth having here.  The survey's own imagery first.
+#: Backgrounds worth having here.  The first is the one the view opens on, so it has to be all-sky.  The survey's
+#: own imagery is a CMZ-only HiPS (``hips_initial_fov`` 0.077 deg, no tiles below
+#: order ~8); opening on it at a 1.6 deg field showed a black rectangle, because
+#: there is nothing there to draw at that scale.  It is worth having, but as a
+#: choice you zoom into, not as the default.
+#:
+#: IDs checked against the CDS MOCServer rather than copied: ``P/DSS2/color``,
+#: ``P/2MASS/color`` and ``P/allWISE/color`` resolve (to ``CDS/P/...``), but
+#: ``P/Spitzer/GLIMPSE360`` matches nothing at all -- that button named a HiPS
+#: that has never existed under that ID.  GLIMPSE360 is served by IPAC.
+#:
+#: The third element is an optional note for the reader: the CMZ mosaic has no
+#: tiles below order 8, so it is blank until you are zoomed in past ~10'.
 SURVEYS = (
-    ('JWST CMZ', 'https://starformation.astro.ufl.edu/avm_images/jwst_cmz_hips/'),
-    ('DSS', 'P/DSS2/color'),
-    ('2MASS', 'P/2MASS/color'),
-    ('WISE', 'P/allWISE/color'),
-    ('GLIMPSE', 'P/Spitzer/GLIMPSE360'),
+    ('DSS', 'P/DSS2/color', ''),
+    ('2MASS', 'P/2MASS/color', ''),
+    ('GLIMPSE', 'IPAC/P/GLIMPSE360', ''),
+    ('WISE', 'P/allWISE/color', ''),
+    ('JWST CMZ', 'https://starformation.astro.ufl.edu/avm_images/jwst_cmz_hips/',
+     'the survey mosaic — zoom in past ~10′ for it to appear'),
 )
 
 
@@ -91,7 +107,13 @@ CSS = """
 .gcm-sky-wrap { position: relative; height: 560px; border-radius: 3px;
                 overflow: hidden; border: 1px solid var(--rule);
                 background: #05080a; }
-#gcm-aladin { position: absolute; inset: 0; }
+/* Explicit dimensions, not just `inset: 0`.  Aladin measures its container at
+   construction and falls back to a 1px-tall canvas when it reads zero -- which
+   is what a container that was `display: none` a moment earlier can still
+   report, since the class change had not been through layout yet.  A height it
+   can read unconditionally, plus a frame's delay before construction (see
+   `start`), removes both halves of that. */
+#gcm-aladin { position: absolute; inset: 0; width: 100%; height: 100%; }
 .gcm-sky-ui { position: absolute; top: 8px; right: 8px; z-index: 10; width: 208px;
               background: rgba(10,16,20,.86); color: #dfe9ec;
               border: 1px solid rgba(255,255,255,.13); border-radius: 4px;
@@ -546,10 +568,15 @@ def _reframe_polys(polys, frame_name):
 
 
 def _roman_polys(roman):
-    """``(spring, autumn, target)`` polygon lists from the Roman GBTDS file."""
-    spring, autumn, target = [], [], []
+    """``(spring, autumn)`` polygon lists from the Roman GBTDS file.
+
+    ``target_area`` in that file is the **JWST** target area, not a Roman layer;
+    it was offered under the Roman heading, where it read as Roman context and
+    was simply mislabelled.  It is not drawn.
+    """
+    spring, autumn = [], []
     if not isinstance(roman, dict):
-        return spring, autumn, target
+        return spring, autumn
     tiles = roman.get('tiles')
     if isinstance(tiles, dict):
         for tile in tiles.values():
@@ -557,9 +584,7 @@ def _roman_polys(roman):
                 continue
             spring.extend(tile.get('spring') or [])
             autumn.extend(tile.get('autumn') or [])
-    if roman.get('target_area'):
-        target.append(roman['target_area'])
-    return spring, autumn, target
+    return spring, autumn
 
 
 def _plain_layer(frame, polys, color, fill_opacity, layer_id, label, width=1.2):
@@ -649,16 +674,18 @@ def static_map(footprints, roman=None, frame_name=DEFAULT_FRAME):
     # Roman is drawn here too, not only in the interactive view. It used to be
     # Aladin-only, which made its three toggles do nothing at all until someone
     # loaded 1.8 MB of script -- they looked like live buttons and were not.
-    spring_p, autumn_p, target_p = _roman_polys(roman)
-    n_roman = len(spring_p) + len(autumn_p) + len(target_p)
-    reframed = _reframe_polys(spring_p + autumn_p + target_p, frame_name)
+    spring_p, autumn_p = _roman_polys(roman)
+    aces_p = [[tuple(v[:2]) for v in poly if len(v) >= 2]
+              for poly in (footprints.get('aces') or [])]
+    n_roman = len(spring_p) + len(autumn_p)
+    reframed = _reframe_polys(spring_p + autumn_p + aces_p, frame_name)
     spring = _plain_layer(frame, reframed[:len(spring_p)], COLOR_SPRING, '.05',
                           'stat-spring', 'Roman GBTDS spring')
     autumn = _plain_layer(frame, reframed[len(spring_p):len(spring_p) + len(autumn_p)],
                           COLOR_AUTUMN, '.05', 'stat-autumn', 'Roman GBTDS autumn')
-    target = _plain_layer(frame, reframed[len(spring_p) + len(autumn_p):],
-                          COLOR_TARGET_AREA, '0', 'stat-target',
-                          'JWST target area', width=2.0)
+    aces = _plain_layer(frame, reframed[len(spring_p) + len(autumn_p):],
+                        COLOR_ACES, '.04', 'stat-aces', 'ACES coverage',
+                        width=1.6)
 
     # The HUD is rendered at zoom 1 here so it exists without JavaScript, and
     # rewritten by the viewer's zoom handler: the bar has to stay a real angular
@@ -688,10 +715,11 @@ def static_map(footprints, roman=None, frame_name=DEFAULT_FRAME):
            'role="group" aria-label="Survey footprints on the sky, %s">'
            '<g id="gcm-sky-pan">%s%s%s%s%s%s%s%s%s</g>%s</svg>'
            % (_num(frame.width), _num(frame.height), _esc(axes),
-              ''.join(grid), ''.join(gal), spring, autumn, target,
+              ''.join(grid), ''.join(gal), spring, autumn, aces,
               nircam, miri, obs_n, obs_m, hud))
     info = {'n_nircam': n_nircam, 'n_miri': n_miri,
             'n_observed': n_obs_n + n_obs_m, 'n_roman': n_roman,
+            'n_aces': len(aces_p),
             'width': frame.width, 'height': frame.height,
             'scale': frame.scale,          # SVG user units per degree
             'frame': frame_name, 'axes': axes,
@@ -720,23 +748,38 @@ def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
                + (f' (program allows {lo:.0f}–{hi:.0f}°)'
                   if lo is not None and hi is not None else ''))
     dither = footprints.get('dither') or {}
+    dithered = any(p.get('dithered')
+                   for p in (footprints.get('planned') or [])
+                   if isinstance(p, dict))
     dither_note = ''
     if dither.get('PrimaryDitherType'):
-        dither_note = (
-            f" Each pointing dithers "
-            f"({'/'.join(dither.get('PrimaryDitherType', []))}"
-            f"{', ' + '/'.join(dither.get('PrimaryDithers', [])) if dither.get('PrimaryDithers') else ''})"
-            f" and only the nominal position is drawn — the real covered area is"
-            f" a little larger, and a FULLBOX pattern exists precisely to fill"
-            f" the inter-module gap the outline shows as a hole.")
+        pattern = ('/'.join(dither.get('PrimaryDitherType', []))
+                   + (' ' + '/'.join(dither.get('PrimaryDithers', []))
+                      if dither.get('PrimaryDithers') else ''))
+        if dithered:
+            dither_note = (
+                f" Each outline is one pointing's <em>whole</em>"
+                f" {_esc(pattern)} dither pattern rather than a single"
+                f" exposure. That pattern is what fills the ~41″ gap between the"
+                f" two NIRCam modules and the gaps between detectors, so drawing"
+                f" the eight detectors separately would advertise holes the"
+                f" observation does not leave.")
+        else:
+            dither_note = (
+                f" Each pointing dithers ({_esc(pattern)}) but only the nominal"
+                f" position is drawn, so the covered area is larger than these"
+                f" outlines.")
 
     observed_cls = 'gcm-sky-empty' if not n_observed else ''
 
-    surveys = ''.join(
-        f'<button class="gcm-sky-btn survey{" on" if i == 0 else ""}" disabled '
-        f'title="interactive view only" '
-        f'data-survey="{_esc(url)}">{_esc(name)}</button>'
-        for i, (name, url) in enumerate(SURVEYS))
+    def _survey_button(index, name, url, note):
+        title = f' title="{_esc(note)}"' if note else ''
+        return (f'<button class="gcm-sky-btn survey'
+                f'{" on" if index == 0 else ""}"{title} '
+                f'data-survey="{_esc(url)}">{_esc(name)}</button>')
+
+    surveys = ''.join(_survey_button(i, *entry)
+                      for i, entry in enumerate(SURVEYS))
 
     static_svg, static_info = static_map(footprints, roman, frame_name)
     if not static_svg:
@@ -754,7 +797,7 @@ def section(footprints, roman=None, aladin_src=ALADIN_LOCAL,
                  % (spec['lon_label'], spec['lat_label'],
                     (', %s/%s dashed' % (other['lon_label'], other['lat_label']))
                     if static_info.get('overlay_grid') else ''))
-    spring_p, autumn_p, _target_p = _roman_polys(roman)
+    spring_p, autumn_p = _roman_polys(roman)
     n_spring, n_autumn = len(spring_p), len(autumn_p)
     # Enough zoom-out to reach the Roman tiles, which sit outside the JWST
     # bounding box that sets the home view; a little more when they are absent
@@ -770,10 +813,8 @@ prime and so covers <em>different sky</em>, which is why it is drawn separately.
 {_esc(pa_note)} — not fixed until each visit is scheduled, and the program may yet
 request the 180° flip, so these positions are <em>indicative</em>: across the
 allowed range alone the MIRI parallel moves ~125″, about the width of a NIRCam
-module, and a flip moves it ~15′. The NIRCam layer draws the eight short-wave
-detectors; the long-wave arrays cover the same two modules without the
-intra-module gaps.{dither_note} <strong>{n_observed}</strong> pointings observed
-so far, from the APT visit status.</p>
+module, and a flip moves it ~15′.{dither_note} <strong>{n_observed}</strong>
+pointings observed so far, from the APT visit status.</p>
 
 <div class="gcm-sky-wrap">
   <div id="gcm-aladin" class="gcm-sky-off"></div>
@@ -804,16 +845,16 @@ so far, from the APT visit status.</p>
     </div>
 
     <div class="gcm-sky-sec">
-      <div class="gcm-sky-lab">Roman GBTDS (context)</div>
+      <div class="gcm-sky-lab">Other surveys (context)</div>
       <div class="gcm-sky-row">
+        <button class="gcm-sky-btn" id="lyr-aces"
+                style="color:{COLOR_ACES}">ACES</button>
         <button class="gcm-sky-btn" id="lyr-spring"
-                style="color:{COLOR_SPRING}">spring
+                style="color:{COLOR_SPRING}">Roman spring
           <span class="gcm-sky-count">{n_spring}</span></button>
         <button class="gcm-sky-btn" id="lyr-autumn"
-                style="color:{COLOR_AUTUMN}">autumn
+                style="color:{COLOR_AUTUMN}">Roman autumn
           <span class="gcm-sky-count">{n_autumn}</span></button>
-        <button class="gcm-sky-btn" id="lyr-target"
-                style="color:{COLOR_TARGET_AREA}">target area</button>
       </div>
     </div>
 
@@ -854,7 +895,7 @@ interactive view adds sky imagery you can pan across.
   var UNITS_PER_DEG = {frame_scale:.6f};
   var C = {json.dumps({'nircam': COLOR_NIRCAM_PLANNED, 'miri': COLOR_MIRI_PLANNED,
                        'observed': COLOR_OBSERVED, 'spring': COLOR_SPRING,
-                       'autumn': COLOR_AUTUMN, 'target': COLOR_TARGET_AREA})};
+                       'autumn': COLOR_AUTUMN, 'aces': COLOR_ACES})};
 
   // Which static <g> each toggle owns.  `observed` owns two, because the
   // observed layer draws both instruments in one colour.
@@ -862,7 +903,7 @@ interactive view adds sky imagery you can pan across.
     nircam: ['stat-nircam'], miri: ['stat-miri'],
     observed: ['stat-obs-nircam', 'stat-obs-miri'],
     spring: ['stat-spring'], autumn: ['stat-autumn'],
-    target: ['stat-target']
+    aces: ['stat-aces']
   }};
 
   var svg = document.getElementById('gcm-sky-static');
@@ -874,7 +915,7 @@ interactive view adds sky imagery you can pan across.
   // Layer state is shared: a toggle drives the static groups now and the Aladin
   // overlays later, so the view you built survives the upgrade.
   var on = {{ nircam: true, miri: true, observed: true,
-             spring: false, autumn: false, target: false }};
+             spring: false, autumn: false, aces: false }};
   var L = null;                      // Aladin overlays, once they exist
 
   function applyLayers() {{
@@ -890,7 +931,7 @@ interactive view adds sky imagery you can pan across.
   }}
 
   [['lyr-nircam', 'nircam'], ['lyr-miri', 'miri'], ['lyr-observed', 'observed'],
-   ['lyr-spring', 'spring'], ['lyr-autumn', 'autumn'], ['lyr-target', 'target']
+   ['lyr-spring', 'spring'], ['lyr-autumn', 'autumn'], ['lyr-aces', 'aces']
   ].forEach(function (pair) {{
     var el = document.getElementById(pair[0]);
     if (!el) {{ return; }}
@@ -1042,12 +1083,21 @@ interactive view adds sky imagery you can pan across.
       note.textContent = 'Sky imagery could not be loaded (' + what +
         '). The footprint map above is unaffected.';
     }}
+    loading = false;
     if (loadBtn) {{ loadBtn.disabled = false; loadBtn.textContent = 'retry'; }}
   }}
 
-  if (loadBtn) {{ loadBtn.addEventListener('click', function () {{
-    loadBtn.disabled = true;
-    loadBtn.textContent = 'loading…';
+  var aladin = null;          // the live view, once there is one
+  var wanted = null;          // a background asked for before it existed
+  var loading = false;
+
+  function loadInteractive() {{
+    if (aladin || loading) {{ return; }}
+    loading = true;
+    if (loadBtn) {{
+      loadBtn.disabled = true;
+      loadBtn.textContent = 'loading…';
+    }}
     if (note) {{ note.textContent = ''; }}
     var s = document.createElement('script');
     s.src = ALADIN_SRC;
@@ -1069,7 +1119,31 @@ interactive view adds sky imagery you can pan across.
       }});
     }};
     document.body.appendChild(s);
-  }}); }}
+  }}
+
+  if (loadBtn) {{ loadBtn.addEventListener('click', loadInteractive); }}
+
+  // Background buttons are live from the start.  They used to be disabled until
+  // the interactive view existed, which meant the row a reader sees first was a
+  // row of dead controls -- and the thing they select is exactly the reason to
+  // load that view, so asking for one is a perfectly good way to ask for it.
+  function applySurvey(target) {{
+    if (!aladin) {{
+      wanted = target;
+      loadInteractive();
+      return;
+    }}
+    aladin.setImageSurvey(target.indexOf('http') === 0 ? A.HiPS(target) : target);
+  }}
+
+  document.querySelectorAll('#gcm-sky-ui button.survey').forEach(function (b) {{
+    b.addEventListener('click', function () {{
+      document.querySelectorAll('#gcm-sky-ui button.survey')
+        .forEach(function (o) {{ o.classList.remove('on'); }});
+      b.classList.add('on');
+      applySurvey(b.dataset.survey);
+    }});
+  }});
 
   function start(fp) {{
     // Aladin measures its container at init, so it has to be visible first --
@@ -1077,19 +1151,35 @@ interactive view adds sky imagery you can pan across.
     // up underneath and is hidden only once there is a working view to replace
     // it with, so no failure between here and there can empty the panel.
     if (aladinDiv) {{ aladinDiv.classList.remove('gcm-sky-off'); }}
-    return A.init.then(function () {{
-      var aladin = A.aladin('#gcm-aladin', {{
-        survey: {json.dumps(SURVEYS[0][1])},
+    // One frame between revealing the container and building into it, so the
+    // reveal has been through layout and the container reports its real height.
+    // Without this Aladin measured zero and produced a 1px-tall canvas.
+    return new Promise(function (resolve) {{
+      requestAnimationFrame(function () {{ resolve(); }});
+    }}).then(function () {{ return A.init; }}).then(function () {{
+      // Open on whichever background was asked for, so a click on '2MASS' that
+      // triggered this load arrives as 2MASS rather than as the default.
+      aladin = A.aladin('#gcm-aladin', {{
+        survey: wanted || {json.dumps(SURVEYS[0][1])},
         target: '0 0', fov: 1.6, cooFrame: 'galactic'
       }});
+      if (wanted && wanted.indexOf('http') === 0) {{
+        // A HiPS given by URL has to be built, not named.
+        aladin.setImageSurvey(A.HiPS(wanted));
+      }}
+      wanted = null;
       if (svg) {{ svg.classList.add('gcm-sky-off'); }}
+      // Hiding the map changes nothing about the container's box, but Aladin
+      // caches its size, so nudge it to re-measure once the panel is settled.
+      requestAnimationFrame(function () {{
+        window.dispatchEvent(new Event('resize'));
+      }});
       if (loadBtn) {{
         loadBtn.textContent = 'interactive view loaded';
         loadBtn.disabled = true;
       }}
+      // Pan/zoom belongs to Aladin now; the static map's reset does nothing.
       if (resetBtn) {{ resetBtn.disabled = true; }}
-      document.querySelectorAll('#gcm-sky-ui button[disabled]')
-        .forEach(function (b) {{ b.disabled = false; b.removeAttribute('title'); }});
 
       function layer(name, color, width) {{
         var ov = A.graphicOverlay({{ color: color, lineWidth: width || 1.2,
@@ -1104,7 +1194,7 @@ interactive view adds sky imagery you can pan across.
         observed: layer('JWST observed', C.observed, 2.0),
         spring: layer('Roman GBTDS spring', C.spring, 1.2),
         autumn: layer('Roman GBTDS autumn', C.autumn, 1.2),
-        target: layer('JWST target area', C.target, 2.0)
+        aces: layer('ACES coverage', C.aces, 1.6)
       }};
 
       (fp.planned || []).forEach(function (p) {{
@@ -1120,19 +1210,12 @@ interactive view adds sky imagery you can pan across.
         (t.spring || []).forEach(function (poly) {{ L.spring.add(A.polygon(poly)); }});
         (t.autumn || []).forEach(function (poly) {{ L.autumn.add(A.polygon(poly)); }});
       }});
-      if (ROMAN.target_area) {{ L.target.add(A.polygon(ROMAN.target_area)); }}
+      (fp.aces || []).forEach(function (poly) {{
+        L.aces.add(A.polygon(poly));
+      }});
 
       applyLayers();
 
-      document.querySelectorAll('#gcm-sky-ui button.survey').forEach(function (b) {{
-        b.onclick = function () {{
-          document.querySelectorAll('#gcm-sky-ui button.survey')
-            .forEach(function (o) {{ o.classList.remove('on'); }});
-          b.classList.add('on');
-          var t = b.dataset.survey;
-          aladin.setImageSurvey(t.indexOf('http') === 0 ? A.HiPS(t) : t);
-        }};
-      }});
     }}).catch(function (e) {{
       restore();
       fail(describe(e));

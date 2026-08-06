@@ -43,11 +43,31 @@ import zipfile
 
 APT_URL = 'https://www.stsci.edu/jwst-program-info/download/jwst/apt/{program}'
 
-#: Apertures drawn per instrument.  The per-detector NIRCam apertures rather
-#: than the single NRCALL outline: the module gap is real sky the survey does
-#: not cover, and an outline hides it.
+#: Apertures drawn per instrument.  The per-detector NIRCam apertures.  With
+#: dithering folded in (see DITHER_HALF_EXTENT) these are unioned into one
+#: bounding box per pointing, because the gaps they show are gaps the dither
+#: pattern exists to fill -- drawing eight separate outlines advertises holes
+#: that the observation does not actually leave.
 NIRCAM_APERTURES = ('NRCA1_FULL', 'NRCA2_FULL', 'NRCA3_FULL', 'NRCA4_FULL',
                     'NRCB1_FULL', 'NRCB2_FULL', 'NRCB3_FULL', 'NRCB4_FULL')
+
+#: Half-extent of the NIRCam primary dither pattern in the anchor aperture's
+#: ideal frame, arcsec, as {pattern: (dx, dy)}.
+#:
+#: MEASURED, not looked up.  JDox publishes these only as a downloadable table
+#: and renders the page with JavaScript, so the values here come from flight
+#: data: the XOFFSET/YOFFSET headers of program 2221, whose APT file records
+#: PrimaryDitherType=FULLBOX with PrimaryDithers=6TIGHT -- the same pattern
+#: 10678 uses.  Its 24 exposures are 6 primary positions x 4 subpixel; the same
+#: subpixel set repeats at each primary, so differencing corresponding exposures
+#: recovers the primary grid exactly: 3 x 24.3" in X, 2 x 10.8" in Y.
+#:
+#: The result is a check on itself.  A pattern that spans 48.6" in X and 10.8"
+#: in Y is filling a ~44" module gap and a ~5" detector gap, which is what
+#: FULLBOX is for.
+DITHER_HALF_EXTENT = {
+    'FULLBOX/6TIGHT': (24.3, 5.4),
+}
 #: The aperture APT's target coordinate refers to; the attitude is anchored here.
 NIRCAM_ANCHOR = 'NRCALL_FULL'
 #: The ILLUMINATED imaging field, not MIRIM_FULL.  MIRIM_FULL is the whole
@@ -56,6 +76,50 @@ NIRCAM_ANCHOR = 'NRCALL_FULL'
 #: 83" x 118" -- drawing MIRIM_FULL overstates the parallel's sky coverage by
 #: ~30% in one axis.
 MIRI_APERTURES = ('MIRIM_ILLUM',)
+
+#: True ACES coverage, as a DS9 region file in GALACTIC coordinates.  ACES (the
+#: ALMA CMZ Exploration Survey) is the obvious comparison for a CMZ survey, and
+#: its real outline is a ~700-vertex polygon rather than a rectangle -- an
+#: approximation would misrepresent which pointings it actually covers.
+ACES_REGION = '/orange/adamginsburg/ACES/mosaics/ACES_footprint.reg'
+
+
+def read_ds9_polygons(path):
+    """``[[(ra, dec), ...], ...]`` in ICRS from a DS9 region file.
+
+    Only ``polygon`` shapes, and only ``galactic`` or ``icrs``/``fk5`` frames --
+    a region file whose frame line says something else is a file this cannot
+    read correctly, and guessing would silently place the outline elsewhere.
+    """
+    with open(path) as fh:
+        text = fh.read()
+    frame = None
+    for line in text.splitlines():
+        word = line.strip().lower()
+        if word in ('galactic', 'icrs', 'fk5', 'j2000', 'image', 'physical'):
+            frame = word
+            break
+    if frame not in ('galactic', 'icrs', 'fk5', 'j2000'):
+        raise ValueError('%s: unsupported region frame %r' % (path, frame))
+
+    polys = []
+    for match in re.finditer(r'polygon\(([^)]*)\)', text):
+        nums = [float(v) for v in match.group(1).replace(',', ' ').split()]
+        pairs = list(zip(nums[0::2], nums[1::2]))
+        if len(pairs) >= 3:
+            polys.append(pairs)
+    if frame == 'galactic':
+        from astropy.coordinates import SkyCoord
+        import astropy.units as u
+        out = []
+        for poly in polys:
+            coord = SkyCoord(l=[p[0] for p in poly] * u.deg,
+                             b=[p[1] for p in poly] * u.deg,
+                             frame='galactic').icrs
+            out.append([[round(float(a), 6), round(float(d), 6)]
+                        for a, d in zip(coord.ra.deg, coord.dec.deg)])
+        return out
+    return [[[round(p[0], 6), round(p[1], 6)] for p in poly] for poly in polys]
 
 
 def fetch_apt(program, dest, force=False):
@@ -195,6 +259,58 @@ def _deg(text):
         return None
 
 
+def dither_half_extent(dither):
+    """``(dx, dy)`` arcsec for the pointing's pattern, or ``None`` if unknown.
+
+    Unknown means unknown: returning zero would silently draw a single-position
+    footprint and label it as covering the dithered area.
+    """
+    key = '%s/%s' % ((dither or {}).get('PrimaryDitherType'),
+                     (dither or {}).get('PrimaryDithers'))
+    return DITHER_HALF_EXTENT.get(key)
+
+
+def dithered_bbox(ra, dec, pa_v3, apertures, anchor, half_extent,
+                  siaf_cache={}):
+    """One sky polygon: the area the pointing covers across its whole dither.
+
+    Built in the anchor aperture's IDEAL frame, where the dither offsets are
+    defined, rather than on sky: take every detector corner, expand the box by
+    the pattern's half-extent, and project the four corners back out.  The
+    pattern is symmetric about zero, so the sign convention of the offsets --
+    whether the telescope or the field moves -- does not change the box.
+    """
+    import pysiaf
+    from pysiaf.utils import rotations
+
+    anchor_inst = 'NIRCam' if anchor.startswith('NRC') else 'MIRI'
+    if anchor_inst not in siaf_cache:
+        siaf_cache[anchor_inst] = pysiaf.Siaf(anchor_inst)
+    anchor_ap = siaf_cache[anchor_inst][anchor]
+    attitude = rotations.attitude(anchor_ap.V2Ref, anchor_ap.V3Ref,
+                                  ra, dec, pa_v3)
+
+    xs, ys = [], []
+    for name in apertures:
+        inst = 'NIRCam' if name.startswith('NRC') else 'MIRI'
+        if inst not in siaf_cache:
+            siaf_cache[inst] = pysiaf.Siaf(inst)
+        ap = siaf_cache[inst][name]
+        v2, v3 = ap.corners('tel', rederive=False)
+        # Into the ANCHOR's ideal frame -- the frame XOFFSET/YOFFSET live in.
+        x, y = anchor_ap.tel_to_idl(v2, v3)
+        xs.extend(float(v) for v in x)
+        ys.extend(float(v) for v in y)
+
+    dx, dy = half_extent
+    box = [(min(xs) - dx, min(ys) - dy), (max(xs) + dx, min(ys) - dy),
+           (max(xs) + dx, max(ys) + dy), (min(xs) - dx, max(ys) + dy)]
+    v2, v3 = anchor_ap.idl_to_tel([p[0] for p in box], [p[1] for p in box])
+    sky_ra, sky_dec = rotations.pointing(attitude, v2, v3)
+    return [[round(float(a), 6), round(float(d), 6)]
+            for a, d in zip(sky_ra, sky_dec)]
+
+
 def aperture_polygons(ra, dec, pa_v3, apertures, anchor, siaf_cache={}):
     """Sky corners of ``apertures`` for a pointing, via the observatory attitude.
 
@@ -227,7 +343,7 @@ def aperture_polygons(ra, dec, pa_v3, apertures, anchor, siaf_cache={}):
     return out
 
 
-def build(program, apt_path, pa_v3=None):
+def build(program, apt_path, pa_v3=None, aces_region=ACES_REGION):
     parsed = parse_apt(apt_path)
     targets = parsed['targets']
     observed_targets = {o['target'] for o in parsed['observed']}
@@ -238,7 +354,15 @@ def build(program, apt_path, pa_v3=None):
     if pa_v3 is None:
         pa_v3 = (lo + hi) / 2.0 if (lo is not None and hi is not None) else 0.0
 
+    aces = []
+    if aces_region and os.path.exists(aces_region):
+        aces = read_ds9_polygons(aces_region)
+    elif aces_region:
+        print('WARNING: no ACES region file at %s -- that layer will be empty'
+              % aces_region, file=sys.stderr)
+
     planned, observed = [], []
+    unknown_dithers = set()
     for obs in parsed['observations']:
         if obs['instrument'] != 'NIRCAM':
             # The other 139 Observation elements are text-only entries under
@@ -250,14 +374,28 @@ def build(program, apt_path, pa_v3=None):
         if coord is None:
             continue
         ra, dec = coord
-        nircam = aperture_polygons(ra, dec, pa_v3, NIRCAM_APERTURES,
-                                   NIRCAM_ANCHOR)
-        miri = aperture_polygons(ra, dec, pa_v3, MIRI_APERTURES, NIRCAM_ANCHOR)
+        half = dither_half_extent(obs.get('dither'))
+        if half:
+            # One most-inclusive outline per pointing.  The eight per-detector
+            # boxes describe a single dither position, and the gaps between them
+            # are exactly what the pattern is there to fill.
+            nircam_polys = [dithered_bbox(ra, dec, pa_v3, NIRCAM_APERTURES,
+                                          NIRCAM_ANCHOR, half)]
+            miri_polys = [dithered_bbox(ra, dec, pa_v3, MIRI_APERTURES,
+                                        NIRCAM_ANCHOR, half)]
+        else:
+            unknown_dithers.add('%s/%s' % (
+                (obs.get('dither') or {}).get('PrimaryDitherType'),
+                (obs.get('dither') or {}).get('PrimaryDithers')))
+            nircam_polys = list(aperture_polygons(
+                ra, dec, pa_v3, NIRCAM_APERTURES, NIRCAM_ANCHOR).values())
+            miri_polys = list(aperture_polygons(
+                ra, dec, pa_v3, MIRI_APERTURES, NIRCAM_ANCHOR).values())
         rec = {'target': obs['target'], 'number': obs['number'],
                'ra': round(ra, 6), 'dec': round(dec, 6),
-               'filters': obs['filters'],
-               'nircam': list(nircam.values()),
-               'miri': list(miri.values())}
+               'filters': obs['filters'], 'dithered': bool(half),
+               'nircam': nircam_polys,
+               'miri': miri_polys}
         (observed if obs['target'] in observed_targets else planned).append(rec)
 
     dithers = {}
@@ -265,11 +403,20 @@ def build(program, apt_path, pa_v3=None):
         for k, v in (o.get('dither') or {}).items():
             dithers.setdefault(k, set()).add(v)
 
+    if unknown_dithers:
+        # Loud, because the alternative is a map that quietly under-states the
+        # covered area by the size of a module gap.
+        print('WARNING: no dither extent known for %s -- those pointings are '
+              'drawn per detector, at one dither position only'
+              % ', '.join(sorted(unknown_dithers)), file=sys.stderr)
+
     return {'program': str(program),
             'dither': {k: sorted(v) for k, v in dithers.items()},
+            'dither_half_extent_arcsec': DITHER_HALF_EXTENT,
             'title': 'JWST/NIRCam Legacy Survey of the Galactic Center',
             'pa_v3': pa_v3, 'pa_v3_range': [lo, hi],
             'n_planned': len(planned), 'n_observed': len(observed),
+            'aces': aces,
             'nircam_apertures': list(NIRCAM_APERTURES),
             'miri_apertures': list(MIRI_APERTURES),
             'planned': planned, 'observed': observed}
