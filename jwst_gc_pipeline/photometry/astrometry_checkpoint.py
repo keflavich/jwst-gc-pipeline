@@ -1618,8 +1618,17 @@ def _group_by_visit_filter(tables):
     return groups
 
 
-def _record_name(stage, filtername):
+def _record_name(stage, filtername, obs_token=""):
     """Single source of truth for a checkpoint record's base name.
+
+    ``obs_token`` disambiguates observations that SHARE a record directory
+    (issue #281).  cloudef's 2092 obs 002 and 005 both write to
+    ``cloudef/astrometry_checkpoints/``, so without it the second run's
+    ``checkpoint_m2_F360M_latest.json`` silently REPLACES the first's -- and
+    every frozen-stage reader then compares o002's exposures against o005's
+    baseline, which is not a movement measurement of anything.  The per-filter
+    consensus catalog already carries the token for exactly this reason
+    (``consensus_catalog.consensus_path``); the checkpoint records did not.
 
     The WRITER keys on ``run_visit_checkpoint``'s ``filtername`` argument, which
     is ``None`` for a mixed-filter run -> the record is stored under ``_all``.
@@ -1627,10 +1636,11 @@ def _record_name(stage, filtername):
     real filter name, never None), so ``_record_name`` alone is not enough to
     close the gap -- see ``_m2_record_path`` for the fallback the readers use.
     """
-    return f"checkpoint_{stage}_{filtername or 'all'}"
+    token = str(obs_token or '')
+    return f"checkpoint_{stage}_{filtername or 'all'}{token}"
 
 
-def _m2_record_path(record_dir, filtername):
+def _m2_record_path(record_dir, filtername, obs_token=""):
     """Resolve the latest m2 record path for a per-group filter, tolerating the
     writer/reader spelling gap.
 
@@ -1645,7 +1655,22 @@ def _m2_record_path(record_dir, filtername):
     """
     if not record_dir:
         return None
-    exact = os.path.join(record_dir, f"{_record_name('m2', filtername)}_latest.json")
+    # Tokened spelling first, then the untokened LEGACY spelling: every record
+    # on disk today predates the token, and failing to find a baseline at a
+    # frozen stage fails closed and stops a healthy field (issue #281).
+    for _tok in ([obs_token, ""] if obs_token else [""]):
+        _p = os.path.join(record_dir,
+                          f"{_record_name('m2', filtername, _tok)}_latest.json")
+        if os.path.exists(_p):
+            if obs_token and not _tok:
+                print(f"astrom checkpoint: no tokened m2 record for "
+                      f"{filtername}{obs_token}; falling back to the untokened "
+                      f"{os.path.basename(_p)}.  If this directory holds more "
+                      f"than one observation, that record may belong to the "
+                      f"other one (issue #281).", flush=True)
+            return _p
+    exact = os.path.join(record_dir,
+                         f"{_record_name('m2', filtername, obs_token)}_latest.json")
     if os.path.exists(exact):
         return exact
     allpath = os.path.join(record_dir, f"{_record_name('m2', None)}_latest.json")
@@ -1676,7 +1701,7 @@ def _visit_entry_matches(v, visit, filtername):
     return vf is None or str(vf) == str(filtername)
 
 
-def _m2_reference_tie_baseline(record_dir, filtername, visit):
+def _m2_reference_tie_baseline(record_dir, filtername, visit, obs_token=""):
     """(dra_mas, ddec_mas) of the m2-frozen consensus->reference tie for this
     (filter, visit), from the latest m2 record; None when unavailable.
 
@@ -1704,7 +1729,7 @@ def _m2_reference_tie_baseline(record_dir, filtername, visit):
     ``swept=False``) and raised "consensus->reference MOVED 7794.98 mas since the
     m2 freeze", blocking the field because the measurement got better.
     """
-    path = _m2_record_path(record_dir, filtername)
+    path = _m2_record_path(record_dir, filtername, obs_token)
     if path is None:
         return None, False
     with open(path) as fh:
@@ -1737,7 +1762,7 @@ def _m2_reference_tie_baseline(record_dir, filtername, visit):
     return None, False
 
 
-def _m2_exposure_baseline(record_dir, filtername, visit):
+def _m2_exposure_baseline(record_dir, filtername, visit, obs_token=""):
     """Map exposure-key tuple -> (dra_mas, ddec_mas) of the m2 per-exposure
     vs-consensus offset, from the latest m2 record; ``{}`` when unavailable.
 
@@ -1754,7 +1779,7 @@ def _m2_exposure_baseline(record_dir, filtername, visit):
     could NEVER pass a frozen stage, 2026-07-20).
     """
     out = {}
-    path = _m2_record_path(record_dir, filtername)
+    path = _m2_record_path(record_dir, filtername, obs_token)
     if path is None:
         return out
     with open(path) as fh:
@@ -1771,7 +1796,7 @@ def _m2_exposure_baseline(record_dir, filtername, visit):
     return out
 
 
-def _m2_skipped_exposures(record_dir, filtername, visit):
+def _m2_skipped_exposures(record_dir, filtername, visit, obs_token=""):
     """Set of exposure-key tuples m2 DELIBERATELY left out of its consensus.
 
     ``build_visit_consensus`` drops an exposure with too few reliable stars and
@@ -1789,7 +1814,7 @@ def _m2_skipped_exposures(record_dir, filtername, visit):
     consensus and raised ``AstrometryRegressionError``, killing the m4-m8 chain
     over a data-quality defect m2 had already found, reported, and worked around.
     """
-    path = _m2_record_path(record_dir, filtername)
+    path = _m2_record_path(record_dir, filtername, obs_token)
     if path is None:
         return set()
     with open(path) as fh:
@@ -1885,11 +1910,13 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
         # magnitude check -- the latter re-trips on intrinsic per-exposure
         # scatter that m2 already tolerated.
         exp_baseline = ({} if correcting
-                        else _m2_exposure_baseline(record_dir, filt, visit))
+                        else _m2_exposure_baseline(record_dir, filt, visit,
+                                                  obs_token))
         # An exposure m2 deliberately skipped has no baseline BY CONSTRUCTION;
         # that absence is not evidence the frozen solution moved.
         m2_skipped = (set() if correcting
-                      else _m2_skipped_exposures(record_dir, filt, visit))
+                      else _m2_skipped_exposures(record_dir, filt, visit,
+                                                 obs_token))
         # issue #158 backstop: an ALIAS reads antisymmetric across the modules of
         # an exposure, where real jitter is common-mode.  Never emit corrections
         # from an antisymmetric set -- they are the footprint geometry, not a
@@ -2065,7 +2092,7 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                         # (brick V12 F182M: m2 10.09 mas PASS, m3 10.31 mas ->
                         # false REGRESSION, 2026-07-16).
                         base, m2_rejected = _m2_reference_tie_baseline(
-                            record_dir, filt, visit)
+                            record_dir, filt, visit, obs_token)
                         if base is not None:
                             delta = float(np.hypot(ref_tie["dra_mas"] - base[0],
                                                    ref_tie["ddec_mas"] - base[1]))
@@ -2216,7 +2243,8 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                       reference_apply_min_mas=REFERENCE_APPLY_MIN_MAS,
                       stage_stability_tol_mas=STAGE_STABILITY_TOL_MAS))
     if record_dir:
-        _write_record(record_dir, _record_name(stage, filtername), record)
+        _write_record(record_dir, _record_name(stage, filtername, obs_token),
+                      record)
 
     for w in unverified:
         print(f"ASTROM CHECKPOINT [{stage}] COULD NOT VERIFY: {w}", flush=True)
