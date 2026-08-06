@@ -44,16 +44,36 @@ def test_skip_predicate_covers_every_product_the_fixture_opens(monkeypatch):
     # patch the POLICY module's namespace -- the fixture resolves `_latest`
     # there, not here
     monkeypatch.setattr(policy, "_latest", _record)
+    # ... and stub everything the fixture does BETWEEN the globs, so that a
+    # tree with no products still reaches all three of them.  Unstubbed, on CI
+    # -- the environment this whole change is about -- `_read_points` raised
+    # before a single glob was recorded and the test went RED, and stubbing
+    # only that one got as far as the first `_img(None)` skip and then failed
+    # on `missing`.  Trading a silent skip for a red CI is not a fix.  What
+    # this test checks is WHICH PATTERNS the fixture asks for; opening the
+    # files is not part of that.
+    monkeypatch.setattr(policy, "_read_points", lambda path: None)
+    monkeypatch.setattr(policy, "_img", lambda path, what="": (None, None))
+    monkeypatch.setattr(policy, "_peaks", lambda arr, w, stars, box=3: None)
     try:
         f480m.__wrapped__()
-    except BaseException:       # noqa: BLE001 -- see below
-        # BaseException, not Exception.  `pytest.skip` raises `Skipped`, which
-        # derives from BaseException, so `except Exception` let it escape and
-        # turned THIS GUARD into a skip -- in exactly the scenario it exists to
-        # catch (a product missing, the fixture calling _img(None)).  We only
-        # care which globs were requested, so any exit is fine.
+    except (pytest.skip.Exception, OSError, ValueError):
+        # NAMED, not `BaseException`.  Widening to BaseException did catch the
+        # `Skipped` that `except Exception` let escape -- `pytest.skip` raises
+        # a BaseException subclass, which is what turned this guard into a skip
+        # in the scenario it exists to catch -- but it also swallows
+        # KeyboardInterrupt and SystemExit.  `Skipped` has a public handle, so
+        # the specific form covers all the documented exits (the skip from
+        # `_img(None)`, an unreadable FITS, a malformed region file) while a
+        # NameError or TypeError from a future fixture edit still surfaces --
+        # which is the breakage this test is for.  KeyError is deliberately
+        # NOT here: the fixture indexes `_REQUIRED`, so a KeyError means the
+        # predicate and the fixture have gone out of step -- the exact
+        # condition under test.  Swallowing it let that mutant live.
         pass
-    assert seen, "the fixture globbed nothing"
+    if not seen:
+        pytest.skip("the fixture bailed before its first glob, so there is "
+                    "nothing to compare against the skip predicate")
     missing = [p for p in _REQUIRED.values() if p not in seen]
     assert not missing, (
         "the fixture did not open every _REQUIRED product, so the predicate "

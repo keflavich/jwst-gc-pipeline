@@ -26,7 +26,10 @@ from astropy.wcs import WCS
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 
-SICKLE = "/orange/adamginsburg/jwst/sickle"
+# `SICKLE_BASEPATH` is a TEST hook, not a configuration knob: it is how the
+# no-products case (CI) is reproduced on a machine that has the products.
+#   SICKLE_BASEPATH=/nonexistent pytest ... -> 2 passed, 3 skipped
+SICKLE = os.environ.get("SICKLE_BASEPATH", "/orange/adamginsburg/jwst/sickle")
 REG = f"{SICKLE}/regions_/f480m_brightstar_regression_20260617.reg"
 
 
@@ -78,9 +81,12 @@ def _peaks(arr, w, stars, box=3):
 #: opened ``None`` -- three ERRORS on main since 2026-07-05 (issue #266).
 #: sickle F480M is exactly that field: it carries m2/m3/m4/resbgsub_m5 residuals
 #: and no m7, because it is parked at m6 (issue #285).
-#: The stage the content checks run against.  It was ``_m7_``, which does not
-#: exist on sickle F480M and is not scheduled -- the field's newest ungrouped
-#: products are ``resbgsub_m5`` -- so keying on it made this a permanent green
+#: The stage the content checks run against.  It was ``_m7_``.  sickle F480M
+#: has 400 ``*_m7_*`` files, including 48 per-frame
+#: ``m7_daophot_basic_mergedcat_residual.fits``; what it has none of is the m7
+#: **i2d** (``*_m7_*i2d.fits`` -> 0), which is what these globs want, and it is
+#: not scheduled -- the field's newest ungrouped i2d products are
+#: ``resbgsub_m5``.  Keying on ``_m7_`` therefore made this a permanent green
 #: skip on the analysis machine, where the docstring says it should run "as a
 #: hard regression".  A test that can never run is worse than one that fails.
 #:
