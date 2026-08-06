@@ -30,6 +30,7 @@ See ``jwst_gc_pipeline/frame_wcs.py`` and
 ``reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md``.
 """
 import re
+import pytest
 import subprocess
 from pathlib import Path
 
@@ -166,3 +167,37 @@ def test_the_guard_actually_matches_the_bad_pattern(tmp_path):
                "ww = wcs.WCS(header)",
                "ww = WCS(hdr, naxis=2)"):
         assert not _SIP_WCS.search(ok), ok
+
+
+def test_sip_offenders_reports_lines_and_the_multiline_fallback():
+    """`_sip_offenders` had no test of its own: returning `[]` unconditionally,
+    or deleting the multi-line fallback, left all three tests green because
+    they exercise the REGEX, not the function that reports through it."""
+    src = ("import numpy as np\n"
+           "ww = frame_wcs(fn)\n"
+           "w2 = WCS(h['SCI'].header, relax=True)\n")
+    assert _sip_offenders(src) == [3], _sip_offenders(src)
+    assert _sip_offenders("ww = frame_wcs(fn)\n") == []
+    # split across lines: no single line matches, so the fallback reports 0
+    multi = "w = WCS(\n    hdul['SCI'].header,\n    relax=True)\n"
+    assert not any(_SIP_WCS.search(l) for l in multi.splitlines())
+    assert _sip_offenders(multi) == [0], _sip_offenders(multi)
+
+
+def test_the_sip_guard_reports_through_that_function(tmp_path, monkeypatch):
+    """Drive the guard, not the helper: `_sip_offenders -> []` must not leave
+    the guard green."""
+    import pathlib
+    import sys
+    me = sys.modules[__name__]
+    bad = tmp_path / "reader.py"
+    bad.write_text("from astropy.wcs import WCS\n"
+                   "w = WCS(hdul['SCI'].header, relax=True)\n")
+    rel = pathlib.Path("reader.py")
+    monkeypatch.setattr(me, "_iter_py_files", lambda: [(rel, bad)])
+    monkeypatch.setattr(me, "ALLOWLIST", set())
+    with pytest.raises(AssertionError) as exc:
+        me.test_no_sip_wcs_for_frame_astrometry()
+    assert "reader.py:2" in str(exc.value)
+    monkeypatch.setattr(me, "ALLOWLIST", {"reader.py"})
+    me.test_no_sip_wcs_for_frame_astrometry()

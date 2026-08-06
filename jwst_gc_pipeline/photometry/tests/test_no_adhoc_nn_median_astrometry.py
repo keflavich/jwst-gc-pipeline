@@ -20,6 +20,7 @@ the reviewed allowlist below.  A new file that trips it must either
 See CLAUDE.md and reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md.
 """
 import ast
+import pathlib
 import re
 
 import pytest
@@ -107,16 +108,23 @@ ALLOWLIST = {
     # satstar correction-data collection: matches to label stars, medians their
     # photometry
     ("scripts/satstar_deblend/collect_correction_data.py", "<unattributed>"),
-    # These five ALSO carry a co-occurrence outside their attributed functions.
-    # Each already had a reviewed per-function entry; the whole-file entry is
-    # what a cross-function split needs, and adding it is the price of the
-    # tripwire actually covering these files -- previously one attributed hit
-    # made the rest of the file invisible.
+    # These THREE also carry a co-occurrence outside their attributed
+    # functions.  Each already had a reviewed per-function entry; the
+    # whole-file entry is what a cross-function split needs, and adding it is
+    # the price of the tripwire covering these files at all -- previously one
+    # attributed hit made the rest of the file invisible.
+    #
+    # It is a real price, and it is worth naming: cataloging.py and
+    # merge_catalogs.py are the two largest modules on the astrometric path,
+    # and a `<unattributed>` entry makes each of them blind to a CLEAN
+    # cross-function split.  A whole-file exemption is unavoidable for that
+    # class -- a split cannot be attributed to a function, so clearing it
+    # cannot be scoped to one.  What the reversal buys is that this is true of
+    # SIX files rather than all of them, and `_EXPECTED_UNATTRIBUTED` pins the
+    # count so a seventh is noticed.
     ("jwst_gc_pipeline/photometry/cataloging.py", "<unattributed>"),
     ("jwst_gc_pipeline/photometry/merge_catalogs.py", "<unattributed>"),
     ("jwst_gc_pipeline/reduction/build_virac2_offsets.py", "<unattributed>"),
-    ("scripts/miri_reduction/miri_f2550w_image3_rerun_v2.py", "<unattributed>"),
-    ("docs/pr57_recovery_investigation/make_caveat_figs.py", "<unattributed>"),
     # one-off scripts outside the pipeline's astrometric path
     ("scripts/reduction/combine_brick_allband.py", "main"),
     # :130-137 medians NN matches against a DENSE NIRCam F405N reference and
@@ -195,14 +203,44 @@ def _has_unattributed_cooccurrence(text, attributed):
         return bool(_MATCH.search(text) and _REDUCE.search(text))
     lines = text.splitlines()
     blanked = list(lines)
+    spans = []
     for node in ast.walk(tree):
-        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and node.name in attributed):
-            for i in range(node.lineno - 1, (node.end_lineno or node.lineno)):
-                if 0 <= i < len(blanked):
-                    blanked[i] = ""
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            spans.append((node.lineno, node.end_lineno or node.lineno))
+            if node.name in attributed:
+                for i in range(node.lineno - 1, (node.end_lineno or node.lineno)):
+                    if 0 <= i < len(blanked):
+                        blanked[i] = ""
+    if "<module>" in attributed:
+        # `<module>` is never a FunctionDef name, so module-level code was
+        # never blanked and every file whose only hit is module-level came back
+        # True -- forced to carry a whole-file `<unattributed>` entry for a hit
+        # that `<module>` already accounts for, which a `<module>` entry can
+        # never clear on its own.  Two of the eight exemptions were this
+        # artifact (make_caveat_figs.py, miri_f2550w_image3_rerun_v2.py).
+        for i, line in enumerate(lines, 1):
+            if not any(lo <= i <= hi for lo, hi in spans):
+                blanked[i - 1] = ""
     rest = "\n".join(blanked)
     return bool(_MATCH.search(rest) and _REDUCE.search(rest))
+
+
+def _live_keys(text):
+    """The (function-or-`<unattributed>`) keys one file's text trips on.
+
+    ONE definition, called by the guard AND by the dead-entry test.  They used
+    to carry divergent copies of the same logic, so gutting the guard's
+    `<unattributed>` emission left the dead-entry test's copy to keep the five
+    whole-file entries "live" and nothing noticed the guard had stopped
+    emitting them.
+    """
+    if not (_MATCH.search(text) and _REDUCE.search(text)):
+        return set()
+    funcs = _offending_functions(text)
+    keys = set(funcs)
+    if _has_unattributed_cooccurrence(text, funcs):
+        keys.add(UNATTRIBUTED)
+    return keys
 
 
 def test_no_adhoc_nn_median_astrometry():
@@ -234,13 +272,9 @@ def test_no_adhoc_nn_median_astrometry():
         # so it must be CLEARED by co-occurrence: every hit it can attribute
         # must be allowlisted AND, if the match and the reduce also occur
         # outside those functions, `<unattributed>` must be too.
-        funcs = _offending_functions(text)
-        for func in sorted(funcs):
-            if (rel.as_posix(), func) not in ALLOWLIST:
-                offenders.append(f"{rel.as_posix()}::{func}")
-        if _has_unattributed_cooccurrence(text, funcs) and \
-                (rel.as_posix(), UNATTRIBUTED) not in ALLOWLIST:
-            offenders.append(f"{rel.as_posix()}::{UNATTRIBUTED}")
+        for key in sorted(_live_keys(text)):
+            if (rel.as_posix(), key) not in ALLOWLIST:
+                offenders.append(f"{rel.as_posix()}::{key}")
     assert not offenders, (
         "FORBIDDEN dense-NN-median astrometry pattern (a nearest-neighbour match "
         "co-occurring with a median/mean) found in non-allowlisted location(s):\n  "
@@ -263,13 +297,20 @@ def test_allowlist_has_no_dead_entries():
     live = set()
     for rel, path in _iter_py_files():
         text = path.read_text(errors="replace")
-        if not (_MATCH.search(text) and _REDUCE.search(text)):
+        try:
+            ast.parse(text)
+        except SyntaxError:
+            # An UNPARSEABLE file says nothing about which entries are dead.
+            # One syntax error anywhere used to collapse that file's keys to
+            # `<unparseable>` and this test would then instruct the developer
+            # to DELETE the reviewed justifications for it -- including the one
+            # recording merge_catalogs.combine_singleframe's ungated
+            # `realign=False` median.  Deleting an allowlist entry on the
+            # strength of a typo is how a reviewed exemption is lost.  The
+            # guard itself still trips on the file; only the rot check abstains.
+            live |= {k for k in ALLOWLIST if k[0] == rel.as_posix()}
             continue
-        funcs = _offending_functions(text)
-        for func in funcs:
-            live.add((rel.as_posix(), func))
-        if _has_unattributed_cooccurrence(text, funcs):
-            live.add((rel.as_posix(), UNATTRIBUTED))
+        live |= {(rel.as_posix(), k) for k in _live_keys(text)}
     dead = sorted(ALLOWLIST - live)
     assert not dead, (
         "ALLOWLIST entries that no longer trip the guard (remove them):\n  "
@@ -337,7 +378,7 @@ def test_a_clean_file_does_not_trip():
 
 #: Files whose ONLY protection is a whole-file exemption.  Each gave up
 #: per-function coverage; do not add to this without reading the file.
-_EXPECTED_UNATTRIBUTED = 8
+_EXPECTED_UNATTRIBUTED = 6
 
 
 def test_unattributed_entries_do_not_multiply():
@@ -368,3 +409,93 @@ def test_a_function_scoped_file_still_catches_a_new_split(tmp_path):
             "    return np.median(_seps(a, b))\n")
     assert _has_unattributed_cooccurrence(src, _offending_functions(src)), (
         "a new cross-function split in a function-scoped file must trip")
+
+
+def test_the_guard_ITSELF_emits_the_unattributed_offender(tmp_path, monkeypatch):
+    """Through the GUARD, not through the helper.
+
+    The `<unattributed>` block is the whole point of this change and nothing
+    exercised it: replacing it with `pass` left 17 passed, because
+    `test_allowlist_has_no_dead_entries` carried its own duplicate copy of the
+    call and kept the whole-file entries "live" on its own.  Both now go
+    through `_live_keys`, and this drives the guard over a synthetic tree.
+    """
+    import sys
+    me = sys.modules[__name__]
+    split = tmp_path / "splitter.py"
+    split.write_text(
+        "import numpy as np\n\n\n"
+        "def find(a, b):\n"
+        "    idx, d2d, _ = a.match_to_catalog_sky(b)\n"
+        "    return idx, d2d\n\n\n"
+        "def correct(d2d):\n"
+        "    return np.median(d2d)\n")
+    rel = pathlib.Path("splitter.py")
+    monkeypatch.setattr(me, "_iter_py_files", lambda: [(rel, split)])
+    # neither function carries BOTH halves, so there is nothing to attribute
+    assert not _offending_functions(split.read_text())
+    with pytest.raises(AssertionError) as exc:
+        me.test_no_adhoc_nn_median_astrometry()
+    assert "splitter.py::<unattributed>" in str(exc.value)
+    # ... and an allowlist entry clears it, so the message is actionable
+    monkeypatch.setattr(me, "ALLOWLIST", ALLOWLIST | {("splitter.py", UNATTRIBUTED)})
+    me.test_no_adhoc_nn_median_astrometry()
+
+
+def test_the_guard_still_reports_the_function_when_it_can_name_one(tmp_path, monkeypatch):
+    """The other direction: a same-function violation must NOT be reported as
+    `<unattributed>`, or every finding becomes a whole-file exemption."""
+    import sys
+    me = sys.modules[__name__]
+    one = tmp_path / "onefunc.py"
+    one.write_text(
+        "import numpy as np\n\n\n"
+        "def realign(a, b):\n"
+        "    idx, d2d, _ = a.match_to_catalog_sky(b)\n"
+        "    return np.median(d2d)\n")
+    rel = pathlib.Path("onefunc.py")
+    monkeypatch.setattr(me, "_iter_py_files", lambda: [(rel, one)])
+    with pytest.raises(AssertionError) as exc:
+        me.test_no_adhoc_nn_median_astrometry()
+    msg = str(exc.value)
+    assert "onefunc.py::realign" in msg
+    assert "onefunc.py::<unattributed>" not in msg
+
+
+def test_a_module_level_hit_needs_no_whole_file_exemption(tmp_path):
+    """`<module>` is never a FunctionDef name, so module-level code was never
+    blanked and a file whose ONLY hit is module-level was forced to carry a
+    whole-file entry as well -- for a hit `<module>` already accounts for, and
+    which a `<module>` entry could never clear on its own.  Two of the eight
+    exemptions were that artifact."""
+    src = ("import numpy as np\n"
+           "idx, d2d, _ = a.match_to_catalog_sky(b)\n"
+           "off = np.median(d2d)\n")
+    assert _offending_functions(src) == {"<module>"}
+    assert not _has_unattributed_cooccurrence(src, {"<module>"})
+    assert _live_keys(src) == {"<module>"}
+    # and it is not a blanket pardon.  Blanking the module residue must not
+    # hide a split that lives in the FUNCTIONS of the same file:
+    src2 = (src
+            + "\n\ndef find(a, b):\n    return a.match_to_catalog_sky(b)\n"
+              "\n\ndef reduce_(v):\n    return np.median(v)\n")
+    assert _offending_functions(src2) == {"<module>"}
+    assert _has_unattributed_cooccurrence(src2, {"<module>"})
+    assert _live_keys(src2) == {"<module>", UNATTRIBUTED}
+
+
+def test_an_unparseable_file_does_not_condemn_its_own_allowlist_entries(tmp_path, monkeypatch):
+    """One syntax error used to make the dead-entry test instruct the developer
+    to DELETE that file's reviewed justifications -- including the one
+    recording merge_catalogs.combine_singleframe's ungated `realign=False`
+    median.  Deleting a reviewed exemption on the strength of a typo is not a
+    rot check."""
+    import sys
+    me = sys.modules[__name__]
+    broken = tmp_path / "broken.py"
+    broken.write_text("def f(:\n    a.match_to_catalog_sky(b); np.median(x)\n")
+    rel = pathlib.Path("broken.py")
+    monkeypatch.setattr(me, "_iter_py_files", lambda: [(rel, broken)])
+    monkeypatch.setattr(me, "ALLOWLIST",
+                        {("broken.py", "some_reviewed_function")})
+    me.test_allowlist_has_no_dead_entries()      # must not report it dead
