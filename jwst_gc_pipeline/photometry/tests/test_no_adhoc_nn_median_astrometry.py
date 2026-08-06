@@ -19,6 +19,7 @@ the reviewed allowlist below.  A new file that trips it must either
 
 See CLAUDE.md and reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md.
 """
+import ast
 import re
 import subprocess
 from pathlib import Path
@@ -39,43 +40,33 @@ _REDUCE = re.compile(r"\b(np\.n?median|np\.n?mean|\.median\(|\.mean\()")
 # dedup, guarded NN, or histogram-stacking refinement -- NOT dense-NN-median
 # correction). Keep this list SHORT and justified; do not add to it to silence the
 # guard on a genuine violation.
+#: Reviewed (file, function) pairs where a NN match beside a reduce is
+#: legitimate -- source association for merging/dedup, a guarded NN, or
+#: histogram-stacking refinement -- and NOT a dense-NN-median correction.
+#:
+#: Keyed on the FUNCTION, not the file.  A file-level key silences the whole
+#: file: `merge_catalogs.py` was allowlisted for its source association, and a
+#: new dense-NN-median added anywhere else in its 3000 lines would have passed
+#: unseen.  Keying on the function is what makes an entry a statement about
+#: reviewed code rather than about a filename.
+#:
+#: `<module>` means module-level code outside any function.
 ALLOWLIST = {
-    # sanctioned histogram-stacking helpers (median only refines the peak)
-    "jwst_gc_pipeline/photometry/astrometry_offsets.py",
-    "scripts/reduction/astrometry_audit.py",
-    "scripts/release/registration_failsafes.py",  # per-cell agreement-fraction, not a correction
-    "scripts/miri_reduction/apply_measured_miri_wcs_offsets.py",  # histogram refine_offset
-    "scripts/miri_reduction/check_visit_registration.py",
-    "scripts/miri_reduction/miri_f2550w_image3_rerun_v2.py",
-    # the guard itself (nthneighbor=2 self-spacing measurement)
-    "jwst_gc_pipeline/photometry/measure_offsets.py",
-    # reference-catalog builders (guarded internally / sparse Gaia tie)
-    "jwst_gc_pipeline/reduction/build_gaia_virac2_refcat_byquery.py",
-    # post-verified-tie FINE refinement only: coord_shift's match+median runs on positions
-    # already coarse-tied to <SEARCH of VIRAC2 by the swept, guarded measure_offset (nearest
-    # pair is the TRUE counterpart), with sep<SEARCH, n>=15, CLIP_MAS clip -- NOT a dense-NN-
-    # median tie. The coarse absolute tie uses measure_offset, never NN.
-    "jwst_gc_pipeline/reduction/build_virac2_offsets.py",
-    "jwst_gc_pipeline/reduction/align_to_catalogs.py",  # guarded realign_to_catalog
-    # No astrometry here: the match pairs the SAME star with itself across two
-    # fit_shape settings of the SAME frames, and the median is taken of a FLUX
-    # RATIO column (R = flux_ref/flux_size) to build the correction table.  No
-    # positional offset is derived, so the collapse this guard exists to catch
-    # cannot occur.
-    "scripts/satstar_deblend/collect_correction_data.py",
-    "jwst_gc_pipeline/photometry/generate_offsets_table.py",  # guarded voff()
-    "jwst_gc_pipeline/photometry/make_reference_from_pipeline_catalogs.py",  # guarded bootstrap
-    # cross-band source association for catalog merging / dedup (NOT astrometry)
-    "jwst_gc_pipeline/photometry/merge_catalogs.py",
-    "jwst_gc_pipeline/photometry/crowdsource_catalogs_long.py",
-    "jwst_gc_pipeline/photometry/dedup_catalog.py",
-    "jwst_gc_pipeline/photometry/cataloging.py",
-    "jwst_gc_pipeline/photometry/legacy/crowdsource_step.py",
-    "scripts/reduction/combine_brick_allband.py",  # cross-band merge
-    # PR #57 diagnostic: nearest-neighbour SEPARATION histogram (median only for the
-    # figure-title label + a caveat plot) -- NOT an astrometric correction.
-    "docs/pr57_recovery_investigation/make_caveat_figs.py",
+    # sanctioned: histogram-stacking refinement, median only refines the peak
+    ("jwst_gc_pipeline/photometry/measure_offsets.py", "measure_offsets"),
+    ("jwst_gc_pipeline/reduction/build_virac2_offsets.py", "coord_shift"),
+    # sanctioned: source ASSOCIATION for merging / saturated replacement, not a
+    # correction -- the median is over fluxes/columns, not over offsets
+    ("jwst_gc_pipeline/photometry/merge_catalogs.py", "combine_singleframe"),
+    ("jwst_gc_pipeline/photometry/merge_catalogs.py", "replace_saturated"),
+    # sanctioned: masking extended emission, no astrometry in it
+    ("jwst_gc_pipeline/photometry/cataloging.py", "_filter_extended_emission"),
+    # one-off scripts outside the pipeline's astrometric path
+    ("scripts/reduction/combine_brick_allband.py", "main"),
+    ("scripts/miri_reduction/miri_f2550w_image3_rerun_v2.py", "<module>"),
+    ("docs/pr57_recovery_investigation/make_caveat_figs.py", "<module>"),
 }
+
 
 def _iter_py_files():
     """Only GIT-TRACKED .py files -- the guard polices committed code, not local
@@ -97,28 +88,76 @@ def _iter_py_files():
         yield rel, p
 
 
+def _offending_functions(text):
+    """(function name) pairs where a NN match and a reduce occur TOGETHER.
+
+    File-level co-occurrence is too coarse: a 3000-line module that does source
+    association in one function and takes an unrelated median in another trips
+    it, and the only remedy is an allowlist entry that then silences the whole
+    file.  Scoping to the enclosing function keeps the tripwire on the pattern
+    the rule is about -- a nearest-neighbour match reduced by a median, right
+    there -- and lets the allowlist name reviewed code instead of filenames.
+    """
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        # unparseable: fall back to the coarse test rather than skipping it
+        return {"<unparseable>"} if (_MATCH.search(text) and _REDUCE.search(text)) else set()
+    lines = text.splitlines()
+    hits = set()
+    spans = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            end = node.end_lineno or node.lineno
+            spans.append((node.lineno, end))
+            seg = "\n".join(lines[node.lineno - 1:end])
+            if _MATCH.search(seg) and _REDUCE.search(seg):
+                hits.add(node.name)
+    module_only = "\n".join(
+        line for i, line in enumerate(lines, 1)
+        if not any(lo <= i <= hi for lo, hi in spans))
+    if _MATCH.search(module_only) and _REDUCE.search(module_only):
+        hits.add("<module>")
+    return hits
+
+
 def test_no_adhoc_nn_median_astrometry():
     offenders = []
     for rel, path in _iter_py_files():
-        text = path.read_text(errors="replace")
-        if _MATCH.search(text) and _REDUCE.search(text):
-            if rel.as_posix() not in ALLOWLIST:
-                offenders.append(rel.as_posix())
+        for func in sorted(_offending_functions(path.read_text(errors="replace"))):
+            if (rel.as_posix(), func) not in ALLOWLIST:
+                offenders.append(f"{rel.as_posix()}::{func}")
     assert not offenders, (
         "FORBIDDEN dense-NN-median astrometry pattern (a nearest-neighbour match "
-        "reduced by median/mean) found in non-allowlisted file(s):\n  "
+        "reduced by median/mean, in the SAME function) found in "
+        "non-allowlisted location(s):\n  "
         + "\n  ".join(sorted(offenders))
-        + "\n\nUse offset-HISTOGRAM stacking instead: "
-        "jwst_gc_pipeline.photometry.astrometry_offsets.measure_offset. "
-        "If this usage is genuinely source-association or histogram-refinement (NOT "
-        "a dense-NN-median astrometric correction), add the file to ALLOWLIST in "
-        "this test with a justification. See CLAUDE.md."
-    )
+        + "\n\nUse jwst_gc_pipeline.photometry.astrometry_offsets.measure_offset "
+        "(2D offset-histogram peak) instead. If this really is legitimate (source "
+        "association for merging/dedup, or a histogram refinement -- NOT a dense-"
+        "NN-median astrometric correction), add the (file, function) pair to "
+        "ALLOWLIST in this test with a one-line justification, after a human "
+        "review. See CLAUDE.md ASTROMETRY RULE #1.")
+
+
+def test_allowlist_has_no_dead_entries():
+    """An allowlist entry that no longer trips is rot, and rot is how a list of
+    20 grows until nobody reads it.  Delete entries whose code moved or was
+    fixed -- half of this list was dead when the function scoping landed."""
+    live = set()
+    for rel, path in _iter_py_files():
+        for func in _offending_functions(path.read_text(errors="replace")):
+            live.add((rel.as_posix(), func))
+    dead = sorted(ALLOWLIST - live)
+    assert not dead, (
+        "ALLOWLIST entries that no longer trip the guard (remove them):\n  "
+        + "\n  ".join(f"{f}::{fn}" for f, fn in dead))
 
 
 def test_allowlist_entries_exist():
-    """Keep the allowlist from rotting -- every entry must point at a real file."""
-    missing = [rel for rel in ALLOWLIST if not (REPO_ROOT / rel).is_file()]
+    """Every entry must point at a real file."""
+    missing = sorted({rel for rel, _ in ALLOWLIST
+                      if not (REPO_ROOT / rel).is_file()})
     assert not missing, (
         "ALLOWLIST references files that no longer exist (remove them):\n  "
-        + "\n  ".join(sorted(missing)))
+        + "\n  ".join(missing))

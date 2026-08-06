@@ -59,9 +59,8 @@ ALLOWLIST = {
     # delta the experiment measures.  Tracked on #154; allowlisted here because
     # the call site is a deliberate fallback, not a SIP-first astrometry read.
     "jwst_gc_pipeline/astrometry_gdc/gdc_wcs.py",
-    # writes/verifies the SIP header against the GWCS -- reads SIP on purpose
-    "jwst_gc_pipeline/reduction/fits_wcs_sync.py",
-    "scripts/release/audit_fits_gwcs_agreement.py",
+    # (fits_wcs_sync.py and audit_fits_gwcs_agreement.py were here; both stopped
+    # building a SIP WCS and were removed by test_allowlist_has_no_dead_entries)
     # all astrometry here goes through frame_wcs; the one remaining
     # WCS(fh['SCI'].header, relax=True) is the no-GWCS FALLBACK of the
     # SCI->PRIMARY header copy, whose primary path is sync_header_to_gwcs.
@@ -71,9 +70,6 @@ ALLOWLIST = {
     "jwst_gc_pipeline/photometry/crowdsource_catalogs_long.py",
     "scripts/release/make_preview_rgb.py",
     "scripts/satstar_deblend/run_satstar_compare.py",
-    # frozen legacy path (see manual-defaults consolidation); not used for
-    # release products
-    "jwst_gc_pipeline/photometry/legacy/crowdsource_step.py",
     # DISPLAY only: the WCS is handed to WCSAxes, which needs a real
     # astropy.wcs.WCS.  No catalog position is derived from it.
     "jwst_gc_pipeline/plotting/plot_tools.py",
@@ -114,13 +110,22 @@ def _iter_py_files():
         yield rel, p
 
 
+def _sip_offenders(text):
+    """Line numbers where a SIP-header WCS is built.  Reported so a reviewer
+    can look at the call site instead of at a filename."""
+    return [i for i, line in enumerate(text.splitlines(), 1)
+            if _SIP_WCS.search(line)] or (
+        [0] if _SIP_WCS.search(text) else [])   # multi-line match
+
+
 def test_no_sip_wcs_for_frame_astrometry():
     offenders = []
     for rel, path in _iter_py_files():
         if rel.as_posix() in ALLOWLIST:
             continue
-        if _SIP_WCS.search(path.read_text(errors="replace")):
-            offenders.append(rel.as_posix())
+        hits = _sip_offenders(path.read_text(errors="replace"))
+        if hits:
+            offenders.append(f"{rel.as_posix()}:{','.join(map(str, hits[:5]))}")
     assert not offenders, (
         "SIP-header WCS built from a detector-frame SCI header in "
         "non-allowlisted file(s):\n  " + "\n  ".join(sorted(offenders))
@@ -131,6 +136,20 @@ def test_no_sip_wcs_for_frame_astrometry():
         "If the file genuinely reads an i2d mosaic (rectified, no SIP) or must "
         "read the SIP header on purpose, add it to ALLOWLIST with a justification."
     )
+
+
+def test_allowlist_has_no_dead_entries():
+    """An entry that no longer trips is rot.  The NN-median guard's list was
+    half dead when this check was added to it; keep this one from going the
+    same way."""
+    dead = []
+    for rel in sorted(ALLOWLIST):
+        p = REPO_ROOT / rel
+        if p.is_file() and not _SIP_WCS.search(p.read_text(errors="replace")):
+            dead.append(rel)
+    assert not dead, (
+        "ALLOWLIST entries that no longer build a SIP WCS (remove them):\n  "
+        + "\n  ".join(dead))
 
 
 def test_allowlist_entries_exist():
