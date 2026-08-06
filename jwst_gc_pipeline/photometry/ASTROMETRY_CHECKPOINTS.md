@@ -99,11 +99,25 @@ It exists because both gates are structurally blind to that term:
 * `CROSSFILTER_TOL_MAS = 5.0` is on the **bulk**, which is ~0 for a field whose
   mean is zero by construction;
 * `LOCAL_CELL_TOL_MAS = 15.0` at `LOCAL_CELL_SIZE_ARCSEC = 2.0` does not merely
-  fail to reach significance — at GC densities a 2″ cell holds ~1 star against
-  `LOCAL_CELL_MIN_STARS = 10`, so the map returns `n_cells = 0`, and
-  `run_crossfilter_checkpoint` reads only `n_flagged`, so an **empty map is
-  indistinguishable from a clean one**. An injection sweep on Brick geometry
-  never trips it at any amplitude up to 30 mas/arcmin.
+  fail to reach significance — on a dense field the reliability cut leaves ~1.2
+  stars per 2″ cell against `LOCAL_CELL_MIN_STARS = 10` (measured on brick
+  F212N/F182M), so the map returns `n_cells = 0`. An injection sweep on Brick
+  geometry never trips it at any amplitude up to 30 mas/arcmin.
+
+  That silence used to score as a **pass**. It is now reported as
+  **unverified**: `run_crossfilter_checkpoint` records `unverified` and
+  `all_verified` (matching `run_visit_checkpoint`) and prints
+  `ASTROM CHECKPOINT [m7-crossfilter] COULD NOT VERIFY:` per entry. Three
+  situations produce one — an empty map, a map with fewer than
+  `LOCAL_CELL_MIN_CELLS` (4) populated cells, and a bulk tie that skipped the
+  local map entirely (swept, or ≥ 100 mas). None is a *failure*: measuring
+  nothing is a coverage fact about the field, not evidence of a misalignment,
+  and failing it would block every dense field on a cell size that cannot work
+  there.
+
+  **`all_verified` still has no non-test reader** — `stage_release.py` never
+  opens `astrometry_checkpoints/` and `monitoring/scan.py` globs `checkpoint_m2_*`
+  only — so today this buys a printed line and a JSON field a human may read.
 
 New `tolerances` keys: `field_cell_arcsec` (45″) and `field_min_stars` (40) —
 cells large enough to hold hundreds of stars, so the per-cell SEM falls far

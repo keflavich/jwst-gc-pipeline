@@ -36,12 +36,15 @@ Implements the failsafe ladder around the cataloging iterations:
   same-detector pairs exceed it -- so bandpass separation is the better
   predictor.  Recorded, printed, never gates.
 
-  The 2" cell gate's blindness is worse than "not significant": at 2" a GC
-  field yields ~1 star per cell against ``LOCAL_CELL_MIN_STARS = 10``, so the
-  map comes back with ``n_cells = 0`` and ``run_crossfilter_checkpoint``, which
-  reads only ``n_flagged``, cannot distinguish an empty map from a clean one.
-  An injection sweep on Brick geometry never trips it at any amplitude up to
-  30 mas/arcmin (issue #296).
+  The 2" cell gate is BLIND on a dense field, not merely insensitive: the
+  reliability cut leaves ~1.2 stars per 2" cell against
+  ``LOCAL_CELL_MIN_STARS = 10`` (measured on brick F212N/F182M), so the map
+  returns ``n_cells = 0``, and an injection sweep on Brick geometry never trips
+  it at any amplitude up to 30 mas/arcmin (issue #296).  That silence used to
+  score as a pass; an empty or near-empty map is now reported as UNVERIFIED --
+  never as a failure, since measuring nothing is a coverage fact rather than
+  evidence of a misalignment -- via the record's ``unverified`` /
+  ``all_verified``.
 
 Every checkpoint writes a machine-readable record under
 ``{basepath}/astrometry_checkpoints/`` so the release gate can audit the full
@@ -85,6 +88,10 @@ CROSSFILTER_TOL_MAS = 5.0
 LOCAL_CELL_TOL_MAS = 15.0
 LOCAL_CELL_SIZE_ARCSEC = 2.0
 LOCAL_CELL_MIN_STARS = 10
+#: Below this many populated cells the local map has checked too little of
+#: the field for a pass to mean anything -- reported as unverified, never as
+#: a failure.  One cell out of thousands is not coverage.
+LOCAL_CELL_MIN_CELLS = 4
 
 # Cross-filter residual FIELD (measurement only, never gates).  The 2"/15 mas
 # local map above is a blend/gross-patch detector and at GC densities it does
@@ -2172,7 +2179,10 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
     ``ALLOW_CROSSFILTER_ASTROM_FAIL=1``).
     """
     if len(catalogs_by_filter) < 2:
-        return dict(passed=True, skipped="single filter", filters=[])
+        # Carry the new keys: an audit rule keyed on `all_verified is not True`
+        # would otherwise refuse a legitimately single-filter field, or KeyError.
+        return dict(passed=True, skipped="single filter", filters=[],
+                    unverified=[], all_verified=True)
     record_dir = record_dir or (os.path.join(basepath, "astrometry_checkpoints")
                                 if basepath else None)
     anchor_filter = pick_reference_anchor_filter(list(catalogs_by_filter))
@@ -2233,6 +2243,16 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
             if bulk.get("swept"):
                 failures.append(f"{fctx}: tie only found by window SWEEP "
                                 f"({bulk['off']:.0f} mas) -- grossly shifted")
+            if bulk.get("swept") or bulk["off"] >= 100.0:
+                # The local map is skipped on these paths, so NOTHING local was
+                # checked.  A large-but-finite error bar can also suppress the
+                # bulk failure above (`off > 3*err` false), leaving a record
+                # that PASSED having measured nothing -- the same shape this
+                # branch exists to stop.
+                unverified.append(
+                    f"{fctx}: bulk tie {bulk['off']:.1f} mas "
+                    f"(swept={bulk.get('swept')}) skipped the local cell map "
+                    f"entirely -- no local check ran")
             if not bulk.get("swept") and bulk["off"] < 100.0:
                 local = local_residual_map(
                     coords, anchor_coords, bulk, cell_arcsec=cell_arcsec,
@@ -2262,7 +2282,25 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                           f"by chance, |J| {field['gradient_mas_per_arcmin']:.2f} "
                           f"mas/arcmin) -- MEASUREMENT ONLY, not a gate",
                           flush=True)
+                npairs = local.get("n_pairs")
                 if not local["n_cells"]:
+                    # Name the cause the code CHECKED.  n_cells == 0 has three,
+                    # and they are not interchangeable: no pair inside the match
+                    # radius; pairs found but ALL ambiguous (the crowded-field
+                    # case that crashed the brick F187N --refcat run,
+                    # 2026-08-03); or pairs binned but every cell below
+                    # min_stars.  Only the third is sparsity, and on a dense
+                    # field the second is a MATCHING failure after a tie this
+                    # run just certified.
+                    if npairs == 0:
+                        why = ("no matched pair survived the map's radius and "
+                               "uniqueness filter -- on a dense field that is a "
+                               "matching failure, not sparsity")
+                    elif npairs is None:
+                        why = "cause not recorded (local_residual_map predates n_pairs)"
+                    else:
+                        why = (f"{npairs} matched pairs binned, but no cell "
+                               f"reached {cell_min_stars} of them")
                     # An EMPTY map is not a clean one.  At GC densities a
                     # `cell_arcsec` cell holds ~1 star against `cell_min_stars`,
                     # so local_residual_map skips every cell and returns
@@ -2275,10 +2313,17 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                     # field, not evidence of a misalignment.
                     unverified.append(
                         f"{fctx}: local {cell_arcsec}\" cell map is EMPTY "
-                        f"({local['n_cells']} cells; every cell held fewer "
-                        f"than {cell_min_stars} matched stars) -- this filter "
-                        f"pair got NO local check at all, and a pass here is "
-                        f"silence rather than a verified result")
+                        f"({why}) -- this filter pair got NO local check at "
+                        f"all, and a pass here is silence rather than a "
+                        f"verified result")
+                elif local["n_cells"] < LOCAL_CELL_MIN_CELLS:
+                    # One or two cells out of thousands is not coverage either.
+                    unverified.append(
+                        f"{fctx}: local {cell_arcsec}\" cell map has only "
+                        f"{local['n_cells']} populated cell(s) (< "
+                        f"{LOCAL_CELL_MIN_CELLS}) from {npairs} pairs -- too "
+                        f"little of the field is checked for a pass to mean "
+                        f"anything")
                 elif local["n_flagged"]:
                     worst = max((c for c in local["cells"] if c["flagged"]),
                                 key=lambda c: c["off_mas"])
@@ -2305,7 +2350,8 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
     if record_dir:
         _write_record(record_dir, "checkpoint_m7_crossfilter", record)
     for w in unverified:
-        print(f"ASTROM CROSSFILTER UNVERIFIED: {w}", flush=True)
+        print(f"ASTROM CHECKPOINT [m7-crossfilter] COULD NOT VERIFY: {w}",
+              flush=True)
     if failures:
         msg = ("CROSS-FILTER ASTROMETRY FAILURE --\n  " + "\n  ".join(failures))
         if _env_flag("ALLOW_CROSSFILTER_ASTROM_FAIL"):
@@ -2422,11 +2468,11 @@ def measure_residual_field(coords, anchor_coords, bulk,
 
     Diagnostic only: nothing here raises, and the caller must not gate on it.
     The point is that a coherent field of a few mas is presently invisible —
-    it passes the 5 mas bulk gate (the bulk is ~0) and it passes the 15 mas/2"
-    cell gate because at 2" a GC field yields ~1 star per cell against
-    ``LOCAL_CELL_MIN_STARS = 10``, so that map comes back EMPTY and
-    ``run_crossfilter_checkpoint``, which reads only ``n_flagged``, cannot tell
-    an empty map from a clean one.
+    it passes the 5 mas bulk gate (the bulk is ~0), and the 15 mas/2" cell gate
+    cannot see it either -- at 2" a dense field leaves ~1.2 stars per cell
+    against ``LOCAL_CELL_MIN_STARS = 10``, so that map comes back EMPTY.  The
+    emptiness is now reported as UNVERIFIED rather than scored as a pass, but
+    the cell gate still measures nothing there, which is why this exists.
 
     ``bulk`` is the ``measure_offset`` result used to pre-align the two
     catalogs; ``local_residual_map`` refuses to run without a verified small
