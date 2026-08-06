@@ -352,7 +352,33 @@ def _restrict_to_same_stars(coords, reference, radius, context="",
         return None, (f"only {100 * survival:.1f}% of stars matched the m2 list "
                       f"(< {100 * RESTRICT_MIN_SURVIVAL:.0f}%) -- that is a "
                       f"chance-coincidence rate, not the same stars")
+    # Survival measures the fraction of THIS EXPOSURE's stars that matched.  It
+    # is blind to what fraction of the STAR LIST is foreign sky: a list that is
+    # half a different pointing passes every check above, because the foreign
+    # half simply never matches and is silently ignored.  That is not
+    # hypothetical -- cloudef's f360m_o002 and f480m_o005 consensus catalogs
+    # each pool TWO pointings 15 arcmin apart (24 of 40 RA bins empty, two
+    # disjoint blobs), because the m2 run that built them ingested two
+    # observations under one filename namespace.
+    #
+    # Report the coverage; do not gate on it.  A star list may legitimately
+    # cover far more sky than one exposure -- it is the whole visit's -- so a
+    # low fraction is a reason to look, not a reason to refuse, and refusing on
+    # it would reject every healthy field.
     return mask, None
+
+
+def _fraction_within_footprint(reference, coords, pad_arcsec=30.0):
+    """Fraction of ``reference`` inside ``coords``' bounding box (+pad)."""
+    if reference is None or len(reference) == 0 or len(coords) == 0:
+        return None
+    cosd = max(np.cos(np.radians(float(np.median(coords.dec.deg)))), 1e-6)
+    pad_ra, pad_dec = pad_arcsec / 3600.0 / cosd, pad_arcsec / 3600.0
+    ra, dec = coords.ra.deg, coords.dec.deg
+    rra, rdec = reference.ra.deg, reference.dec.deg
+    inside = ((rra >= ra.min() - pad_ra) & (rra <= ra.max() + pad_ra)
+              & (rdec >= dec.min() - pad_dec) & (rdec <= dec.max() + pad_dec))
+    return float(inside.sum()) / len(reference)
 
 
 def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
@@ -429,6 +455,7 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
         coords = _all_coords[keep]
         n_before_restrict = int(keep.sum())
         restrict_refused = None
+        restrict_list_coverage = None
         if restrict_to is not None and len(coords):
             # SAME-STAR restriction (issue #285).  A frozen-stage gate asks
             # whether the solution MOVED, and the answer must not depend on
@@ -450,6 +477,16 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
                 coords, restrict_to, restrict_radius,
                 context=f"{context} {exposure_key(tbl)}",
                 reference_tree=_restrict_tree)
+            # RECORDED, never gated: what fraction of the star list lies in
+            # this exposure's footprint.  A visit-wide list legitimately covers
+            # more sky than one exposure, so there is no threshold to set -- but
+            # a list that is half a DIFFERENT POINTING passes every check above,
+            # because the foreign half never matches and is silently ignored.
+            # cloudef's f360m_o002 and f480m_o005 consensus catalogs are exactly
+            # that: two pointings 15 arcmin apart pooled into one file by an m2
+            # run that ingested two observations under one filename namespace.
+            restrict_list_coverage = _fraction_within_footprint(restrict_to,
+                                                                coords)
             if restrict_refused:
                 print(f"astrom consensus [{context}] {exposure_key(tbl)}: "
                       f"same-star restriction REFUSED, using the full star "
@@ -471,6 +508,7 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
             key=exposure_key(tbl), coords=coords, flux=flux,
             n_reliable=len(coords), n_reliable_unrestricted=n_before_restrict,
             restrict_refused=restrict_refused,
+            restrict_list_coverage=restrict_list_coverage,
             coords_unrestricted=_all_coords[keep],
             flux_unrestricted=(np.asarray(tbl["flux_fit"], dtype=float)[keep]
                                if "flux_fit" in tbl.colnames
@@ -789,6 +827,7 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
             n_reliable_unrestricted=e.get("n_reliable_unrestricted",
                                           e["n_reliable"]),
             restrict_refused=e.get("restrict_refused"),
+            restrict_list_coverage=e.get("restrict_list_coverage"),
             component=int(comp_id[pos]),
             internal_tie=bool(rel[pos] is not None and rel[pos]["npairs"] > 0
                               and (comp_id == comp_id[pos]).sum() > 1),

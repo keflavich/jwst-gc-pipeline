@@ -830,3 +830,49 @@ def test_gate_membership_uses_the_unrestricted_count():
     src = inspect.getsource(vc.build_visit_consensus)
     assert 'e["n_reliable_unrestricted"] >= min_stars' in src, (
         "usable_idx must key on the unrestricted count")
+
+
+def test_a_star_list_that_is_half_other_sky_is_reported():
+    """RESTRICT_MIN_SURVIVAL measures the fraction of the EXPOSURE's stars that
+    matched; it is blind to what fraction of the STAR LIST is foreign sky,
+    because the foreign half simply never matches and is ignored.
+
+    Real: cloudef's f360m_o002 and f480m_o005 consensus catalogs each pool two
+    pointings 15 arcmin apart, because the m2 run that built them ingested two
+    observations under one filename namespace.
+    """
+    from jwst_gc_pipeline.photometry.visit_consensus import (
+        _fraction_within_footprint, _restrict_to_same_stars)
+    import astropy.units as u
+    ra, dec = _field(n=400)
+    ref = build_visit_consensus(
+        [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)],
+        context="m2")["coords"]
+    # the same list plus an equal blob 15 arcmin away -- cloudef's shape
+    far = SkyCoord((ref.ra.deg + 15.0 / 60.0 / COSD) * u.deg, ref.dec, frame="icrs")
+    mixed = SkyCoord(np.concatenate([ref.ra.deg, far.ra.deg]) * u.deg,
+                     np.concatenate([ref.dec.deg, far.dec.deg]) * u.deg)
+    assert _fraction_within_footprint(mixed, ref) < 0.6
+    # it still RESTRICTS -- the local half matches fine -- and survival cannot
+    # see the problem, which is the point
+    mask, why = _restrict_to_same_stars(ref, mixed, 0.15 * u.arcsec)
+    assert mask is not None and mask.sum() > 0.8 * len(ref), why
+    # what makes it visible is the RECORDED coverage, not a threshold
+    cons = build_visit_consensus(
+        [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)],
+        context="mixed", restrict_to=mixed)
+    covs = [e["restrict_list_coverage"] for e in cons["exposures"]]
+    assert all(c is not None and c < 0.6 for c in covs), covs
+
+
+def test_footprint_coverage_is_reported_not_gated():
+    """A visit-wide star list legitimately covers more sky than one exposure,
+    so a low fraction is a reason to look, never a reason to refuse."""
+    from jwst_gc_pipeline.photometry.visit_consensus import (
+        _fraction_within_footprint)
+    import astropy.units as u
+    ra, dec = _field(n=200)
+    a = SkyCoord(ra * u.deg, dec * u.deg, frame="icrs")
+    assert _fraction_within_footprint(a, a) == 1.0
+    assert _fraction_within_footprint(a[:0], a) is None
+    assert _fraction_within_footprint(a, a[:0]) is None
