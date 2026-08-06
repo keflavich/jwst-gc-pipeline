@@ -2047,3 +2047,64 @@ def test_assert_poolable_refuses_two_corrections_from_one_module():
     with pytest.raises(OffsetsTableUpdateError, match="MORE THAN ONE"):
         _assert_poolable([{}, {}], ["nrcb1", "nrcb1"], ("jw05365001001", 1),
                          tbl, "/x/Offsets_JWST_Brick5365_VIRAC2locked.csv")
+
+
+def test_two_populated_vgroups_of_aliasing_spellings_are_ACCEPTED(tmp_path):
+    """The vgroup clause of the writer guard, reached for the first time.
+
+    Both earlier vgroup tests short-circuit before it: one uses `module="nrcb"`
+    for both rows, so `len(mods) < 2` returns first; the other uses one vgroup
+    for both, so `len(vgs) == 1` and the condition is False either way.
+    Deleting the clause left them green.
+
+    Two DIFFERENT non-empty vgroups are two physical pointings.  `nrcb` in
+    vgroup A and `nrcblong` in vgroup B describe different frames, so they
+    cannot alias and must be written.
+    """
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        seed_offsets_table_from_consensus)
+    corr = [dict(visit="1", exposure=1, module=m, filtername="F360M",
+                 vgroup=vg, dra_onsky_mas=3.0, ddec_onsky_mas=-2.0,
+                 dec_deg=DEC_TEST, source="m2 visit-consensus")
+            for m, vg in (("nrcb", "02101"), ("nrcblong", "02201"))]
+    path = seed_offsets_table_from_consensus(str(tmp_path), "2092", "002",
+                                             corr, stage="m2")
+    assert len(Table.read(path)) == 2
+
+
+def test_an_EMPTY_vgroup_beside_a_populated_one_is_REFUSED(tmp_path):
+    """The read-time wildcard case the clause exists for.
+
+    An empty Vgroup matches ANY vgroup at read time, so a bare-module row with
+    no vgroup and a `long` row with one still resolve to the same frame --
+    which is the aliasing this guard refuses.  `all(v for v in vgs)` is what
+    makes an empty one collidable; `any` passes it through.
+    """
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        seed_offsets_table_from_consensus)
+    corr = [dict(visit="1", exposure=1, module=m, filtername="F360M",
+                 vgroup=vg, dra_onsky_mas=3.0, ddec_onsky_mas=-2.0,
+                 dec_deg=DEC_TEST, source="m2 visit-consensus")
+            for m, vg in (("nrcb", ""), ("nrcblong", "02201"))]
+    with pytest.raises(OffsetsTableUpdateError, match="aliasing module"):
+        seed_offsets_table_from_consensus(str(tmp_path), "2092", "002", corr,
+                                          stage="m2")
+
+
+def test_assert_poolable_allows_a_LONE_bare_module(tmp_path):
+    """`bare and len(set(mods)) > 1` -- both halves.
+
+    `test_assert_poolable_allows_the_detectors_of_one_module` uses nrcb1..4,
+    where `bare` is empty, so it cannot see the second half.  Dropping it makes
+    a lone bare-module pool -- every LW pool on sgrb2 and cloudef, the case the
+    clause protects -- raise instead:
+
+        BASE  lone bare nrcb pool -> ACCEPTED
+        M02   lone bare nrcb pool -> REFUSED: module(s) ['nrcb'] appear beside
+                                     more specific spellings of the same hardware
+    """
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        _assert_poolable)
+    tbl = Table({"Visit": ["jw05365001001"], "Exposure": [1]})
+    _assert_poolable([{}], ["nrcb"], ("jw05365001001", 1), tbl,
+                     "/x/Offsets_JWST_Brick5365_VIRAC2locked.csv")
