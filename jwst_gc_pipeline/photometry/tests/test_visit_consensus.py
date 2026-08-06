@@ -712,3 +712,71 @@ def test_restrict_to_none_is_unchanged_behaviour():
            [e["n_reliable"] for e in b["exposures"]]
     for e in b["exposures"]:
         assert e["n_reliable_unrestricted"] == e["n_reliable"]
+
+
+def _consensus_stars(n=400):
+    ra, dec = _field(n=n)
+    return build_visit_consensus(
+        [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)],
+        context="m2")["coords"], ra, dec
+
+
+def test_restriction_is_refused_when_the_star_list_is_the_wrong_sky():
+    """cloudef restricted against the OTHER observation's consensus: 0.2-15%
+    matched at a median pair separation of 104 mas, i.e. chance.  A wrong star
+    list must be refused, not matched."""
+    from jwst_gc_pipeline.photometry.visit_consensus import _restrict_to_same_stars
+    ref, ra, dec = _consensus_stars()
+    tables = [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)]
+    # an unrelated star list over the same footprint
+    rng = np.random.default_rng(4242)
+    other = SkyCoord((RA0 + rng.uniform(0, 90.0, 400) / 3600.0 / COSD) * u.deg,
+                     (DEC0 + rng.uniform(0, 90.0, 400) / 3600.0) * u.deg)
+    cons = build_visit_consensus(tables, context="wrong-list", restrict_to=other)
+    assert all(e["restrict_refused"] for e in cons["exposures"]), cons["exposures"]
+    # and the gate still has its full input
+    for e in cons["exposures"]:
+        assert e["n_reliable"] == e["n_reliable_unrestricted"]
+
+
+def test_a_gross_movement_is_still_found_not_dropped():
+    """Above ~150 mas the mutual match collapses.  The exposure must still be
+    MEASURED and flagged, never fall out of the gate."""
+    ref, ra, dec = _consensus_stars()
+    for shift in (160.0, 1000.0):
+        tables = [_exposure_table(ra, dec, exposure=e,
+                                  dra_mas=(shift if e == 3 else 0.0))
+                  for e in range(1, 5)]
+        cons = build_visit_consensus(tables, context=f"shift{shift}",
+                                     restrict_to=ref)
+        keys = [tuple(e["key"])[1] for e in cons["exposures"]]
+        assert 3 in keys, (shift, keys, cons["skipped"])
+        moved = [e for e in cons["exposures"] if tuple(e["key"])[1] == 3][0]
+        assert moved["misaligned"], (shift, moved)
+
+
+def test_restriction_is_off_at_a_correcting_stage(tmp_path):
+    """m1/m2/m12 have nothing to freeze against; the full star set is right."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        CORRECTION_STAGES)
+    assert "m2" in CORRECTION_STAGES and "m3" not in CORRECTION_STAGES
+
+
+def test_missing_m2_consensus_falls_back_open_not_closed(tmp_path, capsys):
+    """A missing baseline is not evidence the solution moved."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        _m2_consensus_stars)
+    stars, path = _m2_consensus_stars(str(tmp_path), str(tmp_path), "F212N", "")
+    assert stars is None                       # falls back, does not raise
+
+
+def test_restrict_radius_is_tight_enough_to_be_same_star():
+    """A 5\" radius is not a same-star match in a GC field -- it is whatever is
+    nearby.  Guard the constant, which no behavioural test pins."""
+    import inspect
+    from jwst_gc_pipeline.photometry import visit_consensus as vc
+    default = inspect.signature(vc.build_visit_consensus).parameters[
+        "restrict_radius"].default
+    assert default.to(u.arcsec).value <= 0.3, default
+    assert vc.RESTRICT_MIN_SURVIVAL >= 0.5
+    assert vc.RESTRICT_MAX_TIE_MAS <= 100.0

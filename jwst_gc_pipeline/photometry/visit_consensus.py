@@ -269,6 +269,21 @@ def _cap_stars(sc, n_max=500_000, seed=1182):
     return sc[np.sort(rng.choice(len(sc), n_max, replace=False))]
 
 
+#: The restriction must find most of the stars, or it is not selecting the same
+#: stars -- it is selecting chance coincidences.  Measured at zero shift against
+#: each field's own m2 consensus: cloudc 94.6-98.9%, sickle 85.0-97.7%, sgrc
+#: 91.3-92.7% -- and cloudef 0.0-15.0%, where a wrong observation token made the
+#: star list the OTHER observation's and the median pair separation 104 mas
+#: (chance: N(<r) proportional to r^2 gives ~25% below r/2, and cloudef measured
+#: 0.23).  Below this the restriction is refused and the full star set is used.
+RESTRICT_MIN_SURVIVAL = 0.5
+
+#: A tie this large means the exposure and the star list are not describing the
+#: same sky, so nearest-partner matching would pair the wrong stars.  Same
+#: precondition `local_residual_map` imposes (radius/3), for the same reason.
+RESTRICT_MAX_TIE_MAS = 50.0
+
+
 def _mutual_match_mask(coords, reference, radius):
     """Boolean mask of ``coords`` whose MUTUAL nearest partner in ``reference``
     is within ``radius``.
@@ -289,6 +304,49 @@ def _mutual_match_mask(coords, reference, radius):
     mask = np.zeros(len(coords), dtype=bool)
     mask[np.flatnonzero(near)[back == np.flatnonzero(near)]] = True
     return mask
+
+
+def _restrict_to_same_stars(coords, reference, radius, context=""):
+    """``(mask, reason)`` -- the same-star restriction, or a refusal.
+
+    NOT an ad-hoc nearest-neighbour association.  ``match_to_catalog_sky`` here
+    selects a SAMPLE; it never reduces the matched offsets to a correction, and
+    every offset in this module is still measured by ``measure_offset``'s
+    histogram peak.  What makes the pairing legitimate is the same precondition
+    the sanctioned path requires and which this originally lacked:
+
+    1. a VERIFIED SMALL TIE between the exposure and the star list, measured by
+       ``measure_offset``, before any pairing.  Without it a wrong star list
+       still "matches" -- cloudef's m3 restricted against the other
+       observation's consensus, matched 0.2-15% of stars at a median pair
+       separation of 104 mas (chance), gated 8 of 16 exposures out, and cut the
+       reliable count 95.5%.  All five failures it then reported were computed
+       on a fabricated star set;
+    2. MUTUAL nearest partners only;
+    3. a minimum SURVIVAL fraction, so a restriction that finds almost nothing
+       is refused rather than silently shrinking the gate's input.
+
+    Any refusal returns ``(None, reason)`` and the caller uses the full star
+    set -- a star list we cannot verify is not evidence about the solution.
+    """
+    if reference is None or len(reference) == 0 or len(coords) == 0:
+        return None, "no reference star list"
+    tie = measure_offset(coords, reference, sweep=True,
+                         sweep_windows=PER_EXPOSURE_SWEEP_WINDOWS,
+                         context=f"{context} same-star precondition")
+    if tie is None or not tie.get("ok"):
+        return None, "no verified tie between this exposure and the m2 star list"
+    if tie.get("swept") or tie["off"] > RESTRICT_MAX_TIE_MAS:
+        return None, (f"tie to the m2 star list is {tie['off']:.0f} mas "
+                      f"(swept={tie.get('swept')}) -- too large for "
+                      f"nearest-partner matching to pair the right star")
+    mask = _mutual_match_mask(coords, reference, radius)
+    survival = float(mask.sum()) / len(coords)
+    if survival < RESTRICT_MIN_SURVIVAL:
+        return None, (f"only {100 * survival:.1f}% of stars matched the m2 list "
+                      f"(< {100 * RESTRICT_MIN_SURVIVAL:.0f}%) -- that is a "
+                      f"chance-coincidence rate, not the same stars")
+    return mask, None
 
 
 def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
@@ -362,29 +420,32 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
         keep = np.asarray(keep, dtype=bool) & _finite
         coords = _all_coords[keep]
         n_before_restrict = int(keep.sum())
+        restrict_refused = None
         if restrict_to is not None and len(coords):
             # SAME-STAR restriction (issue #285).  A frozen-stage gate asks
             # whether the solution MOVED, and the answer must not depend on
             # which stars were detected: a later stage fits on a
             # background-subtracted image, so it detects a different set --
-            # and the m3 consensus, rebuilt over that different set, shifts by
-            # a few mas even when no frame moved at all.  The gate then
-            # reports that shift once per exposure as if every exposure had
-            # moved.
+            # and the consensus, rebuilt over that different set, shifts by a
+            # few mas even when no frame moved.  The gate then reports that
+            # shift once per exposure, as if every exposure had moved.
             #
-            # Restricting to the stars the m2 consensus was built from removes
-            # the population change from the comparison and leaves the
-            # movement, which is the quantity the gate names.  It also answers
-            # the S/N concern directly: new faint detections cannot enter and
-            # dilute the tie, because they are not in the m2 set.
+            # Positions still come from THIS stage; only the star LIST is
+            # frozen.  A stage whose centroids genuinely improved is not
+            # penalised -- only relative movement between an exposure and its
+            # peers is measured.
             #
-            # Positions still come from THIS stage -- only the star LIST is
-            # frozen.  A stage whose centroids genuinely improved is therefore
-            # not penalised; only a relative movement between an exposure and
-            # its peers is.
-            keep_idx = _mutual_match_mask(coords, restrict_to, restrict_radius)
-            coords = coords[keep_idx]
-            _flux_idx = keep_idx
+            # `_restrict_to_same_stars` refuses when it cannot verify the star
+            # list describes this exposure's sky; a refusal falls back to the
+            # full set and is reported, never silently applied.
+            mask, restrict_refused = _restrict_to_same_stars(
+                coords, restrict_to, restrict_radius,
+                context=f"{context} {exposure_key(tbl)}")
+            if mask is not None:
+                coords = coords[mask]
+                _flux_idx = mask
+            else:
+                _flux_idx = None
         else:
             _flux_idx = None
         if "flux_fit" in tbl.colnames:
@@ -396,6 +457,11 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
         entries.append(dict(
             key=exposure_key(tbl), coords=coords, flux=flux,
             n_reliable=len(coords), n_reliable_unrestricted=n_before_restrict,
+            restrict_refused=restrict_refused,
+            coords_unrestricted=_all_coords[keep],
+            flux_unrestricted=(np.asarray(tbl["flux_fit"], dtype=float)[keep]
+                               if "flux_fit" in tbl.colnames
+                               else np.full(n_before_restrict, np.nan)),
             raoffset_meta=_meta_lookup(tbl, "RAOFFSET", default=0.0),
             deoffset_meta=_meta_lookup(tbl, "DEOFFSET", default=0.0)))
 
@@ -415,7 +481,25 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
             f"{sorted(dupes.items())[:8]}.  Check for grouped-fit (`_group_`) "
             f"or stale module-level variants alongside the per-detector ones.")
 
-    usable_idx = [i for i, e in enumerate(entries) if e["n_reliable"] >= min_stars]
+    # Gate membership keys on the UNRESTRICTED count.  Keying on the restricted
+    # one let a displaced exposure LEAVE the gate instead of failing it: above
+    # ~150 mas the mutual match collapses (measured on real sickle frames: 831
+    # -> 17 survivors between 140 and 160 mas), the exposure fell below
+    # `min_stars`, and it was never reported at all.  A gross movement must
+    # still be FOUND -- that is what `measure_offset`'s sweep is for.
+    usable_idx = [i for i, e in enumerate(entries)
+                  if e["n_reliable_unrestricted"] >= min_stars]
+    # ...but an exposure whose restricted set is too thin to tie must fall back
+    # to its full star list rather than be measured on a handful of stars.
+    for i in usable_idx:
+        e = entries[i]
+        if len(e["coords"]) < min_stars and e["n_reliable_unrestricted"] >= min_stars:
+            e["restrict_refused"] = (
+                f"restricted to {len(e['coords'])} stars (< {min_stars}); "
+                f"using the full set for this exposure")
+            e["coords"] = e["coords_unrestricted"]
+            e["flux"] = e["flux_unrestricted"]
+            e["n_reliable"] = e["n_reliable_unrestricted"]
     usable = [entries[i] for i in usable_idx]
     if len(usable) < min_exposures:
         raise ConsensusBuildError(
@@ -691,6 +775,7 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
             key=e["key"], n_reliable=e["n_reliable"],
             n_reliable_unrestricted=e.get("n_reliable_unrestricted",
                                           e["n_reliable"]),
+            restrict_refused=e.get("restrict_refused"),
             component=int(comp_id[pos]),
             internal_tie=bool(rel[pos] is not None and rel[pos]["npairs"] > 0
                               and (comp_id == comp_id[pos]).sum() > 1),

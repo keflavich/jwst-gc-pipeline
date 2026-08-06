@@ -1804,17 +1804,39 @@ def _m2_skipped_exposures(record_dir, filtername, visit):
     return out
 
 
-def _m2_consensus_stars(basepath, filtername, obs_token=""):
+def _m2_consensus_stars(record_dir, basepath, filtername, obs_token=""):
     """(SkyCoord of the m2 consensus stars, path) for the same-star gate.
+
+    The path comes from the m2 RECORD's own ``consensus_catalog`` field where
+    it has one, not from recomputing the token.  Recomputing keyed the star
+    list and the baseline differently: the consensus catalog is obs-tokenised
+    while the checkpoint record was not, so on cloudef -- where
+    ``obs_token`` returns '' for proposal 2092 and the o002/o005 m2 runs
+    interleave into one record file -- an o002 run could restrict against
+    o005's star list, 104 mas away, while comparing against a baseline written
+    by either.  Reading the path the m2 run itself recorded ties the two to the
+    same run for nothing.
 
     Returns ``(None, path)`` when the catalog is absent -- a field whose m2
     predates the per-filter consensus catalog, or a filter m2 could not pool.
-    The caller says so loudly and falls back rather than failing: a missing
-    baseline is not evidence the solution moved.
+    The caller says so loudly and falls back: a missing baseline is not
+    evidence the solution moved.
     """
     from .consensus_catalog import consensus_path
-    path = consensus_path(basepath, filtername, obs_token=obs_token)
-    if not (filtername and os.path.exists(path)):
+    path = None
+    # NB _m2_record_path grows an obs_token parameter in PR #306; this call
+    # deliberately does not pass one so the two branches stay independent.
+    rec_path = _m2_record_path(record_dir, filtername) if record_dir else None
+    if rec_path:
+        try:
+            with open(rec_path) as fh:
+                path = json.load(fh).get("consensus_catalog")
+        except (OSError, ValueError) as ex:
+            print(f"astrom checkpoint: could not read consensus_catalog from "
+                  f"{rec_path} ({type(ex).__name__}: {ex})", flush=True)
+    if not path and basepath:
+        path = consensus_path(basepath, filtername, obs_token=obs_token)
+    if not (filtername and path and os.path.exists(path)):
         return None, path
     try:
         tbl = Table.read(path)
@@ -1896,8 +1918,8 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
     # the full star set is the right one.
     m2_stars, m2_stars_source = (None, None)
     if not correcting and basepath:
-        m2_stars, m2_stars_source = _m2_consensus_stars(basepath, filtername,
-                                                        obs_token)
+        m2_stars, m2_stars_source = _m2_consensus_stars(
+            record_dir, basepath, filtername, obs_token)
         if m2_stars is None:
             print(f"astrom checkpoint [{stage}] {filtername}: no m2 consensus "
                   f"catalog at {m2_stars_source} -- the stage-stability check "
