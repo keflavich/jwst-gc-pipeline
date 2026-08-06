@@ -46,7 +46,12 @@ def _latest(pattern):
     return fns[-1] if fns else None
 
 
-def _img(path):
+def _img(path, what=""):
+    if path is None:
+        # Never reached when the skip predicate and the fixture agree; kept so a
+        # future divergence fails with the missing product named rather than
+        # with astropy's "Empty filename: None".
+        pytest.skip(f"required QA product not on disk: {what}")
     h = fits.open(path)
     sci = h['SCI'] if 'SCI' in [x.name for x in h] else h[0]
     return sci.data, WCS(sci.header)
@@ -65,18 +70,40 @@ def _peaks(arr, w, stars, box=3):
     return np.array(out)
 
 
+#: The EXACT products the fixture opens.  The skip predicate must be keyed on
+#: these and not on anything looser: it used to check
+#: ``*mergedcat_residual_i2d.fits`` while the fixture globbed
+#: ``*_m7_*mergedcat_residual_i2d.fits``, so on a field that had reached m5 but
+#: not m7 the predicate found 4 products, declined to skip, and the fixture then
+#: opened ``None`` -- three ERRORS on main since 2026-07-05 (issue #266).
+#: sickle F480M is exactly that field: it carries m2/m3/m4/resbgsub_m5 residuals
+#: and no m7, because it is parked at m6 (issue #285).
+_REQUIRED = {
+    "data i2d": f"{SICKLE}/F480M/pipeline/*-f480m-nrcb_data_i2d.fits",
+    "m7 residual i2d": f"{SICKLE}/F480M/pipeline/*_m7_*mergedcat_residual_i2d.fits",
+    "m7 model i2d": f"{SICKLE}/F480M/pipeline/*_m7_*mergedcat_model_i2d.fits",
+}
+
+
+def _missing_products():
+    missing = [] if os.path.exists(REG) else [f"region file {REG}"]
+    missing += [f"{what} ({pat})" for what, pat in sorted(_REQUIRED.items())
+                if not glob.glob(pat)]
+    return missing
+
+
 pytestmark = pytest.mark.skipif(
-    not os.path.exists(REG)
-    or not glob.glob(f"{SICKLE}/F480M/pipeline/*mergedcat_residual_i2d.fits"),
-    reason="sickle F480M QA products / region file not present")
+    bool(_missing_products()),
+    reason="sickle F480M QA products / region file not present: "
+           + "; ".join(_missing_products()))
 
 
 @pytest.fixture(scope="module")
 def f480m():
     stars = _read_points(REG)
-    data, dw = _img(_latest(f"{SICKLE}/F480M/pipeline/*-f480m-nrcb_data_i2d.fits"))
-    resid, rw = _img(_latest(f"{SICKLE}/F480M/pipeline/*_m7_*mergedcat_residual_i2d.fits"))
-    model, mw = _img(_latest(f"{SICKLE}/F480M/pipeline/*_m7_*mergedcat_model_i2d.fits"))
+    data, dw = _img(_latest(_REQUIRED["data i2d"]), "data i2d")
+    resid, rw = _img(_latest(_REQUIRED["m7 residual i2d"]), "m7 residual i2d")
+    model, mw = _img(_latest(_REQUIRED["m7 model i2d"]), "m7 model i2d")
     return dict(stars=stars,
                 d=_peaks(data, dw, stars), r=_peaks(resid, rw, stars),
                 m=_peaks(model, mw, stars),
@@ -119,3 +146,23 @@ def test_model_background_not_negative(f480m):
     assert np.mean(fin < -0.5) < 0.05, (
         f"{np.mean(fin < -0.5):.1%} of F480M model pixels are < -0.5; "
         f"the model must be stars on a zero background.")
+
+
+def test_skip_predicate_covers_every_product_the_fixture_opens():
+    """The predicate and the fixture must glob the SAME patterns.
+
+    They diverged for a month: the predicate checked
+    `*mergedcat_residual_i2d.fits` while the fixture needed the `_m7_` variant,
+    so a field with m2..m5 products but no m7 passed the predicate and then
+    opened None -- three ERRORS on main since 2026-07-05 (issue #266).
+    """
+    import inspect
+    src = inspect.getsource(f480m.__wrapped__ if hasattr(f480m, "__wrapped__")
+                            else f480m)
+    for what in _REQUIRED:
+        assert repr(what) in src or f'"{what}"' in src, (
+            f"_REQUIRED lists {what!r} but the fixture does not open it")
+    # every glob the fixture opens must come from _REQUIRED, not be inline
+    assert "SICKLE}/F480M" not in src, (
+        "the fixture globs a path inline; add it to _REQUIRED so the skip "
+        "predicate covers it")
