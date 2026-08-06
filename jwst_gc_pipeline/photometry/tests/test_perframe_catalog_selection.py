@@ -132,9 +132,16 @@ def test_tokened_run_keeps_only_its_own_observation():
 
 def test_untokened_run_drops_the_tokened_siblings():
     """Otherwise a run that writes pre-token names still ingests every
-    observation's tokened catalogs beside it."""
+    observation's tokened catalogs beside it.
+
+    `obs_token` now emits a token for every observation, so an untokened RUN
+    only happens when no field id was threaded -- and then there is no
+    observation to filter on.  `target_obs=None` reproduces that: the tokened
+    siblings still go, the untokened one stays.
+    """
     kept = _drop_foreign_obs_duplicates(_mixed_gc2211(), "",
-                                        "f200w", "m2", "nrcb", "gc2211")
+                                        "f200w", "m2", "nrcb", "gc2211",
+                                        target_obs=None)
     assert kept == [_name(filt="f200w", tok="")]
 
 
@@ -327,17 +334,20 @@ def test_miri_filter_counts_miri_observations_not_nircam():
 
 def test_checkpoint_filters_on_the_written_token_not_the_consensus_name(
         tmp_path, capsys):
-    """End-to-end wiring, wd1: the two tokens DIFFER.
+    """End-to-end wiring, wd1.  The two tokens now AGREE.
 
-    ``consensus_obs_token('1905', '001')`` is ``_o001`` while the per-frame
-    writer emits '', and no wd1 catalog on disk carries a token.  Filtering on
-    the consensus name matches nothing and the checkpoint reports no inputs;
-    filtering on the written token keeps every frame.
+    They used to diverge -- ``consensus_obs_token('1905','001')`` was ``_o001``
+    while the per-frame writer emitted ``''`` -- which is what this test was
+    written to pin, and which was one of the silent no-ops that let a wrong
+    star list and a wrong baseline pair up (#281/#285).  `obs_token` is now
+    emitted for every observation, so the divergence is gone; what still has to
+    hold is that the checkpoint filters on the token the WRITER emits, and that
+    no wd1 catalog on disk carrying no token is thrown away for it.
     """
     from jwst_gc_pipeline.photometry.consensus_catalog import consensus_obs_token
     from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import obs_token
     assert consensus_obs_token("1905", "001") == "_o001"
-    assert obs_token("1905", "001") == ""
+    assert obs_token("1905", "001") == "_o001"      # was '' -- now agrees
     assert fields.filter_observation_count("wd1", "F200W") > 1, "premise: shared"
 
     (tmp_path / "F200W").mkdir(parents=True)

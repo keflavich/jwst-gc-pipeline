@@ -3589,19 +3589,42 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
         # the detectors and PASSES, which is worse than the duplicate it avoids
         # -- the same reasoning as the single-observation branch below.
         want = f"_o{str(target_obs)}_" if target_obs else None
+
+        def _identity(base):
+            m = _OBS_TOKEN_RE.search(base)
+            if m:
+                base = base.replace('_' + m.group(1), '', 1)
+            return re.sub(r'_chunk\d+of\d+', '', base)
+
+        tokened_ids = {_identity(os.path.basename(f)) for f in fns
+                       if _OBS_TOKEN_RE.search(os.path.basename(f))}
         unreadable = []
         for fn in fns:
-            m = _OBS_TOKEN_RE.search(os.path.basename(fn))
+            base = os.path.basename(fn)
+            m = _OBS_TOKEN_RE.search(base)
             if m:
                 if m.group(1) != token:
                     drop.append(fn)
                 continue
             src = _catalog_source_frame(fn)
-            if src is None:
-                unreadable.append(fn)
+            if src is not None:
+                if want and want not in os.path.basename(src):
+                    drop.append(fn)
                 continue
-            if want and want not in os.path.basename(src):
+            # Provenance unreadable.  If a TOKENED copy of the same exposure
+            # exists, this one is redundant whatever it is -- drop it, which is
+            # also the pre-token behaviour and what keeps issue #259's
+            # DuplicateExposureError from returning.  Only a file with no
+            # tokened counterpart is kept, because dropping it could remove a
+            # real exposure and build a consensus from half the detectors.
+            if token and _identity(base) in tokened_ids:
                 drop.append(fn)
+            else:
+                # This run writes no token, or there is no tokened copy of
+                # this exposure: keep.  In either case the file may well be
+                # THIS run's own output under the pre-token name, and dropping
+                # it builds a consensus from half the detectors.
+                unreadable.append(fn)
         if unreadable:
             print(f"astrom checkpoint [{merge_label}] {filt}/{module}: "
                   f"{len(unreadable)} untokened per-frame catalog(s) carry no "
