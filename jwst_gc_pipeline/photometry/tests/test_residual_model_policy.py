@@ -78,10 +78,25 @@ def _peaks(arr, w, stars, box=3):
 #: opened ``None`` -- three ERRORS on main since 2026-07-05 (issue #266).
 #: sickle F480M is exactly that field: it carries m2/m3/m4/resbgsub_m5 residuals
 #: and no m7, because it is parked at m6 (issue #285).
+#: The stage the content checks run against.  It was ``_m7_``, which does not
+#: exist on sickle F480M and is not scheduled -- the field's newest ungrouped
+#: products are ``resbgsub_m5`` -- so keying on it made this a permanent green
+#: skip on the analysis machine, where the docstring says it should run "as a
+#: hard regression".  A test that can never run is worse than one that fails.
+#:
+#: ``resbgsub_m5`` also removes the cross-run hazard issue #266 records: the
+#: ``_m7_`` glob matched both ``resbgsub_m7`` and ``resbgsub_group_m7``, so
+#: ``_latest`` could take the numerator from one run and the denominator from
+#: another.  There is no ``group`` variant at m5, so each glob matches exactly
+#: one file.
+STAGE = "resbgsub_m5"
+
 _REQUIRED = {
     "data i2d": f"{SICKLE}/F480M/pipeline/*-f480m-nrcb_data_i2d.fits",
-    "m7 residual i2d": f"{SICKLE}/F480M/pipeline/*_m7_*mergedcat_residual_i2d.fits",
-    "m7 model i2d": f"{SICKLE}/F480M/pipeline/*_m7_*mergedcat_model_i2d.fits",
+    f"{STAGE} residual i2d":
+        f"{SICKLE}/F480M/pipeline/*_{STAGE}_*mergedcat_residual_i2d.fits",
+    f"{STAGE} model i2d":
+        f"{SICKLE}/F480M/pipeline/*_{STAGE}_*mergedcat_model_i2d.fits",
 }
 
 
@@ -102,14 +117,21 @@ pytestmark = pytest.mark.skipif(
 def f480m():
     stars = _read_points(REG)
     data, dw = _img(_latest(_REQUIRED["data i2d"]), "data i2d")
-    resid, rw = _img(_latest(_REQUIRED["m7 residual i2d"]), "m7 residual i2d")
-    model, mw = _img(_latest(_REQUIRED["m7 model i2d"]), "m7 model i2d")
+    resid, rw = _img(_latest(_REQUIRED[f"{STAGE} residual i2d"]),
+                     f"{STAGE} residual i2d")
+    model, mw = _img(_latest(_REQUIRED[f"{STAGE} model i2d"]),
+                     f"{STAGE} model i2d")
     return dict(stars=stars,
                 d=_peaks(data, dw, stars), r=_peaks(resid, rw, stars),
                 m=_peaks(model, mw, stars),
                 model=model, resid=resid)
 
 
+@pytest.mark.xfail(strict=True, reason=(
+    "issue #266 satstar defect, now REPRODUCED rather than skipped: 5 of 39 "
+    "curated bright stars remain in the sickle F480M resbgsub_m5 residual at "
+    ">30% of their data peak (median resid/data 0.21).  strict=True, so this "
+    "FAILS once the model is fixed -- delete the marker then."))
 def test_residual_contains_no_stars(f480m):
     """At every curated bright star the residual peak must be a small fraction
     of the data peak -- the star must be SUBTRACTED, leaving only background."""
@@ -148,21 +170,43 @@ def test_model_background_not_negative(f480m):
         f"the model must be stars on a zero background.")
 
 
-def test_skip_predicate_covers_every_product_the_fixture_opens():
+@pytest.mark.skipif(False, reason="must run even when the products are absent")
+def test_each_required_glob_matches_at_most_one_file():
+    """The cross-run hazard in issue #266: a glob matching both ``resbgsub_m5``
+    and a ``group`` variant lets `_latest` take numerator and denominator from
+    different runs."""
+    for what, pattern in _REQUIRED.items():
+        assert len(glob.glob(pattern)) <= 1, (what, glob.glob(pattern))
+
+
+@pytest.mark.skipif(False, reason="must run even when the products are absent")
+def test_skip_predicate_covers_every_product_the_fixture_opens(monkeypatch):
     """The predicate and the fixture must glob the SAME patterns.
 
     They diverged for a month: the predicate checked
     `*mergedcat_residual_i2d.fits` while the fixture needed the `_m7_` variant,
     so a field with m2..m5 products but no m7 passed the predicate and then
     opened None -- three ERRORS on main since 2026-07-05 (issue #266).
+
+    Checked by RECORDING what the fixture actually globs, not by inspecting its
+    source: a source check only proves the label strings appear, and passes for
+    a fixture that builds its paths inline or opens a fourth product.
     """
-    import inspect
-    src = inspect.getsource(f480m.__wrapped__ if hasattr(f480m, "__wrapped__")
-                            else f480m)
-    for what in _REQUIRED:
-        assert repr(what) in src or f'"{what}"' in src, (
-            f"_REQUIRED lists {what!r} but the fixture does not open it")
-    # every glob the fixture opens must come from _REQUIRED, not be inline
-    assert "SICKLE}/F480M" not in src, (
-        "the fixture globs a path inline; add it to _REQUIRED so the skip "
-        "predicate covers it")
+    seen = []
+    real_latest = _latest
+
+    def _record(pattern):
+        seen.append(pattern)
+        return real_latest(pattern)
+
+    monkeypatch.setitem(globals(), "_latest", _record)
+    try:
+        f480m.__wrapped__()
+    except Exception:
+        pass                    # we only care WHICH globs were requested
+    assert seen, "the fixture globbed nothing"
+    unknown = [p for p in seen if p not in set(_REQUIRED.values())]
+    assert not unknown, (
+        "the fixture opens product(s) the skip predicate does not check, so a "
+        "tree missing them errors instead of skipping:\n  "
+        + "\n  ".join(unknown))
