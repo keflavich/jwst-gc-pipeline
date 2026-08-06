@@ -1804,6 +1804,31 @@ def _m2_skipped_exposures(record_dir, filtername, visit):
     return out
 
 
+def _m2_consensus_stars(basepath, filtername, obs_token=""):
+    """(SkyCoord of the m2 consensus stars, path) for the same-star gate.
+
+    Returns ``(None, path)`` when the catalog is absent -- a field whose m2
+    predates the per-filter consensus catalog, or a filter m2 could not pool.
+    The caller says so loudly and falls back rather than failing: a missing
+    baseline is not evidence the solution moved.
+    """
+    from .consensus_catalog import consensus_path
+    path = consensus_path(basepath, filtername, obs_token=obs_token)
+    if not (filtername and os.path.exists(path)):
+        return None, path
+    try:
+        tbl = Table.read(path)
+    except (OSError, ValueError) as ex:
+        print(f"astrom checkpoint: m2 consensus catalog {path} unreadable "
+              f"({type(ex).__name__}: {ex}); same-star gate disabled", flush=True)
+        return None, path
+    if not len(tbl):
+        return None, path
+    coords = catalog_coords(tbl)
+    finite = np.isfinite(coords.ra.deg) & np.isfinite(coords.dec.deg)
+    return (coords[finite] if finite.any() else None), path
+
+
 def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                          basepath=None, record_dir=None, context="",
                          consensus_kwargs=None, obs_token=""):
@@ -1860,10 +1885,36 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
     corrections = []
     failures = []      # MEASURED shifts -- blocking at a late stage
     unverified = []    # could-not-verify -- loud warnings, audited by the gate
+    # SAME-STAR restriction at a frozen stage (issue #285).  A later stage fits
+    # on a background-subtracted image and detects a DIFFERENT star set, so its
+    # rebuilt consensus sits a few mas from m2's even when no frame moved --
+    # and the gate, which compares (exposure - consensus) against m2's, then
+    # attributes that consensus movement to every exposure in the visit.
+    # Freezing the star LIST to m2's (positions still come from this stage)
+    # removes the population change from the comparison and leaves the
+    # movement.  At a CORRECTING stage there is nothing to freeze against and
+    # the full star set is the right one.
+    m2_stars, m2_stars_source = (None, None)
+    if not correcting and basepath:
+        m2_stars, m2_stars_source = _m2_consensus_stars(basepath, filtername,
+                                                        obs_token)
+        if m2_stars is None:
+            print(f"astrom checkpoint [{stage}] {filtername}: no m2 consensus "
+                  f"catalog at {m2_stars_source} -- the stage-stability check "
+                  f"falls back to the FULL star set, so a population change "
+                  f"between stages can still read as movement (issue #285)",
+                  flush=True)
+        else:
+            print(f"astrom checkpoint [{stage}] {filtername}: same-star gate "
+                  f"against {len(m2_stars)} m2 consensus stars "
+                  f"({os.path.basename(m2_stars_source)})", flush=True)
+
     for (visit, filt), tables in sorted(_group_by_visit_filter(exposure_tables).items()):
         vctx = f"{context} {filt} visit {visit} [{stage}]"
         try:
-            cons = build_visit_consensus(tables, context=vctx, **consensus_kwargs)
+            cons = build_visit_consensus(tables, context=vctx,
+                                         restrict_to=m2_stars,
+                                         **consensus_kwargs)
         except DuplicateExposureError as ex:
             # malformed INPUTS, not a sparse field.  Recording this as merely
             # "unverified" would let a duplicated exposure silently delete the
@@ -2159,7 +2210,23 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                 median_scatter_mas=float(np.median(cons["scatter_mas"]))
                 if len(cons["scatter_mas"]) else float("nan"),
                 consensus_ok=cons["consensus_ok"],
-                skipped=[list(k) for k in cons["skipped"]]),
+                skipped=[list(k) for k in cons["skipped"]],
+                # The POPULATION change, recorded whether or not the same-star
+                # gate is on.  A stage detecting FEWER stars than m2 is a
+                # regression worth seeing (issue #285 asked why a catalog went
+                # 3212 -> 1707); the same-star restriction stops that change
+                # from being read as astrometric MOVEMENT, it does not make it
+                # uninteresting.  `restricted` is the count entering the tie,
+                # `unrestricted` what this stage detected before the m2 star
+                # list was applied.
+                same_star_gate=bool(m2_stars is not None),
+                n_reliable_restricted=int(sum(
+                    e["n_reliable"] for e in cons["exposures"])),
+                n_reliable_unrestricted=int(sum(
+                    e.get("n_reliable_unrestricted", e["n_reliable"])
+                    for e in cons["exposures"])),
+                m2_consensus_stars=(int(len(m2_stars))
+                                    if m2_stars is not None else None)),
             module_antisymmetry=dict(
                 detected=antisym["detected"],
                 n_pairs_tested=antisym["n_pairs_tested"],

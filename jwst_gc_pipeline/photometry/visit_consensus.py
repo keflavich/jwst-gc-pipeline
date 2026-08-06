@@ -269,9 +269,32 @@ def _cap_stars(sc, n_max=500_000, seed=1182):
     return sc[np.sort(rng.choice(len(sc), n_max, replace=False))]
 
 
+def _mutual_match_mask(coords, reference, radius):
+    """Boolean mask of ``coords`` whose MUTUAL nearest partner in ``reference``
+    is within ``radius``.
+
+    Mutual, not one-way: in a crowded field several stars share a nearest
+    partner, and a one-way match would keep all of them and silently associate
+    different physical stars with one reference entry.  This is the same
+    unique-partner requirement ``local_residual_map`` imposes, for the same
+    reason.
+    """
+    if len(coords) == 0 or reference is None or len(reference) == 0:
+        return np.zeros(len(coords), dtype=bool)
+    idx, sep, _ = coords.match_to_catalog_sky(reference)
+    near = sep < radius
+    if not near.any():
+        return np.zeros(len(coords), dtype=bool)
+    back, _, _ = reference[idx[near]].match_to_catalog_sky(coords)
+    mask = np.zeros(len(coords), dtype=bool)
+    mask[np.flatnonzero(near)[back == np.flatnonzero(near)]] = True
+    return mask
+
+
 def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
                           match_radius=0.2 * u.arcsec, min_exposures=2,
-                          min_stars=50, context=""):
+                          min_stars=50, context="", restrict_to=None,
+                          restrict_radius=0.15 * u.arcsec):
     """Build the per-(visit,filter) consensus catalog and measure every
     exposure's bulk offset against it.
 
@@ -338,13 +361,41 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
         _finite = np.isfinite(_all_coords.ra.deg) & np.isfinite(_all_coords.dec.deg)
         keep = np.asarray(keep, dtype=bool) & _finite
         coords = _all_coords[keep]
+        n_before_restrict = int(keep.sum())
+        if restrict_to is not None and len(coords):
+            # SAME-STAR restriction (issue #285).  A frozen-stage gate asks
+            # whether the solution MOVED, and the answer must not depend on
+            # which stars were detected: a later stage fits on a
+            # background-subtracted image, so it detects a different set --
+            # and the m3 consensus, rebuilt over that different set, shifts by
+            # a few mas even when no frame moved at all.  The gate then
+            # reports that shift once per exposure as if every exposure had
+            # moved.
+            #
+            # Restricting to the stars the m2 consensus was built from removes
+            # the population change from the comparison and leaves the
+            # movement, which is the quantity the gate names.  It also answers
+            # the S/N concern directly: new faint detections cannot enter and
+            # dilute the tie, because they are not in the m2 set.
+            #
+            # Positions still come from THIS stage -- only the star LIST is
+            # frozen.  A stage whose centroids genuinely improved is therefore
+            # not penalised; only a relative movement between an exposure and
+            # its peers is.
+            keep_idx = _mutual_match_mask(coords, restrict_to, restrict_radius)
+            coords = coords[keep_idx]
+            _flux_idx = keep_idx
+        else:
+            _flux_idx = None
         if "flux_fit" in tbl.colnames:
             flux = np.asarray(tbl["flux_fit"], dtype=float)[keep]
+            if _flux_idx is not None:
+                flux = flux[_flux_idx]
         else:
-            flux = np.full(int(keep.sum()), np.nan)
+            flux = np.full(len(coords), np.nan)
         entries.append(dict(
             key=exposure_key(tbl), coords=coords, flux=flux,
-            n_reliable=int(keep.sum()),
+            n_reliable=len(coords), n_reliable_unrestricted=n_before_restrict,
             raoffset_meta=_meta_lookup(tbl, "RAOFFSET", default=0.0),
             deoffset_meta=_meta_lookup(tbl, "DEOFFSET", default=0.0)))
 
@@ -638,6 +689,8 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
                                    or res["off"] > 10.0 * EXPOSURE_CONSENSUS_TOL_MAS))
         exposures.append(dict(
             key=e["key"], n_reliable=e["n_reliable"],
+            n_reliable_unrestricted=e.get("n_reliable_unrestricted",
+                                          e["n_reliable"]),
             component=int(comp_id[pos]),
             internal_tie=bool(rel[pos] is not None and rel[pos]["npairs"] > 0
                               and (comp_id == comp_id[pos]).sum() > 1),

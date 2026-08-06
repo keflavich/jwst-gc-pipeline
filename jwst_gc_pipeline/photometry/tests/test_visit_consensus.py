@@ -622,3 +622,93 @@ def test_same_module_large_shift_still_ties():
     comps = {e["component"] for e in exps if e["component"] >= 0}
     assert len(comps) == 1, \
         f"same-module exposures should form ONE component, got {comps}"
+
+
+# ---------------------------------------------------------------------------
+# same-star restriction (issue #285)
+# ---------------------------------------------------------------------------
+
+def test_mutual_match_mask_is_mutual_not_one_way():
+    from jwst_gc_pipeline.photometry.visit_consensus import _mutual_match_mask
+    import astropy.units as u
+    # two coords crowd around ONE reference star; a one-way match keeps both
+    ref = SkyCoord([RA0] * u.deg, [DEC0] * u.deg)
+    close = SkyCoord([RA0, RA0 + 0.02 / 3600.0 / COSD] * u.deg,
+                     [DEC0, DEC0] * u.deg)
+    mask = _mutual_match_mask(close, ref, 0.15 * u.arcsec)
+    assert mask.sum() == 1, mask
+    assert mask[0]                      # the nearer one wins
+
+
+def test_mutual_match_mask_edges():
+    from jwst_gc_pipeline.photometry.visit_consensus import _mutual_match_mask
+    import astropy.units as u
+    a = SkyCoord([RA0] * u.deg, [DEC0] * u.deg)
+    assert _mutual_match_mask(a, a[:0], 0.15 * u.arcsec).sum() == 0
+    assert len(_mutual_match_mask(a[:0], a, 0.15 * u.arcsec)) == 0
+    assert _mutual_match_mask(a, None, 0.15 * u.arcsec).sum() == 0
+    # a reference star far away matches nothing
+    far = SkyCoord([RA0 + 10.0 / 3600.0 / COSD] * u.deg, [DEC0] * u.deg)
+    assert _mutual_match_mask(a, far, 0.15 * u.arcsec).sum() == 0
+
+
+def test_restrict_to_freezes_the_star_list_not_the_positions():
+    """The gate must measure MOVEMENT, not a change of population.
+
+    Rebuild a visit from catalogs that detect EXTRA stars -- what a later,
+    background-subtracted stage does -- and check that restricting to the
+    first consensus's stars lands back on the first population.
+    """
+    ra, dec = _field(n=400)
+    base_tables = [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)]
+    base = build_visit_consensus(base_tables, context="base")
+    assert len(base["coords"]) > 100
+
+    # the later stage: the same stars plus 300 newly-detected faint ones
+    rng = np.random.default_rng(999)
+    ra2 = np.concatenate([ra, RA0 + rng.uniform(0, 90.0, 300) / 3600.0 / COSD])
+    dec2 = np.concatenate([dec, DEC0 + rng.uniform(0, 90.0, 300) / 3600.0])
+    wide_tables = [_exposure_table(ra2, dec2, exposure=e) for e in range(1, 5)]
+
+    wide = build_visit_consensus(wide_tables, context="wide")
+    tight = build_visit_consensus(wide_tables, context="tight",
+                                  restrict_to=base["coords"])
+
+    assert len(wide["coords"]) > len(tight["coords"]), (
+        len(wide["coords"]), len(tight["coords"]))
+    # the restricted rebuild lands on the m2 population, not the new one
+    assert abs(len(tight["coords"]) - len(base["coords"])) < 0.2 * len(base["coords"]), (
+        len(tight["coords"]), len(base["coords"]))
+    # and it REPORTS what it dropped rather than hiding it
+    for e in tight["exposures"]:
+        assert e["n_reliable_unrestricted"] >= e["n_reliable"]
+    assert any(e["n_reliable_unrestricted"] > e["n_reliable"]
+               for e in tight["exposures"])
+
+
+def test_restrict_to_does_not_hide_a_real_movement():
+    """Freezing the star list must not blind the gate to a shifted exposure."""
+    ra, dec = _field(n=400)
+    base = build_visit_consensus(
+        [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)],
+        context="base")
+    moved = [_exposure_table(ra, dec, exposure=e,
+                             dra_mas=(25.0 if e == 3 else 0.0))
+             for e in range(1, 5)]
+    cons = build_visit_consensus(moved, context="moved",
+                                 restrict_to=base["coords"])
+    offs = {tuple(e["key"])[1]: e["vs_consensus"]["off"] for e in cons["exposures"]}
+    assert offs[3] > 15.0, offs
+    assert all(v < 10.0 for k, v in offs.items() if k != 3), offs
+
+
+def test_restrict_to_none_is_unchanged_behaviour():
+    ra, dec = _field(n=400)
+    tables = [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)]
+    a = build_visit_consensus(tables, context="a")
+    b = build_visit_consensus(tables, context="b", restrict_to=None)
+    assert len(a["coords"]) == len(b["coords"])
+    assert [e["n_reliable"] for e in a["exposures"]] == \
+           [e["n_reliable"] for e in b["exposures"]]
+    for e in b["exposures"]:
+        assert e["n_reliable_unrestricted"] == e["n_reliable"]
