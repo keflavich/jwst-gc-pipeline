@@ -1715,3 +1715,191 @@ def test_reader_prefers_exact_filter_over_all(tmp_path):
                                {"dra_mas": 1.0, "ddec_mas": 2.0, "apply_ok": True}}]})
     baseline, _ = _m2_reference_tie_baseline(str(tmp_path), "F212N", "001")
     assert baseline == (1.0, 2.0)                          # exact filter wins
+
+
+def test_crossfilter_unverified_line_is_printed(tmp_path, capsys):
+    """The printed line is the ENTIRE effective output of this change --
+    `all_verified` has no non-test reader today (stage_release.py never opens
+    astrometry_checkpoints/, monitoring/scan.py globs checkpoint_m2_* only).
+    Deleting the print loop must therefore fail a test."""
+    cats = _crossfilter_catalogs(n=400, extent=300.0)
+    run_crossfilter_checkpoint(cats, record_dir=str(tmp_path), cell_arcsec=2.0,
+                               cell_min_stars=10, context="test")
+    assert "COULD NOT VERIFY" in capsys.readouterr().out
+
+
+def test_crossfilter_empty_map_names_the_cause_it_checked(tmp_path):
+    """`n_cells == 0` has three causes and the message must not assert one the
+    code never checked.  Here the pairs exist and are binned; the cause is that
+    no cell reached `min_stars`, and the message must say so with the count."""
+    cats = _crossfilter_catalogs(n=400, extent=300.0)
+    record = run_crossfilter_checkpoint(cats, record_dir=str(tmp_path),
+                                        cell_arcsec=2.0, cell_min_stars=10,
+                                        context="test")
+    msg = " ".join(record["unverified"])
+    assert "EMPTY" in msg, record
+    assert "matched pairs binned" in msg, msg
+    assert "no cell reached 10" in msg, msg
+    # the sparsity wording must NOT be asserted when pairs did not survive
+    assert "cause not recorded" not in msg
+
+
+def test_local_residual_map_reports_n_pairs():
+    """The caller can only name the empty-map cause because the map returns
+    n_pairs.  The reachable case through the checkpoint is "pairs binned, every
+    cell too small"; the no-surviving-pair case cannot be reached by
+    displacement (local_residual_map refuses a tie > radius/3 first), so it is
+    covered at the unit level below.
+    """
+    import astropy.units as u
+    n = 400
+    rng = np.random.default_rng(5)
+    x = rng.uniform(0, 300.0, n)
+    y = rng.uniform(0, 300.0, n)
+    a = SkyCoord((RA0 + x / 3600.0 / COSD) * u.deg, (DEC0 + y / 3600.0) * u.deg)
+    g = measure_offset(a, a, sweep=True, context="same")
+    m = local_residual_map(a, a, g, cell_arcsec=2.0, min_stars=10, tol_mas=15.0)
+    assert m["n_cells"] == 0 and m["n_pairs"] > 0, m
+    # and a populated map reports the pairs it used
+    m2 = local_residual_map(a, a, g, cell_arcsec=120.0, min_stars=10,
+                            tol_mas=15.0)
+    assert m2["n_cells"] > 0 and m2["n_pairs"] >= 10 * m2["n_cells"] / 10, m2
+
+
+def test_local_residual_map_no_pair_path_reports_zero():
+    """The `_no_pairs` early return must carry n_pairs=0, or the caller cannot
+    tell "no pair survived" from "every cell too small"."""
+    import astropy.units as u
+    a = SkyCoord([RA0] * u.deg, [DEC0] * u.deg)
+    far = SkyCoord([RA0 + 30.0 / 3600.0 / COSD] * u.deg, [DEC0] * u.deg)
+    g = dict(ok=True, swept=False, off=0.0, dra=0.0, ddec=0.0)
+    m = local_residual_map(a, far, g, cell_arcsec=2.0, min_stars=10,
+                           tol_mas=15.0)
+    assert m["n_cells"] == 0 and m["n_pairs"] == 0, m
+
+
+def test_crossfilter_thin_cell_map_is_unverified(tmp_path):
+    """One or two cells out of thousands is not coverage either."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        LOCAL_CELL_MIN_CELLS)
+    assert LOCAL_CELL_MIN_CELLS >= 2
+    # 90" extent at 60" cells -> at most 4 cells, and min_stars keeps 1-3
+    cats = _crossfilter_catalogs(n=900, extent=90.0)
+    record = run_crossfilter_checkpoint(cats, record_dir=str(tmp_path),
+                                        cell_arcsec=60.0, cell_min_stars=200,
+                                        context="test")
+    frec = [f for f in record["filters"]
+            if f["filtername"] != record["anchor_filter"]][0]
+    n = frec["local"]["n_cells"]
+    assert 0 < n < LOCAL_CELL_MIN_CELLS, (n, frec["local"])
+    assert any("populated cell" in w for w in record["unverified"]), record
+    assert record["passed"], record["failures"]
+
+
+def test_crossfilter_single_filter_record_carries_the_new_keys(tmp_path):
+    """An audit rule keyed on `all_verified is not True` must not refuse a
+    legitimately single-filter field, or KeyError on it."""
+    cats = {"F212N": _crossfilter_catalogs()["F212N"]}
+    record = run_crossfilter_checkpoint(cats, record_dir=str(tmp_path))
+    assert record["passed"] and record["all_verified"]
+    assert record["unverified"] == []
+
+
+def test_crossfilter_empty_cell_map_is_unverified_not_clean(tmp_path):
+    """A cell map that returns NO cells must not score as a clean one.
+
+    At GC densities a 2" cell holds ~1 star against LOCAL_CELL_MIN_STARS = 10,
+    so local_residual_map skips every cell; reading only n_flagged then scores
+    that silence as a pass, and an injection sweep on Brick geometry never
+    trips the gate at any amplitude (issue #296).
+    """
+    cats = _crossfilter_catalogs(n=400, extent=300.0)   # ~0 stars per 2" cell
+    record = run_crossfilter_checkpoint(cats, record_dir=str(tmp_path),
+                                        cell_arcsec=2.0, cell_min_stars=10,
+                                        context="test")
+    frec = [f for f in record["filters"]
+            if f["filtername"] != record["anchor_filter"]][0]
+    assert frec["local"]["n_cells"] == 0, frec["local"]
+    assert not record["all_verified"]
+    assert any("EMPTY" in w for w in record["unverified"]), record["unverified"]
+    # it is not a FAILURE -- an unmeasurable map is a coverage fact
+    assert record["passed"], record["failures"]
+
+
+def test_crossfilter_populated_cell_map_stays_verified(tmp_path):
+    cats = _crossfilter_catalogs(n=20000, extent=60.0)
+    record = run_crossfilter_checkpoint(cats, record_dir=str(tmp_path),
+                                        cell_arcsec=10.0, cell_min_stars=15,
+                                        context="test")
+    frec = [f for f in record["filters"]
+            if f["filtername"] != record["anchor_filter"]][0]
+    assert frec["local"]["n_cells"] > 0
+    assert record["all_verified"], record["unverified"]
+    assert record["passed"]
+
+
+def test_a_thin_map_must_not_suppress_a_flagged_cell(tmp_path, monkeypatch):
+    """REGRESSION.  Ordering the thin-map check ahead of the flagged check
+    turned a detection into a pass: a map with 1-3 populated cells, one of them
+    significantly offset, reported "too little of the field is checked" and
+    left `passed` True.  Reachable at the production defaults on any field with
+    a couple of compact over-densities, and it silenced exactly the detection
+    this gate exists for.
+    """
+    monkeypatch.delenv("ALLOW_CROSSFILTER_ASTROM_FAIL", raising=False)
+    # a 15"x15" corner 25 mas off, in a field sparse enough that only a couple
+    # of cells reach cell_min_stars
+    cats = _crossfilter_catalogs(n=1200, extent=120.0,
+                                 patch=(0.0, 15.0, 0.0, 15.0, 25.0))
+    with pytest.raises(CrossFilterAstrometryError) as exc:
+        run_crossfilter_checkpoint(cats, record_dir=str(tmp_path),
+                                   cell_arcsec=15.0, cell_min_stars=15,
+                                   context="test")
+    assert "significant offset" in str(exc.value)
+
+
+def test_a_thin_map_failure_also_records_the_thin_coverage(tmp_path, monkeypatch):
+    """Both facts are worth having: the failure stands, and the coverage behind
+    it is thin."""
+    monkeypatch.setenv("ALLOW_CROSSFILTER_ASTROM_FAIL", "1")
+    cats = _crossfilter_catalogs(n=1200, extent=120.0,
+                                 patch=(0.0, 15.0, 0.0, 15.0, 25.0))
+    record = run_crossfilter_checkpoint(cats, record_dir=str(tmp_path),
+                                        cell_arcsec=15.0, cell_min_stars=15,
+                                        context="test")
+    assert record["failures"], record
+    frec = [f for f in record["filters"]
+            if f["filtername"] != record["anchor_filter"]][0]
+    if frec["local"]["n_cells"] < 4:
+        assert any("rests on only" in w for w in record["unverified"]), record
+
+
+def test_the_ambiguous_pair_path_also_reports_zero_pairs():
+    """The SECOND `_no_pairs` return -- pairs found but ALL ambiguous, the
+    crowded-field case whose comment records it crashing the brick F187N
+    --refcat run.  The first early return was already covered; this one was
+    not, so nothing pinned the value it reports."""
+    import astropy.units as u
+    # every `a` star has the SAME nearest `b`, so the uniqueness filter
+    # discards every pair while search_around_sky did find some
+    rng = np.random.default_rng(9)
+    n = 60
+    a = SkyCoord((RA0 + rng.uniform(0, 0.05, n) / 3600.0 / COSD) * u.deg,
+                 (DEC0 + rng.uniform(0, 0.05, n) / 3600.0) * u.deg)
+    b = SkyCoord([RA0] * u.deg, [DEC0] * u.deg)
+    g = dict(ok=True, swept=False, off=0.0, dra=0.0, ddec=0.0)
+    m = local_residual_map(a, b, g, cell_arcsec=2.0, min_stars=5, tol_mas=15.0)
+    assert m["n_cells"] == 0
+    assert m["n_pairs"] == 0, m
+
+
+def test_the_zero_pair_message_says_matching_failure_not_sparsity(tmp_path):
+    """Pins the WORDING that is the point of the cause-naming: on a dense field
+    `n_pairs == 0` is a matching failure after a tie the run just certified,
+    and calling it sparsity sends an operator the wrong way."""
+    import inspect
+    src = inspect.getsource(run_crossfilter_checkpoint)
+    assert "no matched pair survived" in src
+    assert "not sparsity" in src
+    # and it is reached only when n_pairs is 0
+    assert "if npairs == 0:" in src

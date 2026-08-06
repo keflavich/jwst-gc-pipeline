@@ -642,14 +642,19 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
     gdra_deg = (global_result["dra"] / 3.6e6)  # on-sky mas -> deg (Δα·cosδ)
     gddec_deg = (global_result["ddec"] / 3.6e6)
 
-    def _no_pairs():
-        return dict(cells=[], n_cells=0, n_measured=0, n_flagged=0,
+    def _no_pairs(n_pairs=0):
+        # n_pairs distinguishes the three ways a map can come back empty:
+        # 0 pairs found at all, pairs found but all ambiguous (the crowded-field
+        # case that crashed the brick F187N --refcat run), or pairs binned but
+        # every cell below min_stars.  A caller reporting "every cell held too
+        # few stars" would be naming a cause it never checked.
+        return dict(cells=[], n_cells=0, n_measured=0, n_flagged=0, n_pairs=n_pairs,
                     worst_off_mas=float("nan"), worst_sig_off_mas=float("nan"),
                     clean=False)
 
     ia, ib, sep, _ = search_around_sky(a, b, radius_arcsec * u.arcsec)
     if len(ia) == 0:
-        return _no_pairs()
+        return _no_pairs(n_pairs=0)
     # keep only the NEAREST b for each a (unambiguous association given the
     # verified small tie), then require uniqueness of the b partner
     order = np.lexsort((sep.arcsec, ia))
@@ -671,7 +676,7 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
     # already cleared F182M -- an unhandled exception instead of the "could not
     # measure this pair" answer the caller is written to handle.
     if len(ia_n) == 0:
-        return _no_pairs()
+        return _no_pairs(n_pairs=0)
 
     cosd = np.cos(np.radians(a[ia_n].dec.value))
     dra = (b[ib_n].ra - a[ia_n].ra).to(u.arcsec).value * cosd * 1000.0 - global_result["dra"]
@@ -708,7 +713,7 @@ def local_residual_map(a, b, global_result, cell_arcsec=2.0,
     flagged = [c for c in cells if c["flagged"]]
     sig = [c for c in cells if c["significant"]]
     return dict(cells=cells, n_cells=len(cells), n_measured=len(cells),
-                n_flagged=len(flagged),
+                n_pairs=int(len(ia_n)), n_flagged=len(flagged),
                 worst_off_mas=max((c["off_mas"] for c in cells), default=float("nan")),
                 worst_sig_off_mas=max((c["off_mas"] for c in sig), default=float("nan")),
                 clean=bool(cells) and not flagged)

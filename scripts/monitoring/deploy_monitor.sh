@@ -54,7 +54,8 @@ ssh "$HOST" "mkdir -p '$DEST'"
 # --copy-links: dereference the diagnostics-* symlinks (see above).
 # --delete: the destination holds nothing but this sync's output, so pruning
 #           removed fields and stale figures there is safe.
-rsync -rlptz --copy-links --delete --human-readable $DRY \
+# --delete was removed by hand because I don't want to delete things in the destination.
+rsync -rlptz --copy-links --human-readable $DRY \
       "$SRC/" "$HOST:$DEST/"
 rc=$?
 

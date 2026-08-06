@@ -92,6 +92,14 @@ ALLOWLIST = {
     ("jwst_gc_pipeline/photometry/merge_catalogs.py", "replace_saturated"),
     # sanctioned: masking extended emission, no astrometry in it
     ("jwst_gc_pipeline/photometry/cataloging.py", "_filter_extended_emission"),
+    # No astrometry: `match_to_catalog_sky(nthneighbor=2)` measures a star's
+    # nearest-neighbour SEPARATION, used to SELECT isolated reference stars for
+    # the curve of growth; the medians are of FLUX-RATIO (enclosed-energy)
+    # columns, never positions.  Arrived on main while this branch was open,
+    # under a WHOLE-FILE entry -- naming the function is the tightening this
+    # change is for.
+    ("jwst_gc_pipeline/photometry/aperture_photometry.py",
+     "build_aperture_correction_table"),
     # ---- cross-function splits: the match and the reduce are in DIFFERENT
     # functions, so they cannot be attributed to one and are allowlisted as
     # `<unattributed>`.  These entries are WEAKER than a function-scoped one --
