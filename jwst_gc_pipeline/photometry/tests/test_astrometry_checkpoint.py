@@ -1847,15 +1847,33 @@ def test_a_thin_map_must_not_suppress_a_flagged_cell(tmp_path, monkeypatch):
     this gate exists for.
     """
     monkeypatch.delenv("ALLOW_CROSSFILTER_ASTROM_FAIL", raising=False)
-    # a 15"x15" corner 25 mas off, in a field sparse enough that only a couple
-    # of cells reach cell_min_stars
-    cats = _crossfilter_catalogs(n=1200, extent=120.0,
-                                 patch=(0.0, 15.0, 0.0, 15.0, 25.0))
+    # The map is INJECTED, not coaxed out of a synthetic field.  The first
+    # version of this test used `n=1200, extent=120.0, cell_arcsec=15.0,
+    # cell_min_stars=15` and PASSED ON MAIN: that geometry yields four or more
+    # populated cells, so the thin branch was never taken and the flagged
+    # branch raised on main too.  It proved the flagged path fires; it did not
+    # prove the flagged path fires WHEN THE MAP IS THIN, which is the whole
+    # defect.  `n_cells` must be in [1, LOCAL_CELL_MIN_CELLS) with
+    # `n_flagged >= 1` for the ordering to matter at all, and injecting it is
+    # the only way to hold that precisely.
+    import jwst_gc_pipeline.photometry.astrometry_checkpoint as ac
+    assert 2 < ac.LOCAL_CELL_MIN_CELLS, ac.LOCAL_CELL_MIN_CELLS
+    thin_and_flagged = dict(
+        n_cells=2, n_flagged=1, n_pairs=500,
+        cells=[dict(ix=0, iy=0, n=40, off_mas=42.0, dra=42.0, ddec=0.0,
+                    dra_sem=1.0, ddec_sem=1.0, flagged=True,
+                    ra0=RA0, dec0=DEC0),
+               dict(ix=1, iy=0, n=30, off_mas=2.0, dra=2.0, ddec=0.0,
+                    dra_sem=1.0, ddec_sem=1.0, flagged=False,
+                    ra0=RA0, dec0=DEC0)])
+    monkeypatch.setattr(ac, "local_residual_map",
+                        lambda *a, **k: dict(thin_and_flagged))
+    cats = _crossfilter_catalogs(n=1200, extent=120.0)
     with pytest.raises(CrossFilterAstrometryError) as exc:
         run_crossfilter_checkpoint(cats, record_dir=str(tmp_path),
-                                   cell_arcsec=15.0, cell_min_stars=15,
                                    context="test")
     assert "significant offset" in str(exc.value)
+    assert "42.0" in str(exc.value), str(exc.value)
 
 
 def test_a_thin_map_failure_also_records_the_thin_coverage(tmp_path, monkeypatch):
