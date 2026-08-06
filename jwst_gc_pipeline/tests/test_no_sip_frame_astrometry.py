@@ -30,6 +30,7 @@ See ``jwst_gc_pipeline/frame_wcs.py`` and
 ``reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md``.
 """
 import re
+import pytest
 import subprocess
 from pathlib import Path
 
@@ -59,9 +60,18 @@ ALLOWLIST = {
     # delta the experiment measures.  Tracked on #154; allowlisted here because
     # the call site is a deliberate fallback, not a SIP-first astrometry read.
     "jwst_gc_pipeline/astrometry_gdc/gdc_wcs.py",
-    # writes/verifies the SIP header against the GWCS -- reads SIP on purpose
+    # writes/verifies the SIP header against the GWCS -- reads SIP on purpose.
+    # NB _SIP_WCS does not currently MATCH this file: it builds
+    # `awcs.WCS(header, relax=True)` at :217, with no 'SCI' token on the line.
+    # "the regex stopped matching" is not "the file stopped reading SIP", which
+    # is why there is no dead-entry test on this guard.
     "jwst_gc_pipeline/reduction/fits_wcs_sync.py",
+    # Both still read SIP live -- audit_fits_gwcs_agreement.py:41 and
+    # crowdsource_step.py:906 -- and were removed in error when the narrow
+    # regex stopped matching them.  Restoring the review record is the point;
+    # the guard is green either way.
     "scripts/release/audit_fits_gwcs_agreement.py",
+    "jwst_gc_pipeline/photometry/legacy/crowdsource_step.py",
     # all astrometry here goes through frame_wcs; the one remaining
     # WCS(fh['SCI'].header, relax=True) is the no-GWCS FALLBACK of the
     # SCI->PRIMARY header copy, whose primary path is sync_header_to_gwcs.
@@ -77,9 +87,6 @@ ALLOWLIST = {
     "jwst_gc_pipeline/photometry/aperture_photometry.py",
     "scripts/aperture_photometry/investigate_aperture_vs_psf.py",
     "scripts/aperture_photometry/reference_apcorr_and_compare.py",
-    # frozen legacy path (see manual-defaults consolidation); not used for
-    # release products
-    "jwst_gc_pipeline/photometry/legacy/crowdsource_step.py",
     # DISPLAY only: the WCS is handed to WCSAxes, which needs a real
     # astropy.wcs.WCS.  No catalog position is derived from it.
     "jwst_gc_pipeline/plotting/plot_tools.py",
@@ -120,13 +127,22 @@ def _iter_py_files():
         yield rel, p
 
 
+def _sip_offenders(text):
+    """Line numbers where a SIP-header WCS is built.  Reported so a reviewer
+    can look at the call site instead of at a filename."""
+    return [i for i, line in enumerate(text.splitlines(), 1)
+            if _SIP_WCS.search(line)] or (
+        [0] if _SIP_WCS.search(text) else [])   # multi-line match
+
+
 def test_no_sip_wcs_for_frame_astrometry():
     offenders = []
     for rel, path in _iter_py_files():
         if rel.as_posix() in ALLOWLIST:
             continue
-        if _SIP_WCS.search(path.read_text(errors="replace")):
-            offenders.append(rel.as_posix())
+        hits = _sip_offenders(path.read_text(errors="replace"))
+        if hits:
+            offenders.append(f"{rel.as_posix()}:{','.join(map(str, hits[:5]))}")
     assert not offenders, (
         "SIP-header WCS built from a detector-frame SCI header in "
         "non-allowlisted file(s):\n  " + "\n  ".join(sorted(offenders))
@@ -157,3 +173,37 @@ def test_the_guard_actually_matches_the_bad_pattern(tmp_path):
                "ww = wcs.WCS(header)",
                "ww = WCS(hdr, naxis=2)"):
         assert not _SIP_WCS.search(ok), ok
+
+
+def test_sip_offenders_reports_lines_and_the_multiline_fallback():
+    """`_sip_offenders` had no test of its own: returning `[]` unconditionally,
+    or deleting the multi-line fallback, left all three tests green because
+    they exercise the REGEX, not the function that reports through it."""
+    src = ("import numpy as np\n"
+           "ww = frame_wcs(fn)\n"
+           "w2 = WCS(h['SCI'].header, relax=True)\n")
+    assert _sip_offenders(src) == [3], _sip_offenders(src)
+    assert _sip_offenders("ww = frame_wcs(fn)\n") == []
+    # split across lines: no single line matches, so the fallback reports 0
+    multi = "w = WCS(\n    hdul['SCI'].header,\n    relax=True)\n"
+    assert not any(_SIP_WCS.search(l) for l in multi.splitlines())
+    assert _sip_offenders(multi) == [0], _sip_offenders(multi)
+
+
+def test_the_sip_guard_reports_through_that_function(tmp_path, monkeypatch):
+    """Drive the guard, not the helper: `_sip_offenders -> []` must not leave
+    the guard green."""
+    import pathlib
+    import sys
+    me = sys.modules[__name__]
+    bad = tmp_path / "reader.py"
+    bad.write_text("from astropy.wcs import WCS\n"
+                   "w = WCS(hdul['SCI'].header, relax=True)\n")
+    rel = pathlib.Path("reader.py")
+    monkeypatch.setattr(me, "_iter_py_files", lambda: [(rel, bad)])
+    monkeypatch.setattr(me, "ALLOWLIST", set())
+    with pytest.raises(AssertionError) as exc:
+        me.test_no_sip_wcs_for_frame_astrometry()
+    assert "reader.py:2" in str(exc.value)
+    monkeypatch.setattr(me, "ALLOWLIST", {"reader.py"})
+    me.test_no_sip_wcs_for_frame_astrometry()

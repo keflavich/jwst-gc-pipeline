@@ -19,7 +19,11 @@ the reviewed allowlist below.  A new file that trips it must either
 
 See CLAUDE.md and reduction/ASTROMETRY_WCS_CORRECTION_FLOW.md.
 """
+import ast
+import pathlib
 import re
+
+import pytest
 import subprocess
 from pathlib import Path
 
@@ -32,6 +36,22 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # the peak).  Flagging it would fire on the correct method.  File-level co-occurrence
 # of a NN match with a median/mean is a strong tripwire for a NEW ad-hoc NN-median
 # astrometry script; the allowlist carries the already-reviewed legitimate users.
+#: Attribution label for a file whose match and reduce sit in DIFFERENT
+#: functions.
+#:
+#: **An entry carrying this is a WHOLE-FILE exemption.** There is no way around
+#: that: a cross-function split cannot be attributed to a function, so clearing
+#: it cannot be scoped to one.  A file with such an entry can therefore hide a
+#: SECOND, genuinely new split -- which is what the file-level allowlist did for
+#: every file before the function scoping.
+#:
+#: What the scoping buys is that this is now true of EIGHT files instead of all
+#: of them: a file whose entries are all function-scoped does catch a new split
+#: (verified by test_a_function_scoped_file_still_catches_a_new_split).  Adding
+#: a `<unattributed>` entry gives that up for that file, so
+#: test_unattributed_entries_do_not_multiply fails if the count grows.
+UNATTRIBUTED = "<unattributed>"
+
 _MATCH = re.compile(r"\bmatch_to_catalog_sky\b")
 _REDUCE = re.compile(r"\b(np\.n?median|np\.n?mean|\.median\(|\.mean\()")
 
@@ -39,49 +59,91 @@ _REDUCE = re.compile(r"\b(np\.n?median|np\.n?mean|\.median\(|\.mean\()")
 # dedup, guarded NN, or histogram-stacking refinement -- NOT dense-NN-median
 # correction). Keep this list SHORT and justified; do not add to it to silence the
 # guard on a genuine violation.
+#: Reviewed (file, function) pairs where a NN match beside a reduce is
+#: legitimate -- source association for merging/dedup, a guarded NN, or
+#: histogram-stacking refinement -- and NOT a dense-NN-median correction.
+#:
+#: Keyed on the FUNCTION, not the file.  A file-level key silences the whole
+#: file: `merge_catalogs.py` was allowlisted for its source association, and a
+#: new dense-NN-median added anywhere else in its 3000 lines would have passed
+#: unseen.  Keying on the function is what makes an entry a statement about
+#: reviewed code rather than about a filename.
+#:
+#: `<module>` means module-level code outside any function.
 ALLOWLIST = {
-    # sanctioned histogram-stacking helpers (median only refines the peak)
-    "jwst_gc_pipeline/photometry/astrometry_offsets.py",
-    "scripts/reduction/astrometry_audit.py",
-    "scripts/release/registration_failsafes.py",  # per-cell agreement-fraction, not a correction
-    "scripts/miri_reduction/apply_measured_miri_wcs_offsets.py",  # histogram refine_offset
-    "scripts/miri_reduction/check_visit_registration.py",
-    "scripts/miri_reduction/miri_f2550w_image3_rerun_v2.py",
-    # the guard itself (nthneighbor=2 self-spacing measurement)
-    "jwst_gc_pipeline/photometry/measure_offsets.py",
-    # reference-catalog builders (guarded internally / sparse Gaia tie)
-    "jwst_gc_pipeline/reduction/build_gaia_virac2_refcat_byquery.py",
-    # post-verified-tie FINE refinement only: coord_shift's match+median runs on positions
-    # already coarse-tied to <SEARCH of VIRAC2 by the swept, guarded measure_offset (nearest
-    # pair is the TRUE counterpart), with sep<SEARCH, n>=15, CLIP_MAS clip -- NOT a dense-NN-
-    # median tie. The coarse absolute tie uses measure_offset, never NN.
-    "jwst_gc_pipeline/reduction/build_virac2_offsets.py",
-    "jwst_gc_pipeline/reduction/align_to_catalogs.py",  # guarded realign_to_catalog
-    # No astrometry here: the match pairs the SAME star with itself across two
-    # fit_shape settings of the SAME frames, and the median is taken of a FLUX
-    # RATIO column (R = flux_ref/flux_size) to build the correction table.  No
-    # positional offset is derived, so the collapse this guard exists to catch
-    # cannot occur.
-    "scripts/satstar_deblend/collect_correction_data.py",
-    # No astrometry: match_to_catalog_sky(nthneighbor=2) measures a star's
-    # nearest-neighbour SEPARATION only, used to SELECT isolated reference stars
-    # (reject crowded ones) for the aperture curve of growth; the medians taken
-    # are of FLUX-RATIO (enclosed-energy) columns, never positions.  No offset or
-    # WCS correction is derived, so the dense-NN-median collapse cannot occur.
-    "jwst_gc_pipeline/photometry/aperture_photometry.py",
-    "jwst_gc_pipeline/photometry/generate_offsets_table.py",  # guarded voff()
-    "jwst_gc_pipeline/photometry/make_reference_from_pipeline_catalogs.py",  # guarded bootstrap
-    # cross-band source association for catalog merging / dedup (NOT astrometry)
-    "jwst_gc_pipeline/photometry/merge_catalogs.py",
-    "jwst_gc_pipeline/photometry/crowdsource_catalogs_long.py",
-    "jwst_gc_pipeline/photometry/dedup_catalog.py",
-    "jwst_gc_pipeline/photometry/cataloging.py",
-    "jwst_gc_pipeline/photometry/legacy/crowdsource_step.py",
-    "scripts/reduction/combine_brick_allband.py",  # cross-band merge
-    # PR #57 diagnostic: nearest-neighbour SEPARATION histogram (median only for the
-    # figure-title label + a caveat plot) -- NOT an astrometric correction.
-    "docs/pr57_recovery_investigation/make_caveat_figs.py",
+    # This IS a nearest-neighbour median of positional offsets.  It is
+    # legitimate only because of the RUNTIME guard
+    # `assert_sparse_reference_for_nn_median` at measure_offsets.py:102, which
+    # raises DenseNNMedianAstrometryError unless the reference is sparse.  The
+    # guard, not the shape of the code, is what makes it safe.
+    ("jwst_gc_pipeline/photometry/measure_offsets.py", "measure_offsets"),
+    ("jwst_gc_pipeline/reduction/build_virac2_offsets.py", "coord_shift"),
+    # ALSO a median of positional offsets -- merge_catalogs.py:444 medians
+    # radiff/decdiff into tbl.meta['ra_offset'] -- and its sparse-reference
+    # guard is under `if realign and basecrds is not None` (:398) only.  With
+    # the production default realign=False the median is COMPUTED and stored
+    # ungated, and only not APPLIED.  Allowlisted because nothing in the
+    # production path consumes that metadata as a correction, but the
+    # "median is over fluxes, not offsets" reading this entry used to carry was
+    # simply wrong, and the gap is worth its own issue.
+    ("jwst_gc_pipeline/photometry/merge_catalogs.py", "combine_singleframe"),
+    # source ASSOCIATION for saturated replacement; the only reduce is a
+    # magnitude median in an f-string (:2927), no offsets involved
+    ("jwst_gc_pipeline/photometry/merge_catalogs.py", "replace_saturated"),
+    # sanctioned: masking extended emission, no astrometry in it
+    ("jwst_gc_pipeline/photometry/cataloging.py", "_filter_extended_emission"),
+    # No astrometry: `match_to_catalog_sky(nthneighbor=2)` measures a star's
+    # nearest-neighbour SEPARATION, used to SELECT isolated reference stars for
+    # the curve of growth; the medians are of FLUX-RATIO (enclosed-energy)
+    # columns, never positions.  Arrived on main while this branch was open,
+    # under a WHOLE-FILE entry -- naming the function is the tightening this
+    # change is for.
+    ("jwst_gc_pipeline/photometry/aperture_photometry.py",
+     "build_aperture_correction_table"),
+    # ---- cross-function splits: the match and the reduce are in DIFFERENT
+    # functions, so they cannot be attributed to one and are allowlisted as
+    # `<unattributed>`.  These entries are WEAKER than a function-scoped one --
+    # they silence the whole file -- so each needs a reason that survives
+    # re-reading, and a new one should be resisted.
+    #
+    # the sanctioned estimator itself: measure_offset's histogram peak is the
+    # replacement this rule points at, and local_residual_map's medians are
+    # per-cell refinements of an already-verified tie
+    ("jwst_gc_pipeline/photometry/astrometry_offsets.py", "<unattributed>"),
+    # source association for merging + a magnitude median; no astrometric
+    # correction is derived from a match here
+    ("jwst_gc_pipeline/photometry/crowdsource_catalogs_long.py", "<unattributed>"),
+    # satstar correction-data collection: matches to label stars, medians their
+    # photometry
+    ("scripts/satstar_deblend/collect_correction_data.py", "<unattributed>"),
+    # These THREE also carry a co-occurrence outside their attributed
+    # functions.  Each already had a reviewed per-function entry; the
+    # whole-file entry is what a cross-function split needs, and adding it is
+    # the price of the tripwire covering these files at all -- previously one
+    # attributed hit made the rest of the file invisible.
+    #
+    # It is a real price, and it is worth naming: cataloging.py and
+    # merge_catalogs.py are the two largest modules on the astrometric path,
+    # and a `<unattributed>` entry makes each of them blind to a CLEAN
+    # cross-function split.  A whole-file exemption is unavoidable for that
+    # class -- a split cannot be attributed to a function, so clearing it
+    # cannot be scoped to one.  What the reversal buys is that this is true of
+    # SIX files rather than all of them, and `_EXPECTED_UNATTRIBUTED` pins the
+    # count so a seventh is noticed.
+    ("jwst_gc_pipeline/photometry/cataloging.py", "<unattributed>"),
+    ("jwst_gc_pipeline/photometry/merge_catalogs.py", "<unattributed>"),
+    ("jwst_gc_pipeline/reduction/build_virac2_offsets.py", "<unattributed>"),
+    # one-off scripts outside the pipeline's astrometric path
+    ("scripts/reduction/combine_brick_allband.py", "main"),
+    # :130-137 medians NN matches against a DENSE NIRCam F405N reference and
+    # prints "astrometry: median offset" -- the validation-fools-you pattern by
+    # name.  PRINT ONLY: nothing reads it and no WCS is written from it.  It
+    # should still be converted to measure_offset rather than left as an
+    # example of the thing the rule forbids.
+    ("scripts/miri_reduction/miri_f2550w_image3_rerun_v2.py", "<module>"),
+    ("docs/pr57_recovery_investigation/make_caveat_figs.py", "<module>"),
 }
+
 
 def _iter_py_files():
     """Only GIT-TRACKED .py files -- the guard polices committed code, not local
@@ -103,28 +165,345 @@ def _iter_py_files():
         yield rel, p
 
 
+def _offending_functions(text):
+    """(function name) pairs where a NN match and a reduce occur TOGETHER.
+
+    File-level co-occurrence is too coarse: a 3000-line module that does source
+    association in one function and takes an unrelated median in another trips
+    it, and the only remedy is an allowlist entry that then silences the whole
+    file.  Scoping to the enclosing function keeps the tripwire on the pattern
+    the rule is about -- a nearest-neighbour match reduced by a median, right
+    there -- and lets the allowlist name reviewed code instead of filenames.
+    """
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        # unparseable: fall back to the coarse test rather than skipping it
+        return {"<unparseable>"} if (_MATCH.search(text) and _REDUCE.search(text)) else set()
+    lines = text.splitlines()
+    hits = set()
+    spans = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            end = node.end_lineno or node.lineno
+            spans.append((node.lineno, end))
+            seg = "\n".join(lines[node.lineno - 1:end])
+            if _MATCH.search(seg) and _REDUCE.search(seg):
+                hits.add(node.name)
+    module_only = "\n".join(
+        line for i, line in enumerate(lines, 1)
+        if not any(lo <= i <= hi for lo, hi in spans))
+    if _MATCH.search(module_only) and _REDUCE.search(module_only):
+        hits.add("<module>")
+    return hits
+
+
+def _has_unattributed_cooccurrence(text, attributed):
+    """Do a match and a reduce co-occur OUTSIDE the attributed functions?
+
+    Blank out every function the scoping could attribute a hit to; if the
+    remainder still contains both tokens, the file carries a split the
+    per-function entries do not cover.
+    """
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return bool(_MATCH.search(text) and _REDUCE.search(text))
+    lines = text.splitlines()
+    blanked = list(lines)
+    spans = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            spans.append((node.lineno, node.end_lineno or node.lineno))
+            if node.name in attributed:
+                for i in range(node.lineno - 1, (node.end_lineno or node.lineno)):
+                    if 0 <= i < len(blanked):
+                        blanked[i] = ""
+    if "<module>" in attributed:
+        # `<module>` is never a FunctionDef name, so module-level code was
+        # never blanked and every file whose only hit is module-level came back
+        # True -- forced to carry a whole-file `<unattributed>` entry for a hit
+        # that `<module>` already accounts for, which a `<module>` entry can
+        # never clear on its own.  Two of the eight exemptions were this
+        # artifact (make_caveat_figs.py, miri_f2550w_image3_rerun_v2.py).
+        for i, line in enumerate(lines, 1):
+            if not any(lo <= i <= hi for lo, hi in spans):
+                blanked[i - 1] = ""
+    rest = "\n".join(blanked)
+    return bool(_MATCH.search(rest) and _REDUCE.search(rest))
+
+
+def _live_keys(text):
+    """The (function-or-`<unattributed>`) keys one file's text trips on.
+
+    ONE definition, called by the guard AND by the dead-entry test.  They used
+    to carry divergent copies of the same logic, so gutting the guard's
+    `<unattributed>` emission left the dead-entry test's copy to keep the five
+    whole-file entries "live" and nothing noticed the guard had stopped
+    emitting them.
+    """
+    if not (_MATCH.search(text) and _REDUCE.search(text)):
+        return set()
+    funcs = _offending_functions(text)
+    keys = set(funcs)
+    if _has_unattributed_cooccurrence(text, funcs):
+        keys.add(UNATTRIBUTED)
+    return keys
+
+
 def test_no_adhoc_nn_median_astrometry():
+    """FILE-level co-occurrence is the tripwire; the function scoping only says
+    WHERE.
+
+    Scoping the tripwire itself to the enclosing function looked like a
+    tightening and is a loosening: it is blind to a helper that does the match
+    and a caller that takes the median, to a class with the two in different
+    methods, to a match at module level reduced inside a function, and to a
+    match on a decorator line.  Every one of those is the documented bypass --
+    "a standalone script that does match_to_catalog_sky(...) and then takes
+    np.median" -- with the two halves one `def` apart.
+
+    So a file still trips on co-occurrence, and it is cleared only when EVERY
+    function the scoping can attribute a hit to is allowlisted.  A file whose
+    hit cannot be attributed to any allowlisted function (the cross-function
+    split) fails with `::<unattributed>`.
+    """
     offenders = []
     for rel, path in _iter_py_files():
         text = path.read_text(errors="replace")
-        if _MATCH.search(text) and _REDUCE.search(text):
-            if rel.as_posix() not in ALLOWLIST:
-                offenders.append(rel.as_posix())
+        if not (_MATCH.search(text) and _REDUCE.search(text)):
+            continue
+        # `or {UNATTRIBUTED}` would fire only when NOTHING was attributed, so
+        # any file with one allowlisted hit could hide a second, genuinely
+        # cross-function one -- the exact bypass this design was reversed to
+        # catch, in all ten allowlisted files.  A file trips on co-occurrence,
+        # so it must be CLEARED by co-occurrence: every hit it can attribute
+        # must be allowlisted AND, if the match and the reduce also occur
+        # outside those functions, `<unattributed>` must be too.
+        for key in sorted(_live_keys(text)):
+            if (rel.as_posix(), key) not in ALLOWLIST:
+                offenders.append(f"{rel.as_posix()}::{key}")
     assert not offenders, (
         "FORBIDDEN dense-NN-median astrometry pattern (a nearest-neighbour match "
-        "reduced by median/mean) found in non-allowlisted file(s):\n  "
+        "co-occurring with a median/mean) found in non-allowlisted location(s):\n  "
         + "\n  ".join(sorted(offenders))
-        + "\n\nUse offset-HISTOGRAM stacking instead: "
-        "jwst_gc_pipeline.photometry.astrometry_offsets.measure_offset. "
-        "If this usage is genuinely source-association or histogram-refinement (NOT "
-        "a dense-NN-median astrometric correction), add the file to ALLOWLIST in "
-        "this test with a justification. See CLAUDE.md."
-    )
+        + "\n\n`::<unattributed>` means the match and the reduce are in "
+        "DIFFERENT functions of one file -- the cross-function split, which is "
+        "the classic bypass and is never allowlistable per-function.\n\n"
+        "Use jwst_gc_pipeline.photometry.astrometry_offsets.measure_offset "
+        "(2D offset-histogram peak) instead. If this really is legitimate "
+        "(source association for merging/dedup, or a histogram refinement -- "
+        "NOT a dense-NN-median astrometric correction), add the (file, "
+        "function) pair to ALLOWLIST with a one-line justification, after a "
+        "human review. See CLAUDE.md ASTROMETRY RULE #1.")
+
+
+def test_allowlist_has_no_dead_entries():
+    """An allowlist entry that no longer trips is rot, and rot is how a list of
+    20 grows until nobody reads it.  Delete entries whose code moved or was
+    fixed -- half of this list was dead when the function scoping landed."""
+    live = set()
+    for rel, path in _iter_py_files():
+        text = path.read_text(errors="replace")
+        try:
+            ast.parse(text)
+        except SyntaxError:
+            # An UNPARSEABLE file says nothing about which entries are dead.
+            # One syntax error anywhere used to collapse that file's keys to
+            # `<unparseable>` and this test would then instruct the developer
+            # to DELETE the reviewed justifications for it -- including the one
+            # recording merge_catalogs.combine_singleframe's ungated
+            # `realign=False` median.  Deleting an allowlist entry on the
+            # strength of a typo is how a reviewed exemption is lost.  The
+            # guard itself still trips on the file; only the rot check abstains.
+            live |= {k for k in ALLOWLIST if k[0] == rel.as_posix()}
+            continue
+        live |= {(rel.as_posix(), k) for k in _live_keys(text)}
+    dead = sorted(ALLOWLIST - live)
+    assert not dead, (
+        "ALLOWLIST entries that no longer trip the guard (remove them):\n  "
+        + "\n  ".join(f"{f}::{fn}" for f, fn in dead))
 
 
 def test_allowlist_entries_exist():
-    """Keep the allowlist from rotting -- every entry must point at a real file."""
-    missing = [rel for rel in ALLOWLIST if not (REPO_ROOT / rel).is_file()]
+    """Every entry must point at a real file."""
+    missing = sorted({rel for rel, _ in ALLOWLIST
+                      if not (REPO_ROOT / rel).is_file()})
     assert not missing, (
         "ALLOWLIST references files that no longer exist (remove them):\n  "
-        + "\n  ".join(sorted(missing)))
+        + "\n  ".join(missing))
+
+
+# The five ways a cross-function split evades a function-scoped tripwire.  Each
+# is the documented bypass -- "a standalone script that does
+# match_to_catalog_sky(...) and then takes np.median" -- with the two halves one
+# `def` apart.  Scoping the TRIPWIRE (rather than only the attribution) to the
+# enclosing function made every one of these invisible.
+_EVASIONS = {
+    "helper_matches_caller_medians": (
+        "def h(a, b):\n    return a.match_to_catalog_sky(b)\n"
+        "def c(a, b):\n    i = h(a, b)\n    return np.median(i)\n"),
+    "class_two_methods": (
+        "class C:\n"
+        "    def m1(self, a, b):\n        return a.match_to_catalog_sky(b)\n"
+        "    def m2(self, d):\n        return np.median(d)\n"),
+    "module_match_function_median": (
+        "idx = a.match_to_catalog_sky(b)\n"
+        "def f(d):\n    return np.median(d)\n"),
+    "function_match_module_median": (
+        "def f(a, b):\n    return a.match_to_catalog_sky(b)\n"
+        "out = np.median(f(a, b))\n"),
+    "decorator_line": (
+        "@register(a.match_to_catalog_sky)\n"
+        "def f(d):\n    return np.median(d)\n"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_EVASIONS))
+def test_cross_function_split_still_trips(name):
+    src = _EVASIONS[name]
+    assert _MATCH.search(src) and _REDUCE.search(src), "file-level tripwire"
+    # ...and it cannot be attributed to a function, so it reports as
+    # <unattributed> and needs a whole-file entry rather than a per-function one
+    assert not _offending_functions(src), name
+
+
+@pytest.mark.parametrize("src,expect", [
+    ("def f(a, b):\n    i = a.match_to_catalog_sky(b)\n    return np.median(i)\n", {"f"}),
+    ("async def f(a, b):\n    i = a.match_to_catalog_sky(b)\n    return np.median(i)\n", {"f"}),
+    ("def o(a, b):\n    def i2(c, d):\n        j = c.match_to_catalog_sky(d)\n"
+     "        return np.median(j)\n    return i2(a, b)\n", {"o", "i2"}),
+])
+def test_same_function_is_attributed(src, expect):
+    assert _offending_functions(src) == expect
+
+
+def test_a_clean_file_does_not_trip():
+    src = "def f(a, b):\n    return a.match_to_catalog_sky(b)\n"
+    assert not (_MATCH.search(src) and _REDUCE.search(src))
+    assert not _offending_functions(src)
+
+
+#: Files whose ONLY protection is a whole-file exemption.  Each gave up
+#: per-function coverage; do not add to this without reading the file.
+_EXPECTED_UNATTRIBUTED = 6
+
+
+def test_unattributed_entries_do_not_multiply():
+    """A `<unattributed>` entry silences a whole file.  Eight is the number the
+    tree needs today; a ninth means a file just lost per-function coverage and
+    somebody should have noticed."""
+    n = sum(1 for _f, fn in ALLOWLIST if fn == UNATTRIBUTED)
+    assert n == _EXPECTED_UNATTRIBUTED, (
+        f"{n} whole-file exemptions (expected {_EXPECTED_UNATTRIBUTED}). "
+        f"Adding one trades away the cross-function tripwire for that file; "
+        f"removing one is good news -- update the constant.")
+
+
+def test_a_function_scoped_file_still_catches_a_new_split(tmp_path):
+    """The gain the reversal actually buys, stated as a test rather than a
+    claim: a file whose entries are all function-scoped fails on a NEW
+    cross-function split, where the old file-level allowlist would not have.
+    """
+    src = ("def known(a, b):\n"
+           "    i = a.match_to_catalog_sky(b)\n"
+           "    return np.median(i)\n")
+    assert _offending_functions(src) == {"known"}
+    assert not _has_unattributed_cooccurrence(src, {"known"})
+    # now add a split elsewhere in the same file
+    src += ("\n\ndef _seps(a, b):\n"
+            "    return a.match_to_catalog_sky(b)\n"
+            "\n\ndef tie(a, b):\n"
+            "    return np.median(_seps(a, b))\n")
+    assert _has_unattributed_cooccurrence(src, _offending_functions(src)), (
+        "a new cross-function split in a function-scoped file must trip")
+
+
+def test_the_guard_ITSELF_emits_the_unattributed_offender(tmp_path, monkeypatch):
+    """Through the GUARD, not through the helper.
+
+    The `<unattributed>` block is the whole point of this change and nothing
+    exercised it: replacing it with `pass` left 17 passed, because
+    `test_allowlist_has_no_dead_entries` carried its own duplicate copy of the
+    call and kept the whole-file entries "live" on its own.  Both now go
+    through `_live_keys`, and this drives the guard over a synthetic tree.
+    """
+    import sys
+    me = sys.modules[__name__]
+    split = tmp_path / "splitter.py"
+    split.write_text(
+        "import numpy as np\n\n\n"
+        "def find(a, b):\n"
+        "    idx, d2d, _ = a.match_to_catalog_sky(b)\n"
+        "    return idx, d2d\n\n\n"
+        "def correct(d2d):\n"
+        "    return np.median(d2d)\n")
+    rel = pathlib.Path("splitter.py")
+    monkeypatch.setattr(me, "_iter_py_files", lambda: [(rel, split)])
+    # neither function carries BOTH halves, so there is nothing to attribute
+    assert not _offending_functions(split.read_text())
+    with pytest.raises(AssertionError) as exc:
+        me.test_no_adhoc_nn_median_astrometry()
+    assert "splitter.py::<unattributed>" in str(exc.value)
+    # ... and an allowlist entry clears it, so the message is actionable
+    monkeypatch.setattr(me, "ALLOWLIST", ALLOWLIST | {("splitter.py", UNATTRIBUTED)})
+    me.test_no_adhoc_nn_median_astrometry()
+
+
+def test_the_guard_still_reports_the_function_when_it_can_name_one(tmp_path, monkeypatch):
+    """The other direction: a same-function violation must NOT be reported as
+    `<unattributed>`, or every finding becomes a whole-file exemption."""
+    import sys
+    me = sys.modules[__name__]
+    one = tmp_path / "onefunc.py"
+    one.write_text(
+        "import numpy as np\n\n\n"
+        "def realign(a, b):\n"
+        "    idx, d2d, _ = a.match_to_catalog_sky(b)\n"
+        "    return np.median(d2d)\n")
+    rel = pathlib.Path("onefunc.py")
+    monkeypatch.setattr(me, "_iter_py_files", lambda: [(rel, one)])
+    with pytest.raises(AssertionError) as exc:
+        me.test_no_adhoc_nn_median_astrometry()
+    msg = str(exc.value)
+    assert "onefunc.py::realign" in msg
+    assert "onefunc.py::<unattributed>" not in msg
+
+
+def test_a_module_level_hit_needs_no_whole_file_exemption(tmp_path):
+    """`<module>` is never a FunctionDef name, so module-level code was never
+    blanked and a file whose ONLY hit is module-level was forced to carry a
+    whole-file entry as well -- for a hit `<module>` already accounts for, and
+    which a `<module>` entry could never clear on its own.  Two of the eight
+    exemptions were that artifact."""
+    src = ("import numpy as np\n"
+           "idx, d2d, _ = a.match_to_catalog_sky(b)\n"
+           "off = np.median(d2d)\n")
+    assert _offending_functions(src) == {"<module>"}
+    assert not _has_unattributed_cooccurrence(src, {"<module>"})
+    assert _live_keys(src) == {"<module>"}
+    # and it is not a blanket pardon.  Blanking the module residue must not
+    # hide a split that lives in the FUNCTIONS of the same file:
+    src2 = (src
+            + "\n\ndef find(a, b):\n    return a.match_to_catalog_sky(b)\n"
+              "\n\ndef reduce_(v):\n    return np.median(v)\n")
+    assert _offending_functions(src2) == {"<module>"}
+    assert _has_unattributed_cooccurrence(src2, {"<module>"})
+    assert _live_keys(src2) == {"<module>", UNATTRIBUTED}
+
+
+def test_an_unparseable_file_does_not_condemn_its_own_allowlist_entries(tmp_path, monkeypatch):
+    """One syntax error used to make the dead-entry test instruct the developer
+    to DELETE that file's reviewed justifications -- including the one
+    recording merge_catalogs.combine_singleframe's ungated `realign=False`
+    median.  Deleting a reviewed exemption on the strength of a typo is not a
+    rot check."""
+    import sys
+    me = sys.modules[__name__]
+    broken = tmp_path / "broken.py"
+    broken.write_text("def f(:\n    a.match_to_catalog_sky(b); np.median(x)\n")
+    rel = pathlib.Path("broken.py")
+    monkeypatch.setattr(me, "_iter_py_files", lambda: [(rel, broken)])
+    monkeypatch.setattr(me, "ALLOWLIST",
+                        {("broken.py", "some_reviewed_function")})
+    me.test_allowlist_has_no_dead_entries()      # must not report it dead
