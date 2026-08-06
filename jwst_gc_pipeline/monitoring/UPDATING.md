@@ -137,6 +137,18 @@ Two constraints the script encodes, both easy to get wrong by hand:
   which do not exist on the web host. The sync dereferences them, which is what
   makes the click-through to the diagnostic figures work off-site.
 
+**The release site can delete the monitor.** `htdocs/jwst-gc/` is written by two
+unrelated generators — the release pages by `scripts/release/make_webpage.py`,
+`monitor/` by the script above — and `releases/site/` contains no `monitor/`. A
+release sync carrying `--delete` therefore sees the whole 194 MB monitor tree as
+extraneous and removes it. That is what took the URL offline on **2026-08-06**:
+the release site was republished at 09:28, the monitor 404'd until 14:45.
+`scripts/release/deploy_site.sh` now runs that sync with
+`--filter='protect monitor/'` and fails loudly if the monitor is missing
+afterwards; use it rather than rsyncing `releases/site/` by hand. To put the
+monitor back after a wipe, re-run `deploy_monitor.sh` — the publish directory on
+HiPerGator is the source of truth and survives it.
+
 **A symlink is not servable.** Apache returns **403** for a symlink whose target
 leaves the served tree, which on the dev server means anything pointing into
 `/blue`. `publish()` therefore *copies* figures it cannot hardlink, but the

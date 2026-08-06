@@ -171,6 +171,16 @@ a plain dry run (no `--stage` needed).
 ## 5. Versioning & provenance
 - MANIFEST per-file version bumped; webpage version column updated.
 
+## 6. Publishing the site (do not hand-write the rsync)
+- Deploy with `scripts/release/deploy_site.sh` (`--dry-run` first). The docroot
+  `htdocs/jwst-gc/` is shared: the release pages are ours, `monitor/` belongs to
+  `scripts/monitoring/deploy_monitor.sh` and is **not** in `releases/site/`, so a
+  bare `rsync --delete releases/site/ …/htdocs/jwst-gc/` deletes the 194 MB
+  monitor tree. It did, on 2026-08-06 — the monitor URL 404'd for five hours.
+  The script protects that tree and fails (exit 4) if it is gone afterwards.
+- After deploying, `https://starformation.astro.ufl.edu/jwst-gc/monitor/` still
+  returns 200.
+
 ---
 *Add this same inter-frame overlap item to the per-observation QA issue template
 (`JWST-GC/data-qa`).*

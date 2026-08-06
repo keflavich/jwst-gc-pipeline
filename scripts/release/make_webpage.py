@@ -10,8 +10,11 @@ self-contained site:
                                 with Globus download links, sizes, checksums
     <out>/assets/<field>.jpg    field preview (copied from the release preview/)
 
-Links point at the Globus HTTPS URLs recorded in each MANIFEST.  Deploy by
-rsyncing <out>/ to starformation:.../htdocs/jwst-gc/.
+Links point at the Globus HTTPS URLs recorded in each MANIFEST.  Deploy with
+``scripts/release/deploy_site.sh`` -- NOT a hand-written rsync.  ``htdocs/jwst-gc``
+also holds the pipeline monitor in ``monitor/``, which is not in <out>, so an
+rsync carrying --delete removes it (as happened 2026-08-06); the script protects
+that tree and verifies it is still there afterwards.
 """
 import argparse
 import html
