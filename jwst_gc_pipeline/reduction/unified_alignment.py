@@ -88,6 +88,10 @@ FRAME_KEY = 'ALIGNREF'
 # Offsets tables already collapse-checked in this process (warn once per file).
 _VALIDATED_OFFSETS_TABLES = set()
 
+#: Tables already reported as having no generation stamps -- the notice is a
+#: property of the TABLE, not of each of its thousands of frames.
+_GENLOCK_UNCHECKED_REPORTED = set()
+
 
 @dataclass(frozen=True)
 class AlignmentShift:
@@ -473,31 +477,45 @@ def _check_generation(fn, offsets_tbl, locked_tbl):
 
     has_stamps = all(f'base_{col}' in offsets_tbl.colnames
                      for col, _ in _GENERATION_COLUMNS)
-    if not has_stamps:
-        try:
-            t_tbl = os.path.getmtime(locked_tbl)
-            t_crf = os.path.getmtime(fn)
-        except OSError:
-            t_tbl = t_crf = None
-        if t_tbl is not None and t_tbl < t_crf - 1.0:
-            gmsg = (f"[genlock] offsets table {os.path.basename(locked_tbl)} has no "
-                    f"base_* generation stamps and predates crf "
-                    f"{os.path.basename(fn)}; the tie may be a reduction "
-                    f"generation behind (mtime is a WEAK proxy -- rebuild the "
-                    f"table with the stamping builders for a real check).")
-            if os.environ.get('GENLOCK_STRICT'):
-                raise RuntimeError(gmsg)
-            print("WARNING: " + gmsg, flush=True)
+    if not has_stamps and locked_tbl not in _GENLOCK_UNCHECKED_REPORTED:
+        # The mtime comparison that used to live here fired on EVERY re-reduce
+        # by construction (issue #269): re-reducing rewrites the crf, so the crf
+        # is always newer than a table that was not rebuilt in the same pass --
+        # which is the normal, correct state, not staleness.  A warning that
+        # cannot distinguish "the table is stale" from "this ran again" is not a
+        # check; it is noise that trains readers to skip genlock output.
+        #
+        # Say the true thing instead, ONCE per table rather than once per frame:
+        # without base_* stamps there is NO generation check at all.  Nothing in
+        # the repo writes those columns today, so this is the state of every
+        # field -- see the note on _GENERATION_COLUMNS.
+        _GENLOCK_UNCHECKED_REPORTED.add(locked_tbl)
+        gmsg = (f"[genlock] offsets table {os.path.basename(locked_tbl)} carries "
+                f"no base_* generation stamps, so the tie is applied WITHOUT a "
+                f"generation check: nothing verifies that the correction was "
+                f"solved on the same WCS generation as the frames it is being "
+                f"applied to.  Rebuild the table with a stamping builder to get "
+                f"a real check (GENLOCK_STRICT=1 to refuse instead).")
+        if os.environ.get('GENLOCK_STRICT'):
+            raise RuntimeError(gmsg)
+        print("WARNING: " + gmsg, flush=True)
     return frame_gen
 
 
 #: Generation stamp columns, as ``(table column suffix, generation_stamp key)``.
-#: These names DIVERGE: the tie builders write ``base_calver`` while
-#: ``generation_stamp`` lowercases ``CAL_VER`` to ``cal_ver``.  The check used to
-#: index the stamp with the COLUMN spelling, so the moment a table carried the
-#: stamps the strongest generation layer would have died on ``KeyError: 'calver'``
-#: instead of comparing anything.  It never fired only because nothing populates
-#: the columns yet.
+#: **Nothing in this repository writes these columns.**  A grep for
+#: ``base_calver`` finds only this comment, so :func:`_assert_generation_row` --
+#: the strong generation check -- is DORMANT on every field, and
+#: :func:`_check_generation` says so once per table.  The earlier wording here
+#: claimed "the tie builders write ``base_calver``"; they do not, and that
+#: sentence is why the layer read as implemented (issue #269).
+#:
+#: The names would DIVERGE if they were written: the intended column spelling is
+#: ``base_calver`` while ``generation_stamp`` lowercases ``CAL_VER`` to
+#: ``cal_ver``.  The check used to index the stamp with the COLUMN spelling, so
+#: the moment a table carried stamps the layer would have died on
+#: ``KeyError: 'calver'`` instead of comparing anything.  That is fixed here in
+#: the mapping below; it has still never run.
 _GENERATION_COLUMNS = (('calver', 'cal_ver'),
                        ('crds_ctx', 'crds_ctx'),
                        ('dvacorr', 'dvacorr'))
