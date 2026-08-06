@@ -53,6 +53,7 @@ from datetime import datetime, timezone
 from astropy.table import Table
 
 from jwst_gc_pipeline.atomic_io import atomic_write, keep_a_copy, locked
+from jwst_gc_pipeline.photometry.astrometry_checkpoint import vgroup_key
 
 
 class UnsupportedTableError(ValueError):
@@ -107,7 +108,14 @@ def find_alias_groups(tbl):
         key = (str(r['Visit']), str(r['Filter']), str(int(r['Exposure'])),
                module_family(mod))
         groups[key][mod].append(i)
-        vgroups[key].add(str(r['Vgroup']).strip())
+        # vgroup_key, not str().strip(): the script's only input path is
+        # Table.read(csv), and a blank Vgroup cell beside a populated one makes
+        # astropy produce a MASKED int64 column whose str() is '--' -- truthy,
+        # so `all(v for v in vgs)` skipped the group and the alias was never
+        # found.  The writer guard already uses vgroup_key for this reason.
+        # Latent on arches/cloudef/w51 today (bulk sentinels, no aliasing
+        # partner), so it has not bitten yet.
+        vgroups[key].add(vgroup_key(r['Vgroup']))
     out = {}
     for k, mods in groups.items():
         if len(mods) < 2 or k[3] not in mods:
@@ -134,6 +142,22 @@ def choose_survivor(modules):
         # is a different defect and not what this script is for.
         return None
     return None
+
+
+def _verify(written, expected, table, backup):
+    """Refuse unless the surviving rows are exactly the ones intended."""
+    got = [dict(zip(written.colnames, [str(v) for v in row])) for row in written]
+    if len(got) != len(expected):
+        raise SystemExit(
+            f'{table}: wrote {len(got)} rows, expected {len(expected)}.  The '
+            f'backup at {backup} is intact -- restore it and investigate.')
+    for want, have in zip(expected, got):
+        for col in REQUIRED_COLUMNS:
+            if col in want and want[col] != have.get(col):
+                raise SystemExit(
+                    f'{table}: surviving row mismatch on {col} '
+                    f'({want[col]!r} != {have.get(col)!r}).  The backup at '
+                    f'{backup} is intact -- restore it and investigate.')
 
 
 def main():
@@ -173,7 +197,7 @@ def main():
                 receipts.append(dict(
                     key=dict(visit=key[0], filter=key[1], exposure=key[2],
                              family=key[3],
-                             vgroups=sorted({str(tbl[j]['Vgroup']).strip()
+                             vgroups=sorted({vgroup_key(tbl[j]['Vgroup'])
                                              for idxs in mods.values()
                                              for j in idxs})),
                     removed_module=mod, kept_module=keep,
@@ -239,23 +263,17 @@ def main():
                       fh, indent=2)
         with atomic_write(args.table) as tmp_path:
             current[keep_mask].write(tmp_path, overwrite=True)
+            # VERIFY INSIDE the context, before atomic_write's os.replace
+            # publishes.  Verifying after meant a failure left the wrong table
+            # LIVE and told a human to restore it by hand -- and readers of
+            # these tables take no lock, so that window is human-scale.
+            written = Table.read(tmp_path)
+            _verify(written, expected, args.table, backup)
 
-        # VERIFY.  A backup is only useful if someone notices; check here.
         written = Table.read(args.table)
         got = [dict(zip(written.colnames, [str(v) for v in row]))
                for row in written]
-        if len(got) != len(expected):
-            raise SystemExit(
-                f'{args.table}: wrote {len(got)} rows, expected '
-                f'{len(expected)}.  The backup at {backup} is intact -- '
-                f'restore it and investigate.')
-        for want, have in zip(expected, got):
-            for col in ('Visit', 'Filter', 'Exposure', 'Module', 'Vgroup'):
-                if col in want and want[col] != have.get(col):
-                    raise SystemExit(
-                        f'{args.table}: surviving row mismatch on {col} '
-                        f'({want[col]!r} != {have.get(col)!r}).  The backup at '
-                        f'{backup} is intact -- restore it and investigate.')
+        _verify(written, expected, args.table, backup)
 
     print(f'\nwrote {args.table} ({len(tbl)} -> {sum(keep_mask)} rows, verified)')
     print(f'backup  {backup}')

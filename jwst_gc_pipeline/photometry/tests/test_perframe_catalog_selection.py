@@ -119,14 +119,39 @@ def test_long_detector_supersedes_only_its_own_module():
 
 
 def test_cloudef_f360m_shape_is_resolved():
-    """The exact input set that produced issue #298: 8 stale bare-module
-    catalogs beside 16 `long` ones."""
+    """The exact input set that produced issue #298: 8 bare-module catalogs
+    beside 16 `long` ones.
+
+    IMPORTANT, and the reason this test is not the whole story: on the real
+    cloudef tree those 8 are observation **005's own frames**, so for an o005
+    run this rule discards o005's data and keeps o002's.  It is only correct
+    because `_drop_foreign_obs_duplicates` should have removed the foreign set
+    FIRST -- and on cloudef it does not, because proposal 2092 gets an empty
+    obs token and the filter compares `'' != ''`.
+
+    PR #313 closes that by reading the observation from each catalog's own
+    `meta['FILENAME']`.  Until it lands, this rule is right about the SPELLING
+    and blind to the OBSERVATION, and an o005 run on cloudef F360M must not be
+    launched from this branch alone.
+    """
     fns = ([_name(det="nrcb", filt="f360m", exp=i) for i in range(1, 9)]
            + [_name(det="nrcblong", filt="f360m", exp=i) for i in range(1, 9)]
            + [_name(det="nrcalong", filt="f360m", exp=i) for i in range(1, 9)])
     kept = _drop_module_level_duplicates(fns, "f360m", "m2", "merged")
     assert len(kept) == 16
     assert not any("_nrcb_visit" in os.path.basename(f) for f in kept)
+
+
+def test_the_module_rule_is_blind_to_the_observation():
+    """States the limit explicitly rather than leaving it implied by the test
+    above: this rule cannot tell whose frames it is dropping.  Ordering matters
+    -- the foreign-observation filter must run first (PR #313)."""
+    own = [_name(det="nrcb", filt="f360m", exp=i) for i in range(1, 9)]
+    other = [_name(det="nrcblong", filt="f360m", exp=i) for i in range(1, 9)]
+    kept = _drop_module_level_duplicates(own + other, "f360m", "m2", "merged")
+    # the bare set goes whether or not it is this run's own observation
+    assert len(kept) == 8
+    assert all("_nrcblong_" in os.path.basename(f) for f in kept)
 
 
 def test_bare_module_dropped_only_for_its_own_module():

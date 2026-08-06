@@ -232,3 +232,44 @@ def test_a_same_length_substitution_is_refused(tmp_path, monkeypatch):
     with pytest.raises(SystemExit, match="changed under us"):
         uw.main()
     assert not list(tmp_path.glob("*.pre_unwind298_*")), "must refuse before writing"
+
+
+def test_the_empty_vgroup_wildcard_survives_a_csv_round_trip(tmp_path):
+    """The script's ONLY input path is Table.read(csv).  A blank Vgroup cell
+    beside a populated one makes astropy produce a MASKED int64 column whose
+    str() is '--' -- truthy -- so `all(v for v in vgs)` skipped the group and
+    the alias was never found.  The in-memory test passed because it never
+    touched disk."""
+    p = _write(tmp_path, _table([("nrcb", 1, "", 0.011),
+                                 ("nrcblong", 1, "02101", -0.007)]))
+    from_disk = uw.Table.read(p)
+    # the masked shape the sweep found on arches/cloudef/w51
+    assert str(from_disk["Vgroup"][0]) in ("--", ""), from_disk["Vgroup"]
+    groups = uw.find_alias_groups(from_disk)
+    assert len(groups) == 1, groups
+    assert uw.choose_survivor(list(groups.values())[0]) == "nrcblong"
+
+
+def test_a_failed_verify_does_not_publish(tmp_path, monkeypatch):
+    """Verifying AFTER atomic_write's os.replace left the wrong table LIVE and
+    told a human to restore it by hand -- and readers take no lock, so that
+    window is human-scale."""
+    import sys
+    p = _write(tmp_path, _table([("nrcb", 1, "02101", 0.011),
+                                 ("nrcblong", 1, "02101", -0.007)]))
+    before = pathlib.Path(p).read_bytes()
+    real_read = uw.Table.read
+    calls = {"n": 0}
+
+    def _bad(path, *a, **k):
+        t = real_read(path, *a, **k)
+        calls["n"] += 1
+        if calls["n"] == 3:            # the verify read, now on the TMP path
+            return t[:0]
+        return t
+
+    monkeypatch.setattr(uw.Table, "read", staticmethod(_bad))
+    sys.argv = ["x", p, "--apply"]
+    with pytest.raises(SystemExit):
+        uw.main()
+    assert pathlib.Path(p).read_bytes() == before, "the live table was published"
