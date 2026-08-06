@@ -24,9 +24,20 @@ any other situation:
 * if the two rows carry the SAME correction it still removes one, but says so,
   because a true duplicate is a different (and less alarming) defect.
 
-Provenance: the original table is copied to ``<table>.pre_unwind298_<stamp>``
-before anything is written, and a JSON receipt listing every removed row (with
-its full contents) is written next to it.  Nothing is edited in place.
+Provenance and safety: this edits a LIVE offsets table, possibly while a retie
+loop is running, so it uses the same protocol the pipeline's own writers do
+(``jwst_gc_pipeline.atomic_io``):
+
+* an exclusive ``locked()`` around the whole read-modify-write, so a concurrent
+  ``update_offsets_table``/``seed_offsets_table_from_consensus`` cannot
+  interleave;
+* ``keep_a_copy`` to ``<table>.pre_unwind298_<stamp>`` -- a copy, never a move,
+  because a reader in the gap takes the table-does-not-exist branch and aligns
+  a frame at (0, 0);
+* ``atomic_write``, so no reader ever sees a partial table;
+* a JSON receipt listing every removed row in full;
+* and a VERIFY pass that re-reads the written table and refuses to report
+  success unless the surviving rows are exactly the ones intended.
 
 Usage::
 
@@ -36,11 +47,12 @@ Usage::
 import argparse
 import json
 import os
-import shutil
 from collections import defaultdict
 from datetime import datetime, timezone
 
 from astropy.table import Table
+
+from jwst_gc_pipeline.atomic_io import atomic_write, keep_a_copy, locked
 
 
 class UnsupportedTableError(ValueError):
@@ -192,17 +204,49 @@ def main():
         return
 
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-    backup = f'{args.table}.pre_unwind298_{stamp}'
-    shutil.copy2(args.table, backup)
-    receipt_path = f'{args.table}.unwind298_{stamp}.json'
-    with open(receipt_path, 'w') as fh:
-        json.dump(dict(table=os.path.abspath(args.table), backup=backup,
-                       issue=298, date=stamp, removed=receipts,
-                       refused=[dict(key=list(k), modules=m) for k, m in refused]),
-                  fh, indent=2)
     keep_mask = [i not in set(drop) for i in range(len(tbl))]
-    tbl[keep_mask].write(args.table, overwrite=True)
-    print(f'\nwrote {args.table} ({len(tbl)} -> {sum(keep_mask)} rows)')
+    expected = [dict(zip(tbl.colnames, [str(v) for v in tbl[i]]))
+                for i, k in enumerate(keep_mask) if k]
+
+    with locked(args.table):
+        # Re-read under the lock: the table may have changed between the dry
+        # run above and now, and removing rows by INDEX from a stale read would
+        # delete the wrong ones.
+        current = Table.read(args.table)
+        if len(current) != len(tbl):
+            raise SystemExit(
+                f'{args.table} changed under us ({len(tbl)} -> {len(current)} '
+                f'rows) between analysis and write; re-run.')
+        backup = f'{args.table}.pre_unwind298_{stamp}'
+        keep_a_copy(args.table, backup)
+        receipt_path = f'{args.table}.unwind298_{stamp}.json'
+        with open(receipt_path, 'w') as fh:
+            json.dump(dict(table=os.path.abspath(args.table), backup=backup,
+                           issue=298, date=stamp, removed=receipts,
+                           refused=[dict(key=list(k), modules=m)
+                                    for k, m in refused]),
+                      fh, indent=2)
+        with atomic_write(args.table) as tmp_path:
+            current[keep_mask].write(tmp_path, overwrite=True)
+
+        # VERIFY.  A backup is only useful if someone notices; check here.
+        written = Table.read(args.table)
+        got = [dict(zip(written.colnames, [str(v) for v in row]))
+               for row in written]
+        if len(got) != len(expected):
+            raise SystemExit(
+                f'{args.table}: wrote {len(got)} rows, expected '
+                f'{len(expected)}.  The backup at {backup} is intact -- '
+                f'restore it and investigate.')
+        for want, have in zip(expected, got):
+            for col in ('Visit', 'Filter', 'Exposure', 'Module', 'Vgroup'):
+                if col in want and want[col] != have.get(col):
+                    raise SystemExit(
+                        f'{args.table}: surviving row mismatch on {col} '
+                        f'({want[col]!r} != {have.get(col)!r}).  The backup at '
+                        f'{backup} is intact -- restore it and investigate.')
+
+    print(f'\nwrote {args.table} ({len(tbl)} -> {sum(keep_mask)} rows, verified)')
     print(f'backup  {backup}')
     print(f'receipt {receipt_path}')
 

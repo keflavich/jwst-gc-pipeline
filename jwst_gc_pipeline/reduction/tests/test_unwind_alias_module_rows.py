@@ -127,3 +127,84 @@ def test_choose_survivor_refuses_what_it_cannot_judge():
     assert uw.choose_survivor({"nrcb": [0], "nrcb1": [1], "nrcb2": [2]}) is None
     assert uw.choose_survivor({"nrcb": [0]}) is None
     assert uw.choose_survivor({"nrcb": [0], "nrcblong": [1]}) == "nrcblong"
+
+
+def test_a_table_that_changed_under_us_is_refused(tmp_path, monkeypatch):
+    """Rows are dropped by INDEX, so acting on a stale read would delete the
+    wrong ones.  The re-read under the lock must catch that."""
+    import sys
+    p = _write(tmp_path, _table([("nrcb", 1, "02101", 0.011),
+                                 ("nrcblong", 1, "02101", -0.007)]))
+    real_read = uw.Table.read
+    calls = {"n": 0}
+
+    def _mutating_read(path, *a, **k):
+        t = real_read(path, *a, **k)
+        calls["n"] += 1
+        if calls["n"] == 2:               # the read under the lock
+            t = t[[0]]                    # somebody else shortened it
+        return t
+
+    monkeypatch.setattr(uw.Table, "read", staticmethod(_mutating_read))
+    sys.argv = ["x", p, "--apply"]
+    with pytest.raises(SystemExit, match="changed under us"):
+        uw.main()
+
+
+def test_the_write_is_verified(tmp_path, monkeypatch):
+    """A backup only helps if someone notices.  A write that lands the wrong
+    rows must refuse rather than report success.
+
+    Sabotage the VERIFY read (the third `Table.read`) so it returns what a bad
+    write would have produced.
+    """
+    import sys
+    p = _write(tmp_path, _table([("nrcb", 1, "02101", 0.011),
+                                 ("nrcblong", 1, "02101", -0.007)]))
+    real_read = uw.Table.read
+    calls = {"n": 0}
+
+    def _bad_verify(path, *a, **k):
+        t = real_read(path, *a, **k)
+        calls["n"] += 1
+        if calls["n"] == 3:                    # the verify re-read
+            return t[:0]                       # "we wrote nothing"
+        return t
+
+    monkeypatch.setattr(uw.Table, "read", staticmethod(_bad_verify))
+    sys.argv = ["x", p, "--apply"]
+    with pytest.raises(SystemExit, match="expected"):
+        uw.main()
+    # the backup is intact and the message says so
+    backups = list(tmp_path.glob("*.pre_unwind298_*"))
+    assert len(backups) == 1
+    assert len(real_read(str(backups[0]), format="ascii.csv")) == 2
+
+
+def test_the_verify_catches_a_wrong_surviving_row(tmp_path, monkeypatch):
+    import sys
+    p = _write(tmp_path, _table([("nrcb", 1, "02101", 0.011),
+                                 ("nrcblong", 1, "02101", -0.007)]))
+    real_read = uw.Table.read
+    calls = {"n": 0}
+
+    def _swapped(path, *a, **k):
+        t = real_read(path, *a, **k)
+        calls["n"] += 1
+        if calls["n"] == 3:
+            t["Module"][0] = "nrcb"            # the row we meant to delete
+        return t
+
+    monkeypatch.setattr(uw.Table, "read", staticmethod(_swapped))
+    sys.argv = ["x", p, "--apply"]
+    with pytest.raises(SystemExit, match="mismatch on Module"):
+        uw.main()
+
+
+def test_no_lock_file_is_left_behind(tmp_path):
+    import sys
+    p = _write(tmp_path, _table([("nrcb", 1, "02101", 0.011),
+                                 ("nrcblong", 1, "02101", -0.007)]))
+    sys.argv = ["x", p, "--apply"]
+    uw.main()
+    assert not list(tmp_path.glob("*.lock")), list(tmp_path.glob("*.lock"))
