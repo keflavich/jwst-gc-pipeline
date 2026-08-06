@@ -37,9 +37,18 @@ import re
 import shutil
 import subprocess
 
-import release_freshness
 import sys
 from pathlib import Path
+
+# `release_freshness` is a sibling MODULE, not a package member, so a bare
+# import only resolves when this file is run as a script from a cwd that
+# happens to contain it.  Loading `stage_release` any other way -- which is
+# what the release-gate tests do, via importlib against an absolute path --
+# raised ModuleNotFoundError at import time and took the whole COLLECTION
+# down: pytest then ran nothing at all without --continue-on-collection-errors,
+# so two gate test files silently stopped protecting anything.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import release_freshness            # noqa: E402  (needs the path above)
 
 # --- Globus collection constants ---------------------------------------------
 GLOBUS_COLLECTION_ID = "d9873d5e-0fbd-4980-aedf-4ca56f65a045"

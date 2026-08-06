@@ -362,3 +362,38 @@ def test_readme_no_limitation_section_when_clean(tmp_path):
     stage_release.write_readme(tmp_path, "brick", "vTEST", [cat_item, img_item],
                                "symlink")
     assert "Known photometric limitations" not in (tmp_path / "README.md").read_text()
+
+
+def test_stage_release_imports_without_its_directory_on_the_path():
+    """REGRESSION.  `import release_freshness` is a bare sibling import, so it
+    only resolved when stage_release.py was run as a script from a cwd that
+    happened to contain it.  Loading it any other way raised
+    ModuleNotFoundError at IMPORT time, which took the whole collection down --
+    and pytest then ran nothing at all without
+    `--continue-on-collection-errors`:
+
+        scripts/release/stage_release.py:40: in <module>
+            import release_freshness
+        E   ModuleNotFoundError: No module named 'release_freshness'
+        ERROR test_release_continuity_gate.py
+        ERROR test_release_listed_src_gate.py
+        !!! Interrupted: 2 errors during collection !!!
+
+    So two release-gate test files stopped protecting anything, silently.
+    Import it in a subprocess with a cwd and a sys.path that cannot help.
+    """
+    import subprocess
+    import sys as _sys
+    from pathlib import Path as _Path
+    target = (_Path(__file__).resolve().parents[3] / "scripts" / "release"
+              / "stage_release.py")
+    code = (
+        "import importlib.util, sys\n"
+        f"spec = importlib.util.spec_from_file_location('sr', r'{target}')\n"
+        "m = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(m)\n"
+        "print('ok')\n")
+    proc = subprocess.run([_sys.executable, "-c", code], capture_output=True,
+                          text=True, cwd=str(_Path(__file__).resolve().parent))
+    assert proc.returncode == 0, proc.stderr
+    assert "ok" in proc.stdout
