@@ -894,8 +894,10 @@ def _solve(byve, byv, coarse, c_ra, c_dec, ref, filt, modlabel=None):
     return rows
 
 
-def lock_filter(filt, rc, per_module=False):
+def lock_filter(filt, rc, per_module=False, mtag_override=None):
     sub, ep, mtag = rc['filts'][filt]
+    if mtag_override:
+        mtag = mtag_override
     prop, field, base = rc['proposal'], rc['field'], rc['basepath']
     cache = f'{base}/astrometry_diag/refcache/virac2.fits'
     print(f"=== per-exposure relock {filt} ({prop}/{field}, epoch {ep}) "
@@ -969,6 +971,14 @@ if __name__ == '__main__':
                          '(removes a real inter-module offset; fix_alignment narrows by Module)')
     ap.add_argument('--out', default=None, help='override output path (for validation before '
                     'overwriting the production table)')
+    ap.add_argument('--mtag', default=None,
+                    help="override the REGION per-filter merge tag (e.g. '_m2') for THIS run. "
+                         "The REGION mtag names the stage a field's per-frame catalogs last "
+                         "reached, so it goes stale the moment a re-run stops short of it: a "
+                         "field re-reduced only through m2 still has last generation's _m3 "
+                         "catalogs on disk under the same names, and the builder would silently "
+                         "measure the tie on those. Use this to point a rebuild at the stage the "
+                         "CURRENT generation actually produced.")
     ap.add_argument('--remeasure-crosstie', action='store_true',
                     help='flux-vetted RE-MEASURE of the JWST<->JWST cross-tie vs the 2221 master; '
                          'PRINTS suggested CROSSTIE constants and EXITS (writes nothing). Run this '
@@ -990,7 +1000,7 @@ if __name__ == '__main__':
 
     rows = []
     for f in filts:
-        frows = lock_filter(f, rc, per_module=args.per_module)
+        frows = lock_filter(f, rc, per_module=args.per_module, mtag_override=args.mtag)
         # STAGE-2: JWST<->JWST cross-tie onto the master frame (hardcoded constant; 1182 only).
         ct_ra, ct_de = crosstie_constant(f, rc)
         if ct_ra or ct_de:
