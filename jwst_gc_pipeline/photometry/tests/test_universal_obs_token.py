@@ -125,3 +125,28 @@ def test_skip_if_done_still_finds_untokened_products(tmp_path):
     Table({"x": [1.0]}).write(legacy)
     assert ccl._expected_output_exists(str(tmp_path), "f360m", "nrcblong", opt,
                                        "1", "02101", "00001")
+
+
+def test_lw_is_named_by_detector_at_every_naming_site():
+    """All three sites must agree, or --list-missing-tasks probes a filename
+    the writer never produces and the legacy path keeps emitting the spelling
+    the consumer discards."""
+    import inspect
+    from jwst_gc_pipeline.photometry import crowdsource_catalogs_long as ccl
+    from jwst_gc_pipeline.photometry.legacy import crowdsource_step as legacy
+    for mod in (ccl, legacy):
+        src = inspect.getsource(mod)
+        assert "file_detector.endswith('long')" in src, mod.__name__
+        # the un-guarded form must be gone
+        assert "file_module = file_detector if module == 'merged' else module" \
+            not in src, mod.__name__
+    assert ccl.__file__ and legacy.__file__
+
+
+def test_lw_naming_does_not_collide_across_observations():
+    """The bare spelling was the ONLY thing keeping cloudef o005's F360M
+    catalogs distinct from o002's.  Naming both by detector is safe only
+    because the token now distinguishes them."""
+    from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import obs_token
+    a, b = obs_token("2092", "002"), obs_token("2092", "005")
+    assert a and b and a != b, (a, b)

@@ -496,7 +496,17 @@ def _run_cutout_pipeline(options, modules, filternames, nvisits, proposal_id,
                     visit_id = filename.split("_")[0][-3:]
                     vgroup_id = filename.split("_")[1]
                     file_detector = filename.split("_")[3]
-                    file_module = file_detector if module == 'merged' else module
+                    # An LW frame's detector IS `nrcXlong`; the module family `nrcX` is
+                    # not a second name for it -- it names four other detectors.
+                    # Writing an LW catalog under the module spelling put ONE
+                    # physical frame on disk under two names, and the m2
+                    # checkpoint then wrote offsets rows under both, which
+                    # unified_alignment resolves to two rows for one frame and
+                    # refuses to reduce (issue #298).  Safe only because
+                    # obs_token is now emitted for every observation: without
+                    # it, cloudef o002 and o005 would write the SAME path.
+                    file_module = (file_detector if module == 'merged'
+                                   or file_detector.endswith('long') else module)
                     if options.skip_if_done and _expected_output_exists(
                             cut_bp, filt, file_module, opts_phase,
                             visit_id, vgroup_id, exposure_id,

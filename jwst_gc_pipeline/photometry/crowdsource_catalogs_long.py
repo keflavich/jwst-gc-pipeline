@@ -4741,7 +4741,17 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             # Match the per-file detector token convention
                             # used by the main each-exposure loop above.
                             file_detector = filename.split("_")[3]
-                            file_module = file_detector if module == 'merged' else module
+                            # An LW frame's detector IS `nrcXlong`; the module family `nrcX` is
+                            # not a second name for it -- it names four other detectors.
+                            # Writing an LW catalog under the module spelling put ONE
+                            # physical frame on disk under two names, and the m2
+                            # checkpoint then wrote offsets rows under both, which
+                            # unified_alignment resolves to two rows for one frame and
+                            # refuses to reduce (issue #298).  Safe only because
+                            # obs_token is now emitted for every observation: without
+                            # it, cloudef o002 and o005 would write the SAME path.
+                            file_module = (file_detector if module == 'merged'
+                                           or file_detector.endswith('long') else module)
                             if not _expected_output_exists(
                                     basepath, filtername, file_module, options,
                                     visit_id, vgroup_id, exposure_id,
@@ -4843,7 +4853,18 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             # them all under 'merged' would overwrite 8 outputs
                             # per exposure down to 1.
                             file_detector = filename.split("_")[3]
-                            if module == 'merged':
+                            # An LW frame's detector IS `nrcXlong`; the module
+                            # family `nrcX` is not a second name for it -- it
+                            # names four other detectors.  Writing an LW catalog
+                            # under the module spelling put ONE physical frame on
+                            # disk under two names, and the m2 checkpoint then
+                            # wrote offsets rows under both, which
+                            # unified_alignment resolves to two rows for one
+                            # frame and refuses to reduce (issue #298).  Safe
+                            # only because obs_token is now emitted for every
+                            # observation: without it, cloudef o002 and o005
+                            # would write the SAME path.
+                            if module == 'merged' or file_detector.endswith('long'):
                                 file_module = file_detector
                             else:
                                 file_module = module
