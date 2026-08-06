@@ -1929,3 +1929,51 @@ def test_consensus_writer_allows_distinct_detectors_of_one_module(tmp_path):
     path = seed_offsets_table_from_consensus(str(tmp_path), "2092", "002",
                                              corr, stage="m2")
     assert len(Table.read(path)) == 4
+
+
+def test_consensus_writer_allows_a_lone_bare_module_row(tmp_path):
+    """A single bare-module correction is not an alias -- a genuinely
+    module-level table must stay writable (kills the `len(mods) >= 1` mutant)."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        seed_offsets_table_from_consensus)
+    corr = [dict(visit="1", exposure=e, module="nrcb", filtername="F212N",
+                 vgroup="02101", dra_onsky_mas=1.0, ddec_onsky_mas=0.5,
+                 dec_deg=DEC_TEST, source="m2 visit-consensus")
+            for e in (1, 2, 3)]
+    path = seed_offsets_table_from_consensus(str(tmp_path), "2092", "002", corr,
+                                             stage="m2")
+    assert len(Table.read(path)) == 3
+
+
+def test_consensus_writer_only_refuses_what_this_write_touches(tmp_path, capsys):
+    """A pre-existing alias in ANOTHER filter must not block this write.
+
+    A table-wide refusal would mean cloudef's legacy F360M rows hard-block
+    F162M, F210M and F480M with no escape hatch -- ASTROM_CHECKPOINT_WARN_ONLY
+    is consulted after the seeding call, not before.
+    """
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        seed_offsets_table_from_consensus)
+    # Plant the alias directly: it cannot be created through the writer any
+    # more, which is the point of the other test.
+    import os
+    seed = [dict(visit="1", exposure=1, module="nrcblong", filtername="F360M",
+                 vgroup="02101", dra_onsky_mas=1.0, ddec_onsky_mas=0.0,
+                 dec_deg=DEC_TEST, source="m2 visit-consensus")]
+    path = seed_offsets_table_from_consensus(str(tmp_path), "2092", "002", seed,
+                                             stage="m2")
+    tbl = Table.read(path)
+    row = dict(zip(tbl.colnames, tbl[0]))
+    row["Module"] = "nrcb"
+    tbl.add_row([row[c] for c in tbl.colnames])
+    tbl.write(path, overwrite=True)
+    capsys.readouterr()
+
+    other = [dict(visit="1", exposure=1, module="nrca1", filtername="F162M",
+                  vgroup="02101", dra_onsky_mas=2.0, ddec_onsky_mas=1.0,
+                  dec_deg=DEC_TEST, source="m2 visit-consensus")]
+    path = seed_offsets_table_from_consensus(str(tmp_path), "2092", "002",
+                                             other, stage="m2")
+    assert path                                   # accepted
+    out = capsys.readouterr().out
+    assert "already carries" in out and "unwind_alias_module_rows" in out

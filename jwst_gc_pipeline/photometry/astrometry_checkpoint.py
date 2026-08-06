@@ -564,6 +564,23 @@ def _assert_poolable(members, mods, row_key, tbl, offsets_path):
             f"separately.  A table with no Module column always lands here, "
             f"which is correct: rebuild it per-module "
             f"(build_virac2_offsets --per-module) so corrections map 1:1.")
+    bare = {m for m in mods if m and _module_family(m) == m}
+    if bare and len(set(mods)) > 1:
+        # A BARE module token beside a more specific one is the same physical
+        # hardware twice, not several detectors of one module (issue #298).
+        # Pooling would MEDIAN a frame against itself: sgrb2's F360M table has
+        # no Module column, so `nrcb` and `nrcblong` -- same family, distinct
+        # tokens -- passed the family check above and were silently blended
+        # (10 and -4 mas pooled to 3.0).  That is worse than the aliasing this
+        # refuses at write time, because nothing downstream can see it happened.
+        raise OffsetsTableUpdateError(
+            f"cannot pool corrections for {os.path.basename(offsets_path)}: "
+            f"module(s) {sorted(bare)} appear beside more specific spellings "
+            f"of the same hardware {sorted(set(mods) - bare)} on row(s) "
+            f"{row_key}.  A bare module token is not a detector -- pooling "
+            f"these medians one physical frame against itself.  The upstream "
+            f"cause is a stale bare-module per-frame catalog ingested next to "
+            f"its numbered/`long` counterpart (issue #298).")
     if len(set(mods)) != len(mods):
         dupes = sorted({m for m in mods if mods.count(m) > 1})
         raise OffsetsTableUpdateError(
@@ -1449,34 +1466,63 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
         # check above cannot see it: ('...','F360M',1,'nrcb','2101') and
         # ('...','F360M',1,'nrcblong','2101') are distinct keys, but
         # unified_alignment._read_consensus resolves a frame through
-        # _module_variants, which maps nrcblong -> {nrcblong, nrcb}, so BOTH
-        # match one frame and it refuses to reduce the field (issue #298).
-        # Refuse to WRITE that table -- the alternative is discovering it hours
-        # later, on another field's iteration, with no way to tell which row is
-        # right.  The upstream cause is a stale bare-module per-frame catalog
-        # ingested alongside its `long` counterpart; this is the backstop.
-        # Only a BARE family token aliases.  _module_variants(frame) is
-        # {frame, frame-without-digits, frame-without-long}, so a frame
-        # `nrcb3` matches rows `nrcb3` and `nrcb`, and a frame `nrcblong`
-        # matches `nrcblong` and `nrcb` -- but `nrcb3` and `nrcb4` match
-        # nothing of each other's.  Grouping by family alone would flag every
-        # legitimate per-detector table.
+        # _module_variants -- which for a DETECTOR spelling adds its family and
+        # for a BARE spelling adds `long` -- so both match one frame and it
+        # refuses to reduce the field (issue #298).
+        #
+        # Only a BARE family token aliases.  A frame `nrcb3` matches rows
+        # `nrcb3` and `nrcb`; `nrcblong` matches `nrcblong` and `nrcb`; but
+        # `nrcb3` and `nrcb4` match nothing of each other's.  Grouping on the
+        # family alone would refuse every legitimate per-detector table.
+        #
+        # An EMPTY row Vgroup is a wildcard at read time (vgroup_row_matches),
+        # so it aliases across vgroups too -- arches once carried 85 such legacy
+        # rows.  Grouping on the vgroup exactly would put them in a different
+        # bucket and miss the collision entirely.
+        #
+        # SCOPE: refuse only for keys THIS write touches, and merely report a
+        # pre-existing collision elsewhere in the table.  A table-wide refusal
+        # would mean one filter's legacy rows hard-block every other filter's
+        # seed with no escape hatch -- ASTROM_CHECKPOINT_WARN_ONLY is consulted
+        # after this call, not before -- so cloudef's F360M rows would brick
+        # F162M, F210M and F480M as well.  Use
+        # scripts/reduction/unwind_alias_module_rows.py on the pre-existing ones.
+        def _alias_bucket(k):
+            return (k[0], k[1], k[2], _module_family(k[3]))
+
+        # `prepared` is exactly what this write created or updated.
+        touched = {_alias_bucket(k) for *_rest, k in prepared}
         fam = {}
         for k in keys:
-            fam.setdefault((k[0], k[1], k[2], _module_family(k[3]), k[4]),
-                           set()).add(k[3])
-        alias = sorted({(f, tuple(sorted(mods))) for f, mods in fam.items()
-                        if len(mods) > 1 and any(m == f[3] for m in mods)})
-        if alias:
+            fam.setdefault(_alias_bucket(k), []).append(k)
+        alias = []
+        for bucket, members in sorted(fam.items()):
+            mods = {m[3] for m in members}
+            if len(mods) < 2 or bucket[3] not in mods:
+                continue
+            # vgroups must be able to collide: equal, or either one empty
+            vgs = {m[4] for m in members}
+            if len(vgs) > 1 and all(v for v in vgs):
+                continue
+            alias.append((bucket, tuple(sorted(mods)), tuple(sorted(vgs))))
+        new_alias = [a for a in alias if a[0] in touched]
+        if new_alias:
             raise OffsetsTableUpdateError(
                 f"consensus table {os.path.basename(out_path)} would carry the "
                 f"SAME frame under aliasing module spellings, which "
                 f"unified_alignment resolves to both rows and refuses to read: "
-                f"{alias[:5]}{'...' if len(alias) > 5 else ''} "
-                f"({len(alias)} collision(s)).  This means the checkpoint "
+                f"{new_alias[:5]}{'...' if len(new_alias) > 5 else ''} "
+                f"({len(new_alias)} collision(s)).  This means the checkpoint "
                 f"ingested one physical exposure twice under two module "
                 f"tokens -- check for stale bare-module per-frame catalogs "
                 f"next to their `long` counterparts (issue #298).")
+        for a in alias:
+            print(f"WARNING: consensus table {os.path.basename(out_path)} "
+                  f"already carries {a[0]} under aliasing spellings {a[1]} "
+                  f"(vgroups {a[2]}).  This write does not touch it, but any "
+                  f"frame it describes CANNOT be read -- repair with "
+                  f"scripts/reduction/unwind_alias_module_rows.py (issue #298).",
+                  flush=True)
         big = [(k, r["dra (arcsec)"], r["ddec (arcsec)"]) for k, r in zip(keys, rows)
                if abs(float(r["dra (arcsec)"])) > 0.5 or abs(float(r["ddec (arcsec)"])) > 0.5]
         if big:

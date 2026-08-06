@@ -43,8 +43,23 @@ from datetime import datetime, timezone
 from astropy.table import Table
 
 
+class UnsupportedTableError(ValueError):
+    """The table's schema cannot express the aliasing identity."""
+
+
+#: Columns the aliasing identity is built from.  Many offsets tables on disk
+#: carry a different schema (28 of 54 lack one or more of these), and a tool
+#: whose job is careful operation on live tables must say so rather than
+#: traceback with a raw KeyError.
+REQUIRED_COLUMNS = ('Visit', 'Filter', 'Exposure', 'Module', 'Vgroup')
+
+
 def module_family(module):
-    """``nrcb1``/``nrcb``/``nrcblong`` -> ``nrcb``."""
+    """``nrcb1``/``nrcb``/``nrcblong`` -> ``nrcb``.
+
+    Mirrors ``astrometry_checkpoint._module_family`` with the case/whitespace
+    tolerance a CSV needs.
+    """
     m = str(module).strip().lower().strip('1234')
     return m[:-4] if m.endswith('long') else m
 
@@ -62,14 +77,35 @@ def find_alias_groups(tbl):
     table, which is how this script's first draft "found" 9 non-collisions in
     cloudef's SW filters.
     """
+    missing = [c for c in REQUIRED_COLUMNS if c not in tbl.colnames]
+    if missing:
+        raise UnsupportedTableError(
+            f"table lacks {missing}; the aliasing identity needs "
+            f"{list(REQUIRED_COLUMNS)}.  Many offsets tables carry a different "
+            f"schema and cannot alias at all -- nothing to do here.")
     groups = defaultdict(lambda: defaultdict(list))
+    vgroups = defaultdict(set)
     for i, r in enumerate(tbl):
         mod = str(r['Module']).strip().lower()
-        key = (str(r['Visit']), str(r['Filter']), str(r['Exposure']),
-               module_family(mod), str(r['Vgroup']))
+        # Group WITHOUT the vgroup: an EMPTY row Vgroup is a wildcard at read
+        # time (`vgroup_row_matches`), so it aliases across vgroups too, and
+        # grouping on the vgroup exactly puts such a row in its own bucket and
+        # misses the collision entirely.  arches once carried 85 legacy rows
+        # with no Vgroup.
+        key = (str(r['Visit']), str(r['Filter']), str(int(r['Exposure'])),
+               module_family(mod))
         groups[key][mod].append(i)
-    return {k: v for k, v in groups.items()
-            if len(v) > 1 and k[3] in v}
+        vgroups[key].add(str(r['Vgroup']).strip())
+    out = {}
+    for k, mods in groups.items():
+        if len(mods) < 2 or k[3] not in mods:
+            continue
+        vg = vgroups[k]
+        # distinct non-empty vgroups genuinely cannot collide
+        if len(vg) > 1 and all(v for v in vg):
+            continue
+        out[k] = mods
+    return out
 
 
 def choose_survivor(modules):
@@ -99,7 +135,11 @@ def main():
         raise SystemExit('--apply and --dry-run are mutually exclusive')
 
     tbl = Table.read(args.table)
-    groups = find_alias_groups(tbl)
+    try:
+        groups = find_alias_groups(tbl)
+    except UnsupportedTableError as ex:
+        print(f'{args.table}: {ex}')
+        return
     if not groups:
         print(f'{args.table}: no aliasing module spellings; nothing to do')
         return
@@ -120,7 +160,10 @@ def main():
                 drop.append(i)
                 receipts.append(dict(
                     key=dict(visit=key[0], filter=key[1], exposure=key[2],
-                             family=key[3], vgroup=key[4]),
+                             family=key[3],
+                             vgroups=sorted({str(tbl[j]['Vgroup']).strip()
+                                             for idxs in mods.values()
+                                             for j in idxs})),
                     removed_module=mod, kept_module=keep,
                     identical_values=bool(same),
                     row={c: (float(tbl[i][c])
@@ -137,7 +180,7 @@ def main():
     for rc in receipts:
         k = rc['key']
         print(f"  remove {k['filter']} {k['visit']} exp{k['exposure']} "
-              f"vgroup{k['vgroup']}: module {rc['removed_module']!r} "
+              f"vgroup{'/'.join(k['vgroups'])}: module {rc['removed_module']!r} "
               f"(keeping {rc['kept_module']!r})"
               + ('  [identical values]' if rc['identical_values'] else ''))
 

@@ -3449,7 +3449,12 @@ def _astrom_find_offsets_table(basepath, proposal_id, field=None):
     return None
 
 
-_DETECTOR_TOKEN_RE = re.compile(r'_(nrc[ab](?:[1-4]|long)?)_visit')
+#: The detector token may be followed by a per-observation token
+#: (`_o023`, `_j6778`) before `_visit`.  Requiring `_visit` immediately
+#: after the detector skipped every tokened field -- gc2211 and ngc6334
+#: are entirely tokened, so the duplicate filters below were no-ops there.
+_DETECTOR_TOKEN_RE = re.compile(
+    r'_(nrc[ab](?:[1-4]|long)?)(?:_(?:o\d{3}|j\d{4,5}))?_visit')
 
 # The per-observation / per-proposal disambiguator that `obs_token` inserts
 # between the detector and the visit number (`_o023`, `_j6778`).  Names written
