@@ -2316,15 +2316,17 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                         f"({why}) -- this filter pair got NO local check at "
                         f"all, and a pass here is silence rather than a "
                         f"verified result")
-                elif local["n_cells"] < LOCAL_CELL_MIN_CELLS:
-                    # One or two cells out of thousands is not coverage either.
-                    unverified.append(
-                        f"{fctx}: local {cell_arcsec}\" cell map has only "
-                        f"{local['n_cells']} populated cell(s) (< "
-                        f"{LOCAL_CELL_MIN_CELLS}) from {npairs} pairs -- too "
-                        f"little of the field is checked for a pass to mean "
-                        f"anything")
                 elif local["n_flagged"]:
+                    # A FLAGGED cell is checked FIRST, whatever the coverage.
+                    # Ordering the thin-map test ahead of it turned a detection
+                    # into a pass: a map with one or two populated cells, one of
+                    # them significantly offset, reported "too little of the
+                    # field is checked" and left `passed` True.  Reachable at
+                    # the production defaults (2", min 10 stars) on any field
+                    # with a couple of compact over-densities -- and it silenced
+                    # exactly the detection this gate exists for.  Thin coverage
+                    # is a reason to distrust a PASS, never a reason to discard
+                    # a FAILURE.
                     worst = max((c for c in local["cells"] if c["flagged"]),
                                 key=lambda c: c["off_mas"])
                     failures.append(
@@ -2333,6 +2335,22 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                         f"{worst['off_mas']:.1f}±{np.hypot(worst['dra_sem'], worst['ddec_sem']):.1f} "
                         f"mas from {worst['n']} stars at "
                         f"{worst['ra0']:.5f},{worst['dec0']:.5f})")
+                    if local["n_cells"] < LOCAL_CELL_MIN_CELLS:
+                        # Both are true and both are worth saying: the failure
+                        # stands, and the coverage behind it is thin.
+                        unverified.append(
+                            f"{fctx}: the failure above rests on only "
+                            f"{local['n_cells']} populated cell(s) (< "
+                            f"{LOCAL_CELL_MIN_CELLS})")
+                elif local["n_cells"] < LOCAL_CELL_MIN_CELLS:
+                    # Nothing flagged, and too little of the field checked for
+                    # the pass to mean anything.
+                    unverified.append(
+                        f"{fctx}: local {cell_arcsec}\" cell map has only "
+                        f"{local['n_cells']} populated cell(s) (< "
+                        f"{LOCAL_CELL_MIN_CELLS}) from {npairs} pairs -- too "
+                        f"little of the field is checked for a pass to mean "
+                        f"anything")
         filters.append(frec)
 
     passed = not failures

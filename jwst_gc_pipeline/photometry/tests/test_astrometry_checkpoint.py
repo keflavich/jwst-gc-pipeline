@@ -1836,3 +1836,70 @@ def test_crossfilter_populated_cell_map_stays_verified(tmp_path):
     assert frec["local"]["n_cells"] > 0
     assert record["all_verified"], record["unverified"]
     assert record["passed"]
+
+
+def test_a_thin_map_must_not_suppress_a_flagged_cell(tmp_path, monkeypatch):
+    """REGRESSION.  Ordering the thin-map check ahead of the flagged check
+    turned a detection into a pass: a map with 1-3 populated cells, one of them
+    significantly offset, reported "too little of the field is checked" and
+    left `passed` True.  Reachable at the production defaults on any field with
+    a couple of compact over-densities, and it silenced exactly the detection
+    this gate exists for.
+    """
+    monkeypatch.delenv("ALLOW_CROSSFILTER_ASTROM_FAIL", raising=False)
+    # a 15"x15" corner 25 mas off, in a field sparse enough that only a couple
+    # of cells reach cell_min_stars
+    cats = _crossfilter_catalogs(n=1200, extent=120.0,
+                                 patch=(0.0, 15.0, 0.0, 15.0, 25.0))
+    with pytest.raises(CrossFilterAstrometryError) as exc:
+        run_crossfilter_checkpoint(cats, record_dir=str(tmp_path),
+                                   cell_arcsec=15.0, cell_min_stars=15,
+                                   context="test")
+    assert "significant offset" in str(exc.value)
+
+
+def test_a_thin_map_failure_also_records_the_thin_coverage(tmp_path, monkeypatch):
+    """Both facts are worth having: the failure stands, and the coverage behind
+    it is thin."""
+    monkeypatch.setenv("ALLOW_CROSSFILTER_ASTROM_FAIL", "1")
+    cats = _crossfilter_catalogs(n=1200, extent=120.0,
+                                 patch=(0.0, 15.0, 0.0, 15.0, 25.0))
+    record = run_crossfilter_checkpoint(cats, record_dir=str(tmp_path),
+                                        cell_arcsec=15.0, cell_min_stars=15,
+                                        context="test")
+    assert record["failures"], record
+    frec = [f for f in record["filters"]
+            if f["filtername"] != record["anchor_filter"]][0]
+    if frec["local"]["n_cells"] < 4:
+        assert any("rests on only" in w for w in record["unverified"]), record
+
+
+def test_the_ambiguous_pair_path_also_reports_zero_pairs():
+    """The SECOND `_no_pairs` return -- pairs found but ALL ambiguous, the
+    crowded-field case whose comment records it crashing the brick F187N
+    --refcat run.  The first early return was already covered; this one was
+    not, so nothing pinned the value it reports."""
+    import astropy.units as u
+    # every `a` star has the SAME nearest `b`, so the uniqueness filter
+    # discards every pair while search_around_sky did find some
+    rng = np.random.default_rng(9)
+    n = 60
+    a = SkyCoord((RA0 + rng.uniform(0, 0.05, n) / 3600.0 / COSD) * u.deg,
+                 (DEC0 + rng.uniform(0, 0.05, n) / 3600.0) * u.deg)
+    b = SkyCoord([RA0] * u.deg, [DEC0] * u.deg)
+    g = dict(ok=True, swept=False, off=0.0, dra=0.0, ddec=0.0)
+    m = local_residual_map(a, b, g, cell_arcsec=2.0, min_stars=5, tol_mas=15.0)
+    assert m["n_cells"] == 0
+    assert m["n_pairs"] == 0, m
+
+
+def test_the_zero_pair_message_says_matching_failure_not_sparsity(tmp_path):
+    """Pins the WORDING that is the point of the cause-naming: on a dense field
+    `n_pairs == 0` is a matching failure after a tie the run just certified,
+    and calling it sparsity sends an operator the wrong way."""
+    import inspect
+    src = inspect.getsource(run_crossfilter_checkpoint)
+    assert "no matched pair survived" in src
+    assert "not sparsity" in src
+    # and it is reached only when n_pairs is 0
+    assert "if npairs == 0:" in src
