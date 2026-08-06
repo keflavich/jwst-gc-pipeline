@@ -319,7 +319,14 @@ fields:
           miri: ['001', '002']
         glob_obsid:
           miri: '002'
-        filters: [f140m, f162m, f182m, f187n, f210m, f335m, f360m, f405n, f410m, f480m, f770w, f1280w, f2100w]
+        # f150w and f444w were missing from this list although w51/F150W and
+        # w51/F444W hold genuine jw06151001001 frames (issue #160): F444W has
+        # 32 crf across nrcalong+nrcblong x 16 exposures and 128 files in
+        # pipeline/, F150W has nrca1.. frames of the same visit.  Cataloging
+        # was run manually for both, which is why w51/catalogs has 5 f444w and
+        # 2 f150w products against 71 for f480m -- the registry, not the data,
+        # is what stopped them being produced by the driver.
+        filters: [f140m, f150w, f162m, f182m, f187n, f210m, f335m, f360m, f405n, f410m, f444w, f480m, f770w, f1280w, f2100w]
 
   wd1:
     root: orange
