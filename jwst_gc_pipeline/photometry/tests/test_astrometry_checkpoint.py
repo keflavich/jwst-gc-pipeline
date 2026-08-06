@@ -12,7 +12,8 @@ from astropy.table import Table
 from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
     AstrometryRegressionError, CrossFilterAstrometryError,
     OffsetsTableUpdateError, mark_i2d_stale, provenance_header_cards,
-    run_crossfilter_checkpoint, run_visit_checkpoint, update_offsets_table,
+    measure_residual_field, run_crossfilter_checkpoint, run_visit_checkpoint,
+    update_offsets_table,
 )
 from jwst_gc_pipeline.photometry.astrometry_offsets import (
     GlobalTieNotVerifiedError, local_residual_map, measure_offset,
@@ -881,13 +882,18 @@ def test_m2_perexposure_scatter_still_corrects_not_raises(tmp_path, monkeypatch)
 # ---------------------------------------------------------------------------
 
 def _crossfilter_catalogs(n=6000, extent=60.0, second_offset_mas=0.0,
-                          patch=None, seed=5):
+                          patch=None, seed=5, gradient_mas_per_arcmin=0.0):
     rng = np.random.default_rng(seed)
     x = rng.uniform(0, extent, n)
     y = rng.uniform(0, extent, n)
     ra = RA0 + x / 3600.0 / COSD
     dec = DEC0 + y / 3600.0
     dra = np.full(n, second_offset_mas)
+    if gradient_mas_per_arcmin:
+        # a smooth ramp across the field: bulk ~0, no single 2" cell far off,
+        # but the field is coherently tilted -- the term neither the 5 mas bulk
+        # gate nor the 15 mas cell gate can see
+        dra = dra + gradient_mas_per_arcmin * (x - x.mean()) / 60.0
     if patch:
         lo_x, hi_x, lo_y, hi_y, dra_mas = patch
         inside = (x >= lo_x) & (x < hi_x) & (y >= lo_y) & (y < hi_y)
@@ -937,6 +943,165 @@ def test_crossfilter_local_patch_fails(tmp_path, monkeypatch):
                                    cell_min_stars=15, cell_arcsec=5.0,
                                    context="test")
     assert "local" in str(exc.value)
+
+
+def test_crossfilter_residual_field_sees_what_the_gates_cannot(tmp_path):
+    """A 3 mas/arcmin ramp passes BOTH gates and is reported by the field."""
+    cats = _crossfilter_catalogs(n=20000, gradient_mas_per_arcmin=3.0)
+    record = run_crossfilter_checkpoint(cats, record_dir=str(tmp_path),
+                                        cell_min_stars=15,
+                                        field_cell_arcsec=10.0,
+                                        field_min_stars=40, context="test")
+    # both existing gates are blind to it
+    assert record["passed"], record["failures"]
+
+    field = [f for f in record["filters"] if f["filtername"] != record["anchor_filter"]][0]["field"]
+    assert field is not None
+    # the ramp spans 60" = 1 arcmin, so ~3 mas peak-to-peak -> ~0.9 mas rms
+    assert field["coherent_mas"] > 5 * field["median_sem_mas"]
+    assert 0.5 < field["coherent_mas"] < 1.5, field
+    assert 2.0 < field["gradient_mas_per_arcmin"] < 4.0, field
+    # a linear term is exactly what an affine tie would remove
+    assert field["rms_after_affine_mas"] < 0.3 * field["rms_mas"], field
+
+
+def test_crossfilter_residual_field_flat_when_there_is_no_field(tmp_path):
+    cats = _crossfilter_catalogs(n=20000)
+    record = run_crossfilter_checkpoint(cats, record_dir=str(tmp_path),
+                                        cell_min_stars=15,
+                                        field_cell_arcsec=10.0,
+                                        field_min_stars=40, context="test")
+    field = [f for f in record["filters"] if f["filtername"] != record["anchor_filter"]][0]["field"]
+    assert field is not None
+    assert field["coherent_mas"] < 0.3, field
+
+
+# ---------------------------------------------------------------------------
+# measure_residual_field: the numbers it reports
+# ---------------------------------------------------------------------------
+
+def _field_pair(n=40000, extent=315.0, gradient_mas_per_arcmin=0.0,
+                constant_mas=(0.0, 0.0), noise_mas=0.0, seed=11):
+    """Two SkyCoord lists over a field big enough for the SHIPPED 45" cells.
+
+    ``b`` is ``a`` displaced by a known ramp along x plus a known constant, so
+    every reported amplitude has an analytic expectation.
+    """
+    rng = np.random.default_rng(seed)
+    x = rng.uniform(0, extent, n)
+    y = rng.uniform(0, extent, n)
+    ra = RA0 + x / 3600.0 / COSD
+    dec = DEC0 + y / 3600.0
+    a = SkyCoord(ra * u.deg, dec * u.deg, frame="icrs")
+    dra = constant_mas[0] + gradient_mas_per_arcmin * (x - x.mean()) / 60.0
+    ddec = np.full(n, float(constant_mas[1]))
+    if noise_mas:
+        dra = dra + rng.normal(0, noise_mas, n)
+        ddec = ddec + rng.normal(0, noise_mas, n)
+    b = SkyCoord((ra + dra / 3.6e6 / COSD) * u.deg,
+                 (dec + ddec / 3.6e6) * u.deg, frame="icrs")
+    return a, b
+
+
+def _measure(a, b, **kw):
+    g = measure_offset(a, b, sweep=True, context="test")
+    return measure_residual_field(a, b, g, context="test", **kw)
+
+
+def test_residual_field_rms_is_per_component_at_shipped_defaults():
+    """A pure ramp of amplitude A across the field has per-component rms
+    A/sqrt(12) in one axis and 0 in the other, i.e. A/sqrt(24) per component.
+
+    Runs at the SHIPPED 45" / 40-star defaults, not overrides.
+    """
+    grad = 3.0                       # mas/arcmin
+    extent_arcmin = 315.0 / 60.0
+    amp = grad * extent_arcmin       # peak-to-peak of the ramp
+    f = _measure(*_field_pair(gradient_mas_per_arcmin=grad))
+    assert f is not None
+    assert f["cell_arcsec"] == 45.0 and f["min_stars"] == 40
+    assert f["rms_convention"] == "per-component"
+    expected = amp / np.sqrt(24.0)
+    assert abs(f["rms_mas"] - expected) < 0.1 * expected, (f["rms_mas"], expected)
+    # and NOT the 2-D vector rms, which is sqrt(2) larger
+    assert abs(f["rms_mas"] - np.sqrt(2) * expected) > 0.2 * expected
+
+
+def test_residual_field_gradient_is_unbiased():
+    """The reported gradient must equal the injected ramp, not 0.707x it."""
+    for grad in (2.0, 5.0):
+        f = _measure(*_field_pair(gradient_mas_per_arcmin=grad))
+        assert f is not None
+        assert abs(f["gradient_mas_per_arcmin"] - grad) < 0.1 * grad, (
+            grad, f["gradient_mas_per_arcmin"])
+
+
+def test_residual_field_ignores_a_pure_bulk_offset():
+    """The bulk is the tie's job; the field must not double-count it."""
+    plain = _measure(*_field_pair(gradient_mas_per_arcmin=3.0))
+    shifted = _measure(*_field_pair(gradient_mas_per_arcmin=3.0,
+                                    constant_mas=(40.0, -25.0)))
+    assert plain is not None and shifted is not None
+    assert abs(shifted["rms_mas"] - plain["rms_mas"]) < 0.05 * plain["rms_mas"]
+    assert abs(shifted["gradient_mas_per_arcmin"]
+               - plain["gradient_mas_per_arcmin"]) < 0.1
+
+
+def test_residual_field_deconvolves_the_cell_noise():
+    """coherent_mas must fall below rms_mas once per-cell noise is present,
+    and must go to ~0 when the field is nothing but noise."""
+    clean = _measure(*_field_pair(gradient_mas_per_arcmin=3.0))
+    noisy = _measure(*_field_pair(gradient_mas_per_arcmin=0.0, noise_mas=30.0))
+    assert clean["coherent_mas"] > 0.9 * clean["rms_mas"]      # nothing to remove
+    # pure noise: the SEM must account for essentially all of the rms.  This
+    # only holds with the median-vs-mean SEM factor applied; without it the
+    # deconvolution under-removes and coherent_mas stays ~0.65 * rms.
+    assert noisy["coherent_mas"] < 0.5 * noisy["rms_mas"], noisy
+    assert noisy["median_sem_mas"] > 0.8 * noisy["rms_mas"], noisy
+
+
+def test_residual_field_absorbed_fraction_is_reported_against_chance():
+    f = _measure(*_field_pair(gradient_mas_per_arcmin=3.0))
+    assert f["affine_absorbed_chance"] == pytest.approx(6.0 / (2 * f["n_cells"]))
+    assert f["affine_absorbed_adjusted"] < f["affine_absorbed_fraction"]
+    # a pure ramp is entirely linear, so the adjusted fraction is near 1
+    assert f["affine_absorbed_adjusted"] > 0.9
+
+
+def test_residual_field_records_what_the_number_rests_on():
+    f = _measure(*_field_pair(gradient_mas_per_arcmin=3.0))
+    assert f["match_radius_mas"] == 300.0
+    assert f["n_pairs"] > 1000
+    assert 0.0 < f["matched_fraction"] <= 1.0
+    assert f["n_cells_in_bbox"] >= f["n_cells"]
+    assert f["n_cells_dropped"] == f["n_cells_in_bbox"] - f["n_cells"]
+
+
+def test_residual_field_returns_none_below_min_cells():
+    """Fewer cells than the affine fit can honestly support -> no answer."""
+    a, b = _field_pair(n=3000, extent=90.0, gradient_mas_per_arcmin=3.0)
+    assert _measure(a, b) is None                       # 45" cells -> ~4 cells
+    assert _measure(a, b, cell_arcsec=15.0, min_stars=20) is not None
+
+
+def test_residual_field_match_radius_is_honoured():
+    """Widening the radius must change what is matched, not be ignored."""
+    a, b = _field_pair(gradient_mas_per_arcmin=3.0)
+    tight = _measure(a, b, match_radius_arcsec=0.05)
+    wide = _measure(a, b, match_radius_arcsec=0.5)
+    assert tight["match_radius_mas"] == 50.0
+    assert wide["match_radius_mas"] == 500.0
+    assert wide["n_pairs"] >= tight["n_pairs"]
+
+
+def test_crossfilter_record_always_carries_a_field_key(tmp_path, monkeypatch):
+    """Even when the bulk tie is too gross for a field, the key must exist."""
+    monkeypatch.setenv("ALLOW_CROSSFILTER_ASTROM_FAIL", "1")
+    cats = _crossfilter_catalogs(second_offset_mas=4000.0)
+    record = run_crossfilter_checkpoint(cats, record_dir=str(tmp_path),
+                                        cell_min_stars=15, context="test")
+    for frec in record["filters"]:
+        assert "field" in frec
 
 
 def test_crossfilter_single_filter_skips(tmp_path):
