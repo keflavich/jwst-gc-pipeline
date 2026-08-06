@@ -2241,20 +2241,47 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                 # uninteresting.  `restricted` is the count entering the tie,
                 # `unrestricted` what this stage detected before the m2 star
                 # list was applied.
+                # RECORD FORMAT: `same_star_gate` is a STRING
+                # ("applied" / "refused" / "unavailable"), not a bool -- so
+                # `if rec["same_star_gate"]:` is truthy for all three.  No
+                # reader in the repo does that today; a new one must compare
+                # the value.  Note also that `cons["exposures"]` holds only the
+                # USABLE exposures, so a refusal on an exposure that landed in
+                # `cons["skipped"]` is not counted here.
+                #
                 # What ACTUALLY happened, not whether a star list was found.
                 # `m2_stars is not None` was true whenever a catalog existed,
                 # so on cloudef the record asserted the same-star gate ran
                 # against 40,124 stars while it was refused for all 16
                 # exposures -- the record stated the opposite of the run.
+                # ALL, not `any`.  `any(not refused)` reported "applied" when
+                # one exposure of sixteen restricted, which was true of the
+                # label and false of the run.  The restriction is now
+                # all-or-nothing per visit (see build_visit_consensus), so
+                # `all` is also the accurate spelling: "applied" means every
+                # exposure in this consensus was restricted to the m2 stars.
                 same_star_gate=(
-                    "applied" if (m2_stars is not None and any(
-                        not e.get("restrict_refused") for e in cons["exposures"]))
+                    "applied" if (m2_stars is not None and cons["exposures"]
+                                  and all(not e.get("restrict_refused")
+                                          for e in cons["exposures"]))
                     else ("refused" if m2_stars is not None else "unavailable")),
                 same_star_refused=[
                     dict(key=list(e["key"]), reason=e["restrict_refused"])
                     for e in cons["exposures"] if e.get("restrict_refused")],
                 n_same_star_refused=int(sum(
                     1 for e in cons["exposures"] if e.get("restrict_refused"))),
+                # RECORDED, never gated (see build_visit_consensus): the
+                # smallest fraction of the m2 star list falling inside any one
+                # exposure's footprint.  A visit-wide list legitimately covers
+                # more sky than one exposure, so there is no threshold -- but a
+                # list that is half a DIFFERENT POINTING passes survival and
+                # tie alike, because the foreign half simply never matches.
+                # Computed in the consensus and previously never carried into
+                # the record, which is the same defect as `restrict_refused`.
+                restrict_list_coverage=(
+                    min([c for c in (e.get("restrict_list_coverage")
+                                     for e in cons["exposures"])
+                         if c is not None], default=None)),
                 n_reliable_restricted=int(sum(
                     e["n_reliable"] for e in cons["exposures"])),
                 n_reliable_unrestricted=int(sum(

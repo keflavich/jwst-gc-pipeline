@@ -551,6 +551,35 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
             e["coords"] = e["coords_unrestricted"]
             e["flux"] = e["flux_unrestricted"]
             e["n_reliable"] = e["n_reliable_unrestricted"]
+    # HOMOGENEITY.  One refusal used to leave the visit MIXED, and a mixed
+    # consensus is not the m2 population: a refused exposure contributes its
+    # FULL star list, so any star two refused exposures share clears
+    # `min_exposures` and re-enters the consensus.  Measured on a 4-exposure
+    # visit with an m2 list of 400 and a stage detecting 700: two refusals put
+    # all 300 new stars back, the two exposures that DID restrict were then
+    # measured against a consensus containing stars they do not have, and the
+    # record still said "applied".  The population change this restriction
+    # exists to remove was back in full.
+    #
+    # So the restriction is all-or-nothing per visit.  Falling back is the
+    # conservative direction -- it is the pre-#285 behaviour, and a missing
+    # comparison is not evidence the solution moved -- but it has to be the
+    # same decision for every exposure entering one consensus.
+    if restrict_to is not None:
+        _first = next((entries[i]["restrict_refused"] for i in usable_idx
+                       if entries[i]["restrict_refused"]), None)
+        if _first:
+            for i in usable_idx:
+                e = entries[i]
+                if e["restrict_refused"]:
+                    continue
+                e["restrict_refused"] = (
+                    f"another exposure of this visit refused the restriction "
+                    f"({_first}); the star population entering one consensus "
+                    f"must be homogeneous")
+                e["coords"] = e["coords_unrestricted"]
+                e["flux"] = e["flux_unrestricted"]
+                e["n_reliable"] = e["n_reliable_unrestricted"]
     usable = [entries[i] for i in usable_idx]
     if len(usable) < min_exposures:
         raise ConsensusBuildError(

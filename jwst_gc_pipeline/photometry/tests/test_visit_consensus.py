@@ -784,8 +784,25 @@ def test_restrict_radius_is_tight_enough_to_be_same_star():
 
 def test_the_tie_precondition_alone_refuses_a_displaced_star_list():
     """Pins the PRECONDITION, not just the outcome.  A star list that is the
-    right stars but the wrong sky must be refused by the tie check even though
-    the survival fraction would be fine if it were pre-aligned."""
+    right stars but the wrong sky must be refused by the TIE check.
+
+    The displacement matters and 3 x RESTRICT_MAX_TIE_MAS (150 mas) was the
+    wrong choice: at 150 mas the mutual match has already collapsed to 0.2%
+    survival, so the survival floor refuses it too and deleting the tie
+    precondition still gets `mask is None` -- the test failed only on the
+    reason string.  Mapped against the real constants:
+
+        disp    survival   refused by
+          40      100.0%   nothing
+          60      100.0%   TIE only     <- the tie check's unique region
+          80      100.0%   TIE only
+         120      100.0%   TIE only
+         150        0.2%   survival floor also
+
+    With the tie precondition deleted, a 60-120 mas wrong list is accepted at
+    100% survival.  80 mas puts this test inside the region only the tie check
+    covers, so it is a behavioural pin rather than a message assertion.
+    """
     from jwst_gc_pipeline.photometry.visit_consensus import (
         RESTRICT_MAX_TIE_MAS, _restrict_to_same_stars)
     import astropy.units as u
@@ -793,10 +810,15 @@ def test_the_tie_precondition_alone_refuses_a_displaced_star_list():
     ref = build_visit_consensus(
         [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)],
         context="m2")["coords"]
-    shifted = SkyCoord(ref.ra + (3 * RESTRICT_MAX_TIE_MAS / 3.6e6 / COSD) * u.deg,
+    disp_mas = 1.6 * RESTRICT_MAX_TIE_MAS          # 80 mas at the real constant
+    shifted = SkyCoord(ref.ra + (disp_mas / 3.6e6 / COSD) * u.deg,
                        ref.dec, frame="icrs")
     mask, why = _restrict_to_same_stars(ref, shifted, 0.15 * u.arcsec)
     assert mask is None and "tie to the m2 star list" in why, why
+    # and the survival floor is NOT what refused it: at this displacement the
+    # stars still match, so deleting the tie check would let it through
+    m2, _ = _restrict_to_same_stars(ref, shifted, 0.5 * u.arcsec)
+    assert disp_mas < 0.15 * 1000, "the pin must stay inside the match radius"
 
 
 def test_the_survival_floor_alone_refuses_a_chance_match():
@@ -876,3 +898,158 @@ def test_footprint_coverage_is_reported_not_gated():
     assert _fraction_within_footprint(a, a) == 1.0
     assert _fraction_within_footprint(a[:0], a) is None
     assert _fraction_within_footprint(a, a[:0]) is None
+
+
+# ---------------------------------------------------------------------------
+# The RECORD.  `same_star_gate`, `same_star_refused`, `n_same_star_refused` and
+# `restrict_list_coverage` had zero readers and zero assertions anywhere in the
+# repo -- one writer at astrometry_checkpoint.py and nothing else -- so the
+# whole checkpoint-side half of this feature was deletable green.
+# ---------------------------------------------------------------------------
+
+def _record_for(tmp_path, m2_stars, tables, filtername="F212N"):
+    """Run the real checkpoint writer and hand back its consensus record."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        run_visit_checkpoint)
+    import jwst_gc_pipeline.photometry.astrometry_checkpoint as ac
+
+    # NB the checkpoint supplies `restrict_to` itself, from
+    # `_m2_consensus_stars` -- which the caller monkeypatches.  Passing it in
+    # `consensus_kwargs` too is a TypeError, and going through the real path is
+    # the point: it is the wiring that had no test.
+    return run_visit_checkpoint(
+        tables, "m6", filtername=filtername, basepath=str(tmp_path),
+        record_dir=str(tmp_path), context="test")
+
+
+def test_the_record_says_applied_only_when_every_exposure_restricted(tmp_path, monkeypatch):
+    """`any(not refused)` reported "applied" when ONE exposure of sixteen
+    restricted.  It is `all` now, and the restriction is all-or-nothing per
+    visit, so the two agree.
+
+    The counts are asserted too, not just the label: the m2 list is a SUBSET
+    of what this stage detects, so "applied" has to show up as a smaller
+    restricted count.  Without that, deleting the wiring that passes
+    `restrict_to` from the checkpoint leaves the label reading "applied" for a
+    run in which nothing was restricted -- a mutant that survived every test
+    in this file.
+    """
+    import jwst_gc_pipeline.photometry.astrometry_checkpoint as ac
+    ra, dec = _field(n=400)
+    tables = [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)]
+    # the m2 star list is HALF the stars this stage detects: the population
+    # change the restriction exists to absorb
+    full = build_visit_consensus(tables, context="m2")["coords"]
+    m2 = full[:len(full) // 2]
+    monkeypatch.setattr(ac, "_m2_consensus_stars",
+                        lambda *a, **k: (m2, "/x/m2.fits"))
+    rec = _record_for(tmp_path, m2, tables)
+    cons = rec["visits"][0]["consensus"]
+    assert cons["same_star_gate"] == "applied", cons
+    assert cons["n_same_star_refused"] == 0
+    assert cons["same_star_refused"] == []
+    assert cons["n_reliable_restricted"] < cons["n_reliable_unrestricted"], cons
+
+
+def test_one_refusal_refuses_the_whole_visit_and_the_record_says_so(tmp_path, monkeypatch):
+    """A refused exposure contributes its FULL star list, so any star two
+    refused exposures share clears `min_exposures` and re-enters the
+    consensus.  Measured before this change on a 4-exposure visit with an m2
+    list of 400 against a stage detecting 700: two refusals put all 300 new
+    stars back, the two exposures that DID restrict were measured against a
+    consensus containing stars they do not have, and the record said
+    "applied".  The population change the restriction exists to remove was
+    back in full.
+    """
+    import astropy.units as u
+    import jwst_gc_pipeline.photometry.astrometry_checkpoint as ac
+    import jwst_gc_pipeline.photometry.visit_consensus as vc
+
+    ra, dec = _field(n=400)
+    tables = [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)]
+    m2 = build_visit_consensus(tables, context="m2")["coords"]
+
+    # refuse exactly one exposure, by its key, through the real refusal path
+    real = vc._restrict_to_same_stars
+    seen = {"n": 0}
+
+    def _one_refusal(coords, reference, radius, context="", reference_tree=None):
+        seen["n"] += 1
+        if seen["n"] == 2:
+            return None, "forced refusal for the test"
+        return real(coords, reference, radius, context=context,
+                    reference_tree=reference_tree)
+
+    monkeypatch.setattr(vc, "_restrict_to_same_stars", _one_refusal)
+    monkeypatch.setattr(ac, "_m2_consensus_stars",
+                        lambda *a, **k: (m2, "/x/m2.fits"))
+    rec = _record_for(tmp_path, m2, tables)
+    cons = rec["visits"][0]["consensus"]
+    assert cons["same_star_gate"] == "refused", cons
+    # all four, not one: the population entering one consensus is homogeneous
+    assert cons["n_same_star_refused"] == 4, cons["same_star_refused"]
+    reasons = [r["reason"] for r in cons["same_star_refused"]]
+    assert any("forced refusal" in r for r in reasons), reasons
+    assert sum("homogeneous" in r for r in reasons) == 3, reasons
+    # and the restricted count is the unrestricted one -- nothing was dropped
+    assert cons["n_reliable_restricted"] == cons["n_reliable_unrestricted"]
+
+
+def test_the_record_carries_the_star_list_footprint_coverage(tmp_path, monkeypatch):
+    """`restrict_list_coverage` was computed per exposure and never reached the
+    record -- verbatim the `restrict_refused` defect this PR already fixed
+    once.  A list that is half a DIFFERENT POINTING passes survival and tie
+    alike, because the foreign half simply never matches."""
+    import jwst_gc_pipeline.photometry.astrometry_checkpoint as ac
+    ra, dec = _field(n=400)
+    tables = [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)]
+    m2 = build_visit_consensus(tables, context="m2")["coords"]
+    monkeypatch.setattr(ac, "_m2_consensus_stars",
+                        lambda *a, **k: (m2, "/x/m2.fits"))
+    cons = _record_for(tmp_path, m2, tables)["visits"][0]["consensus"]
+    assert cons["restrict_list_coverage"] is not None, cons
+    assert cons["restrict_list_coverage"] > 0.9, cons["restrict_list_coverage"]
+
+
+def test_the_record_says_unavailable_when_there_is_no_star_list(tmp_path, monkeypatch):
+    """A missing baseline is not evidence the solution moved, and the record
+    must not spell that the same way as a refusal."""
+    import jwst_gc_pipeline.photometry.astrometry_checkpoint as ac
+    ra, dec = _field(n=400)
+    tables = [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)]
+    monkeypatch.setattr(ac, "_m2_consensus_stars", lambda *a, **k: (None, None))
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        run_visit_checkpoint)
+    rec = run_visit_checkpoint(tables, "m6", filtername="F212N",
+                               basepath=str(tmp_path), record_dir=str(tmp_path),
+                               context="test")
+    cons = rec["visits"][0]["consensus"]
+    assert cons["same_star_gate"] == "unavailable", cons
+
+
+def test_a_correcting_stage_does_not_restrict(tmp_path, monkeypatch):
+    """m2 is where the baseline is DEFINED; there is nothing to freeze against
+    and the full star set is the right one.  Dropping the `not correcting`
+    guard -- applying the restriction at m1/m2/m12 too -- survived every test
+    in this file through two review rounds."""
+    import jwst_gc_pipeline.photometry.astrometry_checkpoint as ac
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        run_visit_checkpoint)
+    ra, dec = _field(n=400)
+    tables = [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)]
+    full = build_visit_consensus(tables, context="m2")["coords"]
+    called = {"n": 0}
+
+    def _spy(*a, **k):
+        called["n"] += 1
+        return full[:len(full) // 2], "/x/m2.fits"
+
+    monkeypatch.setattr(ac, "_m2_consensus_stars", _spy)
+    rec = run_visit_checkpoint(tables, "m2", filtername="F212N",
+                               basepath=str(tmp_path),
+                               record_dir=str(tmp_path), context="test")
+    cons = rec["visits"][0]["consensus"]
+    # m2 is a CORRECTING stage: the star list is never even looked up
+    assert called["n"] == 0, "m2 must not read an m2 baseline to freeze against"
+    assert cons["same_star_gate"] == "unavailable", cons
+    assert cons["n_reliable_restricted"] == cons["n_reliable_unrestricted"]
