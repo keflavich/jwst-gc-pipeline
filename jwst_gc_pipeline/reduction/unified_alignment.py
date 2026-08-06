@@ -93,6 +93,15 @@ _VALIDATED_OFFSETS_TABLES = set()
 _GENLOCK_UNCHECKED_REPORTED = set()
 
 
+def _strict_env(name):
+    """``GENLOCK_STRICT=0``/``false`` must not enable strict mode.
+
+    ``os.environ.get(name)`` is truthy for the string ``"0"``; the sibling gate
+    at :540 correctly compares against ``'1'``.
+    """
+    return str(os.environ.get(name, '')).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
 @dataclass(frozen=True)
 class AlignmentShift:
     """The shift to apply to one exposure, split into components (arcsec, in the
@@ -456,12 +465,17 @@ def _validate_once(offsets_tbl, locked_tbl):
 
 
 def _check_generation(fn, offsets_tbl, locked_tbl):
-    """Read this frame's WCS-generation stamp and run the weak mtime fallback.
+    """Read this frame's WCS-generation stamp; report when nothing checks it.
 
-    A correction is only valid on the WCS GENERATION it was solved against.  The
-    strong check (per-row ``base_*`` stamps) runs in :func:`_assert_generation_row`
-    once the row is known; this does the frame-side read plus the mtime fallback
-    used when the table carries no stamps.
+    A correction is only valid on the WCS GENERATION it was solved against.
+    The strong check (per-row ``base_*`` stamps) runs in
+    :func:`_assert_generation_row` once the row is known -- and **nothing in
+    this repository writes those columns**, so it is dormant on every field.
+
+    This does the frame-side read and, once per table, says so.  There used to
+    be an mtime fallback here; it compared the table's mtime against the
+    frame's and fired on every re-reduce by construction, because re-reducing
+    rewrites the frame (issue #269).
     """
     frame_gen = None
     try:
@@ -489,15 +503,19 @@ def _check_generation(fn, offsets_tbl, locked_tbl):
         # without base_* stamps there is NO generation check at all.  Nothing in
         # the repo writes those columns today, so this is the state of every
         # field -- see the note on _GENERATION_COLUMNS.
-        _GENLOCK_UNCHECKED_REPORTED.add(locked_tbl)
         gmsg = (f"[genlock] offsets table {os.path.basename(locked_tbl)} carries "
                 f"no base_* generation stamps, so the tie is applied WITHOUT a "
                 f"generation check: nothing verifies that the correction was "
                 f"solved on the same WCS generation as the frames it is being "
                 f"applied to.  Rebuild the table with a stamping builder to get "
                 f"a real check (GENLOCK_STRICT=1 to refuse instead).")
-        if os.environ.get('GENLOCK_STRICT'):
+        # STRICT must refuse EVERY time.  Memoising before the raise made it
+        # refuse at most once per table per process, so anything that caught
+        # and retried proceeded silently -- the memo is for the WARNING, which
+        # is a property of the table, not for the gate.
+        if _strict_env('GENLOCK_STRICT'):
             raise RuntimeError(gmsg)
+        _GENLOCK_UNCHECKED_REPORTED.add(locked_tbl)
         print("WARNING: " + gmsg, flush=True)
     return frame_gen
 

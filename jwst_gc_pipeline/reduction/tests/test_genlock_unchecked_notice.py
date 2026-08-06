@@ -105,11 +105,47 @@ def test_generation_columns_note_matches_reality():
     import pathlib
     import subprocess
     root = pathlib.Path(ua.__file__).resolve().parents[2]
-    out = subprocess.run(["git", "-C", str(root), "grep", "-l", "base_calver"],
-                         capture_output=True, text=True).stdout.split()
+    proc = subprocess.run(["git", "-C", str(root), "grep", "-l", "base_calver"],
+                          capture_output=True, text=True)
+    # rc 1 = "no match", rc 0 = matches, anything else = git could not answer.
+    # Without this the test passed vacuously in a non-git tree: stdout '' ->
+    # writers [] -> green.
+    if proc.returncode not in (0, 1):
+        pytest.skip(f"git could not run (rc={proc.returncode}); "
+                    f"this check needs a git checkout")
+    out = proc.stdout.split()
     writers = [f for f in out
                if not f.endswith("unified_alignment.py")
                and "tests" not in f and not f.endswith(pathlib.Path(__file__).name)]
     assert not writers, (
         "something now writes base_calver -- the dormant-layer note in "
         f"_GENERATION_COLUMNS needs updating: {writers}")
+
+
+def test_strict_refuses_every_time_not_once_per_process(tmp_path, monkeypatch):
+    """Memoising before the raise made STRICT refuse at most once per table per
+    process, so anything that caught and retried proceeded silently.  The memo
+    is for the WARNING, not for the gate."""
+    monkeypatch.setenv("GENLOCK_STRICT", "1")
+    tbl = _table_without_stamps()
+    locked = str(tmp_path / "tbl.csv")
+    for i in range(3):
+        with pytest.raises(RuntimeError, match="WITHOUT a generation check"):
+            ua._check_generation(_frame(tmp_path, f"f{i}_crf.fits"), tbl, locked)
+
+
+def test_strict_zero_does_not_enable_strict(tmp_path, monkeypatch, capsys):
+    """`os.environ.get(name)` is truthy for the string "0"; the sibling gate
+    compares against '1'."""
+    for value in ("0", "false", ""):
+        ua._GENLOCK_UNCHECKED_REPORTED.clear()
+        monkeypatch.setenv("GENLOCK_STRICT", value)
+        ua._check_generation(_frame(tmp_path, f"z{value or 'e'}_crf.fits"),
+                             _table_without_stamps(), str(tmp_path / "t.csv"))
+        assert "[genlock]" in capsys.readouterr().out
+
+
+def test_the_docstring_does_not_describe_the_removed_check():
+    doc = ua._check_generation.__doc__ or ""
+    assert "mtime fallback used when" not in doc
+    assert "nothing checks it" in doc or "says so" in doc
