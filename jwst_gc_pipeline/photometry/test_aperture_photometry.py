@@ -294,3 +294,32 @@ def test_all_nan_drops_aperture_columns(tmp_path):
     out = mc._ensure_satstar_aperture_photometry(cat, 'f200w', 'faketarget',
                                                  base, cache_path=None)
     assert not ap.has_aperture_columns(out)      # dropped, not a false success
+
+
+def test_partial_coverage_below_threshold_is_invalid(tmp_path):
+    # a small ring of masked pixels near (not on) the center -> core finite but
+    # coverage just under 1.0 -> aper_flux_valid must be False (N4: the 0.999 cut)
+    import numpy as _np
+    path, w = _make_i2d(tmp_path, [(100, 100)], [500.0])
+    with fits.open(path) as h:
+        sci = h['SCI'].data
+        yy, xx = _np.mgrid[0:sci.shape[0], 0:sci.shape[1]]
+        r2 = (xx - 100) ** 2 + (yy - 100) ** 2
+        sci[(r2 >= 9) & (r2 <= 16)] = _np.nan   # annulus of NaN inside the aperture
+        h.writeto(path, overwrite=True)
+    cat = _catalog(w, [(100, 100)])
+    out = ap.measure_aperture_photometry(cat, [path])
+    cov = float(out['aper_area_frac'][0])
+    assert cov < 0.999                       # partial coverage (masked pixels)
+    assert not bool(out['aper_core_saturated'][0])  # core itself finite
+    assert not bool(out['aper_flux_valid'][0])      # still invalid via coverage
+
+
+def test_dual_filter_mosaic_not_claimed_by_wide_partner():
+    # f405n-f444w is F405N's science mosaic; must NOT be accepted for f444w (N5)
+    b = 'jw02221-o001_t001_nircam_f405n-f444w_i2d.fits'
+    assert ap._is_science_mosaic(b, 'f405n', 'nircam')       # narrow owner: yes
+    assert not ap._is_science_mosaic(b, 'f444w', 'nircam')   # wide partner: no
+    # the wide band still resolves its own merged mosaic
+    assert ap._is_science_mosaic(
+        'jw01182-o004_t001_nircam_clear-f444w-merged_i2d.fits', 'f444w', 'nircam')

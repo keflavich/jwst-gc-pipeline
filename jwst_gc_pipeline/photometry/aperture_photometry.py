@@ -88,12 +88,21 @@ def _is_science_mosaic(basename, filt_l, inst):
     toks = seg.split('-')
     if filt_l not in toks:
         return False
+    partner_filters = []
     for t in toks:
         if t == filt_l or t in ('merged', 'nrca', 'nrcb'):
             continue
         if _FILTER_TOKEN.match(t):        # LW dual-filter partner (e.g. f405n-f444w)
+            partner_filters.append(t)
             continue
         return False                       # any other token -> derived product
+    # A dual-filter mosaic (`<narrow>-<wide>`, e.g. f405n-f444w) carries the
+    # NARROW/MEDIUM band's flux; it is the science mosaic for that band only.  The
+    # WIDE partner has its own `clear-<wide>-merged`, so do NOT claim the dual
+    # mosaic for a wide filter (that would apply the wide zeropoint to narrow-band
+    # flux).  This does not rely on the per-filter directory scoping to be safe.
+    if partner_filters and not (filt_l.endswith('n') or filt_l.endswith('m')):
+        return False
     return True
 
 
