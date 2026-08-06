@@ -132,3 +132,57 @@ def test_apply_script_refuses_to_union_two_observations(tmp_path):
         mod.load_corrections(str(tmp_path))
     # with a token it reads exactly one
     assert mod.load_corrections(str(tmp_path), obs_token="_o002") is not None
+
+
+@pytest.mark.parametrize("path,filt,ambiguous", [
+    # the field NEAREST the record dir wins: first-in-dict-order read this as
+    # 'brick' and, brick having no shared filters, called it unambiguous
+    ("/blue/x/jwst/brick/scratch/cloudef/astrometry_checkpoints", "F360M", True),
+    # longest-match does not fix it either -- 'arches' and 'sickle' tie
+    ("/home/arches/runs/sickle/astrometry_checkpoints", "F187N", True),
+    ("/orange/adamginsburg/jwst/brick/astrometry_checkpoints", "F212N", False),
+    # sgrb2 registers nircam ['001'] but miri ['001','002','998'], so the
+    # nircam default returned False for all 14 of its genuinely shared filters
+    ("/orange/adamginsburg/jwst/sgrb2/astrometry_checkpoints", "F360M", True),
+    ("/tmp/nowhere/astrometry_checkpoints", "F360M", True),      # fail-closed
+])
+def test_field_detection_and_ambiguity(path, filt, ambiguous):
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        _filter_is_obs_ambiguous)
+    assert _filter_is_obs_ambiguous(path, filt) is ambiguous
+
+
+def test_the_applier_exposes_the_flag_its_error_names():
+    """The refusal told the operator to pass --obs-token, which did not exist:
+    once tokened records appear, the sanctioned recovery tool always exits
+    non-zero on advice that cannot be followed."""
+    import importlib.util
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parents[3]
+    src = (root / "scripts" / "reduction"
+           / "apply_m2_checkpoint_corrections.py").read_text()
+    assert '"--obs-token"' in src
+    assert "load_corrections(args.records_dir, args.obs_token)" in src
+    assert "load_exposure_universe(args.records_dir," in src
+
+
+@pytest.mark.parametrize("name,token", [
+    ("checkpoint_m2_F360M_o002_latest.json", "_o002"),
+    ("checkpoint_m2_F360M_o002-998_latest.json", "_o002-998"),   # sgrb2
+    ("checkpoint_m2_F360M_o001-002_latest.json", "_o001-002"),   # sickle
+    ("checkpoint_m2_F360M_j7213_latest.json", "_j7213"),
+    ("checkpoint_m2_F360M_latest.json", None),
+])
+def test_joint_obsids_are_recognised(name, token):
+    """Registered obsids include joint forms; a bare o\\d{3} missed them, so the
+    union went unrefused and scan.py's keys collided back to last-wins."""
+    import importlib.util
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parents[3]
+    spec = importlib.util.spec_from_file_location(
+        "apply_m2", root / "scripts" / "reduction"
+        / "apply_m2_checkpoint_corrections.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    m = mod._TOKEN_RE.search(name)
+    assert (m.group(1) if m else None) == token

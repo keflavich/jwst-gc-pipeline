@@ -494,7 +494,10 @@ def astrometry_checkpoints(base, filters=None, ambiguous_filters=()):
         # describe the same filter.  `out[filt]` is last-wins, which silently
         # discards one observation's verdict -- key on the token as well.
         base = os.path.basename(path)
-        _tokm = re.search(r'checkpoint_m2_[^_]+(_(?:o\d{3}|j\d{4,5}))_latest', base)
+        # joint obsids are registered (sgrb2 o002-998, sickle o001-002), so a
+        # bare o\d{3} misses them and the keys collide back to last-wins
+        _tokm = re.search(r'checkpoint_m2_[^_]+(_(?:o[\d-]{3,}|j\d{4,5}))_latest',
+                          base)
         _tok = _tokm.group(1) if _tokm else ''
         filt = base.split('_')[2]
         if filters and filt.upper() not in {f.upper() for f in filters}:

@@ -1657,16 +1657,33 @@ def _filter_is_obs_ambiguous(record_dir, filtername):
         from .. import fields as _fields
     except ImportError:
         return True
+    # The record dir is `<basepath>/astrometry_checkpoints`, so the field is
+    # the path component NEAREST it.  First-in-dict-order resolved
+    # `.../jwst/brick/scratch/cloudef/astrometry_checkpoints` to 'brick' and,
+    # brick having no shared filters, read as unambiguous -- a silent wrong
+    # read, the one outcome this function exists to prevent.  Longest-match
+    # does not fix it either ('arches' and 'sickle' tie on length).
+    #
+    # Path-sniffing is the wrong instrument regardless; the caller knows the
+    # field.  Until it is threaded through, walk from the record dir outward
+    # and take the first component that names a field, which is deterministic
+    # and right for every real layout.
+    known = set(getattr(_fields, "BY_NAME", {}))
     target = None
-    for name in getattr(_fields, "BY_NAME", {}):
-        if f"{os.sep}{name}{os.sep}" in f"{os.sep}{str(record_dir).strip(os.sep)}{os.sep}":
-            target = name
+    for part in reversed([p for p in str(record_dir).split(os.sep) if p]):
+        if part in known:
+            target = part
             break
     if target is None:
         return True
     try:
-        return str(filtername).upper() in {str(f).upper()
-                                           for f in shared_filters(target)}
+        # BOTH instruments: sgrb2 registers nircam ['001'] but miri
+        # ['001','002','998'], so the nircam default returned False for all 14
+        # of its genuinely shared filters.
+        shared = set()
+        for instrument in ("nircam", "miri"):
+            shared |= {str(f).upper() for f in shared_filters(target, instrument)}
+        return str(filtername).upper() in shared
     except (KeyError, TypeError, ValueError):
         return True
 
