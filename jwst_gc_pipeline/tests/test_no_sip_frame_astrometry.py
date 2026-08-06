@@ -65,6 +65,12 @@ ALLOWLIST = {
     # "the regex stopped matching" is not "the file stopped reading SIP", which
     # is why there is no dead-entry test on this guard.
     "jwst_gc_pipeline/reduction/fits_wcs_sync.py",
+    # Both still read SIP live -- audit_fits_gwcs_agreement.py:41 and
+    # crowdsource_step.py:906 -- and were removed in error when the narrow
+    # regex stopped matching them.  Restoring the review record is the point;
+    # the guard is green either way.
+    "scripts/release/audit_fits_gwcs_agreement.py",
+    "jwst_gc_pipeline/photometry/legacy/crowdsource_step.py",
     # all astrometry here goes through frame_wcs; the one remaining
     # WCS(fh['SCI'].header, relax=True) is the no-GWCS FALLBACK of the
     # SCI->PRIMARY header copy, whose primary path is sync_header_to_gwcs.

@@ -36,8 +36,19 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # of a NN match with a median/mean is a strong tripwire for a NEW ad-hoc NN-median
 # astrometry script; the allowlist carries the already-reviewed legitimate users.
 #: Attribution label for a file whose match and reduce sit in DIFFERENT
-#: functions.  Not allowlistable per-function by construction, and an entry
-#: carrying it silences the whole file -- so it is deliberately conspicuous.
+#: functions.
+#:
+#: **An entry carrying this is a WHOLE-FILE exemption.** There is no way around
+#: that: a cross-function split cannot be attributed to a function, so clearing
+#: it cannot be scoped to one.  A file with such an entry can therefore hide a
+#: SECOND, genuinely new split -- which is what the file-level allowlist did for
+#: every file before the function scoping.
+#:
+#: What the scoping buys is that this is now true of EIGHT files instead of all
+#: of them: a file whose entries are all function-scoped does catch a new split
+#: (verified by test_a_function_scoped_file_still_catches_a_new_split).  Adding
+#: a `<unattributed>` entry gives that up for that file, so
+#: test_unattributed_entries_do_not_multiply fails if the count grows.
 UNATTRIBUTED = "<unattributed>"
 
 _MATCH = re.compile(r"\bmatch_to_catalog_sky\b")
@@ -96,6 +107,16 @@ ALLOWLIST = {
     # satstar correction-data collection: matches to label stars, medians their
     # photometry
     ("scripts/satstar_deblend/collect_correction_data.py", "<unattributed>"),
+    # These five ALSO carry a co-occurrence outside their attributed functions.
+    # Each already had a reviewed per-function entry; the whole-file entry is
+    # what a cross-function split needs, and adding it is the price of the
+    # tripwire actually covering these files -- previously one attributed hit
+    # made the rest of the file invisible.
+    ("jwst_gc_pipeline/photometry/cataloging.py", "<unattributed>"),
+    ("jwst_gc_pipeline/photometry/merge_catalogs.py", "<unattributed>"),
+    ("jwst_gc_pipeline/reduction/build_virac2_offsets.py", "<unattributed>"),
+    ("scripts/miri_reduction/miri_f2550w_image3_rerun_v2.py", "<unattributed>"),
+    ("docs/pr57_recovery_investigation/make_caveat_figs.py", "<unattributed>"),
     # one-off scripts outside the pipeline's astrometric path
     ("scripts/reduction/combine_brick_allband.py", "main"),
     # :130-137 medians NN matches against a DENSE NIRCam F405N reference and
@@ -161,6 +182,29 @@ def _offending_functions(text):
     return hits
 
 
+def _has_unattributed_cooccurrence(text, attributed):
+    """Do a match and a reduce co-occur OUTSIDE the attributed functions?
+
+    Blank out every function the scoping could attribute a hit to; if the
+    remainder still contains both tokens, the file carries a split the
+    per-function entries do not cover.
+    """
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return bool(_MATCH.search(text) and _REDUCE.search(text))
+    lines = text.splitlines()
+    blanked = list(lines)
+    for node in ast.walk(tree):
+        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name in attributed):
+            for i in range(node.lineno - 1, (node.end_lineno or node.lineno)):
+                if 0 <= i < len(blanked):
+                    blanked[i] = ""
+    rest = "\n".join(blanked)
+    return bool(_MATCH.search(rest) and _REDUCE.search(rest))
+
+
 def test_no_adhoc_nn_median_astrometry():
     """FILE-level co-occurrence is the tripwire; the function scoping only says
     WHERE.
@@ -183,10 +227,20 @@ def test_no_adhoc_nn_median_astrometry():
         text = path.read_text(errors="replace")
         if not (_MATCH.search(text) and _REDUCE.search(text)):
             continue
-        funcs = _offending_functions(text) or {UNATTRIBUTED}
+        # `or {UNATTRIBUTED}` would fire only when NOTHING was attributed, so
+        # any file with one allowlisted hit could hide a second, genuinely
+        # cross-function one -- the exact bypass this design was reversed to
+        # catch, in all ten allowlisted files.  A file trips on co-occurrence,
+        # so it must be CLEARED by co-occurrence: every hit it can attribute
+        # must be allowlisted AND, if the match and the reduce also occur
+        # outside those functions, `<unattributed>` must be too.
+        funcs = _offending_functions(text)
         for func in sorted(funcs):
             if (rel.as_posix(), func) not in ALLOWLIST:
                 offenders.append(f"{rel.as_posix()}::{func}")
+        if _has_unattributed_cooccurrence(text, funcs) and \
+                (rel.as_posix(), UNATTRIBUTED) not in ALLOWLIST:
+            offenders.append(f"{rel.as_posix()}::{UNATTRIBUTED}")
     assert not offenders, (
         "FORBIDDEN dense-NN-median astrometry pattern (a nearest-neighbour match "
         "co-occurring with a median/mean) found in non-allowlisted location(s):\n  "
@@ -211,8 +265,11 @@ def test_allowlist_has_no_dead_entries():
         text = path.read_text(errors="replace")
         if not (_MATCH.search(text) and _REDUCE.search(text)):
             continue
-        for func in (_offending_functions(text) or {UNATTRIBUTED}):
+        funcs = _offending_functions(text)
+        for func in funcs:
             live.add((rel.as_posix(), func))
+        if _has_unattributed_cooccurrence(text, funcs):
+            live.add((rel.as_posix(), UNATTRIBUTED))
     dead = sorted(ALLOWLIST - live)
     assert not dead, (
         "ALLOWLIST entries that no longer trip the guard (remove them):\n  "
@@ -276,3 +333,38 @@ def test_a_clean_file_does_not_trip():
     src = "def f(a, b):\n    return a.match_to_catalog_sky(b)\n"
     assert not (_MATCH.search(src) and _REDUCE.search(src))
     assert not _offending_functions(src)
+
+
+#: Files whose ONLY protection is a whole-file exemption.  Each gave up
+#: per-function coverage; do not add to this without reading the file.
+_EXPECTED_UNATTRIBUTED = 8
+
+
+def test_unattributed_entries_do_not_multiply():
+    """A `<unattributed>` entry silences a whole file.  Eight is the number the
+    tree needs today; a ninth means a file just lost per-function coverage and
+    somebody should have noticed."""
+    n = sum(1 for _f, fn in ALLOWLIST if fn == UNATTRIBUTED)
+    assert n == _EXPECTED_UNATTRIBUTED, (
+        f"{n} whole-file exemptions (expected {_EXPECTED_UNATTRIBUTED}). "
+        f"Adding one trades away the cross-function tripwire for that file; "
+        f"removing one is good news -- update the constant.")
+
+
+def test_a_function_scoped_file_still_catches_a_new_split(tmp_path):
+    """The gain the reversal actually buys, stated as a test rather than a
+    claim: a file whose entries are all function-scoped fails on a NEW
+    cross-function split, where the old file-level allowlist would not have.
+    """
+    src = ("def known(a, b):\n"
+           "    i = a.match_to_catalog_sky(b)\n"
+           "    return np.median(i)\n")
+    assert _offending_functions(src) == {"known"}
+    assert not _has_unattributed_cooccurrence(src, {"known"})
+    # now add a split elsewhere in the same file
+    src += ("\n\ndef _seps(a, b):\n"
+            "    return a.match_to_catalog_sky(b)\n"
+            "\n\ndef tie(a, b):\n"
+            "    return np.median(_seps(a, b))\n")
+    assert _has_unattributed_cooccurrence(src, _offending_functions(src)), (
+        "a new cross-function split in a function-scoped file must trip")
