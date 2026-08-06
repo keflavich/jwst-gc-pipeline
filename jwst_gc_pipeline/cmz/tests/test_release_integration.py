@@ -1180,3 +1180,61 @@ def test_an_off_convention_preview_stem_fails_closed():
         'cloudc', manifest, 'assets/cloudc.jpg',
         previews=[('assets/cloudc_pretty.jpg', 'cloudc_pretty')])
     assert 'cloudc_pretty' in page
+
+
+# ---- the curated (beautified) images ----
+def _ci():
+    return _load('curated_images', os.path.join(_REL, 'curated_images.py'))
+
+
+def test_every_curated_image_in_the_registry_exists():
+    """The registry mirrors avm_images/rebuild_jwst_cmz_hips.py. A rename there
+    silently drops the picture from the page, so name the missing file."""
+    ci = _ci()
+    missing = {f: ci.missing(f) for f in ci.CURATED if ci.missing(f)}
+    assert not missing, f"curated images listed but absent: {missing}"
+
+
+def test_bricks_two_programs_are_never_combined():
+    """1182 (wide) and 2221 (narrow) do not cover the same sky; crossing them
+    makes an ugly footprint, which is why the curated renders keep them apart."""
+    ci = _ci()
+    labels = [e['label'] for e in ci.for_field('brick')]
+    assert any('1182' in l for l in labels) and any('2221' in l for l in labels)
+    assert not any('1182' in l and '2221' in l for l in labels)
+
+
+def test_cloudc_miri_is_two_separate_images():
+    """F2550W (prog 2221) and F770W (prog 2526) are different pointings.
+    Reprojecting one onto the other's grid crops it to a corner."""
+    ci = _ci()
+    miri = [e for e in ci.for_field('cloudc') if e.get('instrument') == 'MIRI']
+    assert len(miri) == 2
+    assert {e['pointing'] for e in miri} == {'MIRI F770W', 'MIRI F2550W'}
+
+
+def test_gc2211_has_an_image_per_pointing():
+    ci = _ci()
+    assert sorted(e['pointing'] for e in ci.for_field('gc2211')) == \
+        ['o023', 'o028', 'o046', 'o049', 'o050']
+
+
+def test_curated_images_survive_the_superseded_withholding():
+    """Curated renders are independent products. Withholding a staged mosaic
+    must not blank them -- that is what left cloudc with no image at all."""
+    mw = _make_webpage()
+    manifest = {'version': 'v1', 'built': '2026-08-05T00:00:00Z',
+                'globus_https_base': 'https://example.invalid',
+                'globus_collection_id': '0', 'release_path': '/r',
+                'files': [{'category': 'image', 'kind': 'science', 'filter': 'F182M',
+                           'iteration': None, 'observation': None,
+                           'dest': 'images/F182M/bad.fits', 'url': 'u',
+                           'size_bytes': 1}]}
+    page = mw.render_field_page(
+        'cloudc', manifest, None, superseded=['images/F182M/bad.fits'],
+        curated=[('assets/curated_x.jpg', 'R=F466N, B=F405N')])
+    # the staged mosaic is still withheld -- with no reason supplied, under the
+    # sentence that asserts no cause
+    assert 'withheld as superseded' in page
+    assert 'assets/curated_x.jpg' in page       # ...and the curated render survives
+    assert 'R=F466N, B=F405N' in page
