@@ -4811,25 +4811,7 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             # them all under 'merged' would overwrite 8 outputs
                             # per exposure down to 1.
                             file_detector = filename.split("_")[3]
-                            if module == 'merged' or file_detector.endswith('long'):
-                                # LW is named by the DETECTOR (`nrcalong`), and
-                                # the module family (`nrca`) is not a second
-                                # name for it -- it is the name of four other
-                                # detectors.  Writing an LW catalog under the
-                                # module spelling put ONE physical frame on
-                                # disk under two names, the m2 checkpoint then
-                                # wrote offsets rows under both, and
-                                # unified_alignment (whose _module_variants
-                                # maps `nrcblong -> {nrcblong, nrcb}`) matched
-                                # two rows for one frame and refused to reduce
-                                # the field (issue #298).
-                                #
-                                # ~10 operational scripts default to
-                                # `--modules nrcb` (run_field_retie_loop.sh
-                                # among them), so this is not a legacy path:
-                                # without this, a FRESH LW run keeps writing
-                                # the spelling the consumer now treats as
-                                # superseded.
+                            if module == 'merged':
                                 file_module = file_detector
                             else:
                                 file_module = module
