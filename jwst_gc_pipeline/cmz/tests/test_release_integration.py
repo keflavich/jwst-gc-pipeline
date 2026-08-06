@@ -751,3 +751,21 @@ def test_a_quarantined_band_does_not_enter_the_plan(tmp_path):
     (bad / 'x-f405n-merged_i2d_im0_badastrom.fits').touch()
     covered = {f for s in pp.plan(tmp_path) for f in s['filters']}
     assert covered == {'F200W', 'F277W'}
+
+
+def test_aladin_must_prove_it_rendered():
+    """Construction returning is not evidence the view works. Aladin can fail in
+    its own async setup -- WebGL2 unavailable, where aladin.js throws a BARE
+    STRING no try can catch -- leaving an opaque inset:0 host over the static
+    map. That is a black rectangle where the map was: 'it's just not there'."""
+    fo = _fo()
+    out = fo.section([_geom('brick', 0.2, 0.0)])
+    assert 'awaitCanvas' in out
+    assert "querySelector('canvas')" in out
+    assert 'needs WebGL2' in out
+    # the bare-string throw is captured globally, since nothing wraps it
+    assert "window.addEventListener('error'" in out
+    assert 'function describeError' in out
+    # and the host is torn down so the static map comes back
+    body = out.split('function awaitCanvas')[1]
+    assert 'fail(' in body.split('READY_TRIES')[1][:600]

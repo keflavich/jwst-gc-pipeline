@@ -462,6 +462,8 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
   catch (err) {{ btn.disabled = true; return; }}
   var host = null;
   var switchSeq = 0;              // a later click supersedes an in-flight one
+  var READY_POLL_MS = 400, READY_TRIES = 25;     // ~10 s for a canvas to appear
+  var lastGlobalError = null;
   var SWITCH_POLL_MS = 500, SWITCH_TRIES = 16;   // ~8 s for a HiPS to appear
   function teardown() {{
     // Whatever went wrong, the static SVG must be visible and clickable again.
@@ -506,6 +508,27 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
         return (cur && (cur.id || cur.url || cur.name)) || null;
       }} catch (err) {{ return null; }}
     }}
+    // Construction returning is NOT evidence the view works: Aladin can fail
+    // after it, in its own async setup (WebGL2 unavailable is the usual one),
+    // and `host` is an opaque `inset:0` div over the static map. The result is
+    // a black rectangle where the map used to be -- "it's just not there".
+    // Require a sized canvas, and restore the static map if none appears.
+    var readyTries = 0;
+    (function awaitCanvas() {{
+      var canvas = host && host.querySelector && host.querySelector('canvas');
+      if (canvas && canvas.width > 0 && canvas.height > 0) {{ finish(); return; }}
+      if (++readyTries > READY_TRIES) {{
+        var why = lastGlobalError ? ' (' + lastGlobalError + ')' : '';
+        if (window.console) {{ console.error('ov: aladin never rendered', lastGlobalError); }}
+        fail('The interactive view could not start in this browser' + why
+             + '. Aladin Lite needs WebGL2. The map above is unaffected.');
+        return;
+      }}
+      setTimeout(awaitCanvas, READY_POLL_MS);
+    }})();
+
+    // nested so it closes over `aladin` and `host`
+    function finish() {{
     var cat = A.catalog({{name: 'released fields', sourceSize: 14, onClick: 'showPopup'}});
     aladin.addCatalog(cat);
     data.fields.forEach(function (f) {{
@@ -595,7 +618,20 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
     }}
     status.textContent = 'click a field to open its release page';
     btn.textContent = 'Interactive sky view loaded';
+    }}
   }}
+  function describeError(err) {{
+    // aladin.js throws a BARE STRING ('WebGL2 not supported by your browser'),
+    // so `err.message` is undefined for the most likely real failure.
+    if (!err) {{ return 'unknown error'; }}
+    return (typeof err === 'string') ? err : (err.message || String(err));
+  }}
+  window.addEventListener('error', function (ev) {{
+    // Aladin can fail asynchronously inside its own setup, where nothing this
+    // code wraps can catch it. Record it so the panel can say what happened
+    // instead of leaving an opaque box.
+    lastGlobalError = describeError(ev && (ev.error || ev.message));
+  }});
   btn.addEventListener('click', function () {{
     btn.disabled = true;
     status.textContent = 'loading\\u2026';
@@ -617,8 +653,8 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
           fail('Aladin Lite failed to start (' + err + '). The map above is unaffected.');
         }});
       }} catch (err) {{
-        fail('This browser could not start Aladin Lite (' + err + '). '
-             + 'The map above is unaffected.');
+        fail('This browser could not start Aladin Lite ('
+             + describeError(err) + '). The map above is unaffected.');
       }}
     }};
     document.head.appendChild(script);
