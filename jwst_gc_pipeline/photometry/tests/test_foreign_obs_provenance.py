@@ -190,3 +190,56 @@ def test_the_checkpoint_passes_its_own_observation_down(tmp_path, monkeypatch):
         opts, {}, context="test")
     assert seen.get("target_obs") == "005", seen
     assert seen.get("n_in") == 2, seen
+
+
+# ------------------------------------------- the fail-safe must not fail CLOSED
+
+def test_a_source_that_names_no_observation_is_KEPT_not_dropped(tmp_path, monkeypatch, capsys):
+    """`want not in basename(src)` treated "this path does not spell an
+    observation at all" identically to "it spells a DIFFERENT one".
+
+    That is fail-CLOSED inside the one branch whose stated design is that an
+    unidentifiable catalog is KEPT, and it empties the input: a source that is
+    not a crf (`..._cal.fits`) drops every catalog, and at m1/m12/m2
+    `if not fns:` only prints and returns, so the checkpoint silently ceases to
+    exist rather than raising.
+    """
+    monkeypatch.setattr("jwst_gc_pipeline.fields.filter_observation_count",
+                        lambda *a, **k: 2)
+    fns = [_catalog(tmp_path, f"f360m_nrcb_visit001_vgroup02101_exp{i:05d}_m2_daophot_basic.fits",
+                    f"/x/jw02092002001_02101_{i:05d}_nrcblong_cal.fits")
+           for i in range(1, 5)]
+    kept = _drop_foreign_obs_duplicates(fns, "", "f360m", "m2", "merged",
+                                        "cloudef", target_obs="002")
+    assert kept == fns, kept
+    assert "KEEPING" in capsys.readouterr().out
+
+
+def test_a_source_naming_an_unrelated_observation_is_still_dropped(tmp_path, monkeypatch):
+    """The relaxation must not become a pardon: a source that DOES name an
+    observation, and names one that is not ours, is foreign whether or not that
+    observation is a registered sibling."""
+    monkeypatch.setattr("jwst_gc_pipeline.fields.filter_observation_count",
+                        lambda *a, **k: 2)
+    fns = [_catalog(tmp_path, f"f360m_nrcb_visit001_vgroup02101_exp{i:05d}_m2_daophot_basic.fits",
+                    f"/x/jw02092999001_02101_{i:05d}_nrcblong_destreak_o999_crf.fits")
+           for i in range(1, 5)]
+    assert _drop_foreign_obs_duplicates(fns, "", "f360m", "m2", "merged",
+                                        "cloudef", target_obs="002") == []
+
+
+def test_a_joint_obsid_source_is_recognised(tmp_path, monkeypatch):
+    """sgrb2 registers MIRI 002-998 and sickle 001-002 as JOINT obsids, so a
+    provenance path can spell `_o002-998_`."""
+    monkeypatch.setattr("jwst_gc_pipeline.fields.filter_observation_count",
+                        lambda *a, **k: 2)
+    ours = [_catalog(tmp_path, f"f770w_mirimage_visit001_vgroup02101_exp{i:05d}_m2_daophot_basic.fits",
+                     f"/x/jw05365002001_02101_{i:05d}_mirimage_destreak_o002-998_crf.fits")
+            for i in range(1, 3)]
+    theirs = [_catalog(tmp_path, f"f770w_mirimage_visit001_vgroup02101_exp{i:05d}_m2_daophot_basic.fits".replace("exp0000", "exp0001"),
+                       f"/x/jw05365007001_02101_{i:05d}_mirimage_destreak_o007_crf.fits")
+              for i in range(1, 3)]
+    kept = _drop_foreign_obs_duplicates(ours + theirs, "", "f770w", "m2",
+                                        "merged", "sgrb2",
+                                        target_obs="002-998")
+    assert kept == ours, kept

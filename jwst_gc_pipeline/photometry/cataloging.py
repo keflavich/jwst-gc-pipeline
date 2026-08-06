@@ -3456,6 +3456,11 @@ _DETECTOR_TOKEN_RE = re.compile(r'_(nrc[ab](?:[1-4]|long)?)_visit')
 # before that token existed carry nothing there.
 _OBS_TOKEN_RE = re.compile(r'_(o\d{3}|j\d{4,5})_visit')
 
+#: The observation an ``_oNNN_crf.fits`` PROVENANCE path names.  Distinct from
+#: `_OBS_TOKEN_RE`, which reads a token out of a CATALOG filename: a source
+#: path that names no observation is not evidence of a foreign one.
+_SRC_OBS_RE = re.compile(r'_o\d{3}(?:-\d{3})?_')
+
 # What may legitimately sit between the 5-digit exposure number and the stage
 # label in a per-frame catalog name.  Empty is the plain per-frame fit;
 # `resbgsub` is the residual-background-subtracted variant used from m5 on.
@@ -3678,8 +3683,23 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
                 continue
             src = _catalog_source_frame(fn)
             if src is not None:
-                if want and want not in os.path.basename(src):
-                    drop.append(fn)
+                # The source must NAME an observation before it can name a
+                # foreign one.  `want not in basename(src)` treated "this path
+                # does not spell an observation at all" identically to "it
+                # spells a different one" -- fail-CLOSED, inside the one branch
+                # whose stated design is that an unidentifiable catalog is
+                # KEPT.  A source that is not a crf (`..._cal.fits`) emptied
+                # the whole input, and at m1/m12/m2 `if not fns:` only prints
+                # and returns, so the checkpoint would have silently ceased to
+                # exist.  All 8 fields surveyed carry `_oNNN_` today; this is
+                # one non-crf source name away from biting.
+                m_src = _SRC_OBS_RE.search(os.path.basename(src))
+                if want and m_src:
+                    if m_src.group(0) != want:
+                        drop.append(fn)
+                    continue
+                if want:
+                    unreadable.append(fn)
                 continue
             # Provenance unreadable.  If a TOKENED copy of the same exposure
             # exists, this one is redundant whatever it is -- drop it, which is
@@ -3698,7 +3718,7 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
         if unreadable:
             print(f"astrom checkpoint [{merge_label}] {filt}/{module}: "
                   f"{len(unreadable)} untokened per-frame catalog(s) carry no "
-                  f"readable source-frame provenance; KEEPING them.  If this "
+                  f"usable source-frame provenance; KEEPING them.  If this "
                   f"directory holds more than one observation they may belong "
                   f"to another one (issue #298) -- re-catalog to get the "
                   f"observation token in the filename.", flush=True)
