@@ -60,11 +60,13 @@ is caught) and an all-NaN result has its aperture columns **dropped** — on bot
 the cache-hit and the rebuild path — so the catalog looks "not measured" and the
 measurement is retried rather than frozen as a false success.
 
-> Caveat (shared-filter fields): where one filter is imaged by two proposals
-> (e.g. NGC 6334 F200W/F470N, jw06778 + jw07213), both merged mosaics are found
-> and each star is measured on the one that best covers it; the two are
-> independently flux-calibrated, but a star straddling both is measured on a
-> single proposal's mosaic, not a combination.
+> Caveat (multiple valid mosaics): a filter can legitimately have several science
+> mosaics — two proposals imaging the same band (NGC 6334 F200W/F470N,
+> jw06778 + jw07213), or an LW narrow band that appears both as
+> `clear-<filt>-merged` and as a dual-filter pairing `<filt>-<lw>` across
+> observations (brick F405N/F410M/F466N return ~3 each). All are kept and each
+> star is measured on the one that best covers it; the mosaics are independently
+> flux-calibrated, so a star is measured on a single mosaic, not a combination.
 
 ## 4. Aperture-correction tables (kept SEPARATE from photometry)
 
