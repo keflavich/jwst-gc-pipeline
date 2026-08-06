@@ -130,9 +130,10 @@ def test_cloudef_f360m_shape_is_resolved():
     obs token and the filter compares `'' != ''`.
 
     PR #313 closes that by reading the observation from each catalog's own
-    `meta['FILENAME']`.  Until it lands, this rule is right about the SPELLING
-    and blind to the OBSERVATION, and an o005 run on cloudef F360M must not be
-    launched from this branch alone.
+    `meta['FILENAME']`, and this branch is now stacked on it -- see
+    `test_the_foreign_drop_runs_first_and_saves_o005s_own_frames` below, which
+    exercises the two rules in production order.  On its own this rule is right
+    about the SPELLING and blind to the OBSERVATION.
     """
     fns = ([_name(det="nrcb", filt="f360m", exp=i) for i in range(1, 9)]
            + [_name(det="nrcblong", filt="f360m", exp=i) for i in range(1, 9)]
@@ -144,8 +145,8 @@ def test_cloudef_f360m_shape_is_resolved():
 
 def test_the_module_rule_is_blind_to_the_observation():
     """States the limit explicitly rather than leaving it implied by the test
-    above: this rule cannot tell whose frames it is dropping.  Ordering matters
-    -- the foreign-observation filter must run first (PR #313)."""
+    above: this rule cannot tell whose frames it is dropping.  Ordering is what
+    makes it safe -- the foreign-observation filter runs first."""
     own = [_name(det="nrcb", filt="f360m", exp=i) for i in range(1, 9)]
     other = [_name(det="nrcblong", filt="f360m", exp=i) for i in range(1, 9)]
     kept = _drop_module_level_duplicates(own + other, "f360m", "m2", "merged")
@@ -410,3 +411,57 @@ def test_checkpoint_filters_on_the_written_token_not_the_consensus_name(
     out = capsys.readouterr().out
     assert "NO per-frame catalogs matched" not in out, out
     assert "excluded" not in out, out
+
+
+def test_the_foreign_drop_runs_first_and_saves_o005s_own_frames(tmp_path, monkeypatch):
+    """The two rules in PRODUCTION ORDER, on the cloudef shape.
+
+    `_drop_module_level_duplicates` alone discards whichever observation
+    happens to be spelled bare, and on cloudef F360M that is observation 005's
+    own 8 frames -- so an o005 run derived its corrections entirely from o002's
+    frames and wrote them under `Visit=jw02092005001`, 11.4 mas away in the
+    median.  What makes the module rule safe is that
+    `_drop_foreign_obs_duplicates` removes the other observation FIRST
+    (`cataloging.py:3880` before `:3913`), and that filter can only do so
+    because it reads each catalog's own `meta['FILENAME']` rather than its
+    name -- the per-frame token is '' for proposal 2092 either way.
+    """
+    from astropy.table import Table
+    from jwst_gc_pipeline.photometry.cataloging import (
+        _drop_foreign_obs_duplicates, _drop_module_level_duplicates)
+
+    monkeypatch.setattr("jwst_gc_pipeline.fields.filter_observation_count",
+                        lambda *a, **k: 2)
+
+    def _cat(det, exp, obs):
+        fn = str(tmp_path / (f"f360m_{det}_visit001_vgroup02101_exp{exp:05d}"
+                             f"_m2_daophot_basic.fits"))
+        t = Table({"x": [1.0]})
+        t.meta["FILENAME"] = (f"/x/jw02092{obs}001_02101_{exp:05d}_"
+                              f"{det}_destreak_o{obs}_crf.fits")
+        t.write(fn)
+        return fn
+
+    # o005's frames carry the BARE spelling; o002's carry `long`
+    fns = ([_cat("nrcb", i, "005") for i in range(1, 9)]
+           + [_cat("nrcblong", i, "002") for i in range(1, 9)])
+
+    # o005 run: the foreign drop keeps its own 8, and the module rule then has
+    # nothing to supersede them with
+    own = _drop_foreign_obs_duplicates(fns, "", "f360m", "m2", "merged",
+                                       "cloudef", target_obs="005")
+    kept = _drop_module_level_duplicates(own, "f360m", "m2", "merged")
+    assert len(kept) == 8, kept
+    assert all("_nrcb_visit" in os.path.basename(f) for f in kept)
+
+    # and the o002 run keeps o002's
+    own2 = _drop_foreign_obs_duplicates(fns, "", "f360m", "m2", "merged",
+                                        "cloudef", target_obs="002")
+    kept2 = _drop_module_level_duplicates(own2, "f360m", "m2", "merged")
+    assert len(kept2) == 8, kept2
+    assert all("_nrcblong_" in os.path.basename(f) for f in kept2)
+
+    # WITHOUT the foreign drop, the module rule silently hands o005's run
+    # o002's frames -- the failure this ordering prevents
+    blind = _drop_module_level_duplicates(fns, "f360m", "m2", "merged")
+    assert all("_nrcblong_" in os.path.basename(f) for f in blind)

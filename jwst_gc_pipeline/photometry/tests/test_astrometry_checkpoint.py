@@ -1977,3 +1977,73 @@ def test_consensus_writer_only_refuses_what_this_write_touches(tmp_path, capsys)
     assert path                                   # accepted
     out = capsys.readouterr().out
     assert "already carries" in out and "unwind_alias_module_rows" in out
+
+
+def test_consensus_writer_separates_two_vgroups_of_one_module(tmp_path):
+    """All four writer tests pinned vgroup="02101", so the guard's vgroup
+    handling was asserted by nothing.  Two visit groups of the SAME module are
+    distinct physical pointings and must produce two rows, not a refusal."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        seed_offsets_table_from_consensus)
+    corr = [dict(visit="1", exposure=1, module="nrcb", filtername="F212N",
+                 vgroup=vg, dra_onsky_mas=3.0, ddec_onsky_mas=-2.0,
+                 dec_deg=DEC_TEST, source="m2 visit-consensus")
+            for vg in ("02101", "02201")]
+    path = seed_offsets_table_from_consensus(str(tmp_path), "2092", "002",
+                                             corr, stage="m2")
+    assert len(Table.read(path)) == 2
+
+
+def test_consensus_writer_still_refuses_an_alias_inside_one_vgroup(tmp_path):
+    """... and the vgroup must not become an escape hatch: the same frame under
+    `nrcb` and `nrcblong` within ONE vgroup is still the alias."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        seed_offsets_table_from_consensus)
+    corr = [dict(visit="1", exposure=1, module=m, filtername="F360M",
+                 vgroup="02201", dra_onsky_mas=3.0, ddec_onsky_mas=-2.0,
+                 dec_deg=DEC_TEST, source="m2 visit-consensus")
+            for m in ("nrcb", "nrcblong")]
+    with pytest.raises(OffsetsTableUpdateError, match="aliasing module"):
+        seed_offsets_table_from_consensus(str(tmp_path), "2092", "002", corr,
+                                          stage="m2")
+
+
+def test_assert_poolable_refuses_a_bare_module_beside_a_specific_one():
+    """`_assert_poolable` is the clause that actually protects sgrb2's pooling,
+    and it was referenced by no test file at all.
+
+    sgrb2's F360M table has NO Module column, so `nrcb` and `nrcblong` -- same
+    family, distinct tokens -- passed the family check and were silently
+    blended (10 and -4 mas pooled to 3.0).  That is worse than the aliasing
+    refused at write time, because nothing downstream can see it happened.
+    """
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        _assert_poolable)
+    tbl = Table({"Visit": ["jw05365001001"], "Exposure": [1]})
+    with pytest.raises(OffsetsTableUpdateError, match="not a detector"):
+        _assert_poolable([{}, {}], ["nrcb", "nrcblong"], ("jw05365001001", 1),
+                         tbl, "/x/Offsets_JWST_Brick5365_VIRAC2locked.csv")
+
+
+def test_assert_poolable_allows_the_detectors_of_one_module():
+    """The legitimate case pooling exists for: four detectors of one module,
+    whose fixed SIAF positions make their spread a distortion-class
+    systematic.  Kills the "refuse whenever len(mods) > 1" mutant."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        _assert_poolable)
+    tbl = Table({"Visit": ["jw05365001001"], "Exposure": [1]})
+    _assert_poolable([{}] * 4, ["nrcb1", "nrcb2", "nrcb3", "nrcb4"],
+                     ("jw05365001001", 1), tbl,
+                     "/x/Offsets_JWST_Brick5365_VIRAC2locked.csv")
+
+
+def test_assert_poolable_refuses_two_corrections_from_one_module():
+    """Two corrections for one module are not its detectors -- typically two
+    visit groups against a Vgroup-less table.  Pooling must not absorb what the
+    vgroup guard exists to stop."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        _assert_poolable)
+    tbl = Table({"Visit": ["jw05365001001"], "Exposure": [1]})
+    with pytest.raises(OffsetsTableUpdateError, match="MORE THAN ONE"):
+        _assert_poolable([{}, {}], ["nrcb1", "nrcb1"], ("jw05365001001", 1),
+                         tbl, "/x/Offsets_JWST_Brick5365_VIRAC2locked.csv")
