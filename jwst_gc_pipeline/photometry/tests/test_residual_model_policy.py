@@ -170,43 +170,7 @@ def test_model_background_not_negative(f480m):
         f"the model must be stars on a zero background.")
 
 
-@pytest.mark.skipif(False, reason="must run even when the products are absent")
-def test_each_required_glob_matches_at_most_one_file():
-    """The cross-run hazard in issue #266: a glob matching both ``resbgsub_m5``
-    and a ``group`` variant lets `_latest` take numerator and denominator from
-    different runs."""
-    for what, pattern in _REQUIRED.items():
-        assert len(glob.glob(pattern)) <= 1, (what, glob.glob(pattern))
-
-
-@pytest.mark.skipif(False, reason="must run even when the products are absent")
-def test_skip_predicate_covers_every_product_the_fixture_opens(monkeypatch):
-    """The predicate and the fixture must glob the SAME patterns.
-
-    They diverged for a month: the predicate checked
-    `*mergedcat_residual_i2d.fits` while the fixture needed the `_m7_` variant,
-    so a field with m2..m5 products but no m7 passed the predicate and then
-    opened None -- three ERRORS on main since 2026-07-05 (issue #266).
-
-    Checked by RECORDING what the fixture actually globs, not by inspecting its
-    source: a source check only proves the label strings appear, and passes for
-    a fixture that builds its paths inline or opens a fourth product.
-    """
-    seen = []
-    real_latest = _latest
-
-    def _record(pattern):
-        seen.append(pattern)
-        return real_latest(pattern)
-
-    monkeypatch.setitem(globals(), "_latest", _record)
-    try:
-        f480m.__wrapped__()
-    except Exception:
-        pass                    # we only care WHICH globs were requested
-    assert seen, "the fixture globbed nothing"
-    unknown = [p for p in seen if p not in set(_REQUIRED.values())]
-    assert not unknown, (
-        "the fixture opens product(s) the skip predicate does not check, so a "
-        "tree missing them errors instead of skipping:\n  "
-        + "\n  ".join(unknown))
+# NB pytest ORs skip conditions: a function-level skipif(False) CANNOT cancel a
+# module-level pytestmark.  These two must therefore live outside the module
+# mark, which is why _REQUIRED and the mark are module-level and these tests
+# take no fixture -- see test_residual_policy_meta.py.
