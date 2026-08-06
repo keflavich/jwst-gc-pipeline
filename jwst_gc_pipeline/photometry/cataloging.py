@@ -3508,8 +3508,21 @@ def _drop_module_level_duplicates(fns, filt, merge_label, module):
     return [fn for fn in fns if fn not in drop]
 
 
+def _catalog_source_frame(fn):
+    """The crf path a per-frame catalog was measured on, or None.
+
+    Read from the table metadata rather than the filename, because the
+    filename is exactly what is ambiguous here.  Header-only read.
+    """
+    try:
+        from astropy.table import Table
+        return str(Table.read(fn).meta.get('FILENAME') or '') or None
+    except (OSError, ValueError, KeyError):
+        return None
+
+
 def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
-                                 target):
+                                 target, target_obs=None):
     """Drop per-frame catalogs belonging to a DIFFERENT observation/proposal.
 
     The checkpoint's glob is ``{filt}_*visit*_vgroup*_exp*`` -- the ``*`` after
@@ -3559,11 +3572,43 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
     drop = []
     if shared:
         # More than one observation of this field images this filter, so a
-        # pre-token basename cannot say which one wrote it.  Exact token match.
+        # pre-token basename cannot say which one wrote it FROM ITS NAME.
+        #
+        # It can say so from its CONTENTS.  Every per-frame catalog records the
+        # crf it was measured on in `meta['FILENAME']`, and that path carries
+        # the observation (`..._destreak_o005_crf.fits`).  Before the obs token
+        # was emitted universally, an untokened run compared '' against '' and
+        # kept everything -- which is how 8 of observation 005's frames reached
+        # cloudef o002's m2 checkpoint and produced the aliasing offsets rows in
+        # issue #298.  Now that the token is always emitted, a bare name-match
+        # would swing to the opposite error and drop every legacy catalog on
+        # disk, emptying the input.  Read the provenance instead.
+        #
+        # FAIL-SAFE: a catalog whose provenance cannot be read is KEPT, with a
+        # line saying so.  Dropping real exposures builds a consensus from half
+        # the detectors and PASSES, which is worse than the duplicate it avoids
+        # -- the same reasoning as the single-observation branch below.
+        want = f"_o{str(target_obs)}_" if target_obs else None
+        unreadable = []
         for fn in fns:
             m = _OBS_TOKEN_RE.search(os.path.basename(fn))
-            if (m.group(1) if m else '') != token:
+            if m:
+                if m.group(1) != token:
+                    drop.append(fn)
+                continue
+            src = _catalog_source_frame(fn)
+            if src is None:
+                unreadable.append(fn)
+                continue
+            if want and want not in os.path.basename(src):
                 drop.append(fn)
+        if unreadable:
+            print(f"astrom checkpoint [{merge_label}] {filt}/{module}: "
+                  f"{len(unreadable)} untokened per-frame catalog(s) carry no "
+                  f"readable source-frame provenance; KEEPING them.  If this "
+                  f"directory holds more than one observation they may belong "
+                  f"to another one (issue #298) -- re-catalog to get the "
+                  f"observation token in the filename.", flush=True)
     else:
         # Exactly one observation images this filter, so every catalog here is
         # this run's whatever its name.  Discarding the untokened ones would
@@ -3740,7 +3785,8 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
               f"{len(rejected)} non-canonical per-frame catalog(s) (e.g. "
               f"{os.path.basename(rejected[0])})", flush=True)
     fns = _drop_foreign_obs_duplicates(fns, _perframe_token, filt, merge_label,
-                                       module, getattr(options, 'target', None))
+                                       module, getattr(options, 'target', None),
+                                       target_obs=getattr(options, 'field', None))
     if not fns:
         # A frozen stage with no inputs is not a pass -- it is the gate silently
         # ceasing to exist, which is how the `_group_` duplication survived so
