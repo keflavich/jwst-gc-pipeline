@@ -551,35 +551,42 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
             e["coords"] = e["coords_unrestricted"]
             e["flux"] = e["flux_unrestricted"]
             e["n_reliable"] = e["n_reliable_unrestricted"]
-    # HOMOGENEITY.  One refusal used to leave the visit MIXED, and a mixed
-    # consensus is not the m2 population: a refused exposure contributes its
-    # FULL star list, so any star two refused exposures share clears
-    # `min_exposures` and re-enters the consensus.  Measured on a 4-exposure
-    # visit with an m2 list of 400 and a stage detecting 700: two refusals put
-    # all 300 new stars back, the two exposures that DID restrict were then
-    # measured against a consensus containing stars they do not have, and the
-    # record still said "applied".  The population change this restriction
-    # exists to remove was back in full.
+    # HOMOGENEITY, and it is about the star POPULATION, not about which
+    # exposures get measured.  A refused exposure used to contribute its FULL
+    # star list, so any star two refused exposures share cleared
+    # `min_exposures` and re-entered the consensus -- and the exposures that
+    # DID restrict were then measured against a consensus holding stars they
+    # do not have.  The population change this restriction exists to remove was
+    # back in full.
     #
-    # So the restriction is all-or-nothing per visit.  Falling back is the
-    # conservative direction -- it is the pre-#285 behaviour, and a missing
-    # comparison is not evidence the solution moved -- but it has to be the
-    # same decision for every exposure entering one consensus.
-    if restrict_to is not None:
-        _first = next((entries[i]["restrict_refused"] for i in usable_idx
-                       if entries[i]["restrict_refused"]), None)
-        if _first:
-            for i in usable_idx:
-                e = entries[i]
-                if e["restrict_refused"]:
-                    continue
-                e["restrict_refused"] = (
-                    f"another exposure of this visit refused the restriction "
-                    f"({_first}); the star population entering one consensus "
-                    f"must be homogeneous")
-                e["coords"] = e["coords_unrestricted"]
-                e["flux"] = e["flux_unrestricted"]
-                e["n_reliable"] = e["n_reliable_unrestricted"]
+    # The first fix was all-or-nothing per VISIT, and the granularity was
+    # wrong.  On real cloudc F182M, 8 of 128 frames tie 52-54 mas -- 2-4 mas
+    # over RESTRICT_MAX_TIE_MAS -- and 120 healthy frames cascaded off them:
+    # 128 of 128 refused, consensus 119,994 -> 129,135 stars, i.e. the gate
+    # silently inert on the largest field measured, for the sake of 6% of its
+    # frames.
+    #
+    # What has to be homogeneous is the SEED.  A refused exposure is still tied
+    # and still measured -- it just does not EXTEND the consensus with stars the
+    # restricted exposures never had (see the `contributes` flag in the
+    # accumulation below).  It matches into the existing seed like any other
+    # exposure, so it still constrains the stars that are there.
+    contributing = [i for i in usable_idx if not entries[i]["restrict_refused"]]
+    if restrict_to is not None and contributing and len(contributing) < len(usable_idx):
+        print(f"astrom consensus [{context}]: {len(usable_idx) - len(contributing)} "
+              f"of {len(usable_idx)} exposures refused the same-star "
+              f"restriction; they are still MEASURED but do not extend the "
+              f"consensus, so its star population stays the restricted one",
+              flush=True)
+    elif restrict_to is not None and not contributing:
+        # Nothing restricted, so there is no restricted population to protect
+        # and every exposure may extend the seed -- the pre-#285 behaviour,
+        # which is the conservative direction when the star list cannot be
+        # verified against this visit at all.
+        print(f"astrom consensus [{context}]: NO exposure could be restricted "
+              f"to the m2 star list; the consensus is built from the full sets "
+              f"(a population change between stages can still read as "
+              f"movement, issue #285)", flush=True)
     usable = [entries[i] for i in usable_idx]
     if len(usable) < min_exposures:
         raise ConsensusBuildError(
@@ -732,6 +739,15 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
         # fabricated a ~10-15 mas noise floor in scatter_mas.
         ref_ra = ref_dec = None
         sum_dra = sum_ddec = sum_dra2 = sum_ddec2 = counts = flux0 = None
+        # A CONTRIBUTING member seeds, and only a contributing member extends.
+        # If a refused exposure seeded, its full star list would BE the
+        # population -- the same defect from the other end.  Stable sort, so
+        # the existing seed choice (largest n_reliable first) survives among
+        # the contributing ones.
+        _contributes = [not usable[i]["restrict_refused"] for i in
+                        range(len(usable))]
+        if any(_contributes[i] for i in members):
+            members = sorted(members, key=lambda i: not _contributes[i])
         for i in members:
             sc = _shift(usable[i]["coords"], rel[i]["dra"], rel[i]["ddec"])
             if ref_ra is None:
@@ -766,8 +782,12 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
                 matched_b[ib_n] = True
             # unmatched stars extend the seed (mosaic tiles: coverage grows);
             # each becomes its own delta reference (delta 0 on first sighting)
+            # Unmatched stars extend the seed -- but only from an exposure
+            # that is IN the restricted population.  A refused exposure adds
+            # stars the restricted exposures never had, which is exactly the
+            # population change the restriction removes.
             new = ~matched_b
-            if new.any():
+            if new.any() and _contributes[i]:
                 seed = SkyCoord(
                     ra=np.concatenate([seed.ra.deg, sc.ra.deg[new]]) * u.deg,
                     dec=np.concatenate([seed.dec.deg, sc.dec.deg[new]]) * u.deg,

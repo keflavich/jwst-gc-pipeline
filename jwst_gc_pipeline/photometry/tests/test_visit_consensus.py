@@ -845,13 +845,48 @@ def test_the_survival_floor_alone_refuses_a_chance_match():
 
 
 def test_gate_membership_uses_the_unrestricted_count():
-    """Pins the fix for the 🔴: keying on the restricted count let a displaced
-    exposure LEAVE the gate instead of failing it."""
+    """Pins the fix for the 🔴 BEHAVIOURALLY: keying on the restricted count
+    let a displaced exposure LEAVE the gate instead of failing it.
+
+    An exposure whose restricted set collapses must still be REPORTED; a gross
+    movement that removes an exposure from the consensus is the one outcome
+    that cannot be tolerated, because nothing downstream sees it at all.
+
+    Two things worth stating rather than papering over.  The source-grep
+    version of this test could not hold the invariant: the substring
+    `e["n_reliable_unrestricted"] >= min_stars` occurs TWICE -- at the gate
+    membership and again at the thin-set fallback -- so mutating the first
+    left the assertion green.  And the behavioural version below does not
+    hold it either, because it is currently UNREACHABLE: at 900 mas the tie
+    precondition refuses the restriction, the exposure falls back to its full
+    star set, and `n_reliable` is then the unrestricted count anyway.  Keying
+    on the unrestricted count is defence in depth behind the tie precondition
+    and the thin-set fallback, and no input distinguishes the two today.  What
+    this test does hold is the OUTCOME -- the displaced exposure is reported,
+    by whichever of the three mechanisms gets there first.
+    """
+    import astropy.units as u
+    from jwst_gc_pipeline.photometry.visit_consensus import (
+        build_visit_consensus)
+    ra, dec = _field(n=400)
+    tables = [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)]
+    m2 = build_visit_consensus(tables, context="m2")["coords"]
+    # one exposure displaced far enough that essentially nothing survives the
+    # restriction -- its restricted count would be ~0
+    moved = _exposure_table(ra + 900.0 / 3.6e6 / COSD, dec, exposure=5)
+    cons = build_visit_consensus(tables + [moved], context="m6",
+                                 restrict_to=m2, min_stars=50)
+    keys = {e["key"] for e in cons["exposures"]}
+    assert len(keys) == 5, (sorted(keys), cons["skipped"])
+    assert not cons["skipped"], cons["skipped"]
+    # and the source invariant, anchored to the ASSIGNMENT so the thin-set
+    # fallback's identical substring cannot satisfy it
     import inspect
     from jwst_gc_pipeline.photometry import visit_consensus as vc
     src = inspect.getsource(vc.build_visit_consensus)
-    assert 'e["n_reliable_unrestricted"] >= min_stars' in src, (
-        "usable_idx must key on the unrestricted count")
+    assert ('usable_idx = [i for i, e in enumerate(entries)\n'
+            '                  if e["n_reliable_unrestricted"] >= min_stars]'
+            ) in src, "usable_idx must key on the unrestricted count"
 
 
 def test_a_star_list_that_is_half_other_sky_is_reported():
@@ -951,25 +986,30 @@ def test_the_record_says_applied_only_when_every_exposure_restricted(tmp_path, m
     assert cons["n_reliable_restricted"] < cons["n_reliable_unrestricted"], cons
 
 
-def test_one_refusal_refuses_the_whole_visit_and_the_record_says_so(tmp_path, monkeypatch):
-    """A refused exposure contributes its FULL star list, so any star two
-    refused exposures share clears `min_exposures` and re-enters the
-    consensus.  Measured before this change on a 4-exposure visit with an m2
-    list of 400 against a stage detecting 700: two refusals put all 300 new
-    stars back, the two exposures that DID restrict were measured against a
-    consensus containing stars they do not have, and the record said
-    "applied".  The population change the restriction exists to remove was
-    back in full.
+def test_one_refusal_does_not_cascade_but_does_not_pollute_either(tmp_path, monkeypatch):
+    """Two failure modes, and the fix has to avoid both.
+
+    BEFORE any fix: a refused exposure contributed its FULL star list, so any
+    star two refused exposures shared cleared `min_exposures` and re-entered
+    the consensus -- and the exposures that DID restrict were measured against
+    a consensus holding stars they do not have.
+
+    FIRST FIX (all-or-nothing per visit): on real cloudc F182M, 8 of 128
+    frames tie 52-54 mas, 2-4 mas over RESTRICT_MAX_TIE_MAS, and 120 healthy
+    frames cascaded off them -- 128 of 128 refused, consensus 119,994 ->
+    129,135 stars, the gate inert on the largest field measured.
+
+    What must be homogeneous is the SEED.  A refused exposure is still tied
+    and measured; it just does not EXTEND the consensus.
     """
-    import astropy.units as u
     import jwst_gc_pipeline.photometry.astrometry_checkpoint as ac
     import jwst_gc_pipeline.photometry.visit_consensus as vc
 
     ra, dec = _field(n=400)
     tables = [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)]
-    m2 = build_visit_consensus(tables, context="m2")["coords"]
+    full = build_visit_consensus(tables, context="m2")["coords"]
+    m2 = full[:len(full) // 2]
 
-    # refuse exactly one exposure, by its key, through the real refusal path
     real = vc._restrict_to_same_stars
     seen = {"n": 0}
 
@@ -985,14 +1025,24 @@ def test_one_refusal_refuses_the_whole_visit_and_the_record_says_so(tmp_path, mo
                         lambda *a, **k: (m2, "/x/m2.fits"))
     rec = _record_for(tmp_path, m2, tables)
     cons = rec["visits"][0]["consensus"]
+
+    # NO cascade: exactly the one exposure that refused
+    assert cons["n_same_star_refused"] == 1, cons["same_star_refused"]
     assert cons["same_star_gate"] == "refused", cons
-    # all four, not one: the population entering one consensus is homogeneous
-    assert cons["n_same_star_refused"] == 4, cons["same_star_refused"]
     reasons = [r["reason"] for r in cons["same_star_refused"]]
-    assert any("forced refusal" in r for r in reasons), reasons
-    assert sum("homogeneous" in r for r in reasons) == 3, reasons
-    # and the restricted count is the unrestricted one -- nothing was dropped
-    assert cons["n_reliable_restricted"] == cons["n_reliable_unrestricted"]
+    assert reasons == [r for r in reasons if "forced refusal" in r], reasons
+
+    # ... and NO pollution: the consensus is still the restricted population,
+    # not the refused exposure's full one
+    ref = _record_for(tmp_path / "all", m2,
+                      [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)])
+    assert (cons["n_stars"]
+            <= ref["visits"][0]["consensus"]["n_stars"] + 1), (
+        cons["n_stars"], ref["visits"][0]["consensus"]["n_stars"])
+    # the refused exposure was still MEASURED -- it is in the record's
+    # per-exposure list, not in `skipped`
+    assert len(rec["visits"][0]["exposures"]) == 4, rec["visits"][0]
+    assert not rec["visits"][0]["consensus"]["skipped"], cons
 
 
 def test_the_record_carries_the_star_list_footprint_coverage(tmp_path, monkeypatch):
