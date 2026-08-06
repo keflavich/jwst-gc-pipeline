@@ -946,3 +946,77 @@ def test_a_silent_timeout_does_not_assert_webgl2():
     assert 'did not start within' in out
     tail = out.split('The interactive view did not start within')[1][:200]
     assert 'WebGL2' not in tail, tail
+# ---- a superseded product must never be published ----
+def _rf_fresh():
+    return _load('release_freshness', os.path.join(_REL, 'release_freshness.py'))
+
+
+def test_quarantined_source_is_detected(tmp_path):
+    """The m2 checkpoint renames a mosaic it supersedes to *_im0_badastrom.fits.
+    Cloud C shipped six such images for weeks, presented as evidence that the
+    astrometry is sound."""
+    rf = _rf_fresh()
+    live = tmp_path / 'a-f212n-merged_i2d.fits'
+    live.touch()
+    assert rf.source_state(str(live)) == rf.LIVE
+    gone = tmp_path / 'b-f182m-merged_i2d.fits'
+    (tmp_path / 'b-f182m-merged_i2d_im0_badastrom.fits').touch()
+    assert rf.source_state(str(gone)) == rf.SUPERSEDED
+    assert rf.source_state(str(tmp_path / 'never-existed_i2d.fits')) == rf.MISSING
+    assert rf.source_state(None) == rf.MISSING
+
+
+def test_superseded_files_reads_the_manifest(tmp_path):
+    rf = _rf_fresh()
+    (tmp_path / 'x_i2d.fits').touch()
+    (tmp_path / 'y_i2d_im0_badastrom.fits').touch()
+    manifest = {'files': [
+        {'category': 'image', 'dest': 'images/F212N/x.fits',
+         'src': str(tmp_path / 'x_i2d.fits')},
+        {'category': 'image', 'dest': 'images/F182M/y.fits',
+         'src': str(tmp_path / 'y_i2d.fits')},
+        {'category': 'catalog', 'dest': 'catalogs/c.fits',
+         'src': str(tmp_path / 'gone.fits')},
+    ]}
+    assert rf.superseded_files(manifest) == ['images/F182M/y.fits']
+
+
+def test_page_withholds_a_superseded_image_and_says_so():
+    mw = _make_webpage()
+    manifest = {'version': 'v1', 'built': '2026-08-05T00:00:00Z',
+                'globus_https_base': 'https://example.invalid',
+                'globus_collection_id': '0', 'release_path': '/r',
+                'files': [
+                    {'category': 'image', 'kind': 'science', 'filter': 'F212N',
+                     'iteration': None, 'observation': None,
+                     'dest': 'images/F212N/good.fits', 'url': 'u1', 'size_bytes': 1},
+                    {'category': 'image', 'kind': 'science', 'filter': 'F182M',
+                     'iteration': None, 'observation': None,
+                     'dest': 'images/F182M/bad.fits', 'url': 'u2', 'size_bytes': 1},
+                ]}
+    page = mw.render_field_page('cloudc', manifest, None,
+                                superseded=['images/F182M/bad.fits'])
+    assert 'image(s) withheld' in page
+    assert 'F182M' in page.split('withheld')[1][:400]     # named in the notice
+    assert 'u2' not in page                               # no download offered
+    assert 'u1' in page                                   # the current one stays
+
+
+def test_a_preview_built_from_a_withheld_band_is_not_shown():
+    """Withholding the download row and leaving the picture up publishes the bad
+    astrometry anyway -- the preview is what a reader actually looks at."""
+    mw = _make_webpage()
+    manifest = {'version': 'v1', 'built': '2026-08-05T00:00:00Z',
+                'globus_https_base': 'https://example.invalid',
+                'globus_collection_id': '0', 'release_path': '/r',
+                'files': [{'category': 'image', 'kind': 'science', 'filter': 'F182M',
+                           'iteration': None, 'observation': None,
+                           'dest': 'images/F182M/bad.fits', 'url': 'u',
+                           'size_bytes': 1}]}
+    page = mw.render_field_page(
+        'cloudc', manifest, 'assets/cloudc.jpg',
+        previews=[('assets/cloudc_rgb_f212n_f187n_f182m.jpg',
+                   'cloudc_rgb_f212n_f187n_f182m')],
+        superseded=['images/F182M/bad.fits'])
+    assert 'cloudc_rgb_f212n_f187n_f182m' not in page
+    assert 'class=preview ' not in page

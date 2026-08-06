@@ -36,6 +36,8 @@ import os
 import re
 import shutil
 import subprocess
+
+import release_freshness
 import sys
 from pathlib import Path
 
@@ -1503,6 +1505,27 @@ def main(argv=None):
     if not items:
         print(f"No deliverables discovered for field '{args.field}'.", file=sys.stderr)
         return 1
+
+    # ---- SUPERSEDED-SOURCE GATE ----------------------------------------------------
+    # A mosaic the pipeline has already quarantined as bad-astrometry must never
+    # enter a release. Cloud C shipped six of them for weeks: staged 2026-07-10,
+    # superseded by the 2026-07-12 astrometry fix, still on the page in August --
+    # presented as evidence that the astrometry is sound.
+    stale = [it for it in items
+             if release_freshness.source_state(it["src"]) != release_freshness.LIVE]
+    if stale:
+        print(f"\nREFUSING TO STAGE '{args.field}': {len(stale)} product(s) have no "
+              f"live source -- the pipeline has superseded or removed them since "
+              f"they were produced:", file=sys.stderr)
+        for it in stale[:10]:
+            print(f"  {release_freshness.source_state(it['src']):11s} {it['src']}",
+                  file=sys.stderr)
+        if len(stale) > 10:
+            print(f"  ... and {len(stale) - 10} more", file=sys.stderr)
+        print("Re-run the reduction so current mosaics exist, then stage.",
+              file=sys.stderr)
+        return 2
+
     print_manifest(items)
 
     # ---- GENERATION-SPAN REPORT -----------------------------------------------------

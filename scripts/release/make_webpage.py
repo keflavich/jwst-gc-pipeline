@@ -24,6 +24,7 @@ import urllib.parse
 from pathlib import Path
 
 import field_overview
+import release_freshness
 import make_preview_rgb
 import preview_plan
 from stage_release import field_release_dir
@@ -197,8 +198,27 @@ def _preview_caption(stem, field):
 
 
 def render_field_page(field, manifest, preview_rel, preview_channels=None,
-                      all_versions=None, preview_version=None, previews=()):
-    files = manifest["files"]
+                      all_versions=None, preview_version=None, previews=(),
+                      superseded=()):
+    # A staged image whose SOURCE has since been quarantined as bad-astrometry
+    # must not be presented as this field's astrometry. It is withheld from the
+    # page, and the withholding is stated -- the point of the release is to be
+    # evidence the astrometry is right, so quietly serving a superseded mosaic
+    # is worse than showing nothing. The file itself is untouched.
+    superseded = set(superseded or ())
+    files = [f for f in manifest["files"] if f.get("dest") not in superseded]
+    withheld = [f for f in manifest["files"] if f.get("dest") in superseded]
+    # A preview RENDERED FROM a withheld mosaic is the thing a reader actually
+    # looks at, so withholding the download row and leaving the picture up
+    # publishes the bad astrometry anyway. Drop any preview using a withheld
+    # band -- the band names are in the filename.
+    withheld_bands = {(f.get("filter") or "").upper() for f in withheld}
+    if withheld_bands:
+        previews = [(rel, stem) for rel, stem in previews
+                    if not (withheld_bands
+                            & {p.upper() for p in stem.partition("_rgb_")[2].split("_")})]
+        if not previews:
+            preview_rel = None
     images = [f for f in files if f["category"] == "image"]
     catalogs = [f for f in files if f["category"] == "catalog"]
     filters = sorted({f["filter"] for f in images if f["filter"]},
@@ -213,6 +233,16 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                f"<a href='index.html'>← all fields</a>"
                f"{_version_dropdown(field, manifest['version'], all_versions)}</div>")
     out.append("</header><main>")
+    if withheld:
+        bands = sorted({f.get("filter") or "?" for f in withheld})
+        out.append(
+            "<p style='border:1px solid #b58900;padding:.6rem 1rem;border-radius:6px'>"
+            f"<b>{len(withheld)} image(s) withheld.</b> The pipeline has since "
+            f"superseded the mosaics these were staged from (the m2 astrometry "
+            f"checkpoint corrected the offsets table and quarantined every mosaic "
+            f"built before it), so they are no longer shown here: "
+            f"<code>{html.escape(', '.join(bands))}</code>. They will return when "
+            f"the field is re-staged from current products.</p>")
     if all_versions and manifest['version'] != all_versions[0]:
         out.append(f"<p class=muted style='border:1px solid #b58900;padding:.5em'>"
                    f"You are viewing an <b>older</b> release ({html.escape(manifest['version'])}). "
@@ -626,7 +656,12 @@ def main(argv=None):
         for v in versions:
             manifest = json.loads(
                 (field_release_dir(field, v, args.release_root) / "MANIFEST.json").read_text())
+            stale_files = release_freshness.superseded_files(manifest)
+            if stale_files and v == latest:
+                print(f"  {field}: WITHHOLDING {len(stale_files)} superseded "
+                      f"image(s) -- source quarantined since staging")
             page = render_field_page(field, manifest, preview_rel, preview_channels,
+                                     superseded=stale_files,
                                      all_versions=versions,
                                      preview_version=preview_version,
                                      previews=preview_items)
