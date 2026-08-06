@@ -520,7 +520,10 @@ def _check_generation(fn, offsets_tbl, locked_tbl):
         # without base_* stamps there is NO generation check at all.  Nothing in
         # the repo writes those columns today, so this is the state of every
         # field -- see the note on _GENERATION_COLUMNS.
-        gmsg = (f"[genlock] offsets table {os.path.basename(locked_tbl)} carries "
+        # The FULL path, not the basename: brick and cloudc emit an identical
+        # line for two different tables otherwise, which is the legibility
+        # problem this whole change is about.
+        gmsg = (f"[genlock] offsets table {locked_tbl} carries "
                 f"no base_* generation stamps, so the tie is applied WITHOUT a "
                 f"generation check: nothing verifies that the correction was "
                 f"solved on the same WCS generation as the frames it is being "
@@ -540,8 +543,9 @@ def _check_generation(fn, offsets_tbl, locked_tbl):
 
 
 #: Generation stamp columns, as ``(table column suffix, generation_stamp key)``.
-#: **Nothing in this repository writes these columns.**  A grep for
-#: ``base_calver`` finds only this comment, so :func:`_assert_generation_row` --
+#: **No PRODUCTION code in this repository writes these columns.**  A grep for
+#: ``base_calver`` finds this comment and the tests that pin it, and no writer
+#: anywhere, so :func:`_assert_generation_row` --
 #: the strong generation check -- is DORMANT on every field, and
 #: :func:`_check_generation` says so once per table.  The earlier wording here
 #: claimed "the tie builders write ``base_calver``"; they do not, and that
@@ -552,7 +556,11 @@ def _check_generation(fn, offsets_tbl, locked_tbl):
 #: ``cal_ver``.  The check used to index the stamp with the COLUMN spelling, so
 #: the moment a table carried stamps the layer would have died on
 #: ``KeyError: 'calver'`` instead of comparing anything.  That is fixed here in
-#: the mapping below; it has still never run.
+#: the mapping below -- by an EARLIER change, not by this one; the mapping is
+#: byte-identical to what it was and appears here only as context.  It has
+#: never run on a real field: the only things that exercise it are
+#: ``test_generation_mismatch_actually_raises`` and
+#: ``test_generation_match_passes``, which build a stamped table by hand.
 _GENERATION_COLUMNS = (('calver', 'cal_ver'),
                        ('crds_ctx', 'crds_ctx'),
                        ('dvacorr', 'dvacorr'))

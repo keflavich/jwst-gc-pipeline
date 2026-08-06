@@ -100,23 +100,40 @@ def test_stamped_table_is_silent(tmp_path, capsys):
 
 
 def test_generation_columns_note_matches_reality():
-    """The comment claimed the tie builders write base_calver.  Nothing does --
-    that claim is why the strong layer read as implemented."""
+    """The comment claimed the tie builders write base_calver.  Nothing in
+    PRODUCTION does -- that claim is why the strong layer read as implemented.
+
+    `git grep` only sees TRACKED files, so a writer added to an in-progress
+    branch before `git add` was invisible, and the whole-file self-exclusion of
+    `unified_alignment.py` meant a writer added to that file -- the most likely
+    home for a stamper, right beside `_GENERATION_COLUMNS` -- was invisible
+    too.  Walk the tree instead, and exclude only the comment LINES that
+    legitimately name the column.
+    """
     import pathlib
-    import subprocess
-    root = pathlib.Path(ua.__file__).resolve().parents[2]
-    proc = subprocess.run(["git", "-C", str(root), "grep", "-l", "base_calver"],
-                          capture_output=True, text=True)
-    # rc 1 = "no match", rc 0 = matches, anything else = git could not answer.
-    # Without this the test passed vacuously in a non-git tree: stdout '' ->
-    # writers [] -> green.
-    if proc.returncode not in (0, 1):
-        pytest.skip(f"git could not run (rc={proc.returncode}); "
-                    f"this check needs a git checkout")
-    out = proc.stdout.split()
-    writers = [f for f in out
-               if not f.endswith("unified_alignment.py")
-               and "tests" not in f and not f.endswith(pathlib.Path(__file__).name)]
+    repo = pathlib.Path(ua.__file__).resolve().parents[2]
+    here = pathlib.Path(__file__).name
+    # The package AND scripts/ -- a stamper could as easily be a script.
+    # No `git grep`: it sees only TRACKED files, so this went green on any
+    # branch where the writer had not been `git add`ed yet, and it made the
+    # test red in a container with no git on PATH (subprocess.run raises
+    # FileNotFoundError before any returncode is available).
+    sources = [f for d in ("jwst_gc_pipeline", "scripts")
+               for f in sorted((repo / d).rglob("*.py"))]
+    writers = []
+    for f in sources:
+        if f.name == here or "tests" in f.parts:
+            continue
+        for lineno, line in enumerate(f.read_text().splitlines(), 1):
+            if "base_calver" not in line:
+                continue
+            # The dormant-layer note and the mapping itself name the column on
+            # purpose.  Everything else is a writer.
+            if line.lstrip().startswith("#") or line.lstrip().startswith("#:"):
+                continue
+            if "('calver', 'base_calver')" in line or '"base_calver"' in line and "COLUMNS" in line:
+                continue
+            writers.append(f"{f.relative_to(repo)}:{lineno}: {line.strip()}")
     assert not writers, (
         "something now writes base_calver -- the dormant-layer note in "
         f"_GENERATION_COLUMNS needs updating: {writers}")
@@ -164,7 +181,12 @@ def test_an_unparseable_gate_value_raises_rather_than_disabling(tmp_path, monkey
 
 @pytest.mark.parametrize("value,expected", [
     ("1", True), ("true", True), ("YES", True), ("on", True),
-    ("0", False), ("false", False), ("no", False), ("off", False), ("", False)])
+    ("0", False), ("false", False), ("no", False), ("off", False), ("", False),
+    # WHITESPACE.  A trailing space out of a shell script or a SLURM --export
+    # is ordinary, and now that an unrecognised value RAISES, dropping the
+    # .strip() would turn `GENLOCK_STRICT="1 "` into a hard abort of every
+    # field rather than a gate that is simply on.
+    (" 1 ", True), ("\t0\n", False), ("\n1\n", True), (" ", False)])
 def test_recognised_gate_values(value, expected, monkeypatch):
     monkeypatch.setenv("GENLOCK_STRICT", value)
     assert ua._strict_env("GENLOCK_STRICT") is expected
