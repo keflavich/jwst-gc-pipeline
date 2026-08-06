@@ -3508,16 +3508,76 @@ def _drop_module_level_duplicates(fns, filt, merge_label, module):
     return [fn for fn in fns if fn not in drop]
 
 
+def _resolved_obsid(options):
+    """THIS run's observation id, or None when it cannot be established.
+
+    ``--field`` carries it when it was given, and ``submit_cataloging.sbatch``
+    always gives it.  A bare ``crowdsource_catalogs_long.py`` invocation may
+    not, and ``main()`` then falls back to
+    ``fields.default_field_token``, which returns ``obsids[0]`` -- the first
+    entry the registry happens to list.
+
+    That fallback is fine for choosing what to catalog and wrong for saying
+    what a catalog on disk belongs to.  On cloudef it answers '002' whichever
+    observation is running, so an o005 run would read its own 8 frames as
+    foreign and drop them, and the resulting consensus -- built from the other
+    observation's exposures -- would PASS.  Where the registry lists more than
+    one observation for this target and instrument, this returns None and the
+    caller keeps everything: the pre-existing behaviour, loud rather than
+    wrong.  Where exactly one is listed there is nothing to guess and it is
+    returned.
+    """
+    from jwst_gc_pipeline import fields as _freg
+    field = getattr(options, 'field', None)
+    if field not in (None, ''):
+        return str(field)
+    target = getattr(options, 'target', None)
+    proposal = getattr(options, 'proposal_id', None)
+    if not target or not proposal:
+        return None
+    known = _freg.BY_NAME.get(str(target))
+    obs = known.observation(str(proposal)) if known is not None else None
+    if obs is None:
+        return None
+    modules = str(getattr(options, 'modules', '') or '').lower()
+    instrument = 'miri' if 'mirimage' in modules else 'nircam'
+    joint = obs.joint_obsids.get(instrument, ())
+    if joint:
+        return str(joint[0]) if len(joint) == 1 else None
+    seen = obs.obsids.get(instrument, ())
+    return str(seen[0]) if len(seen) == 1 else None
+
+
 def _catalog_source_frame(fn):
     """The crf path a per-frame catalog was measured on, or None.
 
     Read from the table metadata rather than the filename, because the
-    filename is exactly what is ambiguous here.  Header-only read.
+    filename is exactly what is ambiguous here.
+
+    HEADER-ONLY, and that is not a nicety: this runs once per candidate
+    catalog before every frozen-stage checkpoint.  ``Table.read`` pulls the
+    whole binary table to reach one keyword -- measured on brick F212N at
+    0.60 s/file against 0.071 s for ``fits.getheader(ext=1)``, i.e. 114 s vs
+    14 s for 192 catalogs, and roughly 4 core-hours per archive pass per
+    stage.  ``FILENAME`` lives in the ext-1 header, so the rows are never
+    needed.  ``.ecsv`` has no such split and falls back to the full read.
+
+    A catalog a killed job left zero-length is the routine failure here, and
+    the two readers raise differently for it: ``fits.getheader`` an
+    ``OSError``, ``Table.read`` an ``IORegistryError`` (it cannot even guess
+    the format).  Both are named; the caller treats "unreadable" as KEEP.
     """
+    from astropy.io import fits
+    from astropy.io.registry import IORegistryError
+    if fn.endswith(('.fits', '.fit', '.fits.gz')):
+        try:
+            return str(fits.getheader(fn, ext=1).get('FILENAME') or '') or None
+        except (OSError, KeyError, IndexError, ValueError):
+            return None
     try:
         from astropy.table import Table
         return str(Table.read(fn).meta.get('FILENAME') or '') or None
-    except (OSError, ValueError, KeyError):
+    except (OSError, ValueError, KeyError, IORegistryError):
         return None
 
 
@@ -3576,18 +3636,28 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
         #
         # It can say so from its CONTENTS.  Every per-frame catalog records the
         # crf it was measured on in `meta['FILENAME']`, and that path carries
-        # the observation (`..._destreak_o005_crf.fits`).  Before the obs token
-        # was emitted universally, an untokened run compared '' against '' and
-        # kept everything -- which is how 8 of observation 005's frames reached
-        # cloudef o002's m2 checkpoint and produced the aliasing offsets rows in
-        # issue #298.  Now that the token is always emitted, a bare name-match
-        # would swing to the opposite error and drop every legacy catalog on
-        # disk, emptying the input.  Read the provenance instead.
+        # the observation (`..._destreak_o005_crf.fits`).  The per-frame writer
+        # emits a token for 2211/7213/6778 only, so on cloudef this run's token
+        # and the foreign catalogs' were BOTH empty, the comparison was
+        # `'' != ''`, and all 24 F360M catalogs were kept -- 8 of them
+        # observation 005's frames, which is how the aliasing offsets rows in
+        # issue #298 were produced.  Matching on the name cannot fix that
+        # without also dropping every legacy catalog on disk and emptying the
+        # input.  Read the provenance instead.
         #
         # FAIL-SAFE: a catalog whose provenance cannot be read is KEPT, with a
         # line saying so.  Dropping real exposures builds a consensus from half
         # the detectors and PASSES, which is worse than the duplicate it avoids
         # -- the same reasoning as the single-observation branch below.
+        #
+        # `target_obs` must be THIS run's observation and nothing else.  When
+        # it is unknown the filter does not guess: `want` stays None and every
+        # provenance-readable catalog is kept, exactly as before this branch
+        # existed.  Guessing would mean picking `obsids[0]` from the registry,
+        # and on cloudef that is '002' -- so an o005 run would discard its own
+        # 8 frames and build the consensus from the other observation's.  The
+        # resolution lives in `_resolved_obsid`, which returns None rather than
+        # choose.
         want = f"_o{str(target_obs)}_" if target_obs else None
 
         def _identity(base):
@@ -3809,7 +3879,7 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
               f"{os.path.basename(rejected[0])})", flush=True)
     fns = _drop_foreign_obs_duplicates(fns, _perframe_token, filt, merge_label,
                                        module, getattr(options, 'target', None),
-                                       target_obs=getattr(options, 'field', None))
+                                       target_obs=_resolved_obsid(options))
     if not fns:
         # A frozen stage with no inputs is not a pass -- it is the gate silently
         # ceasing to exist, which is how the `_group_` duplication survived so

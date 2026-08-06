@@ -1011,47 +1011,25 @@ def _sample_background_map(background_map, xvals, yvals):
 
 
 def obs_token(proposal_id, field):
-    """Per-observation filename disambiguator.  Emitted for EVERY observation.
+    """Per-observation filename disambiguator for multi-obs targets.
 
-    The token exists because a per-frame catalog name is
-    ``{filter}_{module}_visit001_vgroup02201_exp00001_...`` and the
-    ``(visit, vgroup, exp)`` tuples are REUSED across observations, so two
-    observations sharing a basepath and a filter write the same filename.
-    Proposal 2211 is the case that forced it (5 GC pointings, F277W in all
-    five), and ngc6334's 7213/6778 share a target directory, filters, obs
-    number AND tuples.
-
-    It used to be emitted ONLY for those, on the reasoning that everything else
-    is single-obs-per-basepath.  That reasoning does not hold, and the
-    consequence was not just collisions but a family of SILENT NO-OPS: every
-    guard keyed on the token degrades to "keep everything" when the token is
-    empty, because its comparisons become ``'' != ''``.  Three defects traced
-    to it:
-
-    * ``cataloging._drop_foreign_obs_duplicates`` kept all 24 cloudef F360M
-      catalogs -- 8 of them observation 005's frames -- because this run's
-      token and the foreign catalogs' were both empty (issue #298);
-    * cloudef 2092 obs 002 and 005 interleaved into ONE
-      ``checkpoint_m2_F360M_latest.json``, so a frozen-stage gate compared one
-      observation's exposures against the other's baseline (issue #281);
-    * the same-star star list and the checkpoint baseline were keyed
-      differently, letting an o002 run restrict against o005's consensus
-      catalog 104 mas away (issue #285 review).
-
-    Emitting it universally is what makes those guards mean something.  Readers
-    tolerate both spellings: the per-frame globs carry ``*`` between the filter
-    and ``_visit``, ``_DETECTOR_TOKEN_RE`` accepts an optional token,
-    ``_m2_record_path`` falls back to the untokened name, and
-    ``_expected_output_exists`` checks both so an already-cataloged field is
-    not re-run just because its products predate the token.
+    Proposal 2211 (gc2211) comprises 5 GC pointings (obs 023/028/046/049/050)
+    that REUSE the same ``(visit, vgroup, exp)`` tuples, so the obs-less per-frame
+    catalog-table name ``{filter}_{module}_visit001_vgroup02201_exp00001_...`` is
+    identical across obs that share a filter and silently overwrites (= data loss;
+    F200W: o023/o046/o049/o050; F277W: all 5).  Insert ``_o{field}`` for prop 2211
+    so each obs writes a distinct catalog table.  The per-frame residual/model
+    products under ``{filter}/pipeline/`` already carry ``-o{field}`` and are
+    unaffected.  Other proposals are single-obs-per-basepath and get the empty
+    token, so their filenames and existing products are unchanged.
     """
-    # ngc6334's two proposals share a target dir, filters, obs number AND
-    # (visit, vgroup, exp) tuples, so `_o{field}` alone would still collide --
-    # they are distinguished by PROPOSAL, not by observation.
+    if str(proposal_id) == '2211' and field not in (None, ''):
+        return f'_o{field}'
+    # ngc6334's two proposals (7213, 6778) share a target dir, filters, obs
+    # number AND (visit, vgroup, exp) tuples, so their per-frame catalog names
+    # collide and the second run overwrites the first.  Tag by proposal id.
     if str(proposal_id) in ('7213', '6778'):
         return f'_j{proposal_id}'
-    if field not in (None, ''):
-        return f'_o{field}'
     return ''
 
 
@@ -1141,17 +1119,7 @@ def _expected_output_exists(basepath, filtername, module, options,
                                 iteration_label=iteration_label,
                                 method=method,
                                 basic_or_iterative=basic_or_iterative)
-    if os.path.exists(path):
-        return True
-    # Every product on disk predates the universal obs token, and re-cataloging
-    # a whole campaign to rename files would be a far worse outcome than the
-    # collisions the token prevents.  Accept the untokened LEGACY name too.
-    token = _obs_token_from_options(options)
-    if token:
-        legacy = path.replace(token, '', 1)
-        if legacy != path and os.path.exists(legacy):
-            return True
-    return False
+    return os.path.exists(path)
 
 
 def _as_table(data):
@@ -4741,17 +4709,7 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             # Match the per-file detector token convention
                             # used by the main each-exposure loop above.
                             file_detector = filename.split("_")[3]
-                            # An LW frame's detector IS `nrcXlong`; the module family `nrcX` is
-                            # not a second name for it -- it names four other detectors.
-                            # Writing an LW catalog under the module spelling put ONE
-                            # physical frame on disk under two names, and the m2
-                            # checkpoint then wrote offsets rows under both, which
-                            # unified_alignment resolves to two rows for one frame and
-                            # refuses to reduce (issue #298).  Safe only because
-                            # obs_token is now emitted for every observation: without
-                            # it, cloudef o002 and o005 would write the SAME path.
-                            file_module = (file_detector if module == 'merged'
-                                           or file_detector.endswith('long') else module)
+                            file_module = file_detector if module == 'merged' else module
                             if not _expected_output_exists(
                                     basepath, filtername, file_module, options,
                                     visit_id, vgroup_id, exposure_id,
@@ -4853,18 +4811,7 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             # them all under 'merged' would overwrite 8 outputs
                             # per exposure down to 1.
                             file_detector = filename.split("_")[3]
-                            # An LW frame's detector IS `nrcXlong`; the module
-                            # family `nrcX` is not a second name for it -- it
-                            # names four other detectors.  Writing an LW catalog
-                            # under the module spelling put ONE physical frame on
-                            # disk under two names, and the m2 checkpoint then
-                            # wrote offsets rows under both, which
-                            # unified_alignment resolves to two rows for one
-                            # frame and refuses to reduce (issue #298).  Safe
-                            # only because obs_token is now emitted for every
-                            # observation: without it, cloudef o002 and o005
-                            # would write the SAME path.
-                            if module == 'merged' or file_detector.endswith('long'):
+                            if module == 'merged':
                                 file_module = file_detector
                             else:
                                 file_module = module
