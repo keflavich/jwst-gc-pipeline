@@ -138,7 +138,8 @@ def main(argv=None):
             catalogs[filt] = Table.read(path)
         record = run_crossfilter_checkpoint(
             catalogs, refcat=refcat, basepath=args.basepath,
-            record_dir=args.record_dir, context="cli")
+            record_dir=args.record_dir, context="cli",
+            obs_token=consensus_obs_token(args.proposal_id, args.obsid))
         print(json.dumps(dict(passed=record["passed"],
                               anchor=record.get("anchor_filter"),
                               failures=record.get("failures", [])), indent=2))

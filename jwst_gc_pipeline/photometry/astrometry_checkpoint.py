@@ -1721,7 +1721,11 @@ def _m2_record_path(record_dir, filtername, obs_token=""):
         if not os.path.exists(_p):
             continue
         if obs_token and not _tok:
-            if _filter_is_obs_ambiguous(record_dir, filtername):
+            # A `None` filtername means this IS the mixed-filter `_all`
+            # lookup.  Ambiguity is a property of a FILTER, so with no filter
+            # to ask about there is no answer and it fails closed.
+            if filtername is None or _filter_is_obs_ambiguous(record_dir,
+                                                              filtername):
                 print(f"astrom checkpoint: REFUSING the untokened m2 record "
                       f"{os.path.basename(_p)} for {filtername}{obs_token}: "
                       f"more than one observation of this field images this "
@@ -1729,17 +1733,24 @@ def _m2_record_path(record_dir, filtername, obs_token=""):
                       f"observation identity, so it may be the other one's "
                       f"(issue #281).  Re-run m2 to write a tokened record.",
                       flush=True)
-                return None
+                # BREAK, not `return None`.  Refusing the per-filter legacy
+                # record says nothing about this run's OWN `_all` record, and
+                # returning here let a legacy untokened file on disk hide a
+                # perfectly good tokened mixed-filter one -- failing closed
+                # against the wrong file.
+                break
             print(f"astrom checkpoint: no tokened m2 record for "
                   f"{filtername}{obs_token}; falling back to the untokened "
                   f"{os.path.basename(_p)}.  Only one observation of this "
                   f"field images this filter, so it is unambiguous.",
                   flush=True)
         return _p
+    # `exact` is named only for the message below.  It is NOT re-checked: the
+    # loop above already tried it as its first iteration and would have
+    # returned it, so an `if os.path.exists(exact): return exact` here is
+    # unreachable -- verified by replacing it with `raise AssertionError`.
     exact = os.path.join(record_dir,
                          f"{_record_name('m2', filtername, obs_token)}_latest.json")
-    if os.path.exists(exact):
-        return exact
     # The writer keys the mixed-filter record with the token too, so the
     # reader must look for it there or a tokened run can never find it.
     allpath = os.path.join(
@@ -1747,6 +1758,22 @@ def _m2_record_path(record_dir, filtername, obs_token=""):
     if not os.path.exists(allpath):
         allpath = os.path.join(
             record_dir, f"{_record_name('m2', None)}_latest.json")
+        # The SAME refusal as the per-filter branch above, which was missing
+        # here.  `run_astrometry_checkpoint.py`'s `--filter` defaults to None,
+        # so ONE filterless invocation creates an untokened `_all` record that
+        # every observation of the field would then read as its own -- the
+        # per-filter gate closed while the `_all` door stood open.  A `None`
+        # filtername cannot be tested for ambiguity at all, so it fails closed.
+        if obs_token and os.path.exists(allpath) and (
+                filtername is None
+                or _filter_is_obs_ambiguous(record_dir, filtername)):
+            print(f"astrom checkpoint: REFUSING the untokened mixed-filter m2 "
+                  f"record {os.path.basename(allpath)} for "
+                  f"{filtername}{obs_token}: it carries no observation "
+                  f"identity, and more than one observation of this field "
+                  f"images this filter (issue #281).  Re-run m2 to write a "
+                  f"tokened record.", flush=True)
+            return None
     if filtername and os.path.exists(allpath):
         print(f"astrom checkpoint: no m2 baseline for filter {filtername!r} at "
               f"{os.path.basename(exact)}; falling back to "
@@ -2343,7 +2370,8 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                                cell_tol_mas=LOCAL_CELL_TOL_MAS,
                                cell_min_stars=LOCAL_CELL_MIN_STARS,
                                field_cell_arcsec=CROSSFILTER_FIELD_CELL_ARCSEC,
-                               field_min_stars=CROSSFILTER_FIELD_MIN_STARS):
+                               field_min_stars=CROSSFILTER_FIELD_MIN_STARS,
+                               obs_token=""):
     """Cross-filter astrometry agreement at the cross-band merge.
 
     The filter closest in wavelength to VIRAC2 Ks anchors the absolute frame
@@ -2545,7 +2573,16 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                                   field_cell_arcsec=field_cell_arcsec,
                                   field_min_stars=field_min_stars))
     if record_dir:
-        _write_record(record_dir, "checkpoint_m7_crossfilter", record)
+        # Tokened for the same reason the m2 records are (issue #281): brick's
+        # 1182 and 2221 m7 runs write into one `astrometry_checkpoints/`, and
+        # the untokened name meant 2221's verdict replaced 1182's.  This record
+        # is write-only -- nothing reads it back, and the verdict itself is
+        # raised in-memory as CrossFilterAstrometryError -- so what the
+        # collision costs is the audit trail, not a wrong correction.  Its only
+        # other identity field is `context`, which names the target, not the
+        # observation.
+        _write_record(record_dir, f"checkpoint_m7_crossfilter{obs_token}",
+                      record)
     for w in unverified:
         print(f"ASTROM CHECKPOINT [m7-crossfilter] COULD NOT VERIFY: {w}",
               flush=True)

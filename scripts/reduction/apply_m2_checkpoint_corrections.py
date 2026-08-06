@@ -53,7 +53,9 @@ def load_corrections(records_dir, obs_token=None):
     pattern = (f"checkpoint_m2_*{obs_token}_latest.json" if obs_token
                else "checkpoint_m2_*_latest.json")
     records = sorted(glob.glob(os.path.join(records_dir, pattern)))
-    if obs_token is None:
+    # `not obs_token`, not `is None`: an EMPTY token takes the blind glob above,
+    # so testing for None let `--obs-token ''` walk straight past the refusal.
+    if not obs_token:
         tokens = {m.group(1) for m in
                   (_TOKEN_RE.search(os.path.basename(p)) for p in records) if m}
         if len(tokens) > 1:
@@ -113,7 +115,9 @@ def load_exposure_universe(records_dir, obs_token=None):
     pattern = (f"checkpoint_m2_*{obs_token}_latest.json" if obs_token
                else "checkpoint_m2_*_latest.json")
     records = sorted(glob.glob(os.path.join(records_dir, pattern)))
-    if obs_token is None:
+    # `not obs_token`, not `is None`: an EMPTY token takes the blind glob above,
+    # so testing for None let `--obs-token ''` walk straight past the refusal.
+    if not obs_token:
         tokens = {m.group(1) for m in
                   (_TOKEN_RE.search(os.path.basename(p)) for p in records) if m}
         if len(tokens) > 1:

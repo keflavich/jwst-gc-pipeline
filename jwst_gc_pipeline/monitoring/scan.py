@@ -493,13 +493,15 @@ def astrometry_checkpoints(base, filters=None, ambiguous_filters=()):
         # Records are keyed on the observation (issue #281), so two of them can
         # describe the same filter.  `out[filt]` is last-wins, which silently
         # discards one observation's verdict -- key on the token as well.
-        base = os.path.basename(path)
+        # NB `bname`, not `base` -- `base` is this function's own parameter (the
+        # field basepath), and rebinding it inside the loop shadowed it.
+        bname = os.path.basename(path)
         # joint obsids are registered (sgrb2 o002-998, sickle o001-002), so a
         # bare o\d{3} misses them and the keys collide back to last-wins
         _tokm = re.search(r'checkpoint_m2_[^_]+(_(?:o[\d-]{3,}|j\d{4,5}))_latest',
-                          base)
+                          bname)
         _tok = _tokm.group(1) if _tokm else ''
-        filt = base.split('_')[2]
+        filt = bname.split('_')[2]
         if filters and filt.upper() not in {f.upper() for f in filters}:
             continue
         try:
@@ -570,11 +572,22 @@ def astrometry_checkpoints(base, filters=None, ambiguous_filters=()):
                 if v is not None]
         out[filt.upper() + _tok] = {
             'path': path,
+            # The dict KEY carries the token so two observations' verdicts do
+            # not overwrite each other; consumers that need to look the filter
+            # up elsewhere (`run['per_filter']`, which is keyed on bare filter
+            # names) must use this, not the key.
+            'filter': filt.upper(),
+            'obs_token': _tok,
             'date': rec.get('date'),
             'stage': rec.get('stage'),
             'context': rec.get('context'),
             'correcting': rec.get('correcting'),
-            'attributable': filt.upper() not in {f.upper() for f in ambiguous_filters},
+            # A record that NAMES its observation is attributable to it, shared
+            # filter or not -- that is the whole point of the token.  Only an
+            # untokened record on a filter more than one observation images
+            # cannot be pinned down.
+            'attributable': bool(_tok) or filt.upper() not in {
+                f.upper() for f in ambiguous_filters},
             'n_exposures': len(exposures),
             'n_misaligned': sum(1 for e in exposures if e.get('misaligned')),
             'n_unverified': sum(1 for e in exposures if e.get('unverified')),
