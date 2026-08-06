@@ -581,8 +581,15 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
         fail(canvas
              ? ('The interactive view rendered with no usable size' + why
                 + '. The map above is unaffected.')
-             : ('The interactive view could not start in this browser' + why
-                + '. Aladin Lite needs WebGL2. The map above is unaffected.'));
+             : (lastGlobalError
+                ? ('The interactive view could not start in this browser' + why
+                   + '. Aladin Lite needs WebGL2. The map above is unaffected.')
+                // Nothing was OBSERVED to fail -- no canvas and no error.  A
+                // slow machine or a stalled fetch reads exactly the same, so
+                // do not assert WebGL2 as the cause.
+                : ('The interactive view did not start within '
+                   + Math.round(READY_TRIES * READY_POLL_MS / 1000)
+                   + ' s. The map above is unaffected.')));
         return;
       }}
       setTimeout(awaitCanvas, READY_POLL_MS);
@@ -695,6 +702,12 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
   }});
   btn.addEventListener('click', function () {{
     btn.disabled = true;
+    // Reset before this attempt.  `lastGlobalError` is set by a window.onerror
+    // listener installed at load and was never cleared, so an unrelated page
+    // error -- another script's bug, an ad blocker, a failed analytics fetch --
+    // that happened BEFORE the button was pressed got named on a public page
+    // as the reason the interactive view failed.
+    lastGlobalError = null;
     status.textContent = 'loading\\u2026';
     var script = document.createElement('script');
     script.src = data.aladin;
@@ -711,7 +724,11 @@ def section(geoms, title='The fields on sky', aladin_src=ALADIN_JS,
       // try/catch covers a throw from A itself.
       try {{
         Promise.resolve(A && A.init).then(build).catch(function (err) {{
-          fail('Aladin Lite failed to start (' + err + '). The map above is unaffected.');
+          // describeError, like the synchronous catch two lines down: bare
+          // string concatenation prints "Error: ..." for a real Error and
+          // "[object Object]" for anything without a useful toString.
+          fail('Aladin Lite failed to start (' + describeError(err)
+               + '). The map above is unaffected.');
         }});
       }} catch (err) {{
         fail('This browser could not start Aladin Lite ('

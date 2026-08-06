@@ -902,3 +902,47 @@ def test_running_the_panel_actually_sizes_the_aladin_host(tmp_path):
     # the stage carries a definite pixel height for that 100% to resolve against
     assert got['stageHeight'] and got['stageHeight'].endswith('px')
     assert int(got['stageHeight'][:-2]) >= 240
+
+
+def test_a_prior_page_error_is_not_blamed_on_aladin():
+    """`lastGlobalError` is set by a window.onerror listener installed at load
+    and was never cleared, so an unrelated page error -- another script's bug,
+    an ad blocker, a failed analytics fetch -- occurring BEFORE the button was
+    pressed got named on a PUBLIC page as the reason the interactive view
+    failed.  Reviewer's reproduction:
+
+        status: "The interactive view could not start in this browser (Cannot
+                 read properties of null (reading 'appendChild') at
+                 analytics.js:12). Aladin Lite needs WebGL2. ..."
+
+    Source-level, and deliberately so: the DOM harness does not fire a page
+    error before the click, and extending it is a bigger change than the
+    one-line reset it would be checking.
+    """
+    fo = _fo()
+    out = fo.section([_geom('brick', 0.2, 0.0)])
+    click = out.split("btn.addEventListener('click'")[1].split('script.src')[0]
+    assert 'lastGlobalError = null' in click, \
+        'the attempt must start from a clean error slate'
+
+
+def test_the_promise_path_describes_its_error_like_the_others():
+    """`describeError` is used in the synchronous catch and the global
+    listener; the promise catch concatenated the raw value, which prints
+    "Error: ..." for a real Error and "[object Object]" for anything without a
+    useful toString."""
+    fo = _fo()
+    out = fo.section([_geom('brick', 0.2, 0.0)])
+    assert "'Aladin Lite failed to start (' + err +" not in out
+    assert "'Aladin Lite failed to start (' + describeError(err)" in out
+
+
+def test_a_silent_timeout_does_not_assert_webgl2():
+    """No canvas AND no observed error is not evidence of a missing WebGL2 --
+    a slow machine or a stalled fetch reads exactly the same.  The
+    canvas-present branch already worded this carefully; this one did not."""
+    fo = _fo()
+    out = fo.section([_geom('brick', 0.2, 0.0)])
+    assert 'did not start within' in out
+    tail = out.split('The interactive view did not start within')[1][:200]
+    assert 'WebGL2' not in tail, tail
