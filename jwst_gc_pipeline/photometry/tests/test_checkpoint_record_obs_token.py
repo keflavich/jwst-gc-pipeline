@@ -44,15 +44,19 @@ def test_reader_prefers_its_own_observation(tmp_path):
     assert b[("1", 1, "nrcblong", "F360M", "02101")][0] == 9.0
 
 
-def test_untokened_legacy_record_is_still_found(tmp_path, capsys):
-    """Every record on disk today predates the token; failing to find a
-    baseline at a frozen stage fails closed and stops a healthy field."""
+def test_untokened_legacy_record_is_refused_when_it_could_be_another_obs(
+        tmp_path, capsys):
+    """Fail-CLOSED.  The field cannot be determined from a bare tmp_path, and
+    an untokened record body carries no observation identity, so this must
+    refuse rather than read.  A missing baseline is reported as unverified; a
+    wrong baseline is a silent wrong answer.
+
+    (The permissive fallback this test originally asserted was the hazard #281
+    describes, with a warning attached -- see the review on PR #306.)
+    """
     _write(tmp_path, "checkpoint_m2_F360M", 2.0)
-    base = _m2_exposure_baseline(str(tmp_path), "F360M", "1", "_o002")
-    assert base[("1", 1, "nrcblong", "F360M", "02101")][0] == 2.0
-    out = capsys.readouterr().out
-    assert "falling back to the untokened" in out
-    assert "#281" in out
+    assert _m2_exposure_baseline(str(tmp_path), "F360M", "1", "_o002") == {}
+    assert "REFUSING" in capsys.readouterr().out
 
 
 def test_tokened_record_wins_over_the_legacy_one(tmp_path, capsys):
@@ -72,3 +76,59 @@ def test_no_token_behaves_exactly_as_before(tmp_path, capsys):
 
 def test_missing_record_is_still_no_baseline(tmp_path):
     assert _m2_record_path(str(tmp_path), "F360M", "_o002") is None
+
+
+def test_ambiguous_filter_refuses_the_untokened_record(tmp_path, monkeypatch, capsys):
+    """An untokened record body carries NO observation identity (`visit` is "1"
+    for both jw02092002001 and jw02092005001), so on a filter more than one
+    observation images, falling back IS the hazard, not a degraded read."""
+    monkeypatch.setattr(
+        "jwst_gc_pipeline.monitoring.scan.shared_filters",
+        lambda target, instrument="nircam": {"F360M"})
+    monkeypatch.setattr(
+        "jwst_gc_pipeline.fields.BY_NAME", {"cloudef": object()})
+    d = tmp_path / "cloudef" / "astrometry_checkpoints"
+    d.mkdir(parents=True)
+    _write(d, "checkpoint_m2_F360M", 2.0)
+    assert _m2_record_path(str(d), "F360M", "_o002") is None
+    assert "REFUSING the untokened m2 record" in capsys.readouterr().out
+
+
+def test_unambiguous_filter_still_reads_the_untokened_record(tmp_path, monkeypatch, capsys):
+    """Brick's two observations use disjoint filter sets, so its untokened
+    records are this run's own and must still be readable."""
+    monkeypatch.setattr(
+        "jwst_gc_pipeline.monitoring.scan.shared_filters",
+        lambda target, instrument="nircam": set())
+    monkeypatch.setattr(
+        "jwst_gc_pipeline.fields.BY_NAME", {"brick": object()})
+    d = tmp_path / "brick" / "astrometry_checkpoints"
+    d.mkdir(parents=True)
+    _write(d, "checkpoint_m2_F212N", 2.0)
+    assert _m2_record_path(str(d), "F212N", "_o001") is not None
+    assert "unambiguous" in capsys.readouterr().out
+
+
+def test_unknown_field_fails_closed(tmp_path, capsys):
+    """Reading the wrong observation's baseline is a silent wrong answer;
+    refusing is a loud unverified."""
+    d = tmp_path / "astrometry_checkpoints"
+    d.mkdir(parents=True)
+    _write(d, "checkpoint_m2_F360M", 2.0)
+    assert _m2_record_path(str(d), "F360M", "_o002") is None
+
+
+def test_apply_script_refuses_to_union_two_observations(tmp_path):
+    import importlib.util
+    import pathlib
+    spec = importlib.util.spec_from_file_location(
+        "apply_m2", pathlib.Path(__file__).resolve().parents[3]
+        / "scripts" / "reduction" / "apply_m2_checkpoint_corrections.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    _write(tmp_path, "checkpoint_m2_F360M_o002", 1.0)
+    _write(tmp_path, "checkpoint_m2_F360M_o005", 9.0)
+    with pytest.raises(SystemExit, match="more than one observation"):
+        mod.load_corrections(str(tmp_path))
+    # with a token it reads exactly one
+    assert mod.load_corrections(str(tmp_path), obs_token="_o002") is not None

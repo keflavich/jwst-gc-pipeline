@@ -490,7 +490,13 @@ def astrometry_checkpoints(base, filters=None, ambiguous_filters=()):
         return {}
     out = {}
     for path in sorted(glob.glob(os.path.join(ckdir, 'checkpoint_m2_*_latest.json'))):
-        filt = os.path.basename(path).split('_')[2]
+        # Records are keyed on the observation (issue #281), so two of them can
+        # describe the same filter.  `out[filt]` is last-wins, which silently
+        # discards one observation's verdict -- key on the token as well.
+        base = os.path.basename(path)
+        _tokm = re.search(r'checkpoint_m2_[^_]+(_(?:o\d{3}|j\d{4,5}))_latest', base)
+        _tok = _tokm.group(1) if _tokm else ''
+        filt = base.split('_')[2]
         if filters and filt.upper() not in {f.upper() for f in filters}:
             continue
         try:
@@ -559,7 +565,7 @@ def astrometry_checkpoints(base, filters=None, ambiguous_filters=()):
                      if v is not None]
         offs = [v for v in (_finite(e.get('off')) for e in exposures)
                 if v is not None]
-        out[filt.upper()] = {
+        out[filt.upper() + _tok] = {
             'path': path,
             'date': rec.get('date'),
             'stage': rec.get('stage'),

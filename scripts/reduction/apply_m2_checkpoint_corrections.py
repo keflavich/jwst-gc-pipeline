@@ -24,6 +24,7 @@ checkpoints ENFORCING.  Never re-apply on top of the stale shift.
 """
 import argparse
 import glob
+import re
 import json
 import os
 import sys
@@ -37,10 +38,31 @@ from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
 )
 
 
-def load_corrections(records_dir):
+def load_corrections(records_dir, obs_token=None):
+    """Corrections from the m2 records under ``records_dir``.
+
+    ``obs_token`` restricts to ONE observation.  Checkpoint records are keyed
+    on the observation (issue #281), and this glob is obs-blind: before the
+    token existed only one record per filter survived, so a union was
+    impossible.  With tokened records both survive, and unioning them lands two
+    observations' corrections on the same table rows -- their `visit` fields
+    are both "1".  Pass the token; omitting it on a multi-observation field is
+    refused rather than silently unioned.
+    """
     corrections = []
-    records = sorted(glob.glob(os.path.join(records_dir,
-                                            "checkpoint_m2_*_latest.json")))
+    pattern = (f"checkpoint_m2_*{obs_token}_latest.json" if obs_token
+               else "checkpoint_m2_*_latest.json")
+    records = sorted(glob.glob(os.path.join(records_dir, pattern)))
+    if obs_token is None:
+        tokens = {m.group(1) for m in
+                  (re.search(r"checkpoint_m2_[^_]+(_(?:o\d{3}|j\d{4,5}))_latest",
+                             os.path.basename(p)) for p in records) if m}
+        if len(tokens) > 1:
+            raise SystemExit(
+                f"{records_dir} holds m2 records for more than one observation "
+                f"({sorted(tokens)}) and no --obs-token was given.  Unioning "
+                f"them would apply two observations' corrections to the same "
+                f"table rows (issue #281).")
     for path in records:
         with open(path) as fh:
             rec = json.load(fh)

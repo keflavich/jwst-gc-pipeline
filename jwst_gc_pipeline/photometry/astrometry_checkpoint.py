@@ -1640,6 +1640,37 @@ def _record_name(stage, filtername, obs_token=""):
     return f"checkpoint_{stage}_{filtername or 'all'}{token}"
 
 
+def _filter_is_obs_ambiguous(record_dir, filtername):
+    """True when more than one observation of this field images ``filtername``.
+
+    Only then is an untokened record genuinely ambiguous.  Brick's two
+    observations use disjoint filter sets, so its untokened records are safe to
+    read; cloudef's o002/o005, gc2211's five and ngc6334's two proposals share
+    their filter lists, and those are the unsafe set.
+
+    Fail-CLOSED: if the field cannot be determined, treat the filter as
+    ambiguous.  Reading the wrong observation's baseline is a silent wrong
+    answer; refusing is a loud unverified.
+    """
+    try:
+        from ..monitoring.scan import shared_filters
+        from .. import fields as _fields
+    except ImportError:
+        return True
+    target = None
+    for name in getattr(_fields, "BY_NAME", {}):
+        if f"{os.sep}{name}{os.sep}" in f"{os.sep}{str(record_dir).strip(os.sep)}{os.sep}":
+            target = name
+            break
+    if target is None:
+        return True
+    try:
+        return str(filtername).upper() in {str(f).upper()
+                                           for f in shared_filters(target)}
+    except (KeyError, TypeError, ValueError):
+        return True
+
+
 def _m2_record_path(record_dir, filtername, obs_token=""):
     """Resolve the latest m2 record path for a per-group filter, tolerating the
     writer/reader spelling gap.
@@ -1655,25 +1686,50 @@ def _m2_record_path(record_dir, filtername, obs_token=""):
     """
     if not record_dir:
         return None
-    # Tokened spelling first, then the untokened LEGACY spelling: every record
-    # on disk today predates the token, and failing to find a baseline at a
-    # frozen stage fails closed and stops a healthy field (issue #281).
+    # Tokened spelling first.  The untokened LEGACY spelling is accepted only
+    # where it CANNOT be another observation's: an untokened record body
+    # carries no observation identity at all (`visit` is "1" for both
+    # jw02092002001 and jw02092005001), so on a filter that more than one
+    # observation images, falling back is not a degraded read -- it is the
+    # exact hazard this function exists to stop, with a warning attached.
+    # Verified: cloudef's untokened checkpoint_m2_{F162M,F210M,F360M,F480M}
+    # records are on disk now, nothing deletes them, and o002's m3 read o005's
+    # baseline through this path.
+    #
+    # Where the filter is unambiguous (brick's two observations use disjoint
+    # filter sets) the legacy record is this run's own and is read.
     for _tok in ([obs_token, ""] if obs_token else [""]):
         _p = os.path.join(record_dir,
                           f"{_record_name('m2', filtername, _tok)}_latest.json")
-        if os.path.exists(_p):
-            if obs_token and not _tok:
-                print(f"astrom checkpoint: no tokened m2 record for "
-                      f"{filtername}{obs_token}; falling back to the untokened "
-                      f"{os.path.basename(_p)}.  If this directory holds more "
-                      f"than one observation, that record may belong to the "
-                      f"other one (issue #281).", flush=True)
-            return _p
+        if not os.path.exists(_p):
+            continue
+        if obs_token and not _tok:
+            if _filter_is_obs_ambiguous(record_dir, filtername):
+                print(f"astrom checkpoint: REFUSING the untokened m2 record "
+                      f"{os.path.basename(_p)} for {filtername}{obs_token}: "
+                      f"more than one observation of this field images this "
+                      f"filter, and an untokened record body carries no "
+                      f"observation identity, so it may be the other one's "
+                      f"(issue #281).  Re-run m2 to write a tokened record.",
+                      flush=True)
+                return None
+            print(f"astrom checkpoint: no tokened m2 record for "
+                  f"{filtername}{obs_token}; falling back to the untokened "
+                  f"{os.path.basename(_p)}.  Only one observation of this "
+                  f"field images this filter, so it is unambiguous.",
+                  flush=True)
+        return _p
     exact = os.path.join(record_dir,
                          f"{_record_name('m2', filtername, obs_token)}_latest.json")
     if os.path.exists(exact):
         return exact
-    allpath = os.path.join(record_dir, f"{_record_name('m2', None)}_latest.json")
+    # The writer keys the mixed-filter record with the token too, so the
+    # reader must look for it there or a tokened run can never find it.
+    allpath = os.path.join(
+        record_dir, f"{_record_name('m2', None, obs_token)}_latest.json")
+    if not os.path.exists(allpath):
+        allpath = os.path.join(
+            record_dir, f"{_record_name('m2', None)}_latest.json")
     if filtername and os.path.exists(allpath):
         print(f"astrom checkpoint: no m2 baseline for filter {filtername!r} at "
               f"{os.path.basename(exact)}; falling back to "
