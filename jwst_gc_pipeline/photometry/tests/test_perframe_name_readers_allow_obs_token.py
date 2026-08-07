@@ -254,3 +254,56 @@ def test_the_pattern_captures_the_right_components(relpath):
         assert None not in g, (
             f'{relpath}: a group came back None -- an optional group is '
             f'capturing where it should not: {pat!r} -> {g}')
+
+
+# ---------------------------------------------------------------------------
+# Capturing the token is only half of it: it has to reach the KEY.
+#
+# Both readers key on the frame identity.  gc2211's five pointings reuse the
+# same (visit, vgroup, exposure) tuples, so a key without the token collides
+# them -- 56 of 80 gc2211 F200W identities, which is WORSE than the skip this
+# PR fixes: it silently overwrites rather than silently omits.  Dropping
+# `obstok` from either key left all 15 tests above green.
+# ---------------------------------------------------------------------------
+
+KEY_BUILDERS = {
+    # module -> (line marker, the tuple/namedtuple construction to check)
+    'scripts/analysis/siaf_selfcal/network_selfcal.py': 'cats[FrameKey(',
+    'scripts/analysis/solve_filter_frame_offsets.py': 'key = (',
+}
+
+
+@pytest.mark.parametrize('relpath,marker', sorted(KEY_BUILDERS.items()))
+def test_the_observation_token_reaches_the_frame_key(relpath, marker):
+    """Two names differing ONLY in the observation token must not produce the
+    same key."""
+    import re as _re
+    text = open(os.path.join(REPO, relpath), encoding='utf-8').read()
+    line = [ln for ln in text.splitlines()
+            if marker in ln and not ln.lstrip().startswith('#')]
+    assert line, f'{relpath}: no key construction found ({marker!r})'
+    assert 'obstok' in line[0], (
+        f'{relpath}: the frame key does not carry the observation token, so '
+        f"gc2211's five pointings collide onto one key: {line[0].strip()}")
+
+    # and behaviourally: the captured groups must differ between the two names
+    pats = _compiled_patterns(relpath)
+    assert pats
+    for pat in pats:
+        rx = _re.compile(pat)
+        a = rx.search(TOKENED_ONE).groups()
+        b = rx.search(UNTOKENED_ONE).groups()
+        assert a != b, (
+            f'{relpath}: a tokened and an untokened name are indistinguishable '
+            f'from this pattern, so no key built on it can separate them: {pat!r}')
+
+
+def test_the_vgroup_reaches_the_frame_key_too():
+    """The keys were also dropping the vgroup, which is what let gc2211 collapse
+    592 catalogs onto 32 identities on `main`."""
+    for relpath, marker in KEY_BUILDERS.items():
+        text = open(os.path.join(REPO, relpath), encoding='utf-8').read()
+        line = [ln for ln in text.splitlines()
+                if marker in ln and not ln.lstrip().startswith('#')][0]
+        assert 'vgroup' in line, (
+            f'{relpath}: the frame key does not carry the vgroup: {line.strip()}')
