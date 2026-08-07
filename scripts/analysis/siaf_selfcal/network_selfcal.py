@@ -126,8 +126,9 @@ for a, b2 in itertools.combinations(range(len(keys)), 2):
     obs.append((k1, k2) + r)
 print(f'{npairs_checked} overlapping pairs checked, {len(obs)} usable', flush=True)
 
-# unknowns: attitude per (band? no -- per EXPOSURE = (visit,exp) is shared across detectors
-# BUT across bands, exposures are distinct; attitude key = (band, visit, exp).
+# unknowns: one attitude per physical exposure, one shift per (band, detector).
+# The attitude key is `_attitude_of` -- (band, obs, visit, vgroup, exp) -- and
+# the rows below MUST be built with the same function, not by index.
 attkeys = sorted({_attitude_of(k) for k in keys})
 detkeys = sorted({(k.band, k.det) for k in keys})
 ai = {k: i for i, k in enumerate(attkeys)}
@@ -137,8 +138,14 @@ rows = []
 vals_ra, vals_de, wts = [], [], []
 for (k1, k2, dra, dde, sra, sde, n) in obs:
     row = np.zeros(na + nd)
-    row[ai[(k2[0], k2[2], k2[3])]] += 1; row[ai[(k1[0], k1[2], k1[3])]] -= 1
-    row[na + di[(k2[0], k2[1])]] += 1;   row[na + di[(k1[0], k1[1])]] -= 1
+    # ATTRIBUTE access, not positional.  FrameKey gained `obs` at index 1, so
+    # k[1]/k[2]/k[3] no longer mean det/visit/vgroup -- the positional forms
+    # looked up ('f200w','nrca1','001') and ('f200w','o023'), neither of which
+    # is ever inserted, and the solve died with KeyError on the first
+    # overlapping pair.  These must name exactly what built `ai`/`di` above:
+    # `_attitude_of` and (band, det).
+    row[ai[_attitude_of(k2)]] += 1;        row[ai[_attitude_of(k1)]] -= 1
+    row[na + di[(k2.band, k2.det)]] += 1;  row[na + di[(k1.band, k1.det)]] -= 1
     rows.append(row)
     vals_ra.append(dra); vals_de.append(dde)
     wts.append(np.sqrt(n) / max(np.hypot(sra, sde), 1.0))

@@ -307,3 +307,75 @@ def test_the_vgroup_reaches_the_frame_key_too():
                 if marker in ln and not ln.lstrip().startswith('#')][0]
         assert 'vgroup' in line, (
             f'{relpath}: the frame key does not carry the vgroup: {line.strip()}')
+
+
+# ---------------------------------------------------------------------------
+# network_selfcal's design matrix must be indexed the SAME way its unknowns
+# were enumerated.  FrameKey gained `obs` at position 1, so the positional
+# lookups k[1]/k[2]/k[3] silently stopped meaning det/visit/vgroup and named
+# tuples that are never inserted -- the solve died with KeyError on the first
+# overlapping pair, and nothing noticed because the sweep greps for a source
+# substring and no test builds a FrameKey.
+# ---------------------------------------------------------------------------
+
+def _selfcal():
+    """Load network_selfcal without running its __main__ body."""
+    import ast
+    import os
+    import types
+    path = os.path.join(os.path.dirname(__file__), '..', '..', '..',
+                        'scripts', 'analysis', 'siaf_selfcal',
+                        'network_selfcal.py')
+    src = open(path).read()
+    tree = ast.parse(src)
+    # keep only the imports and defs; the module body does I/O at import time
+    # imports, function defs, and the FrameKey definition only.  Every other
+    # module-level assignment depends on catalogs read at import time.
+    keep = [n for n in tree.body
+            if isinstance(n, (ast.Import, ast.ImportFrom, ast.FunctionDef))
+            or (isinstance(n, ast.Assign)
+                and any(getattr(t, 'id', '') == 'FrameKey' for t in n.targets))]
+    mod = types.ModuleType('network_selfcal_partial')
+    exec(compile(ast.Module(body=keep, type_ignores=[]), path, 'exec'),
+         mod.__dict__)
+    return mod
+
+
+def test_two_observations_get_DISTINCT_attitude_keys():
+    """gc2211's five pointings reuse (visit, exp); carrying `obs` in the
+    attitude key is the whole reason FrameKey was widened."""
+    m = _selfcal()
+    a = m.FrameKey('f200w', 'o023', 'nrca1', '001', '02201', '00001')
+    b = m.FrameKey('f200w', 'o046', 'nrca1', '001', '02201', '00001')
+    assert m._attitude_of(a) != m._attitude_of(b)
+
+
+def test_the_design_matrix_indexes_with_the_SAME_key_it_enumerated():
+    """The 🔴: build ai/di exactly as the script does, then look up the way the
+    row-assembly does.  Positional access raises KeyError here."""
+    m = _selfcal()
+    keys = [m.FrameKey('f200w', 'o023', 'nrca1', '001', '02201', '00001'),
+            m.FrameKey('f200w', 'o023', 'nrca2', '001', '02201', '00001'),
+            m.FrameKey('f200w', 'o046', 'nrca1', '001', '02201', '00001')]
+    ai = {k: i for i, k in enumerate(sorted({m._attitude_of(k) for k in keys}))}
+    di = {k: i for i, k in enumerate(sorted({(k.band, k.det) for k in keys}))}
+    for k in keys:
+        assert m._attitude_of(k) in ai
+        assert (k.band, k.det) in di
+    # and the shapes the OLD positional forms named are absent, which is why
+    # they raised rather than silently mis-indexing
+    assert (keys[0][0], keys[0][1]) not in di        # ('f200w', 'o023')
+    assert (keys[0][0], keys[0][2], keys[0][3]) not in ai   # ('f200w','nrca1','001')
+
+
+def test_the_row_assembly_source_uses_attribute_access():
+    """Source-level, because running the solve needs real catalogs.  A return
+    to `k2[0], k2[2], k2[3]` is the regression."""
+    import os
+    path = os.path.join(os.path.dirname(__file__), '..', '..', '..',
+                        'scripts', 'analysis', 'siaf_selfcal',
+                        'network_selfcal.py')
+    body = open(path).read()
+    assert 'row[ai[_attitude_of(k2)]]' in body
+    assert 'di[(k2.band, k2.det)]' in body
+    assert 'row[ai[(k2[0], k2[2], k2[3])]]' not in body
