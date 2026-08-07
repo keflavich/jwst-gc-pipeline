@@ -24,6 +24,7 @@ checkpoints ENFORCING.  Never re-apply on top of the stale shift.
 """
 import argparse
 import glob
+import re
 import json
 import os
 import sys
@@ -37,10 +38,40 @@ from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
 )
 
 
-def load_corrections(records_dir):
+def load_corrections(records_dir, obs_token=None):
+    """Corrections from the m2 records under ``records_dir``.
+
+    ``obs_token`` restricts to ONE observation.  Checkpoint records are keyed
+    on the observation (issue #281), and this glob is obs-blind: before the
+    token existed only one record per filter survived, so a union was
+    impossible.  With tokened records both survive, and unioning them lands two
+    observations' corrections on the same table rows -- their `visit` fields
+    are both "1".  Pass the token; omitting it on a multi-observation field is
+    refused rather than silently unioned.
+    """
     corrections = []
-    records = sorted(glob.glob(os.path.join(records_dir,
-                                            "checkpoint_m2_*_latest.json")))
+    pattern = (f"checkpoint_m2_*{obs_token}_latest.json" if obs_token
+               else "checkpoint_m2_*_latest.json")
+    records = sorted(glob.glob(os.path.join(records_dir, pattern)))
+    # `not obs_token`, not `is None`: an EMPTY token takes the blind glob above,
+    # so testing for None let `--obs-token ''` walk straight past the refusal.
+    if not obs_token:
+        # An UNTOKENED record is its own identity, not the absence of one.
+        # Counting only tokened names meant legacy + one tokened gave
+        # len(tokens) == 1 and no refusal -- and that is the state this change
+        # creates on every field at its first tokened run, reachable by the
+        # default invocation.  Measured on a real cloudef F360M pair:
+        # records=2, corrections=42, 3 of 3 targeted rows getting two
+        # corrections summed onto them; with --obs-token _o002, records=1,
+        # corrections=21.
+        tokens = {(m.group(1) if m else '<untokened>') for m in
+                  (_TOKEN_RE.search(os.path.basename(p)) for p in records)}
+        if len(tokens) > 1:
+            raise SystemExit(
+                f"{records_dir} holds m2 records for more than one observation "
+                f"({sorted(tokens)}) and no --obs-token was given.  Unioning "
+                f"them would apply two observations' corrections to the same "
+                f"table rows (issue #281).")
     for path in records:
         with open(path) as fh:
             rec = json.load(fh)
@@ -60,7 +91,13 @@ def _table_visit_number(visit_value):
     return int(tail)
 
 
-def load_exposure_universe(records_dir):
+#: Registered obsids include JOINT forms -- sgrb2 `o002-998`, sickle `o001-002`
+#: -- so a bare `o\d{3}` misses them, the union goes unrefused, and scan.py's
+#: keys collide back to last-wins.
+_TOKEN_RE = re.compile(r"checkpoint_m2_[^_]+(_(?:o[\d-]{3,}|j\d{4,5}))_latest")
+
+
+def load_exposure_universe(records_dir, obs_token=None):
     """The TRUE per-(visit, filter) exposure set of the reduction, read from the
     m2 records' full exposure enumeration -- NOT from the corrections.
 
@@ -79,8 +116,31 @@ def load_exposure_universe(records_dir):
     would over-generate phantom rows for the wrong visit.  Returns
     ``{(visit_int, filter): sorted list of exposure ints}``."""
     universe = defaultdict(set)
-    records = sorted(glob.glob(os.path.join(records_dir,
-                                            "checkpoint_m2_*_latest.json")))
+    # Token-aware for the same reason load_corrections is: `key[0]` is "1" in
+    # every real record, so unioning two observations merges o002's exposures
+    # 1-3 with o005's 4-6 under one (visit, filter) key and feeds that to
+    # extend_table_to_per_exposure.  Half this script was tokened.
+    pattern = (f"checkpoint_m2_*{obs_token}_latest.json" if obs_token
+               else "checkpoint_m2_*_latest.json")
+    records = sorted(glob.glob(os.path.join(records_dir, pattern)))
+    # `not obs_token`, not `is None`: an EMPTY token takes the blind glob above,
+    # so testing for None let `--obs-token ''` walk straight past the refusal.
+    if not obs_token:
+        # An UNTOKENED record is its own identity, not the absence of one.
+        # Counting only tokened names meant legacy + one tokened gave
+        # len(tokens) == 1 and no refusal -- and that is the state this change
+        # creates on every field at its first tokened run, reachable by the
+        # default invocation.  Measured on a real cloudef F360M pair:
+        # records=2, corrections=42, 3 of 3 targeted rows getting two
+        # corrections summed onto them; with --obs-token _o002, records=1,
+        # corrections=21.
+        tokens = {(m.group(1) if m else '<untokened>') for m in
+                  (_TOKEN_RE.search(os.path.basename(p)) for p in records)}
+        if len(tokens) > 1:
+            raise SystemExit(
+                f"{records_dir} holds m2 records for more than one observation "
+                f"({sorted(tokens)}) and no --obs-token was given; the exposure "
+                f"universe would merge them (issue #281).")
     for path in records:
         with open(path) as fh:
             rec = json.load(fh)
@@ -155,16 +215,24 @@ def main(argv=None):
     p.add_argument("--apply", action="store_true")
     p.add_argument("--pool", action="store_true",
                    help="Pool per-detector corrections to the granularity of the offsets table before applying them (module-family rows cannot express a per-detector shift, and un-pooled corrections are SUMMED onto the shared row).  This is what the one-correction-per-row refusal asks for.")
+    p.add_argument("--obs-token", default=None,
+                   help="Restrict to ONE observation's m2 records (e.g. _o002). "
+                        "Checkpoint records are keyed on the observation "
+                        "(issue #281); without this, a directory holding more "
+                        "than one observation is REFUSED rather than unioned, "
+                        "because their `visit` fields are both \"1\" and the "
+                        "corrections would land on the same table rows.")
     p.add_argument("--mark-stale", action="store_true")
     args = p.parse_args(argv)
 
-    records, corrections = load_corrections(args.records_dir)
+    records, corrections = load_corrections(args.records_dir, args.obs_token)
     print(f"{len(records)} m2 records -> {len(corrections)} raw corrections")
     if not corrections:
         print("nothing to do")
         return 0
     # true per-(visit, filter) frame set (all measured exposures) = extension universe
-    universe_by_visit_filter = load_exposure_universe(args.records_dir)
+    universe_by_visit_filter = load_exposure_universe(args.records_dir,
+                                                     args.obs_token)
     if universe_by_visit_filter:
         print("exposure universe per (visit, filter) from records: "
               + ", ".join(f"v{vnum}/{f}:{len(e)}"

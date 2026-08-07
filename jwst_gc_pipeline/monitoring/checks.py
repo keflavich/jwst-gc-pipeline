@@ -98,7 +98,13 @@ def check_astrometry(run):
         # correction has already been applied and the record describes the state
         # before the fix.  Reporting that as a live failure would keep a resolved
         # problem permanently red.
-        reduced_mtime = ((run.get('per_filter') or {}).get(filt, {})
+        # `filt` is the astrom dict's KEY, which now carries the observation
+        # token (`F360M_o002`); `run['per_filter']` is keyed on BARE filter
+        # names.  Looking the key up there never matches, which would silently
+        # kill the supersede-suppression for every tokened record and leave an
+        # already-corrected field permanently red.
+        bare_filt = rec.get('filter') or filt
+        reduced_mtime = ((run.get('per_filter') or {}).get(bare_filt, {})
                          .get('reduced') or {}).get('mtime')
         superseded = bool(reduced_mtime and rec.get('mtime')
                           and reduced_mtime > rec['mtime'])
@@ -159,7 +165,10 @@ def check_astrometry(run):
                                   e.get('contrast'), e.get('npairs'),
                                   e.get('window_arcsec')] for e in bad[:40]],
                         'total': len(bad)},
-                    'filter': filt}))
+                    # bare, so downstream filter lookups keep working; the
+                    # observation is in the check id and the message.
+                    'filter': bare_filt,
+                    'obs_token': rec.get('obs_token', '')}))
         elif n_exp:
             out.append(_verdict(
                 f'astrometry-misaligned-{filt}', 'info',

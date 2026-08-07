@@ -306,6 +306,49 @@ contrasts, windows, `swept` flags, per-check reference results, corrections,
 failures, and could-not-verify items.  The release gate can (and should)
 audit the full ladder from these records.
 
+### Naming: records are keyed on the OBSERVATION
+
+`checkpoint_{stage}_{filter}{obs_token}_latest.json`, where `obs_token` comes
+from `consensus_obs_token(proposal_id, obsid)` — `_o002`, `_j7213`, or
+`_o002-998` for a registered joint obsid.  A mixed-filter run
+(`filtername=None`) writes `checkpoint_{stage}_all{obs_token}`.  The m7
+cross-filter record carries it too.
+
+The token is not decorative.  cloudef's 2092 observations 002 and 005 share one
+`astrometry_checkpoints/` directory, so the untokened
+`checkpoint_m2_F360M_latest.json` written by one run replaced the other's, and
+every frozen-stage reader then compared one observation's exposures against the
+other's baseline — which is not a movement measurement of anything (issue
+#281).  An untokened record *body* carries no observation identity either: its
+`visit` field is `"1"` for both `jw02092002001` and `jw02092005001`.
+
+**Legacy untokened records, and what happens to them.**  Every record written
+before this existed is untokened.  Counted precisely, because two earlier
+numbers in this section disagreed with each other: **80**
+`checkpoint_m2_*_latest.json` across **13** directories, **0** of them tokened
+(638 files including the timestamped history, and symlinked field directories
+resolved — brick and cloudc live under `/blue`, the rest under `/orange`).
+A reader
+that wants `_oNNN` accepts the untokened spelling **only where it cannot be
+another observation's**: where the registry says exactly one observation of this
+field images this filter.  brick's two observations use disjoint filter sets, so
+its legacy records are read normally, with a line saying so.  Where more than
+one observation images the filter — and for a `None` filtername, which cannot be
+tested at all — the untokened record is **refused**.
+
+That refusal is a **stop, not a downgrade to "unverified"**.  With no m2
+baseline the exposure has no frozen-stage comparison, so
+`_run_astrometry_stage_checkpoint` appends a "no m2 per-exposure baseline"
+failure and raises `AstrometryRegressionError`.  On cloudef, gc2211, ngc6334 and
+sickle that halts m3–m8 until m2 is re-run.  **There is no migration**, and
+there should not be: renaming an existing record would assert an observation
+identity its contents do not carry.  Re-run m2.
+
+To apply corrections from a directory holding more than one observation, pass
+`scripts/reduction/apply_m2_checkpoint_corrections.py --obs-token _oNNN`.  It
+refuses to run without one rather than union two observations' corrections into
+the same table rows.
+
 ## Environment switches
 
 | var | effect |

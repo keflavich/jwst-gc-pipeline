@@ -4236,7 +4236,8 @@ def _stamp_wcs_source(path):
 
 
 def _run_crossfilter_astrom_checkpoint(vetted_paths_by_filter, cut_bp, basepath,
-                                       refcat_cache, context=""):
+                                       refcat_cache, context="",
+                                       record_dir=None, obs_token=""):
     """Cross-filter astrometry agreement checkpoint before the m7 cross-band
     merge (see astrometry_checkpoint.run_crossfilter_checkpoint): anchor =
     filter nearest VIRAC2 Ks; <5 mas bulk agreement per filter; no significant
@@ -4261,7 +4262,9 @@ def _run_crossfilter_astrom_checkpoint(vetted_paths_by_filter, cut_bp, basepath,
         refcat_cache['refcat'] = _astrom_checkpoint_refcat(basepath)
     try:
         run_crossfilter_checkpoint(catalogs, refcat=refcat_cache['refcat'],
-                                   basepath=cut_bp, context=context)
+                                   basepath=cut_bp, context=context,
+                                   record_dir=record_dir,
+                                   obs_token=obs_token)
         print("crossfilter astrom checkpoint: PASS", flush=True)
     except CrossFilterAstrometryError:
         if os.environ.get('ASTROM_CHECKPOINT_WARN_ONLY', '') == '1':
@@ -5311,9 +5314,21 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 _mp = _merged_path(last_phase, module, _cf, True)
                 _vp = _mp.replace('.fits', '_vetted.fits')
                 _xf_vetted[_cf] = _vp if os.path.exists(_vp) else _mp
+            # The production m7 call passed NO record_dir, so it wrote no
+            # record at all -- the brick 1182/2221 collision this branch cites
+            # came from the CLI.  Tokened and recorded now, for the same reason
+            # the m2 records are: two observations of one field share
+            # `astrometry_checkpoints/` and the untokened name meant the second
+            # run's verdict replaced the first's.
+            from jwst_gc_pipeline.photometry.consensus_catalog import (
+                consensus_obs_token as _xf_consensus_obs_token)
             _run_crossfilter_astrom_checkpoint(
                 _xf_vetted, cut_bp, basepath, astrom_refcat_cache,
-                context=f"{target} {module} [{last_phase}]")
+                context=f"{target} {module} [{last_phase}]",
+                record_dir=os.path.join(basepath, 'astrometry_checkpoints'),
+                obs_token=_xf_consensus_obs_token(
+                    getattr(options, 'proposal_id', None),
+                    getattr(options, 'field', None)))
 
             print(f"manual [{last_phase}]: CROSS-BAND MERGE (module={module}, "
                   f"ref_filter={ref_filter}, filters={list(filternames)})", flush=True)

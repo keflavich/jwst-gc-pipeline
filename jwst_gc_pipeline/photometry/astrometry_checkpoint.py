@@ -1618,8 +1618,17 @@ def _group_by_visit_filter(tables):
     return groups
 
 
-def _record_name(stage, filtername):
+def _record_name(stage, filtername, obs_token=""):
     """Single source of truth for a checkpoint record's base name.
+
+    ``obs_token`` disambiguates observations that SHARE a record directory
+    (issue #281).  cloudef's 2092 obs 002 and 005 both write to
+    ``cloudef/astrometry_checkpoints/``, so without it the second run's
+    ``checkpoint_m2_F360M_latest.json`` silently REPLACES the first's -- and
+    every frozen-stage reader then compares o002's exposures against o005's
+    baseline, which is not a movement measurement of anything.  The per-filter
+    consensus catalog already carries the token for exactly this reason
+    (``consensus_catalog.consensus_path``); the checkpoint records did not.
 
     The WRITER keys on ``run_visit_checkpoint``'s ``filtername`` argument, which
     is ``None`` for a mixed-filter run -> the record is stored under ``_all``.
@@ -1627,10 +1636,89 @@ def _record_name(stage, filtername):
     real filter name, never None), so ``_record_name`` alone is not enough to
     close the gap -- see ``_m2_record_path`` for the fallback the readers use.
     """
-    return f"checkpoint_{stage}_{filtername or 'all'}"
+    token = str(obs_token or '')
+    return f"checkpoint_{stage}_{filtername or 'all'}{token}"
 
 
-def _m2_record_path(record_dir, filtername):
+def _filter_is_obs_ambiguous(record_dir, filtername):
+    """True when more than one observation of this field images ``filtername``.
+
+    Only then is an untokened record genuinely ambiguous.  Brick's two
+    observations use disjoint filter sets, so its untokened records are safe to
+    read; cloudef's o002/o005, gc2211's five and ngc6334's two proposals share
+    their filter lists, and those are the unsafe set.
+
+    Fail-CLOSED: if the field cannot be determined, treat the filter as
+    ambiguous.  Reading the wrong observation's baseline is a silent wrong
+    answer; refusing is a loud unverified.
+    """
+    try:
+        from ..monitoring.scan import shared_filters
+        from .. import fields as _fields
+    except ImportError:
+        return True
+    # The record dir is `<basepath>/astrometry_checkpoints`, so the field is
+    # the path component NEAREST it.  First-in-dict-order resolved
+    # `.../jwst/brick/scratch/cloudef/astrometry_checkpoints` to 'brick' and,
+    # brick having no shared filters, read as unambiguous -- a silent wrong
+    # read, the one outcome this function exists to prevent.  Longest-match
+    # does not fix it either ('arches' and 'sickle' tie on length).
+    #
+    # Path-sniffing is the wrong instrument regardless; the caller knows the
+    # field.  Until it is threaded through, walk from the record dir outward
+    # and take the first component that names a field, which is deterministic
+    # and right for every real layout.
+    known = set(getattr(_fields, "BY_NAME", {}))
+    target = None
+    for part in reversed([p for p in str(record_dir).split(os.sep) if p]):
+        if part in known:
+            target = part
+            break
+    if target is None:
+        return True
+    try:
+        # BOTH instruments: sgrb2 registers nircam ['001'] but miri
+        # ['001','002','998'], so the nircam default returned False for all 14
+        # of its genuinely shared filters.
+        shared = set()
+        for instrument in ("nircam", "miri"):
+            shared |= {str(f).upper() for f in shared_filters(target, instrument)}
+        return str(filtername).upper() in shared
+    except (KeyError, TypeError, ValueError):
+        return True
+
+
+def _m2_refusal_reason(record_dir, filtername, obs_token=""):
+    """Why there is no m2 baseline, when the reason is a REFUSAL.
+
+    A refused untokened record and a genuinely absent one both reach the
+    caller as ``None``, and the caller then emits the frozen-stage movement
+    failure -- which asserts that the solution moved.  That is a false
+    statement about the data: nothing was measured to have moved, there was
+    simply nothing to compare against.  Naming the refusal lets the message
+    say what happened.
+    """
+    if not (record_dir and obs_token):
+        return None
+    tokened = os.path.join(
+        record_dir, f"{_record_name('m2', filtername, obs_token)}_latest.json")
+    if os.path.exists(tokened):
+        return None
+    for legacy in (os.path.join(record_dir,
+                                f"{_record_name('m2', filtername)}_latest.json"),
+                   os.path.join(record_dir,
+                                f"{_record_name('m2', None)}_latest.json")):
+        if os.path.exists(legacy) and _filter_is_obs_ambiguous(record_dir,
+                                                               filtername):
+            return (f"the untokened m2 record {os.path.basename(legacy)} was "
+                    f"REFUSED for {filtername}{obs_token}: more than one "
+                    f"observation of this field images this filter and an "
+                    f"untokened record body carries no observation identity "
+                    f"(issue #281).  Re-run m2 to write a tokened record")
+    return None
+
+
+def _m2_record_path(record_dir, filtername, obs_token=""):
     """Resolve the latest m2 record path for a per-group filter, tolerating the
     writer/reader spelling gap.
 
@@ -1645,10 +1733,77 @@ def _m2_record_path(record_dir, filtername):
     """
     if not record_dir:
         return None
-    exact = os.path.join(record_dir, f"{_record_name('m2', filtername)}_latest.json")
-    if os.path.exists(exact):
-        return exact
-    allpath = os.path.join(record_dir, f"{_record_name('m2', None)}_latest.json")
+    # Tokened spelling first.  The untokened LEGACY spelling is accepted only
+    # where it CANNOT be another observation's: an untokened record body
+    # carries no observation identity at all (`visit` is "1" for both
+    # jw02092002001 and jw02092005001), so on a filter that more than one
+    # observation images, falling back is not a degraded read -- it is the
+    # exact hazard this function exists to stop, with a warning attached.
+    # Verified: cloudef's untokened checkpoint_m2_{F162M,F210M,F360M,F480M}
+    # records are on disk now, nothing deletes them, and o002's m3 read o005's
+    # baseline through this path.
+    #
+    # Where the filter is unambiguous (brick's two observations use disjoint
+    # filter sets) the legacy record is this run's own and is read.
+    for _tok in ([obs_token, ""] if obs_token else [""]):
+        _p = os.path.join(record_dir,
+                          f"{_record_name('m2', filtername, _tok)}_latest.json")
+        if not os.path.exists(_p):
+            continue
+        if obs_token and not _tok:
+            # A `None` filtername means this IS the mixed-filter `_all`
+            # lookup.  Ambiguity is a property of a FILTER, so with no filter
+            # to ask about there is no answer and it fails closed.
+            if filtername is None or _filter_is_obs_ambiguous(record_dir,
+                                                              filtername):
+                print(f"astrom checkpoint: REFUSING the untokened m2 record "
+                      f"{os.path.basename(_p)} for {filtername}{obs_token}: "
+                      f"more than one observation of this field images this "
+                      f"filter, and an untokened record body carries no "
+                      f"observation identity, so it may be the other one's "
+                      f"(issue #281).  Re-run m2 to write a tokened record.",
+                      flush=True)
+                # BREAK, not `return None`.  Refusing the per-filter legacy
+                # record says nothing about this run's OWN `_all` record, and
+                # returning here let a legacy untokened file on disk hide a
+                # perfectly good tokened mixed-filter one -- failing closed
+                # against the wrong file.
+                break
+            print(f"astrom checkpoint: no tokened m2 record for "
+                  f"{filtername}{obs_token}; falling back to the untokened "
+                  f"{os.path.basename(_p)}.  Only one observation of this "
+                  f"field images this filter, so it is unambiguous.",
+                  flush=True)
+        return _p
+    # `exact` is named only for the message below.  It is NOT re-checked: the
+    # loop above already tried it as its first iteration and would have
+    # returned it, so an `if os.path.exists(exact): return exact` here is
+    # unreachable -- verified by replacing it with `raise AssertionError`.
+    exact = os.path.join(record_dir,
+                         f"{_record_name('m2', filtername, obs_token)}_latest.json")
+    # The writer keys the mixed-filter record with the token too, so the
+    # reader must look for it there or a tokened run can never find it.
+    allpath = os.path.join(
+        record_dir, f"{_record_name('m2', None, obs_token)}_latest.json")
+    if not os.path.exists(allpath):
+        allpath = os.path.join(
+            record_dir, f"{_record_name('m2', None)}_latest.json")
+        # The SAME refusal as the per-filter branch above, which was missing
+        # here.  `run_astrometry_checkpoint.py`'s `--filter` defaults to None,
+        # so ONE filterless invocation creates an untokened `_all` record that
+        # every observation of the field would then read as its own -- the
+        # per-filter gate closed while the `_all` door stood open.  A `None`
+        # filtername cannot be tested for ambiguity at all, so it fails closed.
+        if obs_token and os.path.exists(allpath) and (
+                filtername is None
+                or _filter_is_obs_ambiguous(record_dir, filtername)):
+            print(f"astrom checkpoint: REFUSING the untokened mixed-filter m2 "
+                  f"record {os.path.basename(allpath)} for "
+                  f"{filtername}{obs_token}: it carries no observation "
+                  f"identity, and more than one observation of this field "
+                  f"images this filter (issue #281).  Re-run m2 to write a "
+                  f"tokened record.", flush=True)
+            return None
     if filtername and os.path.exists(allpath):
         print(f"astrom checkpoint: no m2 baseline for filter {filtername!r} at "
               f"{os.path.basename(exact)}; falling back to "
@@ -1676,7 +1831,7 @@ def _visit_entry_matches(v, visit, filtername):
     return vf is None or str(vf) == str(filtername)
 
 
-def _m2_reference_tie_baseline(record_dir, filtername, visit):
+def _m2_reference_tie_baseline(record_dir, filtername, visit, obs_token=""):
     """(dra_mas, ddec_mas) of the m2-frozen consensus->reference tie for this
     (filter, visit), from the latest m2 record; None when unavailable.
 
@@ -1704,7 +1859,7 @@ def _m2_reference_tie_baseline(record_dir, filtername, visit):
     ``swept=False``) and raised "consensus->reference MOVED 7794.98 mas since the
     m2 freeze", blocking the field because the measurement got better.
     """
-    path = _m2_record_path(record_dir, filtername)
+    path = _m2_record_path(record_dir, filtername, obs_token)
     if path is None:
         return None, False
     with open(path) as fh:
@@ -1737,7 +1892,7 @@ def _m2_reference_tie_baseline(record_dir, filtername, visit):
     return None, False
 
 
-def _m2_exposure_baseline(record_dir, filtername, visit):
+def _m2_exposure_baseline(record_dir, filtername, visit, obs_token=""):
     """Map exposure-key tuple -> (dra_mas, ddec_mas) of the m2 per-exposure
     vs-consensus offset, from the latest m2 record; ``{}`` when unavailable.
 
@@ -1754,7 +1909,7 @@ def _m2_exposure_baseline(record_dir, filtername, visit):
     could NEVER pass a frozen stage, 2026-07-20).
     """
     out = {}
-    path = _m2_record_path(record_dir, filtername)
+    path = _m2_record_path(record_dir, filtername, obs_token)
     if path is None:
         return out
     with open(path) as fh:
@@ -1771,7 +1926,7 @@ def _m2_exposure_baseline(record_dir, filtername, visit):
     return out
 
 
-def _m2_skipped_exposures(record_dir, filtername, visit):
+def _m2_skipped_exposures(record_dir, filtername, visit, obs_token=""):
     """Set of exposure-key tuples m2 DELIBERATELY left out of its consensus.
 
     ``build_visit_consensus`` drops an exposure with too few reliable stars and
@@ -1789,7 +1944,7 @@ def _m2_skipped_exposures(record_dir, filtername, visit):
     consensus and raised ``AstrometryRegressionError``, killing the m4-m8 chain
     over a data-quality defect m2 had already found, reported, and worked around.
     """
-    path = _m2_record_path(record_dir, filtername)
+    path = _m2_record_path(record_dir, filtername, obs_token)
     if path is None:
         return set()
     with open(path) as fh:
@@ -1958,11 +2113,13 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
         # magnitude check -- the latter re-trips on intrinsic per-exposure
         # scatter that m2 already tolerated.
         exp_baseline = ({} if correcting
-                        else _m2_exposure_baseline(record_dir, filt, visit))
+                        else _m2_exposure_baseline(record_dir, filt, visit,
+                                                  obs_token))
         # An exposure m2 deliberately skipped has no baseline BY CONSTRUCTION;
         # that absence is not evidence the frozen solution moved.
         m2_skipped = (set() if correcting
-                      else _m2_skipped_exposures(record_dir, filt, visit))
+                      else _m2_skipped_exposures(record_dir, filt, visit,
+                                                 obs_token))
         # issue #158 backstop: an ALIAS reads antisymmetric across the modules of
         # an exposure, where real jitter is common-mode.  Never emit corrections
         # from an antisymmetric set -- they are the footprint geometry, not a
@@ -2101,9 +2258,28 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                         # No m2 baseline for this exposure (new/renamed frame at
                         # a frozen stage): the solution was supposed to be frozen
                         # -- fall back to the absolute-offset failure.
-                        failures.append(
-                            msg + " [no m2 per-exposure baseline: frozen-stage "
-                            "exposure absent from the m2 record]")
+                        _refused = _m2_refusal_reason(record_dir, filt,
+                                                      obs_token)
+                        if _refused:
+                            # NOT a movement.  The frozen-stage text asserts
+                            # the solution moved; nothing here was measured to
+                            # have moved, there was simply nothing to compare
+                            # against.  Still blocking -- an unverifiable
+                            # frozen stage is not a pass, and `all_verified`
+                            # has no non-test reader -- but the message must
+                            # not claim a measurement that was never made.
+                            failures.append(
+                                f"{vctx}: exposure {exp['key']} CANNOT BE "
+                                f"CHECKED against the m2 freeze -- {_refused}. "
+                                f"This is a MISSING BASELINE, not a measured "
+                                f"movement: its current vs-consensus offset is "
+                                f"{res['off']:.2f} mas and no frozen value "
+                                f"exists to compare it to.")
+                        else:
+                            failures.append(
+                                msg + " [no m2 per-exposure baseline: "
+                                "frozen-stage exposure absent from the m2 "
+                                "record]")
 
         # ---- consensus vs absolute reference ------------------------------
         ref_tie = None
@@ -2138,7 +2314,7 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                         # (brick V12 F182M: m2 10.09 mas PASS, m3 10.31 mas ->
                         # false REGRESSION, 2026-07-16).
                         base, m2_rejected = _m2_reference_tie_baseline(
-                            record_dir, filt, visit)
+                            record_dir, filt, visit, obs_token)
                         if base is not None:
                             delta = float(np.hypot(ref_tie["dra_mas"] - base[0],
                                                    ref_tie["ddec_mas"] - base[1]))
@@ -2345,7 +2521,8 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                       reference_apply_min_mas=REFERENCE_APPLY_MIN_MAS,
                       stage_stability_tol_mas=STAGE_STABILITY_TOL_MAS))
     if record_dir:
-        _write_record(record_dir, _record_name(stage, filtername), record)
+        _write_record(record_dir, _record_name(stage, filtername, obs_token),
+                      record)
 
     for w in unverified:
         print(f"ASTROM CHECKPOINT [{stage}] COULD NOT VERIFY: {w}", flush=True)
@@ -2371,7 +2548,8 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                                cell_tol_mas=LOCAL_CELL_TOL_MAS,
                                cell_min_stars=LOCAL_CELL_MIN_STARS,
                                field_cell_arcsec=CROSSFILTER_FIELD_CELL_ARCSEC,
-                               field_min_stars=CROSSFILTER_FIELD_MIN_STARS):
+                               field_min_stars=CROSSFILTER_FIELD_MIN_STARS,
+                               obs_token=""):
     """Cross-filter astrometry agreement at the cross-band merge.
 
     The filter closest in wavelength to VIRAC2 Ks anchors the absolute frame
@@ -2573,7 +2751,16 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                                   field_cell_arcsec=field_cell_arcsec,
                                   field_min_stars=field_min_stars))
     if record_dir:
-        _write_record(record_dir, "checkpoint_m7_crossfilter", record)
+        # Tokened for the same reason the m2 records are (issue #281): brick's
+        # 1182 and 2221 m7 runs write into one `astrometry_checkpoints/`, and
+        # the untokened name meant 2221's verdict replaced 1182's.  This record
+        # is write-only -- nothing reads it back, and the verdict itself is
+        # raised in-memory as CrossFilterAstrometryError -- so what the
+        # collision costs is the audit trail, not a wrong correction.  Its only
+        # other identity field is `context`, which names the target, not the
+        # observation.
+        _write_record(record_dir, f"checkpoint_m7_crossfilter{obs_token}",
+                      record)
     for w in unverified:
         print(f"ASTROM CHECKPOINT [m7-crossfilter] COULD NOT VERIFY: {w}",
               flush=True)
