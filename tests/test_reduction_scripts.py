@@ -164,8 +164,13 @@ PERFRAME_SBATCH = os.path.join(
 
 
 def _perframe_sbatch_text():
+    """The script with line continuations folded away.
+
+    A rename split across a backslash-continuation would otherwise be collected
+    by nothing and pass the gate test vacuously.
+    """
     with open(PERFRAME_SBATCH) as fh:
-        return fh.read()
+        return fh.read().replace('\\\n', ' ')
 
 
 def test_perframe_runtime_rename_never_clobbers_a_submitted_name():

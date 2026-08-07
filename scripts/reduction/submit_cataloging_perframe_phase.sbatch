@@ -82,7 +82,14 @@ NSHARDS=${NSHARDS:-16}
 #
 # So: rename only when the job was submitted bare, i.e. the name is still the
 # `pf` placeholder from the #SBATCH directive above.  A named submission keeps
-# the name it was given.
+# the name it was given.  (Same idiom as submit_reduction_miri.sbatch:95.)
+#
+# The bare-path fallback keeps the `pf_<target>_<phase>` shape rather than the
+# dashed one, because that is what the monitor can read: monitoring/jobs.py's
+# _NAME_PF gives `pf_sgrb2_m12` and `pf_sgrb2_m12_fin` both stage='m12', whereas
+# a dashed `sgrb2-pf-m12-fanout` has no `-o<obsid>-` segment to bound the stage
+# and falls through to _NAME_LOOSE as stage='pf-m12-fanout' -- not a stage the
+# monitor buckets.  Only the shard suffix, which is the actual defect, is gone.
 _pf_rename_wanted() { [ "${SLURM_JOB_NAME:-pf}" = "pf" ] && [ -n "${SLURM_JOB_ID:-}" ]; }
 EXTRA_ARGS=${EXTRA_ARGS:-}
 
@@ -100,11 +107,11 @@ if [ "$MODE" = "fanout" ]; then
     SHARD="${SLURM_ARRAY_TASK_ID:-0}/${NSHARDS}"
     MODE_ARGS="--manual-skip-finalize --manual-frame-shard=$SHARD"
     _pf_rename_wanted && scontrol update JobId="$SLURM_JOB_ID" \
-        JobName="${TARGET}-pf-${PHASE}-fanout" 2>/dev/null || true
+        JobName="pf_${TARGET}_${PHASE}" 2>/dev/null || true
 elif [ "$MODE" = "finalize" ]; then
     MODE_ARGS="--manual-finalize-only"
     _pf_rename_wanted && scontrol update JobId="$SLURM_JOB_ID" \
-        JobName="${TARGET}-pf-${PHASE}-fin" 2>/dev/null || true
+        JobName="pf_${TARGET}_${PHASE}_fin" 2>/dev/null || true
     # Lustre metadata coherence lag: the finalize launches (afterok) the instant
     # the last fan-out shard exits, but the per-frame completion markers those
     # shards just wrote may not yet be visible on the finalize node's MDT view.
