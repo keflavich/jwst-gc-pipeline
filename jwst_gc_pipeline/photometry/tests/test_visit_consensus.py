@@ -1103,3 +1103,67 @@ def test_a_correcting_stage_does_not_restrict(tmp_path, monkeypatch):
     assert called["n"] == 0, "m2 must not read an m2 baseline to freeze against"
     assert cons["same_star_gate"] == "unavailable", cons
     assert cons["n_reliable_restricted"] == cons["n_reliable_unrestricted"]
+
+
+def test_a_refused_exposure_does_not_SEED_the_consensus(monkeypatch):
+    """The other half of the mechanism, and it was pinned by nothing.
+
+    The design has two rules and the comment says so: a refused exposure must
+    not EXTEND the seed, and it must not BE the seed -- if it seeded, its full
+    star list would be the population, the same defect from the other end.
+    Deleting the member reordering left `52 passed`, and no test referenced
+    `_contributes` at all.
+
+    It needs `min_exposures` refusals in one component to bite, which is why a
+    single-refusal fixture could not see it: with one refusal the seed's extra
+    stars reach `counts == 1` and the `counts >= min_exposures` filter drops
+    them anyway.  With THREE, the refused members corroborate each other's
+    extra stars and the pre-#285 population comes back.  That is the cloudc
+    F182M shape -- its eight refusals are not scattered, they are all `nrcb3`
+    in vgroup 06201.
+    """
+    import jwst_gc_pipeline.photometry.visit_consensus as vc
+
+    ra, dec = _field(n=400)
+    tables = [_exposure_table(ra, dec, exposure=e) for e in range(1, 7)]
+    full = build_visit_consensus(tables, context="m2")["coords"]
+    m2 = full[:len(full) // 2]          # the restricted population is HALF
+
+    real = vc._restrict_to_same_stars
+    seen = {"n": 0}
+
+    def _three_refuse(coords, reference, radius, context="",
+                      reference_tree=None):
+        seen["n"] += 1
+        if seen["n"] <= 3:
+            return None, "forced refusal for the test"
+        return real(coords, reference, radius, context=context,
+                    reference_tree=reference_tree)
+
+    monkeypatch.setattr(vc, "_restrict_to_same_stars", _three_refuse)
+    cons = build_visit_consensus(tables, context="m6", restrict_to=m2)
+    refused = [e for e in cons["exposures"] if e.get("restrict_refused")]
+    assert len(refused) == 3, refused                      # no cascade
+    # the consensus is the RESTRICTED population, not the refused exposures'
+    assert len(cons["coords"]) < 0.75 * len(full), (
+        len(cons["coords"]), len(full))
+
+
+def test_a_component_with_no_restricted_member_says_so(tmp_path, monkeypatch, capsys):
+    """`any(...)` deliberately permits a component whose members ALL refused to
+    build from their full star sets -- the pre-#285 behaviour, and the same
+    decision the visit-wide `contributing == []` path takes.  That is a real
+    choice and it was implicit; it is stated and printed now, because a
+    component silently built from a different star population than its
+    neighbours is the confusion the restriction exists to remove."""
+    import jwst_gc_pipeline.photometry.visit_consensus as vc
+
+    ra, dec = _field(n=400)
+    tables = [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)]
+    m2 = build_visit_consensus(tables, context="m2")["coords"]
+    monkeypatch.setattr(vc, "_restrict_to_same_stars",
+                        lambda *a, **k: (None, "forced refusal for the test"))
+    cons = build_visit_consensus(tables, context="m6", restrict_to=m2)
+    out = capsys.readouterr().out
+    assert "NO exposure could be restricted" in out, out
+    assert all(e.get("restrict_refused") for e in cons["exposures"])

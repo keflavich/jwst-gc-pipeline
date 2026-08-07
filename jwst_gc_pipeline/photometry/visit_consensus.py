@@ -748,6 +748,20 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
                         range(len(usable))]
         if any(_contributes[i] for i in members):
             members = sorted(members, key=lambda i: not _contributes[i])
+        else:
+            # EVERY member of this component refused.  There is no restricted
+            # population here to protect, so the component is built from the
+            # full star sets -- the pre-#285 behaviour, and the same decision
+            # `contributing == []` takes for the visit as a whole.  Stated
+            # rather than left to fall out of `any()` being False, and said out
+            # loud, because a component silently built from a different star
+            # population than its neighbours is exactly the confusion the
+            # restriction exists to remove.
+            print(f"astrom consensus [{context}]: component of "
+                  f"{len(members)} exposure(s) has NO restricted member; it is "
+                  f"built from their full star sets (a population change "
+                  f"between stages can still read as movement there, issue "
+                  f"#285)", flush=True)
         for i in members:
             sc = _shift(usable[i]["coords"], rel[i]["dra"], rel[i]["ddec"])
             if ref_ra is None:
