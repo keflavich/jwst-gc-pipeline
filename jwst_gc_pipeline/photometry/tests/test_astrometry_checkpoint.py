@@ -1847,31 +1847,73 @@ def test_a_thin_map_must_not_suppress_a_flagged_cell(tmp_path, monkeypatch):
     this gate exists for.
     """
     monkeypatch.delenv("ALLOW_CROSSFILTER_ASTROM_FAIL", raising=False)
-    # a 15"x15" corner 25 mas off, in a field sparse enough that only a couple
-    # of cells reach cell_min_stars
-    cats = _crossfilter_catalogs(n=1200, extent=120.0,
-                                 patch=(0.0, 15.0, 0.0, 15.0, 25.0))
+    # The map is INJECTED, not coaxed out of a synthetic field.  The first
+    # version of this test used `n=1200, extent=120.0, cell_arcsec=15.0,
+    # cell_min_stars=15` and PASSED ON MAIN: that geometry yields four or more
+    # populated cells, so the thin branch was never taken and the flagged
+    # branch raised on main too.  It proved the flagged path fires; it did not
+    # prove the flagged path fires WHEN THE MAP IS THIN, which is the whole
+    # defect.  `n_cells` must be in [1, LOCAL_CELL_MIN_CELLS) with
+    # `n_flagged >= 1` for the ordering to matter at all, and injecting it is
+    # the only way to hold that precisely.
+    import jwst_gc_pipeline.photometry.astrometry_checkpoint as ac
+    assert 2 < ac.LOCAL_CELL_MIN_CELLS, ac.LOCAL_CELL_MIN_CELLS
+    thin_and_flagged = dict(
+        n_cells=2, n_flagged=1, n_pairs=500,
+        cells=[dict(ix=0, iy=0, n=40, off_mas=42.0, dra=42.0, ddec=0.0,
+                    dra_sem=1.0, ddec_sem=1.0, flagged=True,
+                    ra0=RA0, dec0=DEC0),
+               dict(ix=1, iy=0, n=30, off_mas=2.0, dra=2.0, ddec=0.0,
+                    dra_sem=1.0, ddec_sem=1.0, flagged=False,
+                    ra0=RA0, dec0=DEC0)])
+    monkeypatch.setattr(ac, "local_residual_map",
+                        lambda *a, **k: dict(thin_and_flagged))
+    cats = _crossfilter_catalogs(n=1200, extent=120.0)
     with pytest.raises(CrossFilterAstrometryError) as exc:
         run_crossfilter_checkpoint(cats, record_dir=str(tmp_path),
-                                   cell_arcsec=15.0, cell_min_stars=15,
                                    context="test")
     assert "significant offset" in str(exc.value)
+    assert "42.0" in str(exc.value), str(exc.value)
 
 
 def test_a_thin_map_failure_also_records_the_thin_coverage(tmp_path, monkeypatch):
-    """Both facts are worth having: the failure stands, and the coverage behind
-    it is thin."""
+    """Both facts are worth having, and BOTH are asserted.
+
+    This test had the same defect as its twin, three lines below the one that
+    was fixed: the same geometry, so the same `n_cells = 54` against
+    `LOCAL_CELL_MIN_CELLS = 4`, so its only substantive assertion sat behind
+    `if n_cells < 4:` and was never entered.  What survived was
+    `assert record["failures"]`, which the flagged branch produces under EITHER
+    branch ordering -- the same non-reproducing shape this file exists to
+    remove.
+
+    The consequence was that the nested note inside the flagged branch was
+    unpinned repo-wide: deleting it left `14 passed`, and no other file
+    mentions the string.  The one behaviour this test is named for -- a failure
+    records that its coverage was thin -- could be removed with the suite
+    green.
+    """
     monkeypatch.setenv("ALLOW_CROSSFILTER_ASTROM_FAIL", "1")
-    cats = _crossfilter_catalogs(n=1200, extent=120.0,
-                                 patch=(0.0, 15.0, 0.0, 15.0, 25.0))
+    import jwst_gc_pipeline.photometry.astrometry_checkpoint as ac
+    assert 2 < ac.LOCAL_CELL_MIN_CELLS, ac.LOCAL_CELL_MIN_CELLS
+    thin_and_flagged = dict(
+        n_cells=2, n_flagged=1, n_pairs=500,
+        cells=[dict(ix=0, iy=0, n=40, off_mas=42.0, dra=42.0, ddec=0.0,
+                    dra_sem=1.0, ddec_sem=1.0, flagged=True,
+                    ra0=RA0, dec0=DEC0),
+               dict(ix=1, iy=0, n=30, off_mas=2.0, dra=2.0, ddec=0.0,
+                    dra_sem=1.0, ddec_sem=1.0, flagged=False,
+                    ra0=RA0, dec0=DEC0)])
+    monkeypatch.setattr(ac, "local_residual_map",
+                        lambda *a, **k: dict(thin_and_flagged))
+    cats = _crossfilter_catalogs(n=1200, extent=120.0)
     record = run_crossfilter_checkpoint(cats, record_dir=str(tmp_path),
-                                        cell_arcsec=15.0, cell_min_stars=15,
                                         context="test")
+    # UNCONDITIONAL, both of them.  The production comment says the failure
+    # stands AND the coverage behind it is named; only one of those was checked.
     assert record["failures"], record
-    frec = [f for f in record["filters"]
-            if f["filtername"] != record["anchor_filter"]][0]
-    if frec["local"]["n_cells"] < 4:
-        assert any("rests on only" in w for w in record["unverified"]), record
+    assert any("rests on only" in w for w in record["unverified"]), record
+    assert not record["all_verified"], record
 
 
 def test_the_ambiguous_pair_path_also_reports_zero_pairs():
