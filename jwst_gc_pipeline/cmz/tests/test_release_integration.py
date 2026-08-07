@@ -1304,6 +1304,16 @@ def _png_with_avm(path, size):
     return path
 
 
+def _avm_values_or_none(xmp, field):
+    import re as _re
+    if isinstance(xmp, bytes):
+        xmp = xmp.decode('utf8', 'replace')
+    block = _re.search(r'<avm:' + field + r'>(.*?)</avm:' + field + r'>', xmp, _re.S)
+    if not block:
+        return None
+    return [float(v) for v in _re.findall(r'<rdf:li>(.*?)</rdf:li>', block.group(1))]
+
+
 def _avm_values(xmp, field):
     import re as _re
     if isinstance(xmp, bytes):
@@ -1341,6 +1351,93 @@ def test_the_avm_astrometry_is_rescaled_not_copied_and_not_dropped(tmp_path):
     # the FITS header describes the ORIGINAL grid and is not rewritten
     text = xmp.decode('utf8', 'replace') if isinstance(xmp, bytes) else xmp
     assert 'FITSheader' not in text
+
+
+_AVM_CD_XMP = _AVM_XMP.replace(
+    """<avm:Spatial.Scale><rdf:Bag><rdf:li>0.0000100000000000</rdf:li>\
+<rdf:li>-0.0000100000000000</rdf:li></rdf:Bag></avm:Spatial.Scale>""",
+    """<avm:Spatial.CDMatrix><rdf:Bag><rdf:li>-0.0000002649725452</rdf:li>\
+<rdf:li>-0.0000174702244258</rdf:li><rdf:li>-0.0000174702244258</rdf:li>\
+<rdf:li>0.0000002649725452</rdf:li></rdf:Bag></avm:Spatial.CDMatrix>""")
+
+
+def test_a_cdmatrix_render_is_rescaled_and_not_dropped():
+    """AVM gives the pixel scale EITHER as Spatial.Scale (+Rotation) OR as a
+    Spatial.CDMatrix, and this set uses both.  Handling only Scale silently
+    dropped the astrometry of 8 of the 32 curated renders -- every gc2211
+    pointing, brick MIRI, sgrb2 MIRI, both sgrc -- because the writer bailed to
+    `return None` and the JPEG went out with no AVM at all."""
+    mw = _make_webpage()
+    out = mw._avm_for_resize(_AVM_CD_XMP, (1000, 500), (250, 125))
+    assert out is not None, 'a CDMatrix render was dropped'
+    cd = _avm_values(out, r'Spatial\.CDMatrix')
+    assert len(cd) == 4
+    for got, want in zip(cd, [-0.0000002649725452 / 0.25,
+                              -0.0000174702244258 / 0.25,
+                              -0.0000174702244258 / 0.25,
+                              0.0000002649725452 / 0.25]):
+        assert got == pytest.approx(want)
+
+
+def test_the_two_axes_are_rescaled_independently():
+    """`round()` lands differently on the two axes whenever the image is not
+    square: the limiting axis hits max_px exactly and the other is rounded, so
+    one factor for both is wrong.  It was, on every portrait render here -- the
+    angular extent came out 6e-5 to 5e-4 off, tens of mas on these fields."""
+    mw = _make_webpage()
+    # 6521x16577 -> height-limited at 2200 gives 865x2200; 6521*(2200/16577)
+    # is 865.44, so the x factor is 865/6521, NOT 2200/16577
+    out = mw._avm_for_resize(_AVM_CD_XMP, (6521, 16577), (865, 2200))
+    cd = _avm_values(out, r'Spatial\.CDMatrix')
+    sx, sy = 865 / 6521, 2200 / 16577
+    assert sx != sy
+    assert cd[0] == pytest.approx(-0.0000002649725452 / sx)
+    assert cd[1] == pytest.approx(-0.0000174702244258 / sy)
+    refpix = _avm_values(out, r'Spatial\.ReferencePixel')
+    assert refpix == [pytest.approx(500 * sx), pytest.approx(250 * sy)]
+
+
+def test_every_curated_render_in_the_registry_keeps_its_astrometry():
+    """The whole registry, against the real files.  Reading XMP does not decode
+    pixels, so this costs ~0.15 s for all 32 despite them being 13-147 MB.
+
+    Both failures this catches are ones I shipped: a scale expressed as a
+    CDMatrix was dropped entirely, and a single resize factor put the angular
+    extent of the five portrait renders out by up to 5e-4."""
+    import math
+    from PIL import Image
+    mw = _make_webpage()
+    ci = _ci()
+    Image.MAX_IMAGE_PIXELS = None
+
+    def extent(xmp, width, height):
+        scale = _avm_values_or_none(xmp, r'Spatial\.Scale')
+        if scale:
+            return abs(scale[0]) * width, abs(scale[1]) * height
+        cd = _avm_values(xmp, r'Spatial\.CDMatrix')
+        return (math.hypot(cd[0], cd[2]) * width,
+                math.hypot(cd[1], cd[3]) * height)
+
+    checked = 0
+    for field in sorted(ci.CURATED):
+        for entry in ci.for_field(field):
+            with Image.open(entry['file']) as img:
+                xmp = img.info.get('XML:com.adobe.xmp') or img.info.get('xmp')
+                size = img.size
+            if not xmp:
+                continue
+            factor = min(1.0, 2200 / size[0], 2200 / size[1])
+            new = ((max(1, round(size[0] * factor)),
+                    max(1, round(size[1] * factor))) if factor < 1 else size)
+            out = mw._avm_for_resize(xmp, size, new)
+            assert out is not None, f'{entry["stem"]}: astrometry dropped'
+            before = extent(xmp, *size)
+            after = extent(out, *new)
+            for was, now in zip(before, after):
+                assert now == pytest.approx(was, rel=1e-9), \
+                    f'{entry["stem"]}: angular extent changed'
+            checked += 1
+    assert checked >= 30, f'only {checked} renders carried AVM to check'
 
 
 def test_an_unresized_render_keeps_its_avm_verbatim(tmp_path):

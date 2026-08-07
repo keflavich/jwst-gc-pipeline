@@ -202,20 +202,45 @@ def _preview_caption(stem, field):
     return (f"{obs.upper()} - " if obs else "") + (label or stem)
 
 
+def _avm_read(xmp, field):
+    """The ``<rdf:li>`` values of one AVM bag as floats, or ``None``."""
+    block = re.search(r'<avm:' + field + r'>(.*?)</avm:' + field + r'>', xmp, re.S)
+    if not block:
+        return None
+    items = re.findall(r'<rdf:li>(.*?)</rdf:li>', block.group(1), re.S)
+    try:
+        return [float(v) for v in items] or None
+    except ValueError:
+        return None
+
+
 def _avm_bag(xmp, field, values):
-    """Rewrite one ``<avm:Field><rdf:Bag><rdf:li>..`` pair, or return xmp
-    unchanged when the field is absent."""
-    pattern = re.compile(
-        r'(<avm:' + field + r'>\s*<rdf:Bag>\s*<rdf:li>)(.*?)(</rdf:li>\s*<rdf:li>)'
-        r'(.*?)(</rdf:li>)', re.S)
+    """Rewrite one ``<avm:Field>``'s ``<rdf:li>`` values in place.
+
+    Returns ``xmp`` unchanged when the field is absent, and rewrites however
+    many items the bag holds -- ``Spatial.Scale`` has two, ``Spatial.CDMatrix``
+    four.  The first version hard-coded two, which silently left a CDMatrix
+    untouched while the rest of the record was rescaled.
+    """
+    block = re.search(r'(<avm:' + field + r'>)(.*?)(</avm:' + field + r'>)',
+                      xmp, re.S)
+    if block is None:
+        return xmp
+    inner, index = block.group(2), [0]
 
     def _sub(match):
-        return (match.group(1) + f"{values[0]:.16f}" + match.group(3)
-                + f"{values[1]:.16f}" + match.group(5))
-    return pattern.sub(_sub, xmp, count=1)
+        i = index[0]
+        index[0] += 1
+        if i >= len(values):
+            return match.group(0)
+        return match.group(1) + f"{values[i]:.16f}" + match.group(3)
+
+    rewritten = re.sub(r'(<rdf:li>)(.*?)(</rdf:li>)', _sub, inner, flags=re.S)
+    return xmp[:block.start()] + block.group(1) + rewritten + block.group(3) \
+        + xmp[block.end():]
 
 
-def _avm_for_resize(xmp, scale, new_size):
+def _avm_for_resize(xmp, orig_size, new_size):
     """The source AVM, corrected for a resize -- or ``None`` if it cannot be.
 
     Carrying the AVM through UNCHANGED would be worse than dropping it: these
@@ -235,26 +260,41 @@ def _avm_for_resize(xmp, scale, new_size):
         return None
     if isinstance(xmp, bytes):
         xmp = xmp.decode("utf-8", "replace")
-    if scale == 1.0:
+    if tuple(orig_size) == tuple(new_size):
         return xmp.encode("utf-8")
-    match = re.search(
-        r'<avm:Spatial\.ReferencePixel>\s*<rdf:Bag>\s*<rdf:li>(.*?)</rdf:li>\s*'
-        r'<rdf:li>(.*?)</rdf:li>', xmp, re.S)
-    scale_match = re.search(
-        r'<avm:Spatial\.Scale>\s*<rdf:Bag>\s*<rdf:li>(.*?)</rdf:li>\s*'
-        r'<rdf:li>(.*?)</rdf:li>', xmp, re.S)
-    if not (match and scale_match):
-        return None                      # not the shape we know how to correct
-    try:
-        refpix = [float(match.group(1)), float(match.group(2))]
-        pxscale = [float(scale_match.group(1)), float(scale_match.group(2))]
-    except ValueError:
-        return None
+    # PER AXIS, from the size actually written.  One factor for both is wrong
+    # whenever `round()` lands differently on the two axes, which it does for
+    # every portrait render here: the limiting axis hits 2200 exactly and the
+    # other is rounded, so the true x and y factors differ.  Measured on the
+    # five portrait renders that exposed it, using a single factor left the
+    # angular extent off by 6e-5 to 5e-4 -- tens of mas on these fields.
+    sx = new_size[0] / orig_size[0]
+    sy = new_size[1] / orig_size[1]
+    refpix = _avm_read(xmp, r'Spatial\.ReferencePixel')
+    # The pixel scale is given EITHER as Spatial.Scale (+ Spatial.Rotation) OR
+    # as a Spatial.CDMatrix; both are legal AVM and this set uses both.  Only
+    # Scale was handled at first, so 8 of the 32 curated renders -- every
+    # gc2211 pointing, brick MIRI, sgrb2 MIRI, both sgrc -- fell to the
+    # `return None` and were published with their astrometry dropped.
+    pxscale = _avm_read(xmp, r'Spatial\.Scale')
+    cdmatrix = _avm_read(xmp, r'Spatial\.CDMatrix')
+    if not refpix or len(refpix) < 2 or not (pxscale or cdmatrix):
+        return None                      # not a shape we can correct
     out = _avm_bag(xmp, r'Spatial\.ReferenceDimension',
                    [float(new_size[0]), float(new_size[1])])
-    out = _avm_bag(out, r'Spatial\.ReferencePixel', [v * scale for v in refpix])
-    # deg/px grows as the image shrinks
-    out = _avm_bag(out, r'Spatial\.Scale', [v / scale for v in pxscale])
+    out = _avm_bag(out, r'Spatial\.ReferencePixel',
+                   [refpix[0] * sx, refpix[1] * sy])
+    # deg/px grows as the image shrinks; the CD matrix is the same statement in
+    # matrix form, so every element scales the same way.  Rotation, projection,
+    # reference value and quality are all resize-invariant and left alone.
+    if pxscale:
+        out = _avm_bag(out, r'Spatial\.Scale', [pxscale[0] / sx, pxscale[1] / sy])
+    if cdmatrix and len(cdmatrix) == 4:
+        # CD maps (dx, dy) -> (dxi, deta): the first and third elements multiply
+        # dx, the second and fourth multiply dy.
+        out = _avm_bag(out, r'Spatial\.CDMatrix',
+                       [cdmatrix[0] / sx, cdmatrix[1] / sy,
+                        cdmatrix[2] / sx, cdmatrix[3] / sy])
     out = re.sub(r'<avm:Spatial\.FITSheader>.*?</avm:Spatial\.FITSheader>', '',
                  out, flags=re.S)
     return out.encode("utf-8")
@@ -285,11 +325,12 @@ def web_jpeg(src, dest, max_px=2200):
         img = flat
     else:
         img = img.convert("RGB")
+    original_size = img.size
     scale = min(1.0, max_px / img.width, max_px / img.height)
     if scale < 1.0:
         img = img.resize((max(1, round(img.width * scale)),
                           max(1, round(img.height * scale))), Image.LANCZOS)
-    corrected = _avm_for_resize(xmp, scale, img.size)
+    corrected = _avm_for_resize(xmp, original_size, img.size)
     if corrected:
         img.save(dest, format="JPEG", quality=88, progressive=True, xmp=corrected)
     else:
