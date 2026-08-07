@@ -71,6 +71,7 @@ from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
 
 import os
 import re
+from jwst_gc_pipeline.astrometry_utils import pick_refcat as _au_pick_refcat
 import types
 import uuid
 import traceback
@@ -3334,57 +3335,26 @@ def _maybe_dedup_m8(m8_path, options, label='m8'):
         return None
 
 
-def _pick_refcat(cands, field=None):
-    """The refcat for THIS observation, from the candidates on disk.
-
-    A refcat may carry an observation token (``..._o028.fits``) because it was
-    built for one pointing.  Selection used to be ``sorted(cands)[-1]``, which
-    picks the LAST NAME ALPHABETICALLY -- and ``_o028`` sorts after the bare
-    ``gaia_virac2_refcat_epoch2023.71.fits``, so on gc2211 every observation got
-    o028's catalog:
-
-        gaia_virac2_refcat_epoch2023.71.fits          <- generic, wanted
-        gaia_virac2_refcat_epoch2023.71_o028.fits     <- chosen for ALL of them
-
-    o023 was then tied against a reference built for a pointing arcminutes away
-    and the m2 checkpoint measured a -9.28" per-exposure correction, which the
-    magnitude limit refused to write (correctly -- the measurement was wrong,
-    not the frame).  Its five observations are 0.3-17.6 arcmin apart, so a
-    neighbour's refcat is not a degraded reference, it is the wrong sky.
-
-    Order: this observation's token, else an untokened refcat, else refuse --
-    picking SOME other observation's is never right, and doing it silently is
-    how this cost a full o023 chain.
-    """
-    if not cands:
-        return None
-    tok = re.compile(r'_o(\d{3})\.fits$')
-    tokened = {m.group(1): p for p in cands for m in [tok.search(p)] if m}
-    untokened = [p for p in cands if not tok.search(p)]
-    if field:
-        f3 = str(field).zfill(3)
-        if f3 in tokened:
-            return tokened[f3]
-    if untokened:
-        return sorted(untokened)[-1]
-    if tokened:
-        raise ValueError(
-            f"astrom checkpoint: the only reference catalogs under "
-            f"{os.path.dirname(cands[0])} are built for other observations "
-            f"({sorted(tokened)}), and this run is "
-            f"{'o' + str(field).zfill(3) if field else 'untagged'}.  Tying to "
-            f"another pointing's reference is not a degraded measurement, it is "
-            f"the wrong sky -- build one for this observation "
-            f"(build_gaia_virac2_refcat_byquery.py) or point ASTROM_REFCAT at "
-            f"the right file.")
-    return None
+#: Selection lives in astrometry_utils so the reducer-side bulk path
+#: (reduction/bulk_offset_step0.refcat_for_frame) uses the SAME rule -- two
+#: halves of one field's remediation must not disagree about which sky they are
+#: tying to.
+_pick_refcat = _au_pick_refcat
 
 
-def _astrom_checkpoint_refcat(basepath, field=None):
+def _astrom_checkpoint_refcat(basepath, field):
     """Locate + load the absolute reference catalog for the astrometry
     checkpoints: env ``ASTROM_REFCAT`` first, else the seed refcat matching this
-    OBSERVATION (see :func:`_pick_refcat`).  None (consensus-only checks) when
-    the target has no seed refcat."""
+    OBSERVATION (see :func:`pick_refcat`).  None (consensus-only checks) when
+    the target has no seed refcat.
+
+    ``field`` is REQUIRED and has no default on purpose.  A default would let a
+    call site quietly stop passing it -- which is the whole bug: gc2211 got
+    o028's catalogue at every observation, and a test suite that exercises the
+    selector cannot see the omission.  Pass ``None`` explicitly for a caller
+    that genuinely does not know its observation; that reads as a decision
+    rather than an oversight, and it still refuses to substitute some other
+    observation's catalogue."""
     from jwst_gc_pipeline.photometry.visit_consensus import load_reference_catalog
     path = os.environ.get('ASTROM_REFCAT')
     if not path:

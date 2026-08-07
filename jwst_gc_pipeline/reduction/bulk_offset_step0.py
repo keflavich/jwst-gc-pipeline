@@ -743,7 +743,7 @@ def reference_frame_matches_refcat(reference_frame, refcat_path):
 REFCAT_PATTERNS = ('gaia_virac2_refcat*.fits', 'gaia_refcat*.fits')
 
 
-def refcat_for_frame(basepath, reference_frame):
+def refcat_for_frame(basepath, reference_frame, field=None):
     """Pick the reference catalog that belongs to ``reference_frame``.
 
     Returns ``(path, candidates)``; ``path`` is ``None`` when nothing was found.
@@ -767,6 +767,15 @@ def refcat_for_frame(basepath, reference_frame):
             ordered.append(path)
     matching = [p for p in ordered
                 if reference_frame_matches_refcat(reference_frame, p)[0]]
+    # Among the frame-matching candidates, take the one for THIS observation.
+    # `matching[-1]` was the last name alphabetically, and `_o028` sorts after
+    # the bare `gaia_virac2_refcat_epoch2023.71.fits`, so on gc2211 this handed
+    # every observation o028's catalogue -- centred ~13' away with a ~10' radius,
+    # i.e. the wrong sky.  Same rule as the m2 checkpoint's, from one place:
+    # the reducer-side bulk path and the checkpoint must not disagree about
+    # which sky a field is being tied to, and #338's error message sends
+    # operators here for exactly the two multi-observation fields.
+    from ..astrometry_utils import pick_refcat
     if matching:
-        return matching[-1], ordered
-    return (ordered[-1] if ordered else None), ordered
+        return pick_refcat(matching, field=field), ordered
+    return (pick_refcat(ordered, field=field) if ordered else None), ordered
