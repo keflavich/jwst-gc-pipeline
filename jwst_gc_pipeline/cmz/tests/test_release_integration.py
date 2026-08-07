@@ -966,6 +966,20 @@ def test_quarantined_source_is_detected(tmp_path):
     assert rf.source_state(None) == rf.MISSING
 
 
+def test_there_is_no_single_SUPERSEDED_name_to_compare_against():
+    """An alias pointing at one of the two states is worse than no alias.
+    `SUPERSEDED` used to mean EITHER stale state; re-adding it pointed at
+    QUARANTINED silently stopped every comparison matching the REBUILT case --
+    the majority (54 of 114) -- and shipped the branch red, because the two
+    regression tests pinning the overwrite fix compare against it.  Removing the
+    name fails loudly at import instead of quietly changing what it matches."""
+    rf = _rf_fresh()
+    assert not hasattr(rf, 'SUPERSEDED'), \
+        'use is_superseded() for "either", or the two states for "which"'
+    assert rf.is_superseded(rf.QUARANTINED) and rf.is_superseded(rf.REBUILT)
+    assert not rf.is_superseded(rf.LIVE) and not rf.is_superseded(rf.MISSING)
+
+
 def test_a_rebuild_in_place_is_not_reported_as_a_quarantine(tmp_path):
     """Both states stop publication, but only one is knowable.  A renamed source
     is the pipeline repudiating the file; a size mismatch is a re-run, a

@@ -72,9 +72,14 @@ MISSING = "missing"
 #: quarantined 23 of brick's v1.0 images when nothing of the sort had happened.
 SUPERSEDED_STATES = (QUARANTINED, REBUILT)
 
-#: Kept so existing callers reading a single "superseded" name still work; the
-#: two-state split is what the page needs, not what the gate needs.
-SUPERSEDED = QUARANTINED
+# There is deliberately no `SUPERSEDED` constant.  An alias for it was added
+# here for "back-compat" and pointed at QUARANTINED, which is worse than not
+# having one: the name used to mean EITHER stale state, so every comparison
+# against it silently stopped matching the rebuilt case -- 54 of the 114
+# non-live entries, the majority this split exists to name.  It also shipped the
+# branch red, because the two regression tests pinning the overwrite fix compare
+# against it.  Removing the name fails loudly at import instead.  Use
+# `is_superseded()` for "either", or the two states for "which".
 
 
 def is_superseded(state):

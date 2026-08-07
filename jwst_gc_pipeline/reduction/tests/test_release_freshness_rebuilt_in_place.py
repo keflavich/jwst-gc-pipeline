@@ -30,13 +30,18 @@ def _src(tmp_path, name, nbytes):
     return str(p)
 
 
-def test_a_source_rebuilt_in_place_is_SUPERSEDED(tmp_path):
-    """The cloudc case: same path, different bytes."""
+def test_a_source_rebuilt_in_place_is_REBUILT(tmp_path):
+    """The cloudc case: same path, different bytes.
+
+    REBUILT, not QUARANTINED: both withhold the staged copy, but only a rename
+    says the pipeline repudiated the file.  A size mismatch is a re-run, a
+    re-chunk or a new stage, and the page must not claim otherwise."""
     src = _src(tmp_path, "cloudc-f187n_i2d.fits", 2048)
     assert rf.source_state(src, 2048) == rf.LIVE
     # rebuilt: same name, different size
     Path(src).write_bytes(b"\0" * 2000)
-    assert rf.source_state(src, 2048) == rf.SUPERSEDED
+    assert rf.source_state(src, 2048) == rf.REBUILT
+    assert rf.is_superseded(rf.source_state(src, 2048))
 
 
 def test_an_untouched_source_is_still_LIVE(tmp_path):
@@ -57,7 +62,7 @@ def test_the_rename_case_still_works(tmp_path):
     stem = tmp_path / "cloudc-f182m_i2d"
     quarantined = str(stem) + "_im0_badastrom.fits"
     Path(quarantined).write_bytes(b"\0" * 10)
-    assert rf.source_state(str(stem) + ".fits", 1234) == rf.SUPERSEDED
+    assert rf.source_state(str(stem) + ".fits", 1234) == rf.QUARANTINED
 
 
 def test_a_missing_source_with_no_twin_is_MISSING(tmp_path):
@@ -78,5 +83,5 @@ def test_audit_manifest_passes_the_recorded_size_through(tmp_path):
     ]}
     states = rf.audit_manifest(manifest)
     assert states["a.fits"] == rf.LIVE
-    assert states["b.fits"] == rf.SUPERSEDED
+    assert states["b.fits"] == rf.REBUILT
     assert rf.superseded_files(manifest) == ["b.fits"]

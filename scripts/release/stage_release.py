@@ -1520,6 +1520,14 @@ def main(argv=None):
     # enter a release. Cloud C shipped six of them for weeks: staged 2026-07-10,
     # superseded by the 2026-07-12 astrometry fix, still on the page in August --
     # presented as evidence that the astrometry is sound.
+    #
+    # Deliberately called with NO recorded size, so this sees only the RENAME
+    # while the page also withholds sources REBUILT since staging.  The
+    # asymmetry is the point and not an oversight: there is nothing to compare
+    # against at staging time -- the size is recorded BY this run, from the file
+    # it is about to copy, so a rebuilt source is simply the current one and is
+    # exactly what should be staged.  The size check only becomes meaningful
+    # once a manifest exists to disagree with.
     stale = [it for it in items
              if release_freshness.source_state(it["src"]) != release_freshness.LIVE]
     if stale:
