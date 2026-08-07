@@ -3,6 +3,7 @@ the package; imported by path)."""
 import importlib.util
 import json
 import os
+import subprocess
 import time
 
 SCRIPTS = os.path.join(os.path.dirname(__file__), '..', 'scripts', 'reduction')
@@ -210,3 +211,110 @@ def test_perframe_shard_name_does_not_carry_the_array_index():
         if 'scontrol update' in line or 'JobName=' in line:
             assert 'SLURM_ARRAY_TASK_ID' not in line, (
                 f'array index must not go into the job name: {line.strip()}')
+
+
+RETIE_LOOP = os.path.join(SCRIPTS, 'run_field_retie_loop.sh')
+
+
+def _run_reduce_gate(tmp_path, states, ntasks, jobid='9999', keep_errexit=False):
+    """Drive reduce_fully_succeeded() for real, with a stub `sacct` on PATH.
+
+    Returns (returncode, output).  Sourcing the loop needs its four required
+    vars; RETIE_LOOP_SOURCE_ONLY makes it stop before the iteration loop.
+    """
+    stub = tmp_path / 'bin'
+    stub.mkdir()
+    (stub / 'sacct').write_text('#!/bin/bash\nprintf "%s\\n" $SACCT_STATES\n')
+    (stub / 'sacct').chmod(0o755)
+    relax = '' if keep_errexit else 'set +e +u +o pipefail'
+    script = f"""
+        export PATH="{stub}:$PATH"
+        export PROPOSAL=4147 FIELD=012 TARGET=sgrc FILTERS="a b"
+        export RETIE_LOOP_SOURCE_ONLY=1
+        source "{RETIE_LOOP}" >/dev/null 2>&1
+        {relax}
+        export SACCT_STATES="{states}"
+        reduce_fully_succeeded "{jobid}" {ntasks}
+    """
+    proc = subprocess.run(['bash', '-c', script], capture_output=True, text=True)
+    return proc.returncode, proc.stdout + proc.stderr
+
+
+def test_reduce_gate_stops_on_the_sgrc_partial_failure(tmp_path):
+    """The case this PR exists for: 4 COMPLETED + 4 FAILED must not be cataloged.
+
+    A filter whose reduce failed keeps the PREVIOUS iteration's WCS, so the m12
+    merge compares this iteration's frames for some bands against last
+    iteration's for others, and the m2 checkpoint writes that mixture into the
+    consensus table as a correction.  sgrc iteration 3 (38870453, 2026-08-07).
+    """
+    rc, out = _run_reduce_gate(
+        tmp_path, 'COMPLETED COMPLETED COMPLETED COMPLETED FAILED FAILED FAILED FAILED', 8)
+    assert rc == 1, f'a partially-failed reduce must stop the loop:\n{out}'
+    assert 'STOPPING before cataloging' in out
+    assert '4/8 completed' in out
+
+
+def test_reduce_gate_proceeds_when_every_task_completed(tmp_path):
+    """And the happy path must NOT stop -- including under `set -e`.
+
+    `grep -c` exits 1 when the count is 0, so an unguarded count of the
+    non-COMPLETED tasks would kill the loop on exactly the all-succeeded case.
+    """
+    rc, out = _run_reduce_gate(tmp_path, 'COMPLETED ' * 8, 8)
+    assert rc == 0, f'a fully successful reduce must proceed:\n{out}'
+    assert 'STOPPING' not in out
+    assert '8/8 completed, 0 not' in out
+
+
+def test_reduce_gate_stops_when_nothing_completed(tmp_path):
+    """Zero COMPLETED is the other `grep -c` zero-count case."""
+    rc, out = _run_reduce_gate(tmp_path, 'FAILED ' * 8, 8)
+    assert rc == 1, f'a wholly failed reduce must stop the loop:\n{out}'
+    assert '0/8 completed' in out
+
+
+def test_reduce_gate_stops_when_a_requeued_task_double_counts(tmp_path):
+    """n_done > ntasks fails in the safe direction: stop, never catalog."""
+    rc, out = _run_reduce_gate(tmp_path, 'COMPLETED ' * 9, 8)
+    assert rc == 1, f'an unexpected task count must stop the loop:\n{out}'
+
+
+def test_reduce_gate_stops_when_no_job_id_was_parsed(tmp_path):
+    """An unparseable sbatch must stop, not silently catalog."""
+    rc, out = _run_reduce_gate(tmp_path, '', 8, jobid='')
+    assert rc == 1, f'a missing job id must stop the loop:\n{out}'
+    assert 'could not parse a job id' in out
+
+
+def test_reduce_gate_survives_errexit_on_the_happy_path(tmp_path):
+    """`grep -c` exits 1 on a zero count, and the loop runs under `set -euo`.
+
+    Called OUTSIDE an if-condition (where bash would suspend errexit), an
+    unguarded count of the non-COMPLETED tasks aborts the script on exactly the
+    all-succeeded case -- so a fully successful reduce would kill the loop
+    silently, which is worse than the bug the guard fixes.  Verified against the
+    unguarded form: rc=1 with no output at all.
+    """
+    rc, out = _run_reduce_gate(tmp_path, 'COMPLETED ' * 8, 8, keep_errexit=True)
+    assert rc == 0, f'errexit must not abort the all-completed case:\n{out}'
+    assert '8/8 completed, 0 not' in out
+
+
+def test_the_loop_actually_calls_the_gate_between_reduce_and_catalog():
+    """The gate has to be WIRED, not just correct.
+
+    Every other test here sources the script and calls
+    `reduce_fully_succeeded` directly, so deleting the call site leaves the
+    suite green while restoring #327 in full: catalog a mixed reduce, m12
+    merges this iteration's frames for the filters that succeeded with last
+    iteration's for the ones that did not, and m2 writes the mixture into the
+    consensus table as a correction.
+    """
+    with open(RETIE_LOOP) as fh:
+        text = fh.read()
+    between = text[text.index('--- 1. reduce'):text.index('--- 2. catalog')]
+    assert 'reduce_fully_succeeded' in between, (
+        'the loop must call the gate between reduce and catalog')
+    assert 'exit 1' in between, (
+        'the loop must stop, not continue, when the reduce is incomplete')
