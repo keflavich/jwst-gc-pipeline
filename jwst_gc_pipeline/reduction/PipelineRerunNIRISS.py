@@ -58,6 +58,7 @@ import datetime
 # supplies the default; an exported CRDS_PATH wins.  The per-target cache
 # selection further down replaces it once the target is known.
 from jwst_gc_pipeline.config import apply_crds_environment
+from jwst_gc_pipeline.reduction.crds_cache import open_crds_reference
 # Printed because the cache decides which reference files -- and so which
 # distortion and filter-offset solutions -- this run uses.
 print(f"CRDS: {apply_crds_environment()}")
@@ -362,7 +363,8 @@ def main(filtername, Observations=None, regionname='sgrc',
     filter_match = sorted(filter_match, key=lambda x: x[-2])
     if filter_match:
         tweakreg_asdf_filename = filter_match[-1][-1]
-        tweakreg_asdf = asdf.open(f'https://jwst-crds.stsci.edu/unchecked_get/references/jwst/{tweakreg_asdf_filename}')
+        tweakreg_asdf = open_crds_reference(os.environ['CRDS_PATH'], 'niriss',
+                                            tweakreg_asdf_filename)
         tweakreg_parameters = tweakreg_asdf.tree['parameters']
     else:
         print(f"No filter-specific tweakreg pars for {filtername}; using empty parameter set")

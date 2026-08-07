@@ -105,6 +105,7 @@ medfilt_size = {'F410M': 15, 'F405N': 256, 'F466N': 55,
 # Imported as field_registry: `fields` is a local variable in these
 # drivers (the --field list), and shadowed the module.
 from jwst_gc_pipeline import fields as field_registry
+from jwst_gc_pipeline.reduction.crds_cache import open_crds_reference
 
 
 # Reference catalog configuration by proposal and field.
@@ -510,7 +511,8 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         filter_match = [x for x in mapping.todict()['selections'] if filtername in x]
         print(f"Filter_match: {filter_match} n={len(filter_match)}")
         tweakreg_asdf_filename = filter_match[0][4]
-        tweakreg_asdf = asdf.open(f'https://jwst-crds.stsci.edu/unchecked_get/references/jwst/{tweakreg_asdf_filename}')
+        tweakreg_asdf = open_crds_reference(crds_dir, 'nircam',
+                                            tweakreg_asdf_filename)
         tweakreg_parameters = tweakreg_asdf.tree['parameters']
         tweakreg_parameters.update({'skip': True,
                                     'fitgeometry': 'general',
