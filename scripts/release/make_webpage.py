@@ -800,6 +800,14 @@ def main(argv=None):
         # it withholds o049, the one region whose astrometry is actually good
         # (~50 mas, against o050's 5.6").  The curated filenames and the
         # registry both carry the obs token.
+        #
+        # Deliberate: this reads the LATEST manifest whichever version's page is
+        # being built, so an older version's page inherits the newest
+        # repudiations.  A curated render is a property of the FIELD -- one
+        # picture, linked from every version -- not of a release, so the newest
+        # word on whether its mosaic is still good is the right one to obey.
+        # The effect is that a frozen v1.0 page can lose a curated image on the
+        # strength of a v1.2-era quarantine, which is the intended direction.
         _stale_now = set()
         _withheld_now = []
         try:
