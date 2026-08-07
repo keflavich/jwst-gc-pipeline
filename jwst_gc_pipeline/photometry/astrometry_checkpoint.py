@@ -730,10 +730,14 @@ def _match_rows(corr, tbl):
     if corr_obs is None and len(known) > 1:
         raise AmbiguousVisitMatchError(
             f"correction names visit {corr['visit']!r} with no observation, but "
-            f"{tbl.colnames and 'the table'} spans observations {sorted(known)}. "
-            f"Matching on the visit number alone would add this correction to "
-            f"every one of them -- the gc2211 #284 broadcast. Give the "
-            f"correction its full jwPPPPPOOOVVV visit id.")
+            f"the table spans observations {sorted(known)}. Matching on the "
+            f"visit number alone would add this correction to every one of "
+            f"them -- the gc2211 #284 broadcast.\n"
+            f"Give the correction its full jwPPPPPOOOVVV visit id (e.g. "
+            f"'jw02211{sorted(known)[0]}001'). scripts/reduction/"
+            f"step0_bulk_offset.py builds `str(--visit).zfill(3)`, which is a "
+            f"bare visit; pass the full id to --visit instead -- zfill leaves "
+            f"an already-full id unchanged, so nothing else needs to know.")
     match = (row_visit == visit) & (tbl["Filter"] == corr["filtername"])
     if corr_obs is not None:
         # Rows whose Visit is a bare number carry no observation to compare, so
@@ -1112,9 +1116,19 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
         # sum.  The first two name the missing COLUMN (the actionable diagnosis);
         # the third is the general row-wise backstop that also catches a column
         # present at the WRONG granularity (family rows vs detector corrections).
-        _assert_module_granularity(corrections, tbl, offsets_path)
-        _assert_vgroup_granularity(corrections, tbl, offsets_path)
-        _assert_one_correction_per_row(corrections, tbl, offsets_path)
+        # Every one of these narrows through _match_rows, which is the only
+        # place AmbiguousVisitMatchError comes from.  Caught HERE, at the first
+        # site that can reach it, for the reason #331 gave when it wrapped the
+        # validation errors three commits ago: callers and
+        # run_field_retie_loop.sh are written around OffsetsTableUpdateError, so
+        # anything else silently changes this function's error contract.
+        try:
+            _assert_module_granularity(corrections, tbl, offsets_path)
+            _assert_vgroup_granularity(corrections, tbl, offsets_path)
+            _assert_one_correction_per_row(corrections, tbl, offsets_path)
+        except AmbiguousVisitMatchError as ex:
+            raise OffsetsTableUpdateError(
+                f"cannot match a correction to a row; NOT writing:\n{ex}") from ex
         # both column conventions exist: 'dra'/'ddec' (generate_offsets_table) and
         # 'dra (arcsec)'/'ddec (arcsec)' (the VIRAC2locked tables fix_alignment
         # reads).  A builder-shaped table carries BOTH, and every pair present is
@@ -1145,6 +1159,8 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
         # preserves an existing gap rather than closing it.  Scoped to touched
         # rows so a field with one stale filter and ten clean ones recovers filter
         # by filter instead of being blocked as a whole.
+        # Cannot raise: the granularity guards above already ran _match_rows
+        # over every correction inside the try that converts this.
         _touched = set()
         for corr in corrections:
             _touched.update(int(i) for i in _match_rows(corr, tbl))

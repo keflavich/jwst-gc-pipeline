@@ -114,3 +114,49 @@ def test_rows_with_a_bare_visit_stay_eligible_for_an_observation_correction():
     tbl = _tbl(visits=['jw02211023001', '001'])
     idx = _match_rows(_corr('jw02211023001'), tbl)
     assert set(str(v) for v in tbl['Visit'][idx]) == {'jw02211023001', '001'}
+
+
+def test_the_refusal_stays_inside_the_writers_error_contract(tmp_path):
+    """`AmbiguousVisitMatchError` is a ValueError and NOT what callers catch.
+
+    Every caller and `run_field_retie_loop.sh` are written around
+    `OffsetsTableUpdateError`, so letting this escape as itself silently
+    changes what `update_offsets_table` can raise -- the identical defect #331
+    fixed in this same function three commits earlier.
+
+    Reachable, not theoretical: `scripts/reduction/step0_bulk_offset.py:308`
+    builds `visit=str(args.visit).zfill(3)`, a bare visit, which is exactly the
+    input that cannot be told apart on a multi-observation table.
+    """
+    import numpy as np
+    from astropy.table import Table
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        OffsetsTableUpdateError, update_offsets_table)
+
+    rows = []
+    for v in GC2211:
+        rows.append({'Visit': v, 'Filter': 'F277W', 'Exposure': 1,
+                     'Module': 'nrcalong', 'dra': 0.0, 'ddec': 0.0,
+                     'dra (arcsec)': 0.0, 'ddec (arcsec)': 0.0})
+    p = str(tmp_path / 'Offsets_JWST_Brick2211_VIRAC2locked.csv')
+    Table(rows).write(p, format='ascii.csv', overwrite=True)
+
+    bare = [dict(visit='001', exposure=1, module='nrcalong', filtername='F277W',
+                 dra_onsky_mas=10.0, ddec_onsky_mas=-5.0, dec_deg=-28.9,
+                 source='step0-shaped bare visit')]
+    with pytest.raises(OffsetsTableUpdateError) as exc:
+        update_offsets_table(p, bare, stage='m2')
+    msg = str(exc.value)
+    assert 'NOT writing' in msg
+    assert 'broadcast' in msg
+
+
+def test_the_refusal_names_the_escape_hatch():
+    """zfill(3) passes a full jw... id through unchanged, so the caller can fix
+    this without any other change -- the message should say so."""
+    t = _tbl()
+    with pytest.raises(AmbiguousVisitMatchError) as exc:
+        _match_rows(_corr('001'), t)
+    msg = str(exc.value)
+    assert 'step0_bulk_offset' in msg
+    assert 'zfill' in msg
