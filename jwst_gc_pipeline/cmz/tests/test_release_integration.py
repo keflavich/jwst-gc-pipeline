@@ -980,6 +980,35 @@ def test_there_is_no_single_SUPERSEDED_name_to_compare_against():
     assert not rf.is_superseded(rf.LIVE) and not rf.is_superseded(rf.MISSING)
 
 
+def test_a_quarantine_that_was_later_re_drizzled_is_still_a_quarantine(tmp_path):
+    """The commonest shape in the tree, and the one `isfile`-first got wrong:
+    m2 quarantines a mosaic, the field is corrected and RE-DRIZZLED under the
+    same name, and the `*_im0_badastrom.fits` twin stays in the directory.  The
+    source exists again, so a presence-first test calls it `rebuilt` -- while
+    the twin is the only on-disk evidence that the bytes staged before the
+    correction are the repudiated ones.
+
+    49 of the 54 rebuilt entries in the release tree are this, including all 23
+    of brick v1.0 and all 6 of cloudc."""
+    rf = _rf_fresh()
+    src = tmp_path / 'jw01182-o001_t001_nircam_f200w-merged_i2d.fits'
+    src.write_bytes(b'\0' * 200)                       # re-drizzled, present
+    (tmp_path / 'jw01182-o001_t001_nircam_f200w-merged_i2d_im0_badastrom.fits'
+     ).write_bytes(b'\0' * 100)                        # the repudiated twin
+    assert rf.has_quarantine_twin(str(src))
+    assert rf.source_state(str(src), recorded_size=100) == rf.QUARANTINED, \
+        'a re-drizzled quarantine was reported as a plain rebuild'
+    # ... but a staged copy whose bytes ARE the current bytes is LIVE: the
+    # field was corrected and re-staged, which is what the quarantine was for.
+    # Condemning it on the twin alone withholds 65 correctly-staged images.
+    assert rf.source_state(str(src), recorded_size=200) == rf.LIVE
+    # and a genuine rebuild with no twin is still REBUILT
+    plain = tmp_path / 'jw01182-o001_t001_nircam_f356w-merged_i2d.fits'
+    plain.write_bytes(b'\0' * 200)
+    assert not rf.has_quarantine_twin(str(plain))
+    assert rf.source_state(str(plain), recorded_size=100) == rf.REBUILT
+
+
 def test_a_rebuild_in_place_is_not_reported_as_a_quarantine(tmp_path):
     """Both states stop publication, but only one is knowable.  A renamed source
     is the pipeline repudiating the file; a size mismatch is a re-run, a

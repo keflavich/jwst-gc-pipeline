@@ -120,6 +120,15 @@ def source_state(src, recorded_size=None):
     """
     if not src:
         return MISSING
+    # The quarantine twin is looked for FIRST, whether or not the source still
+    # exists.  Testing `isfile` first was wrong for the commonest shape in the
+    # tree: the m2 checkpoint quarantines a mosaic and the field is then
+    # RE-DRIZZLED under the same name, so a repudiated product reads REBUILT
+    # while its `*_im0_badastrom.fits` twin sits in the same directory.  49 of
+    # the 54 rebuilt entries are that -- including all 23 of brick v1.0 and all
+    # 6 of cloudc, i.e. exactly the fields whose staged copies predate the
+    # 2026-07-12 astrometry fix.  Reporting those as "rebuilt, no claim made
+    # about their astrometry" understates what is known about them.
     if os.path.isfile(src):
         if recorded_size is None:
             return LIVE
@@ -127,14 +136,38 @@ def source_state(src, recorded_size=None):
             now = os.path.getsize(src)
         except OSError:
             return LIVE          # unreadable size is not evidence of staleness
-        if abs(now - int(recorded_size)) > SIZE_TOLERANCE_BYTES:
-            return REBUILT
-        return LIVE
+        if abs(now - int(recorded_size)) <= SIZE_TOLERANCE_BYTES:
+            # The staged bytes ARE the bytes on disk now.  A twin from an older
+            # quarantine does not condemn them: the field was corrected and
+            # re-staged, which is the outcome the quarantine was for.  Reading
+            # the twin alone here would withhold 65 correctly-staged images.
+            return LIVE
+        # The staged copy differs from what is on disk.  WHY it differs is what
+        # the twin answers: a `*_im0_badastrom.fits` beside the source means a
+        # product of this name was repudiated, and the older staged bytes are
+        # the likely repudiated ones.  Testing `isfile` first and only looking
+        # for the twin when the source was GONE missed the commonest shape in
+        # the tree -- m2 quarantines a mosaic, the field is re-drizzled under
+        # the same name, and the twin stays beside it.  49 of 54 rebuilt
+        # entries are that, including all 23 of brick v1.0 and all 6 of cloudc,
+        # every one reported as "rebuilt, no claim made about the astrometry".
+        return QUARANTINED if has_quarantine_twin(src) else REBUILT
+    return QUARANTINED if has_quarantine_twin(src) else MISSING
+
+
+def has_quarantine_twin(src):
+    """Was a product of this name ever repudiated by the pipeline?
+
+    Independent of whether the source exists now: a quarantine that was later
+    corrected and re-drizzled leaves the twin behind, and that twin is the only
+    on-disk evidence that the bytes staged BEFORE the correction are the bad
+    ones.
+    """
+    if not src:
+        return False
     stem = src[:-5] if src.endswith(".fits") else src
-    for pattern in QUARANTINE_GLOBS:
-        if glob.glob(pattern.format(stem=stem, src=src)):
-            return QUARANTINED
-    return MISSING
+    return any(glob.glob(pattern.format(stem=stem, src=src))
+               for pattern in QUARANTINE_GLOBS)
 
 
 def audit_manifest(manifest, categories=("image",)):
