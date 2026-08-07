@@ -1302,3 +1302,52 @@ def test_curated_images_survive_the_superseded_withholding():
     assert 'withheld as superseded' in page
     assert 'assets/curated_x.jpg' in page       # ...and the curated render survives
     assert 'R=F466N, B=F405N' in page
+
+
+import inspect as _inspect
+
+
+def _mw():
+    import importlib.util
+    import pathlib
+    spec = importlib.util.spec_from_file_location(
+        "make_webpage",
+        pathlib.Path(__file__).resolve().parents[3] / "scripts" / "release"
+        / "make_webpage.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def test_a_curated_render_is_withheld_by_OBSERVATION_not_band():
+    """gc2211 is five observations in one field and all five share
+    F200W/F277W, so a band-level test cannot express "o050 is repudiated, o049
+    is fine" -- it withholds o049, the one region whose astrometry is good
+    (~50 mas, against o050's 5.6").
+
+    And a curated render is NOT independent of the mosaic it came from: o050's
+    render predates the quarantine of its own source by one day, while the page
+    promoted it as the field's primary image.
+    """
+    import re as _re
+    mw = _mw()
+    src = _inspect.getsource(mw)
+    body = src.split('curated_items = []')[1].split('preview_items = []')[0]
+    # the decision is on the pointing, not on the band names
+    assert 'withheld_obs' in body, body[:400]
+    assert "entry.get(\"pointing\")" in body or "entry.get('pointing')" in body
+    # and the obs token is read out of the SOURCE path, which carries it
+    assert _re.search(r"o\\\\d\{3\}", src) or "o\\d{3}" in src, 'no obs-token pattern'
+
+
+def test_a_curated_render_with_no_provenance_fails_rather_than_falls_through():
+    """A curated entry that cannot be tied to a live mosaic must not be the
+    field's primary image while something on the field is repudiated.  The
+    earlier behaviour fell through and published it."""
+    mw = _mw()
+    body = _inspect.getsource(mw).split('curated_items = []')[1] \
+                                 .split('preview_items = []')[0]
+    assert 'cannot tie it to a live mosaic' in body
+    # the fall-through is a `continue`, i.e. the entry is dropped
+    tail = body.split('cannot tie it to a live mosaic')[1][:200]
+    assert 'continue' in tail, tail
