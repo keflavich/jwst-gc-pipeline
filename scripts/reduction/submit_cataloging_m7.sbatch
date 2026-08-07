@@ -20,7 +20,7 @@
 # run_manual_pipeline start_phase note.  The ZEROFRAME satstar deblend is plumbed
 # via DEBLEND_SATSTARS below so a re-made satstar catalog at m7 matches m12.
 # ---------------------------------------------------------------------------
-# renamed to "<target>-catalog-m7" at runtime (target is not always the GC)
+# renamed to "<target><prop>-o<obsid>-m7" at runtime ONLY when submitted bare
 #SBATCH --job-name=catalog_m7
 #SBATCH --account=astronomy-dept
 #SBATCH --qos=astronomy-dept-b
@@ -80,8 +80,6 @@ if [ -n "${PROPOSAL:-}${FIELD:-}${TARGET:-}${EACH_SUFFIX:-}" ] && [ -z "${MODULE
 fi
 MODULES=${MODULES:-nrcb}
 EACH_SUFFIX=${EACH_SUFFIX:-destreak_o012_crf}
-[ -n "${SLURM_JOB_ID:-}" ] && scontrol update JobId="$SLURM_JOB_ID" \
-    JobName="${TARGET}-catalog-m7" 2>/dev/null || true
 # ALL filters that participate in the cross-band merge (space-separated).
 FILTERS=${FILTERS:-"F115W F162M F182M F212N F360M F405N F470N F480M"}
 MAX_GROUP_SIZE=${MAX_GROUP_SIZE:-unlimited}
@@ -108,7 +106,30 @@ FILT_CSV=$(echo "$FILTERS" | tr ' ' ',')
 REF_ARG=""
 [ -n "$CROSSBAND_REF" ] && REF_ARG="--manual-crossband-ref-filter=$CROSSBAND_REF"
 
-scontrol update JobId="${SLURM_JOB_ID:-0}" Name="cat_${TARGET}_m7" 2>/dev/null || true
+# Rename ONLY when this was submitted bare (no --job-name), i.e. the name is
+# still the #SBATCH placeholder.  Same idiom as
+# submit_cataloging_perframe_phase.sbatch:93 (#326) and
+# submit_reduction_miri.sbatch:95.  This script used to rename itself TWICE,
+# unconditionally, over whatever it was given -- submit_cataloging_chain.sh
+# passes a proper submit-time name and the second write (`cat_<target>_m7`)
+# won.
+#
+# The bare-path fallback is the FULL shape, not `cat_<target>_m7`.  That was an
+# open question on #330 -- whether monitoring/jobs.py reads the underscore form
+# better than the dashed one -- and the answer is that it reads it not at all:
+#
+#     parse_job_name('cat_brick_m7')      -> None          (unattributed)
+#     parse_job_name('brick-catalog-m7')  -> stage 'catalog-m7', no obsid
+#     parse_job_name('brick2221-o001-m7') -> target brick, proposal 2221,
+#                                            obsid 001, stage m7
+#
+# _NAME_PF only accepts a `pf_` head, so the underscore form falls through every
+# shape and _resolve_head cannot find a registered field inside it.  The full
+# shape is what submit_cataloging_perframe.sh:88 and run_field_retie_loop.sh:161
+# already use.
+_m7_rename_wanted() { [ "${SLURM_JOB_NAME:-catalog_m7}" = "catalog_m7" ] && [ -n "${SLURM_JOB_ID:-}" ]; }
+_m7_rename_wanted && scontrol update JobId="$SLURM_JOB_ID" \
+    JobName="${TARGET}${PROPOSAL}-o${FIELD}-m7" 2>/dev/null || true
 
 echo "CATALOG m7 start: $TARGET $PROPOSAL/$FIELD filters=$FILT_CSV modules=$MODULES"
 PYTHON=${PYTHON:-/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/python}
