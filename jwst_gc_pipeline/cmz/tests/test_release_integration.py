@@ -751,3 +751,198 @@ def test_a_quarantined_band_does_not_enter_the_plan(tmp_path):
     (bad / 'x-f405n-merged_i2d_im0_badastrom.fits').touch()
     covered = {f for s in pp.plan(tmp_path) for f in s['filters']}
     assert covered == {'F200W', 'F277W'}
+
+
+def test_aladin_must_prove_it_rendered():
+    """Construction returning is not evidence the view works. Aladin can fail in
+    its own async setup -- WebGL2 unavailable, where aladin.js throws a BARE
+    STRING no try can catch -- leaving an opaque inset:0 host over the static
+    map. That is a black rectangle where the map was: 'it's just not there'."""
+    fo = _fo()
+    out = fo.section([_geom('brick', 0.2, 0.0)])
+    assert 'awaitCanvas' in out
+    assert "querySelector('canvas')" in out
+    assert 'needs WebGL2' in out
+    # the bare-string throw is captured globally, since nothing wraps it
+    assert "window.addEventListener('error'" in out
+    assert 'function describeError' in out
+    # and the host is torn down so the static map comes back
+    body = out.split('function awaitCanvas')[1]
+    assert 'fail(' in body.split('READY_TRIES')[1][:600]
+
+
+def test_a_one_pixel_fallback_canvas_is_not_accepted():
+    """`canvas.width > 0` was satisfied by the 1-pixel canvas Aladin builds when
+    it measures the container as zero -- so the panel reported success for a view
+    0 px tall.  The canvas has to be laid out at a usable size."""
+    fo = _fo()
+    out = fo.section([_geom('brick', 0.2, 0.0)])
+    check = out.split('function awaitCanvas')[1].split('readyTries')[0]
+    assert 'canvas.width > 0' not in check, 'a 1-pixel fallback would pass'
+    assert 'MIN_CANVAS_PX' in check and 'getBoundingClientRect' in check, \
+        'the LAID-OUT size is what matters, not the drawing-buffer attribute'
+    assert 'rendered with no usable size' in out
+
+
+def test_the_aladin_host_is_sized_inline_because_aladin_outranks_the_class():
+    """aladin.js ships `.aladin-container{position:relative}` and puts that class
+    on the host.  It loads after this page's <style>, equal specificity, so it
+    WINS: `.ov-aladin{position:absolute}` is overridden, `inset:0` no longer
+    sizes anything, and the div collapses to height 0 with no `height` rule
+    visible anywhere.  Inline style is the only thing a later sheet cannot beat."""
+    fo = _fo()
+    out = fo.section([_geom('brick', 0.2, 0.0)])
+    build = out.split('function build()')[1].split('A.aladin(')[0]
+    assert "host.style.position = 'absolute'" in build
+    assert "host.style.height = '100%'" in build
+    # ... which needs a definite height on the stage, or 100% is itself auto
+    assert "stage.style.height = Math.max(measured, MIN_STAGE_PX) + 'px'" in build
+    # and layout must be flushed before Aladin measures the container
+    assert 'void host.offsetHeight;' in build
+    assert build.index('stage.style.height') < build.index('void host.offsetHeight')
+    # the pin is released on teardown, or a dead gap outlives the map
+    assert "stage.style.height = '';" in out.split('function teardown')[1]
+
+
+def _node():
+    import shutil as _shutil
+    node = _shutil.which('node') or \
+        '/blue/adamginsburg/adamginsburg/miniconda3/envs/python313/bin/node'
+    return node if os.path.isfile(node) else None
+
+
+_DOM_HARNESS = r"""
+// Minimal DOM: enough to run the panel's IIFE through one click and into
+// build().  Asserting on the emitted SOURCE cannot tell whether the sizing
+// actually reaches the element; running it can.
+const fs = require('fs');
+const emitted = fs.readFileSync(process.argv[2], 'utf8');
+const payload = fs.readFileSync(process.argv[3], 'utf8');
+function El(tag) {
+  return {
+    tagName: tag, style: {}, children: [], parentNode: null, className: '',
+    textContent: '', innerHTML: '', hidden: false, disabled: false,
+    _w: 0, _h: 0,
+    appendChild(c) { c.parentNode = this; this.children.push(c); return c; },
+    removeChild(c) {
+      this.children = this.children.filter(x => x !== c); c.parentNode = null;
+      return c;
+    },
+    querySelector(sel) { return this._q ? this._q(sel) : null; },
+    getBoundingClientRect() { return {width: this._w, height: this._h}; },
+    addEventListener() {}, setAttribute() {},
+  };
+}
+const btn = El('button'), status = El('span'), stage = El('div');
+const surveys = El('span'), dataEl = El('script'), head = El('head');
+dataEl.textContent = payload;
+const svg = El('svg'); svg._w = 1068; svg._h = 322;
+// the stage is height:auto off the SVG's intrinsic ratio -- a real height
+stage._w = 1068; stage._h = 322;
+stage._q = (sel) => (sel === 'svg' ? svg : null);
+const byId = {'ov-load': btn, 'ov-status': status, 'ov-stage': stage,
+              'ov-surveys': surveys, 'ov-data': dataEl};
+let clickHandler = null;
+btn.addEventListener = (evt, fn) => { if (evt === 'click') clickHandler = fn; };
+let injected = null;
+head.appendChild = (el) => { injected = el; return el; };
+globalThis.document = {
+  head, getElementById: (id) => byId[id] || null,
+  createElement: (tag) => El(tag),
+};
+globalThis.window = {addEventListener() {}, console: null, location: {}};
+globalThis.setTimeout = () => 0;          // do not spin the 10 s canvas poll
+globalThis.A = {
+  init: Promise.resolve(),
+  aladin(host) { globalThis.__host = host; return {}; },
+  catalog: () => ({addSources() {}}), graphicOverlay: () => ({add() {}}),
+  polygon: () => ({}), source: () => ({}), HiPS: (u) => u,
+};
+eval(emitted);
+clickHandler();
+injected.onload();
+setImmediate(() => setImmediate(() => {
+  const host = globalThis.__host;
+  console.log(JSON.stringify({
+    stageHeight: stage.style.height || null,
+    hostPosition: (host && host.style.position) || null,
+    hostHeight: (host && host.style.height) || null,
+    hostWidth: (host && host.style.width) || null,
+    attached: !!(host && host.parentNode === stage),
+  }));
+}));
+"""
+
+
+def test_running_the_panel_actually_sizes_the_aladin_host(tmp_path):
+    """The bug shipped past every source-level assertion: the CSS said
+    `position:absolute;inset:0` and looked right.  Run the emitted script against
+    a DOM and read the geometry off the element Aladin is handed."""
+    import json
+    import re
+    import subprocess
+    node = _node()
+    if node is None:
+        pytest.skip('node not available to run the emitted script')
+    fo = _fo()
+    out = fo.section([_geom('brick', 0.2, 0.0)])
+    script = re.search(r'<script>\n(.*?)\n</script>', out, re.S).group(1)
+    payload = re.search(r'<script id=ov-data[^>]*>(.*?)</script>', out, re.S).group(1)
+    (tmp_path / 'emitted.js').write_text(script)
+    (tmp_path / 'payload.json').write_text(payload)
+    (tmp_path / 'harness.js').write_text(_DOM_HARNESS)
+    proc = subprocess.run(
+        [node, str(tmp_path / 'harness.js'), str(tmp_path / 'emitted.js'),
+         str(tmp_path / 'payload.json')], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    got = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert got['attached'], 'the host never reached the stage'
+    assert got['hostPosition'] == 'absolute'
+    assert got['hostHeight'] == '100%' and got['hostWidth'] == '100%'
+    # the stage carries a definite pixel height for that 100% to resolve against
+    assert got['stageHeight'] and got['stageHeight'].endswith('px')
+    assert int(got['stageHeight'][:-2]) >= 240
+
+
+def test_a_prior_page_error_is_not_blamed_on_aladin():
+    """`lastGlobalError` is set by a window.onerror listener installed at load
+    and was never cleared, so an unrelated page error -- another script's bug,
+    an ad blocker, a failed analytics fetch -- occurring BEFORE the button was
+    pressed got named on a PUBLIC page as the reason the interactive view
+    failed.  Reviewer's reproduction:
+
+        status: "The interactive view could not start in this browser (Cannot
+                 read properties of null (reading 'appendChild') at
+                 analytics.js:12). Aladin Lite needs WebGL2. ..."
+
+    Source-level, and deliberately so: the DOM harness does not fire a page
+    error before the click, and extending it is a bigger change than the
+    one-line reset it would be checking.
+    """
+    fo = _fo()
+    out = fo.section([_geom('brick', 0.2, 0.0)])
+    click = out.split("btn.addEventListener('click'")[1].split('script.src')[0]
+    assert 'lastGlobalError = null' in click, \
+        'the attempt must start from a clean error slate'
+
+
+def test_the_promise_path_describes_its_error_like_the_others():
+    """`describeError` is used in the synchronous catch and the global
+    listener; the promise catch concatenated the raw value, which prints
+    "Error: ..." for a real Error and "[object Object]" for anything without a
+    useful toString."""
+    fo = _fo()
+    out = fo.section([_geom('brick', 0.2, 0.0)])
+    assert "'Aladin Lite failed to start (' + err +" not in out
+    assert "'Aladin Lite failed to start (' + describeError(err)" in out
+
+
+def test_a_silent_timeout_does_not_assert_webgl2():
+    """No canvas AND no observed error is not evidence of a missing WebGL2 --
+    a slow machine or a stalled fetch reads exactly the same.  The
+    canvas-present branch already worded this carefully; this one did not."""
+    fo = _fo()
+    out = fo.section([_geom('brick', 0.2, 0.0)])
+    assert 'did not start within' in out
+    tail = out.split('The interactive view did not start within')[1][:200]
+    assert 'WebGL2' not in tail, tail
