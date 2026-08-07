@@ -1279,6 +1279,182 @@ def test_a_curated_render_is_withheld_by_OBSERVATION_not_band():
     assert mw.curated_withheld_reason(o049, withheld_obs, withheld_bands) is None
 
 
+_AVM_XMP = """<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:avm="http://www.communicatingastronomy.org/avm/1.0/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:x="adobe:ns:meta/">
+<rdf:RDF><rdf:Description>
+<avm:Spatial.CoordinateFrame>ICRS</avm:Spatial.CoordinateFrame>
+<avm:Spatial.ReferenceValue><rdf:Bag><rdf:li>266.5381893801516071</rdf:li><rdf:li>-28.7022742932987924</rdf:li></rdf:Bag></avm:Spatial.ReferenceValue>
+<avm:Spatial.ReferenceDimension><rdf:Bag><rdf:li>1000.0000000000000000</rdf:li><rdf:li>500.0000000000000000</rdf:li></rdf:Bag></avm:Spatial.ReferenceDimension>
+<avm:Spatial.ReferencePixel><rdf:Bag><rdf:li>500.0000000000000000</rdf:li><rdf:li>250.0000000000000000</rdf:li></rdf:Bag></avm:Spatial.ReferencePixel>
+<avm:Spatial.Scale><rdf:Bag><rdf:li>0.0000100000000000</rdf:li><rdf:li>-0.0000100000000000</rdf:li></rdf:Bag></avm:Spatial.Scale>
+<avm:Spatial.Rotation>89.0000000000000000</avm:Spatial.Rotation>
+<avm:Spatial.FITSheader>CRPIX1  = 500.0 / original grid</avm:Spatial.FITSheader>
+</rdf:Description></rdf:RDF></x:xmpmeta>"""
+
+
+def _png_with_avm(path, size):
+    """A PNG carrying AVM the way the real renders do -- an `XML:com.adobe.xmp`
+    iTXt chunk.  `Image.save(..., xmp=)` is silently ignored by PIL's PNG
+    writer (it only works for JPEG), so a fixture built that way would test
+    nothing."""
+    from PIL import Image, PngImagePlugin
+    info = PngImagePlugin.PngInfo()
+    info.add_itxt('XML:com.adobe.xmp', _AVM_XMP)
+    Image.new('RGBA', size, (9, 9, 9, 255)).save(path, pnginfo=info)
+    return path
+
+
+def _avm_values(xmp, field):
+    import re as _re
+    if isinstance(xmp, bytes):
+        xmp = xmp.decode('utf8', 'replace')
+    block = _re.search(r'<avm:' + field + r'>(.*?)</avm:' + field + r'>', xmp, _re.S)
+    assert block, f'{field} missing from {xmp[:200]}'
+    return [float(v) for v in _re.findall(r'<rdf:li>(.*?)</rdf:li>', block.group(1))]
+
+
+def test_the_avm_astrometry_is_rescaled_not_copied_and_not_dropped(tmp_path):
+    """These renders are 8-12k px wide and the web copy is 2200, so carrying the
+    source AVM through unchanged describes a grid ~5x larger than the pixels it
+    is attached to -- every source in the wrong place, on a release whose stated
+    purpose is being evidence the astrometry is right.  Dropping it silently
+    (what re-encoding did) turns a positioned image into a picture."""
+    from PIL import Image
+    mw = _make_webpage()
+    src = _png_with_avm(tmp_path / 'render.png', (1000, 500))
+    dest = tmp_path / 'web.jpg'
+    mw.web_jpeg(src, dest, max_px=250)
+    with Image.open(dest) as out:
+        assert out.size == (250, 125)
+        xmp = out.info.get('xmp') or out.info.get('XML:com.adobe.xmp')
+    assert xmp, 'the AVM was dropped by re-encoding'
+    factor = 250 / 1000
+    assert _avm_values(xmp, r'Spatial\.ReferenceDimension') == [250.0, 125.0]
+    assert _avm_values(xmp, r'Spatial\.ReferencePixel') == [500 * factor, 250 * factor]
+    # deg/px GROWS as the image shrinks -- the angular size is invariant
+    scale = _avm_values(xmp, r'Spatial\.Scale')
+    assert scale[0] == pytest.approx(1e-5 / factor)
+    assert scale[1] == pytest.approx(-1e-5 / factor)
+    assert scale[0] * 250 == pytest.approx(1e-5 * 1000)
+    # unchanged by a resize
+    assert _avm_values(xmp, r'Spatial\.ReferenceValue')[0] == pytest.approx(266.53818938)
+    # the FITS header describes the ORIGINAL grid and is not rewritten
+    text = xmp.decode('utf8', 'replace') if isinstance(xmp, bytes) else xmp
+    assert 'FITSheader' not in text
+
+
+def test_an_unresized_render_keeps_its_avm_verbatim(tmp_path):
+    from PIL import Image
+    mw = _make_webpage()
+    src = _png_with_avm(tmp_path / 'small.png', (100, 50))
+    dest = tmp_path / 'small.jpg'
+    mw.web_jpeg(src, dest, max_px=2200)
+    with Image.open(dest) as out:
+        xmp = out.info.get('xmp') or out.info.get('XML:com.adobe.xmp')
+    assert _avm_values(xmp, r'Spatial\.ReferenceDimension') == [1000.0, 500.0]
+    text = xmp.decode('utf8', 'replace') if isinstance(xmp, bytes) else xmp
+    assert 'FITSheader' in text          # nothing was resized, nothing is stale
+
+
+def test_a_render_with_no_avm_still_publishes(tmp_path):
+    """Not every curated render carries AVM; absence must not be an error."""
+    from PIL import Image
+    mw = _make_webpage()
+    src = tmp_path / 'plain.png'
+    Image.new('RGB', (80, 40), (5, 5, 5)).save(src)
+    dest = tmp_path / 'plain.jpg'
+    assert mw.web_jpeg(src, dest, max_px=40).is_file()
+    assert mw._published_avm_state(dest) == 'absent'
+
+
+def test_a_published_curated_render_carries_provenance(tmp_path):
+    """A staged mosaic reaches the page with a source, a size and a checksum; a
+    curated render reached it with a filename -- while being the field's PRIMARY
+    image.  The record says what it was made from and what survived."""
+    from PIL import Image
+    mw = _make_webpage()
+    src = _png_with_avm(tmp_path / 'Brick_RGB_444-356-200_transparent.png',
+                        (600, 300))
+    dest = tmp_path / 'curated_brick.jpg'
+    mw.web_jpeg(src, dest, max_px=300)
+    sidecar = tmp_path / 'curated_brick.json'
+    entry = {'stem': 'brick_rgb', 'file': str(src), 'label': 'R=F444W',
+             'pointing': None, 'instrument': 'NIRCam'}
+    rec = mw.curated_provenance(entry, dest, sidecar=sidecar)
+    import hashlib as _h
+    assert rec['source_sha256'] == _h.sha256(src.read_bytes()).hexdigest()
+    assert rec['published_sha256'] == _h.sha256(dest.read_bytes()).hexdigest()
+    assert rec['source_name'] == src.name and rec['published'] == dest.name
+    assert rec['avm'] == 'carried'          # read back off the written file
+    assert sidecar.is_file()
+
+    # cached on (size, mtime): a second call does not re-hash 147 MB
+    calls = []
+    real = mw._sha256
+    mw._sha256 = lambda p, **kw: (calls.append(p), real(p, **kw))[1]
+    try:
+        again = mw.curated_provenance(entry, dest, sidecar=sidecar)
+    finally:
+        mw._sha256 = real
+    assert again['source_sha256'] == rec['source_sha256']
+    assert str(src) not in [str(c) for c in calls], 'the source was re-hashed'
+
+    # a source edited in place invalidates the cache
+    Image.new('RGBA', (600, 300), (7, 7, 7, 255)).save(src)
+    fresh = mw.curated_provenance(entry, dest, sidecar=sidecar)
+    assert fresh['source_sha256'] != rec['source_sha256']
+
+
+def test_the_avm_state_is_read_back_off_the_written_file(tmp_path):
+    """The defect was that every line of code said the AVM was there while
+    re-encoding had dropped it, so the state is measured, not intended."""
+    from PIL import Image
+    mw = _make_webpage()
+    p = tmp_path / 'x.jpg'
+    Image.new('RGB', (10, 10), (0, 0, 0)).save(p)
+    assert mw._published_avm_state(p) == 'absent'
+    Image.new('RGB', (10, 10), (0, 0, 0)).save(p, xmp=_AVM_XMP.encode('utf8'))
+    assert mw._published_avm_state(p) == 'carried'
+    assert mw._published_avm_state(tmp_path / 'nope.jpg') == 'unknown'
+
+
+def test_curated_withholding_keys_on_the_quarantine_not_the_rebuild(tmp_path):
+    """A curated render has no recorded link to a particular build of the
+    mosaic, so "rebuilt in place" says nothing about the picture -- while "the
+    pipeline repudiated this mosaic's astrometry" condemns everything drawn
+    from it.  On the REBUILT reading brick loses two of its three curated
+    images to 23 rebuilt v1.0 sources and ZERO quarantines."""
+    mw = _make_webpage()
+    rf = _rf_fresh()
+    # a source the pipeline RENAMED (repudiated) ...
+    quarantined = tmp_path / 'jw02221-o050_t001_nircam_f200w_i2d.fits'
+    (tmp_path / 'jw02221-o050_t001_nircam_f200w_i2d_im0_badastrom.fits').touch()
+    # ... and one rebuilt in place, which is a perfectly good current file
+    rebuilt = tmp_path / 'jw02221-o023_t001_nircam_f277w_i2d.fits'
+    rebuilt.write_bytes(b'\0' * 100)
+    manifest = {'files': [
+        {'category': 'image', 'dest': 'q', 'src': str(quarantined),
+         'filter': 'F200W', 'observation': 'o050', 'size_bytes': 4096},
+        {'category': 'image', 'dest': 'r', 'src': str(rebuilt),
+         'filter': 'F277W', 'observation': 'o023', 'size_bytes': 4096},
+    ]}
+    assert rf.superseded_reasons(manifest) == {'q': rf.QUARANTINED,
+                                               'r': rf.REBUILT}
+    obs, bands, known = mw.curated_withholding_inputs(manifest)
+    assert obs == {'o050'}, 'the rebuilt observation must not withhold a render'
+    assert bands == {'F200W'}
+    assert known == {'o023', 'o050'}        # both are real pointings of the field
+
+    # end to end through the rule: o050's render goes, o023's stays
+    o050 = {'pointing': 'o050', 'label': 'R=F277W, G=mean, B=F200W'}
+    o023 = {'pointing': 'o023', 'label': 'R=F277W, G=mean, B=F200W'}
+    assert mw.curated_withheld_reason(o050, obs, bands, known_obs=known)
+    assert mw.curated_withheld_reason(o023, obs, bands, known_obs=known) is None
+    # a field with ONLY rebuilds withholds nothing -- the brick v1.0 case
+    only_rebuilt = {'files': [manifest['files'][1]]}
+    assert mw.curated_withholding_inputs(only_rebuilt) == (set(), set(), {'o023'})
+
+
 def test_a_label_shaped_pointing_is_not_treated_as_an_observation():
     """cloudc's curated MIRI renders carry `pointing='MIRI F770W'` -- a label,
     not an obs token.  It is never in `withheld_obs`, so the observation branch
