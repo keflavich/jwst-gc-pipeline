@@ -282,8 +282,16 @@ def _avm_for_resize(xmp, orig_size, new_size):
         return None                      # not a shape we can correct
     out = _avm_bag(xmp, r'Spatial\.ReferenceDimension',
                    [float(new_size[0]), float(new_size[1])])
+    # (p - 0.5)*s + 0.5, not p*s.  AVM's ReferencePixel is 1-based like FITS
+    # CRPIX, and a resize maps pixel CENTRES -- verified against PIL directly:
+    # for a ramp downscaled 4x, mean|v - ((x+0.5)/s - 0.5)| = 0.003 against
+    # mean|v - x/s| = 1.50.  The naive form is what pyavm's own
+    # `to_wcs(target_shape=)` does (`crpix *= scale`), and it puts the reference
+    # pixel up to half a source pixel out: measured across these renders, the
+    # published position moved by up to 155 mas against the source AVM.
     out = _avm_bag(out, r'Spatial\.ReferencePixel',
-                   [refpix[0] * sx, refpix[1] * sy])
+                   [(refpix[0] - 0.5) * sx + 0.5,
+                    (refpix[1] - 0.5) * sy + 0.5])
     # deg/px grows as the image shrinks; the CD matrix is the same statement in
     # matrix form, so every element scales the same way.  Rotation, projection,
     # reference value and quality are all resize-invariant and left alone.
@@ -298,6 +306,20 @@ def _avm_for_resize(xmp, orig_size, new_size):
     out = re.sub(r'<avm:Spatial\.FITSheader>.*?</avm:Spatial\.FITSheader>', '',
                  out, flags=re.S)
     return out.encode("utf-8")
+
+
+def _needs_avm_refresh(src, dest):
+    """Would re-encoding add astrometry the published copy does not have?"""
+    from PIL import Image
+    Image.MAX_IMAGE_PIXELS = None
+    try:
+        with Image.open(src) as img:
+            if not (img.info.get("XML:com.adobe.xmp") or img.info.get("xmp")):
+                return False                  # nothing to carry
+        with Image.open(dest) as img:
+            return not (img.info.get("xmp") or img.info.get("XML:com.adobe.xmp"))
+    except (OSError, ValueError):
+        return True            # unreadable either side -> rebuild and find out
 
 
 def web_jpeg(src, dest, max_px=2200):
@@ -315,7 +337,15 @@ def web_jpeg(src, dest, max_px=2200):
     from PIL import Image
     Image.MAX_IMAGE_PIXELS = None
     if dest.is_file() and dest.stat().st_mtime >= os.path.getmtime(src):
-        return dest
+        # ... but only if it already has everything this function now writes.
+        # The mtime skip is what makes a page build affordable, and it silently
+        # made the AVM work a no-op wherever a JPEG already existed: the
+        # deployment target holds 31 curated JPEGs built before the AVM was
+        # carried, every one newer than its source, so a rebuild there would
+        # have skipped all 31 and written "avm": "absent" into every provenance
+        # record while claiming the astrometry now survives.
+        if not _needs_avm_refresh(src, dest):
+            return dest
     img = Image.open(src)
     xmp = img.info.get("XML:com.adobe.xmp") or img.info.get("xmp")
     if img.mode in ("RGBA", "LA", "P"):
@@ -375,7 +405,10 @@ def curated_provenance(entry, published, sidecar=None):
     if record is None:
         record = {
             "stem": entry["stem"],
-            "source": os.path.abspath(src),
+            # basename + parent only: the absolute path is a host detail and
+            # this record is served publicly.
+            "source": os.path.join(os.path.basename(os.path.dirname(src)),
+                                   os.path.basename(src)),
             "source_name": os.path.basename(src),
             "source_bytes": stat.st_size,
             "source_mtime": int(stat.st_mtime),
@@ -451,7 +484,11 @@ def curated_withholding_inputs(manifest):
     # cloudc's MIRI renders carry `pointing='MIRI F770W'`, which is a label.
     known_obs = {(f.get("observation") or "").lower()
                  for f in manifest.get("files", []) if f.get("observation")}
-    return withheld_obs, withheld_bands, known_obs | withheld_obs
+    # No `| withheld_obs`: it can never add anything.  `withheld_obs` is built
+    # by the `o\d{3}` search above, so every member already matches
+    # OBS_TOKEN_RE and is recognised on shape alone.  The union looked like
+    # defence in depth and was unreachable -- deleting it changed no test.
+    return withheld_obs, withheld_bands, known_obs
 
 
 def curated_withheld_reason(entry, withheld_obs=(), withheld_bands=(),
@@ -1098,15 +1135,15 @@ def main(argv=None):
         # word on whether its mosaic is still good is the right one to obey.
         # The effect is that a frozen v1.0 page can lose a curated image on the
         # strength of a v1.2-era quarantine, which is the intended direction.
-        _stale_now = set()
-        _withheld_now = []
         try:
             _lm = json.loads((field_release_dir(field, latest, args.release_root)
                               / "MANIFEST.json").read_text())
-        except (OSError, ValueError):
+        except (OSError, ValueError) as err:
+            # Silence here disabled curated withholding entirely and published
+            # every render, with nothing said.
+            print(f"  {field}: WARNING cannot read the latest MANIFEST "
+                  f"({err}); curated withholding is DISABLED for this field")
             _lm = None
-        if _lm is not None:
-            _stale_now = set(release_freshness.superseded_reasons(_lm))
         withheld_obs, withheld_bands_c, known_obs_c = \
             curated_withholding_inputs(_lm)
 
@@ -1122,13 +1159,23 @@ def main(argv=None):
             dest = assets / f"curated_{entry['stem']}.jpg"
             try:
                 web_jpeg(entry["file"], dest)
-                prov = curated_provenance(
-                    entry, dest, sidecar=assets / f"curated_{entry['stem']}.json")
             except (OSError, ValueError) as err:
                 print(f"  {field}: could not prepare {entry['stem']}: {err}")
                 continue
-            curated_prov.append(prov)
-            if prov["avm"] == "absent":
+            try:
+                prov = curated_provenance(
+                    entry, dest, sidecar=assets / f"curated_{entry['stem']}.json")
+            except (OSError, ValueError) as err:
+                # A record that cannot be written is a reason to say so, not to
+                # delete a picture that rendered fine.  Sharing one handler with
+                # web_jpeg meant an unwritable sidecar dropped the field's
+                # primary image from the page.
+                print(f"  {field}: WARNING no provenance for {entry['stem']}: "
+                      f"{err}")
+                prov = None
+            if prov:
+                curated_prov.append(prov)
+            if prov and prov["avm"] == "absent":
                 # not fatal -- some renders genuinely carry no AVM -- but it is
                 # the difference between a picture and a positioned picture, so
                 # it is said out loud rather than discovered later

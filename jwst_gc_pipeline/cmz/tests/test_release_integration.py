@@ -6,6 +6,7 @@ their file paths.
 import importlib.util
 import math
 import os
+import re
 
 import pytest
 
@@ -1404,7 +1405,10 @@ def test_the_avm_astrometry_is_rescaled_not_copied_and_not_dropped(tmp_path):
     assert xmp, 'the AVM was dropped by re-encoding'
     factor = 250 / 1000
     assert _avm_values(xmp, r'Spatial\.ReferenceDimension') == [250.0, 125.0]
-    assert _avm_values(xmp, r'Spatial\.ReferencePixel') == [500 * factor, 250 * factor]
+    # 1-based reference pixel through a centre-mapping resize
+    assert _avm_values(xmp, r'Spatial\.ReferencePixel') == [
+        pytest.approx((500 - 0.5) * factor + 0.5),
+        pytest.approx((250 - 0.5) * factor + 0.5)]
     # deg/px GROWS as the image shrinks -- the angular size is invariant
     scale = _avm_values(xmp, r'Spatial\.Scale')
     assert scale[0] == pytest.approx(1e-5 / factor)
@@ -1458,7 +1462,8 @@ def test_the_two_axes_are_rescaled_independently():
     assert cd[0] == pytest.approx(-0.0000002649725452 / sx)
     assert cd[1] == pytest.approx(-0.0000174702244258 / sy)
     refpix = _avm_values(out, r'Spatial\.ReferencePixel')
-    assert refpix == [pytest.approx(500 * sx), pytest.approx(250 * sy)]
+    assert refpix == [pytest.approx((500 - 0.5) * sx + 0.5),
+                      pytest.approx((250 - 0.5) * sy + 0.5)]
 
 
 def test_every_curated_render_in_the_registry_keeps_its_astrometry():
@@ -1565,6 +1570,28 @@ def test_a_published_curated_render_carries_provenance(tmp_path):
     fresh = mw.curated_provenance(entry, dest, sidecar=sidecar)
     assert fresh['source_sha256'] != rec['source_sha256']
 
+    # ... including an edit that keeps the byte count identical.  Checking size
+    # alone survived, and a re-render to the same length is exactly what a
+    # tweaked stretch of the same field produces.
+    same_length = tmp_path / 'same.png'
+    same_length.write_bytes(src.read_bytes())
+    side2 = tmp_path / 'same.json'
+    entry2 = dict(entry, file=str(same_length), stem='same')
+    first = mw.curated_provenance(entry2, dest, sidecar=side2)
+    swapped = bytearray(same_length.read_bytes())
+    swapped[-1] ^= 0xFF                       # same length, different bytes
+    same_length.write_bytes(bytes(swapped))
+    os.utime(same_length, (rec['source_mtime'] + 50, rec['source_mtime'] + 50))
+    second = mw.curated_provenance(entry2, dest, sidecar=side2)
+    assert second['source_sha256'] != first['source_sha256'], \
+        'the cache trusted the size alone'
+
+    # and the recorded AVM state must come from the file, not from a constant
+    plain_jpg = tmp_path / 'plain.jpg'
+    Image.new('RGB', (20, 10), (0, 0, 0)).save(plain_jpg)
+    entry3 = dict(entry, stem='plain')
+    assert mw.curated_provenance(entry3, plain_jpg)['avm'] == 'absent'
+
 
 def test_the_avm_state_is_read_back_off_the_written_file(tmp_path):
     """The defect was that every line of code said the AVM was there while
@@ -1614,6 +1641,108 @@ def test_curated_withholding_keys_on_the_quarantine_not_the_rebuild(tmp_path):
     # a field with ONLY rebuilds withholds nothing -- the brick v1.0 case
     only_rebuilt = {'files': [manifest['files'][1]]}
     assert mw.curated_withholding_inputs(only_rebuilt) == (set(), set(), {'o023'})
+
+
+def test_the_page_actually_shows_the_provenance(tmp_path):
+    """Nothing passed `curated_prov=` into `render_field_page` anywhere in this
+    file, so the caption line and the JSON link -- the entire user-visible
+    product of the provenance work -- could both be deleted with the suite
+    green.  The unit was tested; the thing a reader sees was not."""
+    mw = _make_webpage()
+    manifest = {'version': 'v1', 'built': '2026-08-05T00:00:00Z',
+                'globus_https_base': 'https://example.invalid',
+                'globus_collection_id': '0', 'release_path': '/r', 'files': []}
+    prov = [{'published': 'curated_x.jpg', 'source_name': 'Brick_RGB.png',
+             'source_sha256': 'abcdef0123456789' * 4, 'avm': 'carried'}]
+    page = mw.render_field_page(
+        'brick', manifest, 'assets/curated_x.jpg',
+        curated=[('assets/curated_x.jpg', 'R=F444W, G=F356W, B=F200W')],
+        curated_prov=prov, preview_from_curated=True)
+    assert 'Brick_RGB.png' in page                  # what it was made from
+    assert 'abcdef012345' in page                   # the checksum, abbreviated
+    assert 'carries AVM/WCS' in page                # what survived
+    assert 'brick_curated.json' in page             # the full record is linked
+
+    # and a render published WITHOUT astrometry says so rather than nothing
+    prov[0]['avm'] = 'absent'
+    page = mw.render_field_page(
+        'brick', manifest, 'assets/curated_x.jpg',
+        curated=[('assets/curated_x.jpg', 'R=F444W')], curated_prov=prov,
+        preview_from_curated=True)
+    assert 'no AVM/WCS' in page
+
+
+def test_main_writes_the_curated_record_and_links_it(tmp_path):
+    """`curated_prov.append(prov)` could be deleted and the suite stayed green:
+    no test ran main() far enough to see the file."""
+    import json as _json
+    from PIL import Image
+    mw = _make_webpage()
+    root, out = str(tmp_path / 'rel'), str(tmp_path / 'site')
+    _fake_release(root, 'brick', 'v1.0-2026.06', with_preview=False)
+    src = _png_with_avm(tmp_path / 'Fake_Brick_render.png', (400, 200))
+    entry = {'stem': 'fake_brick', 'file': str(src), 'label': 'R=F444W',
+             'pointing': None, 'instrument': 'NIRCam'}
+    # patch the module `make_webpage` itself imported, not the test's own copy
+    real = mw.curated_images.for_field
+    mw.curated_images.for_field = lambda f: [entry] if f == 'brick' else []
+    try:
+        mw.main(['--fields', 'brick', '--release-root', root, '--out', out])
+    finally:
+        mw.curated_images.for_field = real
+    record = os.path.join(out, 'brick_curated.json')
+    assert os.path.isfile(record), 'the provenance record was never written'
+    data = _json.loads(open(record).read())
+    assert data['field'] == 'brick' and len(data['images']) == 1
+    got = data['images'][0]
+    assert got['source_name'] == 'Fake_Brick_render.png'
+    assert len(got['source_sha256']) == 64 and len(got['published_sha256']) == 64
+    assert got['avm'] == 'carried'
+    # the served record must not leak the host path it was built from
+    assert not got['source'].startswith('/'), got['source']
+    assert 'brick_curated.json' in open(os.path.join(out, 'brick.html')).read()
+
+
+def test_an_avm_shape_we_cannot_correct_is_dropped_not_passed_through():
+    """The stated contract is that a confident wrong answer is worse than
+    silence.  Nothing pinned the fail-safe that implements it: returning the
+    source XMP unchanged for an un-correctable shape passed every test, and
+    would attach a full-size grid's astrometry to a 2200 px image."""
+    mw = _make_webpage()
+    no_scale = _AVM_XMP
+    for field in ('Spatial.Scale', 'Spatial.CDMatrix'):
+        no_scale = re.sub(r'<avm:' + re.escape(field) + r'>.*?</avm:'
+                          + re.escape(field) + r'>', '', no_scale, flags=re.S)
+    assert mw._avm_for_resize(no_scale, (1000, 500), (250, 125)) is None
+    no_refpix = re.sub(r'<avm:Spatial\.ReferencePixel>.*?'
+                       r'</avm:Spatial\.ReferencePixel>', '', _AVM_XMP, flags=re.S)
+    assert mw._avm_for_resize(no_refpix, (1000, 500), (250, 125)) is None
+    # a resize that is not a resize still passes through verbatim
+    assert mw._avm_for_resize(_AVM_XMP, (1000, 500), (1000, 500)) is not None
+
+
+def test_a_published_jpeg_missing_the_avm_is_rebuilt_despite_its_mtime(tmp_path):
+    """The mtime skip made the whole AVM change a no-op on the deployment
+    target: 31 curated JPEGs there predate it, all newer than their sources, so
+    a rebuild skipped every one and recorded "avm": "absent"."""
+    import time
+    from PIL import Image
+    mw = _make_webpage()
+    src = _png_with_avm(tmp_path / 'r.png', (400, 200))
+    dest = tmp_path / 'r.jpg'
+    Image.new('RGB', (200, 100), (0, 0, 0)).save(dest)      # no XMP, newer
+    os.utime(dest, (time.time() + 10, time.time() + 10))
+    assert mw._needs_avm_refresh(src, dest)
+    mw.web_jpeg(src, dest, max_px=200)
+    assert mw._published_avm_state(dest) == 'carried', 'the skip won again'
+    # once it carries the AVM, the skip applies as before
+    assert not mw._needs_avm_refresh(src, dest)
+    # a source with no AVM never forces a rebuild
+    plain = tmp_path / 'p.png'
+    Image.new('RGB', (40, 20), (1, 1, 1)).save(plain)
+    plain_dest = tmp_path / 'p.jpg'
+    Image.new('RGB', (20, 10), (1, 1, 1)).save(plain_dest)
+    assert not mw._needs_avm_refresh(plain, plain_dest)
 
 
 def test_a_label_shaped_pointing_is_not_treated_as_an_observation():
