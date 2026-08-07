@@ -3449,12 +3449,22 @@ def _astrom_find_offsets_table(basepath, proposal_id, field=None):
     return None
 
 
-_DETECTOR_TOKEN_RE = re.compile(r'_(nrc[ab](?:[1-4]|long)?)_visit')
+#: The detector token may be followed by a per-observation token
+#: (`_o023`, `_j6778`) before `_visit`.  Requiring `_visit` immediately
+#: after the detector skipped every tokened field -- gc2211 and ngc6334
+#: are entirely tokened, so the duplicate filters below were no-ops there.
+_DETECTOR_TOKEN_RE = re.compile(
+    r'_(nrc[ab](?:[1-4]|long)?)(?:_(?:o\d{3}|j\d{4,5}))?_visit')
 
 # The per-observation / per-proposal disambiguator that `obs_token` inserts
 # between the detector and the visit number (`_o023`, `_j6778`).  Names written
 # before that token existed carry nothing there.
 _OBS_TOKEN_RE = re.compile(r'_(o\d{3}|j\d{4,5})_visit')
+
+#: The observation an ``_oNNN_crf.fits`` PROVENANCE path names.  Distinct from
+#: `_OBS_TOKEN_RE`, which reads a token out of a CATALOG filename: a source
+#: path that names no observation is not evidence of a foreign one.
+_SRC_OBS_RE = re.compile(r'_o\d{3}(?:-\d{3})?_')
 
 # What may legitimately sit between the 5-digit exposure number and the stage
 # label in a per-frame catalog name.  Empty is the plain per-frame fit;
@@ -3482,9 +3492,31 @@ def _drop_module_level_duplicates(fns, filt, merge_label, module):
     9th detector covering the same sky -- sgrb2 F212N read +69/-110 mas for it,
     and cloudef F162M still has 24 such files next to 80 per detector.
 
-    A module-level catalog is only dropped when that module also has real
-    per-detector catalogs; a genuinely module-level field (NIRCam LW is named
-    ``nrcalong``/``nrcblong``, not ``nrca``/``nrcb``) is left alone.
+    A module-level catalog is only dropped when that module also has a MORE
+    SPECIFIC spelling of the same hardware: a numbered SW detector
+    (``nrcb1..4``) or the long detector (``nrcblong``).  A module with nothing
+    but bare catalogs is left alone -- a genuinely module-level field must not
+    be emptied.
+
+    ``nrcXlong`` counts as superseding, and that is the fix for issue #298.
+    For an LW filter ``nrcblong`` IS the detector, so a bare ``nrcb`` catalog
+    of an LW filter can only be the SAME physical detector written by a run
+    invoked ``--modules nrcb`` (``crowdsource_catalogs_long`` spells MODULE
+    from the invocation, the detector from the filename).  Keeping both
+    ingested one physical frame twice under two module tokens; the m2 checkpoint
+    then wrote per-exposure rows under both spellings, and
+    ``unified_alignment._read_consensus`` -- whose ``_module_variants`` maps
+    ``nrcblong -> {nrcblong, nrcb}`` -- found two rows for one frame and refused
+    to reduce the field.  On cloudef 2092/002 the bare copies were in fact
+    observation 005's frames, so the two row sets carried genuinely different
+    corrections for the same exposure.
+
+    The earlier form excluded ``long`` here, reasoning that "a bare ``nrca``
+    would be dropped on the strength of an LW catalog with no SW per-detector
+    catalog behind it".  That case cannot arise: this function sees ONE
+    filter's catalogs, and a filter is imaged by one channel, so a SW filter's
+    glob never contains ``nrcalong``.  What the reasoning does protect -- a
+    module whose only catalogs are bare -- is preserved above and tested.
     """
     bare, per_det = {}, set()
     for fn in fns:
@@ -3494,10 +3526,7 @@ def _drop_module_level_duplicates(fns, filt, merge_label, module):
         det = m.group(1)
         if det in ('nrca', 'nrcb'):
             bare.setdefault(det, []).append(fn)
-        elif det[4:] in '1234':
-            # only a NUMBERED detector supersedes its bare module.  `nrcalong`
-            # must not, or a bare `nrca` would be dropped on the strength of an
-            # LW catalog with no SW per-detector catalog behind it.
+        elif det[4:] in '1234' or det.endswith('long'):
             per_det.add(det[:4])
     drop = {fn for det, group in bare.items() if det in per_det for fn in group}
     if drop:
@@ -3508,8 +3537,99 @@ def _drop_module_level_duplicates(fns, filt, merge_label, module):
     return [fn for fn in fns if fn not in drop]
 
 
+def _resolved_obsid(options):
+    """THIS run's observation id, or None when it cannot be established.
+
+    ``--field`` carries it when it was given, and ``submit_cataloging.sbatch``
+    always gives it.  A bare ``crowdsource_catalogs_long.py`` invocation may
+    not, and ``main()`` then falls back to
+    ``fields.default_field_token``, which returns ``obsids[0]`` -- the first
+    entry the registry happens to list.
+
+    That fallback is fine for choosing what to catalog and wrong for saying
+    what a catalog on disk belongs to.  On cloudef it answers '002' whichever
+    observation is running, so an o005 run would read its own 8 frames as
+    foreign and drop them, and the resulting consensus -- built from the other
+    observation's exposures -- would PASS.  Where the registry lists more than
+    one observation for this target and instrument, this returns None and the
+    caller keeps everything: the pre-existing behaviour, loud rather than
+    wrong.  Where exactly one is listed there is nothing to guess and it is
+    returned.
+    """
+    from jwst_gc_pipeline import fields as _freg
+    target = getattr(options, 'target', None)
+    proposal = getattr(options, 'proposal_id', None)
+    known = _freg.BY_NAME.get(str(target)) if target else None
+    obs = known.observation(str(proposal)) if (known is not None and proposal) else None
+    modules = str(getattr(options, 'modules', '') or '').lower()
+    instrument = 'miri' if 'mirimage' in modules else 'nircam'
+    field = getattr(options, 'field', None)
+    if field not in (None, ''):
+        # VALIDATE it.  `--field` was taken verbatim, and
+        # `submit_cataloging.sbatch:63` is `FIELD=${FIELD:-012}` -- so a typo
+        # or a stale default produced a `want` that matches nothing on disk,
+        # and the new consequence of that is a silently emptied m2 gate (at
+        # m1/m12/m2 `if not fns:` only prints) or a fatal m5.  An obsid this
+        # target does not have cannot be this run's, so refuse to use it and
+        # keep everything -- a bad `--field` is harmless again.
+        if obs is None:
+            return str(field)          # unregistered target: nothing to check against
+        allowed = ({str(o) for o in obs.obsids.get(instrument, ())}
+                   | {str(j) for j in obs.joint_obsids.get(instrument, ())})
+        if allowed and str(field) not in allowed:
+            print(f"astrom checkpoint: --field {field!r} is not an obsid of "
+                  f"{target}/{proposal} {instrument} ({sorted(allowed)}); "
+                  f"NOT using it to identify this run's per-frame catalogs "
+                  f"(keeping them all).", flush=True)
+            return None
+        return str(field)
+    if obs is None:
+        return None
+    joint = obs.joint_obsids.get(instrument, ())
+    if joint:
+        return str(joint[0]) if len(joint) == 1 else None
+    seen = obs.obsids.get(instrument, ())
+    return str(seen[0]) if len(seen) == 1 else None
+
+
+def _catalog_source_frame(fn):
+    """The crf path a per-frame catalog was measured on, or None.
+
+    Read from the table metadata rather than the filename, because the
+    filename is exactly what is ambiguous here.
+
+    HEADER-ONLY, and that is not a nicety: this runs once per candidate
+    catalog before every frozen-stage checkpoint.  ``Table.read`` pulls the
+    whole binary table to reach one keyword -- measured on brick F212N at
+    0.60 s/file against 0.071 s for ``fits.getheader(ext=1)``, i.e. 114 s vs
+    14 s for 192 catalogs, and roughly 4 core-hours per archive pass per
+    stage.  ``FILENAME`` lives in the ext-1 header, so the rows are never
+    needed.  ``.ecsv`` has no such split and falls back to the full read.
+
+    A catalog a killed job left zero-length is the routine failure here.
+    Measured, because the obvious guess is wrong: a zero-length ``.fits``
+    raises ``OSError`` from ``fits.getheader`` and never reaches ``Table.read``
+    at all, and a zero-length ``.ecsv`` -- which does -- raises
+    ``InconsistentTableError``, a ``ValueError`` subclass already covered.  An
+    earlier version of this docstring had it the other way round and named
+    ``IORegistryError``, which is unreachable from here.  The caller treats
+    "unreadable" as KEEP.
+    """
+    from astropy.io import fits
+    if fn.endswith(('.fits', '.fit', '.fits.gz')):
+        try:
+            return str(fits.getheader(fn, ext=1).get('FILENAME') or '') or None
+        except (OSError, KeyError, IndexError, ValueError):
+            return None
+    try:
+        from astropy.table import Table
+        return str(Table.read(fn).meta.get('FILENAME') or '') or None
+    except (OSError, ValueError, KeyError):
+        return None
+
+
 def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
-                                 target):
+                                 target, target_obs=None):
     """Drop per-frame catalogs belonging to a DIFFERENT observation/proposal.
 
     The checkpoint's glob is ``{filt}_*visit*_vgroup*_exp*`` -- the ``*`` after
@@ -3557,13 +3677,109 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
     # them risks a consensus quietly built from half the detectors.
     shared = n_obs > 1
     drop = []
+    want = None
     if shared:
         # More than one observation of this field images this filter, so a
-        # pre-token basename cannot say which one wrote it.  Exact token match.
+        # pre-token basename cannot say which one wrote it FROM ITS NAME.
+        #
+        # It can say so from its CONTENTS.  Every per-frame catalog records the
+        # crf it was measured on in `meta['FILENAME']`, and that path carries
+        # the observation (`..._destreak_o005_crf.fits`).  The per-frame writer
+        # emits a token for 2211/7213/6778 only, so on cloudef this run's token
+        # and the foreign catalogs' were BOTH empty, the comparison was
+        # `'' != ''`, and all 24 F360M catalogs were kept -- 8 of them
+        # observation 005's frames, which is how the aliasing offsets rows in
+        # issue #298 were produced.  Matching on the name cannot fix that
+        # without also dropping every legacy catalog on disk and emptying the
+        # input.  Read the provenance instead.
+        #
+        # FAIL-SAFE: a catalog whose provenance cannot be read is KEPT, with a
+        # line saying so.  Dropping real exposures builds a consensus from half
+        # the detectors and PASSES, which is worse than the duplicate it avoids
+        # -- the same reasoning as the single-observation branch below.
+        #
+        # `target_obs` must be THIS run's observation and nothing else.  When
+        # it is unknown the filter does not guess: `want` stays None and every
+        # provenance-readable catalog is kept, exactly as before this branch
+        # existed.  Guessing would mean picking `obsids[0]` from the registry,
+        # and on cloudef that is '002' -- so an o005 run would discard its own
+        # 8 frames and build the consensus from the other observation's.  The
+        # resolution lives in `_resolved_obsid`, which returns None rather than
+        # choose.
+        # A JOINT obsid is a SET of observations, not a string.  sgrb2's MIRI
+        # is registered `002-998` and sickle's `001-002`, and `_resolved_obsid`
+        # hands the joint token straight through -- but no crf is ever named
+        # `_o002-998_`; the real names are `_o002_` and `_o998_`.  Tested as a
+        # single substring, `want` matched nothing and every file was dropped:
+        # sgrb2 F770W 60 -> 0, sickle F770W 60 -> 0, silent at m2 and
+        # AstrometryRegressionError at m5, on release-path fields.  That is the
+        # exact failure the comment above records for the consensus-token
+        # variant, reached through a different door.  Decompose and test
+        # MEMBERSHIP.
+        # The joint spelling itself is kept in the set as well: `_SRC_OBS_RE`
+        # accepts `_o002-998_`, so if a product ever IS named that way it
+        # must not be read as foreign to the very run it belongs to.
+        want = ({f"_o{str(target_obs)}_"}
+                | {f"_o{p}_" for p in str(target_obs).split('-') if p}
+                if target_obs else None)
+
+        def _identity(base):
+            m = _OBS_TOKEN_RE.search(base)
+            if m:
+                base = base.replace('_' + m.group(1), '', 1)
+            return re.sub(r'_chunk\d+of\d+', '', base)
+
+        tokened_ids = {_identity(os.path.basename(f)) for f in fns
+                       if _OBS_TOKEN_RE.search(os.path.basename(f))}
+        unreadable = []
         for fn in fns:
-            m = _OBS_TOKEN_RE.search(os.path.basename(fn))
-            if (m.group(1) if m else '') != token:
+            base = os.path.basename(fn)
+            m = _OBS_TOKEN_RE.search(base)
+            if m:
+                if m.group(1) != token:
+                    drop.append(fn)
+                continue
+            src = _catalog_source_frame(fn)
+            if src is not None:
+                # The source must NAME an observation before it can name a
+                # foreign one.  `want not in basename(src)` treated "this path
+                # does not spell an observation at all" identically to "it
+                # spells a different one" -- fail-CLOSED, inside the one branch
+                # whose stated design is that an unidentifiable catalog is
+                # KEPT.  A source that is not a crf (`..._cal.fits`) emptied
+                # the whole input, and at m1/m12/m2 `if not fns:` only prints
+                # and returns, so the checkpoint would have silently ceased to
+                # exist.  All 8 fields surveyed carry `_oNNN_` today; this is
+                # one non-crf source name away from biting.
+                m_src = _SRC_OBS_RE.search(os.path.basename(src))
+                if want and m_src:
+                    if m_src.group(0) not in want:
+                        drop.append(fn)
+                    continue
+                if want:
+                    unreadable.append(fn)
+                continue
+            # Provenance unreadable.  If a TOKENED copy of the same exposure
+            # exists, this one is redundant whatever it is -- drop it, which is
+            # also the pre-token behaviour and what keeps issue #259's
+            # DuplicateExposureError from returning.  Only a file with no
+            # tokened counterpart is kept, because dropping it could remove a
+            # real exposure and build a consensus from half the detectors.
+            if token and _identity(base) in tokened_ids:
                 drop.append(fn)
+            else:
+                # This run writes no token, or there is no tokened copy of
+                # this exposure: keep.  In either case the file may well be
+                # THIS run's own output under the pre-token name, and dropping
+                # it builds a consensus from half the detectors.
+                unreadable.append(fn)
+        if unreadable:
+            print(f"astrom checkpoint [{merge_label}] {filt}/{module}: "
+                  f"{len(unreadable)} untokened per-frame catalog(s) carry no "
+                  f"usable source-frame provenance; KEEPING them.  If this "
+                  f"directory holds more than one observation they may belong "
+                  f"to another one (issue #298) -- re-catalog to get the "
+                  f"observation token in the filename.", flush=True)
     else:
         # Exactly one observation images this filter, so every catalog here is
         # this run's whatever its name.  Discarding the untokened ones would
@@ -3607,6 +3823,15 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
         foreign = sorted({(_OBS_TOKEN_RE.search(os.path.basename(f)).group(1)
                            if _OBS_TOKEN_RE.search(os.path.basename(f))
                            else '<untokened>') for f in drop})
+        # Say WHAT WAS DEMANDED and how much of the input it cost.  The line
+        # used to name only the filename token, so the loudest failure -- every
+        # catalog dropped -- was silent about its own cause: an operator saw
+        # "excluded 60 ... (['<untokened>'])" with no way to tell that `want`
+        # was a joint token that can never appear in a crf name.  The
+        # unreadable-provenance KEEP path already prints a specific message;
+        # this is the same courtesy on the path that actually removes data.
+        demanded = (f"; this run demanded {sorted(want)}"
+                    if shared and want else "")
         why = ("this run is "
                f"{('_' + token) if token else '<untokened>'}, and the "
                "obs-blind glob matches every observation in the directory"
@@ -3615,8 +3840,14 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
                "the same exposures under their pre-token name")
         noun = "foreign-observation" if shared else "duplicate"
         print(f"astrom checkpoint [{merge_label}] {filt}/{module}: excluded "
-              f"{len(drop)} {noun} per-frame catalog(s) ({foreign}) -- {why}",
-              flush=True)
+              f"{len(drop)} of {len(fns)} {noun} per-frame catalog(s) "
+              f"({foreign}){demanded} -- {why}", flush=True)
+        if shared and len(drop) == len(fns):
+            print(f"astrom checkpoint [{merge_label}] {filt}/{module}: that is "
+                  f"EVERY catalog.  A frozen-stage gate with no inputs is a "
+                  f"silently disabled gate, not a pass -- check that "
+                  f"--field/target_obs names an observation these frames were "
+                  f"actually taken in.", flush=True)
     drop = set(drop)
     return [fn for fn in fns if fn not in drop]
 
@@ -3740,7 +3971,8 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
               f"{len(rejected)} non-canonical per-frame catalog(s) (e.g. "
               f"{os.path.basename(rejected[0])})", flush=True)
     fns = _drop_foreign_obs_duplicates(fns, _perframe_token, filt, merge_label,
-                                       module, getattr(options, 'target', None))
+                                       module, getattr(options, 'target', None),
+                                       target_obs=_resolved_obsid(options))
     if not fns:
         # A frozen stage with no inputs is not a pass -- it is the gate silently
         # ceasing to exist, which is how the `_group_` duplication survived so
