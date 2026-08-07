@@ -1129,6 +1129,35 @@ def _manual_phase_of(options):
     return (getattr(options, 'manual_stop_after_phase', '') or '').strip()
 
 
+def perframe_sentinel_key(options, module, file_detector):
+    """``(file_module, manual_phase)`` for a per-exposure existence check.
+
+    BOTH ``--list-missing-tasks`` and ``--skip-if-done`` must ask the question
+    the same way, so they ask it through here.  They did not, and that is how
+    #333 shipped half-fixed: the LIST path was corrected and the SKIP path was
+    not, giving flatly contradictory answers about the same 1248 frames on the
+    live sgrb2 tree --
+
+        --list-missing-tasks   recognised as done   1248 / 1248
+        --skip-if-done         recognised as done      0 / 1248
+
+    -- which is worse than either answer alone, because the resume is told
+    there is nothing to do and then redoes all of it.
+
+    The two corrections, both keyed on being a manual per-frame run:
+
+    * name by DETECTOR, not by module.  ``save_photutils_results`` writes the
+      detector token unconditionally; ``module`` is only the merge label.  The
+      live fan-out runs ``--modules=nrca``, so predicting ``f150w_nrca_...``
+      never matched the written ``f150w_nrca1_...``.
+    * label by PHASE, not by ``options.iteration_label``.  The launcher passes
+      the phase per call; the top-level option the predictor sees is empty.
+    """
+    phase = _manual_phase_of(options)
+    file_module = file_detector if (phase or module == 'merged') else module
+    return file_module, phase
+
+
 def _expected_output_exists(basepath, filtername, module, options,
                             visit_id, vgroup_id, exposure_id,
                             iteration_label=None, manual_phase=None):
@@ -4774,10 +4803,8 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             # fan-out runs `--modules=nrca`, so this predicted
                             # `f150w_nrca_...` against a written
                             # `f150w_nrca1_...` and matched nothing (#333).
-                            _phase = _manual_phase_of(options)
-                            file_module = (file_detector
-                                           if (_phase or module == 'merged')
-                                           else module)
+                            file_module, _phase = perframe_sentinel_key(
+                                options, module, file_detector)
                             if not _expected_output_exists(
                                     basepath, filtername, file_module, options,
                                     visit_id, vgroup_id, exposure_id,
@@ -4880,14 +4907,13 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             # them all under 'merged' would overwrite 8 outputs
                             # per exposure down to 1.
                             file_detector = filename.split("_")[3]
-                            if module == 'merged':
-                                file_module = file_detector
-                            else:
-                                file_module = module
+                            file_module, _skip_phase = perframe_sentinel_key(
+                                options, module, file_detector)
                             if options.skip_if_done and _expected_output_exists(
                                     basepath, filtername, file_module, options,
                                     visit_id, vgroup_id, exposure_id,
-                                    iteration_label=options.iteration_label or None):
+                                    iteration_label=options.iteration_label or None,
+                                    manual_phase=_skip_phase):
                                 print(f'skip-if-done: expected output exists for '
                                       f'{filtername} {file_module} visit={visit_id} '
                                       f'vgroup={vgroup_id} exp={exposure_id}; skipping.')

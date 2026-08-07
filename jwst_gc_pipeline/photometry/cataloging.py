@@ -4922,6 +4922,37 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                               f"{shard_i}/{shard_n} -> {len(frame_args)} of "
                               f"{len(all_frames)} frames", flush=True)
 
+                    # RESUME.  A fan-out that hit its wall clock leaves every
+                    # finished frame's completion marker on disk; without this
+                    # the re-run refits all of them and hits the same wall
+                    # (#333).  The marker is written by the worker that
+                    # SUCCEEDED, so unlike a predicted output filename it cannot
+                    # drift from what the writer does -- which is how the
+                    # filename-prediction half of this shipped disagreeing with
+                    # itself.  Frames already marked are carried into
+                    # `overlapping_now` so the finalize's completeness check
+                    # still sees them.
+                    if getattr(options, 'skip_if_done', False) and (
+                            skip_finalize or finalize_only):
+                        _todo, _resumed = [], 0
+                        for a in frame_args:
+                            _fn = a['filename']
+                            _det = _fn.split('_')[3]
+                            if os.path.exists(_marker_path(_fn, _det, filt, phase, 'ok')):
+                                overlapping_now.append(_fn)
+                                _resumed += 1
+                            elif os.path.exists(_marker_path(_fn, _det, filt,
+                                                             phase, 'nooverlap')):
+                                no_overlap.append((_fn, 'no-overlap (marker)'))
+                                _resumed += 1
+                            else:
+                                _todo.append(a)
+                        if _resumed:
+                            print(f"manual [{phase}] {filt}/{module}: skip-if-done "
+                                  f"resumed {_resumed} frame(s) from completion "
+                                  f"markers; {len(_todo)} left to fit", flush=True)
+                        frame_args = _todo
+
                     def _on_result(filename, ok, err):
                         if ok:
                             overlapping_now.append(filename)
