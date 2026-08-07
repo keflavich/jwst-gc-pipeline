@@ -961,9 +961,36 @@ def test_quarantined_source_is_detected(tmp_path):
     assert rf.source_state(str(live)) == rf.LIVE
     gone = tmp_path / 'b-f182m-merged_i2d.fits'
     (tmp_path / 'b-f182m-merged_i2d_im0_badastrom.fits').touch()
-    assert rf.source_state(str(gone)) == rf.SUPERSEDED
+    assert rf.source_state(str(gone)) == rf.QUARANTINED
     assert rf.source_state(str(tmp_path / 'never-existed_i2d.fits')) == rf.MISSING
     assert rf.source_state(None) == rf.MISSING
+
+
+def test_a_rebuild_in_place_is_not_reported_as_a_quarantine(tmp_path):
+    """Both states stop publication, but only one is knowable.  A renamed source
+    is the pipeline repudiating the file; a size mismatch is a re-run, a
+    re-chunk or a new stage, and nothing in a `stat` says which.  Collapsing
+    them put "the m2 checkpoint quarantined this" on 23 of brick's 31 frozen
+    v1.0 images, where no such thing had happened."""
+    rf = _rf_fresh()
+    rebuilt = tmp_path / 'c-f405n-merged_i2d.fits'
+    rebuilt.write_bytes(b'12345')
+    assert rf.source_state(str(rebuilt), recorded_size=5) == rf.LIVE
+    assert rf.source_state(str(rebuilt), recorded_size=4096) == rf.REBUILT
+    assert rf.REBUILT != rf.QUARANTINED
+
+    quarantined = tmp_path / 'd-f405n-merged_i2d.fits'
+    (tmp_path / 'd-f405n-merged_i2d_im0_badastrom.fits').touch()
+    assert rf.source_state(str(quarantined), recorded_size=4096) == rf.QUARANTINED
+
+    # both are withheld, and the reason travels with each one
+    manifest = {'files': [
+        {'category': 'image', 'dest': 'r', 'src': str(rebuilt), 'size_bytes': 4096},
+        {'category': 'image', 'dest': 'q', 'src': str(quarantined), 'size_bytes': 4096},
+    ]}
+    assert rf.superseded_files(manifest) == ['q', 'r']
+    assert rf.superseded_reasons(manifest) == {'r': rf.REBUILT,
+                                               'q': rf.QUARANTINED}
 
 
 def test_superseded_files_reads_the_manifest(tmp_path):
@@ -994,12 +1021,59 @@ def test_page_withholds_a_superseded_image_and_says_so():
                      'iteration': None, 'observation': None,
                      'dest': 'images/F182M/bad.fits', 'url': 'u2', 'size_bytes': 1},
                 ]}
-    page = mw.render_field_page('cloudc', manifest, None,
-                                superseded=['images/F182M/bad.fits'])
-    assert 'image(s) withheld' in page
-    assert 'F182M' in page.split('withheld')[1][:400]     # named in the notice
+    rf = _load('release_freshness', os.path.join(_REL, 'release_freshness.py'))
+    page = mw.render_field_page(
+        'cloudc', manifest, None, superseded=['images/F182M/bad.fits'],
+        reasons={'images/F182M/bad.fits': rf.QUARANTINED})
+    assert 'withheld as bad astrometry' in page
+    assert 'F182M' in page.split('withheld')[1][:500]     # named in the notice
     assert 'u2' not in page                               # no download offered
     assert 'u1' in page                                   # the current one stays
+
+
+def test_the_notice_only_blames_the_astrometry_checkpoint_where_it_acted():
+    """The notice used to assert -- for every withheld image -- that the m2
+    checkpoint quarantined the mosaic.  That is knowable only for a RENAMED
+    source; a rebuild in place is one `stat` disagreeing with a recorded size,
+    and it is the majority (52 of 116).  Under the old wording, 23 of brick's
+    31 frozen v1.0 images carried a quarantine that never happened."""
+    mw = _make_webpage()
+    rf = _load('release_freshness', os.path.join(_REL, 'release_freshness.py'))
+
+    def _page(state):
+        manifest = {'version': 'v1', 'built': '2026-08-05T00:00:00Z',
+                    'globus_https_base': 'https://example.invalid',
+                    'globus_collection_id': '0', 'release_path': '/r',
+                    'files': [{'category': 'image', 'kind': 'science',
+                               'filter': 'F182M', 'iteration': None,
+                               'observation': None, 'dest': 'images/F182M/b.fits',
+                               'url': 'u', 'size_bytes': 1}]}
+        return mw.render_field_page('brick', manifest, None,
+                                    superseded=['images/F182M/b.fits'],
+                                    reasons={'images/F182M/b.fits': state})
+
+    quarantined = _page(rf.QUARANTINED)
+    assert 'astrometry checkpoint' in quarantined
+    assert 'bad astrometry' in quarantined
+
+    rebuilt = _page(rf.REBUILT)
+    assert 'astrometry checkpoint' not in rebuilt, \
+        'a rebuild in place is not evidence the checkpoint acted'
+    assert 'quarantin' not in rebuilt.lower()
+    assert 'rebuilt or replaced' in rebuilt
+    assert 'no claim is made about their astrometry' in rebuilt
+
+    # a caller that supplies no reason gets the sentence that asserts less
+    unknown = mw.render_field_page(
+        'brick', {'version': 'v1', 'built': '2026-08-05T00:00:00Z',
+                  'globus_https_base': 'https://example.invalid',
+                  'globus_collection_id': '0', 'release_path': '/r',
+                  'files': [{'category': 'image', 'kind': 'science',
+                             'filter': 'F182M', 'iteration': None,
+                             'observation': None, 'dest': 'd', 'url': 'u',
+                             'size_bytes': 1}]},
+        None, superseded=['d'])
+    assert 'astrometry checkpoint' not in unknown
 
 
 def test_a_preview_built_from_a_withheld_band_is_not_shown():
@@ -1020,3 +1094,75 @@ def test_a_preview_built_from_a_withheld_band_is_not_shown():
         superseded=['images/F182M/bad.fits'])
     assert 'cloudc_rgb_f212n_f187n_f182m' not in page
     assert 'class=preview ' not in page
+
+
+def _gc2211_manifest():
+    """gc2211: two observations, both shipping F200W and F277W."""
+    files = []
+    for obs in ('o023', 'o050'):
+        for band in ('F200W', 'F277W'):
+            files.append({'category': 'image', 'kind': 'science', 'filter': band,
+                          'iteration': None, 'observation': obs,
+                          'dest': f'images/{obs}/{band}/m.fits',
+                          'url': f'u-{obs}-{band}', 'size_bytes': 1})
+    return {'version': 'v1', 'built': '2026-08-05T00:00:00Z',
+            'globus_https_base': 'https://example.invalid',
+            'globus_collection_id': '0', 'release_path': '/r', 'files': files}
+
+
+def test_previews_are_withheld_by_observation_not_by_band():
+    """gc2211's five observations all ship F200W/F277W, so a band-keyed rule
+    drops EVERY preview when one observation is superseded -- including ones
+    rendered entirely from o023's live mosaics -- while the same page still
+    offers o023's F200W and F277W for download.  The manifest carries
+    `observation` and the stems carry the obs token; both were ignored."""
+    mw = _make_webpage()
+    previews = [('a/gc2211_o023_rgb_f277w_mean_f200w.jpg',
+                 'gc2211_o023_rgb_f277w_mean_f200w'),
+                ('a/gc2211_o050_rgb_f277w_mean_f200w.jpg',
+                 'gc2211_o050_rgb_f277w_mean_f200w')]
+    page = mw.render_field_page(
+        'gc2211', _gc2211_manifest(), 'assets/gc2211.jpg', previews=previews,
+        superseded=['images/o050/F200W/m.fits', 'images/o050/F277W/m.fits'])
+    assert 'gc2211_o023_rgb_f277w_mean_f200w' in page, \
+        "the live pointing's preview was dropped for a sibling's supersession"
+    assert 'gc2211_o050_rgb_f277w_mean_f200w' not in page
+    # and the downloads agree with the pictures, which is what broke before
+    assert 'u-o023-F200W' in page and 'u-o050-F200W' not in page
+
+    # With the withheld render FIRST, the headline image must move to the
+    # survivor: `assets/<field>.jpg` is a byte copy of previews[0], so dropping
+    # it from the gallery alone leaves it as the page's main picture.
+    page = mw.render_field_page(
+        'gc2211', _gc2211_manifest(), 'assets/gc2211.jpg',
+        previews=list(reversed(previews)),
+        superseded=['images/o050/F200W/m.fits', 'images/o050/F277W/m.fits'])
+    assert 'gc2211_o050_rgb_f277w_mean_f200w' not in page
+    assert 'gc2211_o023_rgb_f277w_mean_f200w' in page
+    assert 'assets/gc2211.jpg' not in page, \
+        'the headline image is still the copy of the withheld render'
+
+
+def test_an_off_convention_preview_stem_fails_closed():
+    """`stem.partition("_rgb_")[2]` is '' for a stem without `_rgb_`, so the
+    band intersection was empty and the preview was SHOWN.  The picture is what
+    a reader looks at; one that cannot be tied to anything must not survive a
+    withholding round."""
+    mw = _make_webpage()
+    manifest = {'version': 'v1', 'built': '2026-08-05T00:00:00Z',
+                'globus_https_base': 'https://example.invalid',
+                'globus_collection_id': '0', 'release_path': '/r',
+                'files': [{'category': 'image', 'kind': 'science', 'filter': 'F182M',
+                           'iteration': None, 'observation': None,
+                           'dest': 'images/F182M/bad.fits', 'url': 'u',
+                           'size_bytes': 1}]}
+    page = mw.render_field_page(
+        'cloudc', manifest, 'assets/cloudc.jpg',
+        previews=[('assets/cloudc_pretty.jpg', 'cloudc_pretty')],
+        superseded=['images/F182M/bad.fits'])
+    assert 'cloudc_pretty' not in page
+    # ... but with nothing withheld it is published as before
+    page = mw.render_field_page(
+        'cloudc', manifest, 'assets/cloudc.jpg',
+        previews=[('assets/cloudc_pretty.jpg', 'cloudc_pretty')])
+    assert 'cloudc_pretty' in page

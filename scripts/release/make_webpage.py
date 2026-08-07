@@ -17,6 +17,7 @@ rsync carrying --delete removes it (as happened 2026-08-06); the script protects
 that tree and verifies it is still there afterwards.
 """
 import argparse
+import collections
 import html
 import json
 import shutil
@@ -199,26 +200,55 @@ def _preview_caption(stem, field):
 
 def render_field_page(field, manifest, preview_rel, preview_channels=None,
                       all_versions=None, preview_version=None, previews=(),
-                      superseded=()):
+                      superseded=(), reasons=None):
     # A staged image whose SOURCE has since been quarantined as bad-astrometry
     # must not be presented as this field's astrometry. It is withheld from the
     # page, and the withholding is stated -- the point of the release is to be
     # evidence the astrometry is right, so quietly serving a superseded mosaic
     # is worse than showing nothing. The file itself is untouched.
     superseded = set(superseded or ())
+    reasons = dict(reasons or {})
     files = [f for f in manifest["files"] if f.get("dest") not in superseded]
     withheld = [f for f in manifest["files"] if f.get("dest") in superseded]
     # A preview RENDERED FROM a withheld mosaic is the thing a reader actually
     # looks at, so withholding the download row and leaving the picture up
-    # publishes the bad astrometry anyway. Drop any preview using a withheld
-    # band -- the band names are in the filename.
+    # publishes the bad astrometry anyway.
+    #
+    # Withhold on the OBSERVATION where the manifest has one.  Keying on the
+    # band alone is wrong for a multi-pointing field: gc2211's five
+    # observations all ship F200W/F277W, so superseding o050 dropped EVERY
+    # preview -- including ones rendered entirely from o023's live mosaics --
+    # while the same page still offered o023's F200W and F277W for download.
+    # Both halves of the manifest entry are there; only one was being read.
     withheld_bands = {(f.get("filter") or "").upper() for f in withheld}
-    if withheld_bands:
-        previews = [(rel, stem) for rel, stem in previews
-                    if not (withheld_bands
-                            & {p.upper() for p in stem.partition("_rgb_")[2].split("_")})]
-        if not previews:
-            preview_rel = None
+    withheld_obs = {(f.get("observation") or "").lower()
+                    for f in withheld if f.get("observation")}
+    live_obs = {(f.get("observation") or "").lower()
+                for f in files if f.get("observation")}
+
+    def _keep_preview(stem):
+        head, sep, bands = stem.partition("_rgb_")
+        if not sep:
+            # Off-convention stem: nothing can be established about what it was
+            # rendered from.  Fail CLOSED -- the picture is what a reader looks
+            # at, so an untieable one must not survive a withholding round.
+            return not (withheld_bands or withheld_obs)
+        obs = head[len(field) + 1:].lower() if head.startswith(field + "_") else ""
+        if obs and (obs in withheld_obs or obs in live_obs):
+            # the pointing decides, alone: a preview of a live pointing is
+            # live even when a sibling pointing shares its bands
+            return obs not in withheld_obs
+        return not (withheld_bands & {p.upper() for p in bands.split("_")})
+
+    if withheld_bands or withheld_obs:
+        kept = [(rel, stem) for rel, stem in previews if _keep_preview(stem)]
+        if len(kept) != len(previews):
+            # `assets/<field>.jpg` is a byte COPY of previews[0], so dropping
+            # that render from the gallery does not stop it being the page's
+            # headline image and the index card's thumbnail.  Re-point at a
+            # survivor; only an empty survivor list means no picture at all.
+            preview_rel = kept[0][0] if kept else None
+        previews = kept
     images = [f for f in files if f["category"] == "image"]
     catalogs = [f for f in files if f["category"] == "catalog"]
     filters = sorted({f["filter"] for f in images if f["filter"]},
@@ -234,15 +264,46 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                f"{_version_dropdown(field, manifest['version'], all_versions)}</div>")
     out.append("</header><main>")
     if withheld:
-        bands = sorted({f.get("filter") or "?" for f in withheld})
+        # Two states, two sentences.  This notice used to assert -- for every
+        # withheld image -- that "the m2 astrometry checkpoint corrected the
+        # offsets table and quarantined every mosaic built before it".  That is
+        # true only where the pipeline actually renamed the file.  For a source
+        # REBUILT in place, all that is known is one `stat` disagreeing with the
+        # recorded size; a re-run, a re-chunk or a new stage all look identical,
+        # and the rebuilt case is now the majority (52 of 116).  Naming a
+        # quarantine that did not happen is a public-facing false statement --
+        # it would have appeared on 23 of brick's 31 frozen v1.0 images.
+        quarantined = [f for f in withheld
+                       if reasons.get(f.get("dest")) == release_freshness.QUARANTINED]
+        rebuilt = [f for f in withheld if f not in quarantined]
+
+        def _bands(group):
+            return html.escape(', '.join(sorted({f.get("filter") or "?"
+                                                 for f in group})))
+        lines = []
+        if quarantined:
+            lines.append(
+                f"<b>{len(quarantined)} withheld as bad astrometry.</b> The "
+                f"pipeline repudiated the mosaics these were staged from -- the "
+                f"m2 astrometry checkpoint corrected the offsets table and "
+                f"quarantined every mosaic built before it: "
+                f"<code>{_bands(quarantined)}</code>.")
+        if rebuilt:
+            # Deliberately says less.  This bucket is "the bytes on disk are no
+            # longer the staged ones", which also covers a reason the caller did
+            # not supply, so it must not name a cause of any kind.
+            lines.append(
+                f"<b>{len(rebuilt)} withheld as superseded.</b> The sources "
+                f"these were staged from are no longer the files they were "
+                f"copied from -- they have been rebuilt or replaced since, so "
+                f"these are the older bytes. Why is not recorded here, and no "
+                f"claim is made about their astrometry: "
+                f"<code>{_bands(rebuilt)}</code>.")
         out.append(
             "<p style='border:1px solid #b58900;padding:.6rem 1rem;border-radius:6px'>"
-            f"<b>{len(withheld)} image(s) withheld.</b> The pipeline has since "
-            f"superseded the mosaics these were staged from (the m2 astrometry "
-            f"checkpoint corrected the offsets table and quarantined every mosaic "
-            f"built before it), so they are no longer shown here: "
-            f"<code>{html.escape(', '.join(bands))}</code>. They will return when "
-            f"the field is re-staged from current products.</p>")
+            + " ".join(lines)
+            + " They will return when the field is re-staged from current"
+              " products.</p>")
     if all_versions and manifest['version'] != all_versions[0]:
         out.append(f"<p class=muted style='border:1px solid #b58900;padding:.5em'>"
                    f"You are viewing an <b>older</b> release ({html.escape(manifest['version'])}). "
@@ -656,12 +717,16 @@ def main(argv=None):
         for v in versions:
             manifest = json.loads(
                 (field_release_dir(field, v, args.release_root) / "MANIFEST.json").read_text())
-            stale_files = release_freshness.superseded_files(manifest)
+            stale_reasons = release_freshness.superseded_reasons(manifest)
+            stale_files = sorted(stale_reasons)
             if stale_files and v == latest:
-                print(f"  {field}: WITHHOLDING {len(stale_files)} superseded "
-                      f"image(s) -- source quarantined since staging")
+                counts = collections.Counter(stale_reasons.values())
+                print(f"  {field}: WITHHOLDING {len(stale_files)} image(s) -- "
+                      + ", ".join(f"{n} {state}" for state, n
+                                  in sorted(counts.items())))
             page = render_field_page(field, manifest, preview_rel, preview_channels,
                                      superseded=stale_files,
+                                     reasons=stale_reasons,
                                      all_versions=versions,
                                      preview_version=preview_version,
                                      previews=preview_items)

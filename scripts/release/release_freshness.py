@@ -32,6 +32,16 @@ copy goes stale, and the second is the larger:
 
 Nothing is deleted -- a superseded image stops being PUBLISHED, and the file
 stays where it is.
+
+SCOPE -- this detects CHANGE SINCE STAGING, never CORRECTNESS.  A clean audit
+here is not an astrometry pass.  The worst live case in the tree at the time of
+writing is one this module is structurally blind to: ``v1.2-2026.08/sgra``
+reads ``live`` for both images and they are ~14.8" off (#324) -- their sources
+were never renamed and never rebuilt, they were simply never corrected, because
+proposal 1939 was missing from ``ALIGNMENT_CONFIG``.  Nothing here should try to
+catch that; the registration gates and the m2 checkpoint are what look at
+pixels.  This module only answers "are the bytes on the page still the bytes
+that were signed off?".
 """
 import glob
 import json
@@ -46,8 +56,29 @@ QUARANTINE_GLOBS = (
 )
 
 LIVE = "live"
-SUPERSEDED = "superseded"
+#: The pipeline REPUDIATED the file: it renamed it to a quarantine twin.  This
+#: is the only state that says anything about astrometry.
+QUARANTINED = "quarantined"
+#: The source was rebuilt in place under the same name -- a re-run, a re-chunk,
+#: a new stage.  The staged bytes are simply older than the source's; nothing in
+#: a ``stat`` says why, so nothing here may claim a reason.
+REBUILT = "rebuilt"
 MISSING = "missing"
+
+#: Both mean "do not publish these bytes", and they are the majority/minority
+#: the other way round from what the first version of this module assumed: 52
+#: of the 116 non-live entries are REBUILT, not quarantined.  They were reported
+#: under one name, and the page then asserted the astrometry checkpoint had
+#: quarantined 23 of brick's v1.0 images when nothing of the sort had happened.
+SUPERSEDED_STATES = (QUARANTINED, REBUILT)
+
+#: Kept so existing callers reading a single "superseded" name still work; the
+#: two-state split is what the page needs, not what the gate needs.
+SUPERSEDED = QUARANTINED
+
+
+def is_superseded(state):
+    return state in SUPERSEDED_STATES
 
 
 #: A rebuilt mosaic differs from the staged one by far more than this.  The
@@ -92,12 +123,12 @@ def source_state(src, recorded_size=None):
         except OSError:
             return LIVE          # unreadable size is not evidence of staleness
         if abs(now - int(recorded_size)) > SIZE_TOLERANCE_BYTES:
-            return SUPERSEDED
+            return REBUILT
         return LIVE
     stem = src[:-5] if src.endswith(".fits") else src
     for pattern in QUARANTINE_GLOBS:
         if glob.glob(pattern.format(stem=stem, src=src)):
-            return SUPERSEDED
+            return QUARANTINED
     return MISSING
 
 
@@ -113,9 +144,24 @@ def audit_manifest(manifest, categories=("image",)):
 
 
 def superseded_files(manifest, categories=("image",)):
-    """Staged files whose source has since been quarantined."""
+    """Staged files whose source is no longer the one they were staged from."""
     return sorted(dest for dest, state in audit_manifest(manifest, categories).items()
-                  if state == SUPERSEDED)
+                  if is_superseded(state))
+
+
+def superseded_reasons(manifest, categories=("image",)):
+    """``{dest: QUARANTINED | REBUILT}`` -- WHY each withheld file is withheld.
+
+    The page has to say something about every image it withholds, and the two
+    states support different sentences.  ``QUARANTINED`` means the pipeline
+    renamed the file to a quarantine twin, which is a statement about its
+    astrometry.  ``REBUILT`` means one ``stat`` disagrees with the recorded
+    size; that can be a re-run, a re-chunk or a new stage, and asserting a
+    quarantine there is a claim the check cannot support.
+    """
+    return {dest: state
+            for dest, state in audit_manifest(manifest, categories).items()
+            if is_superseded(state)}
 
 
 def load_manifest(field_dir):
@@ -134,19 +180,26 @@ def field_report(field_dir):
         return 0, [], []
     states = audit_manifest(manifest)
     return (sum(1 for s in states.values() if s == LIVE),
-            sorted(d for d, s in states.items() if s == SUPERSEDED),
+            sorted(d for d, s in states.items() if is_superseded(s)),
             sorted(d for d, s in states.items() if s == MISSING))
 
 
 def describe(field, field_dir):
     """One human line, or ``None`` when everything the field ships is current."""
+    manifest = load_manifest(field_dir)
+    states = audit_manifest(manifest) if manifest else {}
     live, superseded, missing = field_report(field_dir)
     if not superseded and not missing:
         return None
     parts = [f"{field}: {live} current"]
-    if superseded:
-        parts.append(f"{len(superseded)} SUPERSEDED "
-                     f"(source quarantined as bad-astrometry since staging)")
+    quarantined = [d for d in superseded if states.get(d) == QUARANTINED]
+    rebuilt = [d for d in superseded if states.get(d) == REBUILT]
+    if quarantined:
+        parts.append(f"{len(quarantined)} QUARANTINED "
+                     f"(source renamed as bad-astrometry since staging)")
+    if rebuilt:
+        parts.append(f"{len(rebuilt)} REBUILT "
+                     f"(source rebuilt in place; these are the older bytes)")
     if missing:
         parts.append(f"{len(missing)} with a missing source")
     return ", ".join(parts)
