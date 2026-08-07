@@ -482,10 +482,14 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
         medsep_ra, medsep_dec = np.median(radiff[oksep]), np.median(decdiff[oksep])
         dmedsep_ra, dmedsep_dec = mad_std(radiff[oksep]), mad_std(decdiff[oksep])
         if dense_nn_refused:
-            tbl.meta['ra_offset'] = np.nan
-            tbl.meta['dec_offset'] = np.nan
-            tbl.meta['dra_offset'] = np.nan
-            tbl.meta['ddec_offset'] = np.nan
+            # NaN *carrying the same unit* the measured path stores, so a reader
+            # doing `.to(u.marcsec)` or `float()` behaves the same on the refused
+            # and the measured path.  A bare float here would make the refusal
+            # surface as a TypeError somewhere unrelated.
+            tbl.meta['ra_offset'] = np.nan * u.arcsec
+            tbl.meta['dec_offset'] = np.nan * u.arcsec
+            tbl.meta['dra_offset'] = np.nan * u.arcsec
+            tbl.meta['ddec_offset'] = np.nan * u.arcsec
         else:
             tbl.meta['ra_offset'] = medsep_ra
             tbl.meta['dec_offset'] = medsep_dec
@@ -501,8 +505,26 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
                 dra_header = 0.0
                 ddec_header = 0.0
 
-        print(f"Exposure {tbl.meta['exposure']} {tbl.meta['MODULE'] if 'MODULE' in tbl.meta else ''} was offset by {medsep_ra.to(u.marcsec):10.3f}+/-{dmedsep_ra.to(u.marcsec):7.3f},"
-              f" {medsep_dec.to(u.marcsec):10.3f}+/-{dmedsep_dec.to(u.marcsec):7.3f} based on {oksep.sum()} matches.  dra={dra_header:7.5g} ddec={ddec_header:7.5g}")
+        _exp_id = (f"Exposure {tbl.meta['exposure']} "
+                   f"{tbl.meta['MODULE'] if 'MODULE' in tbl.meta else ''}")
+        if dense_nn_refused:
+            # Print the refusal ON THE SAME LINE as the number.  "was offset by
+            # X +/- Y" is measurement grammar: printed on its own it is the same
+            # hazard as storing it, one step removed -- it is exactly the form
+            # someone reads off a log and copies into an offsets table by hand.
+            # So the value is shown only as un-usable diagnostic evidence, never
+            # as a measurement.
+            print(f"{_exp_id} NOT MEASURED (dense-NN-median REFUSED, "
+                  f"ASTROMETRY RULE #1): the refused value was "
+                  f"({medsep_ra.to(u.marcsec).value:.3f}, "
+                  f"{medsep_dec.to(u.marcsec).value:.3f}) mas over "
+                  f"{oksep.sum()} matches -- DO NOT copy this into an offsets "
+                  f"table; it is a nearest-neighbour median against a dense "
+                  f"reference and it collapses toward zero.  "
+                  f"dra={dra_header:7.5g} ddec={ddec_header:7.5g}")
+        else:
+            print(f"{_exp_id} was offset by {medsep_ra.to(u.marcsec):10.3f}+/-{dmedsep_ra.to(u.marcsec):7.3f},"
+                  f" {medsep_dec.to(u.marcsec):10.3f}+/-{dmedsep_dec.to(u.marcsec):7.3f} based on {oksep.sum()} matches.  dra={dra_header:7.5g} ddec={ddec_header:7.5g}")
 
         # for tbl0, should be nan (all self-match)
         if realign and not np.isnan(medsep_ra) and not np.isnan(medsep_dec):
