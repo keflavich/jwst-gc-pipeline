@@ -138,7 +138,7 @@ def main(argv=None):
     refcat = args.refcat
     if refcat is None:
         refcat, cands = refcat_for_frame(
-            basepath, cfg.reference_frame if cfg else '')
+            basepath, cfg.reference_frame if cfg else '', field=args.field)
         if refcat is None:
             print(f"ERROR: no reference catalog in {basepath}/catalogs matching "
                   f"{list(REFCAT_PATTERNS)}; pass --refcat", file=sys.stderr)

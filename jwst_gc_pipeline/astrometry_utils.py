@@ -6,6 +6,9 @@ Factored out of ``reduction/build_gaia_virac2_refcat_byquery.py``,
 copy of ``farr``/``prop`` (drift risk: any change to the PM-propagation formula
 had to be mirrored by hand in three places).
 """
+import os
+import re
+
 import numpy as np
 
 
@@ -155,3 +158,49 @@ def base_mismatch_mas(base_ra, base_dec, now_ra, now_dec):
     cosd = np.cos(np.radians(0.5 * (float(base_dec) + float(now_dec))))
     return float(np.hypot((float(now_ra) - float(base_ra)) * cosd,
                           float(now_dec) - float(base_dec)) * 3.6e6)
+
+
+def pick_refcat(cands, field=None):
+    """The refcat for THIS observation, from the candidates on disk.
+
+    A refcat may carry an observation token (``..._o028.fits``) because it was
+    built for one pointing.  Selection used to be ``sorted(cands)[-1]``, which
+    picks the LAST NAME ALPHABETICALLY -- and ``_o028`` sorts after the bare
+    ``gaia_virac2_refcat_epoch2023.71.fits``, so on gc2211 every observation got
+    o028's catalog:
+
+        gaia_virac2_refcat_epoch2023.71.fits          <- generic, wanted
+        gaia_virac2_refcat_epoch2023.71_o028.fits     <- chosen for ALL of them
+
+    o023 was then tied against a reference built for a pointing arcminutes away
+    and the m2 checkpoint measured a -9.28" per-exposure correction, which the
+    magnitude limit refused to write (correctly -- the measurement was wrong,
+    not the frame).  Its five observations are 0.3-17.6 arcmin apart, so a
+    neighbour's refcat is not a degraded reference, it is the wrong sky.
+
+    Order: this observation's token, else an untokened refcat, else refuse --
+    picking SOME other observation's is never right, and doing it silently is
+    how this cost a full o023 chain.
+    """
+    if not cands:
+        return None
+    tok = re.compile(r'_o(\d{3})\.fits$')
+    tokened = {m.group(1): p for p in cands for m in [tok.search(p)] if m}
+    untokened = [p for p in cands if not tok.search(p)]
+    if field:
+        f3 = str(field).zfill(3)
+        if f3 in tokened:
+            return tokened[f3]
+    if untokened:
+        return sorted(untokened)[-1]
+    if tokened:
+        raise ValueError(
+            f"astrom checkpoint: the only reference catalogs under "
+            f"{os.path.dirname(cands[0])} are built for other observations "
+            f"({sorted(tokened)}), and this run is "
+            f"{'o' + str(field).zfill(3) if field else 'untagged'}.  Tying to "
+            f"another pointing's reference is not a degraded measurement, it is "
+            f"the wrong sky -- build one for this observation "
+            f"(build_gaia_virac2_refcat_byquery.py) or point ASTROM_REFCAT at "
+            f"the right file.")
+    return None

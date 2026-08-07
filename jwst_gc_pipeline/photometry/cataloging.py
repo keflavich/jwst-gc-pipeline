@@ -71,6 +71,7 @@ from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
 
 import os
 import re
+from jwst_gc_pipeline.astrometry_utils import pick_refcat as _au_pick_refcat
 import types
 import uuid
 import traceback
@@ -3334,16 +3335,31 @@ def _maybe_dedup_m8(m8_path, options, label='m8'):
         return None
 
 
-def _astrom_checkpoint_refcat(basepath):
+#: Selection lives in astrometry_utils so the reducer-side bulk path
+#: (reduction/bulk_offset_step0.refcat_for_frame) uses the SAME rule -- two
+#: halves of one field's remediation must not disagree about which sky they are
+#: tying to.
+_pick_refcat = _au_pick_refcat
+
+
+def _astrom_checkpoint_refcat(basepath, field):
     """Locate + load the absolute reference catalog for the astrometry
-    checkpoints: env ``ASTROM_REFCAT`` first, else the target's
-    ``gaia_virac2_refcat*.fits`` seed refcat.  None (consensus-only checks)
-    when the target has no seed refcat."""
+    checkpoints: env ``ASTROM_REFCAT`` first, else the seed refcat matching this
+    OBSERVATION (see :func:`pick_refcat`).  None (consensus-only checks) when
+    the target has no seed refcat.
+
+    ``field`` is REQUIRED and has no default on purpose.  A default would let a
+    call site quietly stop passing it -- which is the whole bug: gc2211 got
+    o028's catalogue at every observation, and a test suite that exercises the
+    selector cannot see the omission.  Pass ``None`` explicitly for a caller
+    that genuinely does not know its observation; that reads as a decision
+    rather than an oversight, and it still refuses to substitute some other
+    observation's catalogue."""
     from jwst_gc_pipeline.photometry.visit_consensus import load_reference_catalog
     path = os.environ.get('ASTROM_REFCAT')
     if not path:
         cands = sorted(glob.glob(f"{basepath}/catalogs/gaia_virac2_refcat*.fits"))
-        path = cands[-1] if cands else None
+        path = _pick_refcat(cands, field=field)
     if path and os.path.exists(path):
         print(f"astrom checkpoint: reference catalog {path}", flush=True)
         return load_reference_catalog(path)
@@ -4016,7 +4032,8 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
                       else _vstack(subs, metadata_conflicts='silent'))
 
     if 'refcat' not in refcat_cache:
-        refcat_cache['refcat'] = _astrom_checkpoint_refcat(basepath)
+        refcat_cache['refcat'] = _astrom_checkpoint_refcat(
+            basepath, field=getattr(options, 'field', None))
     refcat = refcat_cache['refcat']
 
     warn_only = os.environ.get('ASTROM_CHECKPOINT_WARN_ONLY', '') == '1'
@@ -4259,7 +4276,9 @@ def _run_crossfilter_astrom_checkpoint(vetted_paths_by_filter, cut_bp, basepath,
         print("crossfilter astrom checkpoint: <2 vetted catalogs; skipped", flush=True)
         return
     if 'refcat' not in refcat_cache:
-        refcat_cache['refcat'] = _astrom_checkpoint_refcat(basepath)
+        _m = re.search(r'o(\d{3})', obs_token or '')
+        refcat_cache['refcat'] = _astrom_checkpoint_refcat(
+            basepath, field=_m.group(1) if _m else None)
     try:
         run_crossfilter_checkpoint(catalogs, refcat=refcat_cache['refcat'],
                                    basepath=cut_bp, context=context,
