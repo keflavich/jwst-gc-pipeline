@@ -2,7 +2,8 @@
 
 #319 read them as duplicates of one quantity, concluded "39 of 40 rows
 disagree", and stopped a gc2211 re-reduction over it.  Measured across all ten
-live locked tables, 438 rows differ and **every one** is reconstructed from
+live locked tables (1164 rows), 678 differ and **every one** is reconstructed
+from
 `prov_dra_added_mas` / `prov_ddec_added_mas` to <0.1 mas:
 
     gc2211 o023 F277W exp1   ddec gap 14986.2 mas   prov_ddec 14986.2 mas

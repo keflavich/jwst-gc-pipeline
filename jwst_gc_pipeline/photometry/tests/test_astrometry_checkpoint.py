@@ -2150,3 +2150,135 @@ def test_assert_poolable_allows_a_LONE_bare_module(tmp_path):
     tbl = Table({"Visit": ["jw05365001001"], "Exposure": [1]})
     _assert_poolable([{}], ["nrcb"], ("jw05365001001", 1), tbl,
                      "/x/Offsets_JWST_Brick5365_VIRAC2locked.csv")
+
+
+# ---------------------------------------------------------------------------
+# Column-pair provenance AT THE CALL SITE (#319 / PR #331 review).
+#
+# `_offsets_csv` above builds a SINGLE-pair table, so
+# `flag_diverged_column_pairs` returns [] on it before looking at anything and
+# every existing update_offsets_table test is blind to this check.  So were the
+# eight tests that shipped with the check: all of them call the helper
+# directly, none crosses `update_offsets_table`, which is where
+# `_heal_column_pairs` runs 90 lines ahead of the validation and can hand it a
+# table it just changed.
+#
+# These build a table with BOTH pairs and real provenance -- the live
+# brick-1182 shape -- and go through the writer.
+# ---------------------------------------------------------------------------
+
+def _two_pair_offsets_csv(tmp_path, prov_dra_mas=-47.6, prov_ddec_mas=-16.0):
+    """A locked-table-shaped CSV: the plain pair is AS-BUILT, the `(arcsec)`
+    pair is as-built + the accumulated `prov_*`, exactly as every live
+    `*_VIRAC2locked.csv` carries it."""
+    rows = []
+    for visit, base in (("jw01182004001", -17.5), ("jw01182004002", 1.9)):
+        for exp in (1, 2):
+            rows.append({
+                "Filter": "F212N", "Module": "nrcb1", "Visit": visit,
+                "Exposure": exp,
+                "dra": base, "ddec": 0.5,
+                "dra (arcsec)": base + (prov_dra_mas / 1000.0) / COSD,
+                "ddec (arcsec)": 0.5 + prov_ddec_mas / 1000.0,
+                "prov_stage": "m2", "prov_date": "2026-01-01T00:00:00Z",
+                "prov_dra_added_mas": prov_dra_mas,
+                "prov_ddec_added_mas": prov_ddec_mas,
+                "prov_source": "fixture",
+            })
+    path = str(tmp_path / "Offsets_JWST_Brick1182_TWOPAIR.csv")
+    Table(rows).write(path, overwrite=True)
+    return path
+
+
+def _corr(dra_mas=12.0, ddec_mas=-8.0):
+    return [dict(visit="jw01182004001", exposure=1, module="nrcb1",
+                 filtername="F212N", dra_onsky_mas=dra_mas,
+                 ddec_onsky_mas=ddec_mas, dec_deg=DEC_TEST,
+                 source="test m2 visit-consensus")]
+
+
+def test_update_offsets_table_writes_a_two_pair_table_with_provenance(tmp_path):
+    """The end-to-end case the check has to survive: one ordinary m2 retie on a
+    table shaped like the live ones.  `_heal_column_pairs` re-syncs the touched
+    row first, which leaves gap 0 with nonzero `prov_*` -- so a check written as
+    `gap == prov` stops this write, on every locked-channel field, as an
+    unhandled error.  It must write."""
+    path = _two_pair_offsets_csv(tmp_path)
+    out = update_offsets_table(path, _corr(), "m2")
+    sel = ((np.array([str(v) for v in out["Visit"]]) == "jw01182004001")
+           & (out["Exposure"] == 1))
+    row = out[sel][0]
+    # healed, then corrected: both pairs carry the new increment
+    assert row["dra (arcsec)"] == pytest.approx(row["dra"], abs=1e-9)
+    assert row["ddec (arcsec)"] == pytest.approx(row["ddec"], abs=1e-9)
+    # provenance ACCUMULATED past the heal rather than being reset by it
+    assert row["prov_dra_added_mas"] == pytest.approx(-47.6 + 12.0)
+    assert row["prov_ddec_added_mas"] == pytest.approx(-16.0 - 8.0)
+    # and it is on disk, not just returned
+    assert Table.read(path)["dra"][0] == pytest.approx(out["dra"][0], abs=1e-9)
+
+
+def test_update_offsets_table_leaves_untouched_rows_reconstructible(tmp_path):
+    """Healing is scoped to the rows a correction touches, so the other three
+    rows must still be in the never-healed state -- gap == prov -- and the
+    validation must accept a table holding BOTH states at once.  That mixture is
+    what every real table looks like mid-campaign."""
+    from jwst_gc_pipeline.reduction.validate_offsets_table import (
+        flag_diverged_column_pairs)
+    path = _two_pair_offsets_csv(tmp_path)
+    out = update_offsets_table(path, _corr(), "m2")
+    untouched = out[~((np.array([str(v) for v in out["Visit"]])
+                       == "jw01182004001") & (out["Exposure"] == 1))]
+    gap_ddec = (np.asarray(untouched["ddec (arcsec)"], dtype=float)
+                - np.asarray(untouched["ddec"], dtype=float)) * 1000.0
+    np.testing.assert_allclose(gap_ddec, -16.0, atol=0.5)
+    assert flag_diverged_column_pairs(out) == []
+
+
+def test_update_offsets_table_does_not_CREATE_a_divergence(tmp_path):
+    """The property that matters: whatever the writer does to a clean table, the
+    result reconstructs.  Three successive corrections, i.e. heal-then-apply
+    twice more on an already-healed row."""
+    from jwst_gc_pipeline.reduction.validate_offsets_table import (
+        flag_diverged_column_pairs)
+    path = _two_pair_offsets_csv(tmp_path)
+    for dra, ddec in ((12.0, -8.0), (-3.0, 4.5), (0.7, 0.2)):
+        out = update_offsets_table(path, _corr(dra, ddec), "m2")
+        assert flag_diverged_column_pairs(out) == [], (dra, ddec)
+    assert out["prov_dra_added_mas"][0] == pytest.approx(-47.6 + 12.0 - 3.0 + 0.7)
+
+
+def test_update_offsets_table_REFUSES_a_pair_moved_outside_the_writer(tmp_path):
+    """The thing the check exists for.  A hand edit moves `dra (arcsec)` by an
+    amount `prov_*` never recorded; `_heal_column_pairs` must refuse rather than
+    silently overwrite the plain pair with it -- healing would assert the
+    `(arcsec)` pair is right when nothing on record says so."""
+    path = _two_pair_offsets_csv(tmp_path)
+    t = Table.read(path)
+    t["dra (arcsec)"][0] = float(t["dra (arcsec)"][0]) + 0.9      # 900 mas, unrecorded
+    t.write(path, overwrite=True)
+    with pytest.raises(OffsetsTableUpdateError, match="provenance"):
+        update_offsets_table(path, _corr(), "m2")
+    # and it did NOT write: the table on disk still holds the hand edit
+    assert Table.read(path)["dra (arcsec)"][0] == pytest.approx(
+        float(t["dra (arcsec)"][0]), abs=1e-9)
+
+
+def test_divergence_escalation_stays_inside_the_writers_error_contract(tmp_path,
+                                                                       monkeypatch):
+    """`OFFSETS_TABLE_DIVERGENCE_RAISE=1` makes the validation raise
+    `DivergedColumnPairError`, which is a ValueError and NOT a
+    `CollapsedOffsetsTableError`.  Every caller and the retie loop are written
+    around `OffsetsTableUpdateError`, so if it escapes as itself the writer's
+    error contract changes depending on an env var."""
+    from jwst_gc_pipeline.reduction import validate_offsets_table as V
+    monkeypatch.setenv('OFFSETS_TABLE_DIVERGENCE_RAISE', '1')
+    path = _two_pair_offsets_csv(tmp_path)
+    # force the validation to report a divergence on the corrected table
+    monkeypatch.setattr(V, "flag_diverged_column_pairs",
+                        lambda tbl, tol_mas=V.PAIR_PROV_TOL_MAS: [dict(
+                            row=0, visit="jw01182004001", filter="F212N",
+                            exposure=1, dra_gap_mas=9.0, prov_dra_mas=0.0,
+                            ddec_gap_mas=9.0, prov_ddec_mas=0.0)])
+    with pytest.raises(OffsetsTableUpdateError):
+        update_offsets_table(path, _corr(), "m2")

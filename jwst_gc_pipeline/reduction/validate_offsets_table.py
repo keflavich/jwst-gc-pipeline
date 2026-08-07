@@ -106,7 +106,8 @@ def flag_diverged_column_pairs(offsets_tbl, tol_mas=PAIR_PROV_TOL_MAS):
                                   dra  gap -7163.5 mas   prov_dra  -6269.7 mas
                                                          / cos(28.9 deg) = -7164.1
 
-    Measured over all ten live locked tables: 438 rows diverge, **0** of them
+    Measured over all ten live locked tables (1164 rows): 678 diverge, **0** of
+    them
     unexplained.  What this flags is the invariant BREAKING -- a writer that
     updates one pair and not the other, which is the mechanism the issue
     suspected and the only way the two can ever mean different things.
@@ -214,7 +215,8 @@ def assert_offsets_table_sane(offsets_tbl, tol_arcsec=0.02, context="",
                   "AS-BUILT value the offsets builder wrote, and `dra "
                   "(arcsec)`/`ddec (arcsec)` is as-built PLUS every correction "
                   "since -- which is what `prov_*` records (issue #319).  The "
-                  "live tables bear that out: 438 rows differ and every one is "
+                  "live tables bear that out: 678 of 1164 rows differ and every "
+                  "one is "
                   "reconstructed to <0.1 mas.\n"
                   "A row is legitimately either in sync (gap 0 -- as built, or "
                   "healed by `update_offsets_table` before its next "
