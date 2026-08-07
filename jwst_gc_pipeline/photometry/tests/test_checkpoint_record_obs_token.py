@@ -491,3 +491,44 @@ def test_the_m7_crossfilter_record_is_wired_at_the_PRODUCTION_call(tmp_path, mon
         obs_token="_o002")
     assert seen.get("record_dir", "").endswith("recs"), seen
     assert seen.get("obs_token") == "_o002", seen
+
+
+def test_the_frozen_stage_says_MISSING_BASELINE_not_MOVED(tmp_path, monkeypatch):
+    """The fourth member of the reader-call-site set, and the one that was
+    missing.
+
+    `_m2_refusal_reason` returns None for an empty token by its first line, so
+    dropping the token at its ONE production call site turns the whole
+    MISSING-BASELINE path off and the caller falls back to the frozen-stage
+    movement text -- the false statement that ask existed to remove.  The three
+    tests covering it called the helper directly, which is the same shape as
+    the mutants they were written to kill.  This drives the frozen stage.
+    """
+    import jwst_gc_pipeline.photometry.astrometry_checkpoint as ac
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        AstrometryRegressionError, run_visit_checkpoint)
+    from .test_visit_consensus import _exposure_table, _field
+
+    monkeypatch.setattr(ac, "_filter_is_obs_ambiguous", lambda *a, **k: True)
+    # one exposure MISaligned, which is what reaches the no-baseline branch
+    ra, dec = _field(n=400)
+    tables = [_exposure_table(ra, dec, exposure=e, filtername="F360M",
+                              module=f"nrcb{e}") for e in (1, 2, 3)]
+    tables.append(_exposure_table(ra, dec, exposure=4, filtername="F360M",
+                                  module="nrcb4", dra_mas=40.0))
+    # an untokened m2 record exists, describing exposures this run does not
+    # have -- so every exposure of the frozen stage lands with no baseline
+    (tmp_path / "checkpoint_m2_F360M_latest.json").write_text(json.dumps(
+        dict(stage="m2", filtername="F360M", visits=[dict(
+            visit="1", filtername="F360M",
+            exposures=[dict(key=["1", 99, "nrcalong", "F360M", "09901"],
+                            dra=0.0, ddec=0.0, ok=True)])])))
+    with pytest.raises(AstrometryRegressionError) as exc:
+        run_visit_checkpoint(tables, "m4", filtername="F360M",
+                             basepath=str(tmp_path), record_dir=str(tmp_path),
+                             context="test", obs_token="_o002")
+    msg = str(exc.value)
+    assert "MISSING BASELINE" in msg, msg
+    assert "REFUSED" in msg, msg
+    # ... and it must NOT claim a movement nobody measured
+    assert "MOVED" not in msg, msg

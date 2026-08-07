@@ -153,6 +153,13 @@ def is_globbed(target, proposal, obsid, instrument='nircam'):
     return str(pattern).lstrip('0') == str(obsid).lstrip('0')
 
 
+#: The observation token in a checkpoint record filename.  Accepts the
+#: registered JOINT forms (sgrb2 `o002-998`, sickle `o001-002`) as well as the
+#: per-proposal `j` form (ngc6334's 7213/6778 share an obsid).
+_OBS_TOKEN_RE = re.compile(
+    r'checkpoint_m2_[^_]+(_(?:o[\d-]{3,}|j\d{4,5}))_latest')
+
+
 def shared_filters(target, instrument='nircam'):
     """Filters registered to MORE THAN ONE observation of ``target``.
 
@@ -518,8 +525,11 @@ def astrometry_checkpoints(base, filters=None, ambiguous_filters=()):
         bname = os.path.basename(path)
         # joint obsids are registered (sgrb2 o002-998, sickle o001-002), so a
         # bare o\d{3} misses them and the keys collide back to last-wins
-        _tokm = re.search(r'checkpoint_m2_[^_]+(_(?:o[\d-]{3,}|j\d{4,5}))_latest',
-                          bname)
+        # ONE pattern, imported rather than re-spelled.  A second literal copy
+        # of a regex that already got joint obsids wrong once is how it drifts
+        # back: sgrb2 registers o002-998 and sickle o001-002, and a bare
+        # `o\d{3}` misses both.
+        _tokm = _OBS_TOKEN_RE.search(bname)
         _tok = _tokm.group(1) if _tokm else ''
         filt = bname.split('_')[2]
         if filters and filt.upper() not in {f.upper() for f in filters}:
