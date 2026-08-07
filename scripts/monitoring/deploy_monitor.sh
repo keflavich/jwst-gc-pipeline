@@ -52,9 +52,11 @@ fi
 ssh "$HOST" "mkdir -p '$DEST'"
 
 # --copy-links: dereference the diagnostics-* symlinks (see above).
-# --delete: the destination holds nothing but this sync's output, so pruning
-#           removed fields and stale figures there is safe.
-# --delete was removed by hand because I don't want to delete things in the destination.
+# NO --delete, deliberately: the destination is a shared web root and pruning
+#           it is not this script's business.  (An earlier comment here argued
+#           the opposite -- that the destination holds nothing but this sync's
+#           output -- and both were left in place, contradicting each other.)
+#           test_deploy_does_NOT_prune_the_destination pins the absence.
 rsync -rlptz --copy-links --human-readable $DRY \
       "$SRC/" "$HOST:$DEST/"
 rc=$?
