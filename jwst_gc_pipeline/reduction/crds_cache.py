@@ -36,6 +36,14 @@ def open_crds_reference(crds_dir, instrument, filename):
 
     Falls back to the CRDS server only when the file genuinely is not cached,
     and prints which source was used so a stale or missing cache is not silent.
+
+    The fallback is on ABSENCE, not on failure: a cached file that exists but is
+    truncated or corrupt raises out of ``asdf.open`` rather than being quietly
+    re-fetched.  That is deliberate -- a corrupt cache is a real problem, and
+    papering over it with a silent network read would hide it for as long as
+    STScI happens to be reachable, which is exactly the coupling this module
+    exists to remove.  Repair the cache instead (``crds sync``, or copy from
+    another field's cache and check the md5 against it).
     """
     cached = cached_reference_path(crds_dir, instrument, filename)
     if os.path.exists(cached):

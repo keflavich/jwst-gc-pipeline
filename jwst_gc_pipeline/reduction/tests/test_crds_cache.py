@@ -6,6 +6,7 @@ through fsspec/aiohttp) and made every reduce depend on STScI being reachable at
 that moment.  A single 504 killed 4 of 8 sgrc filters twice over on 2026-08-07
 while the reference sat checksum-correct in the cache (issue #327).
 """
+import glob
 import os
 
 import pytest
@@ -50,14 +51,17 @@ def test_cache_path_matches_the_crds_layout(instrument):
 
 
 def test_no_driver_fetches_a_reference_directly():
-    """Grep-guard: the drivers must go through open_crds_reference()."""
-    here = os.path.dirname(os.path.dirname(os.path.abspath(crds_cache.__file__)))
-    drivers = ['reduction/PipelineRerunNIRCAM-LONG.py',
-               'reduction/PipelineMIRI.py',
-               'reduction/PipelineRerunNIRISS.py']
-    for rel in drivers:
-        with open(os.path.join(here, rel)) as fh:
+    """Grep-guard: every driver must go through open_crds_reference().
+
+    Globbed rather than listed, so a driver added later is covered without
+    anyone remembering to name it here.
+    """
+    reduction = os.path.dirname(os.path.abspath(crds_cache.__file__))
+    drivers = sorted(glob.glob(os.path.join(reduction, 'Pipeline*.py')))
+    assert len(drivers) >= 3, f'expected the reduction drivers, found {drivers}'
+    for path in drivers:
+        with open(path) as fh:
             text = fh.read()
         assert 'unchecked_get' not in text, (
-            f'{rel} fetches a CRDS reference directly; use '
+            f'{os.path.basename(path)} fetches a CRDS reference directly; use '
             'crds_cache.open_crds_reference so the local cache is honoured')
