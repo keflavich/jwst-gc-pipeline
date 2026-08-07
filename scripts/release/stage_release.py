@@ -36,8 +36,19 @@ import os
 import re
 import shutil
 import subprocess
+
 import sys
 from pathlib import Path
+
+# `release_freshness` is a sibling MODULE, not a package member, so a bare
+# import only resolves when this file is run as a script from a cwd that
+# happens to contain it.  Loading `stage_release` any other way -- which is
+# what the release-gate tests do, via importlib against an absolute path --
+# raised ModuleNotFoundError at import time and took the whole COLLECTION
+# down: pytest then ran nothing at all without --continue-on-collection-errors,
+# so two gate test files silently stopped protecting anything.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import release_freshness            # noqa: E402  (needs the path above)
 
 # --- Globus collection constants ---------------------------------------------
 GLOBUS_COLLECTION_ID = "d9873d5e-0fbd-4980-aedf-4ca56f65a045"
@@ -1503,6 +1514,35 @@ def main(argv=None):
     if not items:
         print(f"No deliverables discovered for field '{args.field}'.", file=sys.stderr)
         return 1
+
+    # ---- SUPERSEDED-SOURCE GATE ----------------------------------------------------
+    # A mosaic the pipeline has already quarantined as bad-astrometry must never
+    # enter a release. Cloud C shipped six of them for weeks: staged 2026-07-10,
+    # superseded by the 2026-07-12 astrometry fix, still on the page in August --
+    # presented as evidence that the astrometry is sound.
+    #
+    # Deliberately called with NO recorded size, so this sees only the RENAME
+    # while the page also withholds sources REBUILT since staging.  The
+    # asymmetry is the point and not an oversight: there is nothing to compare
+    # against at staging time -- the size is recorded BY this run, from the file
+    # it is about to copy, so a rebuilt source is simply the current one and is
+    # exactly what should be staged.  The size check only becomes meaningful
+    # once a manifest exists to disagree with.
+    stale = [it for it in items
+             if release_freshness.source_state(it["src"]) != release_freshness.LIVE]
+    if stale:
+        print(f"\nREFUSING TO STAGE '{args.field}': {len(stale)} product(s) have no "
+              f"live source -- the pipeline has superseded or removed them since "
+              f"they were produced:", file=sys.stderr)
+        for it in stale[:10]:
+            print(f"  {release_freshness.source_state(it['src']):11s} {it['src']}",
+                  file=sys.stderr)
+        if len(stale) > 10:
+            print(f"  ... and {len(stale) - 10} more", file=sys.stderr)
+        print("Re-run the reduction so current mosaics exist, then stage.",
+              file=sys.stderr)
+        return 2
+
     print_manifest(items)
 
     # ---- GENERATION-SPAN REPORT -----------------------------------------------------
