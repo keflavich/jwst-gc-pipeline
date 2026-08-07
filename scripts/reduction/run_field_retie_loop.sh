@@ -96,6 +96,58 @@ wait_job () {
     done
 }
 
+# reduce_fully_succeeded <array-jobid> <ntasks> [sbatch-rc]
+#
+# True when every task of the reduce array reached COMPLETED.  Returns 1 (and
+# explains) otherwise, INCLUDING when no job id could be parsed at all.
+#
+# `sbatch --wait` blocks until every array task is terminal, but its exit status
+# alone is not a safe gate: a partially-failed reduce must NOT be cataloged.
+# The filters that failed keep the PREVIOUS iteration's WCS, so the m12 merge
+# would combine this iteration's frames for some bands with last iteration's for
+# others, and the m2 checkpoint would then "measure" a difference that is really
+# just two iterations mixed together -- and write it into the consensus table as
+# a correction.  That is a corruption, not a lost job.
+#
+# Not hypothetical: sgrc iteration 3 (38870453, 2026-08-07) lost all four LW
+# filters to CRDS 504s four minutes in (#327) while the four SW filters
+# completed, and the loop went straight on to catalog the mixture.
+#
+# `grep -c COMPLETED` is safe against COMPLETING, which does not contain the
+# string.  The comparison is `-ne` rather than `-lt` deliberately: a requeued
+# task can appear twice, making n_done EXCEED ntasks, and stopping on that fails
+# in the safe direction (a spurious stop, never a spurious catalog).
+reduce_fully_succeeded () {
+    local jid="$1" ntasks="$2" rc="${3:-}"
+    if [ -z "$jid" ]; then
+        echo "reduce: could not parse a job id from sbatch (rc=${rc:-?}) -- STOPPING."
+        return 1
+    fi
+    local states n_done n_bad
+    states=$(sacct -j "$jid" -o State -X -n 2>/dev/null || true)
+    # `grep -c` exits 1 when the count is 0, and the script runs under `set -e`,
+    # so an unguarded count kills the loop on exactly the cases we care about:
+    # zero COMPLETED (total failure) and zero non-COMPLETED (total success).
+    n_done=$(printf '%s\n' "$states" | grep -c COMPLETED || true)
+    n_bad=$(printf '%s\n' "$states" | grep -cvE 'COMPLETED|^[[:space:]]*$' || true)
+    echo "reduce $jid: $n_done/$ntasks completed, $n_bad not"
+    if [ "$n_done" -ne "$ntasks" ]; then
+        echo "REDUCE DID NOT FULLY SUCCEED -- STOPPING before cataloging."
+        sacct -j "$jid" -o JobID%18,JobName%34,State,Elapsed -X 2>/dev/null \
+            | grep -vE 'COMPLETED'
+        echo "  Cataloging now would merge this iteration's frames for the"
+        echo "  filters that succeeded with the PREVIOUS iteration's frames"
+        echo "  for the ones that failed."
+        echo "  Re-run the failed filters (FILTERS=\"...\" sbatch"
+        echo "  $HERE/submit_reduction.sbatch), then restart the loop."
+        return 1
+    fi
+    return 0
+}
+
+# Exposed so tests can source the helpers without running the loop.
+[ -n "${RETIE_LOOP_SOURCE_ONLY:-}" ] && return 0 2>/dev/null
+
 for ((it=1; it<=MAXITER; it++)); do
     echo "=================  RE-TIE ITER $it / $MAXITER  ($TARGET $PROPOSAL/$FIELD)  ================="
 
@@ -123,24 +175,7 @@ for ((it=1; it<=MAXITER; it++)); do
     # This is not hypothetical: sgrc iteration 3 (38870453, 2026-08-07) lost all
     # four LW filters to CRDS 504s four minutes in (issue #327) while the four
     # SW filters completed, and the loop went straight on to catalog the mixture.
-    if [ -n "$red_jid" ]; then
-        n_done=$(sacct -j "$red_jid" -o State -X -n 2>/dev/null | grep -c COMPLETED)
-        n_bad=$(sacct -j "$red_jid" -o State -X -n 2>/dev/null \
-                | grep -cvE 'COMPLETED|^\s*$')
-        echo "[iter $it] reduce $red_jid: $n_done/$NF completed, $n_bad not"
-        if [ "$n_done" != "$NF" ]; then
-            echo "[iter $it] REDUCE DID NOT FULLY SUCCEED -- STOPPING before cataloging."
-            sacct -j "$red_jid" -o JobID%18,JobName%34,State,Elapsed -X 2>/dev/null \
-                | grep -vE 'COMPLETED'
-            echo "           Cataloging now would merge this iteration's frames for"
-            echo "           the filters that succeeded with the PREVIOUS iteration's"
-            echo "           frames for the ones that failed."
-            echo "           Re-run the failed filters (FILTERS=\"...\" sbatch"
-            echo "           $HERE/submit_reduction.sbatch), then restart the loop."
-            exit 1
-        fi
-    else
-        echo "[iter $it] could not parse a job id from sbatch (rc=$red_rc) -- STOPPING."
+    if ! reduce_fully_succeeded "$red_jid" "$NF" "$red_rc"; then
         exit 1
     fi
 
