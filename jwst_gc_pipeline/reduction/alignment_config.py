@@ -245,6 +245,27 @@ ALIGNMENT_CONFIG = (
                'directories, so the reference band matters most here.'),
     ),
     FieldAlignment(
+        proposal='1939', fields=('001',),
+        reference_frame=VIRAC2, source=TABLE_LOCKED,
+        reference_filter='F212N',
+        notes=('sgra. Same dispatch gap as arches/sgrb2/gc2211, and the largest '
+               'consequence of it measured so far: 1939 was absent from the '
+               'registry, so every exposure stayed at the raw assign_wcs frame '
+               'while Offsets_JWST_Brick1939_VIRAC2locked.csv (36 rows, 3 '
+               'filters, m2-written 2026-07-28) went unread.  The table asks for '
+               'dra ~10.25" / ddec ~11.85" -- on-sky (8.96", 11.85"), |off| '
+               '~14.8" -- and every mosaic on disk is off by exactly that: '
+               'F115W/F212N/F405N, nrca/nrcb/merged all read 14.83" +/- 0.01" in '
+               'the same direction, agreeing between dense VIRAC2 and sparse '
+               'Gaia to a few mas (measured 2026-08-06, offset-histogram with '
+               'window sweep; peak at w=30" so window_edge_fraction ~0.49, not a '
+               'footprint ridge).  sgra observes F115W+F212N+F405N; F212N is '
+               'what consensus_catalog.reference_filter ranks first for that '
+               'list.  Frames must be regenerated from _cal -- fix_alignment is '
+               'idempotent on a baked RAOFFSET, so re-applying on top of the '
+               'stale shift would not correct them.'),
+    ),
+    FieldAlignment(
         proposal='2211', fields=None,
         reference_frame=VIRAC2, source=TABLE_LOCKED,
         reference_filter='F200W',
