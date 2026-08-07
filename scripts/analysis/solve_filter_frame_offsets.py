@@ -54,6 +54,8 @@ import os
 import re
 from collections import defaultdict
 
+from jwst_gc_pipeline.photometry.naming import OBS_TOKEN_CAPTURE
+
 import numpy as np
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
@@ -152,12 +154,22 @@ def run(field, band, anchor_band, stage, max_exp):
     rolls = []
     seen = set()
     for p in sorted(glob.glob(pat)):
-        m = re.search(rf"{band}_(nrc[ab](?:[0-9]|long))(?:_(?:o\d{3}|j\d{4,5}))?_visit(\d+)_vgroup(\w+)_exp(\d+)_",
+        # NOT an f-string -- see network_selfcal.py: `{3}`/`{4,5}` are
+        # replacement fields, and the resulting `(4, 5)` is a CAPTURING group
+        # that shifts m.group(4) off the exposure.
+        m = re.search(re.escape(band) + r'_(nrc[ab](?:[0-9]|long))' + OBS_TOKEN_CAPTURE
+                      + r'_visit(\d+)_vgroup(\w+)_exp(\d+)_',
                       os.path.basename(p))
         if not m:
             continue
-        det, visit, expn = m.group(1), m.group(2), m.group(4)
-        key = (visit, expn)
+        det, obstok, visit, vgroup, expn = (
+            m.group(1), (m.group(2) or ''), m.group(3), m.group(4), m.group(5))
+        # The key carries the observation token and the vgroup.  gc2211's five
+        # pointings reuse the same (visit, exposure) tuples, so admitting
+        # tokened names into a (visit, exp) key would pool residuals from
+        # different pointings into one "exposure" -- and make `max_exp` cap the
+        # wrong thing.  Untokened fields are unchanged: obstok is ''.
+        key = (obstok, visit, vgroup, expn)
         # Cap distinct EXPOSURES.  Testing `len(per[key])` instead would create
         # the key through the defaultdict and make the cap a no-op after the
         # first exposure of a visit.

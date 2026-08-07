@@ -185,6 +185,13 @@ def vetted_to_i2dseed(vetted_path):
 #: Optional `_o023` / `_j6778` segment, as a non-capturing regex group.
 OBS_TOKEN_PATTERN = r'(?:_(?:o\d{3}|j\d{4,5}))?'
 
+#: Same segment, but CAPTURING the token (or None when absent).  Readers that
+#: KEY on the frame identity need this rather than OBS_TOKEN_PATTERN: gc2211's
+#: five pointings reuse the same (visit, vgroup, exposure) tuples, so admitting
+#: tokened names into a key that cannot hold the token trades "silently skips
+#: those frames" for "silently overwrites them", which is not an improvement.
+OBS_TOKEN_CAPTURE = r'(?:_(o\d{3}|j\d{4,5}))?'
+
 #: Glob fragment covering the same optional segment.  `*` rather than the
 #: regex: a glob cannot express "optional", and a bare `*` here would also span
 #: `_visit001_vgroup...`, so the caller must keep the following literal.

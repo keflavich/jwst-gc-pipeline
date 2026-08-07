@@ -130,21 +130,127 @@ def test_globs_leave_room_for_the_token_between_detector_and_visit():
 # the specific readers #316 names, exercised through their own patterns
 # ---------------------------------------------------------------------------
 
-def _pattern_from(relpath, marker):
-    """Pull the compiled pattern text off the line containing `marker`."""
-    text = open(os.path.join(REPO, relpath), encoding='utf-8').read()
-    for line in text.splitlines():
-        if marker in line and 're.search' in line:
-            return line
-    raise AssertionError(f'{relpath}: no re.search line containing {marker!r}')
+# ---------------------------------------------------------------------------
+# BEHAVIOURAL: compile the pattern each reader actually ships and run it.
+#
+# The first version of this file only grepped source TEXT for `o\d{3}`.  Both
+# broken readers CONTAINED that text while compiling to something else
+# entirely: they were `rf''`-strings, where `{3}` is a replacement field
+# evaluating to `3` and `{4,5}` to the tuple `(4, 5)`.  So the shipped regex
+# was `(?:_(?:o\d3|j\d(4, 5)))?` -- which does not match a token, AND adds a
+# CAPTURING group that shifts every index after the detector.  On brick that
+# turned 192 usable catalogs into 16.
+#
+# #316's own closing paragraph makes this criticism of
+# test_lw_is_named_by_detector_at_every_naming_site.  A source-grep here would
+# have repeated it, so these load the module and exercise the pattern.
+# ---------------------------------------------------------------------------
+
+READER_MODULES = [
+    'scripts/analysis/siaf_selfcal/network_selfcal.py',
+    'scripts/analysis/solve_filter_frame_offsets.py',
+]
 
 
-@pytest.mark.parametrize('relpath,marker', [
-    ('jwst_gc_pipeline/photometry/generate_offsets_table.py', '_visit'),
-    ('scripts/analysis/siaf_selfcal/network_selfcal.py', '_visit'),
-    ('scripts/analysis/solve_filter_frame_offsets.py', '_visit'),
-])
-def test_each_named_reader_admits_the_token(relpath, marker):
-    line = _pattern_from(relpath, marker)
-    assert 'o\\d{3}' in line or 'OBS_TOKEN_PATTERN' in line, (
-        f'{relpath} still requires _visit right after the detector: {line.strip()}')
+def _compiled_patterns(relpath):
+    """Every regex the module builds, compiled the way the module builds it.
+
+    Executes the `re.search(...)` argument expression with the module's own
+    names, so an f-string that mangles its braces is compiled here exactly as
+    it is at runtime.
+    """
+    import ast
+    import re as _re
+    from jwst_gc_pipeline.photometry import naming
+    path = os.path.join(REPO, relpath)
+    tree = ast.parse(open(path, encoding='utf-8').read())
+    env = {'re': _re, 'band': 'f200w',
+           'OBS_TOKEN_PATTERN': naming.OBS_TOKEN_PATTERN,
+           'OBS_TOKEN_CAPTURE': naming.OBS_TOKEN_CAPTURE}
+    out = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == 'search' and node.args):
+            continue
+        expr = ast.Expression(body=node.args[0])
+        ast.fix_missing_locations(expr)
+        try:
+            pat = eval(compile(expr, path, 'eval'), env)
+        except (NameError, TypeError, SyntaxError, ValueError):
+            continue
+        if isinstance(pat, str) and '_visit' in pat and 'nrc' in pat:
+            out.append(pat)
+    return out
+
+
+TOKENED_ONE = 'f200w_nrca1_o023_visit001_vgroup02201_exp00001_m2_daophot_basic.fits'
+UNTOKENED_ONE = 'f200w_nrca1_visit001_vgroup02201_exp00001_m2_daophot_basic.fits'
+
+
+@pytest.mark.parametrize('relpath', READER_MODULES)
+def test_each_readers_SHIPPED_pattern_reads_a_tokened_name(relpath):
+    """Compile what the module ACTUALLY builds, not what its source looks like.
+
+    The first version of this PR failed exactly here and the source-grep tests
+    could not see it: both readers were `rf''`-strings, where `{3}` is a
+    replacement field evaluating to `3` and `{4,5}` to the tuple `(4, 5)`.  The
+    shipped regex was `(?:_(?:o\\d3|j\\d(4, 5)))?` -- no token match, plus a
+    stray CAPTURING group that shifted every index after the detector.  On
+    brick that turned 192 usable catalogs into 16.
+    """
+    import re as _re
+    pats = _compiled_patterns(relpath)
+    assert pats, f'{relpath}: found no per-frame pattern to compile'
+    for pat in pats:
+        rx = _re.compile(pat)
+        assert rx.search(TOKENED_ONE) is not None, (
+            f'{relpath}: shipped pattern does not match a tokened name.\n'
+            f'  compiled to: {pat!r}\n'
+            f'  (an rf-string eats `{{3}}`/`{{4,5}}` -- concatenate instead)')
+        assert rx.search(UNTOKENED_ONE) is not None, (
+            f'{relpath}: regressed the untokened name: {pat!r}')
+
+
+@pytest.mark.parametrize('relpath', READER_MODULES)
+def test_the_token_is_CAPTURED_so_it_can_reach_the_key(relpath):
+    """Matching the token is only half of it.
+
+    These readers KEY on the frame identity, and gc2211's five pointings reuse
+    the same (visit, vgroup, exposure) tuples.  A pattern that MATCHES the
+    token without CAPTURING it lets those frames parse and then collide -- which
+    trades "silently skips 400 frames" for "silently overwrites 400 frames".
+    Measured on gc2211 F200W: 592 files -> 32 keys, 560 colliding.
+    """
+    import re as _re
+    for pat in _compiled_patterns(relpath):
+        rx = _re.compile(pat)
+        mt, mu = rx.search(TOKENED_ONE), rx.search(UNTOKENED_ONE)
+        assert 'o023' in mt.groups(), (
+            f'{relpath}: the observation token is matched but NOT captured, so '
+            f'it cannot reach the frame key: {pat!r} -> {mt.groups()}')
+        # and the two names must differ ONLY in that token
+        assert [g for g in mt.groups() if g != 'o023'] == \
+               [g for g in mu.groups() if g is not None], (
+            f'{relpath}: tokened and untokened names disagree on something '
+            f'other than the token.\n  tokened   {mt.groups()}\n'
+            f'  untokened {mu.groups()}')
+
+
+@pytest.mark.parametrize('relpath', READER_MODULES)
+def test_the_pattern_captures_the_right_components(relpath):
+    """A pattern can match and still be wrong: the stray `(4, 5)` group matched
+    nothing but still shifted `m.group(2)` off the visit onto None."""
+    import re as _re
+    name = 'f200w_nrcalong_j6778_visit007_vgroup02201_exp00042_m2_daophot_basic.fits'
+    for pat in _compiled_patterns(relpath):
+        m = _re.compile(pat).search(name)
+        assert m is not None, pat
+        g = m.groups()
+        assert g[0] == 'nrcalong', (pat, g)
+        assert 'j6778' in g, (pat, g)
+        assert '007' in g, (pat, g)
+        assert g[-1] == '00042', (pat, g)
+        assert None not in g, (
+            f'{relpath}: a group came back None -- an optional group is '
+            f'capturing where it should not: {pat!r} -> {g}')

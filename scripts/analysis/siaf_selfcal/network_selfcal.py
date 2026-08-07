@@ -12,7 +12,8 @@ Usage: python network_selfcal.py BAND1[,BAND2,...] [--stage m7] [--out tag]
 Bands may span proposals (f212n=2221, f200w=1182): detector unknowns are
 (band, detector) so cross-band pairs measure filteroffset+module consistency.
 """
-import sys, glob, os, re, itertools, warnings
+import sys, glob, os, re, itertools, warnings, collections
+from jwst_gc_pipeline.photometry.naming import OBS_TOKEN_CAPTURE
 warnings.filterwarnings('ignore')
 import numpy as np
 from astropy.table import Table
@@ -26,12 +27,33 @@ bands = [b for b, _ in spec]
 args = sys.argv[2:]
 tag = args[args.index('--out')+1] if '--out' in args else '_'.join(bands)
 
-cats = {}   # (band, det, visit, exp) -> dict(ra, dec, n)
+# The key MUST carry the observation token and the vgroup, or one physical frame
+# is not one key.  gc2211's five pointings reuse the same (visit, vgroup, exp)
+# tuples, and (visit, exp) alone collapses 592 F200W catalogs onto 32 keys --
+# 560 of them silently overwriting each other.  Relaxing the regex to admit
+# tokened names WITHOUT widening the key would just trade "skips 400 frames"
+# for "overwrites 400 frames", which is not an improvement.  Untokened fields
+# are unaffected: obs is '' and vgroup was already unique per frame there.
+#: A frame's identity.  A NAMEDTUPLE, not a bare tuple: the downstream code
+#: indexes this key positionally in three places (the same-attitude test, the
+#: attitude unknowns, the detector unknowns), so widening a plain tuple
+#: silently re-points every one of them at the wrong field.
+FrameKey = collections.namedtuple('FrameKey',
+                                  'band obs det visit vgroup exp')
+
+cats = {}   # FrameKey -> dict(ra, dec, n)
 for band, stage in spec:
     for f in sorted(glob.glob(f'{B}/{band.upper()}/{band}_nrc*_visit*_vgroup*_exp*_{stage}_daophot_basic.fits')):
-        m = re.search(rf'{band}_(nrc[ab](?:[0-9]|long))(?:_(?:o\d{3}|j\d{4,5}))?_visit(\d+)_vgroup\d+_exp(\d+)_', os.path.basename(f))
+        # NOT an f-string: `{3}` and `{4,5}` are replacement fields inside one,
+        # so the token fragment would compile to `o\d3|j\d(4, 5)` -- which does
+        # not match a token AND adds a capturing group that shifts every index
+        # after it.  Concatenate instead.
+        m = re.search(re.escape(band) + r'_(nrc[ab](?:[0-9]|long))' + OBS_TOKEN_CAPTURE
+                      + r'_visit(\d+)_vgroup(\w+)_exp(\d+)_', os.path.basename(f))
         if not m: continue
-        det, visit, exp = m.group(1), m.group(2), m.group(3)
+        # NB `obs` is taken further down by the observations list; this is obstok.
+        obstok, det, visit, vgroup, exp = (
+            (m.group(2) or ''), m.group(1), m.group(3), m.group(4), m.group(5))
         t = Table.read(f)
         if 'skycoord_centroid' not in t.colnames or len(t) < 50: continue
         q = np.asarray(t['qfit'], float)
@@ -41,7 +63,7 @@ for band, stage in spec:
         good = np.isfinite(q) & (q < 0.15) & np.isfinite(snr) & (snr > 20)
         if good.sum() < 50: continue
         sc = SkyCoord(t['skycoord_centroid'][good])
-        cats[(band, det, visit, exp)] = dict(ra=np.asarray(sc.ra.deg), dec=np.asarray(sc.dec.deg),
+        cats[FrameKey(band, obstok, det, visit, vgroup, exp)] = dict(ra=np.asarray(sc.ra.deg), dec=np.asarray(sc.dec.deg),
                                              n=int(good.sum()))
 print(f'{len(cats)} catalogs loaded', flush=True)
 
@@ -80,11 +102,22 @@ def pair_offset(c1, c2):
     return (np.median(dr), np.median(dd),
             1.4826*np.median(np.abs(dr-np.median(dr))), 1.4826*np.median(np.abs(dd-np.median(dd))), int(n))
 
+def _attitude_of(k):
+    """The attitude unknown a frame belongs to: one physical exposure.
+
+    Carries obs and vgroup, which the (band, visit, exp) form did not.  On
+    gc2211 five pointings reuse the same (visit, exp), so the old form treated
+    frames from different pointings as the same attitude.
+    """
+    return (k.band, k.obs, k.visit, k.vgroup, k.exp)
+
+
 obs = []  # (k1, k2, dra, dde, sra, sde, n)
 npairs_checked = 0
 for a, b2 in itertools.combinations(range(len(keys)), 2):
     k1, k2 = keys[a], keys[b2]
-    if (k1[0], k1[2], k1[3]) == (k2[0], k2[2], k2[3]):  # same band+visit+exposure, different detector: no overlap
+    # same physical exposure, different detector: no overlap by construction
+    if _attitude_of(k1) == _attitude_of(k2):
         continue
     if not overlap(k1, k2): continue
     npairs_checked += 1
@@ -95,8 +128,8 @@ print(f'{npairs_checked} overlapping pairs checked, {len(obs)} usable', flush=Tr
 
 # unknowns: attitude per (band? no -- per EXPOSURE = (visit,exp) is shared across detectors
 # BUT across bands, exposures are distinct; attitude key = (band, visit, exp).
-attkeys = sorted({(k[0], k[2], k[3]) for k in keys})
-detkeys = sorted({(k[0], k[1]) for k in keys})
+attkeys = sorted({_attitude_of(k) for k in keys})
+detkeys = sorted({(k.band, k.det) for k in keys})
 ai = {k: i for i, k in enumerate(attkeys)}
 di = {k: i for i, k in enumerate(detkeys)}
 na, nd = len(attkeys), len(detkeys)
