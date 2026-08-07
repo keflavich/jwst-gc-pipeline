@@ -1343,6 +1343,38 @@ def test_a_curated_render_is_withheld_by_OBSERVATION_not_band():
     assert mw.curated_withheld_reason(o049, withheld_obs, withheld_bands) is None
 
 
+def test_a_label_shaped_pointing_is_not_treated_as_an_observation():
+    """cloudc's curated MIRI renders carry `pointing='MIRI F770W'` -- a label,
+    not an obs token.  It is never in `withheld_obs`, so the observation branch
+    answered "publish" and the band fallback never ran: the render was published
+    unconditionally, even with F770W itself withheld."""
+    mw = _make_webpage()
+    ci = _ci()
+    miri = [e for e in ci.for_field('cloudc')
+            if e.get('pointing') == 'MIRI F770W']
+    assert miri, 'the cloudc MIRI entry this guards is gone from the registry'
+    why = mw.curated_withheld_reason(miri[0], set(), {'F770W'})
+    assert why, 'a label-shaped pointing must fall through to the bands'
+    # a real obs token still decides alone, with no known_obs supplied
+    o049 = {'pointing': 'o049', 'label': 'R=F277W, G=mean, B=F200W'}
+    o050 = {'pointing': 'o050', 'label': 'R=F277W, G=mean, B=F200W'}
+    assert mw.curated_withheld_reason(o049, {'o050'}, {'F277W', 'F200W'}) is None
+    assert mw.curated_withheld_reason(o050, {'o050'}, {'F277W', 'F200W'})
+
+
+def test_the_curated_and_preview_paths_share_one_rule():
+    """Two implementations of one rule drift, and these two already had: the
+    preview path required the pointing to be a known observation and the curated
+    path did not, which is how the MIRI fail-open survived."""
+    import inspect as _inspect
+    mw = _make_webpage()
+    src = _inspect.getsource(mw)
+    body = src.split('def _keep_preview')[1].split('\n    if withheld')[0]
+    assert 'withheld_reason(' in body, body
+    curated = src.split('def curated_withheld_reason')[1].split('def withheld_reason')[0]
+    assert 'withheld_reason(' in curated
+
+
 def test_a_curated_render_with_no_provenance_fails_rather_than_falls_through():
     """A curated entry that cannot be tied to a live mosaic must not be the
     field's primary image while something on the field is repudiated.  The
