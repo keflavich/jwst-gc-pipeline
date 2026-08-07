@@ -125,6 +125,13 @@ def _base_column_writers(path):
     except SyntaxError:
         return []
     hits = []
+    # enclosing function per line, so a pardon can name ONE function instead of
+    # a whole 2000-line module
+    owner = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for ln in range(node.lineno, (node.end_lineno or node.lineno) + 1):
+                owner.setdefault(ln, node.name)
 
     def _is_base_key(node):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
@@ -144,7 +151,7 @@ def _base_column_writers(path):
             targets = [node.target]
         for t in targets:
             if isinstance(t, ast.Subscript) and _is_base_key(t.slice):
-                hits.append(node.lineno)
+                hits.append((node.lineno, owner.get(node.lineno, "<module>")))
     return hits
 
 
@@ -173,16 +180,25 @@ def test_generation_columns_note_matches_reality():
     # never ARMED, which is a different and more precise statement than
     # "nothing writes these columns", and neither `git grep` nor the text walk
     # could see it: the f-string never spells the literal.
-    KNOWN = {"jwst_gc_pipeline/photometry/astrometry_checkpoint.py"}
+    # (file, FUNCTION), not file.  A whole-file pardon is the exact shape this
+    # test's own docstring gives as a reason the git-grep version failed --
+    # excluding all of unified_alignment.py hid a writer added beside
+    # _GENERATION_COLUMNS.  Excluding all of astrometry_checkpoint.py would be
+    # worse, because the one known writer already lives there, which makes it
+    # the most likely home for the next one: a plain
+    # `tbl['base_calver'] = gen['cal_ver']` anywhere in those 2000 lines passed
+    # green.
+    KNOWN = {("jwst_gc_pipeline/photometry/astrometry_checkpoint.py",
+              "seed_offsets_table_from_consensus")}
     writers = []
     for f in sources:
         if f.name == here or "tests" in f.parts:
             continue
         rel = f.relative_to(repo).as_posix()
-        if rel in KNOWN:
-            continue
-        for lineno in _base_column_writers(f):
-            writers.append(f"{rel}:{lineno}")
+        for lineno, func in _base_column_writers(f):
+            if (rel, func) in KNOWN:
+                continue
+            writers.append(f"{rel}:{lineno} (in {func})")
     assert not writers, (
         "something now writes a base_* generation stamp -- the dormant-layer "
         f"note in _GENERATION_COLUMNS needs updating: {writers}")
