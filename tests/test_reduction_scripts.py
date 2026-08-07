@@ -157,3 +157,56 @@ def test_extend_idempotent_when_exposure_column_present(tmp_path):
     out, extended = m.extend_table_to_per_exposure(str(tp), {}, {'F410M'})
     assert extended is False
     assert len(out) == 1
+
+
+PERFRAME_SBATCH = os.path.join(
+    SCRIPTS, 'submit_cataloging_perframe_phase.sbatch')
+
+
+def _perframe_sbatch_text():
+    """The script with line continuations folded away.
+
+    A rename split across a backslash-continuation would otherwise be collected
+    by nothing and pass the gate test vacuously.
+    """
+    with open(PERFRAME_SBATCH) as fh:
+        return fh.read().replace('\\\n', ' ')
+
+
+def test_perframe_runtime_rename_never_clobbers_a_submitted_name():
+    """A submit-time job name must survive the per-frame phase script.
+
+    The standing naming rule wants target+program+obsid+stage on the job at
+    SUBMIT time, because a queued job shows only that.  The phase script used to
+    rename itself unconditionally to "<target>-pf-<phase>-<mode>", which drops
+    the program and the obsid -- brick and cloudc are both 2221, and gc2211 has
+    five observations, so the degraded name is genuinely ambiguous.  Every
+    `scontrol update ... JobName` here must therefore be gated on the rename
+    guard, which only fires for a bare submission.
+    """
+    text = _perframe_sbatch_text()
+    renames = [ln.strip() for ln in text.splitlines()
+               if not ln.lstrip().startswith('#')
+               and 'scontrol update' in ln and 'JobId=' in ln]
+    assert renames, 'expected the phase script to still contain renames'
+    for line in renames:
+        assert line.startswith('_pf_rename_wanted &&'), (
+            f'ungated runtime rename would clobber the submit-time name: {line}')
+
+
+def test_perframe_shard_name_does_not_carry_the_array_index():
+    """The shard index must not be baked into the job NAME.
+
+    `scontrol update JobId=<task>` does not reliably address one element of an
+    array: sgrb2 m12 fanout 38867646 came out `pf_sgrb2_m12_s15` on all 16
+    tasks, and sgrc 38851171 had tasks 13 and 15 both reading
+    `pf_sgrc_m12_s15` (2026-08-07).  The shard is already unambiguous in the
+    array-task id, so the name must not try to carry it.
+    """
+    text = _perframe_sbatch_text()
+    for line in text.splitlines():
+        if line.lstrip().startswith('#'):
+            continue
+        if 'scontrol update' in line or 'JobName=' in line:
+            assert 'SLURM_ARRAY_TASK_ID' not in line, (
+                f'array index must not go into the job name: {line.strip()}')
