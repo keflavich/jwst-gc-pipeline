@@ -200,6 +200,37 @@ def make_figure(res, path):
     return path
 
 
+
+def _utc_now():
+    """UTC timestamp for the report header."""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+def _git_sha():
+    """Short SHA of the tree that produced the report, or 'unknown'.
+
+    ``-dirty`` matters here: a report generated from uncommitted code is not
+    reproducible from the SHA alone, and saying so is cheaper than someone
+    later failing to reproduce it.
+    """
+    import subprocess
+    try:
+        sha = subprocess.run(
+            ['git', 'rev-parse', '--short', 'HEAD'],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            capture_output=True, text=True, timeout=10).stdout.strip()
+        if not sha:
+            return 'unknown'
+        dirty = subprocess.run(
+            ['git', 'status', '--porcelain'],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            capture_output=True, text=True, timeout=10).stdout.strip()
+        return sha + ('-dirty' if dirty else '')
+    except (OSError, subprocess.SubprocessError):
+        return 'unknown'
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--root', default='/orange/adamginsburg/jwst')
@@ -211,6 +242,12 @@ def main():
     rows = collect(args.root)
     dev, ngroups = deviations(rows)
     res = analyse(dev, exclude_fields=tuple(args.exclude_field))
+    # Provenance, because the inputs are LIVE.  A re-run the same day differed
+    # by 25 measurements (34,672 -> 34,697): sgrc took corrections at 17:48 and
+    # gc2211 was reverted at 17:02.  Without a stamp the next reader cannot tell
+    # ordinary drift from a bug, and the committed report is undated evidence.
+    print(f'# per-detector offset report')
+    print(f'# generated {_utc_now()}  ·  code {_git_sha()}')
     print(f'{len(rows)} per-detector measurements, {ngroups} module-groups, '
           f'{len({r["field"] for r in rows})} fields')
     print(f'\n{"det":9s} {"fields":>6s} {"mean dDec":>10s} {"between-field sd":>17s}  verdict')

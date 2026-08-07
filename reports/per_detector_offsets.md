@@ -8,7 +8,12 @@ Regenerate with:
 python scripts/analysis/per_detector_offset_report.py --exclude-field gc2211
 ```
 
-Last run 2026-08-07 · 34,672 per-detector measurements · 7,358 module-groups · 11 fields
+Last run **2026-08-07T22:58:46Z** · code **f24f275** · 34,697 per-detector measurements · 7,363 module-groups · 11 fields
+
+> The inputs are LIVE offsets tables, so this drifts between runs: an earlier
+> run the same day read 34,672 / 7,358, because sgrc took corrections at 17:48
+> and gc2211 was reverted at 17:02. The stamp is what lets the next reader tell
+> ordinary drift from a bug — the script prints both lines on every run.
 
 ![per-detector offsets](figures/per_detector_offsets.png)
 

@@ -106,3 +106,27 @@ def test_the_clip_survives_an_arcsecond_outlier():
     mean, sem, n = m._robust(a)
     assert mean == pytest.approx(0.5, abs=0.05), mean
     assert n == 60
+
+
+def test_the_report_stamps_its_provenance():
+    """The inputs are live offsets tables, so the numbers drift between runs --
+    34,672 -> 34,697 within one day, because sgrc took corrections and gc2211
+    was reverted between them.  Without a stamp the next reader cannot tell
+    ordinary drift from a bug, and the committed report is undated evidence."""
+    import os
+    import re
+    path = os.path.join(os.path.dirname(__file__), '..', '..', '..',
+                        'scripts', 'analysis', 'per_detector_offset_report.py')
+    src = open(path).read()
+    assert '_utc_now()' in src and '_git_sha()' in src
+    assert re.search(r"print\(f'# generated \{_utc_now\(\)\}.*_git_sha\(\)", src), (
+        'the report must print both a UTC timestamp and the code SHA')
+
+
+def test_a_dirty_tree_is_declared():
+    """A report generated from uncommitted code is not reproducible from the
+    SHA alone; saying so costs nothing and saves a failed reproduction."""
+    import os
+    path = os.path.join(os.path.dirname(__file__), '..', '..', '..',
+                        'scripts', 'analysis', 'per_detector_offset_report.py')
+    assert "'-dirty'" in open(path).read()
