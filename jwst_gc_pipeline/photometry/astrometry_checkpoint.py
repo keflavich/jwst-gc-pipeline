@@ -1017,7 +1017,8 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
     """
     with locked(offsets_path):
         from ..reduction.validate_offsets_table import (
-            CollapsedOffsetsTableError, assert_offsets_table_sane)
+            CollapsedOffsetsTableError, DivergedColumnPairError,
+            assert_offsets_table_sane)
 
         # materialise first: the checks below iterate `corrections` before the apply
         # loop does, and a generator would be consumed by them -- leaving the update
@@ -1184,7 +1185,14 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
         try:
             assert_offsets_table_sane(tbl, context=os.path.basename(offsets_path),
                                       raise_on_issue=True)
-        except CollapsedOffsetsTableError as ex:
+        # DivergedColumnPairError is caught alongside the collapse for the same
+        # reason the collapse is: every caller and the retie loop are written
+        # around OffsetsTableUpdateError, so anything else leaves this function
+        # as a bare ValueError and silently changes its error contract.  It can
+        # only be reached via OFFSETS_TABLE_DIVERGENCE_RAISE=1 (raise_on_issue
+        # deliberately does NOT escalate a divergence), but an opt-in switch
+        # that changes the exception TYPE a caller sees is still a trap.
+        except (CollapsedOffsetsTableError, DivergedColumnPairError) as ex:
             raise OffsetsTableUpdateError(
                 f"corrected offsets table failed validation; NOT writing:\n{ex}") from ex
 
