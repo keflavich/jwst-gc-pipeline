@@ -20,10 +20,18 @@ That is the exact inversion of what a release is for.  Measured 2026-08-05:
 Cloud C's published images predate the 2026-07-12 astrometry fix, so the page
 was showing ~4" errors as evidence that the astrometry is sound.
 
-The check is deliberately cheap and needs no FITS reading: resolve each staged
-image's ``src``; if it is gone and a quarantined twin is in its place, the
-staged copy is superseded.  Nothing is deleted -- a superseded image stops being
-PUBLISHED, and the file stays where it is.
+The check is deliberately cheap and needs no FITS reading.  Two ways a staged
+copy goes stale, and the second is the larger:
+
+* the source was RENAMED to a quarantine twin -- resolve ``src``, and if it is
+  gone with a twin in its place, the staged copy is superseded;
+* the source was REBUILT IN PLACE under the same name, which is a perfectly
+  good file.  Presence is not freshness.  The manifest records ``size_bytes``
+  for every entry, so one ``stat`` says whether the bytes on disk are still
+  the bytes that were staged.  52 of 115 live entries fail that comparison.
+
+Nothing is deleted -- a superseded image stops being PUBLISHED, and the file
+stays where it is.
 """
 import glob
 import json
@@ -42,11 +50,49 @@ SUPERSEDED = "superseded"
 MISSING = "missing"
 
 
-def source_state(src):
-    """``live`` / ``superseded`` / ``missing`` for one staged file's source."""
+#: A rebuilt mosaic differs from the staged one by far more than this.  The
+#: tolerance exists only so a byte-identical re-copy (rsync, restore from tape)
+#: is not read as a rebuild.
+SIZE_TOLERANCE_BYTES = 0
+
+
+def source_state(src, recorded_size=None):
+    """``live`` / ``superseded`` / ``missing`` for one staged file's source.
+
+    PRESENCE IS NOT FRESHNESS.  The first version of this resolved supersession
+    as "the source is gone and a quarantined twin is in its place", which
+    catches only the RENAME.  A mosaic rebuilt IN PLACE under the same name is
+    a perfectly good file, and the guard called it live.
+
+    Measured across the whole release tree: 115 live entries, of which **52**
+    had a source whose size no longer matched what was staged.  On cloudc --
+    the field this check is named for -- five of six sources were rebuilt the
+    same morning, each to a different size, and every one read `live`:
+
+        f187n  recorded 3342309120  now 3340854720
+        f212n  recorded 3342107520  now 3339990720
+        f405n  recorded  552960000  now  552686400
+        f410m  recorded  553383360  now  552888000
+        f466n  recorded  553178880  now  552686400
+
+    The page kept serving July's bytes with the notice saying nothing, which is
+    the failure this module exists to prevent.  The manifest records
+    ``size_bytes`` for 115 of 115 entries, so comparing it costs one ``stat``
+    and no FITS read -- the same budget as before.  ``sha256`` is also recorded
+    and deliberately NOT used: these are multi-GB mosaics and hashing them at
+    page-build time is a different kind of check.
+    """
     if not src:
         return MISSING
     if os.path.isfile(src):
+        if recorded_size is None:
+            return LIVE
+        try:
+            now = os.path.getsize(src)
+        except OSError:
+            return LIVE          # unreadable size is not evidence of staleness
+        if abs(now - int(recorded_size)) > SIZE_TOLERANCE_BYTES:
+            return SUPERSEDED
         return LIVE
     stem = src[:-5] if src.endswith(".fits") else src
     for pattern in QUARANTINE_GLOBS:
@@ -61,7 +107,8 @@ def audit_manifest(manifest, categories=("image",)):
     for entry in manifest.get("files", []):
         if categories and entry.get("category") not in categories:
             continue
-        out[entry.get("dest")] = source_state(entry.get("src"))
+        out[entry.get("dest")] = source_state(entry.get("src"),
+                                              entry.get("size_bytes"))
     return out
 
 
