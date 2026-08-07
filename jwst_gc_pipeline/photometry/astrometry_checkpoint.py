@@ -376,11 +376,10 @@ def _assert_one_correction_per_row(corrections, tbl, offsets_path):
     per-detector residuals must be pooled before they are applied, not summed.
     """
     hits = {}
-    visit_numbers = np.array([int(str(v)[-3:]) for v in tbl["Visit"]])
     for corr in corrections:
         if _is_bulk_correction(corr):
             continue        # see _is_bulk_correction: broad BY DESIGN
-        idx = _match_rows(corr, tbl, visit_numbers)
+        idx = _match_rows(corr, tbl)
         for i in idx:
             hits.setdefault(int(i), []).append(corr)
     over = {i: v for i, v in hits.items() if len(v) > 1}
@@ -462,7 +461,6 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
     # detector whose measurement blew up is averaged out of existence and the
     # operator never learns the measurement failed.  Check the MEMBERS.
     _assert_correction_magnitudes(corrections, offsets_path)
-    visit_numbers = np.array([int(str(v)[-3:]) for v in tbl["Visit"]])
     groups = {}
     order = []
     bulk = []
@@ -470,7 +468,7 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
         if _is_bulk_correction(corr):
             bulk.append(corr)
             continue
-        key = tuple(sorted(int(i) for i in _match_rows(corr, tbl, visit_numbers)))
+        key = tuple(sorted(int(i) for i in _match_rows(corr, tbl)))
         if key not in groups:
             order.append(key)
         groups.setdefault(key, []).append(corr)
@@ -669,7 +667,50 @@ def _apply_module_rows(corr_module, present):
     return {p for p in present if _module_family(p) == fam}
 
 
-def _match_rows(corr, tbl, visit_numbers):
+#: ``jw`` + proposal(5) + observation(3) + visit(3).
+_VISIT_ID_RE = re.compile(r'jw(\d{5})(\d{3})(\d{3})\s*$', re.IGNORECASE)
+
+
+class AmbiguousVisitMatchError(ValueError):
+    """A correction's visit cannot be told from another observation's."""
+
+
+def visit_obs_key(value):
+    """``(observation, visit)`` from a JWST visit id; ``(None, visit)`` if bare.
+
+    Every narrowing site used to key on ``int(str(visit)[-3:])`` -- the visit
+    number alone.  That is unique for a field whose observations each contain
+    one visit, which is every field here except gc2211: its FIVE observations
+    are all visit 001, so the last three digits are ``001`` for all of them.
+
+        jw02211023001  jw02211028001  jw02211046001  jw02211049001  jw02211050001
+                 ^^^ observation                              ^^^ visit == 001
+
+    A correction measured on one of those observations therefore matched the
+    rows of all five and was added to every one -- which is how gc2211's table
+    came to carry a single ``prov_*`` pair across five pointings 0.3-17.6
+    arcmin apart, in five measurably different astrometric states (#284).
+    Keying on (observation, visit) separates them and is a no-op for every
+    single-observation field.
+    """
+    s = str(value).strip()
+    m = _VISIT_ID_RE.match(s)
+    if m:
+        return m.group(2), int(m.group(3))
+    return None, int(s[-3:])
+
+
+def _table_visit_obs(tbl):
+    """Per-row ``(observation, visit)`` keys for an offsets table."""
+    obs, vis = [], []
+    for v in tbl["Visit"]:
+        o, n = visit_obs_key(v)
+        obs.append(o)
+        vis.append(n)
+    return np.array(obs, dtype=object), np.array(vis)
+
+
+def _match_rows(corr, tbl):
     """Row indices of ``tbl`` a single correction would be ADDED to.
 
     Factored out of ``update_offsets_table`` so the granularity guard and the
@@ -677,9 +718,28 @@ def _match_rows(corr, tbl, visit_numbers):
     re-implements the narrowing is a guard that drifts away from what it guards.
     Unlike the apply loop this never raises; callers decide what an empty or
     over-full match means.
+
+    Raises ``AmbiguousVisitMatchError`` -- the ONE thing it does raise -- when
+    the correction names a bare visit number and the table spans more than one
+    observation, because there is then no way to tell which observation's rows
+    it belongs to and matching them all is the #284 broadcast.
     """
-    visit = int(str(corr["visit"])[-3:])
-    match = (visit_numbers == visit) & (tbl["Filter"] == corr["filtername"])
+    corr_obs, visit = visit_obs_key(corr["visit"])
+    row_obs, row_visit = _table_visit_obs(tbl)
+    known = set(o for o in row_obs if o is not None)
+    if corr_obs is None and len(known) > 1:
+        raise AmbiguousVisitMatchError(
+            f"correction names visit {corr['visit']!r} with no observation, but "
+            f"{tbl.colnames and 'the table'} spans observations {sorted(known)}. "
+            f"Matching on the visit number alone would add this correction to "
+            f"every one of them -- the gc2211 #284 broadcast. Give the "
+            f"correction its full jwPPPPPOOOVVV visit id.")
+    match = (row_visit == visit) & (tbl["Filter"] == corr["filtername"])
+    if corr_obs is not None:
+        # Rows whose Visit is a bare number carry no observation to compare, so
+        # they stay eligible; a table that mixes the two forms is matched as
+        # loosely as its least-specific rows allow, not silently narrowed to none.
+        match &= np.array([o is None or o == corr_obs for o in row_obs])
     if corr.get("exposure") is not None and "Exposure" in tbl.colnames:
         match &= tbl["Exposure"] == int(corr["exposure"])
     if corr.get("module") is not None and "Module" in tbl.colnames:
@@ -1079,7 +1139,6 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
                 if tbl[_col].dtype.kind != "f":
                     tbl[_col] = np.asarray(tbl[_col], dtype=float)
 
-        visit_numbers = np.array([int(str(v)[-3:]) for v in tbl["Visit"]])
         now = _utcnow_iso()
         # Re-sync the duplicate columns on the rows these corrections will touch,
         # BEFORE applying anything -- adding the same increment to both pairs
@@ -1088,7 +1147,7 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
         # by filter instead of being blocked as a whole.
         _touched = set()
         for corr in corrections:
-            _touched.update(int(i) for i in _match_rows(corr, tbl, visit_numbers))
+            _touched.update(int(i) for i in _match_rows(corr, tbl))
         _heal_column_pairs(tbl, offsets_path, rows=_touched)
 
         for corr in corrections:
@@ -1107,7 +1166,7 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
             # NOT ``is not None`` -- because exposure_key stringifies a missing
             # VGROUP meta to the literal "None", which would otherwise narrow
             # against a token no row can ever carry ("matches NO row").
-            idx = _match_rows(corr, tbl, visit_numbers)
+            idx = _match_rows(corr, tbl)
             match = np.zeros(len(tbl), dtype=bool)
             match[idx] = True
             wanted_vgroup = vgroup_key(corr.get("vgroup"))
