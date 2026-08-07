@@ -105,10 +105,44 @@ for ((it=1; it<=MAXITER; it++)); do
     # rename only fires when the job STARTS, and a quota-bound retie sits PENDING
     # for hours under the generic name -- which is exactly when the queue is being
     # watched, and when several reduce arrays are in flight at once.
-    sbatch --wait --array=0-$((NF-1)) --qos="$QOS" \
+    red_out=$(sbatch --wait --parsable --array=0-$((NF-1)) --qos="$QOS" \
         --job-name="${TARGET}${PROPOSAL}-o${FIELD}-reduce-retie${it}" \
         --export="${export_common}" \
-        "$HERE/submit_reduction.sbatch"
+        "$HERE/submit_reduction.sbatch" 2>&1)
+    red_rc=$?
+    echo "$red_out"
+    red_jid=$(echo "$red_out" | grep -oE '^[0-9]+' | head -1)
+
+    # `sbatch --wait` blocks until every array task is terminal, but its exit
+    # status alone is not a safe gate: a partially-failed reduce must NOT be
+    # cataloged.  The filters that failed keep the PREVIOUS iteration's WCS, so
+    # the m12 merge would combine this iteration's frames for some bands with
+    # last iteration's for others, and the m2 checkpoint would then "measure" a
+    # difference that is really just two iterations mixed together.
+    #
+    # This is not hypothetical: sgrc iteration 3 (38870453, 2026-08-07) lost all
+    # four LW filters to CRDS 504s four minutes in (issue #327) while the four
+    # SW filters completed, and the loop went straight on to catalog the mixture.
+    if [ -n "$red_jid" ]; then
+        n_done=$(sacct -j "$red_jid" -o State -X -n 2>/dev/null | grep -c COMPLETED)
+        n_bad=$(sacct -j "$red_jid" -o State -X -n 2>/dev/null \
+                | grep -cvE 'COMPLETED|^\s*$')
+        echo "[iter $it] reduce $red_jid: $n_done/$NF completed, $n_bad not"
+        if [ "$n_done" != "$NF" ]; then
+            echo "[iter $it] REDUCE DID NOT FULLY SUCCEED -- STOPPING before cataloging."
+            sacct -j "$red_jid" -o JobID%18,JobName%34,State,Elapsed -X 2>/dev/null \
+                | grep -vE 'COMPLETED'
+            echo "           Cataloging now would merge this iteration's frames for"
+            echo "           the filters that succeeded with the PREVIOUS iteration's"
+            echo "           frames for the ones that failed."
+            echo "           Re-run the failed filters (FILTERS=\"...\" sbatch"
+            echo "           $HERE/submit_reduction.sbatch), then restart the loop."
+            exit 1
+        fi
+    else
+        echo "[iter $it] could not parse a job id from sbatch (rc=$red_rc) -- STOPPING."
+        exit 1
+    fi
 
     # --- 2. catalog to m2 only, with auto-apply ON ---
     echo "[iter $it] cataloging to m2 (ASTROM_CHECKPOINT_APPLY=1)"

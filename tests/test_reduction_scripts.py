@@ -210,3 +210,28 @@ def test_perframe_shard_name_does_not_carry_the_array_index():
         if 'scontrol update' in line or 'JobName=' in line:
             assert 'SLURM_ARRAY_TASK_ID' not in line, (
                 f'array index must not go into the job name: {line.strip()}')
+
+
+RETIE_LOOP = os.path.join(SCRIPTS, 'run_field_retie_loop.sh')
+
+
+def test_retie_loop_gates_cataloging_on_a_fully_successful_reduce():
+    """A partially-failed reduce must stop the loop, not be cataloged.
+
+    Filters whose reduce failed keep the PREVIOUS iteration's WCS, so an m12
+    merge over the mixture compares this iteration's frames for some bands
+    against last iteration's for others, and the m2 checkpoint then "measures"
+    a difference that is only two iterations mixed together.  sgrc iteration 3
+    (38870453, 2026-08-07) lost all four LW filters to CRDS 504s while the four
+    SW filters completed, and the unguarded loop went straight on to catalog
+    (issue #327).
+    """
+    with open(RETIE_LOOP) as fh:
+        text = fh.read()
+    reduce_at = text.index('--- 1. reduce')
+    catalog_at = text.index('--- 2. catalog')
+    between = text[reduce_at:catalog_at]
+    assert 'sacct' in between and 'COMPLETED' in between, (
+        'the loop must inspect the reduce array states before cataloging')
+    assert 'exit 1' in between, (
+        'the loop must stop, not continue, when the reduce is incomplete')
