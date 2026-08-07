@@ -1256,37 +1256,45 @@ def _mw():
 
 
 def test_a_curated_render_is_withheld_by_OBSERVATION_not_band():
-    """gc2211 is five observations in one field and all five share
-    F200W/F277W, so a band-level test cannot express "o050 is repudiated, o049
-    is fine" -- it withholds o049, the one region whose astrometry is good
-    (~50 mas, against o050's 5.6").
+    """BEHAVIOURAL.  The first version of this read the enclosing source, so
+    `if pointing in withheld_obs:` could be replaced with `if False:` and the
+    suite stayed green -- republishing gc2211 o050, the render whose source was
+    quarantined a day after it was made, as the field's primary image.
 
-    And a curated render is NOT independent of the mosaic it came from: o050's
-    render predates the quarantine of its own source by one day, while the page
-    promoted it as the field's primary image.
+    gc2211 is five observations in one field and all five share F200W/F277W,
+    so a band-level test cannot express "o050 is repudiated, o049 is fine" --
+    it withholds o049, the ONE region whose astrometry is good (~50 mas,
+    against o050's 5.6").
     """
-    import re as _re
-    mw = _mw()
-    src = _inspect.getsource(mw)
-    body = src.split('curated_items = []')[1].split('preview_items = []')[0]
-    # the decision is on the pointing, not on the band names
-    assert 'withheld_obs' in body, body[:400]
-    assert "entry.get(\"pointing\")" in body or "entry.get('pointing')" in body
-    # and the obs token is read out of the SOURCE path, which carries it
-    assert _re.search(r"o\\\\d\{3\}", src) or "o\\d{3}" in src, 'no obs-token pattern'
+    mw = _make_webpage()
+    o050 = {"pointing": "o050", "label": "R=F277W, G=mean, B=F200W",
+            "stem": "GC2211_o050_RGB_277-mean-200_asinh"}
+    o049 = {"pointing": "o049", "label": "R=F277W, G=mean, B=F200W",
+            "stem": "GC2211_o049_RGB_277-mean-200_asinh"}
+    withheld_obs = {"o050"}
+    withheld_bands = {"F200W", "F277W"}          # both, as on the real field
+    why = mw.curated_withheld_reason(o050, withheld_obs, withheld_bands)
+    assert why and "o050" in why, why
+    # ... and the good observation is NOT withheld, though it shares both bands
+    assert mw.curated_withheld_reason(o049, withheld_obs, withheld_bands) is None
 
 
 def test_a_curated_render_with_no_provenance_fails_rather_than_falls_through():
     """A curated entry that cannot be tied to a live mosaic must not be the
     field's primary image while something on the field is repudiated.  The
-    earlier behaviour fell through and published it."""
-    mw = _mw()
-    body = _inspect.getsource(mw).split('curated_items = []')[1] \
-                                 .split('preview_items = []')[0]
-    assert 'cannot tie it to a live mosaic' in body
-    # the fall-through is a `continue`, i.e. the entry is dropped
-    tail = body.split('cannot tie it to a live mosaic')[1][:200]
-    assert 'continue' in tail, tail
+    original behaviour fell through and published it."""
+    mw = _make_webpage()
+    # no pointing, and its bands intersect the withheld set
+    hit = {"label": "R=F466N, B=F405N", "stem": "cloudc_x"}
+    assert mw.curated_withheld_reason(hit, set(), {"F466N"})
+    # no pointing and no band names at all -> undecidable -> withheld
+    blind = {"label": "a pretty picture", "stem": "cloudc_y"}
+    assert mw.curated_withheld_reason(blind, set(), {"F466N"})
+    # ... but with nothing repudiated on the field, it publishes
+    assert mw.curated_withheld_reason(blind, set(), set()) is None
+    # and a render whose bands are all live publishes
+    ok = {"label": "R=F212N, B=F182M", "stem": "cloudc_z"}
+    assert mw.curated_withheld_reason(ok, set(), {"F466N"}) is None
 
 
 def _min_manifest():
@@ -1334,6 +1342,19 @@ def test_a_generated_preview_still_gets_its_caption_and_provenance():
     assert "assets/cloudc.jpg" in page
     assert "R=F212N" in page
     assert "Rendered from the v1.0-2026.06 mosaics" in page
+
+
+def test_the_curated_loop_actually_calls_the_withhold_check():
+    """The pure function is useless uncalled, and the two behavioural tests
+    above pass their own arguments in -- so `_why = curated_withheld_reason(...)`
+    can be replaced with `_why = None` and they stay green.  Source-level and
+    labelled: reaching the loop needs a staged release tree and PIL round-trips
+    of multi-hundred-MB PNGs."""
+    mw = _make_webpage()
+    src = _inspect.getsource(mw)
+    block = src.split('curated_items = []')[1].split('preview_items = []')[0]
+    assert 'curated_withheld_reason(entry' in block, block
+    assert 'continue' in block.split('curated_withheld_reason(entry')[1][:400]
 
 
 def test_the_caller_actually_sets_preview_from_curated():

@@ -227,6 +227,45 @@ def web_jpeg(src, dest, max_px=2200):
     return dest
 
 
+def curated_withheld_reason(entry, withheld_obs=(), withheld_bands=()):
+    """Why this curated render must not be published, or ``None``.
+
+    A pure function on purpose.  This lived inline in ``main()`` and the two
+    tests guarding it read the enclosing SOURCE, so `if pointing in
+    withheld_obs:` could be replaced with `if False:` and the suite stayed
+    green -- which republishes gc2211 o050, the render whose source was
+    quarantined a day after it was made, as the field's primary image.  A
+    substring assertion is not a case.
+
+    Withhold on the OBSERVATION, not the band.  gc2211 is five observations in
+    one field and all five share F200W/F277W, so a band-level test cannot
+    express "o050 is repudiated, o049 is fine" -- it withholds o049, the one
+    region whose astrometry is actually good (~50 mas, against o050's 5.6").
+
+    A render with no pointing to reason about falls back to the band names in
+    its label, and if THAT cannot decide either it is withheld: a curated image
+    whose provenance cannot be tied to a live mosaic must not be the field's
+    primary image while something on that field is repudiated.
+    """
+    withheld_obs = {str(o).lower() for o in (withheld_obs or ())}
+    withheld_bands = {str(b).upper() for b in (withheld_bands or ()) if b}
+    pointing = str(entry.get("pointing") or "").lower()
+    if pointing:
+        if pointing in withheld_obs:
+            return (f"observation {pointing}'s mosaic has been superseded "
+                    f"since it was rendered")
+        return None
+    if not (withheld_obs or withheld_bands):
+        return None
+    bands = set(re.findall(r'F\d{3,4}[WMN]',
+                           str(entry.get("label") or "").upper()))
+    if not bands or (bands & withheld_bands):
+        return (f"cannot tie it to a live mosaic (bands="
+                f"{sorted(bands) or 'unknown'}, "
+                f"withheld={sorted(withheld_bands)})")
+    return None
+
+
 def render_field_page(field, manifest, preview_rel, preview_channels=None,
                       all_versions=None, preview_version=None, previews=(),
                       superseded=(), reasons=None, curated=(),
@@ -782,27 +821,11 @@ def main(argv=None):
 
         curated_items = []
         for entry in curated_images.for_field(field):
-            pointing = str(entry.get("pointing") or "").lower()
-            if pointing:
-                if pointing in withheld_obs:
-                    print(f"  {field}: WITHHOLDING curated {entry['stem']} -- "
-                          f"observation {pointing}'s mosaic has been "
-                          f"superseded since it was rendered")
-                    continue
-            elif withheld_obs or withheld_bands_c:
-                # No pointing to reason about.  Fall back to the band names in
-                # the label, and if THAT cannot decide either, withhold: a
-                # curated render whose provenance cannot be established must
-                # not be the field's primary image while something on this
-                # field is repudiated.
-                bands = set(re.findall(r'F\d{3,4}[WMN]',
-                                       str(entry.get("label") or "").upper()))
-                if not bands or (bands & withheld_bands_c):
-                    print(f"  {field}: WITHHOLDING curated {entry['stem']} -- "
-                          f"cannot tie it to a live mosaic "
-                          f"(bands={sorted(bands) or 'unknown'}, "
-                          f"withheld={sorted(withheld_bands_c)})")
-                    continue
+            _why = curated_withheld_reason(entry, withheld_obs,
+                                           withheld_bands_c)
+            if _why:
+                print(f"  {field}: WITHHOLDING curated {entry['stem']} -- {_why}")
+                continue
             dest = assets / f"curated_{entry['stem']}.jpg"
             try:
                 web_jpeg(entry["file"], dest)
