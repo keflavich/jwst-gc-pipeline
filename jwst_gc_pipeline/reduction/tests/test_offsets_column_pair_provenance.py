@@ -9,9 +9,11 @@ live locked tables, 438 rows differ and **every one** is reconstructed from
                              dra  gap -7163.5 mas   prov_dra  -6269.7 mas
                                                     / cos(28.9 deg) = -7164.1
 
-So a gap is normal and its SIZE says nothing.  What is worth catching is the
-invariant BREAKING -- one pair updated without the other, or the pairs re-synced
-while `prov_*` keeps the history.
+So a gap is normal and its SIZE says nothing.  A row sits in one of two
+legitimate states -- pairs in sync (`gap == 0`, where the builder starts it and
+where `update_offsets_table` returns it by HEALING an explained gap), or never
+healed (`gap == prov`).  What is worth catching is a gap that is NEITHER: one
+pair updated without the other.
 """
 import warnings
 
@@ -53,15 +55,33 @@ def test_a_pair_updated_without_the_other_IS_flagged():
     assert abs(bad[0]["ddec_gap_mas"] - 50.0) < 0.1
 
 
-def test_a_recorded_correction_with_NO_gap_IS_flagged():
-    """The other direction, and the one that fires on real data: 27 cloudc rows
-    and 4 sgrc rows record a 1-7 mas m2 correction while both pairs are
-    identical -- the pairs were re-synced and `prov_*` kept the history, so the
-    audit trail no longer reconstructs."""
-    t = _tbl(prov_dra=4.69, prov_ddec=1.31)      # gap 0
-    bad = flag_diverged_column_pairs(t)
+def test_a_recorded_correction_with_NO_gap_is_the_HEALED_state():
+    """27 cloudc rows and 4 sgrc rows record a 1-7 mas m2 correction while both
+    pairs are identical.  That is not a broken table: `update_offsets_table`
+    HEALS an explained gap into the plain pair before applying a correction, and
+    `prov_*` keeps accumulating past the heal, so a corrected row ends at gap 0
+    with nonzero provenance BY DESIGN.
+
+    Requiring `gap == prov` unconditionally therefore flagged every corrected
+    row on every table -- it took the branch's CI red across 8 tests, including
+    `test_offsets_column_pair_sync`, which asserts exactly this heal."""
+    t = _tbl(prov_dra=4.69, prov_ddec=1.31)      # gap 0, corrections recorded
+    assert flag_diverged_column_pairs(t) == []
+
+
+def _tbl_unexplained():
+    """A gap that is neither 0 (healed/in sync) nor the recorded provenance."""
+    return _tbl(prov_dra=4.69, prov_ddec=1.31, ddec_as=-2.0 + 0.050)
+
+
+def test_a_gap_that_is_neither_zero_nor_the_provenance_IS_flagged():
+    """The only remaining state, and the one no writer produces: 50 mas of Dec
+    gap against 1.31 mas of recorded correction.  One pair moved by an amount
+    the other never got."""
+    bad = flag_diverged_column_pairs(_tbl_unexplained())
     assert len(bad) == 1, bad
-    assert bad[0]["ddec_gap_mas"] == 0.0
+    assert abs(bad[0]["ddec_gap_mas"] - 50.0) < 0.1
+    assert abs(bad[0]["prov_ddec_mas"] - 1.31) < 0.1
 
 
 def test_the_RA_axis_is_bounded_not_exact():
@@ -89,7 +109,7 @@ def test_the_gate_WARNS_rather_than_stopping():
     self-consistent -- what is lost is the ability to say how it got there.
     Stopping 31 real rows over a broken audit trail would be the wrong trade,
     and it is escalatable for anyone who wants it to be."""
-    t = _tbl(prov_dra=4.69, prov_ddec=1.31)
+    t = _tbl_unexplained()
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         issues = assert_offsets_table_sane(t, context="test")
@@ -99,9 +119,22 @@ def test_the_gate_WARNS_rather_than_stopping():
 
 
 def test_it_can_be_escalated_to_a_stop():
-    t = _tbl(prov_dra=4.69, prov_ddec=1.31)
     with pytest.raises(DivergedColumnPairError, match="PROVENANCE BROKEN"):
-        assert_offsets_table_sane(t, context="test", raise_on_issue=True)
+        assert_offsets_table_sane(_tbl_unexplained(), context="test",
+                                  raise_on_diverged=True)
+
+
+def test_the_COLLAPSE_switch_does_not_escalate_a_divergence():
+    """They are separate findings and need separate switches.  Sharing one made
+    every existing `raise_on_issue=True` caller -- the m2 checkpoint and the
+    release gate among them -- stop on the weaker one."""
+    t = _tbl_unexplained()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        issues = assert_offsets_table_sane(t, context="test",
+                                           raise_on_issue=True)
+    assert any(i.get("kind") == "diverged_column_pair" for i in issues)
+    assert any("PROVENANCE BROKEN" in str(c.message) for c in caught)
 
 
 def test_a_clean_table_neither_warns_nor_reports():

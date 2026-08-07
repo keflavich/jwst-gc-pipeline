@@ -111,6 +111,23 @@ def flag_diverged_column_pairs(offsets_tbl, tol_mas=PAIR_PROV_TOL_MAS):
     updates one pair and not the other, which is the mechanism the issue
     suspected and the only way the two can ever mean different things.
 
+    A row is therefore legitimately in exactly one of TWO states, and both pass:
+
+      * ``gap == 0`` -- the pairs are in sync.  A row starts here (the builder
+        ends with ``t['dra (arcsec)'] = t['dra']``) and RETURNS here the moment
+        ``update_offsets_table`` touches it, because that writer HEALS an
+        explained gap into the plain pair before applying the new correction.
+        ``prov_*`` keeps accumulating past the heal, so after a heal the gap is
+        0 while ``prov_*`` is nonzero -- checking ``gap == prov`` alone would
+        flag every corrected row on every table (it did: 8 tests, CI red).
+      * ``gap == prov`` -- never healed, so the plain pair is still the as-built
+        value and the whole correction history sits in the gap.
+
+    There is no legitimate third state: an unhealed row that receives a
+    correction is healed first, so it cannot accumulate provenance while
+    keeping a stale gap.  A gap that is neither 0 nor the recorded provenance
+    means one pair moved by an amount the other never got.
+
     Returns a list of offending rows; empty means the invariant holds.
     """
     import numpy as np
@@ -127,11 +144,14 @@ def flag_diverged_column_pairs(offsets_tbl, tol_mas=PAIR_PROV_TOL_MAS):
     prov_c = (np.nan_to_num(np.asarray(offsets_tbl["prov_ddec_added_mas"],
                                        dtype=float))
               if "prov_ddec_added_mas" in cn else np.zeros(len(offsets_tbl)))
+    # state 1: the pairs are in sync (freshly built, or healed by a correction)
+    in_sync = (np.abs(d_gap) <= tol_mas) & (np.abs(c_gap) <= tol_mas)
+    # state 2: never healed -- the gap IS the accumulated provenance
     dec_ok = np.abs(c_gap - prov_c) <= tol_mas
     lo = np.minimum(prov_d, prov_d / _COS_DEC_MIN) - tol_mas
     hi = np.maximum(prov_d, prov_d / _COS_DEC_MIN) + tol_mas
     ra_ok = (d_gap >= lo) & (d_gap <= hi)
-    bad = ~(dec_ok & ra_ok)
+    bad = ~(in_sync | (dec_ok & ra_ok))
     out = []
     for i in np.flatnonzero(bad):
         out.append(dict(
@@ -145,11 +165,20 @@ def flag_diverged_column_pairs(offsets_tbl, tol_mas=PAIR_PROV_TOL_MAS):
     return out
 
 
-def assert_offsets_table_sane(offsets_tbl, tol_arcsec=0.02, context="", raise_on_issue=False):
+def assert_offsets_table_sane(offsets_tbl, tol_arcsec=0.02, context="",
+                              raise_on_issue=False, raise_on_diverged=False):
     """Warn (or raise) if ``offsets_tbl`` shows the visit-collapse signature.
 
     Returns the issue list (empty = clean).  Set ``raise_on_issue`` (or env
     ``OFFSETS_TABLE_COLLAPSE_RAISE=1``) to raise instead of warn.
+
+    The as-built/as-corrected divergence has its OWN switch
+    (``raise_on_diverged`` / ``OFFSETS_TABLE_DIVERGENCE_RAISE=1``) and warns by
+    default, because the two findings differ in severity: a collapse means the
+    shift the reducer applies is wrong, while a divergence means only that the
+    audit trail no longer says how the (still self-consistent) applied pair got
+    there.  Sharing one switch made every existing ``raise_on_issue=True``
+    caller stop on the weaker finding.
     """
     import os
     import warnings
@@ -187,16 +216,18 @@ def assert_offsets_table_sane(offsets_tbl, tol_arcsec=0.02, context="", raise_on
                   "since -- which is what `prov_*` records (issue #319).  The "
                   "live tables bear that out: 438 rows differ and every one is "
                   "reconstructed to <0.1 mas.\n"
-                  "A row where that no longer holds means one of two things, "
-                  "and both cost the AUDIT TRAIL rather than the shift: a "
-                  "writer updated one pair and not the other, or the pairs were "
-                  "re-synced (`_heal_column_pairs`) while `prov_*` kept the "
-                  "history.  A warning rather than a stop, because the reducer "
+                  "A row is legitimately either in sync (gap 0 -- as built, or "
+                  "healed by `update_offsets_table` before its next "
+                  "correction) or never healed (gap == prov).  A gap that is "
+                  "NEITHER means a writer updated one pair and not the other, "
+                  "which costs the AUDIT TRAIL rather than the shift.  A "
+                  "warning rather than a stop, because the reducer "
                   "reads the `(arcsec)` pair and that pair is still "
                   "self-consistent; what is lost is the ability to say how it "
                   "got there.  Re-derive with "
                   "scripts/reduction/reconcile_offsets_column_pairs.py.")
-        if raise_on_issue or os.environ.get('OFFSETS_TABLE_COLLAPSE_RAISE') == '1':
+        if (raise_on_diverged
+                or os.environ.get('OFFSETS_TABLE_DIVERGENCE_RAISE') == '1'):
             raise DivergedColumnPairError(dmsg)
         warnings.warn(dmsg)
         issues = list(issues) + [dict(kind="diverged_column_pair", **d)
