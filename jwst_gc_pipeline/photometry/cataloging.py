@@ -3334,16 +3334,62 @@ def _maybe_dedup_m8(m8_path, options, label='m8'):
         return None
 
 
-def _astrom_checkpoint_refcat(basepath):
+def _pick_refcat(cands, field=None):
+    """The refcat for THIS observation, from the candidates on disk.
+
+    A refcat may carry an observation token (``..._o028.fits``) because it was
+    built for one pointing.  Selection used to be ``sorted(cands)[-1]``, which
+    picks the LAST NAME ALPHABETICALLY -- and ``_o028`` sorts after the bare
+    ``gaia_virac2_refcat_epoch2023.71.fits``, so on gc2211 every observation got
+    o028's catalog:
+
+        gaia_virac2_refcat_epoch2023.71.fits          <- generic, wanted
+        gaia_virac2_refcat_epoch2023.71_o028.fits     <- chosen for ALL of them
+
+    o023 was then tied against a reference built for a pointing arcminutes away
+    and the m2 checkpoint measured a -9.28" per-exposure correction, which the
+    magnitude limit refused to write (correctly -- the measurement was wrong,
+    not the frame).  Its five observations are 0.3-17.6 arcmin apart, so a
+    neighbour's refcat is not a degraded reference, it is the wrong sky.
+
+    Order: this observation's token, else an untokened refcat, else refuse --
+    picking SOME other observation's is never right, and doing it silently is
+    how this cost a full o023 chain.
+    """
+    if not cands:
+        return None
+    tok = re.compile(r'_o(\d{3})\.fits$')
+    tokened = {m.group(1): p for p in cands for m in [tok.search(p)] if m}
+    untokened = [p for p in cands if not tok.search(p)]
+    if field:
+        f3 = str(field).zfill(3)
+        if f3 in tokened:
+            return tokened[f3]
+    if untokened:
+        return sorted(untokened)[-1]
+    if tokened:
+        raise ValueError(
+            f"astrom checkpoint: the only reference catalogs under "
+            f"{os.path.dirname(cands[0])} are built for other observations "
+            f"({sorted(tokened)}), and this run is "
+            f"{'o' + str(field).zfill(3) if field else 'untagged'}.  Tying to "
+            f"another pointing's reference is not a degraded measurement, it is "
+            f"the wrong sky -- build one for this observation "
+            f"(build_gaia_virac2_refcat_byquery.py) or point ASTROM_REFCAT at "
+            f"the right file.")
+    return None
+
+
+def _astrom_checkpoint_refcat(basepath, field=None):
     """Locate + load the absolute reference catalog for the astrometry
-    checkpoints: env ``ASTROM_REFCAT`` first, else the target's
-    ``gaia_virac2_refcat*.fits`` seed refcat.  None (consensus-only checks)
-    when the target has no seed refcat."""
+    checkpoints: env ``ASTROM_REFCAT`` first, else the seed refcat matching this
+    OBSERVATION (see :func:`_pick_refcat`).  None (consensus-only checks) when
+    the target has no seed refcat."""
     from jwst_gc_pipeline.photometry.visit_consensus import load_reference_catalog
     path = os.environ.get('ASTROM_REFCAT')
     if not path:
         cands = sorted(glob.glob(f"{basepath}/catalogs/gaia_virac2_refcat*.fits"))
-        path = cands[-1] if cands else None
+        path = _pick_refcat(cands, field=field)
     if path and os.path.exists(path):
         print(f"astrom checkpoint: reference catalog {path}", flush=True)
         return load_reference_catalog(path)
@@ -4016,7 +4062,8 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
                       else _vstack(subs, metadata_conflicts='silent'))
 
     if 'refcat' not in refcat_cache:
-        refcat_cache['refcat'] = _astrom_checkpoint_refcat(basepath)
+        refcat_cache['refcat'] = _astrom_checkpoint_refcat(
+            basepath, field=getattr(options, 'field', None))
     refcat = refcat_cache['refcat']
 
     warn_only = os.environ.get('ASTROM_CHECKPOINT_WARN_ONLY', '') == '1'
@@ -4259,7 +4306,9 @@ def _run_crossfilter_astrom_checkpoint(vetted_paths_by_filter, cut_bp, basepath,
         print("crossfilter astrom checkpoint: <2 vetted catalogs; skipped", flush=True)
         return
     if 'refcat' not in refcat_cache:
-        refcat_cache['refcat'] = _astrom_checkpoint_refcat(basepath)
+        _m = re.search(r'o(\d{3})', obs_token or '')
+        refcat_cache['refcat'] = _astrom_checkpoint_refcat(
+            basepath, field=_m.group(1) if _m else None)
     try:
         run_crossfilter_checkpoint(catalogs, refcat=refcat_cache['refcat'],
                                    basepath=cut_bp, context=context,
