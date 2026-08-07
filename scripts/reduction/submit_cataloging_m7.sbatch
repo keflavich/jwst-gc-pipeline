@@ -20,7 +20,7 @@
 # run_manual_pipeline start_phase note.  The ZEROFRAME satstar deblend is plumbed
 # via DEBLEND_SATSTARS below so a re-made satstar catalog at m7 matches m12.
 # ---------------------------------------------------------------------------
-# renamed to "<target>-catalog-m7" at runtime (target is not always the GC)
+# renamed to "<target><prop>-o<obsid>-m7" at runtime ONLY when submitted bare
 #SBATCH --job-name=catalog_m7
 #SBATCH --account=astronomy-dept
 #SBATCH --qos=astronomy-dept-b

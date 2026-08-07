@@ -331,9 +331,17 @@ def test_the_loop_actually_calls_the_gate_between_reduce_and_catalog():
 # is covered without anyone remembering to add a test.
 # ---------------------------------------------------------------------------
 
+#: Every submitter that renames itself at runtime, with the placeholder its
+#: `#SBATCH --job-name` carries.  The guard idiom is deliberately NOT pinned:
+#: the repo uses two spellings (a `_*_rename_wanted` helper and a bare
+#: `if [ "${SLURM_JOB_NAME:-x}" = "x" ]`), and an earlier version of this test
+#: enforced one of them -- which excluded the correctly-guarded scripts written
+#: in the other, and let a one-character `=` -> `!=` inversion through.  These
+#: tests EXECUTE the guard instead.
 RENAMING_SBATCH = {
-    'submit_cataloging_perframe_phase.sbatch': '_pf_rename_wanted',
-    'submit_cataloging_m7.sbatch': '_m7_rename_wanted',
+    'submit_cataloging_perframe_phase.sbatch': 'pf',
+    'submit_cataloging_m7.sbatch': 'catalog_m7',
+    'submit_cataloging.sbatch': 'catalog',
 }
 
 
@@ -350,34 +358,116 @@ def _rename_lines(text):
             and 'scontrol update' in ln and 'JobId=' in ln]
 
 
-@pytest.mark.parametrize('script,guard', sorted(RENAMING_SBATCH.items()))
-def test_every_runtime_rename_is_gated_on_the_submit_time_name(script, guard):
+def _rename_attempts(script, placeholder, job_name):
+    """Run the script's rename logic with a stub `scontrol` and report what it
+    tried to set the name to.
+
+    Behavioural, not textual: the previous version string-matched the guard's
+    definition line, so inverting it (`=` -> `!=`) -- which reproduces the exact
+    #330 defect -- left every test green.  It also only recognised the literal
+    `JobId=`, so re-adding a rename with slurm's equally-valid lowercase
+    `jobid=` was invisible.
+    """
+    import subprocess
+    import tempfile
     text = _folded(script)
-    renames = _rename_lines(text)
-    assert renames, f'{script}: expected it to still contain renames'
-    for line in renames:
-        assert line.startswith(f'{guard} &&'), (
-            f'{script}: ungated runtime rename clobbers the submit-time '
-            f'name: {line}')
+    lines = text.splitlines()
+    keep, i = [], 0
+    while i < len(lines):
+        line = lines[i]
+        if line.lstrip().startswith('#'):
+            i += 1
+            continue
+        low = line.lower()
+        st = line.lstrip()
+        if st.startswith('echo ') or st.startswith('printf '):
+            # a message that merely MENTIONS scontrol (perframe_phase:209
+            # suggests re-pointing a dependency) is not a rename
+            i += 1
+            continue
+        if 'rename_wanted()' in line:            # guard helper definition
+            keep.append(line)
+        elif line.lstrip().startswith('if ') and 'SLURM_JOB_NAME' in line:
+            # a guard written as an if-block: keep the WHOLE block, or the
+            # rename inside it runs unconditionally here and the test reports a
+            # clobber that does not happen.
+            block, depth = [line], 1
+            j = i + 1
+            while j < len(lines) and depth:
+                block.append(lines[j])
+                st = lines[j].strip()
+                if st.startswith('if '):
+                    depth += 1
+                elif st == 'fi':
+                    depth -= 1
+                j += 1
+            if any('scontrol update' in b.lower() for b in block):
+                keep.extend(block)
+            i = j
+            continue
+        elif 'scontrol update' in low and 'jobid=' in low:
+            keep.append(line)
+        i += 1
+    with tempfile.TemporaryDirectory() as td:
+        with open(os.path.join(td, 'scontrol'), 'w') as fh:
+            fh.write('#!/bin/bash\necho "$@"\n')
+        os.chmod(os.path.join(td, 'scontrol'), 0o755)
+        env = dict(os.environ)
+        env.update(PATH=td + os.pathsep + env['PATH'],
+                   SLURM_JOB_ID='12345', SLURM_JOB_NAME=job_name,
+                   TARGET='brick', PROPOSAL='2221', FIELD='001',
+                   FILT='F182M', PHASE='m12', MODE='fanout')
+        out = subprocess.run(['bash', '-c', '\n'.join(keep)], env=env,
+                             capture_output=True, text=True, timeout=60)
+    return [ln for ln in out.stdout.splitlines() if ln.strip()]
 
 
-@pytest.mark.parametrize('script,guard', sorted(RENAMING_SBATCH.items()))
-def test_the_rename_guard_matches_this_scripts_own_placeholder(script, guard):
-    """The guard fires only when SLURM_JOB_NAME still equals the `#SBATCH
-    --job-name` placeholder.  A guard written against a DIFFERENT script's
-    placeholder never fires, which is a silent no-op rather than a visible
-    failure -- the job just keeps whatever name it had."""
-    text = _folded(script)
-    placeholder = None
-    for line in text.splitlines():
-        if line.startswith('#SBATCH --job-name='):
-            placeholder = line.split('=', 1)[1].strip()
-    assert placeholder, f'{script}: no #SBATCH --job-name to guard against'
-    gdef = [ln for ln in text.splitlines() if ln.startswith(f'{guard}()')]
-    assert len(gdef) == 1, f'{script}: expected one definition of {guard}'
-    assert f'"{placeholder}"' in gdef[0], (
-        f'{script}: guard tests against something other than its own '
-        f'placeholder {placeholder!r}: {gdef[0]}')
+@pytest.mark.parametrize('script,placeholder', sorted(RENAMING_SBATCH.items()))
+def test_a_submit_time_name_SURVIVES(script, placeholder):
+    """The whole point of #330/#326: a name given at submit time must not be
+    overwritten at runtime."""
+    attempts = _rename_attempts(script, placeholder, 'brick2221-o001-cat')
+    assert not attempts, (
+        f'{script}: renamed itself over the submit-time name -> {attempts}')
+
+
+@pytest.mark.parametrize('script,placeholder', sorted(RENAMING_SBATCH.items()))
+def test_a_BARE_submission_still_gets_renamed(script, placeholder):
+    """And the guard must actually fire when it should -- an inverted guard
+    passes the test above vacuously."""
+    attempts = _rename_attempts(script, placeholder, placeholder)
+    assert attempts, (
+        f'{script}: a bare submission (SLURM_JOB_NAME={placeholder!r}) was '
+        f'never renamed; the guard cannot fire')
+
+
+@pytest.mark.parametrize('script,placeholder', sorted(RENAMING_SBATCH.items()))
+def test_the_bare_path_name_is_readable_by_the_monitor(script, placeholder):
+    """`cat_brick_m7` returned None from parse_job_name -- invisible to the
+    monitor, not merely ambiguous.  Whatever the bare path picks must resolve to
+    a registered field AND name a stage.
+
+    The obsid is NOT required here: #326 settled that the bare fallback keeps
+    the `pf_<target>_<phase>` shape because that is what `_NAME_PF` reads, and
+    it carries no obsid by construction.  The obsid requirement belongs on the
+    SUBMIT-time names, which is where
+    test_every_emitted_job_name_resolves_to_a_field_and_an_observation puts it.
+    """
+    from jwst_gc_pipeline.monitoring.jobs import parse_job_name
+    checked = 0
+    for line in _rename_attempts(script, placeholder, placeholder):
+        for tok in line.split():
+            low = tok.lower()
+            if low.startswith('jobname=') or low.startswith('name='):
+                name = tok.split('=', 1)[1]
+                parsed = parse_job_name(name)
+                assert parsed is not None, (
+                    f'{script}: bare-path name {name!r} is unattributable -- '
+                    f'the monitor cannot file it under any field')
+                assert parsed['stage'], (
+                    f'{script}: bare-path name {name!r} names no stage')
+                checked += 1
+    assert checked, f'{script}: no bare-path name was emitted to check'
 
 
 def test_m7_renames_itself_only_once():

@@ -84,10 +84,14 @@ MODULES=${MODULES:-nrcb}
 EACH_SUFFIX=${EACH_SUFFIX:-destreak_o012_crf}
 FILTERS=${FILTERS:-"F115W F162M F182M F212N F360M F405N F470N F480M"}
 
-# Tag the job with its target (it is not always the GC).  Renames in-queue so
-# squeue shows e.g. "w51-catalog" instead of a generic name.
-[ -n "${SLURM_JOB_ID:-}" ] && scontrol update JobId="$SLURM_JOB_ID" \
-    JobName="${TARGET}-catalog" 2>/dev/null || true
+# NB there is deliberately NO rename here.  This used to be an UNGATED
+# `JobName="${TARGET}-catalog"`, which clobbered the submit-time name every
+# time -- and the gated rename further down could never undo it, because that
+# guard reads SLURM_JOB_NAME, which is fixed at launch and untouched by
+# scontrol.  So a chain-submitted array showed `brick-catalog`: no program, no
+# obsid, and `parse_job_name` reads it only as `loose`.  The gated rename below
+# already covers the bare-submission case, and does it better (it knows the
+# filter).
 
 # Pin a worktree/branch by setting PIPE_ROOT (prepends to PYTHONPATH).
 PIPE_ROOT=${PIPE_ROOT:-}
