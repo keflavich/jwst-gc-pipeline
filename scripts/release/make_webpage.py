@@ -227,7 +227,8 @@ def web_jpeg(src, dest, max_px=2200):
     return dest
 
 
-def curated_withheld_reason(entry, withheld_obs=(), withheld_bands=()):
+def curated_withheld_reason(entry, withheld_obs=(), withheld_bands=(),
+                            known_obs=()):
     """Why this curated render must not be published, or ``None``.
 
     A pure function on purpose.  This lived inline in ``main()`` and the two
@@ -247,18 +248,56 @@ def curated_withheld_reason(entry, withheld_obs=(), withheld_bands=()):
     whose provenance cannot be tied to a live mosaic must not be the field's
     primary image while something on that field is repudiated.
     """
+    return withheld_reason(
+        pointing=entry.get("pointing"),
+        bands=re.findall(r'F\d{3,4}[WMN]', str(entry.get("label") or "").upper()),
+        withheld_obs=withheld_obs, withheld_bands=withheld_bands,
+        known_obs=known_obs)
+
+
+#: What an observation token looks like (`o023`, `o001-002`).  A `pointing`
+#: that is not one of these is a LABEL, and must not be reasoned about as an
+#: observation -- see `withheld_reason`.
+OBS_TOKEN_RE = re.compile(r'^o\d{3}(-\d{3})?$')
+
+
+def withheld_reason(pointing, bands, withheld_obs=(), withheld_bands=(),
+                    known_obs=()):
+    """The ONE withholding rule, for a curated render or a generated preview.
+
+    Both ask the same question -- may this picture be published, given which
+    mosaics the pipeline has repudiated -- and they had two implementations of
+    it, one keyed off a registry entry and one off a preview filename.  They
+    already disagreed (see ``known_obs``), which is what two copies of a rule do.
+
+    A pointing decides ALONE, but only when it is recognisably an observation.
+    That qualification is the fix for a fail-open: cloudc's curated MIRI renders
+    carry ``pointing='MIRI F770W'``, which is a label, not an obs token.  It is
+    never in ``withheld_obs``, so the obs branch returned "publish" and the band
+    fallback never ran -- the render was published unconditionally, even with
+    F770W withheld.  A pointing is therefore trusted only when it LOOKS like an
+    observation (``OBS_TOKEN_RE``) or is one the manifest actually has
+    (``known_obs``); anything else falls through to the bands.
+
+    Recognising the token by shape rather than by membership alone matters: a
+    live pointing is usually absent from ``withheld_obs`` by definition, so a
+    membership-only test withholds every pointing whose siblings share its
+    bands -- which is the exact behaviour this rule exists to avoid.
+    """
     withheld_obs = {str(o).lower() for o in (withheld_obs or ())}
     withheld_bands = {str(b).upper() for b in (withheld_bands or ()) if b}
-    pointing = str(entry.get("pointing") or "").lower()
-    if pointing:
+    known_obs = {str(o).lower() for o in (known_obs or ())} | withheld_obs
+    pointing = str(pointing or "").lower()
+    if pointing and (OBS_TOKEN_RE.match(pointing) or pointing in known_obs):
+        # a picture of a live pointing stays live even when a sibling pointing
+        # shares every one of its bands -- the case no band rule can express
         if pointing in withheld_obs:
             return (f"observation {pointing}'s mosaic has been superseded "
                     f"since it was rendered")
         return None
     if not (withheld_obs or withheld_bands):
         return None
-    bands = set(re.findall(r'F\d{3,4}[WMN]',
-                           str(entry.get("label") or "").upper()))
+    bands = {str(b).upper() for b in (bands or ()) if b}
     if not bands or (bands & withheld_bands):
         return (f"cannot tie it to a live mosaic (bands="
                 f"{sorted(bands) or 'unknown'}, "
@@ -296,18 +335,20 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                 for f in files if f.get("observation")}
 
     def _keep_preview(stem):
+        # Same rule as the curated renders, through the same function -- see
+        # `withheld_reason`.  Only the parsing differs: a curated entry carries
+        # its pointing and bands as fields, a preview carries them in its stem.
         head, sep, bands = stem.partition("_rgb_")
         if not sep:
             # Off-convention stem: nothing can be established about what it was
-            # rendered from.  Fail CLOSED -- the picture is what a reader looks
-            # at, so an untieable one must not survive a withholding round.
-            return not (withheld_bands or withheld_obs)
-        obs = head[len(field) + 1:].lower() if head.startswith(field + "_") else ""
-        if obs and (obs in withheld_obs or obs in live_obs):
-            # the pointing decides, alone: a preview of a live pointing is
-            # live even when a sibling pointing shares its bands
-            return obs not in withheld_obs
-        return not (withheld_bands & {p.upper() for p in bands.split("_")})
+            # rendered from, so there are no bands to tie it with -- which the
+            # shared rule already treats as withhold-if-anything-is-withheld.
+            bands = ""
+        obs = head[len(field) + 1:] if head.startswith(field + "_") else ""
+        return withheld_reason(
+            pointing=obs, bands=[p for p in bands.split("_") if p],
+            withheld_obs=withheld_obs, withheld_bands=withheld_bands,
+            known_obs=live_obs) is None
 
     if withheld_bands or withheld_obs:
         kept = [(rel, stem) for rel, stem in previews if _keep_preview(stem)]
@@ -826,11 +867,19 @@ def main(argv=None):
                 withheld_obs.add(_m.group(1).lower())
         withheld_bands_c = {(f.get("filter") or "").upper()
                             for f in _withheld_now if f.get("filter")}
+        # Which pointings this field actually HAS.  A curated entry's `pointing`
+        # is trusted as an observation only if it is one of these -- cloudc's
+        # MIRI renders carry `pointing='MIRI F770W'`, a label, and treating that
+        # as an observation published them unconditionally.
+        known_obs_c = {(f.get("observation") or "").lower()
+                       for f in (_lm or {}).get("files", []) if f.get("observation")}
+        known_obs_c |= withheld_obs
 
         curated_items = []
         for entry in curated_images.for_field(field):
             _why = curated_withheld_reason(entry, withheld_obs,
-                                           withheld_bands_c)
+                                           withheld_bands_c,
+                                           known_obs=known_obs_c)
             if _why:
                 print(f"  {field}: WITHHOLDING curated {entry['stem']} -- {_why}")
                 continue
