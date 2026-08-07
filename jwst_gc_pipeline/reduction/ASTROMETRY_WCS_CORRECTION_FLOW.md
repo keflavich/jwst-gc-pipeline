@@ -288,6 +288,7 @@ around the visit consensus, re-measured every re-tie iteration.
 | 2045 | 001 | VIRAC2 | `TABLE_CONSENSUS` | F212N | arches |
 | 2045 | 003 | VIRAC2 | `TABLE_LOCKED` | F212N | quintuplet |
 | 5365 | all | VIRAC2 | `TABLE_LOCKED` | F212N | sgrb2 |
+| 1939 | 001 | VIRAC2 | `TABLE_LOCKED` | F212N | sgra; unregistered until 2026-08-06, so every mosaic sits ~14.8″ off |
 | 2211 | all | VIRAC2 | `TABLE_LOCKED` | F200W | gc2211 |
 | 2092 | 005 | VIRAC2 | `TABLE_LOCKED` | F210M | cloudef obs 005 |
 | 2092 | 002 | VIRAC2 | `RECORDED_BULK` + jitter | F210M | cloudef obs 002 |
