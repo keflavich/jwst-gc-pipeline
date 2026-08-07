@@ -65,8 +65,25 @@ CROSSBAND_REF=${CROSSBAND_REF:-}
 PHASE=${PHASE:?set PHASE=m12|m3|m4|m5|m6|m7}
 MODE=${MODE:?set MODE=fanout|finalize}
 NSHARDS=${NSHARDS:-16}
-[ -n "${SLURM_JOB_ID:-}" ] && scontrol update JobId="$SLURM_JOB_ID" \
-    JobName="${TARGET}-pf-${PHASE}-${MODE}" 2>/dev/null || true
+# JOB NAMING.  submit_cataloging_perframe.sh already passes a submit-time
+# --job-name carrying target+program+obsid+stage, which is the standing rule --
+# and a pending job shows ONLY that name, which is exactly when the queue is
+# being watched.  The runtime renames below used to fire unconditionally and
+# DEGRADED it: "${TARGET}-pf-${PHASE}-${MODE}" drops the program and the obsid,
+# so a queue with brick/cloudc (both 2221) or several gc2211 observations in
+# flight could not be told apart.
+#
+# On an ARRAY they are worse than useless.  `scontrol update JobId=<task>` does
+# not reliably address a single element, so the 16 shards race and some lose:
+# sgrb2 m12 fanout 38867646 came out `pf_sgrb2_m12_s15` on all 16 tasks, and
+# sgrc 38851171 had tasks 13 and 15 both reading `pf_sgrc_m12_s15` (2026-08-07).
+# The shard is already unambiguous in the array-task id (`38867646_7`), so the
+# name never needed to carry it.
+#
+# So: rename only when the job was submitted bare, i.e. the name is still the
+# `pf` placeholder from the #SBATCH directive above.  A named submission keeps
+# the name it was given.
+_pf_rename_wanted() { [ "${SLURM_JOB_NAME:-pf}" = "pf" ] && [ -n "${SLURM_JOB_ID:-}" ]; }
 EXTRA_ARGS=${EXTRA_ARGS:-}
 
 # Pin a worktree/branch (this feature is new -> usually needed until merged).
@@ -82,12 +99,12 @@ REF_ARG=""
 if [ "$MODE" = "fanout" ]; then
     SHARD="${SLURM_ARRAY_TASK_ID:-0}/${NSHARDS}"
     MODE_ARGS="--manual-skip-finalize --manual-frame-shard=$SHARD"
-    scontrol update JobId="${SLURM_JOB_ID:-0}" \
-        Name="pf_${TARGET}_${PHASE}_s${SLURM_ARRAY_TASK_ID:-0}" 2>/dev/null || true
+    _pf_rename_wanted && scontrol update JobId="$SLURM_JOB_ID" \
+        JobName="${TARGET}-pf-${PHASE}-fanout" 2>/dev/null || true
 elif [ "$MODE" = "finalize" ]; then
     MODE_ARGS="--manual-finalize-only"
-    scontrol update JobId="${SLURM_JOB_ID:-0}" \
-        Name="pf_${TARGET}_${PHASE}_fin" 2>/dev/null || true
+    _pf_rename_wanted && scontrol update JobId="$SLURM_JOB_ID" \
+        JobName="${TARGET}-pf-${PHASE}-fin" 2>/dev/null || true
     # Lustre metadata coherence lag: the finalize launches (afterok) the instant
     # the last fan-out shard exits, but the per-frame completion markers those
     # shards just wrote may not yet be visible on the finalize node's MDT view.
