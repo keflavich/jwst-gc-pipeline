@@ -166,3 +166,46 @@ def residual_to_infilled_i2d(residual_i2d_path):
 def vetted_to_i2dseed(vetted_path):
     """``..._vetted.fits`` -> ``..._i2dseed.fits``."""
     return vetted_path.replace('_vetted.fits', '_i2dseed.fits')
+
+
+# --- reading a per-frame catalog name back --------------------------------
+# Every reader that parses `{band}_{detector}_visit{NNN}_vgroup...` out of a
+# per-frame catalog name has to allow for the per-observation token `obs_token`
+# inserts BETWEEN the detector and the visit (`_o023`, `_j6778`).  A pattern
+# that requires `_visit` immediately after the detector silently SKIPS every
+# tokened frame -- it does not raise, so the reader just solves on a subset.
+# Measured on the live trees (2026-08-07):
+#
+#     gc2211  F200W   592 globbed   192 parsed   400 skipped   (68%)
+#     ngc6334 F200W   560 globbed   280 parsed   280 skipped   (50%)
+#
+# `cataloging.py::_DETECTOR_TOKEN_RE` was fixed for this in #302; these are the
+# same property in the readers #316 lists.
+
+#: Optional `_o023` / `_j6778` segment, as a non-capturing regex group.
+OBS_TOKEN_PATTERN = r'(?:_(?:o\d{3}|j\d{4,5}))?'
+
+#: Same segment, but CAPTURING the token (or None when absent).  Readers that
+#: KEY on the frame identity need this rather than OBS_TOKEN_PATTERN: gc2211's
+#: five pointings reuse the same (visit, vgroup, exposure) tuples, so admitting
+#: tokened names into a key that cannot hold the token trades "silently skips
+#: those frames" for "silently overwrites them", which is not an improvement.
+OBS_TOKEN_CAPTURE = r'(?:_(o\d{3}|j\d{4,5}))?'
+
+#: Glob fragment covering the same optional segment.  `*` rather than the
+#: regex: a glob cannot express "optional", and a bare `*` here would also span
+#: `_visit001_vgroup...`, so the caller must keep the following literal.
+OBS_TOKEN_GLOB = '*'
+
+
+def perframe_name_re(band_pattern=r'[a-z0-9]+',
+                     detector_pattern=r'nrc[ab](?:[0-9]|long)'):
+    """Compiled regex for ``{band}_{detector}[_obs]_visit{NNN}_vgroup{G}_exp{N}``.
+
+    Groups: ``(band, detector, visit, vgroup, exposure)``.  The observation
+    token is matched but not captured -- readers that need it should use
+    ``obs_token``-aware parsing rather than re-deriving it here.
+    """
+    return re.compile(
+        rf'({band_pattern})_({detector_pattern}){OBS_TOKEN_PATTERN}'
+        rf'_visit(\d+)_vgroup(\w+)_exp(\d+)')
