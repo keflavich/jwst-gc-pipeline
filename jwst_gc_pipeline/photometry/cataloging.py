@@ -3449,7 +3449,12 @@ def _astrom_find_offsets_table(basepath, proposal_id, field=None):
     return None
 
 
-_DETECTOR_TOKEN_RE = re.compile(r'_(nrc[ab](?:[1-4]|long)?)_visit')
+#: The detector token may be followed by a per-observation token
+#: (`_o023`, `_j6778`) before `_visit`.  Requiring `_visit` immediately
+#: after the detector skipped every tokened field -- gc2211 and ngc6334
+#: are entirely tokened, so the duplicate filters below were no-ops there.
+_DETECTOR_TOKEN_RE = re.compile(
+    r'_(nrc[ab](?:[1-4]|long)?)(?:_(?:o\d{3}|j\d{4,5}))?_visit')
 
 # The per-observation / per-proposal disambiguator that `obs_token` inserts
 # between the detector and the visit number (`_o023`, `_j6778`).  Names written
@@ -3487,9 +3492,31 @@ def _drop_module_level_duplicates(fns, filt, merge_label, module):
     9th detector covering the same sky -- sgrb2 F212N read +69/-110 mas for it,
     and cloudef F162M still has 24 such files next to 80 per detector.
 
-    A module-level catalog is only dropped when that module also has real
-    per-detector catalogs; a genuinely module-level field (NIRCam LW is named
-    ``nrcalong``/``nrcblong``, not ``nrca``/``nrcb``) is left alone.
+    A module-level catalog is only dropped when that module also has a MORE
+    SPECIFIC spelling of the same hardware: a numbered SW detector
+    (``nrcb1..4``) or the long detector (``nrcblong``).  A module with nothing
+    but bare catalogs is left alone -- a genuinely module-level field must not
+    be emptied.
+
+    ``nrcXlong`` counts as superseding, and that is the fix for issue #298.
+    For an LW filter ``nrcblong`` IS the detector, so a bare ``nrcb`` catalog
+    of an LW filter can only be the SAME physical detector written by a run
+    invoked ``--modules nrcb`` (``crowdsource_catalogs_long`` spells MODULE
+    from the invocation, the detector from the filename).  Keeping both
+    ingested one physical frame twice under two module tokens; the m2 checkpoint
+    then wrote per-exposure rows under both spellings, and
+    ``unified_alignment._read_consensus`` -- whose ``_module_variants`` maps
+    ``nrcblong -> {nrcblong, nrcb}`` -- found two rows for one frame and refused
+    to reduce the field.  On cloudef 2092/002 the bare copies were in fact
+    observation 005's frames, so the two row sets carried genuinely different
+    corrections for the same exposure.
+
+    The earlier form excluded ``long`` here, reasoning that "a bare ``nrca``
+    would be dropped on the strength of an LW catalog with no SW per-detector
+    catalog behind it".  That case cannot arise: this function sees ONE
+    filter's catalogs, and a filter is imaged by one channel, so a SW filter's
+    glob never contains ``nrcalong``.  What the reasoning does protect -- a
+    module whose only catalogs are bare -- is preserved above and tested.
     """
     bare, per_det = {}, set()
     for fn in fns:
@@ -3499,10 +3526,7 @@ def _drop_module_level_duplicates(fns, filt, merge_label, module):
         det = m.group(1)
         if det in ('nrca', 'nrcb'):
             bare.setdefault(det, []).append(fn)
-        elif det[4:] in '1234':
-            # only a NUMBERED detector supersedes its bare module.  `nrcalong`
-            # must not, or a bare `nrca` would be dropped on the strength of an
-            # LW catalog with no SW per-detector catalog behind it.
+        elif det[4:] in '1234' or det.endswith('long'):
             per_det.add(det[:4])
     drop = {fn for det, group in bare.items() if det in per_det for fn in group}
     if drop:
