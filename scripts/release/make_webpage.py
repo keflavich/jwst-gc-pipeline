@@ -278,6 +278,8 @@ def _avm_for_resize(xmp, orig_size, new_size):
     # `return None` and were published with their astrometry dropped.
     pxscale = _avm_read(xmp, r'Spatial\.Scale')
     cdmatrix = _avm_read(xmp, r'Spatial\.CDMatrix')
+    if cdmatrix is not None and len(cdmatrix) != 4:
+        return None          # a 3-element CD is not something to guess at
     if not refpix or len(refpix) < 2 or not (pxscale or cdmatrix):
         return None                      # not a shape we can correct
     out = _avm_bag(xmp, r'Spatial\.ReferenceDimension',
@@ -297,7 +299,7 @@ def _avm_for_resize(xmp, orig_size, new_size):
     # reference value and quality are all resize-invariant and left alone.
     if pxscale:
         out = _avm_bag(out, r'Spatial\.Scale', [pxscale[0] / sx, pxscale[1] / sy])
-    if cdmatrix and len(cdmatrix) == 4:
+    if cdmatrix:
         # CD maps (dx, dy) -> (dxi, deta): the first and third elements multiply
         # dx, the second and fourth multiply dy.
         out = _avm_bag(out, r'Spatial\.CDMatrix',
@@ -308,18 +310,43 @@ def _avm_for_resize(xmp, orig_size, new_size):
     return out.encode("utf-8")
 
 
-def _needs_avm_refresh(src, dest):
-    """Would re-encoding add astrometry the published copy does not have?"""
+def _needs_avm_refresh(src, dest, max_px=2200):
+    """Would re-encoding write astrometry the published copy does not have?
+
+    Correctness-aware, not presence-aware.  Asking only "does it have SOME
+    XMP?" leaves a JPEG written by an older, wrong correction in place for
+    ever, because it is newer than its source and does carry an AVM: a copy
+    holding the pre-`(p-0.5)*s+0.5` reference pixel is 0.4 px -- up to 144 mas
+    -- out and would never be repaired.  So compare against what this code
+    would write NOW.
+    """
     from PIL import Image
     Image.MAX_IMAGE_PIXELS = None
     try:
         with Image.open(src) as img:
-            if not (img.info.get("XML:com.adobe.xmp") or img.info.get("xmp")):
-                return False                  # nothing to carry
+            xmp = img.info.get("XML:com.adobe.xmp") or img.info.get("xmp")
+            size = img.size
+        if not xmp:
+            return False                      # nothing to carry
         with Image.open(dest) as img:
-            return not (img.info.get("xmp") or img.info.get("XML:com.adobe.xmp"))
+            published = img.info.get("xmp") or img.info.get("XML:com.adobe.xmp")
+            written_size = img.size
     except (OSError, ValueError):
         return True            # unreadable either side -> rebuild and find out
+    if not published:
+        return True
+    want = _avm_for_resize(xmp, size, written_size)
+    if want is None:
+        return False           # nothing correct to write; leave it alone
+    return _avm_key_fields(want) != _avm_key_fields(published)
+
+
+def _avm_key_fields(xmp):
+    """The numbers a resize changes, for comparing two AVM packets."""
+    return tuple(_avm_read(
+        xmp.decode("utf-8", "replace") if isinstance(xmp, bytes) else xmp, field)
+        for field in (r'Spatial\.ReferenceDimension', r'Spatial\.ReferencePixel',
+                      r'Spatial\.Scale', r'Spatial\.CDMatrix'))
 
 
 def web_jpeg(src, dest, max_px=2200):
@@ -451,15 +478,16 @@ def curated_withholding_inputs(manifest):
     QUARANTINED only, not every superseded state.  A curated render is an
     independent product with no recorded link to a particular build of the
     mosaic, so "the source was rebuilt in place" says nothing about the picture
-    -- but "the pipeline repudiated this mosaic's astrometry" condemns
-    everything drawn from it, which is the gc2211 o050 case.
+    -- but "a product of this name was repudiated" condemns everything drawn
+    from it, which is the gc2211 o050 case.
 
-    The difference is most of the tree: on the REBUILT reading brick loses two
-    of its three curated images to 23 rebuilt v1.0 sources and ZERO
-    quarantines, and cloudc v1.1 loses its only NIRCam render to six rebuilds
-    and no quarantines -- the fields whose pictures this exists to publish.
-    Withholding on the quarantine still withholds gc2211 o050 and the whole of
-    sgrc / sgrb2 / cloudc v1.0, which are the real repudiations.
+    This does NOT spare brick and cloudc, and an earlier version of this
+    docstring claimed it did.  That claim rested on brick v1.0 reading 23
+    REBUILT / 0 QUARANTINED, which was an artefact of `source_state` reading
+    presence before the quarantine twin; corrected, brick is 30 quarantined and
+    its two NIRCam renders are withheld.  What the distinction still buys is
+    the 5 genuinely-rebuilt entries -- sgrb2's -- not being condemned, and no
+    page naming an astrometry repudiation the check cannot see.
 
     Split out of ``main`` for the reason the rule itself was: which STATES feed
     the rule is as much of a decision as the rule, and inline it could only be

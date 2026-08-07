@@ -1745,6 +1745,92 @@ def test_a_published_jpeg_missing_the_avm_is_rebuilt_despite_its_mtime(tmp_path)
     assert not mw._needs_avm_refresh(plain, plain_dest)
 
 
+def test_a_published_jpeg_with_STALE_avm_math_is_repaired(tmp_path):
+    """Presence is not correctness.  A JPEG written by an older, wrong
+    correction is newer than its source AND carries an AVM, so a
+    "does it have XMP?" test leaves it in place for ever -- 0.4 px, up to
+    144 mas, permanent."""
+    import time
+    from PIL import Image
+    mw = _make_webpage()
+    src = _png_with_avm(tmp_path / 'r.png', (1000, 500))
+    dest = tmp_path / 'r.jpg'
+    # publish with the OLD refpix math (p*s), everything else identical
+    with Image.open(src) as img:
+        xmp = img.info['XML:com.adobe.xmp']
+    stale = mw._avm_bag(mw._avm_for_resize(xmp, (1000, 500), (250, 125))
+                        .decode('utf8'), r'Spatial\.ReferencePixel',
+                        [500 * 0.25, 250 * 0.25])
+    Image.new('RGB', (250, 125), (0, 0, 0)).save(dest, xmp=stale.encode('utf8'))
+    os.utime(dest, (time.time() + 10, time.time() + 10))     # newer than source
+
+    assert mw._needs_avm_refresh(src, dest, max_px=250), \
+        'a JPEG carrying the wrong correction was left in place'
+    mw.web_jpeg(src, dest, max_px=250)
+    with Image.open(dest) as img:
+        got = _avm_values(img.info['xmp'], r'Spatial\.ReferencePixel')
+    assert got == [pytest.approx((500 - 0.5) * 0.25 + 0.5),
+                   pytest.approx((250 - 0.5) * 0.25 + 0.5)]
+    # correct now -> no further rebuild
+    assert not mw._needs_avm_refresh(src, dest, max_px=250)
+
+    # an unreadable published copy must FAIL OPEN -- rebuild and find out.
+    # Failing closed there keeps a truncated or half-written JPEG on the page
+    # for ever, since it is still newer than its source.
+    dest.write_bytes(b'not a jpeg')
+    assert mw._needs_avm_refresh(src, dest, max_px=250)
+
+
+def test_a_cdmatrix_of_the_wrong_length_is_dropped_not_half_corrected():
+    """A 3-element CD passed the `not (pxscale or cdmatrix)` guard, got a
+    rescaled ReferencePixel and ReferenceDimension, and kept its ORIGINAL
+    scale -- a self-inconsistent packet, which is worse than none."""
+    mw = _make_webpage()
+    broken = re.sub(r'(<avm:Spatial\.CDMatrix>.*?)<rdf:li>[^<]*</rdf:li>\s*'
+                    r'(</rdf:Bag>)', r'\1\2', _AVM_CD_XMP, flags=re.S)
+    assert len(_avm_values(broken, r'Spatial\.CDMatrix')) == 3
+    assert mw._avm_for_resize(broken, (1000, 500), (250, 125)) is None
+
+
+def test_an_unreadable_manifest_says_withholding_is_disabled(tmp_path, capsys):
+    """Silence here published every curated render with nothing said."""
+    mw = _make_webpage()
+    root, out = str(tmp_path / 'rel'), str(tmp_path / 'site')
+    _fake_release(root, 'brick', 'v1.0-2026.06', with_preview=False)
+    path = os.path.join(root, 'v1.0-2026.06', 'brick', 'MANIFEST.json')
+    good = open(path).read()
+    mw.main(['--fields', 'brick', '--release-root', root, '--out', out])
+    open(path, 'w').write(good.replace('{', '{{', 1))        # now unparseable
+    with pytest.raises(ValueError):
+        mw.main(['--fields', 'brick', '--release-root', root, '--out', out])
+    # the field-page loop dies on it, but the curated read warns first
+    assert 'curated withholding is DISABLED' in capsys.readouterr().out
+
+
+def test_the_index_thumbnail_is_the_curated_render(tmp_path):
+    """A headline claim of this PR -- the card shows the beautified image, not
+    a generated preview -- and nothing pinned it."""
+    from PIL import Image
+    mw = _make_webpage()
+    root, out = str(tmp_path / 'rel'), str(tmp_path / 'site')
+    _fake_release(root, 'brick', 'v1.0-2026.06', with_preview=True)
+    src = _png_with_avm(tmp_path / 'Curated_brick.png', (400, 200))
+    entry = {'stem': 'curated_brick_render', 'file': str(src),
+             'label': 'R=F444W', 'pointing': None, 'instrument': 'NIRCam'}
+    real = mw.curated_images.for_field
+    mw.curated_images.for_field = lambda f: [entry] if f == 'brick' else []
+    try:
+        mw.main(['--fields', 'brick', '--release-root', root, '--out', out])
+    finally:
+        mw.curated_images.for_field = real
+    curated_path = os.path.join(out, 'assets', 'curated_curated_brick_render.jpg')
+    assert os.path.isfile(curated_path), 'the curated render was never published'
+    assert open(os.path.join(out, 'assets', 'brick.jpg'), 'rb').read() == \
+        open(curated_path, 'rb').read(), \
+        'the index thumbnail is a generated preview, not the curated render'
+    assert 'assets/brick.jpg' in open(os.path.join(out, 'index.html')).read()
+
+
 def test_a_label_shaped_pointing_is_not_treated_as_an_observation():
     """cloudc's curated MIRI renders carry `pointing='MIRI F770W'` -- a label,
     not an obs token.  It is never in `withheld_obs`, so the observation branch
