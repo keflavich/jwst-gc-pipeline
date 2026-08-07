@@ -78,14 +78,19 @@ ALLOWLIST = {
     # guard, not the shape of the code, is what makes it safe.
     ("jwst_gc_pipeline/photometry/measure_offsets.py", "measure_offsets"),
     ("jwst_gc_pipeline/reduction/build_virac2_offsets.py", "coord_shift"),
-    # ALSO a median of positional offsets -- merge_catalogs.py:444 medians
-    # radiff/decdiff into tbl.meta['ra_offset'] -- and its sparse-reference
-    # guard is under `if realign and basecrds is not None` (:398) only.  With
-    # the production default realign=False the median is COMPUTED and stored
-    # ungated, and only not APPLIED.  Allowlisted because nothing in the
-    # production path consumes that metadata as a correction, but the
-    # "median is over fluxes, not offsets" reading this entry used to carry was
-    # simply wrong, and the gap is worth its own issue.
+    # ALSO a median of positional offsets -- merge_catalogs.py medians
+    # radiff/decdiff into tbl.meta['ra_offset'].  It is allowlisted because it
+    # is now GUARDED at runtime on every path that computes it: the
+    # sparse-reference assertion is keyed on `rematch`, so it covers
+    # realign=True AND the realign=False + MERGE_REMATCH_DIAGNOSTICS=1
+    # diagnostic (issue #314).  The production default reaches neither and
+    # records NaN.
+    #
+    # Two earlier readings of this entry were wrong and are recorded so they
+    # are not re-derived: "the median is over fluxes, not offsets" (it is over
+    # offsets), and "ungated at the production default" (the default does not
+    # compute it at all -- the gap was one env flag wide, not the default
+    # path).
     ("jwst_gc_pipeline/photometry/merge_catalogs.py", "combine_singleframe"),
     # source ASSOCIATION for saturated replacement; the only reduce is a
     # magnitude median in an f-string (:2927), no offsets involved
