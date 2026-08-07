@@ -39,6 +39,28 @@ accumulators it is discarding, recording the revert in ``prov_stage`` /
 quiet.  Refuses unless ``flag_broadcast_provenance`` actually fires, so it cannot
 be pointed at a table whose corrections are real.
 
+## The detector cannot tell a broadcast from a deliberate whole-field bulk
+
+READ THIS BEFORE RUNNING IT ON A FIELD OTHER THAN gc2211.
+
+``flag_broadcast_provenance`` sees only that several visits carry one identical
+``prov_*``.  A correction that is broad BY DESIGN looks the same --
+``_is_bulk_correction`` exists precisely because some corrections are whole-field
+-- so the flag is necessary, not sufficient.  What separates them is the
+provenance, and this script does not read it.
+
+cloudef is the live example.  It is flagged (F162M/F210M/F360M), and its rows
+carry::
+
+    prov_source = "m2 consensus->reference"
+    visits jw02092002001, jw02092005001   -> observations 002 and 005, visit 001
+
+which is the same visit-number collision as gc2211 (see the sibling fix), so it
+is very likely a true positive.  But cloudef's ``-1775.2 mas`` is what #281's
+1.80043" ``RAOFFSET`` change rests on, and ``--field cloudef --apply`` would
+revert it.  Establish which it is -- by measuring the field, the way gc2211's
+five states were measured -- before pointing this at it.
+
 **The products on disk are now stale by construction.**  They were drizzled from
 the pre-revert value, so this MUST be followed by a re-reduction from ``_cal``
 (the destreak overwrite resets ``RAOFFSET`` so the new table is applied) --

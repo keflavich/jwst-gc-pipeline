@@ -139,3 +139,47 @@ def test_a_single_pair_table_is_left_alone(tmp_path):
            'dra': [1.0, 2.0], 'ddec': [3.0, 4.0]}).write(
         p, format='ascii.csv', overwrite=True)
     assert m.revert(p, apply=True) == 0
+
+
+def test_a_partial_write_is_CAUGHT_and_names_the_backup(tmp_path, monkeypatch):
+    """The post-write re-read is the only thing standing between a bad write to
+    a live astrometry table and someone re-reducing from it, so it has to be
+    pinned by something other than the happy path.
+
+    Verified against the mutant the review used (`if not np.allclose(...)` ->
+    `if False`): without this test the suite stays green with the check gone.
+    """
+    m = _load()
+    p = _table(tmp_path)
+
+    real_write = m.write_table_atomic
+
+    def _drop_one_column(tbl, path, **kw):
+        # a write that updates 'ddec (arcsec)' but silently leaves
+        # 'dra (arcsec)' at its pre-revert value -- the partial-write shape
+        broken = tbl.copy()
+        broken['dra (arcsec)'] = [
+            float(d) + PROV[0] / 1000.0 for d in broken['dra']]
+        return real_write(broken, path, **kw)
+
+    monkeypatch.setattr(m, 'write_table_atomic', _drop_one_column)
+    with pytest.raises(SystemExit) as exc:
+        m.revert(p, apply=True)
+    msg = str(exc.value)
+    assert 'dra (arcsec)' in msg, msg
+    assert '.pre_provrevert_' in msg, 'the message must name the backup to restore'
+
+
+def test_the_verification_reads_from_DISK_not_from_memory(tmp_path, monkeypatch):
+    """Checking the in-memory table would pass on any write that never landed.
+    The re-read must open the file the reducer will open."""
+    m = _load()
+    p = _table(tmp_path)
+    real_write = m.write_table_atomic
+
+    def _write_nothing(tbl, path, **kw):
+        return None                      # claims success, writes nothing
+
+    monkeypatch.setattr(m, 'write_table_atomic', _write_nothing)
+    with pytest.raises(SystemExit):
+        m.revert(p, apply=True)
