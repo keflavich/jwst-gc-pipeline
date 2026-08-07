@@ -6,6 +6,8 @@ import os
 import subprocess
 import time
 
+import pytest
+
 SCRIPTS = os.path.join(os.path.dirname(__file__), '..', 'scripts', 'reduction')
 
 
@@ -318,3 +320,124 @@ def test_the_loop_actually_calls_the_gate_between_reduce_and_catalog():
         'the loop must call the gate between reduce and catalog')
     assert 'exit 1' in between, (
         'the loop must stop, not continue, when the reduce is incomplete')
+
+
+# ---------------------------------------------------------------------------
+# Runtime job renames, generalised over EVERY submitter that does one (#330).
+#
+# submit_cataloging_m7.sbatch had the same defect #326 fixed one script over,
+# twice and neither guarded, so the second write won over the submit-time name.
+# Parameterising rather than duplicating means the next script to grow a rename
+# is covered without anyone remembering to add a test.
+# ---------------------------------------------------------------------------
+
+RENAMING_SBATCH = {
+    'submit_cataloging_perframe_phase.sbatch': '_pf_rename_wanted',
+    'submit_cataloging_m7.sbatch': '_m7_rename_wanted',
+}
+
+
+def _folded(basename):
+    """The script with line continuations folded away, so a rename split across
+    a backslash is still one line to match against."""
+    with open(os.path.join(SCRIPTS, basename)) as fh:
+        return fh.read().replace('\\\n', ' ')
+
+
+def _rename_lines(text):
+    return [ln.strip() for ln in text.splitlines()
+            if not ln.lstrip().startswith('#')
+            and 'scontrol update' in ln and 'JobId=' in ln]
+
+
+@pytest.mark.parametrize('script,guard', sorted(RENAMING_SBATCH.items()))
+def test_every_runtime_rename_is_gated_on_the_submit_time_name(script, guard):
+    text = _folded(script)
+    renames = _rename_lines(text)
+    assert renames, f'{script}: expected it to still contain renames'
+    for line in renames:
+        assert line.startswith(f'{guard} &&'), (
+            f'{script}: ungated runtime rename clobbers the submit-time '
+            f'name: {line}')
+
+
+@pytest.mark.parametrize('script,guard', sorted(RENAMING_SBATCH.items()))
+def test_the_rename_guard_matches_this_scripts_own_placeholder(script, guard):
+    """The guard fires only when SLURM_JOB_NAME still equals the `#SBATCH
+    --job-name` placeholder.  A guard written against a DIFFERENT script's
+    placeholder never fires, which is a silent no-op rather than a visible
+    failure -- the job just keeps whatever name it had."""
+    text = _folded(script)
+    placeholder = None
+    for line in text.splitlines():
+        if line.startswith('#SBATCH --job-name='):
+            placeholder = line.split('=', 1)[1].strip()
+    assert placeholder, f'{script}: no #SBATCH --job-name to guard against'
+    gdef = [ln for ln in text.splitlines() if ln.startswith(f'{guard}()')]
+    assert len(gdef) == 1, f'{script}: expected one definition of {guard}'
+    assert f'"{placeholder}"' in gdef[0], (
+        f'{script}: guard tests against something other than its own '
+        f'placeholder {placeholder!r}: {gdef[0]}')
+
+
+def test_m7_renames_itself_only_once():
+    """It used to do it twice, unconditionally, and the second write won."""
+    assert len(_rename_lines(_folded('submit_cataloging_m7.sbatch'))) == 1
+
+
+# ---------------------------------------------------------------------------
+# The names themselves have to be readable by the monitor.  These go through
+# parse_job_name rather than asserting a string, so a shape that looks fine but
+# does not resolve to a field cannot pass.
+# ---------------------------------------------------------------------------
+
+def _emitted_job_names(text, env):
+    """Every `--job-name=` / `JobName=` value in a script, with env expanded."""
+    import re as _re
+    out = []
+    for m in _re.finditer(r'(?:--job-name=|JobName=)"([^"]+)"', text):
+        name = m.group(1)
+        for k, v in env.items():
+            name = name.replace('${' + k + '}', v).replace('$' + k, v)
+        out.append(name)
+    return out
+
+
+CHAIN_ENV = {'TARGET': 'brick', 'PROPOSAL': '2221', 'FIELD': '001',
+             'ph': 'm12'}
+
+
+@pytest.mark.parametrize('script', [
+    'submit_cataloging_chain.sh',
+    'submit_cataloging_m7.sbatch',
+    'submit_cataloging_perframe.sh',
+])
+def test_every_emitted_job_name_resolves_to_a_field_and_an_observation(script):
+    """`cat_brick_m7` -- the name m7 used to give itself -- returns None from
+    parse_job_name: _NAME_PF only accepts a `pf_` head, so it matches no shape
+    and _resolve_head finds no registered field inside it.  It was invisible to
+    the monitor, not merely ambiguous.  A name that carries the obsid parses as
+    `full` and is the only kind that can say WHICH observation is running --
+    brick and cloudc are both 2221 and gc2211 has five observations.
+    """
+    from jwst_gc_pipeline.monitoring.jobs import parse_job_name
+    names = _emitted_job_names(_folded(script), CHAIN_ENV)
+    assert names, f'{script}: no job names found'
+    for name in names:
+        parsed = parse_job_name(name)
+        assert parsed is not None, (
+            f'{script}: job name {name!r} is unattributable -- the monitor '
+            f'cannot file it under any field')
+        assert parsed['obsid'], (
+            f'{script}: job name {name!r} parsed as {parsed["name_kind"]} with '
+            f'no obsid; it cannot identify which observation is running')
+
+
+def test_the_underscore_form_this_replaced_really_was_unreadable():
+    """Pins the measurement the fix rests on, so nobody reintroduces it."""
+    from jwst_gc_pipeline.monitoring.jobs import parse_job_name
+    assert parse_job_name('cat_brick_m7') is None
+    assert parse_job_name('cat_gc2211_m7') is None
+    # and the dashed form it alternated with parsed, but only loosely
+    loose = parse_job_name('brick-catalog-m7')
+    assert loose['name_kind'] == 'loose' and loose['obsid'] is None
