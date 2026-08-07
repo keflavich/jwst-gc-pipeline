@@ -21,6 +21,7 @@ import collections
 import html
 import json
 import os
+import re
 import shutil
 import urllib.parse
 from pathlib import Path
@@ -733,11 +734,63 @@ def main(argv=None):
                 if v != latest:
                     print(f"  {field}: no preview in {latest}, using {v}'s")
                 break
-        # Curated images first -- the published renders, better than anything the
-        # planner makes. They are independent products, so the superseded-source
-        # withholding (which is about staged mosaics) does not apply to them.
+        # Curated images first -- the published renders, better than anything
+        # the planner makes.
+        #
+        # They are NOT independent of the mosaics they were rendered from, and
+        # an earlier version of this comment said they were.  gc2211 o050's
+        # render predates the quarantine of its own source by one day, and the
+        # page was promoting it as the field's primary image while the mosaic
+        # it came from had been repudiated.
+        #
+        # Withhold on the OBSERVATION, not the band.  gc2211 is five
+        # observations in one field and all five share F200W/F277W, so a
+        # band-level test cannot express "o050 is repudiated, o049 is fine" --
+        # it withholds o049, the one region whose astrometry is actually good
+        # (~50 mas, against o050's 5.6").  The curated filenames and the
+        # registry both carry the obs token.
+        _stale_now = set()
+        _withheld_now = []
+        try:
+            _lm = json.loads((field_release_dir(field, latest, args.release_root)
+                              / "MANIFEST.json").read_text())
+        except (OSError, ValueError):
+            _lm = None
+        if _lm is not None:
+            _stale_now = set(release_freshness.superseded_files(_lm))
+            _withheld_now = [f for f in _lm["files"]
+                             if f.get("dest") in _stale_now]
+        withheld_obs = set()
+        for _f in _withheld_now:
+            _m = re.search(r'[-_](o\d{3})[_.\-]', str(_f.get("src") or ""))
+            if _m:
+                withheld_obs.add(_m.group(1).lower())
+        withheld_bands_c = {(f.get("filter") or "").upper()
+                            for f in _withheld_now if f.get("filter")}
+
         curated_items = []
         for entry in curated_images.for_field(field):
+            pointing = str(entry.get("pointing") or "").lower()
+            if pointing:
+                if pointing in withheld_obs:
+                    print(f"  {field}: WITHHOLDING curated {entry['stem']} -- "
+                          f"observation {pointing}'s mosaic has been "
+                          f"superseded since it was rendered")
+                    continue
+            elif withheld_obs or withheld_bands_c:
+                # No pointing to reason about.  Fall back to the band names in
+                # the label, and if THAT cannot decide either, withhold: a
+                # curated render whose provenance cannot be established must
+                # not be the field's primary image while something on this
+                # field is repudiated.
+                bands = set(re.findall(r'F\d{3,4}[WMN]',
+                                       str(entry.get("label") or "").upper()))
+                if not bands or (bands & withheld_bands_c):
+                    print(f"  {field}: WITHHOLDING curated {entry['stem']} -- "
+                          f"cannot tie it to a live mosaic "
+                          f"(bands={sorted(bands) or 'unknown'}, "
+                          f"withheld={sorted(withheld_bands_c)})")
+                    continue
             dest = assets / f"curated_{entry['stem']}.jpg"
             try:
                 web_jpeg(entry["file"], dest)
