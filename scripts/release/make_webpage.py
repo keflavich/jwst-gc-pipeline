@@ -18,6 +18,7 @@ that tree and verifies it is still there afterwards.
 """
 import argparse
 import collections
+import hashlib
 import html
 import json
 import os
@@ -201,8 +202,72 @@ def _preview_caption(stem, field):
     return (f"{obs.upper()} - " if obs else "") + (label or stem)
 
 
+def _avm_bag(xmp, field, values):
+    """Rewrite one ``<avm:Field><rdf:Bag><rdf:li>..`` pair, or return xmp
+    unchanged when the field is absent."""
+    pattern = re.compile(
+        r'(<avm:' + field + r'>\s*<rdf:Bag>\s*<rdf:li>)(.*?)(</rdf:li>\s*<rdf:li>)'
+        r'(.*?)(</rdf:li>)', re.S)
+
+    def _sub(match):
+        return (match.group(1) + f"{values[0]:.16f}" + match.group(3)
+                + f"{values[1]:.16f}" + match.group(5))
+    return pattern.sub(_sub, xmp, count=1)
+
+
+def _avm_for_resize(xmp, scale, new_size):
+    """The source AVM, corrected for a resize -- or ``None`` if it cannot be.
+
+    Carrying the AVM through UNCHANGED would be worse than dropping it: these
+    renders are 8-12k px wide and the web copy is 2200, so the original
+    ``Spatial.Scale`` and ``Spatial.ReferencePixel`` describe a grid ~5x larger
+    than the pixels they would be attached to.  A viewer that trusts AVM would
+    put every source in the wrong place, on a release whose stated purpose is
+    being evidence the astrometry is right.  Silence is better than a confident
+    wrong answer; a corrected answer is better than both.
+
+    ``Spatial.FITSheader`` is DROPPED rather than corrected.  It is a full FITS
+    header for the original grid (CRPIX/CD of an 11796x8219 image), it is
+    redundant with the AVM keywords beside it, and rewriting a FITS header with
+    regexes to keep a nice-to-have is not a trade worth making.
+    """
+    if not xmp:
+        return None
+    if isinstance(xmp, bytes):
+        xmp = xmp.decode("utf-8", "replace")
+    if scale == 1.0:
+        return xmp.encode("utf-8")
+    match = re.search(
+        r'<avm:Spatial\.ReferencePixel>\s*<rdf:Bag>\s*<rdf:li>(.*?)</rdf:li>\s*'
+        r'<rdf:li>(.*?)</rdf:li>', xmp, re.S)
+    scale_match = re.search(
+        r'<avm:Spatial\.Scale>\s*<rdf:Bag>\s*<rdf:li>(.*?)</rdf:li>\s*'
+        r'<rdf:li>(.*?)</rdf:li>', xmp, re.S)
+    if not (match and scale_match):
+        return None                      # not the shape we know how to correct
+    try:
+        refpix = [float(match.group(1)), float(match.group(2))]
+        pxscale = [float(scale_match.group(1)), float(scale_match.group(2))]
+    except ValueError:
+        return None
+    out = _avm_bag(xmp, r'Spatial\.ReferenceDimension',
+                   [float(new_size[0]), float(new_size[1])])
+    out = _avm_bag(out, r'Spatial\.ReferencePixel', [v * scale for v in refpix])
+    # deg/px grows as the image shrinks
+    out = _avm_bag(out, r'Spatial\.Scale', [v / scale for v in pxscale])
+    out = re.sub(r'<avm:Spatial\.FITSheader>.*?</avm:Spatial\.FITSheader>', '',
+                 out, flags=re.S)
+    return out.encode("utf-8")
+
+
 def web_jpeg(src, dest, max_px=2200):
     """Web-sized JPEG of a curated PNG, composited onto black (they carry alpha).
+
+    Carries the AVM/XMP astrometry through, rescaled to the size actually
+    written (see ``_avm_for_resize``).  Re-encoding used to drop it silently,
+    which turned a WCS-carrying render into a flat picture the moment it was
+    published -- the one property that made these images evidence rather than
+    decoration.
 
     Skipped when the destination is newer than the source -- these renders are
     13-147 MB and rebuilding them every page build costs minutes for no change.
@@ -212,6 +277,7 @@ def web_jpeg(src, dest, max_px=2200):
     if dest.is_file() and dest.stat().st_mtime >= os.path.getmtime(src):
         return dest
     img = Image.open(src)
+    xmp = img.info.get("XML:com.adobe.xmp") or img.info.get("xmp")
     if img.mode in ("RGBA", "LA", "P"):
         img = img.convert("RGBA")
         flat = Image.new("RGB", img.size, (0, 0, 0))
@@ -223,8 +289,128 @@ def web_jpeg(src, dest, max_px=2200):
     if scale < 1.0:
         img = img.resize((max(1, round(img.width * scale)),
                           max(1, round(img.height * scale))), Image.LANCZOS)
-    img.save(dest, format="JPEG", quality=88, progressive=True)
+    corrected = _avm_for_resize(xmp, scale, img.size)
+    if corrected:
+        img.save(dest, format="JPEG", quality=88, progressive=True, xmp=corrected)
+    else:
+        img.save(dest, format="JPEG", quality=88, progressive=True)
     return dest
+
+
+def _sha256(path, chunk=1 << 20):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(chunk), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def curated_provenance(entry, published, sidecar=None):
+    """What this published picture is, and what it was made from.
+
+    A staged mosaic reaches the page with a manifest entry, a size, a checksum
+    and a source path; a curated render reached it with a filename.  This PR
+    makes the curated render the field's PRIMARY image, so it was the least
+    accountable thing on the page while being the most prominent -- the same
+    argument the superseded-source gate makes about mosaics, pointed at the
+    picture instead.
+
+    The record is written beside the asset and collected into
+    ``<field>_curated.json``.  Hashing is cached on ``(size, mtime)`` in the
+    sidecar: these are 13-147 MB PNGs and there are 32 of them, so re-hashing
+    every build is ~4.6 GB of reads for an answer that has not changed.
+    """
+    src = entry["file"]
+    stat = os.stat(src)
+    record = None
+    if sidecar is not None and sidecar.is_file():
+        try:
+            cached = json.loads(sidecar.read_text())
+            if (cached.get("source_bytes") == stat.st_size
+                    and cached.get("source_mtime") == int(stat.st_mtime)):
+                record = cached
+        except (OSError, ValueError):
+            record = None
+    if record is None:
+        record = {
+            "stem": entry["stem"],
+            "source": os.path.abspath(src),
+            "source_name": os.path.basename(src),
+            "source_bytes": stat.st_size,
+            "source_mtime": int(stat.st_mtime),
+            "source_sha256": _sha256(src),
+        }
+    record.update({
+        "label": entry.get("label"),
+        "pointing": entry.get("pointing"),
+        "instrument": entry.get("instrument"),
+        "published": os.path.basename(str(published)),
+        "published_sha256": _sha256(published),
+        "published_bytes": os.path.getsize(published),
+        "avm": _published_avm_state(published),
+    })
+    if sidecar is not None:
+        sidecar.write_text(json.dumps(record, indent=1, sort_keys=True))
+    return record
+
+
+def _published_avm_state(published):
+    """``carried`` / ``absent`` -- read back off the file that was WRITTEN.
+
+    Read back rather than inferred from what the writer intended: the whole
+    defect was that re-encoding dropped the AVM while every line of code still
+    said it was there.
+    """
+    from PIL import Image
+    Image.MAX_IMAGE_PIXELS = None
+    try:
+        with Image.open(published) as img:
+            has = bool(img.info.get("xmp") or img.info.get("XML:com.adobe.xmp"))
+    except (OSError, ValueError):
+        return "unknown"
+    return "carried" if has else "absent"
+
+
+def curated_withholding_inputs(manifest):
+    """``(withheld_obs, withheld_bands, known_obs)`` for the curated rule.
+
+    QUARANTINED only, not every superseded state.  A curated render is an
+    independent product with no recorded link to a particular build of the
+    mosaic, so "the source was rebuilt in place" says nothing about the picture
+    -- but "the pipeline repudiated this mosaic's astrometry" condemns
+    everything drawn from it, which is the gc2211 o050 case.
+
+    The difference is most of the tree: on the REBUILT reading brick loses two
+    of its three curated images to 23 rebuilt v1.0 sources and ZERO
+    quarantines, and cloudc v1.1 loses its only NIRCam render to six rebuilds
+    and no quarantines -- the fields whose pictures this exists to publish.
+    Withholding on the quarantine still withholds gc2211 o050 and the whole of
+    sgrc / sgrb2 / cloudc v1.0, which are the real repudiations.
+
+    Split out of ``main`` for the reason the rule itself was: which STATES feed
+    the rule is as much of a decision as the rule, and inline it could only be
+    asserted by reading the source.
+    """
+    if not manifest:
+        return set(), set(), set()
+    reasons = release_freshness.superseded_reasons(manifest)
+    quarantined = {dest for dest, why in reasons.items()
+                   if why == release_freshness.QUARANTINED}
+    entries = [f for f in manifest.get("files", [])
+               if f.get("dest") in quarantined]
+    withheld_obs = set()
+    for entry in entries:
+        match = re.search(r'[-_](o\d{3})[_.\-]', str(entry.get("src") or ""))
+        if match:
+            withheld_obs.add(match.group(1).lower())
+    withheld_bands = {(e.get("filter") or "").upper() for e in entries
+                      if e.get("filter")}
+    # Which pointings this field actually HAS.  A curated entry's `pointing` is
+    # trusted as an observation only if it looks like one or is one of these --
+    # cloudc's MIRI renders carry `pointing='MIRI F770W'`, which is a label.
+    known_obs = {(f.get("observation") or "").lower()
+                 for f in manifest.get("files", []) if f.get("observation")}
+    return withheld_obs, withheld_bands, known_obs | withheld_obs
 
 
 def curated_withheld_reason(entry, withheld_obs=(), withheld_bands=(),
@@ -308,7 +494,7 @@ def withheld_reason(pointing, bands, withheld_obs=(), withheld_bands=(),
 def render_field_page(field, manifest, preview_rel, preview_channels=None,
                       all_versions=None, preview_version=None, previews=(),
                       superseded=(), reasons=None, curated=(),
-                      preview_from_curated=False):
+                      curated_prov=(), preview_from_curated=False):
     # A staged image whose SOURCE has since been quarantined as bad-astrometry
     # must not be presented as this field's astrometry. It is withheld from the
     # page, and the withholding is stated -- the point of the release is to be
@@ -430,13 +616,35 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
         out.append("<p class=muted>Curated colour images -- the published "
                    "renders. Tuned stretches, channels chosen far apart, and "
                    "each program combined with itself.</p>")
+        # Provenance per published render, keyed on the asset filename.  These
+        # are the field's PRIMARY images and they are not staged products, so
+        # without this they would be the only thing on the page with no source,
+        # no checksum and no statement of what survived publication.
+        prov_by_asset = {p.get("published"): p for p in (curated_prov or ())}
         out.append("<div class=previews>")
         for rel, cap in curated:
+            prov = prov_by_asset.get(os.path.basename(rel))
+            note = ""
+            if prov:
+                avm = ('carries AVM/WCS' if prov.get("avm") == "carried"
+                       else 'no AVM/WCS')
+                note = (f"<br><span class=checksum>"
+                        f"{html.escape(str(prov.get('source_name')))} · "
+                        f"sha256 {html.escape(str(prov.get('source_sha256'))[:12])} · "
+                        f"{avm}</span>")
             out.append(f"<figure><img class=preview src='{html.escape(rel)}' "
                        f"loading=lazy alt='{html.escape(field)} {html.escape(cap)}'>"
-                       f"<figcaption class=muted>{html.escape(cap)}</figcaption>"
-                       f"</figure>")
+                       f"<figcaption class=muted>{html.escape(cap)}{note}"
+                       f"</figcaption></figure>")
         out.append("</div>")
+        if curated_prov:
+            out.append(f"<p class=muted>Full provenance for these renders: "
+                       f"<a href='{html.escape(field)}_curated.json'>"
+                       f"{html.escape(field)}_curated.json</a> -- source path and "
+                       f"checksum, the checksum of the bytes served, and whether "
+                       f"the AVM astrometry survived resizing. These are curated "
+                       f"renders, not staged data products; the mosaics they were "
+                       f"made from are in the table below.</p>")
 
     # `assets/<field>.jpg` is a BYTE COPY of the first curated JPEG when there
     # is one -- but `preview_channels`, `_preview_caption` and
@@ -857,25 +1065,12 @@ def main(argv=None):
         except (OSError, ValueError):
             _lm = None
         if _lm is not None:
-            _stale_now = set(release_freshness.superseded_files(_lm))
-            _withheld_now = [f for f in _lm["files"]
-                             if f.get("dest") in _stale_now]
-        withheld_obs = set()
-        for _f in _withheld_now:
-            _m = re.search(r'[-_](o\d{3})[_.\-]', str(_f.get("src") or ""))
-            if _m:
-                withheld_obs.add(_m.group(1).lower())
-        withheld_bands_c = {(f.get("filter") or "").upper()
-                            for f in _withheld_now if f.get("filter")}
-        # Which pointings this field actually HAS.  A curated entry's `pointing`
-        # is trusted as an observation only if it is one of these -- cloudc's
-        # MIRI renders carry `pointing='MIRI F770W'`, a label, and treating that
-        # as an observation published them unconditionally.
-        known_obs_c = {(f.get("observation") or "").lower()
-                       for f in (_lm or {}).get("files", []) if f.get("observation")}
-        known_obs_c |= withheld_obs
+            _stale_now = set(release_freshness.superseded_reasons(_lm))
+        withheld_obs, withheld_bands_c, known_obs_c = \
+            curated_withholding_inputs(_lm)
 
         curated_items = []
+        curated_prov = []
         for entry in curated_images.for_field(field):
             _why = curated_withheld_reason(entry, withheld_obs,
                                            withheld_bands_c,
@@ -886,13 +1081,30 @@ def main(argv=None):
             dest = assets / f"curated_{entry['stem']}.jpg"
             try:
                 web_jpeg(entry["file"], dest)
+                prov = curated_provenance(
+                    entry, dest, sidecar=assets / f"curated_{entry['stem']}.json")
             except (OSError, ValueError) as err:
                 print(f"  {field}: could not prepare {entry['stem']}: {err}")
                 continue
+            curated_prov.append(prov)
+            if prov["avm"] == "absent":
+                # not fatal -- some renders genuinely carry no AVM -- but it is
+                # the difference between a picture and a positioned picture, so
+                # it is said out loud rather than discovered later
+                print(f"  {field}: curated {entry['stem']} published without AVM")
             curated_items.append((f"assets/{dest.name}", curated_images.caption(entry)))
         for gone in curated_images.missing(field):
             print(f"  {field}: curated image listed but not on disk: "
                   f"{os.path.basename(gone)}")
+        # The provenance record for every curated render actually published.
+        # A staged mosaic reaches the page through MANIFEST.json; a curated
+        # render is not staged, so this file is the equivalent -- what it was
+        # made from, the checksum of that source, the checksum of the bytes
+        # served, and whether the AVM astrometry survived publication.
+        if curated_prov:
+            (out_dir / f"{field}_curated.json").write_text(
+                json.dumps({"field": field, "images": curated_prov},
+                           indent=1, sort_keys=True))
 
         preview_items = []
         preview_from_curated = False
@@ -949,6 +1161,7 @@ def main(argv=None):
                                      superseded=stale_files,
                                      reasons=stale_reasons,
                                      curated=curated_items,
+                                     curated_prov=curated_prov,
                                      preview_from_curated=preview_from_curated,
                                      all_versions=versions,
                                      preview_version=preview_version,
