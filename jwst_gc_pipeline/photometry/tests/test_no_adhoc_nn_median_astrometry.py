@@ -133,6 +133,18 @@ ALLOWLIST = {
     ("jwst_gc_pipeline/photometry/cataloging.py", "<unattributed>"),
     ("jwst_gc_pipeline/photometry/merge_catalogs.py", "<unattributed>"),
     ("jwst_gc_pipeline/reduction/build_virac2_offsets.py", "<unattributed>"),
+    # NEW with the #285 same-star restriction, and a whole-file entry is the
+    # weakest kind, so: `_mutual_match_mask` (:299,:303) is source ASSOCIATION
+    # -- it decides WHICH stars of this exposure are also in the m2 star list,
+    # mutually and within a radius, and returns a boolean MASK.  No offset is
+    # derived from it; the tie those stars are then measured with is
+    # `measure_offset` (:345), the sanctioned 2-D histogram peak, and the
+    # restriction is REFUSED unless that tie verifies.  The medians elsewhere
+    # in the file are the consensus itself -- `np.median(coords.dec.deg)` for a
+    # cos(dec) factor (:375, :995), the per-component median of the RELATIVE
+    # ties (:734) -- and none of them reduces a nearest-neighbour pairing into
+    # a correction.
+    ("jwst_gc_pipeline/photometry/visit_consensus.py", "<unattributed>"),
     # one-off scripts outside the pipeline's astrometric path
     ("scripts/reduction/combine_brick_allband.py", "main"),
     # :130-137 medians NN matches against a DENSE NIRCam F405N reference and
@@ -386,7 +398,7 @@ def test_a_clean_file_does_not_trip():
 
 #: Files whose ONLY protection is a whole-file exemption.  Each gave up
 #: per-function coverage; do not add to this without reading the file.
-_EXPECTED_UNATTRIBUTED = 6
+_EXPECTED_UNATTRIBUTED = 7
 
 
 def test_unattributed_entries_do_not_multiply():

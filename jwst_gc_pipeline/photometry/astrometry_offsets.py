@@ -51,13 +51,33 @@ class KDTreeReference:
         for exp in exposures:
             measure_offset(exp_coords, ref, ...)
 
-    Queries run parallel (``workers=-1``).  Results match the plain path
+    Queries run parallel (``workers=-1``) once there are enough of them --
+    see ``_PARALLEL_MIN_QUERIES``; below that the pool spin-up dominates and
+    the reuse is a slowdown, which it was on sparse fields.  Results match the
+    plain path
     (same deterministic probe/subsample RNG, exact within-radius pair sets,
     same histogram) EXCEPT in the dense-subsample regime: when the pair
     budget forces subsampling, the plain path keeps a hard 2000-point floor
     while the tree path relaxes that floor to respect the total-pair budget
     (see ``_measure_at_window_tree``), so the subsample -- and hence the
     histogram -- can differ there."""
+
+    #: Below this many QUERY points, ``workers=-1`` costs more in thread-pool
+    #: spin-up than it saves.  Measured per exposure on real per-frame
+    #: catalogs, plain path vs tree path:
+    #:
+    #:     sickle F187N   ~100 query pts   112 ms  ->  959 ms   0.12x
+    #:     sickle F210M   ~471            1.38 s   -> 1.40 s    0.99x
+    #:     sgrc  F162M  ~4,019           15.0 s    -> 4.05 s    3.7x
+    #:     cloudc F182M ~6,195           14.3 s    -> 2.33 s    6.1x
+    #:
+    #: 96 F187N frames x 0.85 s is ~82 s per filter per frozen stage -- small,
+    #: but sickle F187N is a sparse field and the reuse made it slower, which
+    #: is the opposite of the point.
+    _PARALLEL_MIN_QUERIES = 1000
+
+    def _workers(self, xyz):
+        return -1 if np.shape(xyz)[0] >= self._PARALLEL_MIN_QUERIES else 1
 
     def __init__(self, coords):
         self.coords = coords
@@ -70,12 +90,14 @@ class KDTreeReference:
 
     def count_within_xyz(self, xyz, sep_arcsec):
         return int(np.sum(self._tree.query_ball_point(
-            xyz, _chord(sep_arcsec), workers=-1, return_length=True)))
+            xyz, _chord(sep_arcsec), workers=self._workers(xyz),
+            return_length=True)))
 
     def pairs_within_xyz(self, xyz, sep_arcsec):
         """(ia, ib) index pairs with separation < sep_arcsec (ia into xyz,
         ib into the wrapped reference)."""
-        lists = self._tree.query_ball_point(xyz, _chord(sep_arcsec), workers=-1)
+        lists = self._tree.query_ball_point(xyz, _chord(sep_arcsec),
+                                            workers=self._workers(xyz))
         counts = np.fromiter((len(lst) for lst in lists), dtype=np.int64,
                              count=len(lists))
         ia = np.repeat(np.arange(len(lists)), counts)

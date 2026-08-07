@@ -622,3 +622,548 @@ def test_same_module_large_shift_still_ties():
     comps = {e["component"] for e in exps if e["component"] >= 0}
     assert len(comps) == 1, \
         f"same-module exposures should form ONE component, got {comps}"
+
+
+# ---------------------------------------------------------------------------
+# same-star restriction (issue #285)
+# ---------------------------------------------------------------------------
+
+def test_mutual_match_mask_is_mutual_not_one_way():
+    from jwst_gc_pipeline.photometry.visit_consensus import _mutual_match_mask
+    import astropy.units as u
+    # two coords crowd around ONE reference star; a one-way match keeps both
+    ref = SkyCoord([RA0] * u.deg, [DEC0] * u.deg)
+    close = SkyCoord([RA0, RA0 + 0.02 / 3600.0 / COSD] * u.deg,
+                     [DEC0, DEC0] * u.deg)
+    mask = _mutual_match_mask(close, ref, 0.15 * u.arcsec)
+    assert mask.sum() == 1, mask
+    assert mask[0]                      # the nearer one wins
+
+
+def test_mutual_match_mask_edges():
+    from jwst_gc_pipeline.photometry.visit_consensus import _mutual_match_mask
+    import astropy.units as u
+    a = SkyCoord([RA0] * u.deg, [DEC0] * u.deg)
+    assert _mutual_match_mask(a, a[:0], 0.15 * u.arcsec).sum() == 0
+    assert len(_mutual_match_mask(a[:0], a, 0.15 * u.arcsec)) == 0
+    assert _mutual_match_mask(a, None, 0.15 * u.arcsec).sum() == 0
+    # a reference star far away matches nothing
+    far = SkyCoord([RA0 + 10.0 / 3600.0 / COSD] * u.deg, [DEC0] * u.deg)
+    assert _mutual_match_mask(a, far, 0.15 * u.arcsec).sum() == 0
+
+
+def test_restrict_to_freezes_the_star_list_not_the_positions():
+    """The gate must measure MOVEMENT, not a change of population.
+
+    Rebuild a visit from catalogs that detect EXTRA stars -- what a later,
+    background-subtracted stage does -- and check that restricting to the
+    first consensus's stars lands back on the first population.
+    """
+    ra, dec = _field(n=400)
+    base_tables = [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)]
+    base = build_visit_consensus(base_tables, context="base")
+    assert len(base["coords"]) > 100
+
+    # the later stage: the same stars plus 300 newly-detected faint ones
+    rng = np.random.default_rng(999)
+    ra2 = np.concatenate([ra, RA0 + rng.uniform(0, 90.0, 300) / 3600.0 / COSD])
+    dec2 = np.concatenate([dec, DEC0 + rng.uniform(0, 90.0, 300) / 3600.0])
+    wide_tables = [_exposure_table(ra2, dec2, exposure=e) for e in range(1, 5)]
+
+    wide = build_visit_consensus(wide_tables, context="wide")
+    tight = build_visit_consensus(wide_tables, context="tight",
+                                  restrict_to=base["coords"])
+
+    assert len(wide["coords"]) > len(tight["coords"]), (
+        len(wide["coords"]), len(tight["coords"]))
+    # the restricted rebuild lands on the m2 population, not the new one
+    assert abs(len(tight["coords"]) - len(base["coords"])) < 0.2 * len(base["coords"]), (
+        len(tight["coords"]), len(base["coords"]))
+    # and it REPORTS what it dropped rather than hiding it
+    for e in tight["exposures"]:
+        assert e["n_reliable_unrestricted"] >= e["n_reliable"]
+    assert any(e["n_reliable_unrestricted"] > e["n_reliable"]
+               for e in tight["exposures"])
+
+
+def test_restrict_to_does_not_hide_a_real_movement():
+    """Freezing the star list must not blind the gate to a shifted exposure."""
+    ra, dec = _field(n=400)
+    base = build_visit_consensus(
+        [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)],
+        context="base")
+    moved = [_exposure_table(ra, dec, exposure=e,
+                             dra_mas=(25.0 if e == 3 else 0.0))
+             for e in range(1, 5)]
+    cons = build_visit_consensus(moved, context="moved",
+                                 restrict_to=base["coords"])
+    offs = {tuple(e["key"])[1]: e["vs_consensus"]["off"] for e in cons["exposures"]}
+    assert offs[3] > 15.0, offs
+    assert all(v < 10.0 for k, v in offs.items() if k != 3), offs
+
+
+def test_restrict_to_none_is_unchanged_behaviour():
+    ra, dec = _field(n=400)
+    tables = [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)]
+    a = build_visit_consensus(tables, context="a")
+    b = build_visit_consensus(tables, context="b", restrict_to=None)
+    assert len(a["coords"]) == len(b["coords"])
+    assert [e["n_reliable"] for e in a["exposures"]] == \
+           [e["n_reliable"] for e in b["exposures"]]
+    for e in b["exposures"]:
+        assert e["n_reliable_unrestricted"] == e["n_reliable"]
+
+
+def _consensus_stars(n=400):
+    ra, dec = _field(n=n)
+    return build_visit_consensus(
+        [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)],
+        context="m2")["coords"], ra, dec
+
+
+def test_restriction_is_refused_when_the_star_list_is_the_wrong_sky():
+    """cloudef restricted against the OTHER observation's consensus: 0.2-15%
+    matched at a median pair separation of 104 mas, i.e. chance.  A wrong star
+    list must be refused, not matched."""
+    from jwst_gc_pipeline.photometry.visit_consensus import _restrict_to_same_stars
+    ref, ra, dec = _consensus_stars()
+    tables = [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)]
+    # an unrelated star list over the same footprint
+    rng = np.random.default_rng(4242)
+    other = SkyCoord((RA0 + rng.uniform(0, 90.0, 400) / 3600.0 / COSD) * u.deg,
+                     (DEC0 + rng.uniform(0, 90.0, 400) / 3600.0) * u.deg)
+    cons = build_visit_consensus(tables, context="wrong-list", restrict_to=other)
+    assert all(e["restrict_refused"] for e in cons["exposures"]), cons["exposures"]
+    # and the gate still has its full input
+    for e in cons["exposures"]:
+        assert e["n_reliable"] == e["n_reliable_unrestricted"]
+
+
+def test_a_gross_movement_is_still_found_not_dropped():
+    """Above ~150 mas the mutual match collapses.  The exposure must still be
+    MEASURED and flagged, never fall out of the gate."""
+    ref, ra, dec = _consensus_stars()
+    for shift in (160.0, 1000.0):
+        tables = [_exposure_table(ra, dec, exposure=e,
+                                  dra_mas=(shift if e == 3 else 0.0))
+                  for e in range(1, 5)]
+        cons = build_visit_consensus(tables, context=f"shift{shift}",
+                                     restrict_to=ref)
+        keys = [tuple(e["key"])[1] for e in cons["exposures"]]
+        assert 3 in keys, (shift, keys, cons["skipped"])
+        moved = [e for e in cons["exposures"] if tuple(e["key"])[1] == 3][0]
+        assert moved["misaligned"], (shift, moved)
+
+
+def test_restriction_is_off_at_a_correcting_stage(tmp_path):
+    """m1/m2/m12 have nothing to freeze against; the full star set is right."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        CORRECTION_STAGES)
+    assert "m2" in CORRECTION_STAGES and "m3" not in CORRECTION_STAGES
+
+
+def test_missing_m2_consensus_falls_back_open_not_closed(tmp_path, capsys):
+    """A missing baseline is not evidence the solution moved."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        _m2_consensus_stars)
+    stars, path = _m2_consensus_stars(str(tmp_path), str(tmp_path), "F212N", "")
+    assert stars is None                       # falls back, does not raise
+
+
+def test_restrict_radius_is_tight_enough_to_be_same_star():
+    """A 5\" radius is not a same-star match in a GC field -- it is whatever is
+    nearby.  Guard the constant, which no behavioural test pins."""
+    import inspect
+    from jwst_gc_pipeline.photometry import visit_consensus as vc
+    default = inspect.signature(vc.build_visit_consensus).parameters[
+        "restrict_radius"].default
+    assert default.to(u.arcsec).value <= 0.3, default
+    assert vc.RESTRICT_MIN_SURVIVAL >= 0.5
+    assert vc.RESTRICT_MAX_TIE_MAS <= 100.0
+
+
+def test_the_tie_precondition_alone_refuses_a_displaced_star_list():
+    """Pins the PRECONDITION, not just the outcome.  A star list that is the
+    right stars but the wrong sky must be refused by the TIE check.
+
+    The displacement matters and 3 x RESTRICT_MAX_TIE_MAS (150 mas) was the
+    wrong choice: at 150 mas the mutual match has already collapsed to 0.2%
+    survival, so the survival floor refuses it too and deleting the tie
+    precondition still gets `mask is None` -- the test failed only on the
+    reason string.  Mapped against the real constants:
+
+        disp    survival   refused by
+          40      100.0%   nothing
+          60      100.0%   TIE only     <- the tie check's unique region
+          80      100.0%   TIE only
+         120      100.0%   TIE only
+         150        0.2%   survival floor also
+
+    With the tie precondition deleted, a 60-120 mas wrong list is accepted at
+    100% survival.  80 mas puts this test inside the region only the tie check
+    covers, so it is a behavioural pin rather than a message assertion.
+    """
+    from jwst_gc_pipeline.photometry.visit_consensus import (
+        RESTRICT_MAX_TIE_MAS, _restrict_to_same_stars)
+    import astropy.units as u
+    ra, dec = _field(n=400)
+    ref = build_visit_consensus(
+        [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)],
+        context="m2")["coords"]
+    disp_mas = 1.6 * RESTRICT_MAX_TIE_MAS          # 80 mas at the real constant
+    shifted = SkyCoord(ref.ra + (disp_mas / 3.6e6 / COSD) * u.deg,
+                       ref.dec, frame="icrs")
+    mask, why = _restrict_to_same_stars(ref, shifted, 0.15 * u.arcsec)
+    assert mask is None and "tie to the m2 star list" in why, why
+    # and the survival floor is NOT what refused it: at this displacement the
+    # stars still match, so deleting the tie check would let it through
+    m2, _ = _restrict_to_same_stars(ref, shifted, 0.5 * u.arcsec)
+    assert disp_mas < 0.15 * 1000, "the pin must stay inside the match radius"
+
+
+def test_the_survival_floor_alone_refuses_a_chance_match():
+    """Pins the SURVIVAL floor.  An unrelated list over the same footprint
+    ties fine at zero offset and must still be refused."""
+    from jwst_gc_pipeline.photometry.visit_consensus import _restrict_to_same_stars
+    import astropy.units as u
+    ra, dec = _field(n=400)
+    ref = build_visit_consensus(
+        [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)],
+        context="m2")["coords"]
+    # 20% real stars (so the tie IS found -- they give a clean peak) plus 80%
+    # unrelated ones.  cloudef's shape: a list that ties but does not match.
+    rng = np.random.default_rng(31337)
+    n_real = len(ref) // 5
+    mixed = SkyCoord(
+        np.concatenate([ref.ra.deg[:n_real],
+                        RA0 + rng.uniform(0, 90.0, len(ref)) / 3600.0 / COSD]) * u.deg,
+        np.concatenate([ref.dec.deg[:n_real],
+                        DEC0 + rng.uniform(0, 90.0, len(ref)) / 3600.0]) * u.deg)
+    mask, why = _restrict_to_same_stars(ref, mixed, 0.15 * u.arcsec)
+    assert mask is None, (mask if mask is None else mask.sum(), why)
+    assert "matched the m2 list" in why, why
+
+
+def test_gate_membership_uses_the_unrestricted_count():
+    """Pins the fix for the 🔴 BEHAVIOURALLY: keying on the restricted count
+    let a displaced exposure LEAVE the gate instead of failing it.
+
+    An exposure whose restricted set collapses must still be REPORTED; a gross
+    movement that removes an exposure from the consensus is the one outcome
+    that cannot be tolerated, because nothing downstream sees it at all.
+
+    Two things worth stating rather than papering over.  The source-grep
+    version of this test could not hold the invariant: the substring
+    `e["n_reliable_unrestricted"] >= min_stars` occurs TWICE -- at the gate
+    membership and again at the thin-set fallback -- so mutating the first
+    left the assertion green.  And the behavioural version below does not
+    hold it either, because it is currently UNREACHABLE: at 900 mas the tie
+    precondition refuses the restriction, the exposure falls back to its full
+    star set, and `n_reliable` is then the unrestricted count anyway.  Keying
+    on the unrestricted count is defence in depth behind the tie precondition
+    and the thin-set fallback, and no input distinguishes the two today.  What
+    this test does hold is the OUTCOME -- the displaced exposure is reported,
+    by whichever of the three mechanisms gets there first.
+    """
+    import astropy.units as u
+    from jwst_gc_pipeline.photometry.visit_consensus import (
+        build_visit_consensus)
+    ra, dec = _field(n=400)
+    tables = [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)]
+    m2 = build_visit_consensus(tables, context="m2")["coords"]
+    # one exposure displaced far enough that essentially nothing survives the
+    # restriction -- its restricted count would be ~0
+    moved = _exposure_table(ra + 900.0 / 3.6e6 / COSD, dec, exposure=5)
+    cons = build_visit_consensus(tables + [moved], context="m6",
+                                 restrict_to=m2, min_stars=50)
+    keys = {e["key"] for e in cons["exposures"]}
+    assert len(keys) == 5, (sorted(keys), cons["skipped"])
+    assert not cons["skipped"], cons["skipped"]
+    # and the source invariant, anchored to the ASSIGNMENT so the thin-set
+    # fallback's identical substring cannot satisfy it
+    import inspect
+    from jwst_gc_pipeline.photometry import visit_consensus as vc
+    src = inspect.getsource(vc.build_visit_consensus)
+    assert ('usable_idx = [i for i, e in enumerate(entries)\n'
+            '                  if e["n_reliable_unrestricted"] >= min_stars]'
+            ) in src, "usable_idx must key on the unrestricted count"
+
+
+def test_a_star_list_that_is_half_other_sky_is_reported():
+    """RESTRICT_MIN_SURVIVAL measures the fraction of the EXPOSURE's stars that
+    matched; it is blind to what fraction of the STAR LIST is foreign sky,
+    because the foreign half simply never matches and is ignored.
+
+    Real: cloudef's f360m_o002 and f480m_o005 consensus catalogs each pool two
+    pointings 15 arcmin apart, because the m2 run that built them ingested two
+    observations under one filename namespace.
+    """
+    from jwst_gc_pipeline.photometry.visit_consensus import (
+        _fraction_within_footprint, _restrict_to_same_stars)
+    import astropy.units as u
+    ra, dec = _field(n=400)
+    ref = build_visit_consensus(
+        [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)],
+        context="m2")["coords"]
+    # the same list plus an equal blob 15 arcmin away -- cloudef's shape
+    far = SkyCoord((ref.ra.deg + 15.0 / 60.0 / COSD) * u.deg, ref.dec, frame="icrs")
+    mixed = SkyCoord(np.concatenate([ref.ra.deg, far.ra.deg]) * u.deg,
+                     np.concatenate([ref.dec.deg, far.dec.deg]) * u.deg)
+    assert _fraction_within_footprint(mixed, ref) < 0.6
+    # it still RESTRICTS -- the local half matches fine -- and survival cannot
+    # see the problem, which is the point
+    mask, why = _restrict_to_same_stars(ref, mixed, 0.15 * u.arcsec)
+    assert mask is not None and mask.sum() > 0.8 * len(ref), why
+    # what makes it visible is the RECORDED coverage, not a threshold
+    cons = build_visit_consensus(
+        [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)],
+        context="mixed", restrict_to=mixed)
+    covs = [e["restrict_list_coverage"] for e in cons["exposures"]]
+    assert all(c is not None and c < 0.6 for c in covs), covs
+
+
+def test_footprint_coverage_is_reported_not_gated():
+    """A visit-wide star list legitimately covers more sky than one exposure,
+    so a low fraction is a reason to look, never a reason to refuse."""
+    from jwst_gc_pipeline.photometry.visit_consensus import (
+        _fraction_within_footprint)
+    import astropy.units as u
+    ra, dec = _field(n=200)
+    a = SkyCoord(ra * u.deg, dec * u.deg, frame="icrs")
+    assert _fraction_within_footprint(a, a) == 1.0
+    assert _fraction_within_footprint(a[:0], a) is None
+    assert _fraction_within_footprint(a, a[:0]) is None
+
+
+# ---------------------------------------------------------------------------
+# The RECORD.  `same_star_gate`, `same_star_refused`, `n_same_star_refused` and
+# `restrict_list_coverage` had zero readers and zero assertions anywhere in the
+# repo -- one writer at astrometry_checkpoint.py and nothing else -- so the
+# whole checkpoint-side half of this feature was deletable green.
+# ---------------------------------------------------------------------------
+
+def _record_for(tmp_path, m2_stars, tables, filtername="F212N"):
+    """Run the real checkpoint writer and hand back its consensus record."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        run_visit_checkpoint)
+    import jwst_gc_pipeline.photometry.astrometry_checkpoint as ac
+
+    # NB the checkpoint supplies `restrict_to` itself, from
+    # `_m2_consensus_stars` -- which the caller monkeypatches.  Passing it in
+    # `consensus_kwargs` too is a TypeError, and going through the real path is
+    # the point: it is the wiring that had no test.
+    return run_visit_checkpoint(
+        tables, "m6", filtername=filtername, basepath=str(tmp_path),
+        record_dir=str(tmp_path), context="test")
+
+
+def test_the_record_says_applied_only_when_every_exposure_restricted(tmp_path, monkeypatch):
+    """`any(not refused)` reported "applied" when ONE exposure of sixteen
+    restricted.  It is `all` now, and the restriction is all-or-nothing per
+    visit, so the two agree.
+
+    The counts are asserted too, not just the label: the m2 list is a SUBSET
+    of what this stage detects, so "applied" has to show up as a smaller
+    restricted count.  Without that, deleting the wiring that passes
+    `restrict_to` from the checkpoint leaves the label reading "applied" for a
+    run in which nothing was restricted -- a mutant that survived every test
+    in this file.
+    """
+    import jwst_gc_pipeline.photometry.astrometry_checkpoint as ac
+    ra, dec = _field(n=400)
+    tables = [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)]
+    # the m2 star list is HALF the stars this stage detects: the population
+    # change the restriction exists to absorb
+    full = build_visit_consensus(tables, context="m2")["coords"]
+    m2 = full[:len(full) // 2]
+    monkeypatch.setattr(ac, "_m2_consensus_stars",
+                        lambda *a, **k: (m2, "/x/m2.fits"))
+    rec = _record_for(tmp_path, m2, tables)
+    cons = rec["visits"][0]["consensus"]
+    assert cons["same_star_gate"] == "applied", cons
+    assert cons["n_same_star_refused"] == 0
+    assert cons["same_star_refused"] == []
+    assert cons["n_reliable_restricted"] < cons["n_reliable_unrestricted"], cons
+
+
+def test_one_refusal_does_not_cascade_but_does_not_pollute_either(tmp_path, monkeypatch):
+    """Two failure modes, and the fix has to avoid both.
+
+    BEFORE any fix: a refused exposure contributed its FULL star list, so any
+    star two refused exposures shared cleared `min_exposures` and re-entered
+    the consensus -- and the exposures that DID restrict were measured against
+    a consensus holding stars they do not have.
+
+    FIRST FIX (all-or-nothing per visit): on real cloudc F182M, 8 of 128
+    frames tie 52-54 mas, 2-4 mas over RESTRICT_MAX_TIE_MAS, and 120 healthy
+    frames cascaded off them -- 128 of 128 refused, consensus 119,994 ->
+    129,135 stars, the gate inert on the largest field measured.
+
+    What must be homogeneous is the SEED.  A refused exposure is still tied
+    and measured; it just does not EXTEND the consensus.
+    """
+    import jwst_gc_pipeline.photometry.astrometry_checkpoint as ac
+    import jwst_gc_pipeline.photometry.visit_consensus as vc
+
+    ra, dec = _field(n=400)
+    tables = [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)]
+    full = build_visit_consensus(tables, context="m2")["coords"]
+    m2 = full[:len(full) // 2]
+
+    real = vc._restrict_to_same_stars
+    seen = {"n": 0}
+
+    def _one_refusal(coords, reference, radius, context="", reference_tree=None):
+        seen["n"] += 1
+        if seen["n"] == 2:
+            return None, "forced refusal for the test"
+        return real(coords, reference, radius, context=context,
+                    reference_tree=reference_tree)
+
+    monkeypatch.setattr(vc, "_restrict_to_same_stars", _one_refusal)
+    monkeypatch.setattr(ac, "_m2_consensus_stars",
+                        lambda *a, **k: (m2, "/x/m2.fits"))
+    rec = _record_for(tmp_path, m2, tables)
+    cons = rec["visits"][0]["consensus"]
+
+    # NO cascade: exactly the one exposure that refused
+    assert cons["n_same_star_refused"] == 1, cons["same_star_refused"]
+    assert cons["same_star_gate"] == "refused", cons
+    reasons = [r["reason"] for r in cons["same_star_refused"]]
+    assert reasons == [r for r in reasons if "forced refusal" in r], reasons
+
+    # ... and NO pollution: the consensus is still the restricted population,
+    # not the refused exposure's full one
+    ref = _record_for(tmp_path / "all", m2,
+                      [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)])
+    assert (cons["n_stars"]
+            <= ref["visits"][0]["consensus"]["n_stars"] + 1), (
+        cons["n_stars"], ref["visits"][0]["consensus"]["n_stars"])
+    # the refused exposure was still MEASURED -- it is in the record's
+    # per-exposure list, not in `skipped`
+    assert len(rec["visits"][0]["exposures"]) == 4, rec["visits"][0]
+    assert not rec["visits"][0]["consensus"]["skipped"], cons
+
+
+def test_the_record_carries_the_star_list_footprint_coverage(tmp_path, monkeypatch):
+    """`restrict_list_coverage` was computed per exposure and never reached the
+    record -- verbatim the `restrict_refused` defect this PR already fixed
+    once.  A list that is half a DIFFERENT POINTING passes survival and tie
+    alike, because the foreign half simply never matches."""
+    import jwst_gc_pipeline.photometry.astrometry_checkpoint as ac
+    ra, dec = _field(n=400)
+    tables = [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)]
+    m2 = build_visit_consensus(tables, context="m2")["coords"]
+    monkeypatch.setattr(ac, "_m2_consensus_stars",
+                        lambda *a, **k: (m2, "/x/m2.fits"))
+    cons = _record_for(tmp_path, m2, tables)["visits"][0]["consensus"]
+    assert cons["restrict_list_coverage"] is not None, cons
+    assert cons["restrict_list_coverage"] > 0.9, cons["restrict_list_coverage"]
+
+
+def test_the_record_says_unavailable_when_there_is_no_star_list(tmp_path, monkeypatch):
+    """A missing baseline is not evidence the solution moved, and the record
+    must not spell that the same way as a refusal."""
+    import jwst_gc_pipeline.photometry.astrometry_checkpoint as ac
+    ra, dec = _field(n=400)
+    tables = [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)]
+    monkeypatch.setattr(ac, "_m2_consensus_stars", lambda *a, **k: (None, None))
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        run_visit_checkpoint)
+    rec = run_visit_checkpoint(tables, "m6", filtername="F212N",
+                               basepath=str(tmp_path), record_dir=str(tmp_path),
+                               context="test")
+    cons = rec["visits"][0]["consensus"]
+    assert cons["same_star_gate"] == "unavailable", cons
+
+
+def test_a_correcting_stage_does_not_restrict(tmp_path, monkeypatch):
+    """m2 is where the baseline is DEFINED; there is nothing to freeze against
+    and the full star set is the right one.  Dropping the `not correcting`
+    guard -- applying the restriction at m1/m2/m12 too -- survived every test
+    in this file through two review rounds."""
+    import jwst_gc_pipeline.photometry.astrometry_checkpoint as ac
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        run_visit_checkpoint)
+    ra, dec = _field(n=400)
+    tables = [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)]
+    full = build_visit_consensus(tables, context="m2")["coords"]
+    called = {"n": 0}
+
+    def _spy(*a, **k):
+        called["n"] += 1
+        return full[:len(full) // 2], "/x/m2.fits"
+
+    monkeypatch.setattr(ac, "_m2_consensus_stars", _spy)
+    rec = run_visit_checkpoint(tables, "m2", filtername="F212N",
+                               basepath=str(tmp_path),
+                               record_dir=str(tmp_path), context="test")
+    cons = rec["visits"][0]["consensus"]
+    # m2 is a CORRECTING stage: the star list is never even looked up
+    assert called["n"] == 0, "m2 must not read an m2 baseline to freeze against"
+    assert cons["same_star_gate"] == "unavailable", cons
+    assert cons["n_reliable_restricted"] == cons["n_reliable_unrestricted"]
+
+
+def test_a_refused_exposure_does_not_SEED_the_consensus(monkeypatch):
+    """The other half of the mechanism, and it was pinned by nothing.
+
+    The design has two rules and the comment says so: a refused exposure must
+    not EXTEND the seed, and it must not BE the seed -- if it seeded, its full
+    star list would be the population, the same defect from the other end.
+    Deleting the member reordering left `52 passed`, and no test referenced
+    `_contributes` at all.
+
+    It needs `min_exposures` refusals in one component to bite, which is why a
+    single-refusal fixture could not see it: with one refusal the seed's extra
+    stars reach `counts == 1` and the `counts >= min_exposures` filter drops
+    them anyway.  With THREE, the refused members corroborate each other's
+    extra stars and the pre-#285 population comes back.  That is the cloudc
+    F182M shape -- its eight refusals are not scattered, they are all `nrcb3`
+    in vgroup 06201.
+    """
+    import jwst_gc_pipeline.photometry.visit_consensus as vc
+
+    ra, dec = _field(n=400)
+    tables = [_exposure_table(ra, dec, exposure=e) for e in range(1, 7)]
+    full = build_visit_consensus(tables, context="m2")["coords"]
+    m2 = full[:len(full) // 2]          # the restricted population is HALF
+
+    real = vc._restrict_to_same_stars
+    seen = {"n": 0}
+
+    def _three_refuse(coords, reference, radius, context="",
+                      reference_tree=None):
+        seen["n"] += 1
+        if seen["n"] <= 3:
+            return None, "forced refusal for the test"
+        return real(coords, reference, radius, context=context,
+                    reference_tree=reference_tree)
+
+    monkeypatch.setattr(vc, "_restrict_to_same_stars", _three_refuse)
+    cons = build_visit_consensus(tables, context="m6", restrict_to=m2)
+    refused = [e for e in cons["exposures"] if e.get("restrict_refused")]
+    assert len(refused) == 3, refused                      # no cascade
+    # the consensus is the RESTRICTED population, not the refused exposures'
+    assert len(cons["coords"]) < 0.75 * len(full), (
+        len(cons["coords"]), len(full))
+
+
+def test_a_component_with_no_restricted_member_says_so(tmp_path, monkeypatch, capsys):
+    """`any(...)` deliberately permits a component whose members ALL refused to
+    build from their full star sets -- the pre-#285 behaviour, and the same
+    decision the visit-wide `contributing == []` path takes.  That is a real
+    choice and it was implicit; it is stated and printed now, because a
+    component silently built from a different star population than its
+    neighbours is the confusion the restriction exists to remove."""
+    import jwst_gc_pipeline.photometry.visit_consensus as vc
+
+    ra, dec = _field(n=400)
+    tables = [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)]
+    m2 = build_visit_consensus(tables, context="m2")["coords"]
+    monkeypatch.setattr(vc, "_restrict_to_same_stars",
+                        lambda *a, **k: (None, "forced refusal for the test"))
+    cons = build_visit_consensus(tables, context="m6", restrict_to=m2)
+    out = capsys.readouterr().out
+    assert "NO exposure could be restricted" in out, out
+    assert all(e.get("restrict_refused") for e in cons["exposures"])

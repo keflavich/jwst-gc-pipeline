@@ -269,9 +269,122 @@ def _cap_stars(sc, n_max=500_000, seed=1182):
     return sc[np.sort(rng.choice(len(sc), n_max, replace=False))]
 
 
+#: The restriction must find most of the stars, or it is not selecting the same
+#: stars -- it is selecting chance coincidences.  Measured at zero shift against
+#: each field's own m2 consensus: cloudc 94.6-98.9%, sickle 85.0-97.7%, sgrc
+#: 91.3-92.7% -- and cloudef 0.0-15.0%, where a wrong observation token made the
+#: star list the OTHER observation's and the median pair separation 104 mas
+#: (chance: N(<r) proportional to r^2 gives ~25% below r/2, and cloudef measured
+#: 0.23).  Below this the restriction is refused and the full star set is used.
+RESTRICT_MIN_SURVIVAL = 0.5
+
+#: A tie this large means the exposure and the star list are not describing the
+#: same sky, so nearest-partner matching would pair the wrong stars.  Same
+#: precondition `local_residual_map` imposes (radius/3), for the same reason.
+RESTRICT_MAX_TIE_MAS = 50.0
+
+
+def _mutual_match_mask(coords, reference, radius):
+    """Boolean mask of ``coords`` whose MUTUAL nearest partner in ``reference``
+    is within ``radius``.
+
+    Mutual, not one-way: in a crowded field several stars share a nearest
+    partner, and a one-way match would keep all of them and silently associate
+    different physical stars with one reference entry.  This is the same
+    unique-partner requirement ``local_residual_map`` imposes, for the same
+    reason.
+    """
+    if len(coords) == 0 or reference is None or len(reference) == 0:
+        return np.zeros(len(coords), dtype=bool)
+    idx, sep, _ = coords.match_to_catalog_sky(reference)
+    near = sep < radius
+    if not near.any():
+        return np.zeros(len(coords), dtype=bool)
+    back, _, _ = reference[idx[near]].match_to_catalog_sky(coords)
+    mask = np.zeros(len(coords), dtype=bool)
+    mask[np.flatnonzero(near)[back == np.flatnonzero(near)]] = True
+    return mask
+
+
+def _restrict_to_same_stars(coords, reference, radius, context="",
+                            reference_tree=None):
+    """``(mask, reason)`` -- the same-star restriction, or a refusal.
+
+    NOT an ad-hoc nearest-neighbour association.  ``match_to_catalog_sky`` here
+    selects a SAMPLE; it never reduces the matched offsets to a correction, and
+    every offset in this module is still measured by ``measure_offset``'s
+    histogram peak.  What makes the pairing legitimate is the same precondition
+    the sanctioned path requires and which this originally lacked:
+
+    1. a VERIFIED SMALL TIE between the exposure and the star list, measured by
+       ``measure_offset``, before any pairing.  Without it a wrong star list
+       still "matches" -- cloudef's m3 restricted against the other
+       observation's consensus, matched 0.2-15% of stars at a median pair
+       separation of 104 mas (chance), gated 8 of 16 exposures out, and cut the
+       reliable count 95.5%.  All five failures it then reported were computed
+       on a fabricated star set;
+    2. MUTUAL nearest partners only;
+    3. a minimum SURVIVAL fraction, so a restriction that finds almost nothing
+       is refused rather than silently shrinking the gate's input.
+
+    Any refusal returns ``(None, reason)`` and the caller uses the full star
+    set -- a star list we cannot verify is not evidence about the solution.
+    """
+    if reference is None or len(reference) == 0 or len(coords) == 0:
+        return None, "no reference star list"
+    # The KD tree over the m2 star list is built ONCE per consensus build and
+    # reused: measure_offset's plain path rebuilds trees on both lists every
+    # call, and against a 130k-star m2 list called once per exposure that
+    # dominated the cost (cloudc F182M: 0.19s of matching became 14.7s, x77).
+    tie = measure_offset(coords, reference_tree if reference_tree is not None
+                         else reference, sweep=True,
+                         sweep_windows=PER_EXPOSURE_SWEEP_WINDOWS,
+                         context=f"{context} same-star precondition")
+    if tie is None or not tie.get("ok"):
+        return None, "no verified tie between this exposure and the m2 star list"
+    if tie.get("swept") or tie["off"] > RESTRICT_MAX_TIE_MAS:
+        return None, (f"tie to the m2 star list is {tie['off']:.0f} mas "
+                      f"(swept={tie.get('swept')}) -- too large for "
+                      f"nearest-partner matching to pair the right star")
+    mask = _mutual_match_mask(coords, reference, radius)
+    survival = float(mask.sum()) / len(coords)
+    if survival < RESTRICT_MIN_SURVIVAL:
+        return None, (f"only {100 * survival:.1f}% of stars matched the m2 list "
+                      f"(< {100 * RESTRICT_MIN_SURVIVAL:.0f}%) -- that is a "
+                      f"chance-coincidence rate, not the same stars")
+    # Survival measures the fraction of THIS EXPOSURE's stars that matched.  It
+    # is blind to what fraction of the STAR LIST is foreign sky: a list that is
+    # half a different pointing passes every check above, because the foreign
+    # half simply never matches and is silently ignored.  That is not
+    # hypothetical -- cloudef's f360m_o002 and f480m_o005 consensus catalogs
+    # each pool TWO pointings 15 arcmin apart (24 of 40 RA bins empty, two
+    # disjoint blobs), because the m2 run that built them ingested two
+    # observations under one filename namespace.
+    #
+    # Report the coverage; do not gate on it.  A star list may legitimately
+    # cover far more sky than one exposure -- it is the whole visit's -- so a
+    # low fraction is a reason to look, not a reason to refuse, and refusing on
+    # it would reject every healthy field.
+    return mask, None
+
+
+def _fraction_within_footprint(reference, coords, pad_arcsec=30.0):
+    """Fraction of ``reference`` inside ``coords``' bounding box (+pad)."""
+    if reference is None or len(reference) == 0 or len(coords) == 0:
+        return None
+    cosd = max(np.cos(np.radians(float(np.median(coords.dec.deg)))), 1e-6)
+    pad_ra, pad_dec = pad_arcsec / 3600.0 / cosd, pad_arcsec / 3600.0
+    ra, dec = coords.ra.deg, coords.dec.deg
+    rra, rdec = reference.ra.deg, reference.dec.deg
+    inside = ((rra >= ra.min() - pad_ra) & (rra <= ra.max() + pad_ra)
+              & (rdec >= dec.min() - pad_dec) & (rdec <= dec.max() + pad_dec))
+    return float(inside.sum()) / len(reference)
+
+
 def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
                           match_radius=0.2 * u.arcsec, min_exposures=2,
-                          min_stars=50, context=""):
+                          min_stars=50, context="", restrict_to=None,
+                          restrict_radius=0.15 * u.arcsec):
     """Build the per-(visit,filter) consensus catalog and measure every
     exposure's bulk offset against it.
 
@@ -324,6 +437,8 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
             f"visit consensus ({context}): need >= {min_exposures} exposures, "
             f"got {len(exposure_tables)}")
 
+    _restrict_tree = (KDTreeReference(restrict_to)
+                      if restrict_to is not None and len(restrict_to) else None)
     entries = []
     for tbl in exposure_tables:
         keep = select_reliable_stars(tbl, snr_min=snr_min, qfit_max=qfit_max)
@@ -338,13 +453,66 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
         _finite = np.isfinite(_all_coords.ra.deg) & np.isfinite(_all_coords.dec.deg)
         keep = np.asarray(keep, dtype=bool) & _finite
         coords = _all_coords[keep]
+        n_before_restrict = int(keep.sum())
+        restrict_refused = None
+        restrict_list_coverage = None
+        if restrict_to is not None and len(coords):
+            # SAME-STAR restriction (issue #285).  A frozen-stage gate asks
+            # whether the solution MOVED, and the answer must not depend on
+            # which stars were detected: a later stage fits on a
+            # background-subtracted image, so it detects a different set --
+            # and the consensus, rebuilt over that different set, shifts by a
+            # few mas even when no frame moved.  The gate then reports that
+            # shift once per exposure, as if every exposure had moved.
+            #
+            # Positions still come from THIS stage; only the star LIST is
+            # frozen.  A stage whose centroids genuinely improved is not
+            # penalised -- only relative movement between an exposure and its
+            # peers is measured.
+            #
+            # `_restrict_to_same_stars` refuses when it cannot verify the star
+            # list describes this exposure's sky; a refusal falls back to the
+            # full set and is reported, never silently applied.
+            mask, restrict_refused = _restrict_to_same_stars(
+                coords, restrict_to, restrict_radius,
+                context=f"{context} {exposure_key(tbl)}",
+                reference_tree=_restrict_tree)
+            # RECORDED, never gated: what fraction of the star list lies in
+            # this exposure's footprint.  A visit-wide list legitimately covers
+            # more sky than one exposure, so there is no threshold to set -- but
+            # a list that is half a DIFFERENT POINTING passes every check above,
+            # because the foreign half never matches and is silently ignored.
+            # cloudef's f360m_o002 and f480m_o005 consensus catalogs are exactly
+            # that: two pointings 15 arcmin apart pooled into one file by an m2
+            # run that ingested two observations under one filename namespace.
+            restrict_list_coverage = _fraction_within_footprint(restrict_to,
+                                                                coords)
+            if restrict_refused:
+                print(f"astrom consensus [{context}] {exposure_key(tbl)}: "
+                      f"same-star restriction REFUSED, using the full star "
+                      f"set -- {restrict_refused}", flush=True)
+            if mask is not None:
+                coords = coords[mask]
+                _flux_idx = mask
+            else:
+                _flux_idx = None
+        else:
+            _flux_idx = None
         if "flux_fit" in tbl.colnames:
             flux = np.asarray(tbl["flux_fit"], dtype=float)[keep]
+            if _flux_idx is not None:
+                flux = flux[_flux_idx]
         else:
-            flux = np.full(int(keep.sum()), np.nan)
+            flux = np.full(len(coords), np.nan)
         entries.append(dict(
             key=exposure_key(tbl), coords=coords, flux=flux,
-            n_reliable=int(keep.sum()),
+            n_reliable=len(coords), n_reliable_unrestricted=n_before_restrict,
+            restrict_refused=restrict_refused,
+            restrict_list_coverage=restrict_list_coverage,
+            coords_unrestricted=_all_coords[keep],
+            flux_unrestricted=(np.asarray(tbl["flux_fit"], dtype=float)[keep]
+                               if "flux_fit" in tbl.colnames
+                               else np.full(n_before_restrict, np.nan)),
             raoffset_meta=_meta_lookup(tbl, "RAOFFSET", default=0.0),
             deoffset_meta=_meta_lookup(tbl, "DEOFFSET", default=0.0)))
 
@@ -364,7 +532,61 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
             f"{sorted(dupes.items())[:8]}.  Check for grouped-fit (`_group_`) "
             f"or stale module-level variants alongside the per-detector ones.")
 
-    usable_idx = [i for i, e in enumerate(entries) if e["n_reliable"] >= min_stars]
+    # Gate membership keys on the UNRESTRICTED count.  Keying on the restricted
+    # one let a displaced exposure LEAVE the gate instead of failing it: above
+    # ~150 mas the mutual match collapses (measured on real sickle frames: 831
+    # -> 17 survivors between 140 and 160 mas), the exposure fell below
+    # `min_stars`, and it was never reported at all.  A gross movement must
+    # still be FOUND -- that is what `measure_offset`'s sweep is for.
+    usable_idx = [i for i, e in enumerate(entries)
+                  if e["n_reliable_unrestricted"] >= min_stars]
+    # ...but an exposure whose restricted set is too thin to tie must fall back
+    # to its full star list rather than be measured on a handful of stars.
+    for i in usable_idx:
+        e = entries[i]
+        if len(e["coords"]) < min_stars and e["n_reliable_unrestricted"] >= min_stars:
+            e["restrict_refused"] = (
+                f"restricted to {len(e['coords'])} stars (< {min_stars}); "
+                f"using the full set for this exposure")
+            e["coords"] = e["coords_unrestricted"]
+            e["flux"] = e["flux_unrestricted"]
+            e["n_reliable"] = e["n_reliable_unrestricted"]
+    # HOMOGENEITY, and it is about the star POPULATION, not about which
+    # exposures get measured.  A refused exposure used to contribute its FULL
+    # star list, so any star two refused exposures share cleared
+    # `min_exposures` and re-entered the consensus -- and the exposures that
+    # DID restrict were then measured against a consensus holding stars they
+    # do not have.  The population change this restriction exists to remove was
+    # back in full.
+    #
+    # The first fix was all-or-nothing per VISIT, and the granularity was
+    # wrong.  On real cloudc F182M, 8 of 128 frames tie 52-54 mas -- 2-4 mas
+    # over RESTRICT_MAX_TIE_MAS -- and 120 healthy frames cascaded off them:
+    # 128 of 128 refused, consensus 119,994 -> 129,135 stars, i.e. the gate
+    # silently inert on the largest field measured, for the sake of 6% of its
+    # frames.
+    #
+    # What has to be homogeneous is the SEED.  A refused exposure is still tied
+    # and still measured -- it just does not EXTEND the consensus with stars the
+    # restricted exposures never had (see the `contributes` flag in the
+    # accumulation below).  It matches into the existing seed like any other
+    # exposure, so it still constrains the stars that are there.
+    contributing = [i for i in usable_idx if not entries[i]["restrict_refused"]]
+    if restrict_to is not None and contributing and len(contributing) < len(usable_idx):
+        print(f"astrom consensus [{context}]: {len(usable_idx) - len(contributing)} "
+              f"of {len(usable_idx)} exposures refused the same-star "
+              f"restriction; they are still MEASURED but do not extend the "
+              f"consensus, so its star population stays the restricted one",
+              flush=True)
+    elif restrict_to is not None and not contributing:
+        # Nothing restricted, so there is no restricted population to protect
+        # and every exposure may extend the seed -- the pre-#285 behaviour,
+        # which is the conservative direction when the star list cannot be
+        # verified against this visit at all.
+        print(f"astrom consensus [{context}]: NO exposure could be restricted "
+              f"to the m2 star list; the consensus is built from the full sets "
+              f"(a population change between stages can still read as "
+              f"movement, issue #285)", flush=True)
     usable = [entries[i] for i in usable_idx]
     if len(usable) < min_exposures:
         raise ConsensusBuildError(
@@ -517,6 +739,29 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
         # fabricated a ~10-15 mas noise floor in scatter_mas.
         ref_ra = ref_dec = None
         sum_dra = sum_ddec = sum_dra2 = sum_ddec2 = counts = flux0 = None
+        # A CONTRIBUTING member seeds, and only a contributing member extends.
+        # If a refused exposure seeded, its full star list would BE the
+        # population -- the same defect from the other end.  Stable sort, so
+        # the existing seed choice (largest n_reliable first) survives among
+        # the contributing ones.
+        _contributes = [not usable[i]["restrict_refused"] for i in
+                        range(len(usable))]
+        if any(_contributes[i] for i in members):
+            members = sorted(members, key=lambda i: not _contributes[i])
+        else:
+            # EVERY member of this component refused.  There is no restricted
+            # population here to protect, so the component is built from the
+            # full star sets -- the pre-#285 behaviour, and the same decision
+            # `contributing == []` takes for the visit as a whole.  Stated
+            # rather than left to fall out of `any()` being False, and said out
+            # loud, because a component silently built from a different star
+            # population than its neighbours is exactly the confusion the
+            # restriction exists to remove.
+            print(f"astrom consensus [{context}]: component of "
+                  f"{len(members)} exposure(s) has NO restricted member; it is "
+                  f"built from their full star sets (a population change "
+                  f"between stages can still read as movement there, issue "
+                  f"#285)", flush=True)
         for i in members:
             sc = _shift(usable[i]["coords"], rel[i]["dra"], rel[i]["ddec"])
             if ref_ra is None:
@@ -551,8 +796,12 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
                 matched_b[ib_n] = True
             # unmatched stars extend the seed (mosaic tiles: coverage grows);
             # each becomes its own delta reference (delta 0 on first sighting)
+            # Unmatched stars extend the seed -- but only from an exposure
+            # that is IN the restricted population.  A refused exposure adds
+            # stars the restricted exposures never had, which is exactly the
+            # population change the restriction removes.
             new = ~matched_b
-            if new.any():
+            if new.any() and _contributes[i]:
                 seed = SkyCoord(
                     ra=np.concatenate([seed.ra.deg, sc.ra.deg[new]]) * u.deg,
                     dec=np.concatenate([seed.dec.deg, sc.dec.deg[new]]) * u.deg,
@@ -638,6 +887,10 @@ def build_visit_consensus(exposure_tables, snr_min=10.0, qfit_max=0.1,
                                    or res["off"] > 10.0 * EXPOSURE_CONSENSUS_TOL_MAS))
         exposures.append(dict(
             key=e["key"], n_reliable=e["n_reliable"],
+            n_reliable_unrestricted=e.get("n_reliable_unrestricted",
+                                          e["n_reliable"]),
+            restrict_refused=e.get("restrict_refused"),
+            restrict_list_coverage=e.get("restrict_list_coverage"),
             component=int(comp_id[pos]),
             internal_tie=bool(rel[pos] is not None and rel[pos]["npairs"] > 0
                               and (comp_id == comp_id[pos]).sum() > 1),
