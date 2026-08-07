@@ -1392,7 +1392,21 @@ def test_deploy_refuses_a_destination_that_is_not_the_monitor_dir(tmp_path, dest
 def test_deploy_accepts_the_monitor_dir(tmp_path):
     rc, calls, _err = _run_deploy(tmp_path, '/h/x/htdocs/jwst-gc/monitor')
     assert rc == 0
-    assert 'rsync' in calls and '--copy-links' in calls and '--delete' in calls
+    assert 'rsync' in calls and '--copy-links' in calls
+
+
+def test_deploy_does_NOT_prune_the_destination(tmp_path):
+    """`--delete` was removed from deploy_monitor.sh by hand, deliberately --
+    the script says so -- but this assertion still demanded it, so `main` was
+    red and every branch's monitoring run inherited one failure that had
+    nothing to do with it.
+
+    Asserting its ABSENCE rather than deleting the assertion: the flag is the
+    difference between a sync and a prune of a shared web root, so a silent
+    re-add is worth catching.
+    """
+    _rc, calls, _err = _run_deploy(tmp_path, '/h/x/htdocs/jwst-gc/monitor')
+    assert '--delete' not in calls, calls
 
 
 def test_deploy_reports_a_missing_page_set_above_the_findings_code(tmp_path):
