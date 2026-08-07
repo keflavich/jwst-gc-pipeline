@@ -20,15 +20,21 @@ That is the exact inversion of what a release is for.  Measured 2026-08-05:
 Cloud C's published images predate the 2026-07-12 astrometry fix, so the page
 was showing ~4" errors as evidence that the astrometry is sound.
 
-The check is deliberately cheap and needs no FITS reading.  Two ways a staged
-copy goes stale, and the second is the larger:
+The check is deliberately cheap and needs no FITS reading.  Three signals, in
+order of how much they establish:
 
-* the source was RENAMED to a quarantine twin -- resolve ``src``, and if it is
-  gone with a twin in its place, the staged copy is superseded;
+* a quarantine TWIN newer than the release -- ``*_im0_badastrom.fits`` beside
+  the source, created after ``built``.  The staged copy predates a repudiation.
+  This is decisive whatever the size says, because a drizzled ``i2d``'s length
+  is fixed by the output grid: a re-drizzle after a mas-level correction writes
+  an IDENTICAL byte count, so the size comparison sees nothing.  39 staged
+  mosaics were reading ``live`` with such a twin unread beside them.
+* the source is GONE with a twin in its place -- the plain rename.
 * the source was REBUILT IN PLACE under the same name, which is a perfectly
-  good file.  Presence is not freshness.  The manifest records ``size_bytes``
-  for every entry, so one ``stat`` says whether the bytes on disk are still
-  the bytes that were staged.  52 of 115 live entries fail that comparison.
+  good file.  Presence is not freshness: the manifest records ``size_bytes``,
+  so one ``stat`` says whether the bytes on disk are still the staged ones.
+  With no twin newer than staging, that is all it is -- a re-run, and the page
+  says nothing about why.
 
 Nothing is deleted -- a superseded image stops being PUBLISHED, and the file
 stays where it is.
@@ -43,6 +49,7 @@ catch that; the registration gates and the m2 checkpoint are what look at
 pixels.  This module only answers "are the bytes on the page still the bytes
 that were signed off?".
 """
+import datetime
 import glob
 import json
 import os
@@ -56,8 +63,9 @@ QUARANTINE_GLOBS = (
 )
 
 LIVE = "live"
-#: The pipeline REPUDIATED the file: it renamed it to a quarantine twin.  This
-#: is the only state that says anything about astrometry.
+#: The pipeline REPUDIATED a product of this name: a quarantine twin exists,
+#: either in place of a vanished source or created after this release was
+#: staged.  This is the only state that says anything about astrometry.
 QUARANTINED = "quarantined"
 #: The source was rebuilt in place under the same name -- a re-run, a re-chunk,
 #: a new stage.  The staged bytes are simply older than the source's; nothing in
@@ -92,7 +100,7 @@ def is_superseded(state):
 SIZE_TOLERANCE_BYTES = 0
 
 
-def source_state(src, recorded_size=None):
+def source_state(src, recorded_size=None, staged_at=None):
     """``live`` / ``superseded`` / ``missing`` for one staged file's source.
 
     PRESENCE IS NOT FRESHNESS.  The first version of this resolved supersession
@@ -129,7 +137,20 @@ def source_state(src, recorded_size=None):
     # 6 of cloudc, i.e. exactly the fields whose staged copies predate the
     # 2026-07-12 astrometry fix.  Reporting those as "rebuilt, no claim made
     # about their astrometry" understates what is known about them.
+    twin = newest_quarantine_twin(src)
+    # A twin that was created AFTER this release was staged is the decisive
+    # signal, and it is decisive whatever the size says.  Drizzled `i2d` output
+    # length is fixed by the output grid, so a re-drizzle after a mas-level
+    # offsets correction writes a file of IDENTICAL byte length -- the size
+    # comparison sees nothing, and 39 staged mosaics whose sources were
+    # repudiated after staging were reading `live` with the twin unread beside
+    # them.  Verified by sha256 on a sample: recorded == staged, source !=
+    # recorded, sizes equal.
+    repudiated_since_staging = (twin is not None and staged_at is not None
+                                and twin > staged_at)
     if os.path.isfile(src):
+        if repudiated_since_staging:
+            return QUARANTINED
         if recorded_size is None:
             return LIVE
         try:
@@ -137,22 +158,37 @@ def source_state(src, recorded_size=None):
         except OSError:
             return LIVE          # unreadable size is not evidence of staleness
         if abs(now - int(recorded_size)) <= SIZE_TOLERANCE_BYTES:
-            # The staged bytes ARE the bytes on disk now.  A twin from an older
-            # quarantine does not condemn them: the field was corrected and
-            # re-staged, which is the outcome the quarantine was for.  Reading
-            # the twin alone here would withhold 65 correctly-staged images.
+            # Same bytes on disk as were staged, and no repudiation since.  A
+            # twin OLDER than staging does not condemn these: the field was
+            # corrected and re-staged, which is what the quarantine was for.
             return LIVE
-        # The staged copy differs from what is on disk.  WHY it differs is what
-        # the twin answers: a `*_im0_badastrom.fits` beside the source means a
-        # product of this name was repudiated, and the older staged bytes are
-        # the likely repudiated ones.  Testing `isfile` first and only looking
-        # for the twin when the source was GONE missed the commonest shape in
-        # the tree -- m2 quarantines a mosaic, the field is re-drizzled under
-        # the same name, and the twin stays beside it.  49 of 54 rebuilt
-        # entries are that, including all 23 of brick v1.0 and all 6 of cloudc,
-        # every one reported as "rebuilt, no claim made about the astrometry".
-        return QUARANTINED if has_quarantine_twin(src) else REBUILT
-    return QUARANTINED if has_quarantine_twin(src) else MISSING
+        # The staged copy differs from disk and there is a twin, but the twin
+        # predates staging -- so it belongs to a repudiation this staged copy
+        # already came after.  Calling that a quarantine would put "the m2
+        # checkpoint repudiated this" on a page for what is a plain re-run, the
+        # same false cause the two-state split was introduced to remove.
+        return REBUILT
+    return QUARANTINED if twin is not None else MISSING
+
+
+def newest_quarantine_twin(src):
+    """mtime of the newest ``*_im0_badastrom.fits``-style twin, or ``None``.
+
+    The TIME matters, not just existence: a twin older than the release says a
+    repudiation was corrected before staging, a twin newer says the staged copy
+    predates one.
+    """
+    if not src:
+        return None
+    stem = src[:-5] if src.endswith(".fits") else src
+    times = []
+    for pattern in QUARANTINE_GLOBS:
+        for path in glob.glob(pattern.format(stem=stem, src=src)):
+            try:
+                times.append(os.path.getmtime(path))
+            except OSError:
+                times.append(float("inf"))   # present but unreadable: assume recent
+    return max(times) if times else None
 
 
 def has_quarantine_twin(src):
@@ -170,14 +206,28 @@ def has_quarantine_twin(src):
                for pattern in QUARANTINE_GLOBS)
 
 
+def _staged_at(manifest):
+    """When this release was built, as epoch seconds, or ``None``."""
+    built = (manifest or {}).get("built")
+    if not built:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(
+            str(built).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
 def audit_manifest(manifest, categories=("image",)):
     """``{dest: state}`` for every staged file of the given categories."""
     out = {}
+    staged_at = _staged_at(manifest)
     for entry in manifest.get("files", []):
         if categories and entry.get("category") not in categories:
             continue
         out[entry.get("dest")] = source_state(entry.get("src"),
-                                              entry.get("size_bytes"))
+                                              entry.get("size_bytes"),
+                                              staged_at=staged_at)
     return out
 
 
@@ -234,7 +284,7 @@ def describe(field, field_dir):
     rebuilt = [d for d in superseded if states.get(d) == REBUILT]
     if quarantined:
         parts.append(f"{len(quarantined)} QUARANTINED "
-                     f"(source renamed as bad-astrometry since staging)")
+                     f"(a bad-astrometry twin exists for the source)")
     if rebuilt:
         parts.append(f"{len(rebuilt)} REBUILT "
                      f"(source rebuilt in place; these are the older bytes)")

@@ -980,33 +980,68 @@ def test_there_is_no_single_SUPERSEDED_name_to_compare_against():
     assert not rf.is_superseded(rf.LIVE) and not rf.is_superseded(rf.MISSING)
 
 
-def test_a_quarantine_that_was_later_re_drizzled_is_still_a_quarantine(tmp_path):
-    """The commonest shape in the tree, and the one `isfile`-first got wrong:
-    m2 quarantines a mosaic, the field is corrected and RE-DRIZZLED under the
-    same name, and the `*_im0_badastrom.fits` twin stays in the directory.  The
-    source exists again, so a presence-first test calls it `rebuilt` -- while
-    the twin is the only on-disk evidence that the bytes staged before the
-    correction are the repudiated ones.
+def test_a_quarantine_after_staging_condemns_the_staged_copy(tmp_path):
+    """The decisive signal is the twin's TIME, not the size.
 
-    49 of the 54 rebuilt entries in the release tree are this, including all 23
-    of brick v1.0 and all 6 of cloudc."""
+    A drizzled `i2d`'s byte length is fixed by the output grid, so a re-drizzle
+    after a mas-level offsets correction writes a file of IDENTICAL length --
+    the size comparison sees nothing.  39 staged mosaics whose sources were
+    repudiated after staging read `live` with the twin sitting unread beside
+    them (sha256-checked on a sample: recorded == staged, source != recorded,
+    sizes equal).  brick v1.0 was staged 2026-07-07 and its twins are dated
+    2026-07-08 and 2026-07-12.
+    """
+    import os as _os
     rf = _rf_fresh()
+    staged_at = 1_000_000.0
     src = tmp_path / 'jw01182-o001_t001_nircam_f200w-merged_i2d.fits'
-    src.write_bytes(b'\0' * 200)                       # re-drizzled, present
-    (tmp_path / 'jw01182-o001_t001_nircam_f200w-merged_i2d_im0_badastrom.fits'
-     ).write_bytes(b'\0' * 100)                        # the repudiated twin
-    assert rf.has_quarantine_twin(str(src))
-    assert rf.source_state(str(src), recorded_size=100) == rf.QUARANTINED, \
-        'a re-drizzled quarantine was reported as a plain rebuild'
-    # ... but a staged copy whose bytes ARE the current bytes is LIVE: the
-    # field was corrected and re-staged, which is what the quarantine was for.
-    # Condemning it on the twin alone withholds 65 correctly-staged images.
-    assert rf.source_state(str(src), recorded_size=200) == rf.LIVE
-    # and a genuine rebuild with no twin is still REBUILT
-    plain = tmp_path / 'jw01182-o001_t001_nircam_f356w-merged_i2d.fits'
-    plain.write_bytes(b'\0' * 200)
-    assert not rf.has_quarantine_twin(str(plain))
-    assert rf.source_state(str(plain), recorded_size=100) == rf.REBUILT
+    twin = tmp_path / 'jw01182-o001_t001_nircam_f200w-merged_i2d_im0_badastrom.fits'
+    src.write_bytes(b'\0' * 200)
+    twin.write_bytes(b'\0' * 200)
+
+    # twin created AFTER the release was staged -> the staged copy predates a
+    # repudiation, even though the size still matches exactly
+    _os.utime(twin, (staged_at + 500, staged_at + 500))
+    assert rf.newest_quarantine_twin(str(src)) == staged_at + 500
+    assert rf.source_state(str(src), recorded_size=200,
+                           staged_at=staged_at) == rf.QUARANTINED, \
+        'a same-size re-drizzle after a quarantine was published as live'
+
+    # twin OLDER than staging: the field was corrected and re-staged, which is
+    # what the quarantine existed to produce
+    _os.utime(twin, (staged_at - 500, staged_at - 500))
+    assert rf.source_state(str(src), recorded_size=200,
+                           staged_at=staged_at) == rf.LIVE
+    # ... and if the source has since changed, that is a plain rebuild, NOT an
+    # astrometry repudiation -- the page must not name a cause it cannot see
+    assert rf.source_state(str(src), recorded_size=100,
+                           staged_at=staged_at) == rf.REBUILT
+
+    # a missing source with a twin is quarantined whatever the times say
+    src.unlink()
+    assert rf.source_state(str(src), recorded_size=200,
+                           staged_at=staged_at) == rf.QUARANTINED
+
+
+def test_audit_manifest_reads_the_release_build_time(tmp_path):
+    """`source_state` cannot compare against staging time unless the caller
+    passes it, and only `audit_manifest` knows it."""
+    import os as _os
+    rf = _rf_fresh()
+    src = tmp_path / 'a_i2d.fits'
+    twin = tmp_path / 'a_i2d_im0_badastrom.fits'
+    src.write_bytes(b'\0' * 64)
+    twin.write_bytes(b'\0' * 64)
+    built = '2026-07-07T00:00:00Z'
+    after = rf._staged_at({'built': built}) + 86400
+    _os.utime(twin, (after, after))
+    manifest = {'built': built, 'files': [
+        {'category': 'image', 'dest': 'd', 'src': str(src), 'size_bytes': 64}]}
+    assert rf.audit_manifest(manifest) == {'d': rf.QUARANTINED}
+    # with no build time recorded the comparison is impossible, and an
+    # unusable timestamp must not be read as a repudiation
+    assert rf.audit_manifest({'files': manifest['files']}) == {'d': rf.LIVE}
+    assert rf._staged_at({'built': 'not-a-date'}) is None
 
 
 def test_a_rebuild_in_place_is_not_reported_as_a_quarantine(tmp_path):
