@@ -24,8 +24,9 @@ def _marker_dir(tmp_path):
     return d
 
 
-def _marker_name(frame, filt, module, phase, kind='ok'):
-    return f'{frame}.{filt.lower()}.{module}.{phase}.{kind}'
+def _marker_name(frame, filt, detector, phase, kind='ok', merge=None):
+    tail = detector if merge is None else f'{merge}-{detector}'
+    return f'{frame}.{filt.lower()}.{tail}.{phase}.{kind}'
 
 
 #: The shape the live sgrb2 tree carries (1440 of these on 2026-08-07).
@@ -33,8 +34,8 @@ FRAMES = [f'jw05365001001_03101_0000{i}_nrca{d}_destreak_o001_crf.fits'
           for i in (1, 2) for d in (1, 2)]
 
 
-def _select(frame_args, marker_dir, filt, phase, resume):
-    """The resume filter as `run_manual_pipeline` applies it."""
+def _select(frame_args, marker_dir, filt, phase, resume, merge='nrca'):
+    """The resume filter as `run_manual_pipeline` applies it: MERGE-SCOPED."""
     if not resume:
         return list(frame_args), [], []
     todo, done, nooverlap = [], [], []
@@ -42,10 +43,10 @@ def _select(frame_args, marker_dir, filt, phase, resume):
         fn = a['filename']
         det = fn.split('_')[3]
         if os.path.exists(os.path.join(
-                marker_dir, _marker_name(fn, filt, det, phase, 'ok'))):
+                marker_dir, _marker_name(fn, filt, det, phase, 'ok', merge))):
             done.append(fn)
         elif os.path.exists(os.path.join(
-                marker_dir, _marker_name(fn, filt, det, phase, 'nooverlap'))):
+                marker_dir, _marker_name(fn, filt, det, phase, 'nooverlap', merge))):
             nooverlap.append(fn)
         else:
             todo.append(a)
@@ -57,7 +58,7 @@ def test_marked_frames_are_not_refitted(tmp_path):
     d = _marker_dir(tmp_path)
     args = [{'filename': f} for f in FRAMES]
     for f in FRAMES[:3]:
-        (d / _marker_name(f, 'f212n', f.split('_')[3], 'm12')).touch()
+        (d / _marker_name(f, 'f212n', f.split('_')[3], 'm12', merge='nrca')).touch()
     todo, done, _ = _select(args, str(d), 'f212n', 'm12', resume=True)
     assert len(done) == 3
     assert [a['filename'] for a in todo] == [FRAMES[3]]
@@ -70,7 +71,7 @@ def test_resumed_frames_still_count_as_present(tmp_path):
     d = _marker_dir(tmp_path)
     args = [{'filename': f} for f in FRAMES]
     for f in FRAMES:
-        (d / _marker_name(f, 'f212n', f.split('_')[3], 'm12')).touch()
+        (d / _marker_name(f, 'f212n', f.split('_')[3], 'm12', merge='nrca')).touch()
     todo, done, _ = _select(args, str(d), 'f212n', 'm12', resume=True)
     assert todo == []
     assert set(done) == set(FRAMES)
@@ -81,7 +82,7 @@ def test_a_nooverlap_marker_is_also_a_resume(tmp_path):
     d = _marker_dir(tmp_path)
     args = [{'filename': f} for f in FRAMES]
     (d / _marker_name(FRAMES[0], 'f212n', FRAMES[0].split('_')[3], 'm12',
-                      'nooverlap')).touch()
+                      'nooverlap', merge='nrca')).touch()
     todo, done, nov = _select(args, str(d), 'f212n', 'm12', resume=True)
     assert nov == [FRAMES[0]] and done == []
     assert len(todo) == 3
@@ -93,7 +94,7 @@ def test_without_the_flag_nothing_is_skipped(tmp_path):
     d = _marker_dir(tmp_path)
     args = [{'filename': f} for f in FRAMES]
     for f in FRAMES:
-        (d / _marker_name(f, 'f212n', f.split('_')[3], 'm12')).touch()
+        (d / _marker_name(f, 'f212n', f.split('_')[3], 'm12', merge='nrca')).touch()
     todo, done, _ = _select(args, str(d), 'f212n', 'm12', resume=False)
     assert len(todo) == len(FRAMES) and done == []
 
@@ -103,7 +104,7 @@ def test_a_marker_for_a_DIFFERENT_phase_does_not_resume(tmp_path):
     d = _marker_dir(tmp_path)
     args = [{'filename': f} for f in FRAMES]
     for f in FRAMES:
-        (d / _marker_name(f, 'f212n', f.split('_')[3], 'm12')).touch()
+        (d / _marker_name(f, 'f212n', f.split('_')[3], 'm12', merge='nrca')).touch()
     todo, done, _ = _select(args, str(d), 'f212n', 'm3', resume=True)
     assert len(todo) == len(FRAMES) and done == []
 
@@ -112,7 +113,7 @@ def test_a_marker_for_a_DIFFERENT_filter_does_not_resume(tmp_path):
     d = _marker_dir(tmp_path)
     args = [{'filename': f} for f in FRAMES]
     for f in FRAMES:
-        (d / _marker_name(f, 'f212n', f.split('_')[3], 'm12')).touch()
+        (d / _marker_name(f, 'f212n', f.split('_')[3], 'm12', merge='nrca')).touch()
     todo, done, _ = _select(args, str(d), 'f480m', 'm12', resume=True)
     assert len(todo) == len(FRAMES) and done == []
 
@@ -123,16 +124,49 @@ def test_the_marker_is_keyed_by_DETECTOR_not_module(tmp_path):
     d = _marker_dir(tmp_path)
     args = [{'filename': f} for f in FRAMES]
     # one marker written under the MODULE name rather than the detector
-    (d / _marker_name(FRAMES[0], 'f212n', 'merged', 'm12')).touch()
+    (d / _marker_name(FRAMES[0], 'f212n', 'merged', 'm12', merge='nrca')).touch()
     todo, done, _ = _select(args, str(d), 'f212n', 'm12', resume=True)
     assert done == [], 'a module-keyed marker must not satisfy a detector key'
     assert len(todo) == len(FRAMES)
 
 
-def test_the_live_sgrb2_marker_name_is_the_one_we_look_for():
-    """Pin the on-disk shape, so a rename of the marker breaks this and not a
-    silent resume-nothing. Taken verbatim from the live tree."""
+def test_the_legacy_unscoped_name_is_still_expressible():
+    """The completeness check keeps reading pre-existing markers, so the
+    unscoped form must still be constructible. Verbatim from the live tree."""
     live = ('jw05365001001_03101_00001_nrca1_destreak_o001_crf.fits'
             '.f212n.nrca1.m12.ok')
     frame = 'jw05365001001_03101_00001_nrca1_destreak_o001_crf.fits'
     assert _marker_name(frame, 'f212n', frame.split('_')[3], 'm12') == live
+
+
+def test_the_merged_pass_does_not_resume_on_a_PER_MODULE_marker():
+    """THE defect this scoping exists for.  `merged` fits the SAME files as
+    nrca/nrcb with the same detector token, so a detector-keyed marker was
+    written three times under one name -- 1440 on the live sgrb2 tree,
+    saturated at 10 detectors x 144 and NOT growing while the merged pass ran.
+    Resuming on that would skip every merged frame whose nrca pass finished and
+    silently produce no merged catalog."""
+    import tempfile
+    d = tempfile.mkdtemp()
+    args = [{'filename': f} for f in FRAMES]
+    for f in FRAMES:
+        (open(os.path.join(d, _marker_name(f, 'f212n', f.split('_')[3], 'm12',
+                                           merge='nrca')), 'w').close())
+    todo, done, _ = _select(args, d, 'f212n', 'm12', resume=True, merge='merged')
+    assert done == [], 'a per-module marker must not resume the merged pass'
+    assert len(todo) == len(FRAMES)
+
+
+def test_an_UNSCOPED_legacy_marker_does_not_resume_either():
+    """A marker with no merge label cannot say which pass wrote it.  The
+    completeness check still honours those; the RESUME deliberately does not --
+    re-fitting is cheap, a silently absent merged catalog is not."""
+    import tempfile
+    d = tempfile.mkdtemp()
+    args = [{'filename': f} for f in FRAMES]
+    for f in FRAMES:
+        open(os.path.join(d, _marker_name(f, 'f212n', f.split('_')[3], 'm12')),
+             'w').close()
+    todo, done, _ = _select(args, d, 'f212n', 'm12', resume=True, merge='nrca')
+    assert done == []
+    assert len(todo) == len(FRAMES)

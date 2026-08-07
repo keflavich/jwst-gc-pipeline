@@ -4416,11 +4416,26 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
     if skip_finalize or finalize_only:
         os.makedirs(_marker_dir, exist_ok=True)
 
-    def _marker_path(filename, module, filt, phase, kind='ok'):
+    def _marker_path(filename, detector, filt, phase, kind='ok', merge=None):
         # kind: 'ok' (fit produced output) or 'nooverlap' (legit cutout miss).
+        #
+        # `merge` is the MERGE LABEL (nrca / nrcb / merged) and is part of the
+        # key because a frame is fitted once per label: the `merged` pass runs
+        # over the SAME files as the per-module passes, with the same detector
+        # token.  Keyed on detector alone, all three passes wrote one name --
+        # 1440 markers on the live sgrb2 tree, saturated at 10 detectors x 144
+        # and not growing while the merged pass ran, because it was overwriting
+        # rather than adding.  Harmless while markers were only a completeness
+        # receipt; NOT harmless once --skip-if-done resumes from them, where it
+        # would skip every merged frame whose nrca/nrcb pass had finished and
+        # silently produce no merged output.
+        #
+        # `merge=None` keeps the pre-existing name, so markers already on disk
+        # still satisfy a finalize started before this change.
+        tail = f'{detector}' if merge is None else f'{merge}-{detector}'
         return os.path.join(
             _marker_dir,
-            f'{os.path.basename(filename)}.{filt.lower()}.{module}.{phase}.{kind}')
+            f'{os.path.basename(filename)}.{filt.lower()}.{tail}.{phase}.{kind}')
 
     orig_last_phase = phases[-1]
 
@@ -4895,9 +4910,15 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     _missing_marker = []
                     for fn in all_frames:
                         _det = fn.split('_')[3]   # per-frame products keyed by detector
-                        if os.path.exists(_marker_path(fn, _det, filt, phase, 'ok')):
+                        if (os.path.exists(_marker_path(fn, _det, filt, phase, 'ok',
+                                                        merge=module))
+                                or os.path.exists(
+                                    _marker_path(fn, _det, filt, phase, 'ok'))):
                             overlapping_now.append(fn)
-                        elif os.path.exists(_marker_path(fn, _det, filt, phase, 'nooverlap')):
+                        elif (os.path.exists(_marker_path(fn, _det, filt, phase,
+                                                          'nooverlap', merge=module))
+                              or os.path.exists(
+                                  _marker_path(fn, _det, filt, phase, 'nooverlap'))):
                             no_overlap.append((fn, 'no-overlap (marker)'))
                         else:
                             _missing_marker.append(fn)
@@ -4938,11 +4959,18 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         for a in frame_args:
                             _fn = a['filename']
                             _det = _fn.split('_')[3]
-                            if os.path.exists(_marker_path(_fn, _det, filt, phase, 'ok')):
+                            # merge-scoped ONLY, deliberately without the
+                            # legacy fallback the completeness check keeps: an
+                            # unscoped marker cannot say WHICH pass wrote it, and
+                            # resuming on one would skip a merged frame that was
+                            # never fitted.  Re-fitting a frame is cheap; a
+                            # silently absent merged catalog is not.
+                            if os.path.exists(_marker_path(_fn, _det, filt, phase,
+                                                           'ok', merge=module)):
                                 overlapping_now.append(_fn)
                                 _resumed += 1
-                            elif os.path.exists(_marker_path(_fn, _det, filt,
-                                                             phase, 'nooverlap')):
+                            elif os.path.exists(_marker_path(_fn, _det, filt, phase,
+                                                             'nooverlap', merge=module)):
                                 no_overlap.append((_fn, 'no-overlap (marker)'))
                                 _resumed += 1
                             else:
@@ -4958,12 +4986,14 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                             overlapping_now.append(filename)
                             if skip_finalize or finalize_only:
                                 open(_marker_path(filename, filename.split('_')[3],
-                                                  filt, phase, 'ok'), 'w').close()
+                                                  filt, phase, 'ok',
+                                                  merge=module), 'w').close()
                         elif err and err.startswith('no-overlap'):
                             no_overlap.append((filename, err))
                             if skip_finalize or finalize_only:
                                 open(_marker_path(filename, filename.split('_')[3],
-                                                  filt, phase, 'nooverlap'), 'w').close()
+                                                  filt, phase, 'nooverlap',
+                                                  merge=module), 'w').close()
                         else:
                             failures.append((filename, err))
 
