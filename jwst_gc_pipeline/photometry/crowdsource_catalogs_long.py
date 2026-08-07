@@ -1,5 +1,6 @@
 print("Starting crowdsource_catalogs_long", flush=True)
 import sys
+import copy
 import tracemalloc
 import resource
 import glob
@@ -1101,45 +1102,64 @@ def _predict_tblfilename(basepath, filtername, module, options,
 #: file, labelled with the phase itself (cataloging.py:2312).
 _MANUAL_PHASE_LAST_LABEL = {'m12': 'm2'}
 
+#: Phases whose fit subtracts the residual background, so their filenames carry
+#: `_resbgsub`.  PHASE-derived, not option-derived: cataloging.py:4601 computes
+#: it per phase onto a per-phase COPY of the options
+#: (`opts_phase.use_iter3_residual_bg`), which the launcher never sets on the
+#: top-level options the predictor sees.  Reading `options` here mispredicted
+#: m5/m6/m7 -- three of the six phases.
+_RESBGSUB_PHASES = ('m5', 'm6', 'm7')
 
-def _manual_sentinel_label(options):
-    """The ``iteration_label`` the manual per-frame path will LAST write, or
-    ``None`` when this run is not on that path.
 
-    ``--manual-stop-after-phase`` is the unit the per-frame SLURM fan-out
-    schedules, so it names the sentinel.  Falling back to
-    ``--manual-start-phase`` covers a run that starts partway and goes to the
-    end; there is no single per-frame output for that, so it is deliberately
-    NOT treated as a per-frame sentinel unless a stop phase bounds it.
-    """
-    phase = (getattr(options, 'manual_stop_after_phase', '') or '').strip()
+def _manual_sentinel_label(phase):
+    """The ``iteration_label`` the manual per-frame path LAST writes for
+    ``phase``, or ``None`` when there is no manual phase."""
+    phase = (phase or '').strip()
     if not phase:
         return None
     return _MANUAL_PHASE_LAST_LABEL.get(phase, phase)
 
 
+def _manual_phase_of(options):
+    """The per-frame phase this invocation runs, or ``''``.
+
+    ``--manual-stop-after-phase`` is the unit the per-frame SLURM fan-out
+    schedules, so it names the sentinel.
+    """
+    return (getattr(options, 'manual_stop_after_phase', '') or '').strip()
+
+
 def _expected_output_exists(basepath, filtername, module, options,
                             visit_id, vgroup_id, exposure_id,
-                            iteration_label=None):
+                            iteration_label=None, manual_phase=None):
     """Main output sentinel for --skip-if-done / --list-missing-tasks.
 
     daophot-iterative is the final step when --daophot is set (or basic when
     --basic-only); crowdsource nsky0 is the final step otherwise.
 
-    The MANUAL per-frame path (``--manual-stop-after-phase``) overrides both.
-    It writes ``_daophot_basic`` unconditionally -- ``_save_manual_pass``
-    (cataloging.py:2062) hardcodes ``basic_or_iterative='basic'`` and never
-    consults ``--daophot`` -- and it labels the file with the manual phase.
-    Predicting the ``--daophot``-derived name instead meant the prediction was
-    wrong in the method token AND missing the phase, so it never matched: the
-    sgrb2 m12 fan-out reported all 96 tasks missing with all 96 on disk (#333),
-    and an ``afterok`` fan-out that hits its wall clock redoes everything.
+    ``manual_phase`` selects the MANUAL per-frame path.  It is an explicit
+    ARGUMENT rather than something sniffed off ``options`` on purpose: the
+    legacy cutout loop copies the options wholesale
+    (``legacy/crowdsource_step.py:426``), so a run carrying
+    ``--manual-stop-after-phase`` would otherwise have its own per-phase
+    ``iteration_label`` (None/iter2/iter3/iter4) overwritten by the manual one
+    and report three of its four phases already done -- a FALSE skip, which is
+    far worse than the missed skip this fixes.
+
+    On that path the writer emits ``_daophot_basic`` unconditionally
+    (``_save_manual_pass``, cataloging.py:2062, never reads ``--daophot``),
+    labels the file with the phase (m12 -> the m2 pass), and derives
+    ``_resbgsub`` from the PHASE (cataloging.py:4601).
     """
-    manual_label = _manual_sentinel_label(options)
+    manual_label = _manual_sentinel_label(manual_phase)
     if manual_label is not None:
         method = 'daophot'
         basic_or_iterative = 'basic'
         iteration_label = manual_label
+        want_resbg = manual_phase in _RESBGSUB_PHASES
+        if bool(getattr(options, 'use_iter3_residual_bg', False)) != want_resbg:
+            options = copy.copy(options)
+            options.use_iter3_residual_bg = want_resbg
     elif options.daophot:
         method = 'daophot'
         basic_or_iterative = 'basic' if options.basic_only else 'iterative'
@@ -4746,11 +4766,23 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                             # Match the per-file detector token convention
                             # used by the main each-exposure loop above.
                             file_detector = filename.split("_")[3]
-                            file_module = file_detector if module == 'merged' else module
+                            # The MANUAL per-frame writer names by DETECTOR
+                            # unconditionally (cataloging.py:4848) -- module is
+                            # only the merge label.  `module == 'merged'` is not
+                            # the only case where they differ, it is the case
+                            # where they coincidentally agree: the live sgrb2
+                            # fan-out runs `--modules=nrca`, so this predicted
+                            # `f150w_nrca_...` against a written
+                            # `f150w_nrca1_...` and matched nothing (#333).
+                            _phase = _manual_phase_of(options)
+                            file_module = (file_detector
+                                           if (_phase or module == 'merged')
+                                           else module)
                             if not _expected_output_exists(
                                     basepath, filtername, file_module, options,
                                     visit_id, vgroup_id, exposure_id,
-                                    iteration_label=options.iteration_label or None):
+                                    iteration_label=options.iteration_label or None,
+                                    manual_phase=_phase):
                                 missing_tasks.add(task_idx)
         finally:
             sys.stdout = _real_stdout
