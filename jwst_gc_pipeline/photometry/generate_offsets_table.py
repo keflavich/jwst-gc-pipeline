@@ -48,7 +48,7 @@ def main():
     rows = []
     for fn in frames:
         t = Table.read(fn)
-        mr = re.search(r'(nrc[ab]\d)_visit(\d+)_vgroup\d+_exp(\d+)', fn)
+        mr = re.search(r'(nrc[ab](?:\d|long))(?:_(?:o\d{3}|j\d{4,5}))?_visit(\d+)_vgroup\d+_exp(\d+)', fn)
         mod, vis, exp = mr.group(1), int(mr.group(2)), int(mr.group(3))
         key = (mod, vis, exp)
         if key not in corr:
@@ -92,7 +92,7 @@ def main():
     sample = frames[::40]
     for fn in sample:
         t = Table.read(fn)
-        mr = re.search(r'(nrc[ab]\d)_visit(\d+)_vgroup\d+_exp(\d+)', fn)
+        mr = re.search(r'(nrc[ab](?:\d|long))(?:_(?:o\d{3}|j\d{4,5}))?_visit(\d+)_vgroup\d+_exp(\d+)', fn)
         mod, vis, exp = mr.group(1), int(mr.group(2)), int(mr.group(3))
         sc_before = SkyCoord(t['skycoord_centroid']).icrs
         b = voff(sc_before)

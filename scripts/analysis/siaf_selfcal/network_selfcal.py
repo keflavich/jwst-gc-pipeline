@@ -29,7 +29,7 @@ tag = args[args.index('--out')+1] if '--out' in args else '_'.join(bands)
 cats = {}   # (band, det, visit, exp) -> dict(ra, dec, n)
 for band, stage in spec:
     for f in sorted(glob.glob(f'{B}/{band.upper()}/{band}_nrc*_visit*_vgroup*_exp*_{stage}_daophot_basic.fits')):
-        m = re.search(rf'{band}_(nrc[ab](?:[0-9]|long))_visit(\d+)_vgroup\d+_exp(\d+)_', os.path.basename(f))
+        m = re.search(rf'{band}_(nrc[ab](?:[0-9]|long))(?:_(?:o\d{3}|j\d{4,5}))?_visit(\d+)_vgroup\d+_exp(\d+)_', os.path.basename(f))
         if not m: continue
         det, visit, exp = m.group(1), m.group(2), m.group(3)
         t = Table.read(f)

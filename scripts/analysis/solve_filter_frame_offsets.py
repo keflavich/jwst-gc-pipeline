@@ -152,7 +152,7 @@ def run(field, band, anchor_band, stage, max_exp):
     rolls = []
     seen = set()
     for p in sorted(glob.glob(pat)):
-        m = re.search(rf"{band}_(nrc[ab](?:[0-9]|long))_visit(\d+)_vgroup(\w+)_exp(\d+)_",
+        m = re.search(rf"{band}_(nrc[ab](?:[0-9]|long))(?:_(?:o\d{3}|j\d{4,5}))?_visit(\d+)_vgroup(\w+)_exp(\d+)_",
                       os.path.basename(p))
         if not m:
             continue

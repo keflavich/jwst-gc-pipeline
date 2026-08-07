@@ -13,7 +13,10 @@ dra, dde = sol['det_ra'], sol['det_de']
 cen = {}
 for band, det in detkeys:
     stage = 'm1' if band in ('f200w', 'f115w') else 'resbgsub_m7'
-    g = sorted(glob.glob(f'{B}/{band.upper()}/{band}_{det}_visit*_vgroup*_exp*_{stage}_daophot_basic.fits'))
+    # `{det}*_visit` -- not `{det}_visit`: obs_token puts `_o023`/`_j6778`
+    # between the detector and the visit, and the strict form globbed 24 of
+    # gc2211's 68 nrca1 F200W frames without saying so.
+    g = sorted(glob.glob(f'{B}/{band.upper()}/{band}_{det}*_visit*_vgroup*_exp*_{stage}_daophot_basic.fits'))
     t = Table.read(g[0])
     sc = SkyCoord(t['skycoord_centroid'])
     cen[(band, det)] = (np.median(sc.ra.deg), np.median(sc.dec.deg))
