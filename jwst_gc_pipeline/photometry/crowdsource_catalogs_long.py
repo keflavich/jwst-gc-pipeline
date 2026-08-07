@@ -1095,6 +1095,29 @@ def _predict_tblfilename(basepath, filtername, module, options,
             f'_crowdsource_{basic_or_iterative}.fits')
 
 
+#: ``--manual-stop-after-phase=m12`` runs BOTH m1 and m2 and writes a file for
+#: each (cataloging.py:2271 and :2291).  The last one written is the sentinel;
+#: an m12 job that died between them is not done.  Every other phase writes one
+#: file, labelled with the phase itself (cataloging.py:2312).
+_MANUAL_PHASE_LAST_LABEL = {'m12': 'm2'}
+
+
+def _manual_sentinel_label(options):
+    """The ``iteration_label`` the manual per-frame path will LAST write, or
+    ``None`` when this run is not on that path.
+
+    ``--manual-stop-after-phase`` is the unit the per-frame SLURM fan-out
+    schedules, so it names the sentinel.  Falling back to
+    ``--manual-start-phase`` covers a run that starts partway and goes to the
+    end; there is no single per-frame output for that, so it is deliberately
+    NOT treated as a per-frame sentinel unless a stop phase bounds it.
+    """
+    phase = (getattr(options, 'manual_stop_after_phase', '') or '').strip()
+    if not phase:
+        return None
+    return _MANUAL_PHASE_LAST_LABEL.get(phase, phase)
+
+
 def _expected_output_exists(basepath, filtername, module, options,
                             visit_id, vgroup_id, exposure_id,
                             iteration_label=None):
@@ -1102,8 +1125,22 @@ def _expected_output_exists(basepath, filtername, module, options,
 
     daophot-iterative is the final step when --daophot is set (or basic when
     --basic-only); crowdsource nsky0 is the final step otherwise.
+
+    The MANUAL per-frame path (``--manual-stop-after-phase``) overrides both.
+    It writes ``_daophot_basic`` unconditionally -- ``_save_manual_pass``
+    (cataloging.py:2062) hardcodes ``basic_or_iterative='basic'`` and never
+    consults ``--daophot`` -- and it labels the file with the manual phase.
+    Predicting the ``--daophot``-derived name instead meant the prediction was
+    wrong in the method token AND missing the phase, so it never matched: the
+    sgrb2 m12 fan-out reported all 96 tasks missing with all 96 on disk (#333),
+    and an ``afterok`` fan-out that hits its wall clock redoes everything.
     """
-    if options.daophot:
+    manual_label = _manual_sentinel_label(options)
+    if manual_label is not None:
+        method = 'daophot'
+        basic_or_iterative = 'basic'
+        iteration_label = manual_label
+    elif options.daophot:
         method = 'daophot'
         basic_or_iterative = 'basic' if options.basic_only else 'iterative'
     else:
