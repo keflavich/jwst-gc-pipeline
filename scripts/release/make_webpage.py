@@ -229,7 +229,8 @@ def web_jpeg(src, dest, max_px=2200):
 
 def render_field_page(field, manifest, preview_rel, preview_channels=None,
                       all_versions=None, preview_version=None, previews=(),
-                      superseded=(), reasons=None, curated=()):
+                      superseded=(), reasons=None, curated=(),
+                      preview_from_curated=False):
     # A staged image whose SOURCE has since been quarantined as bad-astrometry
     # must not be presented as this field's astrometry. It is withheld from the
     # page, and the withholding is stated -- the point of the release is to be
@@ -357,7 +358,18 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                        f"</figure>")
         out.append("</div>")
 
-    if preview_rel:
+    # `assets/<field>.jpg` is a BYTE COPY of the first curated JPEG when there
+    # is one -- but `preview_channels`, `_preview_caption` and
+    # `preview_version` are all computed from `previews[0]`, i.e. from a
+    # generated preview that may not even be on the page.  So the hand-made
+    # render was emitted a SECOND time, under a heading saying it was
+    # automatically generated and a caption naming bands it does not contain:
+    # cloudc showed "R=F212N, G=F187N, B=F182M" over an F466N/F405N image (and
+    # those three bands were withheld), and gc2211 claimed "Rendered from the
+    # v1.0-2026.06 mosaics" about a PNG from neither release.  It is already
+    # shown, correctly captioned, in the curated block above; showing it again
+    # under someone else's provenance is worse than not showing it.
+    if preview_rel and not preview_from_curated:
         # Attribute the preview's version whenever it is not this page's. The
         # fallback exists so a re-stage does not blank the card, but "the same
         # mosaics under a new version" is not always true: cloudc, sgrc and wd1
@@ -803,11 +815,15 @@ def main(argv=None):
                   f"{os.path.basename(gone)}")
 
         preview_items = []
+        preview_from_curated = False
         if curated_items:
             # the front page shows the beautified image, not a generated one
             shutil.copy2(assets / os.path.basename(curated_items[0][0]),
                          assets / f"{field}.jpg")
             preview_rel = f"assets/{field}.jpg"
+            # ... and the FIELD page must not then render it a second time
+            # under the generated preview's caption and provenance.
+            preview_from_curated = True
         if previews:
             if not curated_items:
                 shutil.copy2(previews[0], assets / f"{field}.jpg")
@@ -853,6 +869,7 @@ def main(argv=None):
                                      superseded=stale_files,
                                      reasons=stale_reasons,
                                      curated=curated_items,
+                                     preview_from_curated=preview_from_curated,
                                      all_versions=versions,
                                      preview_version=preview_version,
                                      previews=preview_items)

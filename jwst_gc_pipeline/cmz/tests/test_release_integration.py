@@ -1287,3 +1287,64 @@ def test_a_curated_render_with_no_provenance_fails_rather_than_falls_through():
     # the fall-through is a `continue`, i.e. the entry is dropped
     tail = body.split('cannot tie it to a live mosaic')[1][:200]
     assert 'continue' in tail, tail
+
+
+def _min_manifest():
+    return {"version": "v1.1-2026.07", "built": "2026-07-11T22:57:00Z",
+            "group": None, "files": [],
+            "globus_https_base": "https://example.invalid",
+            "globus_collection_id": "0", "release_path": "/r"}
+
+
+def test_the_curated_render_is_not_emitted_twice_under_a_generated_caption():
+    """`assets/<field>.jpg` is a byte copy of the first curated JPEG, but
+    `preview_channels` / `_preview_caption` / `preview_version` are computed
+    from `previews[0]` -- a generated preview that may not even be on the page.
+    So the hand-made render was emitted a SECOND time under a heading saying it
+    was automatically generated, with a caption naming bands it does not
+    contain (cloudc: "R=F212N, G=F187N, B=F182M" over an F466N/F405N image,
+    all three of those bands withheld) and, on gc2211, a provenance claim about
+    a release the PNG came from neither of.
+    """
+    mw = _make_webpage()
+    page = mw.render_field_page(
+        "cloudc", _min_manifest(), "assets/cloudc.jpg",
+        preview_channels=["F212N", "F187N", "F182M"],
+        preview_version="v1.0-2026.06",
+        curated=[("assets/curated_x.jpg", "R=F466N, B=F405N")],
+        preview_from_curated=True)
+    # shown once, in the curated block, with its own caption
+    assert page.count("assets/curated_x.jpg") == 1, page.count("assets/curated_x.jpg")
+    assert "assets/cloudc.jpg" not in page
+    # and none of the generated-preview furniture is attached to it
+    assert "R=F212N" not in page
+    assert "Rendered from the v1.0-2026.06 mosaics" not in page
+    assert "Automatically generated previews" not in page
+
+
+def test_a_generated_preview_still_gets_its_caption_and_provenance():
+    """The other direction: with no curated image, the generated preview must
+    still be rendered, captioned and attributed."""
+    mw = _make_webpage()
+    page = mw.render_field_page(
+        "cloudc", _min_manifest(), "assets/cloudc.jpg",
+        preview_channels=["F212N", "F187N", "F182M"],
+        preview_version="v1.0-2026.06",
+        curated=[], preview_from_curated=False)
+    assert "assets/cloudc.jpg" in page
+    assert "R=F212N" in page
+    assert "Rendered from the v1.0-2026.06 mosaics" in page
+
+
+def test_the_caller_actually_sets_preview_from_curated():
+    """The flag is useless unwired, and the unit tests above pass it in
+    themselves -- so `preview_from_curated = True` can be deleted from the
+    caller with them green.  Source-level, and labelled: driving `main()` needs
+    a staged release tree and PIL round-trips of multi-hundred-MB PNGs.
+    """
+    mw = _make_webpage()
+    src = _inspect.getsource(mw)
+    block = src.split('if curated_items:')[1].split('if previews:')[0]
+    assert 'preview_from_curated = True' in block, block
+    call = src.split('page = render_field_page(')[1][:400]
+    assert 'preview_from_curated=preview_from_curated' in call, call
