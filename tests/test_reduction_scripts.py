@@ -299,3 +299,22 @@ def test_reduce_gate_survives_errexit_on_the_happy_path(tmp_path):
     rc, out = _run_reduce_gate(tmp_path, 'COMPLETED ' * 8, 8, keep_errexit=True)
     assert rc == 0, f'errexit must not abort the all-completed case:\n{out}'
     assert '8/8 completed, 0 not' in out
+
+
+def test_the_loop_actually_calls_the_gate_between_reduce_and_catalog():
+    """The gate has to be WIRED, not just correct.
+
+    Every other test here sources the script and calls
+    `reduce_fully_succeeded` directly, so deleting the call site leaves the
+    suite green while restoring #327 in full: catalog a mixed reduce, m12
+    merges this iteration's frames for the filters that succeeded with last
+    iteration's for the ones that did not, and m2 writes the mixture into the
+    consensus table as a correction.
+    """
+    with open(RETIE_LOOP) as fh:
+        text = fh.read()
+    between = text[text.index('--- 1. reduce'):text.index('--- 2. catalog')]
+    assert 'reduce_fully_succeeded' in between, (
+        'the loop must call the gate between reduce and catalog')
+    assert 'exit 1' in between, (
+        'the loop must stop, not continue, when the reduce is incomplete')
