@@ -166,6 +166,85 @@ def flag_diverged_column_pairs(offsets_tbl, tol_mas=PAIR_PROV_TOL_MAS):
     return out
 
 
+class BroadcastProvenanceError(RuntimeError):
+    """One correction was written to every visit instead of the one it measured."""
+
+
+#: Two visits' corrections agreeing this closely are the same number, not two
+#: measurements.  Real per-visit m2 corrections differ by far more: across the
+#: ten live tables the per-filter spread of ``prov_dra_added_mas`` between
+#: distinct visits is 1.6-970 mas wherever it was measured per visit.
+BROADCAST_PROV_TOL_MAS = 0.05
+
+#: Below this a "correction" is a no-op and agreeing about it means nothing --
+#: two visits that were both never corrected both read 0.
+BROADCAST_PROV_MIN_MAS = 50.0
+
+
+def flag_broadcast_provenance(offsets_tbl, tol_mas=BROADCAST_PROV_TOL_MAS,
+                              min_mas=BROADCAST_PROV_MIN_MAS):
+    """Filters whose distinct visits carry the IDENTICAL ``prov_*`` correction.
+
+    A correction is measured for one visit of one filter.  Physically distinct
+    pointings cannot need the same one to within a fraction of a mas, so when
+    they all carry it, a per-filter value was broadcast across the visits
+    instead of applied to the visit it belongs to.
+
+    This is what happened to gc2211 (#284).  Its five observations are 0.3-17.6
+    arcmin apart and measurably in five different states, and every one carried
+    the same pair:
+
+        F200W  o023 o028 o046 o049 o050   prov (-2470.1, +2825.4) mas
+        F277W  o023 o028 o046 o049 o050   prov (-7031.7, +15009.7) mas
+
+    The reducer reads ``dra (arcsec)`` = as-built + ``prov_*``, so a broadcast
+    correction lands on all five products while the as-built pair -- which
+    reproduced an independent swept-histogram measurement of each region to
+    21-56 mas in RA and 1-26 mas in Dec -- stays correct and unread.  That is
+    the same shape as the brick-1182 curation collapse and the sickle #270
+    revert: the value the pixels were built from is the WRONG one, and the
+    surviving good value is in the column nothing reads.
+
+    Distinct from :func:`flag_collapsed_visits`, which flags identical
+    *offsets*: a table can be built per-visit correctly and then have one
+    correction smeared across it, which is exactly this.
+
+    Returns a list of dicts, one per (filter, axis-pair) group.  Empty = clean.
+    """
+    import numpy as np
+    cn = set(offsets_tbl.colnames)
+    if not {"Visit", "Filter"} <= cn:
+        return []
+    if not {"prov_dra_added_mas", "prov_ddec_added_mas"} <= cn:
+        return []
+    vis = np.asarray([str(v) for v in offsets_tbl["Visit"]])
+    filt = np.asarray([str(f) for f in offsets_tbl["Filter"]])
+    pd_ = np.nan_to_num(np.asarray(offsets_tbl["prov_dra_added_mas"], dtype=float))
+    pc_ = np.nan_to_num(np.asarray(offsets_tbl["prov_ddec_added_mas"], dtype=float))
+    out = []
+    for f in np.unique(filt):
+        fm = filt == f
+        visits = np.unique(vis[fm])
+        if len(visits) < 2:
+            continue
+        vals = {}
+        for v in visits:
+            m = fm & (vis == v)
+            vals[v] = (float(np.nanmedian(pd_[m])), float(np.nanmedian(pc_[m])))
+        mags = [np.hypot(*p) for p in vals.values()]
+        if max(mags) < min_mas:
+            continue                       # nothing was corrected; agreeing is not news
+        spread = max(np.hypot(a[0] - b[0], a[1] - b[1])
+                     for a in vals.values() for b in vals.values())
+        if spread <= tol_mas:
+            first = vals[visits[0]]
+            out.append(dict(filter=str(f), n_visits=int(len(visits)),
+                            visits=[str(v) for v in visits],
+                            prov_dra_mas=first[0], prov_ddec_mas=first[1],
+                            spread_mas=float(spread)))
+    return out
+
+
 def assert_offsets_table_sane(offsets_tbl, tol_arcsec=0.02, context="",
                               raise_on_issue=False, raise_on_diverged=False):
     """Warn (or raise) if ``offsets_tbl`` shows the visit-collapse signature.
@@ -234,4 +313,32 @@ def assert_offsets_table_sane(offsets_tbl, tol_arcsec=0.02, context="",
         warnings.warn(dmsg)
         issues = list(issues) + [dict(kind="diverged_column_pair", **d)
                                  for d in diverged]
+    # One correction smeared across every visit of a filter.  Unlike the
+    # divergence above this DOES change the shift the reducer applies, so it
+    # rides the same switch as the collapse rather than the audit-trail one.
+    broadcast = flag_broadcast_provenance(offsets_tbl)
+    if broadcast:
+        blines = [f"  {b['filter']}: {b['n_visits']} visits all carry prov "
+                  f"({b['prov_dra_mas']:+.1f},{b['prov_ddec_mas']:+.1f}) mas "
+                  f"(spread {b['spread_mas']:.3f} mas) -- {', '.join(b['visits'])}"
+                  for b in broadcast]
+        bmsg = ("BROADCAST OFFSETS PROVENANCE"
+                f"{(' ' + context) if context else ''}: a per-visit correction "
+                "is identical across DISTINCT visits, so it was applied to "
+                "every visit rather than the one it was measured on.\n"
+                + "\n".join(blines)
+                + "\n\nThe reducer reads `dra (arcsec)` = as-built + `prov_*`, "
+                  "so a broadcast correction lands on every product of that "
+                  "filter while the as-built pair stays correct and unread "
+                  "(gc2211 #284: five observations 0.3-17.6 arcmin apart, all "
+                  "carrying one pair, mosaics 0.15-22 arcsec off VIRAC2 while "
+                  "`dra`/`ddec` reproduced each region to <60 mas).  Do NOT "
+                  "reconcile this table -- that would copy the bad pair over "
+                  "the good one.  REVERT it: "
+                  "scripts/reduction/revert_broadcast_provenance.py.")
+        if raise_on_issue or os.environ.get('OFFSETS_TABLE_COLLAPSE_RAISE') == '1':
+            raise BroadcastProvenanceError(bmsg)
+        warnings.warn(bmsg)
+        issues = list(issues) + [dict(kind="broadcast_provenance", **b)
+                                 for b in broadcast]
     return issues
