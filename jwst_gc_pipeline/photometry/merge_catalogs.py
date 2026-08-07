@@ -40,7 +40,7 @@ from jwst_gc_pipeline.photometry.naming import (
     _bgsub_token_from_flags as _bgsub_token,
 )
 from jwst_gc_pipeline.photometry.measure_offsets import (
-    assert_sparse_reference_for_nn_median)
+    DenseNNMedianAstrometryError, assert_sparse_reference_for_nn_median)
 # Imported as field_registry: `fields` is a local variable in these
 # drivers (the --field list), and shadowed the module.
 from jwst_gc_pipeline import fields as field_registry
@@ -395,10 +395,8 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     # that corrupted brick-1182; refuse it (realign defaults False, so production
     # merges are unaffected).  Re-enable relative alignment only via offset-
     # histogram stacking.
-    if realign and basecrds is not None:
-        assert_sparse_reference_for_nn_median(
-            basecrds, max_offset,
-            context="combine_singleframe(realign=True) frame-to-frame base catalog")
+    # NB the guard is keyed on `rematch`, not on `realign` -- see below.  It is
+    # evaluated after `rematch` is computed.
     # The re-matching loop is only *applied* when ``realign=True``; on the
     # production ``realign=False`` path it exists solely for the per-exposure
     # offset diagnostic print, yet it still ran the expensive mutual
@@ -407,6 +405,46 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
     # requests the diagnostic); the per-exposure offsets are then recorded
     # as NaN ("not measured") in newtbl.meta['offsets'].
     rematch = realign or os.environ.get('MERGE_REMATCH_DIAGNOSTICS', '') == '1'
+    # FORBIDDEN-METHOD GUARD (issue #314), and it has to bite differently in the
+    # two modes.
+    #
+    # The loop below takes the MEDIAN of a mutual nearest-neighbour match and
+    # stores it in `tbl.meta['ra_offset']`/`['dec_offset']`.  Against a dense
+    # internal base catalogue that is the dense-NN-median method that corrupted
+    # brick-1182.  The guard used to be keyed on `realign`, which covers only
+    # the branch that APPLIES the median -- so with `realign=False` and
+    # MERGE_REMATCH_DIAGNOSTICS=1 the same number was computed against the same
+    # base and written to the same metadata key, ungated.  "It is only a
+    # diagnostic" is not a property of the number: it is stored under a name a
+    # reader can consume as a correction.
+    #
+    # realign=True  -> RAISE.  The median would move the coordinates.
+    # realign=False -> do not raise, but REFUSE TO RECORD: the diagnostic's
+    #                  other outputs (per-exposure separations, counts) are
+    #                  legitimate and some callers want them on a dense base,
+    #                  so the loop still runs and only the offset metadata is
+    #                  NaN'd, with a line saying why.  Refusing outright would
+    #                  make a forbidden-method guard the reason an unrelated
+    #                  diagnostic cannot run.
+    # realign=False and no flag -> the loop is not reached at all; NaN already.
+    dense_nn_refused = False
+    if rematch and basecrds is not None:
+        try:
+            assert_sparse_reference_for_nn_median(
+                basecrds, max_offset,
+                context=(f"combine_singleframe(realign={realign}) "
+                         f"frame-to-frame base catalog"))
+        except DenseNNMedianAstrometryError:
+            if realign:
+                raise
+            dense_nn_refused = True
+            print("combine_singleframe: the re-match base catalog is DENSE, so "
+                  "meta['ra_offset']/['dec_offset'] will be recorded as NaN "
+                  "(not measured) -- a nearest-neighbour median against a dense "
+                  "reference is the method ASTROMETRY RULE #1 forbids, and "
+                  "MERGE_REMATCH_DIAGNOSTICS=1 does not make the number safe to "
+                  "store.  The per-exposure separations below are unaffected.",
+                  flush=True)
     if not rematch:
         print("Skipping re-matching diagnostics (realign=False; set "
               "MERGE_REMATCH_DIAGNOSTICS=1 to enable)", flush=True)
@@ -443,10 +481,16 @@ def combine_singleframe(tbls, max_offset=0.10 * u.arcsec, realign=False, nanaver
             oksep = (reverse_sep[mutual_reverse_matches] < max_offset) & (reverse_sep[mutual_reverse_matches] != 0) & (tbl[reverse_match_inds[mutual_reverse_matches]][qfcn] > 0.95) & (tbl[reverse_match_inds[mutual_reverse_matches]][ffcn] > 0.85)
         medsep_ra, medsep_dec = np.median(radiff[oksep]), np.median(decdiff[oksep])
         dmedsep_ra, dmedsep_dec = mad_std(radiff[oksep]), mad_std(decdiff[oksep])
-        tbl.meta['ra_offset'] = medsep_ra
-        tbl.meta['dec_offset'] = medsep_dec
-        tbl.meta['dra_offset'] = dmedsep_ra
-        tbl.meta['ddec_offset'] = dmedsep_dec
+        if dense_nn_refused:
+            tbl.meta['ra_offset'] = np.nan
+            tbl.meta['dec_offset'] = np.nan
+            tbl.meta['dra_offset'] = np.nan
+            tbl.meta['ddec_offset'] = np.nan
+        else:
+            tbl.meta['ra_offset'] = medsep_ra
+            tbl.meta['dec_offset'] = medsep_dec
+            tbl.meta['dra_offset'] = dmedsep_ra
+            tbl.meta['ddec_offset'] = dmedsep_dec
 
         with fits.open(tbl.meta['FILENAME']) as fh:
             if 'RAOFFSET' in fh['SCI'].header:
