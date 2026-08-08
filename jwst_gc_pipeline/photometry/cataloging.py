@@ -4054,6 +4054,34 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
             return
         raise
 
+    # A record can FAIL without implying a correction, and the corrections
+    # check alone read that as a pass.  `duplicate_exposure` is the case:
+    # build_visit_consensus refuses, the visit is recorded with
+    # error_kind='duplicate_exposure' and appended to `failures`,
+    # `_checkpoint_passed` returns False -- and then this printed "PASS (no
+    # correction implied)" and returned, because nothing was measured so
+    # nothing could be corrected.
+    #
+    # Every gc2211 observation ran that way: m2 recorded ZERO exposures with
+    # passed=False, the m12 finalize exited 0, the retie loop declared
+    # convergence, and the frozen m3 check failed for want of a baseline that
+    # was never written (#350).  An entire field's astrometry gate was skipped
+    # and the loop certified it.
+    _failures = record.get('failures') or []
+    if record.get('passed') is False or _failures:
+        msg = (f"astrom checkpoint [{merge_label}] {filt}/{module}: FAILED -- "
+               f"{len(_failures)} failure(s); the gate did NOT run.\n"
+               + "\n".join(f"  {f}" for f in _failures[:8])
+               + ("\n  ..." if len(_failures) > 8 else "")
+               + f"\n  record: {record.get('record_path')}")
+        if os.environ.get('ASTROM_CHECKPOINT_WARN_ONLY', '') == '1':
+            print(msg + "  (ASTROM_CHECKPOINT_WARN_ONLY=1 -- continuing)",
+                  flush=True)
+        else:
+            from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+                AstrometryCheckpointFailedError)
+            raise AstrometryCheckpointFailedError(msg)
+
     corrections = record.get('corrections') or []
     if not corrections:
         print(f"astrom checkpoint [{merge_label}] {filt}/{module}: PASS "
