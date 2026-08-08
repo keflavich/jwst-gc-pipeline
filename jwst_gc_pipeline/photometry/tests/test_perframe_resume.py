@@ -172,3 +172,67 @@ def test_an_UNSCOPED_legacy_marker_does_not_resume_either():
     todo, done, _ = _select(args, d, 'f212n', 'm12', resume=True, merge='nrca')
     assert done == []
     assert len(todo) == len(FRAMES)
+
+
+# ---------------------------------------------------------------------------
+# CALL-SITE guards.  The previous round's lesson one level up: extracting
+# `select_resumable_frames` fixed the format copy, but the tests still restated
+# the WIRING, and four production lines each mutated alone left 38 passed --
+#
+#   delete  overlapping_now.extend(_ok)
+#   delete  frame_args = _todo                  <- resume computes, then refits
+#   resume  select_resumable_frames(..., None)  <- merged resumes on nrca markers
+#   writer  _marker_path(..., 'ok') without merge=module
+#
+# A behavioural test needs the whole fan-out; the surrounding tests use a source
+# guard for exactly that reason (test_perframe_helpers.py:101).
+# ---------------------------------------------------------------------------
+
+def _run_manual_src():
+    import inspect
+    from jwst_gc_pipeline.photometry import cataloging
+    return inspect.getsource(cataloging.run_manual_pipeline)
+
+
+def test_the_resume_is_called_with_the_MERGE_LABEL_not_None():
+    """Passing None resumes the merged pass on markers nrca wrote -- the defect
+    the merge scoping exists to prevent, restored verbatim."""
+    import re
+    src = _run_manual_src()
+    calls = re.findall(r'select_resumable_frames\((?:[^()]|\([^()]*\))*\)', src)
+    assert calls, 'run_manual_pipeline no longer calls select_resumable_frames'
+    for c in calls:
+        assert 'module' in c, f'resume must be scoped to the merge label: {c}'
+        assert 'None' not in c, f'resume must not be unscoped: {c}'
+
+
+def test_the_resumed_frames_reach_overlapping_now():
+    """Without this the finalize's completeness check calls a legitimately
+    skipped frame a DROPPED exposure -- the guard that exists to catch real
+    drops -- so the property must be pinned at the CALLER, not just asserted of
+    the helper's return value."""
+    src = _run_manual_src()
+    assert 'overlapping_now.extend(' in src
+
+
+def test_the_todo_list_actually_replaces_frame_args():
+    """The one that matters most: without it the resume computes its three
+    lists and then fits every frame anyway -- #333 unfixed, the wall hit again,
+    suite green."""
+    src = _run_manual_src()
+    assert 'frame_args = _todo' in src
+
+
+def test_both_marker_WRITES_carry_the_merge_label():
+    """A writer that drops `merge=module` re-creates the 1440-marker collision:
+    three passes over one name, and the merged pass resumes on markers it did
+    not write."""
+    import re
+    src = _run_manual_src()
+    # WRITE sites only -- `open(_marker_path(...), 'w')`.  The completeness
+    # check READS the unscoped name too, on purpose, so an in-flight finalize
+    # still honours the markers already on disk.
+    writes = re.findall(r'open\(_marker_path\((?:[^()]|\([^()]*\))*\)', src)
+    assert len(writes) >= 2, writes
+    for w in writes:
+        assert 'merge=' in w, f'marker write without a merge label: {w}'
