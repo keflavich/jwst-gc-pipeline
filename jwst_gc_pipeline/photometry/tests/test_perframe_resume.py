@@ -17,6 +17,9 @@ import os
 
 import pytest
 
+from jwst_gc_pipeline.photometry.cataloging import (
+    perframe_marker_path, select_resumable_frames)
+
 
 def _marker_dir(tmp_path):
     d = tmp_path / 'catalogs' / '_perframe_markers'
@@ -25,8 +28,10 @@ def _marker_dir(tmp_path):
 
 
 def _marker_name(frame, filt, detector, phase, kind='ok', merge=None):
-    tail = detector if merge is None else f'{merge}-{detector}'
-    return f'{frame}.{filt.lower()}.{tail}.{phase}.{kind}'
+    """The REAL builder, not a copy of it.  A second format here is how the
+    previous round shipped two call sites disagreeing about the same frames."""
+    return os.path.basename(
+        perframe_marker_path('', frame, detector, filt, phase, kind, merge))
 
 
 #: The shape the live sgrb2 tree carries (1440 of these on 2026-08-07).
@@ -35,22 +40,19 @@ FRAMES = [f'jw05365001001_03101_0000{i}_nrca{d}_destreak_o001_crf.fits'
 
 
 def _select(frame_args, marker_dir, filt, phase, resume, merge='nrca'):
-    """The resume filter as `run_manual_pipeline` applies it: MERGE-SCOPED."""
+    """`run_manual_pipeline`'s own selection, imported rather than restated.
+
+    `resume` mirrors the caller's `skip_if_done and (skip_finalize or
+    finalize_only)` gate, which is the only part that stays here.  Everything
+    below it -- the marker format, the ok/nooverlap/todo split, the merge
+    scoping -- comes from cataloging.py, so a change there that breaks the
+    resume breaks these tests.
+    """
     if not resume:
         return list(frame_args), [], []
-    todo, done, nooverlap = [], [], []
-    for a in frame_args:
-        fn = a['filename']
-        det = fn.split('_')[3]
-        if os.path.exists(os.path.join(
-                marker_dir, _marker_name(fn, filt, det, phase, 'ok', merge))):
-            done.append(fn)
-        elif os.path.exists(os.path.join(
-                marker_dir, _marker_name(fn, filt, det, phase, 'nooverlap', merge))):
-            nooverlap.append(fn)
-        else:
-            todo.append(a)
-    return todo, done, nooverlap
+    todo, ok, nov = select_resumable_frames(frame_args, marker_dir, filt,
+                                            phase, merge)
+    return todo, ok, [f for f, _ in nov]
 
 
 def test_marked_frames_are_not_refitted(tmp_path):
