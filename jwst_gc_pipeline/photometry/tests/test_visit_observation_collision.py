@@ -160,3 +160,53 @@ def test_the_refusal_names_the_escape_hatch():
     msg = str(exc.value)
     assert 'step0_bulk_offset' in msg
     assert 'zfill' in msg
+
+
+def test_a_BULK_correction_with_a_bare_visit_also_stays_in_contract(tmp_path):
+    """The shape the error message names, and the one the guards skip.
+
+    `_assert_one_correction_per_row` and
+    `pool_corrections_to_table_granularity` both `continue` on
+    `_is_bulk_correction`, so a bulk correction is never narrowed by them.  It
+    used to reach `_match_rows` for the first time in the heal loop, outside the
+    try, and escape as a bare `AmbiguousVisitMatchError` -- while
+    `step0_bulk_offset.py`, which emits exactly this (no exposure, no module,
+    `str(--visit).zfill(3)`), is what the message tells operators to run.
+    """
+    import numpy as np
+    from astropy.table import Table
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        OffsetsTableUpdateError, _is_bulk_correction, update_offsets_table)
+
+    rows = []
+    for v in GC2211:
+        rows.append({'Visit': v, 'Filter': 'F277W', 'Exposure': 1,
+                     'Module': 'nrcalong', 'dra': 0.0, 'ddec': 0.0,
+                     'dra (arcsec)': 0.0, 'ddec (arcsec)': 0.0})
+    p = str(tmp_path / 'Offsets_JWST_Brick2211_VIRAC2locked.csv')
+    Table(rows).write(p, format='ascii.csv', overwrite=True)
+
+    bulk = dict(visit='001', exposure=None, module=None, filtername='F277W',
+                dra_onsky_mas=12.0, ddec_onsky_mas=-8.0, dec_deg=-28.9,
+                source='step0 bulk offset')
+    assert _is_bulk_correction(bulk), 'fixture must exercise the bulk path'
+
+    before = open(p).read()
+    with pytest.raises(OffsetsTableUpdateError) as exc:
+        update_offsets_table(p, [bulk], stage='m2')
+    assert 'NOT writing' in str(exc.value)
+    assert 'broadcast' in str(exc.value)
+    assert open(p).read() == before, 'a refusal must not half-write'
+
+
+def test_the_narrowing_happens_once(tmp_path):
+    """The heal loop reuses the guards' narrowing rather than repeating it, so
+    there is no second site that can raise and no way for the two to disagree
+    about which rows a correction touches."""
+    import inspect
+    from jwst_gc_pipeline.photometry import astrometry_checkpoint as ac
+    src = inspect.getsource(ac.update_offsets_table)
+    assert '_rows_for = [(corr, _match_rows(corr, tbl)) for corr in corrections]' in src
+    heal = src[src.index('_touched = set()'):src.index('_heal_column_pairs')]
+    assert '_match_rows' not in heal, (
+        'the heal loop must reuse _rows_for, not narrow again outside the try')

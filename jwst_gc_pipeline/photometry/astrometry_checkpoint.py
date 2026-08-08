@@ -1122,10 +1122,23 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
         # validation errors three commits ago: callers and
         # run_field_retie_loop.sh are written around OffsetsTableUpdateError, so
         # anything else silently changes this function's error contract.
+        #
+        # The narrowing happens ONCE, here, for every correction -- BULK
+        # INCLUDED -- and the result is reused below.  Both
+        # `_assert_one_correction_per_row` and
+        # `pool_corrections_to_table_granularity` `continue` on
+        # `_is_bulk_correction`, so a bulk correction is never narrowed by the
+        # guards; narrowing only inside them left bulk reaching `_match_rows`
+        # for the first time ten lines lower, outside this try, and escaping as
+        # a bare AmbiguousVisitMatchError.  Bulk is exactly what
+        # `scripts/reduction/step0_bulk_offset.py` emits, with the bare
+        # `zfill(3)` visit this error is about -- so the one shape the message
+        # names was the one shape the wrap missed.
         try:
             _assert_module_granularity(corrections, tbl, offsets_path)
             _assert_vgroup_granularity(corrections, tbl, offsets_path)
             _assert_one_correction_per_row(corrections, tbl, offsets_path)
+            _rows_for = [(corr, _match_rows(corr, tbl)) for corr in corrections]
         except AmbiguousVisitMatchError as ex:
             raise OffsetsTableUpdateError(
                 f"cannot match a correction to a row; NOT writing:\n{ex}") from ex
@@ -1159,11 +1172,12 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
         # preserves an existing gap rather than closing it.  Scoped to touched
         # rows so a field with one stale filter and ten clean ones recovers filter
         # by filter instead of being blocked as a whole.
-        # Cannot raise: the granularity guards above already ran _match_rows
-        # over every correction inside the try that converts this.
+        # Reuses the single narrowing pass above rather than repeating it, so
+        # there is no second site that can raise and no way for the two to
+        # disagree about which rows a correction touches.
         _touched = set()
-        for corr in corrections:
-            _touched.update(int(i) for i in _match_rows(corr, tbl))
+        for _corr, _idx in _rows_for:
+            _touched.update(int(i) for i in _idx)
         _heal_column_pairs(tbl, offsets_path, rows=_touched)
 
         for corr in corrections:
