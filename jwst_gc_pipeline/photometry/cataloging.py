@@ -3771,6 +3771,23 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
                 if want and m_src:
                     if m_src.group(0) not in want:
                         drop.append(fn)
+                    elif token and _identity(base) in tokened_ids:
+                        # THIS run's own exposure, under the PRE-TOKEN name,
+                        # while a tokened copy of the same identity is also on
+                        # disk.  Both are the same frame, so keeping both is
+                        # the DuplicateExposureError of #259 by another route:
+                        # the provenance check answers "whose is it", not "is
+                        # it redundant", and only the unreadable-provenance
+                        # branch below asked the second question.
+                        #
+                        # This is what emptied every gc2211 m2 record.  o050's
+                        # F200W kept 84 files -- 48 tokened plus 36 pre-token
+                        # copies of the same exposures, each provenance-checked
+                        # and correctly identified as o050's own -- so the
+                        # consensus saw 36 identities twice, refused to build,
+                        # recorded 0 exposures, and the run still exited 0
+                        # (#350).
+                        drop.append(fn)
                     continue
                 if want:
                     unreadable.append(fn)
