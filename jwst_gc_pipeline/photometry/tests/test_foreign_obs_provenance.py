@@ -431,3 +431,83 @@ def test_a_chunked_and_unchunked_copy_of_one_exposure_are_one_identity(
                                         "f360m", "m2", "merged", "cloudef",
                                         target_obs="002")
     assert kept == [tokened], kept
+
+
+# ------------------------------------------------- redundant pre-token twin
+
+def test_this_runs_own_pretoken_copy_is_dropped_when_a_tokened_twin_exists(
+        tmp_path, monkeypatch):
+    """The gc2211 case (#350).
+
+    The provenance check answers "whose exposure is it", not "is it redundant".
+    A pre-token catalog whose source frame names THIS run was correctly kept --
+    and so was the tokened copy of the same exposure, so the consensus saw the
+    identity twice and refused to build.
+
+    Measured on o050's F200W before this: 592 globbed -> 84 kept = 48 tokened +
+    36 pre-token copies of the same exposures -> 36 duplicated identities,
+    0 exposures recorded, and the run still exited 0.
+    """
+    monkeypatch.setattr("jwst_gc_pipeline.fields.filter_observation_count",
+                        lambda *a, **k: 4)
+    fns = ([_catalog(tmp_path,
+                     f"f200w_nrcb1_o050_visit001_vgroup02201_exp{i:05d}_m2_daophot_basic.fits",
+                     f"/x/jw02211050001_02201_{i:05d}_nrcb1_destreak_o050_crf.fits")
+            for i in range(1, 5)]
+           + [_catalog(tmp_path,
+                       f"f200w_nrcb1_visit001_vgroup02201_exp{i:05d}_m2_daophot_basic.fits",
+                       f"/x/jw02211050001_02201_{i:05d}_nrcb1_destreak_o050_crf.fits")
+              for i in range(1, 5)])
+    kept = _drop_foreign_obs_duplicates(fns, "_o050", "f200w", "m2", "nrcb",
+                                        "gc2211", target_obs="050")
+    assert len(kept) == 4, [f.split('/')[-1] for f in kept]
+    assert all("_o050_visit" in f for f in kept), 'the TOKENED copy must survive'
+
+
+def test_a_pretoken_copy_with_NO_tokened_twin_is_still_kept(tmp_path, monkeypatch):
+    """The property the redundancy rule must not break: an exposure that exists
+    ONLY under the pre-token name is real data, and dropping it builds a
+    consensus from half the detectors and PASSES -- worse than the duplicate.
+    ngc6334's nrca detectors are exactly this."""
+    monkeypatch.setattr("jwst_gc_pipeline.fields.filter_observation_count",
+                        lambda *a, **k: 4)
+    fns = [_catalog(tmp_path,
+                    f"f200w_nrcb1_visit001_vgroup02201_exp{i:05d}_m2_daophot_basic.fits",
+                    f"/x/jw02211050001_02201_{i:05d}_nrcb1_destreak_o050_crf.fits")
+           for i in range(1, 5)]
+    kept = _drop_foreign_obs_duplicates(fns, "_o050", "f200w", "m2", "nrcb",
+                                        "gc2211", target_obs="050")
+    assert len(kept) == 4
+
+
+def test_the_twin_must_be_the_SAME_exposure(tmp_path, monkeypatch):
+    """A tokened copy of a DIFFERENT exposure does not make this one
+    redundant."""
+    monkeypatch.setattr("jwst_gc_pipeline.fields.filter_observation_count",
+                        lambda *a, **k: 4)
+    fns = [_catalog(tmp_path,
+                    "f200w_nrcb1_o050_visit001_vgroup02201_exp00009_m2_daophot_basic.fits",
+                    "/x/jw02211050001_02201_00009_nrcb1_destreak_o050_crf.fits"),
+           _catalog(tmp_path,
+                    "f200w_nrcb1_visit001_vgroup02201_exp00001_m2_daophot_basic.fits",
+                    "/x/jw02211050001_02201_00001_nrcb1_destreak_o050_crf.fits")]
+    kept = _drop_foreign_obs_duplicates(fns, "_o050", "f200w", "m2", "nrcb",
+                                        "gc2211", target_obs="050")
+    assert len(kept) == 2
+
+
+def test_a_foreign_pretoken_copy_is_still_dropped_as_foreign(tmp_path, monkeypatch):
+    """Unchanged: provenance naming another observation drops first, and the
+    redundancy rule never sees it."""
+    monkeypatch.setattr("jwst_gc_pipeline.fields.filter_observation_count",
+                        lambda *a, **k: 4)
+    fns = [_catalog(tmp_path,
+                    "f200w_nrcb1_o050_visit001_vgroup02201_exp00001_m2_daophot_basic.fits",
+                    "/x/jw02211050001_02201_00001_nrcb1_destreak_o050_crf.fits"),
+           _catalog(tmp_path,
+                    "f200w_nrcb1_visit001_vgroup02201_exp00001_m2_daophot_basic.fits",
+                    "/x/jw02211023001_02201_00001_nrcb1_destreak_o023_crf.fits")]
+    kept = _drop_foreign_obs_duplicates(fns, "_o050", "f200w", "m2", "nrcb",
+                                        "gc2211", target_obs="050")
+    assert len(kept) == 1
+    assert "_o050_visit" in kept[0]
