@@ -4294,6 +4294,79 @@ def _run_crossfilter_astrom_checkpoint(vetted_paths_by_filter, cut_bp, basepath,
         raise
 
 
+def perframe_marker_path(marker_dir, filename, detector, filt, phase,
+                         kind='ok', merge=None):
+    """Path of one frame's per-phase completion marker.
+
+    ONE definition, used by the writer, the finalize completeness check and the
+    --skip-if-done resume, so there is no second format for them to disagree
+    about.  It is module-level rather than a closure so tests can exercise the
+    real thing instead of a copy -- a reimplementation in the test file is how
+    the previous round of this fix shipped two call sites answering the same
+    question 1248-vs-0.
+
+    kind: 'ok' (the fit produced output) or 'nooverlap' (a legitimate cutout
+    miss).
+
+    ``merge`` is the MERGE LABEL (nrca / nrcb / merged) and is part of the key
+    because a frame is fitted once per label: the ``merged`` pass runs over the
+    SAME files as the per-module passes, with the same detector token.  Keyed on
+    detector alone all three passes wrote one name -- 1440 markers on the live
+    sgrb2 tree, saturated at 10 detectors x 144 and not growing while the merged
+    pass ran, because it was overwriting rather than adding.  Harmless while
+    markers were only a completeness receipt; NOT harmless once --skip-if-done
+    resumes from them, where it would skip every merged frame whose nrca/nrcb
+    pass had finished and silently produce no merged output.
+
+    ``merge=None`` keeps the pre-existing name, so markers already on disk still
+    satisfy a finalize started before this change.
+    """
+    tail = f'{detector}' if merge is None else f'{merge}-{detector}'
+    return os.path.join(
+        marker_dir,
+        f'{os.path.basename(filename)}.{filt.lower()}.{tail}.{phase}.{kind}')
+
+
+def select_resumable_frames(frame_args, marker_dir, filt, phase, merge):
+    """Split ``frame_args`` into (still to fit, already done, already no-overlap).
+
+    The --skip-if-done resume for the per-frame fan-out.  A fan-out that hits
+    its wall clock otherwise refits every frame on the next attempt and hits the
+    same wall (#333).  The marker is written by the worker that SUCCEEDED, so
+    unlike a predicted output filename it cannot drift from what the writer
+    does -- which is how the filename-prediction half of this shipped
+    disagreeing with itself.
+
+    Returns ``(todo, resumed_ok, resumed_nooverlap)``:
+
+    * ``todo``       -- frame_args entries still needing a fit;
+    * ``resumed_ok`` -- filenames already fitted.  The caller MUST carry these
+      into ``overlapping_now``, or the finalize's completeness check reads a
+      resumed frame as a dropped exposure and hard-crashes on the guard that
+      exists to catch real drops;
+    * ``resumed_nooverlap`` -- ``(filename, reason)`` for legitimate misses.
+
+    Merge-scoped ONLY, deliberately without the legacy fallback the completeness
+    check keeps: an unscoped marker cannot say WHICH pass wrote it, and resuming
+    on one would skip a merged frame that was never fitted.  Re-fitting a frame
+    is cheap; a silently absent merged catalog is not.
+    """
+    todo, resumed_ok, resumed_nooverlap = [], [], []
+    for a in frame_args:
+        fn = a['filename']
+        det = fn.split('_')[3]
+        if os.path.exists(perframe_marker_path(marker_dir, fn, det, filt, phase,
+                                               'ok', merge=merge)):
+            resumed_ok.append(fn)
+        elif os.path.exists(perframe_marker_path(marker_dir, fn, det, filt,
+                                                 phase, 'nooverlap',
+                                                 merge=merge)):
+            resumed_nooverlap.append((fn, 'no-overlap (marker)'))
+        else:
+            todo.append(a)
+    return todo, resumed_ok, resumed_nooverlap
+
+
 def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         target, field, basepath, crowdsource_default_kwargs,
                         bg_boxsizes):
@@ -4435,11 +4508,9 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
     if skip_finalize or finalize_only:
         os.makedirs(_marker_dir, exist_ok=True)
 
-    def _marker_path(filename, module, filt, phase, kind='ok'):
-        # kind: 'ok' (fit produced output) or 'nooverlap' (legit cutout miss).
-        return os.path.join(
-            _marker_dir,
-            f'{os.path.basename(filename)}.{filt.lower()}.{module}.{phase}.{kind}')
+    def _marker_path(filename, detector, filt, phase, kind='ok', merge=None):
+        return perframe_marker_path(_marker_dir, filename, detector, filt,
+                                    phase, kind, merge)
 
     orig_last_phase = phases[-1]
 
@@ -4914,9 +4985,15 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     _missing_marker = []
                     for fn in all_frames:
                         _det = fn.split('_')[3]   # per-frame products keyed by detector
-                        if os.path.exists(_marker_path(fn, _det, filt, phase, 'ok')):
+                        if (os.path.exists(_marker_path(fn, _det, filt, phase, 'ok',
+                                                        merge=module))
+                                or os.path.exists(
+                                    _marker_path(fn, _det, filt, phase, 'ok'))):
                             overlapping_now.append(fn)
-                        elif os.path.exists(_marker_path(fn, _det, filt, phase, 'nooverlap')):
+                        elif (os.path.exists(_marker_path(fn, _det, filt, phase,
+                                                          'nooverlap', merge=module))
+                              or os.path.exists(
+                                  _marker_path(fn, _det, filt, phase, 'nooverlap'))):
                             no_overlap.append((fn, 'no-overlap (marker)'))
                         else:
                             _missing_marker.append(fn)
@@ -4941,17 +5018,42 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                               f"{shard_i}/{shard_n} -> {len(frame_args)} of "
                               f"{len(all_frames)} frames", flush=True)
 
+                    # RESUME.  A fan-out that hit its wall clock leaves every
+                    # finished frame's completion marker on disk; without this
+                    # the re-run refits all of them and hits the same wall
+                    # (#333).  The marker is written by the worker that
+                    # SUCCEEDED, so unlike a predicted output filename it cannot
+                    # drift from what the writer does -- which is how the
+                    # filename-prediction half of this shipped disagreeing with
+                    # itself.  Frames already marked are carried into
+                    # `overlapping_now` so the finalize's completeness check
+                    # still sees them.
+                    if getattr(options, 'skip_if_done', False) and (
+                            skip_finalize or finalize_only):
+                        _todo, _ok, _nov = select_resumable_frames(
+                            frame_args, _marker_dir, filt, phase, module)
+                        overlapping_now.extend(_ok)
+                        no_overlap.extend(_nov)
+                        _resumed = len(_ok) + len(_nov)
+                        if _resumed:
+                            print(f"manual [{phase}] {filt}/{module}: skip-if-done "
+                                  f"resumed {_resumed} frame(s) from completion "
+                                  f"markers; {len(_todo)} left to fit", flush=True)
+                        frame_args = _todo
+
                     def _on_result(filename, ok, err):
                         if ok:
                             overlapping_now.append(filename)
                             if skip_finalize or finalize_only:
                                 open(_marker_path(filename, filename.split('_')[3],
-                                                  filt, phase, 'ok'), 'w').close()
+                                                  filt, phase, 'ok',
+                                                  merge=module), 'w').close()
                         elif err and err.startswith('no-overlap'):
                             no_overlap.append((filename, err))
                             if skip_finalize or finalize_only:
                                 open(_marker_path(filename, filename.split('_')[3],
-                                                  filt, phase, 'nooverlap'), 'w').close()
+                                                  filt, phase, 'nooverlap',
+                                                  merge=module), 'w').close()
                         else:
                             failures.append((filename, err))
 
