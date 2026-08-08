@@ -92,18 +92,24 @@ def test_a_tokened_and_an_untokened_latest_count_ONCE(tmp_path, capsys):
     assert 'scanned 2 record(s)' in out, out
     assert 'considered 1 record(s)' in out, out
     assert 'blocking-unverified entries (latest per filter): 1' in out, out
-    # both name the same (field, filter)
-    assert (m.record_filter_key(older, json.load(open(older)))
-            == m.record_filter_key(newer, json.load(open(newer))))
+    # They no longer key EQUAL -- the token separates observations -- so the
+    # untokened one is removed by drop_superseded_untokened instead.
+    ko = m.record_filter_key(older, json.load(open(older)))
+    kn = m.record_filter_key(newer, json.load(open(newer)))
+    assert ko != kn
+    assert m.drop_superseded_untokened({ko, kn}) == {kn}
 
 
-def test_the_key_comes_from_the_record_not_the_filename(tmp_path):
-    """The filename carries the observation token whose presence is exactly
-    what makes two files one filter, so the key must not be parsed from it."""
+def test_the_key_DOES_come_from_the_filename(tmp_path):
+    """This test asserted the opposite, and that was the defect: the record
+    carries no observation, so taking everything from it collapsed gc2211's
+    four F200W `_latest` records into one and discarded o023's blocking entry.
+    The token has to be parsed from the filename; the untokened LEGACY record
+    is then removed by drop_superseded_untokened rather than by key collision."""
     m = _mod()
     d = _tree(tmp_path)
     p = _write(d, 'checkpoint_m2_F162M_o012_latest.json', filt='F162M')
-    assert m.record_filter_key(p, json.load(open(p))) == ('sgrc', 'F162M')
+    assert m.record_filter_key(p, json.load(open(p))) == ('sgrc', 'F162M', '012')
 
 
 # --- the denominator --------------------------------------------------------
@@ -148,3 +154,60 @@ def test_the_method_tally_counts_every_record_considered(tmp_path, capsys):
     out = capsys.readouterr().out
     assert '2 record(s) counted EXACTLY' in out, out
     assert '0 record(s) counted from message text' in out, out
+
+
+# ---------------------------------------------------------------------------
+# The dedup key.  `(field, filter)` -- everything taken from the record --
+# collapses a multi-observation field's records into one, because the
+# observation is the only thing separating them and the record does not carry
+# it.  gc2211 has four F200W `_latest` files; all four keyed the same, `_o050`
+# was newest, and o023's blocking entry (the -9.28" item #345 was opened about)
+# was discarded while the count read 0.
+# ---------------------------------------------------------------------------
+
+def test_the_key_separates_observations():
+    m = _mod()
+    base = '/x/gc2211/astrometry_checkpoints/'
+    rec = {'filtername': 'F200W'}
+    keys = {m.record_filter_key(base + n, rec) for n in (
+        'checkpoint_m2_F200W_latest.json',
+        'checkpoint_m2_F200W_o023_latest.json',
+        'checkpoint_m2_F200W_o049_latest.json',
+        'checkpoint_m2_F200W_o050_latest.json')}
+    assert len(keys) == 4, keys
+    assert ('gc2211', 'F200W', '023') in keys
+    assert ('gc2211', 'F200W', None) in keys
+
+
+def test_the_token_comes_from_the_FILENAME_not_the_record():
+    """The record has no observation field; only the filename does."""
+    m = _mod()
+    k = m.record_filter_key(
+        '/x/gc2211/astrometry_checkpoints/checkpoint_m2_F200W_o023_latest.json',
+        {'filtername': 'F200W'})
+    assert k[2] == '023'
+
+
+def test_an_untokened_record_is_dropped_when_a_tokened_sibling_exists():
+    """The untokened `_latest` is the LEGACY record, written before the token.
+    sgrc has one observation, so its untokened F162M_latest really is a copy of
+    `_o012_latest`; without this it was counted twice."""
+    m = _mod()
+    keys = {('sgrc', 'F162M', None), ('sgrc', 'F162M', '012')}
+    assert m.drop_superseded_untokened(keys) == {('sgrc', 'F162M', '012')}
+
+
+def test_an_untokened_record_SURVIVES_when_nothing_supersedes_it():
+    m = _mod()
+    keys = {('cloudc', 'F410M', None)}
+    assert m.drop_superseded_untokened(keys) == keys
+
+
+def test_each_tokened_observation_stands_on_its_own():
+    """gc2211's `_o023`/`_o049`/`_o050` are three pointings, not three copies."""
+    m = _mod()
+    keys = {('gc2211', 'F200W', None), ('gc2211', 'F200W', '023'),
+            ('gc2211', 'F200W', '049'), ('gc2211', 'F200W', '050')}
+    kept = m.drop_superseded_untokened(keys)
+    assert kept == {k for k in keys if k[2] is not None}
+    assert len(kept) == 3

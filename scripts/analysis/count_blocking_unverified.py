@@ -36,6 +36,7 @@ import collections
 import glob
 import json
 import os
+import re
 import sys
 
 BASE = os.environ.get("GC_BASEPATH_OVERRIDE",
@@ -82,15 +83,46 @@ def _all_records(pattern, args):
 
 
 def record_filter_key(path, record):
-    """``(field, filter)`` for latest-per-filter deduplication.
+    """``(field, filter, token)`` for latest-per-filter deduplication.
 
-    Taken from the record rather than parsed out of the filename: the filename
-    carries an optional observation token whose presence is exactly what makes
-    two files describe one filter.
+    The token DOES come from the filename, and must.  Keying on
+    ``(field, filter)`` alone -- taking everything from the record -- collapses
+    a multi-observation field's records into one, because the observation is
+    the only thing that distinguishes them and the record does not carry it:
+
+        checkpoint_m2_F200W_latest.json       entries=0   gc2211 F200W/nrcb
+        checkpoint_m2_F200W_o023_latest.json  entries=1   gc2211 F200W/nrca
+        checkpoint_m2_F200W_o049_latest.json  entries=0   gc2211 F200W/nrca
+        checkpoint_m2_F200W_o050_latest.json  entries=0   gc2211 F200W/nrcb
+
+    All four key to ('gc2211', 'F200W'); `_o050` is newest, so o023's blocking
+    entry -- the record #345 was opened about -- was discarded and the count
+    read 0 with a blocking record sitting in the directory.
     """
     field = path.split(os.sep)[-3]
     filt = str(record.get("filtername") or "")
-    return field, filt
+    m = re.search(r"_o(\d{3})_latest\.json$", os.path.basename(path))
+    return field, filt, (m.group(1) if m else None)
+
+
+def drop_superseded_untokened(keys):
+    """Remove the untokened key for a (field, filter) that has a tokened one.
+
+    The untokened `_latest` is the LEGACY record, written before the token
+    existed; where a tokened sibling covers the same filter it is a duplicate,
+    not another pointing.  sgrc has one observation, so its untokened
+    `F162M_latest` really is a copy of `_o012_latest` and drops out; gc2211's
+    untokened `F200W_latest` drops too, while `_o023`/`_o049`/`_o050` each
+    stand on their own.
+
+    Counting the live tree three ways:
+
+        (field, filter)                        12   collapses observations
+        (field, filter, token)                 14   sgrc F162M counted twice
+        (field, filter, token) + this          13   correct
+    """
+    tokened = {(f, fl) for f, fl, tok in keys if tok is not None}
+    return {k for k in keys if k[2] is not None or (k[0], k[1]) not in tokened}
 
 
 def main(argv=None):
@@ -132,9 +164,11 @@ def main(argv=None):
             _tally(r, pth, byfield)
 
     if not args.all_history:
-        for _, pth, r in newest.values():
+        keep = drop_superseded_untokened(set(newest))
+        for k in sorted(keep, key=lambda x: (x[0], x[1], x[2] or "")):
+            _, pth, r = newest[k]
             _tally(r, pth, byfield)
-        counted = [r for _, _, r in newest.values()]
+        counted = [newest[k][2] for k in keep]
     else:
         counted = None
 
@@ -150,7 +184,7 @@ def main(argv=None):
 
     scope = "all history" if args.all_history else "latest per filter"
     total = sum(byfield.values())
-    n_considered = n_scanned if args.all_history else len(newest)
+    n_considered = n_scanned if args.all_history else len(counted)
     # The denominator, ALWAYS.  Without it a mistyped base, an unmounted
     # /orange or a glob that stopped matching prints byte-identical output to a
     # genuinely clean tree -- for a tool whose job is to make a number
