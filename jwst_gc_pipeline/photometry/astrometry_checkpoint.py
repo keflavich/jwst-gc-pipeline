@@ -116,6 +116,18 @@ class AstrometryCorrectionRequiredError(RuntimeError):
     would propagate the error."""
 
 
+class AstrometryCheckpointFailedError(RuntimeError):
+    """The checkpoint could not run its gate at all.
+
+    Distinct from AstrometryCorrectionRequiredError (the gate RAN and demands a
+    correction) and AstrometryRegressionError (a frozen solution MOVED).  This
+    is "nothing was measured, because the inputs were malformed" -- currently
+    only `duplicate_exposure`.  It has to be its own outcome: a checkpoint that
+    measured nothing has not passed, and reporting it as a pass is how gc2211's
+    gate was skipped for every observation (#350).
+    """
+
+
 class AstrometryRegressionError(RuntimeError):
     """A late-stage (m3+) checkpoint measured an astrometric shift.  The
     solution is supposed to be frozen after the m2 checkpoint; a shift here is
