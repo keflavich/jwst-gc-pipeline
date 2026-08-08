@@ -2050,6 +2050,40 @@ def load_data(filename):
     return fh, im1, data, wht, err, instrument, telescope, obsdate
 
 
+#: NIRCam's dichroic splits the short- and long-wave channels at 2.4 um.
+NIRCAM_SW_LW_SPLIT_UM = 2.4
+
+
+def nircam_is_longwave(filtername):
+    """Is ``filtername`` on NIRCam's LONG-wave channel?
+
+    Decided by the WAVELENGTH the name encodes, not by a substring.  This used
+    to read
+
+        if 'F4' in filtername.upper() or 'F3' in filtername.upper():
+
+    which is right for F3xx/F4xx and wrong for the two LW filters whose names
+    begin 'F2': **F277W** (2.77 um) and F250M (2.50 um).  Both were mapped to a
+    SHORT-wave detector, and building their PSF grid then died inside stpsf:
+
+        RuntimeError: The requested wavelengths are too long for NIRCam short
+        wave channel.
+
+    It stayed hidden because every other GC field's LW filters are F3xx/F4xx.
+    gc2211 images F277W in all five observations, so its mergedcat residual /
+    model i2d build failed there -- and that residual is the NEXT phase's
+    detection image, so the run fails closed rather than degrading m3+ (#159).
+
+    A NIRCam filter name is ``F`` + three digits giving the pivot wavelength in
+    units of 0.01 um, optionally followed by a width code (``W``, ``M``, ``N``,
+    ``W2``).  F150W2 -> 1.50 um (SW), F322W2 -> 3.22 um (LW).
+    """
+    m = re.match(r'F(\d{3})', str(filtername).upper())
+    if not m:
+        return False
+    return int(m.group(1)) / 100.0 >= NIRCAM_SW_LW_SPLIT_UM
+
+
 def stpsf_detector_for_module(module, filtername, instrument):
     """Map a pipeline ``module`` token to the stpsf/WebbPSF detector name.
 
@@ -2073,9 +2107,7 @@ def stpsf_detector_for_module(module, filtername, instrument):
         # niriss_nis_{filter}_fovp101_... hit instead of rebuilding every frame.
         return 'NIS'
     if module in ('nrca', 'nrcb'):
-        if 'F4' in filtername.upper() or 'F3' in filtername.upper():
-            return f'{module.upper()}5'
-        return f'{module.upper()}1'
+        return f'{module.upper()}{5 if nircam_is_longwave(filtername) else 1}'
     if module.lower() in ('nrcalong', 'nrcblong'):
         # Per-frame path passes the physical DETECTOR as ``module``
         # (cataloging sets file_module=file_detector), so LW frames arrive
