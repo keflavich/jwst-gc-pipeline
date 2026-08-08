@@ -140,6 +140,49 @@ def _env_flag(name):
     return os.environ.get(name, "").strip() == "1"
 
 
+#: Env override restoring the pre-#312 meaning of ``passed`` (failures only).
+#: Named like ALLOW_LATE_STAGE_ASTROM_SHIFT: an explicit, greppable decision to
+#: proceed on a field the checkpoint could not verify, not a default.
+ALLOW_UNVERIFIED_ENV = "ALLOW_UNVERIFIED_ASTROM_CHECKPOINT"
+
+
+def _checkpoint_passed(failures, unverified_blocking):
+    """``passed`` for a checkpoint record.
+
+    ``unverified`` is TWO different things in one list, and only one of them is
+    evidence of a problem:
+
+      * COULD NOT MEASURE -- an unbuildable consensus (two exposures, almost no
+        stars), an isolated footprint with no tie, a local cell map with one or
+        two populated cells.  Nothing was measured, so nothing is being ignored.
+        This is deliberately not fatal and is pinned by seven tests
+        (``test_unbuildable_consensus_is_unverified_not_fatal`` among them).
+        Failing here would stop a field for having too little data to check it.
+
+      * MEASURED AND REFUSED -- m2 measured a gross consensus->reference offset,
+        or read equal-and-opposite offsets across an exposure's modules, and
+        declined to apply anything.  A number exists and says the field is
+        misaligned; the checkpoint simply cannot act on it.
+
+    Only the second blocks (#312).  cloudc F410M/nrcblong/visit002 is the case
+    that named this: m2 MEASURED 731.47 mas, over
+    REFERENCE_CROSSCHECK_GROSS_MAS, set ``apply_ok=False``, filed 8 exposures
+    unverified and reported ``passed=True``.  Every iteration since 2026-08-04
+    recorded the identical value with ``ncorr=0`` and the retie loop declared
+    convergence -- because corrections had STOPPED, not because the visit was
+    aligned.  Those 8 exposures drizzle 4.06" out of place.
+
+    A gross offset is precisely the case m2 refuses to correct, so making the
+    refusal invisible to the gate left the loudest evidence of misalignment as
+    the one thing that could not stop the pipeline.
+    """
+    if failures:
+        return False
+    if unverified_blocking and not _env_flag(ALLOW_UNVERIFIED_ENV):
+        return False
+    return True
+
+
 # A per-exposure/per-visit tie correction is mas-scale by construction: it
 # removes guide-star jitter and the consensus->reference residual, not a gross
 # pointing error.  Anything larger is an upstream measurement failure (a
@@ -2159,6 +2202,9 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
     corrections = []
     failures = []      # MEASURED shifts -- blocking at a late stage
     unverified = []    # could-not-verify -- loud warnings, audited by the gate
+    # The subset that is MEASURED-AND-REFUSED rather than could-not-measure.
+    # Only this blocks the gate; see _checkpoint_passed.
+    unverified_blocking = []
     # SAME-STAR restriction at a frozen stage (issue #285).  A later stage fits
     # on a background-subtracted image and detects a DIFFERENT star set, so its
     # rebuilt consensus sits a few mas from m2's even when no frame moved --
@@ -2225,7 +2271,10 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
         antisym = detect_module_antisymmetry(cons["exposures"])
         if antisym["detected"]:
             ex = antisym["examples"][0]
-            unverified.append(
+            # BLOCKING: a number was measured and refused.  The message itself
+            # says the consensus "should be rebuilt/investigated" -- that is not
+            # a pass.
+            unverified_blocking.append(
                 f"{vctx}: MODULE-ANTISYMMETRIC offsets on "
                 f"{antisym['n_antisymmetric']}/{antisym['n_pairs_tested']} "
                 f"exposure(s) -- module {ex['module_a']} reads "
@@ -2238,6 +2287,7 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                 f"(issue #158).  NOT correcting; the affected exposures are "
                 f"UNVERIFIED and the visit consensus for this filter should be "
                 f"rebuilt/investigated")
+            unverified.append(unverified_blocking[-1])
         antisym_keys = antisym["keys"]
         exp_records = []
         for exp in cons["exposures"]:
@@ -2488,13 +2538,17 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                         gate = ("same-star refined="
                                 f"{ref_tie.get('same_star') is not None} "
                                 "[Gaia-only ref: per-tile map is noise, not gating]")
-                    unverified.append(
+                    # BLOCKING: m2 MEASURED the offset and declined to apply it.
+                    # This is the cloudc F410M/nrcblong case in #312 -- 731 mas,
+                    # over REFERENCE_CROSSCHECK_GROSS_MAS, reported as a pass.
+                    unverified_blocking.append(
                         f"{vctx}: consensus->reference offset {off:.2f} mas but the "
                         f"tie is not trustworthy "
                         f"(cross-ref sep={ref_tie['cross_reference'].get('sep_mas'):.1f} mas, "
                         f"gross_ok={ref_tie.get('cross_reference_gross_ok')}, "
                         f"{gate}, "
                         f"swept={ref_tie.get('swept')}) -- NOT applying; investigate")
+                    unverified.append(unverified_blocking[-1])
 
         consensus_by_visit[visit] = cons
         visits.append(dict(
@@ -2605,14 +2659,14 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
     else:
         consensus_catalog_error = None
 
-    passed = not failures
+    passed = _checkpoint_passed(failures, unverified_blocking)
     record = dict(stage=stage, filtername=filtername, context=context,
                   consensus_catalog=consensus_catalog_path,
                   consensus_catalog_error=consensus_catalog_error,
                   date=_utcnow_iso(), correcting=correcting, visits=visits,
                   corrections=corrections, failures=failures,
-                  unverified=unverified, passed=passed,
-                  all_verified=not unverified,
+                  unverified=unverified, unverified_blocking=unverified_blocking,
+                  passed=passed, all_verified=not unverified,
                   tolerances=dict(
                       exposure_consensus_tol_mas=EXPOSURE_CONSENSUS_TOL_MAS,
                       reference_apply_min_mas=REFERENCE_APPLY_MIN_MAS,
@@ -2623,6 +2677,22 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
 
     for w in unverified:
         print(f"ASTROM CHECKPOINT [{stage}] COULD NOT VERIFY: {w}", flush=True)
+    if unverified_blocking and not failures:
+        # Say which way it went and how to proceed deliberately.  Before #312
+        # this printed the same COULD NOT VERIFY lines and then reported a
+        # pass, so the lines read as advisory.
+        if _env_flag(ALLOW_UNVERIFIED_ENV):
+            print(f"ASTROM CHECKPOINT [{stage}]: PASSING with "
+                  f"{len(unverified_blocking)} blocking unverified item(s) because "
+                  f"{ALLOW_UNVERIFIED_ENV}=1 -- the checkpoint could not "
+                  f"confirm these are aligned.", flush=True)
+        else:
+            print(f"ASTROM CHECKPOINT [{stage}]: NOT A PASS -- "
+                  f"{len(unverified_blocking)} item(s) were MEASURED and refused (see "
+                  f"above).  A gross offset is exactly what m2 refuses to "
+                  f"correct, so a refusal that still passed let the retie "
+                  f"loop call a 4\" misalignment converged (#312).  Set "
+                  f"{ALLOW_UNVERIFIED_ENV}=1 to proceed anyway.", flush=True)
     if failures and not correcting:
         msg = (f"ASTROMETRY REGRESSION at stage {stage}: the solution moved after "
                f"it was frozen --\n  " + "\n  ".join(failures))
@@ -2683,6 +2753,7 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
     filters = []
     failures = []
     unverified = []   # measured nothing -- reported, never a pass on its own
+    unverified_blocking = []
     if anchor_tie is not None:
         if not anchor_tie["vs_full"] or not anchor_tie["vs_full"].get("ok"):
             failures.append(f"anchor {anchor_filter}: no coherent tie to the reference")
@@ -2835,12 +2906,13 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
                         f"anything")
         filters.append(frec)
 
-    passed = not failures
+    passed = _checkpoint_passed(failures, unverified_blocking)
     record = dict(stage="m7-crossfilter", context=context, date=_utcnow_iso(),
                   anchor_filter=anchor_filter,
                   anchor_reference_tie=_jsonable(anchor_tie),
                   filters=filters, failures=failures, passed=passed,
-                  unverified=unverified, all_verified=not unverified,
+                  unverified=unverified, unverified_blocking=unverified_blocking,
+                  all_verified=not unverified,
                   tolerances=dict(crossfilter_tol_mas=tol_mas,
                                   local_cell_tol_mas=cell_tol_mas,
                                   local_cell_size_arcsec=cell_arcsec,
