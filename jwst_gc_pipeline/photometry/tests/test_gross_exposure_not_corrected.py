@@ -117,3 +117,42 @@ def test_a_BULK_correction_is_not_judged_by_the_per_exposure_limit():
                 module=None, dra_onsky_mas=-14830.0, ddec_onsky_mas=120.0,
                 dec_deg=-29.0)
     _assert_correction_magnitudes([bulk], 'Offsets_test.csv')
+
+
+# ---------------------------------------------------------------------------
+# The WIRING.  Every test above drives _gross_per_exposure_offset directly, so
+# the whole fix reverts at the call site with the suite green:
+#
+#     gross = _gross_per_exposure_offset(res)   ->   gross = None      29 passed
+#
+# The inherited unverified_blocking site-count pin does not help: the mutant
+# changes the CONDITION, not the append, so the count stays at 3.
+# ---------------------------------------------------------------------------
+
+def test_the_correcting_branch_is_GUARDED_by_the_gross_check():
+    import inspect
+
+    from jwst_gc_pipeline.photometry import astrometry_checkpoint as A
+    src = inspect.getsource(A.run_visit_checkpoint)
+
+    assert 'gross = _gross_per_exposure_offset(res)' in src, (
+        'the gross check must be computed from the measurement, not stubbed')
+    guard = src.index('if correcting and gross is not None:')
+    plain = src.index('elif correcting:')
+    assert guard < plain, (
+        'the correcting branch must be reachable only past the gross test, or '
+        'an arcsecond-scale peak is emitted as a per-exposure correction again')
+
+
+def test_the_gross_branch_blocks_rather_than_only_advising():
+    """A gross exposure that merely warned would let the run continue on a
+    frame nobody measured -- it goes on the blocking list, which is what makes
+    the checkpoint not-a-pass."""
+    import inspect
+
+    from jwst_gc_pipeline.photometry import astrometry_checkpoint as A
+    src = inspect.getsource(A.run_visit_checkpoint)
+    start = src.index('if correcting and gross is not None:')
+    block = src[start:src.index('elif correcting:')]
+    assert 'unverified_blocking.append(' in block
+    assert 'corrections.append(' not in block

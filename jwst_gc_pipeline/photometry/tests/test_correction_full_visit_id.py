@@ -125,3 +125,46 @@ def test_a_single_observation_field_is_UNAFFECTED():
     resolved = _match_rows(dict(visit=full, filtername='F182M',
                                 module='nrca'), tbl)
     assert list(bare) == list(resolved) == [0]
+
+
+# ---------------------------------------------------------------------------
+# The WIRING.  Every test above calls resolve_full_visit_id directly, so both
+# mutants below left the suite green:
+#
+#     corr_visit = visit                          (upgrade never happens)
+#     bulk site left as visit= not corr_visit=    (a separate edit, easy to miss)
+#
+# The second is realistic: the bulk correction is appended ten lines further
+# down than the per-exposure one.
+# ---------------------------------------------------------------------------
+
+def test_BOTH_correction_sites_use_the_resolved_visit():
+    import inspect
+    import re as _re
+
+    from jwst_gc_pipeline.photometry import astrometry_checkpoint as A
+    src = inspect.getsource(A.run_visit_checkpoint)
+
+    appends = [m.start() for m in _re.finditer(r'corrections\.append\(', src)]
+    assert len(appends) == 2, (
+        f'expected the per-exposure and bulk sites, found {len(appends)}; '
+        f'a new one must be checked too')
+    for start in appends:
+        block = src[start:start + 400]
+        assert 'visit=corr_visit' in block, (
+            'a corrections.append() that does not carry the resolved visit id '
+            'emits a correction no multi-observation table can address')
+
+
+def test_the_resolved_visit_is_computed_BEFORE_the_corrections():
+    """`corr_visit = ...` moved below the appends would leave a NameError or a
+    stale value; ordering is part of the wiring."""
+    import inspect
+
+    from jwst_gc_pipeline.photometry import astrometry_checkpoint as A
+    src = inspect.getsource(A.run_visit_checkpoint)
+    assert 'corr_visit = resolve_full_visit_id' in src, (
+        'corr_visit is assigned from something other than the resolver, so the '
+        'upgrade never happens and every correction keeps the bare visit')
+    assert (src.index('corr_visit = resolve_full_visit_id')
+            < src.index('corrections.append('))
