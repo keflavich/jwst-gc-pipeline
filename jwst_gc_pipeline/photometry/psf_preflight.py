@@ -101,6 +101,37 @@ class PSFDataMissingError(RuntimeError):
     """A local stpsf data file the run needs is not on this filesystem."""
 
 
+def _decline_on():
+    """Exception classes the preflight treats as "cannot speak to this".
+
+    The preflight makes a MAST query and downloads an OPD (~23 s cold, 0.6 s
+    warm), so it is exposed to every failure the network is.  Today the same
+    failure inside ``get_psf_model`` is caught by its generic retry loop and
+    retried; if it escaped from HERE it would kill the residual build outright
+    -- inverting this module's own rule that a preflight failing a run the run
+    would have survived is worse than no preflight.
+
+    ``requests`` exceptions are covered by ``OSError`` (``RequestException``
+    derives from ``IOError``).  astroquery's ``RemoteServiceError`` does NOT --
+    its MRO is ``(Exception, BaseException, object)`` -- so it is imported and
+    added explicitly where available.
+
+    The repo forbids bare/blanket exception handling, so this is a named list
+    rather than ``except Exception``.  A class not on it still propagates; the
+    call sites treat the preflight as advisory precisely because this list can
+    never be provably complete.
+    """
+    classes = [OSError, KeyError, AttributeError, TypeError, RuntimeError,
+               IndexError, ImportError]
+    try:
+        from astroquery.exceptions import (  # noqa: F401
+            RemoteServiceError, TimeoutError as AQTimeoutError)
+        classes += [RemoteServiceError, AQTimeoutError]
+    except ImportError:
+        pass
+    return tuple(classes)
+
+
 def preflight_psf_data(instrument, filtername, obsdate, verbose=True):
     """Load the OPD this run will need, now, so a missing file costs seconds.
 
@@ -109,12 +140,18 @@ def preflight_psf_data(instrument, filtername, obsdate, verbose=True):
     the lookup itself is the check, and it is the cheap part of building a PSF
     grid (no ``psf_grid`` call, no fov, no oversampling).
 
+    NOTE this is not free: it issues a MAST query and downloads the OPD (~23 s
+    cold, ~0.6 s warm once stpsf has cached it).  That is the point -- it
+    exercises the failing path -- but it means the preflight is exposed to
+    network failures, which is why `_decline_on` is as broad as the repo's
+    no-blanket-except rule allows.
+
     Returns True when the data is there.  Raises `PSFDataMissingError` naming
     the file, the tree, and any sibling tree that has it.  Anything else --
-    stpsf not importable, an instrument this does not know, a network hiccup in
-    an unrelated part of the load -- returns False and is left to the real call
-    site: a preflight that fails a run for a reason the run itself would have
-    survived is worse than no preflight.
+    stpsf not importable, an instrument this does not know, a MAST outage --
+    returns False and is left to the real call site, where the same failure is
+    retried rather than fatal: a preflight that fails a run for a reason the run
+    itself would have survived is worse than no preflight.
     """
     if not obsdate:
         return False
@@ -139,9 +176,10 @@ def preflight_psf_data(instrument, filtername, obsdate, verbose=True):
         raise PSFDataMissingError(
             f"PSF preflight for {instrument}/{filtername} at {obsdate}:\n{msg}"
         ) from ex
-    except (OSError, KeyError, AttributeError, TypeError):
+    except _decline_on():
         # Not a missing-data failure this can speak to.  Say nothing and let the
-        # real PSF build report whatever it finds.
+        # real PSF build report whatever it finds -- where a network failure is
+        # retried rather than fatal.
         return False
     if verbose:
         print(f"PSF preflight OK: {instrument} OPD for {obsdate} is present "

@@ -197,3 +197,76 @@ def test_the_retry_loop_asks_the_classifier():
             < src.rindex('Failed to download PSF after'))
     assert src.count('Failed to download PSF after') == 2, (
         'the network retry branch must survive unchanged')
+
+
+# ---------------------------------------------------------------------------
+# The preflight makes a MAST query and downloads an OPD, so it is exposed to
+# every failure the network is.  `requests` errors are covered by OSError
+# (RequestException derives from IOError); astroquery's RemoteServiceError is
+# NOT -- its MRO is (Exception, BaseException, object) -- so a MAST outage
+# ESCAPED and killed build_mergedcat_residuals outright, where the same failure
+# inside get_psf_model is caught by the retry loop and retried.
+# ---------------------------------------------------------------------------
+
+class _RemoteServiceError(Exception):
+    """astroquery's shape: a plain Exception, not an OSError."""
+
+
+def test_astroquerys_error_really_is_not_an_OSError():
+    """The premise, pinned -- this is why OSError was not enough."""
+    assert not issubclass(_RemoteServiceError, OSError)
+    try:
+        from astroquery.exceptions import RemoteServiceError
+        assert not issubclass(RemoteServiceError, OSError)
+    except ImportError:
+        pass
+
+
+def test_astroquerys_error_is_on_the_decline_list():
+    try:
+        from astroquery.exceptions import RemoteServiceError
+    except ImportError:
+        pytest.skip('astroquery not installed')
+    assert issubclass(RemoteServiceError, P._decline_on())
+
+
+@pytest.mark.parametrize('exc', [
+    RuntimeError('stpsf internals'),
+    IndexError('empty OPD table'),
+    ImportError('lazy import failed mid-call'),
+])
+def test_a_MAST_side_failure_DECLINES_instead_of_escaping(monkeypatch, exc):
+    """Each of these escaped before.  A preflight that kills a run the run
+    itself would have survived is worse than no preflight."""
+    _install(monkeypatch, _Inst(exc))
+    assert P.preflight_psf_data('NIRCAM', 'F277W', '2022-09-01',
+                                verbose=False) is False
+
+
+def test_a_real_astroquery_error_DECLINES(monkeypatch):
+    try:
+        from astroquery.exceptions import RemoteServiceError
+    except ImportError:
+        pytest.skip('astroquery not installed')
+    _install(monkeypatch, _Inst(RemoteServiceError('MAST 503')))
+    assert P.preflight_psf_data('NIRCAM', 'F277W', '2022-09-01',
+                                verbose=False) is False
+
+
+def test_requests_errors_are_covered_by_OSError():
+    """Not by accident -- documented, so nobody removes OSError from the list."""
+    try:
+        import requests
+    except ImportError:
+        pytest.skip('requests not installed')
+    assert issubclass(requests.exceptions.RequestException, OSError)
+    assert issubclass(requests.exceptions.ConnectionError, P._decline_on())
+    assert issubclass(requests.exceptions.ReadTimeout, P._decline_on())
+
+
+def test_the_missing_FILE_error_still_RAISES_through_the_wider_net(monkeypatch):
+    """Widening the decline list must not swallow the one condition this exists
+    to report."""
+    _install(monkeypatch, _Inst(ValueError(REAL)))
+    with pytest.raises(P.PSFDataMissingError):
+        P.preflight_psf_data('NIRCAM', 'F277W', '2022-09-01', verbose=False)
