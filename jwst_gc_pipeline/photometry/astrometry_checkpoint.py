@@ -798,6 +798,30 @@ def resolve_full_visit_id(tables, bare_visit):
     return full
 
 
+def _gross_per_exposure_offset(res):
+    """Why this per-exposure measurement is too gross to correct, or None.
+
+    ``_assert_correction_magnitudes`` already refuses an arcsecond-scale
+    per-exposure correction -- but it refuses the whole BATCH, at the point of
+    writing the table, so one bad exposure discards every good correction
+    measured alongside it.  This is the same limit asked at the point of
+    MEASUREMENT, where the exposure can be refused on its own.
+
+    The limit tracks ``ASTROM_MAX_CORRECTION_ARCSEC`` so the two cannot drift:
+    anything this returns non-None for is something the writer would have
+    rejected anyway.
+    """
+    off = res.get("off")
+    if off is None or not np.isfinite(off):
+        return None
+    limit_arcsec = _positive_env_float("ASTROM_MAX_CORRECTION_ARCSEC",
+                                       MAX_CORRECTION_ARCSEC)
+    if limit_arcsec <= 0 or off <= limit_arcsec * 1000.0:
+        return None
+    return (f"{off / 1000.0:.2f}\" off the visit consensus "
+            f"(> the {limit_arcsec:g}\" per-exposure limit)")
+
+
 def _table_visit_obs(tbl):
     """Per-row ``(observation, visit)`` keys for an offsets table."""
     obs, vis = [], []
@@ -2401,7 +2425,38 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                        f"(dra={res['dra']:.2f}±{res.get('dra_err', float('nan')):.2f}, "
                        f"ddec={res['ddec']:.2f}±{res.get('ddec_err', float('nan')):.2f}, "
                        f"swept={res.get('swept')})")
-                if correcting:
+                gross = _gross_per_exposure_offset(res)
+                if correcting and gross is not None:
+                    # A per-exposure tie is mas-scale.  An arcsecond-scale one is
+                    # the wide-sweep/footprint-geometry regime, which the
+                    # UNVERIFIED path above already refuses to apply -- but an
+                    # exposure only reaches that path when it has no measurable
+                    # tie at all.  One that produced a peak, at the same
+                    # arcsecond scale, fell through to here and was emitted as a
+                    # correction; `_assert_correction_magnitudes` then rejected
+                    # the whole batch, so ONE such exposure took every valid
+                    # correction in the visit down with it (o023, 38963501: 24
+                    # mas-scale corrections lost to a single -9.28" nrcb1 peak
+                    # whose three sibling exposures were rejected as #158
+                    # aliases).  Refuse it here instead: blocking-unverified, so
+                    # the run still stops for it, and the visit's real
+                    # corrections are still written.
+                    unverified_blocking.append(
+                        f"{vctx}: exposure {exp['key']} measured {gross} "
+                        f"-- a per-exposure tie is mas-scale, so this is the "
+                        f"wide-sweep/footprint-geometry regime, not a "
+                        f"per-exposure misalignment.  NOT corrected; a gross "
+                        f"frame belongs to the per-visit BULK path.  "
+                        f"(dra={res['dra'] / 1000.0:+.3f}\", "
+                        f"ddec={res['ddec'] / 1000.0:+.3f}\", "
+                        f"contrast={res.get('contrast')}, "
+                        f"off/window={res.get('window_edge_fraction')}, "
+                        f"reproduced at an independent window: "
+                        f"{res.get('window_consistent')})")
+                    unverified.append(unverified_blocking[-1])
+                    print(f"ASTROM CHECKPOINT [{stage}] GROSS (not correcting): "
+                          f"{unverified_blocking[-1]}", flush=True)
+                elif correcting:
                     dec_mid = float(np.median(cons["coords"].dec.deg))
                     corrections.append(dict(
                         visit=corr_visit, exposure=exp["key"][1],

@@ -55,18 +55,27 @@ def test_only_an_exact_1_overrides(monkeypatch, value):
     assert A._checkpoint_passed([], [CLOUDC]) is expected
 
 
-def test_the_two_blocking_sites_feed_the_blocking_list():
+def test_the_blocking_sites_feed_the_blocking_list():
     """Only the MEASURED-AND-REFUSED sites may block.  Pinned by source because
     the alternative -- a string-matched severity -- would silently reclassify
-    an entry whenever someone reworded a message."""
+    an entry whenever someone reworded a message.
+
+    Three sites qualify.  The third is the arcsecond-scale per-exposure
+    measurement: it IS a measurement, and it IS refused (a per-exposure tie is
+    mas-scale, so a gross one is the wide-sweep/footprint-geometry regime), so
+    it belongs on the blocking list rather than the advisory one.  Raising this
+    count is a review decision -- a new site must be measured-and-refused, not
+    merely unwelcome.
+    """
     import inspect
     src = inspect.getsource(A)
-    assert src.count('unverified_blocking.append(') == 2, (
-        'exactly two sites are measured-and-refused: MODULE-ANTISYMMETRIC and '
-        'the untrustworthy consensus->reference tie')
-    # both must ALSO appear in the full unverified list, or they stop being
+    assert src.count('unverified_blocking.append(') == 3, (
+        'exactly three sites are measured-and-refused: MODULE-ANTISYMMETRIC, '
+        'the untrustworthy consensus->reference tie, and the gross '
+        'per-exposure offset')
+    # all must ALSO appear in the full unverified list, or they stop being
     # reported at all
-    assert src.count('unverified.append(unverified_blocking[-1])') == 2
+    assert src.count('unverified.append(unverified_blocking[-1])') == 3
 
 
 def test_could_not_measure_is_still_a_PASS():
