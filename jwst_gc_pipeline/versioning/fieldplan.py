@@ -38,12 +38,24 @@ def live_env():
         env['jwst_version'] = str(jwst.__version__)
     except (ImportError, AttributeError):
         pass
+    # A CRDS outage must not propagate: this is a BEST-EFFORT description of the
+    # environment, and not knowing the context is a missing key, not an error.
+    # `crds.core.exceptions.CrdsError` is a plain Exception -- MRO
+    # (CrdsError, Exception, BaseException, object) -- so it is NOT covered by
+    # OSError and used to escape, failing the suite whenever
+    # jwst-crds.stsci.edu returned 504 (2026-08-09).  Same shape as #358.
+    _crds_errors = [ImportError, AttributeError, OSError, ValueError]
+    try:
+        from crds.core.exceptions import CrdsError
+        _crds_errors.append(CrdsError)
+    except ImportError:
+        pass
     try:
         import crds
         ctx = crds.get_context_name('jwst')
         if ctx:
             env['crds_context'] = str(ctx)
-    except (ImportError, AttributeError, OSError, ValueError):
+    except tuple(_crds_errors):
         pass
     return env
 
