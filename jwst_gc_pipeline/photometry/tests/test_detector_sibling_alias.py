@@ -151,3 +151,36 @@ def test_the_checkpoint_consults_it():
     src = inspect.getsource(A.run_visit_checkpoint)
     assert 'detector_sibling_alias_keys' in src
     assert src.index('sibling_alias_keys = ') < src.index('corrections.append(')
+
+
+def test_a_sibling_alias_BLOCKS_rather_than_only_advising():
+    """Review of #359: routed to the advisory list, this branch caught o023's
+    exposure ('1', 4, 'nrcb1') one step before #355's gross branch and took the
+    F200W checkpoint from not-passing to PASSING -- two detectors that produced
+    no tie anywhere in the visit, reported as advisory lines.
+
+    A peak was measured and deliberately refused, which is the same class as
+    #341's and #355's items, so it belongs on the blocking list with them."""
+    import inspect
+
+    from jwst_gc_pipeline.photometry import astrometry_checkpoint as A
+    src = inspect.getsource(A.run_visit_checkpoint)
+    start = src.index('in sibling_alias_keys:')
+    block = src[start:src.index('elif exp["misaligned"] and tuple(exp["key"]) '
+                                'in antisym_keys:', start)]
+    assert 'unverified_blocking.append(' in block, (
+        'a sibling alias that only advises lets a field pass its astrometry '
+        'gate with a detector that never tied')
+    assert 'corrections.append(' not in block
+
+
+def test_the_sibling_branch_still_comes_FIRST():
+    """Order is deliberate: the alias diagnosis is more specific than 'gross',
+    so it should be the message the operator gets -- now that both block, the
+    ordering costs nothing."""
+    import inspect
+
+    from jwst_gc_pipeline.photometry import astrometry_checkpoint as A
+    src = inspect.getsource(A.run_visit_checkpoint)
+    assert (src.index('in sibling_alias_keys:')
+            < src.index('if correcting and gross is not None:'))

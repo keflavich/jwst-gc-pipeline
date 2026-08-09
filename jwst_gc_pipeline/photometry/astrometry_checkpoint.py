@@ -2499,7 +2499,16 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                        f"it (issue #347).  NOT correcting.")
                 print(f"ASTROM CHECKPOINT [{stage}] ALIAS (not correcting): "
                       f"{msg}", flush=True)
-                unverified.append(msg)
+                # BLOCKING, not advisory.  A peak was MEASURED and deliberately
+                # refused, which is the same class as #341's and #355's items --
+                # and what it says about the field is stronger than either: this
+                # detector produced no tie ANYWHERE in the visit.  Routed to the
+                # advisory list it took o023's F200W checkpoint from not-passing
+                # to PASSING, because it caught, one branch earlier, the very
+                # exposure #355 blocks on.  A field with two detectors that
+                # never tied is not a field that passed its astrometry gate.
+                unverified_blocking.append(msg)
+                unverified.append(unverified_blocking[-1])
             elif exp["misaligned"] and tuple(exp["key"]) in antisym_keys:
                 # antisymmetric alias: recorded above at the visit level, never
                 # corrected, never a late-stage regression (the number it would
