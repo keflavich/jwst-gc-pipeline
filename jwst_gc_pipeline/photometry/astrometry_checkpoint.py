@@ -50,6 +50,7 @@ Every checkpoint writes a machine-readable record under
 ``{basepath}/astrometry_checkpoints/`` so the release gate can audit the full
 ladder.  Nothing here ever edits ``_cal.fits`` or pokes a mosaic GWCS.
 """
+import collections
 import glob
 import json
 import os
@@ -796,6 +797,70 @@ def resolve_full_visit_id(tables, bare_visit):
     if int(full[-3:]) != int(str(bare_visit)[-3:]):
         return bare_visit
     return full
+
+
+def detector_sibling_alias_keys(exposures):
+    """Exposure keys whose OWN DETECTOR says their peak is a footprint ridge.
+
+    gc2211 o023's F200W visit, nrcb1 -- four exposures, one search window, one
+    detector::
+
+        contrast 8, edge 1.00, reproduced=False  ->  alias_rejected
+        contrast 7, edge 1.00, reproduced=False  ->  alias_rejected
+        contrast 8, edge 0.99, reproduced=False  ->  alias_rejected
+        contrast 5, edge 0.93, reproduced=True   ->  ACCEPTED
+
+    The accepted one has the LOWEST contrast of the four -- exactly
+    `DEFAULT_MIN_CONTRAST`, clearing the floor by nothing -- and differs from
+    its siblings only in that one confirmation probe reproduced its peak.  On a
+    detector whose pair count is down ~10x (5.4k-17k against 60k-272k elsewhere
+    in the same visit) while its source count is normal, that is the #158
+    footprint ridge: a pair-density feature of the DETECTOR's geometry, which
+    every exposure of it shares.  A probe reproducing it is not evidence
+    against that -- the ridge is there at the other window too.
+
+    So: when a swept, window-edge measurement's siblings on the same detector,
+    at the same window, were rejected as aliases, it is rejected with them.
+    The rule uses only evidence already in the record and needs no new
+    threshold; what it asks is whether this detector produced a tie ANYWHERE in
+    the visit, and here it did not.
+
+    Deliberately narrow -- ALL of:
+
+      * the measurement is ``swept`` and sits at/over ``WINDOW_EDGE_FRACTION``
+        (a clean mas-scale tie has edge ~1e-4 and is untouched)
+      * it shares its detector and window with >= 2 rejected siblings, so a
+        single unlucky neighbour cannot condemn it
+      * a MAJORITY of the detector's measurements at that window were rejected
+
+    A detector that ties cleanly in most exposures keeps its odd one out --
+    that one is a real per-exposure problem and must stay visible.
+    """
+    from .astrometry_offsets import WINDOW_EDGE_FRACTION
+
+    by_detector = collections.defaultdict(list)
+    for exp in exposures:
+        res = exp.get("vs_consensus")
+        key = tuple(exp.get("key") or ())
+        if res is None or len(key) < 3:
+            continue
+        by_detector[(key[2], res.get("window_arcsec"))].append((key, exp, res))
+
+    flagged = set()
+    for (_det, _win), group in by_detector.items():
+        rejected = [g for g in group if g[2].get("alias_rejected")]
+        if len(rejected) < 2 or len(rejected) * 2 <= len(group):
+            continue
+        for key, _exp, res in group:
+            if res.get("alias_rejected"):
+                continue
+            if not res.get("swept"):
+                continue
+            edge = res.get("window_edge_fraction")
+            if edge is None or edge < WINDOW_EDGE_FRACTION:
+                continue
+            flagged.add(key)
+    return flagged
 
 
 def _gross_per_exposure_offset(res):
@@ -2374,6 +2439,9 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                 f"rebuilt/investigated")
             unverified.append(unverified_blocking[-1])
         antisym_keys = antisym["keys"]
+        # A swept, window-edge peak on a detector whose OTHER exposures were all
+        # rejected as footprint-ridge aliases is the same ridge (#158/#347).
+        sibling_alias_keys = detector_sibling_alias_keys(cons["exposures"])
         exp_records = []
         for exp in cons["exposures"]:
             res = exp["vs_consensus"]
@@ -2410,7 +2478,24 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                     f"visit consensus (isolated footprint / too few overlap "
                     f"stars) -- internally UNVERIFIED; the reference tie is its "
                     f"only check.{extra}")
-            if exp["misaligned"] and tuple(exp["key"]) in antisym_keys:
+            if exp["misaligned"] and tuple(exp["key"]) in sibling_alias_keys:
+                # Rejected with its siblings, and reported the same way they
+                # are: this detector produced no tie anywhere in the visit, so
+                # the exposure is UNVERIFIED, not misaligned.
+                msg = (f"{vctx}: exposure {exp['key']} peak "
+                       f"{res['off'] / 1000.0:.1f}\" at the "
+                       f"{res.get('window_arcsec')}\" window "
+                       f"(contrast {res.get('contrast')}, off/window="
+                       f"{res.get('window_edge_fraction'):.2f}) is rejected "
+                       f"with its DETECTOR's sibling exposures, which were "
+                       f"alias-rejected at the same window -- a footprint "
+                       f"ridge is a property of the detector's geometry, and "
+                       f"reproducing at a second window does not distinguish "
+                       f"it (issue #347).  NOT correcting.")
+                print(f"ASTROM CHECKPOINT [{stage}] ALIAS (not correcting): "
+                      f"{msg}", flush=True)
+                unverified.append(msg)
+            elif exp["misaligned"] and tuple(exp["key"]) in antisym_keys:
                 # antisymmetric alias: recorded above at the visit level, never
                 # corrected, never a late-stage regression (the number it would
                 # be compared against is not a measurement of anything).
