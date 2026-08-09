@@ -164,13 +164,28 @@ for ((it=1; it<=MAXITER; it++)); do
     # rename only fires when the job STARTS, and a quota-bound retie sits PENDING
     # for hours under the generic name -- which is exactly when the queue is being
     # watched, and when several reduce arrays are in flight at once.
+    # `|| red_rc=$?` is NOT decoration.  Under `set -e` a plain
+    # `var=$(cmd)` assignment exits the script when cmd fails, and
+    # `sbatch --wait` returns nonzero as soon as ANY array task fails -- which
+    # is exactly the case reduce_fully_succeeded exists to diagnose.  So the
+    # loop died here, before `red_rc=$?`, before `echo "$red_out"`, and before
+    # the guard: it stopped safely but SILENTLY.  cloudef (2026-08-09, F360M of
+    # 4 filters failed) left a log ending at "[iter 1] reducing" with no sbatch
+    # output and no reason, and the operator has to go to sacct to find out
+    # that anything happened at all.
+    red_rc=0
     red_out=$(sbatch --wait --parsable --array=0-$((NF-1)) --qos="$QOS" \
         --job-name="${TARGET}${PROPOSAL}-o${FIELD}-reduce-retie${it}" \
         --export="${export_common}" \
-        "$HERE/submit_reduction.sbatch" 2>&1)
-    red_rc=$?
+        "$HERE/submit_reduction.sbatch" 2>&1) || red_rc=$?
     echo "$red_out"
-    red_jid=$(echo "$red_out" | grep -oE '^[0-9]+' | head -1)
+    # `|| true` for the same reason as above, with `pipefail` making it sharper:
+    # a non-matching grep fails the whole pipeline.  A SUBMISSION failure (QOS
+    # limit, bad partition, malformed --export) prints an error with no leading
+    # job id, so this grep matches nothing and the loop died HERE -- still one
+    # line before the guard, still without printing why.  An empty red_jid with
+    # a nonzero rc is a case reduce_fully_succeeded already reports.
+    red_jid=$(echo "$red_out" | grep -oE '^[0-9]+' | head -1) || true
 
     # `sbatch --wait` blocks until every array task is terminal, but its exit
     # status alone is not a safe gate: a partially-failed reduce must NOT be
@@ -192,15 +207,30 @@ for ((it=1; it<=MAXITER; it++)); do
     # submit_cataloging_perframe.sh self-sbatches the chain; PHASES="m12" stops at
     # the m2 merge+checkpoint.  Capture the finalize (stage B) job id it prints.
     export ASTROM_CHECKPOINT_APPLY=1
+    chain_rc=0
     chain_out=$(PROPOSAL=$PROPOSAL FIELD=$FIELD TARGET=$TARGET MODULES=$MODULES \
         EACH_SUFFIX=$EACH_SUFFIX FILTERS="$FILTERS" MAX_GROUP_SIZE=$MAX_GROUP_SIZE \
         PHASES="m12" PIPE_ROOT=$PIPE_ROOT \
         ASTROM_M2_CORRECTION_FLOOR_MAS=$ASTROM_M2_CORRECTION_FLOOR_MAS \
-        bash "$HERE/submit_cataloging_perframe.sh")
+        bash "$HERE/submit_cataloging_perframe.sh") || chain_rc=$?
     echo "$chain_out"
-    fin_jid=$(echo "$chain_out" | grep -oE 'finalize[^0-9]*[0-9]+' | grep -oE '[0-9]+' | tail -1)
+    if [ "${chain_rc:-0}" -ne 0 ]; then
+        echo "[iter $it] the cataloging submission FAILED (rc=$chain_rc) -- STOPPING."
+        echo "           Its output is above; nothing was queued to wait on."
+        exit 1
+    fi
+    # Both of these need `|| true`: the fallback exists for "the first pattern
+    # did not match", which under `set -o pipefail` is exactly when a bare
+    # assignment exits the script -- so the fallback could never run.
+    fin_jid=$(echo "$chain_out" | grep -oE 'finalize[^0-9]*[0-9]+' | grep -oE '[0-9]+' | tail -1) || true
     if [ -z "$fin_jid" ]; then
-        fin_jid=$(echo "$chain_out" | grep -oE '[0-9]{6,}' | tail -1)
+        fin_jid=$(echo "$chain_out" | grep -oE '[0-9]{6,}' | tail -1) || true
+    fi
+    if [ -z "$fin_jid" ]; then
+        echo "[iter $it] could not parse a finalize job id from the cataloging"
+        echo "           submission output above -- STOPPING rather than waiting"
+        echo "           on nothing and calling the result converged."
+        exit 1
     fi
     echo "[iter $it] waiting on m2 finalize job $fin_jid"
     st=$(wait_job "$fin_jid")
