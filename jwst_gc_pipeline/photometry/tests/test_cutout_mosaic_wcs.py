@@ -179,6 +179,7 @@ class TestResampleOutputWcsGuard:
             L._check_resample_output_wcs(broken, context='data_i2d')
 
 
+@pytest.mark.crds
 class TestCutoutMergedcatMosaicsAreWritten:
     """End-to-end: crop a coadd to its finite data, then land a second mosaic
     on that cropped grid -- the mergedcat residual/model path that failed."""

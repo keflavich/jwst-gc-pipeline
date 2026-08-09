@@ -755,6 +755,66 @@ def visit_obs_key(value):
     return None, int(s[-3:])
 
 
+#: ``jw`` + proposal(5) + observation(3) + visit(3), anywhere in a path.
+_VISIT_ID_IN_NAME_RE = re.compile(r'jw(\d{5})(\d{3})(\d{3})_', re.IGNORECASE)
+
+
+def resolve_full_visit_id(tables, bare_visit):
+    """Upgrade a bare visit number to ``jwPPPPPOOOVVV`` from the frames' names.
+
+    A per-frame catalog's ``VISIT`` metadatum is the visit NUMBER (``1``); the
+    observation lives only in the source frame's name, which the catalog carries
+    as ``FILENAME``::
+
+        VISIT    = 1
+        FILENAME = '.../jw02211050001_02201_00001_nrcb1_destreak_o050_crf.fits'
+                          ^^^^^ proposal
+                               ^^^ observation
+                                  ^^^ visit
+
+    A correction built from the bare number cannot say WHICH observation it was
+    measured on, so `_match_rows` refuses it against a multi-observation table
+    (`AmbiguousVisitMatchError`) -- which is every gc2211 finalize: all five of
+    its observations are visit 001, so ``'1'`` names all of them at once and the
+    correction would broadcast (#284).  Recovering the observation from the
+    frame name is what makes the correction addressable.
+
+    ``FILENAME`` is read first-table-wins: a group where the FIRST table lacks
+    provenance keeps the bare visit even if the rest agree.  That is the
+    conservative direction and is deliberately NOT the same rule as the
+    mixed-group check below, which is all-or-nothing.
+
+    Only upgrades when EVERY table in the group agrees on one (proposal,
+    observation, visit); a group whose frames disagree is contaminated with
+    another observation's exposures (the class #352 fixed), and silently
+    picking one of them would attach the correction to the wrong pointing.
+    Such a group keeps the bare visit, so `_match_rows` still refuses it -- an
+    error that names the real problem rather than a plausible wrong answer.
+    """
+    ids = set()
+    for tbl in tables:
+        fn = None
+        for key in ("FILENAME", "filename"):
+            if key in getattr(tbl, "meta", {}):
+                fn = str(tbl.meta[key])
+                break
+        if not fn:
+            return bare_visit
+        m = _VISIT_ID_IN_NAME_RE.search(os.path.basename(fn))
+        if not m:
+            return bare_visit
+        ids.add(m.group(0).rstrip('_').lower())
+    if len(ids) != 1:
+        return bare_visit
+    full = ids.pop()
+    # The name must agree with the metadatum it is replacing; a mismatch means
+    # one of the two is describing a different frame, and neither can be
+    # trusted to address a table row.
+    if int(full[-3:]) != int(str(bare_visit)[-3:]):
+        return bare_visit
+    return full
+
+
 def _table_visit_obs(tbl):
     """Per-row ``(observation, visit)`` keys for an offsets table."""
     obs, vis = [], []
@@ -2243,6 +2303,12 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
 
     for (visit, filt), tables in sorted(_group_by_visit_filter(exposure_tables).items()):
         vctx = f"{context} {filt} visit {visit} [{stage}]"
+        # The visit NUMBER groups and reports; the corrections this emits must
+        # carry the full jwPPPPPOOOVVV id, or a multi-observation offsets table
+        # cannot tell which of its pointings they belong to (see
+        # resolve_full_visit_id).  Grouping stays on the bare number so record
+        # keys and frozen-stage baselines are unchanged.
+        corr_visit = resolve_full_visit_id(tables, visit)
         try:
             cons = build_visit_consensus(tables, context=vctx,
                                          restrict_to=m2_stars,
@@ -2355,7 +2421,7 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                 if correcting:
                     dec_mid = float(np.median(cons["coords"].dec.deg))
                     corrections.append(dict(
-                        visit=exp["key"][0], exposure=exp["key"][1],
+                        visit=corr_visit, exposure=exp["key"][1],
                         module=exp["key"][2], filtername=filt,
                         # vgroup (key[4]) is carried so the WRITE path can tell
                         # two same-numbered exposures in different visit groups
@@ -2454,7 +2520,7 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                     if correcting:
                         dec_mid = float(np.median(cons["coords"].dec.deg))
                         corrections.append(dict(
-                            visit=visit, exposure=None, module=None,
+                            visit=corr_visit, exposure=None, module=None,
                             filtername=filt,
                             dra_onsky_mas=ref_tie["dra_mas"],
                             ddec_onsky_mas=ref_tie["ddec_mas"],

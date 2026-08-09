@@ -329,6 +329,48 @@ def _shift_from_consensus(fn, cfg, basepath, proposal_id, filtername, module):
         prov_table=os.path.basename(tblfn), prov_stage=prov_stage)
 
 
+def locked_row_match(offsets_tbl, visit, exposure, filtername, module, vgroup):
+    """Boolean mask of the locked-table row(s) that describe one frame.
+
+    Extracted from `_shift_from_locked` so that anything reasoning about which
+    row a frame will receive -- a table migration, a validator -- can ask the
+    reader instead of reimplementing its narrowing.  A private second copy of
+    these rules is precisely what would stay green while the real reader picked
+    a different row.
+    """
+    match = ((offsets_tbl['Visit'] == visit)
+             & (offsets_tbl['Filter'] == filtername))
+    # Support BOTH conventions: per-VISIT tables (1 row/visit, no usable
+    # Exposure) and per-EXPOSURE tables (N rows/visit).  Narrow by Exposure
+    # only when >1 row matches.
+    if match.sum() > 1 and 'Exposure' in offsets_tbl.colnames:
+        match = match & (offsets_tbl['Exposure'] == exposure)
+    # Per-MODULE narrowing (default OFF: filters lock NRCA==NRCB together).
+    # Documented exception: F410M, whose filter-specific distortion leaves
+    # NRCALONG ~40 mas inconsistent with NRCBLONG.
+    if match.sum() > 1 and 'Module' in offsets_tbl.colnames:
+        match = match & ((offsets_tbl['Module'] == module)
+                         | (offsets_tbl['Module'] == module.strip('1234')))
+    # Per-VGROUP narrowing (#183).  A visit can dither across several visit
+    # groups (physically disjoint sky tiles) and the exposure number RESTARTS
+    # in each, so (visit, exposure) alone is ambiguous -- cloudc has 2 groups
+    # in every filter, gc2211 has 6.
+    #
+    # UNCONDITIONAL, unlike the Exposure/Module narrowing above: a lone
+    # surviving row is exactly the dangerous case.  If the table carries a row
+    # for the OTHER group's exposure N and none for this one, `match.sum() == 1`
+    # and a `> 1` guard would silently apply a DIFFERENT pointing's shift.
+    # Narrow always and let the != 1 check raise.  An EMPTY Vgroup cell
+    # predates the column (or was preserved by the builder's field-safe merge)
+    # and still applies -- see vgroup_row_matches.
+    if 'Vgroup' in offsets_tbl.colnames:
+        from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+            vgroup_row_matches)
+        match = match & np.array([vgroup_row_matches(g, vgroup)
+                                  for g in offsets_tbl['Vgroup']])
+    return match
+
+
 def _shift_from_locked(fn, cfg, basepath, proposal_id, filtername,
                        refname=None, use_average=True):
     """Curated VIRAC2-locked table (per-visit or per-exposure)."""
@@ -348,36 +390,9 @@ def _shift_from_locked(fn, cfg, basepath, proposal_id, filtername,
         frame_gen = _check_generation(fn, offsets_tbl, locked_tbl)
         _validate_once(offsets_tbl, locked_tbl)
 
-        match = ((offsets_tbl['Visit'] == visit)
-                 & (offsets_tbl['Filter'] == filtername))
-        # Support BOTH conventions: per-VISIT tables (1 row/visit, no usable
-        # Exposure) and per-EXPOSURE tables (N rows/visit).  Narrow by Exposure
-        # only when >1 row matches.
-        if match.sum() > 1 and 'Exposure' in offsets_tbl.colnames:
-            match = match & (offsets_tbl['Exposure'] == exposure)
-        # Per-MODULE narrowing (default OFF: filters lock NRCA==NRCB together).
-        # Documented exception: F410M, whose filter-specific distortion leaves
-        # NRCALONG ~40 mas inconsistent with NRCBLONG.
-        if match.sum() > 1 and 'Module' in offsets_tbl.colnames:
-            match = match & ((offsets_tbl['Module'] == thismodule)
-                             | (offsets_tbl['Module'] == thismodule.strip('1234')))
-        # Per-VGROUP narrowing (#183).  A visit can dither across several visit
-        # groups (physically disjoint sky tiles) and the exposure number RESTARTS
-        # in each, so (visit, exposure) alone is ambiguous -- cloudc has 2 groups
-        # in every filter, gc2211 has 6.
-        #
-        # UNCONDITIONAL, unlike the Exposure/Module narrowing above: a lone
-        # surviving row is exactly the dangerous case.  If the table carries a row
-        # for the OTHER group's exposure N and none for this one, `match.sum() == 1`
-        # and a `> 1` guard would silently apply a DIFFERENT pointing's shift.
-        # Narrow always and let the != 1 check raise.  An EMPTY Vgroup cell
-        # predates the column (or was preserved by the builder's field-safe merge)
-        # and still applies -- see vgroup_row_matches.
-        if 'Vgroup' in offsets_tbl.colnames:
-            from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
-                vgroup_row_matches)
-            match = match & np.array([vgroup_row_matches(g, vgroup)
-                                      for g in offsets_tbl['Vgroup']])
+        match = locked_row_match(offsets_tbl, visit=visit, exposure=exposure,
+                                 filtername=filtername, module=thismodule,
+                                 vgroup=vgroup)
         if match.sum() != 1:
             raise ValueError(f"module-locked offset match={match.sum()} for {fn} "
                              f"(visit={visit}, exposure={exposure}, "
