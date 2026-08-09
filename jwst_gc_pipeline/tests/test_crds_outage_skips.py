@@ -69,6 +69,58 @@ def test_the_probe_reports_unreachable_rather_than_raising(monkeypatch):
     C._crds_state.clear()
 
 
+def _http_error(code):
+    import urllib.error
+    return urllib.error.HTTPError(C.CRDS_PROBE_URL, code, 'x', {}, None)
+
+
+def test_a_4xx_from_the_probe_endpoint_means_the_server_is_UP(monkeypatch):
+    """`/json/` expects a POST, so the GET this probe makes gets 400 from a
+    perfectly healthy server.  `HTTPError` subclasses `URLError`, so catching
+    the network errors by type marked CRDS unreachable whenever it was up --
+    every `crds`-marked test skipped on every machine, permanently, and a test
+    that always skips protects nothing."""
+    import urllib.request
+    for code in (400, 405, 404):
+        C._crds_state.clear()
+        monkeypatch.setattr(urllib.request, 'urlopen',
+                            lambda *a, _c=code, **kw: (_ for _ in ()).throw(_http_error(_c)))
+        assert C.crds_reachable() is True, f'{code} is the server answering'
+    C._crds_state.clear()
+
+
+def test_a_5xx_is_still_an_outage(monkeypatch):
+    """The failure being guarded was a 504 on the `get_server_info` POST.
+    Treating every HTTPError as "the server answered" would let it back in."""
+    import urllib.request
+    for code in (500, 502, 503, 504):
+        C._crds_state.clear()
+        monkeypatch.setattr(urllib.request, 'urlopen',
+                            lambda *a, _c=code, **kw: (_ for _ in ()).throw(_http_error(_c)))
+        assert C.crds_reachable() is False, f'{code} is an outage'
+    C._crds_state.clear()
+
+
+def test_the_probe_agrees_with_crds_itself():
+    """The probe is a proxy for "can crds talk to the server", so when crds
+    demonstrably can, the probe must not be saying otherwise.  This is the
+    check that would have caught the inversion: the URL assertion passed while
+    the answer was wrong."""
+    crds = pytest.importorskip('crds')
+    C._crds_state.clear()
+    try:
+        context = crds.get_context_name('jwst')
+    except Exception:                      # genuinely unreachable, or no cache
+        pytest.skip('crds cannot reach the server either; nothing to compare')
+    finally:
+        C._crds_state.clear()
+    assert context
+    assert C.crds_reachable() is True, (
+        'crds reached the server but the probe reports it unreachable -- every '
+        'crds-marked test would skip while the server is healthy')
+    C._crds_state.clear()
+
+
 def test_the_probe_is_cached(monkeypatch):
     """One probe per session, not one per marked test."""
     import urllib.request
