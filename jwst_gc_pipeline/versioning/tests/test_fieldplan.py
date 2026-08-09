@@ -1,4 +1,5 @@
 """Tests for the on-disk field planner (`rerun plan --field`)."""
+import pytest
 import numpy as np
 from astropy.io import fits
 from astropy.table import Table
@@ -64,6 +65,7 @@ def test_code_drift_forces_refit(tmp_path):
     assert by['m3'].verdict == rerun.REFIT
 
 
+@pytest.mark.crds
 def test_live_env_bump_triggers_re_reduce(tmp_path):
     # imaging recorded env carries an OLD jwst version (from the header); the live
     # env differs -> a re-reduction is pending.
