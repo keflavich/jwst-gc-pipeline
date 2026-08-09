@@ -29,9 +29,16 @@ import pytest
 LOCAL_DATA_ROOT = '/blue/adamginsburg/adamginsburg/jwst'
 
 #: Cheap reachability probe.  Deliberately NOT `crds.get_context_name`: that
-#: pulls the whole cache config and raises a fatal error, which is the thing
-#: being avoided.
+#: pulls the whole cache config and raises the fatal error being avoided.
+#:
+#: Probe the JSONRPC endpoint, not the site root.  The outage was a 504 on the
+#: `get_server_info` POST to /json/, and while a gateway timeout usually takes
+#: the whole app with it, a PARTIAL outage where the root answers and jsonrpc
+#: does not would mark the tests reachable and let them fail anyway -- which is
+#: the exact failure this is here to prevent.  A GET to /json/ is not the POST
+#: crds makes, so this is still a proxy; it is just a much closer one.
 CRDS_URL = os.environ.get('CRDS_SERVER_URL', 'https://jwst-crds.stsci.edu')
+CRDS_PROBE_URL = CRDS_URL.rstrip('/') + '/json/'
 CRDS_PROBE_TIMEOUT = 10
 
 _crds_state = {}
@@ -56,7 +63,8 @@ def crds_reachable():
     except ImportError:
         pass
     try:
-        urllib.request.urlopen(CRDS_URL, timeout=CRDS_PROBE_TIMEOUT).close()
+        urllib.request.urlopen(CRDS_PROBE_URL,
+                               timeout=CRDS_PROBE_TIMEOUT).close()
         _crds_state['ok'] = True
     except tuple(errors):
         _crds_state['ok'] = False
@@ -82,8 +90,8 @@ def pytest_collection_modifyitems(config, items):
 
     if any('crds' in item.keywords for item in items) and not crds_reachable():
         skip = pytest.mark.skip(
-            reason=f'CRDS server unreachable ({CRDS_URL}); a CRDS outage is '
-                   f'not a defect in this change')
+            reason=f'CRDS server unreachable ({CRDS_PROBE_URL}); a CRDS '
+                   f'outage is not a defect in this change')
         for item in items:
             if 'crds' in item.keywords:
                 item.add_marker(skip)

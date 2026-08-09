@@ -110,3 +110,24 @@ def test_the_two_known_victims_carry_the_marker():
                    / 'test_fieldplan.py').read_text()
     assert ('@pytest.mark.crds\ndef test_live_env_bump_triggers_re_reduce'
             in fieldplan_t)
+
+
+def test_the_probe_hits_the_JSONRPC_endpoint_not_the_site_root():
+    """Review of #362: the outage was a 504 on the `get_server_info` POST to
+    /json/.  A gateway timeout usually takes the whole app with it, but a
+    PARTIAL outage where the root answers and jsonrpc does not would mark the
+    tests reachable and let them fail anyway."""
+    assert C.CRDS_PROBE_URL.endswith('/json/')
+    assert C.CRDS_PROBE_URL.startswith(C.CRDS_URL.rstrip('/'))
+
+
+def test_the_probe_url_follows_CRDS_SERVER_URL(monkeypatch):
+    """A run pointed at a mirror must probe the mirror, not the default host."""
+    import importlib
+    monkeypatch.setenv('CRDS_SERVER_URL', 'https://crds-mirror.example/')
+    m = importlib.reload(C)
+    try:
+        assert m.CRDS_PROBE_URL == 'https://crds-mirror.example/json/'
+    finally:
+        monkeypatch.delenv('CRDS_SERVER_URL', raising=False)
+        importlib.reload(C)
