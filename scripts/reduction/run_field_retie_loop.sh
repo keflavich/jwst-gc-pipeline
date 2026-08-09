@@ -45,6 +45,13 @@ BASE=${BASE:-/orange/adamginsburg/jwst/${TARGET}}
 # offsets table cannot express, so correcting on their detector means never converges.
 # Setting this ABOVE the residual scatter lets the loop stop on a sub-floor PASS while
 # still measuring+recording every residual. Default 0 = strict 2 mas (unchanged).
+# When this loop started, in the checkpoint records' own stamp format.  The
+# fixed-point check counts only records written at/after it: brick, cloudc and
+# cloudef all carry repeating histories from earlier campaigns, and without this
+# the first re-run of any of them would stop at iteration 2 citing passes from
+# a different campaign.
+RETIE_RUN_START=$(date -u +%Y%m%dT%H%M%SZ)
+
 ASTROM_M2_CORRECTION_FLOOR_MAS=${ASTROM_M2_CORRECTION_FLOOR_MAS:-0}
 export ASTROM_M2_CORRECTION_FLOOR_MAS
 # Which offsets table does m2 REWRITE for this field?  The before/after md5sum
@@ -211,6 +218,33 @@ for ((it=1; it<=MAXITER; it++)); do
         echo "           Inspect logs/catalog_pf_${fin_jid}*.out before retrying."
         exit 1
     fi
+    # --- 3b. is it repeating rather than converging? ---
+    # The md5 check above only catches a table that did not change AT ALL.  A
+    # loop at a fixed point (or oscillating between two states) rewrites the
+    # last decimal place every pass, so the md5 differs and the loop runs to
+    # MAXITER measuring the same thing -- sgrc spent 4 passes at ~7 h each doing
+    # exactly that.  Ask the checkpoint records whether re-tying is changing
+    # what the next pass MEASURES.
+    if [ "${RETIE_FIXED_POINT_CHECK:-1}" = "1" ] && [ "$it" -ge 2 ]; then
+        # Same interpreter + path convention as the CONSENSUS_TBL lookup above.
+        if PYTHONPATH="${PIPE_ROOT:-}:${PYTHONPATH:-}" python \
+                -m jwst_gc_pipeline.photometry.retie_fixed_point \
+                --record-dir "${BASE}/astrometry_checkpoints" \
+                --obs-token "o${FIELD}" --since "$RETIE_RUN_START"; then
+            :
+        else
+            fp_rc=$?
+            if [ "$fp_rc" -eq 3 ]; then
+                echo "[iter $it] STOPPING: the re-tie is repeating itself (see above)."
+                echo "           More iterations cannot resolve this; the residual"
+                echo "           needs a decision, not another pass."
+                echo "           Set RETIE_FIXED_POINT_CHECK=0 to override."
+                exit 3
+            fi
+            echo "[iter $it] (fixed-point check exited $fp_rc; continuing)"
+        fi
+    fi
+
     echo "[iter $it] consensus table updated -> re-reduce + re-catalog."
     if [ "$it" -eq "$MAXITER" ]; then
         echo "REACHED MAXITER=$MAXITER without the checkpoint passing."
