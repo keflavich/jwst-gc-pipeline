@@ -157,11 +157,20 @@ for ((it=1; it<=MAXITER; it++)); do
     # rename only fires when the job STARTS, and a quota-bound retie sits PENDING
     # for hours under the generic name -- which is exactly when the queue is being
     # watched, and when several reduce arrays are in flight at once.
+    # `|| red_rc=$?` is NOT decoration.  Under `set -e` a plain
+    # `var=$(cmd)` assignment exits the script when cmd fails, and
+    # `sbatch --wait` returns nonzero as soon as ANY array task fails -- which
+    # is exactly the case reduce_fully_succeeded exists to diagnose.  So the
+    # loop died here, before `red_rc=$?`, before `echo "$red_out"`, and before
+    # the guard: it stopped safely but SILENTLY.  cloudef (2026-08-09, F360M of
+    # 4 filters failed) left a log ending at "[iter 1] reducing" with no sbatch
+    # output and no reason, and the operator has to go to sacct to find out
+    # that anything happened at all.
+    red_rc=0
     red_out=$(sbatch --wait --parsable --array=0-$((NF-1)) --qos="$QOS" \
         --job-name="${TARGET}${PROPOSAL}-o${FIELD}-reduce-retie${it}" \
         --export="${export_common}" \
-        "$HERE/submit_reduction.sbatch" 2>&1)
-    red_rc=$?
+        "$HERE/submit_reduction.sbatch" 2>&1) || red_rc=$?
     echo "$red_out"
     red_jid=$(echo "$red_out" | grep -oE '^[0-9]+' | head -1)
 
