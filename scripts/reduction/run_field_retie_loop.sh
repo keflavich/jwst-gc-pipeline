@@ -211,6 +211,33 @@ for ((it=1; it<=MAXITER; it++)); do
         echo "           Inspect logs/catalog_pf_${fin_jid}*.out before retrying."
         exit 1
     fi
+    # --- 3b. is it repeating rather than converging? ---
+    # The md5 check above only catches a table that did not change AT ALL.  A
+    # loop at a fixed point (or oscillating between two states) rewrites the
+    # last decimal place every pass, so the md5 differs and the loop runs to
+    # MAXITER measuring the same thing -- sgrc spent 4 passes at ~7 h each doing
+    # exactly that.  Ask the checkpoint records whether re-tying is changing
+    # what the next pass MEASURES.
+    if [ "${RETIE_FIXED_POINT_CHECK:-1}" = "1" ] && [ "$it" -ge 2 ]; then
+        # Same interpreter + path convention as the CONSENSUS_TBL lookup above.
+        if PYTHONPATH="${PIPE_ROOT:-}:${PYTHONPATH:-}" python \
+                -m jwst_gc_pipeline.photometry.retie_fixed_point \
+                --record-dir "${BASE}/astrometry_checkpoints" \
+                --obs-token "o${FIELD}"; then
+            :
+        else
+            fp_rc=$?
+            if [ "$fp_rc" -eq 3 ]; then
+                echo "[iter $it] STOPPING: the re-tie is repeating itself (see above)."
+                echo "           More iterations cannot resolve this; the residual"
+                echo "           needs a decision, not another pass."
+                echo "           Set RETIE_FIXED_POINT_CHECK=0 to override."
+                exit 3
+            fi
+            echo "[iter $it] (fixed-point check exited $fp_rc; continuing)"
+        fi
+    fi
+
     echo "[iter $it] consensus table updated -> re-reduce + re-catalog."
     if [ "$it" -eq "$MAXITER" ]; then
         echo "REACHED MAXITER=$MAXITER without the checkpoint passing."
