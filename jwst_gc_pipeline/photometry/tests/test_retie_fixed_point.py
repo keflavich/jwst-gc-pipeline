@@ -94,12 +94,13 @@ def test_disjoint_exposures_are_not_silently_called_identical():
 def _history(tmp_path, states, filt='F162M', token='o012'):
     d = tmp_path / 'astrometry_checkpoints'
     d.mkdir(exist_ok=True)
+    tok = f'_{token}' if token else ''
     for i, st in enumerate(states):
-        p = d / f'checkpoint_m2_{filt}_{token}_2026080{i}T000000Z.json'
+        p = d / f'checkpoint_m2_{filt}{tok}_2026080{i}T000000Z.json'
         p.write_text(json.dumps(_rec(st)))
     # the loop also writes a _latest COPY of the newest record; counting it
     # would compare a pass against itself and invent a repeat
-    (d / f'checkpoint_m2_{filt}_{token}_latest.json').write_text(
+    (d / f'checkpoint_m2_{filt}{tok}_latest.json').write_text(
         json.dumps(_rec(states[-1])))
     return str(d)
 
@@ -191,3 +192,81 @@ def test_measurements_skips_an_exposure_with_no_tie():
         {'key': ['1', 7, 'nrca9'], 'dra': None, 'ddec': None})
     assert ('1', 7, 'nrca9') not in measurements(rec)
     assert len(measurements(rec)) == 3
+
+
+# ---------------------------------------------------------------------------
+# REACHABILITY.  Only sgrc and gc2211 write _oNNN m2 records; brick, cloudc,
+# cloudef, sgrb2, arches, quintuplet, sickle, sgra and ngc6334 are untokened.
+# Requiring the token made the glob match nothing, and the check exited 0 in
+# silence -- inert on nine of the ten fields with checkpoint history, including
+# the two with the longest.
+# ---------------------------------------------------------------------------
+
+def test_an_UNTOKENED_field_is_still_judged(tmp_path):
+    """The token is a preference, not a filter."""
+    d = _history(tmp_path, [A, A_AGAIN, A, A_AGAIN], token=None)
+    stuck, lines = find_fixed_point(d, obs_token='o012')
+    assert stuck, lines
+
+
+def test_a_TOKENED_field_still_prefers_its_own_token(tmp_path):
+    """The fallback must not make a token meaningless: gc2211's five
+    observations share a directory, and o023's records are not o050's."""
+    _history(tmp_path, [A, A_AGAIN, A, A_AGAIN], token='o023')
+    d = _history(tmp_path, [B, B, B, B], token='o050')
+    stuck, lines = find_fixed_point(d, obs_token='o023')
+    assert stuck
+    assert all('o050' not in ln for ln in lines), lines
+
+
+def test_an_EMPTY_scan_SAYS_SO(tmp_path):
+    """Silence reads as 'nothing is wrong'.  An operator must be able to tell a
+    check that did not apply from a clean one."""
+    d = tmp_path / 'astrometry_checkpoints'
+    d.mkdir()
+    stuck, lines = find_fixed_point(str(d))
+    assert not stuck
+    assert any('did NOT run' in ln for ln in lines), lines
+
+
+def test_one_filter_with_BOTH_histories_gives_ONE_verdict(tmp_path):
+    """sgrc F115W is continuous -- untokened to 2026-08-06, _o012 from
+    2026-08-07 -- and splitting it reported two contradictory verdicts for one
+    filter, judging a stale tail nobody writes as if it were live."""
+    _history(tmp_path, [A, A_AGAIN, A, A_AGAIN], filt='F115W', token=None)
+    d = _history(tmp_path, [{k: (v[0] / 2 ** i, v[1] / 2 ** i)
+                             for k, v in A.items()} for i in range(4)],
+                 filt='F115W', token='o012')
+    stuck, lines = find_fixed_point(d)
+    f115 = [ln for ln in lines if ln.startswith('F115W')]
+    assert len(f115) == 1, f115
+    assert 'o012' in f115[0], 'the live tokened history is the one that counts'
+
+
+# ---------------------------------------------------------------------------
+# --since.  brick, cloudc and cloudef all carry REPEATING histories from July
+# campaigns; without a bound the first re-run of any of them stops at iteration
+# 2 citing passes from a different campaign.
+# ---------------------------------------------------------------------------
+
+def test_an_EARLIER_campaigns_passes_are_not_THIS_loops(tmp_path):
+    d = _history(tmp_path, [A, A_AGAIN, A, A_AGAIN])
+    assert find_fixed_point(d)[0], 'unbounded, the stale history judges'
+    stuck, lines = find_fixed_point(d, since='20260901T000000Z')
+    assert not stuck
+    assert any('did NOT run' in ln for ln in lines), lines
+
+
+def test_since_keeps_the_records_written_after_it(tmp_path):
+    d = _history(tmp_path, [A, A_AGAIN, A, A_AGAIN])
+    assert find_fixed_point(d, since='20260800T000000Z')[0]
+
+
+def test_the_loop_passes_its_own_start_time():
+    """Source guard: the bound is worthless if the shell does not send it."""
+    import pathlib
+    sh = (pathlib.Path(__file__).parents[3] / 'scripts' / 'reduction'
+          / 'run_field_retie_loop.sh').read_text()
+    assert 'RETIE_RUN_START=$(date -u +%Y%m%dT%H%M%SZ)' in sh
+    assert '--since "$RETIE_RUN_START"' in sh
+    assert 'retie_fixed_point' in sh

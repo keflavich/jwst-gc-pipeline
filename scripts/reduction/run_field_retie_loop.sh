@@ -45,6 +45,13 @@ BASE=${BASE:-/orange/adamginsburg/jwst/${TARGET}}
 # offsets table cannot express, so correcting on their detector means never converges.
 # Setting this ABOVE the residual scatter lets the loop stop on a sub-floor PASS while
 # still measuring+recording every residual. Default 0 = strict 2 mas (unchanged).
+# When this loop started, in the checkpoint records' own stamp format.  The
+# fixed-point check counts only records written at/after it: brick, cloudc and
+# cloudef all carry repeating histories from earlier campaigns, and without this
+# the first re-run of any of them would stop at iteration 2 citing passes from
+# a different campaign.
+RETIE_RUN_START=$(date -u +%Y%m%dT%H%M%SZ)
+
 ASTROM_M2_CORRECTION_FLOOR_MAS=${ASTROM_M2_CORRECTION_FLOOR_MAS:-0}
 export ASTROM_M2_CORRECTION_FLOOR_MAS
 # Which offsets table does m2 REWRITE for this field?  The before/after md5sum
@@ -223,7 +230,7 @@ for ((it=1; it<=MAXITER; it++)); do
         if PYTHONPATH="${PIPE_ROOT:-}:${PYTHONPATH:-}" python \
                 -m jwst_gc_pipeline.photometry.retie_fixed_point \
                 --record-dir "${BASE}/astrometry_checkpoints" \
-                --obs-token "o${FIELD}"; then
+                --obs-token "o${FIELD}" --since "$RETIE_RUN_START"; then
             :
         else
             fp_rc=$?

@@ -28,6 +28,7 @@ import collections
 import glob
 import json
 import os
+import re
 
 #: Two iterations agree when every shared correction agrees to better than this.
 #: Well under the 2 mas checkpoint tolerance -- the question is not "is the
@@ -65,18 +66,48 @@ def measurements(rec):
     return out
 
 
-def load_records(record_dir, stage="m2", filtername=None, obs_token=None):
+#: ``checkpoint_m2_F162M_o012_20260809T044537Z.json``
+_STAMP_RE = re.compile(r"_(\d{8}T\d{6}Z)\.json$")
+
+
+def record_stamp(path):
+    """The record's own timestamp, or None."""
+    m = _STAMP_RE.search(os.path.basename(path))
+    return m.group(1) if m else None
+
+
+def load_records(record_dir, stage="m2", filtername=None, obs_token=None,
+                 since=None):
     """Timestamped checkpoint records, oldest first.
 
     ``*_latest.json`` is deliberately excluded: it is a COPY of the newest
     timestamped record, so counting it would compare a pass against itself and
     report a repeat that never happened.
+
+    ``obs_token`` is a PREFERENCE, not a filter.  Only sgrc and gc2211 write
+    ``_oNNN`` m2 records; on brick, cloudc, cloudef, sgrb2, arches, quintuplet,
+    sickle, sgra and ngc6334 the records are untokened, and requiring the token
+    made this glob match nothing -- the check exited 0 in silence and the loop
+    ran to MAXITER on exactly the fields with the longest histories.  So: use
+    the tokened records where they exist, and the untokened ones where they do
+    not, which is what the records themselves mean.
     """
     filt = filtername or "*"
-    tok = f"_{obs_token}" if obs_token else "*"
-    pat = os.path.join(record_dir, f"checkpoint_{stage}_{filt}{tok}_*.json")
-    paths = [p for p in glob.glob(pat)
-             if not os.path.basename(p).endswith("_latest.json")]
+    def _scan(tok_glob):
+        return [p for p in glob.glob(
+            os.path.join(record_dir, f"checkpoint_{stage}_{filt}{tok_glob}.json"))
+            if not os.path.basename(p).endswith("_latest.json")]
+
+    paths = _scan(f"_{obs_token}_*") if obs_token else []
+    if not paths:
+        paths = _scan("_*")
+    if since:
+        # Records from an EARLIER campaign are not this loop's passes.  brick,
+        # cloudc and cloudef all carry repeating July histories; without this the
+        # first re-run of any of them would stop at iteration 2 citing passes
+        # from a different campaign.  The loop passes its own start time.
+        paths = [p for p in paths
+                 if (record_stamp(p) or "") >= str(since)]
     out = []
     for path in sorted(paths):
         try:
@@ -102,6 +133,16 @@ def _group_by_filter_token(records):
         filt = parts[1] if len(parts) > 1 else ""
         token = parts[2] if len(parts) > 2 else ""
         groups[(filt, token)].append((path, rec))
+    # A filter with BOTH histories is one continuous history that was
+    # re-tokened mid-campaign (sgrc F115W: untokened to 2026-08-06, _o012 from
+    # 2026-08-07).  Judging them as two series reports two contradictory
+    # verdicts for one filter, and the stale untokened tail -- which nobody is
+    # writing any more -- can be long enough to judge while the live tokened one
+    # is not.  Drop the untokened group when a tokened sibling exists, which is
+    # what #341 settled on for the same collision.
+    tokened_filters = {f for (f, t) in groups if t}
+    for filt in tokened_filters:
+        groups.pop((filt, ""), None)
     return groups
 
 
@@ -133,7 +174,8 @@ def compare(rec_a, rec_b, tol_mas=DEFAULT_TOL_MAS):
 
 
 def find_fixed_point(record_dir, stage="m2", tol_mas=DEFAULT_TOL_MAS,
-                     repeats=DEFAULT_REPEATS, filtername=None, obs_token=None):
+                     repeats=DEFAULT_REPEATS, filtername=None, obs_token=None,
+                     since=None):
     """``(is_fixed_point, report_lines)`` for a field's checkpoint history.
 
     A fixed point is declared only when SOME (filter, token) has repeated
@@ -143,9 +185,20 @@ def find_fixed_point(record_dir, stage="m2", tol_mas=DEFAULT_TOL_MAS,
     """
     groups = _group_by_filter_token(
         load_records(record_dir, stage=stage, filtername=filtername,
-                     obs_token=obs_token))
+                     obs_token=obs_token, since=since))
     lines = []
     stuck = False
+    if not groups:
+        # Silence here reads as "nothing is wrong".  An empty scan means the
+        # check did not apply, which the operator has to be able to tell from a
+        # clean one -- the same reason #341's denominator and #351's ngc6334
+        # all-clear had to say what they had looked at.
+        want = f"checkpoint_{stage}_{filtername or '*'}"
+        lines.append(f"no {stage} checkpoint records matched {want}* under "
+                     f"{record_dir}"
+                     + (f" written at/after {since}" if since else "")
+                     + " -- the fixed-point check did NOT run")
+        return False, lines
     for (filt, token), recs in sorted(groups.items()):
         label = f"{filt}{'/' + token if token else ''}"
         if len(recs) < repeats:
@@ -193,12 +246,17 @@ def main(argv=None):
     ap.add_argument("--obs-token", default=None)
     ap.add_argument("--tol-mas", type=float, default=DEFAULT_TOL_MAS)
     ap.add_argument("--repeats", type=int, default=DEFAULT_REPEATS)
+    ap.add_argument("--since", default=None,
+                    help="ignore records stamped before this (YYYYMMDDTHHMMSSZ);"
+                         " the retie loop passes its own start time so an"
+                         " earlier campaign's passes are not counted as this"
+                         " loop's")
     args = ap.parse_args(argv)
 
     stuck, lines = find_fixed_point(
         args.record_dir, stage=args.stage, tol_mas=args.tol_mas,
         repeats=args.repeats, filtername=args.filtername,
-        obs_token=args.obs_token)
+        obs_token=args.obs_token, since=args.since)
     for line in lines:
         print(line)
     if stuck:
