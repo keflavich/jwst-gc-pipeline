@@ -89,3 +89,64 @@ def test_a_failing_assignment_really_does_exit_under_set_e():
                        'echo "REACHED rc=$rc"'],
         capture_output=True, text=True)
     assert 'REACHED rc=1' in guarded.stdout
+
+
+# ---------------------------------------------------------------------------
+# The SAME trap, three more times in the same eight lines (review of #366).
+# `set -o pipefail` makes a non-matching grep fail the whole pipeline, so every
+# `x=$(... | grep ...)` is a plain assignment that exits the script exactly when
+# the pattern does not match -- which is the case each of them exists to handle.
+# ---------------------------------------------------------------------------
+
+def test_a_SUBMISSION_failure_still_reaches_the_guard():
+    """An array-TASK failure prints a job id; a SUBMISSION failure (QOS limit,
+    bad partition, malformed --export) prints an error with no leading number,
+    so the job-id grep matched nothing and the loop died one line before the
+    guard -- the same silent stop, for the other half of the failure space."""
+    src = _src()
+    line = next(ln for ln in src.splitlines() if 'red_jid=$(echo' in ln)
+    assert line.rstrip().endswith('|| true'), line
+
+
+def test_the_fin_jid_FALLBACK_can_actually_run():
+    """`if [ -z "$fin_jid" ]` exists for 'the first pattern did not match', and
+    that is precisely when the unguarded assignment above it exits."""
+    src = _src()
+    lines = [ln for ln in src.splitlines() if 'fin_jid=$(echo' in ln]
+    assert len(lines) == 2, lines
+    for ln in lines:
+        assert ln.rstrip().endswith('|| true'), ln
+
+
+def test_a_failed_cataloging_SUBMISSION_stops_with_a_reason():
+    src = _src()
+    assert 'chain_rc=0' in src
+    assert 'bash "$HERE/submit_cataloging_perframe.sh") || chain_rc=$?' in src
+    assert 'the cataloging submission FAILED' in src
+
+
+def test_an_unparseable_finalize_id_stops_rather_than_waiting_on_nothing():
+    """`wait_job ""` returns immediately, and the loop would read that as a
+    finished job -- converged on a chain that was never queued."""
+    assert 'could not parse a finalize job id' in _src()
+
+
+def test_the_pipefail_trap_is_real_for_grep():
+    """Demonstrated, like the assignment one: this is the part that makes the
+    fallback dead code rather than merely redundant."""
+    import subprocess
+    bare = subprocess.run(
+        ['bash', '-c', 'set -euo pipefail\n'
+                       'out="sbatch: error: QOSMaxSubmitJobPerUserLimit"\n'
+                       'jid=$(echo "$out" | grep -oE "^[0-9]+" | head -1)\n'
+                       'echo "REACHED"'],
+        capture_output=True, text=True)
+    assert 'REACHED' not in bare.stdout
+
+    guarded = subprocess.run(
+        ['bash', '-c', 'set -euo pipefail\n'
+                       'out="sbatch: error: QOSMaxSubmitJobPerUserLimit"\n'
+                       'jid=$(echo "$out" | grep -oE "^[0-9]+" | head -1) || true\n'
+                       'echo "REACHED jid=[$jid]"'],
+        capture_output=True, text=True)
+    assert 'REACHED jid=[]' in guarded.stdout
