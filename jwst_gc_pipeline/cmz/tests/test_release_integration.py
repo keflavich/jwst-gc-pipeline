@@ -1188,10 +1188,25 @@ def _ci():
     return _load('curated_images', os.path.join(_REL, 'curated_images.py'))
 
 
+def _require_curated():
+    """Skip when the curated renders are not on this machine.
+
+    These six tests read the REAL registry -- that is the point of them: a
+    fixture could not have caught a CDMatrix render being dropped or a
+    label-shaped pointing publishing unconditionally.  But the renders live
+    outside the repo, so on CI (and any checkout without
+    /blue/.../avm_images) they fail for want of data rather than for a defect.
+    """
+    ci = _ci()
+    if not os.path.isdir(ci.AVM):
+        pytest.skip(f'curated renders not present ({ci.AVM})')
+    return ci
+
+
 def test_every_curated_image_in_the_registry_exists():
     """The registry mirrors avm_images/rebuild_jwst_cmz_hips.py. A rename there
     silently drops the picture from the page, so name the missing file."""
-    ci = _ci()
+    ci = _require_curated()
     missing = {f: ci.missing(f) for f in ci.CURATED if ci.missing(f)}
     assert not missing, f"curated images listed but absent: {missing}"
 
@@ -1199,7 +1214,7 @@ def test_every_curated_image_in_the_registry_exists():
 def test_bricks_two_programs_are_never_combined():
     """1182 (wide) and 2221 (narrow) do not cover the same sky; crossing them
     makes an ugly footprint, which is why the curated renders keep them apart."""
-    ci = _ci()
+    ci = _require_curated()
     labels = [e['label'] for e in ci.for_field('brick')]
     assert any('1182' in l for l in labels) and any('2221' in l for l in labels)
     assert not any('1182' in l and '2221' in l for l in labels)
@@ -1208,14 +1223,14 @@ def test_bricks_two_programs_are_never_combined():
 def test_cloudc_miri_is_two_separate_images():
     """F2550W (prog 2221) and F770W (prog 2526) are different pointings.
     Reprojecting one onto the other's grid crops it to a corner."""
-    ci = _ci()
+    ci = _require_curated()
     miri = [e for e in ci.for_field('cloudc') if e.get('instrument') == 'MIRI']
     assert len(miri) == 2
     assert {e['pointing'] for e in miri} == {'MIRI F770W', 'MIRI F2550W'}
 
 
 def test_gc2211_has_an_image_per_pointing():
-    ci = _ci()
+    ci = _require_curated()
     assert sorted(e['pointing'] for e in ci.for_field('gc2211')) == \
         ['o023', 'o028', 'o046', 'o049', 'o050']
 
@@ -1412,7 +1427,7 @@ def test_every_curated_render_in_the_registry_keeps_its_astrometry():
     import math
     from PIL import Image
     mw = _make_webpage()
-    ci = _ci()
+    ci = _require_curated()
     Image.MAX_IMAGE_PIXELS = None
 
     def extent(xmp, width, height):
@@ -1773,7 +1788,7 @@ def test_a_label_shaped_pointing_is_not_treated_as_an_observation():
     answered "publish" and the band fallback never ran: the render was published
     unconditionally, even with F770W itself withheld."""
     mw = _make_webpage()
-    ci = _ci()
+    ci = _require_curated()
     miri = [e for e in ci.for_field('cloudc')
             if e.get('pointing') == 'MIRI F770W']
     assert miri, 'the cloudc MIRI entry this guards is gone from the registry'
