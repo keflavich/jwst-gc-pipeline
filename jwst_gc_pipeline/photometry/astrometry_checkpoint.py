@@ -1468,16 +1468,50 @@ def lookup_consensus_offset(tbl, visit, exposure, module, filtername, vgroup=Non
     # (including the 'long' family variant for LW modules) -- a previous inline
     # set here omitted the 'long' variants and could miss e.g. an 'nrcalong'
     # row when looking up module 'nrca'.
-    variants = _module_variants(module)
-    jit = (vf & (tbl["Exposure"] == int(exposure))
-           & np.array([str(m) in variants for m in tbl["Module"]]))
+    # EXACT row first, family variants only as a fallback.  The variants exist so
+    # a table storing only the family spelling can still serve a detector-level
+    # or long-wave frame -- but when a table carries BOTH spellings for one
+    # exposure, matching on the variant SET returns two rows and the lookup
+    # below raises.  cloudef's consensus table has, for F360M exposure 1 of
+    # visit jw02092002001, both
+    #
+    #     Module=nrcb      (the short-wave detectors, pooled)
+    #     Module=nrcblong  (the long-wave detector)
+    #
+    # and `_module_variants('nrcblong')` is {'nrcb', 'nrcblong'}, so the LW frame
+    # matched its own row AND the short-wave one:
+    #
+    #     ValueError: consensus jitter match=2 for visit=jw02092002001 exp=1
+    #     mod=nrcblong filt=F360M vgroup=02101; expected <=1 row
+    #
+    # which failed the reduce and stopped the field.  A row that names the
+    # module exactly is never the wrong row, so it wins; the fallback keeps
+    # every table that carries only one spelling working as before.
+    _exposure_rows = vf & (tbl["Exposure"] == int(exposure))
     # exposure numbers restart per visit group, so a Vgroup-carrying table must be
     # narrowed by it -- otherwise two disjoint pointings collide on one exposure
     # number and the lookup below raises "match=2".  A row whose Vgroup cell is
     # EMPTY predates the column and still applies (vgroup_row_matches); a row that
     # names a DIFFERENT group does not.
+    #
+    # BEFORE the exact/variant choice, not after.  Deciding exactness over all
+    # groups and filtering afterwards means a table carrying the LW spelling in
+    # one group and only the family spelling in another would pick the exact row
+    # from the WRONG group, lose it to this filter, and raise match=0 where the
+    # fallback would have found the right row.  Narrowing first makes the choice
+    # local to the group being asked about, so the two spellings need not
+    # co-exist within it.
     if vgroup_key(vgroup) and "Vgroup" in tbl.colnames:
-        jit &= np.array([vgroup_row_matches(g, vgroup) for g in tbl["Vgroup"]])
+        _exposure_rows = _exposure_rows & np.array(
+            [vgroup_row_matches(g, vgroup) for g in tbl["Vgroup"]])
+    _exact = _exposure_rows & np.array([str(m) == str(module)
+                                        for m in tbl["Module"]])
+    if _exact.sum() >= 1:
+        jit = _exact
+    else:
+        variants = _module_variants(module)
+        jit = _exposure_rows & np.array([str(m) in variants
+                                         for m in tbl["Module"]])
     nj = int(jit.sum())
     if nj > 1:
         raise ValueError(
