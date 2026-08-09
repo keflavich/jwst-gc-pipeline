@@ -2394,6 +2394,16 @@ def get_psf_model(filtername, proposal_id, field,
                             f"last error: {type(ex).__name__}: {ex}") from ex
                     time.sleep(min(2 ** ntries, 30))
                 except Exception as ex:
+                    # A data file that is not on this filesystem is not a
+                    # transient failure: retrying it spent eleven attempts and
+                    # ~4 min of backoff against a network that was never
+                    # involved, then reported "Failed to download PSF" for a
+                    # file that was sitting in the sibling data tree (#346).
+                    # Fail immediately, naming the real cause.
+                    _local = psf_preflight.missing_local_data_message(ex)
+                    if _local is not None:
+                        raise psf_preflight.PSFDataMissingError(
+                            f"{instrument}/{filtername} PSF grid: {_local}") from ex
                     # psf_grid/load_wss_opd_by_date failure modes span stpsf,
                     # astroquery, and file I/O and are not enumerable here;
                     # cap the retries and chain the real error on exhaustion.
@@ -3302,6 +3312,11 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
         first_cut = overlapping_frames[0]
     fh, im1, _d, _w, _e, instrument, telescope, obsdate = load_data(first_cut)
     fh.close()
+    # Seconds, before the PSF grid is built.  The OPD a run needs is chosen by
+    # obsdate inside load_wss_opd_by_date, so there is no static manifest to
+    # check -- doing the lookup IS the check.  gc2211 o050 spent 1 h 21 m and a
+    # PASSED astrometry checkpoint before discovering one absent file (#346).
+    psf_preflight.preflight_psf_data(instrument, filtername, obsdate)
     grid, _psf = get_psf_model(filtername, proposal_id, field, module=module,
                                use_webbpsf=True, use_grid=options.each_exposure,
                                blur=options.blur, target=options.target,
@@ -3749,6 +3764,11 @@ def build_filtered_iter2_residual_bg(cut_bp, basepath, filtername, proposal_id,
             '.fits', f"_cutout_{_cutout_label_for(options)}.fits"))
     fh, im1, _d, _w, _e, instrument, telescope, obsdate = load_data(first_cut)
     fh.close()
+    # Seconds, before the PSF grid is built.  The OPD a run needs is chosen by
+    # obsdate inside load_wss_opd_by_date, so there is no static manifest to
+    # check -- doing the lookup IS the check.  gc2211 o050 spent 1 h 21 m and a
+    # PASSED astrometry checkpoint before discovering one absent file (#346).
+    psf_preflight.preflight_psf_data(instrument, filtername, obsdate)
     grid, _psf = get_psf_model(filtername, proposal_id, field, module=module,
                                use_webbpsf=True, use_grid=options.each_exposure,
                                blur=options.blur, target=options.target,
