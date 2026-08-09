@@ -60,22 +60,27 @@ def test_the_blocking_sites_feed_the_blocking_list():
     the alternative -- a string-matched severity -- would silently reclassify
     an entry whenever someone reworded a message.
 
-    Three sites qualify.  The third is the arcsecond-scale per-exposure
+    Four sites qualify.  The third is the arcsecond-scale per-exposure
     measurement: it IS a measurement, and it IS refused (a per-exposure tie is
-    mas-scale, so a gross one is the wide-sweep/footprint-geometry regime), so
-    it belongs on the blocking list rather than the advisory one.  Raising this
-    count is a review decision -- a new site must be measured-and-refused, not
-    merely unwelcome.
+    mas-scale, so a gross one is the wide-sweep/footprint-geometry regime).  The
+    fourth is the detector-sibling alias: a peak measured and refused because the
+    detector produced no tie ANYWHERE in the visit, which says something stronger
+    about the field than either of the others.  Routing it to the advisory list
+    instead took o023's F200W checkpoint from not-passing to PASSING, by catching
+    one branch earlier the very exposure the third site blocks on.
+
+    Raising this count is a review decision -- a new site must be
+    measured-and-refused, not merely unwelcome.
     """
     import inspect
     src = inspect.getsource(A)
-    assert src.count('unverified_blocking.append(') == 3, (
-        'exactly three sites are measured-and-refused: MODULE-ANTISYMMETRIC, '
-        'the untrustworthy consensus->reference tie, and the gross '
-        'per-exposure offset')
+    assert src.count('unverified_blocking.append(') == 4, (
+        'exactly four sites are measured-and-refused: MODULE-ANTISYMMETRIC, '
+        'the untrustworthy consensus->reference tie, the gross per-exposure '
+        'offset, and the detector-sibling alias')
     # all must ALSO appear in the full unverified list, or they stop being
     # reported at all
-    assert src.count('unverified.append(unverified_blocking[-1])') == 3
+    assert src.count('unverified.append(unverified_blocking[-1])') == 4
 
 
 def test_could_not_measure_is_still_a_PASS():
