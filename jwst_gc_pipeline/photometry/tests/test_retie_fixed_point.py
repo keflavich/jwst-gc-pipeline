@@ -114,9 +114,12 @@ def test_an_exact_repeat_is_caught(tmp_path):
 
 def test_a_period_2_OSCILLATION_is_caught(tmp_path):
     """sgrc F162M: consecutive passes differ, but every pass reproduces the one
-    before last.  Not progress, and invisible to a consecutive-only test."""
+    before last.  Not progress, and invisible to a consecutive-only test.
+
+    Needs four passes (two lag-2 comparisons), hence MAXITER>=4 -- sgrc ran 12.
+    """
     d = _history(tmp_path, [A, B, A_AGAIN, B])
-    stuck, lines = find_fixed_point(d)
+    stuck, lines = find_fixed_point(d, repeats=4)
     assert stuck
     assert any('OSCILLATING' in ln for ln in lines)
 
@@ -180,10 +183,11 @@ def test_period_2_needs_TWO_lag_comparisons(tmp_path, n):
     assert not stuck
 
 
-def test_the_default_window_can_see_an_oscillation():
-    """DEFAULT_REPEATS must be large enough for two lag-2 comparisons, or the
-    shape sgrc actually exhibits would never be reported."""
-    assert DEFAULT_REPEATS >= 4
+def test_the_default_catches_a_plain_repeat():
+    """Three passes is enough for two lag-1 comparisons.  Period-2 needs four
+    and therefore an explicit MAXITER>=4; see
+    test_an_OSCILLATION_declines_at_three_and_fires_at_four."""
+    assert DEFAULT_REPEATS >= 3
 
 
 def test_measurements_skips_an_exposure_with_no_tie():
@@ -270,3 +274,42 @@ def test_the_loop_passes_its_own_start_time():
     assert 'RETIE_RUN_START=$(date -u +%Y%m%dT%H%M%SZ)' in sh
     assert '--since "$RETIE_RUN_START"' in sh
     assert 'retie_fixed_point' in sh
+
+
+# ---------------------------------------------------------------------------
+# The default must be REACHABLE.  `--since` bounds the scan to this run, and the
+# loop's own default cap is MAXITER=3 -- at most one record per filter per
+# iteration.  A DEFAULT_REPEATS of 4 therefore printed "3 pass(es) recorded,
+# need 4 to judge" and exited 0 on every default-configured loop.
+# ---------------------------------------------------------------------------
+
+def test_the_default_is_reachable_at_the_loops_default_MAXITER():
+    import pathlib
+    import re
+    sh = (pathlib.Path(__file__).parents[3] / 'scripts' / 'reduction'
+          / 'run_field_retie_loop.sh').read_text()
+    m = re.search(r'^MAXITER=\$\{MAXITER:-(\d+)\}', sh, re.M)
+    assert m, 'MAXITER default moved; re-check DEFAULT_REPEATS against it'
+    assert DEFAULT_REPEATS <= int(m.group(1)), (
+        f'DEFAULT_REPEATS={DEFAULT_REPEATS} needs more passes than the loop '
+        f'can produce at MAXITER={m.group(1)}, so the check never runs')
+
+
+def test_a_REPEAT_is_caught_with_only_three_passes(tmp_path):
+    d = _history(tmp_path, [A, A_AGAIN, A])
+    stuck, lines = find_fixed_point(d)
+    assert stuck, lines
+    assert any('REPEATING' in ln for ln in lines)
+
+
+def test_an_OSCILLATION_declines_at_three_and_fires_at_four(tmp_path):
+    """Two lag-2 comparisons are still required, so period-2 needs MAXITER>=4.
+    Declining is the conservative direction: it reads as 'still moving'."""
+    three = _history(tmp_path, [A, B, A_AGAIN])
+    assert not find_fixed_point(three)[0]
+    fourdir = tmp_path / 'four'
+    fourdir.mkdir()
+    four = _history(fourdir, [A, B, A_AGAIN, B])
+    stuck, lines = find_fixed_point(four, repeats=4)
+    assert stuck
+    assert any('OSCILLATING' in ln for ln in lines)

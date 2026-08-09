@@ -37,10 +37,19 @@ import re
 DEFAULT_TOL_MAS = 0.5
 
 #: How many passes of history to judge on.  Two identical passes could be a
-#: coincidence of rounding; three is a loop.  Four, because period-2 oscillation
-#: needs TWO lag-2 comparisons to separate from a single chance match -- with
-#: fewer, that branch declines to fire and the field reads as "still moving".
-DEFAULT_REPEATS = 4
+#: coincidence of rounding; three is a loop.
+#:
+#: THREE, not four, because `--since` bounds the scan to this run and the loop's
+#: own default cap is MAXITER=3 -- at most one record per filter per iteration,
+#: so a default of 4 made the check unreachable on any loop that had not been
+#: given a larger MAXITER.  It printed "3 pass(es) recorded, need 4 to judge"
+#: and exited 0, which is the silence this whole check exists to remove.
+#:
+#: Period-2 OSCILLATION still needs two lag-2 comparisons to separate from a
+#: single chance match, so that branch needs four passes and therefore
+#: MAXITER>=4; at three it declines and the field reads as "still moving",
+#: which is the conservative direction.  A plain REPEAT is caught at three.
+DEFAULT_REPEATS = 3
 
 
 def measurements(rec):
