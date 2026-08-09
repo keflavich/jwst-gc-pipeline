@@ -137,13 +137,30 @@ FIELDS = {
     },
     # gc2211: multi-pointing / multi-epoch (JWST 2211). Each observation is a
     # distinct pointing (o023 & o049 are repeat epochs of one position; o028/
-    # o046/o050 are separate positions). Only o023 & o050 have m7 images; the
-    # others (o028/o046/o049) are still mid-pipeline and are held for a later
-    # release. Images are laid out per observation under images/<obs>/.
+    # o046/o050 are separate positions). Images are laid out per observation
+    # under images/<obs>/.
+    #
+    # o028/o046/o049 were held as "still mid-pipeline"; they were re-drizzled
+    # 2026-08-08 and measured against VIRAC2 with the swept offset-histogram
+    # estimator (3" window, unswept, window_edge_fraction 0.01-0.03, so genuine
+    # ties rather than window-edge aliases):
+    #
+    #     o023  F200W  55 mas  contrast  66     o046  F200W  34 mas  contrast 148
+    #     o023  F277W  75 mas  contrast  65     o046  F277W  35 mas  contrast  91
+    #     o028  F150W  59 mas  contrast  67     o049  F200W  41 mas  contrast 106
+    #     o028  F277W  52 mas  contrast 158     o049  F277W  49 mas  contrast  77
+    #
+    # That is the re-reduction landing: o023 measured ~3.25" off before it.
+    # o028 lies outside the field's main reference catalogue and needs the
+    # per-pointing `gaia_virac2_refcat_epoch2023.71_o028.fits`.
+    #
+    # o050 is DELIBERATELY absent: it has no current mosaic at all, every
+    # product of it is quarantined, and it was the worst-aligned pointing
+    # (~5.6"). Re-add it here once it has been re-reduced and tied.
     "gc2211": {
         "data_dir": Path("/orange/adamginsburg/jwst/gc2211"),
         "proposal_prefix": "jw02211",
-        "observations": ["o023", "o050"],
+        "observations": ["o023", "o028", "o046", "o049"],
     },
     # sickle: NIRCam science mosaics + MIRI; catalogs still in progress so they are
     # NOT shipped yet (skip_catalogs). NIRCam is single-module (nrcb only), so the
@@ -730,7 +747,8 @@ def _release_observations(field_cfg):
     - ``proposal_prefix`` entries carrying ``-oNNN`` (brick = 1182 o004 +
       2221 o001);
     - a bare ``jwPPPPP`` proposal_prefix combined with the ``observations`` list
-      (gc2211 = ``jw02211`` + ``["o023","o050"]`` -> 02211-023, 02211-050);
+      (gc2211 = ``jw02211`` + ``["o023","o028","o046","o049"]`` -> 02211-023,
+      02211-028, 02211-046, 02211-049);
     - explicit per-instrument mosaic lists (``miri`` / ``nircam`` config keys),
       whose ``src`` basenames carry the MIRI observations that ``proposal_prefix``
       (a NIRCam prefix) omits -- e.g. sgrb2 MIRI o002/o998, sickle MIRI o001/o002.
