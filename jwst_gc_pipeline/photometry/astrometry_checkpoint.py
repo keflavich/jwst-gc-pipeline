@@ -767,6 +767,11 @@ def resolve_full_visit_id(tables, bare_visit):
     correction would broadcast (#284).  Recovering the observation from the
     frame name is what makes the correction addressable.
 
+    ``FILENAME`` is read first-table-wins: a group where the FIRST table lacks
+    provenance keeps the bare visit even if the rest agree.  That is the
+    conservative direction and is deliberately NOT the same rule as the
+    mixed-group check below, which is all-or-nothing.
+
     Only upgrades when EVERY table in the group agrees on one (proposal,
     observation, visit); a group whose frames disagree is contaminated with
     another observation's exposures (the class #352 fixed), and silently
