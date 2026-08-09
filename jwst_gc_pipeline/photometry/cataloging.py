@@ -4067,14 +4067,56 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     # convergence, and the frozen m3 check failed for want of a baseline that
     # was never written (#350).  An entire field's astrometry gate was skipped
     # and the loop certified it.
+    # Two different things make `passed` False, and they must not be merged:
+    #
+    #   failures non-empty  -> the gate could NOT RUN.  Malformed inputs
+    #       (duplicate_exposure); nothing was measured, so nothing was checked.
+    #       This is what this branch exists for.
+    #
+    #   failures empty, but the record carries unverified_blocking -> the gate
+    #       RAN and REFUSED.  A measured-and-refused item (#312/#341): a gross
+    #       consensus->reference tie, a module-antisymmetric alias.  It already
+    #       has its own message at the writer, its own escape hatch
+    #       (ALLOW_UNVERIFIED_ASTROM=1, which makes _checkpoint_passed return
+    #       True so this never sees it) and its own issue.
+    #
+    # Reporting the second as "0 failure(s); the gate did NOT run" is false on
+    # both counts, and 14 live m2 records already have exactly that shape
+    # (cloudc F410M, cloudef F480M, gc2211 F200W_o023, ...).  Whether an
+    # unverified-blocking item should stop the run is a separate decision from
+    # this one; here it is reported as what it is and left to the existing
+    # advisory.
     _failures = record.get('failures') or []
-    if record.get('passed') is False or _failures:
+    _blocking = record.get('unverified_blocking') or []
+    if _failures:
         msg = (f"astrom checkpoint [{merge_label}] {filt}/{module}: FAILED -- "
                f"{len(_failures)} failure(s); the gate did NOT run.\n"
                + "\n".join(f"  {f}" for f in _failures[:8])
                + ("\n  ..." if len(_failures) > 8 else "")
                + f"\n  record: {record.get('record_path')}")
-        if os.environ.get('ASTROM_CHECKPOINT_WARN_ONLY', '') == '1':
+        if warn_only:
+            print(msg + "  (ASTROM_CHECKPOINT_WARN_ONLY=1 -- continuing)",
+                  flush=True)
+        else:
+            from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+                AstrometryCheckpointFailedError)
+            raise AstrometryCheckpointFailedError(msg)
+    elif record.get('passed') is False and _blocking:
+        print(f"astrom checkpoint [{merge_label}] {filt}/{module}: NOT A PASS "
+              f"-- {len(_blocking)} item(s) were MEASURED and REFUSED (the gate "
+              f"ran).  See the checkpoint's own report above; "
+              f"ALLOW_UNVERIFIED_ASTROM=1 proceeds.\n"
+              + "\n".join(f"  {b}" for b in _blocking[:4])
+              + ("\n  ..." if len(_blocking) > 4 else "")
+              + f"\n  record: {record.get('record_path')}", flush=True)
+    elif record.get('passed') is False:
+        # passed=False with NEITHER list populated: the record cannot say what
+        # happened, which is the fail-open shape this PR is about.
+        msg = (f"astrom checkpoint [{merge_label}] {filt}/{module}: FAILED -- "
+               f"the record reports passed=False with no failures and no "
+               f"blocking items, so it cannot say what was checked.\n"
+               f"  record: {record.get('record_path')}")
+        if warn_only:
             print(msg + "  (ASTROM_CHECKPOINT_WARN_ONLY=1 -- continuing)",
                   flush=True)
         else:
