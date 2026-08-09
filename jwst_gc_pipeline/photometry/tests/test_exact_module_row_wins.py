@@ -68,23 +68,56 @@ def test_the_SHORT_WAVE_frame_still_gets_the_family_row():
     assert float(got['dra (arcsec)'][0]) == 0.01287
 
 
+def _real(tbl, module, filtername='F360M', visit='jw02092002001',
+          exposure=1, vgroup='02101'):
+    """Through the SHIPPING function.  The fallback tests used to run against
+    the local `_match` restatement, so deleting the fallback from
+    `lookup_consensus_offset` left the suite green -- the exact-wins mutant died
+    only because one test drove the real thing."""
+    t = tbl.copy()
+    if 'prov_stage' not in t.colnames:
+        t['prov_stage'] = ['m2'] * len(t)
+    return lookup_consensus_offset(t, visit, exposure, module, filtername,
+                                   vgroup=vgroup)[:2]
+
+
 def test_a_table_with_ONLY_the_family_spelling_still_serves_an_LW_frame():
     """The fallback's whole purpose -- removing it would break every table that
-    predates the per-channel rows."""
+    predates the per-channel rows.  Driven through the real function."""
     only_family = _tbl([('F360M', 'nrcb', 'jw02092002001', 1, '02101',
                          0.01287, -0.01035)])
-    got = _match(only_family, 'nrcblong')
-    assert len(got) == 1
-    assert str(got['Module'][0]) == 'nrcb'
+    dra, ddec = _real(only_family, 'nrcblong')
+    assert dra == pytest.approx(0.01287, abs=1e-6)
 
 
 def test_a_DETECTOR_level_module_still_reaches_its_family_row():
     """`nrcb1` has no row of its own; it must still find `nrcb`."""
     only_family = _tbl([('F360M', 'nrcb', 'jw02092002001', 1, '02101',
                          0.01287, -0.01035)])
-    got = _match(only_family, 'nrcb1')
-    assert len(got) == 1
-    assert str(got['Module'][0]) == 'nrcb'
+    dra, ddec = _real(only_family, 'nrcb1')
+    assert dra == pytest.approx(0.01287, abs=1e-6)
+
+
+def test_the_REAL_lookup_prefers_the_exact_row_over_the_family_one():
+    """The other half, also end-to-end, so neither branch is measured on a
+    copy of the narrowing."""
+    dra, ddec = _real(CLOUDEF, 'nrcblong')
+    assert dra == pytest.approx(-0.00864, abs=1e-6)
+
+
+def test_the_two_spellings_need_not_co_exist_within_a_VGROUP():
+    """Exactness is decided AFTER the vgroup narrowing.  Deciding it across all
+    groups would take the exact row from the wrong group, lose it to the vgroup
+    filter, and raise match=0 where the fallback would have found the right
+    row.  Not reachable on any table today -- 0 such exposures across arches,
+    cloudef and w51 -- but the ordering is a deliberate choice."""
+    t = _tbl([
+        ('F360M', 'nrcblong', 'jw02092002001', 1, '02101', 1.0, 1.0),
+        ('F360M', 'nrcb', 'jw02092002001', 1, '02102', 2.0, 2.0),
+    ])
+    assert _real(t, 'nrcblong', vgroup='02101')[0] == pytest.approx(1.0)
+    # group 02102 has only the family spelling; the fallback must find it
+    assert _real(t, 'nrcblong', vgroup='02102')[0] == pytest.approx(2.0)
 
 
 def test_a_detector_row_beats_the_family_row_when_both_exist():
@@ -120,6 +153,9 @@ def test_the_reader_uses_exact_first():
     src = inspect.getsource(lookup_consensus_offset)
     assert '_exact' in src
     assert src.index('_exact = ') < src.index('_module_variants(module)')
+    # and the vgroup narrowing comes first, so exactness is decided within the
+    # group being asked about
+    assert src.index('vgroup_row_matches') < src.index('_exact = ')
 
 
 def test_the_REAL_lookup_no_longer_raises_on_the_cloudef_shape():
