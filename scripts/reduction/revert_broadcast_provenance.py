@@ -180,13 +180,13 @@ def revert(path, apply=False):
         # Say a revert happened.  Clearing prov_* without saying so would leave
         # the table looking as though it had never been corrected at all.
         if "prov_stage" in tbl.colnames:
-            tbl["prov_stage"] = tbl["prov_stage"].astype("U32")
+            tbl["prov_stage"] = tbl["prov_stage"].astype("U64")
             tbl["prov_stage"][idx] = "revert"
         if "prov_source" in tbl.colnames:
             tbl["prov_source"] = tbl["prov_source"].astype("U64")
             tbl["prov_source"][idx] = "revert_broadcast_provenance"
         if "prov_date" in tbl.colnames:
-            tbl["prov_date"] = tbl["prov_date"].astype("U32")
+            tbl["prov_date"] = tbl["prov_date"].astype("U64")
             tbl["prov_date"][idx] = datetime.now(timezone.utc).strftime(
                 "%Y-%m-%dT%H:%M:%SZ")
         write_table_atomic(tbl, path, format="ascii.csv")

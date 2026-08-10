@@ -27,12 +27,25 @@ import pytest
 from astropy.table import Table
 
 from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
-    PROV_TEXT_CHARS, PROV_TEXT_COLUMNS, _widen_prov_text_columns,
-    update_offsets_table)
+    PROV_TEXT_COLUMNS, PROV_TEXT_MAX_CHARS, PROV_TEXT_MIN_CHARS,
+    _widen_prov_text_columns, update_offsets_table)
 
 #: What m2 writes for a median pooled over two detectors -- 58 characters, and
 #: the form six live tables cannot hold.
 POOLED_SOURCE = "m2 visit-consensus [median of 2, ptp 1.51mas: nrcb3,nrcb4]"
+
+#: The same for FOUR detectors -- 70 characters.  Four is the number the pooler
+#: is built for (one module's detectors), so this is the ordinary case, not the
+#: extreme one, and a live example already sits truncated in cloudc's table.
+POOLED_SOURCE_4 = ("m2 visit-consensus [median of 4, ptp 3.42mas: "
+                   "nrcb1,nrcb2,nrcb3,nrcb4]")
+
+#: A pooled median on top of a cross-band tie -- the longest form the pipeline
+#: produces, 102 characters.  w51's table already carries the 62-character tie
+#: this is built from.
+POOLED_ON_CROSSBAND = ("m2 consensus->reference (cross-band tied-F210M, "
+                       "contrast>2900) [median of 4, ptp 3.42mas: "
+                       "nrcb1,nrcb2]")
 
 
 def _narrow_table(tmp_path, prov_source="m2 visit-consensus"):
@@ -105,30 +118,107 @@ def test_the_other_rows_keep_their_own_provenance(tmp_path):
         assert t["prov_source"][row] == "m2 visit-consensus"
 
 
-def test_a_source_longer_than_the_cap_is_cut_visibly_not_silently(tmp_path):
-    """Above ``PROV_TEXT_CHARS`` the writers slice, so the cap is the whole story.
+def test_the_four_detector_pooling_survives(tmp_path):
+    """The case a fixed 64-character cap still cut, and it is the ORDINARY one.
 
-    Truncation at a stated, uniform width is a documented limit; truncation at
-    whichever width a table happens to have is the defect.  This pins the first
-    behaviour so the two cannot be confused.
+    A module has four detectors, so a median pooled over four is what the pooler
+    is built for; its source string is 70 characters.  The first version of this
+    fix capped at 64 and would have gone on dropping the last detector and the
+    closing bracket -- and cloudc's live table already carries exactly that,
+    stored as `'...nrcb1,nrcb2,'`.
     """
-    long_source = "m2 visit-consensus [median of 8, ptp 12.34mas: " + \
-                  "nrca1,nrca2,nrca3,nrca4,nrcb1,nrcb2,nrcb3,nrcb4]"
-    assert len(long_source) > PROV_TEXT_CHARS
+    assert len(POOLED_SOURCE_4) > PROV_TEXT_MIN_CHARS
     p = _narrow_table(tmp_path)
-    update_offsets_table(p, [_corr(2, long_source)], stage="m2")
+    update_offsets_table(p, [_corr(2, POOLED_SOURCE_4)], stage="m2")
     t = Table.read(p, format="ascii.csv")
-    assert t["prov_source"][1] == long_source[:PROV_TEXT_CHARS]
+    assert t["prov_source"][1] == POOLED_SOURCE_4
+    assert t["prov_source"][1].endswith("nrcb4]")
+
+
+def test_the_longest_form_the_pipeline_produces_survives(tmp_path):
+    """A pooled median on top of a cross-band tie: 102 characters."""
+    p = _narrow_table(tmp_path)
+    update_offsets_table(p, [_corr(2, POOLED_ON_CROSSBAND)], stage="m2")
+    t = Table.read(p, format="ascii.csv")
+    assert t["prov_source"][1] == POOLED_ON_CROSSBAND
+
+
+def test_a_source_over_the_hard_bound_is_cut_and_announced(tmp_path, capsys):
+    """The bound exists only against absurd input, and it says so when it bites.
+
+    Everything the pipeline produces fits; this is the backstop that stops one
+    caller widening every row of a shared table.  A cut here is ANNOUNCED,
+    because a provenance string cut without a word is the whole of #348.
+    """
+    absurd = "x" * (PROV_TEXT_MAX_CHARS + 50)
+    p = _narrow_table(tmp_path)
+    update_offsets_table(p, [_corr(2, absurd)], stage="m2")
+    assert "provenance value truncated" in capsys.readouterr().out
+    t = Table.read(p, format="ascii.csv")
+    assert t["prov_source"][1] == absurd[:PROV_TEXT_MAX_CHARS]
 
 
 def test_an_already_wide_table_is_left_alone(tmp_path):
     """Idempotent: the widening only ever grows a column."""
-    p = _narrow_table(tmp_path, prov_source="x" * (PROV_TEXT_CHARS + 40))
+    p = _narrow_table(tmp_path, prov_source="x" * (PROV_TEXT_MIN_CHARS + 40))
     before = Table.read(p, format="ascii.csv")["prov_source"].dtype
     update_offsets_table(p, [_corr(2, "m2 visit-consensus")], stage="m2")
     after = Table.read(p, format="ascii.csv")
-    assert after["prov_source"][0] == "x" * (PROV_TEXT_CHARS + 40)
+    assert after["prov_source"][0] == "x" * (PROV_TEXT_MIN_CHARS + 40)
     assert after["prov_source"].dtype.itemsize >= before.itemsize
+
+
+def test_an_empty_provenance_cell_is_not_rewritten(tmp_path):
+    """The blocker: widening must not resurrect what a mask is hiding.
+
+    Six of the thirteen live tables carry these columns MASKED -- 754 rows
+    between them, on rows no correction is touching.  ``np.asarray`` on a
+    ``MaskedColumn`` returns the underlying data and discards the mask, and what
+    astropy's CSV reader leaves under an empty text cell is the literal string
+    ``'0'``.  Widening that way rewrites every one of those cells to ``0``,
+    which is a false provenance record written by the fix for missing
+    provenance.  ``prov_stage`` is read back into the alignment header, so a
+    ``stage='0'`` propagates out of the table.
+    """
+    t = Table.read(_narrow_table(tmp_path), format="ascii.csv")
+    for col in PROV_TEXT_COLUMNS:                      # empty on rows 0, 2, 3
+        t[col] = np.ma.array(list(t[col]), mask=[True, False, True, True])
+    p = str(tmp_path / "masked.csv")
+    t.write(p, format="ascii.csv", overwrite=True)
+    raw_before = open(p).read().splitlines()
+
+    update_offsets_table(p, [_corr(2, POOLED_SOURCE_4)], stage="m2")
+
+    raw_after = open(p).read().splitlines()
+    changed = [i for i, (b, a) in enumerate(zip(raw_before, raw_after)) if b != a]
+    assert changed == [2], (
+        f"only the corrected row may change; changed rows {changed}")
+    after = Table.read(p, format="ascii.csv")
+    assert not any(str(v) == "0" for v in after["prov_source"]), \
+        "an empty provenance cell was rewritten to the literal '0'"
+    assert not any(str(v) == "0" for v in after["prov_stage"])
+
+
+def test_the_column_description_survives_widening():
+    """``astype`` keeps a column's description and metadata; ``asarray`` does not."""
+    t = Table()
+    t["prov_source"] = np.array(["m2"] * 3, dtype="U2")
+    t["prov_source"].description = "where this correction came from"
+    _widen_prov_text_columns(t)
+    assert t["prov_source"].description == "where this correction came from"
+
+
+def test_a_column_that_is_empty_in_every_row_is_still_widened():
+    """A text column that is blank throughout a CSV reads back as int64.
+
+    Assigning text into it raises rather than truncating, which is the same
+    "column typed by its data" failure from the other end.
+    """
+    t = Table()
+    t["prov_source"] = np.zeros(3, dtype=int)          # what Table.read gives
+    _widen_prov_text_columns(t, len(POOLED_SOURCE_4))
+    t["prov_source"][0] = POOLED_SOURCE_4
+    assert t["prov_source"][0] == POOLED_SOURCE_4
 
 
 @pytest.mark.parametrize("column", PROV_TEXT_COLUMNS)
@@ -144,7 +234,7 @@ def test_every_free_text_provenance_column_is_widened(column):
     t = Table()
     t[column] = np.array(["short"] * 3, dtype="U5")
     _widen_prov_text_columns(t)
-    assert t[column].dtype.itemsize // 4 == PROV_TEXT_CHARS
+    assert t[column].dtype.itemsize // 4 == PROV_TEXT_MIN_CHARS
     assert list(t[column]) == ["short"] * 3
 
 
@@ -155,4 +245,4 @@ def test_widening_does_not_touch_an_unrelated_column():
     t["prov_source"] = np.array(["m2"] * 3, dtype="U2")
     _widen_prov_text_columns(t)
     assert t["Module"].dtype.itemsize // 4 == 4
-    assert t["prov_source"].dtype.itemsize // 4 == PROV_TEXT_CHARS
+    assert t["prov_source"].dtype.itemsize // 4 == PROV_TEXT_MIN_CHARS
