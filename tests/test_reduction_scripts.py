@@ -942,3 +942,46 @@ def test_nircam_activity_does_not_age_out_a_miri_mosaic(tmp_path):
     assert caught == []
     assert [round(a) for a, _f, _b in held] == [40], (
         'the age is measured against MIRI, so it is 40 days and not 420')
+
+
+def test_the_instrument_token_comes_from_the_primary_mosaic_pattern():
+    """`instrument_of` must read the SAME match the rule selects on.
+
+    Rule 2's reference is per instrument.  If `instrument_of` used a second,
+    parallel regex and the two drifted, every name the second one did not
+    recognise would return `'?'` and share one bucket -- so a MIRI mosaic and a
+    NIRCam mosaic would once again be clocked against each other, silently, which
+    is exactly what the per-instrument reference exists to prevent.
+    """
+    m = _load('rename_stale_mosaics')
+    assert 'instrument' in m.PRIMARY_MOSAIC_RE.groupindex, (
+        'instrument_of reads this group; without it the coupling is gone')
+    for name, want in (
+            ('jw02221-o002_t001_nircam_clear-f405n-merged_i2d.fits', 'nircam'),
+            ('jw03958-o003_t001_miri_f770w_i2d.fits', 'miri'),
+    ):
+        assert m.instrument_of(name) == want
+        assert m.PRIMARY_MOSAIC_RE.match(name).group('instrument') == want
+
+    # anything the rule does not select on is not given an instrument either,
+    # rather than being lumped in with a real one
+    for name in ('jw02221002001_02201_00001_nrcalong_align_outlier_i2d.fits',
+                 'jw02221-o002_t001_nircam_clear-f405n-nrca_data_i2d.fits',
+                 'not_a_mosaic.fits'):
+        assert m.instrument_of(name) == '?'
+        assert m.PRIMARY_MOSAIC_RE.match(name) is None
+
+
+def test_a_wholly_stale_instrument_is_a_known_blind_spot():
+    """The price of the per-instrument reference, pinned so it stays documented.
+
+    If a field's entire MIRI set is superseded, every MIRI mosaic is its own
+    instrument's newest and none can be selected.  That is the conservative
+    direction -- orphans missed, live data never taken -- but it is a real gap
+    and the module must say so, because that block's stated purpose is to keep
+    its coverage from being overstated.
+    """
+    m = _load('rename_stale_mosaics')
+    doc = m.__doc__.lower()
+    assert 'whole instrument' in doc or 'whole INSTRUMENT'.lower() in doc
+    assert 'known limitation' in doc

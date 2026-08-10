@@ -106,10 +106,24 @@ two rules are evaluated INDEPENDENTLY and their results unioned; letting rule 1
 claim a file it then skips for want of its own reference hid files that rule 2
 selects.
 
-Known limitation, stated so it is not mistaken for coverage: rule 2 cannot see a
-whole POINTING that is stale, because every one of its mosaics is then its own
-family's newest.  That is the conservative direction, and it is what
-``check_generation_span`` and the release freshness gate look at instead.
+Known limitations, stated so they are not mistaken for coverage.  Both are in the
+conservative direction -- the rule misses orphans, it does not take live data --
+and both are gaps ``check_generation_span`` and the release freshness gate are
+the things that look at instead.
+
+  * Rule 2 cannot see a whole POINTING that is stale, because every one of its
+    mosaics is then its own family's newest.
+  * Rule 2 cannot see a whole INSTRUMENT that is stale, for the same reason: its
+    reference is that instrument's own newest primary mosaic, so if a field's
+    entire MIRI set is superseded, every member of it is its own reference and
+    none is selected, at any --campaign-days.  This is the PRICE of the
+    per-instrument reference, and it is deliberate: the alternative clocked MIRI
+    against NIRCam and let ordinary NIRCam reduction walk sole-copy MIRI mosaics
+    toward quarantine (see MIN_ORPHAN_AGE_DAYS).  Trading a missed orphan for a
+    protected live file is the right way round, but it IS a trade.  No field is
+    in this state today -- every field's newest MIRI primary mosaic is from
+    2026-06 or later -- so it is a forward-looking hole rather than a present
+    one.
 
 (An earlier version of this note claimed the opposite of what the rule now does
 -- that a band directory whose ONLY primary mosaic is an orphan would be kept
@@ -166,7 +180,8 @@ PATTERNS = ('*reproject*i2d*.fits', '*realigned-to-*.fits',
 #: tokens after the band.  Together they are 20-184 live files per cloudc band
 #: (F770W 20, F405N 184), all of which a looser pattern would quarantine.
 PRIMARY_MOSAIC_RE = re.compile(
-    r'^(?P<pointing>jw\d+-o\d+)_t\d+_[a-z]+_(?P<product>[a-z0-9-]+)_i2d\.fits$')
+    r'^(?P<pointing>jw\d+-o\d+)_t\d+_(?P<instrument>[a-z]+)_'
+    r'(?P<product>[a-z0-9-]+)_i2d\.fits$')
 
 #: How much older than its own instrument's current generation a mosaic must be
 #: before it counts as an orphan of a retired reduction rather than a product
@@ -374,11 +389,16 @@ def instrument_of(basename):
 
     The instrument sits between the target token and the band in the canonical
     form ``jw<prop>-o<obs>_t<NNN>_<instrument>_<band>_i2d.fits``, which is the
-    only form ``PRIMARY_MOSAIC_RE`` matches, so this reads it back out of the
-    same match rather than guessing from the band.
+    only form ``PRIMARY_MOSAIC_RE`` matches, so this reads the token out of
+    ``PRIMARY_MOSAIC_RE`` ITSELF rather than re-describing it in a second regex.
+    That coupling matters: if the two drifted, every file whose name the second
+    pattern did not recognise would land in one shared ``'?'`` bucket and be
+    clocked against every other unrecognised file -- silently restoring the
+    cross-instrument reference the per-instrument one exists to remove.
+    ``test_the_instrument_token_comes_from_the_primary_mosaic_pattern`` pins it.
     """
-    m = re.match(r'^jw\d+-o\d+_t\d+_([a-z]+)_', basename)
-    return m.group(1) if m else '?'
+    m = PRIMARY_MOSAIC_RE.match(basename)
+    return m.group('instrument') if m else '?'
 
 
 def field_generations(field, campaign_days=21):
