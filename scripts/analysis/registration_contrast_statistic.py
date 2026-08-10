@@ -150,9 +150,15 @@ CLEAN_BRICK_CONTRAST = 18.0
 #: intrinsically weakest cells, which are the artifact cells.  Its conclusion:
 #: "No amplitude statistic can separate them per-cell", and "that overlap is
 #: exactly why step 3 [contiguity] matters more than step 2".
-REAL_SEAM_SIG_179 = [("whole field", 32.6, 78.1, 140.4),
-                     ("half field", 32.6, 75.4, 115.0),
-                     ("narrow dec band", 30.1, 60.7, 97.0)]
+#: (label, sig min/med/max, RAW RATIO min/med/max).  The ratio column matters as
+#: much as the sig one and was omitted at first: #179's real seams score ratio
+#: 5-49 with medians of 12-18, so they START at the false alarms' own 5-8 and
+#: their medians STRADDLE FAIL_MIN_RATIO = 10.  Any sentence comparing this
+#: model's 66-82 against the real 5-8 is the same upper-bound-versus-real
+#: mistake Table 4 was corrected for, one axis over.
+REAL_SEAM_SIG_179 = [("whole field", 32.6, 78.1, 140.4, 5, 18, 49),
+                     ("half field", 32.6, 75.4, 115.0, 5, 17, 39),
+                     ("narrow dec band", 30.1, 60.7, 97.0, 5, 12, 27)]
 
 #: #179's chosen bar, and how it was chosen: the log-midpoint of the artifact
 #: ceiling (49.3) and the hardest real seam's median (60.7) -- 12% headroom, not
@@ -404,8 +410,9 @@ def main(argv=None):
         print(f"{'modelled 90 mas seam':>26}{npair:>9.0f}{ratio:>11.0f}{s:>22.1f}")
     judged_sig = [((r[3] * r[4]) - r[1] / nb) / np.sqrt(r[1] / nb)
                   for r in rows if r[1] >= MIN_PAIRS]
-    for label, lo_s, med_s, hi_s in REAL_SEAM_SIG_179:
-        print(f"{('#179 REAL seam, ' + label):>26}{'':>9}{'':>11}"
+    for label, lo_s, med_s, hi_s, lo_r, med_r, hi_r in REAL_SEAM_SIG_179:
+        print(f"{('#179 REAL seam, ' + label):>26}{'':>9}"
+              f"{f'{lo_r}-{hi_r} (med {med_r})':>11}"
               f"{f'{lo_s:.1f}-{hi_s:.1f} (med {med_s:.1f})':>22}")
     real_lo = min(r[1] for r in REAL_SEAM_SIG_179)
     print(f"\n  false alarms          {min(fp_sig):.1f} - {max(fp_sig):.1f}   "
@@ -421,8 +428,9 @@ def main(argv=None):
           f"{min(judged_sig) / REAL_SEAM_SIG_179[0][2]:.0f}x #179's real seam "
           f"medians, and an upper bound on one population is exactly\n  what "
           f"destroys a claim about the SEPARATION.  Measured on real data the two"
-          f"\n  populations OVERLAP at the low end: both start at sig ~"
-          f"{real_lo:.0f}, because an injected seam\n  displaces each cell's "
+          f"\n  populations OVERLAP at the low end -- false alarms from "
+          f"{min(fp_sig):.1f}, real seams from {real_lo:.1f} --\n  because an "
+          f"injected seam displaces each cell's "
           f"existing peak, so a seam's weakest cells are the field's\n  "
           f"intrinsically weakest -- which are the artifact cells.\n")
     print(f"  So #179 set FAIL_MIN_SIG = {FAIL_MIN_SIG_179:.0f} as the "
@@ -431,14 +439,23 @@ def main(argv=None):
           f"  words: \"no amplitude statistic can separate them per-cell\", and "
           f"\"that overlap is\n  exactly why step 3 [contiguity] matters more "
           f"than step 2\".\n")
+    ratio_los = [r[4] for r in REAL_SEAM_SIG_179]
+    ratio_meds = [r[5] for r in REAL_SEAM_SIG_179]
     print(f"  What the amplitude axis DOES buy is a field-level margin: "
           f"{max(fp_sig):.1f} -> {FAIL_MIN_SIG_179:.0f} against\n  the raw "
           f"count's 8 -> {FAIL_MIN_RATIO:.0f}, and it fires on 290 cells where "
-          f"the raw count fires on 273.\n  The raw count also cannot be fixed by "
-          f"moving its bar: these false alarms score 5-8\n  while a real seam of "
-          f"the same pair count scores {lo:.0f}-{hi:.0f} in this model, and "
-          f"FAIL_MIN_RATIO =\n  {FAIL_MIN_RATIO:.0f} sits below BOTH -- under "
-          f"even a correctly registered cell's ~{CLEAN_BRICK_CONTRAST:.0f}.")
+          f"the raw count fires on 273.\n")
+    print(f"  And the RAW COUNT is worse than the modelled rows suggest, for the "
+          f"same reason.\n  This model puts a seam at those pair counts at "
+          f"{lo:.0f}-{hi:.0f}; #179's REAL seams score ratio\n  "
+          f"{min(ratio_los)}-{max(r[6] for r in REAL_SEAM_SIG_179)} with medians "
+          f"of {min(ratio_meds)}-{max(ratio_meds)}.  They START at the false "
+          f"alarms' own 5-8, and\n  their medians STRADDLE "
+          f"FAIL_MIN_RATIO = {FAIL_MIN_RATIO:.0f}.  So the bar does not merely "
+          f"sit too low to\n  separate the populations -- it sits INSIDE the "
+          f"real seam distribution, failing the\n  weak seam cells and the "
+          f"artifact cells alike.  That is the case against the raw\n  count, "
+          f"and it is made on measured data rather than on this model.")
 
 
     stars = [r[0] for r in rows]

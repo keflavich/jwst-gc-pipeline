@@ -211,8 +211,14 @@ spurious. #166/#172 responded by raising the own-catalog bar from 5 to 10, which
 removed those seven, and left the cross-band check at 5.
 
 Those seven cells held 232–323 pairs at `ratio` 5–8 — their peak bins held
-**1.7–2.5%** of their pairs (median 2.2%), i.e. no coherent same-star signal at
-all, which is what makes them false positives.
+**1.7–2.5%** of their pairs (median 2.2%) — no coherent same-star signal.
+
+That is *not*, on its own, what makes them false positives, and an earlier
+version of this sentence said it was. #179 measured real injected seam cells
+reaching the same level: a seam displaces each cell's existing peak, so a seam's
+weakest cells are the field's intrinsically weakest cells, which are these cells.
+What establishes that these seven are false is the independent evidence — a
+same-star comparison of the same regions reading ≤ 22 mas.
 
 **The threshold sits below what a correctly-registered cell scores.** The best
 evidence for that is not this document's model but the gate's own record, at
@@ -354,11 +360,11 @@ applies to the ~4× above. Comparing the two and reading off a separation is
 exactly the inference an upper bound on one population destroys, so the third
 block is the one that settles it:
 
-| | sig (min / median / max) |
-|---|---|
-| #179, real seam injected into the whole field | 32.6 / 78.1 / 140.4 |
-| #179, real seam injected into half the field | 32.6 / 75.4 / 115.0 |
-| #179, real seam injected into a narrow declination band | 30.1 / 60.7 / 97.0 |
+| | raw `ratio` (min / med / max) | sig (min / med / max) |
+|---|---|---|
+| #179, real seam injected into the whole field | 5 / 18 / 49 | 32.6 / 78.1 / 140.4 |
+| #179, real seam injected into half the field | 5 / 17 / 39 | 32.6 / 75.4 / 115.0 |
+| #179, real seam injected into a narrow declination band | 5 / 12 / 27 | 30.1 / 60.7 / 97.0 |
 
 **Measured on real data the two populations OVERLAP at the low end.** Both start
 at sig ≈ 32.6, because an injected seam displaces each cell's *existing* peak —
@@ -378,10 +384,19 @@ finding, and it inverts the priority between the two proposals above.
 per-cell separation: 49.3 → 55 against the raw count's 8 → 10, and it fires on
 290 cells where the raw count fires on 273.
 
-The raw count also cannot be rescued by moving its bar. Those false alarms score
-5–8, a real seam at the same pair count scores 66–82 in this model, and
-`FAIL_MIN_RATIO = 10` sits below both — under even a correctly registered cell's
-~18.
+**And the raw count is worse than the modelled rows suggest, for exactly the same
+reason.** This model puts a seam at those pair counts at 66–82; #179's *real*
+seams score `ratio` **5–49, with medians of 12–18** (the first column above).
+They start at the false alarms' own 5–8, and their medians **straddle**
+`FAIL_MIN_RATIO = 10`.
+
+So the bar does not merely sit too low to separate the two populations — it sits
+**inside the real seam distribution**, failing weak seam cells and artifact cells
+alike. That is the case against the raw count, and it is made on measured data
+rather than on this model. (An earlier version of this paragraph compared the
+modelled 66–82 against the real 5–8 and said the bar "sits below both", which is
+both the upper-bound mistake corrected above and wrong on its face — 10 is
+*above* 5–8.)
 
 2. **Requiring the failing cells to touch each other before the field is failed.**
    *Yes, this is proposed as a fix, and it is a second, separate test — a cell
