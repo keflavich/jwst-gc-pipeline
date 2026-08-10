@@ -1046,12 +1046,30 @@ PROV_TEXT_MIN_CHARS = 64
 #: Bound on a single provenance value, so that a pathological input cannot make
 #: an offsets table's columns arbitrarily wide.  Reaching it is ANNOUNCED (see
 #: ``_prov_text``) rather than applied silently, because a silent cut here is
-#: the whole of issue #348.  Set well above anything the pipeline produces: the
-#: longest form the pipeline can emit is a per-detector median pooled on top of
-#: the longest base any live table carries (w51's 62-character cross-band tie),
-#: which is 114 characters.  Four detectors, not eight: `_assert_poolable`
-#: refuses a group spanning module families, so nrca* and nrcb* never pool
-#: together.
+#: the whole of issue #348.  Set well above anything the pipeline produces.
+#:
+#: The longest string any code at this head can write is a four-detector pooled
+#: median on the ``visit-consensus`` base, at 70 characters --
+#:
+#:     'm2 visit-consensus [median of 4, ptp 3.42mas: nrcb1,nrcb2,nrcb3,nrcb4]'
+#:
+#: -- or 71 when the spread reaches two digits (pooling admits up to
+#: ``MAX_POOL_SPREAD_MAS`` = 50 mas).  Four detectors, not eight:
+#: `_assert_poolable` refuses a group spanning module families, so nrca* and
+#: nrcb* never pool together, and `_match_rows` narrows on Filter so an SW+LW
+#: group cannot form either.
+#:
+#: THREE earlier versions of this comment named a longer maximum, each of them a
+#: string nothing emits.  The last, 114, was that same pooled median written on
+#: top of w51's 62-character `m2 consensus->reference (cross-band tied-F210M,
+#: contrast>2900)`.  That base is real -- it is in three rows of w51's live
+#: table -- but no code at this head produces it (the only two source strings
+#: written are `f"{stage} visit-consensus"` and `f"{stage} consensus->reference"`,
+#: so the parenthetical is a fossil of an earlier version), and it could not take
+#: a pooled suffix in any case: it belongs to the per-visit BULK tie, which
+#: `pool_corrections_to_table_granularity` passes through without pooling.
+#: The lesson is the reason 256 is a bound and not a fitted maximum -- do not
+#: replace it with a fourth hand-derived number.
 PROV_TEXT_MAX_CHARS = 256
 
 #: The free-text provenance columns, in the order they are created.
@@ -1116,11 +1134,12 @@ def _widen_prov_text_columns(tbl, chars=PROV_TEXT_MIN_CHARS):
 
     ``chars`` is a FLOOR, and callers pass the length of what they are about to
     write.  A fixed cap does not work here: the 64 characters this originally
-    used is under the 70 of the four-detector pooling the pooler is built for,
-    and under the 114 of that same pooling written on top of the longest base
-    any live table carries (w51's 62-character cross-band tie -- see
-    ``PROV_TEXT_MAX_CHARS``), so it would have gone on cutting the detector
-    list in exactly the case that matters.
+    used is under the 70 of the four-detector pooling the pooler is built for --
+    which is the longest string anything at this head emits, and is already
+    truncated in cloudc's live table -- so it would have gone on cutting the
+    detector list in exactly the case that matters.  See
+    ``PROV_TEXT_MAX_CHARS`` for why that maximum is stated from the emitting
+    code rather than from the widest value on disk.
 
     Uses ``Column.astype`` rather than ``np.asarray``.  ``np.asarray`` on a
     ``MaskedColumn`` returns the underlying data and DISCARDS THE MASK, which
@@ -1131,13 +1150,26 @@ def _widen_prov_text_columns(tbl, chars=PROV_TEXT_MIN_CHARS):
     and its metadata.
 
     Only ever grows a column, and is idempotent.
+
+    An object-dtype column is the one case where "widen" could SHRINK: it holds
+    Python strings of any length, so converting it to ``U<chars>`` would cut any
+    value already longer than ``chars`` -- silently, which is the defect this
+    function exists to prevent.  So the target width for an object column is
+    raised to the longest value it already holds.  (A CSV round-trip never
+    yields object dtype; this covers a table built in memory.)
     """
     for col in PROV_TEXT_COLUMNS:
         if col not in tbl.colnames:
             continue
         have = _string_column_chars(tbl[col])
-        if have is None or have < chars:
-            tbl[col] = tbl[col].astype(f"U{chars}")
+        if have is not None and have >= chars:
+            continue
+        width = chars
+        if getattr(tbl[col], "dtype", None) is not None and tbl[col].dtype.kind == "O":
+            longest = max((len(str(v)) for v in tbl[col] if v is not None),
+                          default=0)
+            width = max(width, longest)
+        tbl[col] = tbl[col].astype(f"U{width}")
 
 
 def _prov_text_width(corrections, stage, now):

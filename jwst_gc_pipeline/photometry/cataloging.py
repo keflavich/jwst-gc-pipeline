@@ -3375,7 +3375,9 @@ def _record_pooling(record, pooled, n_before, offsets_path):
     The record is written before the corrections are pooled, and a pooled
     correction's membership otherwise survives only in its ``source`` string.
     The offsets table now stores that string in full -- its provenance column is
-    sized to the value written -- but the string is still a one-line summary,
+    widened to fit the value being written rather than left at whatever width
+    the table happened to have, up to an announced outer bound of
+    ``PROV_TEXT_MAX_CHARS`` (256) -- but the string is still a one-line summary,
     not the per-detector measurements.  Re-write the record (both the timestamped
     file and ``*_latest.json``) with a ``pooling`` section so the provenance of
     an applied shift is recoverable afterwards.
@@ -4189,8 +4191,10 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
                 # Persist WHAT was pooled into the checkpoint record.  The
                 # membership otherwise survives only in the correction's
                 # `source`, which update_offsets_table sizes its column to fit
-                # (bounded at PROV_TEXT_MAX_CHARS), so a real 8-detector member
-                # list now survives the write.
+                # (bounded at PROV_TEXT_MAX_CHARS), so a full four-detector
+                # member list now survives the write instead of being cut after
+                # the second detector.  Four, not eight: `_assert_poolable`
+                # refuses a group spanning module families.
                 _record_pooling(record, corrections, _n_before, _pool_path)
 
     # Actionability floor: per-detector residuals of ~2.4-3.3 mas (measured,

@@ -184,13 +184,14 @@ def revert(path, apply=False):
         # the table looking as though it had never been corrected at all.
         # Widen through the shared helper rather than to a hardcoded width.
         # A literal `astype("U64")` here was not merely redundant: it NARROWED
-        # any column already wider than 64, and the longest string this pipeline
-        # writes is 114 characters (one module's four detectors pooled on top
-        # of a cross-band tie), which came back as
-        #   'm2 consensus->reference (cross-band tied-F210M, contrast>2900) ['
-        # -- silent truncation, on live tables, from the script whose job is to
-        # repair provenance.  This is not hypothetical: gc2211's table carries
-        # 240 rows written by this script, and its `prov_source` is `<U27`.
+        # any column already wider than 64.  w51's live table carries a
+        # 62-character source and cloudc a 70-character pooled one; the widest
+        # string anything at this head emits is 71 (see PROV_TEXT_MAX_CHARS),
+        # and 'm2 visit-consensus [median of 4, ptp 49.99mas: nrcb1,nrcb2,nrcb'
+        # is what a U64 write leaves of it -- silent truncation, on live tables,
+        # from the script whose job is to repair provenance.  Not hypothetical:
+        # gc2211's table carries 240 rows written by this script, and its
+        # `prov_source` is `<U27`.
         _stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         _values = {"prov_stage": "revert",
                    "prov_source": "revert_broadcast_provenance",
