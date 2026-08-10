@@ -168,13 +168,19 @@ Two thresholds are doing that, and both are counts:
 
 The scaling is the expected one and it is worth stating so the numbers are not
 mistaken for a fitted curve. Each star contributes exactly one same-star pair, so
-the peak bin holds *n* of them and grows in step with the star count. The
-divisor does **not** grow with it: it is the median *occupied* bin, and with a
-few hundred pairs spread over 12,281 bins the typical occupied bin holds one
-pair, so the divisor is pinned at 1 (Table 1) and `ratio` is just *n*. Total
-pairs, meanwhile, grow as *n²* — every star can pair with every other star inside
-the search radius — so `ratio` ∝ *n* ∝ √(pairs). Density coupling is arithmetic
-here, not an empirical finding.
+the number of them grows in step with the star count. Not all of them land in the
+*same* bin: the per-star scatter spills some into the neighbouring ones, so the
+peak holds a fixed **fraction** of *n* rather than *n* itself — about 0.59 here
+(Table 2: 41/70, 65/110, 236/400), which is what the 15 mas scatter puts inside a
+40 mas bin at a 90 mas offset. The fraction is set by the bin geometry and does
+not change with density, so the peak still grows in step with *n*.
+
+The divisor does **not** grow with it: it is the median *occupied* bin, and with
+a few hundred pairs spread over 12,281 bins the typical occupied bin holds one
+pair, so the divisor is pinned at 1 (Table 1) and `ratio` is that fraction of
+*n*. Total pairs, meanwhile, grow as *n²* — every star can pair with every other
+star inside the search radius — so `ratio` ∝ *n* ∝ √(pairs). Density coupling is
+arithmetic here, not an empirical finding.
 
 (The *n²* growth is the total pair count, not the ratio's denominator. It becomes
 the denominator only in the replacement proposed at the end of this document,
@@ -218,8 +224,10 @@ for the star count that reproduces 232 and 323 pairs and measures there, giving
 `ratio` **66–82** — against that recorded ~18 for real clean brick cells, a
 factor of about four. Two things to keep in mind about that comparison. It is
 approximate in the sampling sense: at 25 trials it lands at 66–82, and across
-seeds and trial counts from 5 to 100 the same computation returns 65–69 at the
-low end and 80–86 at the high end (the ~4× is stable at 3.6–4.8). And **the ~18
+seeds and trial counts from 5 to 100 the same computation returns 63–69 at the
+low end and 80–86 at the high end, while the fold above ~18 stays at 3.6–4.8×.
+The script derives and prints that spread on every run rather than quoting it, so
+it cannot go stale the way a hardcoded number does. And **the ~18
 comes with no pair count attached** — the gate's comment does not say how
 crowded those clean cells were — so part of a factor of four could be density
 rather than normalisation, which is the same conflation this document exists to
@@ -248,11 +256,24 @@ explained:
    Not `(H.max() − bg)/√bg` with the same `bg`
    — with `bg` pinned at 1 that is identically `ratio − 1` and adds nothing
    (measured: the seven brick cells go 5,5,5,6,6,6,8 → 4,4,4,5,5,5,7). It has to
-   use the *expected* chance-pair background, `lam = npairs / n_disk_bins`,
-   which is fractional and keeps scaling with density where the median saturates
-   at 1. The peak grows as *n* and `lam` as *n²*, so `(peak − lam)/√lam` stops
-   depending on *n* — a crowded cell and a sparse one that are both correctly
-   registered score the same, which is exactly what the raw count fails to do.
+   use the *expected* chance-pair background, `lam = npairs / n_disk_bins` —
+   the average number of chance pairs a bin would hold if they were spread
+   evenly. It is a fraction (a few hundred pairs over 12,281 bins), and it keeps
+   scaling with density where the median occupied bin saturates at 1.
+
+   The form is `(peak − lam)/√lam`: subtract what the bin would hold by chance,
+   then divide by the **spread** of that chance number rather than by the number
+   itself. Counts that arrive independently scatter by about the square root of
+   their mean, so √lam is the size of an ordinary fluctuation, and the ratio
+   answers "how many ordinary fluctuations is this peak above the background" —
+   which is what "how confident are we" should mean here. Dividing by `lam`
+   itself, as the current statistic effectively does, asks "how many times the
+   background", which grows with density even when nothing is wrong.
+
+   And it comes out flat: the peak grows as *n* and `lam` as *n²*, so
+   `(peak − lam)/√lam` stops depending on *n* — a crowded cell and a sparse one
+   that are both correctly registered score the same, which is exactly what the
+   raw count fails to do.
 
 2. **Requiring the failing cells to touch each other.** (#179 called this
    "contiguity": cells are *contiguous* when they are neighbours on the 20×20

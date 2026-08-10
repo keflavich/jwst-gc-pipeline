@@ -130,6 +130,11 @@ BRICK_F405N_FALSE_POSITIVES = [(321, 8), (232, 5), (323, 6), (278, 6),
 #: absolute values are upper bounds.
 CLEAN_BRICK_CONTRAST = 18.0
 
+#: Extra seeds used only to report how far the derived 66-82 moves with the
+#: sampling.  Fixed so the run stays reproducible; two is enough to show the
+#: scale of the wobble without doubling the runtime.
+SAMPLING_SEEDS = (20260811, 20260812)
+
 
 def bin_edges():
     return np.arange(-MX_ARCSEC * 1000, MX_ARCSEC * 1000 + XBIN_ARCSEC * 1000,
@@ -274,7 +279,9 @@ def main(argv=None):
     at = model_ratio_at_npairs([min(obs_npairs), max(obs_npairs)],
                                rows, rng, args.trials)
     lo, hi = at[0][2], at[1][2]
-    # Quote the pair counts the model REACHED, not the ones it aimed at.
+    # Quote the pair counts the model REACHED, not the ones it aimed at -- and
+    # say so when it did not reach them, rather than calling them "matching".
+    solved = "matching" if all(r[3] for r in at) else "the best it reached for"
     print(f"\nThe seven brick F405N cells that were a FALSE failure in 2026-07 "
           f"read ratio 5-8\nat npairs {min(obs_npairs)}-{max(obs_npairs)} -- "
           f"peak bins holding "
@@ -283,15 +290,28 @@ def main(argv=None):
           f"puts CLEAN brick cells at\nmedian contrast "
           f"~{CLEAN_BRICK_CONTRAST:.0f}, so FAIL_MIN_RATIO "
           f"= {FAIL_MIN_RATIO:.0f} is under what a correctly registered cell "
-          f"scores.\nRun at matching pair counts ({at[0][1]:.0f} and "
+          f"scores.\nRun at {solved} pair counts ({at[0][1]:.0f} and "
           f"{at[1][1]:.0f}, solved for), this model scores {lo:.0f}-{hi:.0f} --"
           f"\n~{(lo + hi) / 2 / CLEAN_BRICK_CONTRAST:.0f}x the recorded "
           f"~{CLEAN_BRICK_CONTRAST:.0f} -- so its absolute values are upper "
-          f"bounds; the SCALING\nis the argument.\n"
-          f"\nSampling: that pair of numbers moves over roughly 65-86 with the "
-          f"trial count and the\nseed; the ~4x does not.  And the "
-          f"~{CLEAN_BRICK_CONTRAST:.0f} has no pair count attached, so some of "
-          f"the gap\ncould be density rather than normalisation.")
+          f"bounds; the SCALING\nis the argument.")
+
+    # The spread of that pair of numbers is derived here rather than quoted: a
+    # hardcoded range is the defect this script was pulled up on twice.
+    spread = [model_ratio_at_npairs([min(obs_npairs), max(obs_npairs)], rows,
+                                    np.random.default_rng(seed), args.trials)
+              for seed in SAMPLING_SEEDS]
+    los = [s[0][2] for s in spread] + [lo]
+    his = [s[1][2] for s in spread] + [hi]
+    fold = [(a + b) / 2 / CLEAN_BRICK_CONTRAST for a, b in zip(los, his)]
+    print(f"\nSampling, over {len(los)} seeds at --trials {args.trials}: the low "
+          f"end moves over {min(los):.0f}-{max(los):.0f}\nand the high end over "
+          f"{min(his):.0f}-{max(his):.0f}, while the fold above "
+          f"~{CLEAN_BRICK_CONTRAST:.0f} stays at "
+          f"{min(fold):.1f}-{max(fold):.1f}x.  So quote\nthe range as "
+          f"approximate.  And the ~{CLEAN_BRICK_CONTRAST:.0f} has no pair count "
+          f"attached, so some of the gap could be\ndensity rather than "
+          f"normalisation.")
 
     stars = [r[0] for r in rows]
     ratios = [r[3] for r in rows]
