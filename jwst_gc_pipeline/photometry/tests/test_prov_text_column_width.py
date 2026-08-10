@@ -63,19 +63,65 @@ POOLED_SOURCE_4 = ("m2 visit-consensus [median of 4, ptp 3.42mas: "
 #:        `CORRECTION_STAGES` and fully wired (cataloging.py passes merge_label
 #:        as stage; versioning/rerun.py seeds it).
 #:
-#: The stage now comes from `CORRECTION_STAGES` and the spread from the pooling
-#: limit, so this follows the code instead of a reviewer's arithmetic.  Its
-#: LENGTH is deliberately not asserted: `ASTROM_MAX_POOL_SPREAD_MAS` is an
+#: It is not FORMATTED here either.  A previous version of this helper built the
+#: string from a hand-copied template, and a reviewer defeated it three ways
+#: without any test noticing: rebuilding it on the `consensus->reference` base
+#: (the bulk-only one, which is exactly how 114 was arrived at), renaming the
+#: producer in the module, and changing the suffix wording.  All three left a
+#: stale fixture and a green suite.
+#:
+#: So the fixture is EMITTED: four synthetic detector corrections go through
+#: `pool_corrections_to_table_granularity`, and whatever it returns is what gets
+#: tested, so a change to the suffix wording follows automatically.
+#:
+#: Note what that does NOT settle.  The pooler decides what to pool from the
+#: correction's SHAPE -- a bulk correction is one with no exposure and no module
+#: -- not from its source text, so handing it the `consensus->reference` string
+#: on per-detector corrections pools it happily.  That is why 114 looked
+#: plausible.  What makes the longer base un-poolable is that it is only ever
+#: written on a BULK correction, and bulk corrections pass through untouched;
+#: `test_a_bulk_correction_is_never_given_a_pooled_suffix` pins that directly.
+#:
+#: Its LENGTH is deliberately not asserted: `ASTROM_MAX_POOL_SPREAD_MAS` is an
 #: operator setting, so the spread field's width is not fixed by the source at
 #: all.
+POOLED_DETECTORS = ("nrcb1", "nrcb2", "nrcb3", "nrcb4")   # one module's four
+
+
+def _pool_synthetic(base, detectors=POOLED_DETECTORS, spread=None):
+    """Run the real pooler over one module's detectors and return its ``source``.
+
+    ``spread`` is the peak-to-peak of the corrections handed in.  The value the
+    pooler REPORTS is its own statistic over them, which is not the same number,
+    so this does not try to dictate it -- the caller asks only that the reported
+    field be two digits wide, which is what makes the string its widest.
+    """
+    from astropy.table import Table as _T
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        MAX_POOL_SPREAD_MAS, pool_corrections_to_table_granularity)
+    if spread is None:
+        spread = MAX_POOL_SPREAD_MAS - 0.01
+    n = len(detectors)
+    offsets = np.linspace(-spread / 2, spread / 2, n)
+    tbl = _T({"Visit": ["jw01939001001"] * n, "Exposure": [1] * n,
+              "Filter": ["F212N"] * n, "Module": ["nrcb"] * n})
+    corrections = [
+        dict(visit="jw01939001001", exposure=1, module=det, filtername="F212N",
+             dra_onsky_mas=float(o), ddec_onsky_mas=0.0, dec_deg=-29.0,
+             source=base)
+        for det, o in zip(detectors, offsets)]
+    pooled = pool_corrections_to_table_granularity(
+        corrections, "Offsets_JWST_Brick1939_VIRAC2locked.csv", tbl=tbl)
+    assert len(pooled) == 1, (
+        f"{base!r} did not pool into one row; got {len(pooled)}")
+    return pooled[0]["source"]
+
+
 def _longest_emittable_source():
     from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
-        CORRECTION_STAGES, MAX_POOL_SPREAD_MAS)
+        CORRECTION_STAGES)
     stage = max(CORRECTION_STAGES, key=len)
-    dets = ["nrcb1", "nrcb2", "nrcb3", "nrcb4"]        # one module's four
-    spread = MAX_POOL_SPREAD_MAS - 0.01                # widest `{spread:.2f}`
-    return (f"{stage} visit-consensus [median of {len(dets)}, "
-            f"ptp {spread:.2f}mas: {','.join(dets)}]")
+    return _pool_synthetic(f"{stage} visit-consensus")
 
 
 POOLED_SOURCE_MAX = _longest_emittable_source()
@@ -198,6 +244,7 @@ def test_the_fixture_is_a_string_the_pooler_can_actually_emit(tmp_path):
     "[median of N ...]" suffix at all.
     """
     import inspect
+    import re
     from jwst_gc_pipeline.photometry import astrometry_checkpoint as ac
     from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
         _assert_poolable, OffsetsTableUpdateError)
@@ -213,22 +260,25 @@ def test_the_fixture_is_a_string_the_pooler_can_actually_emit(tmp_path):
                          "row", _T(), "t.csv")
 
     # (2): the part before " [median of" must be a source the module emits.
+    #
+    # An `any()` over hardcoded literals is not enough: renaming one producer
+    # leaves the other satisfying it while the fixture goes stale.  Compare the
+    # SET, so a rename, a removal or a third base all fail here.
     base = POOLED_SOURCE_MAX.split(" [median of")[0]
     src = inspect.getsource(ac)
-    emitted = [f'source=f"{{stage}} {suffix}"'
-               for suffix in ("visit-consensus", "consensus->reference")]
-    assert any(e in src.replace("\n", " ") for e in emitted), (
-        "the module's source-string producers have changed; re-derive the "
-        "maximum from them rather than from the widest value on disk")
+    emitted = set(re.findall(r'source=f"\{stage\} ([^"]+)"', src))
+    assert emitted == {"visit-consensus", "consensus->reference"}, (
+        f"the module's source-string producers are now {sorted(emitted)}; "
+        f"rebuild the fixture from them rather than assuming the old pair")
     stage, _, rest = base.partition(" ")
+    assert rest == "visit-consensus", (
+        f"{rest!r} is not the base a POOLED correction carries -- see "
+        f"test_a_bulk_correction_is_never_given_a_pooled_suffix")
     assert stage in ac.CORRECTION_STAGES, (
         f"{stage!r} is not a stage that writes corrections; the maximum has to "
         f"use the LONGEST of CORRECTION_STAGES, which is where the 70/71 "
         f"measurement went wrong by fixing it at 'm2'")
     assert stage == max(ac.CORRECTION_STAGES, key=len)
-    assert rest in ("visit-consensus", "consensus->reference"), (
-        f"{rest!r} is not a base this module writes")
-
     # ...and the spread must be one the pooler would admit.
     spread = float(POOLED_SOURCE_MAX.split("ptp ")[1].split("mas")[0])
     assert spread <= ac.MAX_POOL_SPREAD_MAS
@@ -445,3 +495,43 @@ def test_an_object_dtype_column_is_not_narrowed_into_shape(tmp_path):
     _widen_prov_text_columns(t, PROV_TEXT_MIN_CHARS)
     assert t["prov_source"][0] == long_value
     assert t["prov_source"].dtype.itemsize // 4 >= len(long_value)
+
+
+def test_a_bulk_correction_is_never_given_a_pooled_suffix():
+    """Why the longer of the two bases can never reach the pooled form.
+
+    `consensus->reference` is five characters longer than `visit-consensus`, so
+    a pooled median written on top of it would be the longest string in the
+    file -- which is exactly the reasoning that produced the retracted 114.
+
+    It cannot happen, but NOT because the pooler inspects the text.  It pools on
+    the correction's SHAPE: `_is_bulk_correction` is "no exposure AND no
+    module", and the `consensus->reference` string is only ever written on such
+    a correction (`astrometry_checkpoint.py`, the per-visit reference tie).
+    Bulk corrections are passed through untouched, so they never acquire a
+    `[median of N ...]` suffix.
+
+    Pinned here directly, because the fixture guard cannot see it: hand the
+    pooler that same string on PER-DETECTOR corrections and it pools it happily.
+    """
+    from astropy.table import Table as _T
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        _is_bulk_correction, pool_corrections_to_table_granularity)
+
+    base = "m12 consensus->reference (cross-band tied-F210M, contrast>2900)"
+    bulk = dict(visit="jw01939001001", exposure=None, module=None,
+                filtername="F212N", dra_onsky_mas=1.5, ddec_onsky_mas=-0.8,
+                dec_deg=-29.0, source=base)
+    assert _is_bulk_correction(bulk)
+
+    tbl = _T({"Visit": ["jw01939001001"], "Exposure": [1],
+              "Filter": ["F212N"], "Module": ["nrcb"]})
+    out = pool_corrections_to_table_granularity(
+        [bulk], "Offsets_JWST_Brick1939_VIRAC2locked.csv", tbl=tbl)
+    assert len(out) == 1
+    assert out[0]["source"] == base, "a bulk correction was pooled"
+    assert "[median of" not in out[0]["source"]
+
+    # and the shape is what decides it, not the text: the same string on
+    # per-detector corrections DOES pool.  This is the trap 114 fell into.
+    assert "[median of" in _pool_synthetic(base)
