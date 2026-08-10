@@ -179,8 +179,12 @@ The divisor does **not** grow with it: it is the median *occupied* bin, and with
 a few hundred pairs spread over 12,281 bins the typical occupied bin holds one
 pair, so the divisor is pinned at 1 (Table 1) and `ratio` is that fraction of
 *n*. Total pairs, meanwhile, grow as *n²* — every star can pair with every other
-star inside the search radius — so `ratio` ∝ *n* ∝ √(pairs). Density coupling is
-arithmetic here, not an empirical finding.
+star inside the search radius. `ratio` ∝ *n* is exact and is all the argument
+needs; the tidier-looking `ratio` ∝ √(pairs) is only asymptotic, since
+pairs ≈ *n* + 0.0097 *n*² still carries a large same-star share at these
+densities — measured over the judged rows `ratio` grows ×5.8 while √pairs grows
+×4.03, an exponent of 0.63 rather than 0.5. Density coupling is arithmetic here,
+not an empirical finding.
 
 (The *n²* growth is the total pair count, not the ratio's denominator. It becomes
 the denominator only in the replacement proposed at the end of this document,
@@ -224,10 +228,13 @@ for the star count that reproduces 232 and 323 pairs and measures there, giving
 `ratio` **66–82** — against that recorded ~18 for real clean brick cells, a
 factor of about four. Two things to keep in mind about that comparison. It is
 approximate in the sampling sense: at 25 trials it lands at 66–82, and across
-seeds and trial counts from 5 to 100 the same computation returns 63–69 at the
-low end and 80–86 at the high end, while the fold above ~18 stays at 3.6–4.8×.
-The script derives and prints that spread on every run rather than quoting it, so
-it cannot go stale the way a hardcoded number does. And **the ~18
+seeds and trial counts the same computation returns **64–72** at the low end and
+**81–86** at the high end, while the fold above ~18 — midpoint over 18, the one
+definition used throughout — stays at **4.1–4.3×**. The script sweeps two seeds
+against five trial counts and prints exactly those figures on every run; the
+numbers quoted here are the ones it prints. Sweeping both knobs matters: at a
+fixed trial count the seed-only range reads 66–67, far tighter than the quantity
+actually is. And **the ~18
 comes with no pair count attached** — the gate's comment does not say how
 crowded those clean cells were — so part of a factor of four could be density
 rather than normalisation, which is the same conflation this document exists to
@@ -266,14 +273,21 @@ explained:
    itself. Counts that arrive independently scatter by about the square root of
    their mean, so √lam is the size of an ordinary fluctuation, and the ratio
    answers "how many ordinary fluctuations is this peak above the background" —
-   which is what "how confident are we" should mean here. Dividing by `lam`
-   itself, as the current statistic effectively does, asks "how many times the
-   background", which grows with density even when nothing is wrong.
+   which is what "how confident are we" should mean here.
 
-   And it comes out flat: the peak grows as *n* and `lam` as *n²*, so
-   `(peak − lam)/√lam` stops depending on *n* — a crowded cell and a sparse one
-   that are both correctly registered score the same, which is exactly what the
-   raw count fails to do.
+   Neither of the two obvious alternatives works. The current statistic divides
+   by the median *occupied* bin, which is pinned at 1, so it is the raw peak
+   count and climbs in step with density. Dividing by `lam` instead over-corrects
+   in the other direction — `lam` grows as *n²* while the peak grows as *n*, so
+   `peak/lam` *falls* as the cell gets more crowded (Table 3: 4341 down to 1537
+   across the judged rows).
+
+   Dividing by √lam sits between the two, and Table 3 is what it does rather than
+   what one would like it to do: **×1.43 across the judged rows, against the raw
+   count's ×5.8.** Much flatter, not flat. That is enough for the argument — a
+   fixed bar means something comparable at 70 stars and at 400 — but "a crowded
+   cell and a sparse one score the same", which an earlier version of this
+   section claimed, is not what the model shows.
 
 2. **Requiring the failing cells to touch each other.** (#179 called this
    "contiguity": cells are *contiguous* when they are neighbours on the 20×20

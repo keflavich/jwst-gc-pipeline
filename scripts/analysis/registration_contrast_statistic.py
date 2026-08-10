@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Why the registration seam check's confidence number depends on star density.
 
-Supports issue #170.  Prints two tables and writes the figure to
+Supports issue #170.  Prints three tables and writes the figure to
 ``docs/reports/figures/registration_contrast_statistic.png``.
 
 (`.gitignore` carries a blanket `*.png` under a comment saying figures live in
@@ -73,14 +73,22 @@ bar sits: the comment on registration_failsafes.py's own `FAIL_MIN_RATIO` notes
 that clean brick cells verify at median contrast ~18, so the bar sits UNDER what
 a correctly registered cell of that field already scores.
 
+Table 3: what the proposed replacement actually does over the same rows.  It is
+printed rather than described because two prose claims about it were wrong: the
+current statistic does NOT "effectively divide by lam" (it divides by the median
+occupied bin, pinned at 1), and (peak-lam)/sqrt(lam) is not flat -- it climbs
+x1.43 across the judged rows, against the raw count's x5.8.  Much flatter, not
+flat.  Dividing by lam itself over-corrects: peak/lam FALLS with density.
+
 CALIBRATION CAVEAT: run at those same pair counts (solved for, not read off a
 nearby row), this model puts a fully misregistered cell at 66-82 -- about 4x the
-recorded ~18 for real clean cells.  The run derives and prints that range rather
-than quoting it.  The model assumes every detection has a truth counterpart and
+recorded ~18 for real clean cells.  The run derives and prints that range, and
+sweeps two seeds against five trial counts to report how far it moves, rather
+than quoting either.  The model assumes every detection has a truth counterpart and
 that all of them lie in one cell, so
 its absolute values are UPPER BOUNDS.  The argument rests on the scaling
-(ratio ~ star count, thresholds fixed), which is arithmetic; a replacement
-threshold must be calibrated on real cells, not on this table.
+(ratio proportional to star count, thresholds fixed), which is arithmetic; a
+replacement threshold must be calibrated on real cells, not on this table.
 
 MODELLING NOTE, because the first version of this script got it wrong.  A cell
 is modelled as N detections and their N truth counterparts in a 45-arcsec box;
@@ -130,10 +138,12 @@ BRICK_F405N_FALSE_POSITIVES = [(321, 8), (232, 5), (323, 6), (278, 6),
 #: absolute values are upper bounds.
 CLEAN_BRICK_CONTRAST = 18.0
 
-#: Extra seeds used only to report how far the derived 66-82 moves with the
-#: sampling.  Fixed so the run stays reproducible; two is enough to show the
-#: scale of the wobble without doubling the runtime.
+#: Extra seeds and trial counts used only to report how far the derived range
+#: moves with the sampling.  Fixed so the run stays reproducible.  BOTH knobs
+#: are swept: at a fixed trial count the seed-only range reads much tighter than
+#: the quantity really is, which would understate exactly what this is measuring.
 SAMPLING_SEEDS = (20260811, 20260812)
+SAMPLING_TRIALS = (5, 10, 25, 50, 100)
 
 
 def bin_edges():
@@ -188,7 +198,8 @@ def sweep(counts, rng, trials, offset_mas=90.0, displaced_fraction=1.0):
     return rows
 
 
-def model_ratio_at_npairs(targets, rows, rng, trials, tol=0.02, passes=6):
+def model_ratio_at_npairs(targets, rows, rng, trials, tol=0.02, passes=6,
+                          quiet=False):
     """What this model scores at a GIVEN pair count.
 
     The real cells being compared against are quoted by pair count, not by star
@@ -226,7 +237,7 @@ def model_ratio_at_npairs(targets, rows, rng, trials, tol=0.02, passes=6):
                 break
             k = float(np.interp(np.log(max(npair, 1)), lp, slope))
             n = max(1, int(round(n * (t / max(npair, 1)) ** (1.0 / max(k, 0.5)))))
-        if not converged:
+        if not converged and not quiet:
             print(f"NOTE: solving for {t} pairs stopped at {npair:.0f} after "
                   f"{passes} passes ({100 * abs(npair - t) / t:.1f}% off, "
                   f"tolerance {100 * tol:.0f}%).  Raise --trials to tighten it.")
@@ -264,6 +275,37 @@ def main(argv=None):
             verdict = "pass"
         print(f"{n:>11}{npair:>9.0f}{off:>11.0f}{ratio:>8.0f}  {verdict}")
 
+    # TABLE 3 -- the replacement, measured rather than asserted.  Two claims
+    # about it were wrong in prose before this table existed: that the current
+    # statistic "effectively divides by lam" (it divides by the median occupied
+    # bin, pinned at 1), and that (peak-lam)/sqrt(lam) is flat (it climbs, just
+    # far less than the raw count does).
+    nb = n_disk_bins()
+    print(f"\nTABLE 3 -- what the proposed replacement does over the same rows")
+    print(f"{'stars/cell':>11}{'peak':>7}{'lam':>10}{'peak/lam':>10}"
+          f"{'(peak-lam)/sqrt(lam)':>22}")
+    sig = []
+    for n, npair, _off, ratio, bg in rows:
+        lam = npair / nb
+        peak = ratio * bg
+        s = (peak - lam) / np.sqrt(lam)
+        sig.append((n, npair, peak, lam, peak / lam, s))
+        print(f"{n:>11}{peak:>7.0f}{lam:>10.4f}{peak / lam:>10.0f}{s:>22.0f}")
+    judged = [r for r in sig if r[1] >= MIN_PAIRS]
+    if judged:
+        raw_fold = judged[-1][2] / judged[0][2]
+        sig_fold = judged[-1][5] / judged[0][5]
+        lam_fold = judged[-1][4] / judged[0][4]
+        print(f"\nOver the rows the gate JUDGES ({judged[0][0]}-{judged[-1][0]} "
+              f"stars):\n"
+              f"  raw count (what it uses now)   {judged[0][2]:.0f} -> "
+              f"{judged[-1][2]:.0f}   x{raw_fold:.1f}\n"
+              f"  peak/lam                       {judged[0][4]:.0f} -> "
+              f"{judged[-1][4]:.0f}   x{lam_fold:.2f}  (FALLS with density)\n"
+              f"  (peak-lam)/sqrt(lam)           {judged[0][5]:.0f} -> "
+              f"{judged[-1][5]:.0f}   x{sig_fold:.2f}\n"
+              f"So the replacement is much flatter than the raw count, not flat.")
+
     crossed = next((r[0] for r in rows if r[3] >= FAIL_MIN_RATIO), None)
     failed = next((r[0] for r in rows if r[1] >= MIN_PAIRS
                    and r[3] >= MIN_PEAK_RATIO and r[2] > OFF_MAX
@@ -296,21 +338,29 @@ def main(argv=None):
           f"~{CLEAN_BRICK_CONTRAST:.0f} -- so its absolute values are upper "
           f"bounds; the SCALING\nis the argument.")
 
-    # The spread of that pair of numbers is derived here rather than quoted: a
-    # hardcoded range is the defect this script was pulled up on twice.
-    spread = [model_ratio_at_npairs([min(obs_npairs), max(obs_npairs)], rows,
-                                    np.random.default_rng(seed), args.trials)
-              for seed in SAMPLING_SEEDS]
-    los = [s[0][2] for s in spread] + [lo]
-    his = [s[1][2] for s in spread] + [hi]
+    # The spread is derived here rather than quoted: a hardcoded range is the
+    # defect this script was pulled up on twice, and the second time it was
+    # merely moved into prose.  Sweep BOTH knobs that move it -- the seed and
+    # the trial count -- because at a fixed trial count the seed-only range
+    # reads far tighter (66-67) than the quantity actually is (62-71).
+    los, his, fold = [lo], [hi], []
+    for seed in SAMPLING_SEEDS:
+        for trials in SAMPLING_TRIALS:
+            got = model_ratio_at_npairs([min(obs_npairs), max(obs_npairs)],
+                                        rows, np.random.default_rng(seed),
+                                        trials, quiet=True)
+            los.append(got[0][2])
+            his.append(got[1][2])
     fold = [(a + b) / 2 / CLEAN_BRICK_CONTRAST for a, b in zip(los, his)]
-    print(f"\nSampling, over {len(los)} seeds at --trials {args.trials}: the low "
-          f"end moves over {min(los):.0f}-{max(los):.0f}\nand the high end over "
-          f"{min(his):.0f}-{max(his):.0f}, while the fold above "
-          f"~{CLEAN_BRICK_CONTRAST:.0f} stays at "
-          f"{min(fold):.1f}-{max(fold):.1f}x.  So quote\nthe range as "
-          f"approximate.  And the ~{CLEAN_BRICK_CONTRAST:.0f} has no pair count "
-          f"attached, so some of the gap could be\ndensity rather than "
+    print(f"\nSampling, over {len(SAMPLING_SEEDS)} seeds x "
+          f"{len(SAMPLING_TRIALS)} trial counts {list(SAMPLING_TRIALS)}: the "
+          f"low end moves over\n{min(los):.0f}-{max(los):.0f} and the high end "
+          f"over {min(his):.0f}-{max(his):.0f}, while the fold above "
+          f"~{CLEAN_BRICK_CONTRAST:.0f} -- midpoint over "
+          f"{CLEAN_BRICK_CONTRAST:.0f},\nthe one definition used throughout -- "
+          f"stays at {min(fold):.1f}-{max(fold):.1f}x.  So quote the range as "
+          f"approximate.\nAnd the ~{CLEAN_BRICK_CONTRAST:.0f} has no pair count "
+          f"attached, so some of the gap could be density\nrather than "
           f"normalisation.")
 
     stars = [r[0] for r in rows]
