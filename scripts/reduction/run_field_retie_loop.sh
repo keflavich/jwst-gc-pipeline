@@ -152,11 +152,152 @@ reduce_fully_succeeded () {
     return 0
 }
 
+# ---------------------------------------------------------------------------
+# Which code is this loop actually running?
+#
+# A loop runs for days -- MAXITER=12 at ~7 h a pass is a fortnight -- and bash
+# reads the script ONCE, at launch.  So the loop is frozen at the state its
+# checkout was in when it started, and a safety guard merged the next morning
+# never reaches it.  That is not hypothetical: sgrc's loop ran 2026-08-07 to
+# 08-09 out of a checkout that predates `reduce_fully_succeeded`, so for its
+# whole life it cataloged without checking that its reduce had succeeded --
+# the exact guard whose own comment cites that field's failure (#364).  Nothing
+# in its output said so; the missing guard is invisible precisely because the
+# code that would have printed it is the code that is missing.
+#
+# TWO checkouts are in play and they need not be the same one:
+#   * this script's own, from BASH_SOURCE -- the loop's control flow and its
+#     guards;
+#   * PIPE_ROOT -- the jwst_gc_pipeline package the reduce and the cataloging
+#     import, which is what actually writes the offsets table.
+# Both are reported, at launch and at every iteration.
+
+# checkout_provenance <dir> -- one line: HEAD, date, dirty, distance behind the
+# upstream branch.  Never fails; a non-repository or a git-less environment
+# reports what it could not determine rather than stopping the loop.
+checkout_provenance () {
+    local dir="$1" head date dirty behind
+    if [ ! -d "$dir" ]; then echo "$dir (does not exist)"; return 0; fi
+    if ! git -C "$dir" rev-parse --git-dir >/dev/null 2>&1; then
+        echo "$dir (not a git checkout -- provenance unknown)"; return 0
+    fi
+    head=$(git -C "$dir" rev-parse --short HEAD 2>/dev/null || echo '?')
+    date=$(git -C "$dir" log -1 --format=%cs 2>/dev/null || echo '?')
+    # every substitution below is guarded: under `set -e` a bare
+    # `var=$(cmd)` whose command fails exits the script, and a pipeline under
+    # `pipefail` fails if ANY stage does.  Reporting an unknown is the job here;
+    # stopping a two-week loop because git had an opinion is not.
+    dirty=$(git -C "$dir" status --porcelain 2>/dev/null | wc -l | tr -d ' ' \
+            || echo '?')
+    behind=$(git -C "$dir" rev-list --count "HEAD..${RETIE_UPSTREAM:-origin/main}" \
+             2>/dev/null || echo '?')
+    echo "$dir @ $head ($date), ${dirty} uncommitted, ${behind} commit(s) behind ${RETIE_UPSTREAM:-origin/main}"
+}
+
+# commits_behind <dir> -- the count alone, or '?' when it cannot be determined.
+commits_behind () {
+    git -C "$1" rev-list --count "HEAD..${RETIE_UPSTREAM:-origin/main}" 2>/dev/null \
+        || echo '?'
+}
+
+# Refuse to START from a checkout that is behind its upstream.
+#
+# Enforced at launch only, never mid-run: at launch it costs nothing and no
+# work is lost, whereas stopping a running loop for the same reason would
+# throw away hours of reduce.  This is the "restart the loop after a safety
+# merge" option from #364, made mechanical instead of remembered.
+#
+# `?` (upstream ref absent, e.g. a checkout that has never fetched) is treated
+# as UNKNOWN and warned about, not refused: refusing there would block every
+# environment without network access to the remote.
+assert_checkouts_current () {
+    local dir behind stale=0
+    for dir in "$@"; do
+        [ -d "$dir" ] || continue
+        git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || continue
+        behind=$(commits_behind "$dir")
+        if [ "$behind" = '?' ]; then
+            echo "WARNING: cannot tell whether $dir is current"
+            echo "  (no ${RETIE_UPSTREAM:-origin/main} to compare against; try 'git -C $dir fetch origin')."
+            echo "  A loop started from a stale checkout silently lacks every guard merged since."
+        elif [ "$behind" -gt 0 ]; then
+            echo "$dir is $behind commit(s) behind ${RETIE_UPSTREAM:-origin/main}:"
+            # `git log | head` makes git take SIGPIPE, which `pipefail` turns
+            # into 141 and `set -e` turns into an exit -- HERE, before the
+            # refusal below is ever printed.  Measured against the #364
+            # checkout: 107 commits behind, and the loop died mid-listing with
+            # no verdict.  This is the same shape as #366 (`set -e` killing the
+            # loop at the sbatch assignment), so the trailing `|| true` is load
+            # bearing, not decoration.  `-n 20` also keeps git from writing more
+            # than it is asked for in the first place.
+            git -C "$dir" log --oneline -n 20 \
+                "HEAD..${RETIE_UPSTREAM:-origin/main}" 2>/dev/null || true
+            # `[ ... ] && echo` returns 1 when the test is false, which under
+            # `set -e` exits the script.  An `if` cannot.
+            if [ "$behind" -gt 20 ]; then
+                echo "  ... and $((behind - 20)) more"
+            fi
+            stale=1
+        fi
+    done
+    if [ "$stale" = 1 ]; then
+        echo "REFUSING to start: this loop would run for days without the changes listed"
+        echo "  above, and would not say so.  sgrc's 2026-08-07 loop ran two days without"
+        echo "  reduce_fully_succeeded for exactly this reason (#364)."
+        echo "  Update the checkout(s) and restart, or set RETIE_ALLOW_STALE_CHECKOUT=1"
+        echo "  and record in the run log why running old code is intended."
+        return 1
+    fi
+    return 0
+}
+
+# Has the script changed on disk since bash read it?  Bash does not re-read it,
+# so an edit landing mid-run changes nothing about what is executing -- and the
+# operator reading the file afterwards to work out what ran would be reading the
+# wrong thing.  Reported, not acted on: whether a loop may adopt code mid-run is
+# a decision about its contract, not a bug fix, and #364 leaves it open.
+SELF_PATH="${BASH_SOURCE[0]}"
+SELF_SUM_AT_LAUNCH=$(md5sum "$SELF_PATH" 2>/dev/null | cut -d' ' -f1 || echo '?')
+
+warn_if_self_changed () {
+    local now
+    now=$(md5sum "$SELF_PATH" 2>/dev/null | cut -d' ' -f1 || echo '?')
+    if [ "$now" != "$SELF_SUM_AT_LAUNCH" ]; then
+        echo "NOTE: $SELF_PATH has changed on disk since this loop started."
+        echo "  bash read it once at launch, so the RUNNING loop is still the old"
+        echo "  version; the file no longer describes what is executing."
+    fi
+}
+
 # Exposed so tests can source the helpers without running the loop.
 [ -n "${RETIE_LOOP_SOURCE_ONLY:-}" ] && return 0 2>/dev/null
 
+echo "=================  CHECKOUT PROVENANCE  ================="
+echo "  loop script : $(checkout_provenance "$HERE")"
+if [ -n "$PIPE_ROOT" ]; then
+    echo "  pipeline    : $(checkout_provenance "$PIPE_ROOT")"
+    _here_top=$(git -C "$HERE" rev-parse --show-toplevel 2>/dev/null || echo "$HERE")
+    _pipe_top=$(git -C "$PIPE_ROOT" rev-parse --show-toplevel 2>/dev/null || echo "$PIPE_ROOT")
+    if [ "$_here_top" != "$_pipe_top" ]; then
+        echo "  NOTE: the loop and the pipeline package come from DIFFERENT checkouts,"
+        echo "        so they can be at different commits and each carry different guards."
+    fi
+else
+    echo "  pipeline    : PIPE_ROOT unset -- whichever jwst_gc_pipeline is on PYTHONPATH"
+fi
+if [ "${RETIE_ALLOW_STALE_CHECKOUT:-0}" = 1 ]; then
+    echo "  RETIE_ALLOW_STALE_CHECKOUT=1 -- staleness check disabled by request."
+else
+    assert_checkouts_current "$HERE" ${PIPE_ROOT:+"$PIPE_ROOT"} || exit 2
+fi
+
 for ((it=1; it<=MAXITER; it++)); do
     echo "=================  RE-TIE ITER $it / $MAXITER  ($TARGET $PROPOSAL/$FIELD)  ================="
+    # Restated every iteration, not only at launch: an iteration's log is what
+    # anyone reads when its results are questioned days later, and "which code
+    # produced this" has to be answerable from that log alone.
+    echo "[iter $it] running: $(checkout_provenance "$HERE")"
+    warn_if_self_changed
 
     # --- 1. reduce (blocks until the whole array finishes) ---
     echo "[iter $it] reducing (fix_alignment applies consensus table if present: $([ -f "$CONSENSUS_TBL" ] && echo yes || echo no))"
