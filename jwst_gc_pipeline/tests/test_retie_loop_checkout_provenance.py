@@ -18,11 +18,18 @@ reduce had succeeded.  Measured on that same checkout today:
 Nothing in the loop's output said so, and it could not have: the code that would
 report a missing guard is part of what is missing.
 
-Two behaviours are pinned here.  Reporting the checkout each iteration, so a log
-answers "which code produced this" on its own; and refusing to START from a
-checkout behind its upstream, which is enforced at launch only -- there no work
-is lost, whereas stopping a running loop the same way would discard hours of
-reduce.
+What is pinned here is REPORTING: the checkout, at launch and at every
+iteration, so a log answers "which code produced this" on its own.
+
+Deliberately NOT a refusal, and the two designs that were tried are recorded in
+the script beside the code, because both were measured and both are wrong.  A
+commit-distance gate refuses 395 of this repository's 400 worktrees, i.e. the
+branch workflow CLAUDE.md mandates.  A named-guard gate -- #364's own
+"minimum-version assertion" -- PASSES the actual checkout from #364, because the
+guard missing there (`reduce_fully_succeeded`) lives in the loop script itself,
+and a script cannot check itself for a guard whose absence also removes the
+check.  That is #364's central observation and no self-check escapes it: the
+code that would report a missing guard is part of what is missing.
 """
 import pathlib
 import re
@@ -117,74 +124,102 @@ def test_every_iteration_reports_the_checkout_not_only_the_launch():
         'iteration log cannot say which code produced it')
 
 
-# --- the refusal ----------------------------------------------------------
+# --- the distance report, which is a REPORT ---------------------------------
 
-def test_a_current_checkout_is_allowed(tmp_path):
-    repo = _repo(tmp_path, 'current')
-    out = _source_helpers(f'assert_checkouts_current "{repo}"')
-    assert out.returncode == 0, out.stdout + out.stderr
+def test_a_checkout_behind_its_upstream_is_reported_not_refused(tmp_path):
+    """Reported, and the loop still starts.
 
-
-def test_a_checkout_behind_its_upstream_is_refused(tmp_path):
+    Refusing on distance was tried and measured against this repository's own
+    400 worktrees: 395 behind, 156 deliberately both ahead and behind (a topic
+    branch under test, which is how a re-tie is normally driven), and a detached
+    HEAD at a release tag refused too.  A rule that refuses 99% of checkouts is
+    a rule the operator overrides by habit.
+    """
     repo = _repo(tmp_path, 'stale', behind=3)
-    out = _source_helpers(f'assert_checkouts_current "{repo}"')
-    assert out.returncode != 0, out.stdout
-    assert 'REFUSING to start' in out.stdout
+    out = _source_helpers(f'warn_if_behind "{repo}"; echo STILL_RUNNING')
+    assert out.returncode == 0, out.stdout + out.stderr
     assert '3 commit(s) behind' in out.stdout
+    assert 'STILL_RUNNING' in out.stdout
+    assert 'REFUS' not in out.stdout.upper()
 
 
-def test_the_refusal_survives_a_long_commit_list(tmp_path):
-    """The listing must not kill the script before the verdict is printed.
+def test_the_report_says_the_distance_is_against_a_local_ref(tmp_path):
+    """"0 behind" is not an all-clear, and the log must not imply it is.
 
-    `git log ... | head -20` makes git take SIGPIPE once the reader stops;
-    `pipefail` turns that into 141 and `set -e` turns 141 into an exit -- at the
-    listing, before the refusal.  Same shape as #366, where `set -e` killed the
-    loop at the sbatch assignment.
-
-    Reproducing it needs BOTH conditions, which is why a naive fixture misses
-    it: more than 20 commits (or `head` never closes the pipe) AND a listing
-    over the ~64 KiB pipe buffer (or git finishes writing before it is closed).
-    29 commits with 6 KiB subjects clears both; 120 commits with `c0`-style
-    subjects is ~1.5 KiB and does not, and passed against the unfixed code.
+    `rev-list HEAD..origin/main` compares against the LOCAL copy of that ref,
+    which is only as fresh as the last fetch, so a checkout that has not fetched
+    for a month reads as current.
     """
-    repo = _repo(tmp_path, 'verystale', behind=29, subject_chars=6000)
-    out = _source_helpers(f'assert_checkouts_current "{repo}"')
-    assert out.returncode != 0, out.stdout
-    assert 'REFUSING to start' in out.stdout, (
-        'the refusal was never printed -- the listing exited first: '
-        + out.stdout[-400:])
-    assert '29 commit(s) behind' in out.stdout
-    assert 'and 9 more' in out.stdout
+    repo = _repo(tmp_path, 'stale', behind=2)
+    out = _source_helpers(f'warn_if_behind "{repo}"')
+    assert 'LOCAL' in out.stdout
+    assert 'last fetch' in out.stdout
 
 
-def test_an_undeterminable_distance_warns_but_does_not_refuse(tmp_path):
-    """No upstream ref to compare against is UNKNOWN, not stale.
+def test_the_report_says_what_being_behind_costs(tmp_path):
+    """The number alone means nothing to a reader; the consequence is the point."""
+    repo = _repo(tmp_path, 'stale', behind=2)
+    out = _source_helpers(f'warn_if_behind "{repo}"')
+    assert 'NOT in this run' in out.stdout
+    assert 'restart the loop' in out.stdout.lower()
 
-    Refusing here would block every environment that cannot reach the remote,
-    which is a larger population than the one this guard protects.
-    """
+
+def test_an_undeterminable_distance_is_reported_too(tmp_path):
     repo = _repo(tmp_path, 'noupstream')
     subprocess.run(['git', '-C', str(repo), 'remote', 'remove', 'origin'],
                    check=True, env={'PATH': '/usr/bin:/bin', 'HOME': str(tmp_path)})
-    out = _source_helpers(f'assert_checkouts_current "{repo}"')
+    out = _source_helpers(f'warn_if_behind "{repo}"')
     assert out.returncode == 0, out.stdout
-    assert 'cannot tell whether' in out.stdout
-    assert 'REFUSING' not in out.stdout
+    assert 'cannot tell how far' in out.stdout
 
 
-def test_the_refusal_can_be_overridden_deliberately():
-    """Running old code on purpose must stay possible, and must be visible."""
+def test_a_long_commit_list_cannot_kill_the_loop(tmp_path):
+    """No pipeline into `head`, so nothing here can take SIGPIPE.
+
+    An earlier version listed the missing commits with `git log | head -20`.
+    That makes git take SIGPIPE once the reader stops; `pipefail` turns it into
+    141 and `set -e` turns 141 into an exit -- the same shape as #366, where
+    `set -e` killed this loop at the sbatch assignment.  Reproducing it needs
+    both more than 20 commits and a listing over the pipe buffer, which is why a
+    naive fixture misses it; 29 commits with 6 KiB subjects clears both.
+    """
+    repo = _repo(tmp_path, 'verystale', behind=29, subject_chars=6000)
+    out = _source_helpers(f'warn_if_behind "{repo}"; echo STILL_RUNNING')
+    assert out.returncode == 0, out.stdout
+    assert 'STILL_RUNNING' in out.stdout
+    assert '29 commit(s) behind' in out.stdout
+
+
+def test_the_report_runs_before_any_reduce_is_submitted():
     src = _src()
-    assert 'RETIE_ALLOW_STALE_CHECKOUT' in src
-    assert re.search(r'RETIE_ALLOW_STALE_CHECKOUT.*?\n.*?staleness check disabled',
-                     src), 'the override must announce itself in the log'
-
-
-def test_the_check_runs_before_any_reduce_is_submitted():
-    """At launch nothing is lost; mid-run it would discard hours of reduce."""
-    src = _src()
-    assert src.index('assert_checkouts_current "$HERE"') < src.index(
+    assert src.index('warn_if_behind "$_here_top_or_here"') < src.index(
         'for ((it=1; it<=MAXITER;')
+
+
+def test_the_loop_never_refuses_on_provenance_alone():
+    """The whole design decision, pinned.
+
+    Both stronger designs were tried and measured, and both are wrong -- a
+    distance gate refuses the mandated worktree workflow, and a named-guard gate
+    PASSES the actual #364 checkout, because the guard missing there lives in
+    this script and a script cannot check itself for a guard whose absence also
+    removes the check.  If a future change adds a refusal here it needs a new
+    argument, not this test deleted quietly.
+    """
+    src = _src()
+    banner = src[src.index('CHECKOUT PROVENANCE'):src.index('for ((it=1; it<=MAXITER;')]
+    assert 'exit ' not in banner, (
+        'the provenance banner must not stop the loop; see warn_if_behind')
+
+
+def test_the_reason_refusal_was_rejected_is_recorded():
+    """A measured negative result is worth as much as the fix, if it is written down."""
+    src = _src()
+    src_new = src[src.index('# Report -- never refuse'):]
+    assert 'worktree' in src_new and '395' in src_new, (
+        'the false-refusal measurement must stay next to the code it explains')
+    assert 'reduce_fully_succeeded' in src_new
+    assert 'cannot check itself' in src_new
 
 
 # --- the mid-run edit note ------------------------------------------------
@@ -199,7 +234,8 @@ def test_a_mid_run_edit_to_the_script_is_reported(tmp_path):
         'SELF_SUM_AT_LAUNCH=deadbeef; warn_if_self_changed')
     assert out.returncode == 0, out.stderr
     assert 'has changed on disk' in out.stdout
-    assert 'still the old' in out.stdout
+    assert 'unpredictable' in out.stdout
+    assert 'INCREMENTALLY' in out.stdout
 
 
 def test_no_note_when_the_script_is_untouched():
