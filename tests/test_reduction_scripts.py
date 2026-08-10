@@ -27,25 +27,178 @@ def test_rename_stale_band_token():
     assert m.band_of('no_band_here.fits') is None
 
 
+def _band_dir(tmp_path, field='myfield', band='F182M'):
+    pipe = tmp_path / field / band / 'pipeline'
+    pipe.mkdir(parents=True)
+    return pipe
+
+
+def _age(path, days, now=None):
+    """Write a placeholder and backdate it.
+
+    Not a FITS file, so ``generation`` falls back to mtime -- which is the
+    fallback path the script documents, exercised here on purpose.
+    """
+    path.write_bytes(b'x')
+    now = now or time.time()
+    os.utime(path, (now - days * 86400,) * 2)
+    return path
+
+
 def test_rename_stale_staleness_logic(tmp_path):
     """A pre-campaign realigned mosaic is renamed; a same-campaign one is kept."""
     m = _load('rename_stale_mosaics')
     m.BASE = str(tmp_path)
-    pipe = tmp_path / 'myfield' / 'F182M' / 'pipeline'
-    pipe.mkdir(parents=True)
-    ref = pipe / 'jw1-o001_t001_nircam_clear-f182m-merged_data_i2d.fits'
-    stale = pipe / 'jw1-o001_t001_nircam_clear-f182m-merged-reproject-vvv_i2d.fits'
-    fresh = pipe / 'jw1-o001_t001_nircam_clear-f182m-merged_realigned-to-refcat.fits'
-    now = time.time()
+    pipe = _band_dir(tmp_path)
+    # rule 1 judges against the band's `*-merged_data_i2d.fits`, unchanged
+    ref = pipe / 'jw01182-o001_t001_nircam_clear-f182m-merged_data_i2d.fits'
+    stale = pipe / 'jw01182-o001_t001_nircam_clear-f182m-merged-reproject-vvv_i2d.fits'
+    fresh = pipe / 'jw01182-o001_t001_nircam_clear-f182m-merged_realigned-to-refcat.fits'
     for p, age_days in ((ref, 0), (stale, 400), (fresh, 0.5)):
-        p.write_bytes(b'x')
-        os.utime(p, (now - age_days * 86400,) * 2)
+        _age(p, age_days)
     plan = m.rename_stale_for_field('myfield', execute=True)
     assert len(plan) == 1
     assert not stale.exists()
-    assert (str(stale) + m.SUFFIX) == str(stale) + '_badastrometry_stale'
+    # the suffix takes the file out of every `*.fits` glob, which is the
+    # protection; `.bad` is the form issue #339 asked for
+    assert (str(stale) + m.SUFFIX) == str(stale) + '.bad'
+    assert not (str(stale) + m.SUFFIX).endswith('.fits')
     assert os.path.exists(str(stale) + m.SUFFIX)
     assert fresh.exists()
+
+
+def test_a_canonically_named_orphan_is_caught_by_its_generation(tmp_path):
+    """Issue #339: cloudc's 2023 F405N/F444W mosaic, in miniature.
+
+    Its name is the ordinary level-3 form -- ``jw<prop>-o<obs>_t<NNN>_<instr>_
+    <band>_i2d.fits`` -- so no name pattern distinguishes it from a live
+    product, and every ``*_i2d.fits`` glob in the tree selects it.  Only its
+    generation says it belongs to a superseded reduction.
+    """
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    pipe = _band_dir(tmp_path, band='F405N')
+    current = pipe / 'jw02221-o002_t001_nircam_clear-f405n-merged_i2d.fits'
+    orphan = pipe / 'jw02221-o002_t001_nircam_f405n-f444w_i2d.fits'
+    _age(current, 0)
+    _age(orphan, 1100)                                   # 2023, three years back
+    plan = m.rename_stale_for_field('myfield', execute=True)
+    assert [os.path.basename(p[0]) for p in plan] == [orphan.name]
+    assert not orphan.exists()
+    assert os.path.exists(str(orphan) + m.SUFFIX)
+    assert current.exists()
+
+
+def test_rule_2_does_not_widen_rule_1(tmp_path):
+    """Adding the generation rule must not change which NAMED files are taken.
+
+    Rule 1 judges against the band's ``*-merged_data_i2d.fits`` and skips the
+    band when there is none.  Rule 2's reference (the newest primary mosaic)
+    exists in far more band directories, so sharing it would silently promote
+    every previously-skipped rule-1 candidate into a rename -- measured
+    archive-wide as 55 files becoming 229.  That is a separate decision about
+    178 files, and this test is what stops it happening by accident.
+    """
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    pipe = _band_dir(tmp_path, band='F405N')
+    # a current primary mosaic exists, but NO `*-merged_data_i2d.fits`
+    _age(pipe / 'jw02221-o002_t001_nircam_clear-f405n-merged_i2d.fits', 0)
+    named = _age(pipe / 'jw02221-o002_t001_nircam_clear-f405n-nrca'
+                        '_realigned-to-vvv.fits', 400)
+    assert m.rename_stale_for_field('myfield', execute=True) == []
+    assert named.exists()
+
+
+def test_a_second_pointing_in_the_same_band_is_not_superseded(tmp_path):
+    """ngc6334 and sickle both keep several pointings in one band directory.
+
+    ngc6334's ``F200W/pipeline`` holds proposals 6778 and 7213 side by side and
+    sickle's ``F1130W/pipeline`` holds observations o001/o002/o003 of 3958.  A
+    pointing reduced three weeks before its neighbour is current, not
+    superseded; without the pointing scoping this fired on nine live products.
+    """
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    pipe = _band_dir(tmp_path, band='F200W')
+    newer = _age(pipe / 'jw06778-o001_t001_nircam_clear-f200w-merged_i2d.fits', 0)
+    older = _age(pipe / 'jw07213-o001_t001_nircam_clear-f200w-merged_i2d.fits', 60)
+    assert m.rename_stale_for_field('myfield', execute=True) == []
+    assert newer.exists() and older.exists()
+
+
+def test_the_orphans_reason_is_recorded_beside_it(tmp_path):
+    """A run log under the field root is easy to lose; the sidecar is not."""
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    pipe = _band_dir(tmp_path, band='F405N')
+    _age(pipe / 'jw02221-o002_t001_nircam_clear-f405n-merged_i2d.fits', 0)
+    orphan = _age(pipe / 'jw02221-o002_t001_nircam_f405n-f444w_i2d.fits', 1100)
+    m.rename_stale_for_field('myfield', execute=True)
+    note = str(orphan) + m.SUFFIX + '.why.txt'
+    assert os.path.exists(note)
+    text = open(note).read()
+    assert 'superseded generation' in text
+    assert m.SUFFIX in text                              # says how to undo it
+
+
+def test_per_exposure_intermediates_are_never_candidates(tmp_path):
+    """The scope guard: hundreds of live intermediates share the band directory.
+
+    ``jw02221002001_02201_00001_nrcalong_align_outlier_i2d.fits`` and its
+    siblings are per-exposure outlier-detection products, 171-188 of them per
+    cloudc band, and many are legitimately years old.  A generation rule that
+    matched ``*_i2d.fits`` would quarantine the lot.
+    """
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    pipe = _band_dir(tmp_path, band='F405N')
+    _age(pipe / 'jw02221-o002_t001_nircam_clear-f405n-merged_i2d.fits', 0)
+    old_intermediates = [
+        _age(pipe / 'jw02221002001_02201_00001_nrcalong_align_outlier_i2d.fits', 900),
+        _age(pipe / 'jw02221002001_02201_00001_nrcalong_i2d.fits', 900),
+    ]
+    byproducts = [
+        _age(pipe / 'jw02221-o002_t001_nircam_clear-f405n-nrca_data_i2d.fits', 900),
+        _age(pipe / ('jw02221-o002_t001_nircam_clear-f405n-nrca_m2_daophot_basic'
+                     '_mergedcat_residual_i2d.fits'), 900),
+    ]
+    assert m.rename_stale_for_field('myfield', execute=True) == []
+    for p in old_intermediates + byproducts:
+        assert p.exists(), p.name
+
+
+def test_a_bands_only_mosaic_is_not_flagged_by_the_campaign_floor(tmp_path):
+    """cloudc's MIRI F2550W case: 59 days below the field floor, and correct.
+
+    A band that simply finished earlier than the rest of the campaign must not
+    be quarantined for it.  The per-band condition is what prevents that, so it
+    is not redundant with the campaign floor.
+    """
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    nircam = _band_dir(tmp_path, band='F182M')
+    miri = _band_dir(tmp_path, band='F2550W')
+    _age(nircam / 'jw02221-o002_t001_nircam_clear-f182m-merged_i2d.fits', 0)
+    lone = _age(miri / 'jw02221-o001_t001_miri_f2550w_i2d.fits', 59)
+    assert m.rename_stale_for_field('myfield', execute=True) == []
+    assert lone.exists()
+
+
+def test_an_already_quarantined_file_is_not_renamed_again(tmp_path):
+    """Idempotence, and the older suffix keeps being recognised as quarantined."""
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    pipe = _band_dir(tmp_path, band='F405N')
+    _age(pipe / 'jw02221-o002_t001_nircam_clear-f405n-merged_i2d.fits', 0)
+    orphan = _age(pipe / 'jw02221-o002_t001_nircam_f405n-f444w_i2d.fits', 1100)
+    m.rename_stale_for_field('myfield', execute=True)
+    assert m.rename_stale_for_field('myfield', execute=True) == []
+    legacy = _age(pipe / ('jw02221-o002_t001_nircam_clear-f405n-nrca'
+                          '_realigned-to-vvv.fits_badastrometry_stale'), 900)
+    assert m.rename_stale_for_field('myfield', execute=True) == []
+    assert legacy.exists()
+    assert os.path.exists(str(orphan) + m.SUFFIX)
 
 
 def test_purge_satstar_caches(tmp_path):

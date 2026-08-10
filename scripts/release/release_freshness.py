@@ -55,9 +55,13 @@ import json
 import os
 
 #: How the pipeline renames a product whose astrometry was superseded.
-#: ``rename_stale_mosaics.py`` uses the second form.
+#: ``rename_stale_mosaics.py`` writes ``{src}.bad`` and, before 2026-08, wrote
+#: ``{src}_badastrometry_stale``; the 192 brick files quarantined by the
+#: 2026-07-03 pass still carry the older form, so both must be recognised or a
+#: release would read a repudiated product as merely absent.
 QUARANTINE_GLOBS = (
     "{stem}_im0_badastrom*.fits",
+    "{src}.bad",
     "{src}_badastrometry_stale",
     "{src}.STALE_*",
 )
