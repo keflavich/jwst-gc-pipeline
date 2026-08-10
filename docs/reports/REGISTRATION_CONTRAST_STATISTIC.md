@@ -146,9 +146,19 @@ real gate quantises the same way.)
 | 260 | 888 | 80 | 153 | **FAIL** |
 | 400 | 1886 | 80 | 236 | **FAIL** |
 
-Read down the `ratio` column: the same seam scores **7** in a sparse cell and
-**236** in a crowded one, a factor of 34. The verdict flips from "not judged" to
-"blocks the release" purely on how many stars the cell happens to contain.
+Read down the `ratio` column: the same seam scores **7** in a 15-star cell and
+**236** in a 400-star one. Two spans are worth separating, because the sparse end
+of the table is outside the regime the rest of this document argues about:
+
+- **41 → 236, a factor of 5.8**, across the rows the release gate actually
+  judges (70 stars and up — the sparser rows hold too few pairs to be judged at
+  all).
+- **7 → 236, a factor of 34**, across the whole table. The 15-star row is the
+  only one where the divisor is not 1 (median occupied bin 1.5, peak count 10),
+  so its `ratio` of 7 is not a raw count like the others.
+
+Either way the verdict flips from "not judged" to "blocks the release" purely on
+how many stars the cell happens to contain.
 
 Two thresholds are doing that, and both are counts:
 
@@ -157,9 +167,20 @@ Two thresholds are doing that, and both are counts:
 - `FAIL_MIN_RATIO` — above the pair floor, the peak-bin count must reach 10.
 
 The scaling is the expected one and it is worth stating so the numbers are not
-mistaken for a fitted curve: the peak grows as the number of stars *n*, while
-the chance-pair background grows as *n²*, so `ratio` ∝ *n* ∝ √(pairs). Density
-coupling is arithmetic here, not an empirical finding.
+mistaken for a fitted curve. Each star contributes exactly one same-star pair, so
+the peak bin holds *n* of them and grows in step with the star count. The
+divisor does **not** grow with it: it is the median *occupied* bin, and with a
+few hundred pairs spread over 12,281 bins the typical occupied bin holds one
+pair, so the divisor is pinned at 1 (Table 1) and `ratio` is just *n*. Total
+pairs, meanwhile, grow as *n²* — every star can pair with every other star inside
+the search radius — so `ratio` ∝ *n* ∝ √(pairs). Density coupling is arithmetic
+here, not an empirical finding.
+
+(The *n²* growth is the total pair count, not the ratio's denominator. It becomes
+the denominator only in the replacement proposed at the end of this document,
+which divides by the **expected** chance-pair occupancy `lam = pairs / bins`
+instead of by the median occupied bin — that is precisely what makes the
+replacement flat in density.)
 
 And the bar is hardest to clear in the sparsest cells, while the crowded cells
 where it is easiest are the Galactic Centre field interiors — where a seam
@@ -194,8 +215,15 @@ distinguishes them. That is the whole of #170.
 seven cells fall *between* Table 2's rows, so the model is re-run at their own
 pair counts rather than read off the neighbours: `model_ratio_at_npairs` solves
 for the star count that reproduces 232 and 323 pairs and measures there, giving
-`ratio` **66–82** — against that recorded ~18 for real clean brick cells of
-comparable density, a factor of about four. The model assumes every detection has a truth-set counterpart and
+`ratio` **66–82** — against that recorded ~18 for real clean brick cells, a
+factor of about four. Two things to keep in mind about that comparison. It is
+approximate in the sampling sense: at 25 trials it lands at 66–82, and across
+seeds and trial counts from 5 to 100 the same computation returns 65–69 at the
+low end and 80–86 at the high end (the ~4× is stable at 3.6–4.8). And **the ~18
+comes with no pair count attached** — the gate's comment does not say how
+crowded those clean cells were — so part of a factor of four could be density
+rather than normalisation, which is the same conflation this document exists to
+warn about. The model assumes every detection has a truth-set counterpart and
 that all of them sit in the one cell; real catalogs are incomplete and real
 cells are not that clean, so **Table 2's absolute values are upper bounds**.
 What the argument rests on is the *scaling* — `ratio` growing linearly with star
@@ -207,15 +235,29 @@ real cells, not on Table 2.
 
 Two changes, both still unimplemented:
 
-1. **A density-flat significance.** Not `(H.max() − bg)/√bg` with the same `bg`
+Both were proposed once before, in PR #179, and that PR was closed with the
+objection *"I can't parse any of this. 'density-flat significance' means nothing
+to me. I don't know what is contiguous."* So both are named in plain language
+first, and the jargon is given afterwards only as a label for what was already
+explained:
+
+1. **A confidence number that does not grow just because the cell is crowded.**
+   (#179 called this a "density-flat significance": *density* = stars per cell,
+   *flat* = the number a correctly-registered cell scores stays put as that
+   density rises, instead of climbing with it as the current one does.)
+   Not `(H.max() − bg)/√bg` with the same `bg`
    — with `bg` pinned at 1 that is identically `ratio − 1` and adds nothing
    (measured: the seven brick cells go 5,5,5,6,6,6,8 → 4,4,4,5,5,5,7). It has to
    use the *expected* chance-pair background, `lam = npairs / n_disk_bins`,
    which is fractional and keeps scaling with density where the median saturates
-   at 1. The peak grows as *n* and `lam` as *n²*, so the significance is flat in
-   density where the raw count is linear in it.
+   at 1. The peak grows as *n* and `lam` as *n²*, so `(peak − lam)/√lam` stops
+   depending on *n* — a crowded cell and a sparse one that are both correctly
+   registered score the same, which is exactly what the raw count fails to do.
 
-2. **Contiguity, as an independent second axis.** A misregistration is a
+2. **Requiring the failing cells to touch each other.** (#179 called this
+   "contiguity": cells are *contiguous* when they are neighbours on the 20×20
+   grid, sharing an edge, so that they form one connected blob rather than
+   scattered dots.) A misregistration is a
    connected patch of cells; chance-pair noise is scattered singletons. It needs
    no new measurement — the offsets and the verified flags are already on the
    grid — and in the #179 trial it was much the stronger of the two, firing on
@@ -229,10 +271,21 @@ Two changes, both still unimplemented:
    of the seven brick false positives are edge-adjacent on the grid, so a 2-cell
    bar re-creates the exact false alarm this is meant to remove.
 
-An attempt at both, PR #179, was closed without a stated reason, and nothing from
-it is on `main` — verified at `a2e1533`: `FAIL_MIN_RATIO = 10.0` is still what
-`scripts/release/registration_failsafes.py` declares, and neither `FAIL_MIN_SIG`
-nor `MIN_SEAM_CELLS` exists anywhere in the tree.
+An attempt at both, PR #179, was closed on 2026-07-29 with a stated reason, and
+the reason was that it could not be read:
+
+> I can't parse any of this. "density-flat significance" means nothing to me. I
+> don't know what is contiguous. I'm closing this and if there's a real problem
+> I'll let an agent resuscitate it.
+
+That is why this document exists, and why both proposals are named in ordinary
+words above before their labels are given. An earlier revision of this report
+said #179 was "closed without a stated reason", which was wrong — the comment is
+on the pull request, timestamped at the close.
+
+Nothing from #179 is on `main` — verified at `d47a2c2`: `FAIL_MIN_RATIO = 10.0`
+is still what `scripts/release/registration_failsafes.py` declares, and neither
+`FAIL_MIN_SIG` nor `MIN_SEAM_CELLS` exists anywhere in the tree.
 
 ## Loose end
 
@@ -264,8 +317,11 @@ suppressing a genuine 80 mas signal in seven cells. Not chased down.
   not fitted. The shape of Table 2 — a count linear in star number, crossing
   fixed bars — does not depend on them.
 - `median(H[H>0]) = 1` holds up to a few thousand pairs per cell and breaks
-  around 20 000, which no cell in this survey approaches. The only real per-cell
-  pair counts on record are the seven brick cells' 232–323; the scan results
-  under `registration_scan_results/` do not record `npairs` or `ratio` for
-  passing cells, so there is no on-disk confirmation of the divisor across the
-  survey.
+  around 20 000, which no cell in this survey approaches. It has been measured on
+  real data once, by #179: *"`median(H[H>0])` is exactly 1 in every verified cell
+  of every brick band"*, across **372 verified cells over 10 bands**. That is a
+  measurement of this document's central claim, from the same trial cited above
+  for the contiguity counts. What is missing is a standing record: the scan
+  results under `registration_scan_results/` do not store `npairs` or `ratio` for
+  passing cells, so the check cannot be repeated from what is on disk today, and
+  the only per-cell pair counts kept anywhere are the seven brick cells' 232–323.

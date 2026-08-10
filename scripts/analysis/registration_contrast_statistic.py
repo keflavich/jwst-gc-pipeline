@@ -198,7 +198,14 @@ def model_ratio_at_npairs(targets, rows, rng, trials, tol=0.02, passes=6):
     guess is refined by rerunning and correcting along that local power law
     until the realised pair count is within ``tol`` of the target.
 
-    Returns ``[(target, realised npairs, ratio), ...]``.
+    A cell's pair count is a random variable, so the target cannot be hit
+    exactly and the refinement can run out of passes without converging -- at
+    ``--trials 5`` it lands 2.6% off.  The realised pair count is therefore
+    RETURNED, never the target, and a run that did not converge says so rather
+    than presenting an off-target result as an on-target one.  Callers should
+    quote the realised counts.
+
+    Returns ``[(target, realised npairs, ratio, converged), ...]``.
     """
     lp = np.log([r[1] for r in rows])
     ls = np.log([r[0] for r in rows])
@@ -206,13 +213,19 @@ def model_ratio_at_npairs(targets, rows, rng, trials, tol=0.02, passes=6):
     out = []
     for t in targets:
         n = max(1, int(round(np.exp(np.interp(np.log(t), lp, ls)))))
+        converged = False
         for _ in range(passes):
             _n, npair, _off, ratio, _bg = sweep([n], rng, trials)[0]
             if npair > 0 and abs(npair - t) / t <= tol:
+                converged = True
                 break
             k = float(np.interp(np.log(max(npair, 1)), lp, slope))
             n = max(1, int(round(n * (t / max(npair, 1)) ** (1.0 / max(k, 0.5)))))
-        out.append((t, npair, ratio))
+        if not converged:
+            print(f"NOTE: solving for {t} pairs stopped at {npair:.0f} after "
+                  f"{passes} passes ({100 * abs(npair - t) / t:.1f}% off, "
+                  f"tolerance {100 * tol:.0f}%).  Raise --trials to tighten it.")
+        out.append((t, npair, ratio, converged))
     return out
 
 
@@ -261,6 +274,7 @@ def main(argv=None):
     at = model_ratio_at_npairs([min(obs_npairs), max(obs_npairs)],
                                rows, rng, args.trials)
     lo, hi = at[0][2], at[1][2]
+    # Quote the pair counts the model REACHED, not the ones it aimed at.
     print(f"\nThe seven brick F405N cells that were a FALSE failure in 2026-07 "
           f"read ratio 5-8\nat npairs {min(obs_npairs)}-{max(obs_npairs)} -- "
           f"peak bins holding "
@@ -273,7 +287,11 @@ def main(argv=None):
           f"{at[1][1]:.0f}, solved for), this model scores {lo:.0f}-{hi:.0f} --"
           f"\n~{(lo + hi) / 2 / CLEAN_BRICK_CONTRAST:.0f}x the recorded "
           f"~{CLEAN_BRICK_CONTRAST:.0f} -- so its absolute values are upper "
-          f"bounds; the SCALING\nis the argument.")
+          f"bounds; the SCALING\nis the argument.\n"
+          f"\nSampling: that pair of numbers moves over roughly 65-86 with the "
+          f"trial count and the\nseed; the ~4x does not.  And the "
+          f"~{CLEAN_BRICK_CONTRAST:.0f} has no pair count attached, so some of "
+          f"the gap\ncould be density rather than normalisation.")
 
     stars = [r[0] for r in rows]
     ratios = [r[3] for r in rows]
