@@ -106,24 +106,34 @@ two rules are evaluated INDEPENDENTLY and their results unioned; letting rule 1
 claim a file it then skips for want of its own reference hid files that rule 2
 selects.
 
-Known limitations, stated so they are not mistaken for coverage.  Both are in the
+Known limitation, stated so it is not mistaken for coverage.  It is in the
 conservative direction -- the rule misses orphans, it does not take live data --
-and both are gaps ``check_generation_span`` and the release freshness gate are
-the things that look at instead.
+and it is a gap ``check_generation_span`` and the release freshness gate are the
+things that look at instead.
 
-  * Rule 2 cannot see a whole POINTING that is stale, because every one of its
-    mosaics is then its own family's newest.
-  * Rule 2 cannot see a whole INSTRUMENT that is stale, for the same reason: its
-    reference is that instrument's own newest primary mosaic, so if a field's
-    entire MIRI set is superseded, every member of it is its own reference and
-    none is selected, at any --campaign-days.  This is the PRICE of the
-    per-instrument reference, and it is deliberate: the alternative clocked MIRI
-    against NIRCam and let ordinary NIRCam reduction walk sole-copy MIRI mosaics
-    toward quarantine (see MIN_ORPHAN_AGE_DAYS).  Trading a missed orphan for a
-    protected live file is the right way round, but it IS a trade.  No field is
-    in this state today -- every field's newest MIRI primary mosaic is from
-    2026-06 or later -- so it is a forward-looking hole rather than a present
-    one.
+RULE 2 CANNOT SEE A WHOLE INSTRUMENT THAT IS STALE.  Its reference is that
+instrument's own newest primary mosaic, computed from the very set being judged,
+so if a field's entire MIRI set is superseded then every member of it is its own
+reference, both clauses degrade together, and nothing is selected at any
+--campaign-days.  The set is invisible, not merely held back.
+
+This is the PRICE of the per-instrument reference, and it is deliberate: the
+alternative clocked MIRI against NIRCam and let ordinary NIRCam reduction walk
+sole-copy MIRI mosaics toward quarantine (see MIN_ORPHAN_AGE_DAYS).  Trading a
+missed orphan for a protected live file is the right way round, but it IS a
+trade.  No field is in this state today -- every field's newest MIRI primary
+mosaic is from 2026-06 or later -- so it is a forward-looking hole rather than a
+present one.
+
+A WHOLE POINTING that is stale is NOT a second case of this, and earlier versions
+of this note said it was.  The pointing appears only in the family key; it is not
+part of either reference, so a stale pointing is judged against the instrument's
+newest like everything else and IS caught whenever any other pointing of that
+instrument in the field is current.  brick is the live example: every NIRCam
+primary mosaic of ``jw02221-o002`` is a 2023 product, and all three are in the
+current selection.  The only pointing rule 2 cannot see is one that is its
+instrument's ONLY pointing -- which is the instrument case above, not a separate
+limitation.
 
 (An earlier version of this note claimed the opposite of what the rule now does
 -- that a band directory whose ONLY primary mosaic is an orphan would be kept

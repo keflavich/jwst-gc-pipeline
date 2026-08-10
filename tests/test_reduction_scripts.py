@@ -972,16 +972,55 @@ def test_the_instrument_token_comes_from_the_primary_mosaic_pattern():
         assert m.PRIMARY_MOSAIC_RE.match(name) is None
 
 
-def test_a_wholly_stale_instrument_is_a_known_blind_spot():
-    """The price of the per-instrument reference, pinned so it stays documented.
+def test_a_wholly_stale_instrument_is_a_known_blind_spot(tmp_path):
+    """The price of the per-instrument reference, pinned as BEHAVIOUR.
 
     If a field's entire MIRI set is superseded, every MIRI mosaic is its own
-    instrument's newest and none can be selected.  That is the conservative
-    direction -- orphans missed, live data never taken -- but it is a real gap
-    and the module must say so, because that block's stated purpose is to keep
-    its coverage from being overstated.
+    instrument's newest, both of rule 2's clauses degrade together, and nothing
+    is selected.  The set is invisible, not merely held back -- so the audit
+    reports it neither as held nor as caught.
+
+    Pinned by running the rule, not by grepping the docstring: an earlier
+    version of this test asserted only that the module said the words, which
+    would have kept a FALSE limitation (the pointing one, below) locked in.
     """
     m = _load('rename_stale_mosaics')
-    doc = m.__doc__.lower()
-    assert 'whole instrument' in doc or 'whole INSTRUMENT'.lower() in doc
-    assert 'known limitation' in doc
+    m.BASE = str(tmp_path)
+    nir = _band_dir(tmp_path, band='F405N')
+    mir = _band_dir(tmp_path, band='F770W')
+    _age(nir / 'jw02221-o002_t001_nircam_clear-f405n-merged_i2d.fits', 0)
+    stale = [_age(mir / 'jw02221-o002_t001_miri_f770w_i2d.fits', 1100),
+             _age(mir / 'jw02221-o002_t001_miri_f770w-sub256_i2d.fits', 1100)]
+
+    assert m.rename_stale_for_field('myfield', execute=True) == []
+    for p in stale:
+        assert p.exists(), 'the whole-instrument blind spot has closed'
+    held, caught = m.audit_age_guard(['myfield'])
+    assert held == [] and caught == [], 'invisible, not held back'
+
+    assert 'known limitation' in m.__doc__.lower()
+
+
+def test_a_wholly_stale_pointing_is_caught_when_another_pointing_is_current(tmp_path):
+    """The pointing is NOT a second blind spot, and the module used to say it was.
+
+    The pointing appears only in the family key -- it is not part of either
+    reference -- so a stale pointing is judged against the instrument's newest
+    like everything else.  brick is the live case: every NIRCam primary mosaic
+    of `jw02221-o002` is a 2023 product and all three are selected today.
+
+    The only invisible pointing is one that is its instrument's ONLY pointing,
+    which is the instrument case, not a separate one.
+    """
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    pipe = _band_dir(tmp_path, band='F405N')
+    _age(pipe / 'jw02221-o002_t001_nircam_clear-f405n-merged_i2d.fits', 0)
+    stale = [_age(pipe / 'jw02221-o009_t001_nircam_f405n-f444w_i2d.fits', 1100),
+             _age(pipe / 'jw02221-o009_t001_nircam_clear-f410m_i2d.fits', 1100)]
+
+    plan = m.rename_stale_for_field('myfield', execute=True)
+    assert sorted(os.path.basename(p[0]) for p in plan) == \
+        sorted(p.name for p in stale), 'a wholly stale pointing must be caught'
+    for p in stale:
+        assert not p.exists() and os.path.exists(str(p) + m.SUFFIX)
