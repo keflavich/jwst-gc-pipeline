@@ -1117,8 +1117,10 @@ def _widen_prov_text_columns(tbl, chars=PROV_TEXT_MIN_CHARS):
     ``chars`` is a FLOOR, and callers pass the length of what they are about to
     write.  A fixed cap does not work here: the 64 characters this originally
     used is under the 70 of the four-detector pooling the pooler is built for,
-    and under the 102 of a pooled cross-band tie, so it would have gone on
-    cutting the detector list in exactly the case that matters.
+    and under the 114 of that same pooling written on top of the longest base
+    any live table carries (w51's 62-character cross-band tie -- see
+    ``PROV_TEXT_MAX_CHARS``), so it would have gone on cutting the detector
+    list in exactly the case that matters.
 
     Uses ``Column.astype`` rather than ``np.asarray``.  ``np.asarray`` on a
     ``MaskedColumn`` returns the underlying data and DISCARDS THE MASK, which
