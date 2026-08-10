@@ -200,3 +200,21 @@ def test_an_unreadable_file_is_not_claimed_to_be_aligned(tmp_path):
     path = tmp_path / 'truncated.fits'
     path.write_bytes(b'not a fits file')
     assert not cio.has_baked_alignment(str(path))
+
+
+def test_the_destreak_policy_is_not_applied_to_MIRI(tmp_path, monkeypatch):
+    """Destreaking is a NIRCam stage-1 step and the policy does not name MIRI
+    products, so asking it about a MIRI frame would demand a lineage that never
+    exists and silently fall through to the next rule.  Say so explicitly."""
+    assert cio._reduction_lineage('brick', 'F2550W', '002', 'mirimage') is None
+    assert cio._reduction_lineage('brick', 'F212N', '002', 'nrca1') == '_destreak'
+
+
+def test_a_MIRI_exposure_with_two_copies_is_decided_by_the_applied_offset(tmp_path, monkeypatch):
+    aligned = _touch(tmp_path, _name(detector='mirimage', lineage='_align'))
+    bare = _touch(tmp_path, _name(detector='mirimage', lineage=''))
+    monkeypatch.setattr(cio, 'has_baked_alignment', lambda p: p == aligned)
+    kept, dropped = cio.select_one_copy_per_exposure([aligned, bare],
+                                                     'brick', 'F2550W')
+    assert kept == [aligned]
+    assert dropped[0][1] == 'the only copy carrying an applied RAOFFSET'

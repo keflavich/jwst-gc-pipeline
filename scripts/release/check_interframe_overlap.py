@@ -251,7 +251,7 @@ def has_baked_alignment(path):
     return False
 
 
-def _reduction_lineage(field, filt, obs):
+def _reduction_lineage(field, filt, obs, detector):
     """The lineage token this field's own reduction writes, or ``None``.
 
     Which frames a field ships is not a judgement call and not a preference
@@ -261,9 +261,13 @@ def _reduction_lineage(field, filt, obs):
     cataloguing stage picks its inputs from that same function, so reading it
     here is what keeps this gate and the catalogue looking at the same files.
 
-    ``None`` for MIRI, whose frames this policy does not name (no MIRI
-    directory has duplicate copies today; the header test below covers them).
+    ``None`` for MIRI: destreaking is a NIRCam stage-1 step and the policy does
+    not name MIRI products, so applying its answer to a MIRI frame would ask
+    for a lineage that never exists.  No MIRI directory holds duplicate copies
+    today; if one ever does, the applied-offset test below decides it.
     """
+    if str(detector).startswith("miri"):
+        return None
     try:
         from jwst_gc_pipeline.reduction.destreak_policy import crf_suffix
     except ImportError:
@@ -310,8 +314,8 @@ def select_one_copy_per_exposure(frames, field, filt):
         if len(copies) == 1:
             kept.append(copies[0])
             continue
-        obs = identity[1]
-        wanted = _reduction_lineage(field, filt, obs)
+        obs, detector = identity[1], identity[5]
+        wanted = _reduction_lineage(field, filt, obs, detector)
         chosen = [p for p in copies if _lineage_token(p) == wanted] if wanted else []
         why = f"this field reduces to {wanted or '?'}_o{obs}_crf"
         if not chosen:
