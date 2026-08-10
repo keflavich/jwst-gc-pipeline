@@ -1,8 +1,9 @@
-"""A re-tie loop must say which code it is running, and refuse to start on old code.
+"""A re-tie loop must say which code it is running.
 
 `run_field_retie_loop.sh` drives a field's reduce -> catalog-to-m2 -> correct
-cycle for as long as it takes to converge.  bash reads a script ONCE, at launch,
-so a loop is frozen at whatever its checkout contained when it started.  At
+cycle for as long as it takes to converge.  bash parses each command as it
+reaches it and never re-reads what it has already run, so a loop is effectively
+frozen at whatever its checkout contained when it started.  At
 MAXITER=12 and ~7 h a pass that is a fortnight, and a safety guard merged on day
 two never reaches it.
 
@@ -156,6 +157,41 @@ def test_the_report_says_the_distance_is_against_a_local_ref(tmp_path):
     assert 'last fetch' in out.stdout
 
 
+def test_the_zero_behind_line_carries_the_caveat_too(tmp_path):
+    """The case the whole design argument turns on, and the one that had no caveat.
+
+    `warn_if_behind` only speaks when the distance is non-zero.  But the
+    dangerous reading is `0 commit(s) behind` on a checkout that has not fetched
+    in a month -- so the qualifier has to be on the provenance line itself,
+    which is what a reader actually sees.
+    """
+    repo = _repo(tmp_path, 'current')                 # 0 behind by construction
+    out = _source_helpers(f'checkout_provenance "{repo}"')
+    assert out.returncode == 0, out.stderr
+    assert '0 commit(s) behind' in out.stdout
+    assert 'local ref' in out.stdout
+    assert 'last fetched' in out.stdout
+
+
+def test_a_never_fetched_checkout_says_so(tmp_path):
+    """"0 behind, last fetched never" is the shape that must not read as clean."""
+    repo = _repo(tmp_path, 'nofetch')
+    fetch_head = repo / '.git' / 'FETCH_HEAD'
+    if fetch_head.exists():
+        fetch_head.unlink()
+    out = _source_helpers(f'checkout_provenance "{repo}"')
+    assert 'last fetched never' in out.stdout
+
+
+def test_the_launch_and_iteration_lines_name_the_same_path():
+    """One checkout must not appear under two different paths in one log."""
+    src = _src()
+    banner = src[src.index('CHECKOUT PROVENANCE'):src.index('for ((it=1; it<=MAXITER;')]
+    body = src[src.index('for ((it=1; it<=MAXITER;'):]
+    assert 'checkout_provenance "$_here_top_or_here"' in banner
+    assert 'checkout_provenance "$_here_top_or_here"' in body
+
+
 def test_the_report_says_what_being_behind_costs(tmp_path):
     """The number alone means nothing to a reader; the consequence is the point."""
     repo = _repo(tmp_path, 'stale', behind=2)
@@ -225,10 +261,17 @@ def test_the_reason_refusal_was_rejected_is_recorded():
 # --- the mid-run edit note ------------------------------------------------
 
 def test_a_mid_run_edit_to_the_script_is_reported(tmp_path):
-    """bash does not re-read the file, so an edit changes nothing that is running.
+    """A mid-run edit makes the run unpredictable, and the note must say so.
 
-    Reported rather than acted on: whether a loop may adopt code mid-run is a
-    decision about its contract, which #364 leaves open.
+    bash reads a script incrementally, by byte offset.  The iteration loop is
+    parsed before it runs, so an edit cannot change the loop mid-flight -- but
+    an edit that shifts offsets makes bash resume mid-token in the code AFTER
+    the loop.  An earlier version of this note told the operator the running
+    loop was simply "still the old version", which is reassurance at exactly the
+    wrong moment.
+
+    Reported rather than acted on: whether a loop may deliberately adopt code
+    mid-run is a decision about its contract, which #364 leaves open.
     """
     out = _source_helpers(
         'SELF_SUM_AT_LAUNCH=deadbeef; warn_if_self_changed')

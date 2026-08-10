@@ -160,8 +160,9 @@ reduce_fully_succeeded () {
 # Which code is this loop actually running?
 #
 # A loop runs for days -- MAXITER=12 at ~7 h a pass is a fortnight -- and bash
-# reads the script ONCE, at launch.  So the loop is frozen at the state its
-# checkout was in when it started, and a safety guard merged the next morning
+# parses each command as it reaches it and does not re-read what it has already
+# run, so a loop is effectively frozen at the state its checkout was in when it
+# started, and a safety guard merged the next morning
 # never reaches it.  That is not hypothetical: sgrc's loop ran 2026-08-07 to
 # 08-09 out of a checkout that predates `reduce_fully_succeeded`, so for its
 # whole life it cataloged without checking that its reduce had succeeded --
@@ -175,6 +176,25 @@ reduce_fully_succeeded () {
 #   * PIPE_ROOT -- the jwst_gc_pipeline package the reduce and the cataloging
 #     import, which is what actually writes the offsets table.
 # Both are reported, at launch and at every iteration.
+
+# _last_fetch <dir> -- when the local copy of the upstream ref was last updated.
+#
+# Printed on EVERY provenance line, including the "0 commit(s) behind" one.  The
+# distance is measured against the LOCAL remote-tracking ref, so a checkout that
+# has not fetched for a month reads "0 behind" while being a month stale -- and
+# that is the case this design turns on, so the qualifier has to be on the line
+# a reader actually sees, not only on the warning that fires when the distance
+# is non-zero.
+_last_fetch () {
+    local f="$1/.git/FETCH_HEAD" gd
+    gd=$(git -C "$1" rev-parse --git-dir 2>/dev/null) || { echo "unknown"; return 0; }
+    case "$gd" in /*) f="$gd/FETCH_HEAD";; *) f="$1/$gd/FETCH_HEAD";; esac
+    if [ -f "$f" ]; then
+        date -u -r "$f" +%Y-%m-%d 2>/dev/null || echo "unknown"
+    else
+        echo "never"
+    fi
+}
 
 # checkout_provenance <dir> -- one line: HEAD, date, dirty, distance behind the
 # upstream branch.  Never fails; a non-repository or a git-less environment
@@ -191,11 +211,19 @@ checkout_provenance () {
     # `var=$(cmd)` whose command fails exits the script, and a pipeline under
     # `pipefail` fails if ANY stage does.  Reporting an unknown is the job here;
     # stopping a two-week loop because git had an opinion is not.
-    dirty=$(git -C "$dir" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
-    dirty=${dirty:-?}
+    # `|| echo` on the whole pipeline is not enough: `wc` has already printed 0
+    # by the time git fails, so the variable becomes "0" and then "?" on the
+    # next line -- guard the pipeline itself.  On a bare repo `git status`
+    # returns 128 and this is the line that would otherwise take the function
+    # down if it were ever called outside a command substitution.
+    if ! dirty=$(git -C "$dir" status --porcelain 2>/dev/null); then
+        dirty="?"
+    else
+        dirty=$(printf '%s' "$dirty" | grep -c . || true)
+    fi
     behind=$(git -C "$dir" rev-list --count "HEAD..${RETIE_UPSTREAM:-origin/main}" \
              2>/dev/null || echo '?')
-    echo "$dir @ $head ($date), ${dirty} uncommitted, ${behind} commit(s) behind ${RETIE_UPSTREAM:-origin/main}"
+    echo "$dir @ $head ($date), ${dirty} uncommitted, ${behind} commit(s) behind ${RETIE_UPSTREAM:-origin/main} (local ref, last fetched $(_last_fetch "$dir"))"
 }
 
 # commits_behind <dir> -- the count alone, or '?' when it cannot be determined.
@@ -254,10 +282,16 @@ warn_if_behind () {
     return 0
 }
 
-# Has the script changed on disk since bash read it?  Bash does not re-read it,
-# so an edit landing mid-run changes nothing about what is executing -- and the
-# operator reading the file afterwards to work out what ran would be reading the
-# wrong thing.  Reported, not acted on: whether a loop may adopt code mid-run is
+# Has the script changed on disk since bash read it?
+#
+# bash reads a script INCREMENTALLY, by byte offset.  The iteration loop is one
+# compound command and is fully parsed before it runs, so an edit cannot change
+# the loop mid-flight -- but there is code AFTER the loop, and an edit that
+# shifts byte offsets makes bash resume mid-token there.  So the effect of a
+# mid-run edit is not "nothing changes": it is that this run stops being
+# predictable, and the file on disk stops describing what is executing.
+#
+# Reported, not acted on: whether a loop may deliberately adopt code mid-run is
 # a decision about its contract, not a bug fix, and #364 leaves it open.
 _here_top_or_here=$(git -C "$HERE" rev-parse --show-toplevel 2>/dev/null \
                     || echo "$HERE")
@@ -304,7 +338,7 @@ for ((it=1; it<=MAXITER; it++)); do
     # Restated every iteration, not only at launch: an iteration's log is what
     # anyone reads when its results are questioned days later, and "which code
     # produced this" has to be answerable from that log alone.
-    echo "[iter $it] running: $(checkout_provenance "$HERE")"
+    echo "[iter $it] running: $(checkout_provenance "$_here_top_or_here")"
     warn_if_self_changed
 
     # --- 1. reduce (blocks until the whole array finishes) ---
