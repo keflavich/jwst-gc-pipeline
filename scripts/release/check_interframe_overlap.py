@@ -126,7 +126,7 @@ def _detect(path, nsigma=8.0, box=5):
 # frames from other observations/programs into the verdict.  The regex both
 # validates a name and yields (proposal, observation, visit, module) exactly.
 _CRF_RE = re.compile(
-    r"^jw(?P<prop>\d{5})(?P<obs>\d{3})(?P<visit>\d{3})_\d+_\d+_"
+    r"^jw(?P<prop>\d{5})(?P<obs>\d{3})(?P<visit>\d{3})_(?P<vgroup>\d+)_(?P<exp>\d+)_"
     r"(?P<det>mirimage|nrc[ab](?:long|[1-4])?)"
     r"(?P<lineage>(?:_[a-z0-9]+)*?)_o(?P<obs2>\d{3})_crf\.fits$")
 
@@ -196,6 +196,136 @@ def _parse_crf(name):
     return dict(prop=m.group("prop"), obs=m.group("obs"), visit=m.group("visit"),
                 det=det, module=module,
                 obs_key=f"{m.group('prop')}-{m.group('obs')}")
+
+
+def exposure_identity(name):
+    """Which PHYSICAL exposure a crf name refers to, ignoring its lineage.
+
+    One exposure is normally on disk several times over: the reduction has been
+    re-run with different settings across three years, and each run writes its
+    own copy under a name that differs only by a lineage token
+    (``_destreak``, ``_align``, or none at all).  Those copies are the same
+    photons on different sky coordinates -- in cloudc/F405N, up to 8.5 arcsec
+    apart -- so pooling them into one registration verdict compares an exposure
+    against stale copies of itself.
+
+    Returns ``None`` for a name that is not a well-formed crf.
+    """
+    m = _CRF_RE.match(os.path.basename(name))
+    if m is None or m.group("obs2") != m.group("obs"):
+        return None
+    return (m.group("prop"), m.group("obs"), m.group("visit"),
+            m.group("vgroup"), m.group("exp"), m.group("det"))
+
+
+def _lineage_token(name):
+    """``'_destreak'``, ``'_align'``, or ``''`` for the bare name."""
+    m = _CRF_RE.match(os.path.basename(name))
+    return "" if m is None else m.group("lineage")
+
+
+def has_baked_alignment(path):
+    """Whether this frame carries the bulk astrometric offset in its header.
+
+    ``fix_alignment`` writes ``RAOFFSET``/``DEOFFSET`` (arcsec) into the science
+    header when it applies a field's offsets-table correction to a frame's WCS,
+    and it is the record that the correction WAS applied -- deliberately, so the
+    step is reversible.  A copy without those keywords is one the alignment
+    never reached: its WCS is whatever ``assign_wcs`` produced.  Present and
+    zero is still applied; the field's correction for that exposure was simply
+    zero.
+
+    Reads the header only.
+    """
+    try:
+        with fits.open(path, memmap=True) as hdul:
+            for ext in (0, "SCI"):
+                try:
+                    header = hdul[ext].header
+                except (KeyError, IndexError):
+                    continue
+                if "RAOFFSET" in header:
+                    return True
+    except OSError:
+        return False
+    return False
+
+
+def _reduction_lineage(field, filt, obs):
+    """The lineage token this field's own reduction writes, or ``None``.
+
+    Which frames a field ships is not a judgement call and not a preference
+    list: ``destreak_policy`` already records, per (field, filter), whether
+    stage 1 destreaks -- and therefore whether the reduced frame is called
+    ``*_destreak_o<obs>_crf.fits`` or ``*_align_o<obs>_crf.fits``.  The
+    cataloguing stage picks its inputs from that same function, so reading it
+    here is what keeps this gate and the catalogue looking at the same files.
+
+    ``None`` for MIRI, whose frames this policy does not name (no MIRI
+    directory has duplicate copies today; the header test below covers them).
+    """
+    try:
+        from jwst_gc_pipeline.reduction.destreak_policy import crf_suffix
+    except ImportError:
+        return None
+    suffix = crf_suffix(field, filt, obs)          # 'destreak_o002_crf'
+    return "_" + suffix.split("_o")[0]             # '_destreak'
+
+
+def select_one_copy_per_exposure(frames, field, filt):
+    """Keep one lineage copy of each physical exposure.  Returns ``(kept, dropped)``.
+
+    ``dropped`` is a list of ``(path, why)`` so the caller can say what it left
+    out -- a silently smaller frame set must stay distinguishable from a small
+    directory.
+
+    The choice is an inference from what is recorded, not a precedence anyone
+    has to agree on:
+
+    1. **the lineage this field's reduction writes** (``destreak_policy``).
+       That decision has already been made per field and the cataloguing stage
+       already reads it, so following it here means the registration gate and
+       the catalogue examine the same frames by construction.
+    2. **among what is left, a frame that carries the applied bulk offset**
+       (``RAOFFSET`` in its header).  A copy without it was never aligned, so
+       its sky coordinates are the raw ``assign_wcs`` ones and measuring
+       registration on it measures the wrong thing.
+    3. only if 1 and 2 leave more than one, the newest -- and the caller is
+       told, because reaching step 3 means the recorded information did not
+       decide it.
+
+    A single copy is never dropped.  This resolves duplication; deciding
+    whether a lone frame is fit to release is a different question and belongs
+    to whatever is asking it.
+    """
+    by_exposure = {}
+    for path in frames:
+        identity = exposure_identity(path)
+        if identity is None:
+            continue
+        by_exposure.setdefault(identity, []).append(path)
+
+    kept, dropped = [], []
+    for identity, copies in sorted(by_exposure.items()):
+        if len(copies) == 1:
+            kept.append(copies[0])
+            continue
+        obs = identity[1]
+        wanted = _reduction_lineage(field, filt, obs)
+        chosen = [p for p in copies if _lineage_token(p) == wanted] if wanted else []
+        why = f"this field reduces to {wanted or '?'}_o{obs}_crf"
+        if not chosen:
+            chosen = [p for p in copies if has_baked_alignment(p)]
+            why = "the only copy carrying an applied RAOFFSET"
+        if not chosen:
+            chosen = list(copies)
+            why = "no copy carries an applied RAOFFSET"
+        if len(chosen) > 1:
+            chosen = [max(chosen, key=os.path.getmtime)]
+            why += ", then newest (the recorded settings did not decide it)"
+        kept.append(chosen[0])
+        dropped += [(p, why) for p in copies if p != chosen[0]]
+    return sorted(kept), dropped
 
 
 def _group_key(crf_path):
@@ -318,6 +448,23 @@ def build_groups(field, filt, observations=None):
         print(f"  {field}/{filt}: excluded {n_retired} retired-path crf "
               f"(realign_to_vvv lineage; FITS header and GWCS disagree by "
               f"arcseconds in those files)", flush=True)
+    # One copy per physical exposure.  A working directory normally holds the
+    # same exposure several times over, written by reductions run months or
+    # years apart, and pooling them compares an exposure against stale copies of
+    # itself.  Announced rather than silent, for the same reason as the retired
+    # count above: a smaller frame set must stay distinguishable from a smaller
+    # directory.
+    frames, superseded = select_one_copy_per_exposure(frames, field, filt)
+    if superseded:
+        reasons = {}
+        for path, why in superseded:
+            reasons.setdefault(why, []).append(path)
+        print(f"  {field}/{filt}: {len(superseded)} superseded lineage "
+              f"copies excluded, keeping one per exposure:", flush=True)
+        for why, paths in sorted(reasons.items()):
+            example = os.path.basename(paths[0])
+            print(f"      {len(paths):4d} x  kept {why}  (e.g. dropped "
+                  f"{example})", flush=True)
     groups = {}
     ndet = {}
     for fn in frames:
