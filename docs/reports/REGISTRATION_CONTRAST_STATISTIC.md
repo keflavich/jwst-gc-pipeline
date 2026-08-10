@@ -17,9 +17,10 @@ is density-coupled") and could not be reviewed on those terms.
 
 ![the same seam scores 7 in a sparse cell and 236 in a crowded one](figures/registration_contrast_statistic.png)
 
-(`.gitignore` carries a blanket `*.png`, but report figures here are force-added
-— `docs/reports/apphot/` and `docs/evidence/` hold 13 — so this one is committed
-the same way.)
+(`.gitignore` carries a blanket `*.png` under a comment saying figures live in
+the Overleaf project — but report figures here are force-added in practice:
+`docs/reports/apphot/` holds 13 and `docs/evidence/satstar_fit_footprint/` 2.
+This one is committed the same way.)
 
 ## Glossary
 
@@ -174,19 +175,31 @@ those same regions. So the cells were not misregistered and the failure was
 spurious. #166/#172 responded by raising the own-catalog bar from 5 to 10, which
 removed those seven, and left the cross-band check at 5.
 
-Those seven cells held 232–323 pairs at `ratio` 5–8. A **genuinely** misregistered
-cell of that pair count scores **65–80** in Table 2's model — so their peak bins
-held 5–8 pairs out of 232–323, about **2–3%**: no coherent same-star signal at
+Those seven cells held 232–323 pairs at `ratio` 5–8 — their peak bins held
+**1.7–2.5%** of their pairs (median 2.2%), i.e. no coherent same-star signal at
 all, which is what makes them false positives.
 
-Read the other way round, that is the more damning fact about the threshold.
-`FAIL_MIN_RATIO = 10` sits **an order of magnitude below** what a real seam of
-that density scores, i.e. down in the noise floor — which is why it was catching
-noise, and why raising it from 5 to 10 removed those seven without ever having
+**The threshold sits below what a correctly-registered cell scores.** The best
+evidence for that is not this document's model but the gate's own record, at
+`registration_failsafes.py:52-54`: *"the clean brick cells verify at median
+contrast ~18"*. So `FAIL_MIN_RATIO = 10` is under the contrast a **clean** cell
+of that field produces — a factor of ~1.8 — which puts the bar in the noise, and
+means raising it from 5 to 10 removed those seven cells without ever having
 distinguished them from a seam. A sparse cell's genuine seam scores 7 (Table 2,
 15 stars) and lands in the same place. The threshold separated the two
 populations on this band by luck of density, not because the statistic
 distinguishes them. That is the whole of #170.
+
+**Where the model and the real data disagree, and it is worth saying.** Table 2
+puts a fully misregistered cell of 232–323 pairs at `ratio` **69–79**, against
+that recorded ~18 for real clean brick cells of comparable density — a factor of
+about four. The model assumes every detection has a truth-set counterpart and
+that all of them sit in the one cell; real catalogs are incomplete and real
+cells are not that clean, so **Table 2's absolute values are upper bounds**.
+What the argument rests on is the *scaling* — `ratio` growing linearly with star
+count while the thresholds stay fixed — and that is arithmetic, unaffected by
+the normalisation. Anyone re-deriving a threshold from this must calibrate on
+real cells, not on Table 2.
 
 ## What would replace it
 
@@ -206,8 +219,9 @@ Two changes, both still unimplemented:
    grid — and in the #179 trial it was much the stronger of the two, firing on
    365 / 179 / 45 cells of three synthetic seams injected into real data (a whole
    field, half a field, and a narrow declination band) against the raw count's
-   273 / 127 / 29, and on **zero** cells across all ten real brick bands and all
-   five cloudc bands #179 tested (cloudc has eight band directories today).
+   273 / 127 / 29, and on **zero** cells across the ten brick bands and five cloudc bands
+   #179 tested (brick has eleven band directories today and cloudc eight, so
+   that sweep did not cover every band even then).
 
    One measured constraint: the minimum patch has to be **3 cells, not 2**. Two
    of the seven brick false positives are edge-adjacent on the grid, so a 2-cell

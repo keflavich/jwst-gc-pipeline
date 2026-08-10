@@ -4,11 +4,10 @@
 Supports issue #170.  Prints two tables and writes the figure to
 ``docs/reports/figures/registration_contrast_statistic.png``.
 
-(`.gitignore` carries a blanket `*.png`, but report figures in this repository
-are force-added -- ``docs/reports/apphot/`` and ``docs/evidence/`` hold 13 of
-them -- so the figure is committed with ``git add -f``, as those were.  An
-earlier version of this script cited the `.gitignore` line as a convention
-against committing it, which is not what the tree does for report figures.)
+(`.gitignore` carries a blanket `*.png` under a comment saying figures live in
+the Overleaf project, but report figures here are force-added in practice:
+``docs/reports/apphot/`` holds 13 and ``docs/evidence/satstar_fit_footprint/``
+2.  The figure is committed with ``git add -f``, as those were.)
 
 GLOSSARY, since the issue this supports was filed in shorthand and could not be
 reviewed on those terms:
@@ -67,10 +66,19 @@ misregistered cell -- every star in it displaced by the same 90 mas -- scores
 7 when the cell holds 15 stars and 236 when it holds 400.  The fail bar is
 therefore crossed at a STAR DENSITY, not at a misregistration level.
 
-And it is crossed low: the seven brick cells that were a false failure read
-ratio 5-8 at 232-323 pairs, where a real seam of that density scores 65-80.
-Their peak bins held 2-3% of their pairs -- no coherent signal -- so the bar of
-10 sits in the noise floor rather than anywhere near a seam.
+And it is crossed low.  The seven brick cells that were a false failure read
+ratio 5-8 at 232-323 pairs; their peak bins held 1.7-2.5% of their pairs, i.e.
+no coherent signal.  The gate's OWN record is the better anchor for where the
+bar sits: registration_failsafes.py:52-54 notes that clean brick cells verify at
+median contrast ~18, so FAIL_MIN_RATIO = 10 is under what a CORRECTLY registered
+cell of that field scores.
+
+CALIBRATION CAVEAT: this model puts a fully misregistered cell of that pair
+count at 69-79, about 4x the recorded ~18 for real clean cells.  It assumes
+every detection has a truth counterpart and that all of them lie in one cell, so
+its absolute values are UPPER BOUNDS.  The argument rests on the scaling
+(ratio ~ star count, thresholds fixed), which is arithmetic; a replacement
+threshold must be calibrated on real cells, not on this table.
 
 MODELLING NOTE, because the first version of this script got it wrong.  A cell
 is modelled as N detections and their N truth counterparts in a 45-arcsec box;
@@ -197,15 +205,20 @@ def main(argv=None):
             verdict = "pass"
         print(f"{n:>11}{npair:>9.0f}{off:>11.0f}{ratio:>8.0f}  {verdict}")
 
+    crossed = next((r[0] for r in rows if r[3] >= FAIL_MIN_RATIO), None)
     print(f"\nSame seam throughout.  The own-catalog fail bar is "
-          f"FAIL_MIN_RATIO = {FAIL_MIN_RATIO:.0f}, crossed between "
-          f"{rows[0][0]} and {rows[2][0]} stars per cell.")
-    print("\nThe seven brick F405N cells that were a FALSE failure in 2026-07 read "
-          "ratio 5-8\nat npairs 232-323.  A genuinely misregistered cell of that "
-          "pair count scores ~65-80\nin the model above, so their peak bins held "
-          "5-8 pairs out of 232-323 -- about 2-3%,\nno coherent same-star signal "
-          "at all.  The fail bar of 10 sits down in that noise\nfloor, an order "
-          "of magnitude below what a real seam of the same density scores.")
+          f"FAIL_MIN_RATIO = {FAIL_MIN_RATIO:.0f}, first cleared at "
+          f"{crossed} stars per cell.")
+    frac = [100.0 * r / n for n, r in BRICK_F405N_FALSE_POSITIVES]
+    print(f"\nThe seven brick F405N cells that were a FALSE failure in 2026-07 "
+          f"read ratio 5-8\nat npairs 232-323 -- peak bins holding "
+          f"{min(frac):.1f}-{max(frac):.1f}% of their pairs, i.e. no coherent "
+          f"signal.\nThe gate's own record (registration_failsafes.py:52-54) "
+          f"puts CLEAN brick cells at\nmedian contrast ~18, so FAIL_MIN_RATIO "
+          f"= {FAIL_MIN_RATIO:.0f} is under what a correctly registered cell "
+          f"scores.\nThis model puts a misregistered cell of that density at "
+          f"69-79 -- ~4x the recorded\n~18 -- so its absolute values are upper "
+          f"bounds; the SCALING is the argument.")
 
     stars = [r[0] for r in rows]
     ratios = [r[3] for r in rows]
@@ -219,7 +232,6 @@ def main(argv=None):
                zorder=4, label=f"not judged at all (npairs < MIN_PAIRS = {MIN_PAIRS:.0f})")
     ax.axhline(FAIL_MIN_RATIO, color="#c0392b", lw=1.5,
                label=f"FAIL_MIN_RATIO = {FAIL_MIN_RATIO:.0f} (own-catalog)")
-    ax.scatter([None], [None])
     ax.set_xscale("log"); ax.set_yscale("log")
     ax.set_xlabel("stars in the grid cell")
     ax.set_ylabel("ratio  =  peak bin count / median occupied bin\n(= the raw peak count, since the divisor is 1)")
