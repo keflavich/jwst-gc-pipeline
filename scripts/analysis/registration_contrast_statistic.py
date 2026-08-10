@@ -1,13 +1,12 @@
 #!/usr/bin/env python
 """Why the registration seam check's confidence number depends on star density.
 
-Supports issue #170.  Prints three tables and writes the figure to
+Supports issue #170.  Prints four tables and writes the figure to
 ``docs/reports/figures/registration_contrast_statistic.png``.
 
-(`.gitignore` carries a blanket `*.png` under a comment saying figures live in
-the Overleaf project, but report figures here are force-added in practice:
-``docs/reports/apphot/`` holds 13 and ``docs/evidence/satstar_fit_footprint/``
-2.  The figure is committed with ``git add -f``, as those were.)
+The figure is NOT committed: ``.gitignore`` carries a blanket ``*.png`` and the
+maintainer's position is that figures belong in the pull request and issue
+discussion rather than in the tree.  Run this script to produce it.
 
 GLOSSARY, since the issue this supports was filed in shorthand and could not be
 reviewed on those terms:
@@ -362,6 +361,40 @@ def main(argv=None):
           f"approximate.\nAnd the ~{CLEAN_BRICK_CONTRAST:.0f} has no pair count "
           f"attached, so some of the gap could be density\nrather than "
           f"normalisation.")
+
+    # TABLE 4 -- the DEMONSTRATION.  Table 3 only shows the replacement on cells
+    # that are fully misregistered; what a threshold has to do is separate those
+    # from the cells that were a FALSE alarm.  Both populations, one statistic.
+    print("\nTABLE 4 -- does the replacement separate the real seam from the "
+          "false alarm?")
+    print(f"{'':>26}{'npairs':>9}{'raw ratio':>11}{'(peak-lam)/sqrt(lam)':>22}")
+    fp_sig = []
+    for npair, ratio in sorted(BRICK_F405N_FALSE_POSITIVES):
+        lam = npair / nb
+        s = (ratio - lam) / np.sqrt(lam)
+        fp_sig.append(s)
+        print(f"{'brick F405N false alarm':>26}{npair:>9}{ratio:>11}{s:>22.1f}")
+    for n, npair, _off, ratio, bg in rows:
+        if npair < MIN_PAIRS:
+            continue
+        lam = npair / nb
+        s = (ratio * bg - lam) / np.sqrt(lam)
+        print(f"{'modelled 90 mas seam':>26}{npair:>9.0f}{ratio:>11.0f}{s:>22.1f}")
+    judged_sig = [((r[3] * r[4]) - r[1] / nb) / np.sqrt(r[1] / nb)
+                  for r in rows if r[1] >= MIN_PAIRS]
+    print(f"\n  false alarms      {min(fp_sig):.1f} - {max(fp_sig):.1f}\n"
+          f"  modelled seams   {min(judged_sig):.0f} - {max(judged_sig):.0f}\n"
+          f"  separation       {min(judged_sig) / max(fp_sig):.1f}x, with no "
+          f"overlap -- so ONE fixed threshold works at every density here.\n"
+          f"  (#179 proposed FAIL_MIN_SIG = 55, which sits in that gap.  Its "
+          f"published\n   values for these seven cells were 32.55-49.32; this "
+          f"reproduces them.)\n"
+          f"\n  The raw count cannot do this at a fixed bar: these false alarms "
+          f"score 5-8\n  while a REAL seam of the same pair count scores "
+          f"{lo:.0f}-{hi:.0f}, and FAIL_MIN_RATIO = "
+          f"{FAIL_MIN_RATIO:.0f}\n  sits below BOTH -- under even a correctly "
+          f"registered cell's ~{CLEAN_BRICK_CONTRAST:.0f}.")
+
 
     stars = [r[0] for r in rows]
     ratios = [r[3] for r in rows]

@@ -15,12 +15,16 @@ python scripts/analysis/registration_contrast_statistic.py
 Background for issue #170, which was filed in shorthand ("the FAIL discriminant
 is density-coupled") and could not be reviewed on those terms.
 
-![the same seam scores 7 in a sparse cell and 236 in a crowded one](figures/registration_contrast_statistic.png)
+![the same seam scores 7 in a sparse cell and 236 in a crowded one](https://raw.githubusercontent.com/keflavich/jwst-gc-pipeline/efb8943/docs/reports/figures/registration_contrast_statistic.png)
 
-(`.gitignore` carries a blanket `*.png` under a comment saying figures live in
-the Overleaf project — but report figures here are force-added in practice:
-`docs/reports/apphot/` holds 13 and `docs/evidence/satstar_fit_footprint/` 2.
-This one is committed the same way.)
+**The figure is not committed to this repository.** `.gitignore` carries a
+blanket `*.png` under a comment saying figures live in the Overleaf project, and
+an earlier revision of this branch force-added it anyway on the precedent of
+`docs/reports/apphot/` (13 PNGs) and `docs/evidence/satstar_fit_footprint/` (2).
+That was reverted at the maintainer's request — figures belong in the pull
+request and issue discussion, not in the tree. Regenerate it locally with the
+command above; the image linked here is the one this branch produces, served
+from the blob at `efb8943`, which stays reachable through `refs/pull/372/head`.
 
 ## Glossary
 
@@ -187,10 +191,10 @@ densities — measured over the judged rows `ratio` grows ×5.8 while √pairs g
 not an empirical finding.
 
 (The *n²* growth is the total pair count, not the ratio's denominator. It becomes
-the denominator only in the replacement proposed at the end of this document,
-which divides by the **expected** chance-pair occupancy `lam = pairs / bins`
-instead of by the median occupied bin — that is precisely what makes the
-replacement flat in density.)
+relevant only in the replacement proposed at the end of this document, which
+divides by **√lam** — the square root of the expected chance-pair occupancy
+`lam = pairs / bins` — instead of by the median occupied bin. That is what makes
+the replacement far flatter in density, though not flat; Table 3 measures it.)
 
 And the bar is hardest to clear in the sparsest cells, while the crowded cells
 where it is easiest are the Galactic Centre field interiors — where a seam
@@ -282,17 +286,93 @@ explained:
    `peak/lam` *falls* as the cell gets more crowded (Table 3: 4341 down to 1537
    across the judged rows).
 
-   Dividing by √lam sits between the two, and Table 3 is what it does rather than
-   what one would like it to do: **×1.43 across the judged rows, against the raw
-   count's ×5.8.** Much flatter, not flat. That is enough for the argument — a
-   fixed bar means something comparable at 70 stars and at 400 — but "a crowded
-   cell and a sparse one score the same", which an earlier version of this
-   section claimed, is not what the model shows.
+   Dividing by √lam sits between the two. What it does is measured below rather
+   than asserted.
 
-2. **Requiring the failing cells to touch each other.** (#179 called this
-   "contiguity": cells are *contiguous* when they are neighbours on the 20×20
-   grid, sharing an edge, so that they form one connected blob rather than
-   scattered dots.) A misregistration is a
+### Table 3 — the replacement over the same rows
+
+Printed by the same script. `peak` is the peak-bin count, `lam = npairs / 12,281`
+is the *expected* chance occupancy of one bin.
+
+| stars | `peak` | `lam` | `peak/lam` | `(peak − lam)/√lam` |
+|---|---|---|---|---|
+| 15 | 10 | 0.0013 | 7676 | 277 |
+| 20 | 10 | 0.0019 | 5340 | 231 |
+| 30 | 17 | 0.0030 | 5643 | 310 |
+| 45 | 27 | 0.0051 | 5263 | 377 |
+| 70 | 41 | 0.0094 | 4341 | 422 |
+| 110 | 65 | 0.0184 | 3532 | 479 |
+| 170 | 100 | 0.0358 | 2791 | 528 |
+| 260 | 153 | 0.0723 | 2116 | 569 |
+| 400 | 236 | 0.1536 | 1537 | 602 |
+
+Over the rows the gate actually judges (70–400 stars):
+
+| | 70 stars → 400 stars | |
+|---|---|---|
+| raw count (what it uses now) | 41 → 236 | **×5.8** |
+| `peak/lam` | 4341 → 1537 | ×0.35 — **falls** with density |
+| `(peak − lam)/√lam` | 422 → 602 | **×1.43** |
+
+So the replacement is **much flatter than the raw count, not flat**. That is
+enough for the argument — a fixed bar means something comparable at 70 stars and
+at 400 — but "a crowded cell and a sparse one score the same", which an earlier
+version of this section claimed, is not what the model shows.
+
+Two things this table does *not* establish, stated so it is not read as more than
+it is. Every row is a **fully misregistered** cell, so it measures how the
+statistic grows with density on a real seam, not the "flat on a *correctly
+registered* cell" property the word *flat* names. And ×1.43 rather than ×1.00 is
+expected here: `lam = pairs/bins` with `pairs ≈ n + 0.0097 n²` is still
+linear-dominated at these densities, which is the same reason the pairs exponent
+is 0.63 rather than 0.5.
+
+### Table 4 — does it separate the false alarm from the real seam?
+
+That is the question a threshold has to answer, and it needs both populations.
+The seven brick F405N cells that were a **false** failure, against the modelled
+seam, under one statistic:
+
+| | npairs | raw `ratio` | `(peak − lam)/√lam` |
+|---|---|---|---|
+| brick F405N false alarm | 232 | 5 | 36.2 |
+| brick F405N false alarm | 241 | 6 | 42.7 |
+| brick F405N false alarm | 266 | 5 | 33.8 |
+| brick F405N false alarm | 278 | 6 | 39.7 |
+| brick F405N false alarm | 287 | 5 | 32.6 |
+| brick F405N false alarm | 321 | 8 | **49.3** |
+| brick F405N false alarm | 323 | 6 | 36.8 |
+| modelled 90 mas seam | 116 | 41 | **421.8** |
+| modelled 90 mas seam | 226 | 65 | 479.0 |
+| modelled 90 mas seam | 440 | 100 | 528.1 |
+| modelled 90 mas seam | 888 | 153 | 568.7 |
+| modelled 90 mas seam | 1886 | 236 | 601.8 |
+
+**False alarms 32.6–49.3; seams 422–602; a factor of 8.6 with no overlap** — so
+one fixed threshold works at every density here. #179 proposed
+`FAIL_MIN_SIG = 55`, which sits in that gap, and published 32.55–49.32 for these
+seven cells; this reproduces those values.
+
+The raw count cannot do the same job at a fixed bar. Those false alarms score
+5–8, a real seam at the same pair count scores 66–82, and `FAIL_MIN_RATIO = 10`
+sits below both — under even a correctly registered cell's ~18.
+
+2. **Requiring the failing cells to touch each other before the field is failed.**
+   *Yes, this is proposed as a fix, and it is a second, separate test — a cell
+   would have to fail the number test above AND be part of a touching group.*
+
+   Concretely: today one failing cell anywhere on the 20×20 grid fails the whole
+   field. Under this change a lone failing cell would not; three or more failing
+   cells that are neighbours — sharing an edge, so they form one connected patch
+   rather than scattered dots — would. Nothing else changes.
+
+   (#179 called this "contiguity, as an independent second axis". *Contiguity*
+   means the cells touch. *Independent second axis* means it is judged separately
+   from the confidence number rather than folded into it — two tests, both of
+   which must fire. That phrasing is the reason #179 was closed unread, so it is
+   given here only as a translation of the plain statement above.)
+
+   A misregistration is a
    connected patch of cells; chance-pair noise is scattered singletons. It needs
    no new measurement — the offsets and the verified flags are already on the
    grid — and in the #179 trial it was much the stronger of the two, firing on
