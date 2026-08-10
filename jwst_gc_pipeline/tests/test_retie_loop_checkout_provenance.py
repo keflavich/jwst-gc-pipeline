@@ -244,8 +244,15 @@ def test_the_loop_never_refuses_on_provenance_alone():
     """
     src = _src()
     banner = src[src.index('CHECKOUT PROVENANCE'):src.index('for ((it=1; it<=MAXITER;')]
-    assert 'exit ' not in banner, (
-        'the provenance banner must not stop the loop; see warn_if_behind')
+    # One exit is allowed here and it is not a refusal: RETIE_PROVENANCE_ONLY is
+    # the operator asking to read the banner and stop.  Anything else exiting on
+    # what the provenance SAYS is the design this PR rejected.
+    exits = [l.strip() for l in banner.splitlines() if l.strip().startswith('exit ')]
+    assert exits == ['exit 0'], (
+        f'the provenance banner must not stop the loop on what it finds; '
+        f'exits present: {exits}')
+    assert 'RETIE_PROVENANCE_ONLY' in banner, (
+        'the only permitted exit must be the opt-in inspect mode')
 
 
 def test_the_reason_refusal_was_rejected_is_recorded():
