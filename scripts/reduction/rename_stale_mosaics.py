@@ -111,11 +111,20 @@ conservative direction -- the rule misses orphans, it does not take live data --
 and it is a gap ``check_generation_span`` and the release freshness gate are the
 things that look at instead.
 
-RULE 2 CANNOT SEE A WHOLE INSTRUMENT THAT IS STALE.  Its reference is that
+RULE 2 IS WEAK ON A WHOLE INSTRUMENT THAT IS STALE.  Its reference is that
 instrument's own newest primary mosaic, computed from the very set being judged,
-so if a field's entire MIRI set is superseded then every member of it is its own
-reference, both clauses degrade together, and nothing is selected at any
---campaign-days.  The set is invisible, not merely held back.
+so if a field's entire MIRI set is superseded then the newest member of that set
+becomes the yardstick for the rest of it.
+
+Stated exactly, because an earlier version of this paragraph claimed more than
+the rule delivers ("nothing is selected at any --campaign-days ... invisible"):
+what is protected is the instrument's NEWEST product, which can never be more
+than 0 days behind itself.  Older members of the same stale set ARE still
+selected once they fall MIN_ORPHAN_AGE_DAYS behind it -- so a MIRI set whose own
+products span more than a year is partially visible, and a set drizzled within
+one year of itself is entirely invisible.  The claim of total invisibility was
+tested only on a fixture whose two members shared one age, which is the
+degenerate case.
 
 This is the PRICE of the per-instrument reference, and it is deliberate: the
 alternative clocked MIRI against NIRCam and let ordinary NIRCam reduction walk
@@ -125,15 +134,20 @@ trade.  No field is in this state today -- every field's newest MIRI primary
 mosaic is from 2026-06 or later -- so it is a forward-looking hole rather than a
 present one.
 
-A WHOLE POINTING that is stale is NOT a second case of this, and earlier versions
-of this note said it was.  The pointing appears only in the family key; it is not
-part of either reference, so a stale pointing is judged against the instrument's
-newest like everything else and IS caught whenever any other pointing of that
-instrument in the field is current.  brick is the live example: every NIRCam
-primary mosaic of ``jw02221-o002`` is a 2023 product, and all three are in the
-current selection.  The only pointing rule 2 cannot see is one that is its
-instrument's ONLY pointing -- which is the instrument case above, not a separate
-limitation.
+A WHOLE POINTING that is stale is NOT a second case of this, and one earlier
+version of this note said it was.  The pointing appears only in the family key;
+it is not part of either reference, so a stale pointing is judged against the
+instrument's newest like everything else.  brick is the live example: every
+NIRCam primary mosaic of ``jw02221-o002`` is a 2023 product, and all three are in
+the current selection.
+
+But being family-retired is not sufficient, and a second earlier version of this
+note over-corrected into saying it was ("IS caught whenever any other pointing of
+that instrument is current").  The 365-day guard still applies.  sickle
+``jw03958-o003`` is the counterexample and it sits in this comment's own margin
+table: all three of its MIRI primaries are family-retired while o001 and o002 are
+current, and none is selected, because they are 62 days old rather than 365.
+That file IS the nearest miss the 5.85x below is measured from.
 
 (An earlier version of this note claimed the opposite of what the rule now does
 -- that a band directory whose ONLY primary mosaic is an orphan would be kept
@@ -466,7 +480,8 @@ def field_generations(field, campaign_days=21):
 def age_guard_rows(field, campaign_days=21):
     """Every primary mosaic of ``field`` whose product family is RETIRED.
 
-    ``[(age_days, path), ...]`` -- age behind the field's newest primary mosaic.
+    ``[(age_days, path), ...]`` -- age behind the field's newest primary mosaic
+    OF THE SAME INSTRUMENT (see ``field_generations``).
     These are exactly the files that clause (a) of rule 2 selects, so
     ``MIN_ORPHAN_AGE_DAYS`` alone decides each one: below it the file is LIVE and
     kept, at or above it the file is quarantined.  The guard's margin is
@@ -701,8 +716,8 @@ def _write_reason_sidecar(path, why, clock, fm, ref, refname):
             f"Quarantined by scripts/reduction/rename_stale_mosaics.py on "
             f"{time.strftime('%Y-%m-%d %H:%M')}.\n"
             f"Reason: {why}.\n"
-            f"This product's generation ({clock}) is {fmt(fm)}; the newest "
-            f"primary mosaic in its band is {fmt(ref)}.\n"
+            f"This product's generation ({clock}) is {fmt(fm)}; {refname} is "
+            f"{fmt(ref)}.\n"
             f"It carries the astrometry of a superseded reduction and must not "
             f"be read as if it were current.  To undo, drop the '{SUFFIX}' "
             f"suffix; see <field>/_stale_rename_*.log.\n")

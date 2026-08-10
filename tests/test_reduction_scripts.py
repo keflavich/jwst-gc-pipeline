@@ -983,6 +983,13 @@ def test_a_wholly_stale_instrument_is_a_known_blind_spot(tmp_path):
     Pinned by running the rule, not by grepping the docstring: an earlier
     version of this test asserted only that the module said the words, which
     would have kept a FALSE limitation (the pointing one, below) locked in.
+
+    NOTE the two members share an age.  That is the degenerate case, and it is
+    the one this test covers; when the stale set SPANS more than
+    MIN_ORPHAN_AGE_DAYS its older members are selected after all, which
+    `test_an_older_member_of_a_wholly_stale_instrument_is_still_selected`
+    pins.  An earlier version of this test used the shared age and the module
+    then claimed total invisibility "at any --campaign-days", which is false.
     """
     m = _load('rename_stale_mosaics')
     m.BASE = str(tmp_path)
@@ -999,6 +1006,52 @@ def test_a_wholly_stale_instrument_is_a_known_blind_spot(tmp_path):
     assert held == [] and caught == [], 'invisible, not held back'
 
     assert 'known limitation' in m.__doc__.lower()
+
+
+def test_a_family_retired_pointing_under_the_age_guard_is_still_kept(tmp_path):
+    """Family-retired is not sufficient -- the 365-day guard still applies.
+
+    sickle `jw03958-o003` is the live case, and it is the file the guard's own
+    margin is measured from: all three of its MIRI primaries are family-retired
+    while o001 and o002 are current, and none is selected, because they are 62
+    days old rather than 365.  An earlier version of the module docstring said a
+    stale pointing "IS caught whenever any other pointing of that instrument is
+    current", which drops that condition.
+    """
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    pipe = _band_dir(tmp_path, band='F770W')
+    _age(pipe / 'jw03958-o001_t001_miri_f770w_i2d.fits', 0)
+    young = [_age(pipe / 'jw03958-o003_t001_miri_f770w-sub128_i2d.fits', 62),
+             _age(pipe / 'jw03958-o003_t001_miri_f770w-sub64_i2d.fits', 62)]
+    assert m.rename_stale_for_field('myfield', execute=True) == []
+    for p in young:
+        assert p.exists(), 'held back by the age guard, not selected'
+    held, caught = m.audit_age_guard(['myfield'])
+    assert caught == [] and len(held) == 2
+
+
+def test_an_older_member_of_a_wholly_stale_instrument_is_still_selected(tmp_path):
+    """The whole-instrument blind spot is partial, not total.
+
+    If the stale instrument's own products span more than MIN_ORPHAN_AGE_DAYS,
+    the newest of them becomes the yardstick and the older ones ARE selected.
+    Only the newest is protected.  The module claimed "nothing is selected at
+    any --campaign-days"; that held only for a fixture whose members shared one
+    age.
+    """
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    nir = _band_dir(tmp_path, band='F405N')
+    mir = _band_dir(tmp_path, band='F770W')
+    _age(nir / 'jw02221-o002_t001_nircam_clear-f405n-merged_i2d.fits', 0)
+    newest_miri = _age(mir / 'jw02221-o002_t001_miri_f770w_i2d.fits', 1100)
+    older_miri = _age(mir / 'jw02221-o002_t001_miri_f770w-sub256_i2d.fits', 1600)
+
+    plan = m.rename_stale_for_field('myfield', execute=True)
+    assert [os.path.basename(p[0]) for p in plan] == [older_miri.name]
+    assert newest_miri.exists(), 'the instrument-newest is what is protected'
+    assert not older_miri.exists()
 
 
 def test_a_wholly_stale_pointing_is_caught_when_another_pointing_is_current(tmp_path):
