@@ -42,14 +42,10 @@ POOLED_SOURCE = "m2 visit-consensus [median of 2, ptp 1.51mas: nrcb3,nrcb4]"
 POOLED_SOURCE_4 = ("m2 visit-consensus [median of 4, ptp 3.42mas: "
                    "nrcb1,nrcb2,nrcb3,nrcb4]")
 
-#: The longest source string the pipeline can actually emit: 71 characters.
+#: The longest source string the pipeline can emit, BUILT rather than quoted.
 #:
-#: Same shape as POOLED_SOURCE_4, with the spread at two digits.  Pooling admits
-#: a spread up to `MAX_POOL_SPREAD_MAS` (50 mas), and `{spread:.2f}` of anything
-#: from 10.00 to 49.99 is one character wider than the 3.42 above.
-#:
-#: THREE earlier versions of this constant were strings the pooler cannot emit,
-#: each quoted in turn as the maximum:
+#: FOUR literal maxima have been wrong in this file's history, each for its own
+#: reason, so this one is assembled from the code that decides its parts:
 #:
 #:   102  said "median of 4" while listing only two detectors.
 #:   138  listed eight detectors across both modules.  `_assert_poolable`
@@ -63,12 +59,26 @@ POOLED_SOURCE_4 = ("m2 visit-consensus [median of 4, ptp 3.42mas: "
 #:        f"{stage} visit-consensus" and f"{stage} consensus->reference"), and it
 #:        is a per-visit BULK correction, which the pooler passes through without
 #:        pooling.  So it can never take a "[median of N ...]" suffix.
+#:   70/71 fixed the stage token at "m2" and missed "m12", which is in
+#:        `CORRECTION_STAGES` and fully wired (cataloging.py passes merge_label
+#:        as stage; versioning/rerun.py seeds it).
 #:
-#: A fixture that cannot occur does not test the longest form, which is why
-#: `test_the_fixture_is_a_string_the_pooler_can_actually_emit` now checks the
-#: BASE against the emitting code as well as the detector list.
-POOLED_SOURCE_MAX = ("m2 visit-consensus [median of 4, ptp 49.99mas: "
-                     "nrcb1,nrcb2,nrcb3,nrcb4]")
+#: The stage now comes from `CORRECTION_STAGES` and the spread from the pooling
+#: limit, so this follows the code instead of a reviewer's arithmetic.  Its
+#: LENGTH is deliberately not asserted: `ASTROM_MAX_POOL_SPREAD_MAS` is an
+#: operator setting, so the spread field's width is not fixed by the source at
+#: all.
+def _longest_emittable_source():
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        CORRECTION_STAGES, MAX_POOL_SPREAD_MAS)
+    stage = max(CORRECTION_STAGES, key=len)
+    dets = ["nrcb1", "nrcb2", "nrcb3", "nrcb4"]        # one module's four
+    spread = MAX_POOL_SPREAD_MAS - 0.01                # widest `{spread:.2f}`
+    return (f"{stage} visit-consensus [median of {len(dets)}, "
+            f"ptp {spread:.2f}mas: {','.join(dets)}]")
+
+
+POOLED_SOURCE_MAX = _longest_emittable_source()
 
 
 def _narrow_table(tmp_path, prov_source="m2 visit-consensus"):
@@ -159,8 +169,12 @@ def test_the_four_detector_pooling_survives(tmp_path):
 
 
 def test_the_longest_form_the_pipeline_produces_survives(tmp_path):
-    """The widest emittable source: 71 characters, four detectors, 2-digit spread."""
-    assert len(POOLED_SOURCE_MAX) == 71
+    """The widest emittable source: longest stage, four detectors, widest spread.
+
+    No literal length is asserted -- four of those have been wrong.  What is
+    asserted is that the built string is longer than the floor (so it exercises
+    the widening at all) and inside the outer bound.
+    """
     assert len(POOLED_SOURCE_MAX) > PROV_TEXT_MIN_CHARS
     assert len(POOLED_SOURCE_MAX) < PROV_TEXT_MAX_CHARS
     p = _narrow_table(tmp_path)
@@ -206,8 +220,14 @@ def test_the_fixture_is_a_string_the_pooler_can_actually_emit(tmp_path):
     assert any(e in src.replace("\n", " ") for e in emitted), (
         "the module's source-string producers have changed; re-derive the "
         "maximum from them rather than from the widest value on disk")
-    assert base == "m2 visit-consensus", (
-        f"{base!r} is not a base this module writes")
+    stage, _, rest = base.partition(" ")
+    assert stage in ac.CORRECTION_STAGES, (
+        f"{stage!r} is not a stage that writes corrections; the maximum has to "
+        f"use the LONGEST of CORRECTION_STAGES, which is where the 70/71 "
+        f"measurement went wrong by fixing it at 'm2'")
+    assert stage == max(ac.CORRECTION_STAGES, key=len)
+    assert rest in ("visit-consensus", "consensus->reference"), (
+        f"{rest!r} is not a base this module writes")
 
     # ...and the spread must be one the pooler would admit.
     spread = float(POOLED_SOURCE_MAX.split("ptp ")[1].split("mas")[0])
