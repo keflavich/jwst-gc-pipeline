@@ -54,10 +54,26 @@ import glob
 import json
 import os
 
-#: How the pipeline renames a product whose astrometry was superseded.
-#: ``rename_stale_mosaics.py`` uses the second form.
+#: How the pipeline renames a product whose astrometry was superseded.  A
+#: quarantined product must be recognised here, or a release reads a repudiated
+#: file as merely absent.
+#:
+#: ``rename_stale_mosaics.py`` writes ``{src}.bad`` from 2026-08; before that it
+#: wrote ``{src}_badastrometry_stale``.  Counted under ``*/*/pipeline`` on
+#: 2026-08-10:
+#:
+#:     *_stale                 465     of which 327 are _badastrometry_stale,
+#:                                     so 138 carry the BARE form
+#:     *.bad                     0     (this convention is new)
+#:
+#: The bare ``_stale`` form is what the 2026-07-03 brick pass wrote ("EXECUTE --
+#: 192 stale, 29 kept") and it is deliberately NOT added here: matching those
+#: further files moves release entries from `live`/`missing` to `quarantined`
+#: across every field, which changes what a release REPORTS and belongs in its
+#: own review rather than riding along with a renamer fix.  Reported on #339.
 QUARANTINE_GLOBS = (
     "{stem}_im0_badastrom*.fits",
+    "{src}.bad",
     "{src}_badastrometry_stale",
     "{src}.STALE_*",
 )
