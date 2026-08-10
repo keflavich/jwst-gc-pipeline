@@ -170,10 +170,11 @@ def test_a_product_merely_older_than_the_campaign_is_not_an_orphan(tmp_path):
     A product of a family that is no longer written, but only weeks old, is a
     band that finished early -- not an orphan of a retired reduction.  Only the
     year-scale gap distinguishes the two, and the real margins are narrow:
-    measured over the archive, 3.26x on the live side (the nearest miss is a
-    sickle MIRI product 111.9 days behind its field) and 1.17x on the orphan
-    side (w51's merged-reproject at 426.7 days).  An earlier version of this
-    docstring said "~50x either way"; that was wrong on both sides.
+    measured over the archive, 5.85x on the live side (the nearest miss is a
+    sickle MIRI product 62.4 days behind its field's newest MIRI mosaic) and
+    1.17x on the orphan side (w51's merged-reproject at 426.7 days).  An earlier
+    version of this docstring said "~50x either way"; that was wrong on both
+    sides.
     """
     m = _load('rename_stale_mosaics')
     m.BASE = str(tmp_path)
@@ -259,9 +260,20 @@ def test_per_exposure_intermediates_are_never_candidates(tmp_path):
     """The scope guard: hundreds of live intermediates share the band directory.
 
     ``jw02221002001_02201_00001_nrcalong_align_outlier_i2d.fits`` and its
-    siblings are per-exposure outlier-detection products, 171-188 of them per
-    cloudc band, and many are legitimately years old.  A generation rule that
-    matched ``*_i2d.fits`` would quarantine the lot.
+    siblings are per-exposure outlier-detection products, and many are
+    legitimately years old.  A generation rule that matched ``*_i2d.fits`` would
+    quarantine the lot.
+
+    Counts, measured over cloudc's eight band directories and stated against the
+    right category, because two earlier versions of this docstring were not:
+
+      * files matching ``*outlier*_i2d.fits``:   0-144 per band (two bands zero)
+      * every ``*_i2d.fits`` that is NOT a primary mosaic:  20-184 per band
+      * every ``*_i2d.fits``:                    21-188 per band
+
+    "171-188" appeared here from the first commit and matches none of the three.
+    The number that belongs in a SCOPE guard is the middle one -- 20-184 -- since
+    that is everything the primary-mosaic pattern has to exclude.
     """
     m = _load('rename_stale_mosaics')
     m.BASE = str(tmp_path)
@@ -863,11 +875,12 @@ def test_the_age_guard_audit_reports_the_NEAREST_MISS_not_the_safest(tmp_path):
     m = _load('rename_stale_mosaics')
     m.BASE = str(tmp_path)
     pipe = _band_dir(tmp_path, band='F405N')
+    # one instrument throughout, so this test measures the sort order and
+    # nothing else -- the per-instrument reference has its own test below
     _age(pipe / 'jw02221-o002_t001_nircam_clear-f405n-merged_i2d.fits', 0)
-    # three retired-family products, none old enough to be quarantined
-    for name, days in (('jw02221-o002_t001_miri_f770w_i2d.fits', 300),
-                       ('jw02221-o002_t001_miri_f1130w_i2d.fits', 100),
-                       ('jw02221-o002_t001_miri_f1500w_i2d.fits', 30)):
+    for name, days in (('jw02221-o002_t001_nircam_f405n-f444w_i2d.fits', 300),
+                       ('jw02221-o002_t001_nircam_f405n-f322w2_i2d.fits', 100),
+                       ('jw02221-o002_t001_nircam_f405n-f356w_i2d.fits', 30)):
         _age(pipe / name, days)
     held, caught = m.audit_age_guard(['myfield'])
     assert [round(a) for a, _f, _b in held] == [300, 100, 30]
@@ -884,8 +897,8 @@ def test_the_audit_measures_through_the_rules_own_references(tmp_path):
     m.BASE = str(tmp_path)
     pipe = _band_dir(tmp_path, band='F405N')
     _age(pipe / 'jw02221-o002_t001_nircam_clear-f405n-merged_i2d.fits', 0)
-    young = _age(pipe / 'jw02221-o002_t001_miri_f770w_i2d.fits', 300)
-    old = _age(pipe / 'jw02221-o002_t001_miri_f1130w_i2d.fits', 500)
+    young = _age(pipe / 'jw02221-o002_t001_nircam_f405n-f444w_i2d.fits', 300)
+    old = _age(pipe / 'jw02221-o002_t001_nircam_f444w-f466n_i2d.fits', 500)
 
     held, caught = m.audit_age_guard(['myfield'])
     assert [os.path.basename(b) for _a, _f, b in held] == [young.name]
@@ -895,3 +908,37 @@ def test_the_audit_measures_through_the_rules_own_references(tmp_path):
     m.rename_stale_for_field('myfield', execute=True)
     assert young.exists(), 'the audit called this live and the rule quarantined it'
     assert not old.exists() and (pipe / (old.name + m.SUFFIX)).exists()
+
+
+def test_nircam_activity_does_not_age_out_a_miri_mosaic(tmp_path):
+    """MIRI and NIRCam are reduced on independent campaigns.
+
+    Clocking every product against the field's newest primary mosaic of ANY
+    instrument makes a field's NIRCam activity age out its MIRI products: a
+    NIRCam-only re-drizzle moves a clock no MIRI product has any part in.  On
+    the archive that was not hypothetical -- 22 of the 47 live mosaics the age
+    guard was holding back were MIRI judged against a NIRCam newest, and NINE of
+    those were the only primary mosaic in their band directory.  Sole copies
+    would have been quarantined by the passage of time alone.
+
+    Here: MIRI last ran 380 days ago, NIRCam ran today, and a MIRI mosaic of a
+    product family MIRI no longer writes is 420 days old.  Measured against the
+    field's newest of any instrument it is 420 days behind and rule 2 takes it;
+    measured against MIRI's own campaign it is 40 days behind and is live.
+    """
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    nir = _band_dir(tmp_path, band='F405N')
+    mir = _band_dir(tmp_path, band='F770W')
+    _age(nir / 'jw02221-o002_t001_nircam_clear-f405n-merged_i2d.fits', 0)
+    _age(mir / 'jw02221-o002_t001_miri_f770w_i2d.fits', 380)
+    retired = _age(mir / 'jw02221-o002_t001_miri_f770w-sub256_i2d.fits', 420)
+
+    assert m.rename_stale_for_field('myfield', execute=True) == []
+    assert retired.exists(), (
+        'a MIRI mosaic was aged out by NIRCam reduction it has no part in')
+
+    held, caught = m.audit_age_guard(['myfield'])
+    assert caught == []
+    assert [round(a) for a, _f, _b in held] == [40], (
+        'the age is measured against MIRI, so it is 40 days and not 420')

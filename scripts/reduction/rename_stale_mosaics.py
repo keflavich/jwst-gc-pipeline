@@ -48,10 +48,15 @@ the version that nearly deleted live data, see below.  It is **is this KIND of
 product still being made**:
 
   * no member of the file's own (band, pointing, product) family is newer than
-    the reduction-campaign floor = (the field's newest primary mosaic) - 21 days
-    -- i.e. the current generation does not produce this product at all; AND
-  * the file is more than MIN_ORPHAN_AGE_DAYS (365) older than the field's
-    newest primary mosaic.
+    the reduction-campaign floor = (the field's newest primary mosaic FROM THE
+    SAME INSTRUMENT) - 21 days -- i.e. the current generation does not produce
+    this product at all; AND
+  * the file is more than MIN_ORPHAN_AGE_DAYS (365) older than that same
+    per-instrument newest.
+
+Both references are per instrument because NIRCam and MIRI are reduced on
+independent campaigns; clocking a MIRI product against a NIRCam re-drizzle ages
+it out for activity it has no part in.  See ``field_generations``.
 
 "pointing" is the ``jw<proposal>-o<observation>`` prefix; "product" is the band
 and module token, ``clear-f200w-merged`` / ``clear-f200w-nrca`` / the pupil-pair
@@ -80,16 +85,19 @@ that matters most:
     currency masking another's staleness -- which is what its test pins.
 
 The 365-day age guard is what separates a retired family from a live one that
-merely finished early, and it is LOAD BEARING: 47 live primary mosaics across
+merely finished early, and it is LOAD BEARING: 28 live primary mosaics across
 the archive are held back from quarantine by that constant alone.  The numbers
-are in MIN_ORPHAN_AGE_DAYS below -- 3.26x clear of the closest live product
-(sickle MIRI at 111.9 days), 1.17x clear of the nearest orphan (w51 at 426.7).
-Do not change it without reading them.
+are in MIN_ORPHAN_AGE_DAYS below -- 5.85x clear of the closest live product
+(sickle MIRI at 62.4 days), 1.17x clear of the nearest orphan (w51 at 426.7).
+Do not change it without reading them.  The reference is per instrument, which
+is what keeps a field's NIRCam campaign from ageing out its MIRI products.
 
 Scope is narrow by construction -- only the primary drizzle products
 (``PRIMARY_MOSAIC_RE``), never the per-exposure ``_outlier_i2d`` intermediates
-(20-184 of them per cloudc band) and never the photometry byproducts
-(``_data_i2d``, ``*mergedcat*``).
+and never the photometry byproducts (``_data_i2d``, ``*mergedcat*``).  Together
+those come to 20-184 non-primary ``*_i2d.fits`` per cloudc band; the
+``*outlier*`` subset alone is 0-144, and quoting that subset's range for the
+whole set is a mistake this note has made twice.
 
 Each rule keeps its OWN reference and campaign floor, so adding rule 2 leaves
 rule 1's selection bit-identical: measured over all 17 fields with a
@@ -160,37 +168,42 @@ PATTERNS = ('*reproject*i2d*.fits', '*realigned-to-*.fits',
 PRIMARY_MOSAIC_RE = re.compile(
     r'^(?P<pointing>jw\d+-o\d+)_t\d+_[a-z]+_(?P<product>[a-z0-9-]+)_i2d\.fits$')
 
-#: How much older than the field's current generation a mosaic must be before it
-#: counts as an orphan of a retired reduction rather than a product that was
-#: simply written earlier in the same campaign.
+#: How much older than its own instrument's current generation a mosaic must be
+#: before it counts as an orphan of a retired reduction rather than a product
+#: that was simply written earlier in the same campaign.
 #:
 #: This is the guard that keeps the rule off live data, and it is LOAD BEARING
 #: rather than a comfortable separator.  Measured over all 17 fields at the
 #: default --campaign-days 21:
 #:
-#:   47 LIVE primary mosaics belong to a family the current generation no longer
-#:   writes, and are held back from quarantine by THIS CONSTANT ALONE.
+#:   28 LIVE primary mosaics belong to a family their instrument's current
+#:   generation no longer writes, and are held back by THIS CONSTANT ALONE.
 #:
 #:   The margin on the live side is set by the file NEAREST to being taken,
-#:   i.e. the LARGEST age gap among those 47 -- not the smallest:
+#:   i.e. the LARGEST age gap among those 28 -- not the smallest:
 #:
-#:   closest live case   sickle F770W and F1500W (jw03958-o003), 111.91 days
-#:                       behind their field's newest primary mosaic
-#:                       -> margin 365/111.91 = 3.26x
-#:   next                sickle F1130W (same pointing), 111.82 days;
-#:                       then cloudc F2550W at 59.4 and six more sickle MIRI
-#:                       products at ~50
+#:   closest live case   sickle F770W and F1500W (jw03958-o003), 62.35 days
+#:                       behind their field's newest MIRI primary mosaic
+#:                       -> margin 365/62.35 = 5.85x
+#:   next                sickle F1130W (same pointing), 62.26 days; then two
+#:                       sgrb2 NIRCam merged-reproject products at 45.72
 #:   tightest ORPHAN     w51's 2025-06-06 merged-reproject, 426.7 days
 #:                       -> margin 426.7/365 = 1.17x
 #:   the other seven     2023 products in 2026 fields, 1115.6-1152.7 days
 #:
-#: So the two populations are separated by 111.9 days against 426.7 -- a factor
-#: of 3.8, not the "two orders of magnitude" one earlier version of this comment
-#: claimed nor the 18 another did, and the guard sits nearer the orphan edge
-#: than the live edge either way.  Lowering it does NOT start taking live data
-#: 47 files at a time: the first casualties are the three sickle MIRI products
-#: at ~112 days, alone, and 44 files sit at 59 days or less.  Raising it drops
-#: w51's orphan first.
+#: So the two populations are separated by 62.4 days against 426.7 -- a factor
+#: of 6.8, and the guard sits nearer the orphan edge than the live edge.
+#: Lowering it does NOT start taking live data 28 files at a time: the first
+#: casualties are the three sickle MIRI products at ~62 days, alone.  Raising it
+#: drops w51's orphan first.
+#:
+#: The reference is PER INSTRUMENT, and the margin depends on that.  Against a
+#: field-wide newest the same measurement read 47 held back at 3.26x -- because
+#: 22 of those 47 were MIRI products clocked against a NIRCam newest, nine of
+#: them the only primary mosaic in their band directory.  MIRI and NIRCam are
+#: reduced on independent campaigns, so that arrangement let ordinary NIRCam
+#: activity walk sole copies toward quarantine with no code or configuration
+#: change -- the margin eroded by the calendar.  See `field_generations`.
 #:
 #: Two earlier versions of this comment got the live-side number wrong, in the
 #: direction that makes the guard look safer than it is, so both are recorded
@@ -200,7 +213,7 @@ PRIMARY_MOSAIC_RE = re.compile(
 #:     was cited as the worst live case.  Doubly wrong: wd1 has NO
 #:     family-retired primary mosaics at the default settings, so nothing there
 #:     depends on this constant at all.  The (band, pointing, product) key is
-#:     what protects wd1; this constant is what protects the other 47.
+#:     what protects wd1; this constant is what protects the other 28.
 #:   * brick F2550W at 23.3 days was then cited instead, for a claimed 15.7x.
 #:     That is the SMALLEST gap in the held-back set -- its safest member --
 #:     because the measurement sorted ascending and took the first row.  The
@@ -356,23 +369,47 @@ def primary_mosaics(banddir):
                   and not is_quarantined(os.path.basename(p)))
 
 
+def instrument_of(basename):
+    """``'nircam'`` / ``'miri'`` from a level-3 product name, else ``'?'``.
+
+    The instrument sits between the target token and the band in the canonical
+    form ``jw<prop>-o<obs>_t<NNN>_<instrument>_<band>_i2d.fits``, which is the
+    only form ``PRIMARY_MOSAIC_RE`` matches, so this reads it back out of the
+    same match rather than guessing from the band.
+    """
+    m = re.match(r'^jw\d+-o\d+_t\d+_([a-z]+)_', basename)
+    return m.group(1) if m else '?'
+
+
 def field_generations(field, campaign_days=21):
     """Everything the two rules need to know about one field's generations.
 
-    ``(banddirs, band_of_dir, dref1, fam_newest, field_newest, campaign1,
-    campaign2)``, or None when the field has no ``*/pipeline`` directories.
+    ``(banddirs, band_of_dir, dref1, fam_newest, newest_by_instrument,
+    campaign1, campaign2_by_instrument)``, or None when the field has no
+    ``*/pipeline`` directories.
 
     Extracted so ``--audit-age-guard`` measures the age guard's margin through
     the SAME references the rule uses.  An audit that recomputes them
     independently can report a margin the rule does not have, which is how the
     two retracted numbers in ``MIN_ORPHAN_AGE_DAYS`` were arrived at.
+
+    Rule 2's reference is PER INSTRUMENT, and that is load bearing.  Clocking
+    everything against the field's newest primary mosaic of ANY instrument makes
+    a field's NIRCam activity age out its MIRI products: NIRCam and MIRI are
+    reduced on independent campaigns, so a NIRCam-only re-drizzle moves a clock
+    that no MIRI product has any part in.  Measured on the field-wide reference,
+    22 of the 47 live mosaics the age guard was holding back were MIRI judged
+    against a NIRCam newest, nine of them the ONLY primary mosaic in their band
+    directory -- so continued NIRCam reduction alone would eventually have
+    quarantined sole copies, with no code or configuration change.  Per
+    instrument, a MIRI product is judged against MIRI's campaign.
     """
     banddirs = glob.glob(f'{BASE}/{field}/*/pipeline')
     if not banddirs:
         return None
     dref1, band_of_dir = {}, {}
     fam_newest = {}          # (band, pointing, product) -> newest generation
-    field_newest = None      # the field's current generation, any primary mosaic
+    newest = {}              # instrument -> that instrument's current generation
     for d in banddirs:
         band = os.path.basename(d.rsplit('/pipeline', 1)[0]).lower()
         band_of_dir[d] = band
@@ -384,13 +421,15 @@ def field_generations(field, campaign_days=21):
             gen = generation(p)[0]
             if gen is None:
                 continue
-            key = (band,) + product_key(os.path.basename(p))
+            base = os.path.basename(p)
+            key = (band,) + product_key(base)
             fam_newest[key] = max(gen, fam_newest.get(key, gen))
-            field_newest = gen if field_newest is None else max(field_newest, gen)
+            inst = instrument_of(base)
+            newest[inst] = max(gen, newest.get(inst, gen))
     campaign1 = max((v for v in dref1.values() if v), default=None)
     campaign1 = (campaign1 - campaign_days * DAY) if campaign1 else None
-    campaign2 = (field_newest - campaign_days * DAY) if field_newest else None
-    return (banddirs, band_of_dir, dref1, fam_newest, field_newest,
+    campaign2 = {i: g - campaign_days * DAY for i, g in newest.items()}
+    return (banddirs, band_of_dir, dref1, fam_newest, newest,
             campaign1, campaign2)
 
 
@@ -407,8 +446,8 @@ def age_guard_rows(field, campaign_days=21):
     gens = field_generations(field, campaign_days)
     if gens is None:
         return []
-    banddirs, band_of_dir, _dref1, fam_newest, field_newest, _c1, campaign2 = gens
-    if field_newest is None:
+    banddirs, band_of_dir, _dref1, fam_newest, newest, _c1, campaign2 = gens
+    if not newest:
         return []
     rows = []
     for d in banddirs:
@@ -417,10 +456,16 @@ def age_guard_rows(field, campaign_days=21):
             gen = generation(p)[0]
             if gen is None:
                 continue
-            key = (band,) + product_key(os.path.basename(p))
-            if campaign2 is not None and fam_newest.get(key, 0) >= campaign2:
+            base = os.path.basename(p)
+            inst = instrument_of(base)
+            ref = newest.get(inst)
+            floor = campaign2.get(inst)
+            if ref is None:
+                continue
+            key = (band,) + product_key(base)
+            if floor is not None and fam_newest.get(key, 0) >= floor:
                 continue                      # family still live -- not rule 2's
-            rows.append(((field_newest - gen) / DAY, p))
+            rows.append(((ref - gen) / DAY, p))
     return rows
 
 
@@ -436,7 +481,10 @@ def audit_age_guard(fields, campaign_days=21):
     held, caught = [], []
     for field in fields:
         for age, path in age_guard_rows(field, campaign_days):
-            (held if age < MIN_ORPHAN_AGE_DAYS else caught).append(
+            # `<=`, not `<`: rule 2's test is `gen < ref - MIN * DAY`, i.e. an
+            # age of exactly MIN days is NOT caught.  The audit exists to agree
+            # with the rule, so the boundary has to match it.
+            (held if age <= MIN_ORPHAN_AGE_DAYS else caught).append(
                 (age, field, os.path.basename(path)))
     held.sort(reverse=True)                   # nearest miss first
     caught.sort()                             # tightest orphan first
@@ -470,7 +518,7 @@ def rename_stale_for_field(field, execute=False, campaign_days=21):
     if gens is None:
         print(f"[{field}] no */pipeline dirs under {pipe}; skipping")
         return []
-    (banddirs, band_of_dir, dref1, fam_newest, field_newest,
+    (banddirs, band_of_dir, dref1, fam_newest, newest_by_instrument,
      campaign1, campaign2) = gens
 
     # Each rule carries its OWN reference generation, and they are deliberately
@@ -510,11 +558,15 @@ def rename_stale_for_field(field, execute=False, campaign_days=21):
         band = band_of_dir[d]
         for p in primary_mosaics(d):
             gen = generation(p)[0]
-            key = (band,) + product_key(os.path.basename(p))
-            if gen is None or field_newest is None:
+            base = os.path.basename(p)
+            key = (band,) + product_key(base)
+            inst = instrument_of(base)
+            ref = newest_by_instrument.get(inst)
+            floor = campaign2.get(inst)
+            if gen is None or ref is None:
                 continue
-            family_live = campaign2 is None or fam_newest.get(key, 0) >= campaign2
-            old_enough = gen < field_newest - MIN_ORPHAN_AGE_DAYS * DAY
+            family_live = floor is None or fam_newest.get(key, 0) >= floor
+            old_enough = gen < ref - MIN_ORPHAN_AGE_DAYS * DAY
             if not family_live and old_enough:
                 generational[p] = 'retired product family'
 
@@ -539,8 +591,11 @@ def rename_stale_for_field(field, execute=False, campaign_days=21):
                 fm = mt(f)
                 missing = 'no-data_i2d'
             else:
-                ref, campaign, clock = field_newest, campaign2, generation(f)[1]
-                refname = "the field's newest primary mosaic"
+                _inst = instrument_of(base)
+                ref, campaign = (newest_by_instrument.get(_inst),
+                                 campaign2.get(_inst))
+                clock = generation(f)[1]
+                refname = f"the field's newest {_inst} primary mosaic"
                 fm = generation(f)[0]
                 missing = 'no-reference-mosaic'
             if band is None or ref is None or fm is None:
@@ -554,9 +609,12 @@ def rename_stale_for_field(field, execute=False, campaign_days=21):
             else:
                 kept += 1
 
+    # Rule 2's floor is per instrument (see `field_generations`), so name each.
+    floors2 = ", ".join(f"{i} {fmt(v)}" for i, v in sorted(campaign2.items())) \
+        or "NONE"
     print(f"[{field}] {'EXECUTE' if execute else 'DRY RUN'}: "
           f"{len(plan)} superseded, {kept} current kept "
-          f"(campaign floors {fmt(campaign1)} / {fmt(campaign2)})")
+          f"(campaign floors: rule 1 {fmt(campaign1)}; rule 2 {floors2})")
     skipped = 0
     log = None
     if execute and plan:
