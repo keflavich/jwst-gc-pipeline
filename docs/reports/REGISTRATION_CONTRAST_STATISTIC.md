@@ -181,8 +181,8 @@ all, which is what makes them false positives.
 
 **The threshold sits below what a correctly-registered cell scores.** The best
 evidence for that is not this document's model but the gate's own record, at
-`registration_failsafes.py:52-54`: *"the clean brick cells verify at median
-contrast ~18"*. So `FAIL_MIN_RATIO = 10` is under the contrast a **clean** cell
+the comment on `scripts/release/registration_failsafes.py::FAIL_MIN_RATIO`:
+*"the clean brick cells verify at median contrast ~18"*. So `FAIL_MIN_RATIO = 10` is under the contrast a **clean** cell
 of that field produces — a factor of ~1.8 — which puts the bar in the noise, and
 means raising it from 5 to 10 removed those seven cells without ever having
 distinguished them from a seam. A sparse cell's genuine seam scores 7 (Table 2,
@@ -190,10 +190,12 @@ distinguished them from a seam. A sparse cell's genuine seam scores 7 (Table 2,
 populations on this band by luck of density, not because the statistic
 distinguishes them. That is the whole of #170.
 
-**Where the model and the real data disagree, and it is worth saying.** Table 2
-puts a fully misregistered cell of 232–323 pairs at `ratio` **69–79**, against
-that recorded ~18 for real clean brick cells of comparable density — a factor of
-about four. The model assumes every detection has a truth-set counterpart and
+**Where the model and the real data disagree, and it is worth saying.** The
+seven cells fall *between* Table 2's rows, so the model is re-run at their own
+pair counts rather than read off the neighbours: `model_ratio_at_npairs` solves
+for the star count that reproduces 232 and 323 pairs and measures there, giving
+`ratio` **66–82** — against that recorded ~18 for real clean brick cells of
+comparable density, a factor of about four. The model assumes every detection has a truth-set counterpart and
 that all of them sit in the one cell; real catalogs are incomplete and real
 cells are not that clean, so **Table 2's absolute values are upper bounds**.
 What the argument rests on is the *scaling* — `ratio` growing linearly with star
@@ -228,9 +230,9 @@ Two changes, both still unimplemented:
    bar re-creates the exact false alarm this is meant to remove.
 
 An attempt at both, PR #179, was closed without a stated reason, and nothing from
-it is on `main` — verified at `a2e1533`: `FAIL_MIN_RATIO = 10.0` is still at
-`registration_failsafes.py:51`, and neither `FAIL_MIN_SIG` nor `MIN_SEAM_CELLS`
-exists anywhere in the tree.
+it is on `main` — verified at `a2e1533`: `FAIL_MIN_RATIO = 10.0` is still what
+`scripts/release/registration_failsafes.py` declares, and neither `FAIL_MIN_SIG`
+nor `MIN_SEAM_CELLS` exists anywhere in the tree.
 
 ## Loose end
 

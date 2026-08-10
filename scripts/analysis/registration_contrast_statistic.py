@@ -69,13 +69,15 @@ therefore crossed at a STAR DENSITY, not at a misregistration level.
 And it is crossed low.  The seven brick cells that were a false failure read
 ratio 5-8 at 232-323 pairs; their peak bins held 1.7-2.5% of their pairs, i.e.
 no coherent signal.  The gate's OWN record is the better anchor for where the
-bar sits: registration_failsafes.py:52-54 notes that clean brick cells verify at
-median contrast ~18, so FAIL_MIN_RATIO = 10 is under what a CORRECTLY registered
-cell of that field scores.
+bar sits: the comment on registration_failsafes.py's own `FAIL_MIN_RATIO` notes
+that clean brick cells verify at median contrast ~18, so the bar sits UNDER what
+a correctly registered cell of that field already scores.
 
-CALIBRATION CAVEAT: this model puts a fully misregistered cell of that pair
-count at 69-79, about 4x the recorded ~18 for real clean cells.  It assumes
-every detection has a truth counterpart and that all of them lie in one cell, so
+CALIBRATION CAVEAT: run at those same pair counts (solved for, not read off a
+nearby row), this model puts a fully misregistered cell at 66-82 -- about 4x the
+recorded ~18 for real clean cells.  The run derives and prints that range rather
+than quoting it.  The model assumes every detection has a truth counterpart and
+that all of them lie in one cell, so
 its absolute values are UPPER BOUNDS.  The argument rests on the scaling
 (ratio ~ star count, thresholds fixed), which is arithmetic; a replacement
 threshold must be calibrated on real cells, not on this table.
@@ -121,6 +123,12 @@ POS_SCATTER_ARCSEC = 0.015
 #: comparison of the same regions read <= 22 mas.  (npairs, ratio), from #170.
 BRICK_F405N_FALSE_POSITIVES = [(321, 8), (232, 5), (323, 6), (278, 6),
                                (287, 5), (241, 6), (266, 5)]
+
+#: What a CORRECTLY registered brick cell actually scores, per the release
+#: gate's own record (the comment on registration_failsafes.py::FAIL_MIN_RATIO).
+#: This is the anchor the fail bar should be compared against -- not this script's model, whose
+#: absolute values are upper bounds.
+CLEAN_BRICK_CONTRAST = 18.0
 
 
 def bin_edges():
@@ -175,6 +183,39 @@ def sweep(counts, rng, trials, offset_mas=90.0, displaced_fraction=1.0):
     return rows
 
 
+def model_ratio_at_npairs(targets, rows, rng, trials, tol=0.02, passes=6):
+    """What this model scores at a GIVEN pair count.
+
+    The real cells being compared against are quoted by pair count, not by star
+    count, and they fall BETWEEN the swept rows.  Rather than read the nearest
+    row -- or, worse, quote a number by hand -- solve for the star count that
+    produces each target pair count and run the model there.
+
+    Interpolating the sweep gets within ~6%, which is not close enough to say
+    "at the same density": pair count grows faster than linearly in star count
+    (~n^1.5 here, since each extra star pairs with every other one inside the
+    search radius), so a straight-line inverse overshoots.  So the interpolated
+    guess is refined by rerunning and correcting along that local power law
+    until the realised pair count is within ``tol`` of the target.
+
+    Returns ``[(target, realised npairs, ratio), ...]``.
+    """
+    lp = np.log([r[1] for r in rows])
+    ls = np.log([r[0] for r in rows])
+    slope = np.gradient(lp, ls)          # d log(npairs) / d log(stars)
+    out = []
+    for t in targets:
+        n = max(1, int(round(np.exp(np.interp(np.log(t), lp, ls)))))
+        for _ in range(passes):
+            _n, npair, _off, ratio, _bg = sweep([n], rng, trials)[0]
+            if npair > 0 and abs(npair - t) / t <= tol:
+                break
+            k = float(np.interp(np.log(max(npair, 1)), lp, slope))
+            n = max(1, int(round(n * (t / max(npair, 1)) ** (1.0 / max(k, 0.5)))))
+        out.append((t, npair, ratio))
+    return out
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--trials", type=int, default=25)
@@ -206,19 +247,33 @@ def main(argv=None):
         print(f"{n:>11}{npair:>9.0f}{off:>11.0f}{ratio:>8.0f}  {verdict}")
 
     crossed = next((r[0] for r in rows if r[3] >= FAIL_MIN_RATIO), None)
+    failed = next((r[0] for r in rows if r[1] >= MIN_PAIRS
+                   and r[3] >= MIN_PEAK_RATIO and r[2] > OFF_MAX
+                   and r[3] >= FAIL_MIN_RATIO), None)
     print(f"\nSame seam throughout.  The own-catalog fail bar is "
-          f"FAIL_MIN_RATIO = {FAIL_MIN_RATIO:.0f}, first cleared at "
-          f"{crossed} stars per cell.")
+          f"FAIL_MIN_RATIO = {FAIL_MIN_RATIO:.0f}.  The ratio first reaches it "
+          f"at {crossed} stars per\ncell -- but that cell is NOT judged (its "
+          f"pair count is under MIN_PAIRS = {MIN_PAIRS:.0f}), so\nclearing the "
+          f"bar there decides nothing.  The first row that actually FAILS is "
+          f"{failed}\nstars per cell.")
     frac = [100.0 * r / n for n, r in BRICK_F405N_FALSE_POSITIVES]
+    obs_npairs = [n for n, _ in BRICK_F405N_FALSE_POSITIVES]
+    at = model_ratio_at_npairs([min(obs_npairs), max(obs_npairs)],
+                               rows, rng, args.trials)
+    lo, hi = at[0][2], at[1][2]
     print(f"\nThe seven brick F405N cells that were a FALSE failure in 2026-07 "
-          f"read ratio 5-8\nat npairs 232-323 -- peak bins holding "
+          f"read ratio 5-8\nat npairs {min(obs_npairs)}-{max(obs_npairs)} -- "
+          f"peak bins holding "
           f"{min(frac):.1f}-{max(frac):.1f}% of their pairs, i.e. no coherent "
-          f"signal.\nThe gate's own record (registration_failsafes.py:52-54) "
-          f"puts CLEAN brick cells at\nmedian contrast ~18, so FAIL_MIN_RATIO "
+          f"signal.\nThe gate's own record (registration_failsafes.py::FAIL_MIN_RATIO) "
+          f"puts CLEAN brick cells at\nmedian contrast "
+          f"~{CLEAN_BRICK_CONTRAST:.0f}, so FAIL_MIN_RATIO "
           f"= {FAIL_MIN_RATIO:.0f} is under what a correctly registered cell "
-          f"scores.\nThis model puts a misregistered cell of that density at "
-          f"69-79 -- ~4x the recorded\n~18 -- so its absolute values are upper "
-          f"bounds; the SCALING is the argument.")
+          f"scores.\nRun at matching pair counts ({at[0][1]:.0f} and "
+          f"{at[1][1]:.0f}, solved for), this model scores {lo:.0f}-{hi:.0f} --"
+          f"\n~{(lo + hi) / 2 / CLEAN_BRICK_CONTRAST:.0f}x the recorded "
+          f"~{CLEAN_BRICK_CONTRAST:.0f} -- so its absolute values are upper "
+          f"bounds; the SCALING\nis the argument.")
 
     stars = [r[0] for r in rows]
     ratios = [r[3] for r in rows]
@@ -232,6 +287,12 @@ def main(argv=None):
                zorder=4, label=f"not judged at all (npairs < MIN_PAIRS = {MIN_PAIRS:.0f})")
     ax.axhline(FAIL_MIN_RATIO, color="#c0392b", lw=1.5,
                label=f"FAIL_MIN_RATIO = {FAIL_MIN_RATIO:.0f} (own-catalog)")
+    # The clean-cell anchor belongs ON the figure: the figure is what gets read,
+    # and the point of #170 is that the fail bar sits BELOW what a correctly
+    # registered cell of this field already scores.
+    ax.axhline(CLEAN_BRICK_CONTRAST, color="#2e7d32", lw=1.5, ls="--",
+               label=f"clean brick cells score ~{CLEAN_BRICK_CONTRAST:.0f}\n"
+                     f"(registration_failsafes.py::FAIL_MIN_RATIO)")
     ax.set_xscale("log"); ax.set_yscale("log")
     ax.set_xlabel("stars in the grid cell")
     ax.set_ylabel("ratio  =  peak bin count / median occupied bin\n(= the raw peak count, since the divisor is 1)")
@@ -239,6 +300,13 @@ def main(argv=None):
                  fontsize=11)
     ax.legend(fontsize=8, loc="upper left")
     ax.grid(alpha=.25, which="both")
+    # Read on its own -- as it will be, pasted into the issue -- the curve would
+    # look like a calibrated prediction.  It is not.
+    ax.text(0.98, 0.03,
+            "model: every detection has a truth counterpart, all in one cell\n"
+            "-> absolute values are UPPER BOUNDS; the scaling is the argument",
+            transform=ax.transAxes, ha="right", va="bottom", fontsize=7,
+            color="#555")
     fig.tight_layout()
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     fig.savefig(args.out, dpi=140)
