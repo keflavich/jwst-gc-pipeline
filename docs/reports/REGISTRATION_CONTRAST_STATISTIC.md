@@ -1,21 +1,37 @@
 # The registration seam check's confidence number is a star count
 
-**Summary: the number the release gate uses to decide whether a suspicious grid
-cell is trustworthy is, arithmetically, the raw number of star pairs in one
-histogram bin. It grows with star density, so the same physical misregistration
-scores 5 in a sparse cell and 70 in a crowded one, and the threshold behaves as
-a cut on density rather than on confidence.**
+**Summary: the number the release gate uses to decide whether a suspicious patch
+of a mosaic is trustworthy is, arithmetically, the raw number of star pairs in
+one histogram bin. It grows with star density, so one and the same
+misregistration is silently ignored in a sparse patch and fails the release in a
+crowded one.**
 
-Regenerate with:
+Reproduce with:
 
 ```bash
 python scripts/analysis/registration_contrast_statistic.py
 ```
 
-![the confidence number is a star count](figures/registration_contrast_statistic.png)
-
 Background for issue #170, which was filed in shorthand ("the FAIL discriminant
 is density-coupled") and could not be reviewed on those terms.
+
+There is no figure. This repository keeps figures in the Overleaf
+astrometry-paper project rather than in the tree (`.gitignore:38-39`), and the
+result here is two monotone columns, which a table carries as well as a plot.
+
+## Glossary
+
+Everything below is written for someone who does not work on this pipeline.
+
+| term | meaning |
+|---|---|
+| **mosaic** | one combined image of a field in one filter, made by resampling ("drizzling") many exposures onto a common grid |
+| **module** | NIRCam images through two detector modules, A and B (`nrca`, `nrcb`). Their footprints overlap on the sky |
+| **seam** | the strip where the two modules' data are stitched together — where a misregistration between them appears |
+| **registration** | whether a star's position on the mosaic is where the star actually is |
+| **truth set** | a second list of positions that ought to agree with the mosaic's detections |
+| **mas** | milliarcsecond, 1/3 600 000 of a degree. Pixels here are ~30 mas; the effects in question are 60–90 mas |
+| **H** | the 2-D histogram of star-pair separations, described below |
 
 ## Where in the pipeline this happens
 
@@ -24,151 +40,199 @@ drizzled into mosaics and cataloged, and immediately before its images and
 catalogs would be published. `scripts/release/registration_failsafes.py` runs
 there and can refuse the release.
 
-What it checks is **registration**: that a star's position on the delivered
-mosaic is where the star actually is. A whole-field average is not enough, and
-we know that from a specific failure — brick 1182 F356W in July 2026 carried
-several arcseconds of misregistration confined to the narrow strip where the two
-NIRCam module footprints overlap, while the field average was about zero. So the
-check is spatially resolved: it lays a 20×20 grid over the mosaic and asks the
-question separately in each cell.
+A whole-field average is not enough, and that is known from a specific failure:
+the brick field (proposal 1182, filter F356W, July 2026) carried several
+arcseconds of misregistration confined to the module seam, while the field
+average was about zero. So the check is spatially resolved — a 20×20 grid over
+the mosaic, and the question asked separately in each cell.
 
 ## What it does inside one cell
 
-Take every bright source detected on the mosaic being checked, and a **truth
-set** — a second list of positions that ought to agree with it. There are three
-truth sets, run as three independent checks:
+Take every bright source detected on the mosaic, and a **truth set** — a second
+list of positions that ought to agree with it. Pair each detection with every
+truth position within 2.5 arcsec, and histogram those pair separations into
+40 × 40 mas bins.
 
-| check | truth set | what it can catch |
-|---|---|---|
-| per-module | the same band's single-module (nrca / nrcb) mosaics | junk created where the two modules are combined |
-| cross-band | detections in another JWST filter | a band that has drifted relative to the others |
-| own-catalog | the mosaic's own vetted source catalog | a mosaic that disagrees with the catalog derived from it |
-
-None of them uses an external reference catalogue, deliberately: crowding and
-extinction cannot fool a check whose two sides come from the same telescope.
-
-Then, per cell: pair each detection with every truth position within 2.5
-arcsec, and histogram those pair separations into 40 × 40 mas bins.
-
-* If the mosaic is registered, every true pair lands near zero separation and
-  piles into one bin. Pairs of a star with some unrelated neighbour spread
-  thinly over the whole search disk.
-* If the cell is misregistered by, say, 90 mas, the pile-up sits 90 mas from
-  zero instead.
+- A star paired with **itself** — seen once in the mosaic, once in the truth set
+  — lands at the separation between the two, and every such pair in the cell
+  lands at the *same* separation, so they pile into one bin.
+- A star paired with an unrelated **neighbour** lands somewhere arbitrary, and
+  those spread thinly over the whole search disk.
 
 So the histogram is one peak on a thin floor, and **where the peak sits is the
 cell's measured misregistration**. Two numbers come out:
 
 ```python
-off   = distance of the peak bin from zero, in mas
-ratio = H.max() / median(H[H > 0])      # peak count over the median occupied bin
+off   = distance of the peak bin from zero, in mas      # the measurement
+ratio = H.max() / median(H[H > 0])                       # "is that peak real?"
 ```
 
-`off` is the measurement. `ratio` is meant to answer "is that peak real, or did
-a handful of chance pairs happen to land in one bin?" A cell FAILS — and one
-failing cell fails the whole field, blocking the release — only when
+A cell **fails** — and one failing cell fails the whole field, blocking the
+release — when *all* of:
 
 ```
-off > OFF_MAX (60 mas)   AND   ratio >= FAIL_MIN_RATIO
+npair >= MIN_PAIRS (80)  and  ratio >= MIN_PEAK_RATIO (5)     [ "verified" ]
+off   >  OFF_MAX (60 mas)
+ratio >= FAIL_MIN_RATIO
 ```
 
-`FAIL_MIN_RATIO` is 10 for the own-catalog check and 5 for the other two. The
-asymmetry was introduced in #166/#172 to stop a specific false alarm, described
-below.
+`FAIL_MIN_RATIO` is **10** for the own-catalog check and **5** for the
+cross-band one. There are three outcomes, not two: below the `verified` bar a
+cell is **unverified** — neither passed nor failed, and not reported as a
+problem.
+
+### Which checks actually run
+
+Three truth sets exist in the module, but `--scan`, which is what the release
+gate runs, uses **two**:
+
+| check | truth set | runs at the gate? |
+|---|---|---|
+| cross-band | the same stars detected in another filter | **yes** |
+| own-catalog | the mosaic's own vetted source catalog | **yes** |
+| per-module | the same band's single-module (`nrca` / `nrcb`) mosaics | only from the single-filter command line, and as a fallback view when a band has no combined mosaic |
+
+None uses an external reference catalogue, deliberately: crowding and extinction
+cannot fool a check whose two sides both come from JWST.
+
+**The own-catalog check has a known blind spot**, recorded in `CLAUDE.md` and
+worth repeating because it bounds how much the gate is worth: the mosaic and its
+own catalog derive from the same calibrated exposures, so a per-visit residual is
+self-referential and **cancels** — both are wrong the same way, they agree, and
+the cell passes. A green `registration_failsafes` is not sufficient on its own.
 
 ## Why `ratio` does not mean what its name says
 
-**Panel A.** The search disk of radius 2.5 arcsec contains **12,281** bins of
-40 × 40 mas. A grid cell holds a few hundred pairs. With forty times more bins
-than pairs, almost every occupied bin outside the peak holds exactly one pair —
-so `median(H[H > 0])` is **exactly 1**, at every density that occurs in this
-survey:
+### Table 1 — the divisor is 1
 
-| pairs in the cell | 100 | 220 | 450 | 950 | 2000 | 3000 |
-|---|---|---|---|---|---|---|
-| `median(H[H>0])` | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 |
-| `ratio` | 13 | 32 | 66 | 136 | 296 | 445 |
+The 2.5 arcsec search disk contains **12,281** bins of 40 × 40 mas (counting
+bins whose centres fall inside it). A grid cell holds tens to hundreds of pairs.
+With far more bins than pairs, essentially every occupied bin outside the peak
+holds exactly one pair:
 
-`ratio` is therefore `H.max() / 1` — **the raw number of pairs in the peak bin**.
-It is not a ratio and it is not normalised by anything. `FAIL_MIN_RATIO = 10`
-currently means "the peak bin must contain at least ten pairs".
+| stars in the cell | 15 | 20 | 30 | 45 | 70 | 110 | 170 | 260 | 400 |
+|---|---|---|---|---|---|---|---|---|---|
+| pairs | 16 | 23 | 37 | 63 | 116 | 226 | 440 | 888 | 1886 |
+| `median(H[H>0])` | 1.5 | **1.0** | **1.0** | **1.0** | **1.0** | **1.0** | **1.0** | **1.0** | **1.0** |
 
-**Panel B.** A count scales with how many stars the cell contains. Both curves
-are the *same* 90 mas misregistration, measured by the *same* estimator; they
-differ only in how many stars the cell holds and what fraction of its pairs the
-seam displaces:
+So `ratio` is `H.max() / 1` — **the raw number of pairs in the peak bin**. It is
+not a ratio and nothing normalises it. `FAIL_MIN_RATIO = 10` means, literally,
+"the peak bin must contain at least ten pairs".
 
-* a cell lying wholly inside the misregistered strip (25% of pairs displaced)
-  scores 13 at 100 pairs and 445 at 3000;
-* a cell the strip merely clips (4% displaced — which is most of them, since the
-  strip is narrower than a grid cell) crosses `FAIL_MIN_RATIO = 10` at roughly
-  450 pairs. Below that density the identical seam is recorded as
-  "verified-but-not-confident" and does not fail the field. Above it, it does.
+### Table 2 — so the bar is crossed at a star density
 
-So the bar is crossed at a **star density**, not at a misregistration level.
-And it is hardest to clear in the sparsest cells — while the crowded cells,
-where it is easiest to clear, are the Galactic Centre field interiors, where a
-seam matters most *and* where chance-pair confusion is worst.
+One misregistration — 90 mas, **every star in the cell displaced by it** —
+measured by the real estimator at different star densities. The seam is
+identical in every row; only the number of stars changes:
 
-## The false alarm that motivated the current threshold
+| stars in the cell | pairs | `off` (mas) | `ratio` | verdict |
+|---|---|---|---|---|
+| 15 | 16 | 80 | 7 | unverified — not judged at all |
+| 20 | 23 | 80 | 10 | unverified — not judged at all |
+| 30 | 37 | 80 | 17 | unverified — not judged at all |
+| 45 | 63 | 80 | 27 | unverified — not judged at all |
+| 70 | 116 | 80 | 41 | **FAIL** |
+| 110 | 226 | 80 | 65 | **FAIL** |
+| 170 | 440 | 80 | 100 | **FAIL** |
+| 260 | 888 | 80 | 153 | **FAIL** |
+| 400 | 1886 | 80 | 236 | **FAIL** |
 
-In July 2026 the own-catalog check failed brick F405N on seven cells, each
-reading an 80 mas offset at `ratio` 5–8. An independent same-star comparison of
-those same regions read ≤ 22 mas, so the cells were not misregistered and the
-failure was spurious. #166/#172 responded by raising the own-catalog bar from 5
-to 10, which removed those seven and left the other two checks at 5.
+Read down the `ratio` column: the same seam scores **7** in a sparse cell and
+**236** in a crowded one, a factor of 34. The verdict flips from "not judged" to
+"blocks the release" purely on how many stars the cell happens to contain.
 
-Those seven cells are the black crosses in panel B, at 232–323 pairs. They land
-**on the purple curve** — i.e. exactly where a real seam that clips a cell of
-that density would also land. The threshold separated the two populations on
-this band, but not because the statistic distinguishes them; at fixed density it
-cannot. That is the whole of #170.
+Two thresholds are doing that, and both are counts:
 
-One thing recorded in that issue and still unexplained, which should not be lost
-in the statistics: all seven cells peak at the **same vector**, +80 mas in RA,
-to the bin. Chance pairs would not agree on a direction. That may be a small
-real systematic between the F405N mosaic and its own catalog rather than noise —
-in which case the raised bar is suppressing a genuine signal, not a false one.
-It has not been chased down.
+- `MIN_PAIRS = 80` — below roughly 50 stars per cell the check does not run at
+  all, and the cell is silently unverified.
+- `FAIL_MIN_RATIO` — above the pair floor, the peak-bin count must reach 10.
+
+The scaling is the expected one and it is worth stating so the numbers are not
+mistaken for a fitted curve: the peak grows as the number of stars *n*, while
+the chance-pair background grows as *n²*, so `ratio` ∝ *n* ∝ √(pairs). Density
+coupling is arithmetic here, not an empirical finding.
+
+And the bar is hardest to clear in the sparsest cells, while the crowded cells
+where it is easiest are the Galactic Centre field interiors — where a seam
+matters most and where chance-pair confusion is also worst.
+
+## The false alarm that set the current threshold
+
+In July 2026 the own-catalog check failed the brick field's F405N band on seven
+cells, each reading an 80 mas offset at `ratio` 5–8. An independent same-star
+comparison — matching the individual stars between the two lists and taking the
+median displacement, rather than histogramming all pairs — read ≤ 22 mas over
+those same regions. So the cells were not misregistered and the failure was
+spurious. #166/#172 responded by raising the own-catalog bar from 5 to 10, which
+removed those seven, and left the cross-band check at 5.
+
+Those seven cells held 232–323 pairs at `ratio` 5–8 — i.e. **squarely inside the
+band in Table 2 where a genuine seam also scores 7–17**. The threshold separated
+the two populations on this band, but not because the statistic distinguishes
+them; at a given density it does not. That is the whole of #170.
 
 ## What would replace it
 
-Two changes, from the #170 discussion, both still unimplemented:
+Two changes, both still unimplemented:
 
-1. **A density-flat significance.** Not `(H.max() − bg) / sqrt(bg)` with the
-   same `bg` — with `bg` pinned at 1 that is identically `ratio − 1` and adds
-   nothing. The estimator has to use the *expected* chance-pair background,
-   `lam = npairs / n_disk_bins`, which is fractional and keeps scaling with
-   density where the median saturates. Peak goes as *n* and `lam` as *n²*, so
-   the significance is flat in density where the count is linear in it.
+1. **A density-flat significance.** Not `(H.max() − bg)/√bg` with the same `bg`
+   — with `bg` pinned at 1 that is identically `ratio − 1` and adds nothing
+   (measured: the seven brick cells go 5,5,5,6,6,6,8 → 4,4,4,5,5,5,7). It has to
+   use the *expected* chance-pair background, `lam = npairs / n_disk_bins`,
+   which is fractional and keeps scaling with density where the median saturates
+   at 1. The peak grows as *n* and `lam` as *n²*, so the significance is flat in
+   density where the raw count is linear in it.
 
-2. **Contiguity as a second, independent axis.** A misregistration is a
-   connected patch of cells; chance-pair noise is scattered singletons. This
-   needs no new measurement — the offsets and the verified flags are already on
-   the grid — and in the #179 trial it was much the stronger discriminant,
-   firing on 365 / 179 / 45 cells of three injected seams against the count's
+2. **Contiguity, as an independent second axis.** A misregistration is a
+   connected patch of cells; chance-pair noise is scattered singletons. It needs
+   no new measurement — the offsets and the verified flags are already on the
+   grid — and in the #179 trial it was much the stronger of the two, firing on
+   365 / 179 / 45 cells of three synthetic seams injected into real data (a whole
+   field, half a field, and a narrow declination band) against the raw count's
    273 / 127 / 29, and on **zero** cells across all ten real brick bands and all
-   five cloudc bands.
+   six real cloudc bands.
 
-   With a caveat that was measured and matters: the minimum patch size has to be
-   **3 cells, not 2**. Two of the seven brick false positives are 4-adjacent, so
-   a 2-cell bar re-creates the exact false alarm this is meant to remove.
+   One measured constraint: the minimum patch has to be **3 cells, not 2**. Two
+   of the seven brick false positives are edge-adjacent on the grid, so a 2-cell
+   bar re-creates the exact false alarm this is meant to remove.
 
-A previous attempt at both, PR #179, was closed without a stated reason and
-nothing from it is on `main` — `FAIL_MIN_RATIO = 10.0` is still at
-`registration_failsafes.py:51`, and neither `FAIL_MIN_SIG` nor
-`MIN_SEAM_CELLS` exists anywhere in the tree.
+An attempt at both, PR #179, was closed without a stated reason, and nothing from
+it is on `main` — verified at `a2e1533`: `FAIL_MIN_RATIO = 10.0` is still at
+`registration_failsafes.py:51`, and neither `FAIL_MIN_SIG` nor `MIN_SEAM_CELLS`
+exists anywhere in the tree.
 
-## Caveats on this document
+## Loose end
 
-* Both panels are the real estimator — the same bin geometry, the same
-  `H.max() / median(H[H>0])` — run over **synthetic** pair populations. That is
-  deliberate: it shows a property of the statistic rather than of any one field,
-  and it is reproducible without the archive. It is not a measurement of any
-  real seam.
-* The two curves' matched fractions (25% and 4%) are illustrative of a cell
-  inside and a cell clipped by a strip. The *shape* of panel B — a count linear
-  in density, crossing a fixed bar at a density — does not depend on them.
-* The per-star scatter is taken as 15 mas, which widens the peak into
-  neighbouring bins and if anything makes `ratio` look *better* behaved than it
-  is.
+All seven brick F405N cells peak at the **same vector**, +80 mas in RA, to the
+bin. Chance pairs would not agree on a direction. That looks more like a small
+localized systematic between the F405N mosaic and its own catalog than like
+noise — the ≤ 22 mas same-star reading is what makes us call them false
+positives, but the two measurements are not obviously measuring the same thing
+(mosaic-versus-catalog here, catalog-versus-catalog there). If they *are* real,
+both the current threshold and any replacement calibrated against them are
+suppressing a genuine 80 mas signal in seven cells. Not chased down.
+
+## Caveats
+
+- Both tables run the **real** estimator — the same bin geometry, the same
+  `H.max() / median(H[H>0])`, the same peak selection — over **synthetic** star
+  fields. That is deliberate: it shows a property of the statistic rather than of
+  any one field, and it reproduces without the archive. It is not a measurement
+  of any real seam.
+- A cell is modelled as *n* detections and their *n* truth counterparts in a
+  45-arcsec box, with chance pairs arising on their own from the other truth
+  stars inside the search radius. An earlier version of this document instead
+  modelled a cell that a seam only *clips* as "a few displaced pairs plus uniform
+  noise", which silently deleted the correctly-registered stars in the rest of
+  that cell. With those present the peak sits at **zero** and the cell is never
+  even a fail candidate, so that curve described nothing real. It has been
+  removed; a partially clipped cell is not the interesting case.
+- The 45-arcsec cell size and the 15 mas per-star scatter are representative,
+  not fitted. The shape of Table 2 — a count linear in star number, crossing
+  fixed bars — does not depend on them.
+- `median(H[H>0]) = 1` holds up to a few thousand pairs per cell and breaks
+  around 20 000, which no cell in this survey approaches. The only real per-cell
+  pair counts on record are the seven brick cells' 232–323; the scan results
+  under `registration_scan_results/` do not record `npairs` or `ratio` for
+  passing cells, so there is no on-disk confirmation of the divisor across the
+  survey.
