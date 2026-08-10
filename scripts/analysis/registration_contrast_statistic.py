@@ -137,6 +137,28 @@ BRICK_F405N_FALSE_POSITIVES = [(321, 8), (232, 5), (323, 6), (278, 6),
 #: absolute values are upper bounds.
 CLEAN_BRICK_CONTRAST = 18.0
 
+#: What the replacement scores on REAL seams, from #179's trial: three synthetic
+#: +90 mas seams injected into real brick F405N data (whole field, half field,
+#: narrow declination band), as (min, median, max) of the significance over the
+#: high-offset cells of each.
+#:
+#: This is here because the modelled seam rows below are an UPPER BOUND and must
+#: not be compared against the real false alarms on their own.  #179 measured the
+#: real thing and reported, under a heading of its own, that the two populations
+#: OVERLAP at the low end -- both start at sig ~32.6, because an injected seam
+#: displaces each cell's existing peak, so a seam's weakest cells are the field's
+#: intrinsically weakest cells, which are the artifact cells.  Its conclusion:
+#: "No amplitude statistic can separate them per-cell", and "that overlap is
+#: exactly why step 3 [contiguity] matters more than step 2".
+REAL_SEAM_SIG_179 = [("whole field", 32.6, 78.1, 140.4),
+                     ("half field", 32.6, 75.4, 115.0),
+                     ("narrow dec band", 30.1, 60.7, 97.0)]
+
+#: #179's chosen bar, and how it was chosen: the log-midpoint of the artifact
+#: ceiling (49.3) and the hardest real seam's median (60.7) -- 12% headroom, not
+#: a clear gap.
+FAIL_MIN_SIG_179 = 55.0
+
 #: Extra seeds and trial counts used only to report how far the derived range
 #: moves with the sampling.  Fixed so the run stays reproducible.  BOTH knobs
 #: are swept: at a fixed trial count the seed-only range reads much tighter than
@@ -382,18 +404,41 @@ def main(argv=None):
         print(f"{'modelled 90 mas seam':>26}{npair:>9.0f}{ratio:>11.0f}{s:>22.1f}")
     judged_sig = [((r[3] * r[4]) - r[1] / nb) / np.sqrt(r[1] / nb)
                   for r in rows if r[1] >= MIN_PAIRS]
-    print(f"\n  false alarms      {min(fp_sig):.1f} - {max(fp_sig):.1f}\n"
-          f"  modelled seams   {min(judged_sig):.0f} - {max(judged_sig):.0f}\n"
-          f"  separation       {min(judged_sig) / max(fp_sig):.1f}x, with no "
-          f"overlap -- so ONE fixed threshold works at every density here.\n"
-          f"  (#179 proposed FAIL_MIN_SIG = 55, which sits in that gap.  Its "
-          f"published\n   values for these seven cells were 32.55-49.32; this "
-          f"reproduces them.)\n"
-          f"\n  The raw count cannot do this at a fixed bar: these false alarms "
-          f"score 5-8\n  while a REAL seam of the same pair count scores "
-          f"{lo:.0f}-{hi:.0f}, and FAIL_MIN_RATIO = "
-          f"{FAIL_MIN_RATIO:.0f}\n  sits below BOTH -- under even a correctly "
-          f"registered cell's ~{CLEAN_BRICK_CONTRAST:.0f}.")
+    for label, lo_s, med_s, hi_s in REAL_SEAM_SIG_179:
+        print(f"{('#179 REAL seam, ' + label):>26}{'':>9}{'':>11}"
+              f"{f'{lo_s:.1f}-{hi_s:.1f} (med {med_s:.1f})':>22}")
+    real_lo = min(r[1] for r in REAL_SEAM_SIG_179)
+    print(f"\n  false alarms          {min(fp_sig):.1f} - {max(fp_sig):.1f}   "
+          f"(real, measured)\n"
+          f"  modelled seams      {min(judged_sig):.0f} - {max(judged_sig):.0f}"
+          f"   (THIS model -- upper bounds)\n"
+          f"  #179's real seams     {real_lo:.1f} - "
+          f"{max(r[3] for r in REAL_SEAM_SIG_179):.1f}   (real, measured)\n")
+    print(f"  READ THE THIRD ROW, NOT THE SECOND.  Against the modelled seams "
+          f"the gap looks like\n  "
+          f"{min(judged_sig) / max(fp_sig):.1f}x with nothing in between -- but "
+          f"those values are upper bounds, roughly\n  "
+          f"{min(judged_sig) / REAL_SEAM_SIG_179[0][2]:.0f}x #179's real seam "
+          f"medians, and an upper bound on one population is exactly\n  what "
+          f"destroys a claim about the SEPARATION.  Measured on real data the two"
+          f"\n  populations OVERLAP at the low end: both start at sig ~"
+          f"{real_lo:.0f}, because an injected seam\n  displaces each cell's "
+          f"existing peak, so a seam's weakest cells are the field's\n  "
+          f"intrinsically weakest -- which are the artifact cells.\n")
+    print(f"  So #179 set FAIL_MIN_SIG = {FAIL_MIN_SIG_179:.0f} as the "
+          f"log-midpoint of the artifact ceiling\n  ({max(fp_sig):.1f}) and the "
+          f"hardest seam's median (60.7): 12% headroom, not a clear gap.  Its own\n"
+          f"  words: \"no amplitude statistic can separate them per-cell\", and "
+          f"\"that overlap is\n  exactly why step 3 [contiguity] matters more "
+          f"than step 2\".\n")
+    print(f"  What the amplitude axis DOES buy is a field-level margin: "
+          f"{max(fp_sig):.1f} -> {FAIL_MIN_SIG_179:.0f} against\n  the raw "
+          f"count's 8 -> {FAIL_MIN_RATIO:.0f}, and it fires on 290 cells where "
+          f"the raw count fires on 273.\n  The raw count also cannot be fixed by "
+          f"moving its bar: these false alarms score 5-8\n  while a real seam of "
+          f"the same pair count scores {lo:.0f}-{hi:.0f} in this model, and "
+          f"FAIL_MIN_RATIO =\n  {FAIL_MIN_RATIO:.0f} sits below BOTH -- under "
+          f"even a correctly registered cell's ~{CLEAN_BRICK_CONTRAST:.0f}.")
 
 
     stars = [r[0] for r in rows]

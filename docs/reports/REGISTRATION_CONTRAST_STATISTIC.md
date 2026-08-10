@@ -348,14 +348,40 @@ seam, under one statistic:
 | modelled 90 mas seam | 888 | 153 | 568.7 |
 | modelled 90 mas seam | 1886 | 236 | 601.8 |
 
-**False alarms 32.6–49.3; seams 422–602; a factor of 8.6 with no overlap** — so
-one fixed threshold works at every density here. #179 proposed
-`FAIL_MIN_SIG = 55`, which sits in that gap, and published 32.55–49.32 for these
-seven cells; this reproduces those values.
+The false alarms are **real measured cells**. The seam rows are **this model**,
+and the model's absolute values are upper bounds — the same caveat this document
+applies to the ~4× above. Comparing the two and reading off a separation is
+exactly the inference an upper bound on one population destroys, so the third
+block is the one that settles it:
 
-The raw count cannot do the same job at a fixed bar. Those false alarms score
-5–8, a real seam at the same pair count scores 66–82, and `FAIL_MIN_RATIO = 10`
-sits below both — under even a correctly registered cell's ~18.
+| | sig (min / median / max) |
+|---|---|
+| #179, real seam injected into the whole field | 32.6 / 78.1 / 140.4 |
+| #179, real seam injected into half the field | 32.6 / 75.4 / 115.0 |
+| #179, real seam injected into a narrow declination band | 30.1 / 60.7 / 97.0 |
+
+**Measured on real data the two populations OVERLAP at the low end.** Both start
+at sig ≈ 32.6, because an injected seam displaces each cell's *existing* peak —
+so a seam's weakest cells are the field's intrinsically weakest cells, which are
+the artifact cells. #179 put this under a heading of its own and concluded: *"No
+amplitude statistic can separate them per-cell… that overlap is exactly why step
+3 [contiguity] matters more than step 2."*
+
+So `FAIL_MIN_SIG = 55` is not the midpoint of a clear gap. #179 chose it as the
+log-midpoint of the artifact ceiling (49.3) and the hardest real seam's median
+(60.7) — **12% headroom**. An earlier version of this section read the modelled
+422–602 against the real 32.6–49.3, called it "a factor of 8.6 with no overlap",
+and concluded one fixed threshold works at every density. That inverts #179's own
+finding, and it inverts the priority between the two proposals above.
+
+**What the amplitude axis does buy** is a *field-level* margin rather than a
+per-cell separation: 49.3 → 55 against the raw count's 8 → 10, and it fires on
+290 cells where the raw count fires on 273.
+
+The raw count also cannot be rescued by moving its bar. Those false alarms score
+5–8, a real seam at the same pair count scores 66–82 in this model, and
+`FAIL_MIN_RATIO = 10` sits below both — under even a correctly registered cell's
+~18.
 
 2. **Requiring the failing cells to touch each other before the field is failed.**
    *Yes, this is proposed as a fix, and it is a second, separate test — a cell
@@ -415,7 +441,7 @@ suppressing a genuine 80 mas signal in seven cells. Not chased down.
 
 ## Caveats
 
-- Both tables run the **real** estimator — the same bin geometry, the same
+- Tables 1–3 and the modelled rows of Table 4 run the **real** estimator — the same bin geometry, the same
   `H.max() / median(H[H>0])`, the same peak selection — over **synthetic** star
   fields. That is deliberate: it shows a property of the statistic rather than of
   any one field, and it reproduces without the archive. It is not a measurement
