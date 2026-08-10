@@ -24,6 +24,8 @@ on the order their rows were written.
 
 Issue #348.
 """
+import inspect
+
 import numpy as np
 import pytest
 from astropy.table import Table
@@ -126,6 +128,53 @@ def _longest_emittable_source():
 
 POOLED_SOURCE_MAX = _longest_emittable_source()
 
+#: A stage label longer than the "m2"/"m12" the source string uses.  The `stage`
+#: ARGUMENT is not restricted to `CORRECTION_STAGES`:
+#: `apply_m2_checkpoint_corrections.py` passes "m2cycle2", and brick's two
+#: VIRAC2locked tables carry it on 240 rows between them.  So `prov_stage` is a
+#: column a narrowing can truncate on live data, which is why the revert test
+#: asserts all three provenance columns rather than `prov_source` alone.
+LONG_STAGE = "m2cycle2"
+
+
+def _emitted_sources():
+    """Every ``source=f"{stage} ..."`` the checkpoint writes, with its SHAPE.
+
+    Returns ``{(source_text_after_the_stage, is_bulk), ...}`` by walking the
+    module's AST, not its text.  Two reasons it is not a regex:
+
+    * a text match sees only the quote style it was written for, and
+      `source=f'{stage} ...'` in single quotes slips straight past it.  That is
+      the defect the previous guard in this file was replaced for; re-creating
+      it in the replacement is how it came back.
+    * the SHAPE matters as much as the string.  ``_is_bulk_correction`` is "no
+      exposure AND no module", and the longer base can only stay un-poolable
+      while it is written on a bulk correction.  Reading the same keyword
+      arguments the literal is written beside is what pins that at the call
+      site, rather than asserting it about a hand-built dict elsewhere.
+    """
+    import ast
+    from jwst_gc_pipeline.photometry import astrometry_checkpoint as _ac
+    tree = ast.parse(inspect.getsource(_ac))
+    found = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        kw = {k.arg: k.value for k in node.keywords if k.arg}
+        src = kw.get("source")
+        if not isinstance(src, ast.JoinedStr):
+            continue
+        # f"{stage} <literal>" -> take the literal tail
+        tail = "".join(v.value for v in src.values
+                       if isinstance(v, ast.Constant) and isinstance(v.value, str))
+        tail = tail.strip()
+        if not tail:
+            continue
+        is_bulk = all(
+            isinstance(kw.get(a), ast.Constant) and kw[a].value is None
+            for a in ("exposure", "module"))
+        found.add((tail, is_bulk))
+    return found
 
 def _narrow_table(tmp_path, prov_source="m2 visit-consensus"):
     """A table whose ``prov_source`` column is as wide as its content and no more.
@@ -262,11 +311,12 @@ def test_the_fixture_is_a_string_the_pooler_can_actually_emit(tmp_path):
     # (2): the part before " [median of" must be a source the module emits.
     #
     # An `any()` over hardcoded literals is not enough: renaming one producer
-    # leaves the other satisfying it while the fixture goes stale.  Compare the
-    # SET, so a rename, a removal or a third base all fail here.
+    # leaves the other satisfying it while the fixture goes stale.  So compare
+    # the SET -- and find it by walking the AST rather than by matching source
+    # TEXT, because a text match is defeated by a quote character, which is the
+    # exact defect this guard's predecessor was replaced for.
     base = POOLED_SOURCE_MAX.split(" [median of")[0]
-    src = inspect.getsource(ac)
-    emitted = set(re.findall(r'source=f"\{stage\} ([^"]+)"', src))
+    emitted = {src for src, _bulk in _emitted_sources()}
     assert emitted == {"visit-consensus", "consensus->reference"}, (
         f"the module's source-string producers are now {sorted(emitted)}; "
         f"rebuild the fixture from them rather than assuming the old pair")
@@ -419,7 +469,7 @@ def _broadcast_table(path, prov_source):
     t["ddec (arcsec)"] = np.array([1.30, 1.40])
     t["prov_dra_added_mas"] = np.array([1000.0, 1000.0])
     t["prov_ddec_added_mas"] = np.array([2000.0, 2000.0])
-    t["prov_stage"] = np.array(["m2", "m2"], dtype="U2")
+    t["prov_stage"] = np.array([LONG_STAGE] * 2, dtype=f"U{len(LONG_STAGE)}")
     t["prov_date"] = np.array(["2026-08-10T00:00:00Z"] * 2)
     t["prov_source"] = np.array([prov_source] * 2)
     t.write(path, format="ascii.csv", overwrite=True)
@@ -460,13 +510,20 @@ def test_the_revert_tool_does_not_narrow_a_wide_column(tmp_path):
     p2 = str(tmp_path / "Offsets_JWST_Brick9998_VIRAC2locked.csv")
     t = _broadcast_table(p2, POOLED_SOURCE_MAX)
     t.add_row(["003", "F212N", 0.5, 0.6, 1.5, 1.6, 5.0, 6.0,
-               "m2", "2026-08-10T00:00:00Z", POOLED_SOURCE_MAX])
+               LONG_STAGE, "2026-08-10T00:00:00Z", POOLED_SOURCE_MAX])
     t.write(p2, format="ascii.csv", overwrite=True)
     mod.revert(p2, apply=True)
     kept = Table.read(p2, format="ascii.csv")
     untouched = kept[np.asarray([str(f) for f in kept["Filter"]]) == "F212N"]
-    assert untouched["prov_source"][0] == POOLED_SOURCE_MAX, (
-        "the write narrowed a column and cut an untouched row's provenance")
+    # ALL THREE columns, not just prov_source.  A narrowing of prov_stage alone
+    # passed this test while truncating live data: brick's two VIRAC2locked
+    # tables carry prov_stage='m2cycle2' on 240 rows between them, and that is
+    # the column read back into the frame's alignment header.
+    for col, want in (("prov_source", POOLED_SOURCE_MAX),
+                      ("prov_stage", LONG_STAGE),
+                      ("prov_date", "2026-08-10T00:00:00Z")):
+        assert untouched[col][0] == want, (
+            f"the write narrowed {col} and cut an untouched row's provenance")
 
 
 def test_widening_to_the_baseline_never_shortens_a_wider_column(tmp_path):
@@ -535,3 +592,22 @@ def test_a_bulk_correction_is_never_given_a_pooled_suffix():
     # and the shape is what decides it, not the text: the same string on
     # per-detector corrections DOES pool.  This is the trap 114 fell into.
     assert "[median of" in _pool_synthetic(base)
+
+    # THE INVARIANT, PINNED WHERE IT LIVES.  The two assertions above are about
+    # a dict built here; neither says anything about how the module writes that
+    # string.  Add one per-exposure producer carrying the longer base and both
+    # still pass, while the longest emittable source jumps from 72 to 77 -- the
+    # retracted 114 made real by the guard built to catch it.  So read the SHAPE
+    # off the call sites: every source longer than the one the fixture uses must
+    # be written on a bulk correction, and the fixture's own base must not be.
+    by_src = dict(_emitted_sources())
+    fixture_base = POOLED_SOURCE_MAX.split(" [median of")[0].partition(" ")[2]
+    assert by_src[fixture_base] is False, (
+        f"{fixture_base!r} is now written on a bulk correction, which the "
+        f"pooler passes through -- the fixture can no longer be pooled")
+    for src, is_bulk in by_src.items():
+        if len(src) > len(fixture_base):
+            assert is_bulk, (
+                f"{src!r} is longer than the fixture's base and is written on a "
+                f"NON-bulk correction, so it can take a pooled suffix -- the "
+                f"longest emittable source is no longer POOLED_SOURCE_MAX")
