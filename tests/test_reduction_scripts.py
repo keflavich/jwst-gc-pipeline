@@ -848,3 +848,50 @@ def test_one_pointings_currency_does_not_mask_anothers_staleness(tmp_path):
     assert [os.path.basename(p[0]) for p in plan] == [stale.name], (
         'without the pointing in the key, o001 being current makes o003 look '
         'live and a genuinely stale pointing is never reported')
+
+
+def test_the_age_guard_audit_reports_the_NEAREST_MISS_not_the_safest(tmp_path):
+    """The margin is set by the live file closest to being quarantined.
+
+    Two revisions of `MIN_ORPHAN_AGE_DAYS`' comment quoted it from the wrong end
+    of the distribution -- the smallest age gap among the held-back files, which
+    is the SAFEST member of that set, not the nearest miss -- and so reported the
+    guard as 4.8x safer than it is.  Both times the number came from a
+    hand-written scan rather than from the rule, which is why `audit_age_guard`
+    exists and why this pins the sort order.
+    """
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    pipe = _band_dir(tmp_path, band='F405N')
+    _age(pipe / 'jw02221-o002_t001_nircam_clear-f405n-merged_i2d.fits', 0)
+    # three retired-family products, none old enough to be quarantined
+    for name, days in (('jw02221-o002_t001_miri_f770w_i2d.fits', 300),
+                       ('jw02221-o002_t001_miri_f1130w_i2d.fits', 100),
+                       ('jw02221-o002_t001_miri_f1500w_i2d.fits', 30)):
+        _age(pipe / name, days)
+    held, caught = m.audit_age_guard(['myfield'])
+    assert [round(a) for a, _f, _b in held] == [300, 100, 30]
+    assert caught == []
+    # the margin is 365/300, not 365/30
+    assert m.MIN_ORPHAN_AGE_DAYS / held[0][0] < 1.3
+
+
+def test_the_audit_measures_through_the_rules_own_references(tmp_path):
+    """An audit that recomputes the references can report a margin the rule
+    does not have -- which is how both retracted numbers were produced.  Rule 2
+    and the audit must agree on which files the constant alone is holding."""
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    pipe = _band_dir(tmp_path, band='F405N')
+    _age(pipe / 'jw02221-o002_t001_nircam_clear-f405n-merged_i2d.fits', 0)
+    young = _age(pipe / 'jw02221-o002_t001_miri_f770w_i2d.fits', 300)
+    old = _age(pipe / 'jw02221-o002_t001_miri_f1130w_i2d.fits', 500)
+
+    held, caught = m.audit_age_guard(['myfield'])
+    assert [os.path.basename(b) for _a, _f, b in held] == [young.name]
+    assert [os.path.basename(b) for _a, _f, b in caught] == [old.name]
+
+    # and rule 2 takes exactly the file the audit says it takes
+    m.rename_stale_for_field('myfield', execute=True)
+    assert young.exists(), 'the audit called this live and the rule quarantined it'
+    assert not old.exists() and (pipe / (old.name + m.SUFFIX)).exists()

@@ -206,9 +206,13 @@ PRIMARY_MOSAIC_RE = re.compile(
 #:     because the measurement sorted ascending and took the first row.  The
 #:     margin is set by the nearest miss, which is 4.8x closer than that.
 #:
-#: Before moving this constant, re-measure it: over every field, recompute the
-#: age gap behind the field's newest primary mosaic for each live primary mosaic
-#: whose family is retired, and read the LARGEST gap in that set.
+#: Every number above is printed by
+#:
+#:     rename_stale_mosaics.py --audit-age-guard --field <each field>
+#:
+#: which measures through the rule's OWN references (`field_generations`) rather
+#: than a hand-written scan.  Both retracted numbers came from hand-written
+#: scans.  Re-run it before moving this constant.
 MIN_ORPHAN_AGE_DAYS = 365
 
 #: Renaming to this suffix takes the file out of every ``*.fits`` glob, which is
@@ -352,22 +356,20 @@ def primary_mosaics(banddir):
                   and not is_quarantined(os.path.basename(p)))
 
 
-def rename_stale_for_field(field, execute=False, campaign_days=21):
-    pipe = f'{BASE}/{field}'
-    banddirs = glob.glob(f'{pipe}/*/pipeline')
-    if not banddirs:
-        print(f"[{field}] no */pipeline dirs under {pipe}; skipping")
-        return []
+def field_generations(field, campaign_days=21):
+    """Everything the two rules need to know about one field's generations.
 
-    # Each rule carries its OWN reference generation, and they are deliberately
-    # not shared.  Rule 1's is the one this script has always used -- the band's
-    # `*-merged_data_i2d.fits` mtime -- so rule 1 selects exactly the files it
-    # selected before this rule 2 was added.  Broadening rule 1's reference to
-    # the primary mosaics as well was tried and measured: archive-wide it moves
-    # rule 1's selection from 55 files to 229, because a band with no
-    # `*-merged_data_i2d.fits` currently SKIPS its candidates rather than
-    # judging them.  That may well be worth doing, but it is a separate decision
-    # about 178 files and does not belong in a fix for one orphan (#339).
+    ``(banddirs, band_of_dir, dref1, fam_newest, field_newest, campaign1,
+    campaign2)``, or None when the field has no ``*/pipeline`` directories.
+
+    Extracted so ``--audit-age-guard`` measures the age guard's margin through
+    the SAME references the rule uses.  An audit that recomputes them
+    independently can report a margin the rule does not have, which is how the
+    two retracted numbers in ``MIN_ORPHAN_AGE_DAYS`` were arrived at.
+    """
+    banddirs = glob.glob(f'{BASE}/{field}/*/pipeline')
+    if not banddirs:
+        return None
     dref1, band_of_dir = {}, {}
     fam_newest = {}          # (band, pointing, product) -> newest generation
     field_newest = None      # the field's current generation, any primary mosaic
@@ -388,6 +390,101 @@ def rename_stale_for_field(field, execute=False, campaign_days=21):
     campaign1 = max((v for v in dref1.values() if v), default=None)
     campaign1 = (campaign1 - campaign_days * DAY) if campaign1 else None
     campaign2 = (field_newest - campaign_days * DAY) if field_newest else None
+    return (banddirs, band_of_dir, dref1, fam_newest, field_newest,
+            campaign1, campaign2)
+
+
+def age_guard_rows(field, campaign_days=21):
+    """Every primary mosaic of ``field`` whose product family is RETIRED.
+
+    ``[(age_days, path), ...]`` -- age behind the field's newest primary mosaic.
+    These are exactly the files that clause (a) of rule 2 selects, so
+    ``MIN_ORPHAN_AGE_DAYS`` alone decides each one: below it the file is LIVE and
+    kept, at or above it the file is quarantined.  The guard's margin is
+    therefore the gap between the LARGEST age below the constant (the live
+    product nearest to being taken) and the SMALLEST age at or above it.
+    """
+    gens = field_generations(field, campaign_days)
+    if gens is None:
+        return []
+    banddirs, band_of_dir, _dref1, fam_newest, field_newest, _c1, campaign2 = gens
+    if field_newest is None:
+        return []
+    rows = []
+    for d in banddirs:
+        band = band_of_dir[d]
+        for p in primary_mosaics(d):
+            gen = generation(p)[0]
+            if gen is None:
+                continue
+            key = (band,) + product_key(os.path.basename(p))
+            if campaign2 is not None and fam_newest.get(key, 0) >= campaign2:
+                continue                      # family still live -- not rule 2's
+            rows.append(((field_newest - gen) / DAY, p))
+    return rows
+
+
+def audit_age_guard(fields, campaign_days=21):
+    """Print what MIN_ORPHAN_AGE_DAYS is actually holding, and its two margins.
+
+    The constant's comment cites numbers that must be re-measured before it is
+    moved; this is how.  Two earlier revisions of that comment quoted the live
+    margin from the WRONG end of the distribution -- the safest member of the
+    held-back set rather than the one nearest to being taken -- so the sort
+    order here is load bearing and is asserted in the tests.
+    """
+    held, caught = [], []
+    for field in fields:
+        for age, path in age_guard_rows(field, campaign_days):
+            (held if age < MIN_ORPHAN_AGE_DAYS else caught).append(
+                (age, field, os.path.basename(path)))
+    held.sort(reverse=True)                   # nearest miss first
+    caught.sort()                             # tightest orphan first
+    print(f"MIN_ORPHAN_AGE_DAYS = {MIN_ORPHAN_AGE_DAYS}, "
+          f"--campaign-days {campaign_days}, {len(fields)} field(s)")
+    print(f"\nLIVE primary mosaics of a retired family, held back by this "
+          f"constant alone: {len(held)}")
+    for age, field, base in held[:5]:
+        print(f"  {age:9.2f} d  {field:10s} {base}")
+    print(f"\nQuarantined by it: {len(caught)}")
+    for age, field, base in caught[:5]:
+        print(f"  {age:9.2f} d  {field:10s} {base}")
+    if held:
+        print(f"\nlive margin   {MIN_ORPHAN_AGE_DAYS}/{held[0][0]:.2f} = "
+              f"{MIN_ORPHAN_AGE_DAYS / held[0][0]:.2f}x  "
+              f"({held[0][1]} {held[0][2]})")
+    if caught:
+        print(f"orphan margin {caught[0][0]:.2f}/{MIN_ORPHAN_AGE_DAYS} = "
+              f"{caught[0][0] / MIN_ORPHAN_AGE_DAYS:.2f}x  "
+              f"({caught[0][1]} {caught[0][2]})")
+    if held and caught:
+        print(f"populations separated by {held[0][0]:.1f} d against "
+              f"{caught[0][0]:.1f} d -- a factor of "
+              f"{caught[0][0] / held[0][0]:.1f}")
+    return held, caught
+
+
+def rename_stale_for_field(field, execute=False, campaign_days=21):
+    pipe = f'{BASE}/{field}'
+    gens = field_generations(field, campaign_days)
+    if gens is None:
+        print(f"[{field}] no */pipeline dirs under {pipe}; skipping")
+        return []
+    (banddirs, band_of_dir, dref1, fam_newest, field_newest,
+     campaign1, campaign2) = gens
+
+    # Each rule carries its OWN reference generation, and they are deliberately
+    # not shared.  Rule 1's is the one this script has always used -- the band's
+    # `*-merged_data_i2d.fits` mtime -- so rule 1 selects exactly the files it
+    # selected before this rule 2 was added.  Broadening rule 1's reference to
+    # the primary mosaics as well was tried and measured: archive-wide it moves
+    # rule 1's selection from 55 files to 229, because a band with no
+    # `*-merged_data_i2d.fits` currently SKIPS its candidates rather than
+    # judging them.  That may well be worth doing, but it is a separate decision
+    # about 178 files and does not belong in a fix for one orphan (#339).
+    #
+    # (The references themselves are computed in `field_generations`, which
+    # `--audit-age-guard` shares so the audited margin is the rule's own.)
 
     # RULE 1: named retired-alignment products, anywhere in the band directory.
     named, generational = {}, {}
@@ -531,7 +628,13 @@ def main():
     ap.add_argument('--execute', action='store_true',
                     help='actually rename (default: dry run)')
     ap.add_argument('--campaign-days', type=int, default=21)
+    ap.add_argument('--audit-age-guard', action='store_true',
+                    help='report what MIN_ORPHAN_AGE_DAYS holds back and its '
+                         'two margins, and rename nothing')
     args = ap.parse_args()
+    if args.audit_age_guard:
+        audit_age_guard(args.field, campaign_days=args.campaign_days)
+        return
     for field in args.field:
         rename_stale_for_field(field, execute=args.execute,
                                campaign_days=args.campaign_days)
