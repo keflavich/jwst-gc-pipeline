@@ -37,7 +37,8 @@ reduction wrote the pupil pair into the product token (``f405n-f444w``) where
 the current one writes ``clear-f405n-merged``.  So for this file the
 (band, pointing, product) key is distinguishing filename generations rather than
 different kinds of product, and it is the 365-day age guard plus the 4.1 arcsec
-measurement, not the key, that make the case for quarantining it.  Nothing about its NAME distinguishes
+measurement, not the key, that make the case for quarantining it.  Nothing
+about its NAME distinguishes
 it from a live product: it carries the canonical level-3 form
 ``jw<prop>-o<obs>_t<NNN>_<instrument>_<band>-<module>_i2d.fits``, so rule 1 does
 not see it and a ``*_i2d.fits`` glob does (issue #339).
@@ -69,17 +70,24 @@ that matters most:
   * BY POINTING.  Several pointings share a band directory and are reduced weeks
     apart without any being superseded: ngc6334 keeps proposals 6778 and 7213 in
     one F200W directory, sickle keeps observations o001/o002/o003 in one F1130W
-    directory.  Ignoring the pointing flagged nine live products.
+    directory.  Ignoring the pointing flagged nine live products under the
+    SUPERSEDED design, which ranked a product against its band's newest.
+
+    Under the family rule the pointing no longer protects live data, and saying
+    otherwise would overstate what this key does: merging pointings raises a
+    family's newest, so a family looks live MORE often and the rule selects
+    FEWER files.  Dropping it can only cause false NEGATIVES -- one pointing's
+    currency masking another's staleness -- which is what its test pins.
 
 The 365-day age guard is what separates a retired family from a live one that
-merely finished early, and the separation is not a tuned number: the real
-orphans are three YEARS behind their field's current generation, and the largest
-gap between two live products of one field is 18 DAYS.  Two orders of magnitude
-of margin on one side, fifty times on the other.
+merely finished early, and it is LOAD BEARING: 47 live primary mosaics across
+the archive are held back from quarantine by that constant alone.  The numbers
+are in MIN_ORPHAN_AGE_DAYS below -- 15.7x clear of the closest live product,
+1.17x clear of the nearest orphan.  Do not change it without reading them.
 
 Scope is narrow by construction -- only the primary drizzle products
 (``PRIMARY_MOSAIC_RE``), never the per-exposure ``_outlier_i2d`` intermediates
-(0-144 of them per cloudc band) and never the photometry byproducts
+(20-184 of them per cloudc band) and never the photometry byproducts
 (``_data_i2d``, ``*mergedcat*``).
 
 Each rule keeps its OWN reference and campaign floor, so adding rule 2 leaves
@@ -146,8 +154,8 @@ PATTERNS = ('*reproject*i2d*.fits', '*realigned-to-*.fits',
 #: construction the per-exposure ``jw02221002001_02201_00001_nrcalong_*_i2d``
 #: intermediates (no ``-o<obs>_t<NNN>_`` infix) and every photometry byproduct
 #: (``_data_i2d``, ``*_m<N>_daophot_*_mergedcat_*_i2d``), which carry extra
-#: tokens after the band.  Matching those would quarantine up to 144 live
-#: intermediate products per band (cloudc F405N; 0 in the two MIRI bands).
+#: tokens after the band.  Together they are 20-184 live files per cloudc band
+#: (F770W 20, F405N 184), all of which a looser pattern would quarantine.
 PRIMARY_MOSAIC_RE = re.compile(
     r'^(?P<pointing>jw\d+-o\d+)_t\d+_[a-z]+_(?P<product>[a-z0-9-]+)_i2d\.fits$')
 
@@ -193,7 +201,8 @@ SUFFIX = '.bad'
 #: Quarantine conventions this tree has used, kept as documentation and as the
 #: invariant asserted below.  NOTE: `is_quarantined` does not read this list --
 #: it tests `not basename.endswith('.fits')`, which every one of these satisfies
-#: by construction.  The list is what makes that test's correctness checkable.  Counted under ``*/*/pipeline`` on 2026-08-10:
+#: by construction.  The list is what makes that test's correctness
+#: checkable.  Counted under ``*/*/pipeline`` on 2026-08-10:
 #: ``*_stale`` 465, of which ``*_badastrometry_stale`` is 327 -- so 138 carry the
 #: bare form, which is what the 2026-07-03 brick pass wrote ("EXECUTE -- 192
 #: stale, 29 kept").  ``*.bad`` 0, this convention being new.  (A whole-tree
@@ -298,7 +307,9 @@ def product_key(basename):
     per-module ones.  wd1's F200W merged mosaic is 18 days older than its own
     nrca/nrcb siblings, and it is the 5.1 GB primary deliverable of that band.
     Ranking it against them -- which an earlier version of this did -- put it
-    three days away from being quarantined.
+    three days away from being quarantined.  (Under the family rule the age
+    guard now covers wd1's 18 days on its own; the product token's job is to
+    stop a current product of the same pointing MASKING a retired one.)
 
     By pointing: several pointings share a band directory and are reduced at
     different times without any of them being superseded:
