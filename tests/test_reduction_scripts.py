@@ -116,8 +116,13 @@ def test_a_second_pointing_in_the_same_band_is_not_superseded(tmp_path):
     ngc6334's ``F200W/pipeline`` holds proposals 6778 and 7213 side by side and
     sickle's ``F1130W/pipeline`` holds observations o001/o002/o003 of 3958.  A
     pointing reduced weeks before its neighbour is current, not superseded;
-    against the archive this fired on nine live products before the key
-    distinguished pointings.
+    against the archive this fired on nine live products under the SUPERSEDED
+    design, which ranked a product against its band's newest.
+
+    Under the family rule the pointing is no longer a safety axis: merging
+    pointings makes a family look live MORE often, so dropping it can only cause
+    false negatives, never false positives.  It is kept for completeness -- see
+    the masking test below -- and this test is the regression guard on the nine.
     """
     m = _load('rename_stale_mosaics')
     m.BASE = str(tmp_path)
@@ -135,10 +140,16 @@ def test_a_merged_mosaic_is_not_ranked_against_its_per_module_siblings(tmp_path)
     ones, so the merged mosaic ends up the OLDEST primary product of its band
     while being the band's headline deliverable.  On wd1 F200W the gap is 18
     days (merged 2026-06-13, nrca/nrcb 2026-07-01), and an earlier version of
-    this rule -- which ranked a product against every primary mosaic of its
-    band and pointing -- put it three days from quarantine.
+    this rule -- which ranked a product against every primary mosaic of its band
+    and pointing -- put that 5.1 GB file three days from quarantine.
 
-    A merged mosaic must only ever be compared against other merged mosaics.
+    WHAT PROTECTS IT NOW, stated precisely because an earlier version of this
+    docstring credited the wrong mechanism: at 18 days the AGE GUARD covers it
+    on its own, and this test still passes with the product token removed from
+    the key.  The product token matters for a different reason -- see
+    ``test_an_orphan_is_not_masked_by_a_current_product_of_the_same_pointing``,
+    which fails without it.  This test pins wd1's real configuration, which is
+    what matters operationally, not the mechanism that saves it.
     """
     m = _load('rename_stale_mosaics')
     m.BASE = str(tmp_path)
@@ -270,8 +281,9 @@ def test_a_bands_only_mosaic_is_not_flagged_by_the_campaign_floor(tmp_path):
     """cloudc's MIRI F2550W case: 59 days below the field floor, and correct.
 
     A band that simply finished earlier than the rest of the campaign must not
-    be quarantined for it.  The per-band condition is what prevents that, so it
-    is not redundant with the campaign floor.
+    be quarantined for it.  There is no per-band condition in rule 2 -- what
+    prevents this is the age guard, and removing MIN_ORPHAN_AGE_DAYS is what
+    makes this test fail.
     """
     m = _load('rename_stale_mosaics')
     m.BASE = str(tmp_path)
@@ -782,3 +794,53 @@ def test_the_underscore_form_this_replaced_really_was_unreadable():
     # and the dashed form it alternated with parsed, but only loosely
     loose = parse_job_name('brick-catalog-m7')
     assert loose['name_kind'] == 'loose' and loose['obsid'] is None
+
+
+def test_the_quarantine_suffix_is_recognised_by_the_release_gate():
+    """`SUFFIX` and `release_freshness.QUARANTINE_GLOBS` must move together.
+
+    A release reads a quarantined product as REPUDIATED only if it can find the
+    twin; if the suffix changes and the glob does not, every quarantined product
+    silently reclassifies from `quarantined` to `missing` in every field's
+    listing -- which is a report that says the opposite of what happened.
+    """
+    m = _load('rename_stale_mosaics')
+    freshness = os.path.join(os.path.dirname(__file__), '..', 'scripts',
+                             'release', 'release_freshness.py')
+    globs = open(freshness).read()
+    assert "{src}" + m.SUFFIX in globs, (
+        f"rename_stale_mosaics writes '{m.SUFFIX}' but release_freshness's "
+        f"QUARANTINE_GLOBS does not match it")
+
+
+def test_the_product_token_is_what_finds_the_orphan(tmp_path):
+    """The product token's real job under the family rule.
+
+    Without it, `f405n-f444w` and `clear-f405n-merged` of one pointing are the
+    same "family", the current one makes that family look live, and the 2023
+    orphan is never selected -- a false NEGATIVE, which is how this rule fails
+    now that the age guard covers the false-positive side.
+    """
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    pipe = _band_dir(tmp_path, band='F405N')
+    _age(pipe / 'jw02221-o002_t001_nircam_clear-f405n-merged_i2d.fits', 0)
+    orphan = _age(pipe / 'jw02221-o002_t001_nircam_f405n-f444w_i2d.fits', 1100)
+    plan = m.rename_stale_for_field('myfield', execute=True)
+    assert [os.path.basename(p[0]) for p in plan] == [orphan.name], (
+        'the orphan shares its pointing with a current product; without the '
+        'product token in the key that current product masks it')
+    assert not orphan.exists()
+
+
+def test_one_pointings_currency_does_not_mask_anothers_staleness(tmp_path):
+    """Same masking failure, on the pointing axis."""
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    pipe = _band_dir(tmp_path, band='F1130W')
+    _age(pipe / 'jw03958-o001_t001_miri_f1130w_i2d.fits', 0)
+    stale = _age(pipe / 'jw03958-o003_t001_miri_f1130w_i2d.fits', 1100)
+    plan = m.rename_stale_for_field('myfield', execute=True)
+    assert [os.path.basename(p[0]) for p in plan] == [stale.name], (
+        'without the pointing in the key, o001 being current makes o003 look '
+        'live and a genuinely stale pointing is never reported')

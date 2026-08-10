@@ -24,11 +24,20 @@ its name.  cloudc carries
 
     F405N/pipeline/jw02221-o002_t001_nircam_f405n-f444w_i2d.fits   2023-07-11
 
-a 2023 artifact of a reduction that paired F405N against F444W as its continuum
--- F444W is not a cloudc filter and no F444W exposure exists on disk to have
-built it from -- and it ties to VIRAC2 (the VVV-based near-infrared reference
+a 2023 product that ties to VIRAC2 (the VVV-based near-infrared reference
 catalogue used for these fields) **4.1 arcsec** out of place, where every
-current cloudc mosaic ties at 32-33 mas.  Nothing about its NAME distinguishes
+current cloudc mosaic ties at 32-33 mas.
+
+Its header reads ``FILTER=F444W, PUPIL=F405N`` -- and so does its live 2026
+replacement, ``clear-f405n-merged_i2d.fits``.  F444W is the blocking filter for
+the F405N narrowband, not a foreign filter, so an earlier version of this note
+claiming "F444W is not a cloudc filter and no F444W exposure exists on disk" was
+simply wrong.  What separates the two files is the NAMING VINTAGE -- the 2023
+reduction wrote the pupil pair into the product token (``f405n-f444w``) where
+the current one writes ``clear-f405n-merged``.  So for this file the
+(band, pointing, product) key is distinguishing filename generations rather than
+different kinds of product, and it is the 365-day age guard plus the 4.1 arcsec
+measurement, not the key, that make the case for quarantining it.  Nothing about its NAME distinguishes
 it from a live product: it carries the canonical level-3 form
 ``jw<prop>-o<obs>_t<NNN>_<instrument>_<band>-<module>_i2d.fits``, so rule 1 does
 not see it and a ``*_i2d.fits`` glob does (issue #339).
@@ -70,7 +79,7 @@ of margin on one side, fifty times on the other.
 
 Scope is narrow by construction -- only the primary drizzle products
 (``PRIMARY_MOSAIC_RE``), never the per-exposure ``_outlier_i2d`` intermediates
-(72-176 of them per cloudc band) and never the photometry byproducts
+(0-144 of them per cloudc band) and never the photometry byproducts
 (``_data_i2d``, ``*mergedcat*``).
 
 Each rule keeps its OWN reference and campaign floor, so adding rule 2 leaves
@@ -96,10 +105,17 @@ out here rather than quietly deleted.)
 ⚠ THREE OF THE EIGHT current selections are the ONLY primary mosaic of their
 (band, pointing): brick F405N, F410M and F466N each hold exactly one
 ``jw02221-o002`` primary mosaic and it is the 2023 file.  Quarantining those
-leaves that band/pointing with no primary mosaic at all, and none of the three
-has had its astrometry measured -- they are selected on generation alone.  None
-can be rebuilt from disk either (no constituent exposures survive).  Decide that
-before running with --execute.
+leaves that band and pointing with no primary mosaic at all, and none of the
+three has had its astrometry measured -- they are selected on generation alone.
+
+They CAN be rebuilt: each of those directories holds 64 ``jw02221*_cal.fits``
+calibrated exposures (cloudc F405N holds 32), so a re-drizzle would regenerate
+them.  An earlier version of this notice said no constituent exposures survived,
+which told the operator a decision was permanent when it is not.  The rename is
+reversible in any case -- the file is kept and the log records it.
+
+Decide it before running with --execute all the same: it is still the removal of
+a band and pointing's only product.
 
 Band token is parsed from either NIRCam ('clear-f182m-', 'f405n-f444w-'
 pupil forms) or MIRI ('_f2550w') filename conventions.
@@ -130,8 +146,8 @@ PATTERNS = ('*reproject*i2d*.fits', '*realigned-to-*.fits',
 #: construction the per-exposure ``jw02221002001_02201_00001_nrcalong_*_i2d``
 #: intermediates (no ``-o<obs>_t<NNN>_`` infix) and every photometry byproduct
 #: (``_data_i2d``, ``*_m<N>_daophot_*_mergedcat_*_i2d``), which carry extra
-#: tokens after the band.  Matching those would quarantine 72-176 live
-#: intermediate products per band.
+#: tokens after the band.  Matching those would quarantine up to 144 live
+#: intermediate products per band (cloudc F405N; 0 in the two MIRI bands).
 PRIMARY_MOSAIC_RE = re.compile(
     r'^(?P<pointing>jw\d+-o\d+)_t\d+_[a-z]+_(?P<product>[a-z0-9-]+)_i2d\.fits$')
 
@@ -139,20 +155,32 @@ PRIMARY_MOSAIC_RE = re.compile(
 #: counts as an orphan of a retired reduction rather than a product that was
 #: simply written earlier in the same campaign.
 #:
-#: This is the guard that keeps the rule off live data.  The measured separation,
-#: stated exactly rather than rounded in the flattering direction:
+#: This is the guard that keeps the rule off live data, and it is LOAD BEARING
+#: rather than a comfortable separator.  Measured over all 17 fields at the
+#: default --campaign-days 21:
 #:
-#:   worst LIVE case      wd1's merged F200W mosaic, 18 days behind its own
-#:                        per-module siblings, because the merged drizzle ran
-#:                        later in that campaign.   365/18  = 20x margin.
-#:   tightest ORPHAN      w51's 2025-06-06 merged-reproject product, 426 days
-#:                        behind its field's newest.  426/365 = 1.17x margin.
-#:   the other seven      2023 products in 2026 fields, ~1100 days.  ~3x.
+#:   47 LIVE primary mosaics belong to a family the current generation no longer
+#:   writes, and are held back from quarantine by THIS CONSTANT ALONE.
 #:
-#: So it is 20x clear of the live population and only 1.17x clear of the nearest
-#: orphan -- the guard is set close to the orphan edge, not comfortably between
-#: two well-separated groups.  Loosening it is what would start taking live data;
-#: tightening it drops w51's first.
+#:   closest live case   brick F2550W, 23.3 days behind its field's newest
+#:                       -> margin 365/23.3 = 15.7x
+#:   next                ngc6334 F444W and F200W, ~24.7 days
+#:   tightest ORPHAN     w51's 2025-06-06 merged-reproject, 426 days
+#:                       -> margin 426/365 = 1.17x
+#:   the other seven     2023 products in 2026 fields, ~1100-1150 days
+#:
+#: So the two populations are separated by roughly 23 days against 426 -- a
+#: factor of 18, not the "two orders of magnitude" an earlier version of this
+#: comment claimed, and the guard sits much nearer the orphan edge than the live
+#: edge.  Lowering it starts taking live data 47 files at a time; raising it
+#: drops w51's orphan first.
+#:
+#: An earlier version cited wd1's merged F200W mosaic (18 days behind its own
+#: per-module siblings) as the worst live case.  That was doubly wrong: wd1 has
+#: NO family-retired primary mosaics at the default settings, so nothing there
+#: depends on this constant at all, and 18 days is not the closest live case
+#: anyway.  The (band, pointing, product) key is what protects wd1; this
+#: constant is what protects the other 47.
 MIN_ORPHAN_AGE_DAYS = 365
 
 #: Renaming to this suffix takes the file out of every ``*.fits`` glob, which is
@@ -162,8 +190,10 @@ MIN_ORPHAN_AGE_DAYS = 365
 #: explicitly, which is the point.
 SUFFIX = '.bad'
 
-#: Already-quarantined files, under this or any earlier convention, are skipped
-#: rather than renamed again.  Counted under ``*/*/pipeline`` on 2026-08-10:
+#: Quarantine conventions this tree has used, kept as documentation and as the
+#: invariant asserted below.  NOTE: `is_quarantined` does not read this list --
+#: it tests `not basename.endswith('.fits')`, which every one of these satisfies
+#: by construction.  The list is what makes that test's correctness checkable.  Counted under ``*/*/pipeline`` on 2026-08-10:
 #: ``*_stale`` 465, of which ``*_badastrometry_stale`` is 327 -- so 138 carry the
 #: bare form, which is what the 2026-07-03 brick pass wrote ("EXECUTE -- 192
 #: stale, 29 kept").  ``*.bad`` 0, this convention being new.  (A whole-tree
