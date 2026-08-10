@@ -1047,9 +1047,11 @@ PROV_TEXT_MIN_CHARS = 64
 #: an offsets table's columns arbitrarily wide.  Reaching it is ANNOUNCED (see
 #: ``_prov_text``) rather than applied silently, because a silent cut here is
 #: the whole of issue #348.  Set well above anything the pipeline produces: the
-#: longest form is a per-detector median pooled on top of the longest base any
-#: live table carries (w51's 62-character cross-band tie), which is 114
-#: characters over four detectors and 138 over eight.
+#: longest form the pipeline can emit is a per-detector median pooled on top of
+#: the longest base any live table carries (w51's 62-character cross-band tie),
+#: which is 114 characters.  Four detectors, not eight: `_assert_poolable`
+#: refuses a group spanning module families, so nrca* and nrcb* never pool
+#: together.
 PROV_TEXT_MAX_CHARS = 256
 
 #: The free-text provenance columns, in the order they are created.

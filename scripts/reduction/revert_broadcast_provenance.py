@@ -185,8 +185,8 @@ def revert(path, apply=False):
         # Widen through the shared helper rather than to a hardcoded width.
         # A literal `astype("U64")` here was not merely redundant: it NARROWED
         # any column already wider than 64, and the longest string this pipeline
-        # writes is 102 characters (a per-detector median pooled on top of a
-        # cross-band tie), which came back as
+        # writes is 114 characters (one module's four detectors pooled on top
+        # of a cross-band tie), which came back as
         #   'm2 consensus->reference (cross-band tied-F210M, contrast>2900) ['
         # -- silent truncation, on live tables, from the script whose job is to
         # repair provenance.  This is not hypothetical: gc2211's table carries

@@ -288,8 +288,10 @@ passes AND D is clean (`apply_ok`).  Anything else is recorded as
   (50 mas), and any member over the magnitude ceiling — which is checked on the
   **members**, since `median ≤ max` means pooling would otherwise average a
   blown-up detector out of existence. What was collapsed is written to the
-  checkpoint record under `pooling` (the correction's `source` is truncated to
-  64 characters, shorter than a real member list).
+  checkpoint record under `pooling`. The correction's `source` string survives in
+  the offsets table -- its provenance column is sized to the value written, not
+  capped -- but a one-line summary is not the per-detector measurements, which
+  is why the record carries them separately.
 * Stale im0 mosaics are RENAMED `*_i2d_im0_badastrom.fits` and kept intact (+ a
   `.why.json` sidecar and a ledger in `astrometry_checkpoints/`).
 * `fix_alignment` stamps `APROVST/APROVMT/APROVDR/APROVDD/APROVRF/APROVTB/

@@ -42,22 +42,23 @@ POOLED_SOURCE = "m2 visit-consensus [median of 2, ptp 1.51mas: nrcb3,nrcb4]"
 POOLED_SOURCE_4 = ("m2 visit-consensus [median of 4, ptp 3.42mas: "
                    "nrcb1,nrcb2,nrcb3,nrcb4]")
 
-#: A pooled median on top of a cross-band tie -- the longest form the pipeline
-#: produces.  w51's live table already carries the 62-character base.  114
-#: characters over four detectors; the eight-detector form below is 138, which
-#: is the true maximum and still well under PROV_TEXT_MAX_CHARS.
+#: The longest source string the pipeline can actually emit: 114 characters.
 #:
-#: (An earlier version of this constant said "median of 4" while listing two
-#: detectors -- a string the pooler cannot emit -- and was quoted as the
-#: pipeline's longest form at 102 characters.  Both wrong.)
+#: A pooled median on top of the longest base any live table carries (w51's
+#: 62-character cross-band tie), over the most detectors a single pool can hold.
+#: That is FOUR, not eight: `_assert_poolable` refuses any group spanning module
+#: families, so `nrca*` and `nrcb*` never pool together --
+#:
+#:     _assert_poolable(8 corrections, ['nrca1'..'nrcb4'], ...)
+#:       -> OffsetsTableUpdateError: corrections spanning module families
+#:
+#: Two earlier versions of this constant were strings the pooler cannot emit: one
+#: said "median of 4" while listing two detectors (quoted as a 102-character
+#: maximum), and one listed eight detectors across both modules (quoted as 138).
+#: A fixture that cannot occur does not test the longest form.
 POOLED_ON_CROSSBAND = ("m2 consensus->reference (cross-band tied-F210M, "
                        "contrast>2900) [median of 4, ptp 3.42mas: "
                        "nrcb1,nrcb2,nrcb3,nrcb4]")
-
-#: The genuine maximum: eight detectors on the longest base.
-POOLED_ON_CROSSBAND_8 = ("m2 consensus->reference (cross-band tied-F210M, "
-                         "contrast>2900) [median of 8, ptp 3.42mas: "
-                         "nrca1,nrca2,nrca3,nrca4,nrcb1,nrcb2,nrcb3,nrcb4]")
 
 
 def _narrow_table(tmp_path, prov_source="m2 visit-consensus"):
@@ -147,15 +148,35 @@ def test_the_four_detector_pooling_survives(tmp_path):
     assert t["prov_source"][1].endswith("nrcb4]")
 
 
-@pytest.mark.parametrize("source", [POOLED_ON_CROSSBAND, POOLED_ON_CROSSBAND_8])
-def test_the_longest_form_the_pipeline_produces_survives(tmp_path, source):
-    """A pooled median on the longest base: 114 chars over 4 detectors, 138 over 8."""
-    assert len(source) > PROV_TEXT_MIN_CHARS
-    assert len(source) < PROV_TEXT_MAX_CHARS
+def test_the_longest_form_the_pipeline_produces_survives(tmp_path):
+    """A pooled median on the longest base: 114 characters over four detectors."""
+    assert len(POOLED_ON_CROSSBAND) == 114
+    assert len(POOLED_ON_CROSSBAND) > PROV_TEXT_MIN_CHARS
+    assert len(POOLED_ON_CROSSBAND) < PROV_TEXT_MAX_CHARS
     p = _narrow_table(tmp_path)
-    update_offsets_table(p, [_corr(2, source)], stage="m2")
+    update_offsets_table(p, [_corr(2, POOLED_ON_CROSSBAND)], stage="m2")
     t = Table.read(p, format="ascii.csv")
-    assert t["prov_source"][1] == source
+    assert t["prov_source"][1] == POOLED_ON_CROSSBAND
+
+
+def test_the_fixture_is_a_string_the_pooler_can_actually_emit(tmp_path):
+    """Guards the fixture itself -- twice now it has not been.
+
+    `_assert_poolable` refuses a group spanning module families, so the longest
+    real pool is one module's four detectors.  A fixture listing eight across
+    both modules, or four while naming two, tests a string that cannot occur.
+    """
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        _assert_poolable, OffsetsTableUpdateError)
+    from astropy.table import Table as _T
+    mods = ["nrcb1", "nrcb2", "nrcb3", "nrcb4"]
+    for m in mods:                      # every detector named must appear
+        assert m in POOLED_ON_CROSSBAND
+    assert f"median of {len(mods)}" in POOLED_ON_CROSSBAND
+    _assert_poolable([{}] * len(mods), mods, "row", _T(), "t.csv")   # allowed
+    with pytest.raises(OffsetsTableUpdateError, match="module families"):
+        _assert_poolable([{}] * 8, ["nrca1", "nrca2", "nrca3", "nrca4"] + mods,
+                         "row", _T(), "t.csv")
 
 
 def test_a_source_over_the_hard_bound_is_cut_and_announced(tmp_path, capsys):
@@ -267,7 +288,7 @@ def test_the_revert_tool_does_not_narrow_a_wide_column(tmp_path):
     """`revert_broadcast_provenance` writes into live tables and must not cut them.
 
     It previously hardcoded ``astype("U64")``, which NARROWS any column already
-    wider than 64 -- and the longest string this pipeline writes is 102
+    wider than 64 -- and the longest string this pipeline writes is 114
     characters.  Not hypothetical: gc2211's live table carries 240 rows written
     by that script, and its ``prov_source`` column is ``<U27``.
     """
