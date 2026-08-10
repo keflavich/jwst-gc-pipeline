@@ -4,8 +4,10 @@ An offsets table is stored as CSV and read back with ``Table.read``, so each of
 its text columns is typed to the longest string that file happened to contain --
 ``<U23`` for a table whose provenance so far has only ever said ``'m2
 visit-consensus'``.  Assigning a longer string into a numpy string column
-truncates it silently: no error, no warning, the leading characters kept and the
-rest dropped.
+truncates it: the leading characters are kept and the rest dropped.  astropy
+does emit a ``StringTruncateWarning``, but it is one line in a log carrying
+thousands, and nothing downstream can tell a truncated value from a short one --
+which is the part that matters.
 
 The string the m2 checkpoint writes when it pools several detectors' corrections
 into one is 58 characters:
@@ -246,3 +248,37 @@ def test_widening_does_not_touch_an_unrelated_column():
     _widen_prov_text_columns(t)
     assert t["Module"].dtype.itemsize // 4 == 4
     assert t["prov_source"].dtype.itemsize // 4 == PROV_TEXT_MIN_CHARS
+
+
+def test_the_revert_tool_does_not_narrow_a_wide_column(tmp_path):
+    """`revert_broadcast_provenance` writes into live tables and must not cut them.
+
+    It previously hardcoded ``astype("U64")``, which NARROWS any column already
+    wider than 64 -- and the longest string this pipeline writes is 102
+    characters.  Not hypothetical: gc2211's live table carries 240 rows written
+    by that script, and its ``prov_source`` column is ``<U27``.
+    """
+    import importlib.util
+    import os
+    spec = importlib.util.spec_from_file_location(
+        "revert_broadcast_provenance",
+        os.path.join(os.path.dirname(__file__), "..", "..", "..",
+                     "scripts", "reduction", "revert_broadcast_provenance.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    t = Table()
+    t["prov_stage"] = np.array(["m2"] * 3, dtype="U2")
+    t["prov_date"] = np.array(["2026-08-10T00:00:00Z"] * 3)
+    t["prov_source"] = np.array([POOLED_ON_CROSSBAND] * 3)
+    assert t["prov_source"].dtype.itemsize // 4 == len(POOLED_ON_CROSSBAND)
+
+    _widen_prov_text_columns(t, PROV_TEXT_MIN_CHARS)
+    assert t["prov_source"][0] == POOLED_ON_CROSSBAND, (
+        "widening to the baseline must not shorten a column already wider")
+    # and the tool reaches for the same helper rather than a literal width.
+    # Comments are stripped first, so the explanation of WHY the literal was
+    # wrong does not itself trip the check.
+    code = "\n".join(l.split("#", 1)[0] for l in open(mod.__file__))
+    assert "_widen_prov_text_columns" in code
+    assert 'astype("U' not in code, "a hardcoded column width is back"

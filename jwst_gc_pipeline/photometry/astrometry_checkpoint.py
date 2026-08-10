@@ -567,7 +567,8 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
         # Dispersion, so a bimodal group is visible rather than pooling to a
         # meaningless middle with no trace.  Peak-to-peak of the 2-D residual
         # magnitudes; carried in `source` AND returned on the dict for the
-        # checkpoint record (`source` is truncated to 64 chars on write).
+        # checkpoint record (`source` is bounded at PROV_TEXT_MAX_CHARS on
+        # write, and the column is sized to fit whatever is written).
         mags = [float(np.hypot(c["dra_onsky_mas"], c["ddec_onsky_mas"]))
                 for c in members]
         spread = float(np.ptp(mags))
@@ -1136,10 +1137,13 @@ def _widen_prov_text_columns(tbl, chars=PROV_TEXT_MIN_CHARS):
 
 def _prov_text_width(corrections, stage, now):
     """How wide the provenance columns must be for this write, at minimum."""
-    lengths = [PROV_TEXT_MIN_CHARS, len(_prov_text(stage)), len(_prov_text(now))]
+    # Measures, never announces: `_prov_text` prints when it has to cut, and
+    # this runs over the same values the apply loop is about to write, so
+    # announcing here would print every over-bound value twice.
+    lengths = [PROV_TEXT_MIN_CHARS, len(str(stage)), len(str(now))]
     for corr in corrections:
-        lengths.append(len(_prov_text(corr.get("source", ""))))
-    return max(lengths)
+        lengths.append(len(str(corr.get("source", ""))))
+    return min(max(lengths), PROV_TEXT_MAX_CHARS)
 
 
 #: How closely ``(arcsec) - plain`` must match the accumulated ``prov_*`` for the

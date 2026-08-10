@@ -3375,7 +3375,9 @@ def _record_pooling(record, pooled, n_before, offsets_path):
     The record is written before the corrections are pooled, and a pooled
     correction's membership otherwise survives only in its ``source`` string --
     which ``update_offsets_table`` truncates to 64 characters, shorter than a
-    real 8-detector member list.  Re-write the record (both the timestamped
+    real 8-detector member list -- which the offsets table itself now stores in
+    full, since its provenance column is sized to the value written.  Re-write
+    the record (both the timestamped
     file and ``*_latest.json``) with a ``pooling`` section so the provenance of
     an applied shift is recoverable afterwards.
     """
@@ -4187,8 +4189,9 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
                       f"what made sgrc diverge)", flush=True)
                 # Persist WHAT was pooled into the checkpoint record.  The
                 # membership otherwise survives only in the correction's
-                # `source`, which update_offsets_table truncates to 64 chars --
-                # and a real 8-detector member list is longer than that.
+                # `source`, which update_offsets_table sizes its column to fit
+                # (bounded at PROV_TEXT_MAX_CHARS), so a real 8-detector member
+                # list now survives the write.
                 _record_pooling(record, corrections, _n_before, _pool_path)
 
     # Actionability floor: per-detector residuals of ~2.4-3.3 mas (measured,
