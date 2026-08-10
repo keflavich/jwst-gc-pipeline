@@ -15,9 +15,11 @@ python scripts/analysis/registration_contrast_statistic.py
 Background for issue #170, which was filed in shorthand ("the FAIL discriminant
 is density-coupled") and could not be reviewed on those terms.
 
-There is no figure. This repository keeps figures in the Overleaf
-astrometry-paper project rather than in the tree (`.gitignore:38-39`), and the
-result here is two monotone columns, which a table carries as well as a plot.
+![the same seam scores 7 in a sparse cell and 236 in a crowded one](figures/registration_contrast_statistic.png)
+
+(`.gitignore` carries a blanket `*.png`, but report figures here are force-added
+— `docs/reports/apphot/` and `docs/evidence/` hold 13 — so this one is committed
+the same way.)
 
 ## Glossary
 
@@ -115,6 +117,10 @@ holds exactly one pair:
 | pairs | 16 | 23 | 37 | 63 | 116 | 226 | 440 | 888 | 1886 |
 | `median(H[H>0])` | 1.5 | **1.0** | **1.0** | **1.0** | **1.0** | **1.0** | **1.0** | **1.0** | **1.0** |
 
+(The 15-star cell reads 1.5 because with only 16 pairs the median is taken over
+a handful of bins. That cell is far below `MIN_PAIRS` and is never judged; every
+density the gate actually looks at reads exactly 1.)
+
 So `ratio` is `H.max() / 1` — **the raw number of pairs in the peak bin**. It is
 not a ratio and nothing normalises it. `FAIL_MIN_RATIO = 10` means, literally,
 "the peak bin must contain at least ten pairs".
@@ -123,7 +129,9 @@ not a ratio and nothing normalises it. `FAIL_MIN_RATIO = 10` means, literally,
 
 One misregistration — 90 mas, **every star in the cell displaced by it** —
 measured by the real estimator at different star densities. The seam is
-identical in every row; only the number of stars changes:
+identical in every row; only the number of stars changes. (`off` reads 80 for a
+90 mas injection because the 40 mas bin edges fall at …, −20, 20, 60, 100 — the
+real gate quantises the same way.)
 
 | stars in the cell | pairs | `off` (mas) | `ratio` | verdict |
 |---|---|---|---|---|
@@ -166,10 +174,19 @@ those same regions. So the cells were not misregistered and the failure was
 spurious. #166/#172 responded by raising the own-catalog bar from 5 to 10, which
 removed those seven, and left the cross-band check at 5.
 
-Those seven cells held 232–323 pairs at `ratio` 5–8 — i.e. **squarely inside the
-band in Table 2 where a genuine seam also scores 7–17**. The threshold separated
-the two populations on this band, but not because the statistic distinguishes
-them; at a given density it does not. That is the whole of #170.
+Those seven cells held 232–323 pairs at `ratio` 5–8. A **genuinely** misregistered
+cell of that pair count scores **65–80** in Table 2's model — so their peak bins
+held 5–8 pairs out of 232–323, about **2–3%**: no coherent same-star signal at
+all, which is what makes them false positives.
+
+Read the other way round, that is the more damning fact about the threshold.
+`FAIL_MIN_RATIO = 10` sits **an order of magnitude below** what a real seam of
+that density scores, i.e. down in the noise floor — which is why it was catching
+noise, and why raising it from 5 to 10 removed those seven without ever having
+distinguished them from a seam. A sparse cell's genuine seam scores 7 (Table 2,
+15 stars) and lands in the same place. The threshold separated the two
+populations on this band by luck of density, not because the statistic
+distinguishes them. That is the whole of #170.
 
 ## What would replace it
 
@@ -190,7 +207,7 @@ Two changes, both still unimplemented:
    365 / 179 / 45 cells of three synthetic seams injected into real data (a whole
    field, half a field, and a narrow declination band) against the raw count's
    273 / 127 / 29, and on **zero** cells across all ten real brick bands and all
-   six real cloudc bands.
+   five cloudc bands #179 tested (cloudc has eight band directories today).
 
    One measured constraint: the minimum patch has to be **3 cells, not 2**. Two
    of the seven brick false positives are edge-adjacent on the grid, so a 2-cell

@@ -1,9 +1,14 @@
 #!/usr/bin/env python
 """Why the registration seam check's confidence number depends on star density.
 
-Supports issue #170.  Prints two tables; there is no figure, because this
-repository keeps figures in the Overleaf astrometry-paper project rather than in
-the tree (`.gitignore:38-39`).
+Supports issue #170.  Prints two tables and writes the figure to
+``docs/reports/figures/registration_contrast_statistic.png``.
+
+(`.gitignore` carries a blanket `*.png`, but report figures in this repository
+are force-added -- ``docs/reports/apphot/`` and ``docs/evidence/`` hold 13 of
+them -- so the figure is committed with ``git add -f``, as those were.  An
+earlier version of this script cited the `.gitignore` line as a convention
+against committing it, which is not what the tree does for report figures.)
 
 GLOSSARY, since the issue this supports was filed in shorthand and could not be
 reviewed on those terms:
@@ -62,6 +67,11 @@ misregistered cell -- every star in it displaced by the same 90 mas -- scores
 7 when the cell holds 15 stars and 236 when it holds 400.  The fail bar is
 therefore crossed at a STAR DENSITY, not at a misregistration level.
 
+And it is crossed low: the seven brick cells that were a false failure read
+ratio 5-8 at 232-323 pairs, where a real seam of that density scores 65-80.
+Their peak bins held 2-3% of their pairs -- no coherent signal -- so the bar of
+10 sits in the noise floor rather than anywhere near a seam.
+
 MODELLING NOTE, because the first version of this script got it wrong.  A cell
 is modelled as N detections and their N truth counterparts in a 45-arcsec box;
 chance pairs then arise on their own from the other truth stars inside the search
@@ -76,8 +86,12 @@ Usage:
     python scripts/analysis/registration_contrast_statistic.py
 """
 import argparse
+import os
 
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 # The estimator's own geometry, copied from registration_failsafes.py so this
 # script measures what the release gate measures.
@@ -156,6 +170,8 @@ def sweep(counts, rng, trials, offset_mas=90.0, displaced_fraction=1.0):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--trials", type=int, default=25)
+    ap.add_argument("--out", default=os.path.join(
+        "docs", "reports", "figures", "registration_contrast_statistic.png"))
     args = ap.parse_args(argv)
     rng = np.random.default_rng(20260810)
     counts = [15, 20, 30, 45, 70, 110, 170, 260, 400]
@@ -184,8 +200,37 @@ def main(argv=None):
     print(f"\nSame seam throughout.  The own-catalog fail bar is "
           f"FAIL_MIN_RATIO = {FAIL_MIN_RATIO:.0f}, crossed between "
           f"{rows[0][0]} and {rows[2][0]} stars per cell.")
-    print("The seven brick F405N cells that were a FALSE failure in 2026-07 sat "
-          "at ratio 5-8\n(npairs 232-323), i.e. squarely in that same band.")
+    print("\nThe seven brick F405N cells that were a FALSE failure in 2026-07 read "
+          "ratio 5-8\nat npairs 232-323.  A genuinely misregistered cell of that "
+          "pair count scores ~65-80\nin the model above, so their peak bins held "
+          "5-8 pairs out of 232-323 -- about 2-3%,\nno coherent same-star signal "
+          "at all.  The fail bar of 10 sits down in that noise\nfloor, an order "
+          "of magnitude below what a real seam of the same density scores.")
+
+    stars = [r[0] for r in rows]
+    ratios = [r[3] for r in rows]
+    fig, ax = plt.subplots(figsize=(7.2, 4.8))
+    judged = [r[1] >= MIN_PAIRS and r[3] >= MIN_PEAK_RATIO for r in rows]
+    ax.plot(stars, ratios, "o-", color="#1b6ca8", zorder=3,
+            label="one 90 mas misregistration,\nevery star in the cell displaced")
+    ax.scatter([s for s, j in zip(stars, judged) if not j],
+               [r for r, j in zip(ratios, judged) if not j],
+               s=140, facecolors="none", edgecolors="#888", linewidths=1.6,
+               zorder=4, label=f"not judged at all (npairs < MIN_PAIRS = {MIN_PAIRS:.0f})")
+    ax.axhline(FAIL_MIN_RATIO, color="#c0392b", lw=1.5,
+               label=f"FAIL_MIN_RATIO = {FAIL_MIN_RATIO:.0f} (own-catalog)")
+    ax.scatter([None], [None])
+    ax.set_xscale("log"); ax.set_yscale("log")
+    ax.set_xlabel("stars in the grid cell")
+    ax.set_ylabel("ratio  =  peak bin count / median occupied bin\n(= the raw peak count, since the divisor is 1)")
+    ax.set_title("The same seam scores 7 in a sparse cell and 236 in a crowded one",
+                 fontsize=11)
+    ax.legend(fontsize=8, loc="upper left")
+    ax.grid(alpha=.25, which="both")
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+    fig.savefig(args.out, dpi=140)
+    print(f"\nwrote {args.out}")
     return 0
 
 
