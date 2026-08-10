@@ -567,7 +567,8 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
         # Dispersion, so a bimodal group is visible rather than pooling to a
         # meaningless middle with no trace.  Peak-to-peak of the 2-D residual
         # magnitudes; carried in `source` AND returned on the dict for the
-        # checkpoint record (`source` is truncated to 64 chars on write).
+        # checkpoint record (`source` is bounded at PROV_TEXT_MAX_CHARS on
+        # write, and the column is sized to fit whatever is written).
         mags = [float(np.hypot(c["dra_onsky_mas"], c["ddec_onsky_mas"]))
                 for c in members]
         spread = float(np.ptp(mags))
@@ -1037,6 +1038,181 @@ def _column_pairs(tbl):
             if d in tbl.colnames and c in tbl.colnames]
 
 
+#: Baseline width for an offsets table's free-text provenance columns.  A column
+#: is widened to whichever is larger, this or the longest value being written, so
+#: this is a floor and not a cap -- see ``_widen_prov_text_columns``.
+PROV_TEXT_MIN_CHARS = 64
+
+#: Bound on a single provenance value, so that a pathological input cannot make
+#: an offsets table's columns arbitrarily wide.  Reaching it is ANNOUNCED (see
+#: ``_prov_text``) rather than applied silently, because a silent cut here is
+#: the whole of issue #348.  Set well above anything the pipeline produces.
+#:
+#: This comment has now named FOUR different "longest string the pipeline can
+#: write" -- 102, 138, 114, then 70/71 -- and every one of them was wrong.  So it
+#: no longer states a figure.  What the longest string is MADE OF, which is
+#: checkable and does not go stale:
+#:
+#:     <stage> <base> [median of <k>, ptp <spread>mas: <detectors>]
+#:
+#:   stage      one of ``CORRECTION_STAGES`` -- currently m1, m2, m12, so up to
+#:              three characters.  (Assuming "m2" is what produced the 70/71.)
+#:   base       ``visit-consensus`` or ``consensus->reference``: those two
+#:              f-strings are the only sources any code at this head writes.
+#:   k          at most FOUR.  `_assert_poolable` refuses a group spanning
+#:              module families, so nrca* and nrcb* never pool together, and
+#:              `_match_rows` narrows on Filter so an SW+LW group cannot form.
+#:   spread     ``{spread:.2f}`` bounded by ``MAX_POOL_SPREAD_MAS`` (50 mas) --
+#:              but that limit is an operator knob, `ASTROM_MAX_POOL_SPREAD_MAS`,
+#:              so the field's width is NOT fixed by anything in this file.  This
+#:              alone means no exact maximum can be quoted here.
+#:
+#: `test_the_longest_form_the_pipeline_produces_survives` builds the longest form
+#: from those parts rather than from a literal, so it follows the code.
+#:
+#: The retracted figures, kept because each was retracted for a different reason
+#: and the pattern is the point:
+#:
+#:   102  claimed "median of 4" while listing two detectors.
+#:   138  listed eight detectors across both modules -- refused by
+#:        `_assert_poolable`.
+#:   114  put a pooled median on top of w51's 62-character
+#:        `m2 consensus->reference (cross-band tied-F210M, contrast>2900)`.
+#:        That base is real, and sits in three rows of w51's live table, but no
+#:        code at this head writes the parenthetical, and it belongs to the
+#:        per-visit BULK tie, which `pool_corrections_to_table_granularity`
+#:        passes through WITHOUT pooling -- so it can never take a pooled suffix.
+#:   70/71  measured with the stage token fixed at "m2", missing m12.
+#:
+#: 256 is a bound, not a fitted maximum, and that is the point of it.
+PROV_TEXT_MAX_CHARS = 256
+
+#: The free-text provenance columns, in the order they are created.
+PROV_TEXT_COLUMNS = ("prov_stage", "prov_date", "prov_source")
+
+
+def _prov_text(value):
+    """One provenance value, bounded at ``PROV_TEXT_MAX_CHARS`` and never quietly.
+
+    The column is sized to fit whatever this returns, so in normal operation
+    nothing is lost.  The bound exists only so a caller passing something absurd
+    cannot widen every row of a shared table; when it bites it says so, because
+    a provenance string cut without a word is exactly the defect this module is
+    fixing.
+    """
+    text = str(value)
+    if len(text) > PROV_TEXT_MAX_CHARS:
+        print(f"[offsets] WARNING: provenance value truncated at "
+              f"{PROV_TEXT_MAX_CHARS} characters (was {len(text)}): "
+              f"{text[:80]}...", flush=True)
+        return text[:PROV_TEXT_MAX_CHARS]
+    return text
+
+
+def _string_column_chars(col):
+    """Characters a numpy string column can hold, or None if it is not one.
+
+    An astropy column round-tripped from CSV is typed ``<U<n>`` where *n* is the
+    longest string that file happened to contain, so the capacity is a property
+    of the data already written rather than of the schema.
+
+    None means "not a fixed-width string column", which covers two cases that
+    both need widening rather than skipping: an object-dtype column (holds
+    Python strings, cannot truncate, but is worth normalising) and a NUMERIC
+    column -- a provenance column that is empty in every row of a CSV reads back
+    as ``int64``, and assigning text into that raises rather than truncating.
+    """
+    dtype = getattr(col, "dtype", None)
+    if dtype is None or dtype.kind not in ("U", "S"):
+        return None
+    return dtype.itemsize // 4 if dtype.kind == "U" else dtype.itemsize
+
+
+def _widen_prov_text_columns(tbl, chars=PROV_TEXT_MIN_CHARS):
+    """Widen the offsets table's free-text provenance columns in place.
+
+    Assigning a string longer than a numpy string column's width truncates it:
+    numpy keeps the leading characters and drops the rest.  astropy does emit a
+    ``StringTruncateWarning``, but it is one line in a log that carries
+    thousands, and nothing downstream can tell a truncated value from a short
+    one.  ``prov_source`` is the column this bites -- the source string the m2
+    checkpoint writes when it pools four detectors' corrections into one is 70
+    characters --
+
+        'm2 visit-consensus [median of 4, ptp 3.42mas: nrcb1,nrcb2,nrcb3,nrcb4]'
+
+    -- while six of the thirteen live offsets tables carry ``prov_source`` as
+    ``<U23``, because no row written into them so far has been longer than that.
+    What gets cut is the tail: the detector list, i.e. the part that says which
+    measurements the number came from.  The column whose only job is to record
+    what happened is then the one column that does not (issue #348).
+
+    ``chars`` is a FLOOR, and callers pass the length of what they are about to
+    write.  A fixed cap does not work here.  The 64 characters this originally
+    used is under the four-detector pooled form the pooler is built for -- a
+    string cloudc's live table already carries cut at 58 -- so it would have gone
+    on cutting the detector list in exactly the case that matters.  And no larger
+    fixed number works either: the spread field's width depends on
+    ``ASTROM_MAX_POOL_SPREAD_MAS``, an operator setting, so there is no maximum
+    this file can state.  See ``PROV_TEXT_MAX_CHARS``.
+
+    Uses ``Column.astype`` rather than ``np.asarray``.  ``np.asarray`` on a
+    ``MaskedColumn`` returns the underlying data and DISCARDS THE MASK, which
+    would rewrite every empty provenance cell to whatever astropy's CSV reader
+    left beneath it -- the literal string ``'0'``.  Six live tables carry these
+    columns masked, 754 rows between them, none of which this function has any
+    business touching.  ``astype`` preserves the mask, the column description
+    and its metadata.
+
+    Only ever grows a column, and is idempotent.
+
+    An object-dtype column is the one case where "widen" could SHRINK: it holds
+    Python strings of any length, so converting it to ``U<chars>`` would cut any
+    value already longer than ``chars`` -- silently, which is the defect this
+    function exists to prevent.  So the target width for an object column is
+    raised to the longest value it already holds, still bounded by
+    ``PROV_TEXT_MAX_CHARS`` and ANNOUNCED when that bites, so this branch cannot
+    be the one path by which a pathological value widens a table without limit.
+    ``None`` is skipped when measuring and would render as the literal ``'None'``
+    on conversion, so it is reported rather than fabricated into a provenance
+    value.  (A CSV round-trip never yields object dtype; this covers a table
+    built in memory.)
+    """
+    for col in PROV_TEXT_COLUMNS:
+        if col not in tbl.colnames:
+            continue
+        have = _string_column_chars(tbl[col])
+        if have is not None and have >= chars:
+            continue
+        width = chars
+        if getattr(tbl[col], "dtype", None) is not None and tbl[col].dtype.kind == "O":
+            values = list(tbl[col])
+            longest = max((len(str(v)) for v in values if v is not None),
+                          default=0)
+            if longest > PROV_TEXT_MAX_CHARS:
+                print(f"WARNING: {col} holds a {longest}-character value; "
+                      f"widening to the {PROV_TEXT_MAX_CHARS}-character bound "
+                      f"(PROV_TEXT_MAX_CHARS), so it WILL be truncated.",
+                      flush=True)
+            if any(v is None for v in values):
+                print(f"WARNING: {col} holds None in an unmasked object column; "
+                      f"it will be written as the literal string 'None'.",
+                      flush=True)
+            width = max(width, min(longest, PROV_TEXT_MAX_CHARS))
+        tbl[col] = tbl[col].astype(f"U{width}")
+
+
+def _prov_text_width(corrections, stage, now):
+    """How wide the provenance columns must be for this write, at minimum."""
+    # Measures, never announces: `_prov_text` prints when it has to cut, and
+    # this runs over the same values the apply loop is about to write, so
+    # announcing here would print every over-bound value twice.
+    lengths = [PROV_TEXT_MIN_CHARS, len(str(stage)), len(str(now))]
+    for corr in corrections:
+        lengths.append(len(str(corr.get("source", ""))))
+    return min(max(lengths), PROV_TEXT_MAX_CHARS)
+
+
 #: How closely ``(arcsec) - plain`` must match the accumulated ``prov_*`` for the
 #: divergence to count as EXPLAINED.  What this absorbs is float round-trip
 #: through CSV, nothing physical: measured across all ten live locked tables the
@@ -1265,9 +1441,13 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
         if not pairs:
             raise OffsetsTableUpdateError(
                 f"{offsets_path} has no dra/ddec columns ({tbl.colnames})")
+        now = _utcnow_iso()
         for col, fill in (("prov_stage", ""), ("prov_date", ""), ("prov_source", "")):
             if col not in tbl.colnames:
-                tbl[col] = np.full(len(tbl), fill, dtype="U64")
+                tbl[col] = np.full(len(tbl), fill,
+                                   dtype=f"U{PROV_TEXT_MIN_CHARS}")
+        # Sized to what THIS write puts in them, floored at the baseline.
+        _widen_prov_text_columns(tbl, _prov_text_width(corrections, stage, now))
         for col in ("prov_dra_added_mas", "prov_ddec_added_mas"):
             if col not in tbl.colnames:
                 tbl[col] = np.zeros(len(tbl))
@@ -1281,7 +1461,6 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
                 if tbl[_col].dtype.kind != "f":
                     tbl[_col] = np.asarray(tbl[_col], dtype=float)
 
-        now = _utcnow_iso()
         # Re-sync the duplicate columns on the rows these corrections will touch,
         # BEFORE applying anything -- adding the same increment to both pairs
         # preserves an existing gap rather than closing it.  Scoped to touched
@@ -1351,15 +1530,16 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
             for _dc, _cc in _column_pairs(tbl):
                 tbl[_dc][idx] = np.asarray(tbl[_dc][idx], dtype=float) + dra_add
                 tbl[_cc][idx] = np.asarray(tbl[_cc][idx], dtype=float) + ddec_add
-            tbl["prov_stage"][idx] = str(stage)
-            tbl["prov_date"][idx] = now
+            tbl["prov_stage"][idx] = _prov_text(stage)
+            tbl["prov_date"][idx] = _prov_text(now)
             tbl["prov_dra_added_mas"][idx] = (
                 np.asarray(tbl["prov_dra_added_mas"][idx], dtype=float)
                 + float(corr["dra_onsky_mas"]))
             tbl["prov_ddec_added_mas"][idx] = (
                 np.asarray(tbl["prov_ddec_added_mas"][idx], dtype=float)
                 + float(corr["ddec_onsky_mas"]))
-            tbl["prov_source"][idx] = str(corr.get("source", "astrometry_checkpoint"))[:64]
+            tbl["prov_source"][idx] = _prov_text(
+                corr.get("source", "astrometry_checkpoint"))
 
         # CUMULATIVE drift bound.  The per-correction ceiling cannot see creep that
         # accumulates across successive calls -- five legal 0.4" corrections over
@@ -1661,9 +1841,10 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
                                              + float(corr["dra_onsky_mas"]))
                 row["prov_ddec_added_mas"] = (float(row.get("prov_ddec_added_mas", 0.0))
                                               + float(corr["ddec_onsky_mas"]))
-                row["prov_stage"] = str(stage)
-                row["prov_date"] = now
-                row["prov_source"] = str(corr.get("source", "m2 visit-consensus"))[:64]
+                row["prov_stage"] = _prov_text(stage)
+                row["prov_date"] = _prov_text(now)
+                row["prov_source"] = _prov_text(
+                    corr.get("source", "m2 visit-consensus"))
                 # REFRESH the genlock base stamp on upsert: the cumulative row's shift
                 # is applied to THIS iteration's crf generation, so the base must track
                 # it.  Keeping the first iteration's stamp would make the genlock guard
@@ -1679,10 +1860,12 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
                     "Filter": corr["filtername"], "Module": module, "Visit": visit_tok,
                     "Exposure": exposure, "Vgroup": vgroup,
                     "dra (arcsec)": dra_add, "ddec (arcsec)": ddec_add,
-                    "prov_stage": str(stage), "prov_date": now,
+                    "prov_stage": _prov_text(stage),
+                    "prov_date": _prov_text(now),
                     "prov_dra_added_mas": float(corr["dra_onsky_mas"]),
                     "prov_ddec_added_mas": float(corr["ddec_onsky_mas"]),
-                    "prov_source": str(corr.get("source", "m2 visit-consensus seed"))[:64],
+                    "prov_source": _prov_text(
+                        corr.get("source", "m2 visit-consensus seed")),
                 }
                 if base_stamp_for is not None:
                     stamp = base_stamp_for.get(

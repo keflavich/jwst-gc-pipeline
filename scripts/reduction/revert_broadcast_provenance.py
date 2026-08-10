@@ -81,6 +81,9 @@ import sys
 from datetime import datetime, timezone
 
 import numpy as np
+
+from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+    PROV_TEXT_MIN_CHARS, _widen_prov_text_columns)
 from astropy.table import Table
 
 from jwst_gc_pipeline.atomic_io import locked, write_table_atomic
@@ -179,16 +182,26 @@ def revert(path, apply=False):
                 tbl[c] = col
         # Say a revert happened.  Clearing prov_* without saying so would leave
         # the table looking as though it had never been corrected at all.
-        if "prov_stage" in tbl.colnames:
-            tbl["prov_stage"] = tbl["prov_stage"].astype("U32")
-            tbl["prov_stage"][idx] = "revert"
-        if "prov_source" in tbl.colnames:
-            tbl["prov_source"] = tbl["prov_source"].astype("U64")
-            tbl["prov_source"][idx] = "revert_broadcast_provenance"
-        if "prov_date" in tbl.colnames:
-            tbl["prov_date"] = tbl["prov_date"].astype("U32")
-            tbl["prov_date"][idx] = datetime.now(timezone.utc).strftime(
-                "%Y-%m-%dT%H:%M:%SZ")
+        # Widen through the shared helper rather than to a hardcoded width.
+        # A literal `astype("U64")` here was not merely redundant: it NARROWED
+        # any column already wider than 64.  w51's live table carries a
+        # 62-character source and cloudc a 70-character pooled one, and the
+        # widest form the checkpoint can write is longer than both -- see
+        # PROV_TEXT_MAX_CHARS, which no longer quotes a figure because the
+        # spread field's width depends on an operator setting.  A U64 write
+        # leaves 'm12 visit-consensus [median of 4, ptp 49.99mas: nrcb1,nrcb' of
+        # it: silent truncation, on live tables, from the script whose job is to
+        # repair provenance.  Not hypothetical: gc2211's table carries 240 rows
+        # written by this script, and its `prov_source` is `<U27`.
+        _stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        _values = {"prov_stage": "revert",
+                   "prov_source": "revert_broadcast_provenance",
+                   "prov_date": _stamp}
+        _widen_prov_text_columns(
+            tbl, max([PROV_TEXT_MIN_CHARS] + [len(v) for v in _values.values()]))
+        for _col, _val in _values.items():
+            if _col in tbl.colnames:
+                tbl[_col][idx] = _val
         write_table_atomic(tbl, path, format="ascii.csv")
 
     # Re-read and verify rather than trusting the write: this edits the file the
