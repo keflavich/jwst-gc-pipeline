@@ -1,0 +1,115 @@
+name: merged-tree
+
+# Re-test every open pull request against the CURRENT main.
+#
+# The per-pull-request `tests` workflow already runs on a MERGED tree --
+# actions/checkout resolves refs/pull/<n>/merge, which is the branch merged into
+# main -- so the merged tree is not the gap.  Staleness is: that run happens when
+# the branch is pushed and does not repeat when main moves, so a green check can
+# describe a merge with a main that no longer exists.  Measured 2026-08-10, the
+# two oldest open pull requests carried green checks computed against a main 659
+# and 665 commits behind, and this repository has no branch protection requiring
+# a branch to be current before it merges.
+#
+# So this runs when main MOVES (and weekly, and on demand), which is exactly
+# when a green check somewhere else stops being true.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Monday 06:00 UTC -- catches a branch that went stale during a quiet week
+    # with no merges to main.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'Cap how many pull requests are tested (blank = all)'
+        required: false
+        default: ''
+
+concurrency:
+  # One at a time: a burst of merges to main would otherwise start several
+  # multi-hour matrices that all reach the same answer.
+  group: merged-tree
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  each-pull-request:
+    name: each open PR merged with main
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: the script merges each pull request's head onto this
+          # checkout, which a shallow clone cannot do.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install package + test deps
+        env:
+          # Same reason as the `tests` workflow: the repository's tag style is
+          # unparseable by setuptools_scm, and it must be package-scoped so it
+          # does not leak into other scm-built sdists in the same pip run.
+          SETUPTOOLS_SCM_PRETEND_VERSION_FOR_JWST_GC_PIPELINE: 0.0.dev0
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[test]
+
+      - name: Test each open pull request against this main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # saturated_star_finding refuses to import without STPSF_PATH; the
+          # unit tests never compute a PSF, so an empty directory satisfies it.
+          STPSF_PATH: ${{ runner.temp }}/stpsf-data
+          WEBBPSF_PATH: ${{ runner.temp }}/stpsf-data
+          MPLBACKEND: Agg
+        run: |
+          mkdir -p "$STPSF_PATH"
+          LIMIT_ARG=""
+          if [ -n "${{ github.event.inputs.limit }}" ]; then
+            LIMIT_ARG="--limit ${{ github.event.inputs.limit }}"
+          fi
+          python scripts/ci/merged_tree_check.py $LIMIT_ARG \
+            --output "$GITHUB_STEP_SUMMARY"
+
+  all-together:
+    name: every open PR merged together
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install package + test deps
+        env:
+          SETUPTOOLS_SCM_PRETEND_VERSION_FOR_JWST_GC_PIPELINE: 0.0.dev0
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[test]
+
+      - name: Merge every open pull request onto main and run the suite once
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STPSF_PATH: ${{ runner.temp }}/stpsf-data
+          WEBBPSF_PATH: ${{ runner.temp }}/stpsf-data
+          MPLBACKEND: Agg
+        run: |
+          mkdir -p "$STPSF_PATH"
+          python scripts/ci/merged_tree_check.py --all-together \
+            --output "$GITHUB_STEP_SUMMARY"
