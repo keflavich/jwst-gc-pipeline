@@ -93,11 +93,11 @@ def test_rule_2_does_not_widen_rule_1(tmp_path):
     """Adding the generation rule must not change which NAMED files are taken.
 
     Rule 1 judges against the band's ``*-merged_data_i2d.fits`` and skips the
-    band when there is none.  Rule 2's reference (the newest primary mosaic)
-    exists in far more band directories, so sharing it would silently promote
-    every previously-skipped rule-1 candidate into a rename -- measured
-    archive-wide as 55 files becoming 229.  That is a separate decision about
-    178 files, and this test is what stops it happening by accident.
+    band when there is none.  Rule 2's reference exists in far more band
+    directories, so letting rule 1 borrow it would silently promote every
+    previously-skipped rule-1 candidate into a rename -- measured archive-wide
+    as 55 files becoming over 200.  That is a separate decision about a much
+    larger set, and this test is what stops it happening by accident.
     """
     m = _load('rename_stale_mosaics')
     m.BASE = str(tmp_path)
@@ -115,8 +115,9 @@ def test_a_second_pointing_in_the_same_band_is_not_superseded(tmp_path):
 
     ngc6334's ``F200W/pipeline`` holds proposals 6778 and 7213 side by side and
     sickle's ``F1130W/pipeline`` holds observations o001/o002/o003 of 3958.  A
-    pointing reduced three weeks before its neighbour is current, not
-    superseded; without the pointing scoping this fired on nine live products.
+    pointing reduced weeks before its neighbour is current, not superseded;
+    against the archive this fired on nine live products before the key
+    distinguished pointings.
     """
     m = _load('rename_stale_mosaics')
     m.BASE = str(tmp_path)
@@ -125,6 +126,97 @@ def test_a_second_pointing_in_the_same_band_is_not_superseded(tmp_path):
     older = _age(pipe / 'jw07213-o001_t001_nircam_clear-f200w-merged_i2d.fits', 60)
     assert m.rename_stale_for_field('myfield', execute=True) == []
     assert newer.exists() and older.exists()
+
+
+def test_a_merged_mosaic_is_not_ranked_against_its_per_module_siblings(tmp_path):
+    """wd1's real geometry, and the reason this script nearly deleted 5.1 GB.
+
+    A merged drizzle routinely runs later in a campaign than the per-module
+    ones, so the merged mosaic ends up the OLDEST primary product of its band
+    while being the band's headline deliverable.  On wd1 F200W the gap is 18
+    days (merged 2026-06-13, nrca/nrcb 2026-07-01), and an earlier version of
+    this rule -- which ranked a product against every primary mosaic of its
+    band and pointing -- put it three days from quarantine.
+
+    A merged mosaic must only ever be compared against other merged mosaics.
+    """
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    pipe = _band_dir(tmp_path, band='F200W')
+    merged = _age(pipe / 'jw01905-o001_t001_nircam_clear-f200w-merged_i2d.fits', 18)
+    nrca = _age(pipe / 'jw01905-o001_t001_nircam_clear-f200w-nrca_i2d.fits', 0)
+    nrcb = _age(pipe / 'jw01905-o001_t001_nircam_clear-f200w-nrcb_i2d.fits', 0)
+    # even with the campaign floor pulled right up under the merged product
+    assert m.rename_stale_for_field('myfield', execute=True,
+                                    campaign_days=3) == []
+    for p in (merged, nrca, nrcb):
+        assert p.exists(), p.name
+
+
+def test_a_product_merely_older_than_the_campaign_is_not_an_orphan(tmp_path):
+    """The age guard, on its own.
+
+    A product of a family that is no longer written, but only weeks old, is a
+    band that finished early -- not an orphan of a retired reduction.  Only the
+    year-scale gap distinguishes the two, and the margin is ~50x either way.
+    """
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    pipe = _band_dir(tmp_path, band='F405N')
+    _age(pipe / 'jw02221-o002_t001_nircam_clear-f405n-merged_i2d.fits', 0)
+    recent = _age(pipe / 'jw02221-o002_t001_nircam_f405n-f444w_i2d.fits', 60)
+    assert m.rename_stale_for_field('myfield', execute=True,
+                                    campaign_days=3) == []
+    assert recent.exists()
+
+
+def test_a_quarantined_file_is_never_overwritten(tmp_path):
+    """`os.rename` replaces its destination silently.
+
+    A product regenerated under a name that was already quarantined would, on
+    the next run, destroy the quarantined bytes -- of a tool whose whole premise
+    is that it is reversible and the file is kept.  Same guard and same
+    reasoning as `quarantine_pre_obstoken_catalogs.py`.
+    """
+    m = _load('rename_stale_mosaics')
+    m.BASE = str(tmp_path)
+    pipe = _band_dir(tmp_path, band='F405N')
+    _age(pipe / 'jw02221-o002_t001_nircam_clear-f405n-merged_i2d.fits', 0)
+    orphan = pipe / 'jw02221-o002_t001_nircam_f405n-f444w_i2d.fits'
+    _age(orphan, 1100)
+    orphan.write_bytes(b'GENERATION-1')
+    os.utime(orphan, (time.time() - 1100 * 86400,) * 2)
+    m.rename_stale_for_field('myfield', execute=True)
+    assert (pipe / (orphan.name + m.SUFFIX)).read_bytes() == b'GENERATION-1'
+
+    # the product comes back under the same name, and is quarantined again
+    orphan.write_bytes(b'GENERATION-2')
+    os.utime(orphan, (time.time() - 1100 * 86400,) * 2)
+    m.rename_stale_for_field('myfield', execute=True)
+    assert (pipe / (orphan.name + m.SUFFIX)).read_bytes() == b'GENERATION-1', \
+        'the first quarantine was destroyed'
+    assert orphan.exists(), 'the second copy should be left in place, not lost'
+
+
+def test_a_fits_date_is_read_as_utc(tmp_path):
+    """FITS `DATE` is UTC; reading it as local time skews every comparison.
+
+    Below the day-scale thresholds here, but it is a 4-5 hour systematic that
+    is not even constant across a daylight-saving boundary, sitting between two
+    generations measured on different clocks.
+    """
+    pytest.importorskip('astropy')
+    from astropy.io import fits
+    m = _load('rename_stale_mosaics')
+    p = tmp_path / 'x.fits'
+    hdu = fits.PrimaryHDU()
+    hdu.header['DATE'] = '2023-07-11T12:00:00'
+    hdu.writeto(p)
+    import calendar
+    expect = calendar.timegm(time.strptime('2023-07-11T12:00:00',
+                                           '%Y-%m-%dT%H:%M:%S'))
+    assert m.date_header(str(p)) == expect
+    assert m.generation(str(p)) == (expect, 'DATE')
 
 
 def test_the_orphans_reason_is_recorded_beside_it(tmp_path):
@@ -138,7 +230,7 @@ def test_the_orphans_reason_is_recorded_beside_it(tmp_path):
     note = str(orphan) + m.SUFFIX + '.why.txt'
     assert os.path.exists(note)
     text = open(note).read()
-    assert 'superseded generation' in text
+    assert 'retired product family' in text
     assert m.SUFFIX in text                              # says how to undo it
 
 

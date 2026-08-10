@@ -19,54 +19,71 @@ repo-root ``_stale_rename.py``: 192 renamed, log
 ``merged-reproject-vvv_i2d`` -- the canonical known-bad 2023 brick files --
 because its globs were narrower than these.)
 
-RULE 2 -- BY GENERATION.  A superseded mosaic need not say so in its name.
-cloudc carries
+RULE 2 -- BY RETIRED PRODUCT FAMILY.  A superseded mosaic need not say so in
+its name.  cloudc carries
 
     F405N/pipeline/jw02221-o002_t001_nircam_f405n-f444w_i2d.fits   2023-07-11
 
-which is a 2023 artifact of a reduction that paired F405N against F444W as its
-continuum -- F444W is not a cloudc filter and no F444W frame exists on disk to
-have built it from -- and it ties to VIRAC2 **4.1 arcsec** out of place, where
-every current-generation cloudc mosaic ties at 32-33 mas.  Nothing about its
-NAME distinguishes it from a live product: it carries the canonical level-3
-form ``jw<prop>-o<obs>_t<NNN>_<instrument>_<band>_i2d.fits``, so rule 1 does not
-see it and a ``*_i2d.fits`` glob does (issue #339).
+a 2023 artifact of a reduction that paired F405N against F444W as its continuum
+-- F444W is not a cloudc filter and no F444W exposure exists on disk to have
+built it from -- and it ties to VIRAC2 (the VVV-based near-infrared reference
+catalogue used for these fields) **4.1 arcsec** out of place, where every
+current cloudc mosaic ties at 32-33 mas.  Nothing about its NAME distinguishes
+it from a live product: it carries the canonical level-3 form
+``jw<prop>-o<obs>_t<NNN>_<instrument>_<band>-<module>_i2d.fits``, so rule 1 does
+not see it and a ``*_i2d.fits`` glob does (issue #339).
 
-Rule 2 therefore compares a mosaic's GENERATION against its own band AND
-pointing's current
-one.  Scope is deliberately narrow -- only the primary drizzle products
+The question rule 2 asks is NOT "is this older than its neighbours" -- that is
+the version that nearly deleted live data, see below.  It is **is this KIND of
+product still being made**:
+
+  * no member of the file's own (band, pointing, product) family is newer than
+    the reduction-campaign floor = (the field's newest primary mosaic) - 21 days
+    -- i.e. the current generation does not produce this product at all; AND
+  * the file is more than MIN_ORPHAN_AGE_DAYS (365) older than the field's
+    newest primary mosaic.
+
+"pointing" is the ``jw<proposal>-o<observation>`` prefix; "product" is the band
+and module token, ``clear-f200w-merged`` / ``clear-f200w-nrca`` / the pupil-pair
+form ``f405n-f444w``.  Both belong in the key, and the second one is the one
+that matters most:
+
+  * BY PRODUCT.  A merged mosaic and its two per-module mosaics are three
+    distinct live deliverables, and the merged drizzle routinely runs later in a
+    campaign than the per-module ones -- so the merged mosaic ends up the OLDEST
+    primary product of its band while being the band's headline deliverable.
+    wd1's F200W merged mosaic (2026-06-13, 5.1 GB) sits 18 days behind its own
+    nrca/nrcb siblings (2026-07-01).  An earlier version of this rule, which
+    ranked a product against every primary mosaic of its band and pointing, put
+    that file THREE DAYS from being quarantined, and would have taken
+    cloudef's and quintuplet's per-module mosaics with it.
+  * BY POINTING.  Several pointings share a band directory and are reduced weeks
+    apart without any being superseded: ngc6334 keeps proposals 6778 and 7213 in
+    one F200W directory, sickle keeps observations o001/o002/o003 in one F1130W
+    directory.  Ignoring the pointing flagged nine live products.
+
+The 365-day age guard is what separates a retired family from a live one that
+merely finished early, and the separation is not a tuned number: the real
+orphans are three YEARS behind their field's current generation, and the largest
+gap between two live products of one field is 18 DAYS.  Two orders of magnitude
+of margin on one side, fifty times on the other.
+
+Scope is narrow by construction -- only the primary drizzle products
 (``PRIMARY_MOSAIC_RE``), never the per-exposure ``_outlier_i2d`` intermediates
-(171-188 of them per cloudc band) and never the photometry byproducts
+(72-176 of them per cloudc band) and never the photometry byproducts
 (``_data_i2d``, ``*mergedcat*``).
 
 Each rule keeps its OWN reference and campaign floor, so adding rule 2 leaves
-rule 1's selection bit-identical: measured archive-wide over 14 fields, 55 files
-before and 55 after, plus rule 2's 4.
+rule 1's selection bit-identical: measured over all 17 fields with a
+``*/pipeline`` directory, 55 files before and 55 after, plus rule 2's 8.  The
+two rules are evaluated INDEPENDENTLY and their results unioned; letting rule 1
+claim a file it then skips for want of its own reference hid files that rule 2
+selects.
 
-SUPERSEDED (rule 2) = BOTH of:
-  * older by > 1 day than the newest primary mosaic of its own BAND AND
-    POINTING, where the pointing is the ``jw<proposal>-o<observation>`` prefix
-    (so same-run products made hours apart are never flagged), AND
-  * older than the field's reduction-campaign floor = (newest primary mosaic
-    across all bands and pointings) - 21 days (so a whole in-progress campaign
-    is never flagged just because one band finished later).
-
-Both conditions are required and neither is redundant.  cloudc's F2550W band
-holds one MIRI mosaic dated 2026-06-11 against a field campaign of 2026-08-09:
-59 days below the campaign floor, and correctly kept, because it is its own
-band's newest.  Conversely the F405N orphan is 3 years below both.
-
-Scoping the comparison to the POINTING is what keeps the rule from firing on a
-band directory that legitimately holds several: without it, an archive-wide dry
-run flagged six live ngc6334 products (F200W and F470N, where proposals 6778 and
-7213 share a directory) and three live sickle MIRI ones (F770W/F1130W/F1500W,
-where observations o001/o002/o003 sit together).  All nine are current products
-of a pointing that was simply reduced earlier than its neighbour.
-
-A whole pointing that is genuinely stale is therefore NOT caught -- each of its
-mosaics is its own pointing's newest.  That is the same conservative gap as the
-single-mosaic case below, and it is what ``check_generation_span`` and the
-release freshness gate look at instead.
+Known limitation, stated so it is not mistaken for coverage: rule 2 cannot see a
+whole POINTING that is stale, because every one of its mosaics is then its own
+family's newest.  That is the conservative direction, and it is what
+``check_generation_span`` and the release freshness gate look at instead.
 
 Generation is read from the FITS ``DATE`` header -- the time the pipeline wrote
 the product -- falling back to mtime when the header cannot be read.  mtime
@@ -89,6 +106,7 @@ Dry-run by default; --execute renames and appends to
 ``<fieldpath>/_stale_rename_<date>.log``.
 """
 import argparse
+import calendar
 import glob
 import os
 import re
@@ -107,10 +125,23 @@ PATTERNS = ('*reproject*i2d*.fits', '*realigned-to-*.fits',
 #: construction the per-exposure ``jw02221002001_02201_00001_nrcalong_*_i2d``
 #: intermediates (no ``-o<obs>_t<NNN>_`` infix) and every photometry byproduct
 #: (``_data_i2d``, ``*_m<N>_daophot_*_mergedcat_*_i2d``), which carry extra
-#: tokens after the band.  Matching those would quarantine hundreds of live
+#: tokens after the band.  Matching those would quarantine 72-176 live
 #: intermediate products per band.
 PRIMARY_MOSAIC_RE = re.compile(
-    r'^(?P<pointing>jw\d+-o\d+)_t\d+_[a-z]+_[a-z0-9-]+_i2d\.fits$')
+    r'^(?P<pointing>jw\d+-o\d+)_t\d+_[a-z]+_(?P<product>[a-z0-9-]+)_i2d\.fits$')
+
+#: How much older than the field's current generation a mosaic must be before it
+#: counts as an orphan of a retired reduction rather than a product that was
+#: simply written earlier in the same campaign.
+#:
+#: This is the guard that keeps the rule off live data, and the separation it
+#: exploits is enormous.  The four real orphans are 2023 products in fields whose
+#: current generation is 2026 -- three YEARS.  The largest gap between two live
+#: products of one field is wd1's, whose merged F200W mosaic (2026-06-13) sits 18
+#: DAYS behind its own per-module siblings (2026-07-01) because the merged drizzle
+#: ran later in that campaign.  A year sits two orders of magnitude clear of the
+#: live case and fifty times under the orphan case, so it is not a tuned number.
+MIN_ORPHAN_AGE_DAYS = 365
 
 #: Renaming to this suffix takes the file out of every ``*.fits`` glob, which is
 #: the protection that matters: no reader selects it by accident any more.  It
@@ -120,10 +151,17 @@ PRIMARY_MOSAIC_RE = re.compile(
 SUFFIX = '.bad'
 
 #: Already-quarantined files, under this or any earlier convention, are skipped
-#: rather than renamed again.  ``_badastrometry_stale`` is what this script
-#: wrote before 2026-08 and what the 192 brick files from the 2026-07-03 pass
-#: still carry; ``release_freshness`` looks for both.
+#: rather than renamed again.  Counted on disk 2026-08-10: ``*_stale`` 2504
+#: (what the 2026-07-03 brick pass wrote -- "EXECUTE -- 192 stale, 29 kept"),
+#: ``*_badastrometry_stale`` 327, ``*.bad`` 0.  ``release_freshness`` recognises
+#: the last two but NOT the bare ``_stale``; that gap is real and is reported on
+#: #339 rather than fixed here, since closing it would reclassify 2504 files in
+#: every release listing.
 QUARANTINE_SUFFIXES = (SUFFIX, '_badastrometry_stale', '_stale')
+if any(s.endswith('.fits') for s in QUARANTINE_SUFFIXES):      # pragma: no cover
+    raise RuntimeError(
+        "a quarantine suffix that leaves the name ending in '.fits' would let "
+        "the file back into every glob this script exists to remove it from")
 
 
 def mt(p):
@@ -155,7 +193,6 @@ def is_quarantined(basename):
     instead of after it fails here loudly instead of silently re-entering the
     candidate set.
     """
-    assert all(not s.endswith('.fits') for s in QUARANTINE_SUFFIXES)
     return not basename.endswith('.fits')
 
 
@@ -175,8 +212,12 @@ def date_header(path):
         return None
     if not value:
         return None
+    # FITS DATE is UTC.  `time.mktime` would read it as LOCAL time, putting a
+    # 4-5 hour zone offset (and a DST discontinuity) between a DATE-derived
+    # generation and an mtime-derived one.  `calendar.timegm` is the UTC inverse.
     try:
-        return time.mktime(time.strptime(str(value)[:19], '%Y-%m-%dT%H:%M:%S'))
+        return calendar.timegm(time.strptime(str(value)[:19],
+                                             '%Y-%m-%dT%H:%M:%S'))
     except ValueError:
         return None
 
@@ -195,11 +236,27 @@ def generation(path):
     return mt(path), 'mtime'
 
 
-def pointing_of(basename):
-    """``jw<proposal>-o<observation>`` for a primary mosaic, else None.
+def product_key(basename):
+    """``(pointing, product)`` for a primary mosaic, else None.
 
-    One band directory routinely holds mosaics of SEVERAL pointings, and they
-    are reduced at different times without any of them being superseded:
+    ``pointing`` is ``jw<proposal>-o<observation>``; ``product`` is the band and
+    module token, e.g. ``clear-f200w-merged``, ``clear-f200w-nrca``, or the
+    pupil-pair form ``f405n-f444w``.  BOTH are needed to decide what a product's
+    own generation is, and getting this wrong is the way this script destroys
+    live data.
+
+    One band directory routinely holds SEVERAL live primary mosaics, and they are
+    written at different times without any of them being superseded.
+
+    By product: the merged mosaic and the two per-module ones are three distinct
+    deliverables, and the merged drizzle often runs later in a campaign than the
+    per-module ones.  wd1's F200W merged mosaic is 18 days older than its own
+    nrca/nrcb siblings, and it is the 5.1 GB primary deliverable of that band.
+    Ranking it against them -- which an earlier version of this did -- put it
+    three days away from being quarantined.
+
+    By pointing: several pointings share a band directory and are reduced at
+    different times without any of them being superseded:
     sickle's ``F1130W/pipeline`` carries observations o001, o002 and o003 of
     proposal 3958, and ngc6334's ``F200W/pipeline`` carries proposals 6778 and
     7213 side by side (they share a target directory and a filter list).
@@ -209,7 +266,7 @@ def pointing_of(basename):
     this scoping was added.
     """
     m = PRIMARY_MOSAIC_RE.match(basename)
-    return m.group('pointing') if m else None
+    return (m.group('pointing'), m.group('product')) if m else None
 
 
 def primary_mosaics(banddir):
@@ -235,7 +292,9 @@ def rename_stale_for_field(field, execute=False, campaign_days=21):
     # `*-merged_data_i2d.fits` currently SKIPS its candidates rather than
     # judging them.  That may well be worth doing, but it is a separate decision
     # about 178 files and does not belong in a fix for one orphan (#339).
-    dref1, dref2, band_of_dir = {}, {}, {}
+    dref1, band_of_dir = {}, {}
+    fam_newest = {}          # (band, pointing, product) -> newest generation
+    field_newest = None      # the field's current generation, any primary mosaic
     for d in banddirs:
         band = os.path.basename(d.rsplit('/pipeline', 1)[0]).lower()
         band_of_dir[d] = band
@@ -243,61 +302,80 @@ def rename_stale_for_field(field, execute=False, campaign_days=21):
              if 'nrca' not in os.path.basename(x)
              and 'nrcb' not in os.path.basename(x)]
         dref1[band] = max((mt(x) for x in g), default=None)
-        # Rule 2's reference: the newest primary mosaic of the SAME BAND AND
-        # POINTING.  It cannot key on `*-merged_data_i2d.fits` -- that product
-        # is absent in twelve field/band combinations (issue #256), and cloudc
-        # F405N, which holds this issue's 4.1" orphan, is one of them.  Keying
-        # on a product missing exactly where the orphan lives is why the orphan
-        # was reported `[no-data_i2d]` and skipped instead of flagged.
         for p in primary_mosaics(d):
             gen = generation(p)[0]
             if gen is None:
                 continue
-            key = (band, pointing_of(os.path.basename(p)))
-            dref2[key] = max(gen, dref2.get(key, gen))
-    # The campaign floor stays on rule 1's clock so rule 1 is unchanged; rule 2
-    # gets its own from the primary mosaics, for the same reason as above.
+            key = (band,) + product_key(os.path.basename(p))
+            fam_newest[key] = max(gen, fam_newest.get(key, gen))
+            field_newest = gen if field_newest is None else max(field_newest, gen)
     campaign1 = max((v for v in dref1.values() if v), default=None)
     campaign1 = (campaign1 - campaign_days * DAY) if campaign1 else None
-    campaign2 = max((v for v in dref2.values() if v), default=None)
-    campaign2 = (campaign2 - campaign_days * DAY) if campaign2 else None
+    campaign2 = (field_newest - campaign_days * DAY) if field_newest else None
 
     # RULE 1: named retired-alignment products, anywhere in the band directory.
-    cands = {}
+    named, generational = {}, {}
     for d in banddirs:
         for pat in PATTERNS:
             for p in glob.glob(f'{d}/{pat}'):
-                cands.setdefault(p, 'retired-path name')
-    # RULE 2: primary mosaics older than their own pointing's current generation.
+                named[p] = 'retired-path name'
+    # RULE 2: a primary mosaic belonging to a RETIRED PRODUCT FAMILY.
+    #
+    # Not "older than its siblings" -- that is what put wd1's 5.1 GB merged
+    # F200W mosaic three days from deletion, because a merged drizzle routinely
+    # runs later in a campaign than the per-module ones it is compared against.
+    # The question is instead whether this KIND of product is still being made:
+    #
+    #   (a) no member of its own (band, pointing, product) family is newer than
+    #       the campaign floor -- the current generation does not produce it; AND
+    #   (b) it is more than MIN_ORPHAN_AGE_DAYS older than the field's newest
+    #       primary mosaic.
+    #
+    # (b) is what separates a retired family from a live one that happens to sit
+    # just under the floor.  See MIN_ORPHAN_AGE_DAYS for the margin.
     for d in banddirs:
+        band = band_of_dir[d]
         for p in primary_mosaics(d):
-            cands.setdefault(p, 'superseded generation')
+            gen = generation(p)[0]
+            key = (band,) + product_key(os.path.basename(p))
+            if gen is None or field_newest is None:
+                continue
+            family_live = campaign2 is None or fam_newest.get(key, 0) >= campaign2
+            old_enough = gen < field_newest - MIN_ORPHAN_AGE_DAYS * DAY
+            if not family_live and old_enough:
+                generational[p] = 'retired product family'
 
-    plan, kept = [], 0
-    for f, why in sorted(cands.items()):
-        base = os.path.basename(f)
-        if is_quarantined(base):
-            continue
-        # the directory is authoritative for which band's reference applies;
-        # the name is the fallback for a product filed somewhere unexpected
-        band = band_of_dir.get(os.path.dirname(f)) or band_of(base)
-        if why == 'retired-path name':
-            ref, campaign, clock = dref1.get(band), campaign1, 'mtime'
-            fm = mt(f)
-            missing = 'no-data_i2d'
-        else:
-            pointing = pointing_of(base)
-            ref, campaign = dref2.get((band, pointing)), campaign2
-            fm, clock = generation(f)
-            missing = 'no-reference-mosaic'
-        if band is None or ref is None or fm is None:
-            print(f"  SKIP [{field}] {base} "
-                  f"[{'no-band' if band is None else missing}]")
-            continue
-        if fm < ref - DAY and (campaign is None or fm < campaign):
-            plan.append((f, fm, ref, why, clock))
-        else:
-            kept += 1
+    # The two rules are evaluated INDEPENDENTLY and unioned, not first-wins.
+    # Letting rule 1 claim a file it then skips for want of its own reference
+    # hid 12 files that rule 2 selects -- ngc6334's and w51's
+    # `*-merged-reproject_i2d.fits`, which are both named AND orphaned.
+    plan, kept, seen = [], 0, set()
+    for cands, which in ((named, 1), (generational, 2)):
+        for f, why in sorted(cands.items()):
+            base = os.path.basename(f)
+            if is_quarantined(base) or f in seen:
+                continue
+            band = band_of_dir.get(os.path.dirname(f)) or band_of(base)
+            if which == 1:
+                ref, campaign, clock, refname = (dref1.get(band), campaign1,
+                                                 'mtime', "the band's data_i2d")
+                fm = mt(f)
+                missing = 'no-data_i2d'
+            else:
+                ref, campaign, clock = field_newest, campaign2, generation(f)[1]
+                refname = "the field's newest primary mosaic"
+                fm = generation(f)[0]
+                missing = 'no-reference-mosaic'
+            if band is None or ref is None or fm is None:
+                print(f"  SKIP [{field}] {base} "
+                      f"[rule{which}: {'no-band' if band is None else missing}]")
+                continue
+            if which == 2 or (fm < ref - DAY
+                              and (campaign is None or fm < campaign)):
+                seen.add(f)
+                plan.append((f, fm, ref, why, clock, refname))
+            else:
+                kept += 1
 
     print(f"[{field}] {'EXECUTE' if execute else 'DRY RUN'}: "
           f"{len(plan)} superseded, {kept} current kept "
@@ -306,21 +384,38 @@ def rename_stale_for_field(field, execute=False, campaign_days=21):
     if execute and plan:
         log = open(f'{pipe}/_stale_rename_{time.strftime("%Y-%m-%d")}.log', 'a')
         log.write(f"# rename_stale_mosaics.py {time.strftime('%Y-%m-%d %H:%M')}\n")
-    for f, fm, ref, why, clock in plan:
-        line = (f"  {fmt(fm)} [{clock}] (band current {fmt(ref)}) "
+    for f, fm, ref, why, clock, refname in plan:
+        line = (f"  {fmt(fm)} [{clock}] ({refname} {fmt(ref)}) "
                 f"{why}: {os.path.basename(f)}")
         print(('RENAME' if execute else 'would rename') + line)
-        if execute:
-            os.rename(f, f + SUFFIX)
-            log.write(f"RENAME {f} -> {f}{SUFFIX}  ({why}; {clock} {fmt(fm)}, "
-                      f"band current {fmt(ref)})\n")
-            _write_reason_sidecar(f + SUFFIX, why, clock, fm, ref)
+        if not execute:
+            continue
+        dst = f + SUFFIX
+        # NEVER overwrite an earlier quarantine.  `os.rename` replaces its
+        # destination silently, so a product regenerated under a name that was
+        # already quarantined would destroy the quarantined bytes on the next
+        # run -- of a tool whose whole premise is that it is reversible.  Same
+        # guard, same reasoning, as quarantine_pre_obstoken_catalogs.py:206.
+        if os.path.exists(dst):
+            print(f"    SKIP: {os.path.basename(dst)} already exists -- "
+                  f"not overwriting an earlier quarantine")
+            log.write(f"SKIP {f} -> {dst} (destination exists)\n")
+            continue
+        try:
+            os.rename(f, dst)
+        except OSError as ex:
+            print(f"    FAILED to rename {f}: {ex}")
+            log.write(f"FAILED {f} -> {dst}: {ex}\n")
+            continue
+        log.write(f"RENAME {f} -> {dst}  ({why}; {clock} {fmt(fm)}, "
+                  f"{refname} {fmt(ref)})\n")
+        _write_reason_sidecar(dst, why, clock, fm, ref, refname)
     if log:
         log.close()
     return plan
 
 
-def _write_reason_sidecar(path, why, clock, fm, ref):
+def _write_reason_sidecar(path, why, clock, fm, ref, refname):
     """Record WHY this file was quarantined, next to the file itself.
 
     The run log lives under the field root and is easy to lose track of; whoever
