@@ -25,6 +25,17 @@
 #   PROPOSAL=4147 FIELD=012 TARGET=sgrc FILTERS="F115W F162M F182M F212N F360M F405N F470N F480M" \
 #     PIPE_ROOT=/orange/adamginsburg/repos/jwst-gc-pipeline \
 #     scripts/reduction/run_field_retie_loop.sh
+#
+# Optional:
+#   RETIE_PROVENANCE_ONLY=1   print the checkout provenance and exit 0 without
+#                    submitting anything.  This is the ONLY safe way to inspect
+#                    the run: MAXITER=0 is not a no-op (see below).
+#   RETIE_UPSTREAM   branch to report the checkout distance against
+#                    (default origin/main).  Reporting only -- see warn_if_behind.
+#
+# MAXITER must be >= 1.  Values below 1 skip the iteration loop and fall through
+# to the FULL m3-m7 cataloging submission; that submitted twelve unintended jobs
+# on 2026-08-09.  The script refuses them unless RETIE_PROVENANCE_ONLY=1.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,6 +49,22 @@ EACH_SUFFIX=${EACH_SUFFIX:-destreak_o${FIELD}_crf}
 MAX_GROUP_SIZE=${MAX_GROUP_SIZE:-unlimited}
 PIPE_ROOT=${PIPE_ROOT:-}
 MAXITER=${MAXITER:-3}
+# MAXITER < 1 skips the iteration loop entirely and falls straight through to the
+# FULL m3-m7 cataloging submission at the bottom -- so `MAXITER=0`, the obvious
+# way to ask "just show me what this would run", submits a dozen jobs instead.
+# That happened on 2026-08-09: MAXITER=0 against sgrc 4147/012 submitted jobs
+# 39044950 and 39044953-39044961, ten of which were RUNNING before they were
+# cancelled.  There is no dry-run mode, so the only safe way to read the
+# provenance banner is RETIE_PROVENANCE_ONLY=1, added below.
+if ! [ "$MAXITER" -ge 1 ] 2>/dev/null && [ "${RETIE_PROVENANCE_ONLY:-0}" != 1 ]; then
+    echo "REFUSING: MAXITER=$MAXITER -- must be an integer >= 1."
+    echo "  Values below 1 do NOT make this a no-op: they skip the iteration"
+    echo "  loop and fall through to the full m3-m7 cataloging submission."
+    echo "  To inspect the checkout provenance without submitting anything, use"
+    echo "  RETIE_PROVENANCE_ONLY=1 (which overrides this check, so it works"
+    echo "  whatever MAXITER is set to)."
+    exit 2
+fi
 QOS=${QOS:-astronomy-dept-b}
 BASE=${BASE:-/orange/adamginsburg/jwst/${TARGET}}
 # Actionability floor for the m2 checkpoint (see cataloging.py ~L3064): per-detector
@@ -152,11 +179,195 @@ reduce_fully_succeeded () {
     return 0
 }
 
+# ---------------------------------------------------------------------------
+# Which code is this loop actually running?
+#
+# A loop runs for days -- MAXITER=12 at ~7 h a pass is a fortnight -- and bash
+# parses each command as it reaches it and does not re-read what it has already
+# run, so a loop is effectively frozen at the state its checkout was in when it
+# started, and a safety guard merged the next morning
+# never reaches it.  That is not hypothetical: sgrc's loop ran 2026-08-07 to
+# 08-09 out of a checkout that predates `reduce_fully_succeeded`, so for its
+# whole life it cataloged without checking that its reduce had succeeded --
+# the exact guard whose own comment cites that field's failure (#364).  Nothing
+# in its output said so; the missing guard is invisible precisely because the
+# code that would have printed it is the code that is missing.
+#
+# TWO checkouts are in play and they need not be the same one:
+#   * this script's own, from BASH_SOURCE -- the loop's control flow and its
+#     guards;
+#   * PIPE_ROOT -- the jwst_gc_pipeline package the reduce and the cataloging
+#     import, which is what actually writes the offsets table.
+# Both are reported, at launch and at every iteration.
+
+# _last_fetch <dir> -- when the local copy of the upstream ref was last updated.
+#
+# Printed on EVERY provenance line, including the "0 commit(s) behind" one.  The
+# distance is measured against the LOCAL remote-tracking ref, so a checkout that
+# has not fetched for a month reads "0 behind" while being a month stale -- and
+# that is the case this design turns on, so the qualifier has to be on the line
+# a reader actually sees, not only on the warning that fires when the distance
+# is non-zero.
+_last_fetch () {
+    local f="$1/.git/FETCH_HEAD" gd
+    gd=$(git -C "$1" rev-parse --git-dir 2>/dev/null) || { echo "unknown"; return 0; }
+    case "$gd" in /*) f="$gd/FETCH_HEAD";; *) f="$1/$gd/FETCH_HEAD";; esac
+    if [ -f "$f" ]; then
+        date -u -r "$f" +%Y-%m-%d 2>/dev/null || echo "unknown"
+    else
+        echo "never"
+    fi
+}
+
+# checkout_provenance <dir> -- one line: HEAD, date, dirty, distance behind the
+# upstream branch.  Never fails; a non-repository or a git-less environment
+# reports what it could not determine rather than stopping the loop.
+checkout_provenance () {
+    local dir="$1" head date dirty behind
+    if [ ! -d "$dir" ]; then echo "$dir (does not exist)"; return 0; fi
+    if ! git -C "$dir" rev-parse --git-dir >/dev/null 2>&1; then
+        echo "$dir (not a git checkout -- provenance unknown)"; return 0
+    fi
+    head=$(git -C "$dir" rev-parse --short HEAD 2>/dev/null || echo '?')
+    date=$(git -C "$dir" log -1 --format=%cs 2>/dev/null || echo '?')
+    # every substitution below is guarded: under `set -e` a bare
+    # `var=$(cmd)` whose command fails exits the script, and a pipeline under
+    # `pipefail` fails if ANY stage does.  Reporting an unknown is the job here;
+    # stopping a two-week loop because git had an opinion is not.
+    # `|| echo` on the whole pipeline is not enough: `wc` has already printed 0
+    # by the time git fails, so the variable becomes "0" and then "?" on the
+    # next line -- guard the pipeline itself.  On a bare repo `git status`
+    # returns 128 and this is the line that would otherwise take the function
+    # down if it were ever called outside a command substitution.
+    if ! dirty=$(git -C "$dir" status --porcelain 2>/dev/null); then
+        dirty="?"
+    else
+        dirty=$(printf '%s' "$dirty" | grep -c . || true)
+    fi
+    behind=$(git -C "$dir" rev-list --count "HEAD..${RETIE_UPSTREAM:-origin/main}" \
+             2>/dev/null || echo '?')
+    echo "$dir @ $head ($date), ${dirty} uncommitted, ${behind} commit(s) behind ${RETIE_UPSTREAM:-origin/main} (local ref, last fetched $(_last_fetch "$dir"))"
+}
+
+# commits_behind <dir> -- the count alone, or '?' when it cannot be determined.
+commits_behind () {
+    git -C "$1" rev-list --count "HEAD..${RETIE_UPSTREAM:-origin/main}" 2>/dev/null \
+        || echo '?'
+}
+
+# Report -- never refuse -- how far behind its upstream a checkout is.
+#
+# Reporting, not gating, and the reason is worth writing down because the
+# obvious stronger designs were tried and measured and both fail:
+#
+#   * REFUSE WHEN BEHIND origin/main.  Refuses the workflow this project
+#     mandates.  CLAUDE.md requires pipeline work to happen on worktree
+#     branches; of the 400 worktrees of this repository 395 are behind
+#     origin/main and 156 are deliberately both ahead and behind -- a topic
+#     branch under test, which is how a re-tie is normally driven.  It also
+#     refuses a detached HEAD at a release tag, which is the operational recipe
+#     #364 recommends.  A rule that refuses 99% of checkouts trains the operator
+#     to set the override every time, which disables it for the real case.
+#     And it cannot even be trusted as an all-clear: `rev-list HEAD..origin/main`
+#     compares against the LOCAL copy of that ref, so a checkout that has not
+#     fetched for a month reads "0 behind".
+#
+#   * REFUSE WHEN A NAMED GUARD IS ABSENT (#364's "minimum-version assertion").
+#     Tried against the actual checkout from #364: it PASSES, because the guard
+#     that was missing there -- `reduce_fully_succeeded` -- lives in this shell
+#     script, not in the Python package, and a script cannot check itself for a
+#     guard whose absence also removes the check -- a script cannot check itself.
+#     Meanwhile it refused a
+#     legitimate topic-branch worktree.  Wrong on both sides.
+#
+# The general point, which #364 states and which no self-check can get around:
+# the code that would report a missing guard is part of what is missing.  What
+# is left is to make the gap VISIBLE -- which is #364's own first suggestion --
+# and to keep the operational rule that long loops are restarted after a safety
+# merge.
+warn_if_behind () {
+    local dir behind
+    for dir in "$@"; do
+        [ -d "$dir" ] || continue
+        git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || continue
+        behind=$(commits_behind "$dir")
+        if [ "$behind" = '?' ]; then
+            echo "  NOTE: cannot tell how far $dir is behind"
+            echo "        (no ${RETIE_UPSTREAM:-origin/main} locally; try 'git -C $dir fetch origin')"
+        elif [ "$behind" -gt 0 ]; then
+            echo "  NOTE: $dir is $behind commit(s) behind its LOCAL"
+            echo "        ${RETIE_UPSTREAM:-origin/main}, which is only as fresh as the last fetch."
+            echo "        Being behind is normal on a topic branch.  What it means here is that"
+            echo "        any safety guard merged in those commits is NOT in this run and will"
+            echo "        not arrive while it lasts -- restart the loop to pick them up."
+        fi
+    done
+    return 0
+}
+
+# Has the script changed on disk since bash read it?
+#
+# bash reads a script INCREMENTALLY, by byte offset.  The iteration loop is one
+# compound command and is fully parsed before it runs, so an edit cannot change
+# the loop mid-flight -- but there is code AFTER the loop, and an edit that
+# shifts byte offsets makes bash resume mid-token there.  So the effect of a
+# mid-run edit is not "nothing changes": it is that this run stops being
+# predictable, and the file on disk stops describing what is executing.
+#
+# Reported, not acted on: whether a loop may deliberately adopt code mid-run is
+# a decision about its contract, not a bug fix, and #364 leaves it open.
+_here_top_or_here=$(git -C "$HERE" rev-parse --show-toplevel 2>/dev/null \
+                    || echo "$HERE")
+SELF_PATH="${BASH_SOURCE[0]}"
+SELF_SUM_AT_LAUNCH=$(md5sum "$SELF_PATH" 2>/dev/null | cut -d' ' -f1 || echo '?')
+
+warn_if_self_changed () {
+    local now
+    now=$(md5sum "$SELF_PATH" 2>/dev/null | cut -d' ' -f1 || echo '?')
+    if [ "$now" != "$SELF_SUM_AT_LAUNCH" ]; then
+        echo "WARNING: $SELF_PATH has changed on disk since this loop started."
+        echo "  bash reads a script INCREMENTALLY, by byte offset, so an edit that"
+        echo "  shifts offsets can make it resume mid-token in code after the loop."
+        echo "  This run is now unpredictable and the file no longer describes it."
+        echo "  Do not edit a running script; restart the loop instead."
+    fi
+}
+
 # Exposed so tests can source the helpers without running the loop.
 [ -n "${RETIE_LOOP_SOURCE_ONLY:-}" ] && return 0 2>/dev/null
 
+echo "=================  CHECKOUT PROVENANCE  ================="
+echo "  loop script : $(checkout_provenance "$_here_top_or_here")"
+if [ -n "$PIPE_ROOT" ]; then
+    echo "  pipeline    : $(checkout_provenance "$PIPE_ROOT")"
+    _pipe_top=$(git -C "$PIPE_ROOT" rev-parse --show-toplevel 2>/dev/null \
+                || echo "$PIPE_ROOT")
+    if [ "$_here_top_or_here" != "$_pipe_top" ]; then
+        echo "  NOTE: the loop and the pipeline package come from DIFFERENT checkouts,"
+        echo "        so they can be at different commits and each carry different guards."
+    fi
+else
+    echo "  pipeline    : PIPE_ROOT unset -- whichever jwst_gc_pipeline is on PYTHONPATH"
+fi
+warn_if_behind "$_here_top_or_here" ${PIPE_ROOT:+"$PIPE_ROOT"}
+if [ -z "${PIPE_ROOT:-}" ]; then
+    echo "  NOTE: PIPE_ROOT is unset, so this log cannot say which jwst_gc_pipeline"
+    echo "        the reduce and the cataloging will import -- whatever is on"
+    echo "        PYTHONPATH wins, and it is not recorded anywhere."
+fi
+if [ "${RETIE_PROVENANCE_ONLY:-0}" = 1 ]; then
+    echo "RETIE_PROVENANCE_ONLY=1 -- reported the provenance above and submitted"
+    echo "  nothing.  Unset it to run the loop."
+    exit 0
+fi
+
 for ((it=1; it<=MAXITER; it++)); do
     echo "=================  RE-TIE ITER $it / $MAXITER  ($TARGET $PROPOSAL/$FIELD)  ================="
+    # Restated every iteration, not only at launch: an iteration's log is what
+    # anyone reads when its results are questioned days later, and "which code
+    # produced this" has to be answerable from that log alone.
+    echo "[iter $it] running: $(checkout_provenance "$_here_top_or_here")"
+    warn_if_self_changed
 
     # --- 1. reduce (blocks until the whole array finishes) ---
     echo "[iter $it] reducing (fix_alignment applies consensus table if present: $([ -f "$CONSENSUS_TBL" ] && echo yes || echo no))"
