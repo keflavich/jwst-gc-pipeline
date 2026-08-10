@@ -327,8 +327,40 @@ def test_maxiter_below_one_is_refused():
 
 
 def test_there_is_a_way_to_read_the_provenance_without_submitting():
-    """The banner is the PR's whole product; it must be readable safely."""
+    """The banner is the PR's whole product; it must be readable safely.
+
+    Asserted on the EXIT, not on the first mention of the variable: the earlier
+    version used `src.index('RETIE_PROVENANCE_ONLY')`, which finds the mention
+    inside the MAXITER refusal message near the top of the file, so moving the
+    whole inspect block to the end left the test passing.
+    """
     src = _src()
-    assert 'RETIE_PROVENANCE_ONLY' in src
-    # and it must exit before anything is submitted
-    assert src.index('RETIE_PROVENANCE_ONLY') < src.index('for ((it=1; it<=MAXITER;')
+    block = src.index('if [ "${RETIE_PROVENANCE_ONLY:-0}" = 1 ]; then')
+    assert block < src.index('for ((it=1; it<=MAXITER;')
+    assert 'exit 0' in src[block:block + 400]
+
+
+def test_the_inspect_mode_works_whatever_maxiter_is(tmp_path):
+    """The refusal's own advice has to be followable.
+
+    `MAXITER=0` is refused, and the refusal says to use RETIE_PROVENANCE_ONLY=1
+    -- which did not work while MAXITER stayed 0, because the guard ran first.
+    """
+    out = subprocess.run(
+        ['bash', str(LOOP)], capture_output=True, text=True,
+        env=dict(MAXITER='0', RETIE_PROVENANCE_ONLY='1', PROPOSAL='4147',
+                 FIELD='012', TARGET='sgrc', FILTERS='F115W',
+                 OFFSETS_TBL='/tmp/unused.csv',
+                 PATH='/usr/bin:/bin:/usr/local/bin', HOME='/tmp'))
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert 'CHECKOUT PROVENANCE' in out.stdout
+    assert 'submitted' in out.stdout
+    assert 'sbatch' not in out.stdout
+
+
+def test_both_new_knobs_are_documented_in_the_usage_header():
+    """An operator reads the header, not the middle of the file."""
+    src = _src()
+    header = src[:src.index('set -euo pipefail')]
+    assert 'RETIE_PROVENANCE_ONLY' in header
+    assert 'MAXITER must be >= 1' in header

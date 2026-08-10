@@ -27,8 +27,15 @@
 #     scripts/reduction/run_field_retie_loop.sh
 #
 # Optional:
+#   RETIE_PROVENANCE_ONLY=1   print the checkout provenance and exit 0 without
+#                    submitting anything.  This is the ONLY safe way to inspect
+#                    the run: MAXITER=0 is not a no-op (see below).
 #   RETIE_UPSTREAM   branch to report the checkout distance against
 #                    (default origin/main).  Reporting only -- see warn_if_behind.
+#
+# MAXITER must be >= 1.  Values below 1 skip the iteration loop and fall through
+# to the FULL m3-m7 cataloging submission; that submitted twelve unintended jobs
+# on 2026-08-09.  The script refuses them unless RETIE_PROVENANCE_ONLY=1.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -49,12 +56,13 @@ MAXITER=${MAXITER:-3}
 # 39044950 and 39044953-39044961, ten of which were RUNNING before they were
 # cancelled.  There is no dry-run mode, so the only safe way to read the
 # provenance banner is RETIE_PROVENANCE_ONLY=1, added below.
-if ! [ "$MAXITER" -ge 1 ] 2>/dev/null; then
+if ! [ "$MAXITER" -ge 1 ] 2>/dev/null && [ "${RETIE_PROVENANCE_ONLY:-0}" != 1 ]; then
     echo "REFUSING: MAXITER=$MAXITER -- must be an integer >= 1."
     echo "  Values below 1 do NOT make this a no-op: they skip the iteration"
     echo "  loop and fall through to the full m3-m7 cataloging submission."
     echo "  To inspect the checkout provenance without submitting anything, use"
-    echo "  RETIE_PROVENANCE_ONLY=1."
+    echo "  RETIE_PROVENANCE_ONLY=1 (which overrides this check, so it works"
+    echo "  whatever MAXITER is set to)."
     exit 2
 fi
 QOS=${QOS:-astronomy-dept-b}
