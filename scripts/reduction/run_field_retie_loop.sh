@@ -42,6 +42,21 @@ EACH_SUFFIX=${EACH_SUFFIX:-destreak_o${FIELD}_crf}
 MAX_GROUP_SIZE=${MAX_GROUP_SIZE:-unlimited}
 PIPE_ROOT=${PIPE_ROOT:-}
 MAXITER=${MAXITER:-3}
+# MAXITER < 1 skips the iteration loop entirely and falls straight through to the
+# FULL m3-m7 cataloging submission at the bottom -- so `MAXITER=0`, the obvious
+# way to ask "just show me what this would run", submits a dozen jobs instead.
+# That happened on 2026-08-09: MAXITER=0 against sgrc 4147/012 submitted jobs
+# 39044950 and 39044953-39044961, ten of which were RUNNING before they were
+# cancelled.  There is no dry-run mode, so the only safe way to read the
+# provenance banner is RETIE_PROVENANCE_ONLY=1, added below.
+if ! [ "$MAXITER" -ge 1 ] 2>/dev/null; then
+    echo "REFUSING: MAXITER=$MAXITER -- must be an integer >= 1."
+    echo "  Values below 1 do NOT make this a no-op: they skip the iteration"
+    echo "  loop and fall through to the full m3-m7 cataloging submission."
+    echo "  To inspect the checkout provenance without submitting anything, use"
+    echo "  RETIE_PROVENANCE_ONLY=1."
+    exit 2
+fi
 QOS=${QOS:-astronomy-dept-b}
 BASE=${BASE:-/orange/adamginsburg/jwst/${TARGET}}
 # Actionability floor for the m2 checkpoint (see cataloging.py ~L3064): per-detector
@@ -331,6 +346,11 @@ if [ -z "${PIPE_ROOT:-}" ]; then
     echo "  NOTE: PIPE_ROOT is unset, so this log cannot say which jwst_gc_pipeline"
     echo "        the reduce and the cataloging will import -- whatever is on"
     echo "        PYTHONPATH wins, and it is not recorded anywhere."
+fi
+if [ "${RETIE_PROVENANCE_ONLY:-0}" = 1 ]; then
+    echo "RETIE_PROVENANCE_ONLY=1 -- reported the provenance above and submitted"
+    echo "  nothing.  Unset it to run the loop."
+    exit 0
 fi
 
 for ((it=1; it<=MAXITER; it++)); do

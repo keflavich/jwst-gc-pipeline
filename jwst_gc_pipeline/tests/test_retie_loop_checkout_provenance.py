@@ -252,8 +252,15 @@ def test_the_reason_refusal_was_rejected_is_recorded():
     """A measured negative result is worth as much as the fix, if it is written down."""
     src = _src()
     src_new = src[src.index('# Report -- never refuse'):]
-    assert 'worktree' in src_new and '395' in src_new, (
-        'the false-refusal measurement must stay next to the code it explains')
+    # Assert the ARGUMENT, not a literal count.  The worktree population is
+    # mutable -- it was 400 when this was written and 411 a day later -- so
+    # pinning the number means re-measuring the comment breaks the test, which
+    # is backwards: it pressures the comment to stay stale.
+    assert 'worktree' in src_new
+    assert re.search(r'\b\d{3}\b.*behind', src_new) or \
+        re.search(r'behind.*\b\d{3}\b', src_new), (
+            'the false-refusal measurement must stay next to the code it '
+            'explains, with its counts')
     assert 'reduce_fully_succeeded' in src_new
     assert 'cannot check itself' in src_new
 
@@ -286,3 +293,31 @@ def test_no_note_when_the_script_is_untouched():
     assert out.returncode == 0, out.stderr
     assert 'has changed on disk' not in out.stdout
     assert 'QUIET' in out.stdout
+
+
+def test_maxiter_below_one_is_refused():
+    """`MAXITER=0` is the obvious way to ask for a no-op, and it was not one.
+
+    Values below 1 skip the iteration loop and fall straight through to the FULL
+    m3-m7 cataloging submission at the bottom of the script.  On 2026-08-09 that
+    submitted twelve jobs against sgrc 4147/012 (39044950, 39044953-39044961),
+    ten of them RUNNING before they were cancelled, from someone trying to read
+    the provenance banner.
+    """
+    out = subprocess.run(
+        ['bash', str(LOOP)], capture_output=True, text=True,
+        env=dict(MAXITER='0', PROPOSAL='4147', FIELD='012', TARGET='sgrc',
+                 FILTERS='F115W', OFFSETS_TBL='/tmp/unused.csv',
+                 PATH='/usr/bin:/bin:/usr/local/bin', HOME='/tmp'))
+    assert out.returncode == 2, out.stdout + out.stderr
+    assert 'REFUSING' in out.stdout
+    assert 'do NOT make this a no-op' in out.stdout
+    assert 'sbatch' not in out.stdout
+
+
+def test_there_is_a_way_to_read_the_provenance_without_submitting():
+    """The banner is the PR's whole product; it must be readable safely."""
+    src = _src()
+    assert 'RETIE_PROVENANCE_ONLY' in src
+    # and it must exit before anything is submitted
+    assert src.index('RETIE_PROVENANCE_ONLY') < src.index('for ((it=1; it<=MAXITER;')
