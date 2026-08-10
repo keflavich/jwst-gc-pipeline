@@ -59,18 +59,18 @@ import os
 #: file as merely absent.
 #:
 #: ``rename_stale_mosaics.py`` writes ``{src}.bad`` from 2026-08; before that it
-#: wrote ``{src}_badastrometry_stale``.  Counted on disk 2026-08-10:
+#: wrote ``{src}_badastrometry_stale``.  Counted under ``*/*/pipeline`` on
+#: 2026-08-10:
 #:
-#:     *_stale                2504     <-- NOT matched here; see below
-#:     *_badastrometry_stale   327
+#:     *_stale                 465     of which 327 are _badastrometry_stale,
+#:                                     so 138 carry the BARE form
 #:     *.bad                     0     (this convention is new)
 #:
-#: The bare ``_stale`` form is the most populous by far -- it is what the
-#: 2026-07-03 brick pass wrote ("EXECUTE -- 192 stale, 29 kept") -- and it is
-#: deliberately NOT added here: matching 2504 further files would move release
-#: entries from `live`/`missing` to `quarantined` across every field, which is a
-#: change to what a release reports and belongs in its own review rather than
-#: riding along with a renamer fix.  Tracked as a separate finding on #339.
+#: The bare ``_stale`` form is what the 2026-07-03 brick pass wrote ("EXECUTE --
+#: 192 stale, 29 kept") and it is deliberately NOT added here: matching those
+#: further files moves release entries from `live`/`missing` to `quarantined`
+#: across every field, which changes what a release REPORTS and belongs in its
+#: own review rather than riding along with a renamer fix.  Reported on #339.
 QUARANTINE_GLOBS = (
     "{stem}_im0_badastrom*.fits",
     "{src}.bad",

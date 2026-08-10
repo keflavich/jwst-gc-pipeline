@@ -85,16 +85,21 @@ whole POINTING that is stale, because every one of its mosaics is then its own
 family's newest.  That is the conservative direction, and it is what
 ``check_generation_span`` and the release freshness gate look at instead.
 
-Generation is read from the FITS ``DATE`` header -- the time the pipeline wrote
-the product -- falling back to mtime when the header cannot be read.  mtime
-alone is not enough: a copy or a restore resets it, and DATE is the quantity
-``check_generation_span`` already uses to decide a staged image set's
-generation.  Which clock was used is printed per file.
+(An earlier version of this note claimed the opposite of what the rule now does
+-- that a band directory whose ONLY primary mosaic is an orphan would be kept
+because it is its own reference.  Under the (band, pointing, product) key that
+is exactly how such an orphan IS caught: cloudc's F405N file is the sole member
+of its family and is selected.  A stale safety notice in a script that renames
+science data reads as a guarantee it does not give, which is why it is called
+out here rather than quietly deleted.)
 
-Known limitation, stated so it is not mistaken for coverage: rule 2 needs a
-sibling to compare against.  A band directory whose ONLY primary mosaic is an
-orphan has nothing newer in it, so the orphan is its own reference and is kept.
-That is the conservative direction (no false positives), but it is a gap.
+⚠ THREE OF THE EIGHT current selections are the ONLY primary mosaic of their
+(band, pointing): brick F405N, F410M and F466N each hold exactly one
+``jw02221-o002`` primary mosaic and it is the 2023 file.  Quarantining those
+leaves that band/pointing with no primary mosaic at all, and none of the three
+has had its astrometry measured -- they are selected on generation alone.  None
+can be rebuilt from disk either (no constituent exposures survive).  Decide that
+before running with --execute.
 
 Band token is parsed from either NIRCam ('clear-f182m-', 'f405n-f444w-'
 pupil forms) or MIRI ('_f2550w') filename conventions.
@@ -134,13 +139,20 @@ PRIMARY_MOSAIC_RE = re.compile(
 #: counts as an orphan of a retired reduction rather than a product that was
 #: simply written earlier in the same campaign.
 #:
-#: This is the guard that keeps the rule off live data, and the separation it
-#: exploits is enormous.  The four real orphans are 2023 products in fields whose
-#: current generation is 2026 -- three YEARS.  The largest gap between two live
-#: products of one field is wd1's, whose merged F200W mosaic (2026-06-13) sits 18
-#: DAYS behind its own per-module siblings (2026-07-01) because the merged drizzle
-#: ran later in that campaign.  A year sits two orders of magnitude clear of the
-#: live case and fifty times under the orphan case, so it is not a tuned number.
+#: This is the guard that keeps the rule off live data.  The measured separation,
+#: stated exactly rather than rounded in the flattering direction:
+#:
+#:   worst LIVE case      wd1's merged F200W mosaic, 18 days behind its own
+#:                        per-module siblings, because the merged drizzle ran
+#:                        later in that campaign.   365/18  = 20x margin.
+#:   tightest ORPHAN      w51's 2025-06-06 merged-reproject product, 426 days
+#:                        behind its field's newest.  426/365 = 1.17x margin.
+#:   the other seven      2023 products in 2026 fields, ~1100 days.  ~3x.
+#:
+#: So it is 20x clear of the live population and only 1.17x clear of the nearest
+#: orphan -- the guard is set close to the orphan edge, not comfortably between
+#: two well-separated groups.  Loosening it is what would start taking live data;
+#: tightening it drops w51's first.
 MIN_ORPHAN_AGE_DAYS = 365
 
 #: Renaming to this suffix takes the file out of every ``*.fits`` glob, which is
@@ -151,12 +163,15 @@ MIN_ORPHAN_AGE_DAYS = 365
 SUFFIX = '.bad'
 
 #: Already-quarantined files, under this or any earlier convention, are skipped
-#: rather than renamed again.  Counted on disk 2026-08-10: ``*_stale`` 2504
-#: (what the 2026-07-03 brick pass wrote -- "EXECUTE -- 192 stale, 29 kept"),
-#: ``*_badastrometry_stale`` 327, ``*.bad`` 0.  ``release_freshness`` recognises
-#: the last two but NOT the bare ``_stale``; that gap is real and is reported on
-#: #339 rather than fixed here, since closing it would reclassify 2504 files in
-#: every release listing.
+#: rather than renamed again.  Counted under ``*/*/pipeline`` on 2026-08-10:
+#: ``*_stale`` 465, of which ``*_badastrometry_stale`` is 327 -- so 138 carry the
+#: bare form, which is what the 2026-07-03 brick pass wrote ("EXECUTE -- 192
+#: stale, 29 kept").  ``*.bad`` 0, this convention being new.  (A whole-tree
+#: count is larger and did not complete in reasonable time on this filesystem;
+#: the number quoted here is the one that was actually measured.)
+#: ``release_freshness`` recognises ``_badastrometry_stale`` and ``.bad`` but NOT
+#: the bare ``_stale``; that gap is real and is reported on #339 rather than
+#: fixed here, since closing it reclassifies files in every release listing.
 QUARANTINE_SUFFIXES = (SUFFIX, '_badastrometry_stale', '_stale')
 if any(s.endswith('.fits') for s in QUARANTINE_SUFFIXES):      # pragma: no cover
     raise RuntimeError(
@@ -346,9 +361,13 @@ def rename_stale_for_field(field, execute=False, campaign_days=21):
                 generational[p] = 'retired product family'
 
     # The two rules are evaluated INDEPENDENTLY and unioned, not first-wins.
-    # Letting rule 1 claim a file it then skips for want of its own reference
-    # hid 12 files that rule 2 selects -- ngc6334's and w51's
-    # `*-merged-reproject_i2d.fits`, which are both named AND orphaned.
+    # Letting rule 1 claim a file and then skip it for want of its own reference
+    # hides anything rule 2 would have taken.  Measured on the current tree
+    # exactly ONE file is in both sets -- w51's
+    # `clear-f150w-merged-reproject_i2d.fits`, which is both named and orphaned
+    # -- so the union recovers one file today, not the dozen an earlier count
+    # claimed (that count predated the 365-day age guard, which excludes
+    # ngc6334's `merged-reproject` products).
     plan, kept, seen = [], 0, set()
     for cands, which in ((named, 1), (generational, 2)):
         for f, why in sorted(cands.items()):
@@ -380,6 +399,7 @@ def rename_stale_for_field(field, execute=False, campaign_days=21):
     print(f"[{field}] {'EXECUTE' if execute else 'DRY RUN'}: "
           f"{len(plan)} superseded, {kept} current kept "
           f"(campaign floors {fmt(campaign1)} / {fmt(campaign2)})")
+    skipped = 0
     log = None
     if execute and plan:
         log = open(f'{pipe}/_stale_rename_{time.strftime("%Y-%m-%d")}.log', 'a')
@@ -400,6 +420,7 @@ def rename_stale_for_field(field, execute=False, campaign_days=21):
             print(f"    SKIP: {os.path.basename(dst)} already exists -- "
                   f"not overwriting an earlier quarantine")
             log.write(f"SKIP {f} -> {dst} (destination exists)\n")
+            skipped += 1
             continue
         try:
             os.rename(f, dst)
@@ -412,6 +433,9 @@ def rename_stale_for_field(field, execute=False, campaign_days=21):
         _write_reason_sidecar(dst, why, clock, fm, ref, refname)
     if log:
         log.close()
+    if skipped:
+        print(f"[{field}] {skipped} of {len(plan)} left in place "
+              f"(a quarantine of that name already exists)")
     return plan
 
 

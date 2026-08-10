@@ -198,13 +198,19 @@ def test_a_quarantined_file_is_never_overwritten(tmp_path):
     assert orphan.exists(), 'the second copy should be left in place, not lost'
 
 
-def test_a_fits_date_is_read_as_utc(tmp_path):
+def test_a_fits_date_is_read_as_utc(tmp_path, monkeypatch):
     """FITS `DATE` is UTC; reading it as local time skews every comparison.
 
-    Below the day-scale thresholds here, but it is a 4-5 hour systematic that
-    is not even constant across a daylight-saving boundary, sitting between two
+    Below the day-scale thresholds here, but it is a 4-5 hour systematic that is
+    not even constant across a daylight-saving boundary, sitting between two
     generations measured on different clocks.
+
+    `TZ` is forced to a non-UTC zone: under `TZ=UTC` the broken and the correct
+    implementations agree, so the test would pass against `time.mktime` and pin
+    nothing.
     """
+    monkeypatch.setenv('TZ', 'America/New_York')
+    time.tzset()
     pytest.importorskip('astropy')
     from astropy.io import fits
     m = _load('rename_stale_mosaics')
