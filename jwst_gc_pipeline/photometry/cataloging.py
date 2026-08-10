@@ -3373,11 +3373,10 @@ def _record_pooling(record, pooled, n_before, offsets_path):
     """Persist what pooling collapsed into the checkpoint record on disk.
 
     The record is written before the corrections are pooled, and a pooled
-    correction's membership otherwise survives only in its ``source`` string --
-    which ``update_offsets_table`` truncates to 64 characters, shorter than a
-    real 8-detector member list -- which the offsets table itself now stores in
-    full, since its provenance column is sized to the value written.  Re-write
-    the record (both the timestamped
+    correction's membership otherwise survives only in its ``source`` string.
+    The offsets table now stores that string in full -- its provenance column is
+    sized to the value written -- but the string is still a one-line summary,
+    not the per-detector measurements.  Re-write the record (both the timestamped
     file and ``*_latest.json``) with a ``pooling`` section so the provenance of
     an applied shift is recoverable afterwards.
     """

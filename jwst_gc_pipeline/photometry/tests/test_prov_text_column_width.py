@@ -43,11 +43,21 @@ POOLED_SOURCE_4 = ("m2 visit-consensus [median of 4, ptp 3.42mas: "
                    "nrcb1,nrcb2,nrcb3,nrcb4]")
 
 #: A pooled median on top of a cross-band tie -- the longest form the pipeline
-#: produces, 102 characters.  w51's table already carries the 62-character tie
-#: this is built from.
+#: produces.  w51's live table already carries the 62-character base.  114
+#: characters over four detectors; the eight-detector form below is 138, which
+#: is the true maximum and still well under PROV_TEXT_MAX_CHARS.
+#:
+#: (An earlier version of this constant said "median of 4" while listing two
+#: detectors -- a string the pooler cannot emit -- and was quoted as the
+#: pipeline's longest form at 102 characters.  Both wrong.)
 POOLED_ON_CROSSBAND = ("m2 consensus->reference (cross-band tied-F210M, "
                        "contrast>2900) [median of 4, ptp 3.42mas: "
-                       "nrcb1,nrcb2]")
+                       "nrcb1,nrcb2,nrcb3,nrcb4]")
+
+#: The genuine maximum: eight detectors on the longest base.
+POOLED_ON_CROSSBAND_8 = ("m2 consensus->reference (cross-band tied-F210M, "
+                         "contrast>2900) [median of 8, ptp 3.42mas: "
+                         "nrca1,nrca2,nrca3,nrca4,nrcb1,nrcb2,nrcb3,nrcb4]")
 
 
 def _narrow_table(tmp_path, prov_source="m2 visit-consensus"):
@@ -137,12 +147,15 @@ def test_the_four_detector_pooling_survives(tmp_path):
     assert t["prov_source"][1].endswith("nrcb4]")
 
 
-def test_the_longest_form_the_pipeline_produces_survives(tmp_path):
-    """A pooled median on top of a cross-band tie: 102 characters."""
+@pytest.mark.parametrize("source", [POOLED_ON_CROSSBAND, POOLED_ON_CROSSBAND_8])
+def test_the_longest_form_the_pipeline_produces_survives(tmp_path, source):
+    """A pooled median on the longest base: 114 chars over 4 detectors, 138 over 8."""
+    assert len(source) > PROV_TEXT_MIN_CHARS
+    assert len(source) < PROV_TEXT_MAX_CHARS
     p = _narrow_table(tmp_path)
-    update_offsets_table(p, [_corr(2, POOLED_ON_CROSSBAND)], stage="m2")
+    update_offsets_table(p, [_corr(2, source)], stage="m2")
     t = Table.read(p, format="ascii.csv")
-    assert t["prov_source"][1] == POOLED_ON_CROSSBAND
+    assert t["prov_source"][1] == source
 
 
 def test_a_source_over_the_hard_bound_is_cut_and_announced(tmp_path, capsys):
