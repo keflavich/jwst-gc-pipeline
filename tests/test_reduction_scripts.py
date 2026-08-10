@@ -169,7 +169,11 @@ def test_a_product_merely_older_than_the_campaign_is_not_an_orphan(tmp_path):
 
     A product of a family that is no longer written, but only weeks old, is a
     band that finished early -- not an orphan of a retired reduction.  Only the
-    year-scale gap distinguishes the two, and the margin is ~50x either way.
+    year-scale gap distinguishes the two, and the real margins are narrow:
+    measured over the archive, 3.26x on the live side (the nearest miss is a
+    sickle MIRI product 111.9 days behind its field) and 1.17x on the orphan
+    side (w51's merged-reproject at 426.7 days).  An earlier version of this
+    docstring said "~50x either way"; that was wrong on both sides.
     """
     m = _load('rename_stale_mosaics')
     m.BASE = str(tmp_path)

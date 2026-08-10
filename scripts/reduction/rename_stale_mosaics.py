@@ -82,8 +82,9 @@ that matters most:
 The 365-day age guard is what separates a retired family from a live one that
 merely finished early, and it is LOAD BEARING: 47 live primary mosaics across
 the archive are held back from quarantine by that constant alone.  The numbers
-are in MIN_ORPHAN_AGE_DAYS below -- 15.7x clear of the closest live product,
-1.17x clear of the nearest orphan.  Do not change it without reading them.
+are in MIN_ORPHAN_AGE_DAYS below -- 3.26x clear of the closest live product
+(sickle MIRI at 111.9 days), 1.17x clear of the nearest orphan (w51 at 426.7).
+Do not change it without reading them.
 
 Scope is narrow by construction -- only the primary drizzle products
 (``PRIMARY_MOSAIC_RE``), never the per-exposure ``_outlier_i2d`` intermediates
@@ -170,25 +171,44 @@ PRIMARY_MOSAIC_RE = re.compile(
 #:   47 LIVE primary mosaics belong to a family the current generation no longer
 #:   writes, and are held back from quarantine by THIS CONSTANT ALONE.
 #:
-#:   closest live case   brick F2550W, 23.3 days behind its field's newest
-#:                       -> margin 365/23.3 = 15.7x
-#:   next                ngc6334 F444W and F200W, ~24.7 days
-#:   tightest ORPHAN     w51's 2025-06-06 merged-reproject, 426 days
-#:                       -> margin 426/365 = 1.17x
-#:   the other seven     2023 products in 2026 fields, ~1100-1150 days
+#:   The margin on the live side is set by the file NEAREST to being taken,
+#:   i.e. the LARGEST age gap among those 47 -- not the smallest:
 #:
-#: So the two populations are separated by roughly 23 days against 426 -- a
-#: factor of 18, not the "two orders of magnitude" an earlier version of this
-#: comment claimed, and the guard sits much nearer the orphan edge than the live
-#: edge.  Lowering it starts taking live data 47 files at a time; raising it
-#: drops w51's orphan first.
+#:   closest live case   sickle F770W and F1500W (jw03958-o003), 111.91 days
+#:                       behind their field's newest primary mosaic
+#:                       -> margin 365/111.91 = 3.26x
+#:   next                sickle F1130W (same pointing), 111.82 days;
+#:                       then cloudc F2550W at 59.4 and six more sickle MIRI
+#:                       products at ~50
+#:   tightest ORPHAN     w51's 2025-06-06 merged-reproject, 426.7 days
+#:                       -> margin 426.7/365 = 1.17x
+#:   the other seven     2023 products in 2026 fields, 1115.6-1152.7 days
 #:
-#: An earlier version cited wd1's merged F200W mosaic (18 days behind its own
-#: per-module siblings) as the worst live case.  That was doubly wrong: wd1 has
-#: NO family-retired primary mosaics at the default settings, so nothing there
-#: depends on this constant at all, and 18 days is not the closest live case
-#: anyway.  The (band, pointing, product) key is what protects wd1; this
-#: constant is what protects the other 47.
+#: So the two populations are separated by 111.9 days against 426.7 -- a factor
+#: of 3.8, not the "two orders of magnitude" one earlier version of this comment
+#: claimed nor the 18 another did, and the guard sits nearer the orphan edge
+#: than the live edge either way.  Lowering it does NOT start taking live data
+#: 47 files at a time: the first casualties are the three sickle MIRI products
+#: at ~112 days, alone, and 44 files sit at 59 days or less.  Raising it drops
+#: w51's orphan first.
+#:
+#: Two earlier versions of this comment got the live-side number wrong, in the
+#: direction that makes the guard look safer than it is, so both are recorded
+#: here rather than quietly replaced:
+#:
+#:   * wd1's merged F200W mosaic, "18 days behind its own per-module siblings",
+#:     was cited as the worst live case.  Doubly wrong: wd1 has NO
+#:     family-retired primary mosaics at the default settings, so nothing there
+#:     depends on this constant at all.  The (band, pointing, product) key is
+#:     what protects wd1; this constant is what protects the other 47.
+#:   * brick F2550W at 23.3 days was then cited instead, for a claimed 15.7x.
+#:     That is the SMALLEST gap in the held-back set -- its safest member --
+#:     because the measurement sorted ascending and took the first row.  The
+#:     margin is set by the nearest miss, which is 4.8x closer than that.
+#:
+#: Before moving this constant, re-measure it: over every field, recompute the
+#: age gap behind the field's newest primary mosaic for each live primary mosaic
+#: whose family is retired, and read the LARGEST gap in that set.
 MIN_ORPHAN_AGE_DAYS = 365
 
 #: Renaming to this suffix takes the file out of every ``*.fits`` glob, which is
