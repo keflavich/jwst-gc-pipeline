@@ -20,6 +20,24 @@ each row vs VIRAC2 with the window-swept helper -- lives in the standalone valid
 import numpy as np
 
 
+#: The provenance record of what a correction added is an ON-SKY separation.
+#: Right ascension also has a COORDINATE offset, differing by cos(declination)
+#: -- ~14% at Galactic Centre declinations -- and the table's own ``dra``
+#: columns hold that one, so the name has to say which is which.  Tables
+#: written before the convention was in the name use ``prov_*_added_mas`` and
+#: are renamed on their next correction; both spellings are read here.
+_PROV_ONSKY_RA = "prov_dra_onsky_mas"
+_PROV_ONSKY_DEC = "prov_ddec_onsky_mas"
+
+
+def _prov_onsky_names(colnames):
+    """``(ra, dec)`` provenance column names for whichever spelling is present."""
+    ra = (_PROV_ONSKY_RA if _PROV_ONSKY_RA in colnames else "prov_dra_added_mas")
+    dec = (_PROV_ONSKY_DEC if _PROV_ONSKY_DEC in colnames
+           else "prov_ddec_added_mas")
+    return ra, dec
+
+
 def flag_collapsed_visits(offsets_tbl, tol_arcsec=0.02):
     """Flag filters whose distinct visits carry (near-)identical offsets.
 
@@ -99,7 +117,9 @@ def flag_diverged_column_pairs(offsets_tbl, tol_mas=PAIR_PROV_TOL_MAS):
     a re-reduction (#319).  The bare pair is the AS-BUILT value the offsets
     builder wrote; the ``(arcsec)`` pair is as-built PLUS every correction the
     m2 checkpoint has since accumulated, which is exactly what
-    ``prov_dra_added_mas`` / ``prov_ddec_added_mas`` record.  So a gap is
+    ``prov_dra_onsky_mas`` / ``prov_ddec_onsky_mas`` record (called
+    ``prov_*_added_mas`` before the convention was put in the name -- see
+    ``astrometry_checkpoint.migrate_prov_column_names``).  So a gap is
     normal and its SIZE is not the signal:
 
         gc2211  o023 F277W exp1   ddec gap 14986.2 mas   prov_ddec 14986.2 mas
@@ -139,12 +159,13 @@ def flag_diverged_column_pairs(offsets_tbl, tol_mas=PAIR_PROV_TOL_MAS):
              - np.asarray(offsets_tbl["dra"], dtype=float)) * 1000.0
     c_gap = (np.asarray(offsets_tbl["ddec (arcsec)"], dtype=float)
              - np.asarray(offsets_tbl["ddec"], dtype=float)) * 1000.0
-    prov_d = (np.nan_to_num(np.asarray(offsets_tbl["prov_dra_added_mas"],
+    _pra, _pdec = _prov_onsky_names(cn)
+    prov_d = (np.nan_to_num(np.asarray(offsets_tbl[_pra],
                                        dtype=float))
-              if "prov_dra_added_mas" in cn else np.zeros(len(offsets_tbl)))
-    prov_c = (np.nan_to_num(np.asarray(offsets_tbl["prov_ddec_added_mas"],
+              if _pra in cn else np.zeros(len(offsets_tbl)))
+    prov_c = (np.nan_to_num(np.asarray(offsets_tbl[_pdec],
                                        dtype=float))
-              if "prov_ddec_added_mas" in cn else np.zeros(len(offsets_tbl)))
+              if _pdec in cn else np.zeros(len(offsets_tbl)))
     # state 1: the pairs are in sync (freshly built, or healed by a correction)
     in_sync = (np.abs(d_gap) <= tol_mas) & (np.abs(c_gap) <= tol_mas)
     # state 2: never healed -- the gap IS the accumulated provenance
@@ -172,7 +193,7 @@ class BroadcastProvenanceError(RuntimeError):
 
 #: Two visits' corrections agreeing this closely are the same number, not two
 #: measurements.  Real per-visit m2 corrections differ by far more: across the
-#: ten live tables the per-filter spread of ``prov_dra_added_mas`` between
+#: ten live tables the per-filter spread of the on-sky RA provenance between
 #: distinct visits is 1.6-970 mas wherever it was measured per visit.
 BROADCAST_PROV_TOL_MAS = 0.05
 
@@ -215,12 +236,13 @@ def flag_broadcast_provenance(offsets_tbl, tol_mas=BROADCAST_PROV_TOL_MAS,
     cn = set(offsets_tbl.colnames)
     if not {"Visit", "Filter"} <= cn:
         return []
-    if not {"prov_dra_added_mas", "prov_ddec_added_mas"} <= cn:
+    _pra, _pdec = _prov_onsky_names(cn)
+    if not {_pra, _pdec} <= cn:
         return []
     vis = np.asarray([str(v) for v in offsets_tbl["Visit"]])
     filt = np.asarray([str(f) for f in offsets_tbl["Filter"]])
-    pd_ = np.nan_to_num(np.asarray(offsets_tbl["prov_dra_added_mas"], dtype=float))
-    pc_ = np.nan_to_num(np.asarray(offsets_tbl["prov_ddec_added_mas"], dtype=float))
+    pd_ = np.nan_to_num(np.asarray(offsets_tbl[_pra], dtype=float))
+    pc_ = np.nan_to_num(np.asarray(offsets_tbl[_pdec], dtype=float))
     out = []
     for f in np.unique(filt):
         fm = filt == f

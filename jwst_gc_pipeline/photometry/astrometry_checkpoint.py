@@ -1226,6 +1226,63 @@ PROV_EXPLAINS_TOL_MAS = 0.5
 #: so the exact factor is unrecoverable but confined to [COS_DEC_MIN, 1].
 COS_DEC_MIN = np.cos(np.radians(30.0))
 
+# ---------------------------------------------------------------------------
+# Provenance column names, and the naming rule they follow
+# ---------------------------------------------------------------------------
+# Right ascension has TWO quantities that are both measured in angle and differ
+# by cos(declination) -- about 14% at Galactic Centre declinations:
+#
+#   * an ON-SKY separation: how far the source actually moved on the sky;
+#   * a COORDINATE offset: how much the right-ascension NUMBER changed.
+#
+# Declination has only one, which is why the confusion has only ever shown up
+# on the RA axis.  The rule is that a name must say which of the two it holds.
+# The offsets table's `dra`/`dra (arcsec)` columns are COORDINATE offsets (see
+# generate_offsets_table.py); the provenance record of what was added is an
+# ON-SKY separation, and now says so in its name.
+#
+# `prov_dra_added_mas` said neither, and that cost three mis-diagnoses of one
+# issue (#319) before the difference was identified as the explanation.
+PROV_ONSKY_RA_KEY = "prov_dra_onsky_mas"
+PROV_ONSKY_DEC_KEY = "prov_ddec_onsky_mas"
+
+#: The declination the cos(dec) conversion used, per row.  Without it the
+#: coordinate offset a provenance entry implies is only bounded, not known, so
+#: the right-ascension axis cannot be validated as strictly as declination --
+#: which is what let a 14% right-ascension provenance corruption pass.
+PROV_DEC_DEG_KEY = "prov_dec_deg"
+
+#: What these columns were called before the convention was in the name.  Read
+#: for compatibility and renamed on the next write; every live table predates
+#: the rename.
+_LEGACY_PROV_NAMES = {"prov_dra_added_mas": PROV_ONSKY_RA_KEY,
+                      "prov_ddec_added_mas": PROV_ONSKY_DEC_KEY}
+
+
+def migrate_prov_column_names(tbl):
+    """Rename the legacy provenance columns in place; return what it renamed.
+
+    The values are unchanged -- they were always on-sky milliarcseconds, the
+    name simply did not say so.  A table carrying BOTH spellings is left alone
+    and reported, because merging them is a curation decision rather than a
+    rename.
+    """
+    renamed = {}
+    for legacy, current in _LEGACY_PROV_NAMES.items():
+        if legacy in tbl.colnames and current not in tbl.colnames:
+            tbl.rename_column(legacy, current)
+            renamed[legacy] = current
+    return renamed
+
+
+def prov_onsky_columns(tbl):
+    """``(ra_key, dec_key)`` for whichever spelling this table carries."""
+    ra = (PROV_ONSKY_RA_KEY if PROV_ONSKY_RA_KEY in tbl.colnames
+          else "prov_dra_added_mas")
+    dec = (PROV_ONSKY_DEC_KEY if PROV_ONSKY_DEC_KEY in tbl.colnames
+           else "prov_ddec_added_mas")
+    return ra, dec
+
 
 def _row_label(tbl, i):
     for col in ("Visit", "Filter"):
@@ -1285,10 +1342,11 @@ def _heal_column_pairs(tbl, offsets_path, rows=None):
     if not len(bad):
         return 0
 
-    prov_d = (np.asarray(tbl["prov_dra_added_mas"], dtype=float)
-              if "prov_dra_added_mas" in tbl.colnames else np.zeros(len(tbl)))
-    prov_c = (np.asarray(tbl["prov_ddec_added_mas"], dtype=float)
-              if "prov_ddec_added_mas" in tbl.colnames else np.zeros(len(tbl)))
+    _ra_key, _dec_key = prov_onsky_columns(tbl)
+    prov_d = (np.asarray(tbl[_ra_key], dtype=float)
+              if _ra_key in tbl.colnames else np.zeros(len(tbl)))
+    prov_c = (np.asarray(tbl[_dec_key], dtype=float)
+              if _dec_key in tbl.colnames else np.zeros(len(tbl)))
     # DEC is exact: prov is on-sky mas and ddec is an on-sky arcsec offset, no
     # cos(dec) between them.
     dec_bad = np.abs(c_gap * 1000.0 - prov_c) > PROV_EXPLAINS_TOL_MAS
@@ -1301,9 +1359,27 @@ def _heal_column_pairs(tbl, offsets_path, rows=None):
     # and the heal WRITES this column, so it has to be checked: without it a row
     # whose Dec gap is explained and whose RA gap is not gets its dra silently
     # overwritten.
-    lo = np.minimum(prov_d / 1000.0, prov_d / 1000.0 / COS_DEC_MIN)
-    hi = np.maximum(prov_d / 1000.0, prov_d / 1000.0 / COS_DEC_MIN)
     slack = PROV_EXPLAINS_TOL_MAS / 1000.0
+    # With the declination recorded, the coordinate offset a provenance entry
+    # implies is EXACT and right ascension is checked as strictly as
+    # declination.  Without it the factor is only bounded to
+    # [COS_DEC_MIN, 1] -- a ~14% window, which is wide enough for a 14%
+    # corruption of the right-ascension provenance to pass unnoticed.  That is
+    # the gap prov_dec_deg exists to close, and rows written before it will
+    # keep the loose check for as long as they are not re-corrected.
+    if PROV_DEC_DEG_KEY in tbl.colnames:
+        _dec = np.asarray(tbl[PROV_DEC_DEG_KEY], dtype=float)
+        _cosd = np.cos(np.radians(_dec))
+        _known = np.isfinite(_dec) & (np.abs(_cosd) > 1e-6)
+    else:
+        _known = np.zeros(len(tbl), dtype=bool)
+        _cosd = np.ones(len(tbl))
+    exact = np.where(_known, prov_d / 1000.0 / np.where(_known, _cosd, 1.0),
+                     np.nan)
+    lo = np.where(_known, exact,
+                  np.minimum(prov_d / 1000.0, prov_d / 1000.0 / COS_DEC_MIN))
+    hi = np.where(_known, exact,
+                  np.maximum(prov_d / 1000.0, prov_d / 1000.0 / COS_DEC_MIN))
     ra_bad = (d_gap < lo - slack) | (d_gap > hi + slack)
 
     rogue = np.where(diverged & (dec_bad | ra_bad))[0]
@@ -1312,11 +1388,11 @@ def _heal_column_pairs(tbl, offsets_path, rows=None):
         if dec_bad[i]:
             axis, gap_i, prov_i, col_a, col_b, expect = (
                 "Dec", c_gap[i], prov_c[i], ca, cb,
-                f"prov_ddec_added_mas {prov_c[i]:.2f} mas")
+                f"{_dec_key} {prov_c[i]:.2f} mas")
         else:
             axis, gap_i, prov_i, col_a, col_b, expect = (
                 "RA", d_gap[i], prov_d[i], da, db,
-                f"prov_dra_added_mas {prov_d[i]:.2f} mas, i.e. a coordinate gap "
+                f"{_ra_key} {prov_d[i]:.2f} mas, i.e. a coordinate gap "
                 f"in [{lo[i] * 1000:.2f}, {hi[i] * 1000:.2f}] mas after the "
                 f"cos(dec) the apply loop divided by")
         raise OffsetsTableUpdateError(
@@ -1357,8 +1433,14 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
     The corrected table is validated with ``assert_offsets_table_sane``
     (collapsed-visit guard) before it is written.  The original is kept as a
     ``.pre_<stage>_<timestamp>`` backup.  Every corrected row gets provenance
-    columns (``prov_stage``, ``prov_date``, ``prov_dra_added_mas``,
-    ``prov_ddec_added_mas``, ``prov_source``).
+    columns (``prov_stage``, ``prov_date``, ``prov_dra_onsky_mas``,
+    ``prov_ddec_onsky_mas``, ``prov_dec_deg``, ``prov_source``).  The
+    ``_onsky_`` in those names is load-bearing: the table's own ``dra`` columns
+    hold a COORDINATE offset, and the two differ by cos(dec) -- ~14% at these
+    declinations.  ``prov_dec_deg`` records the declination the conversion
+    used, so the coordinate offset a provenance entry implies is exact rather
+    than bounded.  Tables written under the older ``prov_*_added_mas`` names
+    are renamed on the next write, values untouched.
 
     Returns the corrected Table.  Raises ``OffsetsTableUpdateError`` when a
     correction matches no row or the corrected table fails validation.
@@ -1448,9 +1530,24 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
                                    dtype=f"U{PROV_TEXT_MIN_CHARS}")
         # Sized to what THIS write puts in them, floored at the baseline.
         _widen_prov_text_columns(tbl, _prov_text_width(corrections, stage, now))
-        for col in ("prov_dra_added_mas", "prov_ddec_added_mas"):
+        _renamed = migrate_prov_column_names(tbl)
+        if _renamed:
+            print(f"  {os.path.basename(offsets_path)}: renaming provenance "
+                  f"column(s) "
+                  + ", ".join(f"{a} -> {b}" for a, b in sorted(_renamed.items()))
+                  + " -- the values are unchanged (they were always on-sky "
+                    "milliarcseconds); the name now says so, because right "
+                    "ascension also has a COORDINATE offset differing by "
+                    "cos(dec) (~14% here)", flush=True)
+        for col in (PROV_ONSKY_RA_KEY, PROV_ONSKY_DEC_KEY):
             if col not in tbl.colnames:
                 tbl[col] = np.zeros(len(tbl))
+        # NaN, not 0.0: a declination of exactly zero is a real (if
+        # impossible-here) value, so filling with it would claim every legacy
+        # row was corrected on the celestial equator.  The validator reads
+        # non-finite as "not recorded" and falls back to the loose bound.
+        if PROV_DEC_DEG_KEY not in tbl.colnames:
+            tbl[PROV_DEC_DEG_KEY] = np.full(len(tbl), np.nan)
         # An INT offset column truncates every fractional correction to zero and,
         # once one pair is float and the other is not, locks the table into a
         # permanent disagreement no write can clear.  Coerce before anything is
@@ -1532,12 +1629,19 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
                 tbl[_cc][idx] = np.asarray(tbl[_cc][idx], dtype=float) + ddec_add
             tbl["prov_stage"][idx] = _prov_text(stage)
             tbl["prov_date"][idx] = _prov_text(now)
-            tbl["prov_dra_added_mas"][idx] = (
-                np.asarray(tbl["prov_dra_added_mas"][idx], dtype=float)
+            tbl[PROV_ONSKY_RA_KEY][idx] = (
+                np.asarray(tbl[PROV_ONSKY_RA_KEY][idx], dtype=float)
                 + float(corr["dra_onsky_mas"]))
-            tbl["prov_ddec_added_mas"][idx] = (
-                np.asarray(tbl["prov_ddec_added_mas"][idx], dtype=float)
+            tbl[PROV_ONSKY_DEC_KEY][idx] = (
+                np.asarray(tbl[PROV_ONSKY_DEC_KEY][idx], dtype=float)
                 + float(corr["ddec_onsky_mas"]))
+            # The declination this correction's cos(dec) used.  Recorded per
+            # row so the coordinate offset it implies can be re-derived exactly
+            # rather than bounded -- the whole point of the column.  A row
+            # corrected twice from different declinations keeps the latest,
+            # which is the one whose conversion the accumulated total reflects
+            # only if they agree; they differ by <1e-4 deg within a pointing.
+            tbl[PROV_DEC_DEG_KEY][idx] = float(corr["dec_deg"])
             tbl["prov_source"][idx] = _prov_text(
                 corr.get("source", "astrometry_checkpoint"))
 
@@ -1549,8 +1653,8 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
         # guide-star fix of arcseconds, but never more than a swept peak could mean.
         drift_limit = _positive_env_float("ASTROM_MAX_BULK_CORRECTION_ARCSEC",
                                           MAX_BULK_CORRECTION_ARCSEC)
-        drift = np.hypot(np.asarray(tbl["prov_dra_added_mas"], dtype=float),
-                         np.asarray(tbl["prov_ddec_added_mas"], dtype=float)) / 1000.0
+        drift = np.hypot(np.asarray(tbl[PROV_ONSKY_RA_KEY], dtype=float),
+                         np.asarray(tbl[PROV_ONSKY_DEC_KEY], dtype=float)) / 1000.0
         over = np.where(drift > drift_limit)[0]
         if len(over):
             worst = [(str(tbl["Visit"][i]), str(tbl["Filter"][i]),
@@ -1824,7 +1928,7 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
             row["Vgroup"] = vgroup
             bykey[legacy[:4] + (vgroup,)] = row
             kept = tuple(_finite_float(row.get(c))
-                         for c in ("prov_dra_added_mas", "prov_ddec_added_mas"))
+                         for c in (PROV_ONSKY_RA_KEY, PROV_ONSKY_DEC_KEY))
             print(f"[consensus] migrated pre-Vgroup row {legacy[:4]} -> "
                   f"Vgroup={vgroup} (keeps its accumulated "
                   f"{kept[0]:+.2f},{kept[1]:+.2f} mas)", flush=True)
@@ -1837,10 +1941,15 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
                 row = bykey[key]
                 row["dra (arcsec)"] = float(row["dra (arcsec)"]) + dra_add
                 row["ddec (arcsec)"] = float(row["ddec (arcsec)"]) + ddec_add
-                row["prov_dra_added_mas"] = (float(row.get("prov_dra_added_mas", 0.0))
-                                             + float(corr["dra_onsky_mas"]))
-                row["prov_ddec_added_mas"] = (float(row.get("prov_ddec_added_mas", 0.0))
-                                              + float(corr["ddec_onsky_mas"]))
+                row[PROV_ONSKY_RA_KEY] = (
+                    _finite_float(row.get(PROV_ONSKY_RA_KEY,
+                                          row.get("prov_dra_added_mas", 0.0)))
+                    + float(corr["dra_onsky_mas"]))
+                row[PROV_ONSKY_DEC_KEY] = (
+                    _finite_float(row.get(PROV_ONSKY_DEC_KEY,
+                                          row.get("prov_ddec_added_mas", 0.0)))
+                    + float(corr["ddec_onsky_mas"]))
+                row[PROV_DEC_DEG_KEY] = float(corr["dec_deg"])
                 row["prov_stage"] = _prov_text(stage)
                 row["prov_date"] = _prov_text(now)
                 row["prov_source"] = _prov_text(
@@ -1862,8 +1971,9 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
                     "dra (arcsec)": dra_add, "ddec (arcsec)": ddec_add,
                     "prov_stage": _prov_text(stage),
                     "prov_date": _prov_text(now),
-                    "prov_dra_added_mas": float(corr["dra_onsky_mas"]),
-                    "prov_ddec_added_mas": float(corr["ddec_onsky_mas"]),
+                    PROV_ONSKY_RA_KEY: float(corr["dra_onsky_mas"]),
+                    PROV_ONSKY_DEC_KEY: float(corr["ddec_onsky_mas"]),
+                    PROV_DEC_DEG_KEY: float(corr["dec_deg"]),
                     "prov_source": _prov_text(
                         corr.get("source", "m2 visit-consensus seed")),
                 }

@@ -95,7 +95,20 @@ BASE = os.environ.get("GC_BASEPATH_OVERRIDE",
 
 AS_BUILT = ("dra", "ddec")
 APPLIED = ("dra (arcsec)", "ddec (arcsec)")
-PROV = ("prov_dra_added_mas", "prov_ddec_added_mas")
+#: The on-sky provenance columns, under either spelling: the convention was
+#: put into the name (``_onsky_``) because right ascension also has a
+#: COORDINATE offset differing by cos(declination), and every live table
+#: predates that.  Resolved per table rather than assumed.
+_PROV_CURRENT = ("prov_dra_onsky_mas", "prov_ddec_onsky_mas")
+_PROV_LEGACY = ("prov_dra_added_mas", "prov_ddec_added_mas")
+
+
+def prov_columns(colnames):
+    """Whichever spelling of the on-sky provenance pair this table carries."""
+    return (_PROV_CURRENT if _PROV_CURRENT[0] in colnames else _PROV_LEGACY)
+
+
+PROV = _PROV_LEGACY
 
 SNAPSHOT_MARKERS = ("_backup", ".pre_", ".contaminated", ".old", ".removed_",
                     "_bak", "preclean")
@@ -175,7 +188,7 @@ def revert(path, apply=False):
             col = np.asarray(tbl[applied], dtype=float)
             col[idx] = np.asarray(tbl[as_built], dtype=float)[idx]
             tbl[applied] = col
-        for c in PROV:
+        for c in prov_columns(tbl.colnames):
             if c in tbl.colnames:
                 col = np.asarray(tbl[c], dtype=float)
                 col[idx] = 0.0

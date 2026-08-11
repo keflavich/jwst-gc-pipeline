@@ -376,14 +376,28 @@ def test_an_empty_provenance_cell_is_not_rewritten(tmp_path):
         t[col] = np.ma.array(list(t[col]), mask=[True, False, True, True])
     p = str(tmp_path / "masked.csv")
     t.write(p, format="ascii.csv", overwrite=True)
-    raw_before = open(p).read().splitlines()
+    before = Table.read(p, format="ascii.csv")
 
     update_offsets_table(p, [_corr(2, POOLED_SOURCE_4)], stage="m2")
 
-    raw_after = open(p).read().splitlines()
-    changed = [i for i, (b, a) in enumerate(zip(raw_before, raw_after)) if b != a]
-    assert changed == [2], (
-        f"only the corrected row may change; changed rows {changed}")
+    # Compared row by row rather than line by line.  A raw-text comparison used
+    # to stand in for "an untouched row is not rewritten", and it cannot any
+    # more: this write renames the provenance columns to the spelling that
+    # states their convention and adds prov_dec_deg, so every line of the file
+    # legitimately changes.  The property is about VALUES.
+    after = Table.read(p, format="ascii.csv")
+    corrected_row = 1                      # data row index of exposure 2
+    shared = [c for c in before.colnames if c in after.colnames]
+    for i in range(len(before)):
+        if i == corrected_row:
+            continue
+        for col in shared:
+            b, a = before[col][i], after[col][i]
+            same = (str(b) == str(a)
+                    or (isinstance(b, float) and isinstance(a, float)
+                        and np.isnan(b) and np.isnan(a)))
+            assert same, (f"untouched row {i} column {col!r} changed "
+                          f"{b!r} -> {a!r}")
     after = Table.read(p, format="ascii.csv")
     assert not any(str(v) == "0" for v in after["prov_source"]), \
         "an empty provenance cell was rewritten to the literal '0'"
