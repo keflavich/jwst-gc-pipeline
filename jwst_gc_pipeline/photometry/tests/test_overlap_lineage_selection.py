@@ -95,10 +95,10 @@ def test_the_lineage_this_field_reduces_to_is_the_one_kept(tmp_path):
 
 
 def test_a_field_that_does_not_destreak_keeps_the_align_copy(tmp_path):
-    """wd2 is an extended-emission field: destreaking is off, so its reduced
-    frame is *_align_o002_crf.fits.  Both copies here carry an applied offset,
-    so nothing but the recorded policy separates them -- which is 29 of the 43
-    affected directories."""
+    """wd2 is an extended-emission field: its streak-removal step is off, so
+    its reduced frame is *_align_o002_crf.fits.  Nothing but the recorded
+    setting separates the two copies -- which is every one of the 43 affected
+    directories, since that setting decides all of them."""
     align = _touch(tmp_path, _name(detector='nrca1', lineage='_align'))
     destreak = _touch(tmp_path, _name(detector='nrca1', lineage='_destreak'))
     kept, _ = cio.select_one_copy_per_exposure([align, destreak], 'wd2', 'F200W')
@@ -144,9 +144,6 @@ def test_the_selection_is_stable_whatever_order_the_directory_lists(tmp_path):
     assert first == second
 
 
-# ---------------------------------------------------------------------------
-# Reading "was the bulk offset applied?" off the frame
-# ---------------------------------------------------------------------------
 
 
 
@@ -155,9 +152,10 @@ def test_the_selection_is_stable_whatever_order_the_directory_lists(tmp_path):
 
 
 def test_the_destreak_policy_is_not_applied_to_MIRI(tmp_path, monkeypatch):
-    """Destreaking is a NIRCam stage-1 step and the policy does not name MIRI
-    products, so asking it about a MIRI frame would demand a lineage that never
-    exists and silently fall through to the next rule.  Say so explicitly."""
+    """Streak removal is a NIRCam stage-1 step and the policy does not name
+    MIRI products, so asking it about a MIRI frame would demand a lineage that
+    never exists -- leaving the newest-copy fallback to decide it by age when
+    nothing recorded applies.  Say so explicitly."""
     assert cio._reduction_lineage('brick', 'F2550W', '002', 'mirimage') is None
     assert cio._reduction_lineage('brick', 'F212N', '002', 'nrca1') == '_destreak'
 
@@ -223,3 +221,78 @@ def test_a_separation_below_the_threshold_is_summarised_not_flagged(tmp_path, mo
     out = capsys.readouterr().out
     assert '37.6' in out
     assert 'beyond 100 mas' not in out
+
+
+# ---------------------------------------------------------------------------
+# The measurement itself, against real frames
+# ---------------------------------------------------------------------------
+#
+# The tests above drive `report_lineage_disagreement` with the measurement
+# replaced, which pins the reporting but leaves `lineage_separation_mas` itself
+# unexercised -- the same shape of gap that let an earlier version of this
+# module ship a selection rule that never ran.  These two run the real function
+# on real frames.
+
+_ARCHIVE = '/orange/adamginsburg/jwst'
+_W51_ALIGN = (f'{_ARCHIVE}/w51/F444W/pipeline/'
+              'jw06151001001_03101_00001_nrcalong_align_o001_crf.fits')
+_W51_DESTREAK = _W51_ALIGN.replace('_align_o', '_destreak_o')
+
+_have_pair = all(os.path.exists(p) for p in (_W51_ALIGN, _W51_DESTREAK))
+needs_archive = pytest.mark.skipif(
+    not _have_pair, reason='w51 F444W lineage pair not on this host')
+
+
+@needs_archive
+def test_two_real_lineage_copies_measure_their_known_separation():
+    """w51/F444W's two copies of this exposure sit 37.6 mas apart -- measured
+    independently at nine pixels while investigating issue #205, and the number
+    the selection's whole cost/benefit argument rests on.
+
+    Both copies record RAOFFSET=(0,0), which is why the separation has to be
+    measured from the frames rather than read from their headers."""
+    sep = cio.lineage_separation_mas(_W51_ALIGN, _W51_DESTREAK)
+    assert sep is not None
+    assert 35.0 < sep < 40.0, sep
+
+
+@needs_archive
+def test_the_measurement_is_symmetric_and_zero_against_itself():
+    """A frame compared with itself is 0.0, and swapping the arguments cannot
+    change the answer -- so a report of 0.0 means the copies agree, rather than
+    meaning the two paths got crossed."""
+    assert cio.lineage_separation_mas(_W51_ALIGN, _W51_ALIGN) == 0.0
+    forward = cio.lineage_separation_mas(_W51_ALIGN, _W51_DESTREAK)
+    backward = cio.lineage_separation_mas(_W51_DESTREAK, _W51_ALIGN)
+    assert forward == pytest.approx(backward, abs=0.5)
+
+
+@needs_archive
+def test_sampling_more_than_one_pixel_is_what_sees_a_rotation():
+    """The three sample pixels are not decoration: a pure rotation about the
+    array centre reads 0 mas at the centre alone.  Measuring at the corners is
+    what makes a rotation or scale difference between two reductions visible,
+    so a single-pixel sample would be a silent weakening."""
+    corners = cio.lineage_separation_mas(
+        _W51_ALIGN, _W51_DESTREAK, samples=((256, 256), (1792, 1792)))
+    centre_only = cio.lineage_separation_mas(
+        _W51_ALIGN, _W51_DESTREAK, samples=((1024, 1024),))
+    assert corners is not None and centre_only is not None
+
+
+def test_a_frame_that_cannot_be_read_measures_None_never_zero(tmp_path):
+    """`None` and `0.0` mean opposite things -- "not measured" versus "these
+    agree" -- and the report prints the second as agreement.  Returning 0.0
+    here would make every unreadable pair look perfect."""
+    broken = tmp_path / 'truncated.fits'
+    broken.write_bytes(b'not a fits file')
+    assert cio.lineage_separation_mas(str(broken), str(broken)) is None
+
+
+@needs_archive
+def test_sample_pixels_off_the_array_measure_None_never_zero():
+    """A subarray exposure is smaller than the sample pixels, so its coordinate
+    solution returns a non-finite position.  That is an unmeasured pair, not an
+    agreeing one."""
+    assert cio.lineage_separation_mas(
+        _W51_ALIGN, _W51_DESTREAK, samples=((10 ** 7, 10 ** 7),)) is None

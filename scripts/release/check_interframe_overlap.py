@@ -321,7 +321,12 @@ def select_one_copy_per_exposure(frames, field, filt):
 
     Raises ``UnparseableFrameError`` rather than dropping a frame whose name it
     cannot identify: vanishing silently is the failure this whole change exists
-    to remove.
+    to remove.  This is a guard on this function's own contract, not a fix for
+    any directory today -- ``build_groups`` filters with ``_parse_crf`` first,
+    which accepts exactly the same names, so nothing unparseable reaches here
+    from the gate.  (wd1/F200W's frames are rejected by that earlier filter and
+    the directory reads as empty, which the gate already fails closed on; see
+    issue #376.)
     """
     by_exposure = {}
     unparseable = []
@@ -351,7 +356,12 @@ def select_one_copy_per_exposure(frames, field, filt):
         if len(chosen) != 1:
             # Nothing recorded decided it: MIRI, a partly-finished
             # re-reduction, or (impossible today) two files with one lineage.
-            chosen = [max(chosen or copies, key=os.path.getmtime)]
+            # (mtime, path) not mtime alone: equal timestamps are common
+            # among copies written by one run, and `max` returns the FIRST
+            # maximal element, so a bare mtime key makes the winner depend on
+            # the order the directory happened to be listed in.
+            chosen = [max(chosen or copies,
+                          key=lambda p: (os.path.getmtime(p), p))]
             why = ("newest -- no recorded reduction setting decided this one"
                    if not wanted else
                    f"newest -- this field's reduction writes "
@@ -369,6 +379,15 @@ def report_lineage_disagreement(dropped, kept, label, threshold_mas=100.0):
     reduction setting ever points at the stale copy, the rule itself cannot
     notice, but this will.  A pair beyond ``threshold_mas`` is not a lineage
     question -- at that size one of the two frames is simply wrong.
+
+    **This reports; it does not gate.** Issue #205 asks a second question --
+    whether copies disagreeing beyond some tolerance should make the gate
+    REFUSE rather than pick one -- and that is deliberately not answered here,
+    because the tolerance was to be set from measurements that did not exist
+    until this function produced them.  So a directory can print "one of the
+    two frames is wrong" for most of its discarded copies and still return a
+    passing verdict.  Choosing the refusal threshold is the follow-up this
+    data is for.
 
     Returns the list of ``(dropped_path, separation_mas)`` it measured.
     """
@@ -538,12 +557,18 @@ def build_groups(field, filt, observations=None):
               f"copies excluded, keeping one per exposure:", flush=True)
         for why, paths in sorted(reasons.items()):
             example = os.path.basename(paths[0])
-            print(f"      {len(paths):4d} x  kept {why}  (e.g. dropped "
+            print(f"      {len(paths):4d} dropped because {why}  (e.g. "
                   f"{example})", flush=True)
         # Measure what was discarded rather than only naming it.  The selection
         # above reads filenames and a recorded setting; this is the only part
         # that consults the frames, and so the only part that could notice the
         # setting pointing at the wrong copy.
+        #
+        # It is not free: two GWCS loads per discarded copy at ~0.5-2 s each,
+        # so ~3 min on a 192-exposure filter directory such as brick/F212N,
+        # ahead of the detection pass that reopens the kept frames anyway.
+        # Worth it while the disagreements are this large and this unmapped;
+        # revisit if a full --scan becomes routine.
         report_lineage_disagreement(superseded, frames, f"{field}/{filt}")
     groups = {}
     ndet = {}
