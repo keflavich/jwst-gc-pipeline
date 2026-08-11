@@ -464,15 +464,28 @@ def _assert_one_correction_per_row(corrections, tbl, offsets_path):
 
 
 def pool_corrections_to_table_granularity(corrections, offsets_path,
-                                          tbl=None, stat="median"):
-    """Collapse corrections that share a table row into one, robustly.
+                                          tbl=None, stat="mean"):
+    """Collapse corrections that share a table row into one.
 
     A module-FAMILY offsets row cannot express a per-DETECTOR shift: the four
     detectors of a NIRCam module sit at fixed SIAF positions within it, so their
     individual residuals are a distortion/DVA-class systematic the row has no
-    freedom to remove.  What the row CAN express is the part they share.  Take
-    the median (not the sum, and not the mean -- one bad detector should not
-    move it) of every correction that lands on the same row.
+    freedom to remove.  What the row CAN express is the part they share, so
+    every correction landing on one row is combined into one.
+
+    **The MEAN, not the median** (and never the sum).  Each member is itself the
+    consensus of thousands of matched stars on one detector, so there is no
+    population of one-off blunders for a robust statistic to protect against --
+    and the protection it does offer is already provided, better, by the spread
+    refusal below: a group whose members disagree by more than
+    ``MAX_POOL_SPREAD_MAS`` is rejected outright rather than quietly averaged.
+    A median inside that limit would silently down-weight a member the refusal
+    had already judged acceptable.
+
+    Two concrete reasons the median is the wrong choice at these group sizes.
+    For the common N=2 it IS the mean, so the robustness is imaginary.  For N=4
+    it is the average of the middle two, which discards the two extreme
+    detectors entirely -- half the measurements, all of them equally valid.
 
     Returns a NEW list; corrections that own their row are passed through
     unchanged.  Pooled entries carry the member modules and count in ``source``
@@ -547,9 +560,10 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
             seen[i] = key
 
     if stat not in _POOL_STATS:
-        # `agg = np.median if stat == "median" else np.mean` silently degraded a
-        # typo to the LESS robust statistic, and the statistic is the whole
-        # point: members 1,1,1,100 give 1.0 as "median" and 25.75 as "medain".
+        # `agg = np.median if stat == "median" else np.mean` silently degraded
+        # a typo to whichever statistic the `else` named, and the statistic is
+        # the whole point: members 1,1,1,100 give 1.0 under one and 25.75 under
+        # the other.  A typo must not choose between them.
         raise ValueError(f"pool stat must be one of {sorted(_POOL_STATS)}, "
                          f"got {stat!r}")
     agg = _POOL_STATS[stat]
@@ -589,11 +603,10 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
     return out
 
 
-# dra and ddec are aggregated INDEPENDENTLY, which is the component-wise median
-# and not the geometric (2-D) median.  For the N<=4 groups this pooler is built
-# for the two differ negligibly, and the component-wise form has the property
-# that matters here -- it cannot exceed the component-wise max, so it can never
-# sum.  Revisit if groups ever get large.
+# dra and ddec are aggregated INDEPENDENTLY.  For the mean that is exact -- the
+# mean of a set of vectors is the vector of component means -- so unlike the
+# component-wise median it is not an approximation to anything.  Either way the
+# result cannot exceed the component-wise maximum, so pooling can never sum.
 _POOL_STATS = {"median": np.median, "mean": np.mean}
 
 # Refuse a group whose members disagree by more than this; they are not one

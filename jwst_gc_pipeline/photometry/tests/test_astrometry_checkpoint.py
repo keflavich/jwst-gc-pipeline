@@ -1309,11 +1309,18 @@ def test_refuses_detector_corrections_on_module_family_table(tmp_path):
 
 
 def test_pooling_collapses_detectors_to_the_family_row(tmp_path):
-    """Pooled corrections apply 1:1, and the pooled value is the MEDIAN."""
+    """Pooled corrections apply 1:1, and four detectors become one row value.
+
+    The residuals here (1, 5, 3, 3) were chosen to largely cancel -- their
+    combined value is 3 while their SUM is 12, which is the failure pooling
+    exists to prevent.  They also happen to give the same answer under either
+    combining statistic, so this test is about the 1:1 apply; which statistic
+    is used is pinned separately, on values where the two differ.
+    """
     from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
         pool_corrections_to_table_granularity)
     path = _module_family_csv(tmp_path)
-    # residuals that largely cancel: median 3, sum 12 -- the whole point
+    # residuals that largely cancel: combined 3, summed 12 -- the whole point
     corr = []
     for m, d in (("nrca1", 1.0), ("nrca2", 5.0), ("nrca3", 3.0), ("nrca4", 3.0)):
         corr.extend(_detector_corrections((m,), ddec=d))
@@ -1321,7 +1328,7 @@ def test_pooling_collapses_detectors_to_the_family_row(tmp_path):
     assert len(pooled) == 1
     assert pooled[0]["ddec_onsky_mas"] == pytest.approx(3.0)
     assert pooled[0]["module"] == "nrca"
-    assert "median of 4" in pooled[0]["source"]
+    assert "mean of 4" in pooled[0]["source"]
     out = update_offsets_table(path, pooled, "m2")
     hit = out[(out["Module"] == "nrca") & (out["Exposure"] == 1)]
     assert len(hit) == 1
@@ -1331,7 +1338,7 @@ def test_pooling_collapses_detectors_to_the_family_row(tmp_path):
     assert other[0]["ddec (arcsec)"] == pytest.approx(0.0)
 
 
-def test_pooled_sum_would_have_been_four_times_the_median(tmp_path):
+def test_pooled_sum_would_have_been_four_times_the_combined_value(tmp_path):
     """Pin the actual divergence factor: summing 4 detectors over-corrects ~4x."""
     from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
         pool_corrections_to_table_granularity)
@@ -1512,7 +1519,7 @@ def test_pooled_entry_carries_its_dispersion(tmp_path):
     pooled = pool_corrections_to_table_granularity(corr, path)[0]
     assert pooled["pooled_n"] == 4
     assert pooled["pooled_spread_mas"] == pytest.approx(4.0)
-    assert pooled["pooled_stat"] == "median"
+    assert pooled["pooled_stat"] == "mean"
     assert "ptp 4.00mas" in pooled["source"]
 
 
@@ -2282,3 +2289,80 @@ def test_divergence_escalation_stays_inside_the_writers_error_contract(tmp_path,
                             ddec_gap_mas=9.0, prov_ddec_mas=0.0)])
     with pytest.raises(OffsetsTableUpdateError):
         update_offsets_table(path, _corr(), "m2")
+
+
+# ---------------------------------------------------------------------------
+# Which statistic combines several detectors' corrections onto one table row
+# ---------------------------------------------------------------------------
+
+from jwst_gc_pipeline.photometry.astrometry_checkpoint import (      # noqa: E402
+    pool_corrections_to_table_granularity)
+
+
+def test_corrections_landing_on_one_row_are_combined_by_the_MEAN(tmp_path):
+    """Each member is the consensus of thousands of matched stars on one
+    detector, so there is no population of blunders for a robust statistic to
+    guard against -- and a group that genuinely disagrees is REFUSED by the
+    spread check rather than quietly averaged.
+
+    The distinction is visible only at N>=3: with four detectors the median is
+    the average of the middle two and discards the outer pair entirely.
+    """
+    path = _offsets_csv(tmp_path)
+    corr = [dict(visit="jw01182004001", exposure=1, module=m, filtername="F212N",
+                 dra_onsky_mas=v, ddec_onsky_mas=0.0, dec_deg=DEC_TEST)
+            for m, v in zip(("nrcb1", "nrcb2", "nrcb3", "nrcb4"),
+                            (1.0, 2.0, 3.0, 10.0))]
+    pooled = pool_corrections_to_table_granularity(corr, path)
+    assert len(pooled) == 1
+    assert pooled[0]["dra_onsky_mas"] == pytest.approx(4.0)      # mean
+    assert pooled[0]["dra_onsky_mas"] != pytest.approx(2.5)      # not the median
+    assert pooled[0]["pooled_stat"] == "mean"
+
+
+def test_the_statistic_used_is_named_in_the_provenance(tmp_path):
+    """A pooled value must say how it was arrived at; the row records one
+    number for four measurements."""
+    path = _offsets_csv(tmp_path)
+    corr = [dict(visit="jw01182004001", exposure=1, module=m, filtername="F212N",
+                 dra_onsky_mas=1.0, ddec_onsky_mas=0.0, dec_deg=DEC_TEST)
+            for m in ("nrcb1", "nrcb2")]
+    pooled = pool_corrections_to_table_granularity(corr, path)
+    assert "mean of 2" in pooled[0]["source"]
+
+
+def test_the_median_is_still_available_and_still_differs(tmp_path):
+    """Kept as an option so the choice stays a choice, and so a future
+    comparison does not need a code change."""
+    path = _offsets_csv(tmp_path)
+    corr = [dict(visit="jw01182004001", exposure=1, module=m, filtername="F212N",
+                 dra_onsky_mas=v, ddec_onsky_mas=0.0, dec_deg=DEC_TEST)
+            for m, v in zip(("nrcb1", "nrcb2", "nrcb3", "nrcb4"),
+                            (1.0, 2.0, 3.0, 10.0))]
+    pooled = pool_corrections_to_table_granularity(corr, path, stat="median")
+    assert pooled[0]["dra_onsky_mas"] == pytest.approx(2.5)
+    assert pooled[0]["pooled_stat"] == "median"
+
+
+def test_a_group_that_genuinely_disagrees_is_refused_not_averaged(tmp_path):
+    """This is what actually protects against a bad detector, and it is why the
+    combining statistic does not have to: members spread beyond the limit are
+    not one shift seen four times, so their middle means nothing."""
+    path = _offsets_csv(tmp_path)
+    corr = [dict(visit="jw01182004001", exposure=1, module=m, filtername="F212N",
+                 dra_onsky_mas=v, ddec_onsky_mas=0.0, dec_deg=DEC_TEST)
+            for m, v in zip(("nrcb1", "nrcb2"), (0.0, 500.0))]
+    with pytest.raises(OffsetsTableUpdateError, match="spread|disagree"):
+        pool_corrections_to_table_granularity(corr, path)
+
+
+def test_two_detectors_give_the_same_answer_either_way(tmp_path):
+    """For the common two-member group the median IS the mean, so the change
+    moves nothing there -- worth pinning, since most groups are this size."""
+    path = _offsets_csv(tmp_path)
+    corr = [dict(visit="jw01182004001", exposure=1, module=m, filtername="F212N",
+                 dra_onsky_mas=v, ddec_onsky_mas=0.0, dec_deg=DEC_TEST)
+            for m, v in zip(("nrcb1", "nrcb2"), (2.0, 6.0))]
+    as_mean = pool_corrections_to_table_granularity(corr, path)[0]
+    as_median = pool_corrections_to_table_granularity(corr, path, stat="median")[0]
+    assert as_mean["dra_onsky_mas"] == pytest.approx(as_median["dra_onsky_mas"])
