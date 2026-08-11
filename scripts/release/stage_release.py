@@ -684,6 +684,38 @@ FRAME_REFCAT = {
     "brick": "/orange/adamginsburg/jwst/brick/catalogs/gaia_virac2_refcat_epoch2022.70.fits",
 }
 
+# ---------------------------------------------------------------------------
+# The star list the OVERLAP gate uses to arbitrate a pair it cannot measure
+# frame-against-frame.  A separate registry from FRAME_REFCAT above, because the
+# two jobs have opposite requirements.
+#
+# FRAME_REFCAT feeds a BLOCKING absolute-frame check: "is this catalogue on the
+# right sky?"  That needs a dense catalogue -- a sparse one gives a noisy bulk
+# tie and would refuse good data.
+#
+# This registry feeds a TIE-BREAK: two exposures overlap on a sliver too thin
+# to compare directly, so both are compared against a common list of stars
+# instead.  Sparse is fine for that, and far better than nothing -- with no
+# list the pair is simply unmeasurable and the field cannot stage.  w51's Gaia
+# list is ~9,500 rows against the Galactic Centre fields' ~100,000, which is
+# why it belongs here and NOT in FRAME_REFCAT.
+OVERLAP_ARBITER_REFCAT = {
+    "w51": "/orange/adamginsburg/jwst/w51/catalogs/gaia_refcat.fits",
+}
+
+
+def overlap_arbiter_refcat(field):
+    """The star list to arbitrate an unmeasurable overlap pair, or ``None``.
+
+    Prefers the field's own arbiter entry; falls back to its absolute-frame
+    catalogue, which is denser and works for this too.
+    """
+    for source in (OVERLAP_ARBITER_REFCAT, FRAME_REFCAT):
+        path = source.get(field)
+        if path and os.path.exists(path):
+            return path
+    return None
+
 
 def _frame_bulk_offset(sc, ref):
     """The catalog's bulk offset vs the reference, by the SANCTIONED method
@@ -1675,9 +1707,14 @@ def main(argv=None):
         # frame-vs-frame pooled histogram is unreliable there; the same-star
         # residual map vs VIRAC2 is the authoritative arbiter (fail-closed still
         # applies if the refcat is missing).
-        overlap_refcat = FRAME_REFCAT.get(args.field)
-        if overlap_refcat and os.path.exists(overlap_refcat):
+        overlap_refcat = overlap_arbiter_refcat(args.field)
+        if overlap_refcat:
             overlap_cmd += ["--refcat", overlap_refcat]
+        else:
+            print(f"  no overlap arbiter star list for '{args.field}' "
+                  f"(OVERLAP_ARBITER_REFCAT / FRAME_REFCAT) -- any pair whose "
+                  f"footprints overlap too thinly to compare frame-against-frame "
+                  f"will stay unmeasurable and block staging", flush=True)
         rc = subprocess.run(overlap_cmd).returncode
         if rc == 1:
             print(f"\nREFUSING TO STAGE '{args.field}': inter-frame OVERLAP gate FAILED "
