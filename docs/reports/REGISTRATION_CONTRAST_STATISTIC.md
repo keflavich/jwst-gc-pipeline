@@ -226,15 +226,20 @@ the comment on `scripts/release/registration_failsafes.py::FAIL_MIN_RATIO`:
 *"the clean brick cells verify at median contrast ~18"*. So `FAIL_MIN_RATIO = 10` is under the contrast a **clean** cell
 of that field produces — a factor of ~1.8 — which puts the bar in the noise, and
 means raising it from 5 to 10 removed those seven cells without ever having
-distinguished them from a seam. A sparse cell's genuine seam scores 7 (Table 2,
-15 stars) and lands in the same place. The threshold separated the two
+distinguished them from a seam — see Table 4, where #179's *real* injected seams
+start at the same `ratio` 5 these cells read. (An earlier version argued this
+from Table 2's 15-star row instead, which is both modelled and the one row this
+document twice fences off as not a raw count and outside the argued regime.
+Issue #170 retracted that comparison; the report had kept it.) The threshold
+separated the two
 populations on this band by luck of density, not because the statistic
 distinguishes them. That is the whole of #170.
 
 **Where the model and the real data disagree, and it is worth saying.** The
 seven cells fall *between* Table 2's rows, so the model is re-run at their own
 pair counts rather than read off the neighbours: `model_ratio_at_npairs` solves
-for the star count that reproduces 232 and 323 pairs and measures there, giving
+for the star count that reproduces the observed 232 and 323 pairs and measures
+there — realising 231 and 317, which is what is quoted — giving
 `ratio` **66–82** — against that recorded ~18 for real clean brick cells, a
 factor of about four. Two things to keep in mind about that comparison. It is
 approximate in the sampling sense: at 25 trials it lands at 66–82, and across
@@ -387,12 +392,16 @@ per-cell separation: 49.3 → 55 against the raw count's 8 → 10, and it fires 
 **And the raw count is worse than the modelled rows suggest, for exactly the same
 reason.** This model puts a seam at those pair counts at 66–82; #179's *real*
 seams score `ratio` **5–49, with medians of 12–18** (the first column above).
-They start at the false alarms' own 5–8, and their medians **straddle**
-`FAIL_MIN_RATIO = 10`.
+They start at the false alarms' own 5–8; their medians (12–18) **clear**
+`FAIL_MIN_RATIO = 10`, but their sub-median tail does not.
 
-So the bar does not merely sit too low to separate the two populations — it sits
+So the bar does not merely sit too low to separate the two populations — it falls
 **inside the real seam distribution**, failing weak seam cells and artifact cells
-alike. That is the case against the raw count, and it is made on measured data
+alike. (An earlier version said the medians *straddle* 10. They do not: 18, 17
+and 12 all clear it by 1.2–1.8×. What straddles the bar is each trial's full
+range, 5 up to 27–49. The distinction matters — as written it implied the
+*typical* real seam cell falls under the bar, where in fact only the weak tail
+does.) That is the case against the raw count, and it is made on measured data
 rather than on this model. (An earlier version of this paragraph compared the
 modelled 66–82 against the real 5–8 and said the bar "sits below both", which is
 both the upper-bound mistake corrected above and wrong on its face — 10 is
@@ -439,7 +448,7 @@ words above before their labels are given. An earlier revision of this report
 said #179 was "closed without a stated reason", which was wrong — the comment is
 on the pull request, timestamped at the close.
 
-Nothing from #179 is on `main` — verified at `d47a2c2`: `FAIL_MIN_RATIO = 10.0`
+Nothing from #179 is on `main` — verified at `2ca3cdc`: `FAIL_MIN_RATIO = 10.0`
 is still what `scripts/release/registration_failsafes.py` declares, and neither
 `FAIL_MIN_SIG` nor `MIN_SEAM_CELLS` exists anywhere in the tree.
 

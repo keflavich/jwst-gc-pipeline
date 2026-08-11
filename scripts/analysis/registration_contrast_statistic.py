@@ -411,7 +411,7 @@ def main(argv=None):
     judged_sig = [((r[3] * r[4]) - r[1] / nb) / np.sqrt(r[1] / nb)
                   for r in rows if r[1] >= MIN_PAIRS]
     for label, lo_s, med_s, hi_s, lo_r, med_r, hi_r in REAL_SEAM_SIG_179:
-        print(f"{('#179 REAL seam, ' + label):>26}{'':>9}"
+        print(f"{('#179 real, ' + label):>26}{'':>9}"
               f"{f'{lo_r}-{hi_r} (med {med_r})':>11}"
               f"{f'{lo_s:.1f}-{hi_s:.1f} (med {med_s:.1f})':>22}")
     real_lo = min(r[1] for r in REAL_SEAM_SIG_179)
@@ -429,7 +429,8 @@ def main(argv=None):
           f"medians, and an upper bound on one population is exactly\n  what "
           f"destroys a claim about the SEPARATION.  Measured on real data the two"
           f"\n  populations OVERLAP at the low end -- false alarms from "
-          f"{min(fp_sig):.1f}, real seams from {real_lo:.1f} --\n  because an "
+          f"{min(fp_sig):.1f}, real seams from {real_lo:.1f}; #179 rounds\n  both "
+          f"to 'sig ~32.6' -- because an "
           f"injected seam displaces each cell's "
           f"existing peak, so a seam's weakest cells are the field's\n  "
           f"intrinsically weakest -- which are the artifact cells.\n")
