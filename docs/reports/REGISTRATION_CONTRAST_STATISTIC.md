@@ -211,10 +211,8 @@ spurious. #166/#172 responded by raising the own-catalog bar from 5 to 10, which
 removed those seven, and left the cross-band check at 5.
 
 Those seven cells held 232–323 pairs at `ratio` 5–8 — their peak bins held
-**1.7–2.5%** of their pairs (median 2.2%) — no coherent same-star signal.
-
-That is *not*, on its own, what makes them false positives, and an earlier
-version of this sentence said it was. #179 measured real injected seam cells
+**1.7–2.5%** of their pairs (median 2.2%) — which does *not*, on its own, make
+them false positives, though an earlier version of this sentence said it did. #179 measured real injected seam cells
 reaching the same level: a seam displaces each cell's existing peak, so a seam's
 weakest cells are the field's intrinsically weakest cells, which are these cells.
 What establishes that these seven are false is the independent evidence — a

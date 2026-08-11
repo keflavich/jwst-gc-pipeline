@@ -56,7 +56,8 @@ failing cell fails the whole field -- when ALL of:
 
 WHAT THIS SCRIPT SHOWS
 
-Table 1: `median(H[H > 0])` is exactly 1 at every density that occurs, because
+Table 1: `median(H[H > 0])` is exactly 1 at every density the gate actually
+judges -- the 15-star row reads 1.5, and is never judged -- because
 the search disk holds ~12,000 bins and a cell holds tens to hundreds of pairs.
 So `ratio` is not a ratio -- it is the raw number of pairs in the peak bin.
 
@@ -66,8 +67,11 @@ misregistered cell -- every star in it displaced by the same 90 mas -- scores
 therefore crossed at a STAR DENSITY, not at a misregistration level.
 
 And it is crossed low.  The seven brick cells that were a false failure read
-ratio 5-8 at 232-323 pairs; their peak bins held 1.7-2.5% of their pairs, i.e.
-no coherent signal.  The gate's OWN record is the better anchor for where the
+ratio 5-8 at 232-323 pairs, their peak bins holding 1.7-2.5% of their pairs.
+That fraction does NOT by itself make them false -- TABLE 4 below shows #179's
+REAL injected seams reaching the same level, because a seam displaces each cell's
+existing peak.  What establishes these seven as false is the independent
+same-star reading of <= 22 mas.  The gate's OWN record is the better anchor for where the
 bar sits: the comment on registration_failsafes.py's own `FAIL_MIN_RATIO` notes
 that clean brick cells verify at median contrast ~18, so the bar sits UNDER what
 a correctly registered cell of that field already scores.
@@ -152,8 +156,9 @@ CLEAN_BRICK_CONTRAST = 18.0
 #: exactly why step 3 [contiguity] matters more than step 2".
 #: (label, sig min/med/max, RAW RATIO min/med/max).  The ratio column matters as
 #: much as the sig one and was omitted at first: #179's real seams score ratio
-#: 5-49 with medians of 12-18, so they START at the false alarms' own 5-8 and
-#: their medians STRADDLE FAIL_MIN_RATIO = 10.  Any sentence comparing this
+#: 5-49, so they START at the false alarms' own 5-8; their medians (12-18)
+#: CLEAR FAIL_MIN_RATIO = 10 while their sub-median tail does not, so the bar
+#: falls INSIDE the real seam distribution.  Any sentence comparing this
 #: model's 66-82 against the real 5-8 is the same upper-bound-versus-real
 #: mistake Table 4 was corrected for, one axis over.
 REAL_SEAM_SIG_179 = [("whole field", 32.6, 78.1, 140.4, 5, 18, 49),
@@ -354,8 +359,9 @@ def main(argv=None):
     print(f"\nThe seven brick F405N cells that were a FALSE failure in 2026-07 "
           f"read ratio 5-8\nat npairs {min(obs_npairs)}-{max(obs_npairs)} -- "
           f"peak bins holding "
-          f"{min(frac):.1f}-{max(frac):.1f}% of their pairs, i.e. no coherent "
-          f"signal.\nThe gate's own record (registration_failsafes.py::FAIL_MIN_RATIO) "
+          f"{min(frac):.1f}-{max(frac):.1f}% of their pairs -- a fraction TABLE 4 "
+          f"below shows\nreal seams reach too, so it does not by itself make "
+          f"them false; the <= 22 mas\nsame-star reading does.\nThe gate's own record (registration_failsafes.py::FAIL_MIN_RATIO) "
           f"puts CLEAN brick cells at\nmedian contrast "
           f"~{CLEAN_BRICK_CONTRAST:.0f}, so FAIL_MIN_RATIO "
           f"= {FAIL_MIN_RATIO:.0f} is under what a correctly registered cell "
@@ -369,7 +375,7 @@ def main(argv=None):
     # defect this script was pulled up on twice, and the second time it was
     # merely moved into prose.  Sweep BOTH knobs that move it -- the seed and
     # the trial count -- because at a fixed trial count the seed-only range
-    # reads far tighter (66-67) than the quantity actually is (62-71).
+    # reads far tighter (66-67) than the quantity actually is (the both-knobs range the run prints).
     los, his, fold = [lo], [hi], []
     for seed in SAMPLING_SEEDS:
         for trials in SAMPLING_TRIALS:
@@ -451,11 +457,12 @@ def main(argv=None):
           f"{lo:.0f}-{hi:.0f}; #179's REAL seams score ratio\n  "
           f"{min(ratio_los)}-{max(r[6] for r in REAL_SEAM_SIG_179)} with medians "
           f"of {min(ratio_meds)}-{max(ratio_meds)}.  They START at the false "
-          f"alarms' own 5-8, and\n  their medians STRADDLE "
-          f"FAIL_MIN_RATIO = {FAIL_MIN_RATIO:.0f}.  So the bar does not merely "
-          f"sit too low to\n  separate the populations -- it sits INSIDE the "
-          f"real seam distribution, failing the\n  weak seam cells and the "
-          f"artifact cells alike.  That is the case against the raw\n  count, "
+          f"alarms' own 5-8; their medians\n  ({min(ratio_meds)}-"
+          f"{max(ratio_meds)}) CLEAR FAIL_MIN_RATIO = {FAIL_MIN_RATIO:.0f}, "
+          f"while their sub-median tail does not.\n  So the bar does not merely "
+          f"sit too low to separate the populations -- it falls INSIDE\n  the "
+          f"real seam distribution, failing weak seam cells and artifact cells "
+          f"alike.  That is the case against the raw\n  count, "
           f"and it is made on measured data rather than on this model.")
 
 
