@@ -579,13 +579,22 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
         dra = float(agg([float(c["dra_onsky_mas"]) for c in members]))
         ddec = float(agg([float(c["ddec_onsky_mas"]) for c in members]))
         # Dispersion, so a bimodal group is visible rather than pooling to a
-        # meaningless middle with no trace.  Peak-to-peak of the 2-D residual
-        # magnitudes; carried in `source` AND returned on the dict for the
-        # checkpoint record (`source` is bounded at PROV_TEXT_MAX_CHARS on
-        # write, and the column is sized to fit whatever is written).
-        mags = [float(np.hypot(c["dra_onsky_mas"], c["ddec_onsky_mas"]))
-                for c in members]
-        spread = float(np.ptp(mags))
+        # meaningless middle with no trace.  Carried in `source` AND returned on
+        # the dict for the checkpoint record (`source` is bounded at
+        # PROV_TEXT_MAX_CHARS on write, and the column is sized to fit whatever
+        # is written).
+        #
+        # The LARGEST SEPARATION BETWEEN ANY TWO MEMBERS, as vectors.  It was
+        # the peak-to-peak of their MAGNITUDES, which cannot see direction:
+        # members (+30,0) (+30,0) (+30,0) (-30,0) all have magnitude 30, so a
+        # 60 mas disagreement reported `ptp 0.00mas` and the provenance
+        # positively asserted perfect agreement.  Measured on the live
+        # checkpoint records, two real groups exceed the 50 mas refusal limit
+        # by vector separation and the magnitude form caught neither -- it read
+        # 13.82 and 8.54 mas.  One of those is gc2211 F200W visit
+        # jw02211049001, where nrca1 points opposite to its three neighbours:
+        # 77 mas apart, reported as 13.82.
+        spread = _max_pairwise_separation(members)
         _assert_pool_spread(spread, members, mods, offsets_path)
         pooled = dict(members[0])
         pooled["dra_onsky_mas"] = dra
@@ -609,11 +618,28 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
 # result cannot exceed the component-wise maximum, so pooling can never sum.
 _POOL_STATS = {"median": np.median, "mean": np.mean}
 
-# Refuse a group whose members disagree by more than this; they are not one
-# shift seen four times, and their middle means nothing.  Generous by default:
-# real per-detector SIAF/DVA spread is a few mas, and the sgrb2 groups measured
-# on 2026-08-01 ran 1.7-3.4 mas peak-to-peak.
+# Refuse a group whose members disagree by more than this -- measured as the
+# largest separation between any two of them AS VECTORS.  Beyond it they are not
+# one shift seen four times, and their middle means nothing.  Generous by
+# default: real per-detector SIAF/DVA spread is a few mas, and the sgrb2 groups
+# measured on 2026-08-01 ran 1.7-3.4 mas.
 MAX_POOL_SPREAD_MAS = 50.0
+
+
+def _max_pairwise_separation(members):
+    """The largest separation between any two corrections in a group, in mas.
+
+    A dispersion measure for a set of 2-D shifts has to be computed on the
+    VECTORS.  Reducing each to its magnitude first discards direction, and
+    direction is exactly what distinguishes "four detectors measuring one
+    shift" from "one detector disagreeing with three".
+    """
+    vec = np.array([[float(c["dra_onsky_mas"]), float(c["ddec_onsky_mas"])]
+                    for c in members], dtype=float)
+    if len(vec) < 2:
+        return 0.0
+    diff = vec[:, None, :] - vec[None, :, :]
+    return float(np.hypot(diff[..., 0], diff[..., 1]).max())
 
 
 def _assert_poolable(members, mods, row_key, tbl, offsets_path):

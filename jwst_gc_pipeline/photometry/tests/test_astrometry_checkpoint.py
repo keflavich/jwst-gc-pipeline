@@ -2366,3 +2366,52 @@ def test_two_detectors_give_the_same_answer_either_way(tmp_path):
     as_mean = pool_corrections_to_table_granularity(corr, path)[0]
     as_median = pool_corrections_to_table_granularity(corr, path, stat="median")[0]
     assert as_mean["dra_onsky_mas"] == pytest.approx(as_median["dra_onsky_mas"])
+
+
+def test_a_detector_pointing_the_OPPOSITE_way_is_refused(tmp_path):
+    """The group the old dispersion measure could not see.
+
+    Reducing each correction to its magnitude before taking the peak-to-peak
+    discards direction, so four members at (+30,0) (+30,0) (+30,0) (-30,0) --
+    a 60 mas disagreement -- all had magnitude 30 and reported a spread of
+    0.00 mas.  The provenance then positively asserted perfect agreement over a
+    group whose members contradict each other, and the refusal never fired.
+
+    Two real groups in the live checkpoint records exceed the 50 mas limit by
+    vector separation and were caught by neither: gc2211 F200W visit
+    jw02211049001, where nrca1 points opposite to its three neighbours (77 mas
+    apart, reported as 13.82), and one other.
+    """
+    path = _offsets_csv(tmp_path)
+    corr = [dict(visit="jw01182004001", exposure=1, module=m, filtername="F212N",
+                 dra_onsky_mas=v, ddec_onsky_mas=0.0, dec_deg=DEC_TEST)
+            for m, v in zip(("nrcb1", "nrcb2", "nrcb3", "nrcb4"),
+                            (30.0, 30.0, 30.0, -30.0))]
+    with pytest.raises(OffsetsTableUpdateError, match="spread|disagree"):
+        pool_corrections_to_table_granularity(corr, path)
+
+
+def test_the_dispersion_reported_is_the_largest_separation_between_members(tmp_path):
+    """Stated positively, because the number goes into the provenance and a
+    reader has to know what it means."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        _max_pairwise_separation)
+    members = [dict(dra_onsky_mas=0.0, ddec_onsky_mas=0.0),
+               dict(dra_onsky_mas=3.0, ddec_onsky_mas=4.0)]     # 3-4-5
+    assert _max_pairwise_separation(members) == pytest.approx(5.0)
+
+
+def test_opposing_members_of_equal_size_are_not_reported_as_agreeing(tmp_path):
+    """The specific inversion: equal magnitudes, opposite directions."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        _max_pairwise_separation)
+    members = [dict(dra_onsky_mas=+30.0, ddec_onsky_mas=0.0),
+               dict(dra_onsky_mas=-30.0, ddec_onsky_mas=0.0)]
+    assert _max_pairwise_separation(members) == pytest.approx(60.0)
+
+
+def test_a_single_member_has_no_dispersion(tmp_path):
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        _max_pairwise_separation)
+    assert _max_pairwise_separation([dict(dra_onsky_mas=5.0,
+                                          ddec_onsky_mas=5.0)]) == 0.0
