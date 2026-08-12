@@ -1259,6 +1259,35 @@ _LEGACY_PROV_NAMES = {"prov_dra_added_mas": PROV_ONSKY_RA_KEY,
                       "prov_ddec_added_mas": PROV_ONSKY_DEC_KEY}
 
 
+def _accumulated_prov(row, current_key, legacy_key):
+    """The accumulated on-sky provenance on a row, under either spelling.
+
+    ``row.get(current, row.get(legacy, 0.0))`` is NOT enough and was a real
+    defect: once a table carries both column names -- which happens the moment
+    one row dict is written with the new spelling and another still has the old
+    -- ``astropy`` fills the missing side as a MASKED cell rather than leaving
+    the key absent.  ``.get`` then returns the mask, the fallback never fires,
+    and the accumulated history is silently replaced by zero.
+
+    So this checks the VALUE, not merely the key.
+    """
+    names = getattr(row, "colnames", None)
+    names = set(names) if names is not None else set(row)
+    for key in (current_key, legacy_key):
+        if key not in names:
+            continue
+        value = row[key]
+        if value is None or value is np.ma.masked:
+            continue
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(value):
+            return value
+    return 0.0
+
+
 def migrate_prov_column_names(tbl):
     """Rename the legacy provenance columns in place; return what it renamed.
 
@@ -1368,7 +1397,16 @@ def _heal_column_pairs(tbl, offsets_path, rows=None):
     # the gap prov_dec_deg exists to close, and rows written before it will
     # keep the loose check for as long as they are not re-corrected.
     if PROV_DEC_DEG_KEY in tbl.colnames:
-        _dec = np.asarray(tbl[PROV_DEC_DEG_KEY], dtype=float)
+        # filled(nan) FIRST: a masked or empty cell read straight through
+        # `np.asarray(..., float)` becomes 0.0, which would be taken as a
+        # declination of zero -- the celestial equator, cos = 1 -- and the row
+        # checked EXACTLY against a factor that never applied.  That inverts
+        # this check in both directions: it refuses a correct correction and
+        # accepts the cos(dec) corruption it exists to catch.  An absent
+        # declination must read as ABSENT.
+        _dec = np.asarray(np.ma.filled(np.ma.masked_invalid(
+            np.ma.filled(np.ma.asarray(tbl[PROV_DEC_DEG_KEY], dtype=float),
+                         np.nan)), np.nan), dtype=float)
         _cosd = np.cos(np.radians(_dec))
         _known = np.isfinite(_dec) & (np.abs(_cosd) > 1e-6)
     else:
@@ -1927,8 +1965,10 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
             row = bykey.pop(legacy)
             row["Vgroup"] = vgroup
             bykey[legacy[:4] + (vgroup,)] = row
-            kept = tuple(_finite_float(row.get(c))
-                         for c in (PROV_ONSKY_RA_KEY, PROV_ONSKY_DEC_KEY))
+            kept = (_accumulated_prov(row, PROV_ONSKY_RA_KEY,
+                                      "prov_dra_added_mas"),
+                    _accumulated_prov(row, PROV_ONSKY_DEC_KEY,
+                                      "prov_ddec_added_mas"))
             print(f"[consensus] migrated pre-Vgroup row {legacy[:4]} -> "
                   f"Vgroup={vgroup} (keeps its accumulated "
                   f"{kept[0]:+.2f},{kept[1]:+.2f} mas)", flush=True)
@@ -1942,13 +1982,20 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
                 row["dra (arcsec)"] = float(row["dra (arcsec)"]) + dra_add
                 row["ddec (arcsec)"] = float(row["ddec (arcsec)"]) + ddec_add
                 row[PROV_ONSKY_RA_KEY] = (
-                    _finite_float(row.get(PROV_ONSKY_RA_KEY,
-                                          row.get("prov_dra_added_mas", 0.0)))
+                    _accumulated_prov(row, PROV_ONSKY_RA_KEY,
+                                      "prov_dra_added_mas")
                     + float(corr["dra_onsky_mas"]))
                 row[PROV_ONSKY_DEC_KEY] = (
-                    _finite_float(row.get(PROV_ONSKY_DEC_KEY,
-                                          row.get("prov_ddec_added_mas", 0.0)))
+                    _accumulated_prov(row, PROV_ONSKY_DEC_KEY,
+                                      "prov_ddec_added_mas")
                     + float(corr["ddec_onsky_mas"]))
+                # Drop the legacy key once its value has been carried over, so
+                # the table this builds never ends up with two columns each
+                # claiming to be the record -- the state migrate_prov_column_names
+                # refuses to resolve, and which would shadow the legacy column
+                # from the cumulative-drift and broadcast guards.
+                row.pop("prov_dra_added_mas", None)
+                row.pop("prov_ddec_added_mas", None)
                 row[PROV_DEC_DEG_KEY] = float(corr["dec_deg"])
                 row["prov_stage"] = _prov_text(stage)
                 row["prov_date"] = _prov_text(now)

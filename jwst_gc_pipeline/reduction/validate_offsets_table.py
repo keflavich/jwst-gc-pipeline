@@ -28,6 +28,8 @@ import numpy as np
 #: are renamed on their next correction; both spellings are read here.
 _PROV_ONSKY_RA = "prov_dra_onsky_mas"
 _PROV_ONSKY_DEC = "prov_ddec_onsky_mas"
+#: The declination each correction's cos(dec) conversion used.
+_PROV_DEC_DEG = "prov_dec_deg"
 
 
 def _prov_onsky_names(colnames):
@@ -170,8 +172,26 @@ def flag_diverged_column_pairs(offsets_tbl, tol_mas=PAIR_PROV_TOL_MAS):
     in_sync = (np.abs(d_gap) <= tol_mas) & (np.abs(c_gap) <= tol_mas)
     # state 2: never healed -- the gap IS the accumulated provenance
     dec_ok = np.abs(c_gap - prov_c) <= tol_mas
-    lo = np.minimum(prov_d, prov_d / _COS_DEC_MIN) - tol_mas
-    hi = np.maximum(prov_d, prov_d / _COS_DEC_MIN) + tol_mas
+    # With the declination the conversion used recorded on the row, the
+    # coordinate offset a provenance entry implies is EXACT, and right
+    # ascension is checked as strictly as declination.  Without it the
+    # factor is only bounded to [_COS_DEC_MIN, 1] -- a ~14% window, wide
+    # enough for a corruption of exactly that size to pass.  A masked or
+    # empty cell reads as ABSENT, never as declination zero.
+    _known = np.zeros(len(offsets_tbl), dtype=bool)
+    _cosd = np.ones(len(offsets_tbl))
+    if _PROV_DEC_DEG in cn:
+        _dec = np.ma.filled(np.ma.asarray(offsets_tbl[_PROV_DEC_DEG],
+                                          dtype=float), np.nan)
+        _cosd = np.cos(np.radians(_dec))
+        _known = np.isfinite(_dec) & (np.abs(_cosd) > 1e-6)
+    # milliarcseconds throughout here: prov_d and d_gap are both mas in this
+    # function (unlike _heal_column_pairs, which works in arcsec).
+    _exact = prov_d / np.where(_known, _cosd, 1.0)
+    lo = np.where(_known, _exact - tol_mas,
+                  np.minimum(prov_d, prov_d / _COS_DEC_MIN) - tol_mas)
+    hi = np.where(_known, _exact + tol_mas,
+                  np.maximum(prov_d, prov_d / _COS_DEC_MIN) + tol_mas)
     ra_ok = (d_gap >= lo) & (d_gap <= hi)
     bad = ~(in_sync | (dec_ok & ra_ok))
     out = []

@@ -184,3 +184,49 @@ def test_the_same_edit_passes_when_the_declination_was_not_recorded(tmp_path):
     out.write(path, overwrite=True)
     update_offsets_table(
         path, [_correction(dra_onsky=1.0, ddec_onsky=0.0, exposure=1)], "m2")
+
+
+# ---------------------------------------------------------------------------
+# What review found: an empty declination is ABSENT, not zero
+# ---------------------------------------------------------------------------
+
+def test_an_empty_declination_cell_is_read_as_absent_not_as_the_equator(tmp_path):
+    """`np.asarray(col, float)` turns a masked cell into 0.0, which would be
+    taken as declination zero -- cos = 1 -- and the row checked EXACTLY against
+    a factor that never applied.  That inverts the check in both directions: it
+    refuses a correct correction, and accepts the corruption this exists for.
+
+    Forcing "unknown means zero degrees" must therefore fail a test, and this
+    is that test.
+    """
+    path = _table(str(tmp_path / "off.csv"))
+    out = update_offsets_table(path,
+                               [_correction(dra_onsky=400.0, ddec_onsky=0.0)], "m2")
+    out["dra"][0] = 0.456 - 0.456           # a CORRECT row: the exact gap
+    out[PROV_DEC_DEG_KEY] = np.ma.array([np.nan] * len(out), mask=[True] * len(out))
+    out.write(path, overwrite=True)
+    # must NOT raise: the declination is unknown, so the loose bound applies
+    update_offsets_table(
+        path, [_correction(dra_onsky=1.0, ddec_onsky=0.0, exposure=1)], "m2")
+
+
+def test_an_accumulated_value_survives_a_table_carrying_both_spellings():
+    """Once both column names exist, astropy fills the missing side as a MASKED
+    cell rather than leaving the key absent -- so `.get(new, .get(legacy))`
+    returns the mask, the fallback never fires, and the accumulated history is
+    replaced by zero.  Check the VALUE, not the key."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        _accumulated_prov)
+    from astropy.table import Table as _T
+    t = _T([dict(prov_dra_added_mas=-6.25),
+            dict(prov_dra_onsky_mas=-1.25)])
+    assert _accumulated_prov(t[0], PROV_ONSKY_RA_KEY,
+                             "prov_dra_added_mas") == pytest.approx(-6.25)
+    assert _accumulated_prov(t[1], PROV_ONSKY_RA_KEY,
+                             "prov_dra_added_mas") == pytest.approx(-1.25)
+
+
+def test_a_row_with_neither_spelling_accumulates_from_zero():
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        _accumulated_prov)
+    assert _accumulated_prov({}, PROV_ONSKY_RA_KEY, "prov_dra_added_mas") == 0.0
