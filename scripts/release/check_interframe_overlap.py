@@ -126,7 +126,7 @@ def _detect(path, nsigma=8.0, box=5):
 # frames from other observations/programs into the verdict.  The regex both
 # validates a name and yields (proposal, observation, visit, module) exactly.
 _CRF_RE = re.compile(
-    r"^jw(?P<prop>\d{5})(?P<obs>\d{3})(?P<visit>\d{3})_\d+_\d+_"
+    r"^jw(?P<prop>\d{5})(?P<obs>\d{3})(?P<visit>\d{3})_(?P<vgroup>\d+)_(?P<exp>\d+)_"
     r"(?P<det>mirimage|nrc[ab](?:long|[1-4])?)"
     r"(?P<lineage>(?:_[a-z0-9]+)*?)_o(?P<obs2>\d{3})_crf\.fits$")
 
@@ -196,6 +196,230 @@ def _parse_crf(name):
     return dict(prop=m.group("prop"), obs=m.group("obs"), visit=m.group("visit"),
                 det=det, module=module,
                 obs_key=f"{m.group('prop')}-{m.group('obs')}")
+
+
+def exposure_identity(name):
+    """Which PHYSICAL exposure a crf name refers to, ignoring its lineage.
+
+    One exposure is normally on disk several times over: the reduction has been
+    re-run with different settings across three years, and each run writes its
+    own copy under a name that differs only by a lineage token
+    (``_destreak``, ``_align``, or none at all).  Those copies are the same
+    photons on different sky coordinates -- in cloudc/F405N, up to 8.5 arcsec
+    apart -- so pooling them into one registration verdict compares an exposure
+    against stale copies of itself.
+
+    Returns ``None`` for a name that is not a well-formed crf.
+    """
+    m = _CRF_RE.match(os.path.basename(name))
+    if m is None or m.group("obs2") != m.group("obs"):
+        return None
+    # A retired-path product is not a copy of this exposure that competes on
+    # merit: its FITS header and its GWCS disagree by arcseconds, so it is
+    # rejected outright (see _RETIRED_LINEAGE_TOKENS).  Giving it an identity
+    # would let it into a selection that is only supposed to choose between
+    # frames a reader can get a consistent answer out of.
+    if set(m.group("lineage").split("_")) & set(_RETIRED_LINEAGE_TOKENS):
+        return None
+    return (m.group("prop"), m.group("obs"), m.group("visit"),
+            m.group("vgroup"), m.group("exp"), m.group("det"))
+
+
+def _lineage_token(name):
+    """``'_destreak'``, ``'_align'``, or ``''`` for the bare name."""
+    m = _CRF_RE.match(os.path.basename(name))
+    return "" if m is None else m.group("lineage")
+
+
+def lineage_separation_mas(a, b, samples=((256, 256), (1024, 1024), (1792, 1792))):
+    """How far apart two copies of one exposure place the same pixel, in
+    milliarcseconds.
+
+    Read from each frame's authoritative coordinate solution (the GWCS carried
+    in the file's ASDF extension, via ``frame_wcs``), NOT from the approximate
+    FITS header keywords -- those are a fitted approximation and disagree with
+    the GWCS by several mas on frames written before 2026-07-29.
+
+    Returns ``None`` when either frame cannot be read, or when the sampled
+    pixels fall outside a frame's valid area (a subarray exposure), because a
+    missing measurement must not be reported as agreement.
+    """
+    try:
+        wa, wb = frame_wcs(a), frame_wcs(b)
+    except (OSError, ValueError, KeyError):
+        return None
+    seps = []
+    for x, y in samples:
+        ca, cb = wa.pixel_to_world(x, y), wb.pixel_to_world(x, y)
+        sep = ca.separation(cb).to(u.mas).value
+        if np.isfinite(sep):
+            seps.append(float(sep))
+    return max(seps) if seps else None
+
+
+def _reduction_lineage(field, filt, obs, detector):
+    """The lineage token this field's own reduction writes, or ``None``.
+
+    Which frames a field ships is not a judgement call and not a preference
+    list: ``destreak_policy`` already records, per (field, filter), whether
+    stage 1 applies its streak-removal step -- and therefore whether the
+    reduced frame is called ``*_destreak_o<obs>_crf.fits`` or
+    ``*_align_o<obs>_crf.fits``.  The cataloguing stage picks its inputs from
+    that same function, so reading it here is what keeps this gate and the
+    catalogue looking at the same files.
+
+    ``None`` for MIRI: streak removal is a NIRCam stage-1 step and the policy
+    does not name MIRI products, so applying its answer to a MIRI frame would
+    ask for a lineage that never exists.
+    """
+    if str(detector).startswith("miri"):
+        return None
+    try:
+        from jwst_gc_pipeline.reduction.destreak_policy import crf_suffix
+    except ImportError:
+        return None
+    suffix = crf_suffix(field, filt, obs)          # 'destreak_o002_crf'
+    return "_" + suffix.split("_o")[0]             # '_destreak'
+
+
+class UnparseableFrameError(ValueError):
+    """A frame reached the selector whose name it cannot identify."""
+
+
+def select_one_copy_per_exposure(frames, field, filt):
+    """Keep one processed copy of each physical exposure.  ``(kept, dropped)``.
+
+    ``dropped`` is a list of ``(path, why)`` so the caller can say what it left
+    out -- a silently smaller frame set must stay distinguishable from a
+    smaller directory.
+
+    **The rule is a single recorded fact, not a preference order.** Which of
+    the reduction's two output variants a field produces was decided per
+    (field, filter) long ago and is recorded in
+    ``reduction/destreak_policy.py``; the cataloguing stage reads that same
+    record to choose which frames to photometer.  Reading it here is what makes
+    the registration gate and the catalogue examine the same files by
+    construction, and it decides every one of the 43 affected directories.
+
+    When the recorded variant is absent for an exposure -- a partly-finished
+    re-reduction, or MIRI, whose products the policy does not name -- the
+    newest copy is kept and the caller is told, because reaching that case
+    means nothing recorded decided it.
+
+    **What this deliberately does NOT use.** An earlier version preferred the
+    copy carrying ``RAOFFSET`` (the keyword ``fix_alignment`` writes when it
+    applies a field's pointing correction).  Measured across the archive, that
+    keyword does not predict the coordinate solution in either direction: two
+    w51/F444W copies both record ``RAOFFSET=(0,0)`` and place the same pixel
+    37.6 mas apart, while a wd2/F150W copy with no ``RAOFFSET`` at all is
+    identical to its corrected twin to 0.0 mas.  Whatever differs between two
+    reduction runs is not captured by that keyword, so selecting on it would be
+    guessing with a confident-looking rule.  The separation between the kept
+    and dropped copies is instead MEASURED and reported -- see
+    ``lineage_separation_mas`` and the caller -- which is the cross-check that
+    would catch this rule pointing at the wrong copy.
+
+    Raises ``UnparseableFrameError`` rather than dropping a frame whose name it
+    cannot identify: vanishing silently is the failure this whole change exists
+    to remove.  This is a guard on this function's own contract, not a fix for
+    any directory today -- ``build_groups`` filters with ``_parse_crf`` first,
+    which accepts exactly the same names, so nothing unparseable reaches here
+    from the gate.  (wd1/F200W's frames are rejected by that earlier filter and
+    the directory reads as empty, which the gate already fails closed on; see
+    issue #376.)
+    """
+    by_exposure = {}
+    unparseable = []
+    for path in frames:
+        identity = exposure_identity(path)
+        if identity is None:
+            unparseable.append(path)
+            continue
+        by_exposure.setdefault(identity, []).append(path)
+    if unparseable:
+        raise UnparseableFrameError(
+            f"{len(unparseable)} frame(s) reached the lineage selector with a "
+            f"name it cannot identify, e.g. "
+            f"{os.path.basename(unparseable[0])}.  Refusing to drop them "
+            f"silently: a smaller frame set must stay distinguishable from a "
+            f"smaller directory.")
+
+    kept, dropped = [], []
+    for identity, copies in sorted(by_exposure.items()):
+        if len(copies) == 1:
+            kept.append(copies[0])
+            continue
+        obs, detector = identity[1], identity[5]
+        wanted = _reduction_lineage(field, filt, obs, detector)
+        chosen = [p for p in copies if _lineage_token(p) == wanted] if wanted else []
+        why = f"this field's reduction writes {wanted or '?'}_o{obs}_crf"
+        if len(chosen) != 1:
+            # Nothing recorded decided it: MIRI, a partly-finished
+            # re-reduction, or (impossible today) two files with one lineage.
+            # (mtime, path) not mtime alone: equal timestamps are common
+            # among copies written by one run, and `max` returns the FIRST
+            # maximal element, so a bare mtime key makes the winner depend on
+            # the order the directory happened to be listed in.
+            chosen = [max(chosen or copies,
+                          key=lambda p: (os.path.getmtime(p), p))]
+            why = ("newest -- no recorded reduction setting decided this one"
+                   if not wanted else
+                   f"newest -- this field's reduction writes "
+                   f"{wanted}_o{obs}_crf, which is not on disk for this exposure")
+        kept.append(chosen[0])
+        dropped += [(p, why) for p in copies if p != chosen[0]]
+    return sorted(kept), dropped
+
+
+def report_lineage_disagreement(dropped, kept, label, threshold_mas=100.0):
+    """Measure how far each discarded copy sits from the one kept, and say so.
+
+    This is the check issue #205 asked for, and it is the only part of the
+    selection that consults the data rather than a filename: if the recorded
+    reduction setting ever points at the stale copy, the rule itself cannot
+    notice, but this will.  A pair beyond ``threshold_mas`` is not a lineage
+    question -- at that size one of the two frames is simply wrong.
+
+    **This reports; it does not gate.** Issue #205 asks a second question --
+    whether copies disagreeing beyond some tolerance should make the gate
+    REFUSE rather than pick one -- and that is deliberately not answered here,
+    because the tolerance was to be set from measurements that did not exist
+    until this function produced them.  So a directory can print "one of the
+    two frames is wrong" for most of its discarded copies and still return a
+    passing verdict.  Choosing the refusal threshold is the follow-up this
+    data is for.
+
+    Returns the list of ``(dropped_path, separation_mas)`` it measured.
+    """
+    by_identity = {exposure_identity(p): p for p in kept}
+    measured = []
+    for path, _why in dropped:
+        twin = by_identity.get(exposure_identity(path))
+        if twin is None:
+            continue
+        sep = lineage_separation_mas(twin, path)
+        measured.append((path, sep))
+    usable = [s for _p, s in measured if s is not None]
+    if not usable:
+        return measured
+    over = sorted(((p, s) for p, s in measured
+                   if s is not None and s > threshold_mas),
+                  key=lambda t: -t[1])
+    print(f"  {label}: discarded copies sit "
+          f"{min(usable):.1f}-{max(usable):.1f} mas from the one kept "
+          f"(median {float(np.median(usable)):.1f})", flush=True)
+    if over:
+        print(f"      {len(over)} beyond {threshold_mas:.0f} mas -- at that "
+              f"size one of the two frames is wrong, not merely older:",
+              flush=True)
+        for path, sep in over[:3]:
+            print(f"        {sep:9.1f} mas  {os.path.basename(path)}", flush=True)
+    unmeasured = sum(1 for _p, s in measured if s is None)
+    if unmeasured:
+        print(f"      {unmeasured} pair(s) could not be measured (unreadable "
+              f"frame, or the sampled pixels lie outside a subarray)",
+              flush=True)
+    return measured
 
 
 def _group_key(crf_path):
@@ -318,6 +542,34 @@ def build_groups(field, filt, observations=None):
         print(f"  {field}/{filt}: excluded {n_retired} retired-path crf "
               f"(realign_to_vvv lineage; FITS header and GWCS disagree by "
               f"arcseconds in those files)", flush=True)
+    # One copy per physical exposure.  A working directory normally holds the
+    # same exposure several times over, written by reductions run months or
+    # years apart, and pooling them compares an exposure against stale copies of
+    # itself.  Announced rather than silent, for the same reason as the retired
+    # count above: a smaller frame set must stay distinguishable from a smaller
+    # directory.
+    frames, superseded = select_one_copy_per_exposure(frames, field, filt)
+    if superseded:
+        reasons = {}
+        for path, why in superseded:
+            reasons.setdefault(why, []).append(path)
+        print(f"  {field}/{filt}: {len(superseded)} superseded lineage "
+              f"copies excluded, keeping one per exposure:", flush=True)
+        for why, paths in sorted(reasons.items()):
+            example = os.path.basename(paths[0])
+            print(f"      {len(paths):4d} dropped because {why}  (e.g. "
+                  f"{example})", flush=True)
+        # Measure what was discarded rather than only naming it.  The selection
+        # above reads filenames and a recorded setting; this is the only part
+        # that consults the frames, and so the only part that could notice the
+        # setting pointing at the wrong copy.
+        #
+        # It is not free: two GWCS loads per discarded copy at ~0.5-2 s each,
+        # so ~3 min on a 192-exposure filter directory such as brick/F212N,
+        # ahead of the detection pass that reopens the kept frames anyway.
+        # Worth it while the disagreements are this large and this unmapped;
+        # revisit if a full --scan becomes routine.
+        report_lineage_disagreement(superseded, frames, f"{field}/{filt}")
     groups = {}
     ndet = {}
     for fn in frames:
