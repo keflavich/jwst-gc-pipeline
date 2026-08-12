@@ -482,10 +482,25 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
     A median inside that limit would silently down-weight a member the refusal
     had already judged acceptable.
 
-    Two concrete reasons the median is the wrong choice at these group sizes.
-    For the common N=2 it IS the mean, so the robustness is imaginary.  For N=4
-    it is the average of the middle two, which discards the two extreme
-    detectors entirely -- half the measurements, all of them equally valid.
+    Three concrete reasons the median is the wrong choice at these group sizes,
+    measured over the 486 groups in the live checkpoint records:
+
+      * **N=2 (61% of groups)** -- the median IS the mean, so its robustness
+        there is imaginary;
+      * **N=3 (20%)** -- it keeps ONE of three, and this is where the two
+        statistics differ most typically: median shift 0.789 mas at the 50th
+        percentile against a typical pooled correction of 2.69 mas, i.e. ~30%
+        of the correction, and against a 2.0 mas exposure-consensus tolerance;
+      * **N=4 (18%)** -- it is the average of the middle two, discarding the
+        outer pair entirely.
+
+    39% of groups change value; the largest single change is 14.6 mas.
+
+    A better answer than either exists and is deliberately NOT taken here: each
+    member already reports its own measured precision (``dra_err``/``ddec_err``,
+    spanning 0.011-6.02 mas in the records), and weighting by it needs neither
+    statistic's assumption.  It is a wider change -- those errors are dropped at
+    three hops before they reach this function -- and is issue #386.
 
     Returns a NEW list; corrections that own their row are passed through
     unchanged.  Pooled entries carry the member modules and count in ``source``
