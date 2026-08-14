@@ -387,17 +387,34 @@ def test_an_empty_provenance_cell_is_not_rewritten(tmp_path):
     # legitimately changes.  The property is about VALUES.
     after = Table.read(p, format="ascii.csv")
     corrected_row = 1                      # data row index of exposure 2
-    shared = [c for c in before.colnames if c in after.colnames]
+
+    # Compare EVERY column, following the two that were renamed rather than
+    # skipping them.  Taking only the columns whose names are unchanged looks
+    # thorough and silently drops the provenance -- the very thing this file is
+    # about.  Demonstrated: adding 999 mas to prov_dra_onsky_mas on every row
+    # left the intersection-based version of this test green.
+    renamed = {"prov_dra_added_mas": "prov_dra_onsky_mas",
+               "prov_ddec_added_mas": "prov_ddec_onsky_mas"}
+    pairs = [(c, renamed.get(c, c)) for c in before.colnames]
+    missing = [b for b, a in pairs if a not in after.colnames]
+    assert not missing, f"columns vanished from the table entirely: {missing}"
+
+    def _same(b, a):
+        if str(b) == str(a):
+            return True
+        try:
+            fb, fa = float(b), float(a)
+        except (TypeError, ValueError):
+            return False
+        return (np.isnan(fb) and np.isnan(fa)) or fb == fa
+
     for i in range(len(before)):
         if i == corrected_row:
             continue
-        for col in shared:
-            b, a = before[col][i], after[col][i]
-            same = (str(b) == str(a)
-                    or (isinstance(b, float) and isinstance(a, float)
-                        and np.isnan(b) and np.isnan(a)))
-            assert same, (f"untouched row {i} column {col!r} changed "
-                          f"{b!r} -> {a!r}")
+        for bcol, acol in pairs:
+            b, a = before[bcol][i], after[acol][i]
+            assert _same(b, a), (f"untouched row {i} column {bcol!r} "
+                                 f"(now {acol!r}) changed {b!r} -> {a!r}")
     after = Table.read(p, format="ascii.csv")
     assert not any(str(v) == "0" for v in after["prov_source"]), \
         "an empty provenance cell was rewritten to the literal '0'"
