@@ -252,12 +252,12 @@ passes AND D is clean (`apply_ok`).  Anything else is recorded as
 * **Cumulative drift bound.** The per-correction ceiling bounds one call at a
   time, so creep accumulates across successive calls (five legal 0.4″ corrections
   = 2″ of silent drift; cloudef reached 105″ that way). Because
-  `prov_dra/ddec_added_mas` accumulate, the write
+  `prov_dra/ddec_onsky_mas` accumulate, the write
   path also rejects any ROW whose total accumulated correction exceeds the **bulk**
   limit. ⚠ That bounds accumulation at 60″, so a table can still reach tens of
-  arcseconds of `prov_*_added_mas` inside the bound. **The diagnostic for a
-  poisoned table is `prov_*_added_mas`, not the total `|offset|`** — an m2 visit-consensus correction is
-  mas-scale by construction, so arcsecond-scale `prov_*_added_mas` is a category
+  arcseconds of `prov_*_onsky_mas` inside the bound. **The diagnostic for a
+  poisoned table is `prov_*_onsky_mas`, not the total `|offset|`** — an m2 visit-consensus correction is
+  mas-scale by construction, so arcsecond-scale `prov_*_onsky_mas` is a category
   error, while a large *total* `|offset|` can be perfectly correct (brick-1182's
   released table is median 12.1″ with 68/7.6 mas of `prov_*` additions).
   ⚠ **Blind spot:** `update_offsets_table` zero-fills the `prov_*` columns when

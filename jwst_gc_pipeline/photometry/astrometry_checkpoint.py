@@ -1373,7 +1373,7 @@ def _heal_column_pairs(tbl, offsets_path, rows=None):
     is as-built + everything applied.  That is not a guess: across all ten live
     ``*_VIRAC2locked.csv`` tables,
 
-        max | ((arcsec) - plain)*1000 - prov_*_added_mas |  =  0.000000 mas
+        max | ((arcsec) - plain)*1000 - prov_*_onsky_mas |  =  0.000000 mas
 
     so the gap is exactly the recorded provenance.  When that identity holds the
     plain pair carries no information the ``(arcsec)`` pair lacks, and the two can
@@ -1489,7 +1489,7 @@ def _heal_column_pairs(tbl, offsets_path, rows=None):
     worst = int(bad[np.argmax(np.abs(c_gap[bad]))])
     print(f"  {os.path.basename(offsets_path)}: re-syncing '{db}'/'{cb}' from "
           f"'{da}'/'{ca}' on {len(bad)} row(s) -- only the '(arcsec)' pair was "
-          f"ever written, and the gap matches prov_*_added_mas exactly, so the "
+          f"ever written, and the gap matches the recorded on-sky provenance exactly, so the "
           f"plain pair is the as-built value and carries nothing the other lacks. "
           f"Worst {_row_label(tbl, worst)}: {c_gap[worst] * 1000:.1f} mas.",
           flush=True)
@@ -1522,7 +1522,7 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
     hold a COORDINATE offset, and the two differ by cos(dec) -- ~14% at these
     declinations.  ``prov_dec_deg`` records the declination the conversion
     used, so the coordinate offset a provenance entry implies is exact rather
-    than bounded.  Tables written under the older ``prov_*_added_mas`` names
+    than bounded.  Tables written under the older ``prov_*_onsky_mas`` names
     are renamed on the next write, values untouched.
 
     Returns the corrected Table.  Raises ``OffsetsTableUpdateError`` when a
@@ -1761,7 +1761,7 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
             raise OffsetsTableUpdateError(
                 f"{len(over)} row(s) of {os.path.basename(offsets_path)} have "
                 f"accumulated more than {drift_limit}\" of correction across all "
-                f"writes (prov_dra/ddec_added_mas) -- runaway feedback, not a "
+                f"writes (prov_dra/ddec_onsky_mas) -- runaway feedback, not a "
                 f"measurement.  NOT writing.  (visit, filter, |accumulated|\"): "
                 f"{worst}")
 
