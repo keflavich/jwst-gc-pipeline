@@ -958,27 +958,6 @@ def _samestar_pair_footprint(a_src, b_src, ref, global_result, tol_mas=None,
                            f"{widest['off_mas']:.0f} mas")
 
 
-def _pair_cannot_share_stars(pair):
-    """Whether an unmeasurable pair is one no star-based check could ever settle.
-
-    Both sides MIRI.  A mid-infrared image of these fields holds orders of
-    magnitude fewer point sources than a near-infrared one, so two MIRI
-    pointings routinely share none at all where their footprints meet -- there
-    is nothing to match, however the comparison is arranged, and an external
-    star list does not help because the stars are missing from the DATA rather
-    than from the list.
-
-    Treating that as a blocking "could not verify" would park a field forever on
-    a question no amount of work can answer.  It is reported rather than
-    silenced: this says the check cannot speak to the pair, not that the pair is
-    aligned.
-
-    Keyed on the group labels, which end in the detector module -- MIRI's is
-    ``mirimage``.
-    """
-    return all(str(pair.get(side, "")).endswith("mirimage") for side in ("a", "b"))
-
-
 def check_filter(field, filt, refcat=None, verbose=True, observations=None):
     pooled, ndet, nframes = build_groups(field, filt, observations=observations)
     # FAIL-CLOSED on "found nothing": a gate that goes green because its glob
@@ -1176,7 +1155,7 @@ def check_filter(field, filt, refcat=None, verbose=True, observations=None):
     # when the external reference POSITIVELY measured it.  Per-pair now: its own
     # footprint verdict decides, and only a pair whose footprint holds too few
     # reference stars falls back to the field-wide map (loudly).
-    still_open, cleared, no_stars_to_share = [], 0, []
+    still_open, cleared = [], 0
     for r in unverifiable:
         v = r.get("ext_pair")
         if v is not None and v["measurable"] and not v["clean"]:
@@ -1196,20 +1175,7 @@ def check_filter(field, filt, refcat=None, verbose=True, observations=None):
                       f"FIELD-WIDE same-star map, which does not resolve this "
                       f"pair's sliver.", flush=True)
             continue
-        if _pair_cannot_share_stars(r):
-            no_stars_to_share.append(r)
-            continue
         still_open.append(r)
-    if no_stars_to_share and verbose:
-        for r in no_stars_to_share:
-            print(f"      NOT BLOCKING: pair {r['a']} | {r['b']} has no stars in "
-                  f"common to compare.  Both are MIRI, whose mid-infrared images "
-                  f"of these fields contain far too few point sources for two "
-                  f"pointings to share any where their footprints meet -- so "
-                  f"this is a property of the observation, not evidence of a "
-                  f"misregistration.  Nothing about their alignment is being "
-                  f"asserted here, only that this check cannot speak to it.",
-                  flush=True)
     could_not_verify = bool(still_open)
     if cleared and verbose:
         print(f"      {cleared}/{len(unverifiable)} deferred pair(s) accepted by the "

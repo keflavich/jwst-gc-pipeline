@@ -5,13 +5,16 @@ about where the stars are.  Some pairs overlap on a sliver too thin to compare
 directly; for those, both sides are instead compared against a common list of
 known star positions, which settles the question.
 
-Two things were stopping w51 from ever reaching a verdict:
+W51 had no such list configured, because the only registry available was the
+one feeding a *different* check -- the blocking absolute-frame one, which needs
+a dense catalogue and would refuse good data given a sparse one.  That is what
+this module covers.
 
-1. no such star list was configured for it, because the only registry available
-   was the one feeding a *different*, denser-catalogue-requiring check; and
-2. four of its five unmeasurable pairs are MIRI-to-MIRI, and a mid-infrared
-   image of these fields holds so few point sources that two pointings share
-   none at all -- a question no star list can answer.
+(An earlier version of this change also exempted MIRI-to-MIRI pairs from
+blocking, on the argument that mid-infrared images hold too few sources for two
+pointings to share any.  Review measured the opposite -- those pairs share
+hundreds of detections, and one of them carries a real 66 mas offset the gate
+had already measured -- so that half was withdrawn.  See #385.)
 """
 import importlib.util
 import os
@@ -35,37 +38,11 @@ def _load(relpath, name):
 cio = _load('scripts/release/check_interframe_overlap.py', '_cio')
 
 
-# ---------------------------------------------------------------------------
-# A pair with no stars to share
-# ---------------------------------------------------------------------------
-
-def test_two_MIRI_pointings_are_not_blocked_for_sharing_no_stars():
-    """The stars are missing from the DATA, not from the star list, so no
-    external list could settle it.  Blocking on it parks the field forever on a
-    question nothing can answer."""
-    assert cio._pair_cannot_share_stars(
-        dict(a='002001:mirimage', b='002002:mirimage'))
 
 
-def test_a_near_infrared_pair_is_still_blocked():
-    """NIRCam images of these fields are crowded, so two of them failing to
-    share stars means something is wrong -- exactly what the check is for."""
-    assert not cio._pair_cannot_share_stars(
-        dict(a='001001:nrca', b='001001:nrcb'))
 
 
-def test_a_mixed_pair_is_still_blocked():
-    """One MIRI side does not excuse the pair: the near-infrared side has the
-    sources, so the comparison remains possible in principle."""
-    assert not cio._pair_cannot_share_stars(
-        dict(a='002001:mirimage', b='001001:nrca'))
 
-
-def test_a_malformed_label_is_not_quietly_excused():
-    """Anything unrecognised must fall through to blocking rather than be
-    waved past -- an unparseable label is not evidence of anything."""
-    assert not cio._pair_cannot_share_stars(dict(a='', b=''))
-    assert not cio._pair_cannot_share_stars(dict())
 
 
 # ---------------------------------------------------------------------------
