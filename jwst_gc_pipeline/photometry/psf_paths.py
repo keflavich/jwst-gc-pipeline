@@ -39,11 +39,30 @@ def central_merged_psf_grid_path(jwst_root, instrument, module, filtername,
     return os.path.join(central_psf_dir(jwst_root), name)
 
 
+def legacy_merged_psf_grid_name(filtername, proposal_id, field,
+                                oversample=1, blur=False):
+    """Filename (no directory) that a merged gridded-PSF is written under.
+
+    Single-sourced because two readers build this name from different
+    directories: ``legacy_merged_psf_grid_path`` below, from
+    ``{jwst_root}/{target}``, and ``reduction.saturated_star_finding.get_psf``,
+    from the ``psfs`` directory it is handed directly.
+
+    The ``_oversample{N}`` token is not optional.  All 237 merged grids on disk
+    carry it (three oversamplings each, half of them additionally ``_blur``) --
+    it is how the writer, the deprecated ``reduction.make_merged_psf``, named
+    them.  A reader that omits it matches nothing, which is silent: the caller
+    falls back to a detector-specific grid without reporting that it looked.
+    """
+    return (f'{filtername.upper()}_{proposal_id}_{field}_merged_PSFgrid'
+            f'_oversample{oversample}{_blur_token(blur)}.fits')
+
+
 def legacy_merged_psf_grid_path(jwst_root, target, filtername, proposal_id,
                                 field, oversample=1, blur=False):
     """The historical per-(proposal, field) merged gridded-PSF path."""
-    name = (f'{filtername.upper()}_{proposal_id}_{field}_merged_PSFgrid'
-            f'_oversample{oversample}{_blur_token(blur)}.fits')
+    name = legacy_merged_psf_grid_name(filtername, proposal_id, field,
+                                       oversample, blur)
     return os.path.join(jwst_root, target, 'psfs', name)
 
 

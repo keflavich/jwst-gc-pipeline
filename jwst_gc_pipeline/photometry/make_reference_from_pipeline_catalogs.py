@@ -1245,7 +1245,12 @@ def main() -> None:
     print(f"Wrote bootstrap summary to {summary_ecsv}")
     print(f"Wrote bootstrap summary to {summary_fits}")
     print(f"Wrote bootstrap report to {report_path}")
-    print(f"Cached VVV catalog at {vvv_cache_path} with {len(vvv)} rows")
+    # Name the survey that was actually queried.  Only one of VIRAC2 / VVV runs
+    # (see the --reference-survey branch above), and only its cache file is
+    # written, so naming VVV unconditionally would point at a path that does
+    # not exist on the default (VIRAC2) route.
+    print(f"Cached {primary_name.upper()} catalog at {primary_cache_path} "
+          f"with {len(primary_ref)} rows")
     if gns is not None:
         print(f"Cached GNS catalog at {gns_cache_path} with {len(gns)} rows")
     print(f"Cached Gaia catalog at {gaia_cache_path} with {len(gaia)} rows")

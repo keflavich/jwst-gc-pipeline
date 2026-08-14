@@ -45,6 +45,10 @@ test = [
     "pytest",
     "pytest-doctestplus",
     "pytest-cov",
+    # scope-aware undefined-name analysis, used by
+    # photometry/tests/test_no_undefined_module_names.py.  That test skips
+    # without it, so listing it here is what makes the check actually run.
+    "pyflakes",
 ]
 docs = [
     "sphinx",

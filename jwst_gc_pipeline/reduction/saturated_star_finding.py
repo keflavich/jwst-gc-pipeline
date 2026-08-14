@@ -40,6 +40,7 @@ from astropy import log
 from astropy.coordinates import SkyCoord
 from astropy import units as u
 from .filtering import get_filtername, get_fwhm
+from ..photometry.psf_paths import legacy_merged_psf_grid_name
 from ..frame_wcs import frame_wcs, gwcs_from_file
 from .fits_wcs_sync import sync_header_to_gwcs
 import requests
@@ -141,7 +142,14 @@ def get_psf(header, path_prefix='.', use_merged_psf_for_merged=False, fov_pixels
     if module == 'merged':
         project_id = header['PROGRAM'][1:5]
         obs_id = header['OBSERVTN'].strip()
-        merged_psf_fn = f'{basepath}/psfs/{filtername.upper()}_{project_id}_{obs_id}_merged_PSFgrid.fits'
+        # ``path_prefix`` IS the psfs directory -- every caller passes
+        # f'{basepath}/psfs' -- so it replaces the unbound ``basepath`` this
+        # line used to interpolate, which made it a NameError rather than a
+        # lookup.  The name comes from psf_paths so it stays identical to what
+        # reduction.make_merged_psf writes, including the _oversample{N} token
+        # this line omitted.
+        merged_psf_fn = os.path.join(path_prefix, legacy_merged_psf_grid_name(
+            filtername, project_id, obs_id, oversample=oversample))
         if use_merged_psf_for_merged and os.path.exists(merged_psf_fn):
             psf_fn = merged_psf_fn
             log.info(f"Using merged PSF grid {psf_fn}")
