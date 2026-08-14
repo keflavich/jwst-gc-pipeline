@@ -3888,9 +3888,38 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
     return [fn for fn in fns if fn not in drop]
 
 
+def _is_whole_consensus_shift(c):
+    """Is this the tie of the whole visit consensus to the reference catalog?
+
+    Keyed on the ``source`` string the checkpoint writes
+    (``astrometry_checkpoint.REFERENCE_TIE_SOURCE_SUFFIX``), not on
+    ``exposure is None``: a correction assembled without those keys at all
+    would read as None too, so a fixture or a future caller that omits them
+    would silently become un-floorable.
+    """
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        REFERENCE_TIE_SOURCE_SUFFIX)
+    return str(c.get('source', '')).endswith(REFERENCE_TIE_SOURCE_SUFFIX)
+
+
 def _floor_actionable_corrections(corrections, floor_mas, label):
     """Corrections whose on-sky magnitude ``hypot(dra_onsky_mas, ddec_onsky_mas)``
-    is at least ``floor_mas``.
+    is at least ``floor_mas`` -- plus the consensus-to-reference tie regardless.
+
+    The floor exists for ONE class of residual: a per-detector distortion term
+    (instrument aperture model, velocity aberration) that the module-locked
+    offsets table has no way to express, so applying its detector mean is what
+    the previous cycle already did and the loop never converges.  That argument
+    is about the SHAPE of the residual, not its size.
+
+    It does not reach the tie of the whole visit consensus to the reference
+    catalog: that is one rigid shift of every exposure together, which the table
+    expresses exactly.  Flooring it would let an absolute frame error up to
+    ``floor_mas`` through with nothing downstream to catch it -- a common-mode
+    shift moves every band equally, so the m7 cross-band gate sees agreement,
+    and the ~100 mas gross gate is two orders of magnitude away.  So the
+    reference tie is always actionable, and only per-exposure residuals are
+    floored.
 
     Reads the magnitude LOUDLY: a ``c.get(key, 0.0)`` default would read
     magnitude 0 for any correction missing ``dra_onsky_mas`` / ``ddec_onsky_mas``,
@@ -3916,7 +3945,8 @@ def _floor_actionable_corrections(corrections, floor_mas, label):
             f"ASTROM_M2_CORRECTION_FLOOR_MAS filter cannot tell them from "
             f"sub-floor and would apply nothing. First offender: {bad[0]}")
     return [c for c in corrections
-            if np.hypot(c['dra_onsky_mas'], c['ddec_onsky_mas']) >= floor_mas]
+            if _is_whole_consensus_shift(c)
+            or np.hypot(c['dra_onsky_mas'], c['ddec_onsky_mas']) >= floor_mas]
 
 
 def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath,
