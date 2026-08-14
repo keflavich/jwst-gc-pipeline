@@ -1586,6 +1586,14 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
         # non-finite as "not recorded" and falls back to the loose bound.
         if PROV_DEC_DEG_KEY not in tbl.colnames:
             tbl[PROV_DEC_DEG_KEY] = np.full(len(tbl), np.nan)
+        elif tbl[PROV_DEC_DEG_KEY].dtype.kind != "f":
+            # An all-blank column round-trips from CSV as int64, and writing a
+            # declination of -28.7 into it silently stores -28 -- 0.7 degrees
+            # out, which is enough to make the exact check reject a correct row
+            # later.  The dra/ddec pairs are coerced a few lines below for the
+            # same reason; this column needs it too.
+            tbl[PROV_DEC_DEG_KEY] = np.ma.filled(
+                np.ma.asarray(tbl[PROV_DEC_DEG_KEY], dtype=float), np.nan)
         # An INT offset column truncates every fractional correction to zero and,
         # once one pair is float and the other is not, locks the table into a
         # permanent disagreement no write can clear.  Coerce before anything is
@@ -1667,11 +1675,19 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
                 tbl[_cc][idx] = np.asarray(tbl[_cc][idx], dtype=float) + ddec_add
             tbl["prov_stage"][idx] = _prov_text(stage)
             tbl["prov_date"][idx] = _prov_text(now)
+            # `np.ma.filled(..., 0.0)`: on a table that reached here carrying
+            # BOTH spellings, the new column is MASKED on rows whose value lives
+            # under the legacy name, and a bare asarray turns that mask into
+            # whatever numpy feels like rather than the accumulated total.  The
+            # rename above should make that unreachable; this makes the failure
+            # a zero rather than a silent corruption if it is not.
             tbl[PROV_ONSKY_RA_KEY][idx] = (
-                np.asarray(tbl[PROV_ONSKY_RA_KEY][idx], dtype=float)
+                np.ma.filled(np.ma.asarray(tbl[PROV_ONSKY_RA_KEY][idx],
+                                           dtype=float), 0.0)
                 + float(corr["dra_onsky_mas"]))
             tbl[PROV_ONSKY_DEC_KEY][idx] = (
-                np.asarray(tbl[PROV_ONSKY_DEC_KEY][idx], dtype=float)
+                np.ma.filled(np.ma.asarray(tbl[PROV_ONSKY_DEC_KEY][idx],
+                                           dtype=float), 0.0)
                 + float(corr["ddec_onsky_mas"]))
             # The declination this correction's cos(dec) used.  Recorded per
             # row so the coordinate offset it implies can be re-derived exactly
@@ -1901,7 +1917,24 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
         existed = os.path.exists(out_path)
         bykey = {}
         if existed:
-            for r in Table.read(out_path):
+            # Rename the provenance columns on the WHOLE table before any row is
+            # read out of it.  Popping the legacy key per touched row is not
+            # enough and was the round-1 fix's mistake: untouched rows keep the
+            # old key, so `Table(rows)` below re-creates BOTH columns with each
+            # masked on the other's rows -- the state this is supposed to
+            # prevent, and one that then makes migrate_prov_column_names a
+            # permanent silent no-op because both spellings are present forever.
+            _existing = Table.read(out_path)
+            _renamed = migrate_prov_column_names(_existing)
+            if _renamed:
+                print(f"  {os.path.basename(out_path)}: renaming provenance "
+                      f"column(s) "
+                      + ", ".join(f"{a} -> {b}"
+                                  for a, b in sorted(_renamed.items()))
+                      + " -- values unchanged; the name now states that these "
+                        "are ON-SKY milliarcseconds, which right ascension's "
+                        "COORDINATE offset is not", flush=True)
+            for r in _existing:
                 row = {c: r[c] for c in r.colnames}
                 # normalise the round-tripped cell ONCE (masked/'--'/int64 -> canonical
                 # string) so the key, the migration below and the written column all
@@ -1989,11 +2022,9 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
                     _accumulated_prov(row, PROV_ONSKY_DEC_KEY,
                                       "prov_ddec_added_mas")
                     + float(corr["ddec_onsky_mas"]))
-                # Drop the legacy key once its value has been carried over, so
-                # the table this builds never ends up with two columns each
-                # claiming to be the record -- the state migrate_prov_column_names
-                # refuses to resolve, and which would shadow the legacy column
-                # from the cumulative-drift and broadcast guards.
+                # Belt and braces after the table-wide rename above: if a row
+                # dict reached here from somewhere that had not been migrated,
+                # this stops it re-introducing the legacy key.
                 row.pop("prov_dra_added_mas", None)
                 row.pop("prov_ddec_added_mas", None)
                 row[PROV_DEC_DEG_KEY] = float(corr["dec_deg"])

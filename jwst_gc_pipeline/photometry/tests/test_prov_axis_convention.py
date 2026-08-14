@@ -230,3 +230,137 @@ def test_a_row_with_neither_spelling_accumulates_from_zero():
     from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
         _accumulated_prov)
     assert _accumulated_prov({}, PROV_ONSKY_RA_KEY, "prov_dra_added_mas") == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Round 2: the fixes above had no tests, so mutating them back changed nothing
+# ---------------------------------------------------------------------------
+
+def _consensus_table(path, legacy_values=(-6.2532, 0.0, 1.0)):
+    """A per-exposure corrections table in the older provenance spelling."""
+    t = Table()
+    t["Filter"] = ["F360M"] * 3
+    t["Module"] = ["nrcb1", "nrcb2", "nrcb3"]
+    t["Visit"] = ["jw02092002001"] * 3
+    t["Exposure"] = [1, 2, 3]
+    t["Vgroup"] = ["2101"] * 3
+    t["dra (arcsec)"] = [0.0] * 3
+    t["ddec (arcsec)"] = [0.0] * 3
+    t["prov_dra_added_mas"] = list(legacy_values)
+    t["prov_ddec_added_mas"] = [0.0] * 3
+    for c in ("prov_stage", "prov_date", "prov_source"):
+        t[c] = ["x"] * 3
+    t.write(path, overwrite=True)
+    return path
+
+
+def test_the_upsert_path_never_leaves_two_columns_claiming_to_be_the_record(tmp_path):
+    """Renaming only the rows a correction TOUCHES is not enough: the untouched
+    rows keep the old key, and rebuilding the table from row dictionaries then
+    re-creates BOTH columns, each masked where the other holds the value.
+
+    That state is worse than the original problem -- it is permanent, because
+    the migration then sees both spellings present and declines to act, every
+    time, silently.  So the whole table has to be renamed when it is read.
+    """
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        seed_offsets_table_from_consensus)
+    path = _consensus_table(str(tmp_path / "Offsets_JWST_Brick2092_consensus.csv"))
+    corr = [dict(visit="jw02092002001", exposure=2, module="nrcb2",
+                 filtername="F360M", dra_onsky_mas=10.0, ddec_onsky_mas=0.0,
+                 dec_deg=-28.49, vgroup="2101")]
+    seed_offsets_table_from_consensus(str(tmp_path), "2092", "002", corr,
+                                      stage="m2", out_path=path)
+    out = Table.read(path)
+    assert "prov_dra_added_mas" not in out.colnames, (
+        "the legacy column survived, so the table now carries two columns each "
+        "claiming to be the provenance record")
+    assert PROV_ONSKY_RA_KEY in out.colnames
+
+
+def test_the_upsert_path_keeps_every_row_s_accumulated_value(tmp_path):
+    """The values are what the rename is for.  An untouched row must arrive in
+    the new column with its history intact, not stranded in a dropped one."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        seed_offsets_table_from_consensus)
+    path = _consensus_table(str(tmp_path / "Offsets_JWST_Brick2092_consensus.csv"))
+    corr = [dict(visit="jw02092002001", exposure=2, module="nrcb2",
+                 filtername="F360M", dra_onsky_mas=10.0, ddec_onsky_mas=0.0,
+                 dec_deg=-28.49, vgroup="2101")]
+    seed_offsets_table_from_consensus(str(tmp_path), "2092", "002", corr,
+                                      stage="m2", out_path=path)
+    out = Table.read(path)
+    by_exposure = {int(r["Exposure"]): r for r in out}
+    assert float(by_exposure[1][PROV_ONSKY_RA_KEY]) == pytest.approx(-6.2532)
+    assert float(by_exposure[2][PROV_ONSKY_RA_KEY]) == pytest.approx(10.0)
+    assert float(by_exposure[3][PROV_ONSKY_RA_KEY]) == pytest.approx(1.0)
+
+
+def test_an_all_blank_declination_column_does_not_truncate_the_value(tmp_path):
+    """A column of empty cells round-trips from CSV as an integer column, and
+    writing -28.7 into it silently stores -28.  Seven tenths of a degree is
+    enough to make the exact check reject a correct row on the next write."""
+    path = _table(str(tmp_path / "off.csv"))
+    t = Table.read(path)
+    t[PROV_DEC_DEG_KEY] = np.ma.array([0] * len(t), mask=[True] * len(t))
+    t.write(path, overwrite=True)
+    assert Table.read(path)[PROV_DEC_DEG_KEY].dtype.kind != "f"   # the trap
+    out = update_offsets_table(path, [_correction(dec=-28.7)], "m2")
+    assert float(out[PROV_DEC_DEG_KEY][0]) == pytest.approx(-28.7)
+
+
+# ---------------------------------------------------------------------------
+# The validator's half of the change had no coverage at all
+# ---------------------------------------------------------------------------
+
+def _diverged(prov_dra_mas, gap_arcsec, dec=None):
+    """One row whose two column pairs disagree by `gap`, with `prov` recorded."""
+    t = Table()
+    t["Filter"] = ["F212N"]; t["Module"] = ["nrcb1"]
+    t["Visit"] = ["jw01182004001"]; t["Exposure"] = [1]
+    t["dra (arcsec)"] = [gap_arcsec]; t["ddec (arcsec)"] = [0.0]
+    t["dra"] = [0.0]; t["ddec"] = [0.0]
+    t[PROV_ONSKY_RA_KEY] = [prov_dra_mas]; t[PROV_ONSKY_DEC_KEY] = [0.0]
+    if dec is not None:
+        t[PROV_DEC_DEG_KEY] = [dec]
+    return t
+
+
+def test_the_validator_uses_the_recorded_declination(tmp_path):
+    """`flag_diverged_column_pairs` is the check issue #343 names.  With the
+    declination recorded it must reject a gap equal to the ON-SKY number, which
+    the loose bound accepts."""
+    from jwst_gc_pipeline.reduction.validate_offsets_table import (
+        flag_diverged_column_pairs)
+    # 400 mas on-sky is 456 mas of coordinate right ascension at this declination
+    assert flag_diverged_column_pairs(_diverged(400.0, 0.400, dec=GC_DEC))
+    assert not flag_diverged_column_pairs(_diverged(400.0, 0.456024, dec=GC_DEC))
+
+
+def test_the_validator_falls_back_to_the_loose_bound_without_a_declination():
+    """A row written before the column existed keeps the old behaviour."""
+    from jwst_gc_pipeline.reduction.validate_offsets_table import (
+        flag_diverged_column_pairs)
+    assert not flag_diverged_column_pairs(_diverged(400.0, 0.400))
+
+
+def test_the_validator_reads_an_absent_declination_as_absent():
+    """Masked or non-finite means "not recorded", never "the equator"."""
+    from jwst_gc_pipeline.reduction.validate_offsets_table import (
+        flag_diverged_column_pairs)
+    t = _diverged(400.0, 0.400, dec=np.nan)
+    assert not flag_diverged_column_pairs(t)
+    t2 = _diverged(400.0, 0.400, dec=0.0)
+    t2[PROV_DEC_DEG_KEY] = np.ma.array([0.0], mask=[True])
+    assert not flag_diverged_column_pairs(t2)
+
+
+def test_the_validator_converts_degrees_not_radians():
+    """`cos(-28.7)` without the degree conversion is 0.885 rather than 0.877 --
+    close enough to look right and wrong enough to move the bound."""
+    from jwst_gc_pipeline.reduction.validate_offsets_table import (
+        flag_diverged_column_pairs)
+    exact_deg = 400.0 / 1000.0 / np.cos(np.radians(GC_DEC))
+    exact_rad = 400.0 / 1000.0 / np.cos(GC_DEC)
+    assert abs(exact_deg - exact_rad) > 1e-3
+    assert not flag_diverged_column_pairs(_diverged(400.0, exact_deg, dec=GC_DEC))
