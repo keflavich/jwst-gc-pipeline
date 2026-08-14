@@ -1505,7 +1505,7 @@ def test_pooling_refuses_a_bimodal_group(tmp_path, monkeypatch):
     for m, d in (("nrca1", 1.0), ("nrca2", 1.0), ("nrca3", 100.0),
                  ("nrca4", 100.0)):
         corr.extend(_detector_corrections((m,), ddec=d))
-    with pytest.raises(OffsetsTableUpdateError, match="(?i)peak-to-peak"):
+    with pytest.raises(OffsetsTableUpdateError, match="(?i)apart at their furthest"):
         _pool(corr, path)
 
 
@@ -1518,9 +1518,12 @@ def test_pooled_entry_carries_its_dispersion(tmp_path):
         corr.extend(_detector_corrections((m,), ddec=d))
     pooled = pool_corrections_to_table_granularity(corr, path)[0]
     assert pooled["pooled_n"] == 4
+    assert pooled["pooled_max_sep_mas"] == pytest.approx(4.0)
+    # written under the old key too for one release, so a reader of a mixed
+    # set of records is not silently comparing two different quantities
     assert pooled["pooled_spread_mas"] == pytest.approx(4.0)
     assert pooled["pooled_stat"] == "mean"
-    assert "ptp 4.00mas" in pooled["source"]
+    assert "maxsep 4.00mas" in pooled["source"]
 
 
 def test_unknown_pool_stat_raises_rather_than_becoming_the_mean(tmp_path):
@@ -2332,8 +2335,13 @@ def test_the_statistic_used_is_named_in_the_provenance(tmp_path):
 
 
 def test_the_median_is_still_available_and_still_differs(tmp_path):
-    """Kept as an option so the choice stays a choice, and so a future
-    comparison does not need a code change."""
+    """Kept as a parameter so the choice stays visible in the code.
+
+    Note it is not reachable from a command line or an environment variable --
+    both callers take the default -- so comparing the two on a real run today
+    DOES need a code change.  An earlier version of this pull request claimed
+    otherwise.
+    """
     path = _offsets_csv(tmp_path)
     corr = [dict(visit="jw01182004001", exposure=1, module=m, filtername="F212N",
                  dra_onsky_mas=v, ddec_onsky_mas=0.0, dec_deg=DEC_TEST)
@@ -2363,9 +2371,15 @@ def test_two_detectors_give_the_same_answer_either_way(tmp_path):
     corr = [dict(visit="jw01182004001", exposure=1, module=m, filtername="F212N",
                  dra_onsky_mas=v, ddec_onsky_mas=0.0, dec_deg=DEC_TEST)
             for m, v in zip(("nrcb1", "nrcb2"), (2.0, 6.0))]
-    as_mean = pool_corrections_to_table_granularity(corr, path)[0]
-    as_median = pool_corrections_to_table_granularity(corr, path, stat="median")[0]
-    assert as_mean["dra_onsky_mas"] == pytest.approx(as_median["dra_onsky_mas"])
+    as_mean = pool_corrections_to_table_granularity(corr, path)
+    as_median = pool_corrections_to_table_granularity(corr, path, stat="median")
+    # assert the pooling HAPPENED: without this the test passes when the two
+    # corrections land on different rows and nothing is combined at all, which
+    # is what it used to do.
+    assert len(as_mean) == 1 and as_mean[0]["pooled_n"] == 2
+    assert as_mean[0]["dra_onsky_mas"] == pytest.approx(4.0)      # (2+6)/2
+    assert as_mean[0]["dra_onsky_mas"] == pytest.approx(
+        as_median[0]["dra_onsky_mas"])
 
 
 def test_a_detector_pointing_the_OPPOSITE_way_is_refused(tmp_path):
@@ -2415,3 +2429,35 @@ def test_a_single_member_has_no_dispersion(tmp_path):
         _max_pairwise_separation)
     assert _max_pairwise_separation([dict(dra_onsky_mas=5.0,
                                           ddec_onsky_mas=5.0)]) == 0.0
+
+
+def test_three_detectors_are_where_the_two_statistics_differ_most(tmp_path):
+    """N=3 is 20% of real groups and the size where the median and the mean
+    part company most typically -- the median keeps ONE of three.
+
+    Every other test here uses two or four members, so nothing pinned the case
+    the code comment now argues is the strongest.
+    """
+    path = _offsets_csv(tmp_path)
+    corr = [dict(visit="jw01182004001", exposure=1, module=m, filtername="F212N",
+                 dra_onsky_mas=v, ddec_onsky_mas=0.0, dec_deg=DEC_TEST)
+            for m, v in zip(("nrcb1", "nrcb2", "nrcb3"), (1.0, 2.0, 9.0))]
+    as_mean = pool_corrections_to_table_granularity(corr, path)[0]
+    as_median = pool_corrections_to_table_granularity(corr, path, stat="median")[0]
+    assert as_mean["pooled_n"] == 3
+    assert as_mean["dra_onsky_mas"] == pytest.approx(4.0)      # (1+2+9)/3
+    assert as_median["dra_onsky_mas"] == pytest.approx(2.0)    # keeps one of three
+    assert as_mean["dra_onsky_mas"] != pytest.approx(
+        as_median["dra_onsky_mas"])
+
+
+def test_the_dispersion_of_three_members_is_the_widest_pair(tmp_path):
+    """The helper's two direct tests both use two members, where the maximum,
+    the mean and the first pair all coincide -- so the word "maximum" was
+    pinned only incidentally.  Three members separate them."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        _max_pairwise_separation)
+    members = [dict(dra_onsky_mas=0.0, ddec_onsky_mas=0.0),
+               dict(dra_onsky_mas=1.0, ddec_onsky_mas=0.0),
+               dict(dra_onsky_mas=9.0, ddec_onsky_mas=0.0)]
+    assert _max_pairwise_separation(members) == pytest.approx(9.0)   # not 1.0

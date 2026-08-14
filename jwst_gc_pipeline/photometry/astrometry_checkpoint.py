@@ -603,12 +603,27 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
         # the peak-to-peak of their MAGNITUDES, which cannot see direction:
         # members (+30,0) (+30,0) (+30,0) (-30,0) all have magnitude 30, so a
         # 60 mas disagreement reported `ptp 0.00mas` and the provenance
-        # positively asserted perfect agreement.  Measured on the live
-        # checkpoint records, two real groups exceed the 50 mas refusal limit
-        # by vector separation and the magnitude form caught neither -- it read
-        # 13.82 and 8.54 mas.  One of those is gc2211 F200W visit
-        # jw02211049001, where nrca1 points opposite to its three neighbours:
-        # 77 mas apart, reported as 13.82.
+        # positively asserted perfect agreement.
+        #
+        # Measured on the live checkpoint records, TEN real groups across TWO
+        # fields exceed the 50 mas refusal limit by vector separation, and the
+        # magnitude form caught none of them:
+        #
+        #   gc2211 F200W o049   2 groups   76-77 mas   read as 8.5 / 13.8
+        #   cloudef F360M       8 groups   52-58 mas   read as 0.7 - 4.8
+        #
+        # both in `correcting: True` records.  The cloudef case is the more
+        # striking: each group pairs an `nrcb` correction at dra ~ +27 with an
+        # `nrcblong` one at dra ~ -26.5 -- equal size, opposite sign, so their
+        # magnitudes are nearly identical and the old metric read ~0.  The
+        # "synthetic worst case" this fix was written against is not synthetic;
+        # it is live in cloudef, eight times over.
+        #
+        # BLAST RADIUS: after this change, cloudef F360M and gc2211 F200W o049
+        # STOP at m2 with OffsetsTableUpdateError where they previously
+        # proceeded.  That is the intended effect -- their members contradict
+        # each other and their middle means nothing -- but it is a behaviour
+        # change on live fields and is stated rather than discovered.
         spread = _max_pairwise_separation(members)
         _assert_pool_spread(spread, members, mods, offsets_path)
         pooled = dict(members[0])
@@ -618,10 +633,16 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
         pooled["module"] = _pooled_module_label(mods, tbl, key)
         pooled["pooled_from"] = mods
         pooled["pooled_n"] = len(members)
+        pooled["pooled_max_sep_mas"] = spread
+        # Written under the old key too, for one release, so a reader of a
+        # mixed set of checkpoint records is not silently comparing two
+        # different quantities: before this change `spread_mas` held a
+        # peak-to-peak of magnitudes, and it now holds a maximum pairwise
+        # vector separation.  The new key is the one to read.
         pooled["pooled_spread_mas"] = spread
         pooled["pooled_stat"] = stat
         pooled["source"] = (f"{members[0].get('source', 'astrometry_checkpoint')}"
-                            f" [{stat} of {len(members)}, ptp {spread:.2f}mas: "
+                            f" [{stat} of {len(members)}, maxsep {spread:.2f}mas: "
                             f"{','.join(mods)}]")
         out.append(pooled)
     return out
@@ -708,7 +729,7 @@ def _assert_pool_spread(spread, members, mods, offsets_path):
     raise OffsetsTableUpdateError(
         f"cannot pool corrections for {os.path.basename(offsets_path)}: "
         f"{len(members)} corrections for modules {mods} disagree by "
-        f"{spread:.1f} mas peak-to-peak (limit {limit} mas, "
+        f"{spread:.1f} mas apart at their furthest (limit {limit} mas, "
         f"ASTROM_MAX_POOL_SPREAD_MAS).  That is not one shift measured several "
         f"times, so their middle is not a measurement of anything -- one "
         f"detector's tie has probably failed.  Inspect the checkpoint record.")
