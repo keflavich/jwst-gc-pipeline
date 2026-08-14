@@ -1298,9 +1298,40 @@ def migrate_prov_column_names(tbl):
     """
     renamed = {}
     for legacy, current in _LEGACY_PROV_NAMES.items():
-        if legacy in tbl.colnames and current not in tbl.colnames:
+        if legacy not in tbl.colnames:
+            continue
+        if current not in tbl.colnames:
             tbl.rename_column(legacy, current)
             renamed[legacy] = current
+            continue
+        # BOTH spellings present.  This used to be left alone and reported,
+        # on the reasoning that merging two columns each claiming to be the
+        # record is a curation decision.  That was wrong in the case that
+        # actually arises: the two are DISJOINT -- each row's value lives in
+        # exactly one of them and the other is masked -- because the state is
+        # produced by rebuilding a table from a mixture of old- and new-spelled
+        # row dictionaries, never by two writers recording different totals.
+        # Leaving it alone stranded the legacy values where every reader
+        # resolving to the new name would miss them, which is the silent data
+        # loss this whole rename exists to prevent.
+        old_vals = np.ma.filled(np.ma.asarray(tbl[legacy], dtype=float), np.nan)
+        new_vals = np.ma.filled(np.ma.asarray(tbl[current], dtype=float), np.nan)
+        conflict = np.isfinite(old_vals) & np.isfinite(new_vals) & (
+            old_vals != new_vals)
+        if conflict.any():
+            # A genuine disagreement IS a curation decision, and there is no
+            # rule that picks correctly.  Refuse rather than choose.
+            raise OffsetsTableUpdateError(
+                f"{legacy} and {current} both hold a value on "
+                f"{int(conflict.sum())} row(s) and they disagree (e.g. "
+                f"{old_vals[conflict][0]:+.3f} vs {new_vals[conflict][0]:+.3f} "
+                f"mas).  These are two columns each claiming to be the record "
+                f"of what was added, and nothing here can say which is right.  "
+                f"Resolve by hand before correcting this table again.")
+        merged = np.where(np.isfinite(new_vals), new_vals, old_vals)
+        tbl[current] = np.where(np.isfinite(merged), merged, 0.0)
+        tbl.remove_column(legacy)
+        renamed[legacy] = f"{current} (merged; the two were disjoint)"
     return renamed
 
 

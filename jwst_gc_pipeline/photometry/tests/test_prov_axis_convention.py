@@ -20,7 +20,7 @@ from astropy.table import Table
 from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
     PROV_DEC_DEG_KEY, PROV_ONSKY_DEC_KEY, PROV_ONSKY_RA_KEY,
     OffsetsTableUpdateError, migrate_prov_column_names, prov_onsky_columns,
-    update_offsets_table)
+    update_offsets_table)   # noqa: F401
 
 GC_DEC = -28.7          # a Galactic Centre declination; cos -> ~0.877
 
@@ -71,15 +71,41 @@ def test_a_legacy_table_is_renamed_without_its_values_changing(tmp_path):
     assert list(t[PROV_ONSKY_DEC_KEY]) == [7.5, 1.0]
 
 
-def test_a_table_carrying_both_spellings_is_left_alone(tmp_path):
-    """Merging two columns that both claim to be the record is a curation
-    decision, not a rename, so this refuses to guess."""
+def test_two_disjoint_spellings_are_merged_rather_than_one_being_stranded():
+    """When both column names exist, each row's value lives in exactly ONE of
+    them and the other is masked -- the state comes from rebuilding a table
+    from a mixture of old- and new-spelled rows, not from two writers recording
+    different totals.
+
+    An earlier version left this alone, which stranded every legacy value where
+    a reader resolving to the new name would miss it: the silent loss the whole
+    rename exists to prevent.
+    """
+    t = Table([dict(prov_dra_added_mas=-6.25),
+               dict(prov_dra_onsky_mas=3.5)])
+    renamed = migrate_prov_column_names(t)
+    assert 'prov_dra_added_mas' not in t.colnames
+    assert list(t[PROV_ONSKY_RA_KEY]) == [-6.25, 3.5]
+    assert 'merged' in renamed['prov_dra_added_mas']
+
+
+def test_two_spellings_that_genuinely_disagree_refuse_to_merge():
+    """A real disagreement IS a curation decision and no rule picks correctly,
+    so this stops rather than choosing."""
     t = Table()
     t["prov_dra_added_mas"] = [1.0]
     t[PROV_ONSKY_RA_KEY] = [2.0]
-    assert migrate_prov_column_names(t) == {}
-    assert list(t["prov_dra_added_mas"]) == [1.0]
-    assert list(t[PROV_ONSKY_RA_KEY]) == [2.0]
+    with pytest.raises(OffsetsTableUpdateError, match='both hold a value'):
+        migrate_prov_column_names(t)
+
+
+def test_a_value_equal_in_both_spellings_is_not_a_disagreement():
+    """Identical is not a conflict -- it is the same record written twice."""
+    t = Table()
+    t["prov_dra_added_mas"] = [4.0]
+    t[PROV_ONSKY_RA_KEY] = [4.0]
+    migrate_prov_column_names(t)
+    assert list(t[PROV_ONSKY_RA_KEY]) == [4.0]
 
 
 def test_either_spelling_can_be_read(tmp_path):
