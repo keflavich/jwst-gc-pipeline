@@ -485,6 +485,18 @@ for ((it=1; it<=MAXITER; it++)); do
         # this check's whole output -- rc 3 and rc 4 are its two verdicts.
         # Without it the loop would die here, one line before the branch that
         # reads them, with the report captured and never printed.
+        # Validate the operator-supplied ceiling BEFORE handing it to argparse.
+        # A typo makes argparse exit 2, which lands in the `-ne 0` arm below and
+        # is reported as "continuing" -- so a mistyped ceiling would not merely
+        # fail to accept, it would switch OFF the fixed-point STOP for the rest
+        # of the run and grind to MAXITER at ~7 h a pass with a usage message
+        # buried in the log.
+        case "${RETIE_ACCEPT_RESIDUAL_MAS:-0}" in
+            ''|*[!0-9.]*|*.*.*)
+                echo "REFUSING: RETIE_ACCEPT_RESIDUAL_MAS=${RETIE_ACCEPT_RESIDUAL_MAS}"
+                echo "          is not a number of milliarcseconds."
+                exit 2 ;;
+        esac
         fp_rc=0
         fp_out=$(PYTHONPATH="${PIPE_ROOT:-}:${PYTHONPATH:-}" python \
                 -m jwst_gc_pipeline.photometry.retie_fixed_point \
@@ -502,26 +514,47 @@ for ((it=1; it<=MAXITER; it++)); do
         elif [ "$fp_rc" -eq 4 ]; then
             # A BOUNDED fixed point: the residual repeats and is small enough
             # that it is the systematic a per-exposure table cannot express, not
-            # a correction failing to reach the frame.  Proceed to m3-m7 over it
-            # rather than holding the field -- but only by raising the m2
-            # CORRECTION floor to just above it, so the residual is still
-            # MEASURED and RECORDED every stage and the reference-tie gates
-            # (including the gross one) are untouched.  Anything the loop has
-            # not seen still stops the run.
+            # a correction failing to reach the frame.  Proceed over it rather
+            # than holding the field -- but only by raising the m2 CORRECTION
+            # floor to just above it, so the residual is still MEASURED and
+            # RECORDED every stage.  The consensus-to-reference tie is never
+            # floored, and the gross reference-tie gates are untouched.
             fp_floor=$(echo "$fp_out" | sed -n 's/^ASTROM_M2_CORRECTION_FLOOR_MAS=//p' | tail -1)
             if [ -z "$fp_floor" ]; then
                 echo "[iter $it] STOPPING: the fixed-point check reported a bounded"
                 echo "           residual but printed no floor to run it under."
                 exit 3
             fi
-            echo "[iter $it] BOUNDED fixed point -- proceeding to m3-m7 with"
+            # Raise the floor and take ANOTHER PASS -- do not break out here.
+            # Reaching this point means m2 just wrote new corrections into the
+            # offsets table and stale-tagged this filter's _i2d mosaics.  The
+            # frames on disk still carry the PREVIOUS pass's baked RAOFFSET, so
+            # breaking now would leave the table describing frames that were
+            # never re-drizzled (the frame/table disagreement behind brick-1182
+            # v001) and the mosaics renamed _im0_badastrom for good.  Another
+            # pass re-reduces with the table applied, re-drizzles, and m2 passes
+            # under the raised floor -- and the loop then exits by its normal
+            # converged branch, with table, frames and mosaics agreeing.
+            echo "[iter $it] BOUNDED fixed point -- re-reducing once more with"
             echo "           ASTROM_M2_CORRECTION_FLOOR_MAS=$fp_floor (was"
-            echo "           $ASTROM_M2_CORRECTION_FLOOR_MAS)."
+            echo "           ${ASTROM_M2_CORRECTION_FLOOR_MAS:-unset}), so the"
+            echo "           frames and the offsets table end up agreeing."
             ASTROM_M2_CORRECTION_FLOOR_MAS="$fp_floor"
             export ASTROM_M2_CORRECTION_FLOOR_MAS
-            break
+            if [ "$it" -eq "$MAXITER" ]; then
+                echo "[iter $it] ...but this is the last iteration (MAXITER=$MAXITER)."
+                echo "           Re-run with MAXITER=$((MAXITER + 1)) and"
+                echo "           ASTROM_M2_CORRECTION_FLOOR_MAS=$fp_floor to finish."
+                exit 2
+            fi
         elif [ "$fp_rc" -ne 0 ]; then
-            echo "[iter $it] (fixed-point check exited $fp_rc; continuing)"
+            # rc 2 is argparse/usage: the check never ran, so treating it as
+            # "no fixed point" would silently disable this whole branch.
+            echo "[iter $it] STOPPING: the fixed-point check itself failed"
+            echo "           (exit $fp_rc) -- it did not report a verdict, so"
+            echo "           continuing would run blind.  Set"
+            echo "           RETIE_FIXED_POINT_CHECK=0 to proceed without it."
+            exit 3
         fi
     fi
 

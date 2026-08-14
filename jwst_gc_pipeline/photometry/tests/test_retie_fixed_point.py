@@ -410,3 +410,97 @@ def test_the_ceiling_does_not_make_a_MOVING_loop_stop_early(tmp_path):
               for i in range(5)]
     d = _history(tmp_path, states)
     assert _cli(d, '--accept-below-mas', '15') == 0
+
+
+# ---------------------------------------------------------------------------
+# What the floor may be sized against
+# ---------------------------------------------------------------------------
+
+def _multi_history(tmp_path, per_filter):
+    """One record directory holding several filters' histories."""
+    d = tmp_path / 'astrometry_checkpoints'
+    d.mkdir(exist_ok=True)
+    for filt, states in per_filter.items():
+        for i, st in enumerate(states):
+            (d / f'checkpoint_m2_{filt}_o012_2026080{i}T000000Z.json').write_text(
+                json.dumps(_rec(st)))
+    return str(d)
+
+
+#: still converging: 96 -> 48 -> 24 -> 12 mas, one pass from done
+_CONVERGING = [{('1', 7, 'nrca1'): (96.0, 0.0)},
+               {('1', 7, 'nrca1'): (48.0, 0.0)},
+               {('1', 7, 'nrca1'): (24.0, 0.0)},
+               {('1', 7, 'nrca1'): (12.0, 0.0)}]
+
+
+def test_a_still_converging_filter_blocks_acceptance(tmp_path, capsys):
+    """The floor is applied to EVERY filter in the field.
+
+    Accepting while one band is still halving its residual hands that band an
+    amnesty it never needed and was one pass from clearing -- and the number
+    the floor is sized from would be its residual, not the stuck one's.
+    """
+    d = _multi_history(tmp_path, {
+        'F162M': [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],   # stuck at ~5 mas
+        'F212N': _CONVERGING,                                # still moving
+    })
+    assert _cli(d, '--accept-below-mas', '15') == 3
+    out = capsys.readouterr().out
+    assert 'NOT ACCEPTED' in out
+    assert 'F212N' in out
+
+
+def test_the_floor_is_sized_only_from_the_STUCK_filters(tmp_path):
+    """A group that has too little history to judge is not stuck, so its
+    residual must not set the ceiling the whole field then runs under."""
+    from jwst_gc_pipeline.photometry.retie_fixed_point import (
+        group_verdicts, largest_measured_residual)
+    d = _multi_history(tmp_path, {
+        'F162M': [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],
+        'F444W': [{('1', 8, 'nrcb1'): (300.0, 0.0)}],        # 1 pass, unjudged
+    })
+    stuck, moving, _ = group_verdicts(d)
+    assert ('F162M', 'o012') in stuck
+    assert not moving, 'one pass is not "still moving", it is unjudged'
+    worst, _, label = largest_measured_residual(d, only_groups=stuck)
+    assert worst == pytest.approx(5.2, abs=0.3), worst
+    assert 'F162M' in label
+    unrestricted, _, _ = largest_measured_residual(d)
+    assert unrestricted > 200, 'the guard is what keeps the 300 mas group out'
+
+
+def test_an_exposure_the_checkpoint_would_never_correct_does_not_size_the_floor(
+        tmp_path):
+    """A module-antisymmetric residual is filed `alias_suspect` and is never
+    corrected -- it is a detector-naming collision, not a misalignment.  Letting
+    it set the floor would waive real corrections up to its size."""
+    from jwst_gc_pipeline.photometry.retie_fixed_point import (
+        largest_measured_residual)
+    rec = _rec(SMALL)
+    rec['visits'][0]['exposures'].append(
+        {'key': ['1', 9, 'nrcb2'], 'dra': 900.0, 'ddec': 0.0, 'off': 900.0,
+         'alias_suspect': True})
+    d = tmp_path / 'astrometry_checkpoints'
+    d.mkdir()
+    (d / 'checkpoint_m2_F162M_o012_20260801T000000Z.json').write_text(
+        json.dumps(rec))
+    worst, key, _ = largest_measured_residual(str(d))
+    assert worst == pytest.approx(5.2, abs=0.3), (worst, key)
+
+
+def test_the_margin_is_the_tolerance_that_defined_the_fixed_point(tmp_path,
+                                                                  capsys):
+    """Consecutive passes may differ by up to --tol-mas and still count as
+    repeating, so the next pass can legitimately read that much larger.  A
+    margin below the tolerance leaves the field one ordinary wobble from
+    re-correcting at m2 and raising in the frozen stages."""
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN])
+    _cli(d, '--accept-below-mas', '15', '--tol-mas', '2.0')
+    floor = float([ln for ln in capsys.readouterr().out.splitlines()
+                   if ln.startswith('ASTROM_M2_CORRECTION_FLOOR_MAS=')
+                   ][-1].split('=')[1])
+    from jwst_gc_pipeline.photometry.retie_fixed_point import (
+        largest_measured_residual)
+    worst, _, _ = largest_measured_residual(d)
+    assert floor >= worst + 2.0, (floor, worst)
