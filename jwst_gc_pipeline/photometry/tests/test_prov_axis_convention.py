@@ -20,7 +20,7 @@ from astropy.table import Table
 from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
     PROV_DEC_DEG_KEY, PROV_ONSKY_DEC_KEY, PROV_ONSKY_RA_KEY,
     OffsetsTableUpdateError, migrate_prov_column_names, prov_onsky_columns,
-    update_offsets_table)   # noqa: F401
+    update_offsets_table)
 
 GC_DEC = -28.7          # a Galactic Centre declination; cos -> ~0.877
 

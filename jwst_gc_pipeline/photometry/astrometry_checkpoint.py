@@ -1289,12 +1289,26 @@ def _accumulated_prov(row, current_key, legacy_key):
 
 
 def migrate_prov_column_names(tbl):
-    """Rename the legacy provenance columns in place; return what it renamed.
+    """Bring the provenance columns onto the current spelling, in place.
+
+    Returns ``{old name: what happened}`` for whatever it changed, empty when
+    the table was already current.
 
     The values are unchanged -- they were always on-sky milliarcseconds, the
-    name simply did not say so.  A table carrying BOTH spellings is left alone
-    and reported, because merging them is a curation decision rather than a
-    rename.
+    name simply did not say so.
+
+    A table carrying BOTH spellings is MERGED when the two are disjoint, which
+    is the only way that state arises here: it comes from rebuilding a table
+    out of a mixture of old- and new-spelled row dictionaries, so each row's
+    value sits in exactly one column and the other is masked.  Leaving such a
+    table alone -- which this function used to do, on the reasoning that
+    merging two records is a curation decision -- stranded every legacy value
+    where a reader resolving to the new name would miss it, which is the silent
+    loss the rename exists to prevent.
+
+    A row where BOTH columns hold a finite value AND they differ is a genuine
+    disagreement, no rule picks correctly, and it raises.  Equal values in both
+    are not a disagreement; that is one record written twice.
     """
     renamed = {}
     for legacy, current in _LEGACY_PROV_NAMES.items():

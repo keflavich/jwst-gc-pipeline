@@ -202,8 +202,21 @@ passes AND D is clean (`apply_ok`).  Anything else is recorded as
   correction against a per-visit (module-locked) table, validates the result
   with the collapsed-visit guard (which raises on the brick-1182 signature),
   keeps a timestamped backup, and stamps provenance
-  columns (`prov_stage`, `prov_date`, `prov_dra_added_mas`,
-  `prov_ddec_added_mas`, `prov_source`).
+  columns (`prov_stage`, `prov_date`, `prov_dra_onsky_mas`,
+  `prov_ddec_onsky_mas`, `prov_dec_deg`, `prov_source`).
+
+  The `_onsky_` in those names is load-bearing. Right ascension has two
+  quantities that are both angles and differ by cos(declination) — about 14% at
+  Galactic Centre declinations: an **on-sky separation** (how far the source
+  actually moved) and a **coordinate offset** (how much the right-ascension
+  number changed). The table's own `dra` columns hold the coordinate one; these
+  provenance columns hold the on-sky one, and now say so. `prov_dec_deg` records
+  the declination each conversion used, so the coordinate offset a provenance
+  entry implies can be re-derived exactly rather than bounded.
+
+  Tables written before that convention use `prov_dra_added_mas` /
+  `prov_ddec_added_mas`; they are renamed on their next correction, values
+  untouched.
 * **`Vgroup` is part of a per-exposure row's identity.** A visit can dither
   across several visit groups (physically disjoint sky tiles) and the exposure
   number RESTARTS in each, so `(visit, filter, exposure, module)` names two

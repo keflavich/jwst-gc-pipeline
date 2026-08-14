@@ -108,6 +108,9 @@ def prov_columns(colnames):
     return (_PROV_CURRENT if _PROV_CURRENT[0] in colnames else _PROV_LEGACY)
 
 
+#: Kept only because older callers imported it.  Resolve the pair with
+#: `prov_columns(tbl.colnames)` instead -- a live table may carry either
+#: spelling, and this constant names only one of them.
 PROV = _PROV_LEGACY
 
 SNAPSHOT_MARKERS = ("_backup", ".pre_", ".contaminated", ".old", ".removed_",
