@@ -1,4 +1,4 @@
-"""Two ways an overlap pair can be unmeasurable, and only one should block.
+"""Which star list tie-breaks an overlap too thin to measure directly.
 
 Before a field is published, a check confirms that overlapping exposures agree
 about where the stars are.  Some pairs overlap on a sliver too thin to compare
@@ -35,16 +35,6 @@ def _load(relpath, name):
     return mod
 
 
-cio = _load('scripts/release/check_interframe_overlap.py', '_cio')
-
-
-
-
-
-
-
-
-
 # ---------------------------------------------------------------------------
 # Which star list arbitrates an unmeasurable pair
 # ---------------------------------------------------------------------------
@@ -61,11 +51,36 @@ def test_a_sparse_star_list_is_allowed_to_arbitrate():
         assert stage.overlap_arbiter_refcat('w51') == path
 
 
-def test_the_sparse_list_is_kept_OUT_of_the_absolute_frame_check():
-    """That check asks whether a catalogue sits on the right sky and needs a
-    dense list; a sparse one gives a noisy answer and would refuse good data.
-    The two registries exist because the requirements are opposite."""
-    assert 'w51' not in stage.FRAME_REFCAT
+def test_the_absolute_frame_check_reads_only_its_own_registry():
+    """`stage_release.check_catalog_on_frame` asks whether a shipped catalogue
+    sits on the right sky, and needs a dense list -- a sparse one gives a noisy
+    bulk tie and would refuse good data.  So it must read FRAME_REFCAT and NOT
+    the tie-break registry.
+
+    Asserted on the MECHANISM rather than on registry contents: an earlier
+    version of this test checked `'w51' not in FRAME_REFCAT`, which is a fact
+    about a dict literal.  Re-pointing check_catalog_on_frame at
+    `overlap_arbiter_refcat` -- wiring the sparse list straight into the
+    blocking check -- left that test green.
+    """
+    import inspect
+    src = inspect.getsource(stage.check_catalog_on_frame)
+    assert 'FRAME_REFCAT' in src
+    assert 'overlap_arbiter_refcat' not in src, (
+        'the absolute-frame check must not resolve its catalogue through the '
+        'tie-break registry, which may hold a sparse list')
+
+
+def test_a_field_with_no_list_is_told_so_rather_than_left_to_wonder():
+    """Without this line, a pair stays unmeasurable and the log gives no reason
+    -- indistinguishable from the arbiter having run and found nothing."""
+    import inspect
+    src = inspect.getsource(stage.main) if hasattr(stage, 'main') else ''
+    if not src:
+        import pathlib as _p
+        src = (_p.Path(stage.__file__).read_text()
+               if getattr(stage, '__file__', None) else '')
+    assert 'no overlap arbiter star list' in src
 
 
 def test_a_field_with_only_a_dense_list_still_uses_it_to_arbitrate():
@@ -79,3 +94,26 @@ def test_a_field_with_only_a_dense_list_still_uses_it_to_arbitrate():
 
 def test_a_field_with_no_list_at_all_says_so_rather_than_pretending():
     assert stage.overlap_arbiter_refcat('not-a-field') is None
+
+
+def test_a_catalogue_without_a_source_column_is_not_called_VIRAC2():
+    """The gating slot used to be labelled `VIRAC2` whatever was read.
+
+    VIRAC2 is the VVV-based near-infrared catalogue, and W51 lies OUTSIDE the
+    VVV footprint -- it does not exist there.  An operator debugging a W51
+    block was told a catalogue had been used that cannot exist for the field.
+    The split is by presence of a `source` column, not by what the file is, so
+    the label has to report what was actually read.
+    """
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        '_cio_label', _REPO / 'scripts' / 'release' / 'check_interframe_overlap.py')
+    cio = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cio)
+
+    w51 = stage.OVERLAP_ARBITER_REFCAT.get('w51')
+    if not (w51 and os.path.exists(w51)):
+        pytest.skip('w51 star list not on this host')
+    _rc, _gaia, label = cio._refcat(w51)
+    assert 'VIRAC2' not in label.split('NOT')[0]
+    assert 'no `source` column' in label

@@ -97,6 +97,20 @@ or the `ALLOW_*` overrides without a written justification.
   `check_catalog_on_frame` returns `None` ("can't enforce → caller warns"), so item
   1 is a warning, not a block. Add the field's Gaia-tied refcat there before
   treating this as enforced.
+- ⚠ **`FRAME_REFCAT` needs a DENSE catalogue; do not add a sparse one to it.**
+  This gate measures whether a shipped catalogue sits on the right sky, and a
+  sparse list gives a noisy bulk tie that would refuse good data. A field whose
+  only star list is sparse (w51: ~9,500 rows, medNN 5.2″, against brick's
+  ~115,000 at 1.1″) belongs in **`OVERLAP_ARBITER_REFCAT`** instead — a separate
+  registry, read by `overlap_arbiter_refcat()`, whose list is used only to
+  tie-break an inter-frame overlap too thin to measure frame-against-frame.
+  `overlap_arbiter_refcat` falls back to `FRAME_REFCAT`, so a field with a dense
+  catalogue needs one entry, not two.
+- ⚠ **Known gap (issue #263).** The overlap check routes a star list into its
+  gating or diagnostic slot by whether the file has a `source` column, not by
+  how dense it is — so a sparse Gaia-only list without that column is used for
+  gating. Routing by content has not landed. Until it does, read that check's
+  log line for the catalogue it names rather than assuming VIRAC2.
 
 ## 1b. Astrometric frame + epoch declaration (BLOCKING)
 

@@ -596,7 +596,19 @@ def _refcat(path):
     if src is not None:
         gm = np.array([s in (b"GaiaDR3", "GaiaDR3") for s in t[src]])
         gaia = rc[gm] if gm.any() else None
-    return rc, gaia
+    # What the whole-table set actually IS, for the log.  A catalogue built by
+    # build_gaia_virac2_refcat_byquery carries a `source` column naming each
+    # star's origin, and its bulk is VIRAC2 (the VVV-based near-infrared
+    # catalogue).  A table WITHOUT that column is something else -- w51's is
+    # Gaia only, and w51 lies outside the VVV footprint, so VIRAC2 does not
+    # exist there at all.  Calling it "VIRAC2" in the log told an operator a
+    # catalogue had been used that cannot exist for the field.
+    if src is None:
+        label = (f"{os.path.basename(path)} -- no `source` column, so this is "
+                 f"NOT the Gaia+VIRAC2 catalogue the gating slot assumes")
+    else:
+        label = "VIRAC2"
+    return rc, gaia, label
 
 
 def _val_mas(x):
@@ -1093,7 +1105,7 @@ def check_filter(field, filt, refcat=None, verbose=True, observations=None):
     ext_ran = False
     field_clean = False
     if refcat:
-        rc, gaia = _refcat(refcat)
+        rc, gaia, rc_label = _refcat(refcat)
         allsrc = SkyCoord(np.concatenate([p.ra.deg for p in pooled.values()]) * u.deg,
                           np.concatenate([p.dec.deg for p in pooled.values()]) * u.deg)
         # GC reference-frame policy (gc-gaia-frame-not-catalog): VIRAC2 is the GC
@@ -1102,7 +1114,17 @@ def check_filter(field, filt, refcat=None, verbose=True, observations=None):
         # per-tile a dense field -- on a fine grid its cells are star-starved and
         # false-fail, so it is measured as a DIAGNOSTIC only and never sets
         # ext_fail. A real absolute-frame problem shows up against dense VIRAC2.
-        for rn, rr, gates in (("VIRAC2", rc, True), ("Gaia", gaia, False)):
+        #
+        # CAVEAT, and it is not yet resolved (issue #263): the split above is by
+        # PRESENCE OF A `source` COLUMN, not by what the catalogue is.  A
+        # Gaia-only table without that column lands whole in the GATING slot --
+        # exactly what this comment says must not happen to Gaia.  w51's list is
+        # that case.  No false block has been observed there only because the
+        # list is too sparse for the gating paths to measure at all, which is
+        # luck rather than separation.  Routing by content is issue #263's
+        # item (c); until it lands, the label below at least names what was
+        # actually read.
+        for rn, rr, gates in ((rc_label, rc, True), ("Gaia", gaia, False)):
             if rr is None:
                 continue
             g = _samestar_ref_grid(allsrc, rr, max_off_mas=GRID_MAX_OFF_MAS)
