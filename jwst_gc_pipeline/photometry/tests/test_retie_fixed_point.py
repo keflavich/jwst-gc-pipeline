@@ -313,3 +313,100 @@ def test_an_OSCILLATION_declines_at_three_and_fires_at_four(tmp_path):
     stuck, lines = find_fixed_point(four, repeats=4)
     assert stuck
     assert any('OSCILLATING' in ln for ln in lines)
+
+
+# ---------------------------------------------------------------------------
+# --accept-below-mas: a fixed point is a repeat, not a size
+# ---------------------------------------------------------------------------
+#
+# Stopping on every fixed point holds a field for a decision the records have
+# already made.  The two cases need opposite answers and the loop could not
+# tell them apart:
+#
+#   * cloudc F212N and cloudef F360M repeat at 7-11 mas -- a per-detector
+#     SIAF/DVA term the per-exposure offsets table cannot express, so no number
+#     of further passes removes it;
+#   * arches F212N exposure 4 repeats at 18-26 mas on six detectors at once,
+#     which is a correction not reaching the frame -- a defect, and stopping is
+#     right.
+#
+# So the ceiling is the decision, and it is written down rather than taken per
+# run.  Everything below it still gets MEASURED and RECORDED; only the
+# CORRECTION is withheld, by raising the m2 floor to just above it.
+
+#: repeats at ~5.2 mas -- the systematic shape
+SMALL = {('1', 1, 'nrca1'): (-0.21, -2.52), ('1', 2, 'nrca1'): (-0.11, -3.43),
+         ('1', 1, 'nrcb4'): (-0.79, -5.14)}
+SMALL_AGAIN = {k: (v[0] + 0.03, v[1] + 0.06) for k, v in SMALL.items()}
+#: repeats at ~26 mas -- arches exposure 4, the defect shape
+BIG = {**SMALL, ('1', 4, 'nrca4'): (-15.70, 20.88)}
+BIG_AGAIN = {k: (v[0] + 0.03, v[1] + 0.06) for k, v in BIG.items()}
+
+
+def _cli(record_dir, *extra):
+    from jwst_gc_pipeline.photometry.retie_fixed_point import main
+    return main(['--record-dir', record_dir, *extra])
+
+
+def test_largest_residual_is_over_the_NEWEST_pass_only(tmp_path):
+    """The older passes are what the loop has already superseded.  Including
+    them reports a residual that no longer exists, and the caller sizes its
+    floor against it."""
+    from jwst_gc_pipeline.photometry.retie_fixed_point import (
+        largest_measured_residual)
+    huge = {k: (v[0] * 100, v[1] * 100) for k, v in SMALL.items()}
+    d = _history(tmp_path, [huge, SMALL, SMALL_AGAIN])
+    worst, key, label = largest_measured_residual(d)
+    assert worst == pytest.approx(5.2, abs=0.3), (worst, key)
+    assert 'F162M' in label
+
+
+def test_without_the_flag_every_fixed_point_still_stops(tmp_path):
+    """The behaviour before this existed, kept as the default: a ceiling is a
+    decision, and it has to be made deliberately rather than inherited."""
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN])
+    assert _cli(d) == 3
+
+
+def test_a_bounded_residual_is_accepted(tmp_path, capsys):
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN])
+    assert _cli(d, '--accept-below-mas', '15') == 4
+    out = capsys.readouterr().out
+    assert 'BOUNDED' in out
+    assert 'ASTROM_M2_CORRECTION_FLOOR_MAS=' in out
+
+
+def test_the_floor_it_prints_is_ABOVE_the_residual_it_has_to_clear(tmp_path,
+                                                                  capsys):
+    """A floor equal to the measurement re-corrects it on the very next pass,
+    and the frozen m3+ stages then raise on the shift -- so the field stops one
+    stage later than before, having spent a whole reduce to get there."""
+    from jwst_gc_pipeline.photometry.retie_fixed_point import (
+        largest_measured_residual)
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN])
+    _cli(d, '--accept-below-mas', '15')
+    line = [ln for ln in capsys.readouterr().out.splitlines()
+            if ln.startswith('ASTROM_M2_CORRECTION_FLOOR_MAS=')][-1]
+    floor = float(line.split('=')[1])
+    worst, _, _ = largest_measured_residual(d)
+    assert floor > worst
+
+
+def test_a_residual_too_big_to_be_a_systematic_still_stops(tmp_path, capsys):
+    """arches exposure 4: 26 mas repeating on six detectors at once is not a
+    distortion term the table cannot express, it is a correction that is not
+    reaching the frame."""
+    d = _history(tmp_path, [BIG, BIG_AGAIN, BIG, BIG_AGAIN])
+    assert _cli(d, '--accept-below-mas', '15') == 3
+    out = capsys.readouterr().out
+    assert 'NOT BOUNDED' in out
+    assert '26' in out                     # the number the decision needs
+
+
+def test_the_ceiling_does_not_make_a_MOVING_loop_stop_early(tmp_path):
+    """Acceptance applies to a fixed point only.  A loop still converging must
+    keep iterating however small its residual is -- it is about to succeed."""
+    states = [{k: (v[0] / 2 ** i, v[1] / 2 ** i) for k, v in SMALL.items()}
+              for i in range(5)]
+    d = _history(tmp_path, states)
+    assert _cli(d, '--accept-below-mas', '15') == 0

@@ -23,10 +23,27 @@ anything the first two did not already show.
 
 Stopping on it is not a substitute for deciding what the residual IS.  It ends
 the spend and reports the numbers the decision needs.
+
+``--accept-below-mas`` is that decision, made once and written down.  A fixed
+point says the residual REPEATS; it says nothing about how BIG it is, and the
+two need different answers:
+
+* a few mas that will not close is a SIAF/DVA-class systematic -- the
+  per-exposure offsets table cannot express a per-detector distortion term, so
+  no number of further passes removes it, and holding the field costs the whole
+  m3-m7 chain to learn nothing;
+* twenty-five mas that will not close is a correction that is not REACHING the
+  frame, which is a defect, and stopping is right.
+
+Given a ceiling, this exits 4 for the first and 3 for the second, and prints
+the ``ASTROM_M2_CORRECTION_FLOOR_MAS`` that lets the frozen m3+ stages run over
+a residual that is measured, recorded and left alone.  Without the flag every
+fixed point still stops, which is the behaviour this had before.
 """
 import collections
 import glob
 import json
+import math
 import os
 import re
 
@@ -182,6 +199,36 @@ def compare(rec_a, rec_b, tol_mas=DEFAULT_TOL_MAS):
     return True, f"{detail} (tol {tol_mas} mas)"
 
 
+def largest_measured_residual(record_dir, stage="m2", filtername=None,
+                              obs_token=None, since=None):
+    """``(worst_mas, key, label)`` over the NEWEST pass of every filter.
+
+    A fixed point says the residual REPEATS.  It does not say how big it is,
+    and those are different decisions: a 3 mas residual that will not close is
+    a SIAF/DVA-class systematic the offsets table cannot express, while a 25 mas
+    one that will not close means the correction is not reaching the frame.
+    The loop stops on both today, so a field is held for a decision that the
+    records already answer.
+
+    Measured over the newest record per (filter, token) rather than pooled over
+    the history: the older passes are what the loop has already superseded, and
+    including them reports a residual that no longer exists.
+    """
+    groups = _group_by_filter_token(
+        load_records(record_dir, stage=stage, filtername=filtername,
+                     obs_token=obs_token, since=since))
+    worst, worst_key, worst_label = 0.0, None, None
+    for (filt, token), recs in sorted(groups.items()):
+        path, rec = recs[-1]
+        for key, (dra, ddec) in measurements(rec).items():
+            mag = (dra ** 2 + ddec ** 2) ** 0.5
+            if mag > worst:
+                worst, worst_key = mag, key
+                worst_label = f"{filt}{'/' + token if token else ''} " \
+                              f"({os.path.basename(path)})"
+    return worst, worst_key, worst_label
+
+
 def find_fixed_point(record_dir, stage="m2", tol_mas=DEFAULT_TOL_MAS,
                      repeats=DEFAULT_REPEATS, filtername=None, obs_token=None,
                      since=None):
@@ -260,6 +307,12 @@ def main(argv=None):
                          " the retie loop passes its own start time so an"
                          " earlier campaign's passes are not counted as this"
                          " loop's")
+    ap.add_argument("--accept-below-mas", type=float, default=0.0,
+                    help="when a fixed point is reached and the largest"
+                         " residual still measured is below this, exit 4"
+                         " (BOUNDED) instead of 3 (STOP), and print the m2"
+                         " correction floor that lets the frozen stages run."
+                         " 0 (default) disables it: every fixed point stops.")
     args = ap.parse_args(argv)
 
     stuck, lines = find_fixed_point(
@@ -268,14 +321,36 @@ def main(argv=None):
         obs_token=args.obs_token, since=args.since)
     for line in lines:
         print(line)
-    if stuck:
-        print("\nFIXED POINT: applying these corrections does not change what "
-              "the next pass measures.\nThe residual is not something a "
-              "per-exposure rigid shift removes -- inspect the records above "
-              "(intrinsic scatter? distortion? centroid bias?) rather than "
-              "running more iterations.")
+    if not stuck:
+        return 0
+    print("\nFIXED POINT: applying these corrections does not change what "
+          "the next pass measures.\nThe residual is not something a "
+          "per-exposure rigid shift removes -- inspect the records above "
+          "(intrinsic scatter? distortion? centroid bias?) rather than "
+          "running more iterations.")
+    if args.accept_below_mas <= 0:
         return 3
-    return 0
+    worst, key, label = largest_measured_residual(
+        args.record_dir, stage=args.stage, filtername=args.filtername,
+        obs_token=args.obs_token, since=args.since)
+    if worst >= args.accept_below_mas:
+        print(f"\nNOT BOUNDED: the largest residual still measured is "
+              f"{worst:.2f} mas at {key} in {label}, at or above the "
+              f"{args.accept_below_mas:.1f} mas acceptance ceiling.  A residual "
+              f"this large that does not close is not a systematic the table "
+              f"cannot express -- it is a correction that is not reaching the "
+              f"frame.  STOPPING.")
+        return 3
+    # Round UP to the next 0.1 mas so the floor is strictly above the residual
+    # it has to sit above; a floor equal to the measurement re-corrects it on
+    # the next pass and the frozen stages raise.
+    floor = math.ceil((worst + 0.05) * 10) / 10
+    print(f"\nBOUNDED: the largest residual still measured is {worst:.2f} mas "
+          f"at {key} in {label}, below the {args.accept_below_mas:.1f} mas "
+          f"acceptance ceiling.\nEvery residual is recorded in the checkpoint "
+          f"records above; none is corrected away, and the gross reference-tie "
+          f"gates are untouched.\nASTROM_M2_CORRECTION_FLOOR_MAS={floor}")
+    return 4
 
 
 if __name__ == "__main__":

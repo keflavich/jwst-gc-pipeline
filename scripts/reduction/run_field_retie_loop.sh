@@ -32,6 +32,16 @@
 #                    the run: MAXITER=0 is not a no-op (see below).
 #   RETIE_UPSTREAM   branch to report the checkout distance against
 #                    (default origin/main).  Reporting only -- see warn_if_behind.
+#   RETIE_ACCEPT_RESIDUAL_MAS
+#                    ceiling under which a FIXED POINT is accepted rather than
+#                    stopped on (default 0 = accept none, the behaviour before
+#                    this existed).  A repeating residual below it is the
+#                    SIAF/DVA-class systematic a per-exposure offsets table
+#                    cannot express; the loop raises the m2 correction floor to
+#                    just above the measured value and runs m3-m7 over it, with
+#                    every residual still measured and recorded.  A repeating
+#                    residual AT or above it is a correction that is not
+#                    reaching the frame, and still stops the run.
 #
 # MAXITER must be >= 1.  Values below 1 skip the iteration loop and fall through
 # to the FULL m3-m7 cataloging submission; that submitted twelve unintended jobs
@@ -468,20 +478,49 @@ for ((it=1; it<=MAXITER; it++)); do
     # what the next pass MEASURES.
     if [ "${RETIE_FIXED_POINT_CHECK:-1}" = "1" ] && [ "$it" -ge 2 ]; then
         # Same interpreter + path convention as the CONSENSUS_TBL lookup above.
-        if PYTHONPATH="${PIPE_ROOT:-}:${PYTHONPATH:-}" python \
+        # Captured rather than streamed: rc=4 needs the floor the check printed,
+        # and re-running it to read that would judge a different set of records.
+        # `|| fp_rc=$?` for the same reason as the reduce above: under `set -e` a
+        # bare `var=$(cmd)` exits the script when cmd fails, and a NONZERO rc is
+        # this check's whole output -- rc 3 and rc 4 are its two verdicts.
+        # Without it the loop would die here, one line before the branch that
+        # reads them, with the report captured and never printed.
+        fp_rc=0
+        fp_out=$(PYTHONPATH="${PIPE_ROOT:-}:${PYTHONPATH:-}" python \
                 -m jwst_gc_pipeline.photometry.retie_fixed_point \
                 --record-dir "${BASE}/astrometry_checkpoints" \
-                --obs-token "o${FIELD}" --since "$RETIE_RUN_START"; then
-            :
-        else
-            fp_rc=$?
-            if [ "$fp_rc" -eq 3 ]; then
-                echo "[iter $it] STOPPING: the re-tie is repeating itself (see above)."
-                echo "           More iterations cannot resolve this; the residual"
-                echo "           needs a decision, not another pass."
-                echo "           Set RETIE_FIXED_POINT_CHECK=0 to override."
+                --obs-token "o${FIELD}" --since "$RETIE_RUN_START" \
+                --accept-below-mas "${RETIE_ACCEPT_RESIDUAL_MAS:-0}" 2>&1) \
+                || fp_rc=$?
+        echo "$fp_out"
+        if [ "$fp_rc" -eq 3 ]; then
+            echo "[iter $it] STOPPING: the re-tie is repeating itself (see above)."
+            echo "           More iterations cannot resolve this; the residual"
+            echo "           needs a decision, not another pass."
+            echo "           Set RETIE_FIXED_POINT_CHECK=0 to override."
+            exit 3
+        elif [ "$fp_rc" -eq 4 ]; then
+            # A BOUNDED fixed point: the residual repeats and is small enough
+            # that it is the systematic a per-exposure table cannot express, not
+            # a correction failing to reach the frame.  Proceed to m3-m7 over it
+            # rather than holding the field -- but only by raising the m2
+            # CORRECTION floor to just above it, so the residual is still
+            # MEASURED and RECORDED every stage and the reference-tie gates
+            # (including the gross one) are untouched.  Anything the loop has
+            # not seen still stops the run.
+            fp_floor=$(echo "$fp_out" | sed -n 's/^ASTROM_M2_CORRECTION_FLOOR_MAS=//p' | tail -1)
+            if [ -z "$fp_floor" ]; then
+                echo "[iter $it] STOPPING: the fixed-point check reported a bounded"
+                echo "           residual but printed no floor to run it under."
                 exit 3
             fi
+            echo "[iter $it] BOUNDED fixed point -- proceeding to m3-m7 with"
+            echo "           ASTROM_M2_CORRECTION_FLOOR_MAS=$fp_floor (was"
+            echo "           $ASTROM_M2_CORRECTION_FLOOR_MAS)."
+            ASTROM_M2_CORRECTION_FLOOR_MAS="$fp_floor"
+            export ASTROM_M2_CORRECTION_FLOOR_MAS
+            break
+        elif [ "$fp_rc" -ne 0 ]; then
             echo "[iter $it] (fixed-point check exited $fp_rc; continuing)"
         fi
     fi
