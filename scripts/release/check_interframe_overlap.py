@@ -1189,14 +1189,42 @@ def check_filter(field, filt, refcat=None, verbose=True, observations=None):
             cleared += 1                  # cleared on its OWN footprint
             continue
         if ext_ran and field_clean:
-            cleared += 1
+            # The field-wide map CANNOT settle this pair, and saying so in a
+            # warning while clearing it anyway is the thing issue #174
+            # concluded must not happen: a sliver is a minority of every cell it
+            # touches, so a localized seam inside it leaves the field-wide
+            # verdict clean.  Demonstrated with the real gate -- a 500 mas seam
+            # in a thin sliver, against a star list dense over the field and
+            # thin inside the sliver, took this branch and reported PASS.
+            #
+            # It never fired while no field had an arbiter star list; routing
+            # one to w51 is what makes it reachable, and w51 clears the density
+            # this needs by a factor of only 3.4.
+            #
+            # So it is OFF by default and fails closed: the pair stays
+            # unverified and the field does not stage.  The override exists
+            # because a field can be genuinely un-arbitrable and the operator
+            # may have settled it another way.  Setting it is the RECORD of that
+            # decision, not the justification for it -- same policy as
+            # ALLOW_REGISTRATION_FAIL.
+            why = v["reason"] if v is not None else "external reference not run"
+            if os.environ.get("OVERLAP_ALLOW_FIELDWIDE_CLEAR") == "1":
+                cleared += 1
+                if verbose:
+                    print(f"      WARNING: pair {r['a']} | {r['b']} could NOT be "
+                          f"arbitrated in its own overlap footprint ({why}); "
+                          f"cleared ONLY by the FIELD-WIDE same-star map, which "
+                          f"cannot resolve this pair's sliver -- because "
+                          f"OVERLAP_ALLOW_FIELDWIDE_CLEAR=1 was set.", flush=True)
+                continue
             if verbose:
-                why = v["reason"] if v is not None else "external reference not run"
-                print(f"      WARNING: pair {r['a']} | {r['b']} could NOT be arbitrated "
-                      f"in its own overlap footprint ({why}); cleared only by the "
-                      f"FIELD-WIDE same-star map, which does not resolve this "
-                      f"pair's sliver.", flush=True)
-            continue
+                print(f"      pair {r['a']} | {r['b']} could NOT be arbitrated in "
+                      f"its own overlap footprint ({why}).  The field-wide "
+                      f"same-star map is clean, and it cannot see this pair's "
+                      f"sliver, so it does not clear it: the pair stays "
+                      f"UNVERIFIED.  A denser arbiter star list for this field "
+                      f"resolves it; OVERLAP_ALLOW_FIELDWIDE_CLEAR=1 overrides.",
+                      flush=True)
         still_open.append(r)
     could_not_verify = bool(still_open)
     if cleared and verbose:

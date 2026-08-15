@@ -111,6 +111,17 @@ or the `ALLOW_*` overrides without a written justification.
   how dense it is — so a sparse Gaia-only list without that column is used for
   gating. Routing by content has not landed. Until it does, read that check's
   log line for the catalogue it names rather than assuming VIRAC2.
+- ⚠ **A pair the arbiter cannot settle stays UNVERIFIED, and the field does not
+  stage.** When an overlap is too thin to measure frame-against-frame *and* its
+  own footprint holds too few reference stars to arbitrate, the check used to
+  fall back to the field-wide same-star map. That map is one verdict for a whole
+  filter, so a seam confined to the sliver is a minority of every cell it
+  measures and leaves the verdict clean — issue #174's conclusion, reproduced
+  with the real gate on a 500 mas seam. That fallback is now off by default.
+  `OVERLAP_ALLOW_FIELDWIDE_CLEAR=1` re-enables it; setting it records a decision
+  reached some other way rather than justifying one, and the log then names
+  every pair cleared that way. What removes the need for it is a **denser
+  arbiter star list** for the field.
 
 ## 1b. Astrometric frame + epoch declaration (BLOCKING)
 

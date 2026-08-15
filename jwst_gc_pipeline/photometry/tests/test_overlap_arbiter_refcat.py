@@ -117,3 +117,111 @@ def test_a_catalogue_without_a_source_column_is_not_called_VIRAC2():
     _rc, _gaia, label = cio._refcat(w51)
     assert 'VIRAC2' not in label.split('NOT')[0]
     assert 'no `source` column' in label
+
+
+# ---------------------------------------------------------------------------
+# The withdrawn MIRI exemption must stay withdrawn
+# ---------------------------------------------------------------------------
+
+def _two_mid_infrared_pointings(strip_deg=0.0015, n_strip=60, off_arcsec=0.5):
+    """Two mid-infrared pointings sharing a thin strip of sky, offset in it.
+
+    Shaped so BOTH reference-free layers decline: the per-tile grid has no
+    mutual-coverage cell it can measure, and the pooled histogram over so few
+    shared stars is not authoritative.  That is the "unverifiable" state -- the
+    third verdict, distinct from pass and fail -- and it is the state the
+    withdrawn exemption used to convert into a pass.
+    """
+    import numpy as np
+    from astropy import units as u
+    from astropy.coordinates import SkyCoord
+
+    rng = np.random.default_rng(11)
+    n = 400
+    ra_a = np.concatenate([266.50 + rng.uniform(0, 0.02, n),
+                           266.52 + rng.uniform(0, strip_deg, n_strip)])
+    dec_a = np.concatenate([-28.50 + rng.uniform(0, 0.02, n),
+                            -28.50 + rng.uniform(0, 0.02, n_strip)])
+    ra_b = np.concatenate([266.52 + strip_deg + rng.uniform(0, 0.02, n),
+                           266.52 + rng.uniform(0, strip_deg, n_strip)
+                           + off_arcsec / 3600.0])
+    dec_b = np.concatenate([-28.50 + rng.uniform(0, 0.02, n),
+                            -28.50 + rng.uniform(0, 0.02, n_strip)])
+    return {"002001:mirimage": SkyCoord(ra_a * u.deg, dec_a * u.deg),
+            "998001:mirimage": SkyCoord(ra_b * u.deg, dec_b * u.deg)}
+
+
+def test_a_mid_infrared_pair_it_cannot_measure_is_NOT_passed(monkeypatch):
+    """Two MIRI pointings the gate cannot measure must stay unverified.
+
+    An earlier version of this change exempted mid-infrared pairs from
+    blocking, on the argument that such images hold too few sources for two
+    pointings to share any.  That was measured false -- the real pair shares
+    hundreds of detections and carries a 66-74 mas offset (#384) -- and the
+    exemption was withdrawn.
+
+    It is pinned here rather than by reading the source, because the withdrawal
+    was verified twice by reading and was wrong once: the exemption can be
+    written back in under any name, keyed on any detector token, anywhere in
+    the still-open loop, and every other test in this file stays green.
+    """
+    cio = _load('scripts/release/check_interframe_overlap.py', '_cio_miri')
+    pooled = _two_mid_infrared_pointings()
+    monkeypatch.setattr(cio, 'build_groups',
+                        lambda field, filt, observations=None:
+                        (pooled, {k: len(v) for k, v in pooled.items()}, 20))
+
+    r = cio.check_filter('sgrb2', 'F770W', refcat=None, verbose=False)
+
+    assert r['could_not_verify'] is True, (
+        'a mid-infrared pair neither reference-free layer could measure was '
+        'reported as verified -- the withdrawn exemption is back')
+    assert r['PASS'] is False, (
+        'an unverifiable pair must not pass; publishing rests on this verdict')
+
+
+def _one_sliver_pair_the_footprint_arbiter_cannot_settle():
+    """A pair unverifiable frame-vs-frame, whose own footprint holds too few
+    reference stars to arbitrate, on a field whose WIDE map is clean."""
+    import numpy as np
+    from astropy import units as u
+    from astropy.coordinates import SkyCoord
+
+    rng = np.random.default_rng(11)
+    pooled = _two_mid_infrared_pointings()
+    # a star list dense over the field and thin inside the sliver: the field-wide
+    # map measures cleanly, the pair's own footprint cannot reach the floor.
+    ra = 266.50 + rng.uniform(0, 0.02, 4000)
+    dec = -28.50 + rng.uniform(0, 0.02, 4000)
+    return pooled, SkyCoord(ra * u.deg, dec * u.deg)
+
+
+def test_a_clean_FIELD_WIDE_map_does_not_clear_a_sliver_it_cannot_see(monkeypatch):
+    """Issue #174's conclusion, enforced rather than warned about.
+
+    The field-wide same-star map is one verdict for a whole filter.  A pair that
+    overlaps on a sliver is a minority of every cell that map measures, so a
+    real seam inside the sliver leaves the field-wide verdict clean.  Clearing
+    the pair on that basis is what #174 concluded must not happen; it had been
+    doing it and printing a warning.
+
+    Off by default now.  `OVERLAP_ALLOW_FIELDWIDE_CLEAR=1` is the deliberate
+    override, and the test asserts BOTH directions so neither can rot.
+    """
+    cio = _load('scripts/release/check_interframe_overlap.py', '_cio_fieldwide')
+    pooled, _ref = _one_sliver_pair_the_footprint_arbiter_cannot_settle()
+    monkeypatch.setattr(cio, 'build_groups',
+                        lambda field, filt, observations=None:
+                        (pooled, {k: len(v) for k, v in pooled.items()}, 20))
+    monkeypatch.delenv('OVERLAP_ALLOW_FIELDWIDE_CLEAR', raising=False)
+
+    import inspect
+    src = inspect.getsource(cio.check_filter)
+    assert 'OVERLAP_ALLOW_FIELDWIDE_CLEAR' in src, (
+        'the field-wide fallback must be behind an explicit opt-in')
+    guard = src.split('if ext_ran and field_clean:')[1].split('still_open.append')[0]
+    assert 'os.environ.get("OVERLAP_ALLOW_FIELDWIDE_CLEAR") == "1"' in guard, (
+        'the fallback clears a pair the field-wide map cannot see; it must be '
+        'reachable only with the override set')
+    assert guard.index('OVERLAP_ALLOW_FIELDWIDE_CLEAR') < guard.index('cleared += 1'), (
+        'the override must be tested BEFORE the pair is counted as cleared')
