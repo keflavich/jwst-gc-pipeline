@@ -3899,7 +3899,11 @@ def _is_whole_consensus_shift(c):
     """
     from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
         REFERENCE_TIE_SOURCE_SUFFIX)
-    return str(c.get('source', '')).endswith(REFERENCE_TIE_SOURCE_SUFFIX)
+    # `in`, not `endswith`: w51's live table carries three rows reading
+    # 'm2 consensus->reference (cross-band tied-F210M, contrast>2900)'.  No code
+    # at this head writes that parenthetical, so an endswith test fails OPEN on
+    # it -- silently reinstating the floor over an absolute frame tie.
+    return REFERENCE_TIE_SOURCE_SUFFIX in str(c.get('source', ''))
 
 
 def _floor_actionable_corrections(corrections, floor_mas, label):

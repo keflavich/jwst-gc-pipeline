@@ -59,6 +59,19 @@ EACH_SUFFIX=${EACH_SUFFIX:-destreak_o${FIELD}_crf}
 MAX_GROUP_SIZE=${MAX_GROUP_SIZE:-unlimited}
 PIPE_ROOT=${PIPE_ROOT:-}
 MAXITER=${MAXITER:-3}
+# A fixed point needs DEFAULT_REPEATS (3) passes before it can be judged, so the
+# check first has an opinion at iteration 3 -- which at MAXITER=3 is the LAST
+# one.  Accepting there has nowhere to re-reduce, so the run would end with the
+# offsets table ahead of the frames and the mosaics stale-tagged: precisely the
+# state the acceptance path exists to avoid, reached by running out of
+# iterations instead of by breaking.  So acceptance requires headroom.
+if [ "${RETIE_ACCEPT_RESIDUAL_MAS:-0}" != "0" ] && [ "$MAXITER" -lt 4 ]; then
+    echo "REFUSING: RETIE_ACCEPT_RESIDUAL_MAS is set but MAXITER=$MAXITER."
+    echo "          A fixed point cannot be judged before iteration 3, and"
+    echo "          accepting one needs a further pass to re-reduce under the"
+    echo "          raised floor.  Re-run with MAXITER=4 or higher."
+    exit 2
+fi
 # MAXITER < 1 skips the iteration loop entirely and falls straight through to the
 # FULL m3-m7 cataloging submission at the bottom -- so `MAXITER=0`, the obvious
 # way to ask "just show me what this would run", submits a dozen jobs instead.
@@ -539,7 +552,12 @@ for ((it=1; it<=MAXITER; it++)); do
             echo "           ASTROM_M2_CORRECTION_FLOOR_MAS=$fp_floor (was"
             echo "           ${ASTROM_M2_CORRECTION_FLOOR_MAS:-unset}), so the"
             echo "           frames and the offsets table end up agreeing."
-            ASTROM_M2_CORRECTION_FLOOR_MAS="$fp_floor"
+            # Never LOWER an operator-set floor.  Eight fields run at 4.0
+            # today; a computed 0.5 would make the next m2 correct everything
+            # above 0.5 mas and the loop would never converge.
+            _prev_floor=${ASTROM_M2_CORRECTION_FLOOR_MAS:-0}
+            ASTROM_M2_CORRECTION_FLOOR_MAS=$(awk -v a="$_prev_floor" -v b="$fp_floor" \
+                'BEGIN{print (a>b)?a:b}')
             export ASTROM_M2_CORRECTION_FLOOR_MAS
             if [ "$it" -eq "$MAXITER" ]; then
                 echo "[iter $it] ...but this is the last iteration (MAXITER=$MAXITER)."

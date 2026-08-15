@@ -92,7 +92,9 @@ def test_a_bounded_fixed_point_does_NOT_leave_the_loop_here():
 
 def test_it_raises_the_correction_floor_before_taking_that_pass():
     branch = _branch()
-    assert 'ASTROM_M2_CORRECTION_FLOOR_MAS="$fp_floor"' in branch
+    # the floor is now max(existing, computed) rather than a bare assignment,
+    # so that acceptance can never LOWER an operator-set floor
+    assert 'ASTROM_M2_CORRECTION_FLOOR_MAS=$(awk' in branch
     assert 'export ASTROM_M2_CORRECTION_FLOOR_MAS' in branch
 
 
@@ -224,3 +226,60 @@ def test_a_numeric_ceiling_passes_the_guard(good):
     r = subprocess.run(['bash', '-c', script], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
     assert 'ACCEPTED' in r.stdout
+
+
+# ---------------------------------------------------------------------------
+# The acceptance path has to be able to COMPLETE
+# ---------------------------------------------------------------------------
+
+def test_acceptance_requires_more_iterations_than_a_fixed_point_needs():
+    """At the loop's own defaults the accept path could never finish.
+
+    A fixed point needs three passes before it can be judged, so the check first
+    has an opinion at iteration 3 -- which at `MAXITER=3` is the last one.
+    Accepting there has nowhere to re-reduce, so the run ends with the offsets
+    table ahead of the frames and the mosaics stale-tagged: exactly the state
+    this path exists to avoid, reached by running out of iterations instead of
+    by breaking.
+    """
+    from jwst_gc_pipeline.photometry.retie_fixed_point import DEFAULT_REPEATS
+    src = _src()
+    assert 'MAXITER" -lt 4' in src, (
+        'acceptance must require headroom beyond the pass count a fixed point '
+        f'needs to be judged (DEFAULT_REPEATS={DEFAULT_REPEATS})')
+    guard = src[src.index('RETIE_ACCEPT_RESIDUAL_MAS:-0}" != "0" ]'):][:600]
+    assert 'exit 2' in guard
+    assert 'MAXITER=4' in guard, 'the refusal must say what to re-run with'
+
+
+@pytest.mark.parametrize('maxiter,expect', [('3', 2), ('4', 0)])
+def test_executed_the_maxiter_guard_refuses_before_a_pass_is_spent(maxiter,
+                                                                   expect):
+    src = _src()
+    start = src.index('if [ "${RETIE_ACCEPT_RESIDUAL_MAS:-0}" != "0" ] && [ "$MAXITER" -lt 4 ]')
+    end = src.index('fi\n', start) + len('fi\n')
+    script = (f'MAXITER={maxiter}\nRETIE_ACCEPT_RESIDUAL_MAS=15\n'
+              + src[start:end] + 'echo PROCEEDED\n')
+    r = subprocess.run(['bash', '-c', script], capture_output=True, text=True)
+    assert r.returncode == expect, r.stdout + r.stderr
+    assert ('PROCEEDED' in r.stdout) == (expect == 0)
+
+
+def test_the_floor_is_never_LOWERED_by_acceptance():
+    """Eight fields run at an operator floor of 4.0 mas today.  A computed 0.5
+    would make the next checkpoint correct everything above 0.5 mas, so the loop
+    would never converge -- acceptance would cause the failure it prevents."""
+    branch = _branch()
+    assert 'awk' in branch and 'a>b' in branch, (
+        'the raised floor must be max(existing, computed), not an assignment')
+
+
+@pytest.mark.parametrize('prev,computed,want', [
+    ('4.0', '0.5', '4.0'), ('4.0', '8.0', '8.0'), ('', '5.5', '5.5')])
+def test_executed_the_floor_takes_the_larger_of_the_two(prev, computed, want):
+    script = (f'_prev_floor={prev or 0}\nfp_floor={computed}\n'
+              "ASTROM_M2_CORRECTION_FLOOR_MAS=$(awk -v a=\"$_prev_floor\" "
+              "-v b=\"$fp_floor\" 'BEGIN{print (a>b)?a:b}')\n"
+              'echo "FLOOR=$ASTROM_M2_CORRECTION_FLOOR_MAS"\n')
+    r = subprocess.run(['bash', '-c', script], capture_output=True, text=True)
+    assert f'FLOOR={want}' in r.stdout, r.stdout

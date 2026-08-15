@@ -460,9 +460,13 @@ def test_the_floor_is_sized_only_from_the_STUCK_filters(tmp_path):
         'F162M': [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],
         'F444W': [{('1', 8, 'nrcb1'): (300.0, 0.0)}],        # 1 pass, unjudged
     })
-    stuck, moving, _ = group_verdicts(d)
+    stuck, moving, unjudged, _ = group_verdicts(d)
     assert ('F162M', 'o012') in stuck
     assert not moving, 'one pass is not "still moving", it is unjudged'
+    assert ('F444W', 'o012') in unjudged, (
+        'a group with too little history must be reported as unjudged: the '
+        'floor is applied to the whole field, so accepting while it is unknown '
+        'waives a residual nothing has looked at')
     worst, _, label = largest_measured_residual(d, only_groups=stuck)
     assert worst == pytest.approx(5.2, abs=0.3), worst
     assert 'F162M' in label
@@ -504,3 +508,56 @@ def test_the_margin_is_the_tolerance_that_defined_the_fixed_point(tmp_path,
         largest_measured_residual)
     worst, _, _ = largest_measured_residual(d)
     assert floor >= worst + 2.0, (floor, worst)
+
+
+def test_an_unjudged_group_blocks_acceptance(tmp_path, capsys):
+    """w51 today: three stuck groups reading zero beside an unjudged one whose
+    newest residual is 29 arcseconds.  The floor is applied to every filter in
+    the field, so accepting waives a residual nothing has looked at."""
+    d = _multi_history(tmp_path, {
+        'F162M': [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],   # stuck at ~5 mas
+        'F444W': [{('1', 8, 'nrcb1'): (29000.0, 0.0)}],      # 1 pass, unjudged
+    })
+    assert _cli(d, '--accept-below-mas', '15') == 3
+    out = capsys.readouterr().out
+    assert 'NOT ACCEPTED' in out
+    assert 'F444W' in out
+
+
+def test_a_stuck_group_with_nothing_correctable_is_not_BOUNDED(tmp_path, capsys):
+    """"the largest residual is 0.00 mas" is the absence of a measurement, not a
+    small one -- and the floor derived from it (0.5 mas) is LOWER than the 4.0
+    the campaign runs at, so the next pass corrects everything and the loop
+    never converges."""
+    rec = _rec(SMALL)
+    for exp in rec['visits'][0]['exposures']:
+        exp['misaligned'] = False              # measured, and none actionable
+    d = tmp_path / 'astrometry_checkpoints'
+    d.mkdir()
+    for i in range(4):
+        (d / f'checkpoint_m2_F162M_o012_2026080{i}T000000Z.json').write_text(
+            json.dumps(rec))
+    assert _cli(str(d), '--accept-below-mas', '15') == 3
+    assert 'no correctable residual' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('bad', [float('inf'), float('nan'), 1e9, 100000.0])
+def test_a_ceiling_that_is_not_a_small_number_is_refused(tmp_path, bad):
+    """`inf`, `nan` and 1e9 all reached the acceptance branch, caught only by a
+    character class in the shell wrapper -- which let 100000 through."""
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN])
+    with pytest.raises(SystemExit) as exc:
+        _cli(d, '--accept-below-mas', str(bad))
+    assert exc.value.code == 2
+
+
+def test_the_floor_may_not_exceed_the_ceiling_it_was_accepted_under(tmp_path,
+                                                                    capsys):
+    """The tolerance margin can push the floor past the ceiling: a 14.6 mas
+    residual under a 15 mas ceiling needs a 15.1 mas floor, which waives more
+    than was agreed to."""
+    big = {('1', 1, 'nrca1'): (14.6, 0.0)}
+    big_again = {k: (v[0] + 0.03, v[1]) for k, v in big.items()}
+    d = _history(tmp_path, [big, big_again, big, big_again])
+    assert _cli(d, '--accept-below-mas', '15') == 3
+    assert 'exceeds the 15.0 mas ceiling' in capsys.readouterr().out

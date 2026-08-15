@@ -98,3 +98,21 @@ def test_per_exposure_corrections_are_still_floored_alongside_it():
     small = _corr(1.0, 0.0, exposure=3, module='nrcb3')
     out = _floor_actionable_corrections([tie, big, small], 7.6, "lbl")
     assert out == [tie, big]
+
+
+def test_an_annotated_reference_tie_is_still_exempt():
+    """w51's live table carries three rows reading
+
+        'm2 consensus->reference (cross-band tied-F210M, contrast>2900)'
+
+    No code at this head writes that parenthetical, so an `endswith` test on the
+    source string fails OPEN on it -- silently putting the absolute frame tie
+    back under the floor, which is the defect the exemption exists to fix.
+    """
+    annotated = _corr(3.0, 0.0, visit='jw06151002001', exposure=None,
+                      module=None,
+                      source='m2 consensus->reference '
+                             '(cross-band tied-F210M, contrast>2900)')
+    out = _floor_actionable_corrections([annotated], 7.6, "m2] F210M/nrcb")
+    assert out == [annotated], (
+        'a reference tie carrying its cross-band annotation was floored')

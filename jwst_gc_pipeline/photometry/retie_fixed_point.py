@@ -68,6 +68,13 @@ DEFAULT_TOL_MAS = 0.5
 #: which is the conservative direction.  A plain REPEAT is caught at three.
 DEFAULT_REPEATS = 3
 
+#: Hardest ceiling `--accept-below-mas` may be given.  Well below the ~100 mas
+#: gross reference-tie gate, so a ceiling can never reach the class of error that
+#: gate exists to catch.  Without it, `inf`, `nan` and 1e9 all reached the
+#: acceptance branch -- caught only by a character class in the shell wrapper,
+#: which let 100000 and 999999.9 through.
+MAX_ACCEPT_CEILING_MAS = 50.0
+
 
 def measurements(rec):
     """``{exposure key: (dra, ddec)}`` for every exposure the pass MEASURED.
@@ -272,7 +279,7 @@ def largest_measured_residual(record_dir, stage="m2", filtername=None,
 def group_verdicts(record_dir, stage="m2", tol_mas=DEFAULT_TOL_MAS,
                    repeats=DEFAULT_REPEATS, filtername=None, obs_token=None,
                    since=None):
-    """``(stuck_groups, moving_groups, report_lines)``, per (filter, token).
+    """``(stuck, moving, unjudged, report_lines)``, per (filter, token).
 
     ``find_fixed_point`` below is this with the two sets collapsed to one
     boolean, which is all the STOP decision needs.  The ACCEPT decision needs
@@ -281,14 +288,16 @@ def group_verdicts(record_dir, stage="m2", tol_mas=DEFAULT_TOL_MAS,
     another is still converging is a case a person should see rather than one
     to hand an automatic amnesty.
 
-    A group that has too little history to judge is in neither set: it is not
-    known to repeat and not known to be moving.
+    A group with too little history to judge is in ``unjudged`` -- not known to
+    repeat and not known to be moving.  It is reported separately because the
+    correction floor is applied to the whole field, so accepting while a group
+    is unjudged waives a residual nothing has looked at.
     """
     groups = _group_by_filter_token(
         load_records(record_dir, stage=stage, filtername=filtername,
                      obs_token=obs_token, since=since))
     lines = []
-    stuck, moving = set(), set()
+    stuck, moving, unjudged = set(), set(), set()
     if not groups:
         # Silence here reads as "nothing is wrong".  An empty scan means the
         # check did not apply, which the operator has to be able to tell from a
@@ -299,10 +308,11 @@ def group_verdicts(record_dir, stage="m2", tol_mas=DEFAULT_TOL_MAS,
                      f"{record_dir}"
                      + (f" written at/after {since}" if since else "")
                      + " -- the fixed-point check did NOT run")
-        return stuck, moving, lines
+        return stuck, moving, unjudged, lines
     for (filt, token), recs in sorted(groups.items()):
         label = f"{filt}{'/' + token if token else ''}"
         if len(recs) < repeats:
+            unjudged.add((filt, token))
             lines.append(f"{label}: {len(recs)} pass(es) recorded, need "
                          f"{repeats} to judge")
             continue
@@ -335,7 +345,7 @@ def group_verdicts(record_dir, stage="m2", tol_mas=DEFAULT_TOL_MAS,
                 continue
         for path, _ in tail:
             lines.append(f"    {os.path.basename(path)}")
-    return stuck, moving, lines
+    return stuck, moving, unjudged, lines
 
 
 def find_fixed_point(record_dir, stage="m2", tol_mas=DEFAULT_TOL_MAS,
@@ -352,7 +362,7 @@ def find_fixed_point(record_dir, stage="m2", tol_mas=DEFAULT_TOL_MAS,
     this used to return was True; ``group_verdicts`` is the same scan with the
     still-moving groups kept as well.
     """
-    stuck, _moving, lines = group_verdicts(
+    stuck, _moving, _unjudged, lines = group_verdicts(
         record_dir, stage=stage, tol_mas=tol_mas, repeats=repeats,
         filtername=filtername, obs_token=obs_token, since=since)
     return stuck, lines
@@ -380,8 +390,17 @@ def main(argv=None):
                          " correction floor that lets the frozen stages run."
                          " 0 (default) disables it: every fixed point stops.")
     args = ap.parse_args(argv)
+    if args.accept_below_mas and not math.isfinite(args.accept_below_mas):
+        ap.error(f"--accept-below-mas {args.accept_below_mas} is not a finite "
+                 f"number of milliarcseconds")
+    if args.accept_below_mas > MAX_ACCEPT_CEILING_MAS:
+        ap.error(f"--accept-below-mas {args.accept_below_mas} exceeds "
+                 f"{MAX_ACCEPT_CEILING_MAS} mas.  A ceiling that large accepts "
+                 f"the gross-misalignment class this check exists to stop; if "
+                 f"that is really wanted, raise MAX_ACCEPT_CEILING_MAS "
+                 f"deliberately and say why.")
 
-    stuck, moving, lines = group_verdicts(
+    stuck, moving, unjudged, lines = group_verdicts(
         args.record_dir, stage=args.stage, tol_mas=args.tol_mas,
         repeats=args.repeats, filtername=args.filtername,
         obs_token=args.obs_token, since=args.since)
@@ -395,6 +414,17 @@ def main(argv=None):
           "(intrinsic scatter? distortion? centroid bias?) rather than "
           "running more iterations.")
     if args.accept_below_mas <= 0:
+        return 3
+    if unjudged:
+        # A group with too little history is not "converging" and not "stuck" --
+        # it is unknown, and the floor is applied to the WHOLE field.  w51 has
+        # an unjudged group whose newest residual is 29 arcseconds sitting
+        # beside three stuck ones reading zero.
+        names = ", ".join(f"{f}{'/' + t if t else ''}" for f, t in sorted(unjudged))
+        print(f"\nNOT ACCEPTED: {names} {'has' if len(unjudged) == 1 else 'have'} "
+              f"too little history to judge, and the correction floor is applied "
+              f"to every filter in the field.  Accepting now would waive a "
+              f"residual nothing has looked at.  STOPPING.")
         return 3
     if moving:
         # One band stuck while another is still halving its residual is not a
@@ -412,6 +442,18 @@ def main(argv=None):
     worst, key, label = largest_measured_residual(
         args.record_dir, stage=args.stage, filtername=args.filtername,
         obs_token=args.obs_token, since=args.since, only_groups=stuck)
+    if key is None:
+        # Nothing correctable was measured, so "the largest residual is 0.00 mas"
+        # is the absence of a measurement rather than a small one -- and the
+        # floor derived from it would be 0.5 mas, LOWER than the 4.0 the campaign
+        # runs at, which makes the next pass correct everything and never
+        # converge.  w51's three stuck groups read exactly this today.
+        print(f"\nNOT ACCEPTED: the stuck group(s) "
+              + ", ".join(f"{f}{'/' + t if t else ''}" for f, t in sorted(stuck))
+              + " have no correctable residual in their newest record, so there "
+                "is no measurement to bound.  That is not a small residual, it "
+                "is the absence of one.  STOPPING.")
+        return 3
     if worst >= args.accept_below_mas:
         print(f"\nNOT BOUNDED: the largest residual still measured is "
               f"{worst:.2f} mas at {key} in {label}, at or above the "
@@ -429,6 +471,15 @@ def main(argv=None):
     # having spent the whole m3-m7 chain to get there, which is the outcome
     # this is supposed to prevent.
     floor = math.ceil((worst + args.tol_mas) * 10) / 10
+    if floor > args.accept_below_mas:
+        # The margin can push the floor past the ceiling the operator set (a
+        # 14.6 mas residual under a 15 mas ceiling gives 15.1).  Running at a
+        # floor above the ceiling waives more than was agreed to.
+        print(f"\nNOT ACCEPTED: the residual is {worst:.2f} mas, but the floor "
+              f"needed to run over it ({floor} mas) exceeds the "
+              f"{args.accept_below_mas:.1f} mas ceiling once the {args.tol_mas} "
+              f"mas fixed-point tolerance is allowed for.  STOPPING.")
+        return 3
     print(f"\nBOUNDED: the largest residual still measured is {worst:.2f} mas "
           f"at {key} in {label}, below the {args.accept_below_mas:.1f} mas "
           f"acceptance ceiling.\nResiduals below the printed floor are still "
