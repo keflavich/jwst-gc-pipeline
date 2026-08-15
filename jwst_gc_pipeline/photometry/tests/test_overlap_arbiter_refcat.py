@@ -207,16 +207,20 @@ def test_a_mid_infrared_pair_it_cannot_measure_is_NOT_passed(tmp_path,
     # ...and on the EXIT CODE, which is what stage_release consumes.  An
     # exemption written into main()'s aggregation instead of the still-open loop
     # leaves the verdict dict untouched and turns exit 2 into exit 0.
-    monkeypatch.setattr(cio, 'check_filter',
-                        lambda *a, **k: dict(field=field, filt='F770W',
-                                             PASS=False, could_not_verify=True,
-                                             n_fail=0, pairs=[]))
-    monkeypatch.setattr(cio, '_filters_for', lambda *a, **k: ['F770W'],
-                        raising=False)
+    #
+    # The stub replays the REAL verdict, pair records included.  Returning
+    # `pairs=[]` -- what this did first -- means a main()-level exemption keyed
+    # on the pair labels (which is how the withdrawn one was keyed) finds
+    # nothing to inspect and is never reached, so it survived while this
+    # assertion passed.
+    monkeypatch.setattr(cio, 'check_filter', lambda *a, **k: dict(r))
     rc = cio.main(['--field', field, '--filter', 'F770W'])
     assert rc == 2, (
         f'an unverifiable pair must leave the gate at exit 2, not {rc}; '
         f'stage_release refuses on the exit code, not on the dict')
+    assert r.get('pairs'), (
+        'the replayed verdict carries no pair records, so an exemption keyed '
+        'on the pair labels would never be reached by this assertion')
 
 
 # ---------------------------------------------------------------------------
