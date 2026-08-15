@@ -8,6 +8,7 @@ import os
 import shutil
 import time
 
+from . import schedule as _schedule
 from . import (checks, figures as _figures, jobs as _jobs, paper as _paper,
                render, scan, skyview)
 
@@ -144,7 +145,8 @@ def collect_cutouts(targets=None):
 
 def write_report(outdir=DEFAULT_OUTDIR, targets=None, instrument='nircam',
                  cutout_label=None, show_skip=False, per_field=True,
-                 with_cutouts=True, log_dir=None):
+                 with_cutouts=True, log_dir=None, schedule_program=None,
+                 schedule_offline=False):
     """Build everything and write it.
 
     Returns ``{'aggregate': path, 'fragment': path, 'fields': {target: path},
@@ -158,6 +160,15 @@ def write_report(outdir=DEFAULT_OUTDIR, targets=None, instrument='nircam',
     footprints = skyview.load_footprints(
         os.path.join(outdir, skyview.FOOTPRINTS_JSON))
     roman = skyview.load_footprints(os.path.join(outdir, 'roman_gbtds.json'))
+    # The published observing schedule.  Fetched here rather than in the
+    # renderer so the JSON is written next to the page and the network is
+    # touched once per run, not once per page.  `load` never raises on a
+    # network problem -- it falls back to its cache and says so.
+    schedule = None
+    if schedule_program:
+        schedule = _schedule.load(outdir, program=schedule_program,
+                                  offline=schedule_offline)
+        _schedule.write_json(outdir, schedule)
     cutouts = collect_cutouts(targets) if with_cutouts else []
     generated = time.time()
 
@@ -185,7 +196,7 @@ def write_report(outdir=DEFAULT_OUTDIR, targets=None, instrument='nircam',
     front = dict(entries=entries, cutouts=cutouts, subtitle=subtitle,
                  show_skip=show_skip, generated=generated,
                  unattributed_jobs=unattributed, footprints=footprints,
-                 roman=roman,
+                 roman=roman, schedule=schedule,
                  # The front page is the overview: map, then status cards, then
                  # a link out per field. Inlining 18 fields' tables and evidence
                  # below the cards made the monitor's entry point its largest
@@ -234,6 +245,7 @@ def write_report(outdir=DEFAULT_OUTDIR, targets=None, instrument='nircam',
                 # per-field pages told the reader to generate a file that was
                 # already sitting next to them.
                 footprints=footprints, roman=roman,
+                include_schedule=False,
                 asset_prefix='../',
                 # The map is ~100 kB of identical inline geometry; carrying it
                 # on all 18 field pages costs more than it tells anyone reading
@@ -243,7 +255,7 @@ def write_report(outdir=DEFAULT_OUTDIR, targets=None, instrument='nircam',
             field_paths[target] = path
 
     return {'aggregate': aggregate, 'fragment': fragment, 'fields': field_paths,
-            'entries': entries, 'cutouts': cutouts,
+            'entries': entries, 'cutouts': cutouts, 'schedule': schedule,
             'unattributed_jobs': unattributed, 'generated': generated}
 
 
@@ -395,7 +407,8 @@ def publish(outdir, publish_dir, index_from='monitor.html'):
 
     # Sky-view assets: the footprint data and a same-origin copy of Aladin Lite,
     # so the page depends on no third-party CDN.
-    for name in (skyview.FOOTPRINTS_JSON, 'roman_gbtds.json'):
+    for name in (skyview.FOOTPRINTS_JSON, 'roman_gbtds.json',
+                 _schedule.SCHEDULE_JSON):
         src = os.path.join(outdir, name)
         if os.path.exists(src):
             done[name] = _link(src, os.path.join(publish_dir, name))

@@ -24,6 +24,7 @@ import html
 import os
 import time
 
+from . import schedule_section as _schedule_section
 from . import skyview
 
 # --------------------------------------------------------------------------
@@ -858,6 +859,7 @@ def render_page(entries, cutouts=(), title='JWST-GC pipeline monitor',
                 generated=None, unattributed_jobs=(), figure_base=None,
                 footprints=None, roman=None, asset_prefix='',
                 include_detail=True, include_skyview=True,
+                schedule=None, include_schedule=True,
                 detail_href=None, home_href='#overview'):
     """The whole page.
 
@@ -913,6 +915,12 @@ def render_page(entries, cutouts=(), title='JWST-GC pipeline monitor',
            if include_skyview else '')
     detail_sec = (f'<section class="gcm-sec"><h2>Detail</h2>{details}</section>'
                   if include_detail else '')
+    # After the map, before the status cards: the map is where the survey IS,
+    # this is when the next of it arrives, and the cards are what has been
+    # processed.  Off on the per-field pages for the same reason the map is --
+    # the schedule is about the survey, not about one field.
+    sched_sec = (_schedule_section.section(schedule, entries)
+                 if include_schedule and schedule else '')
     card_note = ('Click a card for that field’s own page.' if detail_href
                  else 'Click a card for the detail.')
 
@@ -935,6 +943,7 @@ def render_page(entries, cutouts=(), title='JWST-GC pipeline monitor',
 
 <div class="gcm-wrap">
 {sky}
+{sched_sec}
 
 <section class="gcm-sec" id="overview"><h2>Overview</h2>
 <p class="gcm-note">One card per registered observation. The bar is the stage
