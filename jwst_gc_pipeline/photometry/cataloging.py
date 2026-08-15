@@ -3394,10 +3394,10 @@ def _record_pooling(record, pooled, n_before, offsets_path):
                # peak-to-peak of magnitudes and now holds a maximum
                # pairwise vector separation.  Without the new name beside
                # it, comparing records across that boundary silently
-               # compares two different quantities.  `max_sep_mas` is the
+               # compares two different quantities.  `max_pair_sep_mas` is the
                # one to read.
                'spread_mas': c.get('pooled_spread_mas'),
-               'max_sep_mas': c.get('pooled_max_sep_mas'),
+               'max_pair_sep_mas': c.get('pooled_max_pair_sep_mas'),
                'dra_onsky_mas': c.get('dra_onsky_mas'),
                'ddec_onsky_mas': c.get('ddec_onsky_mas')}
               for c in pooled if c.get('pooled_from')]

@@ -12,7 +12,7 @@ which is the part that matters.
 The string the m2 checkpoint writes when it pools several detectors' corrections
 into one is 59 characters:
 
-    'm2 visit-consensus [mean of 2, maxsep 1.51mas: nrcb3,nrcb4]'
+    'm2 visit-consensus [mean of 2, max_pair_sep 1.51mas: nrcb3,nrcb4]'
 
 Stored in a ``<U23`` column that becomes ``'m2 visit-consensus [mea'`` -- the
 detector list, the part that says which measurements the pooled value came from, is
@@ -38,12 +38,12 @@ from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
 #: form six live tables cannot hold.  (It was 58 when the statistic was the
 #: median -- "mean" is two characters shorter, and "maxsep" three longer than
 #: the "ptp" it replaced, so the string grew by one.)
-POOLED_SOURCE = "m2 visit-consensus [mean of 2, maxsep 1.51mas: nrcb3,nrcb4]"
+POOLED_SOURCE = "m2 visit-consensus [mean of 2, max_pair_sep 1.51mas: nrcb3,nrcb4]"
 
 #: The same for FOUR detectors -- 71 characters.  Four is the number the pooler
 #: is built for (one module's detectors), so this is the ordinary case, not the
 #: extreme one, and a live example already sits truncated in cloudc's table.
-POOLED_SOURCE_4 = ("m2 visit-consensus [mean of 4, maxsep 3.42mas: "
+POOLED_SOURCE_4 = ("m2 visit-consensus [mean of 4, max_pair_sep 3.42mas: "
                    "nrcb1,nrcb2,nrcb3,nrcb4]")
 
 #: The longest source string the pipeline can emit, BUILT rather than quoted.
@@ -335,7 +335,7 @@ def test_the_fixture_is_a_string_the_pooler_can_actually_emit(tmp_path):
     # `maxsep`, not `ptp`: the dispersion is the largest separation between
     # any two members as VECTORS, not a peak-to-peak of their magnitudes,
     # and the emitted token was renamed with it.
-    spread = float(POOLED_SOURCE_MAX.split("maxsep ")[1].split("mas")[0])
+    spread = float(POOLED_SOURCE_MAX.split("max_pair_sep ")[1].split("mas")[0])
     assert spread <= ac.MAX_POOL_SPREAD_MAS
 
 

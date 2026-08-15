@@ -473,36 +473,58 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
     freedom to remove.  What the row CAN express is the part they share, so
     every correction landing on one row is combined into one.
 
-    **The MEAN, not the median** (and never the sum).  Each member is itself the
-    consensus of thousands of matched stars on one detector, so there is no
-    population of one-off blunders for a robust statistic to protect against --
-    and the protection it does offer is already provided, better, by the spread
-    refusal below: a group whose members disagree by more than
-    ``MAX_POOL_SPREAD_MAS`` is rejected outright rather than quietly averaged.
-    A median inside that limit would silently down-weight a member the refusal
-    had already judged acceptable.
+    **The MEAN, not the median** (and never the sum).  A robust statistic earns
+    its cost when the population it protects against exists, and at these group
+    sizes it mostly does not.  The protection comes INSTEAD from the spread
+    refusal below, which rejects a group whose members disagree by more than
+    ``MAX_POOL_SPREAD_MAS`` rather than quietly averaging it.  A median INSIDE
+    that limit silently down-weights a member the refusal has already judged
+    acceptable.
 
-    Three concrete reasons the median is the wrong choice at these group sizes.
+    Two things to be clear about, because earlier versions of this docstring
+    were not:
 
-    Measured over the **271 groups this function actually pools** -- after
-    ``_assert_poolable`` and the spread refusal below have removed the ones it
-    refuses, which is the only population where the choice of statistic has any
-    effect.  (Counting every group carrying a ``pooled_from`` instead gives 285,
-    whose worst mean-vs-median difference is 2383 mas -- a group the refusal
-    rejects, so that number describes nothing this code does.)
-    Measured 2026-08-15 over 1019 checkpoint records; regenerate with
-    ``reports/measure_pooling_population.py``:
+    * **For half the groups this changes nothing.**  Group size, counted
+      straight from ``pooled_from`` in the records (2026-08-15, 1052 records,
+      285 unique groups): **N=2 51.6%**, N=3 27.7%, N=4 20.7%.  At N=2 the
+      median IS the mean.  So the change reaches the ~48% at N>=3, where the
+      median keeps one of three, or averages the middle two of four and
+      discards the outer pair.
+    * **A member is not always the consensus of thousands of stars.**  Over the
+      per-detector measurements in the live records the median is ~4700 matched
+      stars, but 20% are under 1000 and the 1st percentile is ~100.  The group
+      this function now refuses (gc2211 F200W exposure 4) has members built from
+      54-69 stars.  So "no blunders to protect against" is not true by
+      construction; it is true because the spread refusal catches the case a
+      median would otherwise dilute.
 
-      * **N=4 (42% of groups)** -- the commonest case, and the median is the
-        average of the middle two, discarding the outer pair entirely;
-      * **N=3 (19%)** -- it keeps ONE of three, and this is where the two
-        statistics differ most typically: 0.626 mas at the 50th percentile
-        against a typical pooled correction of 2.42 mas, i.e. ~26% of the
-        correction, and against a 2.0 mas exposure-consensus tolerance;
-      * **N=2 (26%)** -- the median IS the mean, so its robustness there is
-        imaginary.
+    Over the groups this function actually pools -- after ``_assert_poolable``
+    and the spread refusal have removed the ones it refuses, the only population
+    where the choice of statistic has any effect -- the two statistics differ by
+    more than 0.5 mas in **19%** of groups, and the largest single difference is
+    **2.7 mas**.  At N=3 the typical difference is 0.63 mas against a typical
+    pooled correction of 2.42 mas, i.e. ~26% of the correction, and against a
+    2.0 mas exposure-consensus tolerance.
 
-    35% of pooled groups change value.  The largest single change is **3.0 mas**.
+    **Where the mean is bounded rather than protected.**  Inside the refusal's
+    limit the mean does move where a median would not: with the other members at
+    zero and one at the limit ``L``, the pooled value shifts by ``L/3`` at N=3
+    and ``L/4`` at N=4 -- so at the current ``MAX_POOL_SPREAD_MAS = 50`` that is
+    16.6 and 12.5 mas, several times the 2.0 mas exposure-consensus tolerance.
+    Those are the true maxima, not examples.  The bound is
+    ``(N-1)/N * MAX_POOL_SPREAD_MAS`` in the worst case, and tightening the
+    limit tightens it proportionally: the largest separation among groups
+    actually pooled today is 16.4 mas (99th percentile 11.4), so a limit of
+    20 mas would refuse nothing currently pooled and cap the shift at 6.7 mas.
+    That is a gate change and is left as a decision rather than taken here;
+    weighting each member by its own measured precision removes the question
+    entirely and is issue #386.
+
+    Regenerate every figure above with ``reports/measure_pooling_population.py``,
+    which reports the size distribution directly from the records and the
+    difference figures from a reconstruction it validates against each record's
+    own pooled value (discarding the ~35% it cannot verify, rather than counting
+    them).
     An earlier version of this docstring said 14.6 mas; that group is gc2211
     F200W exposure 4, whose members sit 76 mas apart, and the spread refusal
     below now rejects it -- so that figure cannot occur under this code.
@@ -550,7 +572,7 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
                 f"{offsets_path} has no Visit column ({tbl.colnames}) -- a "
                 f"correction cannot be matched to a row without one")
     corrections = list(corrections)
-    # Magnitude ceiling BEFORE the median.  Pooling cannot inflate a correction
+    # Magnitude ceiling BEFORE the members are combined.  Pooling cannot inflate a correction
     # past the ceiling (a mean cannot exceed its largest member), so the risk
     # runs the other way: a
     # detector whose measurement blew up is averaged out of existence and the
@@ -655,7 +677,7 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
         pooled["module"] = _pooled_module_label(mods, tbl, key)
         pooled["pooled_from"] = mods
         pooled["pooled_n"] = len(members)
-        pooled["pooled_max_sep_mas"] = spread
+        pooled["pooled_max_pair_sep_mas"] = spread
         # Written under the old key too, for one release, so a reader of a
         # mixed set of checkpoint records is not silently comparing two
         # different quantities: before this change `spread_mas` held a
@@ -664,7 +686,7 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
         pooled["pooled_spread_mas"] = spread
         pooled["pooled_stat"] = stat
         pooled["source"] = (f"{members[0].get('source', 'astrometry_checkpoint')}"
-                            f" [{stat} of {len(members)}, maxsep {spread:.2f}mas: "
+                            f" [{stat} of {len(members)}, max_pair_sep {spread:.2f}mas: "
                             f"{','.join(mods)}]")
         out.append(pooled)
     return out
@@ -750,7 +772,7 @@ def _assert_pool_spread(spread, members, mods, offsets_path):
         return
     raise OffsetsTableUpdateError(
         f"cannot pool corrections for {os.path.basename(offsets_path)}: "
-        f"{len(members)} corrections for modules {mods} disagree by "
+        f"{len(members)} corrections for modules {mods} are "
         f"{spread:.1f} mas apart at their furthest (limit {limit} mas, "
         f"ASTROM_MAX_POOL_SPREAD_MAS).  That is not one shift measured several "
         f"times, so their middle is not a measurement of anything -- one "
@@ -1150,7 +1172,7 @@ PROV_TEXT_MIN_CHARS = 64
 #: no longer states a figure.  What the longest string is MADE OF, which is
 #: checkable and does not go stale:
 #:
-#:     <stage> <base> [mean of <k>, maxsep <spread>mas: <detectors>]
+#:     <stage> <base> [mean of <k>, max_pair_sep <spread>mas: <detectors>]
 #:
 #:   stage      one of ``CORRECTION_STAGES`` -- currently m1, m2, m12, so up to
 #:              three characters.  (Assuming "m2" is what produced the 70/71.)
@@ -1236,7 +1258,7 @@ def _widen_prov_text_columns(tbl, chars=PROV_TEXT_MIN_CHARS):
     checkpoint writes when it pools four detectors' corrections into one is 71
     characters --
 
-        'm2 visit-consensus [mean of 4, maxsep 3.42mas: nrcb1,nrcb2,nrcb3,nrcb4]'
+        'm2 visit-consensus [mean of 4, max_pair_sep 3.42mas: nrcb1,nrcb2,nrcb3,nrcb4]'
 
     -- while six of the thirteen live offsets tables carry ``prov_source`` as
     ``<U23``, because no row written into them so far has been longer than that.

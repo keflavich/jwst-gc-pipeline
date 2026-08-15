@@ -72,7 +72,7 @@ Keep the table module-keyed, and keep pooling. The per-detector term is:
 ## One change that is worth making: pool by mean, not median
 
 > **Landed (#381).** Pooling uses the mean now, and `prov_source` records
-> `[mean of N, maxsep <s>mas: ...]`. Everything below is the measurement that
+> `[mean of N, max_pair_sep <s>mas: ...]`. Everything below is the measurement that
 > motivated the change, and describes the state before it.
 
 `prov_source` records `m2 visit-consensus [median of N]`. With n=4 the median averages the middle two detectors and discards the outer two. Measured difference between the two estimators:

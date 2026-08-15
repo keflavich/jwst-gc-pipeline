@@ -1518,18 +1518,18 @@ def test_pooled_entry_carries_its_dispersion(tmp_path):
         corr.extend(_detector_corrections((m,), ddec=d))
     pooled = pool_corrections_to_table_granularity(corr, path)[0]
     assert pooled["pooled_n"] == 4
-    assert pooled["pooled_max_sep_mas"] == pytest.approx(4.0)
+    assert pooled["pooled_max_pair_sep_mas"] == pytest.approx(4.0)
     # written under the old key too for one release, so a reader of a mixed
     # set of records is not silently comparing two different quantities
     assert pooled["pooled_spread_mas"] == pytest.approx(4.0)
     assert pooled["pooled_stat"] == "mean"
-    assert "maxsep 4.00mas" in pooled["source"]
+    assert "max_pair_sep 4.00mas" in pooled["source"]
 
 
 def test_the_dispersion_reaches_the_ON_DISK_record_under_its_new_name(tmp_path):
     """The in-memory correction is not the artifact anyone reads later.
 
-    `pooled_max_sep_mas` was set on the correction and the checkpoint record
+    `pooled_max_pair_sep_mas` was set on the correction and the checkpoint record
     still wrote only `spread_mas` -- the key a reader already knows, whose
     MEANING this change alters from a peak-to-peak of magnitudes to a maximum
     pairwise vector separation.  A reader comparing records across that
@@ -1538,15 +1538,25 @@ def test_the_dispersion_reaches_the_ON_DISK_record_under_its_new_name(tmp_path):
     """
     from jwst_gc_pipeline.photometry.cataloging import _record_pooling
 
-    record = {}
+    import json
+
+    # Through a real file: the previous version passed `record={}` with no
+    # record_path, so `_record_pooling` returned before opening anything and the
+    # assertions read an in-memory dict.  The claim being made is about what a
+    # later reader finds ON DISK, so the test has to round-trip.
+    record_path = tmp_path / "checkpoint_m2_F212N_20260815T000000Z.json"
+    record_path.write_text(json.dumps({"stage": "m2", "filtername": "F212N"}))
+    record = json.loads(record_path.read_text())
+    record["record_path"] = str(record_path)
     pooled = [dict(module="nrca", filtername="F212N", exposure=1, vgroup="02101",
                    pooled_from=["nrca1", "nrca2"], pooled_n=2, pooled_stat="mean",
-                   pooled_spread_mas=4.0, pooled_max_sep_mas=4.0,
+                   pooled_spread_mas=4.0, pooled_max_pair_sep_mas=4.0,
                    dra_onsky_mas=1.0, ddec_onsky_mas=2.0)]
     _record_pooling(record, pooled, n_before=2, offsets_path="t.csv")
+    record_path.write_text(json.dumps(record))
 
-    group = record["pooling"]["groups"][0]
-    assert group["max_sep_mas"] == pytest.approx(4.0), (
+    group = json.loads(record_path.read_text())["pooling"]["groups"][0]
+    assert group["max_pair_sep_mas"] == pytest.approx(4.0), (
         "the on-disk record must carry the new name; without it the meaning "
         "of spread_mas changed with no marker anyone could see")
     assert group["spread_mas"] == pytest.approx(4.0)
@@ -2418,9 +2428,14 @@ def test_a_detector_pointing_the_OPPOSITE_way_is_refused(tmp_path):
     group whose members contradict each other, and the refusal never fired.
 
     Two real groups in the live checkpoint records exceed the 50 mas limit by
-    vector separation and were caught by neither: gc2211 F200W visit
-    jw02211049001, where nrca1 points opposite to its three neighbours (77 mas
-    apart, reported as 13.82), and one other.
+    vector separation and were caught by neither.  Both are gc2211 F200W
+    exposure 4, vgroup 04201 -- the same field, filter and exposure, not two
+    fields.  In ``checkpoint_m2_F200W_o049_20260809T180144Z.json`` the four
+    detectors split two against two: nrca1 (-33.8, +12.7) and nrca2
+    (-30.4, +8.5) against nrca3 (+37.2, -14.8) and nrca4 (+34.2, -13.3), which
+    is 76.2 mas at its widest and read 8.5 under the old metric.  The residual
+    falls across re-tie iterations (77 -> 59 -> 53 mas in successive records),
+    so the exact figures depend on which record is read; quote one by name.
     """
     path = _offsets_csv(tmp_path)
     corr = [dict(visit="jw01182004001", exposure=1, module=m, filtername="F212N",
@@ -2436,9 +2451,13 @@ def test_the_dispersion_reported_is_the_largest_separation_between_members(tmp_p
     reader has to know what it means."""
     from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
         _max_pairwise_separation)
-    members = [dict(dra_onsky_mas=0.0, ddec_onsky_mas=0.0),
-               dict(dra_onsky_mas=3.0, ddec_onsky_mas=4.0)]     # 3-4-5
-    assert _max_pairwise_separation(members) == pytest.approx(5.0)
+    # Deliberately NOT (0,0) and (3,4): those have magnitudes 0 and 5, so a
+    # peak-to-peak of magnitudes also returns 5.0 and the test cannot see the
+    # difference it is named for.  These two have EQUAL magnitude 5, so the old
+    # metric returns 0.0 and the separation is 6.0.
+    members = [dict(dra_onsky_mas=4.0, ddec_onsky_mas=3.0),
+               dict(dra_onsky_mas=4.0, ddec_onsky_mas=-3.0)]
+    assert _max_pairwise_separation(members) == pytest.approx(6.0)
 
 
 def test_opposing_members_of_equal_size_are_not_reported_as_agreeing(tmp_path):
@@ -2483,7 +2502,10 @@ def test_the_dispersion_of_three_members_is_the_widest_pair(tmp_path):
     pinned only incidentally.  Three members separate them."""
     from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
         _max_pairwise_separation)
-    members = [dict(dra_onsky_mas=0.0, ddec_onsky_mas=0.0),
-               dict(dra_onsky_mas=1.0, ddec_onsky_mas=0.0),
-               dict(dra_onsky_mas=9.0, ddec_onsky_mas=0.0)]
-    assert _max_pairwise_separation(members) == pytest.approx(9.0)   # not 1.0
+    # All three have magnitude 10, so a peak-to-peak of magnitudes returns 0.0
+    # and cannot distinguish "widest pair" from anything else.  The widest pair
+    # here is the first and third, 20 mas apart, not the adjacent 10.0.
+    members = [dict(dra_onsky_mas=10.0, ddec_onsky_mas=0.0),
+               dict(dra_onsky_mas=0.0, ddec_onsky_mas=10.0),
+               dict(dra_onsky_mas=-10.0, ddec_onsky_mas=0.0)]
+    assert _max_pairwise_separation(members) == pytest.approx(20.0)
