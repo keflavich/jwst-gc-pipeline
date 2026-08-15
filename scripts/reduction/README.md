@@ -28,6 +28,12 @@ catalog the rest. It found `run_sgra_4147_o001.sh`, which had driven Sgr A* as
 Sgr C's proposal (4147) for the whole campaign; every check already in the loop
 passed on that spec.
 
+`--modules` must match the `MODULES` the runner will pass — a module the
+observation genuinely lacks is a real failure, and one the runner was never
+going to ask for is not. Where the reduce itself declares an observation
+module-restricted (sickle 3958/007 is module B only), the check reads that
+declaration and does not report the other module as missing.
+
 Add `--instrument miri` / `--instrument niriss` (and for NIRISS,
 `--target <target>/niriss`, which is where its data lives) for those.
 

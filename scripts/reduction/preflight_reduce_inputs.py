@@ -42,6 +42,7 @@ Reports and returns nonzero if anything is missing.  Changes nothing.
 """
 import argparse
 import glob
+import json
 import os
 import re
 import sys
@@ -62,11 +63,26 @@ ASN_GLOB = 'jw0{proposal}-o{obsid}*_image3_*0[0-9][0-9]_asn.json'
 #: ``jw01939001001_02101_00001_nrca1_cal.fits`` / ``..._mirimage_cal.fits``
 DETECTOR_RE = re.compile(r'_(nrc[ab](?:long|[1-4])|mirimage|nis)_')
 
-#: Detector tokens that carry no module distinction.  MIRI has one imager and
-#: NIRISS one detector, so "does this module have frames" is not a question
-#: their data can answer, and asking it of them reported every complete MIRI and
-#: NIRISS field as missing both NIRCam modules.
+#: Detector tokens that carry no module distinction.
 SINGLE_DETECTOR = {'mirimage', 'nis'}
+
+#: Instruments with one detector, for which "which module has frames" has no
+#: answer.  Asking it of them reported every complete MIRI and NIRISS field as
+#: missing both NIRCam modules.  Keyed on the INSTRUMENT, since keying it on the
+#: detector tokens found on disk let a NIRCam spec aimed at a NIRISS directory
+#: report OK.
+_SINGLE_DETECTOR_INSTRUMENTS = {'miri', 'niriss'}
+
+#: The member-exposure token the reduce requires of an association it will use.
+#: One observation can produce associations for several instruments under the
+#: same proposal and observation number, and the reduce keeps only its own.
+_MEMBER_TOKEN = {'nircam': 'nrc', 'miri': 'mirimage', 'niriss': '_nis_'}
+
+#: Module tokens a `--modules` spec may name.  A token outside this set is a
+#: typo, and a typo used to be truncated to four characters and reported as a
+#: module genuinely missing from the data.
+_MODULE_TOKENS = ({'nrca', 'nrcb', 'merged', 'nrcalong', 'nrcblong'}
+                  | {f'nrc{ab}{n}' for ab in 'ab' for n in '1234'})
 
 
 def module_family(token):
@@ -141,19 +157,136 @@ def registry_verdict(target, proposal, obsid, instrument='nircam'):
     return True, f'{owner} owns {proposal}/o{obsid}'
 
 
-def check(root, target, proposal, obsid, filters, modules):
+#: Where the reduce declares that an observation uses only some modules.
+_REDUCE_SCRIPT = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    'jwst_gc_pipeline', 'reduction', 'PipelineRerunNIRCAM-LONG.py')
+
+
+def reduce_module_policy(script=None):
+    """``MODULES_BY_PROPOSAL_FIELD_FILTER`` as the reduce declares it.
+
+    Read by PARSING rather than importing: that module pulls in the whole JWST
+    stack, and this check exists to be run in ten seconds before submitting.
+    Parsing also means a policy the reduce cannot express cannot be invented
+    here.
+
+    Without it, a correct field reads as broken: sickle 3958/007 is restricted
+    to module B by this policy, so the default module spec reported both its
+    filters MISSING on data that reduces fine -- and the README documented that
+    invocation.  A check whose documented use produces false alarms is a check
+    operators learn to ignore.
+    """
+    import ast
+    path = script or _REDUCE_SCRIPT
+    try:
+        tree = ast.parse(open(path).read(), filename=path)
+    except (OSError, SyntaxError):
+        return {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        for tgt in node.targets:
+            if isinstance(tgt, ast.Name) and tgt.id == 'MODULES_BY_PROPOSAL_FIELD_FILTER':
+                try:
+                    return ast.literal_eval(node.value)
+                except ValueError:
+                    return {}
+    return {}
+
+
+def allowed_modules(proposal, obsid, filtername, requested, policy=None):
+    """``requested``, narrowed to what the reduce will actually run.
+
+    Returns the families the reduce would produce for this (proposal,
+    observation, filter).  A field with no policy entry is unrestricted, which
+    is every field but one.
+    """
+    policy = reduce_module_policy() if policy is None else policy
+    entry = (policy.get(str(proposal), {}).get(str(obsid), {})
+             .get(str(filtername).upper()))
+    if not entry:
+        return set(requested)
+    return {module_family(m) for m in entry} & set(requested)
+
+
+def association_members(path):
+    """The member exposure names in an association file.
+
+    Raises ``UnreadableAssociation`` rather than returning empty: an
+    association the reduce cannot parse is a failure there, so reading it as
+    "no members" here would turn a stop into a pass.  ``OSError`` is included
+    because an unreadable-by-permissions file is the same problem as a
+    malformed one from this side.
+    """
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+        return [m.get('expname', '') for m
+                in (data.get('products') or [{}])[0].get('members') or []]
+    except (OSError, ValueError, KeyError, IndexError, TypeError) as exc:
+        raise UnreadableAssociation(f'{os.path.basename(path)}: {exc}')
+
+
+class UnreadableAssociation(Exception):
+    """An association file the reduce would refuse to parse."""
+
+
+def usable_associations(paths, instrument):
+    """The associations the reduce would actually keep, and why the rest went.
+
+    The reduce does not use every association matching its glob: for NIRCam it
+    keeps only those with a member whose exposure name contains ``nrc``
+    (`PipelineRerunNIRCAM-LONG.py`), because one observation can produce NIRISS
+    and MIRI associations under the same proposal and observation.  23% of the
+    665 image3 associations on disk have no NIRCam member, and sgrc/F480M holds
+    a NIRCam one beside a NIRISS one right now.
+
+    Counting the glob alone reported those as usable input, so a directory
+    holding only another instrument's associations read as OK and then failed
+    the reduce.
+    """
+    token = _MEMBER_TOKEN.get(str(instrument).lower())
+    keep, dropped = [], []
+    for path in sorted(paths):
+        members = association_members(path)
+        if not members:
+            dropped.append((path, 'no members'))
+        elif token and not any(token in m for m in members):
+            dropped.append((path, f'no {token} member'))
+        else:
+            keep.append(path)
+    return keep, dropped
+
+
+def _families_from_members(members):
+    """Module families present among an association's member exposures."""
+    out = set()
+    for name in members:
+        m = DETECTOR_RE.search(os.path.basename(name))
+        if m:
+            out.add(module_family(m.group(1)))
+    return sorted(out)
+
+
+def check(root, target, proposal, obsid, filters, modules, instrument='nircam'):
     """A :class:`Row` per requested filter."""
     if not filters:
         raise ValueError('no filters requested -- an empty filter list checks '
                          'nothing and would report success')
     obsid = normalize_obsid(obsid)
-    # `merged` is a product of the two module reductions, not an input.  It is
-    # not simply dropped: a merged product needs BOTH modules present, so
-    # asking for it asks for both, and `--modules merged` alone used to switch
-    # the module check off entirely.
+    # `merged` names a product built from the two module reductions, so asking
+    # for it asks for both modules.  Dropping it instead left `--modules merged`
+    # with nothing to check.
     wanted = {module_family(m) for m in modules if m != 'merged'}
     if any(m == 'merged' for m in modules):
         wanted |= {'nrca', 'nrcb'}
+    # A single-detector instrument can answer only whether frames exist.  Keyed
+    # off the INSTRUMENT rather than off what the directory happens to contain:
+    # deciding it from the data let a NIRCam spec pointed at a NIRISS directory
+    # report OK because every frame there was `nis`.
+    single_detector_instrument = str(instrument).lower() in _SINGLE_DETECTOR_INSTRUMENTS
+    policy = reduce_module_policy()
     rows = []
     for filt in filters:
         d = os.path.join(root, target, filt, 'pipeline')
@@ -161,24 +294,41 @@ def check(root, target, proposal, obsid, filters, modules):
             rows.append(Row(filt, 0, 0, [], sorted(wanted), f'no directory {d}'))
             continue
         pat = ASN_GLOB.format(proposal=int(proposal), obsid=obsid)
-        asns = glob.glob(os.path.join(d, pat))
+        candidates = glob.glob(os.path.join(d, pat))
         cals = glob.glob(os.path.join(
             d, f'jw{int(proposal):05d}{obsid}*_cal.fits'))
-        families = sorted({module_family(m.group(1)) for f in cals
-                           for m in [DETECTOR_RE.search(os.path.basename(f))]
-                           if m})
-        # A single-detector instrument answers "are there frames", not "which
-        # module"; requiring NIRCam module families of it fails every MIRI and
-        # NIRISS field that is entirely fine.
-        single = bool(families) and set(families) <= SINGLE_DETECTOR
-        missing = [] if single else sorted(w for w in wanted if w not in families)
+        try:
+            asns, dropped = usable_associations(candidates, instrument)
+        except UnreadableAssociation as exc:
+            rows.append(Row(filt, len(candidates), len(cals), [], sorted(wanted),
+                            f'association the reduce cannot parse -- {exc}'))
+            continue
+        # Module coverage comes from the MEMBERS of the association the reduce
+        # would use, not from a listing of the directory.  The reduce narrows
+        # the association to one module's members and raises when none remain,
+        # so a module present on disk but absent from the association is a
+        # failure the directory listing cannot see.
+        members = []
+        for path in asns:
+            members.extend(association_members(path))
+        families = _families_from_members(members)
+        # Narrow to what the reduce will actually run for this filter: one
+        # observation is declared module-B-only in the reduce's own policy, and
+        # asking it for module A is a false alarm rather than a finding.
+        want_here = allowed_modules(proposal, obsid, filt, wanted, policy=policy)
+        missing = ([] if single_detector_instrument
+                   else sorted(w for w in want_here if w not in families))
         why = ''
-        if not asns:
+        if not candidates:
             why = f'no image3 association matching {pat}'
+        elif not asns:
+            why = ('no image3 association the reduce would use: '
+                   + '; '.join(f'{os.path.basename(p)} ({r})' for p, r in dropped))
         elif not cals:
             why = f'no _cal for jw{int(proposal):05d}{obsid}'
         elif missing:
-            why = f'no _cal frames for module(s) {missing}'
+            why = (f'module(s) {missing} have no members in the association '
+                   f'the reduce would use')
         rows.append(Row(filt, len(asns), len(cals), families, missing, why))
     return rows
 
@@ -190,7 +340,11 @@ def main(argv=None):
     ap.add_argument('--obsid', required=True)
     ap.add_argument('--filters', required=True,
                     help='space-separated, e.g. "F115W F212N F405N"')
-    ap.add_argument('--modules', default='nrca,nrcb,merged')
+    ap.add_argument('--modules', default='nrca,nrcb,merged',
+                    help='comma- or space-separated NIRCam modules the reduce '
+                         'will be asked for, e.g. "nrca,nrcb,merged". Must '
+                         'match the runner\'s MODULES; a module the '
+                         'observation does not have is a real failure.')
     ap.add_argument('--instrument', default='nircam',
                     help='which registry table to check the spec against')
     ap.add_argument('--root', default='/orange/adamginsburg/jwst')
@@ -217,8 +371,16 @@ def main(argv=None):
         if not ok:
             bad += 1
 
+    # `--filters` is space-separated and `--modules` was comma-only, so mixing
+    # them is the natural mistake -- and `--modules "nrcb nrca"` used to parse
+    # as one token, truncate to `nrcb`, and exit 0 on a field with no module A.
+    mods = [m for m in re.split(r'[,\s]+', args.modules) if m]
+    unknown = sorted(set(mods) - _MODULE_TOKENS)
+    if unknown:
+        ap.error(f'--modules names {unknown}, which are not module tokens; '
+                 f'expected some of {sorted(_MODULE_TOKENS)}')
     rows = check(args.root, args.target, args.proposal, obsid,
-                 filters, args.modules.split(','))
+                 filters, mods, instrument=args.instrument)
     for r in rows:
         bad += not r.ok
         print(f'{"OK" if r.ok else "MISSING":<7s}  {args.target} '

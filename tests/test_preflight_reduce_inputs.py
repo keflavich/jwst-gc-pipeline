@@ -43,11 +43,26 @@ def _load():
 PF = _load()
 
 
-def _field(tmp_path, target, filt, asns=(), cals=()):
+def _members(*expnames):
+    return {'products': [{'members': [{'expname': n, 'exptype': 'science'}
+                                      for n in expnames]}]}
+
+
+#: The default association members: one exposure per NIRCam module.
+#:
+#: An earlier version of this helper wrote `{'members': []}` for every fixture,
+#: and a test asserted that returns OK.  That pinned the defect as correct: the
+#: reduce raises on an association with no members, and eight of nine adversarial
+#: trees passed this check and then failed the reduce.
+NRCA_NRCB = ('jw01939001001_02101_00001_nrca1_cal.fits',
+             'jw01939001001_02101_00001_nrcb1_cal.fits')
+
+
+def _field(tmp_path, target, filt, asns=(), cals=(), members=NRCA_NRCB):
     d = tmp_path / target / filt / 'pipeline'
     d.mkdir(parents=True, exist_ok=True)
     for name in asns:
-        (d / name).write_text(json.dumps({'products': [{'members': []}]}))
+        (d / name).write_text(json.dumps(_members(*members)))
     for name in cals:
         (d / name).write_text('')
     return str(tmp_path)
@@ -139,7 +154,8 @@ def test_a_module_the_observation_does_not_have_is_reported(tmp_path):
     overrides the module list."""
     root = _field(tmp_path, 'gc2211', 'F200W', asns=[
         'jw02211-o050_20260101t000000_image3_00001_asn.json'],
-        cals=['jw02211050001_02101_00001_nrcb1_cal.fits'])
+        cals=['jw02211050001_02101_00001_nrcb1_cal.fits'],
+        members=('jw02211050001_02101_00001_nrcb1_cal.fits',))
     rows = PF.check(root, 'gc2211', '2211', '050', ['F200W'], ['nrca', 'nrcb'])
     assert not rows[0].ok
     assert rows[0].missing == ['nrca']
@@ -150,7 +166,8 @@ def test_asking_for_the_combined_product_asks_for_BOTH_modules(tmp_path):
     module list turned the module check off entirely for `--modules merged`."""
     root = _field(tmp_path, 'gc2211', 'F200W', asns=[
         'jw02211-o050_20260101t000000_image3_00001_asn.json'],
-        cals=['jw02211050001_02101_00001_nrcb1_cal.fits'])
+        cals=['jw02211050001_02101_00001_nrcb1_cal.fits'],
+        members=('jw02211050001_02101_00001_nrcb1_cal.fits',))
     rows = PF.check(root, 'gc2211', '2211', '050', ['F200W'], ['merged'])
     assert not rows[0].ok, 'a one-module observation cannot produce a merged product'
     assert rows[0].missing == ['nrca']
@@ -165,10 +182,13 @@ def test_a_single_detector_instrument_is_not_asked_which_module(tmp_path,
                                                                 detector):
     """MIRI has one imager and NIRISS one detector.  Requiring NIRCam module
     families of them reported every complete field as missing both."""
+    instrument = 'miri' if detector == 'mirimage' else 'niriss'
+    frame = f'jw02526021001_02101_00001_{detector}_cal.fits'
     root = _field(tmp_path, 'cloudc', 'F770W', asns=[
         'jw02526-o021_20260101t000000_image3_00001_asn.json'],
-        cals=[f'jw02526021001_02101_00001_{detector}_cal.fits'])
-    rows = PF.check(root, 'cloudc', '2526', '021', ['F770W'], ['nrca', 'nrcb'])
+        cals=[frame], members=(frame,))
+    rows = PF.check(root, 'cloudc', '2526', '021', ['F770W'], ['nrca', 'nrcb'],
+                    instrument=instrument)
     assert rows[0].ok, rows[0].why
     assert rows[0].families == [detector]
 
@@ -256,3 +276,155 @@ def test_a_deliberately_unregistered_field_can_skip_the_registry_check(
                   '--modules', 'nrca,nrcb', '--skip-registry'])
     assert rc == 0
     assert 'registry' not in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# Trees that break the reduce.  Eight of these nine used to report OK.
+# ---------------------------------------------------------------------------
+
+ASN = 'jw01939-o001_20260101t000000_image3_00001_asn.json'
+
+
+def _spec(root, **kw):
+    return PF.check(root, 'sgra', '1939', '001', ['F115W'],
+                    kw.pop('modules', ['nrca', 'nrcb']), **kw)
+
+
+def test_an_association_with_no_members_is_not_usable_input(tmp_path):
+    """The reduce raises `Did not find any NIRCam asn files`.  The fixtures in
+    this file used to write exactly this shape for every test."""
+    root = _field(tmp_path, 'sgra', 'F115W', asns=[ASN], cals=CALS_AB,
+                  members=())
+    assert not _spec(root)[0].ok
+
+
+@pytest.mark.parametrize('foreign,label', [
+    (('jw01939001001_02101_00001_nis_cal.fits',), 'NIRISS'),
+    (('jw01939001001_02101_00001_mirimage_cal.fits',), 'MIRI'),
+])
+def test_another_instruments_association_is_not_this_reduces_input(
+        tmp_path, foreign, label):
+    """One observation produces associations for several instruments under the
+    same proposal and observation number, and the reduce keeps only its own.
+    sgrc/F480M holds a NIRCam one beside a NIRISS one right now."""
+    root = _field(tmp_path, 'sgra', 'F115W', asns=[ASN], cals=CALS_AB,
+                  members=foreign)
+    assert not _spec(root)[0].ok, f'{label} association accepted as NIRCam input'
+
+
+def test_a_module_on_disk_but_absent_from_the_association_is_reported(tmp_path):
+    """The reduce narrows the association to one module's members and raises
+    `No {module} members found`.  A directory listing cannot see this: the
+    frames are there, and the association does not use them."""
+    root = _field(tmp_path, 'sgra', 'F115W', asns=[ASN], cals=CALS_AB,
+                  members=('jw01939001001_02101_00001_nrcb1_cal.fits',))
+    row = _spec(root)[0]
+    assert not row.ok
+    assert row.missing == ['nrca']
+
+
+def test_a_malformed_association_stops_rather_than_passing(tmp_path):
+    root = _field(tmp_path, 'sgra', 'F115W', asns=[], cals=CALS_AB)
+    (pathlib.Path(root) / 'sgra' / 'F115W' / 'pipeline' / ASN).write_text('{')
+    row = _spec(root)[0]
+    assert not row.ok
+    assert 'cannot parse' in row.why
+
+
+def test_an_association_with_no_products_stops_rather_than_passing(tmp_path):
+    root = _field(tmp_path, 'sgra', 'F115W', asns=[], cals=CALS_AB)
+    (pathlib.Path(root) / 'sgra' / 'F115W' / 'pipeline' / ASN).write_text(
+        json.dumps({'asn_type': 'image3'}))
+    assert not _spec(root)[0].ok
+
+
+def test_an_unreadable_association_stops_rather_than_passing(tmp_path):
+    """Same problem as a malformed one from this side, and the reduce's own
+    handler does not catch OSError -- so this reads as OK and then crashes it."""
+    root = _field(tmp_path, 'sgra', 'F115W', asns=[ASN], cals=CALS_AB)
+    path = pathlib.Path(root) / 'sgra' / 'F115W' / 'pipeline' / ASN
+    path.chmod(0o000)
+    try:
+        if os.access(path, os.R_OK):
+            pytest.skip('running as a user that can read a 0o000 file')
+        row = _spec(root)[0]
+        assert not row.ok
+        assert 'cannot parse' in row.why
+    finally:
+        path.chmod(0o644)
+
+
+def test_no_cal_frames_is_reported_even_with_a_good_association(tmp_path):
+    root = _field(tmp_path, 'sgra', 'F115W', asns=[ASN], cals=[])
+    row = _spec(root)[0]
+    assert not row.ok
+    assert '_cal' in row.why
+
+
+# ---------------------------------------------------------------------------
+# The module spec itself
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize('spec', ['nrcb nrca', 'nrca, nrcb', 'nrca,nrcb'])
+def test_a_module_spec_is_split_on_commas_OR_spaces(tmp_path, spec):
+    """`--filters` is space-separated and `--modules` was comma-only, so mixing
+    them is the natural mistake.  `--modules "nrcb nrca"` parsed as ONE token,
+    truncated to `nrcb`, and exited 0 on a field with no module A."""
+    root = _field(tmp_path, 'sgra', 'F115W', asns=[ASN], cals=CALS_AB,
+                  members=('jw01939001001_02101_00001_nrcb1_cal.fits',))
+    rc = PF.main(['--target', 'sgra', '--proposal', '1939', '--obsid', '001',
+                  '--filters', 'F115W', '--root', root, '--modules', spec,
+                  '--skip-registry'])
+    assert rc == 1, f'--modules {spec!r} did not notice module A is absent'
+
+
+@pytest.mark.parametrize('bad', ['nrcc', 'nrca,nrcz', 'module-a', 'nrc'])
+def test_an_unknown_module_token_is_refused_not_truncated(tmp_path, bad):
+    """Truncated to four characters, a typo became a module name and was
+    reported as genuinely missing from the data."""
+    root = _field(tmp_path, 'sgra', 'F115W', asns=[ASN], cals=CALS_AB)
+    with pytest.raises(SystemExit) as exc:
+        PF.main(['--target', 'sgra', '--proposal', '1939', '--obsid', '001',
+                 '--filters', 'F115W', '--root', root, '--modules', bad,
+                 '--skip-registry'])
+    assert exc.value.code == 2
+
+
+def test_a_nircam_spec_pointed_at_another_instruments_directory_is_not_OK(
+        tmp_path):
+    """The single-detector escape used to key off the DATA, so any directory
+    whose frames were all NIRISS satisfied a NIRCam module request."""
+    frame = 'jw01939001001_02101_00001_nis_cal.fits'
+    root = _field(tmp_path, 'sgra', 'F115W', asns=[ASN], cals=[frame],
+                  members=(frame,))
+    row = PF.check(root, 'sgra', '1939', '001', ['F115W'], ['nrca', 'nrcb'],
+                   instrument='nircam')[0]
+    assert not row.ok, 'a NIRCam spec was satisfied by NIRISS frames'
+
+
+def test_an_observation_the_reduce_restricts_to_one_module_is_not_a_failure(
+        tmp_path):
+    """sickle 3958/007 is declared module-B-only in the reduce's own policy, so
+    asking it for module A is a false alarm, not a finding -- and the README
+    documented exactly that invocation."""
+    root = _field(tmp_path, 'sickle', 'F187N', asns=[
+        'jw03958-o007_20260101t000000_image3_00001_asn.json'],
+        cals=['jw03958007001_02101_00001_nrcb1_cal.fits'],
+        members=('jw03958007001_02101_00001_nrcb1_cal.fits',))
+    row = PF.check(root, 'sickle', '3958', '007', ['F187N'],
+                   ['nrca', 'nrcb', 'merged'])[0]
+    assert row.ok, row.why
+
+
+def test_the_policy_is_read_from_the_reduce_rather_than_restated(tmp_path):
+    """Parsed, not imported: importing that module pulls in the whole JWST
+    stack, and this check exists to run in seconds before a submission."""
+    policy = PF.reduce_module_policy()
+    assert policy.get('3958', {}).get('007'), (
+        'the reduce no longer declares the sickle module policy where this '
+        'reads it; re-point reduce_module_policy or drop the narrowing')
+    # a field with no entry is unrestricted
+    assert PF.allowed_modules('1939', '001', 'F115W', {'nrca', 'nrcb'},
+                              policy=policy) == {'nrca', 'nrcb'}
+    assert PF.allowed_modules('3958', '007', 'F187N', {'nrca', 'nrcb'},
+                              policy=policy) == {'nrcb'}
