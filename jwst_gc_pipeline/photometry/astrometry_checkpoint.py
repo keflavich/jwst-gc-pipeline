@@ -1222,9 +1222,9 @@ PROV_EXPLAINS_TOL_MAS = 0.5
 
 #: Lower bound on cos(dec) over the fields this runs on -- all Galactic Centre or
 #: nearer the equator, so |dec| < 30 deg.  Used to BOUND the RA-axis check: the
-#: apply loop divides on-sky mas by cos(dec).  Used only as a FALLBACK: a row
-#: that records ``prov_dec_deg`` gives the exact factor, and this bounds the
-#: check for a row written before that column existed, where it is confined to
+#: apply loop divides on-sky mas by cos(dec).  This is the FALLBACK bound, used
+#: only for a row written before ``prov_dec_deg`` existed: a row that records it
+#: gives the exact factor, and without it the factor is confined to
 #: [COS_DEC_MIN, 1].
 COS_DEC_MIN = np.cos(np.radians(30.0))
 
@@ -1528,7 +1528,7 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
     hold a COORDINATE offset, and the two differ by cos(dec) -- ~14% at these
     declinations.  ``prov_dec_deg`` records the declination the conversion
     used, so the coordinate offset a provenance entry implies is exact rather
-    than bounded.  Tables written under the older ``prov_*_onsky_mas`` names
+    than bounded.  Tables written under the older ``prov_*_added_mas`` names
     are renamed on the next write, values untouched.
 
     Returns the corrected Table.  Raises ``OffsetsTableUpdateError`` when a
@@ -1743,9 +1743,13 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
             # The declination this correction's cos(dec) used.  Recorded per
             # row so the coordinate offset it implies can be re-derived exactly
             # rather than bounded -- the whole point of the column.  A row
-            # corrected twice from different declinations keeps the latest,
-            # which is the one whose conversion the accumulated total reflects
-            # only if they agree; they differ by <1e-4 deg within a pointing.
+            # corrected twice from different declinations keeps the LATEST,
+            # while the accumulated total reflects both, so the two agree only
+            # while the declination barely moves.  `dec_deg` is the median
+            # declination of the consensus STAR SET, recomputed per re-tie
+            # iteration, so it moves with the sampled stars rather than with the
+            # pointing -- this is not bounded here.  The tolerance it needs is
+            # prov[mas] x delta-dec[deg] <~ 46; see issue #387.
             tbl[PROV_DEC_DEG_KEY][idx] = float(corr["dec_deg"])
             tbl["prov_source"][idx] = _prov_text(
                 corr.get("source", "astrometry_checkpoint"))

@@ -221,8 +221,10 @@ def test_the_heal_converts_degrees_not_radians(tmp_path):
     accept-side: reopen the gap to exactly the coordinate value the DEGREE
     conversion predicts, and the next write must not refuse it.
 
-    cos(-28.7 deg) = 0.877 against cos(-28.7 rad) = 0.885, so the two land
-    0.4 mas apart on a 400 mas correction -- inside no tolerance here.
+    cos(-28.7 deg) = 0.877 against cos(-28.7 rad) = -0.911, so a 400 mas
+    on-sky correction becomes 456.0 mas of coordinate right ascension under the
+    degree conversion and -439.2 mas under the radian one -- opposite sign, and
+    895 mas apart, against a 0.5 mas tolerance.
     """
     path = _table(str(tmp_path / "radians.csv"))
     out = update_offsets_table(path,
@@ -410,6 +412,14 @@ def test_the_validator_reads_an_absent_declination_as_absent():
     t2 = _diverged(400.0, 0.400, dec=0.0)
     t2[PROV_DEC_DEG_KEY] = np.ma.array([0.0], mask=[True])
     assert not flag_diverged_column_pairs(t2)
+    # ...and the masked case at a gap INSIDE the loose window and outside any
+    # exact branch.  Masked is the shape that ships: a table written by
+    # `seed_offsets_table_from_consensus` reads back
+    # `prov_dec_deg = [masked, -28.7, masked]`, so reading masked as the equator
+    # compares a real unhealed row against an exact window and flags it falsely.
+    t3 = _diverged(400.0, 0.456024, dec=0.0)
+    t3[PROV_DEC_DEG_KEY] = np.ma.array([0.0], mask=[True])
+    assert not flag_diverged_column_pairs(t3)
 
 
 def test_the_validator_converts_degrees_not_radians():
@@ -428,21 +438,39 @@ def test_the_validator_converts_degrees_not_radians():
 # ---------------------------------------------------------------------------
 
 def test_the_consensus_writer_records_the_declination_too(tmp_path):
-    """The seed/upsert path writes the three live consensus tables (arches 52,
-    cloudef 39, w51 373 rows) and had no test for this column at all: deleting
-    the assignment left the whole suite green."""
+    """The seed/upsert path writes the live consensus tables and had no test for
+    this column at all.
+
+    Asserted on the WRITTEN VALUE rather than on the source text.  A source-text
+    check passes when the branch writes 0.0 (the equator) or writes the RA
+    provenance into the declination column -- both of which are the corruption
+    this column exists to make visible.
+    """
     from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
         seed_offsets_table_from_consensus)
-    import inspect
-    src = inspect.getsource(seed_offsets_table_from_consensus)
-    # the NAME, not the value: the source references the constant, and asserting
-    # its value here passes only if someone hard-codes the string
-    assert "PROV_DEC_DEG_KEY" in src, (
-        "the consensus writer must record the declination its conversion used; "
-        "without it those tables can only ever be checked on the loose bound")
-    # both the upsert branch and the insert branch, not just one
-    assert src.count("PROV_DEC_DEG_KEY") >= 2, (
-        "one of the two write branches (upsert / insert) does not record it")
+
+    base = tmp_path / "seed"
+    (base / "offsets").mkdir(parents=True)
+    corr = _correction(dra_onsky=100.0, ddec_onsky=0.0, dec=GC_DEC)
+    out = seed_offsets_table_from_consensus(
+        str(base), "1182", "004", [corr], stage="m2")
+    tbl = Table.read(out)
+    written = np.ma.filled(np.ma.asarray(tbl[PROV_DEC_DEG_KEY], dtype=float),
+                           np.nan)
+    got = written[np.isfinite(written)]
+    assert len(got), "the inserted row records no declination"
+    assert got[0] == pytest.approx(GC_DEC), (
+        f"recorded {got[0]} for a correction made at declination {GC_DEC}")
+
+    # ...and again on the UPSERT branch, which is a different write
+    out2 = seed_offsets_table_from_consensus(
+        str(base), "1182", "004", [corr], stage="m2")
+    tbl2 = Table.read(out2)
+    written2 = np.ma.filled(np.ma.asarray(tbl2[PROV_DEC_DEG_KEY], dtype=float),
+                            np.nan)
+    got2 = written2[np.isfinite(written2)]
+    assert got2[0] == pytest.approx(GC_DEC), (
+        f"the upsert branch recorded {got2[0]}, not {GC_DEC}")
 
 
 def test_the_revert_resolves_each_provenance_axis_independently():
