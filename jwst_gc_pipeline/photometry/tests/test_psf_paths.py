@@ -27,6 +27,35 @@ def test_legacy_path_keeps_proposal_and_field():
     assert p == '/jwst/brick/psfs/F405N_1182_001_merged_PSFgrid_oversample1.fits'
 
 
+def test_the_merged_grid_name_carries_the_oversample_token():
+    """Every merged grid on disk is named ``..._oversample{N}[_blur].fits``.
+
+    ``reduction.saturated_star_finding.get_psf`` used to build this name by hand
+    without the token, so it matched none of the 237 grids that exist and fell
+    back to a detector-specific grid without saying it had looked.  Both callers
+    now go through this one function, so they cannot drift apart again.
+    """
+    name = PP.legacy_merged_psf_grid_name('f405n', '1182', '001', oversample=2)
+    assert name == 'F405N_1182_001_merged_PSFgrid_oversample2.fits'
+    assert PP.legacy_merged_psf_grid_path(ROOT, 'brick', 'f405n', '1182', '001',
+                                          oversample=2).endswith(name)
+
+
+def test_the_reader_of_merged_grids_uses_the_shared_name():
+    """`saturated_star_finding` must not re-spell the name it looks for.
+
+    Its copy is what drifted; a second copy anywhere is the same defect again.
+    """
+    import inspect
+    from jwst_gc_pipeline.reduction import saturated_star_finding as SSF
+
+    src = inspect.getsource(SSF.get_psf)
+    assert 'legacy_merged_psf_grid_name' in src, (
+        'get_psf builds the merged-grid filename itself again')
+    assert 'merged_PSFgrid' not in src, (
+        'get_psf has a hand-written copy of the merged-grid filename')
+
+
 def _resolve(present):
     return PP.resolve_merged_psf_grid_path(
         ROOT, 'brick', 'NIRCam', 'nrcb5', 'f405n', '1182', '001',

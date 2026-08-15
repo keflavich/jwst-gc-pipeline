@@ -26,18 +26,40 @@ import os
 import pytest
 
 PHOTOMETRY = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PACKAGE = os.path.dirname(PHOTOMETRY)
 
-#: Files whose call sites need survey data, so an unbound name in them cannot
-#: be caught by running the code in CI.  These are exactly the ones that need a
-#: static check.
-MODULES = [
-    'crowdsource_catalogs_long.py',
-    'cataloging.py',
-    'merge_catalogs.py',
-    'astrometry_checkpoint.py',
-    'visit_consensus.py',
-    'psf_preflight.py',
-]
+#: The one file where "bound nowhere in this module" is the intended design
+#: rather than a defect: it rebuilds its predecessor's namespace at import time
+#: with ``globals().update(vars(crowdsource_catalogs_long))``, so several
+#: hundred of its names are bound by that call and by nothing a parser can see.
+#: It is frozen legacy code reached only via ``--legacy-iterations``.
+DENY = {
+    os.path.join('photometry', 'legacy', 'crowdsource_step.py'),
+}
+
+
+def _package_modules():
+    """Every .py file in the package except the namespace-copying legacy one.
+
+    Started as a six-name allowlist of files whose call sites need survey data.
+    That was the wrong axis: needing survey data is what makes a defect
+    *survive* CI, and it is not a property of a file that anyone maintains as
+    the tree grows.  Two of the three unbound names in #379 were in files
+    nobody had thought to list.  Sweeping everything costs ~2 s.
+    """
+    out = []
+    for root, dirs, files in os.walk(PACKAGE):
+        dirs[:] = [d for d in dirs if d != '__pycache__']
+        for name in sorted(files):
+            if not name.endswith('.py'):
+                continue
+            rel = os.path.relpath(os.path.join(root, name), PACKAGE)
+            if rel not in DENY:
+                out.append(rel)
+    return out
+
+
+MODULES = _package_modules()
 
 
 def _bound_names(tree):
@@ -94,7 +116,7 @@ def _loaded_names(tree):
 
 @pytest.mark.parametrize('filename', MODULES)
 def test_every_name_used_is_bound_somewhere(filename):
-    path = os.path.join(PHOTOMETRY, filename)
+    path = os.path.join(PACKAGE, filename)
     if not os.path.exists(path):
         pytest.skip(f'{filename} not present')
     with open(path) as fh:
@@ -122,3 +144,34 @@ def test_the_regression_this_exists_for():
     assert used, 'call sites gone -- delete this test with them'
     assert 'psf_preflight' in _bound_names(tree), (
         'psf_preflight is called but never imported')
+
+
+def test_no_name_is_used_outside_the_scope_that_binds_it():
+    """The check above pools every binding in a file, so it cannot see scope.
+
+    That blind spot cost a real run.  ``make_reference_from_pipeline_catalogs``
+    ended ``main()`` with ``print(f"... {len(vvv)} rows")``.  ``vvv`` is bound
+    inside ``fetch_vvv_catalog()`` and nowhere else, so the pooled-binding
+    check sees it as bound and the interpreter does not: every complete run of
+    that script raised ``NameError`` on that line, after all of its outputs had
+    already been written, and exited non-zero on a run that had succeeded.
+
+    ``pyflakes`` does per-scope analysis, so it catches that case as well as
+    the bound-nowhere ones.  It is in the ``test`` extra; skipped rather than
+    failed when absent, so the pooled check above still runs without it.
+    """
+    pyflakes_checker = pytest.importorskip('pyflakes.checker')
+    pyflakes_messages = pytest.importorskip('pyflakes.messages')
+
+    undefined = []
+    for rel in MODULES:
+        path = os.path.join(PACKAGE, rel)
+        with open(path) as fh:
+            tree = ast.parse(fh.read(), filename=path)
+        for msg in pyflakes_checker.Checker(tree, filename=path).messages:
+            if isinstance(msg, pyflakes_messages.UndefinedName):
+                undefined.append(f'{rel}:{msg.lineno} {msg.message % msg.message_args}')
+
+    assert not undefined, (
+        'name(s) used where the interpreter cannot resolve them -- a NameError '
+        'on whichever input reaches the line:\n  ' + '\n  '.join(undefined))
