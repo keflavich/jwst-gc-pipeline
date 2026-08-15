@@ -1222,8 +1222,10 @@ PROV_EXPLAINS_TOL_MAS = 0.5
 
 #: Lower bound on cos(dec) over the fields this runs on -- all Galactic Centre or
 #: nearer the equator, so |dec| < 30 deg.  Used to BOUND the RA-axis check: the
-#: apply loop divides on-sky mas by cos(dec) and dec_deg is not stored per row,
-#: so the exact factor is unrecoverable but confined to [COS_DEC_MIN, 1].
+#: apply loop divides on-sky mas by cos(dec).  Used only as a FALLBACK: a row
+#: that records ``prov_dec_deg`` gives the exact factor, and this bounds the
+#: check for a row written before that column existed, where it is confined to
+#: [COS_DEC_MIN, 1].
 COS_DEC_MIN = np.cos(np.radians(30.0))
 
 # ---------------------------------------------------------------------------
@@ -1391,8 +1393,10 @@ def _heal_column_pairs(tbl, offsets_path, rows=None):
     right when nothing on record says so.
 
     Both axes are checked before anything is written, because both are written.
-    Dec is exact (prov and ddec are both on-sky); RA is bounded, since the apply
-    loop divided by a cos(dec) this function cannot recover exactly.
+    Dec is exact (prov and ddec are both on-sky).  RA is exact too when the row
+    records ``prov_dec_deg``, which gives back the cos(dec) the apply loop
+    divided by; without it -- rows written before that column existed -- it is
+    bounded by [COS_DEC_MIN, 1] instead.
 
     ``rows``: restrict to these row indices (the ones a correction will touch).
     A field with one stale filter and ten clean ones must be able to recover
@@ -1425,10 +1429,12 @@ def _heal_column_pairs(tbl, offsets_path, rows=None):
     # cos(dec) between them.
     dec_bad = np.abs(c_gap * 1000.0 - prov_c) > PROV_EXPLAINS_TOL_MAS
 
-    # RA needs a BOUND rather than an equality.  The apply loop divides the
-    # on-sky mas by cos(dec) to get the coordinate offset, and dec_deg is not
-    # stored per row, so the exact factor is unrecoverable -- but it is confined
-    # to [cos(dec_max), 1], which for these fields is a ~14% window.  That is far
+    # RA needs a BOUND rather than an equality WHEN THE ROW DOES NOT RECORD ITS
+    # DECLINATION.  The apply loop divides the on-sky mas by cos(dec) to get the
+    # coordinate offset; a row carrying ``prov_dec_deg`` gives that factor back
+    # exactly, and the branch below uses it.  Without it -- a row written before
+    # that column existed -- the factor is confined to [cos(dec_max), 1], which
+    # for these fields is a ~14% window.  That is far
     # tighter than needed to reject a hand-edited RA gap against a recorded zero,
     # and the heal WRITES this column, so it has to be checked: without it a row
     # whose Dec gap is explained and whose RA gap is not gets its dra silently

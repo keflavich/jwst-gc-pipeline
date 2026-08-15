@@ -212,6 +212,31 @@ def test_the_same_edit_passes_when_the_declination_was_not_recorded(tmp_path):
         path, [_correction(dra_onsky=1.0, ddec_onsky=0.0, exposure=1)], "m2")
 
 
+def test_the_heal_converts_degrees_not_radians(tmp_path):
+    """The heal's cos(dec) had no test that could see a WRONG factor.
+
+    Every other exact-branch test here asserts "must raise", and a factor that
+    is wrong but non-degenerate still raises -- so `np.cos(np.radians(dec))`
+    could become `np.cos(dec)` with the whole suite green.  This is the
+    accept-side: reopen the gap to exactly the coordinate value the DEGREE
+    conversion predicts, and the next write must not refuse it.
+
+    cos(-28.7 deg) = 0.877 against cos(-28.7 rad) = 0.885, so the two land
+    0.4 mas apart on a 400 mas correction -- inside no tolerance here.
+    """
+    path = _table(str(tmp_path / "radians.csv"))
+    out = update_offsets_table(path,
+                               [_correction(dra_onsky=400.0, ddec_onsky=0.0)], "m2")
+    coordinate = 0.400 / np.cos(np.radians(GC_DEC))
+    assert float(out["dra (arcsec)"][0]) == pytest.approx(coordinate, abs=1e-4)
+
+    # reopen the pair by exactly the amount the recorded declination explains
+    out["dra"][0] = float(out["dra (arcsec)"][0]) - coordinate
+    out.write(path, overwrite=True)
+    update_offsets_table(
+        path, [_correction(dra_onsky=1.0, ddec_onsky=0.0, exposure=1)], "m2")
+
+
 # ---------------------------------------------------------------------------
 # What review found: an empty declination is ABSENT, not zero
 # ---------------------------------------------------------------------------
@@ -376,6 +401,12 @@ def test_the_validator_reads_an_absent_declination_as_absent():
         flag_diverged_column_pairs)
     t = _diverged(400.0, 0.400, dec=np.nan)
     assert not flag_diverged_column_pairs(t)
+    # ...and the gap the EQUATOR would predict must still be accepted only by
+    # the loose bound.  Asserting it at gap == prov cannot fail: that value is
+    # simultaneously the loose window's edge and cos(0)=1's exact answer, so
+    # reintroducing "absent means the equator" leaves it green.  This one is
+    # inside the loose window and outside any exact branch.
+    assert not flag_diverged_column_pairs(_diverged(400.0, 0.456024, dec=np.nan))
     t2 = _diverged(400.0, 0.400, dec=0.0)
     t2[PROV_DEC_DEG_KEY] = np.ma.array([0.0], mask=[True])
     assert not flag_diverged_column_pairs(t2)
@@ -390,3 +421,46 @@ def test_the_validator_converts_degrees_not_radians():
     exact_rad = 400.0 / 1000.0 / np.cos(GC_DEC)
     assert abs(exact_deg - exact_rad) > 1e-3
     assert not flag_diverged_column_pairs(_diverged(400.0, exact_deg, dec=GC_DEC))
+
+
+# ---------------------------------------------------------------------------
+# Two one-line gaps review found: the consensus writer, and the revert resolver
+# ---------------------------------------------------------------------------
+
+def test_the_consensus_writer_records_the_declination_too(tmp_path):
+    """The seed/upsert path writes the three live consensus tables (arches 52,
+    cloudef 39, w51 373 rows) and had no test for this column at all: deleting
+    the assignment left the whole suite green."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        seed_offsets_table_from_consensus)
+    import inspect
+    src = inspect.getsource(seed_offsets_table_from_consensus)
+    # the NAME, not the value: the source references the constant, and asserting
+    # its value here passes only if someone hard-codes the string
+    assert "PROV_DEC_DEG_KEY" in src, (
+        "the consensus writer must record the declination its conversion used; "
+        "without it those tables can only ever be checked on the loose bound")
+    # both the upsert branch and the insert branch, not just one
+    assert src.count("PROV_DEC_DEG_KEY") >= 2, (
+        "one of the two write branches (upsert / insert) does not record it")
+
+
+def test_the_revert_resolves_each_provenance_axis_independently():
+    """On a HALF-migrated table, deciding both names from the right-ascension
+    one returns a declination column that is absent, and the caller then skips
+    zeroing it silently."""
+    import importlib.util
+    import pathlib as _p
+    spec = importlib.util.spec_from_file_location(
+        "_revert",
+        _p.Path(__file__).resolve().parents[3]
+        / "scripts" / "reduction" / "revert_broadcast_provenance.py")
+    rev = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rev)
+
+    half = ["Visit", "prov_dra_onsky_mas", "prov_ddec_added_mas"]
+    assert rev.prov_columns(half) == ("prov_dra_onsky_mas", "prov_ddec_added_mas")
+    both_new = ["prov_dra_onsky_mas", "prov_ddec_onsky_mas"]
+    assert rev.prov_columns(both_new) == tuple(both_new)
+    both_old = ["prov_dra_added_mas", "prov_ddec_added_mas"]
+    assert rev.prov_columns(both_old) == tuple(both_old)

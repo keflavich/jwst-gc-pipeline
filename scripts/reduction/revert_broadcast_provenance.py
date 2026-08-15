@@ -104,8 +104,18 @@ _PROV_LEGACY = ("prov_dra_added_mas", "prov_ddec_added_mas")
 
 
 def prov_columns(colnames):
-    """Whichever spelling of the on-sky provenance pair this table carries."""
-    return (_PROV_CURRENT if _PROV_CURRENT[0] in colnames else _PROV_LEGACY)
+    """Whichever spelling of the on-sky provenance pair this table carries.
+
+    Resolved PER AXIS.  Deciding both from the right-ascension name alone --
+    what this used to do -- returns the declination column of whichever pair the
+    RA name belongs to, and on a HALF-MIGRATED table that column is absent.  The
+    caller then skips it silently under ``--apply``, leaving a reverted row
+    still carrying its declination provenance.  Every other resolver this
+    codebase has for these columns (``prov_onsky_columns``,
+    ``_prov_onsky_names``) resolves the two independently, and so does this.
+    """
+    return tuple(cur if cur in colnames else legacy
+                 for cur, legacy in zip(_PROV_CURRENT, _PROV_LEGACY))
 
 
 

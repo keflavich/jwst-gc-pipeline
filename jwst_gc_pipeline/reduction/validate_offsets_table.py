@@ -105,9 +105,9 @@ class DivergedColumnPairError(ValueError):
 PAIR_PROV_TOL_MAS = 0.5
 
 #: The apply loop converts on-sky mas to a Delta-alpha offset by dividing by
-#: cos(dec), and dec is not stored per row -- so the RA-axis gap is bounded
-#: rather than exact.  Every field here is Galactic Centre or nearer the
-#: equator, so |dec| < 30 deg.
+#: cos(dec).  A row that records ``prov_dec_deg`` gives that factor back exactly;
+#: this is the FALLBACK bound for a row written before that column existed.
+#: Every field here is Galactic Centre or nearer the equator, so |dec| < 30 deg.
 _COS_DEC_MIN = 0.8660254037844387
 
 
