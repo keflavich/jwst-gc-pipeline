@@ -10,11 +10,11 @@ thousands, and nothing downstream can tell a truncated value from a short one --
 which is the part that matters.
 
 The string the m2 checkpoint writes when it pools several detectors' corrections
-into one is 58 characters:
+into one is 59 characters:
 
     'm2 visit-consensus [mean of 2, maxsep 1.51mas: nrcb3,nrcb4]'
 
-Stored in a ``<U23`` column that becomes ``'m2 visit-consensus [med'`` -- the
+Stored in a ``<U23`` column that becomes ``'m2 visit-consensus [mea'`` -- the
 detector list, the part that says which measurements the pooled value came from, is
 exactly what is cut.  Six of the thirteen live offsets tables (arches, both
 cloudef tables, quintuplet, sgra, sgrb2) are ``<U23`` today; the three that
@@ -34,12 +34,13 @@ from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
     PROV_TEXT_COLUMNS, PROV_TEXT_MAX_CHARS, PROV_TEXT_MIN_CHARS,
     _widen_prov_text_columns, update_offsets_table)
 
-#: What m2 writes for a value pooled over two detectors.  (It was 58
-#: characters when the statistic was the median; "mean" is two shorter.)
-#: the form six live tables cannot hold.
+#: What m2 writes for a value pooled over two detectors: 59 characters, and a
+#: form six live tables cannot hold.  (It was 58 when the statistic was the
+#: median -- "mean" is two characters shorter, and "maxsep" three longer than
+#: the "ptp" it replaced, so the string grew by one.)
 POOLED_SOURCE = "m2 visit-consensus [mean of 2, maxsep 1.51mas: nrcb3,nrcb4]"
 
-#: The same for FOUR detectors -- 70 characters.  Four is the number the pooler
+#: The same for FOUR detectors -- 71 characters.  Four is the number the pooler
 #: is built for (one module's detectors), so this is the ordinary case, not the
 #: extreme one, and a live example already sits truncated in cloudc's table.
 POOLED_SOURCE_4 = ("m2 visit-consensus [mean of 4, maxsep 3.42mas: "
@@ -218,7 +219,7 @@ def test_the_fixture_really_is_too_narrow(tmp_path):
 
 
 def test_a_pooled_source_string_survives_a_narrow_column(tmp_path):
-    """The defect: 58 characters in, 58 characters out."""
+    """The defect: 59 characters in, 59 characters out."""
     p = _narrow_table(tmp_path)
     update_offsets_table(p, [_corr(2, POOLED_SOURCE)], stage="m2")
     t = Table.read(p, format="ascii.csv")
@@ -251,7 +252,7 @@ def test_the_four_detector_pooling_survives(tmp_path):
     """The case a fixed 64-character cap still cut, and it is the ORDINARY one.
 
     A module has four detectors, so a value pooled over four is what the pooler
-    is built for; its source string is 70 characters.  The first version of this
+    is built for; its source string is 71 characters.  The first version of this
     fix capped at 64 and would have gone on dropping the last detector and the
     closing bracket -- and cloudc's live table already carries exactly that,
     stored as `'...nrcb1,nrcb2,'`.

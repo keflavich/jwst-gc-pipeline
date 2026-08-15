@@ -275,7 +275,7 @@ passes AND D is clean (`apply_ok`).  Anything else is recorded as
   before the actionability floor, and `update_offsets_table(..., pool=True)` /
   `--pool` on `apply_m2_checkpoint_corrections.py` and
   `run_astrometry_checkpoint.py` expose it to the recovery tooling. It takes the
-  **median** of the corrections sharing a row, because a family row can only
+  **mean** of the corrections sharing a row, because a family row can only
   express the module-common shift; the per-detector spread is a
   distortion/DVA-class systematic the row has no freedom to remove. Pooling
   before the floor is what makes the loop converge — residuals that largely
@@ -285,9 +285,10 @@ passes AND D is clean (`apply_ok`).  Anything else is recorded as
   "rebuild `--per-module`" refusal instead of a silent A/B average), a module
   contributing twice to one row (two vgroups against a `Vgroup`-less table), a
   group whose members disagree by more than `ASTROM_MAX_POOL_SPREAD_MAS`
-  (50 mas), and any member over the magnitude ceiling — which is checked on the
-  **members**, since `median ≤ max` means pooling would otherwise average a
-  blown-up detector out of existence. What was collapsed is written to the
+  (50 mas) measured as the largest separation between any two of them **as
+  vectors**, and any member over the magnitude ceiling — which is checked on the
+  **members**, since a mean cannot exceed the largest of them and pooling would
+  otherwise average a blown-up detector out of existence. What was collapsed is written to the
   checkpoint record under `pooling`. The correction's `source` string survives in
   the offsets table -- its provenance column is widened to fit the value being
   written rather than left at whatever width the table happened to have, so the

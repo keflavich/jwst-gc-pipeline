@@ -1526,6 +1526,32 @@ def test_pooled_entry_carries_its_dispersion(tmp_path):
     assert "maxsep 4.00mas" in pooled["source"]
 
 
+def test_the_dispersion_reaches_the_ON_DISK_record_under_its_new_name(tmp_path):
+    """The in-memory correction is not the artifact anyone reads later.
+
+    `pooled_max_sep_mas` was set on the correction and the checkpoint record
+    still wrote only `spread_mas` -- the key a reader already knows, whose
+    MEANING this change alters from a peak-to-peak of magnitudes to a maximum
+    pairwise vector separation.  A reader comparing records across that
+    boundary would have been silently comparing two different quantities with
+    nothing on disk to distinguish them.
+    """
+    from jwst_gc_pipeline.photometry.cataloging import _record_pooling
+
+    record = {}
+    pooled = [dict(module="nrca", filtername="F212N", exposure=1, vgroup="02101",
+                   pooled_from=["nrca1", "nrca2"], pooled_n=2, pooled_stat="mean",
+                   pooled_spread_mas=4.0, pooled_max_sep_mas=4.0,
+                   dra_onsky_mas=1.0, ddec_onsky_mas=2.0)]
+    _record_pooling(record, pooled, n_before=2, offsets_path="t.csv")
+
+    group = record["pooling"]["groups"][0]
+    assert group["max_sep_mas"] == pytest.approx(4.0), (
+        "the on-disk record must carry the new name; without it the meaning "
+        "of spread_mas changed with no marker anyone could see")
+    assert group["spread_mas"] == pytest.approx(4.0)
+
+
 def test_unknown_pool_stat_raises_rather_than_becoming_the_mean(tmp_path):
     path = _module_family_csv(tmp_path)
     corr = _detector_corrections(("nrca1", "nrca2"), ddec=10.0)

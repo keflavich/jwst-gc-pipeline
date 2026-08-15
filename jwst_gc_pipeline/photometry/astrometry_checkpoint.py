@@ -482,19 +482,30 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
     A median inside that limit would silently down-weight a member the refusal
     had already judged acceptable.
 
-    Three concrete reasons the median is the wrong choice at these group sizes,
-    measured over the 486 groups in the live checkpoint records:
+    Three concrete reasons the median is the wrong choice at these group sizes.
 
-      * **N=2 (61% of groups)** -- the median IS the mean, so its robustness
-        there is imaginary;
-      * **N=3 (20%)** -- it keeps ONE of three, and this is where the two
-        statistics differ most typically: median shift 0.789 mas at the 50th
-        percentile against a typical pooled correction of 2.69 mas, i.e. ~30%
-        of the correction, and against a 2.0 mas exposure-consensus tolerance;
-      * **N=4 (18%)** -- it is the average of the middle two, discarding the
-        outer pair entirely.
+    Measured over the **271 groups this function actually pools** -- after
+    ``_assert_poolable`` and the spread refusal below have removed the ones it
+    refuses, which is the only population where the choice of statistic has any
+    effect.  (Counting every group carrying a ``pooled_from`` instead gives 285,
+    whose worst mean-vs-median difference is 2383 mas -- a group the refusal
+    rejects, so that number describes nothing this code does.)
+    Measured 2026-08-15 over 1019 checkpoint records; regenerate with
+    ``reports/measure_pooling_population.py``:
 
-    39% of groups change value; the largest single change is 14.6 mas.
+      * **N=4 (42% of groups)** -- the commonest case, and the median is the
+        average of the middle two, discarding the outer pair entirely;
+      * **N=3 (19%)** -- it keeps ONE of three, and this is where the two
+        statistics differ most typically: 0.626 mas at the 50th percentile
+        against a typical pooled correction of 2.42 mas, i.e. ~26% of the
+        correction, and against a 2.0 mas exposure-consensus tolerance;
+      * **N=2 (26%)** -- the median IS the mean, so its robustness there is
+        imaginary.
+
+    35% of pooled groups change value.  The largest single change is **3.0 mas**.
+    An earlier version of this docstring said 14.6 mas; that group is gc2211
+    F200W exposure 4, whose members sit 76 mas apart, and the spread refusal
+    below now rejects it -- so that figure cannot occur under this code.
 
     A better answer than either exists and is deliberately NOT taken here: each
     member already reports its own measured precision (``dra_err``/``ddec_err``,
@@ -540,7 +551,8 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
                 f"correction cannot be matched to a row without one")
     corrections = list(corrections)
     # Magnitude ceiling BEFORE the median.  Pooling cannot inflate a correction
-    # past the ceiling (median <= max), so the risk runs the other way: a
+    # past the ceiling (a mean cannot exceed its largest member), so the risk
+    # runs the other way: a
     # detector whose measurement blew up is averaged out of existence and the
     # operator never learns the measurement failed.  Check the MEMBERS.
     _assert_correction_magnitudes(corrections, offsets_path)
@@ -619,11 +631,21 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
         # "synthetic worst case" this fix was written against is not synthetic;
         # it is live in cloudef, eight times over.
         #
-        # BLAST RADIUS: after this change, cloudef F360M and gc2211 F200W o049
-        # STOP at m2 with OffsetsTableUpdateError where they previously
-        # proceeded.  That is the intended effect -- their members contradict
-        # each other and their middle means nothing -- but it is a behaviour
-        # change on live fields and is stated rather than discovered.
+        # BLAST RADIUS, measured through the guard that runs FIRST.  Of the 285
+        # pooled groups in the live checkpoint records, `_assert_poolable`
+        # ALREADY refuses 11 -- 8 cloudef F360M and 3 F480M, all on the bare-vs-
+        # `long` spelling of one module (issue #298) -- and one more is refused
+        # under either metric.  What this change NEWLY refuses is TWO groups,
+        # both gc2211 F200W exposure 4 vgroup 04201:
+        #
+        #     nrca1,nrca2,nrca3        59.0 mas apart   (old metric read 14.9)
+        #     nrca1,nrca2,nrca3,nrca4  76.2 mas apart   (old metric read  8.5)
+        #
+        # One field, one filter, one exposure.  An earlier version of this
+        # comment said cloudef F360M stops here too.  It does not: it stops one
+        # guard earlier, already, on main.  Counting groups whose vector spread
+        # exceeds the limit WITHOUT applying `_assert_poolable` first overstates
+        # this change's effect by 5x.
         spread = _max_pairwise_separation(members)
         _assert_pool_spread(spread, members, mods, offsets_path)
         pooled = dict(members[0])
@@ -1128,7 +1150,7 @@ PROV_TEXT_MIN_CHARS = 64
 #: no longer states a figure.  What the longest string is MADE OF, which is
 #: checkable and does not go stale:
 #:
-#:     <stage> <base> [median of <k>, ptp <spread>mas: <detectors>]
+#:     <stage> <base> [mean of <k>, maxsep <spread>mas: <detectors>]
 #:
 #:   stage      one of ``CORRECTION_STAGES`` -- currently m1, m2, m12, so up to
 #:              three characters.  (Assuming "m2" is what produced the 70/71.)
@@ -1148,10 +1170,10 @@ PROV_TEXT_MIN_CHARS = 64
 #: The retracted figures, kept because each was retracted for a different reason
 #: and the pattern is the point:
 #:
-#:   102  claimed "median of 4" while listing two detectors.
+#:   102  claimed "mean of 4" while listing two detectors.
 #:   138  listed eight detectors across both modules -- refused by
 #:        `_assert_poolable`.
-#:   114  put a pooled median on top of w51's 62-character
+#:   114  put a pooled value on top of w51's 62-character
 #:        `m2 consensus->reference (cross-band tied-F210M, contrast>2900)`.
 #:        That base is real, and sits in three rows of w51's live table, but no
 #:        code at this head writes the parenthetical, and it belongs to the
@@ -1211,10 +1233,10 @@ def _widen_prov_text_columns(tbl, chars=PROV_TEXT_MIN_CHARS):
     ``StringTruncateWarning``, but it is one line in a log that carries
     thousands, and nothing downstream can tell a truncated value from a short
     one.  ``prov_source`` is the column this bites -- the source string the m2
-    checkpoint writes when it pools four detectors' corrections into one is 70
+    checkpoint writes when it pools four detectors' corrections into one is 71
     characters --
 
-        'm2 visit-consensus [median of 4, ptp 3.42mas: nrcb1,nrcb2,nrcb3,nrcb4]'
+        'm2 visit-consensus [mean of 4, maxsep 3.42mas: nrcb1,nrcb2,nrcb3,nrcb4]'
 
     -- while six of the thirteen live offsets tables carry ``prov_source`` as
     ``<U23``, because no row written into them so far has been longer than that.

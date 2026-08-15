@@ -3389,7 +3389,15 @@ def _record_pooling(record, pooled, n_before, offsets_path):
                'pooled_from': c.get('pooled_from'),
                'n': c.get('pooled_n'),
                'stat': c.get('pooled_stat'),
+               # BOTH keys, for one release.  `spread_mas` is the name a
+               # reader already knows, and its MEANING changed: it held a
+               # peak-to-peak of magnitudes and now holds a maximum
+               # pairwise vector separation.  Without the new name beside
+               # it, comparing records across that boundary silently
+               # compares two different quantities.  `max_sep_mas` is the
+               # one to read.
                'spread_mas': c.get('pooled_spread_mas'),
+               'max_sep_mas': c.get('pooled_max_sep_mas'),
                'dra_onsky_mas': c.get('dra_onsky_mas'),
                'ddec_onsky_mas': c.get('ddec_onsky_mas')}
               for c in pooled if c.get('pooled_from')]
@@ -4164,7 +4172,7 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     # 185.7 -> 525.7 -> 1678.5 mas over three re-tie iterations).
     #
     # A family row can only express the module-COMMON shift, so pool with the
-    # MEDIAN.  Doing it before the floor is what makes the loop converge: four
+    # MEAN.  Doing it before the floor is what makes the loop converge: four
     # SIAF-class detector residuals that largely cancel pool to a sub-floor
     # module shift and the checkpoint PASSES, instead of writing their sum and
     # re-measuring a larger residual next iteration.
