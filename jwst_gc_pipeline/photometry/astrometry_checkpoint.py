@@ -772,7 +772,7 @@ def _assert_pool_spread(spread, members, mods, offsets_path):
         return
     raise OffsetsTableUpdateError(
         f"cannot pool corrections for {os.path.basename(offsets_path)}: "
-        f"{len(members)} corrections for modules {mods} are "
+        f"{len(members)} corrections for modules {mods} disagree -- they are "
         f"{spread:.1f} mas apart at their furthest (limit {limit} mas, "
         f"ASTROM_MAX_POOL_SPREAD_MAS).  That is not one shift measured several "
         f"times, so their middle is not a measurement of anything -- one "

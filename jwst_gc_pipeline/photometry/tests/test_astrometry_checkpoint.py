@@ -2396,7 +2396,8 @@ def test_a_group_that_genuinely_disagrees_is_refused_not_averaged(tmp_path):
     corr = [dict(visit="jw01182004001", exposure=1, module=m, filtername="F212N",
                  dra_onsky_mas=v, ddec_onsky_mas=0.0, dec_deg=DEC_TEST)
             for m, v in zip(("nrcb1", "nrcb2"), (0.0, 500.0))]
-    with pytest.raises(OffsetsTableUpdateError, match="spread|disagree"):
+    with pytest.raises(OffsetsTableUpdateError,
+                       match="apart at their furthest|ASTROM_MAX_POOL_SPREAD_MAS"):
         pool_corrections_to_table_granularity(corr, path)
 
 
@@ -2442,7 +2443,8 @@ def test_a_detector_pointing_the_OPPOSITE_way_is_refused(tmp_path):
                  dra_onsky_mas=v, ddec_onsky_mas=0.0, dec_deg=DEC_TEST)
             for m, v in zip(("nrcb1", "nrcb2", "nrcb3", "nrcb4"),
                             (30.0, 30.0, 30.0, -30.0))]
-    with pytest.raises(OffsetsTableUpdateError, match="spread|disagree"):
+    with pytest.raises(OffsetsTableUpdateError,
+                       match="apart at their furthest|ASTROM_MAX_POOL_SPREAD_MAS"):
         pool_corrections_to_table_granularity(corr, path)
 
 
