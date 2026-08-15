@@ -123,7 +123,8 @@ def test_a_catalogue_without_a_source_column_is_not_called_VIRAC2():
 # The withdrawn MIRI exemption must stay withdrawn
 # ---------------------------------------------------------------------------
 
-def _two_mid_infrared_pointings(strip_deg=0.0015, n_strip=60, off_arcsec=0.5):
+def _two_mid_infrared_pointings(strip_deg=0.0015, n_strip=60, off_arcsec=0.5,
+                                with_reference=False):
     """Two mid-infrared pointings sharing a thin strip of sky, offset in it.
 
     Shaped so BOTH reference-free layers decline: the per-tile grid has no
@@ -147,11 +148,26 @@ def _two_mid_infrared_pointings(strip_deg=0.0015, n_strip=60, off_arcsec=0.5):
                            + off_arcsec / 3600.0])
     dec_b = np.concatenate([-28.50 + rng.uniform(0, 0.02, n),
                             -28.50 + rng.uniform(0, 0.02, n_strip)])
-    return {"002001:mirimage": SkyCoord(ra_a * u.deg, dec_a * u.deg),
-            "998001:mirimage": SkyCoord(ra_b * u.deg, dec_b * u.deg)}
+    pooled = {"002001:mirimage": SkyCoord(ra_a * u.deg, dec_a * u.deg),
+              "998001:mirimage": SkyCoord(ra_b * u.deg, dec_b * u.deg)}
+    if not with_reference:
+        return pooled
+    # A reference drawn from THESE positions, dense over the two footprints and
+    # thin inside the shared strip.  Drawn independently it shares no stars, the
+    # arbiter never runs, and an exemption gated on "the arbiter measured
+    # nothing" is unreachable -- so that shape of re-insertion survives.
+    body_ra = np.concatenate([ra_a[:n], ra_b[:n]])
+    body_dec = np.concatenate([dec_a[:n], dec_b[:n]])
+    strip_ra, strip_dec = ra_a[n:n + 6], dec_a[n:n + 6]      # only 6, under the floor
+    ref = SkyCoord(np.concatenate([body_ra, strip_ra]) * u.deg,
+                   np.concatenate([body_dec, strip_dec]) * u.deg)
+    return pooled, ref
 
 
-def test_a_mid_infrared_pair_it_cannot_measure_is_NOT_passed(monkeypatch):
+@pytest.mark.parametrize('field', ['sgrb2', 'w51'])
+def test_a_mid_infrared_pair_it_cannot_measure_is_NOT_passed(tmp_path,
+                                                             monkeypatch,
+                                                             field):
     """Two MIRI pointings the gate cannot measure must stay unverified.
 
     An earlier version of this change exempted mid-infrared pairs from
@@ -165,63 +181,129 @@ def test_a_mid_infrared_pair_it_cannot_measure_is_NOT_passed(monkeypatch):
     written back in under any name, keyed on any detector token, anywhere in
     the still-open loop, and every other test in this file stays green.
     """
+    from astropy.table import Table
+
     cio = _load('scripts/release/check_interframe_overlap.py', '_cio_miri')
-    pooled = _two_mid_infrared_pointings()
+    # WITH a reference list, so `ext_pair` is a real unmeasurable verdict rather
+    # than None.  Called with refcat=None -- what this test used to do -- an
+    # exemption gated on "the arbiter measured nothing" is never reached, so
+    # that whole shape of re-insertion survived.  It is also w51 F560W's live
+    # state.
+    pooled, ref = _two_mid_infrared_pointings(with_reference=True)
+    refcat = tmp_path / 'ref.fits'
+    Table({'ra': ref.ra.deg, 'dec': ref.dec.deg}).write(refcat)
     monkeypatch.setattr(cio, 'build_groups',
-                        lambda field, filt, observations=None:
+                        lambda f, filt, observations=None:
                         (pooled, {k: len(v) for k, v in pooled.items()}, 20))
+    monkeypatch.delenv('OVERLAP_ALLOW_FIELDWIDE_CLEAR', raising=False)
 
-    r = cio.check_filter('sgrb2', 'F770W', refcat=None, verbose=False)
-
+    r = cio.check_filter(field, 'F770W', refcat=str(refcat), verbose=False)
     assert r['could_not_verify'] is True, (
         'a mid-infrared pair neither reference-free layer could measure was '
         'reported as verified -- the withdrawn exemption is back')
     assert r['PASS'] is False, (
         'an unverifiable pair must not pass; publishing rests on this verdict')
 
+    # ...and on the EXIT CODE, which is what stage_release consumes.  An
+    # exemption written into main()'s aggregation instead of the still-open loop
+    # leaves the verdict dict untouched and turns exit 2 into exit 0.
+    monkeypatch.setattr(cio, 'check_filter',
+                        lambda *a, **k: dict(field=field, filt='F770W',
+                                             PASS=False, could_not_verify=True,
+                                             n_fail=0, pairs=[]))
+    monkeypatch.setattr(cio, '_filters_for', lambda *a, **k: ['F770W'],
+                        raising=False)
+    rc = cio.main(['--field', field, '--filter', 'F770W'])
+    assert rc == 2, (
+        f'an unverifiable pair must leave the gate at exit 2, not {rc}; '
+        f'stage_release refuses on the exit code, not on the dict')
 
-def _one_sliver_pair_the_footprint_arbiter_cannot_settle():
-    """A pair unverifiable frame-vs-frame, whose own footprint holds too few
-    reference stars to arbitrate, on a field whose WIDE map is clean."""
+
+# ---------------------------------------------------------------------------
+# The field-wide fallback, driven through the real gate in both directions
+# ---------------------------------------------------------------------------
+
+def _sliver_with_a_seam(seed=31, n=9000, sliver_arcsec=7.2, seam_mas=500.0,
+                        sliver_ref_stars=12):
+    """Two groups overlapping in a thin strip, with a seam only inside it.
+
+    The reference is drawn from the SAME truth positions as the detections --
+    an independently drawn one gives no same-star tie at all, so the field-wide
+    map reads `measurable=False` and the branch under test is never entered in
+    either direction.  An earlier version of this fixture made that mistake and
+    was never wired up, so it could not have failed.
+
+    Dense over the field and thinned inside the strip: that is the shape that
+    makes the field-wide map read clean while the pair's own footprint holds too
+    few reference stars to arbitrate, which is the only way to reach the
+    fallback.
+    """
     import numpy as np
     from astropy import units as u
     from astropy.coordinates import SkyCoord
 
-    rng = np.random.default_rng(11)
-    pooled = _two_mid_infrared_pointings()
-    # a star list dense over the field and thin inside the sliver: the field-wide
-    # map measures cleanly, the pair's own footprint cannot reach the floor.
-    ra = 266.50 + rng.uniform(0, 0.02, 4000)
-    dec = -28.50 + rng.uniform(0, 0.02, 4000)
-    return pooled, SkyCoord(ra * u.deg, dec * u.deg)
+    ra0, dec0 = 266.5, -28.7
+    cosd = float(np.cos(np.deg2rad(dec0)))
+    rng = np.random.default_rng(seed)
+    ra = ra0 + rng.uniform(-0.02, 0.02, n) / cosd
+    dec = dec0 + rng.uniform(-0.02, 0.02, n)
+
+    half = sliver_arcsec / 2.0 / 3600.0
+    in_a, in_b = dec <= dec0 + half, dec >= dec0 - half
+    jit = lambda v, k: v + rng.normal(0, 5.0 / 3.6e6, k)      # 5 mas jitter
+    a_ra, a_dec = jit(ra[in_a], in_a.sum()), jit(dec[in_a], in_a.sum())
+    b_ra, b_dec = jit(ra[in_b], in_b.sum()), jit(dec[in_b], in_b.sum())
+    band = b_dec <= dec0 + half                      # the seam, inside the strip
+    b_ra[band] += seam_mas / 3.6e6 / cosd
+
+    # reference: every star outside the strip, only a handful inside it
+    outside = np.abs(dec - dec0) > half
+    inside = np.where(~outside)[0]
+    keep = np.concatenate([np.where(outside)[0],
+                           rng.choice(inside, size=min(sliver_ref_stars,
+                                                       len(inside)),
+                                      replace=False)])
+    ref = SkyCoord(ra[keep] * u.deg, dec[keep] * u.deg)
+    pooled = {"001001:nrca": SkyCoord(a_ra * u.deg, a_dec * u.deg),
+              "001002:nrcb": SkyCoord(b_ra * u.deg, b_dec * u.deg)}
+    return pooled, ref
 
 
-def test_a_clean_FIELD_WIDE_map_does_not_clear_a_sliver_it_cannot_see(monkeypatch):
+@pytest.mark.parametrize('allow,expect_pass', [(None, False), ('1', True)])
+def test_a_clean_FIELD_WIDE_map_does_not_clear_a_sliver_it_cannot_see(
+        tmp_path, monkeypatch, allow, expect_pass):
     """Issue #174's conclusion, enforced rather than warned about.
 
-    The field-wide same-star map is one verdict for a whole filter.  A pair that
-    overlaps on a sliver is a minority of every cell that map measures, so a
-    real seam inside the sliver leaves the field-wide verdict clean.  Clearing
-    the pair on that basis is what #174 concluded must not happen; it had been
-    doing it and printing a warning.
+    The field-wide same-star map is one verdict for a whole filter.  A pair
+    overlapping on a thin strip is a minority of every cell that map measures,
+    so a real seam inside the strip leaves the field-wide verdict clean.  The
+    gate used to clear the pair on that basis while printing a warning saying
+    the map could not resolve it.
 
-    Off by default now.  `OVERLAP_ALLOW_FIELDWIDE_CLEAR=1` is the deliberate
-    override, and the test asserts BOTH directions so neither can rot.
+    Driven through the real `check_filter`, both directions.  The previous
+    version of this test asserted three substrings of `check_filter`'s SOURCE:
+    re-inserting the clearing with the words in a different order left it green
+    while the 500 mas seam passed the gate.
     """
+    from astropy.table import Table
+
     cio = _load('scripts/release/check_interframe_overlap.py', '_cio_fieldwide')
-    pooled, _ref = _one_sliver_pair_the_footprint_arbiter_cannot_settle()
+    pooled, ref = _sliver_with_a_seam()
+
+    refcat = tmp_path / 'sliver_ref.fits'
+    Table({'ra': ref.ra.deg, 'dec': ref.dec.deg}).write(refcat)
     monkeypatch.setattr(cio, 'build_groups',
                         lambda field, filt, observations=None:
                         (pooled, {k: len(v) for k, v in pooled.items()}, 20))
-    monkeypatch.delenv('OVERLAP_ALLOW_FIELDWIDE_CLEAR', raising=False)
+    if allow is None:
+        monkeypatch.delenv('OVERLAP_ALLOW_FIELDWIDE_CLEAR', raising=False)
+    else:
+        monkeypatch.setenv('OVERLAP_ALLOW_FIELDWIDE_CLEAR', allow)
 
-    import inspect
-    src = inspect.getsource(cio.check_filter)
-    assert 'OVERLAP_ALLOW_FIELDWIDE_CLEAR' in src, (
-        'the field-wide fallback must be behind an explicit opt-in')
-    guard = src.split('if ext_ran and field_clean:')[1].split('still_open.append')[0]
-    assert 'os.environ.get("OVERLAP_ALLOW_FIELDWIDE_CLEAR") == "1"' in guard, (
-        'the fallback clears a pair the field-wide map cannot see; it must be '
-        'reachable only with the override set')
-    assert guard.index('OVERLAP_ALLOW_FIELDWIDE_CLEAR') < guard.index('cleared += 1'), (
-        'the override must be tested BEFORE the pair is counted as cleared')
+    r = cio.check_filter('brick', 'F405N', refcat=str(refcat), verbose=False)
+
+    assert r['PASS'] is expect_pass, (
+        f"with OVERLAP_ALLOW_FIELDWIDE_CLEAR={allow!r} a 500 mas seam confined "
+        f"to the strip gave PASS={r['PASS']}; the field-wide map cannot see it")
+    if not expect_pass:
+        assert r['could_not_verify'] is True

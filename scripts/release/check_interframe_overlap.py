@@ -1197,9 +1197,14 @@ def check_filter(field, filt, refcat=None, verbose=True, observations=None):
             # in a thin sliver, against a star list dense over the field and
             # thin inside the sliver, took this branch and reported PASS.
             #
-            # It never fired while no field had an arbiter star list; routing
-            # one to w51 is what makes it reachable, and w51 clears the density
-            # this needs by a factor of only 3.4.
+            # This has been REACHABLE all along for any field `stage_release`
+            # passes --refcat for, which is brick (via the FRAME_REFCAT
+            # fallback) on every staging run.  An earlier version of this
+            # comment said it "never fired while no field had an arbiter star
+            # list"; that was wrong, and it was the stated reason the default
+            # flip needed no measurement.  Routing a list to w51 adds a second
+            # such field, and w51 clears the density this needs by a factor of
+            # only 3.4.
             #
             # So it is OFF by default and fails closed: the pair stays
             # unverified and the field does not stage.  The override exists
