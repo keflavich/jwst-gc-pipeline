@@ -54,12 +54,19 @@ from jwst_gc_pipeline.reduction.align_to_catalogs import merge_a_plus_b
 from jwst_gc_pipeline.reduction.fits_wcs_sync import sync_header_to_gwcs
 from jwst_gc_pipeline.reduction.saturated_star_finding import remove_saturated_stars
 from jwst_gc_pipeline.reduction.stage12_selection import (member_in_stage12_pass,
-                                                          stage12_products_fresh)
+                                                          note_stage12_processed,
+                                                          stage12_skip_reason)
 
 import crds
 import jwst
 
 filter_regex = re.compile('f[0-9][0-9][0-9][nmw]')
+
+# Detector1 keeps the fitted ramp alongside the rate/cal products (the satstar
+# path reads it).  Ramp retention policy is #421's concern; the stage-1/2
+# resume check is told about this flag so it cannot look for a _ramp.fits that
+# the driver never writes.
+SAVE_CALIBRATED_RAMP = True
 
 import warnings
 from astropy.utils.exceptions import AstropyWarning, AstropyDeprecationWarning
@@ -552,32 +559,38 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
                 if '_nrc' not in member['expname']:
                     print(f"Skipping non-NIRCam member {member['expname']}")
                     continue
+                # example filename: jw02221002001_02201_00002_nrcalong_cal.fits
+                # This whole-asn provenance check runs on every member of
+                # every pass, above the per-module scoping below, so a foreign
+                # member from a mis-globbed asn is caught even on a field
+                # whose module policy narrows to a single module.
+                assert f'jw0{proposal_id}{field}' in member['expname']
                 # #417: each module pass claims only its own members, with the
                 # same substring semantics as the per-module member trim in
                 # the tweakreg block below ('nrca' claims nrca1-4 + nrcalong).
                 # The merged pass keeps every NIRCam member so a merged-only
                 # or single-module run still produces every _cal it needs; on
-                # the default nrca,nrcb,merged sequence the freshness check
+                # the default nrca,nrcb,merged sequence the in-process memo
                 # below skips the members the module passes already produced.
                 if not member_in_stage12_pass(member['expname'], module):
                     print(f"Skipping member {member['expname']}: the {module} pass does not claim it")
                     continue
-                # example filename: jw02221002001_02201_00002_nrcalong_cal.fits
-                assert f'jw0{proposal_id}{field}' in member['expname']
                 uncal_fn = member['expname'].replace("_cal.fits", "_uncal.fits")
-                # #417: idempotence.  A member whose _cal and _ramp both exist
-                # and are newer than its _uncal is already done, so a retry
-                # after a partial failure reprocesses exactly the
-                # missing/stale members.
-                if stage12_products_fresh(uncal_fn):
-                    print(f"Skipping stage 1+2 for {member['expname']}: _cal.fits and _ramp.fits exist and are newer than the _uncal.fits")
+                # #417: skip a member THIS process already ran stage 1+2 on in
+                # an earlier module pass (and, only under STAGE12_RESUME=1, one
+                # whose products on disk are newer than its uncal).  A fresh
+                # process with SKIP=0 still re-fits every ramp.
+                skip_stage12 = stage12_skip_reason(uncal_fn,
+                                                  require_ramp=SAVE_CALIBRATED_RAMP)
+                if skip_stage12:
+                    print(f"Skipping stage 1+2 for {member['expname']}: {skip_stage12}")
                     continue
                 print(f"DETECTOR PIPELINE on {member['expname']}")
                 print("Detector1Pipeline step")
                 # from Hosek: expand_large_events -> false; turn off "snowball" detection
                 Detector1Pipeline.call(uncal_fn,
                                        save_results=True, output_dir=output_dir,
-                                       save_calibrated_ramp=True,
+                                       save_calibrated_ramp=SAVE_CALIBRATED_RAMP,
                                        steps={'ramp_fit': {'suppress_one_group':False, 'save_results':True},
                                               "refpix": {"use_side_ref_pixels": True},
                                               "jump":{"save_results":True}})
@@ -594,6 +607,9 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
                                                               "_rate.fits"),
                                     save_results=True, output_dir=output_dir,
                                    )
+                # #417: a later module pass in this same interpreter must not
+                # redo the member we just calibrated.
+                note_stage12_processed(uncal_fn)
         else:
             print("Skipped step 1 and step2")
 
