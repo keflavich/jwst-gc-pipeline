@@ -35,8 +35,12 @@ Two checks, cheapest first:
    sgra case outright, and also catches the case the on-disk scan cannot: the
    right proposal against the wrong target.
 2. **against the frames** -- for each (filter, module): an ``image3`` association
-   file exists for that proposal and observation, ``_cal`` frames exist for it,
-   and the detectors in those frames cover every requested module family.
+   the reduce would actually use exists for that proposal and observation,
+   ``_cal`` frames exist for it, and that association's MEMBERS cover every
+   requested module family.  Coverage comes from the members rather than from a
+   listing of the directory, because the reduce narrows the association to one
+   module's members and raises when none remain -- a module present on disk but
+   absent from the association is a failure a listing cannot see.
 
 Reports and returns nonzero if anything is missing.  Changes nothing.
 """
@@ -195,7 +199,8 @@ def reduce_module_policy(script=None):
     return {}
 
 
-def allowed_modules(proposal, obsid, filtername, requested, policy=None):
+def allowed_modules(proposal, obsid, filtername, requested, policy=None,
+                    as_written=None):
     """``requested``, narrowed to what the reduce will actually run.
 
     Returns the families the reduce would produce for this (proposal,
@@ -207,7 +212,30 @@ def allowed_modules(proposal, obsid, filtername, requested, policy=None):
              .get(str(filtername).upper()))
     if not entry:
         return set(requested)
-    return {module_family(m) for m in entry} & set(requested)
+    allowed = {module_family(m) for m in entry} & set(requested)
+    # The reduce matches the modules AS WRITTEN, so `merged` against a policy
+    # listing only detectors is an empty intersection there and raises.  Here
+    # `merged` had already been expanded to both families, which made the
+    # intersection non-empty and hid the failure -- on the one field the policy
+    # covers.
+    if as_written is not None:
+        groups = {module_family(m) for m in entry}
+        if not {m if m == 'merged' else module_family(m)
+                for m in as_written} & groups:
+            allowed = set()
+    if not allowed:
+        # The reduce RAISES here -- `No requested modules are allowed for
+        # proposal_id=... field=... filtername=...` -- before it does any work.
+        # Narrowing to an empty set and reporting OK is the opposite verdict,
+        # and it fired on the one field this narrowing exists for: `--modules
+        # nrca` and `--modules merged` against sickle 3958/007, which is module
+        # B only, both read OK and both make the reduce stop.
+        raise NoAllowedModules(
+            f'the reduce allows only {sorted({module_family(m) for m in entry})} '
+            f'for {proposal}/o{obsid} {filtername}, and none of the requested '
+            f'{sorted(requested)} is among them -- it would raise "No requested '
+            f'modules are allowed" before doing any work')
+    return allowed
 
 
 def association_members(path):
@@ -224,12 +252,17 @@ def association_members(path):
             data = json.load(fh)
         return [m.get('expname', '') for m
                 in (data.get('products') or [{}])[0].get('members') or []]
-    except (OSError, ValueError, KeyError, IndexError, TypeError) as exc:
+    except (OSError, ValueError, KeyError, IndexError, TypeError,
+            AttributeError) as exc:
         raise UnreadableAssociation(f'{os.path.basename(path)}: {exc}')
 
 
 class UnreadableAssociation(Exception):
     """An association file the reduce would refuse to parse."""
+
+
+class NoAllowedModules(Exception):
+    """Every requested module is excluded by the reduce's own policy."""
 
 
 def usable_associations(paths, instrument):
@@ -315,7 +348,13 @@ def check(root, target, proposal, obsid, filters, modules, instrument='nircam'):
         # Narrow to what the reduce will actually run for this filter: one
         # observation is declared module-B-only in the reduce's own policy, and
         # asking it for module A is a false alarm rather than a finding.
-        want_here = allowed_modules(proposal, obsid, filt, wanted, policy=policy)
+        try:
+            want_here = allowed_modules(proposal, obsid, filt, wanted,
+                                        policy=policy, as_written=modules)
+        except NoAllowedModules as exc:
+            rows.append(Row(filt, len(asns), len(cals), families,
+                            sorted(wanted), str(exc)))
+            continue
         missing = ([] if single_detector_instrument
                    else sorted(w for w in want_here if w not in families))
         why = ''
@@ -346,7 +385,10 @@ def main(argv=None):
                          'match the runner\'s MODULES; a module the '
                          'observation does not have is a real failure.')
     ap.add_argument('--instrument', default='nircam',
-                    help='which registry table to check the spec against')
+                    choices=('nircam', 'miri', 'niriss'),
+                    help='which registry table to check the spec against, and '
+                         'whose associations to accept; an unknown value used '
+                         'to disable the association filter silently')
     ap.add_argument('--root', default='/orange/adamginsburg/jwst')
     ap.add_argument('--skip-registry', action='store_true',
                     help='do not cross-check the spec against fields.yaml '

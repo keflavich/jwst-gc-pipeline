@@ -19,8 +19,10 @@ python scripts/reduction/preflight_reduce_inputs.py \
 
 Reads only; exits nonzero if a filter has no usable input. It cross-checks the
 (target, proposal, observation) against `fields.yaml` — which needs no
-filesystem access — then confirms on disk that an `image3` association file and
-`_cal` frames exist and that the detectors cover the requested modules.
+filesystem access — then confirms on disk that the `image3` association the
+reduce would use exists, that `_cal` frames (the stage-2 calibrated single
+exposures) exist, and that the association's members cover the requested
+modules.
 
 Worth the ten seconds because the alternative is ~20 h of queue: a wrong
 proposal fails every task in the array, and the re-tie loop then declines to

@@ -150,8 +150,12 @@ def test_the_module_SPEC_is_normalized_too(tmp_path):
 
 
 def test_a_module_the_observation_does_not_have_is_reported(tmp_path):
-    """gc2211 observation 050 is module B only, which is why its driver script
-    overrides the module list."""
+    """gc2211 observation 050 is module B only.
+
+    Its driver script does NOT override the module list -- only sickle's does --
+    so the campaign submits module A for it and the reduce fails those tasks.
+    That is issue #408, and this test is the shape that finds it.
+    """
     root = _field(tmp_path, 'gc2211', 'F200W', asns=[
         'jw02211-o050_20260101t000000_image3_00001_asn.json'],
         cals=['jw02211050001_02101_00001_nrcb1_cal.fits'],
@@ -428,3 +432,68 @@ def test_the_policy_is_read_from_the_reduce_rather_than_restated(tmp_path):
                               policy=policy) == {'nrca', 'nrcb'}
     assert PF.allowed_modules('3958', '007', 'F187N', {'nrca', 'nrcb'},
                               policy=policy) == {'nrcb'}
+
+
+# ---------------------------------------------------------------------------
+# A module the reduce is not allowed to run is a failure, not a narrowing
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize('modules', ['nrca', 'merged', 'nrca,merged'])
+def test_a_module_the_policy_excludes_is_a_FAILURE_not_a_narrowing(tmp_path,
+                                                                   modules):
+    """The reduce raises `No requested modules are allowed` before doing any
+    work.  Narrowing to an empty set and reporting OK is the opposite verdict.
+
+    This fired on the one field the narrowing exists for: sickle 3958/007 is
+    module B only, and both `--modules nrca` and `--modules merged` read OK
+    while making the reduce stop.  `merged` needs its own check because it is
+    expanded to both families before the policy is consulted, which made the
+    intersection non-empty and hid the failure.
+    """
+    root = _field(tmp_path, 'sickle', 'F187N', asns=[
+        'jw03958-o007_20260101t000000_image3_00001_asn.json'],
+        cals=['jw03958007001_02101_00001_nrcb1_cal.fits'],
+        members=('jw03958007001_02101_00001_nrcb1_cal.fits',))
+    rc = PF.main(['--target', 'sickle', '--proposal', '3958', '--obsid', '007',
+                  '--filters', 'F187N', '--root', root, '--modules', modules,
+                  '--skip-registry'])
+    assert rc == 1, f'--modules {modules} on a module-B-only observation read OK'
+
+
+def test_the_module_the_policy_DOES_allow_still_passes(tmp_path):
+    root = _field(tmp_path, 'sickle', 'F187N', asns=[
+        'jw03958-o007_20260101t000000_image3_00001_asn.json'],
+        cals=['jw03958007001_02101_00001_nrcb1_cal.fits'],
+        members=('jw03958007001_02101_00001_nrcb1_cal.fits',))
+    rc = PF.main(['--target', 'sickle', '--proposal', '3958', '--obsid', '007',
+                  '--filters', 'F187N', '--root', root, '--modules', 'nrcb',
+                  '--skip-registry'])
+    assert rc == 0
+
+
+# ---------------------------------------------------------------------------
+# The instrument token filter, which the module check was masking
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize('instrument,foreign', [
+    ('miri', 'jw02526021001_02101_00001_nrca1_cal.fits'),
+    ('niriss', 'jw02526021001_02101_00001_nrca1_cal.fits'),
+])
+def test_a_single_detector_spec_rejects_another_instruments_association(
+        tmp_path, instrument, foreign):
+    """Deleting the token filter left 43 of 43 tests passing.
+
+    The eight adversarial trees catch its absence only as a side effect of the
+    module-coverage check -- and that check is SKIPPED for single-detector
+    instruments, which is exactly where the token filter is the only thing
+    standing between a MIRI spec and a NIRCam association.
+    """
+    own = f'jw02526021001_02101_00001_{"mirimage" if instrument == "miri" else "nis"}_cal.fits'
+    root = _field(tmp_path, 'cloudc', 'F770W', asns=[
+        'jw02526-o021_20260101t000000_image3_00001_asn.json'],
+        cals=[own], members=(foreign,))
+    row = PF.check(root, 'cloudc', '2526', '021', ['F770W'], ['nrca', 'nrcb'],
+                   instrument=instrument)[0]
+    assert not row.ok, (
+        f'a {instrument} spec accepted an association whose only member is a '
+        f'NIRCam exposure; the reduce keeps only its own instrument')
