@@ -1222,10 +1222,12 @@ PROV_EXPLAINS_TOL_MAS = 0.5
 
 #: Lower bound on cos(dec) over the fields this runs on -- all Galactic Centre or
 #: nearer the equator, so |dec| < 30 deg.  Used to BOUND the RA-axis check: the
-#: apply loop divides on-sky mas by cos(dec).  This is the FALLBACK bound, used
-#: only for a row written before ``prov_dec_deg`` existed: a row that records it
-#: gives the exact factor, and without it the factor is confined to
-#: [COS_DEC_MIN, 1].
+#: apply loop divides on-sky mas by cos(dec).  This is the FALLBACK bound: a row
+#: that records ``prov_dec_deg`` gives the exact factor, and any row whose cell
+#: is blank falls back here.  That is not only rows predating the column --
+#: migration NaN-fills every row it does not touch, so a table that HAS the
+#: column still reads blank on most of its rows.  Without a declination the
+#: factor is confined to [COS_DEC_MIN, 1].
 COS_DEC_MIN = np.cos(np.radians(30.0))
 
 # ---------------------------------------------------------------------------
@@ -1745,11 +1747,13 @@ def update_offsets_table(offsets_path, corrections, stage, out_path=None,
             # rather than bounded -- the whole point of the column.  A row
             # corrected twice from different declinations keeps the LATEST,
             # while the accumulated total reflects both, so the two agree only
-            # while the declination barely moves.  `dec_deg` is the median
-            # declination of the consensus STAR SET, recomputed per re-tie
-            # iteration, so it moves with the sampled stars rather than with the
-            # pointing -- this is not bounded here.  The tolerance it needs is
-            # prov[mas] x delta-dec[deg] <~ 46; see issue #387.
+            # while the declination barely moves.  `dec_deg` is whatever the
+            # caller passes: the visit checkpoints pass the MEDIAN declination
+            # of the consensus star set, recomputed per re-tie iteration, and
+            # the pooled path passes the mean of its members' values -- so it
+            # moves with the sampled stars rather than with the pointing, and is
+            # not bounded here.  The tolerance it needs is
+            # prov[mas] x delta-dec[deg] <~ 46 (45.9 at dec = -28.7); see #387.
             tbl[PROV_DEC_DEG_KEY][idx] = float(corr["dec_deg"])
             tbl["prov_source"][idx] = _prov_text(
                 corr.get("source", "astrometry_checkpoint"))

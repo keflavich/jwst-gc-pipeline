@@ -263,6 +263,40 @@ def test_an_empty_declination_cell_is_read_as_absent_not_as_the_equator(tmp_path
         path, [_correction(dra_onsky=1.0, ddec_onsky=0.0, exposure=1)], "m2")
 
 
+def test_the_heal_reads_a_PARTIALLY_blank_declination_column_as_absent(tmp_path):
+    """The shape the pipeline's own seed writer produces, and the one the heal
+    reads.
+
+    ``seed_offsets_table_from_consensus`` records ``prov_dec_deg`` only on the
+    rows it touches, so a live table reads back masked on the rest -- dtype
+    float64, mask ``[False, True, True]``.  ``np.asarray(col, float)`` turns
+    those into 0.0, the celestial equator, and the row is then checked EXACTLY
+    against a factor that never applied: a correct row is refused with
+    ``a coordinate gap in [400.00, 400.00] mas``.
+
+    An ALL-blank column does not catch this -- the whole array is unknown either
+    way -- and neither does the validator's version of this assertion, which is
+    what the previous attempt added: the validator is a different reader.  The
+    gap here sits inside the loose window and outside every exact branch, so
+    only "masked means the equator" can fail it.
+    """
+    path = _table(str(tmp_path / "partial.csv"), n=2)
+    out = update_offsets_table(path,
+                               [_correction(dra_onsky=400.0, ddec_onsky=0.0)], "m2")
+    # The corrected row (0) carries 400 mas of provenance and a BLANK
+    # declination -- a row written before the column existed, sitting in a table
+    # that now has it because another row was corrected since.  That is the
+    # mixed state a live table reaches, and the all-blank fixture above cannot
+    # reach it.
+    out[PROV_DEC_DEG_KEY] = np.ma.array([np.nan, GC_DEC], mask=[True, False])
+    # its coordinate gap is the full 456.02 mas: inside the loose window
+    # [400.00, 461.88] and outside the exact one the equator would imply.
+    out["dra"][0] = 0.0
+    out.write(path, overwrite=True)
+    update_offsets_table(
+        path, [_correction(dra_onsky=1.0, ddec_onsky=0.0, exposure=1)], "m2")
+
+
 def test_an_accumulated_value_survives_a_table_carrying_both_spellings():
     """Once both column names exist, astropy fills the missing side as a MASKED
     cell rather than leaving the key absent -- so `.get(new, .get(legacy))`
@@ -423,8 +457,9 @@ def test_the_validator_reads_an_absent_declination_as_absent():
 
 
 def test_the_validator_converts_degrees_not_radians():
-    """`cos(-28.7)` without the degree conversion is 0.885 rather than 0.877 --
-    close enough to look right and wrong enough to move the bound."""
+    """`cos(-28.7)` without the degree conversion is -0.911, not 0.877, so the
+    two conversions land 895 mas apart with OPPOSITE signs -- 456.0 mas of
+    coordinate right ascension against -439.2 mas, on a 0.5 mas tolerance."""
     from jwst_gc_pipeline.reduction.validate_offsets_table import (
         flag_diverged_column_pairs)
     exact_deg = 400.0 / 1000.0 / np.cos(np.radians(GC_DEC))
@@ -469,6 +504,7 @@ def test_the_consensus_writer_records_the_declination_too(tmp_path):
     written2 = np.ma.filled(np.ma.asarray(tbl2[PROV_DEC_DEG_KEY], dtype=float),
                             np.nan)
     got2 = written2[np.isfinite(written2)]
+    assert len(got2), "the upsert branch recorded no declination"
     assert got2[0] == pytest.approx(GC_DEC), (
         f"the upsert branch recorded {got2[0]}, not {GC_DEC}")
 
