@@ -287,6 +287,7 @@ around the visit consensus, re-measured every re-tie iteration.
 | 6151 | all | **Gaia** | `TABLE_CONSENSUS` | F210M | w51 (outside the VVV footprint); was F200W, which 6151 does not observe |
 | 2045 | 001 | VIRAC2 | `TABLE_CONSENSUS` | F212N | arches |
 | 2045 | 003 | VIRAC2 | `TABLE_LOCKED` | F212N | quintuplet |
+| 10678 | all | VIRAC2 | `TABLE_CONSENSUS` | F212N | gc-treasury; registered before first light (2026-08-16), obsids claimed by the fields.yaml wildcard, table seeded by the m2 checkpoint |
 | 5365 | all | VIRAC2 | `TABLE_LOCKED` | F212N | sgrb2 |
 | 1939 | 001 | VIRAC2 | `TABLE_LOCKED` | F212N | sgra; unregistered until 2026-08-06, so every mosaic sits ~14.8″ off |
 | 2211 | all | VIRAC2 | `TABLE_LOCKED` | F200W | gc2211 |

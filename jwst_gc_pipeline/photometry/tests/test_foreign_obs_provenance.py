@@ -328,6 +328,53 @@ def test_an_unregistered_target_still_takes_its_field_verbatim():
                                 field="007")) == "007"
 
 
+# ------------------------------------------------- a wildcard-obsid field (10678)
+
+def test_a_wildcard_field_accepts_any_obsid_shaped_field():
+    """gc-treasury registers `obsids: {nircam: '*'}`, so `allowed == {'*'}` and
+    membership rejects every REAL obsid -- `'042' not in {'*'}` -- handing the
+    checkpoint None on every run of the program.  None is the "keep them all"
+    path, which is exactly what must not happen here: every tile writes into
+    one <basepath>/<filter>/ tree.  A wildcard has no list to check against,
+    so `--field` is validated on shape."""
+    assert _resolved_obsid(_Opt(target="gc-treasury", proposal_id="10678",
+                                field="042")) == "042"
+    assert _resolved_obsid(_Opt(target="gc-treasury", proposal_id="10678",
+                                field="001", modules="mirimage")) == "001"
+
+
+def test_a_wildcard_field_still_refuses_a_field_that_is_not_an_obsid(capsys):
+    """The shape check is the only validation left, so it has to do the
+    `FIELD=${FIELD:-012}` job: a module name or a filter is not an obsid."""
+    got = _resolved_obsid(_Opt(target="gc-treasury", proposal_id="10678",
+                               field="nrcb"))
+    assert got is None, got
+    assert "not shaped like an obsid" in capsys.readouterr().out
+
+
+def test_a_wildcard_field_never_resolves_to_the_wildcard_itself():
+    """Without `--field` there is nothing to resolve, and the registry token
+    '*' is not an answer: downstream it becomes the substring `_o*_`, which
+    matches no crf basename, so every catalog would be dropped -- the
+    sgrb2/sickle joint-token failure (F770W 60 -> 0) by another door."""
+    for instrument in ("merged", "mirimage"):
+        got = _resolved_obsid(_Opt(target="gc-treasury", proposal_id="10678",
+                                   field=None, modules=instrument))
+        assert got is None, (instrument, got)
+
+
+def test_the_wildcard_field_takes_the_shared_branch_of_the_filter():
+    """`filter_observation_count` decides whether the foreign-observation
+    filter runs at all (`shared = n_obs > 1`).  A wildcard means "several,
+    and the registry cannot say how many"; counting it as ONE observation
+    switches the filter off and sends 10678 down the single-observation
+    branch, which collapses catalogs sharing (visit, vgroup, exp) across
+    different tiles onto one file."""
+    from jwst_gc_pipeline.fields import filter_observation_count
+    for filt in ("F212N", "F480M", "F770W"):
+        assert filter_observation_count("gc-treasury", filt) > 1, filt
+
+
 def test_the_checkpoint_runs_the_REAL_filter_on_mixed_provenance(tmp_path, monkeypatch):
     """The wiring test above stubs `_drop_foreign_obs_duplicates` with a spy,
     so it pins the wiring and never runs the real filter.  A test of THAT

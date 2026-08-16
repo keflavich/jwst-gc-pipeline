@@ -34,9 +34,33 @@ class FieldRegistryError(ValueError):
 #: An observation block may declare ``obsids: {nircam: '*'}``: every
 #: observation of the proposal belongs to this field for that instrument.
 #: For a campaign whose observation numbers land as it executes (10678, the
-#: GC Treasury, 139 visits), enumerating them would be a standing race between
-#: fields.yaml edits and the trigger that submits the reduce.
+#: GC Treasury: 139 visits over ~1668 planned OBSERVATIONS), enumerating them
+#: would be a standing race between fields.yaml edits and the trigger that
+#: submits the reduce.
 WILDCARD_OBSID = '*'
+
+#: A wildcard says "every observation of this proposal", and the registry
+#: cannot say how many that is.  Where a count is used only as
+#: "one observation, or several?" -- ``filter_observation_count`` and the m2
+#: foreign-observation filter it feeds -- the answer for a wildcard is
+#: "several", so it contributes this rather than ``len(('*',)) == 1``.
+WILDCARD_OBSERVATION_COUNT = 2
+
+#: What a concrete observation number looks like: three digits, or several of
+#: them joined by '-' for a joint-obsid token ('002-998').  Every obsid in
+#: fields.yaml has this shape.  The wildcard resolves only keys that match, so
+#: a typo or a module name ('nrcb', '0001') raises ``KeyError`` from the
+#: mapping instead of being absorbed into the catch-all owner.
+OBSID_RE = re.compile(r'\d{3}(?:-\d{3})*')
+
+
+def is_obsid(token):
+    """True when ``token`` has the shape of an observation number.
+
+    Shape only.  A wildcard proposal's real observation numbers land as the
+    campaign executes, so shape is all there is to validate against.
+    """
+    return bool(OBSID_RE.fullmatch(str(token)))
 
 
 class WildcardObsidMap(dict):
@@ -47,24 +71,47 @@ class WildcardObsidMap(dict):
     ordinary dict interface: ``[]``, ``get`` and ``in`` all fall back to the
     wildcard owner when the concrete key is absent.  An explicit entry from
     another field still wins over the wildcard.
+
+    The fallback applies only to obsid-SHAPED keys (``is_obsid``).  Resolving
+    anything at all would make ``'nrcb' in mapping`` true and
+    ``target_for_obsid(proposal, 'typo')`` answer the wildcard owner, so a
+    misspelling would be absorbed rather than raised.
     """
 
     def __init__(self, mapping=(), wildcard_target=None):
         super().__init__(mapping)
         self.wildcard_target = wildcard_target
 
-    def __missing__(self, key):
-        if self.wildcard_target is None:
-            raise KeyError(key)
+    def _wildcard_for(self, key):
+        """The wildcard owner if it claims ``key``, else None."""
+        if self.wildcard_target is None or not is_obsid(key):
+            return None
         return self.wildcard_target
 
+    def __missing__(self, key):
+        owner = self._wildcard_for(key)
+        if owner is None:
+            raise KeyError(key)
+        return owner
+
     def __contains__(self, key):
-        return super().__contains__(key) or self.wildcard_target is not None
+        return super().__contains__(key) or self._wildcard_for(key) is not None
 
     def get(self, key, default=None):
         if super().__contains__(key):
             return super().__getitem__(key)
-        return default if self.wildcard_target is None else self.wildcard_target
+        owner = self._wildcard_for(key)
+        return default if owner is None else owner
+
+    def copy(self):
+        """A copy that is still wildcard-resolving.
+
+        ``dict.copy`` returns a plain ``dict``, which silently drops the
+        fallback and restores the ``KeyError`` this class exists to prevent.
+        """
+        return WildcardObsidMap(self, wildcard_target=self.wildcard_target)
+
+    __copy__ = copy
 
 
 def _wavelength_key(filtername):
@@ -170,10 +217,22 @@ def _load(path=REGISTRY_PATH):
         for proposal, obs in sorted((spec.get('observations') or {}).items(),
                                     key=lambda kv: int(kv[0])):
             # `nircam: '*'` is a scalar; sorted('*') would still give ('*',)
-            # but only by the accident of it being one character.
-            obsids = {inst.lower(): ((WILDCARD_OBSID,) if ids == WILDCARD_OBSID
-                                     else tuple(sorted(ids)))
-                      for inst, ids in (obs.get('obsids') or {}).items()}
+            # but only by the accident of it being one character.  Any OTHER
+            # scalar is refused rather than silently exploded: `nircam: '001'`
+            # would load as ('0', '0', '1'), and the wildcard documented above
+            # makes a scalar look like a supported spelling.
+            obsids = {}
+            for inst, ids in (obs.get('obsids') or {}).items():
+                if ids == WILDCARD_OBSID:
+                    obsids[inst.lower()] = (WILDCARD_OBSID,)
+                elif isinstance(ids, (str, bytes, int)):
+                    raise FieldRegistryError(
+                        f'{name}/{proposal} obsids.{inst} is the scalar '
+                        f'{ids!r}; write a list ([{ids!r}]) or the wildcard '
+                        f"{WILDCARD_OBSID!r}.  A bare string loads as its "
+                        f'individual characters.')
+                else:
+                    obsids[inst.lower()] = tuple(sorted(ids))
             unknown = set(obsids) - set(INSTRUMENTS)
             if unknown:
                 raise FieldRegistryError(
@@ -301,6 +360,12 @@ def filter_observation_count(target, filtername, instrument=None):
     disk is 6778's whatever its name, and discarding the untokened ones would
     throw away real exposures (nrca exists ONLY under the pre-token name).
 
+    A ``'*'`` (wildcard) obsid list contributes
+    ``WILDCARD_OBSERVATION_COUNT`` (2), not 1: it claims every observation of
+    the proposal, so the count is "several" and how many is not knowable from
+    the registry.  The exact number would matter only to a caller asking
+    "how many", and both callers ask "one, or several?".
+
     ``instrument`` defaults to the one the filter NAME implies (MIRI bands are
     counted against MIRI's observations, everything else against NIRCam's);
     pass it explicitly for NIRISS.
@@ -333,6 +398,14 @@ def filter_observation_count(target, filtername, instrument=None):
         # `obsids` (sgrb2 miri lists 001/002/998 and joins 002-998), so adding
         # it would count the same observation twice.
         ids = tuple(o.obsids.get(instrument, ()))
+        if WILDCARD_OBSID in ids:
+            # '*' claims EVERY observation of the proposal, so this filter is
+            # shared by definition -- `len(('*',)) == 1` would read as "one
+            # observation images it", which switches the m2 foreign-observation
+            # filter off and lets one tile's per-frame catalogs stand in for
+            # another's (the gc2211 #259/#298 class).
+            n += WILDCARD_OBSERVATION_COUNT
+            continue
         # A proposal that declares the filter but lists no obsid for this
         # instrument still counts as one observation: the registry cannot say
         # how many, and 1 means "not shared", which keeps every catalog.

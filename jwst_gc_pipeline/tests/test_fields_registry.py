@@ -451,9 +451,10 @@ def test_the_offsets_table_follows_the_basepath_the_caller_is_using():
 # --------------------------------------------------------------------------
 # The obsid wildcard (program 10678, the GC Treasury; issue #413).
 # --------------------------------------------------------------------------
-# 10678 lands 139 observations as the campaign executes, so fields.yaml cannot
-# enumerate them ahead of time; its block claims them with `obsids: '*'` and
-# every lookup resolves a concrete obsid through that wildcard.
+# 10678 lands its observations (139 visits, ~1668 planned observations) as the
+# campaign executes, so fields.yaml cannot enumerate them ahead of time; its
+# block claims them with `obsids: '*'` and every lookup resolves a concrete
+# obsid through that wildcard.
 
 def test_the_treasury_field_is_registered():
     """The name must match data-qa's ``mast_monitor.TREASURY_FIELD``, which
@@ -505,6 +506,64 @@ def test_two_fields_cannot_both_hold_the_wildcard(monkeypatch):
     monkeypatch.setattr(F, 'FIELDS', F.FIELDS + (rival,))
     with pytest.raises(F.FieldRegistryError, match='wildcard'):
         F.field_to_reg_mapping('10678', 'nircam')
+
+
+def test_the_wildcard_resolves_only_obsid_shaped_keys():
+    """A catch-all that answers for ANYTHING absorbs typos.  'nrcb', 'F212N'
+    and '0042' are not observation numbers, and a mapping that says they are
+    turns a misspelling into a confident wrong field name instead of the
+    KeyError the caller can act on."""
+    mapping = F.field_to_reg_mapping('10678', 'nircam')
+    for good in ('001', '042', '139', '001-002'):
+        assert mapping[good] == 'gc-treasury', good
+        assert good in mapping
+    for bad in ('nrcb', 'F212N', '0042', '42', '', 'merged', None):
+        assert bad not in mapping, bad
+        assert mapping.get(bad) is None, bad
+        with pytest.raises(KeyError):
+            mapping[bad]
+    with pytest.raises(KeyError):
+        F.target_for_obsid('10678', 'not-an-obsid')
+
+
+def test_a_copy_of_a_wildcard_map_still_resolves():
+    """``dict.copy`` returns a plain dict, which drops the fallback and
+    restores the KeyError this class exists to prevent."""
+    mapping = F.field_to_reg_mapping('10678', 'nircam')
+    clone = mapping.copy()
+    assert isinstance(clone, F.WildcardObsidMap)
+    assert clone.wildcard_target == 'gc-treasury'
+    assert clone['037'] == 'gc-treasury'
+    assert copy.copy(mapping)['037'] == 'gc-treasury'
+
+
+def test_a_wildcard_filter_counts_as_more_than_one_observation():
+    """``filter_observation_count`` feeds the m2 foreign-observation filter,
+    which runs only when the count is > 1.  ``len(('*',)) == 1`` read as "one
+    observation images this filter", switching the filter OFF for the one
+    field that most needs it: every 10678 tile writes its per-frame catalogs
+    into the same <basepath>/<filter>/ tree, all of them visit001, so the
+    single-observation branch would collapse different tiles' catalogs onto
+    one identity and drop the rest."""
+    assert F.filter_observation_count('gc-treasury', 'F212N') > 1
+    assert F.filter_observation_count('gc-treasury', 'F480M') > 1
+    assert F.filter_observation_count('gc-treasury', 'F770W') > 1
+    # ... and the counts every other field reports are untouched.
+    assert F.filter_observation_count('gc2211', 'F200W') == 5
+    assert F.filter_observation_count('ngc6334', 'F090W') == 1
+    assert F.filter_observation_count('sgrb2', 'F770W') == 3
+
+
+def test_a_scalar_obsid_list_is_refused(tmp_path):
+    """'*' is the only supported scalar.  `nircam: '001'` would load as
+    ('0', '0', '1') -- three observations that do not exist -- and the
+    wildcard makes a bare string look like a supported spelling."""
+    raw = {'roots': {'blue': '/b'},
+           'fields': {'x': {'root': 'blue',
+                            'observations': {'10678': {
+                                'obsids': {'nircam': '001'}}}}}}
+    with pytest.raises(F.FieldRegistryError, match='scalar'):
+        _reload_from(tmp_path, raw)
 
 
 def test_the_default_reference_catalog_answers_for_any_observation():

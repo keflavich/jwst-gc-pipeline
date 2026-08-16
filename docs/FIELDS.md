@@ -44,7 +44,7 @@ shuffling the file and comparing.
 
 | key | meaning |
 |---|---|
-| `obsids` | Every observation number that images this field, per instrument. `'*'` instead of a list claims **every** observation of the proposal for that instrument — for a campaign whose observation numbers land as it executes (10678, the GC Treasury, 139 visits), where enumerating them would race the automated trigger. At most one field may hold the wildcard per (proposal, instrument); an explicit number registered by another field wins over it. |
+| `obsids` | Every observation number that images this field, per instrument, as a **list**. `'*'` is the one supported scalar and claims **every** observation of the proposal for that instrument — for a campaign whose observation numbers land as it executes (10678, the GC Treasury: 139 visits, ~1668 planned observations), where enumerating them would race the automated trigger. At most one field may hold the wildcard per (proposal, instrument); an explicit number registered by another field wins over it. The wildcard resolves only obsid-**shaped** keys (`fields.is_obsid`: `042`, `002-998`), so a typo raises rather than being absorbed. Any other scalar (`nircam: '001'`) raises `FieldRegistryError`: a bare string would load as its individual characters. A wildcard means "several, count unknown", so `filter_observation_count` reports more than one observation and the m2 foreign-observation filter stays switched on. |
 | `glob_obsid` | The observation number the merge builds filename patterns from, per instrument. Needed only when `obsids` lists more than one; `'*'` matches several. |
 | `joint_obsids` | Tokens naming several observations cataloged in one run, e.g. `'002-998'`. |
 | `nvisits` | How many visits the observation has. |
