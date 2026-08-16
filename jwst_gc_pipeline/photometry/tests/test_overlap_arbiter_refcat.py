@@ -114,13 +114,9 @@ def test_a_catalogue_without_a_source_column_is_not_called_VIRAC2():
     w51 = stage.OVERLAP_ARBITER_REFCAT.get('w51')
     if not (w51 and os.path.exists(w51)):
         pytest.skip('w51 star list not on this host')
-    _rc, _gaia, label, may_gate = cio._refcat(w51)
+    _rc, _gaia, label = cio._refcat(w51)
     assert 'VIRAC2' not in label.split('NOT')[0]
     assert 'no `source` column' in label
-    assert may_gate is False, (
-        'a catalogue without a `source` column may arbitrate a pair but must '
-        'not gate the absolute frame -- saying so in the label and then gating '
-        'on it is what turned three clean w51 bands into failures')
 
 
 # ---------------------------------------------------------------------------
@@ -324,31 +320,116 @@ def test_a_clean_FIELD_WIDE_map_does_not_clear_a_sliver_it_cannot_see(
         assert r['could_not_verify'] is True
 
 
-def test_a_list_that_cannot_gate_does_not_FAIL_the_field_on_its_own(tmp_path):
-    """The registry split, carried inside the check.
+# ---------------------------------------------------------------------------
+# What may FAIL a field on an absolute-frame tie
+# ---------------------------------------------------------------------------
 
-    A star list without a `source` column may ARBITRATE a pair -- two exposures
-    compared against a common set of stars needs only that the stars be the same
-    ones -- but it may not GATE the absolute frame, which needs a dense
-    catalogue.  Supplying w51's Gaia-only list turned F140M, F150W and F162M
-    from PASS to FAIL on the absolute tie alone, while each pair's own
-    frame-against-frame measurement stayed clean at 3 mas over 18 of 18 tiles.
+def _whole_field_shift(seed=5, n=9000, shift_mas=500.0):
+    """One filter's detections, and a reference the whole field is offset from."""
+    import numpy as np
+    from astropy import units as u
+    from astropy.coordinates import SkyCoord
+
+    rng = np.random.default_rng(seed)
+    ra0, dec0 = 266.5, -28.7
+    cosd = float(np.cos(np.deg2rad(dec0)))
+    ra = ra0 + rng.uniform(-0.02, 0.02, n) / cosd
+    dec = dec0 + rng.uniform(-0.02, 0.02, n)
+    ref = SkyCoord(ra * u.deg, dec * u.deg)
+    half = n // 2
+    det = SkyCoord((ra + shift_mas / 3.6e6 / cosd) * u.deg, dec * u.deg)
+    pooled = {"001001:nrca": det[:half], "001002:nrcb": det[half:]}
+    return pooled, ref
+
+
+@pytest.mark.parametrize('with_source_column', [True, False])
+def test_a_DENSE_reference_fails_the_field_whatever_its_columns(
+        tmp_path, monkeypatch, with_source_column):
+    """A real 500 mas absolute offset must block, and the column must not decide.
+
+    The first version of this guard keyed on whether the catalogue carried a
+    `source` column.  That is not a density test and it inverts at the boundary:
+    omegacen's 115,009-row list has no such column, ngc6334's 23,639-row list
+    has one.  Same table, same offset, different column name gave opposite
+    verdicts.
     """
-    import inspect
-
-    cio = _load('scripts/release/check_interframe_overlap.py', '_cio_gate')
-    src = inspect.getsource(cio.check_filter)
-    guard = src[src.index('ext_fail = True') - 400:src.index('ext_fail = True') + 40]
-    assert 'rc_may_gate' in guard, (
-        'ext_fail must be conditioned on whether the catalogue can gate the '
-        'absolute frame at all')
-
-    # and the flag itself distinguishes the two shapes
     from astropy.table import Table
-    dense = tmp_path / 'dense.fits'
-    Table({'ra': [266.5, 266.6], 'dec': [-28.7, -28.6],
-           'source': [b'GaiaDR3', b'VIRAC2']}).write(dense)
-    sparse = tmp_path / 'sparse.fits'
-    Table({'ra': [266.5, 266.6], 'dec': [-28.7, -28.6]}).write(sparse)
-    assert cio._refcat(str(dense))[3] is True
-    assert cio._refcat(str(sparse))[3] is False
+
+    cio = _load('scripts/release/check_interframe_overlap.py', '_cio_dense')
+    pooled, ref = _whole_field_shift()
+    cols = {'ra': ref.ra.deg, 'dec': ref.dec.deg}
+    if with_source_column:
+        cols['source'] = [b'VIRAC2'] * len(ref)
+    path = tmp_path / 'dense.fits'
+    Table(cols).write(path)
+    monkeypatch.setattr(cio, 'build_groups',
+                        lambda f, filt, observations=None:
+                        (pooled, {k: len(v) for k, v in pooled.items()}, 20))
+    monkeypatch.delenv('OVERLAP_ALLOW_FIELDWIDE_CLEAR', raising=False)
+
+    # The two exposure groups are shifted TOGETHER, so they agree with each
+    # other and the pair is unmeasurable -- `PASS is False` would be true from
+    # `could_not_verify` alone, which is how the first version of this test let
+    # `if may_gate and False:` survive.  Assert on the absolute arm itself.
+    r = cio.check_filter('brick', 'F405N', refcat=str(path), verbose=False)
+    assert r['PASS'] is False
+    assert r.get('ext_fail') is True, (
+        f'a dense reference measuring a 500 mas absolute offset did not fail '
+        f'the field on that arm (source column present: {with_source_column})')
+
+
+def test_a_SPARSE_reference_does_not_fail_the_field_by_itself(tmp_path,
+                                                              monkeypatch):
+    """The w51 case: a list matching a few hundred stars over a mosaic cannot
+    support the claim "this whole filter is in the wrong place".
+
+    Supplying w51's Gaia-only list turned F140M, F150W and F162M from pass to
+    FAIL on this arm alone, while each pair's own frame-against-frame
+    measurement stayed clean at 3 mas over 18 of 18 tiles.
+    """
+    from astropy.table import Table
+
+    cio = _load('scripts/release/check_interframe_overlap.py', '_cio_sparse')
+    pooled, ref = _whole_field_shift()
+    thin = ref[::40]                      # ~225 stars, under the floor
+    path = tmp_path / 'sparse.fits'
+    Table({'ra': thin.ra.deg, 'dec': thin.dec.deg}).write(path)
+    monkeypatch.setattr(cio, 'build_groups',
+                        lambda f, filt, observations=None:
+                        (pooled, {k: len(v) for k, v in pooled.items()}, 20))
+    monkeypatch.delenv('OVERLAP_ALLOW_FIELDWIDE_CLEAR', raising=False)
+
+    r = cio.check_filter('w51', 'F140M', refcat=str(path), verbose=False)
+    assert r.get('ext_fail') is not True, (
+        'a sparse list failed the field on an absolute tie by itself')
+
+
+def test_the_gating_floor_is_a_measured_match_count(tmp_path):
+    """Not the catalogue's provenance, and not a column name."""
+    import numpy as np
+    from astropy import units as u
+    from astropy.coordinates import SkyCoord
+
+    cio = _load('scripts/release/check_interframe_overlap.py', '_cio_floor')
+    rng = np.random.default_rng(3)
+    ra = 266.5 + rng.uniform(-0.02, 0.02, 4000)
+    dec = -28.7 + rng.uniform(-0.02, 0.02, 4000)
+    src = SkyCoord(ra * u.deg, dec * u.deg)
+
+    may, n, _ = cio._may_gate_absolute_frame(src, src)
+    assert may and n >= cio.MIN_GATING_MATCHES
+    may, n, _ = cio._may_gate_absolute_frame(src, src[::100])
+    assert not may and n < cio.MIN_GATING_MATCHES
+    assert cio._may_gate_absolute_frame(src, None)[0] is False
+
+    # ...and it must NOT collapse when the field is genuinely misaligned, which
+    # is the case the absolute arm exists for.  A match-based count does: the
+    # same 4000-star reference reads 4000 in-footprint and only a few hundred
+    # matched once a 500 mas shift is applied.
+    shifted = SkyCoord((ra + 500 / 3.6e6 / np.cos(np.deg2rad(-28.7))) * u.deg,
+                       dec * u.deg)
+    may_shift, n_shift, _ = cio._may_gate_absolute_frame(shifted, src)
+    assert may_shift, (
+        f'a misaligned field made its own reference look too sparse to gate '
+        f'({n_shift} in footprint) -- the arm would switch off exactly when it '
+        f'is needed')
