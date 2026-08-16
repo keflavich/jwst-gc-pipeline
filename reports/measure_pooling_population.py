@@ -33,6 +33,26 @@ from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
     MAX_POOL_SPREAD_MAS, OffsetsTableUpdateError, _assert_poolable)
 
 
+def _reproduces(members, group):
+    """True when ``members`` reproduces the group's recorded pooled value.
+
+    The same check the final validation applies, factored out so the visit
+    resolver can use it to DISCRIMINATE rather than only to reject at the end.
+    """
+    import numpy as _np
+    if not 2 <= len(members) <= MAX_MEMBERS:
+        return False
+    if group.get('n') is not None and len(members) != int(group['n']):
+        return False
+    recorded = (group.get('dra_onsky_mas'), group.get('ddec_onsky_mas'))
+    if None in recorded:
+        return True
+    got = (float(_np.median([m[0] for m in members])),
+           float(_np.median([m[1] for m in members])))
+    return (abs(got[0] - recorded[0]) < 1e-6
+            and abs(got[1] - recorded[1]) < 1e-6)
+
+
 def _records(root):
     return [p for p in sorted(glob.glob(
         os.path.join(root, '*', 'astrometry_checkpoints', '*.json')))
@@ -59,12 +79,34 @@ def _members_of(by_key, group, mods):
     The live records were written with the median, so a correct reconstruction
     reproduces it exactly; one that does not is discarded rather than counted.
     """
-    want_visit = str(group.get('visit'))
-    members = [by_key[k] for k in by_key
+    # `visit` is written into the group dict as of this change.  Records
+    # already on disk predate it -- all 1649 of them -- so the escape hatch
+    # below short-circuited to "any visit" and the member match was byte-
+    # equivalent to the unfixed version, silently discarding cloudc's 137
+    # groups (42.7% of the population, and the only two-visit field).
+    #
+    # For those records, RESOLVE the visit instead of ignoring it: try each
+    # candidate and keep the one whose members reproduce the recorded pooled
+    # value.  Ambiguous or unresolvable groups return None and are counted as
+    # discards rather than silently pooled across visits.
+    def _members_for(visit):
+        got = [by_key[k] for k in by_key
                if k[2] in mods
                and k[1] == group.get('exposure')
                and str(k[4]) == str(group.get('vgroup'))
-               and (want_visit in ('None', '') or str(k[0]) == want_visit)]
+               and (visit is None or str(k[0]) == str(visit))]
+        return got
+
+    want_visit = group.get('visit')
+    if want_visit not in (None, '', 'None'):
+        members = _members_for(want_visit)
+    else:
+        cands = sorted({str(k[0]) for k in by_key})
+        ok = [m for m in (_members_for(v) for v in cands)
+              if _reproduces(m, group)]
+        if len(ok) != 1:
+            return None            # unresolvable, or ambiguous across visits
+        members = ok[0]
     if not 2 <= len(members) <= MAX_MEMBERS:
         return None
     if group.get('n') is not None and len(members) != int(group['n']):

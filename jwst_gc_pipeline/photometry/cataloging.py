@@ -3384,6 +3384,13 @@ def _record_pooling(record, pooled, n_before, offsets_path):
     """
     groups = [{'module': c.get('module'),
                'filtername': c.get('filtername'),
+               # `visit` is the key a reader needs to match a pooled group back
+               # to its exposures, and it was the one field the correction
+               # carried that this dict did not write.  Without it every
+               # consumer's visit match short-circuits: cloudc is the only
+               # two-visit field and 42.7% of the population, and the
+               # reconstruction dropped all 137 of its groups silently.
+               'visit': c.get('visit'),
                'exposure': c.get('exposure'),
                'vgroup': c.get('vgroup'),
                'pooled_from': c.get('pooled_from'),
