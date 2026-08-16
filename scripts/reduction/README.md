@@ -10,6 +10,35 @@ these two lines.
 
 ## 1. Reduction + alignment
 
+### First: check the field spec has inputs
+
+```
+python scripts/reduction/preflight_reduce_inputs.py \
+    --target sgra --proposal 1939 --obsid 001 --filters "F115W F212N F405N"
+```
+
+Reads only; exits nonzero if a filter has no usable input. It cross-checks the
+(target, proposal, observation) against `fields.yaml` — which needs no
+filesystem access — then confirms on disk that the `image3` association the
+reduce would use exists, that `_cal` frames (the stage-2 calibrated single
+exposures) exist, and that the association's members cover the requested
+modules.
+
+Worth the ten seconds because the alternative is ~20 h of queue: a wrong
+proposal fails every task in the array, and the re-tie loop then declines to
+catalog the rest. It found `run_sgra_4147_o001.sh`, which had driven Sgr A* as
+Sgr C's proposal (4147) for the whole campaign; every check already in the loop
+passed on that spec.
+
+`--modules` must match the `MODULES` the runner will pass — a module the
+observation genuinely lacks is a real failure, and one the runner was never
+going to ask for is not. Where the reduce itself declares an observation
+module-restricted (sickle 3958/007 is module B only), the check reads that
+declaration and does not report the other module as missing.
+
+Add `--instrument miri` / `--instrument niriss` (and for NIRISS,
+`--target <target>/niriss`, which is where its data lives) for those.
+
 ```
 sbatch --array=0-7 scripts/reduction/submit_reduction.sbatch          # Sgr C, all 8 filters (default)
 ```
