@@ -168,6 +168,43 @@ def vetted_to_i2dseed(vetted_path):
     return vetted_path.replace('_vetted.fits', '_i2dseed.fits')
 
 
+# --- observation scoping ---------------------------------------------------
+# Which proposals put more than one observation under ONE basepath with
+# RESTARTED (visit, vgroup, exposure) numbering, so per-frame catalog names
+# need the ``_o{field}`` disambiguator ``crowdsource_catalogs_long.obs_token``
+# inserts.  2211 = gc2211 (5 GC pointings); 10678 = the GC Treasury program
+# (139 tiles sharing the gc-treasury tree; issue #416).  Lives here (a
+# heavy-import-free module) so merge_catalogs.py can consult it without a
+# circular import of crowdsource_catalogs_long.
+MULTIOBS_PROPOSALS = ('2211', '10678')
+
+#: The subset whose MERGED catalogs are per-observation too.  gc2211 is multi-
+#: obs at the per-frame level but pools all five pointings into one untokened
+#: merged catalog by design; at 139 tiles that pooling is itself the corruption
+#: mode, so 10678 scopes the merged catalogs to one observation as well.
+PER_OBS_MERGED_PROPOSALS = ('10678',)
+
+
+def merged_catalog_obs_token(proposal_id, field):
+    """Observation token baked into the MERGED catalog names, post-module slot.
+
+    Only ``PER_OBS_MERGED_PROPOSALS`` get one: 10678's 139 tiles share the
+    gc-treasury tree, and pooling another tile's frames into a merge is the
+    corruption class the obs scoping exists to prevent, so every per-filter
+    merged catalog is scoped to one observation
+    (``{filt}_{module}_o{field}_indivexp_merged...``).  gc2211 keeps its
+    all-obs UNTOKENED merged names ('' here): its five pointings are pooled at
+    merge by design (the ``_o*`` glob in ``merge_individual_frames``) and
+    scoped afterwards at the vetting step (``_vtok`` in cataloging.py).
+    Writers (``merge_individual_frames``' ``out_obs_``) and every reader of a
+    merged-catalog name (``cataloging._merged_path``, the m7 seed reader,
+    ``merge_daophot``'s input glob) must agree on this token.
+    """
+    if str(proposal_id) in PER_OBS_MERGED_PROPOSALS and field not in (None, ''):
+        return f'_o{field}'
+    return ''
+
+
 # --- reading a per-frame catalog name back --------------------------------
 # Every reader that parses `{band}_{detector}_visit{NNN}_vgroup...` out of a
 # per-frame catalog name has to allow for the per-observation token `obs_token`

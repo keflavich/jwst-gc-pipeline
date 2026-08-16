@@ -38,6 +38,7 @@ from astropy.modeling.fitting import LevMarLSQFitter
 
 from jwst_gc_pipeline.photometry.naming import (
     _iteration_token, _bgsub_token,
+    MULTIOBS_PROPOSALS, merged_catalog_obs_token,
     residual_to_smoothed_bg_i2d, smoothed_bg_to_detection_i2d, vetted_to_i2dseed)
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS, mopt
 # Lives in atomic_io with the rest of the shared-file tools; imported here
@@ -2469,12 +2470,18 @@ def _build_crossband_seed(cut_bp, modules, filternames, options, *,
     for module in modules:
         for fi, filt in enumerate(filternames):
             # ngc6334's two proposals tag the per-proposal merged catalog AFTER
-            # the module (matching merge_individual_frames' _j{proposal} output);
-            # every other target keeps its token at the END (unchanged).
+            # the module (matching merge_individual_frames' _j{proposal} output),
+            # as do the per-obs-MERGED proposals (10678: _o{field}, see
+            # naming.merged_catalog_obs_token -- their vetted names carry NO end
+            # token, _vtok='' below); every other target keeps its token at the
+            # END (unchanged).
             _jtok = (f'_j{getattr(options, "proposal_id", None)}'
                      if str(getattr(options, 'proposal_id', None)) in ('7213', '6778') else '')
-            _endsuf = '' if _jtok else _obssuf
-            p = (f'{cut_bp}/catalogs/{filt.lower()}_{module}{_jtok}_indivexp_merged'
+            _modtok = merged_catalog_obs_token(
+                getattr(options, 'proposal_id', None),
+                getattr(options, 'field', None))
+            _endsuf = '' if (_jtok or _modtok) else _obssuf
+            p = (f'{cut_bp}/catalogs/{filt.lower()}_{module}{_jtok}{_modtok}_indivexp_merged'
                  f'{desat}{bgsub}{blur_}_m6_dao_basic{_endsuf}_vetted.fits')
             if not os.path.exists(p):
                 continue
@@ -2722,10 +2729,14 @@ def annotate_independent_detection(merged_path, cut_bp, filternames, options, *,
                            getattr(options, 'field', None))
     nfilt_indep = np.zeros(len(t), dtype='i4')
     # ngc6334 proposals tag the per-proposal merged catalog after the
-    # module (see merge_individual_frames); others keep the end token.
+    # module (see merge_individual_frames), as do the per-obs-merged proposals
+    # (10678 _o{field}; their vetted names carry NO end token); others keep
+    # the end token.
     _jtok = (f'_j{getattr(options, "proposal_id", None)}'
              if str(getattr(options, 'proposal_id', None)) in ('7213', '6778') else '')
-    _endsuf = '' if _jtok else _obssuf
+    _modtok = merged_catalog_obs_token(getattr(options, 'proposal_id', None),
+                                       getattr(options, 'field', None))
+    _endsuf = '' if (_jtok or _modtok) else _obssuf
     _modules = (getattr(options, 'modules', '') or 'merged').split(',')
     # Per-filter independence is OR-ed across modules and counted ONCE per
     # filter.  (The previous module-outer loop added ``indep`` to
@@ -2737,7 +2748,7 @@ def annotate_independent_detection(merged_path, cut_bp, filternames, options, *,
         col = f'independently_detected_{f}'
         indep = np.zeros(len(t), dtype=bool)
         for module in _modules:
-            p = (f'{cut_bp}/catalogs/{f}_{module}{_jtok}_indivexp_merged'
+            p = (f'{cut_bp}/catalogs/{f}_{module}{_jtok}{_modtok}_indivexp_merged'
                  f'{desat}{bgsub}{blur_}_m6_dao_basic{_endsuf}_vetted.fits')
             if not os.path.exists(p):
                 continue
@@ -4053,7 +4064,15 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
         # The merged product for THIS stage is the discriminator -- if the merge
         # produced output but no per-frame catalog matched, the inputs are wrong;
         # if there is no merge either, the stage simply did not run here.
-        merged = glob.glob(f"{cut_bp}/catalogs/{filt.lower()}_{module}_"
+        # ngc6334 (_j{proposal}) and the per-obs-merged proposals (10678,
+        # _o{field}) tag the merged name after the module -- spell THIS run's
+        # token, so another observation's merge cannot stand in for our own.
+        _mergetok = (f'_j{getattr(options, "proposal_id", None)}'
+                     if str(getattr(options, 'proposal_id', None)) in ('7213', '6778')
+                     else merged_catalog_obs_token(
+                         getattr(options, 'proposal_id', None),
+                         getattr(options, 'field', None)))
+        merged = glob.glob(f"{cut_bp}/catalogs/{filt.lower()}_{module}{_mergetok}_"
                             f"indivexp_merged*_{merge_label}_dao_basic.fits")
         msg = (f"astrom checkpoint [{merge_label}] {filt}/{module}: NO per-frame "
                f"catalogs matched ({base}_{merge_label}_daophot_basic.fits) -- "
@@ -4559,6 +4578,12 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
               f"structure-noise prune to struct_x=1.0 struct_y=2.0 "
               f"(override with --manual-struct-noise-x/-y).", flush=True)
 
+    # 10678/gc-treasury: 139 tiles share this tree, so the per-filter MERGED
+    # catalogs are per-observation -- the merge is called with the field passed
+    # through and bakes ``_o{field}`` after the module
+    # (naming.merged_catalog_obs_token).  '' for every other proposal.
+    _merged_otok = merged_catalog_obs_token(proposal_id, field)
+
     def _merged_path(label, module, filt, resbgsub):
         desat = '_unsatstar' if options.desaturated else ''
         bgsub = ('_bgsub' if options.bgsub else '') + ('_resbgsub' if resbgsub else '')
@@ -4567,9 +4592,13 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
         # filters (F200W/F470N), so merge_individual_frames writes PER-PROPOSAL
         # merged catalogs tagged ``_j{proposal}`` (see merge_catalogs.py).  Match
         # that token here so the manual pipeline reads back the file it wrote;
-        # every other target uses the empty token (unchanged).
+        # every other target uses the empty token (unchanged).  Per-obs-MERGED
+        # proposals (10678/gc-treasury) tag the same slot ``_o{field}``: the
+        # merge is called with the field passed through, so its ``out_obs_``
+        # bakes the obs into the merged name (_merged_otok, computed once
+        # below the phase setup).
         _jtok = f'_j{proposal_id}' if str(proposal_id) in ('7213', '6778') else ''
-        return (f'{cut_bp}/catalogs/{filt.lower()}_{module}{_jtok}_indivexp_merged'
+        return (f'{cut_bp}/catalogs/{filt.lower()}_{module}{_jtok}{_merged_otok}_indivexp_merged'
                 f'{desat}{bgsub}{blur_}_{label}_dao_basic.fits')
 
     def _data_i2d_path(module, filt):
@@ -4914,11 +4943,19 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 # Single-obs NIRCam targets keep _vtok='' (unchanged behavior).
                 _miri_field = (module == 'mirimage'
                                or _L._instrument_from_filter(filt) == 'MIRI')
-                _multiobs = str(proposal_id) == '2211'
+                _multiobs = str(proposal_id) in MULTIOBS_PROPOSALS
                 _vtok = f'_o{field}' if (_miri_field or _multiobs) else ''
                 # gc2211: the COMBINED (post-vet) catalog is also per-obs (no cross-
                 # obs vstack).  MIRI: combined stays un-tokened (all-obs).
                 _combsuf = f'_o{field}' if _multiobs else ''
+                # Per-obs-MERGED proposals (10678): the merged name already
+                # carries ``_o{field}`` after the module (_merged_otok), so an
+                # end-slot token would double it.  The vetted/combined names
+                # inherit the module-slot token instead; the m7 seed reader and
+                # merge_daophot's input glob spell them the same way.
+                if _merged_otok:
+                    _vtok = ''
+                    _combsuf = ''
                 # m3..m6 seed = vetted previous catalog UNION daofind on a
                 # progressively cleaner i2d (per PSFPhotometryPlan2026-06-09):
                 #   iter3(m3): raw i2d                        fit RAW frames
@@ -5319,6 +5356,12 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     iteration_label=merge_label, bgsub=options.bgsub,
                     desat=options.desaturated, epsf=options.epsf, blur=options.blur,
                     resbgsub=resbgsub, group=getattr(options, 'group', False),
+                    # Per-obs-merged proposals (10678): scope the merge to THIS
+                    # observation -- glob + output both carry _o{field}.  Every
+                    # other proposal keeps field=None: gc2211's all-obs pooling
+                    # (_o* glob, untokened output) and the single-obs targets'
+                    # untokened names are unchanged.
+                    field=(field if _merged_otok else None),
                     fwhm_basepath=basepath,
                     # parallelize the otherwise-serial dense-field merge: pass the
                     # worker count so combine auto-spatial-chunks when the source

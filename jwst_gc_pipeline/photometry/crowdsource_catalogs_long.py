@@ -199,7 +199,8 @@ class CappedSourceGrouper:
 # restructure).  Imported here so existing references keep working unchanged.
 from jwst_gc_pipeline.photometry.naming import (
     _CHUNK_TOKEN_RE, _chunk_token, _strip_chunk, _iteration_token, _bgsub_token,
-    MIRI_FILTERS, _instrument_from_filter, _inst_token, _instrument_override,
+    MIRI_FILTERS, MULTIOBS_PROPOSALS,
+    _instrument_from_filter, _inst_token, _instrument_override,
     residual_to_smoothed_bg_i2d, residual_to_model_i2d, residual_to_infilled_i2d,
 )
 from jwst_gc_pipeline.photometry.psf_paths import (
@@ -1019,13 +1020,17 @@ def obs_token(proposal_id, field):
     that REUSE the same ``(visit, vgroup, exp)`` tuples, so the obs-less per-frame
     catalog-table name ``{filter}_{module}_visit001_vgroup02201_exp00001_...`` is
     identical across obs that share a filter and silently overwrites (= data loss;
-    F200W: o023/o046/o049/o050; F277W: all 5).  Insert ``_o{field}`` for prop 2211
-    so each obs writes a distinct catalog table.  The per-frame residual/model
-    products under ``{filter}/pipeline/`` already carry ``-o{field}`` and are
-    unaffected.  Other proposals are single-obs-per-basepath and get the empty
-    token, so their filenames and existing products are unchanged.
+    F200W: o023/o046/o049/o050; F277W: all 5).  Proposal 10678 (the GC Treasury
+    program) is the same shape at 139 tiles: every obs images F212N+F480M under
+    the one gc-treasury tree with per-obs restarted numbering, so the second tile
+    would overwrite the first (issue #416).  Insert ``_o{field}`` for these
+    proposals (``naming.MULTIOBS_PROPOSALS``) so each obs writes a distinct
+    catalog table.  The per-frame residual/model products under
+    ``{filter}/pipeline/`` already carry ``-o{field}`` and are unaffected.
+    Other proposals are single-obs-per-basepath and get the empty token, so
+    their filenames and existing products are unchanged.
     """
-    if str(proposal_id) == '2211' and field not in (None, ''):
+    if str(proposal_id) in MULTIOBS_PROPOSALS and field not in (None, ''):
         return f'_o{field}'
     # ngc6334's two proposals (7213, 6778) share a target dir, filters, obs
     # number AND (visit, vgroup, exp) tuples, so their per-frame catalog names

@@ -49,6 +49,7 @@ from jwst.tweakreg.utils import adjust_wcs
 from jwst.datamodels import ImageModel
 
 from jwst_gc_pipeline.reduction.destreak import destreak
+from jwst_gc_pipeline.reduction.mast_obs_scope import observation_scope_mask
 
 from jwst_gc_pipeline.reduction.align_to_catalogs import merge_a_plus_b
 from jwst_gc_pipeline.reduction.fits_wcs_sync import sync_header_to_gwcs
@@ -405,6 +406,13 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         # np.array wrapper needed as of 2026-04-10 to avoid masked array type error that shouldn't happen
         msk = ((np.char.find(np.array(obs_table['filters']), filtername.upper()) >= 0) |
                (np.char.find(np.array(obs_table['obs_id']), filtername.lower()) >= 0))
+        # Restrict to the observation under reduction (issue #416): all 139
+        # gc-treasury tiles share FILTERS='F212N;F480M', so the filter mask
+        # alone selects every released observation and each fresh tile would
+        # download the whole program's asn products.  Single-obs fields pass
+        # trivially (every row already spells this observation).
+        msk &= observation_scope_mask(np.array(obs_table['obs_id']),
+                                      proposal_id, field)
         data_products_by_obs = Observations.get_product_list(obs_table[msk])
         print("data prodcts by obs length: ", len(data_products_by_obs))
 

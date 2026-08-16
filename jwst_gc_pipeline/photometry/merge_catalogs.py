@@ -37,6 +37,7 @@ from jwst_gc_pipeline.photometry.residual_background import (
 from jwst_gc_pipeline.scratch_basepath import apply_basepath_override
 from jwst_gc_pipeline.photometry.naming import (
     _inst_token, _svo_filter_id,
+    PER_OBS_MERGED_PROPOSALS, merged_catalog_obs_token,
     _bgsub_token_from_flags as _bgsub_token,
 )
 from jwst_gc_pipeline.photometry.measure_offsets import (
@@ -1450,6 +1451,11 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     # _o{field}; see obs_token() / save_photutils_results / _predict_tblfilename).
     # The GLOB token and the OUTPUT token differ for the all-obs merge:
     #   - field set (per-obs merge): glob only that obs (_o{field}), write per-obs.
+    #     Proposal 10678 (gc-treasury, 139 tiles under one tree) ALWAYS takes
+    #     this branch -- the manual pipeline passes its field through, and a
+    #     field-less 10678 call is refused below: an un-tokened glob finds
+    #     nothing (the per-frame writer stamps _o{field}) and an _o* glob pools
+    #     other tiles' frames, both silent corruption modes (issue #416).
     #   - field unset on gc2211 (the manual pipeline's internal all-obs merge,
     #     cataloging.py:run_manual_pipeline): glob EVERY obs (_o*) so the merged
     #     catalog pools all obs-tagged tables (NOT the legacy un-tokened orphans),
@@ -1467,7 +1473,14 @@ def merge_individual_frames(module='merged', suffix="", desat=False, filtername=
     # ``glob_obs_`` fully determines which frames are pooled, so we glob it ONCE
     # per (module, visit, exposure) -- the old per-progid loop globbed the SAME
     # pattern once per obs_filters entry and deduped, which was purely redundant.
-    ngc6334_multiprop = any(str(p) in ('7213', '6778') for p in _obs_filters_for(target))
+    if str(progid) in PER_OBS_MERGED_PROPOSALS and field in (None, ''):
+        raise ValueError(
+            f"proposal {progid} shares one basepath across many observations "
+            f"whose merged catalogs are per-obs (naming.merged_catalog_obs_token); "
+            f"pass field=<obs>.  An unscoped merge would glob nothing (the "
+            f"per-frame writer stamps _o{{field}}) or pool other tiles' frames.")
+    ngc6334_multiprop = any(str(p) in ('7213', '6778')
+                            for p in (_obs_filters_for(target) or ()))
     if ngc6334_multiprop:
         glob_obs_ = out_obs_ = f'_j{progid}'
     elif field not in (None, ''):
@@ -1817,7 +1830,23 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
     # Empty for other targets.  MUST match _vtok/_combsuf in cataloging.py and
     # obs_token() in crowdsource_catalogs_long.
     _obssuf = f'_o{field}' if (target == 'gc2211' and field not in (None, '')) else ''
-    vetted_tok = f'{_obssuf}_vetted' if vetted else ''
+    # Per-obs-MERGED proposals (10678/gc-treasury) place the obs token after the
+    # module instead: the per-filter merged/vetted inputs are
+    # ``{filt}_{module}_o{field}_indivexp_merged..._vetted.fits`` (see
+    # naming.merged_catalog_obs_token and _merged_path/_vtok in cataloging.py),
+    # so the input glob must carry the module-slot token -- an unscoped ``*``
+    # would match another tile's catalogs -- while the OUTPUT keeps the end-slot
+    # ``_o{field}`` that cataloging's m7/m8 readers spell via obs_token().
+    _perobs_merged_tok = ''
+    if field not in (None, ''):
+        for _p in map(str, _obs_filters_for(target) or ()):
+            _perobs_merged_tok = merged_catalog_obs_token(_p, field)
+            if _perobs_merged_tok:
+                break
+    if _perobs_merged_tok:
+        _obssuf = _perobs_merged_tok
+    _mtk = f'{_perobs_merged_tok}_' if _perobs_merged_tok else ''
+    vetted_tok = ('_vetted' if _perobs_merged_tok else f'{_obssuf}_vetted') if vetted else ''
 
     # Resolve each filter's catalog AND its i2d (for WCS) TOGETHER, keeping
     # filternames / catfns / imgfns / tbls / wcses strictly aligned 1:1.
@@ -1832,7 +1861,7 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
     for filn in filternames:
         if indivexp:
             _cat_matches = sorted(glob.glob(
-                f"{basepath}/catalogs/{filn.lower()}*{module}*indivexp_merged"
+                f"{basepath}/catalogs/{filn.lower()}*{module}*{_mtk}indivexp_merged"
                 f"{desat}{bgsub}{blur_}{iter_token}_{method_name}_{daophot_type}{vetted_tok}.fits"))
             if not _cat_matches:
                 print(f"WARNING: no indivexp daophot {daophot_type} catalog for "
