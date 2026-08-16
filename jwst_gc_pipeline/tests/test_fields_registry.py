@@ -71,6 +71,9 @@ OBSNUM_CHANGES = {
     # omegacen is in the reduce driver's map and had no merge entry at all.
     ('omegacen', '8322'): '001',
     ('omegacen', '12587'): '001',
+    # gc-treasury post-dates the old dictionary; its obsids are the wildcard,
+    # so the glob token is '*'.
+    ('gc-treasury', '10678'): '*',
 }
 
 
@@ -443,3 +446,168 @@ def test_the_offsets_table_follows_the_basepath_the_caller_is_using():
     assert F.offsets_table_relpath('brick', '1182') == (
         'offsets/Offsets_JWST_Brick1182_F444ref.csv')
     assert F.offsets_table_relpath('brick', '2221') is None
+
+
+# --------------------------------------------------------------------------
+# The obsid wildcard (program 10678, the GC Treasury; issue #413).
+# --------------------------------------------------------------------------
+# 10678 lands 139 observations as the campaign executes, so fields.yaml cannot
+# enumerate them ahead of time; its block claims them with `obsids: '*'` and
+# every lookup resolves a concrete obsid through that wildcard.
+
+def test_the_treasury_field_is_registered():
+    """The name must match data-qa's ``mast_monitor.TREASURY_FIELD``, which
+    routes every 10678 observation to this field."""
+    assert 'gc-treasury' in F.BY_NAME
+    assert F.basepath('gc-treasury').startswith('/blue/')
+    assert F.obs_filters()['gc-treasury']['10678'] == ['f212n', 'f480m', 'f770w']
+
+
+def test_a_concrete_obsid_resolves_through_the_wildcard():
+    """The reduce drivers hard-index ``mapping[obsid]`` at startup, so the
+    mapping itself has to answer for observation numbers the registry never
+    listed -- the crash the wildcard exists to prevent."""
+    for instrument in ('nircam', 'miri'):
+        mapping = F.field_to_reg_mapping('10678', instrument)
+        assert mapping, f'{instrument}: empty mapping'
+        assert mapping['037'] == 'gc-treasury'
+        assert mapping.get('105') == 'gc-treasury'
+        assert '042' in mapping
+        assert F.target_for_obsid('10678', '037', instrument) == 'gc-treasury'
+
+
+def test_a_wildcard_free_mapping_still_raises_on_a_missing_obsid():
+    """The fallback belongs to the wildcard owner alone; every other proposal
+    keeps its exact-key behaviour."""
+    mapping = F.field_to_reg_mapping('2221', 'nircam')
+    with pytest.raises(KeyError):
+        mapping['037']
+    assert '037' not in mapping
+    assert mapping.get('037') is None
+
+
+def test_an_explicit_obsid_wins_over_the_wildcard(monkeypatch):
+    """A field naming an observation outright is more specific than a field
+    claiming everything, so the explicit claim wins for that obsid and the
+    wildcard keeps the rest."""
+    special = F.Field('special', root='blue', observations=(
+        F.Obs(proposal='10678', obsids={'nircam': ('042',)}),))
+    monkeypatch.setattr(F, 'FIELDS', F.FIELDS + (special,))
+    mapping = F.field_to_reg_mapping('10678', 'nircam')
+    assert mapping['042'] == 'special'
+    assert mapping['043'] == 'gc-treasury'
+
+
+def test_two_fields_cannot_both_hold_the_wildcard(monkeypatch):
+    """'*' claims every observation, which only one field can do."""
+    rival = F.Field('rival', root='blue', observations=(
+        F.Obs(proposal='10678', obsids={'nircam': ('*',)}),))
+    monkeypatch.setattr(F, 'FIELDS', F.FIELDS + (rival,))
+    with pytest.raises(F.FieldRegistryError, match='wildcard'):
+        F.field_to_reg_mapping('10678', 'nircam')
+
+
+def test_the_default_reference_catalog_answers_for_any_observation():
+    """10678 has no exact reference_catalog keys, so every obsid falls through
+    to the default -- reaching stage 1 with a catalog rather than a raise."""
+    for obsid in ('001', '037', '139'):
+        path = F.reference_catalog_path('10678', obsid)
+        assert path == ('/blue/adamginsburg/adamginsburg/jwst/gc-treasury/'
+                        'catalogs/gaia_virac2_refcat_epoch2026.65.fits'), obsid
+    miri = F.reference_catalog_path('10678', '105', instrument='miri')
+    assert miri.endswith('gaia_virac2_refcat_epoch2026.65.fits')
+
+
+def test_an_exact_reference_catalog_key_wins_over_the_default(monkeypatch):
+    """The default is a fallback: an observation with its own key keeps it, so
+    a special-epoch refcat can still be pinned per observation."""
+    keyed = F.Field('keyed', root='orange', observations=(
+        F.Obs(proposal='4242', obsids={'nircam': ('001', '002')},
+              reference_catalogs={'001': ('catalogs/exact.fits',)},
+              default_reference_catalog=('catalogs/fallback.fits',)),))
+    monkeypatch.setattr(F, 'FIELDS', F.FIELDS + (keyed,))
+    monkeypatch.setitem(F.BY_NAME, 'keyed', keyed)
+    assert F.reference_catalog_candidates('4242', '001')[0].endswith(
+        'catalogs/exact.fits')
+    assert F.reference_catalog_candidates('4242', '002')[0].endswith(
+        'catalogs/fallback.fits')
+
+
+def test_no_key_and_no_default_still_raises(monkeypatch):
+    """The default must never turn a genuinely unregistered catalog into a
+    silent empty answer; the raise (and its edit-this-file message) stays."""
+    bare = F.Field('bare', root='orange', observations=(
+        F.Obs(proposal='4242', obsids={'nircam': ('001',)}),))
+    monkeypatch.setattr(F, 'FIELDS', F.FIELDS + (bare,))
+    monkeypatch.setitem(F.BY_NAME, 'bare', bare)
+    with pytest.raises(F.FieldRegistryError, match='no reference catalog'):
+        F.reference_catalog_candidates('4242', '001')
+
+
+def test_the_wildcard_survives_a_reload(tmp_path):
+    """The loader turns the scalar '*' into the wildcard tuple, whatever file
+    it reads."""
+    raw = {'roots': {'blue': '/b'},
+           'fields': {'x': {'root': 'blue',
+                            'observations': {'10678': {
+                                'obsids': {'nircam': '*'},
+                                'default_reference_catalog': 'catalogs/r.fits',
+                            }}}}}
+    _, loaded = _reload_from(tmp_path, raw)
+    obs = loaded[0].observation('10678')
+    assert obs.obsids['nircam'] == ('*',)
+    assert obs.default_reference_catalog == ('catalogs/r.fits',)
+
+
+#: `field_to_reg_mapping` for every (proposal, instrument) pair that existed
+#: before the wildcard was added, captured from the registry as it stood
+#: (2026-08-16).  The wildcard machinery must leave every one of them alone.
+FIELD_MAPS_BEFORE_THE_WILDCARD = {
+    ('1182', 'nircam'): {'004': 'brick'},
+    ('1334', 'nircam'): {'001': 'm92'},
+    ('1905', 'nircam'): {'001': 'wd1', '003': 'wd1'},
+    ('1939', 'nircam'): {'001': 'sgra'},
+    ('1979', 'nircam'): {'001': 'ngc6397', '002': 'm4', '003': 'm4'},
+    ('2045', 'nircam'): {'001': 'arches', '003': 'quintuplet'},
+    ('2092', 'nircam'): {'002': 'cloudef', '005': 'cloudef'},
+    ('2211', 'nircam'): {'023': 'gc2211', '028': 'gc2211', '046': 'gc2211',
+                         '049': 'gc2211', '050': 'gc2211'},
+    ('2221', 'nircam'): {'001': 'brick', '002': 'cloudc'},
+    ('3523', 'nircam'): {'003': 'wd2', '005': 'wd2'},
+    ('3958', 'nircam'): {'001': 'sickle', '002': 'sickle', '007': 'sickle'},
+    ('4147', 'nircam'): {'012': 'sgrc'},
+    ('5365', 'nircam'): {'001': 'sgrb2'},
+    ('6151', 'nircam'): {'001': 'w51'},
+    ('6778', 'nircam'): {'001': 'ngc6334'},
+    ('7213', 'nircam'): {'001': 'ngc6334'},
+    ('8322', 'nircam'): {'001': 'omegacen'},
+    ('12587', 'nircam'): {'001': 'omegacen'},
+    ('2092', 'miri'): {'004': 'cloudef', '006': 'cloudef', '008': 'cloudef'},
+    ('2221', 'miri'): {'001': 'cloudc', '002': 'brick'},
+    ('2526', 'miri'): {'021': 'cloudc'},
+    ('3958', 'miri'): {'001': 'sickle', '001-002': 'sickle', '002': 'sickle',
+                       '003': 'brick'},
+    ('5365', 'miri'): {'001': 'sgrb2', '002': 'sgrb2', '002-998': 'sgrb2',
+                       '998': 'sgrb2'},
+    ('6151', 'miri'): {'001': 'w51', '002': 'w51'},
+    ('4147', 'niriss'): {'012': 'sgrc'},
+}
+
+
+def test_every_preexisting_proposal_maps_exactly_as_before():
+    """The no-regression sweep for the wildcard change: a pre-existing proposal
+    has no wildcard, so its mapping must compare equal to the plain dict it
+    used to be -- same keys, same targets, no fallback."""
+    for (proposal, instrument), expected in FIELD_MAPS_BEFORE_THE_WILDCARD.items():
+        got = F.field_to_reg_mapping(proposal, instrument)
+        assert dict(got) == expected, (proposal, instrument)
+        assert got.wildcard_target is None, (proposal, instrument)
+
+    # And the sweep itself is complete: nothing beyond the snapshot and the
+    # treasury answers with a non-empty mapping.
+    proposals = sorted({o.proposal for f in F.FIELDS for o in f.observations},
+                       key=int)
+    populated = {(p, inst) for inst in F.INSTRUMENTS for p in proposals
+                 if F.field_to_reg_mapping(p, inst)}
+    new = populated - set(FIELD_MAPS_BEFORE_THE_WILDCARD)
+    assert new == {('10678', 'nircam'), ('10678', 'miri')}, sorted(new)

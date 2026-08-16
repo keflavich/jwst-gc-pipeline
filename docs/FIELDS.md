@@ -44,7 +44,7 @@ shuffling the file and comparing.
 
 | key | meaning |
 |---|---|
-| `obsids` | Every observation number that images this field, per instrument. |
+| `obsids` | Every observation number that images this field, per instrument. `'*'` instead of a list claims **every** observation of the proposal for that instrument — for a campaign whose observation numbers land as it executes (10678, the GC Treasury, 139 visits), where enumerating them would race the automated trigger. At most one field may hold the wildcard per (proposal, instrument); an explicit number registered by another field wins over it. |
 | `glob_obsid` | The observation number the merge builds filename patterns from, per instrument. Needed only when `obsids` lists more than one; `'*'` matches several. |
 | `joint_obsids` | Tokens naming several observations cataloged in one run, e.g. `'002-998'`. |
 | `nvisits` | How many visits the observation has. |
@@ -53,6 +53,7 @@ shuffling the file and comparing.
 | `reference_frame` | The astrometric frame token (`VIRAC2`, `Gaia`), used to name a per-proposal offsets table, `offsets/Offsets_JWST_Brick<proposal>_<token>[_average].csv`, on the fallback path taken when the proposal has no locked table. Keyed per proposal: two fields sharing a proposal must agree, and the loader raises if they disagree. **Leave it out** when the proposal aligns from a table declared in `reduction/alignment_config.py` — that is where the frame a product records comes from, and an absent token makes `resolve_shift` refuse to build the fallback filename rather than name a table that should not be used. |
 | `reference_catalog` | Observation number → the catalog file the astrometry ties TO, relative to the field directory. Per observation, because different observations of one proposal sit at different epochs. A value may be a list; `reference_catalog_path` takes the first entry present on disk, whatever the instrument. MIRI and NIRISS are simply the ones that register more than one. What happens when none is present differs: the NIRCam driver **raises**, while MIRI falls through to `twomass.fits` and then to running with no reference. |
 | `reference_catalog_by_filter` | The rare per-filter override of the above: observation → filter → file. |
+| `default_reference_catalog` | The catalog consulted for any observation that has no exact `reference_catalog` key. An exact key still wins, and an observation with neither still raises. This is what makes a wildcard-obsid proposal tie-able: its observation numbers were unknown when the registry was written, so per-obsid keys cannot exist. |
 | `offsets_table` | Path to the measured astrometric offsets, relative to the field's directory. Measured from the data once and then fixed. |
 
 ### Observation numbers are per instrument, and they have to be

@@ -124,6 +124,31 @@ fields:
           miri: '*'
         filters: [f162m, f210m, f360m, f480m, f770w, f2100w]
 
+  gc-treasury:
+    # The GC Treasury (program 10678): 139 visits tiling the inner Galactic
+    # Centre, every visit NIRCam F212N+F480M prime with MIRI F770W parallel;
+    # first observations 2026-08-16.  The name must stay exactly 'gc-treasury':
+    # data-qa's mast_monitor.TREASURY_FIELD routes every 10678 observation to
+    # it, and the triggered reduce looks the field up under that name (#413).
+    # root is blue: /orange is 98% full hosting the download staging, /blue has
+    # the headroom (#421).
+    root: blue
+    observations:
+      '10678':
+        # Consulted for every observation without an exact reference_catalog
+        # key -- for this program, all of them.  The file is owed by the refcat
+        # provisioning issue (#415) and does not exist yet.
+        default_reference_catalog: catalogs/gaia_virac2_refcat_epoch2026.65.fits
+        nvisits: 1
+        reference_frame: VIRAC2
+        # Observation numbers land as tiles execute, so they cannot be
+        # enumerated ahead of time; '*' claims every observation of the
+        # proposal for that instrument.
+        obsids:
+          nircam: '*'
+          miri: '*'
+        filters: [f212n, f480m, f770w]
+
   gc2211:
     root: orange
     observations:

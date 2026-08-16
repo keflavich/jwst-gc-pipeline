@@ -31,6 +31,42 @@ class FieldRegistryError(ValueError):
     """The registry file says something the pipeline cannot act on."""
 
 
+#: An observation block may declare ``obsids: {nircam: '*'}``: every
+#: observation of the proposal belongs to this field for that instrument.
+#: For a campaign whose observation numbers land as it executes (10678, the
+#: GC Treasury, 139 visits), enumerating them would be a standing race between
+#: fields.yaml edits and the trigger that submits the reduce.
+WILDCARD_OBSID = '*'
+
+
+class WildcardObsidMap(dict):
+    """``{obsid: target}`` whose lookups fall back to a ``'*'`` catch-all owner.
+
+    The reduce drivers hard-index ``mapping[obsid]`` with concrete observation
+    numbers, so a wildcard-owning proposal has to resolve those through an
+    ordinary dict interface: ``[]``, ``get`` and ``in`` all fall back to the
+    wildcard owner when the concrete key is absent.  An explicit entry from
+    another field still wins over the wildcard.
+    """
+
+    def __init__(self, mapping=(), wildcard_target=None):
+        super().__init__(mapping)
+        self.wildcard_target = wildcard_target
+
+    def __missing__(self, key):
+        if self.wildcard_target is None:
+            raise KeyError(key)
+        return self.wildcard_target
+
+    def __contains__(self, key):
+        return super().__contains__(key) or self.wildcard_target is not None
+
+    def get(self, key, default=None):
+        if super().__contains__(key):
+            return super().__getitem__(key)
+        return default if self.wildcard_target is None else self.wildcard_target
+
+
 def _wavelength_key(filtername):
     """Sort key putting filters in wavelength order: f115w, f405n, f2550w.
 
@@ -47,6 +83,8 @@ class Obs:
 
     proposal: str
     #: Every observation number, per instrument, that images this field.
+    #: ``('*',)`` claims every observation of the proposal for that instrument;
+    #: at most one field may hold the wildcard per (proposal, instrument).
     obsids: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
     #: Tokens naming several observations cataloged in one run, e.g. '002-998'.
     joint_obsids: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
@@ -65,6 +103,11 @@ class Obs:
     reference_catalogs: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
     #: The rare per-filter override of the above: obsid -> filter -> file.
     reference_catalogs_by_filter: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    #: Reference catalog files consulted for any observation that has no exact
+    #: ``reference_catalogs`` key, in preference order.  What makes a
+    #: wildcard-obsid proposal tie-able: its observation numbers land as the
+    #: campaign executes, so per-obsid keys cannot be written ahead of time.
+    default_reference_catalog: Tuple[str, ...] = ()
     #: Path to the measured astrometric offsets, relative to the field
     #: directory. Measured from the data once and then fixed.
     offsets_table: Optional[str] = None
@@ -126,13 +169,19 @@ def _load(path=REGISTRY_PATH):
         observations = []
         for proposal, obs in sorted((spec.get('observations') or {}).items(),
                                     key=lambda kv: int(kv[0])):
-            obsids = {inst.lower(): tuple(sorted(ids))
+            # `nircam: '*'` is a scalar; sorted('*') would still give ('*',)
+            # but only by the accident of it being one character.
+            obsids = {inst.lower(): ((WILDCARD_OBSID,) if ids == WILDCARD_OBSID
+                                     else tuple(sorted(ids)))
                       for inst, ids in (obs.get('obsids') or {}).items()}
             unknown = set(obsids) - set(INSTRUMENTS)
             if unknown:
                 raise FieldRegistryError(
                     f'{name}/{proposal} lists unknown instrument(s) '
                     f'{sorted(unknown)}; known: {list(INSTRUMENTS)}')
+            default_refcat = obs.get('default_reference_catalog') or ()
+            if not isinstance(default_refcat, (list, tuple)):
+                default_refcat = (default_refcat,)
             observations.append(Obs(
                 proposal=str(proposal),
                 obsids=obsids,
@@ -152,6 +201,7 @@ def _load(path=REGISTRY_PATH):
                 reference_catalogs_by_filter={
                     str(k): {f.lower(): v for f, v in fd.items()}
                     for k, fd in (obs.get('reference_catalog_by_filter') or {}).items()},
+                default_reference_catalog=tuple(default_refcat),
                 offsets_table=obs.get('offsets_table'),
             ))
         loaded.append(Field(name=name, root=spec['root'],
@@ -337,21 +387,40 @@ def field_to_reg_mapping(proposal, instrument='nircam'):
 
     The reduce and catalog drivers use this to name the field an observation
     belongs to.
+
+    A field declaring the ``'*'`` wildcard owns every observation of the
+    proposal for that instrument, and the returned mapping resolves any
+    concrete obsid through it, so the drivers' ``mapping[obsid]`` works for
+    observation numbers that land after the registry was written.  An explicit
+    entry from another field still wins; two fields claiming the wildcard for
+    one (proposal, instrument) is an error.
     """
     instrument = instrument.lower()
     out = {}
+    wildcard_owner = None
     for field in FIELDS:
         obs = field.observation(proposal)
         if obs is None:
             continue
         for obsid in (tuple(obs.obsids.get(instrument, ()))
                       + tuple(obs.joint_obsids.get(instrument, ()))):
+            if obsid == WILDCARD_OBSID:
+                if wildcard_owner is not None and wildcard_owner != field.name:
+                    raise FieldRegistryError(
+                        f'proposal {proposal} ({instrument}) has two wildcard '
+                        f'obsid owners: {wildcard_owner!r} and {field.name!r}. '
+                        f"'*' claims every observation, which only one field "
+                        f'can do.')
+                wildcard_owner = field.name
+                continue
             if obsid in out:
                 raise FieldRegistryError(
                     f'proposal {proposal} observation {obsid} ({instrument}) '
                     f'is claimed by both {out[obsid]!r} and {field.name!r}')
             out[obsid] = field.name
-    return out
+    if wildcard_owner is not None:
+        out[WILDCARD_OBSID] = wildcard_owner
+    return WildcardObsidMap(out, wildcard_target=wildcard_owner)
 
 
 def target_for_obsid(proposal, obsid, instrument='nircam'):
@@ -424,7 +493,10 @@ def reference_catalog_candidates(proposal, obsid, filtername=None,
     """Every registered reference catalog for one observation, best first.
 
     MIRI and NIRISS register several and take the first present on disk; NIRCam
-    registers one.
+    registers one.  An exact ``reference_catalog`` key for the obsid wins;
+    ``default_reference_catalog`` answers for any observation without one,
+    which is how a wildcard-obsid proposal registers a catalog for observations
+    whose numbers were unknown when the registry was written.
     """
     obsid = str(obsid)
     if target is None:
@@ -443,6 +515,8 @@ def reference_catalog_candidates(proposal, obsid, filtername=None,
             relative = (one,)
     if not relative:
         relative = obs.reference_catalogs.get(obsid, ())
+    if not relative:
+        relative = obs.default_reference_catalog
     if not relative:
         raise FieldRegistryError(
             f'no reference catalog registered for {target} proposal {proposal} '
