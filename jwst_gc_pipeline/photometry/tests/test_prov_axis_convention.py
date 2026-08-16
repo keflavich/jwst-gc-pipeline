@@ -284,17 +284,23 @@ def test_the_heal_reads_a_PARTIALLY_blank_declination_column_as_absent(tmp_path)
     out = update_offsets_table(path,
                                [_correction(dra_onsky=400.0, ddec_onsky=0.0)], "m2")
     # The corrected row (0) carries 400 mas of provenance and a BLANK
-    # declination -- a row written before the column existed, sitting in a table
-    # that now has it because another row was corrected since.  That is the
-    # mixed state a live table reaches, and the all-blank fixture above cannot
-    # reach it.
+    # declination -- a row MIGRATION NaN-filled, sitting in a table that has the
+    # column because another row was corrected since.  (Same provenance as the
+    # docstring gives: rows the seed writer did not touch.  Not "a row written
+    # before the column existed" -- that narrowing is what kept this branch
+    # looking dead.)  It is the mixed state a live table reaches, and the
+    # all-blank fixture above cannot reach it.
     out[PROV_DEC_DEG_KEY] = np.ma.array([np.nan, GC_DEC], mask=[True, False])
     # its coordinate gap is the full 456.02 mas: inside the loose window
     # [400.00, 461.88] and outside the exact one the equator would imply.
     out["dra"][0] = 0.0
     out.write(path, overwrite=True)
-    update_offsets_table(
+    got = update_offsets_table(
         path, [_correction(dra_onsky=1.0, ddec_onsky=0.0, exposure=1)], "m2")
+    # Assert, rather than resting on "did not raise": a no-op regression in
+    # update_offsets_table would leave a raise-only test green.
+    assert float(got["prov_dra_onsky_mas"][0]) == pytest.approx(401.0)
+    assert float(got["prov_dra_onsky_mas"][1]) == pytest.approx(0.0)
 
 
 def test_an_accumulated_value_survives_a_table_carrying_both_spellings():

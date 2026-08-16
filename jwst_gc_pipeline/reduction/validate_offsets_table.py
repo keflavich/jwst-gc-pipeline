@@ -106,7 +106,8 @@ PAIR_PROV_TOL_MAS = 0.5
 
 #: The apply loop converts on-sky mas to a Delta-alpha offset by dividing by
 #: cos(dec).  A row that records ``prov_dec_deg`` gives that factor back exactly;
-#: this is the FALLBACK bound for a row written before that column existed.
+#: this is the FALLBACK bound for any row whose cell is BLANK -- which includes
+#: every row migration NaN-filled, not only rows predating the column.
 #: Every field here is Galactic Centre or nearer the equator, so |dec| < 30 deg.
 _COS_DEC_MIN = 0.8660254037844387
 

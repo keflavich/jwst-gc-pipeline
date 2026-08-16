@@ -1397,8 +1397,10 @@ def _heal_column_pairs(tbl, offsets_path, rows=None):
     Both axes are checked before anything is written, because both are written.
     Dec is exact (prov and ddec are both on-sky).  RA is exact too when the row
     records ``prov_dec_deg``, which gives back the cos(dec) the apply loop
-    divided by; without it -- rows written before that column existed -- it is
-    bounded by [COS_DEC_MIN, 1] instead.
+    divided by; where that cell is BLANK it is bounded by [COS_DEC_MIN, 1]
+    instead.  Blank is not only rows predating the column: migration NaN-fills
+    every row it does not touch, so a table that HAS the column still reads
+    blank on most of its rows and this branch is live on migrated tables.
 
     ``rows``: restrict to these row indices (the ones a correction will touch).
     A field with one stale filter and ten clean ones must be able to recover
@@ -1434,8 +1436,9 @@ def _heal_column_pairs(tbl, offsets_path, rows=None):
     # RA needs a BOUND rather than an equality WHEN THE ROW DOES NOT RECORD ITS
     # DECLINATION.  The apply loop divides the on-sky mas by cos(dec) to get the
     # coordinate offset; a row carrying ``prov_dec_deg`` gives that factor back
-    # exactly, and the branch below uses it.  Without it -- a row written before
-    # that column existed -- the factor is confined to [cos(dec_max), 1], which
+    # exactly, and the branch below uses it.  Where the cell is BLANK -- which
+    # includes every row migration NaN-filled, not only rows predating the
+    # column -- the factor is confined to [cos(dec_max), 1], which
     # for these fields is a ~14% window.  That is far
     # tighter than needed to reject a hand-edited RA gap against a recorded zero,
     # and the heal WRITES this column, so it has to be checked: without it a row
@@ -1447,8 +1450,9 @@ def _heal_column_pairs(tbl, offsets_path, rows=None):
     # declination.  Without it the factor is only bounded to
     # [COS_DEC_MIN, 1] -- a ~14% window, which is wide enough for a 14%
     # corruption of the right-ascension provenance to pass unnoticed.  That is
-    # the gap prov_dec_deg exists to close, and rows written before it will
-    # keep the loose check for as long as they are not re-corrected.
+    # the gap prov_dec_deg exists to close, and every row whose cell is blank --
+    # migration-filled rows included, not just rows predating the column --
+    # keeps the loose check for as long as it is not re-corrected.
     if PROV_DEC_DEG_KEY in tbl.colnames:
         # filled(nan) FIRST: a masked or empty cell read straight through
         # `np.asarray(..., float)` becomes 0.0, which would be taken as a
