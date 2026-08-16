@@ -40,12 +40,14 @@ _CROSSBAND_RE = re.compile(
     r'(?P<resbg>_resbgsub)?(?:_m(?P<stage>\d+))?(?P<dedup>_dedup)?\.fits$')
 
 # The module token can carry a per-proposal ``_j<proposal>`` suffix (e.g.
-# ``nrca_j7213``), the products written by the shared-filter-collision fix.
-# Without the optional ``_j\d+`` the module group ``[a-z0-9-]+`` cannot match
+# ``nrca_j7213``), the products written by the shared-filter-collision fix, or
+# a per-observation ``_o<field>`` one (``nrcblong_o042``), written by the
+# per-obs-merged proposals (10678/gc-treasury; naming.PER_OBS_MERGED_PROPOSALS).
+# Without those optional groups the module group ``[a-z0-9-]+`` cannot match
 # the underscore and those products are invisible, leaving only the
 # un-tokenized collision product on disk to be picked.
 _PERFILTER_RE = re.compile(
-    r'^(?P<filt>f\d{3}[a-z]\d?)_(?P<module>[a-z0-9-]+(?:_j\d+)?)_indivexp_merged'
+    r'^(?P<filt>f\d{3}[a-z]\d?)_(?P<module>[a-z0-9-]+(?:_j\d+|_o\d{3})?)_indivexp_merged'
     r'(?P<resbg>_resbgsub)?_m(?P<stage>\d+)_dao_basic\.fits$')
 
 

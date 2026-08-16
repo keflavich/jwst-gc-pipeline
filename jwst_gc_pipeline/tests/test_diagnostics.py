@@ -423,6 +423,15 @@ def test_perfilter_regex_matches_proposal_tokened_module():
     assert m.group('module') == 'nrca_j7213'
 
 
+def test_perfilter_regex_matches_obs_tokened_module():
+    """A per-obs-merged proposal (10678) tags the module slot with _o<field>;
+    without it the inventory cannot see a gc-treasury tile's merged catalog."""
+    m = inv_mod._PERFILTER_RE.match(
+        'f212n_nrcblong_o042_indivexp_merged_resbgsub_m6_dao_basic.fits')
+    assert m is not None
+    assert m.group('module') == 'nrcblong_o042'
+
+
 def test_module_siblings_flags_partial_field_coverage(catdir):
     """Finding 5: a single-module pick with other modules on disk is flagged."""
     _touch(os.path.join(catdir, 'f200w_nrca_indivexp_merged_m6_dao_basic.fits'))
