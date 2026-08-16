@@ -684,7 +684,32 @@ FRAME_TOL_MAS = 15.0
 FRAME_REFCAT = {
     # field: the Gaia-tied refcat the reduction was (re)anchored to. Extend as confirmed.
     "brick": "/orange/adamginsburg/jwst/brick/catalogs/gaia_virac2_refcat_epoch2022.70.fits",
+    # arches: same construction as brick's (GaiaDR3 3656 + VIRAC2 174193, identical
+    # columns).  Confirmed by measuring the staged mosaics against it with the swept
+    # offset-histogram estimator: F212N nrca/nrcb 9.5/8.4 mas, F323N nrca/nrcb
+    # 10.6/9.3 mas, every one un-swept at 3" with window_edge_fraction 0.00.
+    #
+    # This one matters for the OVERLAP gate rather than the frame gate: arches ships
+    # no catalogs, so `check_catalog_on_frame` has nothing to test, but arches is
+    # module-split with `geometry: disjoint` -- precisely the thin/sparse inter-module
+    # overlap where the reference-free frame-vs-frame histogram is unreliable and the
+    # same-star residual map vs VIRAC2 is the authoritative arbiter.  Staging it
+    # printed "no Gaia refcat mapped for 'arches' in FRAME_REFCAT" while the refcat
+    # sat on disk beside the ones already in use.
+    "arches": "/orange/adamginsburg/jwst/arches/catalogs/gaia_virac2_refcat_epoch2023.64.fits",
 }
+
+# NOT mapped, deliberately, though a `gaia_virac2_refcat_*.fits` exists for each:
+#
+# * gc2211 -- its pointings are DISJOINT and o028 lies outside the field-wide
+#   refcat's footprint (measuring against it reads `ref_in_fov=0` and no tie at any
+#   window; it has its own `..._o028.fits`).  A single field-level entry would hand
+#   the arbiter a reference that cannot see one of the pointings, which is worse
+#   than no arbiter: the gate would fail-closed on good data.  Mapping gc2211 needs
+#   per-observation refcats, which this dict cannot express.
+# * cloudef -- its o002 mosaics are ~185 mas off this refcat in all four bands
+#   (o005 F480M is 5.4 mas), so the field is not tied to it yet.  Mapping it now
+#   would assert a frame the data does not sit on.
 
 
 def _frame_bulk_offset(sc, ref, detect_sc=None):
