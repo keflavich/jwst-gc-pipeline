@@ -53,6 +53,8 @@ from jwst_gc_pipeline.reduction.destreak import destreak
 from jwst_gc_pipeline.reduction.align_to_catalogs import merge_a_plus_b
 from jwst_gc_pipeline.reduction.fits_wcs_sync import sync_header_to_gwcs
 from jwst_gc_pipeline.reduction.saturated_star_finding import remove_saturated_stars
+from jwst_gc_pipeline.reduction.stage12_selection import (member_in_stage12_pass,
+                                                          stage12_products_fresh)
 
 import crds
 import jwst
@@ -550,13 +552,30 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
                 if '_nrc' not in member['expname']:
                     print(f"Skipping non-NIRCam member {member['expname']}")
                     continue
+                # #417: each module pass claims only its own members, with the
+                # same substring semantics as the per-module member trim in
+                # the tweakreg block below ('nrca' claims nrca1-4 + nrcalong).
+                # The merged pass keeps every NIRCam member so a merged-only
+                # or single-module run still produces every _cal it needs; on
+                # the default nrca,nrcb,merged sequence the freshness check
+                # below skips the members the module passes already produced.
+                if not member_in_stage12_pass(member['expname'], module):
+                    print(f"Skipping member {member['expname']}: the {module} pass does not claim it")
+                    continue
                 # example filename: jw02221002001_02201_00002_nrcalong_cal.fits
                 assert f'jw0{proposal_id}{field}' in member['expname']
+                uncal_fn = member['expname'].replace("_cal.fits", "_uncal.fits")
+                # #417: idempotence.  A member whose _cal and _ramp both exist
+                # and are newer than its _uncal is already done, so a retry
+                # after a partial failure reprocesses exactly the
+                # missing/stale members.
+                if stage12_products_fresh(uncal_fn):
+                    print(f"Skipping stage 1+2 for {member['expname']}: _cal.fits and _ramp.fits exist and are newer than the _uncal.fits")
+                    continue
                 print(f"DETECTOR PIPELINE on {member['expname']}")
                 print("Detector1Pipeline step")
                 # from Hosek: expand_large_events -> false; turn off "snowball" detection
-                Detector1Pipeline.call(member['expname'].replace("_cal.fits",
-                                                                 "_uncal.fits"),
+                Detector1Pipeline.call(uncal_fn,
                                        save_results=True, output_dir=output_dir,
                                        save_calibrated_ramp=True,
                                        steps={'ramp_fit': {'suppress_one_group':False, 'save_results':True},
