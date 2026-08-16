@@ -299,3 +299,27 @@ def test_executed_the_floor_takes_the_larger_of_the_two(prev, computed, want):
               'echo "FLOOR=$ASTROM_M2_CORRECTION_FLOOR_MAS"\n')
     r = subprocess.run(['bash', '-c', script], capture_output=True, text=True)
     assert f'FLOOR={want}' in r.stdout, r.stdout
+
+
+def test_the_check_is_told_which_filters_to_expect():
+    """`--expect-filters` is the only thing standing between the acceptance
+    branch and the hole it was added to close, and it appears exactly ONCE
+    outside the module -- in the loop's invocation.
+
+    Deleting that one line leaves the whole suite green (431 passed) and sends
+    gc2211/o046 straight back to rc=4, accepting at 3.63 mas against an operator
+    floor of 4.0.  A production wiring with no test is a wiring that gets
+    refactored away.
+    """
+    assert '--expect-filters' in _invocation(), (
+        'the loop must declare which filters it expects, or the coverage '
+        'refusal can never fire')
+
+
+def test_the_expected_filters_are_not_hardcoded_in_the_loop():
+    """It has to be the run's own filter list, not a literal -- the declaration
+    is scoped to the observation being scanned, and a literal would be wrong for
+    every field but the one it was written for."""
+    inv = _invocation()
+    seg = inv[inv.index('--expect-filters'):inv.index('--expect-filters') + 60]
+    assert '$' in seg, f'--expect-filters takes a literal, not a variable: {seg}'

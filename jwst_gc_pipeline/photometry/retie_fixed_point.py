@@ -384,8 +384,12 @@ def main(argv=None):
                          " earlier campaign's passes are not counted as this"
                          " loop's")
     ap.add_argument("--expect-filters", default="",
-                    help="space-separated filters the field is running.  Any "
-                         "of them the scan did not cover refuses acceptance: "
+                    help="comma- or space-separated filters THIS OBSERVATION "
+                         "is running -- an operator declaration scoped to the "
+                         "scan, not the field's filter list.  gc2211 o046 "
+                         "images F200W and F277W but not F150W, so passing the "
+                         "field list there refuses forever.  Any declared "
+                         "filter the scan did not cover refuses acceptance: "
                          "the scan is scoped by --obs-token/--since, the "
                          "correction floor is not.")
     ap.add_argument("--accept-below-mas", type=float, default=0.0,
@@ -395,7 +399,12 @@ def main(argv=None):
                          " correction floor that lets the frozen stages run."
                          " 0 (default) disables it: every fixed point stops.")
     args = ap.parse_args(argv)
-    args.expect_filters = str(args.expect_filters or '').split()
+    # `[,\s]`: docs/HIPERGATOR.md:118 documents the COMMA form for the
+    # reduction FILTERS variable, and `--expect-filters "F200W,F277W"`
+    # otherwise refuses with the whole string as one filter name.
+    args.expect_filters = [f for f in re.split(r'[,\s]+',
+                                              str(args.expect_filters or ''))
+                           if f]
     if args.accept_below_mas and not math.isfinite(args.accept_below_mas):
         ap.error(f"--accept-below-mas {args.accept_below_mas} is not a finite "
                  f"number of milliarcseconds")
@@ -432,11 +441,28 @@ def main(argv=None):
     if args.accept_below_mas <= 0:
         return 3
     if unscanned:
+        # Report the measured residual BEFORE returning.  This branch and the
+        # NOT-BOUNDED one below share a return code, so ordering them this way
+        # costs no safety -- but returning first threw away the number that
+        # identifies the problem: gc2211/o023 under the production invocation
+        # printed the coverage refusal and lost `9340.44 mas at
+        # ('1',4,'nrcb1','F200W','02201')`, which is the whole diagnosis.
+        _worst, _key, _label = largest_measured_residual(
+            args.record_dir, stage=args.stage, filtername=args.filtername,
+            obs_token=args.obs_token, since=args.since)
+        if _key is not None:
+            print(f"\nlargest measured residual in scope: {_worst:.2f} mas at "
+                  f"{_key} [{_label}]")
         print(f"\nNOT ACCEPTED: {', '.join(unscanned)} produced no checkpoint "
-              f"record this scan could see, and the correction floor is applied "
-              f"to every filter in the field.  The scan is scoped by "
-              f"--obs-token/--since and the floor is not, so accepting now "
-              f"would waive whatever those filters are doing.  STOPPING.")
+              f"record this scan could see.  --expect-filters is an OPERATOR "
+              f"DECLARATION scoped to the observation being scanned, not the "
+              f"field's filter list: gc2211 o046 images F200W and F277W but not "
+              f"F150W, so declaring the field list there refuses forever.  If "
+              f"those filters are genuinely absent from this observation, drop "
+              f"them from --expect-filters; if they are present, they have no "
+              f"record this scan could see and the correction floor -- which is "
+              f"applied to every filter in the field, unlike the scan -- would "
+              f"waive whatever they are doing.  STOPPING.")
         return 3
     if unjudged:
         # A group with too little history is not "converging" and not "stuck" --
