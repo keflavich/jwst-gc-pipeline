@@ -83,8 +83,8 @@ def test_the_glob_is_the_one_the_reduce_itself_uses():
     Both reduce entry points build the same literal.  If either changes, this
     check would keep passing on files the reduce no longer reads.
     """
-    literal = "jw0{proposal_id}-o{field}*_image3_*0[0-9][0-9]_asn.json"
-    ours = PF.ASN_GLOB.replace('{proposal}', '{proposal_id}') \
+    literal = "{jw_prefix(proposal_id)}-o{field}*_image3_*0[0-9][0-9]_asn.json"
+    ours = PF.ASN_GLOB.replace('{jw}', '{jw_prefix(proposal_id)}') \
                       .replace('{obsid}', '{field}')
     assert ours == literal, (
         f'preflight globs {ours!r}; the reduce globs {literal!r}')

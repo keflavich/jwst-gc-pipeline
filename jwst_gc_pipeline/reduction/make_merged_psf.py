@@ -22,6 +22,7 @@ from astropy.nddata import NDData
 from tqdm.auto import tqdm
 from webbpsf.utils import to_griddedpsfmodel
 from astropy.convolution import convolve, Gaussian2DKernel
+from jwst_gc_pipeline.naming import jw_prefix
 
 def footprint_contains(x, y, shape):
     return (x > 0) and (y > 0) and (y < shape[0]) and (x < shape[1])
@@ -69,7 +70,7 @@ def make_merged_psf(filtername, basepath, halfstampsize=25,
 
         grids[detector.upper()] = grid
 
-    parent_file = fits.open(f'{basepath}/{filtername}/pipeline/jw0{project_id}-o{obs_id}_t001_nircam_clear-{filtername.lower()}-{suffix}.fits')
+    parent_file = fits.open(f'{basepath}/{filtername}/pipeline/{jw_prefix(project_id)}-o{obs_id}_t001_nircam_clear-{filtername.lower()}-{suffix}.fits')
     parent_wcs = WCS(parent_file[1].header)
 
     pshape = parent_file[1].data.shape

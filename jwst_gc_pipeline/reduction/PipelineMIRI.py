@@ -30,6 +30,7 @@ import datetime
 # supplies the default; an exported CRDS_PATH wins.  The per-target cache
 # selection further down replaces it once the target is known.
 from jwst_gc_pipeline.config import apply_crds_environment
+from jwst_gc_pipeline.naming import jw_prefix, proposal_id_from_filename
 # Printed because the cache decides which reference files -- and so which
 # distortion and filter-offset solutions -- this run uses.
 print(f"CRDS: {apply_crds_environment()}")
@@ -388,7 +389,7 @@ def main(filtername, Observations=None, regionname='brick',
 
     products_fits = Observations.filter_products(data_products_by_obs, extension="fits")
     print("products_fits length:", len(products_fits))
-    uncal_mask = np.array([uri.endswith('_uncal.fits') and f'jw0{proposal_id}{field}' in uri for uri in products_fits['dataURI']])
+    uncal_mask = np.array([uri.endswith('_uncal.fits') and f'{jw_prefix(proposal_id)}{field}' in uri for uri in products_fits['dataURI']])
     uncal_mask &= products_fits['productType'] == 'SCIENCE'
     print("uncal length:", (uncal_mask.sum()))
 
@@ -406,8 +407,8 @@ def main(filtername, Observations=None, regionname='brick',
 
     if True: # just to preserve indendation
         print(f"Working on MIRI: running initial pipeline setup steps (skip_step1and2={skip_step1and2})")
-        print(f"Searching for {os.path.join(output_dir, f'jw0{proposal_id}-o{field}*_image3_*0[0-9][0-9]_asn.json')}")
-        asn_file_search = glob(os.path.join(output_dir, f'jw0{proposal_id}-o{field}*_image3_*0[0-9][0-9]_asn.json'))
+        print(f"Searching for {os.path.join(output_dir, f'{jw_prefix(proposal_id)}-o{field}*_image3_*0[0-9][0-9]_asn.json')}")
+        asn_file_search = glob(os.path.join(output_dir, f'{jw_prefix(proposal_id)}-o{field}*_image3_*0[0-9][0-9]_asn.json'))
         if len(asn_file_search) == 1:
             asn_file = asn_file_search[0]
         elif len(asn_file_search) > 1:
@@ -467,7 +468,7 @@ def main(filtername, Observations=None, regionname='brick',
         if (not skip_step1and2) or (skip_step1and2 and len([member['expname'] for member in members if not os.path.exists(member['expname'])]) > 0):
             # re-calibrate uncal files -> cal files *without* suppressing first group
             for member in members:
-                assert f'jw0{proposal_id}{field}' in member['expname']
+                assert f'{jw_prefix(proposal_id)}{field}' in member['expname']
                 cal_name = member['expname']
                 if skip_step1and2 and os.path.exists(cal_name):
                     continue
@@ -497,7 +498,7 @@ def main(filtername, Observations=None, regionname='brick',
 
         with open(asn_file) as f_obj:
             asn_data = json.load(f_obj)
-        asn_data['products'][0]['name'] = f'jw0{proposal_id}-o{field}_t001_miri_{filtername.lower()}'
+        asn_data['products'][0]['name'] = f'{jw_prefix(proposal_id)}-o{field}_t001_miri_{filtername.lower()}'
         asn_data['products'][0]['members'] = [row for row in asn_data['products'][0]['members']]
 
         for member in asn_data['products'][0]['members']:
@@ -613,11 +614,11 @@ def main(filtername, Observations=None, regionname='brick',
         print(f"DONE running {asn_file_each}")
 
         # CRF NAMING FIX (2026-06-20): because we set the asn product name above
-        # (line ~375) to 'jw0{prop}-o{field}_t001_miri_{filt}', outlier_detection
+        # (line ~375) to 'jw{prop:05d}-o{field}_t001_miri_{filt}', outlier_detection
         # names the CR-flagged products after the PRODUCT, not the exposure:
         #   jw03958-o001_t001_miri_f770w_<N>_o{field}_crf.fits
         # The per-frame photometry (crowdsource_catalogs_long.get_filenames) globs
-        # PER-EXPOSURE crf:  jw0{prop}{field}{visit}*{module}*o{field}_crf.fits
+        # PER-EXPOSURE crf:  jw{prop:05d}{field}{visit}*{module}*o{field}_crf.fits
         # i.e. jw03958001001_*_mirimage_o001_crf.fits .  Those two never matched,
         # so a corrected re-reduction's crf silently never reached cataloging
         # (the o001 37deg-rotation fix was invisible for days for exactly this).
@@ -682,7 +683,10 @@ def fix_alignment(fn, proposal_id=None, regionname='brick', field=None, basepath
 
     mod = ImageModel(fn)
     if proposal_id is None:
-        proposal_id = os.path.basename(fn)[3:7]
+        # The first five digits after ``jw`` are the proposal for BOTH the
+        # zero-padded 4-digit products on disk and 5-digit ones; the [3:7]
+        # slice this replaces read '0678' off a jw10678 product (issue #414).
+        proposal_id = proposal_id_from_filename(fn)
     if filtername is None:
         try:
             filtername = filter_regex.search(fn).group()

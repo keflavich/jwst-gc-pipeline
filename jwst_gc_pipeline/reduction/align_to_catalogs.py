@@ -15,6 +15,7 @@ from astropy.io import fits
 import datetime
 
 from jwst_gc_pipeline.catalog_utils import catalog_skycoord
+from jwst_gc_pipeline.naming import jw_prefix
 
 
 def print(*args, **kwargs):
@@ -113,7 +114,7 @@ def retrieve_vvv_is_deprecated(
         width = fov[0].width
         height, width = width, height # CARTA wrote it wrong
 
-    vvvdr4filename = f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{fieldnumber}_t001_nircam_clear-{filtername}-{module}_vvvcat.ecsv'
+    vvvdr4filename = f'{basepath}/{filtername.upper()}/pipeline/{jw_prefix(proposal_id)}-o{fieldnumber}_t001_nircam_clear-{filtername}-{module}_vvvcat.ecsv'
 
     if os.path.exists(vvvdr4filename):
         vvvdr4 = Table.read(vvvdr4filename)
@@ -168,8 +169,8 @@ def merge_a_plus_b(filtername,
     """suffix can be realigned-to-vvv, realigned-to-refcat, or i2d"""
     import reproject
     from reproject.mosaicking import find_optimal_celestial_wcs, reproject_and_coadd
-    filename_nrca = f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{fieldnumber}_t001_nircam_clear-{filtername.lower()}-nrca{suffix}.fits'
-    filename_nrcb = f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{fieldnumber}_t001_nircam_clear-{filtername.lower()}-nrcb{suffix}.fits'
+    filename_nrca = f'{basepath}/{filtername.upper()}/pipeline/{jw_prefix(proposal_id)}-o{fieldnumber}_t001_nircam_clear-{filtername.lower()}-nrca{suffix}.fits'
+    filename_nrcb = f'{basepath}/{filtername.upper()}/pipeline/{jw_prefix(proposal_id)}-o{fieldnumber}_t001_nircam_clear-{filtername.lower()}-nrcb{suffix}.fits'
     files = [filename_nrca, filename_nrcb]
     missing_files = [filename for filename in files if not os.path.exists(filename)]
     if missing_files:
@@ -206,6 +207,6 @@ def merge_a_plus_b(filtername,
                          fits.ImageHDU(data=merged_err, name='ERR', header=header),
                          fits.ImageHDU(data=weightmap, name='WHT', header=header),
                         ])
-    outfn = f'{basepath}/{filtername.upper()}/pipeline/jw0{proposal_id}-o{fieldnumber}_t001_nircam_clear-{filtername.lower()}-{outsuffix}_i2d.fits'
+    outfn = f'{basepath}/{filtername.upper()}/pipeline/{jw_prefix(proposal_id)}-o{fieldnumber}_t001_nircam_clear-{filtername.lower()}-{outsuffix}_i2d.fits'
     hdul.writeto(outfn, overwrite=True)
     return outfn

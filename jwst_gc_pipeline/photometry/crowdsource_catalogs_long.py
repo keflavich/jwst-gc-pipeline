@@ -11,6 +11,7 @@ import regions
 import numpy as np
 from pathlib import Path
 from jwst_gc_pipeline.frame_wcs import frame_wcs
+from jwst_gc_pipeline.naming import jw_prefix
 from jwst_gc_pipeline.photometry import psf_preflight
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
 from astropy.convolution import convolve, convolve_fft, Gaussian2DKernel, interpolate_replace_nans
@@ -2551,7 +2552,7 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
     for module_pattern in module_patterns:
         for chunk_pat in ('', '_chunk*of*'):
             residual_glob = (
-                f'{pipeline_dir}/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-'
+                f'{pipeline_dir}/{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-'
                 f'{module_pattern}_visit*_vgroup*_exp*{desat_}{bgsub_}{epsf_}{blur_}{group_}'
                 f'{iter_}{chunk_pat}_daophot_{residual_kind}_residual.fits'
             )
@@ -2634,7 +2635,7 @@ def mosaic_each_exposure_residuals(basepath, filtername, proposal_id, field, mod
     residual_files = sorted(set(combined_residuals))
 
     product_name = (
-        f'jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}'
+        f'{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_{pupil}-{filtername.lower()}-{module}'
         f'{desat_}{bgsub_}{epsf_}{blur_}{group_}{iter_}_daophot_{residual_kind}_residual'
     )
     asn = asn_from_list.asn_from_list(
@@ -2844,7 +2845,7 @@ def _reduction_mosaic_output_wcs(pipeline_dir, proposal_id, field, inst_token,
                                  filtername):
     """Path to an ASDF holding the reduction-mosaic (image3 i2d) GWCS, or None.
 
-    When a reduction mosaic ``jw0{prop}-o{field}_t001_{inst}_{filt}_i2d.fits``
+    When a reduction mosaic ``jw{prop:05d}-o{field}_t001_{inst}_{filt}_i2d.fits``
     exists, the cataloging ``_data_i2d`` should be resampled onto its EXACT grid
     so the 'data' image matches the canonical reduction mosaic pixel-for-pixel
     (byte-identical: same crf + same output WCS -> max|diff|=0).
@@ -2853,7 +2854,7 @@ def _reduction_mosaic_output_wcs(pipeline_dir, proposal_id, field, inst_token,
     """
     mosaic = os.path.join(
         pipeline_dir,
-        f'jw0{proposal_id}-o{field}_t001_{inst_token}_{filtername.lower()}_i2d.fits')
+        f'{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_{filtername.lower()}_i2d.fits')
     if not os.path.exists(mosaic):
         # This pipeline names its reduction mosaic with the custom
         # 'clear-{filt}-merged' token (PipelineRerunNIRCAM-*), not the STScI
@@ -2861,7 +2862,7 @@ def _reduction_mosaic_output_wcs(pipeline_dir, proposal_id, field, inst_token,
         # reduction grid instead of a tight crop-to-data bbox.
         alt = os.path.join(
             pipeline_dir,
-            f'jw0{proposal_id}-o{field}_t001_{inst_token}_clear-{filtername.lower()}-merged_i2d.fits')
+            f'{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_clear-{filtername.lower()}-merged_i2d.fits')
         if os.path.exists(alt):
             mosaic = alt
         else:
@@ -2984,7 +2985,7 @@ def mosaic_cutout_input_data(cut_bp, filtername, proposal_id, field, module,
               f"(label={label!r}, input_files={input_files is not None}) "
               f"in {pipeline_dir}", flush=True)
         return None
-    product_name = (f'jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-'
+    product_name = (f'{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_{pupil}-'
                     f'{filtername.lower()}-{module}_data')
     # Full-frame runs (input_files passed): if a reduction mosaic exists, land the
     # data_i2d on its EXACT grid so the cataloging 'data' image == the canonical
@@ -3012,7 +3013,7 @@ def mosaic_cutout_satstar_flags(cut_bp, filtername, proposal_id, field, module,
     from reproject import reproject_interp
     pipeline_dir = f'{cut_bp}/{filtername}/pipeline'
     inst_token = _inst_token(filtername)
-    ref = (f'{pipeline_dir}/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-'
+    ref = (f'{pipeline_dir}/{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_{pupil}-'
            f'{filtername.lower()}-{module}_data_i2d.fits')
     flagfiles = sorted(glob.glob(f'{pipeline_dir}/*_cutout_{label}_satstar_flags.fits'))
     if not (os.path.exists(ref) and flagfiles):
@@ -3033,7 +3034,7 @@ def mosaic_cutout_satstar_flags(cut_bp, filtername, proposal_id, field, module,
     out.header['FLAGBIT1'] = (1, 'partly saturated (nonlinear)')
     out.header['FLAGBIT2'] = (2, 'totally saturated (unrecoverable NaN)')
     out.header['FLAGBIT4'] = (4, 'included in saturated-star fit')
-    out_fn = (f'{pipeline_dir}/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-'
+    out_fn = (f'{pipeline_dir}/{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_{pupil}-'
               f'{filtername.lower()}-{module}_satstar_flags_i2d.fits')
     out.writeto(out_fn, overwrite=True)
     print(f"Wrote satstar flags i2d {out_fn}", flush=True)
@@ -3057,10 +3058,10 @@ def _build_cutout_model_i2d(cut_bp, filtername, proposal_id, field, module,
     group = '_group' if options.group else ''
     iter_ = _iteration_token(iteration_label)
     pdir = f'{cut_bp}/{filtername}/pipeline'
-    stem = (f'{pdir}/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-'
+    stem = (f'{pdir}/{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_{pupil}-'
             f'{filtername.lower()}-{module}{desat}{bgsub}{epsf}{blur}{group}{iter_}'
             f'_daophot_iterative')
-    data_i2d = (f'{pdir}/jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-'
+    data_i2d = (f'{pdir}/{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_{pupil}-'
                 f'{filtername.lower()}-{module}_data_i2d.fits')
     for resid_i2d in (f'{stem}_mergedcat_residual_i2d.fits',
                       f'{stem}_residual_i2d.fits'):
@@ -3415,7 +3416,7 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
          epsf_, blur_, group_, iter_) = _predict_output_tokens(
             options, visit_id, vgroup_id, exposure_id, iteration_label)
         for kind in kinds:
-            stem = (f'{pipeline_dir}/jw0{proposal_id}-o{field}_t001_{inst_token}_'
+            stem = (f'{pipeline_dir}/{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_'
                     f'{pupil}-{filtername.lower()}-{frame_detector}{visitid_}{vgroupid_}'
                     f'{exposure_}{desat}{bgsub}{epsf_}{blur_}{group_}{iter_}'
                     f'_daophot_{kind}')
@@ -3629,7 +3630,7 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     # crop-to-data when the data_i2d is absent.
     _data_i2d = os.path.join(
         pipeline_dir,
-        f'jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-'
+        f'{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_{pupil}-'
         f'{filtername.lower()}-{module}_data_i2d.fits')
     _shared_wcs = _i2d_grid_output_wcs(
         _data_i2d,
@@ -3641,7 +3642,7 @@ def build_mergedcat_residuals(cut_bp, basepath, merged_cat_path, filtername,
     for kind in kinds:
         if not written[kind]:
             continue
-        product_name = (f'jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-'
+        product_name = (f'{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_{pupil}-'
                         f'{filtername.lower()}-{module}{desat_tok}{bgsub_tok}'
                         f'{epsf_tok}{blur_tok}{group_tok}{iter_tok}'
                         f'_daophot_{kind}_mergedcat_residual')
@@ -3797,7 +3798,7 @@ def build_filtered_iter2_residual_bg(cut_bp, basepath, filtername, proposal_id,
         (visitid_, vgroupid_, exposure_, desat, bgsub,
          epsf_, blur_, group_, iter_) = _predict_output_tokens(
             options, visit_id, vgroup_id, exposure_id, 'iter2')
-        stem = (f'{pipeline_dir}/jw0{proposal_id}-o{field}_t001_{inst_token}_'
+        stem = (f'{pipeline_dir}/{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_'
                 f'{pupil}-{filtername.lower()}-{module}{visitid_}{vgroupid_}'
                 f'{exposure_}{desat}{bgsub}{epsf_}{blur_}{group_}{iter_}'
                 f'_daophot_iterative')
@@ -3842,7 +3843,7 @@ def build_filtered_iter2_residual_bg(cut_bp, basepath, filtername, proposal_id,
     blur_tok = '_blur' if options.blur else ''
     epsf_tok = '_epsf' if options.epsf else ''
     group_tok = '_group' if options.group else ''
-    product_name = (f'jw0{proposal_id}-o{field}_t001_{inst_token}_{pupil}-'
+    product_name = (f'{jw_prefix(proposal_id)}-o{field}_t001_{inst_token}_{pupil}-'
                     f'{filtername.lower()}-{module}{desat_tok}{bgsub_tok}'
                     f'{epsf_tok}{blur_tok}{group_tok}_iter2_daophot_iterative_qfilt_residual')
     i2d = _resample_to_i2d(written, pipeline_dir, product_name, crop_to_data=True)
@@ -5107,7 +5108,7 @@ def get_filenames(basepath, filtername, proposal_id, field, each_suffix, module,
     # downstream (merge globs by vgroup* not obs; data_i2d / residual i2d
     # ResampleStep auto-unions the frame WCSs) is already obs-agnostic, so the
     # only obs-locked step is this glob.  The leading filename token encodes the
-    # real obs number (jw0{proposal}{obs}{visit}); the ``o{obs}_crf`` suffix
+    # real obs number (jw{proposal:05d}{obs}{visit}); the ``o{obs}_crf`` suffix
     # token does too, so derive a per-obs suffix by substituting the obs digits.
     subfields = field.split('-') if '-' in str(field) else [field]
     fglob = []
@@ -5118,7 +5119,7 @@ def get_filenames(basepath, filtername, proposal_id, field, each_suffix, module,
         else:
             sf_suffix = each_suffix
         for gm in glob_modules:
-            glstr = f'{basepath}/{filtername}/pipeline/jw0{proposal_id}{sf}{visitid}*{gm}*{sf_suffix}.fits'
+            glstr = f'{basepath}/{filtername}/pipeline/{jw_prefix(proposal_id)}{sf}{visitid}*{gm}*{sf_suffix}.fits'
             glstr_list.append(glstr)
             fglob.extend(glob.glob(glstr))
     if len(fglob) == 0:

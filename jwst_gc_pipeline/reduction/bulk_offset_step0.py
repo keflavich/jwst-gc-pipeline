@@ -69,6 +69,8 @@ from typing import Optional
 
 import numpy as np
 
+from ..naming import jw_prefix
+
 __all__ = [
     'BulkOffsetVerificationError', 'BulkOffsetResult',
     'BULK_VERIFY_TOL_MAS', 'generation_hash', 'measure_bulk_offset',
@@ -666,7 +668,7 @@ def default_frame_glob(basepath, filtername, proposal_id, field):
     reported a third visit that had nothing to do with the requested field.
     """
     filt = str(filtername).upper()
-    stem = f"jw{str(proposal_id).zfill(5)}{str(field).zfill(3)}"
+    stem = f"{jw_prefix(proposal_id)}{str(field).zfill(3)}"
     return f'{basepath}/{filt}/pipeline/{stem}*_destreak.fits'
 
 

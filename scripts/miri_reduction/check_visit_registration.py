@@ -33,6 +33,7 @@ from photutils.detection import DAOStarFinder
 from scipy.ndimage import median_filter
 from reproject import reproject_interp
 from jwst_gc_pipeline.photometry.astrometry_offsets import measure_offset
+from jwst_gc_pipeline.naming import jw_prefix
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -45,9 +46,9 @@ import re as _re
 fwhm_um = int(_re.match(r'[Ff](\d+)', filt).group(1)) / 100.
 fwhm_pix = max(2.0, fwhm_um / 0.11 * 0.31)  # ~MIRI PSF FWHM in pixels
 
-cal = sorted(glob.glob(f'{pipedir}/jw0{proposal}{obs}*_mirimage_cal.fits'))
+cal = sorted(glob.glob(f'{pipedir}/{jw_prefix(proposal)}{obs}*_mirimage_cal.fits'))
 if not cal:
-    cal = sorted(glob.glob(f'{pipedir}/jw0{proposal}{obs}*_mirimage_align.fits'))
+    cal = sorted(glob.glob(f'{pipedir}/{jw_prefix(proposal)}{obs}*_mirimage_align.fits'))
 # group by visit token jw<prop><obs>VVV_GGGGG (chars 0:19)
 visits = {}
 for fn in cal:
@@ -56,7 +57,7 @@ print(f'{target} {filt}: {len(cal)} frames in {len(visits)} visits: '
       + ', '.join(f'{k[-5:]}({len(v)})' for k, v in visits.items()))
 
 # common output grid from the combined i2d
-i2d = sorted(glob.glob(f'{pipedir}/jw0{proposal}-o{obs}*_{filt.lower()}_i2d.fits'))
+i2d = sorted(glob.glob(f'{pipedir}/{jw_prefix(proposal)}-o{obs}*_{filt.lower()}_i2d.fits'))
 if not i2d:
     print('no combined i2d for grid; aborting')
     sys.exit(1)

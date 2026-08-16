@@ -43,6 +43,7 @@ from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS, mopt
 # Lives in atomic_io with the rest of the shared-file tools; imported here
 # because every call site in this module and its tests names it.
 from jwst_gc_pipeline.atomic_io import write_table_atomic
+from jwst_gc_pipeline.naming import jw_prefix
 from jwst_gc_pipeline.photometry.residual_background import (
     local_bkg_column_name, measure_footprint_background)
 from jwst_gc_pipeline.photometry.psf_fitting import (
@@ -1821,7 +1822,7 @@ def _prepare_frame_for_photometry(options, filtername, module, field, basepath,
     # gate is MIRI-only inside get_saturated_stars, so this is a no-op there.
     _seed_gate_image = _seed_gate_wcs = None
     if module == 'mirimage':
-        _di2d_path = (f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-'
+        _di2d_path = (f'{basepath}/{filtername}/pipeline/{jw_prefix(proposal_id)}-'
                       f'o{field}_t001_{_L._inst_token(filtername)}_{pupil}-'
                       f'{filtername.lower()}-{module}_data_i2d.fits')
         if os.path.exists(_di2d_path):
@@ -2065,7 +2066,7 @@ def _save_manual_pass(ctx, result, modsky, options, iteration_label, detector):
         iteration_label=iteration_label)
 
     residual = _residual_for_bkg
-    stub = (f'{bp}/{ctx.filtername}/pipeline/jw0{ctx.proposal_id}-o{ctx.field}_t001_'
+    stub = (f'{bp}/{ctx.filtername}/pipeline/{jw_prefix(ctx.proposal_id)}-o{ctx.field}_t001_'
             f'{ctx.inst_token}_{ctx.pupil}-{ctx.filtername.lower()}-{ctx.module}'
             f'{ctx.visitid_}{ctx.vgroupid_}{ctx.exposure_}{ctx.desat}{ctx.bgsub}'
             f'{ctx.epsf_}{ctx.blur_}{ctx.group}{iter_}_daophot_basic')
@@ -2172,7 +2173,7 @@ def do_photometry_step_manual(options, filtername, module, detector, field, base
     _prom_ww_i2d = None
     if _is_miri or _nircam_prom_any:
         try:
-            _i2dp = (f'{basepath}/{filtername}/pipeline/jw0{proposal_id}-o{field}'
+            _i2dp = (f'{basepath}/{filtername}/pipeline/{jw_prefix(proposal_id)}-o{field}'
                      f'_t001_{_L._inst_token(filtername)}_{pupil}-'
                      f'{filtername.lower()}-{module}_data_i2d.fits')
             if os.path.exists(_i2dp):
@@ -3177,7 +3178,7 @@ def _reconstruct_smoothed_bg_path(cut_bp, proposal_id, field, module, filt,
         '_resbgsub' if label in ('m5', 'm6', 'm7') else '')
     group_ = '_group' if options.group else ''
     inst = _L._inst_token(filt)
-    return (f'{cut_bp}/{filt}/pipeline/jw0{proposal_id}-o{field}_t001_{inst}_'
+    return (f'{cut_bp}/{filt}/pipeline/{jw_prefix(proposal_id)}-o{field}_t001_{inst}_'
             f'{pupil}-{filt.lower()}-{module}{desat}{bgsub}{group_}_{label}_'
             f'daophot_basic_mergedcat_residual_smoothed_bg_i2d.fits')
 
@@ -4573,7 +4574,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 f'{desat}{bgsub}{blur_}_{label}_dao_basic.fits')
 
     def _data_i2d_path(module, filt):
-        return (f'{cut_bp}/{filt}/pipeline/jw0{proposal_id}-o{field}_t001_'
+        return (f'{cut_bp}/{filt}/pipeline/{jw_prefix(proposal_id)}-o{field}_t001_'
                 f'{_L._inst_token(filt)}_{pupil}-{filt.lower()}-{module}_data_i2d.fits')
 
     frame_cache = {}

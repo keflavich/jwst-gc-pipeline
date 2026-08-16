@@ -70,6 +70,7 @@ from .astrometry_offsets import measure_offset, local_residual_map
 from .consensus_catalog import (pool_visit_consensi,
                                  write_filter_consensus)
 from ..atomic_io import atomic_write, keep_a_copy, locked
+from ..naming import jw_prefix
 
 # Stages at which a measured shift is EXPECTED to be possible and is CORRECTED
 # (the first checkpoint after the first per-frame photometry).  At every later
@@ -1035,7 +1036,7 @@ def assert_visit_token(token, context):
     The reachable failure is a JOINT multi-observation run: cataloging is invoked
     with ``--field 002-998`` (sgrb2 MIRI obs 002 + the obs 998 "redo" combined),
     and ``seed_offsets_table_from_consensus`` interpolates that straight into
-    ``jw0{proposal}{field}{visit:03d}`` -> ``jw05365002-998001``.  Every frame of
+    ``jw{proposal:05d}{field}{visit:03d}`` -> ``jw05365002-998001``.  Every frame of
     that run keys as ``jw05365002001`` or ``jw05365998001``, so NOTHING matches:
     ``lookup_consensus_offset`` returns ``(0.0, 0.0)`` for every exposure and the
     re-tie loop re-measures the identical residual forever while reporting that it
@@ -1851,7 +1852,7 @@ def seed_offsets_table_from_consensus(basepath, proposal_id, field, corrections,
         for corr in corrections:
             visit = int(str(corr["visit"])[-3:])
             visit_tok = assert_visit_token(
-                f"jw0{proposal_id}{field}{visit:03d}",
+                f"{jw_prefix(proposal_id)}{field}{visit:03d}",
                 f"seed_offsets_table_from_consensus({os.path.basename(out_path)})")
             # A consensus->reference correction is the per-VISIT bulk tie (whole
             # visit onto VIRAC2) -- it carries exposure=None AND module=None.  Store

@@ -32,6 +32,7 @@ ABMAG_OFFSET = 8.90
 # flags-based bgsub token is imported as ``_bgsub_token`` (this module calls it
 # with explicit booleans, matching the producer-side names).
 from jwst_gc_pipeline.frame_wcs import frame_wcs
+from jwst_gc_pipeline.naming import jw_prefix
 from jwst_gc_pipeline.photometry.residual_background import (
     RESBKG_COLUMNS, combine_frames as combine_resbkg_frames)
 from jwst_gc_pipeline.scratch_basepath import apply_basepath_override
@@ -1634,7 +1635,7 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
               for filn in _obs_filters_for(target)[obsid]
               if _obsid_for_glob(target, obsid, filn) is not None
               for x in glob.glob(f"{basepath}/{filn.upper()}/pipeline/"
-                                 f"jw0{obsid}-o{_obsid_for_glob(target, obsid, filn)}_t001_{_inst_token(filn)}*{filn.lower()}*{module}_i2d.fits")
+                                 f"{jw_prefix(obsid)}-o{_obsid_for_glob(target, obsid, filn)}_t001_{_inst_token(filn)}*{filn.lower()}*{module}_i2d.fits")
               if f'{module}_' in x or f'{module}1_' in x
              ]
 
@@ -1854,7 +1855,7 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
         _proj = _project_for_target_filter(target, filn)
         _obsid = _obsid_for_glob(target, _proj, filn)
         _img_matches = [] if _obsid is None else [x for x in glob.glob(
-            f"{basepath}/{filn.upper()}/pipeline/jw0{_proj}-o{_obsid}"
+            f"{basepath}/{filn.upper()}/pipeline/{jw_prefix(_proj)}-o{_obsid}"
             f"_t001_{_inst_token(filn)}*{filn.lower()}*{module}_i2d.fits")
             if f'{module}_' in x or f'{module}1_' in x]
         if not _img_matches:
@@ -2043,7 +2044,7 @@ def load_satstar_catalog(filtername, target='brick',
     if (_inst_token(filtername) == 'nircam'
             and target in project_obsnum and proj in project_obsnum[target]):
         primary = (f'{basepath}/{filtername.upper()}/pipeline/'
-                   f'jw0{proj}-o{project_obsnum[target][proj]}'
+                   f'{jw_prefix(proj)}-o{project_obsnum[target][proj]}'
                    f'_t001_nircam_clear-{filtername}-merged_i2d_satstar_catalog.fits')
         # project_obsnum may hold a glob wildcard for multi-obs targets
         # (sickle/cloudef/gc2211), so resolve via glob rather than exists().
