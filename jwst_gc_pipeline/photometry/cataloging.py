@@ -3686,12 +3686,19 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
       could be any of them, so keep only the basenames carrying this run's
       token.  gc2211 F200W is this case: the untokened copies are a different
       observation's exposures.
-    - **exactly one observation images it** -- every catalog in the directory is
-      this run's whatever its name, so keep both spellings and drop an untokened
-      file only where the same exposure is also present under a tokened name.
-      ngc6334 F090W is this case, and its nrca detectors exist ONLY under the
-      pre-token name; discarding them would build a consensus from nrcb alone
-      and PASS, which is worse than the duplicate it avoids.
+    - **exactly one observation images it** -- an UNTOKENED catalog in the
+      directory is this run's whatever its name, so keep both spellings and drop
+      an untokened file only where the same exposure is also present under a
+      tokened name.  ngc6334 F090W is this case, and its nrca detectors exist
+      ONLY under the pre-token name; discarding them would build a consensus
+      from nrcb alone and PASS, which is worse than the duplicate it avoids.
+      A catalog that SPELLS a different observation is still dropped here: the
+      registry's count is what this branch cannot trust (0 for an unregistered
+      field, 1 for a wildcard obsid list -- both of which program 10678's
+      gc-treasury returns while 139 tiles share one tree), and stripping the
+      token to compare identities would collapse tile 001's and tile 002's
+      copies of the same ``(visit, vgroup, exp)`` onto one key and keep tile
+      001's.  Only applied when this run writes a token of its own.
 
     This narrows the checkpoint's input to one observation, which is what the
     visit consensus is defined over.  A field deliberately pooling two
@@ -3702,11 +3709,16 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
     token = str(obs_token or '').lstrip('_')
     n_obs = filter_observation_count(target, filt)
     # n_obs == 0 means the registry could not answer (unregistered field, or no
-    # target threaded).  Treat that as NOT shared: keeping both spellings risks
-    # a DuplicateExposureError, which is loud and recoverable, while dropping
-    # them risks a consensus quietly built from half the detectors.
+    # target threaded).  Treat that as NOT shared: keeping both UNTOKENED
+    # spellings risks a DuplicateExposureError, which is loud and recoverable,
+    # while dropping them risks a consensus quietly built from half the
+    # detectors.  A name that SPELLS a foreign observation is dropped either
+    # way -- see the single-observation branch, which the registry cannot be
+    # trusted to keep 10678's 139 tiles out of (0 unregistered, 1 for a
+    # wildcard obsid list).
     shared = n_obs > 1
     drop = []
+    foreign_token = []
     want = None
     if shared:
         # More than one observation of this field images this filter, so a
@@ -3846,9 +3858,41 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
                 base = base.replace('_' + m.group(1), '', 1)
             return re.sub(r'_chunk\d+of\d+', '', base)
 
+        # A name that SPELLS a different observation is foreign whatever the
+        # registry's count says -- and the count is exactly what cannot be
+        # trusted here.  `filter_observation_count` returns 0 for an
+        # unregistered field and 1 for a field whose obsids are a wildcard
+        # (`{'nircam': '*'}` loads as a one-element tuple), so program 10678's
+        # gc-treasury lands in THIS branch with 139 tiles in one tree.  The
+        # identity above strips the token, so tile 001's and tile 002's
+        # `_o001`/`_o002` copies of `visit001_vgroup10678001_exp00001` collapse
+        # onto one identity and `sorted(group)[0]` keeps o001 -- tile 002's m2
+        # visit consensus built from tile 001's exposures, at the CORRECTING
+        # stage (rewrites the offsets table, stale-tags im0, stops the run), so
+        # the tile is "corrected" by the inter-tile separation.
+        #
+        # Drop the differing tokens FIRST, and only when this run writes a
+        # token of its own: with `token == ''` there is nothing to compare
+        # against, and a tokened file may well be this run's own output from a
+        # code version that stamped one.  Untokened files are still kept --
+        # an untokened name leaves the observation open, and the branch's
+        # fail-safe exists for exactly that (ngc6334 F090W nrca exists ONLY
+        # under the pre-token name).
+        if token:
+            for fn in fns:
+                m = _OBS_TOKEN_RE.search(os.path.basename(fn))
+                if m and m.group(1) != token:
+                    foreign_token.append(fn)
+        if foreign_token:
+            drop.extend(foreign_token)
+            foreign_set = set(foreign_token)
+            fns_local = [fn for fn in fns if fn not in foreign_set]
+        else:
+            fns_local = fns
+
         tokened = {}
         untokened = {}
-        for fn in fns:
+        for fn in fns_local:
             base = os.path.basename(fn)
             m = _OBS_TOKEN_RE.search(base)
             (tokened if m else untokened).setdefault(_identity(base), []).append(fn)
@@ -3879,17 +3923,28 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
         # this is the same courtesy on the path that actually removes data.
         demanded = (f"; this run demanded {sorted(want)}"
                     if shared and want else "")
-        why = ("this run is "
-               f"{('_' + token) if token else '<untokened>'}, and the "
-               "obs-blind glob matches every observation in the directory"
-               if shared else
-               f"{filt} is imaged by ONE observation of {target}, so these are "
-               "the same exposures under their pre-token name")
-        noun = "foreign-observation" if shared else "duplicate"
+        if shared:
+            why = ("this run is "
+                   f"{('_' + token) if token else '<untokened>'}, and the "
+                   "obs-blind glob matches every observation in the directory")
+            noun = "foreign-observation"
+        elif foreign_token:
+            # The registry says ONE observation images this filter and the
+            # names on disk say otherwise; the names win.  Say which count was
+            # disbelieved, because a wrong `--field` reaches this same line.
+            why = (f"the registry counts {n_obs} observation(s) of {target} "
+                   f"imaging {filt}; these names spell an observation other "
+                   f"than this run's (_{token})")
+            noun = ("foreign-observation" if len(drop) == len(foreign_token)
+                    else "foreign-observation/duplicate")
+        else:
+            why = (f"{filt} is imaged by ONE observation of {target}, so these "
+                   "are the same exposures under their pre-token name")
+            noun = "duplicate"
         print(f"astrom checkpoint [{merge_label}] {filt}/{module}: excluded "
               f"{len(drop)} of {len(fns)} {noun} per-frame catalog(s) "
               f"({foreign}){demanded} -- {why}", flush=True)
-        if shared and len(drop) == len(fns):
+        if (shared or foreign_token) and len(drop) == len(fns):
             print(f"astrom checkpoint [{merge_label}] {filt}/{module}: that is "
                   f"EVERY catalog.  A frozen-stage gate with no inputs is a "
                   f"silently disabled gate, not a pass -- check that "
@@ -4029,7 +4084,8 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
     # `_perframe_token` is what the per-frame catalogs on disk actually SPELL,
     # and the foreign-observation filter can only match a token that was written.
     # `crowdsource_catalogs_long.obs_token` is that writer, and it returns '' for
-    # every proposal except 2211/7213/6778.  Filtering on the consensus token
+    # every proposal except 2211/10678 (naming.MULTIOBS_PROPOSALS) and
+    # 7213/6778 (ngc6334's `_j`).  Filtering on the consensus token
     # instead asks for `_o001` in a directory where the writer never emitted a
     # token, which matches nothing and empties the checkpoint's input: measured
     # on the real trees, wd1 F200W 96 -> 0, wd2 F200W 32 -> 0, cloudef F162M

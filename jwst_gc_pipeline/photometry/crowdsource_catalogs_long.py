@@ -200,6 +200,7 @@ class CappedSourceGrouper:
 from jwst_gc_pipeline.photometry.naming import (
     _CHUNK_TOKEN_RE, _chunk_token, _strip_chunk, _iteration_token, _bgsub_token,
     MIRI_FILTERS, MULTIOBS_PROPOSALS,
+    PER_OBS_MERGED_PROPOSALS as _PER_OBS_MERGED_PROPOSALS,
     _instrument_from_filter, _inst_token, _instrument_override,
     residual_to_smoothed_bg_i2d, residual_to_model_i2d, residual_to_infilled_i2d,
 )
@@ -2102,9 +2103,12 @@ def save_photutils_results(result, ww, filename,
         result.meta['BKGMETH'] = 'bkg2d_sampled' if background_map is not None else 'none'
 
     iter_ = _iteration_token(iteration_label)
-    # Per-observation disambiguator (prop 2211/gc2211 only; empty elsewhere).
-    # gc2211's 5 obs reuse the same visit/vgroup/exp tuples, so without _o{field}
-    # the catalog tables collide across obs and silently overwrite.  MUST match
+    # Per-observation disambiguator (naming.MULTIOBS_PROPOSALS -- 2211/gc2211
+    # and 10678/gc-treasury -- plus ngc6334's per-proposal `_j`; empty
+    # elsewhere).  Both multi-obs proposals restart the visit/vgroup/exp tuples
+    # per observation, so without _o{field} the catalog tables collide across
+    # obs and silently overwrite (gc2211's 5 pointings; 10678's 139 tiles, where
+    # the collision is certain at tile 2).  MUST match
     # _predict_tblfilename and the merge_catalogs.py glob.  See obs_token().
     obs_ = _obs_token_from_options(options)
     # {module} only, no detector token -- that is what merge_catalogs.py globs
@@ -5050,6 +5054,16 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     _merge_methods = [('dao', '_basic')]
                     if not options.basic_only:
                         _merge_methods.append(('daoiterative', '_iterative'))
+                    # A per-obs-merged proposal (10678) REFUSES a field-less
+                    # merge, and this call sits inside a print-and-continue
+                    # except -- so without the field the refusal would degrade
+                    # to one line and the cutout run would quietly have no
+                    # merged catalog.  Passed only for those proposals: gc2211
+                    # pools every observation into one untokened cutout merged
+                    # catalog by design, and a field would scope that away.
+                    _merge_field = (getattr(options, 'field', None)
+                                    if str(proposal_id) in _PER_OBS_MERGED_PROPOSALS
+                                    else None)
                     for _mname, _msuffix in _merge_methods:
                         try:
                             _merge_catalogs.merge_individual_frames(
@@ -5060,6 +5074,7 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                                 bgsub=options.bgsub, desat=options.desaturated,
                                 epsf=options.epsf, blur=options.blur,
                                 resbgsub=getattr(options, 'use_iter3_residual_bg', False),
+                                field=_merge_field,
                                 fwhm_basepath=basepath)
                             print(f"cutout: wrote merged {_mname} catalog under "
                                   f"{_cut_bp}/catalogs/", flush=True)

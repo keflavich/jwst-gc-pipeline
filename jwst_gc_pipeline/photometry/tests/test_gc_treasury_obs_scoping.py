@@ -327,3 +327,248 @@ def test_merge_daophot_reads_own_tile_and_stamps_the_end_slot_token(
     assert [os.path.basename(f) for f in calls['files']] == [
         'f212n_nrcblong_o001_indivexp_merged_resbgsub_m7_dao_basic_vetted.fits',
         'f480m_nrcblong_o001_indivexp_merged_resbgsub_m7_dao_basic_vetted.fits']
+
+
+# ---------------------------------------------------------------------------
+# m2 per-frame selection: a tile must not consume another tile's exposures
+# ---------------------------------------------------------------------------
+
+def _perframe_catalog(dirpath, name, source_frame):
+    """A stand-in per-frame catalog table carrying its crf provenance."""
+    path = os.path.join(str(dirpath), name)
+    tbl = Table({'x': [1.0]})
+    tbl.meta['FILENAME'] = source_frame
+    tbl.write(path)
+    return path
+
+
+def _two_tile_perframe_names(exp=1):
+    """Tile 001's and tile 002's names for the SAME (visit, vgroup, exp).
+
+    10678 restarts the numbering per observation, so the only thing that tells
+    them apart is the ``_o{field}`` token this PR's writer stamps.
+    """
+    return [f'f212n_nrcblong_o{obs}_visit001_vgroup10678001_exp{exp:05d}'
+            f'_m2_daophot_basic.fits' for obs in ('001', '002')]
+
+
+@pytest.mark.parametrize('n_obs, why', [
+    (0, 'unregistered gc-treasury (fields.filter_observation_count -> 0)'),
+    (1, "wildcard obsids {'nircam': '*'} -> len(('*',)) == 1"),
+])
+def test_m2_keeps_only_this_tiles_per_frame_catalogs(tmp_path, monkeypatch,
+                                                     n_obs, why):
+    """The registry cannot count 10678's tiles, and the token must still rule.
+
+    ``_drop_foreign_obs_duplicates`` picks its branch from
+    ``filter_observation_count``, which answers 0 for an unregistered field and
+    1 for a wildcard obsid list -- both of which gc-treasury gives -- so a
+    139-tile program lands in the single-observation branch.  That branch
+    strips the token before comparing identities, so tile 001's and tile 002's
+    copies of one ``(visit, vgroup, exp)`` collapsed onto one key and
+    ``sorted(group)[0]`` kept tile 001's.  m2 is the CORRECTING stage, so the
+    consequence is tile 002's visit consensus built from tile 001's exposures.
+    """
+    from jwst_gc_pipeline.photometry.cataloging import (
+        _drop_foreign_obs_duplicates)
+    monkeypatch.setattr('jwst_gc_pipeline.fields.filter_observation_count',
+                        lambda *a, **k: n_obs)
+    fns = [_perframe_catalog(tmp_path, name,
+                             f'/x/jw10678{name.split("_o")[1][:3]}001_'
+                             f'10678001_00001_nrcblong_o'
+                             f'{name.split("_o")[1][:3]}_crf.fits')
+           for name in _two_tile_perframe_names()]
+    kept = _drop_foreign_obs_duplicates(fns, '_o002', 'f212n', 'm2',
+                                        'nrcblong', 'gc-treasury',
+                                        target_obs='002')
+    assert [os.path.basename(f) for f in kept] == [
+        _two_tile_perframe_names()[1]], (why, kept)
+    # ... and tile 001's run keeps the mirror image of that
+    kept = _drop_foreign_obs_duplicates(fns, '_o001', 'f212n', 'm2',
+                                        'nrcblong', 'gc-treasury',
+                                        target_obs='001')
+    assert [os.path.basename(f) for f in kept] == [
+        _two_tile_perframe_names()[0]], (why, kept)
+
+
+def test_m2_drops_the_foreign_tile_LOUDLY(tmp_path, monkeypatch, capsys):
+    """An empty input is a silently disabled gate, so say what was excluded."""
+    from jwst_gc_pipeline.photometry.cataloging import (
+        _drop_foreign_obs_duplicates)
+    monkeypatch.setattr('jwst_gc_pipeline.fields.filter_observation_count',
+                        lambda *a, **k: 0)
+    fns = [_perframe_catalog(tmp_path, _two_tile_perframe_names()[0],
+                             '/x/jw10678001001_10678001_00001_nrcblong_o001_crf.fits')]
+    assert _drop_foreign_obs_duplicates(fns, '_o002', 'f212n', 'm2',
+                                        'nrcblong', 'gc-treasury',
+                                        target_obs='002') == []
+    out = capsys.readouterr().out
+    assert '1 of 1' in out and 'EVERY catalog' in out, out
+
+
+def test_m2_still_keeps_untokened_catalogs(tmp_path, monkeypatch):
+    """The branch's fail-safe survives the fix.
+
+    ngc6334 F090W's nrca detectors exist ONLY under the pre-token name, and
+    dropping them builds a consensus from nrcb alone and PASSES.  An untokened
+    name leaves its observation open, so the drop applies only to a name that
+    SPELLS a different one -- and a pre-token copy of an exposure that also has
+    a tokened one still goes, as before.
+    """
+    from jwst_gc_pipeline.photometry.cataloging import (
+        _drop_foreign_obs_duplicates)
+    monkeypatch.setattr('jwst_gc_pipeline.fields.filter_observation_count',
+                        lambda *a, **k: 1)
+    nrca = _perframe_catalog(
+        tmp_path, 'f090w_nrca1_visit001_vgroup1_exp00001_m2_daophot_basic.fits',
+        '/x/jw06778001001_1_00001_nrca1_o001_crf.fits')
+    nrcb_tok = _perframe_catalog(
+        tmp_path,
+        'f090w_nrcb1_j6778_visit001_vgroup1_exp00001_m2_daophot_basic.fits',
+        '/x/jw06778001001_1_00001_nrcb1_o001_crf.fits')
+    nrcb_pre = _perframe_catalog(
+        tmp_path, 'f090w_nrcb1_visit001_vgroup1_exp00001_m2_daophot_basic.fits',
+        '/x/jw06778001001_1_00001_nrcb1_o001_crf.fits')
+    kept = _drop_foreign_obs_duplicates([nrca, nrcb_tok, nrcb_pre], '_j6778',
+                                        'f090w', 'm2', 'nrcb', 'ngc6334')
+    assert sorted(kept) == sorted([nrca, nrcb_tok]), kept
+
+
+def test_m2_selection_end_to_end_through_the_checkpoint(tmp_path, monkeypatch):
+    """Through ``_run_astrometry_stage_checkpoint`` with the REAL filter, so
+    the obs-blind glob and the drop are exercised together on two tiles."""
+    from jwst_gc_pipeline.photometry import cataloging
+    cut_bp = tmp_path / 'cutouts' / 'merged'
+    (cut_bp / 'F212N').mkdir(parents=True)
+    for obs in ('001', '002'):
+        for exp in (1, 2):
+            _perframe_catalog(
+                cut_bp / 'F212N',
+                f'f212n_nrcblong_o{obs}_visit001_vgroup10678001_'
+                f'exp{exp:05d}_m2_daophot_basic.fits',
+                f'/x/jw10678{obs}001_10678001_{exp:05d}_nrcblong_o{obs}_crf.fits')
+
+    class _Stop(Exception):
+        """Stop the checkpoint the instant the filter has spoken.
+
+        These are one-column stand-in tables, so the consensus builder trips a
+        few lines further down on a missing photometry column -- past the point
+        under test, and on an exception type that is an implementation detail
+        of the builder.  Raise our own rather than catch whatever that is.
+        """
+
+    seen = {}
+    real = cataloging._drop_foreign_obs_duplicates
+
+    def _watch(*a, **k):
+        seen['kept'] = list(real(*a, **k))
+        raise _Stop
+
+    monkeypatch.setattr(cataloging, '_drop_foreign_obs_duplicates', _watch)
+    monkeypatch.delenv('ASTROM_CHECKPOINT', raising=False)
+    opts = _options(field='002')
+    opts.modules = 'nrcblong'
+    opts.each_exposure = True
+    with pytest.raises(_Stop):
+        cataloging._run_astrometry_stage_checkpoint(
+            'm2', 'nrcblong', 'F212N', str(cut_bp), str(tmp_path), '10678',
+            opts, {}, context='test')
+    kept = sorted(os.path.basename(f) for f in seen.get('kept', []))
+    assert len(kept) == 2, kept
+    assert all('_o002_' in b for b in kept), kept
+
+
+# ---------------------------------------------------------------------------
+# annotate_independent_detection: the m7 provenance flag reads a tokened m6
+# ---------------------------------------------------------------------------
+
+def _m7_merged(base, ra=266.0, dec=-28.9):
+    p = base / 'catalogs' / 'crossband_m7_merged.fits'
+    Table({'skycoord_ref': SkyCoord([ra] * u.deg, [dec] * u.deg)}).write(p)
+    return p
+
+
+def _annotate_options(field):
+    o = _options(field)
+    o.modules = 'nrcblong'
+    return o
+
+
+def test_independent_detection_flag_reads_this_tiles_m6_vetted(tmp_path):
+    """``independently_detected_<filt>`` separates a real per-band detection
+    from a cross-band-seeded force-fit, and it reads the m6 VETTED catalog by
+    name.  The name now carries ``_o{field}`` at the module slot, so a reader
+    still spelling the old name finds nothing, flags every row False, and the
+    m7 catalog ships saying no band saw anything on its own -- and the call
+    site swallows the exception, so nothing says so."""
+    from jwst_gc_pipeline.photometry.cataloging import (
+        annotate_independent_detection)
+    (tmp_path / 'catalogs').mkdir()
+    _write_m6_vetted(tmp_path, 'f212n', modtok='_o001')
+    # f480m's own detection is 30" away -> not within the 30 mas radius
+    _write_m6_vetted(tmp_path, 'f480m', modtok='_o001', ra=266.01)
+    merged = _m7_merged(tmp_path)
+    annotate_independent_detection(str(merged), str(tmp_path),
+                                   ['F212N', 'F480M'],
+                                   _annotate_options('001'))
+    t = Table.read(merged)
+    assert bool(t['independently_detected_f212n'][0])
+    assert not bool(t['independently_detected_f480m'][0])
+    assert int(t['n_filt_independent'][0]) == 1
+
+
+def test_independent_detection_flag_refuses_another_tiles_m6(tmp_path):
+    """Only tile 001's m6 vetted exists; tile 002's m7 must not claim it."""
+    from jwst_gc_pipeline.photometry.cataloging import (
+        annotate_independent_detection)
+    (tmp_path / 'catalogs').mkdir()
+    for filt in ('f212n', 'f480m'):
+        _write_m6_vetted(tmp_path, filt, modtok='_o001')
+    merged = _m7_merged(tmp_path)
+    annotate_independent_detection(str(merged), str(tmp_path),
+                                   ['F212N', 'F480M'],
+                                   _annotate_options('002'))
+    t = Table.read(merged)
+    assert int(t['n_filt_independent'][0]) == 0
+
+
+def test_independent_detection_flag_still_reads_ngc6334s_j_spelling(tmp_path):
+    """ngc6334 tags the module slot with ``_j{proposal}``; unchanged."""
+    from jwst_gc_pipeline.photometry.cataloging import (
+        annotate_independent_detection)
+    (tmp_path / 'catalogs').mkdir()
+    _write_m6_vetted(tmp_path, 'f212n', modtok='_j6778')
+    merged = _m7_merged(tmp_path)
+    o = _options(None, '6778', 'ngc6334')
+    o.modules = 'nrcblong'
+    annotate_independent_detection(str(merged), str(tmp_path), ['F212N'], o)
+    assert bool(Table.read(merged)['independently_detected_f212n'][0])
+
+
+def test_frozen_stage_discriminator_spells_ngc6334s_j_token(tmp_path):
+    """The discriminator's old ``{module}_indivexp`` adjacency could not see a
+    tokened merged catalog at all, ngc6334's ``_j`` names included, so an
+    ngc6334 frozen stage with no per-frame inputs printed "skipped" where the
+    merge HAD run.  It now spells this run's token -- a behavior change for an
+    existing field, and this pins it in both directions."""
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        AstrometryRegressionError)
+    from jwst_gc_pipeline.photometry.cataloging import (
+        _run_astrometry_stage_checkpoint)
+    (tmp_path / 'F090W').mkdir()
+    (tmp_path / 'catalogs').mkdir()
+
+    def _run(proposal):
+        return _run_astrometry_stage_checkpoint(
+            'm5', 'nrcb', 'f090w', str(tmp_path), str(tmp_path), proposal,
+            _options(None, proposal, 'ngc6334'), {}, context='test')
+
+    # the OTHER proposal's merge is not ours -> the stage did not run here
+    (tmp_path / 'catalogs' /
+     'f090w_nrcb_j7213_indivexp_merged_resbgsub_m5_dao_basic.fits').touch()
+    _run('6778')        # must not raise
+
+    (tmp_path / 'catalogs' /
+     'f090w_nrcb_j6778_indivexp_merged_resbgsub_m5_dao_basic.fits').touch()
+    with pytest.raises(AstrometryRegressionError, match='(?i)silently disabled'):
+        _run('6778')

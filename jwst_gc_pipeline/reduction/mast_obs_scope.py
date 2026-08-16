@@ -37,8 +37,32 @@ def observation_scope_mask(obs_ids, proposal_id, field):
     change what a single-obs field downloads today.  For a single-observation
     field every row spells this observation, so the mask is all-True and
     behavior is unchanged.
+
+    A JOINT ``field`` names a SET of observations, each with its own MAST
+    spelling: sgrb2's MIRI is registered ``002-998`` and sickle's ``001-002``,
+    and no MAST row is ever named ``jw05365-o002-998``.  Tested as one prefix
+    it matches nothing, so every attributed row would be dropped and the
+    reduction would download no association at all -- the same shape as the m2
+    joint-token blocker.
+    Decompose and test MEMBERSHIP, keeping the joint spelling in the set as
+    well in case a product ever IS named that way.
+
+    Keeping NOTHING is reported: an empty obs table reaches
+    ``get_product_list`` looking like "no products released yet", and a wrong
+    ``--field`` looks identical.
     """
     obs_ids = np.asarray(obs_ids, dtype=str)
-    own = np.char.startswith(obs_ids, obs_id_prefix(proposal_id, field))
+    prefixes = list(dict.fromkeys(
+        [obs_id_prefix(proposal_id, field)]
+        + [obs_id_prefix(proposal_id, p) for p in str(field).split('-') if p]))
+    own = np.zeros(obs_ids.shape, dtype=bool)
+    for prefix in prefixes:
+        own |= np.char.startswith(obs_ids, prefix)
     unattributed = np.char.find(obs_ids, '-o') < 0
-    return own | unattributed
+    mask = own | unattributed
+    if len(obs_ids) and not mask.any():
+        print(f"MAST obs scoping: kept 0 of {len(obs_ids)} obs-table row(s) -- "
+              f"none of them spells {sorted(prefixes)}.  Either this "
+              f"observation has no released products yet, or --field names an "
+              f"observation this proposal does not have.", flush=True)
+    return mask
