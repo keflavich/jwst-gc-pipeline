@@ -5687,6 +5687,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 ref_filter=ref_filter.lower(),
                 filternames_override=[f.lower() for f in filternames],
                 field=field,
+                progid=proposal_id,
                 vetted=True)
             _xbsuf = _L.obs_token(proposal_id, field)
             _xb = (f'{cut_bp}/catalogs/basic_{module}_indivexp_photometry_tables_'

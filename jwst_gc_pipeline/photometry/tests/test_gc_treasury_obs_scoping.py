@@ -329,6 +329,62 @@ def test_merge_daophot_reads_own_tile_and_stamps_the_end_slot_token(
         'f480m_nrcblong_o001_indivexp_merged_resbgsub_m7_dao_basic_vetted.fits']
 
 
+def test_merge_daophot_takes_the_token_from_the_RUNNING_proposal(
+        tmp_path, monkeypatch):
+    """The registry cannot answer for an unregistered gc-treasury.
+
+    ``_obs_filters_for('gc-treasury')`` is empty until fields.yaml gains the
+    entry, so a registry-only token read '' and the glob went back to
+    ``{filt}*{module}*indivexp_merged``, whose ``*`` swallows tile 001's
+    ``_o001_``.  ``progid`` is the running proposal and decides when given.
+    """
+    (tmp_path / 'catalogs').mkdir()
+    _fake_svo(monkeypatch)
+    monkeypatch.setattr(MC, '_obs_filters_for', lambda target: None)
+    for filt in ('f212n', 'f480m'):          # only tile 002 on disk
+        _write_m7_vetted(tmp_path, filt, '002')
+    with pytest.raises(ValueError, match='No daophot basic catalogs found'):
+        MC.merge_daophot(module='nrcblong', daophot_type='basic',
+                         indivexp=True, resbgsub=True, iteration_label='m7',
+                         target='gc-treasury', basepath=str(tmp_path),
+                         filternames_override=['f212n', 'f480m'],
+                         field='001', progid='10678', vetted=True)
+
+
+def test_merge_daophot_does_not_hand_10678s_convention_to_a_sibling(
+        tmp_path, monkeypatch):
+    """A target registering 10678 alongside another proposal: that proposal's
+    run keeps its own (untokened) spelling, which the registry scan alone
+    would have overridden with ``_o{field}``."""
+    (tmp_path / 'catalogs').mkdir()
+    (tmp_path / 'reduction').mkdir()
+    Table({'Filter': ['F212N'], 'PSF FWHM (arcsec)': [0.072],
+           'PSF FWHM (pixel)': [2.3]}).write(
+        tmp_path / 'reduction' / 'fwhm_table.ecsv')
+    _fake_svo(monkeypatch)
+    monkeypatch.setattr(MC, '_obs_filters_for',
+                        lambda target: {'10678': ['f212n'], '2221': ['f212n']})
+    monkeypatch.setattr(MC, 'sanity_check_individual_table', lambda tbl: None)
+    calls = {}
+    monkeypatch.setattr(MC, 'merge_catalogs',
+                        lambda tbls, **kw: calls.update(
+                            obs_suffix=kw['obs_suffix'],
+                            files=sorted(t.meta['filename'] for t in tbls)))
+    t = Table({'skycoord': SkyCoord([266.0] * u.deg, [-28.9] * u.deg),
+               'flux_fit': [1000.0], 'flux_err': [1.0]})
+    t.meta['PIXSCALE'] = 0.063
+    t.write(tmp_path / 'catalogs' / 'f212n_nrcblong_indivexp_merged_resbgsub'
+                                    '_m7_dao_basic_vetted.fits')
+    MC.merge_daophot(module='nrcblong', daophot_type='basic', indivexp=True,
+                     resbgsub=True, iteration_label='m7', target='sometarget',
+                     basepath=str(tmp_path), ref_filter='f212n',
+                     filternames_override=['f212n'], field='001',
+                     progid='2221', vetted=True)
+    assert calls['obs_suffix'] == ''
+    assert [os.path.basename(f) for f in calls['files']] == [
+        'f212n_nrcblong_indivexp_merged_resbgsub_m7_dao_basic_vetted.fits']
+
+
 # ---------------------------------------------------------------------------
 # m2 per-frame selection: a tile must not consume another tile's exposures
 # ---------------------------------------------------------------------------

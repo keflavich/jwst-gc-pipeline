@@ -1783,6 +1783,7 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
                   vetted=False,
                   filternames_override=None,
                   field=None,
+                  progid=None,
                   basepath='/blue/adamginsburg/adamginsburg/jwst/brick/'):
     """Cross-filter merge of per-filter daophot catalogs.
 
@@ -1792,6 +1793,11 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
     the full ``_obs_filters_for(target)`` set -- REQUIRED for the manual NIRCam path,
     whose target (e.g. sickle) registers MIRI filters in the same obs_filters
     entry that must NOT enter the NIRCam cross-band merge.
+
+    ``progid`` is the RUNNING proposal.  It decides the per-obs-merged
+    module-slot token (``naming.merged_catalog_obs_token``) of the per-filter
+    input glob; the field registry answers only for a caller that names no
+    proposal.
     """
 
     desat = "_unsatstar" if desat else ""
@@ -1837,12 +1843,23 @@ def merge_daophot(module='nrca', detector='', daophot_type='basic', desat=False,
     # so the input glob must carry the module-slot token -- an unscoped ``*``
     # would match another tile's catalogs -- while the OUTPUT keeps the end-slot
     # ``_o{field}`` that cataloging's m7/m8 readers spell via obs_token().
+    #
+    # The RUNNING proposal decides, when the caller names it.  Reading the token
+    # off the field registry alone gets it wrong in both directions: an
+    # unregistered gc-treasury (no fields.yaml entry yet, issue #416) reads ''
+    # and globs unscoped, and the `*` after the module swallows another tile's
+    # `_o001_` -- while a target that registers 10678 ALONGSIDE another proposal
+    # would hand 10678's convention to that proposal's run.  The registry scan
+    # stays as the fallback for a caller that passes no progid.
     _perobs_merged_tok = ''
     if field not in (None, ''):
-        for _p in map(str, _obs_filters_for(target) or ()):
-            _perobs_merged_tok = merged_catalog_obs_token(_p, field)
-            if _perobs_merged_tok:
-                break
+        if progid not in (None, ''):
+            _perobs_merged_tok = merged_catalog_obs_token(progid, field)
+        else:
+            for _p in map(str, _obs_filters_for(target) or ()):
+                _perobs_merged_tok = merged_catalog_obs_token(_p, field)
+                if _perobs_merged_tok:
+                    break
     if _perobs_merged_tok:
         _obssuf = _perobs_merged_tok
     _mtk = f'{_perobs_merged_tok}_' if _perobs_merged_tok else ''
