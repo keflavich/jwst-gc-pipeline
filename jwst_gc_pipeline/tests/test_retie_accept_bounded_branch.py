@@ -92,10 +92,26 @@ def test_a_bounded_fixed_point_does_NOT_leave_the_loop_here():
 
 def test_it_raises_the_correction_floor_before_taking_that_pass():
     branch = _branch()
-    # the floor is now max(existing, computed) rather than a bare assignment,
-    # so that acceptance can never LOWER an operator-set floor
-    assert 'ASTROM_M2_CORRECTION_FLOOR_MAS=$(awk' in branch
+    # max(existing, computed), so acceptance can never LOWER an operator floor
+    assert "_effective_floor=$(awk" in branch
+    assert 'ASTROM_M2_CORRECTION_FLOOR_MAS="$_effective_floor"' in branch
     assert 'export ASTROM_M2_CORRECTION_FLOOR_MAS' in branch
+
+
+def test_both_messages_quote_the_floor_the_run_will_ACTUALLY_use():
+    """They used to interpolate the computed value while the run continued at
+    the max, so with a preset of 4.0 and a computed 0.6 the log said 0.6 -- and
+    the last-iteration line then told a human to set 0.6, which is the exact
+    lowering the max exists to prevent."""
+    branch = _branch()
+    assert '$fp_floor (was' not in branch, (
+        'the announcement must quote the exported floor, not the computed one')
+    said = [ln.strip() for ln in branch.splitlines()
+            if ln.strip().startswith('echo ')
+            and 'ASTROM_M2_CORRECTION_FLOOR_MAS=' in ln]
+    assert said, 'the branch must say which floor it is continuing at'
+    for line in said:
+        assert '$_effective_floor' in line, line
 
 
 def test_accepting_on_the_LAST_iteration_stops_and_says_how_to_finish():

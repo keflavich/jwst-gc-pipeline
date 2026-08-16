@@ -515,7 +515,8 @@ for ((it=1; it<=MAXITER; it++)); do
                 -m jwst_gc_pipeline.photometry.retie_fixed_point \
                 --record-dir "${BASE}/astrometry_checkpoints" \
                 --obs-token "o${FIELD}" --since "$RETIE_RUN_START" \
-                --accept-below-mas "${RETIE_ACCEPT_RESIDUAL_MAS:-0}" 2>&1) \
+                --accept-below-mas "${RETIE_ACCEPT_RESIDUAL_MAS:-0}" \
+                --expect-filters "$FILTERS" 2>&1) \
                 || fp_rc=$?
         echo "$fp_out"
         if [ "$fp_rc" -eq 3 ]; then
@@ -548,21 +549,30 @@ for ((it=1; it<=MAXITER; it++)); do
             # pass re-reduces with the table applied, re-drizzles, and m2 passes
             # under the raised floor -- and the loop then exits by its normal
             # converged branch, with table, frames and mosaics agreeing.
-            echo "[iter $it] BOUNDED fixed point -- re-reducing once more with"
-            echo "           ASTROM_M2_CORRECTION_FLOOR_MAS=$fp_floor (was"
-            echo "           ${ASTROM_M2_CORRECTION_FLOOR_MAS:-unset}), so the"
-            echo "           frames and the offsets table end up agreeing."
             # Never LOWER an operator-set floor.  Eight fields run at 4.0
             # today; a computed 0.5 would make the next m2 correct everything
             # above 0.5 mas and the loop would never converge.
+            #
+            # Computed BEFORE the announcement, and both messages interpolate
+            # the EXPORTED value.  They used to print `$fp_floor` while the run
+            # continued at the max -- so with a preset of 4.0 and a computed
+            # 0.6 the log said the run was continuing at 0.6, and the
+            # last-iteration line then handed a human the exact lowering this
+            # max exists to prevent.
             _prev_floor=${ASTROM_M2_CORRECTION_FLOOR_MAS:-0}
-            ASTROM_M2_CORRECTION_FLOOR_MAS=$(awk -v a="$_prev_floor" -v b="$fp_floor" \
+            _effective_floor=$(awk -v a="$_prev_floor" -v b="$fp_floor" \
                 'BEGIN{print (a>b)?a:b}')
+            echo "[iter $it] BOUNDED fixed point -- re-reducing once more with"
+            echo "           ASTROM_M2_CORRECTION_FLOOR_MAS=$_effective_floor (was"
+            echo "           ${ASTROM_M2_CORRECTION_FLOOR_MAS:-unset}; the check"
+            echo "           computed $fp_floor and a floor is never lowered), so"
+            echo "           the frames and the offsets table end up agreeing."
+            ASTROM_M2_CORRECTION_FLOOR_MAS="$_effective_floor"
             export ASTROM_M2_CORRECTION_FLOOR_MAS
             if [ "$it" -eq "$MAXITER" ]; then
                 echo "[iter $it] ...but this is the last iteration (MAXITER=$MAXITER)."
                 echo "           Re-run with MAXITER=$((MAXITER + 1)) and"
-                echo "           ASTROM_M2_CORRECTION_FLOOR_MAS=$fp_floor to finish."
+                echo "           ASTROM_M2_CORRECTION_FLOOR_MAS=$_effective_floor to finish."
                 exit 2
             fi
         elif [ "$fp_rc" -ne 0 ]; then

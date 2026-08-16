@@ -383,6 +383,11 @@ def main(argv=None):
                          " the retie loop passes its own start time so an"
                          " earlier campaign's passes are not counted as this"
                          " loop's")
+    ap.add_argument("--expect-filters", default="",
+                    help="space-separated filters the field is running.  Any "
+                         "of them the scan did not cover refuses acceptance: "
+                         "the scan is scoped by --obs-token/--since, the "
+                         "correction floor is not.")
     ap.add_argument("--accept-below-mas", type=float, default=0.0,
                     help="when a fixed point is reached and the largest"
                          " residual still measured is below this, exit 4"
@@ -390,6 +395,7 @@ def main(argv=None):
                          " correction floor that lets the frozen stages run."
                          " 0 (default) disables it: every fixed point stops.")
     args = ap.parse_args(argv)
+    args.expect_filters = str(args.expect_filters or '').split()
     if args.accept_below_mas and not math.isfinite(args.accept_below_mas):
         ap.error(f"--accept-below-mas {args.accept_below_mas} is not a finite "
                  f"number of milliarcseconds")
@@ -406,6 +412,16 @@ def main(argv=None):
         obs_token=args.obs_token, since=args.since)
     for line in lines:
         print(line)
+    # The scan is SCOPED by --obs-token and --since; the floor is not -- it is
+    # applied to every filter in the field.  A filter whose only history is
+    # untokened, or predates --since, disappears from `groups` entirely: not
+    # stuck, not moving, not even unjudged.  On sgrc `--obs-token o012` hid six
+    # groups the bare scan calls unjudged, with residuals up to 4.99 mas.  So
+    # the caller declares what the field is running and the scan has to have
+    # covered it.
+    unscanned = sorted(
+        f for f in (args.expect_filters or [])
+        if f.upper() not in {g[0].upper() for g in (stuck | moving | unjudged)})
     if not stuck:
         return 0
     print("\nFIXED POINT: applying these corrections does not change what "
@@ -414,6 +430,13 @@ def main(argv=None):
           "(intrinsic scatter? distortion? centroid bias?) rather than "
           "running more iterations.")
     if args.accept_below_mas <= 0:
+        return 3
+    if unscanned:
+        print(f"\nNOT ACCEPTED: {', '.join(unscanned)} produced no checkpoint "
+              f"record this scan could see, and the correction floor is applied "
+              f"to every filter in the field.  The scan is scoped by "
+              f"--obs-token/--since and the floor is not, so accepting now "
+              f"would waive whatever those filters are doing.  STOPPING.")
         return 3
     if unjudged:
         # A group with too little history is not "converging" and not "stuck" --
@@ -439,9 +462,14 @@ def main(argv=None):
                 f"in the field, so accepting here would waive a residual the "
                 f"converging filter(s) had not finished removing.  STOPPING.")
         return 3
+    # `only_groups=stuck` was a no-op and is gone: `main` returns 3 on
+    # `unjudged` and on `moving` above, and groups = stuck | moving | unjudged,
+    # so by here `stuck` IS every group in scope.  An argument that cannot
+    # change the result cannot be pinned by a test, and claiming it was pinned
+    # was wrong.
     worst, key, label = largest_measured_residual(
         args.record_dir, stage=args.stage, filtername=args.filtername,
-        obs_token=args.obs_token, since=args.since, only_groups=stuck)
+        obs_token=args.obs_token, since=args.since)
     if key is None:
         # Nothing correctable was measured, so "the largest residual is 0.00 mas"
         # is the absence of a measurement rather than a small one -- and the

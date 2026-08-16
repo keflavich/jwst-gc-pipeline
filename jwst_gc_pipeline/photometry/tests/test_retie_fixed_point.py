@@ -561,3 +561,47 @@ def test_the_floor_may_not_exceed_the_ceiling_it_was_accepted_under(tmp_path,
     d = _history(tmp_path, [big, big_again, big, big_again])
     assert _cli(d, '--accept-below-mas', '15') == 3
     assert 'exceeds the 15.0 mas ceiling' in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# the scan is scoped; the floor is not  (PR #388 re-review, blocker 2)
+# ---------------------------------------------------------------------------
+
+def test_a_filter_the_scoped_scan_never_saw_refuses_acceptance(tmp_path):
+    """`--obs-token` and `--since` shrink the SCAN. They do not shrink the
+    correction floor, which is applied to every filter in the field.
+
+    Live: `--obs-token o012` on sgrc hid six groups the bare scan calls
+    unjudged, with residuals up to 4.99 mas; `--obs-token o002` on cloudc hid
+    three, up to 3.96 mas. Those filters were not stuck, not moving, not even
+    unjudged -- they were absent, and the acceptance never considered them.
+    """
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],
+                 filt='F162M', token='o012')
+    assert _cli(d, '--accept-below-mas', '15', '--obs-token', 'o012') == 4
+    assert _cli(d, '--accept-below-mas', '15', '--obs-token', 'o012',
+                '--expect-filters', 'F162M F480M') == 3
+
+
+def test_the_refusal_names_the_filters_that_were_not_covered(tmp_path, capsys):
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],
+                 filt='F162M', token='o012')
+    _cli(d, '--accept-below-mas', '15', '--obs-token', 'o012',
+         '--expect-filters', 'F162M F480M F405N')
+    out = capsys.readouterr().out
+    assert 'F405N' in out and 'F480M' in out
+    assert 'F162M produced no' not in out, 'the covered filter must not be named'
+
+
+def test_expect_filters_is_case_insensitive(tmp_path):
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],
+                 filt='F162M', token='o012')
+    assert _cli(d, '--accept-below-mas', '15', '--obs-token', 'o012',
+                '--expect-filters', 'f162m') == 4
+
+
+def test_expect_filters_does_nothing_when_acceptance_is_off(tmp_path):
+    """It is a guard on ACCEPTING, not a new way to fail a scan."""
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],
+                 filt='F162M', token='o012')
+    assert _cli(d, '--obs-token', 'o012', '--expect-filters', 'F162M F480M') == 3
