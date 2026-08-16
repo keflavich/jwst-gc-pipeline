@@ -445,7 +445,10 @@ def test_a_fresh_cached_index_is_reused_without_refetching(tmp_path, monkeypatch
     (cache / '20260817_report_20260814.txt').write_text(REPORT)
     calls = []
     monkeypatch.setattr(S, '_get', lambda url, timeout=30: calls.append(url))
-    out = S.load(str(tmp_path), program='10678')
+    # min_rows=1: this fixture is a two-visit stub, well under the production
+    # plausibility floor.  The floor itself is exercised in both directions by
+    # the two tests at the end of this file.
+    out = S.load(str(tmp_path), program='10678', min_rows=1)
     assert calls == [], 'a fresh cached index must not be re-fetched'
     assert out['stale'] is False, 'reusing a fresh cache is not a degradation'
     assert len(out['visits']) == 2
@@ -468,3 +471,101 @@ def test_a_stale_cached_index_is_refetched(tmp_path, monkeypatch):
     monkeypatch.setattr(S, '_get', _fake)
     S.load(str(tmp_path), program='10678')
     assert calls and calls[0] == S.SCHEDULE_INDEX
+
+
+# ---------------------------------------------------------------------------
+# The six mutations that survived review round N, plus the two new anomalies.
+# Each of these was written against a specific mutation that left 208 green.
+# ---------------------------------------------------------------------------
+
+def test_an_index_with_no_report_LINKS_does_not_claim_the_program_is_unscheduled(
+        tmp_path, monkeypatch):
+    """The forbidden sentence, reachable with NO local failure.
+
+    An STScI 200 that is a maintenance page, a changed href pattern, or a
+    truncated cached index all give a non-empty index that yields zero report
+    URLs.  Nothing else fires, and the page then says the program "is not on the
+    published schedule yet" -- a claim about the PROGRAM made on the strength of
+    a page we failed to read.
+    """
+    cache = tmp_path / S.CACHE_SUBDIR
+    cache.mkdir()
+    (cache / 'index.html').write_text(
+        '<html><body><h1>Scheduled maintenance</h1></body></html>')
+    monkeypatch.setattr(S, '_get', lambda url, timeout=30: '')
+    out = S.load(str(tmp_path), program='10678')
+    assert out['stale'] is True, out
+    assert out['note'], 'a zero-link index must say so'
+    assert 'no weekly report links' in out['note'], out['note']
+
+
+def test_a_TRUNCATED_report_is_refused_rather_than_undercounted(tmp_path,
+                                                               monkeypatch):
+    """A body truncated in transit parses cleanly -- ruler and leading rows
+    intact -- and published a confident undercount with stale=False.  Measured
+    on the real 20260817 report: 20% of it gives "5 visits, 3.3 h"; 90% gives
+    "30 visits, 19.7 h".  Both silent."""
+    cache = tmp_path / S.CACHE_SUBDIR
+    cache.mkdir()
+    (cache / 'index.html').write_text(
+        '<a href="/d/_documents/20260817_report_20260814.txt">x</a>')
+    (cache / '20260817_report_20260814.txt').write_text(REPORT)
+    monkeypatch.setattr(S, '_get', lambda url, timeout=30: '')
+    out = S.load(str(tmp_path), program='10678', min_rows=50)
+    assert out['stale'] is True, out
+    assert 'plausibility floor' in (out['note'] or ''), out['note']
+
+
+def test_the_plausibility_floor_does_not_fire_on_a_full_report(tmp_path,
+                                                              monkeypatch):
+    """The other direction: a report at or above the floor must stay clean, or
+    the floor is just an unconditional refusal."""
+    cache = tmp_path / S.CACHE_SUBDIR
+    cache.mkdir()
+    (cache / 'index.html').write_text(
+        '<a href="/d/_documents/20260817_report_20260814.txt">x</a>')
+    (cache / '20260817_report_20260814.txt').write_text(REPORT)
+    monkeypatch.setattr(S, '_get', lambda url, timeout=30: '')
+    out = S.load(str(tmp_path), program='10678', min_rows=1)
+    assert out['stale'] is False, out
+    assert not out['note'], out['note']
+
+
+def test_the_cache_write_survives_a_SECOND_WRITER(tmp_path):
+    """`path + '.tmp'` is atomic against a kill and NOT against a second
+    process: both writers share the temp inode, so the loser's os.replace moves
+    it into place while the winner still holds a descriptor and the winner's
+    remaining bytes land INSIDE the published file.  Measured on the fixed name:
+    a 100000-byte cache reading BBBBB...GGGGG, permanently cached.
+
+    Asserting temp-then-replace is not enough -- the previous test asserted only
+    that the content landed and no `.tmp` remained, which a plain
+    `open(path, 'w')` also satisfies.
+    """
+    import multiprocessing
+    target = str(tmp_path / 'cache.txt')
+
+    def _writer(ch):
+        S._write_cache(target, ch * 50000)
+
+    procs = [multiprocessing.Process(target=_writer, args=(c,))
+             for c in ('B', 'G')]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join(30)
+    got = open(target).read()
+    assert len(got) == 50000, f'interleaved write: {len(got)} bytes'
+    assert set(got) in ({'B'}, {'G'}), (
+        f'published file mixes two writers: head {got[:5]} tail {got[-5:]}')
+    assert not [f for f in os.listdir(tmp_path) if f.endswith('.tmp')]
+
+
+def test_the_cache_write_uses_a_UNIQUE_temp_name(tmp_path):
+    """The property the interleaving test rests on, asserted directly so it
+    cannot regress into a fixed name that merely happens to pass."""
+    import inspect
+    src = inspect.getsource(S._write_cache)
+    assert 'mkstemp' in src, (
+        "a fixed `path + '.tmp'` is shared by concurrent writers")
+    assert "f'{path}.tmp'" not in src

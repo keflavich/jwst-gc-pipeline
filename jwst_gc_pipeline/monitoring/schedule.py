@@ -44,6 +44,7 @@ import datetime
 import http.client
 import json
 import os
+import tempfile
 import re
 import urllib.error
 import urllib.request
@@ -80,6 +81,11 @@ USER_AGENT = 'jwst-gc-pipeline monitor (schedule reader)'
 #: ``stale``.
 INDEX_MAX_AGE_S = 1800
 
+#: Fewest visits a real published weekly report can carry.  Below this the body
+#: was almost certainly truncated: the live 20260817 report has 100+ rows, and a
+#: 2% truncation still parses to 1 row without raising.
+MIN_PLAUSIBLE_ROWS = 20
+
 #: What a failed fetch can raise.  ``http.client.HTTPException`` is in the list
 #: because it is a subclass of NEITHER ``OSError`` nor ``ValueError``: a
 #: truncated HTTPS response (``IncompleteRead``) propagated out of ``load``,
@@ -107,9 +113,17 @@ def _write_cache(path, text):
     filesystem mid-write leaves a partial or zero-byte file -- which the reader
     then treated as authoritative forever.
     """
-    tmp = f'{path}.tmp'
+    # mkstemp, not a fixed `path + '.tmp'`: the fixed name is atomic against a
+    # KILL and not against a SECOND WRITER.  Two concurrent refreshes share the
+    # temp inode, so the loser's os.replace moves it into place while the winner
+    # still holds a descriptor on it and its remaining bytes land INSIDE the
+    # published file -- measured: a 100000-byte cache reading BBBBB...GGGGG,
+    # permanently cached, with the loser also raising FileNotFoundError.
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or '.',
+                               prefix=os.path.basename(path) + '.',
+                               suffix='.tmp')
     try:
-        with open(tmp, 'w') as fh:
+        with os.fdopen(fd, 'w') as fh:
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
@@ -274,7 +288,7 @@ def report_urls(index_html, base='https://www.stsci.edu'):
     return [best[w] for w in sorted(best, reverse=True)]
 
 
-def load(outdir, program=DEFAULT_PROGRAM, weeks=8, offline=False):
+def load(outdir, program=DEFAULT_PROGRAM, weeks=8, offline=False, min_rows=MIN_PLAUSIBLE_ROWS):
     """Scheduled visits for ``program``, newest weeks first, with provenance.
 
     Returns ``{'program', 'visits', 'weeks', 'fetched', 'stale', 'note'}``.
@@ -334,6 +348,17 @@ def load(outdir, program=DEFAULT_PROGRAM, weeks=8, offline=False):
                 'note': note or 'no schedule index available, cached or live'}
 
     wanted = report_urls(index_html)[:weeks]
+    if not wanted:
+        # An index that is non-empty but yields NO report URLs is not a local
+        # failure, so none of the other anomaly checks fire -- and the page then
+        # prints "not on the published schedule yet", which is a claim about the
+        # PROGRAM made on the strength of a page we failed to read.  Reachable
+        # from an STScI 200 that is a maintenance page, a changed href pattern,
+        # or a truncated cached index.
+        return {'program': program, 'visits': [], 'weeks': [], 'stale': True,
+                'fetched': None,
+                'note': note or ('read the schedule index but found no weekly '
+                                 'report links in it')}
     visits, weeks_seen = [], []
     for week, generated, url in wanted:
         path = os.path.join(cache, f'{week}_report_{generated}.txt')
@@ -390,10 +415,17 @@ def load(outdir, program=DEFAULT_PROGRAM, weeks=8, offline=False):
                 note = note or f'{week}: {exc}'
                 stale = True
                 continue
-        if not parsed:
-            # A published weekly report is never empty.  Zero rows means the
-            # parse found a ruler it should not have.
-            note = note or f'{week}: the report parsed to zero visits'
+        if len(parsed) < min_rows:
+            # A plausibility FLOOR, not a zero check.  A body truncated in
+            # transit parses cleanly -- the ruler and the leading rows are
+            # intact -- and publishes a confident undercount with stale=False:
+            # measured on the real 20260817 report, 20% of it gives 23 rows and
+            # "5 visits, 3.3 h", 90% gives "30 visits, 19.7 h", both silent.
+            # A real JWST week schedules far more than a handful of visits, so
+            # anything under the floor is a short read rather than a quiet week.
+            note = note or (f'{week}: the report parsed to only {len(parsed)} '
+                            f'visit(s), below the {min_rows}-row '
+                            f'plausibility floor -- probably a truncated read')
             stale = True
         mine = [v for v in parsed if v['program'] == str(program)]
         weeks_seen.append({'week': week, 'generated': generated, 'url': url,
