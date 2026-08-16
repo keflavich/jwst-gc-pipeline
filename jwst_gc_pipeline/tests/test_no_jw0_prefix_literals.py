@@ -2,9 +2,9 @@
 
 MAST zero-pads the proposal number to FIVE digits in every product name
 (``jw02221...``, ``jw10678...``).  The literal ``f'jw0{proposal_id}'`` is
-byte-identical to that for a 4-digit proposal and wrong for a 5-digit one:
-against program 10678 (the first 5-digit proposal, GC Treasury) it fabricates
-``jw010678`` -- the MAST URI filter selects zero uncals, every product glob
+byte-identical to that for a 4-digit proposal and wrong for a 5-digit one
+(10678, the GC Treasury program, and omegacen's 12587): against 10678 it
+fabricates ``jw010678`` -- the MAST URI filter selects zero uncals, every glob
 matches nothing, and the m2 visit token fails its own ``^jw\\d{11}$``
 validator (issue #414).  Because the spelling WORKS on every 4-digit program,
 nothing else catches it until a 5-digit run dies.

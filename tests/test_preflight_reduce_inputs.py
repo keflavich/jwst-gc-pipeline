@@ -122,6 +122,41 @@ def test_a_real_image3_association_passes(tmp_path):
     assert rows[0].n_asn == 1
 
 
+def test_a_five_digit_proposals_products_are_found(tmp_path):
+    """Issue #414 at this call site, pinned on the VALUE the template is
+    filled with.
+
+    ``test_the_glob_is_the_one_the_reduce_itself_uses`` pins ``ASN_GLOB``'s
+    text alone, so it stays green when the ``{jw}`` field carries the old
+    ``'jw0' + proposal`` spelling.  MAST writes ``jw10678-o001...`` for the GC
+    Treasury program; the old spelling globs ``jw010678-o001...`` and reads a
+    complete field as having no inputs at all -- 20 h of queue answering a
+    question this gate exists to answer in ten seconds.
+    """
+    members = ('jw10678001001_02101_00001_nrca1_cal.fits',
+               'jw10678001001_02101_00001_nrcb1_cal.fits')
+    root = _field(tmp_path, 'sgra', 'F212N',
+                  asns=['jw10678-o001_20260816t000000_image3_00001_asn.json'],
+                  cals=list(members), members=members)
+    rows = PF.check(root, 'sgra', '10678', '001', ['F212N'], ['nrca', 'nrcb'])
+    assert rows[0].ok, rows[0].why
+    assert rows[0].n_asn == 1 and rows[0].n_cal == 2
+
+
+def test_a_five_digit_proposal_does_not_match_the_over_padded_name(tmp_path):
+    """The converse: products written under the WRONG prefix are not accepted
+    as this proposal's inputs, so a run that fabricated ``jw010678`` names
+    cannot make the gate green."""
+    members = ('jw010678001001_02101_00001_nrca1_cal.fits',
+               'jw010678001001_02101_00001_nrcb1_cal.fits')
+    root = _field(tmp_path, 'sgra', 'F212N',
+                  asns=['jw010678-o001_20260816t000000_image3_00001_asn.json'],
+                  cals=list(members), members=members)
+    rows = PF.check(root, 'sgra', '10678', '001', ['F212N'], ['nrca', 'nrcb'])
+    assert not rows[0].ok
+    assert 'jw10678-o001' in rows[0].why, rows[0].why
+
+
 # ---------------------------------------------------------------------------
 # modules
 # ---------------------------------------------------------------------------

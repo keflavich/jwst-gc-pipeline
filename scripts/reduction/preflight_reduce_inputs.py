@@ -51,7 +51,11 @@ import os
 import re
 import sys
 
-from jwst_gc_pipeline.naming import jw_prefix
+# `jw_prefix` is imported inside `check()`.  This module's own imports are
+# stdlib-only on purpose -- it PARSES the reduce driver (see
+# `reduce_module_policy`) and defers `fields` for the same reason -- so `--help`
+# and a parse-only run stay off the numpy/astropy import that executing the
+# package `__init__` performs.
 
 #: The association glob the reduce ITSELF uses -- copied verbatim from
 #: ``reduction/PipelineRerunNIRCAM-LONG.py`` and ``reduction/PipelineMIRI.py``,
@@ -308,6 +312,7 @@ def _families_from_members(members):
 
 def check(root, target, proposal, obsid, filters, modules, instrument='nircam'):
     """A :class:`Row` per requested filter."""
+    from jwst_gc_pipeline.naming import jw_prefix
     if not filters:
         raise ValueError('no filters requested -- an empty filter list checks '
                          'nothing and would report success')

@@ -1630,12 +1630,15 @@ def merge_crowdsource(module='nrca', suffix="", desat=False, bgsub=False,
         raise NotImplementedError
     print()
     print(f'Starting merge crowdsource module: {module} suffix: {suffix} target: {target} iter: {iteration_label}', flush=True)
+    # `_obs_filters_for` is keyed by PROPOSAL (the observation number comes from
+    # `_obsid_for_glob`); the loop variable used to be spelled `obsid`, which
+    # read as if the prefix were built out of an observation number.
     imgfns = [x
-              for obsid in _obs_filters_for(target)
-              for filn in _obs_filters_for(target)[obsid]
-              if _obsid_for_glob(target, obsid, filn) is not None
+              for proposal in _obs_filters_for(target)
+              for filn in _obs_filters_for(target)[proposal]
+              if _obsid_for_glob(target, proposal, filn) is not None
               for x in glob.glob(f"{basepath}/{filn.upper()}/pipeline/"
-                                 f"{jw_prefix(obsid)}-o{_obsid_for_glob(target, obsid, filn)}_t001_{_inst_token(filn)}*{filn.lower()}*{module}_i2d.fits")
+                                 f"{jw_prefix(proposal)}-o{_obsid_for_glob(target, proposal, filn)}_t001_{_inst_token(filn)}*{filn.lower()}*{module}_i2d.fits")
               if f'{module}_' in x or f'{module}1_' in x
              ]
 

@@ -2,18 +2,25 @@
 
 MAST zero-pads the proposal number to FIVE digits in every product name:
 proposal 2221 ships as ``jw02221...`` and proposal 10678 as ``jw10678...``.
-Every proposal this pipeline processed before the GC Treasury program
-(10678, first 5-digit proposal, 2026) had four digits, so ~95 call sites
-spelled the prefix as the literal ``f'jw0{proposal_id}'`` -- byte-identical
-to the padded form for a 4-digit proposal and wrong for a 5-digit one
-(``jw010678`` where MAST writes ``jw10678``): the MAST URI filter selects
-zero uncals, every product glob matches nothing, and the m2 visit token
-fails its own ``^jw\\d{11}$`` validator (issue #414).  Build the prefix
+Every proposal whose data this pipeline has REDUCED has four digits, so ~96
+call sites spelled the prefix as the literal ``f'jw0{proposal_id}'`` --
+byte-identical to the padded form for a 4-digit proposal and wrong for a
+5-digit one (``jw010678`` where MAST writes ``jw10678``): the MAST URI filter
+selects zero uncals, every product glob matches nothing, and the m2 visit
+token fails its own ``^jw\\d{11}$`` validator (issue #414).  Build the prefix
 here instead; a grep-guard test (``test_no_jw0_prefix_literals.py``)
 refuses any new ``jw0{`` literal.
 
-Stdlib-only on purpose, so scripts can import it without pulling in the
-JWST stack.
+Two 5-digit proposals are in scope, and the helper changes the prefix for
+both: the GC Treasury program 10678 (first delivery 2026-08-16) and omegacen's
+12587 (GO-8322/12587, still EXCLUSIVE_ACCESS, so no products on disk).  For
+every proposal with data on disk today -- all 4-digit -- the prefix stays
+byte-identical to the old spelling.
+
+The module itself is stdlib-only, so a script can defer the import to the
+function that needs it and keep its own module-level imports light.  (The
+import still executes ``jwst_gc_pipeline/__init__.py``, which pulls numpy and
+astropy for the provenance hook; the JWST stack is not among them.)
 """
 import os
 import re
@@ -29,10 +36,12 @@ _JW_BASENAME_RE = re.compile(r"^jw(\d{5})")
 def jw_prefix(proposal_id):
     """``'jw02221'`` / ``'jw10678'`` -- the MAST filename prefix of a proposal.
 
-    Zero-pads to five digits exactly as MAST does.  For the historical 4-digit
-    proposals this reproduces the old ``f'jw0{proposal_id}'`` spelling byte for
-    byte (``jw_prefix(2221) == 'jw02221'``); for 5-digit proposals it yields
-    the real on-disk prefix the old spelling got wrong.
+    Zero-pads to five digits exactly as MAST does.  For a 4-digit proposal --
+    every proposal with products on disk today -- this reproduces the old
+    ``f'jw0{proposal_id}'`` spelling byte for byte (``jw_prefix(2221) ==
+    'jw02221'``).  It diverges from that spelling in the two places the
+    spelling was wrong: a 5-digit proposal (``jw10678``, not ``jw010678``) and
+    a proposal below 1000 (``jw00618``, not ``jw0618``).
 
     Accepts an int or a numeric string (with or without leading zeros).
     Raises ``ValueError`` on anything else: a non-numeric value, a negative
