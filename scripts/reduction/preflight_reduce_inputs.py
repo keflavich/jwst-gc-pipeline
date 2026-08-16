@@ -230,11 +230,13 @@ def allowed_modules(proposal, obsid, filtername, requested, policy=None,
         # and it fired on the one field this narrowing exists for: `--modules
         # nrca` and `--modules merged` against sickle 3958/007, which is module
         # B only, both read OK and both make the reduce stop.
+        groups = sorted({module_family(m) for m in entry})
+        spec = sorted(as_written) if as_written is not None else sorted(requested)
         raise NoAllowedModules(
-            f'the reduce allows only {sorted({module_family(m) for m in entry})} '
-            f'for {proposal}/o{obsid} {filtername}, and none of the requested '
-            f'{sorted(requested)} is among them -- it would raise "No requested '
-            f'modules are allowed" before doing any work')
+            f'the reduce allows only {groups} for {proposal}/o{obsid} '
+            f'{filtername}, and the requested {spec} names nothing it will run '
+            f'-- it would raise "No requested modules are allowed" before doing '
+            f'any work')
     return allowed
 
 
@@ -349,8 +351,12 @@ def check(root, target, proposal, obsid, filters, modules, instrument='nircam'):
         # observation is declared module-B-only in the reduce's own policy, and
         # asking it for module A is a false alarm rather than a finding.
         try:
-            want_here = allowed_modules(proposal, obsid, filt, wanted,
-                                        policy=policy, as_written=modules)
+            # NIRCam-only: `PipelineMIRI` and `PipelineRerunNIRISS` never call
+            # `get_allowed_modules`, so consulting it for them reports MISSING
+            # against a table that says nothing about their data.
+            want_here = (wanted if single_detector_instrument
+                         else allowed_modules(proposal, obsid, filt, wanted,
+                                              policy=policy, as_written=modules))
         except NoAllowedModules as exc:
             rows.append(Row(filt, len(asns), len(cals), families,
                             sorted(wanted), str(exc)))
@@ -417,6 +423,10 @@ def main(argv=None):
     # them is the natural mistake -- and `--modules "nrcb nrca"` used to parse
     # as one token, truncate to `nrcb`, and exit 0 on a field with no module A.
     mods = [m for m in re.split(r'[,\s]+', args.modules) if m]
+    if not mods:
+        ap.error('--modules is empty; an empty list disables the module check '
+                 'silently, which is the check that finds a one-module '
+                 'observation asked for both (issue #408)')
     unknown = sorted(set(mods) - _MODULE_TOKENS)
     if unknown:
         ap.error(f'--modules names {unknown}, which are not module tokens; '

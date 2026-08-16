@@ -497,3 +497,73 @@ def test_a_single_detector_spec_rejects_another_instruments_association(
     assert not row.ok, (
         f'a {instrument} spec accepted an association whose only member is a '
         f'NIRCam exposure; the reduce keeps only its own instrument')
+
+
+def test_the_refusal_names_the_spec_AS_WRITTEN(tmp_path):
+    """`--modules merged` was refused with "none of ['nrca','nrcb'] is among
+    ['nrcb']" -- and nrcb plainly is.  The real reason is that `merged` is not a
+    token the policy lists; the message named the expanded set, sending an
+    operator to look on disk for module-B frames that are present."""
+    root = _field(tmp_path, 'sickle', 'F187N', asns=[
+        'jw03958-o007_20260101t000000_image3_00001_asn.json'],
+        cals=['jw03958007001_02101_00001_nrcb1_cal.fits'],
+        members=('jw03958007001_02101_00001_nrcb1_cal.fits',))
+    row = PF.check(root, 'sickle', '3958', '007', ['F187N'], ['merged'])[0]
+    assert not row.ok
+    assert "['merged']" in row.why, row.why
+    assert "'nrca'" not in row.why, (
+        'the refusal names the expanded set rather than what was asked for')
+
+
+def test_a_single_detector_instrument_does_not_consult_a_NIRCam_policy(tmp_path):
+    """`PipelineMIRI` and `PipelineRerunNIRISS` never call `get_allowed_modules`,
+    so narrowing a MIRI spec against a NIRCam-only policy table reports MISSING
+    on data that reduces fine."""
+    frame = 'jw03958007001_02101_00001_mirimage_cal.fits'
+    root = _field(tmp_path, 'sickle', 'F187N', asns=[
+        'jw03958-o007_20260101t000000_image3_00001_asn.json'],
+        cals=[frame], members=(frame,))
+    row = PF.check(root, 'sickle', '3958', '007', ['F187N'], ['nrca'],
+                   instrument='miri')[0]
+    assert row.ok, row.why
+
+
+def test_an_unparseable_association_type_produces_a_verdict(tmp_path):
+    """A JSON-valid association whose members are strings raises AttributeError
+    inside the parse; without it in the tuple the check crashes instead of
+    reporting."""
+    import json as _json
+    root = _field(tmp_path, 'sgra', 'F115W', asns=[], cals=CALS_AB)
+    d = pathlib.Path(root) / 'sgra' / 'F115W' / 'pipeline'
+    (d / ASN).write_text(_json.dumps({'products': [{'members': ['a.fits']}]}))
+    row = _spec(root)[0]
+    assert not row.ok
+    assert 'cannot parse' in row.why
+
+
+@pytest.mark.parametrize('bad', ['nircam-long', 'NIRCAM', 'nrc'])
+def test_an_unknown_instrument_is_refused_not_silently_unfiltered(tmp_path, bad):
+    """An unknown value set the member token to None via `.get`, disabling the
+    association filter; it failed closed only because the module check then ran,
+    which is skipped for single-detector instruments."""
+    root = _field(tmp_path, 'sgra', 'F115W', asns=[ASN], cals=CALS_AB)
+    with pytest.raises(SystemExit) as exc:
+        PF.main(['--target', 'sgra', '--proposal', '1939', '--obsid', '001',
+                 '--filters', 'F115W', '--root', root, '--instrument', bad,
+                 '--skip-registry'])
+    assert exc.value.code == 2
+
+
+@pytest.mark.parametrize('empty', ['', '   ', ','])
+def test_an_empty_module_list_is_refused(tmp_path, empty):
+    """It disabled the module check silently, on the exact case #408 is about,
+    while `--filters ''` is refused."""
+    root = _field(tmp_path, 'gc2211', 'F200W', asns=[
+        'jw02211-o050_20260101t000000_image3_00001_asn.json'],
+        cals=['jw02211050001_02101_00001_nrcb1_cal.fits'],
+        members=('jw02211050001_02101_00001_nrcb1_cal.fits',))
+    with pytest.raises(SystemExit) as exc:
+        PF.main(['--target', 'gc2211', '--proposal', '2211', '--obsid', '050',
+                 '--filters', 'F200W', '--root', root, '--modules', empty,
+                 '--skip-registry'])
+    assert exc.value.code == 2
