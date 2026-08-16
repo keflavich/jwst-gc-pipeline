@@ -35,10 +35,25 @@ path (data-qa already deploys its MAST monitor that way — see
 # faster mostly re-reads an unchanged tree, and anything slower makes the page
 # stale enough that people stop trusting it.
 #SCRON --account=astronomy-dept --qos=astronomy-dept-b --partition=hpg-default
-#SCRON --cpus-per-task=2 --mem=8gb --time=00:40:00
+#SCRON --cpus-per-task=2 --mem=8gb --time=00:50:00
 #SCRON --job-name=gc-monitor-refresh
 #SCRON --output=/orange/adamginsburg/jwst/logs/gc-monitor-%j.out
-0 * * * * MONITOR_DEPLOY=1 /orange/adamginsburg/repos/jwst-gc-pipeline/scripts/monitoring/refresh_monitor.sh
+0 * * * * MONITOR_DEPLOY=1 REPO=<checkout> PATH=<python-env>/bin:$PATH bash <checkout>/scripts/monitoring/refresh_monitor.sh
+```
+
+**`REPO` is not optional and its value is not obvious.** `refresh_monitor.sh`
+does `cd "$REPO"` and then `python -m jwst_gc_pipeline.monitoring`, and `-m`
+puts the working directory first on `sys.path` — so the checkout named by
+`REPO` is the code that runs, whatever `PIPE_ROOT` says. The installed job on
+2026-08-15 therefore names the checkout that carries this feature, not
+`/orange/adamginsburg/repos/jwst-gc-pipeline`, which is a separate clone that
+sits on `main` and does not update itself. Point `REPO` at whichever checkout
+you intend to serve from, and remember that nothing pulls it.
+
+Read the installed job rather than trusting this file:
+
+```bash
+scrontab -l
 ```
 
 `MONITOR_DEPLOY=1` is on in that line because the two things it needs were

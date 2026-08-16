@@ -41,6 +41,7 @@ raising -- the monitor's own convention: the section says what it could not
 reach instead of vanishing.
 """
 import datetime
+import http.client
 import json
 import os
 import re
@@ -72,9 +73,54 @@ SCHEDULE_JSON = 'schedule.json'
 
 USER_AGENT = 'jwst-gc-pipeline monitor (schedule reader)'
 
+#: How long a cached index stays authoritative without re-fetching.  One
+#: refresh runs the generator TWICE -- the field pass and the probe-cutout pass
+#: -- so without this every hourly refresh hit stsci.edu twice for a page that
+#: changes weekly.  Reusing a fresh cache is not a degradation and does not set
+#: ``stale``.
+INDEX_MAX_AGE_S = 1800
+
+#: What a failed fetch can raise.  ``http.client.HTTPException`` is in the list
+#: because it is a subclass of NEITHER ``OSError`` nor ``ValueError``: a
+#: truncated HTTPS response (``IncompleteRead``) propagated out of ``load``,
+#: through ``write_report``, and killed the monitor build -- and
+#: ``refresh_monitor.sh`` only fails the job above rc 1, so the crash was
+#: indistinguishable from the normal "the archive has failing runs" exit and the
+#: deploy shipped whatever stale pages were on disk.
+FETCH_ERRORS = (urllib.error.URLError, http.client.HTTPException,
+                OSError, ValueError)
+
 
 class ScheduleFormatError(ValueError):
     """The report does not have the header/ruler this parser needs."""
+
+
+def _now_s():
+    """Wall clock, as its own function so a test can move it."""
+    return datetime.datetime.now(datetime.timezone.utc).timestamp()
+
+
+def _write_cache(path, text):
+    """Cache ``text`` at ``path`` atomically.  True when it landed.
+
+    ``open(path, 'w')`` truncates and then fills, so a kill or a full
+    filesystem mid-write leaves a partial or zero-byte file -- which the reader
+    then treated as authoritative forever.
+    """
+    tmp = f'{path}.tmp'
+    try:
+        with open(tmp, 'w') as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+        return True
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return False
 
 
 def _get(url, timeout=30):
@@ -113,11 +159,20 @@ def parse_report(text):
     lines = text.splitlines()
     ruler_at = None
     for i, line in enumerate(lines):
-        if line.strip() and set(line.strip()) == {'-', ' '}:
+        if not line.strip() or set(line.strip()) != {'-', ' '}:
+            continue
+        # The ruler is the one UNDER THE HEADER, not the first row of dashes in
+        # the file.  Taking the first meant one horizontal rule added to STScI's
+        # preamble would zero the panel with no exception and no trace -- and
+        # the page then states, in prose, that the programme is not on the
+        # schedule.  That is a claim about the survey manufactured from a local
+        # parse failure.
+        if i and 'VISIT ID' in lines[i - 1].upper():
             ruler_at = i
             break
     if ruler_at is None:
-        raise ScheduleFormatError('no column ruler (row of dashes) in report')
+        raise ScheduleFormatError(
+            'no column ruler under a "VISIT ID" header line')
     spans = _columns(lines[ruler_at])
 
     def cell(line, idx):
@@ -136,11 +191,18 @@ def parse_report(text):
             # It has no start time of its own -- it runs with its prime -- so
             # attaching it rather than emitting it is what keeps the count of
             # pointings equal to the count of visits.
+            # ...but only when it says so.  A continuation line can also be a
+            # second TARGET for the same visit (line 61 of the 2026-08-17
+            # report, `TA_RJ0018` under 12782:2:1); calling that a parallel
+            # would put a second instrument on a pointing that has one.
             if current is not None:
                 inst = cell(line, 5)
-                if inst:
+                vtype = cell(line, 2)
+                if inst and 'PARALLEL' in vtype.upper():
                     current['parallels'].append(
-                        {'visit_type': cell(line, 2), 'instrument': inst})
+                        {'visit_type': vtype, 'instrument': inst})
+                elif cell(line, 6):
+                    current.setdefault('extra_targets', []).append(cell(line, 6))
             continue
         m = VISIT_ID_RE.match(vid)
         if not m:
@@ -226,19 +288,46 @@ def load(outdir, program=DEFAULT_PROGRAM, weeks=8, offline=False):
 
     index_path = os.path.join(cache, 'index.html')
     index_html = ''
-    if not offline:
+    fresh_cache = False
+    if os.path.exists(index_path):
+        try:
+            age = max(0.0, _now_s() - os.path.getmtime(index_path))
+            fresh_cache = age < INDEX_MAX_AGE_S
+        except OSError:
+            fresh_cache = False
+    if fresh_cache:
+        try:
+            with open(index_path) as fh:
+                index_html = fh.read()
+        except OSError:
+            index_html = ''
+    if not index_html and not offline:
+        # The fetch and the cache WRITE get separate handlers.  Sharing one
+        # reported a local write failure as "could not reach the STScI schedule
+        # index (...Permission denied: '/orange/adamginsburg/jwst/monitor/
+        # schedule/index.html')" -- and that note is rendered onto a PUBLIC
+        # page, so an internal storage layout and the username shipped under a
+        # message that also blamed the wrong component.  Notes carry no paths.
         try:
             index_html = _get(SCHEDULE_INDEX)
-            with open(index_path, 'w') as fh:
-                fh.write(index_html)
-        except (urllib.error.URLError, OSError, ValueError) as exc:
-            note = f'could not reach the STScI schedule index ({exc})'
+        except FETCH_ERRORS:
+            note = 'could not reach the STScI schedule index'
+            stale = True
+        if index_html and not _write_cache(index_path, index_html):
+            note = note or 'fetched the schedule index but could not cache it'
             stale = True
     if not index_html and os.path.exists(index_path):
-        with open(index_path) as fh:
-            index_html = fh.read()
-        stale = True
-        note = note or 'using the cached schedule index'
+        # A cache older than INDEX_MAX_AGE_S that we could not refresh.  THAT
+        # is the degradation -- reusing a fresh one a few minutes old is the
+        # normal path and is not reported as one.
+        try:
+            with open(index_path) as fh:
+                index_html = fh.read()
+        except OSError:
+            index_html = ''
+        if index_html:
+            stale = True
+            note = note or 'using a cached schedule index that could not be refreshed'
     if not index_html:
         return {'program': program, 'visits': [], 'weeks': [], 'stale': True,
                 'fetched': None,
@@ -248,25 +337,64 @@ def load(outdir, program=DEFAULT_PROGRAM, weeks=8, offline=False):
     visits, weeks_seen = [], []
     for week, generated, url in wanted:
         path = os.path.join(cache, f'{week}_report_{generated}.txt')
-        text = ''
+        text, from_cache = '', False
         if os.path.exists(path):
-            with open(path) as fh:
-                text = fh.read()
-        elif not offline:
+            try:
+                with open(path) as fh:
+                    text = fh.read()
+                from_cache = True
+            except OSError:
+                text = ''
+        if not text and not offline:
             try:
                 text = _get(url)
-                with open(path, 'w') as fh:
-                    fh.write(text)
-            except (urllib.error.URLError, OSError, ValueError) as exc:
-                note = note or f'could not fetch {os.path.basename(url)} ({exc})'
+            except FETCH_ERRORS:
+                note = note or f'could not fetch {os.path.basename(url)}'
                 stale = True
+            else:
+                if not _write_cache(path, text):
+                    note = note or 'fetched a weekly report but could not cache it'
+                    stale = True
         if not text:
+            # An empty or unreadable weekly report is a DEGRADATION, not an
+            # absence of visits.  Left silent, the panel says in prose that the
+            # programme is not on the schedule -- a claim about the survey
+            # manufactured from a local read failure.
+            note = note or f'{week}: the weekly report is empty or unreadable'
+            stale = True
             continue
         try:
             parsed = parse_report(text)
         except ScheduleFormatError as exc:
-            note = note or f'{os.path.basename(url)}: {exc}'
-            continue
+            if from_cache and not offline:
+                # A cached report that no longer parses is the truncated-write
+                # case; the cache was authoritative forever, so one killed
+                # write lost a whole week permanently and invisibly.  Re-fetch
+                # once before believing it.
+                try:
+                    text = _get(url)
+                except FETCH_ERRORS:
+                    text = ''
+                if text and _write_cache(path, text):
+                    try:
+                        parsed = parse_report(text)
+                    except ScheduleFormatError as exc2:
+                        note = note or f'{week}: {exc2}'
+                        stale = True
+                        continue
+                else:
+                    note = note or f'{week}: cached report unreadable ({exc})'
+                    stale = True
+                    continue
+            else:
+                note = note or f'{week}: {exc}'
+                stale = True
+                continue
+        if not parsed:
+            # A published weekly report is never empty.  Zero rows means the
+            # parse found a ruler it should not have.
+            note = note or f'{week}: the report parsed to zero visits'
+            stale = True
         mine = [v for v in parsed if v['program'] == str(program)]
         weeks_seen.append({'week': week, 'generated': generated, 'url': url,
                            'n_visits': len(parsed), 'n_program': len(mine)})
@@ -274,7 +402,13 @@ def load(outdir, program=DEFAULT_PROGRAM, weeks=8, offline=False):
             v['week'] = week
         visits.extend(mine)
 
-    visits.sort(key=lambda v: (v.get('start') or '', v['visit_id']))
+    def _order(v):
+        # Lexicographic on the visit id put 10678:10:1 before 10678:2:1.
+        parts = tuple(int(p) if p.isdigit() else 0
+                      for p in str(v['visit_id']).split(':'))
+        return (v.get('start') or '', parts)
+
+    visits.sort(key=_order)
     return {'program': str(program), 'visits': visits, 'weeks': weeks_seen,
             'fetched': datetime.datetime.now(datetime.timezone.utc)
                                .strftime('%Y-%m-%dT%H:%M:%SZ'),

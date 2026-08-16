@@ -130,15 +130,23 @@ def test_offline_with_no_cache_reports_itself_rather_than_raising(tmp_path):
     assert 'no schedule index' in out['note']
 
 
-def test_offline_reads_the_cache_and_says_it_is_stale(tmp_path):
+def test_offline_reads_the_cache_and_says_it_is_stale(tmp_path, monkeypatch):
+    """An index too old to be current, which offline mode cannot refresh.
+
+    A cache a few minutes old is the normal second-pass path and is NOT a
+    degradation; only one that could not be refreshed is.
+    """
     cache = tmp_path / S.CACHE_SUBDIR
     cache.mkdir()
-    (cache / 'index.html').write_text(
-        '<a href="/d/_documents/20260817_report_20260814.txt">x</a>')
+    idx = cache / 'index.html'
+    idx.write_text('<a href="/d/_documents/20260817_report_20260814.txt">x</a>')
     (cache / '20260817_report_20260814.txt').write_text(REPORT)
+    monkeypatch.setattr(S, '_now_s',
+                        lambda: os.path.getmtime(idx) + S.INDEX_MAX_AGE_S + 1)
     out = S.load(str(tmp_path), program='10678', offline=True)
     assert [v['visit_id'] for v in out['visits']] == ['10678:1:1', '10678:20:1']
     assert out['stale'] is True
+    assert 'could not be refreshed' in out['note']
     assert out['weeks'][0]['n_program'] == 2
     assert out['weeks'][0]['n_visits'] == 3
 
@@ -231,7 +239,7 @@ def test_the_panel_says_the_schedule_is_a_plan():
 def test_a_stale_fetch_is_declared_on_the_page():
     sched = dict(_sched(), stale=True, note='could not reach the index')
     out = SS.section(sched, entries=(), now=NOW)
-    assert 'stale' in out
+    assert 'degraded' in out
     assert 'could not reach the index' in out
 
 
@@ -262,3 +270,201 @@ def test_html_in_a_target_name_cannot_reach_the_page():
     out = SS.section(sched, entries=(), now=NOW)
     assert '<script>alert(1)</script>' not in out
     assert '&lt;script&gt;' in out
+
+
+
+# ---------------------------------------------------------------------------
+# degradation must never become a claim about the survey (PR #404 review)
+# ---------------------------------------------------------------------------
+
+HEADER = REPORT.splitlines()[2]
+RULER = REPORT.splitlines()[3]
+
+
+def _continuation(visit_type, instrument='', target=''):
+    """A continuation line with its cells in the columns the ruler defines.
+
+    Hand-spacing a fixture is how a test ends up asserting about a column the
+    parser never reads.
+    """
+    spans = S._columns(RULER)
+    line = [' '] * (spans[-1][0] + 40)
+    for idx, value in ((2, visit_type), (5, instrument), (6, target)):
+        if value:
+            line[spans[idx][0]:spans[idx][0] + len(value)] = value
+    return ''.join(line).rstrip()
+
+
+def test_an_empty_middle_column_is_read_as_empty(tmp_path):
+    """The discriminator the ruler actually buys.
+
+    A two-or-more-space split reproduces the real file's numbers exactly,
+    because KEYWORDS is comma-and-SINGLE-space separated -- so the test that
+    claimed to pin the ruler was passed by the mutation.  What a delimiter
+    split cannot do is an EMPTY intermediate column: the report's
+    `ATTACHED TO PRIME` rows have a blank DURATION, and splitting puts the
+    instrument into the duration cell.
+    """
+    text = '\n'.join([
+        'Visit Information', '', HEADER, RULER,
+        '12551:41:1     NONE        PARALLEL DARK CALIBRATION      '
+        '^ATTACHED TO PRIME^                NIRSpec Dark',
+    ])
+    row = S.parse_report(text)[0]
+    assert row['duration'] == ''
+    assert row['instrument'] == 'NIRSpec Dark'
+    assert row['start'] == '^ATTACHED TO PRIME^'
+
+
+def test_a_decoy_ruler_in_the_preamble_does_not_zero_the_panel():
+    """One horizontal rule added to STScI's preamble used to zero the panel
+    with no exception and no trace, and the page then said the programme was
+    not on the schedule."""
+    text = '\n'.join(['Visit Information', '--------------------', '',
+                      HEADER, RULER,
+                      REPORT.splitlines()[5], REPORT.splitlines()[6]])
+    visits = S.parse_report(text)
+    assert [v['visit_id'] for v in visits] == ['10678:1:1']
+    assert visits[0]['target'] == 'GC_1'
+
+
+def test_a_ruler_with_no_VISIT_ID_header_above_it_is_refused():
+    with pytest.raises(S.ScheduleFormatError):
+        S.parse_report('preamble\n------  -----\nx  y\n')
+
+
+def test_a_continuation_line_that_is_not_a_parallel_is_not_one():
+    """Line 61 of the real report is a second TARGET for 12782:2:1, not a
+    second instrument on the pointing."""
+    text = '\n'.join([
+        'Visit Information', '', HEADER, RULER,
+        REPORT.splitlines()[5],
+        _continuation('TARGET ACQUISITION', target='TA_RJ0018'),
+    ])
+    visit = S.parse_report(text)[0]
+    assert visit['parallels'] == []
+    assert visit.get('extra_targets') == ['TA_RJ0018']
+
+
+def test_an_unreadable_cached_report_is_declared_rather_than_read_as_absence(
+        tmp_path):
+    cache = tmp_path / S.CACHE_SUBDIR
+    cache.mkdir()
+    (cache / 'index.html').write_text(
+        '<a href="/d/_documents/20260817_report_20260814.txt">x</a>')
+    (cache / '20260817_report_20260814.txt').write_text('')     # zero-byte
+    out = S.load(str(tmp_path), program='10678', offline=True)
+    assert out['visits'] == []
+    assert out['stale'] is True
+    assert out['note'], 'a zero-byte cached report left no trace at all'
+
+
+def test_a_cached_report_that_no_longer_parses_is_declared(tmp_path):
+    cache = tmp_path / S.CACHE_SUBDIR
+    cache.mkdir()
+    (cache / 'index.html').write_text(
+        '<a href="/d/_documents/20260817_report_20260814.txt">x</a>')
+    (cache / '20260817_report_20260814.txt').write_text('truncated preamble\n')
+    out = S.load(str(tmp_path), program='10678', offline=True)
+    assert out['stale'] is True and out['note']
+
+
+def test_a_degraded_read_does_not_claim_the_programme_is_unscheduled():
+    """The one claim the panel must never make, in its other form."""
+    out = SS.section({'program': '10678', 'visits': [], 'weeks': [],
+                      'stale': True, 'note': 'could not reach the index',
+                      'fetched': None}, now=NOW)
+    assert 'says nothing about whether it is on it' in out
+    assert 'not on the published schedule yet' not in out
+
+
+def test_a_clean_read_with_no_visits_still_says_so_plainly():
+    out = SS.section({'program': '99999', 'visits': [], 'weeks': [],
+                      'stale': False, 'note': '', 'fetched': 'x'}, now=NOW)
+    assert 'not on the published schedule yet' in out
+
+
+def test_no_local_path_or_username_reaches_the_note(tmp_path):
+    """The note is rendered onto a PUBLIC page."""
+    cache = tmp_path / S.CACHE_SUBDIR
+    cache.mkdir()
+    (cache / 'index.html').write_text('<a href="/d/_documents/'
+                                      '20260817_report_20260814.txt">x</a>')
+    (cache / '20260817_report_20260814.txt').write_text('')
+    out = S.load(str(tmp_path), program='10678', offline=True)
+    assert str(tmp_path) not in out['note']
+    assert '/' not in out['note']
+
+
+def test_the_cache_write_is_atomic(tmp_path):
+    """A partial file used to be cached permanently, and by the note bug that
+    loss was invisible."""
+    target = tmp_path / 'r.txt'
+    assert S._write_cache(str(target), 'content')
+    assert target.read_text() == 'content'
+    assert not list(tmp_path.glob('*.tmp'))
+
+
+def test_http_layer_failures_are_caught_by_the_fetch_tuple():
+    """`IncompleteRead` is a subclass of neither OSError nor ValueError, so a
+    truncated HTTPS response propagated out and killed the monitor build."""
+    import http.client
+    assert issubclass(http.client.IncompleteRead, S.FETCH_ERRORS)
+    assert issubclass(http.client.HTTPException, S.FETCH_ERRORS)
+
+
+def test_ties_sort_numerically_not_lexicographically(tmp_path):
+    sched = _sched()
+    for v, vid in zip(sched['visits'], ['10678:10:1', '10678:2:1']):
+        v['visit_id'], v['start'] = vid, '2026-08-17T08:10:36Z'
+    cache = tmp_path / S.CACHE_SUBDIR
+    cache.mkdir()
+    (cache / 'index.html').write_text('<a href="/d/_documents/'
+                                      '20260817_report_20260814.txt">x</a>')
+    (cache / '20260817_report_20260814.txt').write_text(REPORT)
+    out = S.load(str(tmp_path), program='10678', offline=True)
+    assert out['visits'][0]['visit_id'] == '10678:1:1'
+
+
+def test_the_panel_names_the_survey_and_expands_its_vocabulary():
+    """This page is public; `visit`, `tile` and `+ MIRI Imaging` shipped bare
+    and the page never named the survey."""
+    out = SS.section(_sched(), entries=(), now=NOW)
+    assert 'Treasury' in out
+    assert 'coordinated parallel' in out
+    assert 'tiles' in out
+
+
+def test_a_fresh_cached_index_is_reused_without_refetching(tmp_path, monkeypatch):
+    """One refresh runs the generator twice (field pass, cutout pass), so
+    without this every hourly refresh hit stsci.edu twice for a weekly page."""
+    cache = tmp_path / S.CACHE_SUBDIR
+    cache.mkdir()
+    (cache / 'index.html').write_text(
+        '<a href="/d/_documents/20260817_report_20260814.txt">x</a>')
+    (cache / '20260817_report_20260814.txt').write_text(REPORT)
+    calls = []
+    monkeypatch.setattr(S, '_get', lambda url, timeout=30: calls.append(url))
+    out = S.load(str(tmp_path), program='10678')
+    assert calls == [], 'a fresh cached index must not be re-fetched'
+    assert out['stale'] is False, 'reusing a fresh cache is not a degradation'
+    assert len(out['visits']) == 2
+
+
+def test_a_stale_cached_index_is_refetched(tmp_path, monkeypatch):
+    cache = tmp_path / S.CACHE_SUBDIR
+    cache.mkdir()
+    idx = cache / 'index.html'
+    idx.write_text('<a href="/d/_documents/20260817_report_20260814.txt">x</a>')
+    (cache / '20260817_report_20260814.txt').write_text(REPORT)
+    monkeypatch.setattr(S, '_now_s',
+                        lambda: os.path.getmtime(idx) + S.INDEX_MAX_AGE_S + 1)
+    calls = []
+
+    def _fake(url, timeout=30):
+        calls.append(url)
+        return idx.read_text()
+
+    monkeypatch.setattr(S, '_get', _fake)
+    S.load(str(tmp_path), program='10678')
+    assert calls and calls[0] == S.SCHEDULE_INDEX
