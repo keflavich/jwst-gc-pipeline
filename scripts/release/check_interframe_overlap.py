@@ -608,7 +608,19 @@ def _refcat(path):
                  f"NOT the Gaia+VIRAC2 catalogue the gating slot assumes")
     else:
         label = "VIRAC2"
-    return rc, gaia, label
+    # ...and act on that, rather than only saying it.  A table without a
+    # `source` column may ARBITRATE a pair -- comparing two exposures against a
+    # common list of stars needs only that the stars be the same ones -- but it
+    # may not GATE the absolute frame, which needs a dense catalogue.  Those are
+    # the two jobs this PR's registry split separates, and the split has to hold
+    # inside the check too.
+    #
+    # Measured on w51, whose list is Gaia-only: with it supplied, F140M, F150W
+    # and F162M each went from PASS to FAIL on the absolute tie alone -- their
+    # own frame-against-frame measurement stayed clean at 3 mas over 18/18
+    # tiles, and no residual-map cell was ever built (n_ok=0/1).  The label
+    # already said the catalogue was wrong for that job; now the code agrees.
+    return rc, gaia, label, src is not None
 
 
 def _val_mas(x):
@@ -1105,7 +1117,7 @@ def check_filter(field, filt, refcat=None, verbose=True, observations=None):
     ext_ran = False
     field_clean = False
     if refcat:
-        rc, gaia, rc_label = _refcat(refcat)
+        rc, gaia, rc_label, rc_may_gate = _refcat(refcat)
         allsrc = SkyCoord(np.concatenate([p.ra.deg for p in pooled.values()]) * u.deg,
                           np.concatenate([p.dec.deg for p in pooled.values()]) * u.deg)
         # GC reference-frame policy (gc-gaia-frame-not-catalog): VIRAC2 is the GC
@@ -1154,7 +1166,13 @@ def check_filter(field, filt, refcat=None, verbose=True, observations=None):
                           f"{rad['field_ratio']:.2f}) -- a sub-population sitting at "
                           f"~the match radius there; inspect those frames.", flush=True)
             if gates and g["measurable"] and not g["clean"]:
-                ext_fail = True
+                if rc_may_gate:
+                    ext_fail = True
+                elif verbose:
+                    print(f"      NOT failing the field on this: {rn} cannot "
+                          f"gate the absolute frame, only arbitrate a pair "
+                          f"(issue #263).  The pair's own frame-against-frame "
+                          f"verdict stands.", flush=True)
             # PER-PAIR scoping (issue #174 item 3): the field-wide map is ONE
             # boolean for the whole filter, so a single clean map cleared EVERY
             # deferred pair -- and on brick F405N every cell it could measure sat

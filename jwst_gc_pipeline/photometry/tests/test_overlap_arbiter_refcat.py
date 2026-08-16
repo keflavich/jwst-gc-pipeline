@@ -114,9 +114,13 @@ def test_a_catalogue_without_a_source_column_is_not_called_VIRAC2():
     w51 = stage.OVERLAP_ARBITER_REFCAT.get('w51')
     if not (w51 and os.path.exists(w51)):
         pytest.skip('w51 star list not on this host')
-    _rc, _gaia, label = cio._refcat(w51)
+    _rc, _gaia, label, may_gate = cio._refcat(w51)
     assert 'VIRAC2' not in label.split('NOT')[0]
     assert 'no `source` column' in label
+    assert may_gate is False, (
+        'a catalogue without a `source` column may arbitrate a pair but must '
+        'not gate the absolute frame -- saying so in the label and then gating '
+        'on it is what turned three clean w51 bands into failures')
 
 
 # ---------------------------------------------------------------------------
@@ -273,7 +277,14 @@ def _sliver_with_a_seam(seed=31, n=9000, sliver_arcsec=7.2, seam_mas=500.0,
     return pooled, ref
 
 
-@pytest.mark.parametrize('allow,expect_pass', [(None, False), ('1', True)])
+@pytest.mark.parametrize('allow,expect_pass', [
+    (None, False),
+    ('1', True),
+    # '0' must NOT enable it: loosening the test to `is not None` survives every
+    # other assertion here, and an operator who sets the variable to 0 to turn
+    # the fallback OFF would turn it on.
+    ('0', False),
+])
 def test_a_clean_FIELD_WIDE_map_does_not_clear_a_sliver_it_cannot_see(
         tmp_path, monkeypatch, allow, expect_pass):
     """Issue #174's conclusion, enforced rather than warned about.
@@ -311,3 +322,33 @@ def test_a_clean_FIELD_WIDE_map_does_not_clear_a_sliver_it_cannot_see(
         f"to the strip gave PASS={r['PASS']}; the field-wide map cannot see it")
     if not expect_pass:
         assert r['could_not_verify'] is True
+
+
+def test_a_list_that_cannot_gate_does_not_FAIL_the_field_on_its_own(tmp_path):
+    """The registry split, carried inside the check.
+
+    A star list without a `source` column may ARBITRATE a pair -- two exposures
+    compared against a common set of stars needs only that the stars be the same
+    ones -- but it may not GATE the absolute frame, which needs a dense
+    catalogue.  Supplying w51's Gaia-only list turned F140M, F150W and F162M
+    from PASS to FAIL on the absolute tie alone, while each pair's own
+    frame-against-frame measurement stayed clean at 3 mas over 18 of 18 tiles.
+    """
+    import inspect
+
+    cio = _load('scripts/release/check_interframe_overlap.py', '_cio_gate')
+    src = inspect.getsource(cio.check_filter)
+    guard = src[src.index('ext_fail = True') - 400:src.index('ext_fail = True') + 40]
+    assert 'rc_may_gate' in guard, (
+        'ext_fail must be conditioned on whether the catalogue can gate the '
+        'absolute frame at all')
+
+    # and the flag itself distinguishes the two shapes
+    from astropy.table import Table
+    dense = tmp_path / 'dense.fits'
+    Table({'ra': [266.5, 266.6], 'dec': [-28.7, -28.6],
+           'source': [b'GaiaDR3', b'VIRAC2']}).write(dense)
+    sparse = tmp_path / 'sparse.fits'
+    Table({'ra': [266.5, 266.6], 'dec': [-28.7, -28.6]}).write(sparse)
+    assert cio._refcat(str(dense))[3] is True
+    assert cio._refcat(str(sparse))[3] is False
