@@ -33,7 +33,7 @@ import subprocess
 
 import numpy as np
 
-from ..naming import jw_prefix
+from ..mast_names import jw_prefix
 
 #: Preferred probe filters, narrow/medium SW first: they are the fastest to fit
 #: and the best-exercised.  ``F150W2``/``F322W2`` are last because only the

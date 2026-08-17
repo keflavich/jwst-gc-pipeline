@@ -1,7 +1,7 @@
 """A skip_outlier_detection run must never copy an OLDER run's product crf.
 
 ``outlier_detection`` is the only Image3 step that emits product-named crf
-(``jw0<prop>-o<field>_t001_nircam_clear-<filt>-<module>_<N>_o<field>_crf.fits``).
+(``jw<prop:05d>-o<field>_t001_nircam_clear-<filt>-<module>_<N>_o<field>_crf.fits``).
 With it skipped (#161) the current run writes none, so any on disk are leftovers
 from a previous reduction -- carrying that reduction's WCS.
 

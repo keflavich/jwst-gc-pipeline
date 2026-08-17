@@ -33,7 +33,7 @@ from photutils.detection import DAOStarFinder
 from scipy.ndimage import median_filter
 from reproject import reproject_interp
 from jwst_gc_pipeline.photometry.astrometry_offsets import measure_offset
-from jwst_gc_pipeline.naming import jw_prefix
+from jwst_gc_pipeline.mast_names import jw_prefix
 import warnings
 warnings.filterwarnings('ignore')
 

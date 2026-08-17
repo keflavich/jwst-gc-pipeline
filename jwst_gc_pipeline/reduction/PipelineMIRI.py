@@ -30,7 +30,7 @@ import datetime
 # supplies the default; an exported CRDS_PATH wins.  The per-target cache
 # selection further down replaces it once the target is known.
 from jwst_gc_pipeline.config import apply_crds_environment
-from jwst_gc_pipeline.naming import jw_prefix, proposal_id_from_filename
+from jwst_gc_pipeline.mast_names import jw_prefix, proposal_id_from_filename
 # Printed because the cache decides which reference files -- and so which
 # distortion and filter-offset solutions -- this run uses.
 print(f"CRDS: {apply_crds_environment()}")

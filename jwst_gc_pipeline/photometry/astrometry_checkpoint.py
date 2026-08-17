@@ -70,7 +70,7 @@ from .astrometry_offsets import measure_offset, local_residual_map
 from .consensus_catalog import (pool_visit_consensi,
                                  write_filter_consensus)
 from ..atomic_io import atomic_write, keep_a_copy, locked
-from ..naming import jw_prefix
+from ..mast_names import jw_prefix
 
 # Stages at which a measured shift is EXPECTED to be possible and is CORRECTED
 # (the first checkpoint after the first per-frame photometry).  At every later

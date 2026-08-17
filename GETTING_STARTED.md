@@ -116,7 +116,7 @@ jw<proposal, zero-padded to 5 digits>-o<obs>*_image3_*0[0-9][0-9]_asn.json
 
 The proposal is padded to five digits exactly as MAST writes it: `jw02221` for
 proposal 2221, `jw10678` for proposal 10678
-(`jwst_gc_pipeline.naming.jw_prefix` builds it).
+(`jwst_gc_pipeline.mast_names.jw_prefix` builds it).
 
 That pattern needs a run of digits before `_asn.json`, which MAST filenames have
 and a hand-written name usually lacks. A real one:

@@ -40,8 +40,10 @@ def test_seed_round_trip_convention(tmp_path):
 def test_five_digit_proposal_visit_token(tmp_path):
     """Issue #414's hard failure, pinned on the WRITTEN token.
 
-    The visit token is proposal + field + visit and its validator is
-    ``VISIT_TOKEN_RE = ^jw\\d{11}$``.  Spelled the old way, proposal 10678
+    The visit token is ``jw`` + proposal(5) + observation(3) + visit(3) -- the
+    11 digits its validator ``VISIT_TOKEN_RE = ^jw\\d{11}$`` counts.  (The
+    ``field`` argument below IS the observation number; m2 spells it
+    ``field``.)  Spelled the old way, proposal 10678
     yields ``jw010678`` + 6 digits = 14 characters, which ``assert_visit_token``
     refuses -- the m2 checkpoint cannot seed a correction for the GC Treasury
     program at all.  ``test_seed_round_trip_convention`` above covers only the

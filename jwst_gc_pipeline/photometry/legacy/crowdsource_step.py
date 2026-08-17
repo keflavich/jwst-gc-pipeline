@@ -20,7 +20,7 @@ helpers must patch THIS module (e.g. ``legacy.crowdsource_step.get_psf_model``),
 not the host module.
 """
 import jwst_gc_pipeline.photometry.crowdsource_catalogs_long as _host
-from jwst_gc_pipeline.naming import jw_prefix
+from jwst_gc_pipeline.mast_names import jw_prefix
 import pylab as pl
 
 # Reproduce the exact module namespace the relocated code had while it lived in

@@ -20,6 +20,8 @@ import importlib.util
 import json
 import os
 import pathlib
+import subprocess
+import sys
 
 import pytest
 
@@ -93,6 +95,50 @@ def test_the_glob_is_the_one_the_reduce_itself_uses():
         assert literal in src, f'{name} no longer builds {literal!r}'
 
 
+def test_the_inlined_prefix_agrees_with_the_package_helper():
+    """This script inlines the five-digit pad to stay runnable with no package
+    on the path (see `jw_prefix`'s docstring).  Two copies can drift, so pin
+    them equal over both digit widths and the sub-1000 case."""
+    from jwst_gc_pipeline.mast_names import jw_prefix as canonical
+    for proposal in ('2221', 2221, '02221', '1182', '10678', 10678, '12587',
+                     '618', 1, 99999):
+        assert PF.jw_prefix(proposal) == canonical(proposal), proposal
+    assert PF.jw_prefix('10678') == 'jw10678'
+    assert PF.jw_prefix('2221') == 'jw02221'
+
+
+@pytest.mark.parametrize('bad', ['brick', '', None, -1, '-2221', 123456, 0,
+                                 '2_221', ' 2221 ', '+2221'])
+def test_the_inlined_prefix_refuses_what_the_helper_refuses(bad):
+    with pytest.raises(ValueError):
+        PF.jw_prefix(bad)
+
+
+def test_the_script_runs_with_no_package_on_the_path():
+    """The gate answers in ten seconds a question the reduce answers in 20 h of
+    queue, so it must run wherever it is invoked from.  Every functional path,
+    `--skip-registry` included, stays off `jwst_gc_pipeline`: an editable
+    install pointing at a different checkout, or none at all, would otherwise
+    take the gate down.  Measured on the real script, from a directory that is
+    not the repo, with PYTHONPATH cleared."""
+    env = {k: v for k, v in os.environ.items() if k != 'PYTHONPATH'}
+    probe = (
+        "import importlib.util, sys, json\n"
+        f"spec = importlib.util.spec_from_file_location('pf', {str(SCRIPT)!r})\n"
+        "mod = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(mod)\n"
+        "mod.check('/nonexistent-root', 'brick', '10678', '001', ['F212N'],\n"
+        "          ['nrca'])\n"
+        "print(json.dumps(sorted({m.split('.')[0] for m in sys.modules}\n"
+        "                        & {'jwst_gc_pipeline', 'numpy', 'astropy',\n"
+        "                           'jwst'})))\n"
+    )
+    out = subprocess.run([sys.executable, '-c', probe], cwd=os.sep,
+                         env=env, capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout.strip().splitlines()[-1]) == [], out.stdout
+
+
 def test_an_image2_association_is_not_counted_as_an_input(tmp_path):
     """The directory holds far more image2 associations than image3 ones, so
     counting everything made a field with no usable input read as OK."""
@@ -128,7 +174,7 @@ def test_a_five_digit_proposals_products_are_found(tmp_path):
 
     ``test_the_glob_is_the_one_the_reduce_itself_uses`` pins ``ASN_GLOB``'s
     text alone, so it stays green when the ``{jw}`` field carries the old
-    ``'jw0' + proposal`` spelling.  MAST writes ``jw10678-o001...`` for the GC
+    4-digit-only spelling.  MAST writes ``jw10678-o001...`` for the GC
     Treasury program; the old spelling globs ``jw010678-o001...`` and reads a
     complete field as having no inputs at all -- 20 h of queue answering a
     question this gate exists to answer in ten seconds.

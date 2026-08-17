@@ -58,7 +58,7 @@ import warnings
 warnings.filterwarnings('ignore')
 # GENERATION LOCK: recompute RA/Dec from stable detector x/y through the live crf WCS.
 from ..astrometry_utils import _resolve_existing_path
-from ..naming import jw_prefix
+from ..mast_names import jw_prefix
 # Sanctioned density-immune, window-swept, guarded bulk-offset estimator (replaces the
 # bespoke coarse_xcorr this module used to reimplement -- see brick-jwst-2221 PR #39 review).
 from ..photometry.astrometry_offsets import measure_offset
@@ -1008,7 +1008,9 @@ if __name__ == '__main__':
     os.makedirs(os.path.dirname(path), exist_ok=True)
     # FIELD-SAFE merge: replace only rows for the SAME (Filter, proposal+field Visit prefix);
     # preserve every other filter AND every other field that shares this per-proposal table.
-    new_visit_prefixes = set(str(v)[:11] for v in t['Visit'])   # jw0<prop><field>
+    # 11 chars = 'jw' + proposal(5, MAST zero-pads) + observation(3) + 1, i.e.
+    # the visit-token prefix through the observation number.
+    new_visit_prefixes = set(str(v)[:11] for v in t['Visit'])
     new_filts = set(str(x) for x in t['Filter'])
     if os.path.exists(path):
         old = Table.read(path)

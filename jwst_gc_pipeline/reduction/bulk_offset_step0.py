@@ -69,7 +69,7 @@ from typing import Optional
 
 import numpy as np
 
-from ..naming import jw_prefix
+from ..mast_names import jw_prefix
 
 __all__ = [
     'BulkOffsetVerificationError', 'BulkOffsetResult',

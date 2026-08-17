@@ -32,7 +32,7 @@ ABMAG_OFFSET = 8.90
 # flags-based bgsub token is imported as ``_bgsub_token`` (this module calls it
 # with explicit booleans, matching the producer-side names).
 from jwst_gc_pipeline.frame_wcs import frame_wcs
-from jwst_gc_pipeline.naming import jw_prefix
+from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.photometry.residual_background import (
     RESBKG_COLUMNS, combine_frames as combine_resbkg_frames)
 from jwst_gc_pipeline.scratch_basepath import apply_basepath_override
@@ -121,8 +121,12 @@ def individual_frame_merge_jobs(target):
 
 
 def _obs_filters_for(target):
-    """``_obs_filters_for(target)`` (the {obsid: [filters]} dict), with the NIRISS
-    filter set substituted when the process instrument override is NIRISS."""
+    """This target's ``{proposal: [filters]}`` dict, with the NIRISS filter set
+    substituted when the process instrument override is NIRISS.
+
+    The key is a PROPOSAL, whatever the ``obs_filters`` name suggests; callers
+    that spelled the loop variable ``obsid`` were reading it as an observation
+    number."""
     from jwst_gc_pipeline.photometry.naming import _instrument_override
     if _instrument_override() == 'NIRISS' and target in obs_filters_niriss:
         return obs_filters_niriss[target]

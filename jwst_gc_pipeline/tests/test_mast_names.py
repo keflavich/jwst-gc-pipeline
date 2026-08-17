@@ -1,15 +1,20 @@
-"""``jw_prefix`` / ``proposal_id_from_filename`` -- the 5-digit-safe spellings.
+"""The 5-digit-safe proposal spellings -- ``jw_prefix``,
+``proposal_id_from_filename``, ``proposal_id_from_program``.
 
 The behavior pinned here is issue #414's fix: the filename prefix is the
 proposal zero-padded to FIVE digits, exactly as MAST writes it.  For every
 4-digit proposal the helper must reproduce the old ``f'jw0{proposal_id}'``
 literal byte for byte (so the sweep changed no existing product name), and for
-the first 5-digit proposal (10678, GC Treasury) it must yield ``jw10678``
-where the old literal fabricated ``jw010678``.
+a 5-digit proposal -- 10678 (GC Treasury) and omegacen's 12587, which was
+already in the registry -- it must yield ``jw10678`` where the old literal
+fabricated ``jw010678``.  ``PROGRAM`` is the same padded form in the header,
+so reading a proposal out of it is a de-pad, where the reduction path used the
+4-digit-only slice ``PROGRAM[1:5]``.
 """
 import pytest
 
-from jwst_gc_pipeline.naming import jw_prefix, proposal_id_from_filename
+from jwst_gc_pipeline.mast_names import (jw_prefix, proposal_id_from_filename,
+                                     proposal_id_from_program)
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +97,61 @@ def test_every_registry_proposal_gets_its_mast_prefix():
 def test_non_numeric_negative_or_overwide_input_raises(bad):
     with pytest.raises(ValueError):
         jw_prefix(bad)
+
+
+@pytest.mark.parametrize('bad', [
+    0,            # no proposal 0; the old code built 'jw00000'
+    '0',
+    '2_221',      # int() reads this as 2221 and the typo survives to a glob
+    '+2221',
+    ' 2221 ',     # a stray space in a shell wrapper's argument
+    '2221\n',
+    '٢٢٢١',   # Arabic-Indic digits: int() accepts these
+    2221.0,       # str(2221.0) == '2221.0'
+    b'2221',
+])
+def test_input_that_int_would_have_normalized_is_refused(bad):
+    """``int()`` accepts more shapes than a proposal number has.  Each of these
+    used to produce a plausible-looking prefix from an input that is not a
+    proposal, which is how a typo reaches a glob and reads as 'no data'."""
+    with pytest.raises(ValueError):
+        jw_prefix(bad)
+
+
+# ---------------------------------------------------------------------------
+# proposal_id_from_program -- the header spelling of the same defect
+# ---------------------------------------------------------------------------
+
+def test_program_header_de_pads_a_four_digit_proposal():
+    """PROGRAM is the padded form on every real frame; the value the pipeline
+    keys on is unpadded.  Matches the old ``PROGRAM[1:5]`` slice exactly."""
+    assert proposal_id_from_program('02221') == '2221'
+    assert proposal_id_from_program('02221') == '02221'[1:5]
+    assert proposal_id_from_program('01182') == '1182'
+
+
+def test_program_header_keeps_all_five_digits_of_a_treasury_frame():
+    assert proposal_id_from_program('10678') == '10678'
+    # the defect this replaces: '10678'[1:5] == '0678'
+    assert proposal_id_from_program('10678') != '10678'[1:5]
+    assert proposal_id_from_program('12587') == '12587'
+
+
+def test_program_header_tolerates_the_padding_fits_adds():
+    assert proposal_id_from_program(' 10678 ') == '10678'
+    assert proposal_id_from_program(2221) == '2221'
+
+
+@pytest.mark.parametrize('bad', ['', 'nircam', None, '123456'])
+def test_a_program_value_that_is_not_a_proposal_raises(bad):
+    with pytest.raises(ValueError):
+        proposal_id_from_program(bad)
+
+
+def test_program_agrees_with_the_filename_on_a_real_frame():
+    """The two parses read the same proposal off the same product."""
+    fn = 'jw01182004001_02101_00001_nrca1_cal.fits'
+    assert proposal_id_from_filename(fn) == proposal_id_from_program('01182')
 
 
 # ---------------------------------------------------------------------------

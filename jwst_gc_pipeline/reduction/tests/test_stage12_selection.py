@@ -417,7 +417,7 @@ def test_processed_members_are_recorded_after_both_stages():
 
 
 def test_provenance_assert_runs_before_the_module_scoping():
-    """The whole-asn `jw0{proposal}{field}` check must see every member of
+    """The whole-asn `jw_prefix(proposal) + field` check must see every member of
     every pass; below the scoping `continue` a single-module-policy field
     (sickle nrcb-only) would never check a foreign, mis-globbed member."""
     loop = _stage12_loop()

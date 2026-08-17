@@ -43,7 +43,7 @@ from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS, mopt
 # Lives in atomic_io with the rest of the shared-file tools; imported here
 # because every call site in this module and its tests names it.
 from jwst_gc_pipeline.atomic_io import write_table_atomic
-from jwst_gc_pipeline.naming import jw_prefix
+from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.photometry.residual_background import (
     local_bkg_column_name, measure_footprint_background)
 from jwst_gc_pipeline.photometry.psf_fitting import (

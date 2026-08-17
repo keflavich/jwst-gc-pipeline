@@ -51,11 +51,30 @@ import os
 import re
 import sys
 
-# `jw_prefix` is imported inside `check()`.  This module's own imports are
-# stdlib-only on purpose -- it PARSES the reduce driver (see
-# `reduce_module_policy`) and defers `fields` for the same reason -- so `--help`
-# and a parse-only run stay off the numpy/astropy import that executing the
-# package `__init__` performs.
+
+def jw_prefix(proposal):
+    """The MAST filename prefix: the proposal zero-padded to five digits.
+
+    Inlined rather than imported.  This script's whole point is to answer in
+    ten seconds a question the reduce takes 20 h of queue to answer, so it
+    stays runnable with no package on the path: its imports are stdlib-only,
+    it PARSES the reduce driver instead of importing it (see
+    `reduce_module_policy`), and it defers `fields` to the registry check that
+    needs it.  Importing `jwst_gc_pipeline.mast_names` for a one-line pad would
+    put the package `__init__` -- numpy, astropy, and the provenance
+    `HDUList.writeto` hook -- on every functional path, including
+    `--skip-registry`, which needs no package at all.
+
+    `jwst_gc_pipeline.mast_names.jw_prefix` is the canonical helper (issue #414);
+    `test_preflight_reduce_inputs.py` asserts this agrees with it over 4- and
+    5-digit proposals, so the two cannot drift.
+    """
+    text = proposal if isinstance(proposal, str) else str(proposal)
+    if not re.fullmatch(r'[0-9]{1,5}', text) or int(text) == 0:
+        raise ValueError(f'proposal {proposal!r} is not a JWST proposal '
+                         f'number: expected one to five decimal digits')
+    return f'jw{int(text):05d}'
+
 
 #: The association glob the reduce ITSELF uses -- copied verbatim from
 #: ``reduction/PipelineRerunNIRCAM-LONG.py`` and ``reduction/PipelineMIRI.py``,
@@ -312,7 +331,6 @@ def _families_from_members(members):
 
 def check(root, target, proposal, obsid, filters, modules, instrument='nircam'):
     """A :class:`Row` per requested filter."""
-    from jwst_gc_pipeline.naming import jw_prefix
     if not filters:
         raise ValueError('no filters requested -- an empty filter list checks '
                          'nothing and would report success')

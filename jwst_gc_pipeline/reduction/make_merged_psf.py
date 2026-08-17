@@ -22,7 +22,7 @@ from astropy.nddata import NDData
 from tqdm.auto import tqdm
 from webbpsf.utils import to_griddedpsfmodel
 from astropy.convolution import convolve, Gaussian2DKernel
-from jwst_gc_pipeline.naming import jw_prefix
+from jwst_gc_pipeline.mast_names import jw_prefix
 
 def footprint_contains(x, y, shape):
     return (x > 0) and (y > 0) and (y < shape[0]) and (x < shape[1])

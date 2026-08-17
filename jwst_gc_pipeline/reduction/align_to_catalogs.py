@@ -15,7 +15,7 @@ from astropy.io import fits
 import datetime
 
 from jwst_gc_pipeline.catalog_utils import catalog_skycoord
-from jwst_gc_pipeline.naming import jw_prefix
+from jwst_gc_pipeline.mast_names import jw_prefix
 
 
 def print(*args, **kwargs):

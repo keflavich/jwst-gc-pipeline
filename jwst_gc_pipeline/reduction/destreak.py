@@ -6,6 +6,8 @@ from astropy.wcs import WCS
 import scipy
 import scipy.ndimage
 
+from ..mast_names import proposal_id_from_program
+
 basepath = '/orange/adamginsburg/jwst/brick/'
 
 # these were created in notebooks/MedianFilterBackground.ipynb
@@ -148,7 +150,12 @@ def add_background_map(data, hdu, background_mapping=background_mapping,
     if filtername in ('CLEAR', 'F444W') and hdu[0].header['FILTER'] in ('F405N', 'F466N', 'F410M', 'F212N', 'F187N', 'F182M'):
         filtername = hdu[0].header['FILTER']
 
-    proposal_id = hdu[0].header['PROGRAM'][1:5]
+    # `background_mapping` is keyed on the UNPADDED proposal ('2221'), while
+    # PROGRAM carries MAST's five-character padded form ('02221', '10678').
+    # The slice [1:5] this replaces read '0678' off a 10678 frame, missed the
+    # mapping, and returned the frame with no background added -- a warning,
+    # not an error (issue #414).
+    proposal_id = proposal_id_from_program(hdu[0].header['PROGRAM'])
     obsid = hdu[0].header['OBSERVTN'].strip()
     visit = hdu[0].header['VISIT'].strip()
 
@@ -223,7 +230,9 @@ def destreak(frame, percentile=10, median_filter_size=256, overwrite=True, write
                          add_smoothed=not use_background_map
                                          )
 
-    proposal_id = hdu[0].header['PROGRAM'][1:5]
+    # Unpadded proposal, as `background_mapping` is keyed -- see the note in
+    # `add_background_map` above.
+    proposal_id = proposal_id_from_program(hdu[0].header['PROGRAM'])
     obsid = hdu[0].header['OBSERVTN'].strip()
     if use_background_map and not (proposal_id not in background_mapping or obsid not in background_mapping[proposal_id]):
         regionname = background_mapping[proposal_id][obsid]['regionname']

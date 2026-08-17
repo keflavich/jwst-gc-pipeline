@@ -11,7 +11,7 @@ import regions
 import numpy as np
 from pathlib import Path
 from jwst_gc_pipeline.frame_wcs import frame_wcs
-from jwst_gc_pipeline.naming import jw_prefix
+from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.photometry import psf_preflight
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS
 from astropy.convolution import convolve, convolve_fft, Gaussian2DKernel, interpolate_replace_nans

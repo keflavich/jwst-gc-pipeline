@@ -23,7 +23,7 @@ from astropy.io import fits
 from astropy.wcs import WCS
 from astropy.stats import sigma_clipped_stats
 from reproject import reproject_interp
-from jwst_gc_pipeline.naming import jw_prefix
+from jwst_gc_pipeline.mast_names import jw_prefix
 import warnings
 warnings.filterwarnings('ignore')
 

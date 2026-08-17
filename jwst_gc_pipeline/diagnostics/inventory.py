@@ -29,7 +29,7 @@ import re
 from dataclasses import dataclass, field as _dcfield
 
 from jwst_gc_pipeline import fields as _fields
-from jwst_gc_pipeline.naming import jw_prefix
+from jwst_gc_pipeline.mast_names import jw_prefix
 
 # Post-hoc derivatives that are never the canonical product.
 _DERIVATIVE_RE = re.compile(

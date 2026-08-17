@@ -35,7 +35,7 @@ from astropy.stats import sigma_clipped_stats
 
 from photutils.aperture import CircularAperture, CircularAnnulus, ApertureStats
 
-from jwst_gc_pipeline.naming import jw_prefix
+from jwst_gc_pipeline.mast_names import jw_prefix
 
 ABMAG_OFFSET = 8.90
 
