@@ -170,6 +170,20 @@ a plain dry run (no `--stage` needed).
 
 ## 5. Versioning & provenance
 - MANIFEST per-file version bumped; webpage version column updated.
+- `exposures/` (the detector frames behind each mosaic; on by default,
+  `--no-exposures` to omit) is **symlinks, never copies, even under `--copy`**,
+  and is deliberately absent from `CHECKSUMS.sha256` — a re-reduction rewrites
+  those frames' headers in place, so a frozen hash of one is a claim the
+  release cannot keep. `MANIFEST.json` records this as `exposure_mode`. Two
+  consequences to check:
+  - A dangling link under `exposures/` means the pipeline moved a frame; a
+    dangling link under `images/` is a real defect, because that tree must be
+    `--copy`. Audit both with
+    `find <field> -type l ! -exec test -e {} \; -print`.
+  - `EXPOSURE PROVENANCE:` lines at staging name mosaics whose `ASNTABLE`
+    association could not be read, so their frames are not offered. The mosaic
+    still ships — the line exists so a field quietly offering frames for 9 of
+    its 10 bands is visible at staging time rather than from the page.
 
 ## 6. Publishing the site (do not hand-write the rsync)
 - Deploy with `scripts/release/deploy_site.sh` (`--dry-run` first). The docroot

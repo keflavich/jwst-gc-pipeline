@@ -134,6 +134,15 @@ code { background:#0b0f14; padding:.1rem .35rem; border-radius:4px; font-size:.8
        font-weight:600; padding:.5rem 1rem; border-radius:6px; margin:.3rem .5rem .3rem 0; }
 .btn:hover { text-decoration:none; filter:brightness(1.1); }
 .btn.secondary { background:#21262d; color:var(--fg); border:1px solid var(--border); }
+.btn.small { padding:.25rem .7rem; font-size:.82rem; font-weight:500; }
+/* Per-exposure link lists. A field ships up to ~700 frames, so the individual
+   links are collapsed by default and wrap into columns when opened -- the row
+   above them (count, size, bundle button) is what most readers need. */
+details.frames { margin:.2rem 0 0; }
+details.frames summary { cursor:pointer; color:var(--muted); font-size:.85rem; }
+details.frames .names { columns:3 21rem; column-gap:1.5rem; margin:.5rem 0 0;
+                        font-size:.78rem; line-height:1.55; }
+details.frames .names a { display:block; overflow-wrap:anywhere; }
 """
 
 KIND_LABEL = {
@@ -144,7 +153,13 @@ KIND_LABEL = {
     "catalog_qualcut": "Merged catalog (quality-cut)",
     "seed": "Seed source list",
     "catalog_per_filter_vetted": "Per-filter vetted",
+    "detector_frame": "Detector-frame exposure",
 }
+
+#: Manifest category of a detector-frame exposure (see `exposure_bundle`).
+#: Named here rather than imported so the page generator keeps working against
+#: an older manifest that predates the exposure staging.
+EXPOSURE_CATEGORY = "exposure"
 
 
 def human_size(num_bytes):
@@ -608,8 +623,20 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
     # is worse than showing nothing. The file itself is untouched.
     superseded = set(superseded or ())
     reasons = dict(reasons or {})
-    files = [f for f in manifest["files"] if f.get("dest") not in superseded]
-    withheld = [f for f in manifest["files"] if f.get("dest") in superseded]
+
+    # A detector-frame exposure carries the same astrometric solution as the
+    # mosaic it was drizzled into -- the pipeline's WCS correction is baked into
+    # the frame, which is what `resample` then reads. So withholding a mosaic
+    # for a superseded solution while still offering its input frames publishes
+    # that solution anyway, one level down. `parent_dest` (written by
+    # `exposure_bundle.link_parents`) is the tie; an exposure is withheld
+    # exactly when its parent mosaic is.
+    def _withheld(entry):
+        return (entry.get("dest") in superseded
+                or (entry.get("parent_dest") or "") in superseded)
+
+    files = [f for f in manifest["files"] if not _withheld(f)]
+    withheld = [f for f in manifest["files"] if _withheld(f)]
     # A preview RENDERED FROM a withheld mosaic is the thing a reader actually
     # looks at, so withholding the download row and leaving the picture up
     # publishes the bad astrometry anyway.
@@ -680,9 +707,21 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
         # and the rebuilt case is now the majority (52 of 116).  Naming a
         # quarantine that did not happen is a public-facing false statement --
         # it would have appeared on 23 of brick's 31 frozen v1.0 images.
-        quarantined = [f for f in withheld
+        #
+        # Counted over the AUDITED products only.  The freshness audit runs on
+        # mosaics, so only a mosaic has an entry in `reasons`; a detector-frame
+        # exposure is withheld by association with its parent and has none.
+        # Pooling them would put every frame in the `rebuilt` bucket and read
+        # "353 withheld as superseded" where one mosaic was withheld and 352
+        # frames followed it -- a count that overstates by two orders of
+        # magnitude what the audit actually found.
+        withheld_products = [f for f in withheld
+                             if f.get("category") != EXPOSURE_CATEGORY]
+        withheld_frames = [f for f in withheld
+                           if f.get("category") == EXPOSURE_CATEGORY]
+        quarantined = [f for f in withheld_products
                        if reasons.get(f.get("dest")) == release_freshness.QUARANTINED]
-        rebuilt = [f for f in withheld if f not in quarantined]
+        rebuilt = [f for f in withheld_products if f not in quarantined]
 
         def _bands(group):
             return html.escape(', '.join(sorted({f.get("filter") or "?"
@@ -706,11 +745,17 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                 f"these are the older bytes. Why is not recorded here, and no "
                 f"claim is made about their astrometry: "
                 f"<code>{_bands(rebuilt)}</code>.")
-        out.append(
-            "<p style='border:1px solid #b58900;padding:.6rem 1rem;border-radius:6px'>"
-            + " ".join(lines)
-            + " They will return when the field is re-staged from current"
-              " products.</p>")
+        if withheld_frames:
+            lines.append(
+                f"The {len(withheld_frames)} detector-frame exposures behind "
+                f"those mosaics are withheld with them: the same astrometric "
+                f"solution is baked into the frames.")
+        if lines:
+            out.append(
+                "<p style='border:1px solid #b58900;padding:.6rem 1rem;border-radius:6px'>"
+                + " ".join(lines)
+                + " They will return when the field is re-staged from current"
+                  " products.</p>")
     if all_versions and manifest['version'] != all_versions[0]:
         out.append(f"<p class=muted style='border:1px solid #b58900;padding:.5em'>"
                    f"You are viewing an <b>older</b> release ({html.escape(manifest['version'])}). "
@@ -833,11 +878,12 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
     coll = manifest["globus_collection_id"]
     have_images = any(f["category"] == "image" for f in files)
     have_catalogs = any(f["category"] == "catalog" for f in files)
+    exposures = [f for f in files if f.get("category") == EXPOSURE_CATEGORY]
 
-    def app_link(subpath, label):
+    def app_link(subpath, label, cls="btn"):
         url = (f"{GLOBUS_APP}?origin_id={coll}"
                f"&origin_path={urllib.parse.quote(subpath + '/')}")
-        return f"<a class=btn href='{html.escape(url)}'>⬇ {label}</a>"
+        return f"<a class='{cls}' href='{html.escape(url)}'>⬇ {label}</a>"
 
     buttons = []
     if have_images and have_catalogs:
@@ -846,12 +892,19 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
         buttons.append(app_link(base + "/images", "Images only"))
     if have_catalogs:
         buttons.append(app_link(base + "/catalogs", "Catalogs only"))
+    if exposures:
+        exp_bytes = sum(f.get("size_bytes") or 0 for f in exposures)
+        buttons.append(app_link(
+            base + "/exposures",
+            f"All exposures ({len(exposures)}, {human_size(exp_bytes)})"))
     txt_links = [
         f"<a href='{html.escape(field)}_files.txt'>all</a>"]
     if have_images:
         txt_links.append(f"<a href='{html.escape(field)}_images.txt'>images</a>")
     if have_catalogs:
         txt_links.append(f"<a href='{html.escape(field)}_catalogs.txt'>catalogs</a>")
+    if exposures:
+        txt_links.append(f"<a href='{html.escape(field)}_exposures.txt'>exposures</a>")
 
     out.append(
         "<div class=bulk><b>Bulk download</b>"
@@ -925,10 +978,119 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                    f"<td>{dl(f)}</td></tr>")
     out.append("</table>")
 
+    out.append(render_exposures(field, exposures, base, app_link, multi))
+
     out.append("</main>")
     out.append(footer())
     out.append("</body></html>")
     return "\n".join(out)
+
+
+def published_urls(manifest, superseded=(), categories=None):
+    """Download URLs for the files this release actually publishes.
+
+    The ``<field>_*.txt`` lists must withhold exactly what the page withholds.
+    They are linked FROM the page that carries the withholding notice, so a
+    superseded mosaic pulled from the table and left in ``<field>_files.txt`` is
+    still published -- one click further away, to a ``wget -i`` that fetches it
+    without ever showing the notice.
+
+    Exposures follow their parent mosaic here for the same reason they do on the
+    page: the withdrawn astrometric solution is baked into the frames.
+    """
+    superseded = set(superseded or ())
+
+    def keep(entry):
+        return (entry.get("dest") not in superseded
+                and (entry.get("parent_dest") or "") not in superseded
+                and (categories is None or entry.get("category") in categories))
+
+    return [f["url"] for f in manifest["files"] if f.get("url") and keep(f)]
+
+
+def render_exposures(field, exposures, base, app_link, multi):
+    """The detector-frame exposures section: one row per (observation, filter).
+
+    A per-frame row would be unusable -- wd1 ships 696 frames, and a table of
+    696 near-identical file names is not a download interface.  Each group
+    instead gets its count, size, a one-click bundle button for that group's
+    folder, and a collapsed list of the individual links, which is where "a link
+    to each file" actually lives.
+
+    On the bundle: there is no tarball, here or anywhere else on this site, and
+    that is a size decision rather than an oversight.  One field-filter is
+    ~20 GB of frames and the release is several hundred GB of them; a
+    pre-built archive would double that on disk for data that is symlinked
+    precisely so it is NOT duplicated, and it would go stale the moment the
+    pipeline re-headers a frame.  The Globus folder link transfers the whole
+    group in one action, resumably, which is what the archive would have been
+    for.
+    """
+    if not exposures:
+        return ""
+    out = ["<h2>Detector-frame exposures</h2>"]
+    total = sum(f.get("size_bytes") or 0 for f in exposures)
+    out.append(
+        f"<p class=muted>The <b>{len(exposures)} individual exposures</b> "
+        f"({human_size(total)}) the mosaics above were drizzled from, in the "
+        f"original detector frame -- full GWCS distortion chain, this pipeline's "
+        f"astrometric solution, before resampling. Each group holds exactly the "
+        f"frames behind the matching mosaic: the list is read from that mosaic's "
+        f"own association, not reconstructed. Use these to re-drizzle, re-fit, or "
+        f"chase a per-exposure systematic.</p>")
+    out.append(
+        "<p class=muted>The last detector-frame product differs by field and "
+        "filter: <code>_crf</code> is the Stage-3 outlier/CR-flagged frame where "
+        "one was written, otherwise the <code>_destreak</code> / "
+        "<code>_align</code> / <code>_cal</code> frame the mosaic was drizzled "
+        "from directly. <b>These are symlinks into the live pipeline tree, not "
+        "frozen copies</b> -- they are not in <code>CHECKSUMS.sha256</code>, and a "
+        "re-reduction rewrites their headers in place. Cite the mosaics and "
+        "catalogs; treat these as a working convenience.</p>")
+
+    groups = {}
+    for f in exposures:
+        groups.setdefault((f.get("observation") or "", f.get("filter") or "?"),
+                          []).append(f)
+    obs_col = "<th>Obs</th>" if multi else ""
+    out.append(f"<table><tr>{obs_col}<th>Filter</th><th>Frames</th><th>Size</th>"
+               "<th>Product</th><th>Download</th></tr>")
+    for key in sorted(groups, key=lambda k: (k[0], FILTER_WAVELENGTH.get(k[1], 99))):
+        obs, filt = key
+        rows = sorted(groups[key], key=lambda f: f["dest"])
+        size = sum(f.get("size_bytes") or 0 for f in rows)
+        # The product suffix is the one thing here worth stating per group: it
+        # says whether this band has Stage-3 flags or was drizzled from `_cal`.
+        suffixes = sorted({_frame_product(f) for f in rows})
+        subpath = Path(rows[0]["dest"]).parent.as_posix()
+        obs_cell = f"<td><b>{html.escape(obs)}</b></td>" if multi else ""
+        links = "".join(
+            f"<a href='{html.escape(f['url'])}'>"
+            f"{html.escape(Path(f['dest']).name)}</a>"
+            for f in rows if f.get("url"))
+        out.append(
+            f"<tr>{obs_cell}<td><b>{html.escape(filt)}</b></td>"
+            f"<td>{len(rows)}</td>"
+            f"<td class=size>{human_size(size)}</td>"
+            f"<td><span class=tag>{html.escape(', '.join(suffixes))}</span></td>"
+            f"<td>{app_link(f'{base}/{subpath}', 'bundle', cls='btn small')}</td></tr>")
+        if links:
+            out.append(
+                f"<tr><td colspan={6 if multi else 5}>"
+                f"<details class=frames><summary>{len(rows)} individual frames"
+                f"</summary><div class=names>{links}</div></details></td></tr>")
+    out.append("</table>")
+    return "\n".join(out)
+
+
+def _frame_product(entry):
+    """``destreak_o001_crf`` / ``align_o001_crf`` / ``cal`` -- which product a
+    frame is, taken from its name after the standard JWST exposure prefix
+    (``jw<prop><obs><visit>_<exp>_<n>_<detector>_``)."""
+    stem = Path(entry["dest"]).name
+    if stem.endswith(".fits"):
+        stem = stem[:-len(".fits")]
+    return "_".join(stem.split("_")[4:]) or "?"
 
 
 def footer():
@@ -1010,6 +1172,13 @@ def render_help():
                "<a href='https://www.globus.org/globus-connect-personal'>Globus Connect "
                "Personal</a> once to make it a collection. Track progress with "
                "<code>globus task list</code>.</p>")
+    out.append("<p>This is also the best way to take the "
+               "<b>detector-frame exposures</b>: a field's <code>exposures/</code> "
+               "folder runs to tens or hundreds of GB across hundreds of files, "
+               "which is what a recursive, resumable Globus transfer is for. "
+               "Append <code>exposures/</code> (or "
+               "<code>exposures/&lt;FILTER&gt;/</code>) to the source path above "
+               "to take just those.</p>")
 
     out.append("<h2>No Globus collection at your destination? <code>wget</code> / <code>curl</code></h2>")
     out.append("<p>Only needed if you cannot use a Globus collection as the destination "
@@ -1286,13 +1455,13 @@ def main(argv=None):
             (out_dir / fname).write_text(page)
             if v == latest:
                 def write_urls(suffix, cats):
-                    urls = [f["url"] for f in manifest["files"]
-                            if f.get("url") and (cats is None or f["category"] in cats)]
+                    urls = published_urls(manifest, stale_files, cats)
                     if urls:
                         (out_dir / f"{field}_{suffix}.txt").write_text("\n".join(urls) + "\n")
                 write_urls("files", None)
                 write_urls("images", {"image"})
                 write_urls("catalogs", {"catalog"})
+                write_urls("exposures", {EXPOSURE_CATEGORY})
                 files = manifest["files"]
                 fields_info.append({
                     "field": field, "version": manifest["version"],
