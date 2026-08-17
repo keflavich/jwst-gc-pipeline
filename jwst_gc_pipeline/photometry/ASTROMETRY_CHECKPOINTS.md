@@ -111,7 +111,7 @@ The **consensus→reference** tie is gated the same way, with the same distincti
 
 | m2 state | frozen-stage verdict |
 |---|---|
-| tie applied (`apply_ok: true`) | delta vs the reported bulk; > tol ⇒ `AstrometryRegressionError` |
+| tie applied (`apply_ok: true`) | delta vs the reported bulk; > tol ⇒ **re-measured on the stars the two consensi share** (below), and only a delta that survives that raises `AstrometryRegressionError` |
 | tie measured but **refused** (`apply_ok: false` — no coherent dense peak, gross sparse-Gaia split, failed per-tile / same-star gate), and the later stage lands **within** tol of it | **STABLE**. A refused tie is still a *measurement*: two readings of the same quantity agreeing is evidence the solution did not move. `apply_ok: false` says the *absolute* tie is uncertified, not that the consensus was free to move — so the pass is kept and the message notes the tie remains uncertified. (sgra F212N: m2 refused 48.49 mas, m3 reads 48.09 — a 0.41 mas delta) |
 | tie measured but **refused**, and the later stage lands **beyond** tol | **UNVERIFIED**. It moved, but away from something that was never applied, so this is not a frozen-solution regression. The delta and m2's value are both named in the message; the field's *absolute* tie is the thing to investigate |
 | no m2 record at all | `AstrometryRegressionError` — fail closed |
@@ -125,6 +125,62 @@ window-limited histogram peak), refused to apply it, and recorded it in
 blocked because the measurement got *better*.  Note the failure only fires in
 that direction: w51 F162M and F182M, whose m3 ties were *also* refused, passed,
 because a refused m3 tie never reaches the baseline comparison at all.
+
+### The comparison is made on the stars both stages have
+
+A delta over tolerance is **not** reported as movement until both ties have been
+re-measured over the stars the two consensi share.  Issue #285 restricted the
+later stage's consensus to m2's star *list*, but the number it is differenced
+against was measured over m2's *full* set — so the stars a later stage cannot
+re-detect drag the baseline and nothing else.  From the live sickle records
+(2026-08-16), F335M m2 vs m5:
+
+```
+m2 over its full 2964 stars    (-0.013, +0.014) mas
+m5 over its      2644 stars    (+0.457, +2.194) mas    raw delta 2.230
+both over the shared 2642      (-0.013, +1.764) mas -> delta 0.637  PASS
+```
+
+`STAGE_STABILITY_TOL_MAS` is unchanged at 2.0; what changes is which two
+numbers it is applied to.  The re-measure runs **only** when the raw comparison
+is over tolerance, so a passing stage never pays for it.
+
+It is not a way to get a pass.  It **refuses**, leaving the raw comparison to
+raise, when
+
+* m2's pooled consensus catalog is missing or unreadable;
+* either consensus holds fewer than `SURVIVOR_MIN_STARS` (50);
+* the shared set is below `max(50, SURVIVOR_MIN_FRACTION × min(n_m2, n_stage))`
+  — two 90,000-star catalogs sharing 0.07% of their stars clear any absolute
+  floor while saying nothing about each other;
+* either re-measure returns a non-finite tie, sets `apply_ok: false`, or had to
+  **sweep** its window — a measurement the estimator declined to sign cannot
+  overturn a blocking failure;
+* the two re-measures used different estimators (`bulk_source` `same-star` vs
+  `histogram`), whose difference against a dense reference is several mas of
+  method rather than a shift.
+
+Matching is mutual (`_mutual_match_mask`) at `SURVIVOR_MATCH_TOL_MAS` = 150 mas,
+mirroring `build_visit_consensus(restrict_radius=0.15")`, which is what produced
+the stage consensus in the first place.
+
+The record grows `visits[].symmetric_baseline`: both ties on the shared stars,
+`delta_mas`, `raw_delta_mas`, the three counts, the floor, `bulk_source`, the
+refusal `reason`, and `mag_split` — the median magnitude of the kept and dropped
+stars. The intersection is a **biased sample** and the direction is not fixed:
+sickle's F335M drop-outs are ~1.1 mag fainter than its survivors, its F187N
+drop-outs ~2.2 mag brighter. Displacement confined to the stars a later stage
+drops is not visible to this comparison; that is a real reduction in coverage,
+and `mag_split` is what makes the skew visible to whoever reads the pass.
+
+Absent `symmetric_baseline` means the re-measure never ran — the raw comparison
+passed, or the stage is a correcting one, or there is no reference catalog, or
+the offset is under `REFERENCE_APPLY_MIN_MAS`, or m2 refused its own tie.
+
+The check removes a *baseline artefact*; it does not soften the gate. sickle
+F187N m3 fails either way — 2.342 mas raw, 2.463 mas on the 1824 shared stars —
+because there the drop-outs are brighter than the survivors and carry no
+artefact to remove.
 
 Stage-name mapping: the user-facing plan's "m1 pass" = the repo's m12 phase
 (iter1+iter2); its merge is labeled **m2** — that is the correcting

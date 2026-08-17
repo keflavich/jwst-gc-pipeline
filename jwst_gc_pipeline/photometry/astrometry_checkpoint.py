@@ -101,17 +101,32 @@ STAGE_STABILITY_TOL_MAS = 2.0
 
 # How close a star in the LATER stage's consensus must sit to an m2 consensus
 # star for the two to be the same star when the frozen-stage baseline is
-# re-measured on the survivors (_survivor_baseline_tie).  The later stage is
-# already restricted to m2's star LIST, so a survivor sits within the consensus
-# builder's own match radius of its m2 counterpart; this only has to be tighter
-# than the field's star spacing to pair uniquely.  GC per-star scatter is a few
-# mas and the median VIRAC2 neighbour spacing is ~3", so 200 mas is far above
-# any real displacement and far below any confusion.
-SURVIVOR_MATCH_TOL_MAS = 200.0
+# re-measured on the survivors (_survivor_baseline_tie).
+#
+# This MIRRORS `build_visit_consensus(restrict_radius=0.15")`, which is what
+# produced the stage consensus in the first place: pairing at a wider radius
+# here would re-admit stars the restriction itself refused.  It is NOT chosen
+# against the reference catalog's spacing -- the match is JWST consensus
+# against JWST consensus, and those are far denser than VIRAC2.  Measured
+# nearest-neighbour separations in the catalogs this code actually pairs:
+#
+#     sickle f335m_o007   n=  2964   median 707 mas   5th pct 234
+#     sickle f210m_o007   n=  9823   median 408 mas   5th pct  98
+#     cloudc f182m_o002   n=123362   median 370 mas   5th pct  91
+#     brick  f115w_o004   n= 75229   median 507 mas   5th pct  95
+#
+# so a sizeable minority of stars have a neighbour inside this radius and the
+# pairing is safe because it is MUTUAL (see _mutual_match_mask), not because
+# the radius is small compared with the spacing.
+SURVIVOR_MATCH_TOL_MAS = 150.0
 
 # The survivor re-measure needs enough stars for the tie to mean anything.
-# Below this it reports "could not re-measure" and the raw comparison stands.
+# Below EITHER floor it reports "could not re-measure" and the raw comparison
+# stands.  The FRACTION matters independently of the count: two 90,000-star
+# catalogs sharing 0.07% of their stars clear any absolute floor, and a tie
+# measured on that intersection is not a statement about the two catalogs.
 SURVIVOR_MIN_STARS = 50
+SURVIVOR_MIN_FRACTION = 0.5
 
 # Cross-filter agreement tolerances (m7 checkpoint).
 CROSSFILTER_TOL_MAS = 5.0
@@ -2486,42 +2501,30 @@ def _m2_skipped_exposures(record_dir, filtername, visit, obs_token=""):
     return out
 
 
-def _m2_consensus_stars(record_dir, basepath, filtername, obs_token=""):
-    """(SkyCoord of the m2 consensus stars, path) for the same-star gate.
-
-    Thin wrapper on :func:`_m2_consensus_catalog`, which also hands back the
-    magnitudes the survivor re-measure needs.
-
-    The path comes from the m2 RECORD's own ``consensus_catalog`` field where
-    it has one, not from recomputing the token.  Recomputing keyed the star
-    list and the baseline differently: the consensus catalog is obs-tokenised
-    while the checkpoint record was not, so on cloudef -- where
-    ``obs_token`` returns '' for proposal 2092 and the o002/o005 m2 runs
-    interleave into one record file -- an o002 run could restrict against
-    o005's star list, 104 mas away, while comparing against a baseline written
-    by either.  Reading the path the m2 run itself recorded ties the two to the
-    same run for nothing.
-
-    Returns ``(None, path)`` when the catalog is absent -- a field whose m2
-    predates the per-filter consensus catalog, or a filter m2 could not pool.
-    The caller says so loudly and falls back: a missing baseline is not
-    evidence the solution moved.
-    """
-    coords, _mag, path = _m2_consensus_catalog(record_dir, basepath, filtername,
-                                               obs_token)
-    return coords, path
-
-
 def _m2_consensus_catalog(record_dir, basepath, filtername, obs_token=""):
     """(SkyCoord, magnitude array or None, path) of the m2 consensus catalog.
 
-    The magnitudes come from the pooled catalog's ``refmag`` column and are
-    passed through to ``measure_reference_tie`` as ``consensus_mag`` so the
-    survivor re-measure runs the SAME checks the live tie ran — a baseline
-    measured with check E off and compared against one measured with it on
-    would reintroduce the method difference this whole path exists to remove.
-    ``None`` when the column is absent (an older catalog); the tie then simply
-    skips that check on both sides.
+    The path comes from the m2 RECORD's own ``consensus_catalog`` field where it
+    has one, not from recomputing the token.  Recomputing keyed the star list
+    and the baseline differently: the consensus catalog is obs-tokenised while
+    the checkpoint record was not, so on cloudef -- where ``obs_token`` returns
+    '' for proposal 2092 and the o002/o005 m2 runs interleave into one record
+    file -- an o002 run could restrict against o005's star list, 104 mas away,
+    while comparing against a baseline written by either.  Reading the path the
+    m2 run itself recorded ties the two to the same run for nothing.
+
+    Returns ``(None, None, path)`` when the catalog is absent -- a field whose
+    m2 predates the per-filter consensus catalog, or a filter m2 could not pool.
+    The caller says so loudly and falls back: a missing baseline is not evidence
+    the solution moved.
+
+    The magnitudes come from the pooled catalog's ``refmag`` column.  They are
+    passed to ``measure_reference_tie`` as ``consensus_mag``, which enables its
+    flux-windowed residual (check E) and the magnitude split recorded alongside
+    the comparison.  Check E is REPORTED and gates nothing -- it enters neither
+    ``apply_ok`` nor ``dra_mas``/``ddec_mas`` -- so passing the magnitudes does
+    not change the numbers being compared; it changes what an operator can see
+    about them.  ``None`` when the column is absent (an older catalog).
     """
     from .consensus_catalog import consensus_path
     path = None
@@ -2559,70 +2562,150 @@ def _m2_consensus_catalog(record_dir, basepath, filtername, obs_token=""):
     return coords[finite], mag, path
 
 
-def _survivor_baseline_tie(m2_coords, m2_mag, stage_coords, refcat,
+def _tie_signed_off(tie, label, info):
+    """``True`` when ``measure_reference_tie`` stands behind ``tie``.
+
+    A tie on this path can be REFUSED by its own estimator: the shared set is
+    smaller than either input, which is the regime that loses the dense peak or
+    falls back to a swept window.  Overturning a blocking failure with a
+    measurement the measurer declined to sign is the mistake
+    ``reduction/bulk_offset_step0.py`` names -- "measure_reference_tie did not
+    sign off (apply_ok=False) on its measurement ... treating a close separation
+    as a pass would defeat the check."
+    """
+    if not (np.isfinite(tie.get("dra_mas", np.nan))
+            and np.isfinite(tie.get("ddec_mas", np.nan))):
+        info["reason"] = f"the {label} re-measure returned a non-finite tie"
+        return False
+    if not tie.get("apply_ok"):
+        info["reason"] = (
+            f"the {label} re-measure did not sign off on itself "
+            f"(apply_ok=False, cross-ref gross_ok="
+            f"{tie.get('cross_reference_gross_ok')}, per-tile clean="
+            f"{(tie.get('per_tile') or {}).get('clean')})")
+        return False
+    if tie.get("swept"):
+        info["reason"] = (f"the {label} re-measure had to SWEEP the window "
+                          f"(window {tie.get('window_arcsec')}\"), so its peak "
+                          f"is not a small-tie measurement")
+        return False
+    return True
+
+
+def _survivor_mag_split(mag, keep):
+    """Median magnitude of the kept and the dropped stars, and the gap."""
+    if mag is None:
+        return None
+    mag = np.asarray(mag, dtype=float)
+    kept = mag[keep][np.isfinite(mag[keep])]
+    dropped = mag[~keep][np.isfinite(mag[~keep])]
+    if not len(kept) or not len(dropped):
+        return None
+    return dict(kept_median=float(np.median(kept)),
+                dropped_median=float(np.median(dropped)),
+                dropped_minus_kept=float(np.median(dropped) - np.median(kept)),
+                n_dropped=int(len(dropped)))
+
+
+def _survivor_baseline_tie(m2_coords, m2_mag, stage_coords, stage_mag, refcat,
                            filtername=None, context=""):
-    """Re-measure the m2 consensus->reference tie over ONLY the m2 stars that
-    survived into THIS stage's consensus.
+    """Re-measure BOTH stages' consensus->reference ties over only the stars the
+    two consensi have in common.
 
     The frozen-stage gate compares this stage's tie against the number m2
     recorded, and those two are measured over different star sets.  Issue #285
     restricts the later stage to m2's star LIST, but the recorded m2 baseline
     was measured over m2's FULL set, so the restriction is one-sided: the stars
-    the later stage cannot re-detect drag the baseline and nothing else, and
-    the difference is reported as astrometric MOVEMENT.  Measured on sickle
-    F335M m2 vs m4 (2026-08-10): m2 over ALL 2958 stars read ddec -0.80 mas and
-    m4 over its 2813 read +1.43 -- 2.23 mas of "movement" -- while over the 2819
-    stars BOTH stages carry the two read +1.50 and +1.42, i.e. 0.08 mas apart.
-    The 139 drop-outs sat at -18.58 mas in Dec on their own.  The fabricated
-    shift inherits the drop-outs' axis, which is why it reads as Dec-only,
-    which is not a physical shape for a frame shift.
+    the later stage cannot re-detect drag the baseline and nothing else, and the
+    difference is reported as astrometric MOVEMENT.  From the live sickle F335M
+    records, m2 vs m5 (2026-08-16):
 
-    Re-measuring m2's OWN catalog restricted to the survivors makes the
-    comparison symmetric: same stars, same estimator, same reference.  A
-    residual difference after that is movement.
+        m2 over its full 2964 stars    (-0.013, +0.014) mas
+        m5 over its      2644 stars    (+0.457, +2.194) mas    raw delta 2.230
+        both over the shared 2642      (-0.013, +1.764) mas -> delta 0.637
 
-    Returns ``(tie, info)`` where ``tie`` is the ``measure_reference_tie``
-    result over the survivors, or ``(None, info)`` when it could not be
-    measured.  ``info`` always carries the reason and the counts.
+    so 1.75 mas of that 2.23 is the m2 baseline being dragged by 322 drop-outs
+    rather than the solution moving.
+
+    Restricting BOTH sides -- not only re-measuring m2 -- is what makes the
+    comparison symmetric.  The stage's own tie is measured over its whole
+    consensus, and that consensus equals m2's star list only while
+    ``_restrict_to_same_stars`` succeeds on every exposure; it legitimately
+    refuses (cloudef is the documented case), after which the stage set holds
+    stars m2 never had and the one-sided asymmetry is back.
+
+    Returns ``(result, info)``.  ``result`` is ``(m2_tie, stage_tie)`` over the
+    shared stars, or ``None`` when the comparison could not be made; ``info``
+    always carries the counts and the reason.
     """
-    info = dict(n_m2=int(len(m2_coords)) if m2_coords is not None else 0,
-                n_stage=int(len(stage_coords)) if stage_coords is not None else 0,
-                n_survivors=0, match_tol_mas=SURVIVOR_MATCH_TOL_MAS,
-                min_stars=SURVIVOR_MIN_STARS, reason=None)
+    n_m2 = int(len(m2_coords)) if m2_coords is not None else 0
+    n_stage = int(len(stage_coords)) if stage_coords is not None else 0
+    info = dict(n_m2=n_m2, n_stage=n_stage, n_survivors=0,
+                match_tol_mas=SURVIVOR_MATCH_TOL_MAS,
+                min_stars=SURVIVOR_MIN_STARS,
+                min_fraction=SURVIVOR_MIN_FRACTION, reason=None)
     if m2_coords is None or stage_coords is None:
         info["reason"] = "no m2 consensus catalog or no stage consensus"
         return None, info
-    if len(m2_coords) < SURVIVOR_MIN_STARS or len(stage_coords) < SURVIVOR_MIN_STARS:
-        info["reason"] = (f"too few stars to re-measure "
-                          f"(m2 {info['n_m2']}, stage {info['n_stage']}, "
-                          f"need {SURVIVOR_MIN_STARS})")
+    if n_m2 < SURVIVOR_MIN_STARS or n_stage < SURVIVOR_MIN_STARS:
+        info["reason"] = (f"too few stars to re-measure (m2 {n_m2}, stage "
+                          f"{n_stage}, need {SURVIVOR_MIN_STARS})")
         return None, info
-    # SELECTION, not measurement: which m2 stars this stage still carries.  The
-    # offsets themselves are never reduced here -- the tie below is the
-    # sanctioned histogram+same-star estimator (CLAUDE.md astrometry rule #1).
-    # MUTUAL partners, via the same helper the #285 restriction uses: in a
-    # crowded field a one-way match lets several stage stars claim one m2 star,
-    # which would put the same m2 star in the survivor set for the wrong reason.
-    survived = _mutual_match_mask(m2_coords, stage_coords,
-                                  SURVIVOR_MATCH_TOL_MAS * u.mas)
-    info["n_survivors"] = int(survived.sum())
-    if info["n_survivors"] < SURVIVOR_MIN_STARS:
-        info["reason"] = (f"only {info['n_survivors']} of {info['n_m2']} m2 stars "
-                          f"survive into this stage within "
-                          f"{SURVIVOR_MATCH_TOL_MAS:.0f} mas (need "
-                          f"{SURVIVOR_MIN_STARS})")
+    # This SELECTS the stars the two consensi have in common.  The pairing
+    # yields a boolean mask; the ties below are the sanctioned estimator
+    # (CLAUDE.md astrometry rule #1).  MUTUAL partners, via the same helper the
+    # #285 restriction uses: in a crowded field a one-way match lets several
+    # stage stars claim one m2 star, which would seat that m2 star in the shared
+    # set for the wrong reason.
+    radius = SURVIVOR_MATCH_TOL_MAS * u.mas
+    m2_keep = _mutual_match_mask(m2_coords, stage_coords, radius)
+    stage_keep = _mutual_match_mask(stage_coords, m2_coords, radius)
+    n_shared = int(min(m2_keep.sum(), stage_keep.sum()))
+    info["n_survivors"] = n_shared
+    floor = max(SURVIVOR_MIN_STARS,
+                int(SURVIVOR_MIN_FRACTION * min(n_m2, n_stage)))
+    info["survivor_floor"] = floor
+    if n_shared < floor:
+        info["reason"] = (
+            f"only {n_shared} of {n_m2} m2 / {n_stage} stage stars are shared "
+            f"within {SURVIVOR_MATCH_TOL_MAS:.0f} mas -- below the floor of "
+            f"{floor} ({SURVIVOR_MIN_STARS} absolute, "
+            f"{SURVIVOR_MIN_FRACTION:.0%} of the smaller catalog).  A tie on "
+            f"that intersection is not a statement about these two catalogs")
         return None, info
-    tie = measure_reference_tie(
-        m2_coords[survived], refcat["all"], refcat["sparse"],
-        filtername=filtername,
-        consensus_mag=(m2_mag[survived] if m2_mag is not None else None),
-        ref_mag=refcat.get("mag"), dense=refcat.get("dense", True),
-        context=f"{context} [m2 re-measured on survivors]")
-    if not (np.isfinite(tie.get("dra_mas", np.nan))
-            and np.isfinite(tie.get("ddec_mas", np.nan))):
-        info["reason"] = "the survivor re-measure returned a non-finite tie"
+    # The magnitude distribution of what is kept against what is dropped.  The
+    # intersection is a BIASED sample and the direction is not fixed: on sickle
+    # the F335M drop-outs are ~1.1 mag fainter than the survivors and the F187N
+    # drop-outs ~2.2 mag BRIGHTER.  Recorded, never gated -- an operator reading
+    # a pass needs to see which population produced it.
+    info["mag_split"] = _survivor_mag_split(m2_mag, m2_keep)
+    ties = {}
+    for label, coords, mag, keep in (
+            ("m2", m2_coords, m2_mag, m2_keep),
+            ("stage", stage_coords, stage_mag, stage_keep)):
+        tie = measure_reference_tie(
+            coords[keep], refcat["all"], refcat["sparse"],
+            filtername=filtername,
+            consensus_mag=(np.asarray(mag)[keep] if mag is not None else None),
+            ref_mag=refcat.get("mag"), dense=refcat.get("dense", True),
+            context=f"{context} [{label} re-measured on shared stars]")
+        if not _tie_signed_off(tie, label, info):
+            return None, info
+        ties[label] = tie
+    # The two must be the same KIND of measurement.  measure_reference_tie
+    # reports a same-star refined bulk when the tie is verified small and the
+    # histogram peak otherwise, and against a dense reference those differ by
+    # several mas (CLAUDE.md).  Differencing one of each reintroduces exactly
+    # the method difference this comparison exists to remove.
+    if ties["m2"].get("bulk_source") != ties["stage"].get("bulk_source"):
+        info["reason"] = (
+            f"the two re-measures used different estimators (m2 bulk_source="
+            f"{ties['m2'].get('bulk_source')}, stage bulk_source="
+            f"{ties['stage'].get('bulk_source')}), so their difference would "
+            f"carry the method difference rather than a shift")
         return None, info
-    return tie, info
+    info["bulk_source"] = ties["m2"].get("bulk_source")
+    return (ties["m2"], ties["stage"]), info
 
 
 def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
@@ -2695,17 +2778,11 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
     # the full star set is the right one.
     m2_stars, m2_star_mags, m2_stars_source = (None, None, None)
     if not correcting and basepath:
-        # The star LIST comes through _m2_consensus_stars, which is the seam
-        # callers and tests substitute.  The magnitudes are read separately and
-        # only adopted when they line up with the list actually in hand, so a
-        # substituted list never gets another catalog's magnitudes attached.
-        m2_stars, m2_stars_source = _m2_consensus_stars(
+        # ONE read.  cloudc F182M's pooled consensus is 123,362 rows and an
+        # earlier revision opened it twice per filter, once for the star list
+        # and once for the magnitudes.
+        m2_stars, m2_star_mags, m2_stars_source = _m2_consensus_catalog(
             record_dir, basepath, filtername, obs_token)
-        if m2_stars is not None:
-            _, cat_mag, _ = _m2_consensus_catalog(record_dir, basepath,
-                                                  filtername, obs_token)
-            if cat_mag is not None and len(cat_mag) == len(m2_stars):
-                m2_star_mags = cat_mag
         if m2_stars is None:
             print(f"astrom checkpoint [{stage}] {filtername}: no m2 consensus "
                   f"catalog at {m2_stars_source} -- the stage-stability check "
@@ -2994,51 +3071,58 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                                       f"tie): {vctx}", flush=True)
                             else:
                                 # The recorded m2 baseline was measured over
-                                # m2's FULL star set; this stage's tie is over
-                                # the subset m2's list AND this stage share.
-                                # Before calling that difference movement,
-                                # re-measure m2's own catalog on the survivors
-                                # so both sides see the same stars (see
-                                # _survivor_baseline_tie).
-                                sym_tie, sym_info = _survivor_baseline_tie(
-                                    m2_stars, m2_star_mags, cons["coords"],
+                                # m2's FULL star set, and this stage's tie over
+                                # its own.  Before calling that difference
+                                # movement, re-measure BOTH on the stars the two
+                                # consensi share (see _survivor_baseline_tie).
+                                sym, sym_info = _survivor_baseline_tie(
+                                    m2_stars, m2_star_mags,
+                                    cons["coords"], cons.get("mag"),
                                     refcat, filtername=filt, context=vctx)
                                 sym_delta = None
-                                if sym_tie is not None:
+                                if sym is not None:
+                                    sym_m2, sym_stage = sym
                                     sym_delta = float(np.hypot(
-                                        ref_tie["dra_mas"] - sym_tie["dra_mas"],
-                                        ref_tie["ddec_mas"] - sym_tie["ddec_mas"]))
-                                    sym_info["dra_mas"] = float(sym_tie["dra_mas"])
-                                    sym_info["ddec_mas"] = float(sym_tie["ddec_mas"])
+                                        sym_stage["dra_mas"] - sym_m2["dra_mas"],
+                                        sym_stage["ddec_mas"] - sym_m2["ddec_mas"]))
+                                    sym_info["m2_dra_mas"] = float(sym_m2["dra_mas"])
+                                    sym_info["m2_ddec_mas"] = float(sym_m2["ddec_mas"])
+                                    sym_info["stage_dra_mas"] = float(sym_stage["dra_mas"])
+                                    sym_info["stage_ddec_mas"] = float(sym_stage["ddec_mas"])
                                     sym_info["delta_mas"] = sym_delta
+                                    sym_info["raw_delta_mas"] = float(delta)
                                 symmetric_baseline = sym_info
                                 if (sym_delta is not None
                                         and sym_delta <= STAGE_STABILITY_TOL_MAS):
                                     print(f"ASTROM CHECKPOINT [{stage}] STABLE: "
                                           f"{vctx} tie unchanged since m2 on the "
-                                          f"{sym_info['n_survivors']} stars both "
-                                          f"stages share (delta {sym_delta:.2f} mas "
-                                          f"<= {STAGE_STABILITY_TOL_MAS}).  The raw "
+                                          f"{sym_info['n_survivors']} stars the two "
+                                          f"consensi share -- m2 reads "
+                                          f"({sym_m2['dra_mas']:+.2f},"
+                                          f"{sym_m2['ddec_mas']:+.2f}) and this stage "
+                                          f"({sym_stage['dra_mas']:+.2f},"
+                                          f"{sym_stage['ddec_mas']:+.2f}) mas, delta "
+                                          f"{sym_delta:.2f} <= "
+                                          f"{STAGE_STABILITY_TOL_MAS}.  The raw "
                                           f"comparison read {delta:.2f} mas because "
-                                          f"the recorded m2 baseline "
+                                          f"m2's recorded baseline "
                                           f"({base[0]:+.2f},{base[1]:+.2f}) was "
-                                          f"measured over all {sym_info['n_m2']} m2 "
-                                          f"stars while this stage re-detects "
-                                          f"{sym_info['n_stage']}; the drop-outs "
-                                          f"move the BASELINE only.  Same stars, "
-                                          f"m2 reads ({sym_tie['dra_mas']:+.2f},"
-                                          f"{sym_tie['ddec_mas']:+.2f}) mas.",
+                                          f"measured over all {sym_info['n_m2']} of "
+                                          f"its stars while this stage re-detects "
+                                          f"{sym_info['n_stage']}; the drop-outs move "
+                                          f"the BASELINE only "
+                                          f"(bulk_source={sym_info.get('bulk_source')})",
                                           flush=True)
                                 elif sym_delta is not None:
                                     failures.append(
                                         f"{vctx}: consensus->reference MOVED "
                                         f"{sym_delta:.2f} mas since the m2 freeze on "
-                                        f"the {sym_info['n_survivors']} stars both "
-                                        f"stages share (m2 re-measured on those stars="
-                                        f"({sym_tie['dra_mas']:+.2f},"
-                                        f"{sym_tie['ddec_mas']:+.2f}), now="
-                                        f"({ref_tie['dra_mas']:+.2f},"
-                                        f"{ref_tie['ddec_mas']:+.2f}) mas).  The raw "
+                                        f"the {sym_info['n_survivors']} stars the two "
+                                        f"consensi share (m2 re-measured on those "
+                                        f"stars=({sym_m2['dra_mas']:+.2f},"
+                                        f"{sym_m2['ddec_mas']:+.2f}), this stage on "
+                                        f"the same stars=({sym_stage['dra_mas']:+.2f},"
+                                        f"{sym_stage['ddec_mas']:+.2f}) mas).  The raw "
                                         f"comparison against m2's recorded full-set "
                                         f"baseline ({base[0]:+.2f},{base[1]:+.2f}) "
                                         f"read {delta:.2f} mas")

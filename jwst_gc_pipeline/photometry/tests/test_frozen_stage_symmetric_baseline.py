@@ -1,5 +1,5 @@
 """The frozen-stage (m3+) reference-tie gate must compare the two stages on the
-SAME stars.
+stars they have in common.
 
 Issue #285 restricted the later stage's consensus to m2's star LIST but left the
 baseline it is differenced against as the number m2 measured over m2's FULL set.
@@ -7,20 +7,23 @@ One-sided restriction manufactures a shift out of two correct measurements: the
 stars a later stage cannot re-detect drag the BASELINE and nothing else, and the
 gate reports the difference as "the solution moved after it was frozen".
 
-Measured on sickle F335M m2 vs m4 (2026-08-10):
+From the live sickle records (2026-08-16), F335M m2 vs m5 -- the case where this
+is the whole story:
 
-    m2 ALL            ddec -0.80   n=2958
-    m4 ALL            ddec +1.43   n=2813    <- gate called this 2.23 mas of movement
-    m2 SHARED         ddec +1.50   n=2819
-    m4 SHARED         ddec +1.42   n=2819    <- same stars: 0.08 mas
-    m2 DROPOUTS only  ddec -18.58  n=139
+    m2 over its full 2964 stars    (-0.013, +0.014) mas
+    m5 over its      2644 stars    (+0.457, +2.194) mas    raw delta 2.230 -> RAISE
+    both over the shared 2642      (-0.013, +1.764) mas -> delta 0.637 -> pass
 
-The same field blocked twice in the 2026-08 campaign: m3 F187N at 2.34 mas and
-m5 F335M at 2.23 mas, both on a solution nothing had touched since m2.
+and F187N m3, where it is NOT -- there the drop-outs are ~2.2 mag BRIGHTER than
+the survivors, carry no baseline artefact, and the comparison on shared stars
+reads 2.463 mas, slightly worse than the raw 2.342.  The gate is meant to keep
+failing that one.
 
 These tests drive ``run_visit_checkpoint`` with a reference tie whose value
-DEPENDS on which stars are handed to it, which is the only way the asymmetry can
-show up at all -- a fake that returns a constant is blind to it.
+depends BOTH on which stars it is handed and on where those stars are -- a fake
+returning a constant is blind to the first, and a fake reading only the star
+list is blind to the second, which is how a match tolerance of 1e-9 mas once
+left the suite green.
 """
 import json
 import os
@@ -38,9 +41,30 @@ from .test_visit_consensus import RA0, DEC0, _exposure_table, _field
 
 _DUMMY_REFCAT = dict(all=None, sparse=None, mag=None, dense=True)
 
-#: n_dropouts of these carry the drop-out bias; the rest are the shared stars.
 N_M2_STARS = 400
 N_DROPOUTS = 40
+
+#: Per-star offset from the reference, in mas of Dec.  The shared stars agree
+#: between the stages; the drop-outs carry the measured sickle F335M drop-out
+#: bias.  ``SHARED`` sits above ``REFERENCE_APPLY_MIN_MAS`` so the tie reaches
+#: the frozen-stage branch at all.
+SHARED_DDEC = 2.60
+DROPOUT_DDEC = -18.58
+
+#: How far the stage's stars sit from m2's, per star.  Real per-star fit
+#: differences between stages are a few mas and carry no preferred direction;
+#: 20 mas with ALTERNATING SIGN is well inside SURVIVOR_MATCH_TOL_MAS, sums to
+#: zero so it is not itself a shift, and is far outside "identical
+#: coordinates" -- which is what makes the match tolerance testable at all.
+POS_JITTER_MAS = 20.0
+
+
+def _zero_mean_jitter(n):
+    """+/-POS_JITTER_MAS alternating, in degrees; exactly zero mean for even n."""
+    sign = np.where(np.arange(n) % 2 == 0, 1.0, -1.0)
+    if n % 2:
+        sign[-1] = 0.0
+    return POS_JITTER_MAS * sign / 3.6e6
 
 
 def _tiny_visit_table():
@@ -49,8 +73,7 @@ def _tiny_visit_table():
 
 
 def _m2_star_grid(n=N_M2_STARS):
-    """n stars on one RA row, spaced 1" apart -- far enough that each pairs
-    uniquely inside SURVIVOR_MATCH_TOL_MAS (200 mas)."""
+    """n stars on one RA row, 1" apart -- far enough to pair uniquely."""
     ra = RA0 + np.arange(n) / 3600.0
     dec = np.full(n, DEC0)
     return SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs")
@@ -81,68 +104,86 @@ def _write_m2_record(record_dir, dra, ddec, consensus_catalog,
         json.dump(rec, fh)
 
 
-def _patch_population_dependent_tie(monkeypatch, m2_coords, survivor_mask,
-                                    shared_ddec, dropout_ddec, moved_ddec=0.0):
-    """Patch the consensus + the tie so BOTH depend on the star set.
+def _install_fakes(monkeypatch, m2_coords, per_star_ddec, stage_coords,
+                   apply_ok=True, swept=False, bulk_source="same-star",
+                   stage_bulk_source=None, remeasure_apply_ok=None,
+                   remeasure_swept=None):
+    """Patch the consensus and the tie so both depend on the stars AND on where
+    they are.
 
-    ``build_visit_consensus`` returns the survivors (what a later stage
-    re-detects).  ``measure_reference_tie`` returns the mean per-star Dec offset
-    of whatever coordinates it is given, so handing it m2's full set, m2's
-    survivors, or this stage's consensus gives three different answers -- which
-    is the mechanism under test.  ``moved_ddec`` is added for the stage's own
-    consensus only, modelling a solution that really did move.
+    ``measure_reference_tie`` here returns, for whatever coordinates it is given:
+
+        mean(per-star offset of the nearest m2 star)  +  mean(Dec displacement
+        from that m2 star)
+
+    i.e. a population term plus a rigid term, which is the decomposition the
+    real estimator makes.  Handing it m2's full set, m2's shared subset, or the
+    stage's stars therefore gives three different answers, and moving the stage's
+    stars changes the answer independently of which stars they are.
     """
-    survivors = m2_coords[survivor_mask]
-    per_star = np.where(survivor_mask, shared_ddec, dropout_ddec)
-    # RA is unique per star by construction, so it keys the lookup.
-    lookup = {round(float(r), 9): float(v)
-              for r, v in zip(m2_coords.ra.deg, per_star)}
+    base_ra = np.asarray(m2_coords.ra.deg)
+    base_dec = np.asarray(m2_coords.dec.deg)
+    vals = np.asarray(per_star_ddec, dtype=float)
 
     def _fake_consensus(tables, context="", **kw):
-        return dict(coords=survivors, mag=np.full(len(survivors), 16.0),
-                    exposures=[], anchor_key=("001", 1, "nrcb1", "F212N"),
+        return dict(coords=stage_coords,
+                    mag=np.full(len(stage_coords), 16.0), exposures=[],
+                    anchor_key=("001", 1, "nrcb1", "F212N"),
                     scatter_mas=np.array([1.0]), consensus_ok=True, skipped=[])
 
     def _fake_tie(cons_coords, ref_all, ref_sparse, context="", **kw):
-        # A coordinate neither catalog knows (a padded far star in the
-        # match-coverage test) reads as a shared star, so padding changes the
-        # star COUNT without moving the tie.
-        vals = [lookup.get(round(float(r), 9), shared_ddec)
-                for r in cons_coords.ra.deg]
-        ddec = float(np.mean(vals))
-        # The stage's own consensus (not the m2 re-measure) carries any real
-        # movement.  The re-measure is labelled by its context.
-        if "re-measured on survivors" not in context:
-            ddec += moved_ddec
-        return dict(off_mas=float(abs(ddec)), apply_ok=True,
-                    dra_mas=0.0, ddec_mas=ddec,
+        ra = np.asarray(cons_coords.ra.deg)
+        dec = np.asarray(cons_coords.dec.deg)
+        idx = np.abs(ra[:, None] - base_ra[None, :]).argmin(axis=1)
+        population = float(np.mean(vals[idx]))
+        rigid = float(np.mean(dec - base_dec[idx])) * 3.6e6
+        ddec = population + rigid
+        src = bulk_source
+        if stage_bulk_source is not None and "stage re-measured" in context:
+            src = stage_bulk_source
+        # `remeasure_*` apply ONLY to the re-measures on shared stars, so the
+        # stage's own tie still reaches the frozen-stage branch.  Setting
+        # apply_ok False everywhere sends it to unverified_blocking instead and
+        # the branch under test never runs.
+        ok, swp = apply_ok, swept
+        if "re-measured on shared stars" in context:
+            if remeasure_apply_ok is not None:
+                ok = remeasure_apply_ok
+            if remeasure_swept is not None:
+                swp = remeasure_swept
+        return dict(off_mas=float(abs(ddec)), apply_ok=ok,
+                    dra_mas=0.0, ddec_mas=ddec, bulk_source=src,
                     cross_reference={"agree": True, "sep_mas": 0.0},
                     cross_reference_gross_ok=True, per_tile={"clean": True},
-                    swept=False, reference_dense=True,
+                    swept=swp, window_arcsec=3.0, reference_dense=True,
                     vs_full={"dra": 0.0, "ddec": ddec})
 
     monkeypatch.setattr(_ac, "build_visit_consensus", _fake_consensus)
     monkeypatch.setattr(_ac, "measure_reference_tie", _fake_tie)
 
 
-def _sickle_case(tmp_path, monkeypatch, moved_ddec=0.0,
-                 n_stars=N_M2_STARS, n_dropouts=N_DROPOUTS):
-    """The sickle shape, with the drop-outs' measured -18.58 mas Dec bias: the
-    shared stars agree between the stages, m2's FULL-set mean is dragged away
-    from them by the drop-outs, and the raw comparison exceeds the 2 mas
-    tolerance.  The shared value sits above ``REFERENCE_APPLY_MIN_MAS`` so the
-    tie reaches the frozen-stage branch at all."""
+def _sickle_case(tmp_path, monkeypatch, moved_mas=0.0, n_stars=N_M2_STARS,
+                 n_dropouts=N_DROPOUTS, write_catalog=True, **fake_kw):
+    """The sickle F335M shape: the shared stars agree between the stages, m2's
+    FULL-set baseline is dragged away from them by the drop-outs, and the raw
+    comparison exceeds the 2 mas tolerance while the shared stars do not."""
     coords = _m2_star_grid(n_stars)
-    mask = np.ones(n_stars, dtype=bool)
-    mask[:n_dropouts] = False
-    shared, dropout = 2.60, -18.58
-    m2_full_mean = float(np.mean(np.where(mask, shared, dropout)))
+    keep = np.ones(n_stars, dtype=bool)
+    keep[:n_dropouts] = False
+    per_star = np.where(keep, SHARED_DDEC, DROPOUT_DDEC)
+    m2_full_mean = float(np.mean(per_star))
+    # The stage re-detects the survivors, at slightly different positions, plus
+    # any rigid movement under test.
+    surv = coords[keep]
+    stage = SkyCoord(
+        ra=surv.ra.deg * u.deg,
+        dec=(surv.dec.deg + _zero_mean_jitter(len(surv))
+             + moved_mas / 3.6e6) * u.deg, frame="icrs")
     basepath = str(tmp_path)
-    cat = _write_m2_consensus_catalog(basepath, coords)
+    cat = _write_m2_consensus_catalog(basepath, coords) if write_catalog else None
     _write_m2_record(basepath, 0.0, m2_full_mean, cat)
-    _patch_population_dependent_tie(monkeypatch, coords, mask, shared, dropout,
-                                    moved_ddec=moved_ddec)
-    return basepath, m2_full_mean, shared
+    _install_fakes(monkeypatch, coords, per_star, stage, **fake_kw)
+    return basepath, m2_full_mean, coords, per_star, keep
 
 
 def _run(basepath, stage="m3"):
@@ -152,23 +193,30 @@ def _run(basepath, stage="m3"):
                                 context="test")
 
 
+def _sym(rec):
+    return rec["visits"][0]["symmetric_baseline"]
+
+
+# ---------------------------------------------------------------------------
+# the population change alone
+# ---------------------------------------------------------------------------
+
 def test_population_change_alone_is_not_a_regression(tmp_path, monkeypatch):
-    """The sickle case: the raw comparison exceeds tolerance, the same stars
-    agree to well under it, and the stage passes."""
-    basepath, m2_full_mean, shared = _sickle_case(tmp_path, monkeypatch)
-    # The premise: without the fix this comparison is the one that raises.
-    assert abs(shared - m2_full_mean) > _ac.STAGE_STABILITY_TOL_MAS
+    """The raw comparison exceeds tolerance, the shared stars do not, and the
+    stage passes."""
+    basepath, m2_full_mean, _c, _p, _k = _sickle_case(tmp_path, monkeypatch)
+    # The premise: without the fix this is the comparison that raises.
+    assert abs(SHARED_DDEC - m2_full_mean) > _ac.STAGE_STABILITY_TOL_MAS
     rec = _run(basepath)
     assert rec["passed"]
     assert rec["failures"] == []
 
 
 def test_without_the_re_measure_the_same_fixture_raises(tmp_path, monkeypatch):
-    """The premise of every test above, pinned: on this fixture nothing moved,
-    and the gate raises anyway as soon as the survivor re-measure is taken out.
-    Without this, a re-measure that silently stopped running would leave the
-    suite green only because the fixture stopped exercising the gate."""
-    basepath, _m2_full_mean, _shared = _sickle_case(tmp_path, monkeypatch)
+    """The premise of every test here, pinned: nothing moved on this fixture,
+    and the gate raises as soon as the re-measure is taken out.  Without this a
+    re-measure that silently stopped running would leave the suite green."""
+    basepath, _m, _c, _p, _k = _sickle_case(tmp_path, monkeypatch)
     monkeypatch.setattr(_ac, "_survivor_baseline_tie",
                         lambda *a, **k: (None, dict(reason="disabled for the test",
                                                     n_m2=0, n_stage=0,
@@ -177,66 +225,152 @@ def test_without_the_re_measure_the_same_fixture_raises(tmp_path, monkeypatch):
         _run(basepath)
 
 
-def test_the_record_carries_both_numbers(tmp_path, monkeypatch):
-    """A pass that needed the re-measure must SAY so in the record -- the counts
-    and both ties -- or the next reader cannot tell it from a raw pass."""
-    basepath, m2_full_mean, shared = _sickle_case(tmp_path, monkeypatch)
+def test_the_record_carries_both_ties_and_the_raw_delta(tmp_path, monkeypatch):
+    """A pass that needed the re-measure must SAY so -- both ties, the counts,
+    and the raw number -- or the next reader cannot tell it from a raw pass, nor
+    reconcile it with the m2 record and the earlier logs."""
+    basepath, _m, _c, _p, _k = _sickle_case(tmp_path, monkeypatch)
     rec = _run(basepath)
-    sym = rec["visits"][0]["symmetric_baseline"]
+    sym = _sym(rec)
     assert sym is not None
-    assert sym["n_survivors"] == N_M2_STARS - N_DROPOUTS
     assert sym["n_m2"] == N_M2_STARS
-    # m2 RE-MEASURED on the survivors reads the shared value, not its full-set one.
-    assert sym["ddec_mas"] == pytest.approx(shared, abs=1e-6)
-    assert sym["delta_mas"] < _ac.STAGE_STABILITY_TOL_MAS
+    assert sym["n_stage"] == N_M2_STARS - N_DROPOUTS
+    assert sym["n_survivors"] == N_M2_STARS - N_DROPOUTS
+    # m2 RE-MEASURED on the shared stars reads the shared value, not its
+    # full-set one; the stage reads the same plus its positional jitter.
+    assert sym["m2_ddec_mas"] == pytest.approx(SHARED_DDEC, abs=1e-6)
+    assert sym["stage_ddec_mas"] == pytest.approx(SHARED_DDEC, abs=1e-3)
+    assert sym["delta_mas"] == pytest.approx(0.0, abs=1e-3)
+    assert sym["raw_delta_mas"] > _ac.STAGE_STABILITY_TOL_MAS
+    assert sym["bulk_source"] == "same-star"
 
 
 def test_a_raw_pass_does_not_re_measure(tmp_path, monkeypatch):
     """No drop-outs, so the raw comparison already agrees: the re-measure never
-    runs and the record says nothing about it.  This is what keeps the fix off
+    runs and the record says nothing about it.  This is what keeps the check off
     the path of every passing stage."""
-    basepath, _m2_full_mean, _shared = _sickle_case(tmp_path, monkeypatch,
-                                                    n_dropouts=0)
+    basepath, _m, _c, _p, _k = _sickle_case(tmp_path, monkeypatch, n_dropouts=0)
     rec = _run(basepath)
     assert rec["passed"]
-    assert rec["visits"][0]["symmetric_baseline"] is None
+    assert _sym(rec) is None
 
+
+def test_a_correcting_stage_never_re_measures(tmp_path, monkeypatch):
+    """m2 has nothing to be frozen against; the whole path is m3+."""
+    basepath, _m, _c, _p, _k = _sickle_case(tmp_path, monkeypatch)
+    rec = _run(basepath, stage="m2")
+    assert _sym(rec) is None
+
+
+# ---------------------------------------------------------------------------
+# real movement
+# ---------------------------------------------------------------------------
 
 def test_real_movement_still_raises(tmp_path, monkeypatch):
-    """Same population change, plus a 5 mas shift the stage's consensus really
-    carries.  The same stars now disagree by 5 mas, so it raises."""
-    basepath, _m2_full_mean, _shared = _sickle_case(tmp_path, monkeypatch,
-                                                    moved_ddec=5.0)
+    """Same population change, plus a 30 mas rigid shift the stage's stars
+    really carry.  The shared stars now disagree, so it raises."""
+    basepath, _m, _c, _p, _k = _sickle_case(tmp_path, monkeypatch, moved_mas=30.0)
     with pytest.raises(AstrometryRegressionError) as ex:
         _run(basepath)
     msg = str(ex.value)
-    assert "stars both stages share" in msg, msg
-    assert "5.00 mas" in msg, msg
+    assert "the two consensi share" in msg, msg
+    assert f"{30.0:.2f} mas" in msg, msg
 
 
 def test_movement_message_reports_the_raw_delta_too(tmp_path, monkeypatch):
-    """The raw number is what the operator saw in earlier logs and in the m2
-    record; dropping it would make the two irreconcilable."""
-    basepath, m2_full_mean, shared = _sickle_case(tmp_path, monkeypatch,
-                                                  moved_ddec=5.0)
+    """The raw number is what earlier logs and the m2 record show; dropping it
+    would leave the two irreconcilable."""
+    basepath, m2_full_mean, _c, _p, _k = _sickle_case(tmp_path, monkeypatch,
+                                                      moved_mas=30.0)
     with pytest.raises(AstrometryRegressionError) as ex:
         _run(basepath)
-    raw = abs((shared + 5.0) - m2_full_mean)
+    raw = abs((SHARED_DDEC + 30.0) - m2_full_mean)
     assert f"read {raw:.2f} mas" in str(ex.value), str(ex.value)
 
+
+# ---------------------------------------------------------------------------
+# the comparison is symmetric: BOTH sides restricted
+# ---------------------------------------------------------------------------
+
+def test_the_stage_side_is_restricted_too(tmp_path, monkeypatch):
+    """The stage consensus equals m2's star list only while
+    ``_restrict_to_same_stars`` succeeds on every exposure; it legitimately
+    refuses, after which the stage set holds stars m2 never had.  Here the stage
+    carries 80 extra stars at -18.58 mas that m2 has no counterpart for.  With
+    both sides restricted the extras leave both ties and the stage passes; an
+    implementation that re-measures only m2 differences its restricted baseline
+    against a stage tie those extras have dragged, and raises."""
+    coords = _m2_star_grid()
+    keep = np.ones(N_M2_STARS, dtype=bool)
+    keep[:N_DROPOUTS] = False
+    per_star = np.where(keep, SHARED_DDEC, DROPOUT_DDEC)
+    m2_full_mean = float(np.mean(per_star))
+
+    surv = coords[keep]
+    # 80 stars a degree away: mutually unmatched, so they are stage-only.
+    extra_ra = coords.ra.deg[:80] + 1.0
+    stage = SkyCoord(
+        ra=np.concatenate([surv.ra.deg, extra_ra]) * u.deg,
+        dec=np.concatenate([surv.dec.deg + _zero_mean_jitter(len(surv)),
+                            np.full(80, DEC0)]) * u.deg, frame="icrs")
+
+    basepath = str(tmp_path)
+    cat = _write_m2_consensus_catalog(basepath, coords)
+    _write_m2_record(basepath, 0.0, m2_full_mean, cat)
+    # The extras sit at the drop-out offset: nearest-base lookup gives them
+    # DROPOUT_DDEC, so an unrestricted stage tie is dragged by them.
+    _install_fakes(monkeypatch, coords, per_star, stage)
+
+    rec = _run(basepath)
+    assert rec["passed"], rec["failures"]
+    sym = _sym(rec)
+    assert sym["n_stage"] == len(stage)
+    assert sym["n_survivors"] == N_M2_STARS - N_DROPOUTS
+    assert sym["stage_ddec_mas"] == pytest.approx(SHARED_DDEC, abs=1e-3)
+
+
+def test_survivor_matching_is_by_sky_position_not_row_order(tmp_path, monkeypatch):
+    """Shuffling the stage consensus changes nothing.  An index-based
+    implementation passes everything else and fails this."""
+    basepath, _m, _c, _p, _k = _sickle_case(tmp_path, monkeypatch)
+    shuffled = _ac.build_visit_consensus(None)["coords"]
+    order = np.random.default_rng(0).permutation(len(shuffled))
+    inner = _ac.build_visit_consensus
+
+    def _shuffled_consensus(tables, context="", **kw):
+        out = dict(inner(tables, context=context, **kw))
+        out["coords"] = shuffled[order]
+        return out
+
+    monkeypatch.setattr(_ac, "build_visit_consensus", _shuffled_consensus)
+    rec = _run(basepath)
+    assert rec["passed"]
+    assert _sym(rec)["n_survivors"] == N_M2_STARS - N_DROPOUTS
+
+
+def test_the_match_tolerance_has_to_be_wide_enough_to_pair(tmp_path, monkeypatch):
+    """The stage's stars sit POS_JITTER_MAS from m2's, as real ones do.  A match
+    tolerance below that pairs nothing and the comparison refuses -- which is
+    what makes the constant testable at the tight end.  With coordinates
+    identical on both sides, every tolerance down to 1e-9 mas would pass."""
+    basepath, _m, _c, _p, _k = _sickle_case(tmp_path, monkeypatch)
+    monkeypatch.setattr(_ac, "SURVIVOR_MATCH_TOL_MAS", POS_JITTER_MAS / 2.0)
+    with pytest.raises(AstrometryRegressionError) as ex:
+        _run(basepath)
+    assert "are shared within" in str(ex.value), str(ex.value)
+
+
+# ---------------------------------------------------------------------------
+# refusals -- each leaves the raw comparison standing and names its reason
+# ---------------------------------------------------------------------------
 
 def test_no_consensus_catalog_raises_and_says_why(tmp_path, monkeypatch):
     """Without m2's catalog the re-measure cannot run.  That is not evidence the
     solution stayed put, so the stage fails closed -- and names what was
-    missing, since 'MOVED 2.23 mas' on its own sent two earlier investigations
-    to the wrong cause (issue #368)."""
-    coords = _m2_star_grid()
-    mask = np.ones(N_M2_STARS, dtype=bool)
-    mask[:N_DROPOUTS] = False
-    m2_full_mean = float(np.mean(np.where(mask, 2.60, -18.58)))
-    basepath = str(tmp_path)
-    _write_m2_record(basepath, 0.0, m2_full_mean, None)   # no catalog on disk
-    _patch_population_dependent_tie(monkeypatch, coords, mask, 2.60, -18.58)
+    missing, since "MOVED 2.23 mas" on its own sent two earlier investigations
+    to the wrong cause (#368)."""
+    basepath, _m, _c, _p, _k = _sickle_case(tmp_path, monkeypatch,
+                                            write_catalog=False)
     with pytest.raises(AstrometryRegressionError) as ex:
         _run(basepath)
     msg = str(ex.value)
@@ -245,12 +379,11 @@ def test_no_consensus_catalog_raises_and_says_why(tmp_path, monkeypatch):
 
 
 def test_too_small_a_consensus_raises_and_says_why(tmp_path, monkeypatch):
-    """A re-measure on a handful of stars is not a measurement.  Below
-    SURVIVOR_MIN_STARS the raw comparison stands and the stage fails closed."""
+    """A re-measure on a handful of stars is not a measurement."""
     n = _ac.SURVIVOR_MIN_STARS + 10
-    n_drop = n - (_ac.SURVIVOR_MIN_STARS - 5)      # stage set just under the floor
-    basepath, _m2, _sh = _sickle_case(tmp_path, monkeypatch, n_stars=n,
-                                      n_dropouts=n_drop)
+    basepath, _m, _c, _p, _k = _sickle_case(
+        tmp_path, monkeypatch, n_stars=n,
+        n_dropouts=n - (_ac.SURVIVOR_MIN_STARS - 5))
     with pytest.raises(AstrometryRegressionError) as ex:
         _run(basepath)
     msg = str(ex.value)
@@ -258,76 +391,97 @@ def test_too_small_a_consensus_raises_and_says_why(tmp_path, monkeypatch):
     assert "too few stars to re-measure" in msg, msg
 
 
-def test_too_few_stars_actually_MATCH_raises_and_says_why(tmp_path, monkeypatch):
-    """Both catalogs are big enough, and they still overlap in almost nothing --
-    a stage consensus that is mostly a DIFFERENT patch of sky.  The count that
-    decides is what MATCHES, not what either side holds; a guard on the two
-    input sizes alone passes this and re-measures on 30 stars."""
+def test_a_small_shared_FRACTION_raises_even_when_the_count_is_large(
+        tmp_path, monkeypatch):
+    """Two large catalogs sharing a small fraction of their stars clear any
+    absolute floor while the intersection says nothing about either.  Here both
+    consensi hold 400 stars and share 40 -- 40 is under SURVIVOR_MIN_STARS=50
+    only by accident of this fixture, so the count that decides is spelled out
+    in the message: the floor is 200, half of the smaller catalog."""
     coords = _m2_star_grid()
-    mask = np.ones(N_M2_STARS, dtype=bool)
-    mask[:N_M2_STARS - 30] = False                 # only 30 real survivors
-    shared, dropout = 2.60, -18.58
-    m2_full_mean = float(np.mean(np.where(mask, shared, dropout)))
+    keep = np.zeros(N_M2_STARS, dtype=bool)
+    keep[-40:] = True                      # only 40 m2 stars are re-detected
+    per_star = np.where(keep, SHARED_DDEC, DROPOUT_DDEC)
     basepath = str(tmp_path)
     cat = _write_m2_consensus_catalog(basepath, coords)
-    _write_m2_record(basepath, 0.0, m2_full_mean, cat)
-    _patch_population_dependent_tie(monkeypatch, coords, mask, shared, dropout)
+    _write_m2_record(basepath, 0.0, float(np.mean(per_star)), cat)
+    surv = coords[keep]
+    # Pad to 400 with stars a degree away, so the stage clears the size guard
+    # and the SHARED count is what refuses.
+    extra_ra = coords.ra.deg[:N_M2_STARS - 40] + 1.0
+    stage = SkyCoord(
+        ra=np.concatenate([surv.ra.deg, extra_ra]) * u.deg,
+        dec=np.concatenate([surv.dec.deg + _zero_mean_jitter(len(surv)),
+                            np.full(len(extra_ra), DEC0)]) * u.deg,
+        frame="icrs")
+    _install_fakes(monkeypatch, coords, per_star, stage)
 
-    # Pad the stage consensus with stars a degree away, so it clears the size
-    # guard while adding nothing that matches.
-    survivors = coords[mask]
-    far = SkyCoord(ra=(coords.ra.deg[:100] + 1.0) * u.deg,
-                   dec=coords.dec.deg[:100] * u.deg, frame="icrs")
-    padded = SkyCoord(ra=np.concatenate([survivors.ra.deg, far.ra.deg]) * u.deg,
-                      dec=np.concatenate([survivors.dec.deg, far.dec.deg]) * u.deg,
-                      frame="icrs")
-
-    def _padded_consensus(tables, context="", **kw):
-        return dict(coords=padded, mag=np.full(len(padded), 16.0), exposures=[],
-                    anchor_key=("001", 1, "nrcb1", "F212N"),
-                    scatter_mas=np.array([1.0]), consensus_ok=True, skipped=[])
-
-    monkeypatch.setattr(_ac, "build_visit_consensus", _padded_consensus)
     with pytest.raises(AstrometryRegressionError) as ex:
         _run(basepath)
     msg = str(ex.value)
-    assert "was unavailable" in msg, msg
-    assert "survive into this stage" in msg, msg
-    assert "only 30 of 400" in msg, msg
+    assert "below the floor of 200" in msg, msg
+    assert "50% of the smaller catalog" in msg, msg
 
 
-def test_a_correcting_stage_never_re_measures(tmp_path, monkeypatch):
-    """m2 itself has nothing to be frozen against; the whole path is m3+."""
-    basepath, _m2_full_mean, _shared = _sickle_case(tmp_path, monkeypatch)
-    rec = _run(basepath, stage="m2")
-    assert rec["visits"][0]["symmetric_baseline"] is None
+def test_a_re_measure_that_did_not_sign_off_cannot_waive_the_failure(
+        tmp_path, monkeypatch):
+    """``apply_ok=False`` means the estimator refused its own number.  Using it
+    to overturn a blocking failure is the mistake bulk_offset_step0 names."""
+    basepath, _m, _c, _p, _k = _sickle_case(tmp_path, monkeypatch,
+                                            remeasure_apply_ok=False)
+    with pytest.raises(AstrometryRegressionError) as ex:
+        _run(basepath)
+    assert "did not sign off on itself" in str(ex.value), str(ex.value)
 
 
-def test_survivor_matching_is_per_star_not_positional(tmp_path, monkeypatch):
-    """The survivors are found by SKY MATCH, so which m2 rows they are does not
-    have to be known -- shuffling the stage's consensus order changes nothing.
-    An index-based implementation passes the tests above and fails this one."""
+def test_a_swept_re_measure_cannot_waive_the_failure(tmp_path, monkeypatch):
+    """A swept peak is a large-offset search result, not a small-tie
+    measurement, and the frozen gate is a small-tie question."""
+    basepath, _m, _c, _p, _k = _sickle_case(tmp_path, monkeypatch,
+                                            remeasure_swept=True)
+    with pytest.raises(AstrometryRegressionError) as ex:
+        _run(basepath)
+    assert "had to SWEEP the window" in str(ex.value), str(ex.value)
+
+
+def test_two_different_estimators_cannot_be_differenced(tmp_path, monkeypatch):
+    """A same-star bulk and a histogram bulk differ by several mas against a
+    dense reference.  Differencing one of each measures the method, not a
+    shift."""
+    basepath, _m, _c, _p, _k = _sickle_case(tmp_path, monkeypatch,
+                                            stage_bulk_source="histogram")
+    with pytest.raises(AstrometryRegressionError) as ex:
+        _run(basepath)
+    assert "different estimators" in str(ex.value), str(ex.value)
+
+
+# ---------------------------------------------------------------------------
+# what the record has to show about the population it certified
+# ---------------------------------------------------------------------------
+
+def test_the_magnitude_split_of_the_shared_sample_is_recorded(
+        tmp_path, monkeypatch):
+    """The intersection is a biased sample and the direction is not fixed --
+    sickle's F335M drop-outs are ~1.1 mag fainter than its survivors, its F187N
+    drop-outs ~2.2 mag brighter.  A pass has to say which population it was
+    measured on."""
     coords = _m2_star_grid()
-    mask = np.ones(N_M2_STARS, dtype=bool)
-    mask[:N_DROPOUTS] = False
-    shared, dropout = 2.60, -18.58
-    m2_full_mean = float(np.mean(np.where(mask, shared, dropout)))
+    keep = np.ones(N_M2_STARS, dtype=bool)
+    keep[:N_DROPOUTS] = False
+    per_star = np.where(keep, SHARED_DDEC, DROPOUT_DDEC)
+    mags = np.where(keep, 16.0, 13.8)          # drop-outs 2.2 mag brighter
     basepath = str(tmp_path)
-    cat = _write_m2_consensus_catalog(basepath, coords)
-    _write_m2_record(basepath, 0.0, m2_full_mean, cat)
-    _patch_population_dependent_tie(monkeypatch, coords, mask, shared, dropout)
+    cat = _write_m2_consensus_catalog(basepath, coords, refmag=mags)
+    _write_m2_record(basepath, 0.0, float(np.mean(per_star)), cat)
+    surv = coords[keep]
+    stage = SkyCoord(ra=surv.ra.deg * u.deg,
+                     dec=(surv.dec.deg + _zero_mean_jitter(len(surv))) * u.deg,
+                     frame="icrs")
+    _install_fakes(monkeypatch, coords, per_star, stage)
 
-    shuffled = _ac.build_visit_consensus(None)["coords"]
-    order = np.random.default_rng(0).permutation(len(shuffled))
-
-    def _shuffled_consensus(tables, context="", **kw):
-        return dict(coords=shuffled[order],
-                    mag=np.full(len(shuffled), 16.0), exposures=[],
-                    anchor_key=("001", 1, "nrcb1", "F212N"),
-                    scatter_mas=np.array([1.0]), consensus_ok=True, skipped=[])
-
-    monkeypatch.setattr(_ac, "build_visit_consensus", _shuffled_consensus)
     rec = _run(basepath)
-    assert rec["passed"]
-    assert rec["visits"][0]["symmetric_baseline"]["n_survivors"] == \
-        N_M2_STARS - N_DROPOUTS
+    split = _sym(rec)["mag_split"]
+    assert split["n_dropped"] == N_DROPOUTS
+    assert split["kept_median"] == pytest.approx(16.0)
+    assert split["dropped_median"] == pytest.approx(13.8)
+    assert split["dropped_minus_kept"] == pytest.approx(-2.2, abs=1e-6)
