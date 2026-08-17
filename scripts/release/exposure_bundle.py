@@ -161,6 +161,12 @@ def exposures_for_mosaic(mosaic, search_root=None):
     mosaic = Path(mosaic)
     asn_path = asn_for_mosaic(mosaic, search_root=search_root)
     if asn_path is None:
+        # Three distinguishable states, and saying the wrong one sends someone
+        # looking in the wrong place: a mosaic that is not there at all (a
+        # dangling staged symlink reads exactly like this), one that opens but
+        # names no association, and one that names an association that is gone.
+        if not mosaic.is_file():
+            return [], f"{mosaic.name}: mosaic not readable at {mosaic}"
         name = _asn_name(mosaic)
         detail = f"ASNTABLE={name!r} not found on disk" if name else "no ASNTABLE header"
         return [], f"{mosaic.name}: {detail}"
@@ -212,8 +218,15 @@ def discover_exposures(science_items, search_root=None, problems=None):
     """
     items, claimed = [], set()
     for mosaic_item in science_items:
-        frames, problem = exposures_for_mosaic(mosaic_item["src"],
-                                               search_root=search_root)
+        # ``asn_source`` lets a caller read the association out of a DIFFERENT
+        # copy of the same mosaic -- ``add_to_release`` uses the frozen copy in
+        # the release tree, which is present and byte-exact even when the
+        # original pipeline product has since been quarantined or re-drizzled.
+        # ``parent_src`` stays the manifest's ``src`` either way, because that is
+        # what the freshness audit and the page key on.
+        frames, problem = exposures_for_mosaic(
+            mosaic_item.get("asn_source") or mosaic_item["src"],
+            search_root=search_root)
         if problem and problems is not None:
             problems.append(problem)
         for frame in frames:
@@ -253,6 +266,84 @@ def link_parents(items):
             if parent:
                 it["parent_dest"] = parent
     return items
+
+
+def add_to_release(field_dir, assign_dest, collection_root, https_base,
+                   search_root=None, problems=None):
+    """Add (or refresh) ONLY the detector-frame exposures of a staged release.
+
+    Returns ``(exposure_items, manifest)`` without writing anything; the caller
+    stages the links and rewrites ``MANIFEST.json``.
+
+    WHY THIS EXISTS SEPARATELY FROM A NORMAL RE-STAGE
+    =================================================
+
+    A full ``--stage`` re-derives the whole deliverable set and re-runs every
+    mosaic gate, so a field that cannot currently ship a mosaic cannot receive
+    its exposures either.  arches is exactly that: its F212N mosaic is in an m2
+    correct-and-requarantine cycle and has no live product, so the listed-source
+    gate refuses the field outright -- while its ALREADY-PUBLISHED v1.2 release
+    sits on disk, gated and frozen weeks ago.
+
+    Adding frames to that release asserts nothing new about registration.  The
+    mosaics are untouched, the gates that admitted them already ran, and each
+    frame is read from the association of the mosaic it belongs to.  So this
+    path deliberately does NOT re-run those gates -- there is no mosaic decision
+    for them to make -- and it cannot change which mosaics ship: it only ever
+    adds ``category == "exposure"`` entries.
+
+    THE ASSOCIATION IS READ FROM THE STAGED COPY
+    ============================================
+
+    Not from ``src``.  A published release is a tree of COPIES, so the staged
+    mosaic is present and byte-exact even when the pipeline has since renamed or
+    re-drizzled the original -- which is the whole situation this function is
+    for.  Falling back to ``src`` covers a symlink-mode release, where the
+    staged path is the original.
+
+    A consequence worth stating: the association is NEVER beside the staged copy,
+    because it stayed in the pipeline directory the mosaic was drizzled in.  So
+    ``search_root`` is REQUIRED on this path, where it is merely a fallback on
+    the normal one; without it every mosaic reports its ``ASNTABLE`` as not found
+    and the field silently gains no frames.
+
+    ``built`` IS PRESERVED BY THE CALLER
+    ====================================
+
+    Not a detail: ``release_freshness`` compares a quarantine twin's mtime
+    against ``built`` to decide whether a staged copy predates a repudiation.
+    Stamping a fresh ``built`` here would make every existing twin older than
+    "staging" and silently flip the field's QUARANTINED images back to LIVE --
+    re-publishing, as a side effect of adding a symlink, exactly the mosaics the
+    astrometry checkpoint pulled.  arches would have had both superseded F212N
+    mosaics returned to its page.
+    """
+    field_dir = Path(field_dir)
+    manifest = json.loads((field_dir / "MANIFEST.json").read_text())
+    science = []
+    for entry in manifest.get("files", []):
+        if entry.get("category") != "image" or entry.get("kind") != "science":
+            continue
+        staged = field_dir / entry["dest"]
+        item = dict(entry)
+        # `is_file()` follows symlinks, so a dangling staged link falls through
+        # to `src` rather than being read as present.
+        item["asn_source"] = str(staged) if staged.is_file() else entry["src"]
+        science.append(item)
+
+    exposures = discover_exposures(science, search_root=search_root,
+                                   problems=problems)
+    for item in exposures:
+        item["dest"] = str(assign_dest(item))
+        src = Path(item["src"])
+        item["size_bytes"] = src.stat().st_size if src.is_file() else None
+        item.setdefault("version", manifest.get("version"))
+        rel = (field_dir / item["dest"]).relative_to(collection_root)
+        item["globus_path"] = "/" + str(rel)
+        item["url"] = https_base + item["globus_path"]
+    # parent_dest needs the mosaics' dests, which are already in the manifest
+    link_parents(list(manifest.get("files", [])) + exposures)
+    return exposures, manifest
 
 
 def summarize(items):

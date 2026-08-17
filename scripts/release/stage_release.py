@@ -1407,6 +1407,65 @@ def stage(items, field, version, release_root, mode, do_checksum,
     return field_dir
 
 
+def stage_exposures_only(field, version, release_root):
+    """Add the detector-frame exposures to an ALREADY-STAGED release.
+
+    Stages nothing but symlinks, and rewrites ``MANIFEST.json`` and ``README.md``
+    around them.  ``images/``, ``catalogs/`` and ``CHECKSUMS.sha256`` are not
+    touched, and the mosaic gates are deliberately not re-run -- see
+    ``exposure_bundle.add_to_release`` for why that is sound and for the
+    ``built`` trap it avoids.
+
+    Returns ``(field_dir, n_exposures)``, or ``(None, 0)`` when the field has no
+    staged release to add to.
+    """
+    field_dir = field_release_dir(field, version, release_root)
+    if not (field_dir / "MANIFEST.json").is_file():
+        print(f"\nNo staged release at {field_dir} -- --exposures-only adds "
+              f"frames to an EXISTING release; stage the field first.",
+              file=sys.stderr)
+        return None, 0
+
+    problems = []
+    exposures, manifest = exposure_bundle.add_to_release(
+        field_dir, lambda it: assign_dest(it, field),
+        GLOBUS_COLLECTION_ROOT, GLOBUS_HTTPS_BASE,
+        search_root=FIELDS[field]["data_dir"], problems=problems)
+    if problems:
+        print(f"\nEXPOSURE PROVENANCE: could not establish the detector-frame "
+              f"input list for {len(problems)} staged mosaic(s); their frames "
+              f"are NOT offered:")
+        for problem in problems:
+            print(f"    - {problem}")
+    if not exposures:
+        print(f"\nNo detector-frame exposures could be resolved for '{field}'.",
+              file=sys.stderr)
+        return field_dir, 0
+
+    print_manifest(exposures)
+    for it in exposures:
+        dest = field_dir / it["dest"]
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest.exists() or dest.is_symlink():
+            dest.unlink()
+        dest.symlink_to(Path(it["src"]).resolve())
+
+    kept = [f for f in manifest.get("files", [])
+            if f.get("category") != exposure_bundle.EXPOSURE_CATEGORY]
+    manifest["files"] = kept + exposures
+    manifest["exposure_mode"] = "symlink"
+    # `built` is NOT touched -- release_freshness reads it as the staging time
+    # and would re-publish this field's quarantined mosaics if it moved.  The
+    # separate key records when the frames were added without claiming the
+    # release itself was rebuilt.
+    manifest["exposures_added"] = datetime.datetime.now().astimezone().isoformat()
+    (field_dir / "MANIFEST.json").write_text(json.dumps(manifest, indent=2))
+    write_readme(field_dir, field, manifest.get("version", version),
+                 manifest["files"], manifest.get("mode", "copy"))
+    subprocess.run(["chmod", "-R", "a+rX", str(field_dir)], check=True)
+    return field_dir, len(exposures)
+
+
 def write_readme(field_dir, field, version, items, mode):
     images = [it for it in items if it["category"] == "image"]
     catalogs = [it for it in items if it["category"] == "catalog"]
@@ -1610,6 +1669,13 @@ def main(argv=None):
     parser.add_argument("--no-exposures", action="store_true",
                         help="do not offer the detector-frame exposures behind each "
                              "shipped mosaic (default: offer them, symlinked)")
+    parser.add_argument("--exposures-only", action="store_true",
+                        help="add ONLY the detector-frame exposures to an already-"
+                             "staged release: symlinks + MANIFEST/README, leaving "
+                             "images/, catalogs/ and CHECKSUMS.sha256 untouched and "
+                             "not re-running the mosaic gates (it cannot change which "
+                             "mosaics ship). Use when a field's frames should go out "
+                             "but a band has no live mosaic to re-stage.")
     parser.add_argument("--images-only", action="store_true",
                         help="ship mosaics only, no catalogs (e.g. images are internally "
                              "consistent but the catalog/absolute frame is not yet certified)")
@@ -1633,6 +1699,23 @@ def main(argv=None):
     # printed: sickle's F210M was in exactly that state on 2026-08-05. Refuse, and name
     # the quarantined sibling so the operator can see what took the file. There is
     # deliberately no override -- the fix is a one-line config edit, not a flag.
+    # Handled before everything below: this path adds no mosaic and makes no
+    # mosaic decision, so the gates that decide which mosaics ship have nothing
+    # to rule on. Running them anyway would refuse a field whose ALREADY-STAGED
+    # release is exactly what is being added to (arches: F212N has no live
+    # mosaic, so the listed-source gate refuses the field while its published
+    # v1.2 tree sits there gated and frozen).
+    if args.exposures_only:
+        field_dir, n = stage_exposures_only(args.field, args.version,
+                                            args.release_root)
+        if field_dir is None:
+            return 2
+        if not n:
+            return 1
+        print(f"Added {n} detector-frame exposures (symlinked, not checksummed) "
+              f"to {field_dir}. Mosaics, catalogs and CHECKSUMS.sha256 unchanged.")
+        return 0
+
     missing = []
     exposure_problems = []
     items = build_manifest(args.field, args.version, images_only=args.images_only,

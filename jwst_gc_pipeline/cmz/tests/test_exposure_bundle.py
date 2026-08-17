@@ -432,3 +432,147 @@ def test_a_page_with_no_exposures_gains_no_section(mw, sr, eb, nircam_field):
     page = mw.render_field_page('f', manifest, None)
     assert 'Detector-frame exposures' not in page
     assert '/exposures/' not in page
+
+
+# ---- adding frames to an already-staged release ----
+#
+# A full re-stage re-derives the deliverable set and re-runs every mosaic gate,
+# so a field that cannot currently ship a mosaic cannot receive its frames
+# either.  arches is exactly that: F212N sits in an m2 correct-and-requarantine
+# cycle with no live product, so the listed-source gate refuses the field, while
+# its already-published v1.2 release sits on disk gated and frozen.
+
+def _staged_release(sr, eb, tmp_path, nircam_field, mode='copy'):
+    """A minimal staged release: one science mosaic, no exposures yet."""
+    import shutil
+    field_dir = tmp_path / 'releases' / 'v9-test' / 'f'
+    mosaic = _science(nircam_field['mosaic'])
+    mosaic['dest'] = str(sr.assign_dest(mosaic, 'f'))
+    mosaic['size_bytes'] = os.path.getsize(mosaic['src'])
+    mosaic['sha256'] = 'deadbeef'
+    dest = field_dir / mosaic['dest']
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if mode == 'copy':
+        shutil.copy2(mosaic['src'], dest)
+    else:
+        dest.symlink_to(mosaic['src'])
+    manifest = {'field': 'f', 'version': 'v9-test', 'mode': mode,
+                'built': '2026-08-04T12:58:26-04:00',
+                'release_path': '/releases/v9-test/f',
+                'globus_collection_id': sr.GLOBUS_COLLECTION_ID,
+                'globus_https_base': sr.GLOBUS_HTTPS_BASE,
+                'files': [mosaic]}
+    (field_dir / 'MANIFEST.json').write_text(json.dumps(manifest))
+    (field_dir / 'CHECKSUMS.sha256').write_text(f"deadbeef  {mosaic['dest']}\n")
+    return field_dir
+
+
+def test_add_to_release_reads_the_asn_from_the_staged_copy(sr, eb, tmp_path,
+                                                           nircam_field):
+    """The whole point: the ORIGINAL mosaic can be gone -- quarantined by the m2
+    checkpoint, or re-drizzled under a new name -- and the frames must still
+    resolve, because the release tree holds a frozen copy of the exact mosaic
+    that shipped and that copy names its own association."""
+    field_dir = _staged_release(sr, eb, tmp_path, nircam_field)
+    os.remove(nircam_field['mosaic'])          # the pipeline product goes away
+    problems = []
+    exposures, manifest = eb.add_to_release(
+        field_dir, lambda it: sr.assign_dest(it, 'f'),
+        tmp_path / 'releases', sr.GLOBUS_HTTPS_BASE,
+        search_root=nircam_field['root'], problems=problems)
+    assert not problems, problems
+    assert len(exposures) == 2
+    assert all(e['url'].startswith(sr.GLOBUS_HTTPS_BASE) for e in exposures)
+    # ...and they still point at the mosaic that is IN the manifest, so the
+    # page's withholding keys on the right thing
+    assert {e['parent_dest'] for e in exposures} == {manifest['files'][0]['dest']}
+
+
+def test_add_to_release_falls_back_to_src_for_a_symlink_release(sr, eb, tmp_path,
+                                                                nircam_field):
+    field_dir = _staged_release(sr, eb, tmp_path, nircam_field, mode='symlink')
+    exposures, _ = eb.add_to_release(
+        field_dir, lambda it: sr.assign_dest(it, 'f'),
+        tmp_path / 'releases', sr.GLOBUS_HTTPS_BASE,
+        search_root=nircam_field['root'])
+    assert len(exposures) == 2
+
+
+def test_add_to_release_reports_an_unreadable_mosaic_rather_than_guessing(
+        sr, eb, tmp_path, nircam_field):
+    """A dangling staged symlink whose source is also gone.  It must say the
+    mosaic is not readable -- 'no ASNTABLE header' would send someone looking at
+    a header that was never opened."""
+    field_dir = _staged_release(sr, eb, tmp_path, nircam_field, mode='symlink')
+    os.remove(nircam_field['mosaic'])
+    problems = []
+    exposures, _ = eb.add_to_release(
+        field_dir, lambda it: sr.assign_dest(it, 'f'),
+        tmp_path / 'releases', sr.GLOBUS_HTTPS_BASE, problems=problems)
+    assert exposures == []
+    assert len(problems) == 1 and 'not readable' in problems[0]
+
+
+def test_exposures_only_preserves_built_and_the_frozen_deliverables(
+        sr, eb, tmp_path, nircam_field, monkeypatch):
+    """`built` is what `release_freshness` compares a quarantine twin's mtime
+    against.  Stamping a fresh one here would make every existing twin older
+    than "staging" and silently flip this field's QUARANTINED images back to
+    LIVE -- re-publishing, as a side effect of adding a symlink, the very
+    mosaics the astrometry checkpoint pulled.  arches would have had both
+    superseded F212N mosaics returned to its page."""
+    field_dir = _staged_release(sr, eb, tmp_path, nircam_field)
+    before = json.loads((field_dir / 'MANIFEST.json').read_text())
+    checksums_before = (field_dir / 'CHECKSUMS.sha256').read_text()
+    mosaic_ino = os.stat(field_dir / before['files'][0]['dest']).st_ino
+
+    monkeypatch.setattr(sr, 'GLOBUS_COLLECTION_ROOT', tmp_path / 'releases')
+    monkeypatch.setattr(sr, 'field_release_dir',
+                        lambda field, version, root: field_dir)
+    monkeypatch.setitem(sr.FIELDS, 'f', {'data_dir': nircam_field['root']})
+    out_dir, n = sr.stage_exposures_only('f', 'v9-test', tmp_path / 'releases')
+
+    assert out_dir == field_dir and n == 2
+    after = json.loads((field_dir / 'MANIFEST.json').read_text())
+    assert after['built'] == before['built']
+    assert after['exposures_added']            # recorded separately
+    assert after['exposure_mode'] == 'symlink'
+    # the frozen deliverables are untouched, byte for byte and inode for inode
+    assert (field_dir / 'CHECKSUMS.sha256').read_text() == checksums_before
+    assert os.stat(field_dir / before['files'][0]['dest']).st_ino == mosaic_ino
+    assert [f for f in after['files'] if f['category'] == 'image'] == \
+        before['files']
+    frames = [f for f in after['files'] if f['category'] == eb.EXPOSURE_CATEGORY]
+    assert len(frames) == 2
+    assert all((field_dir / f['dest']).is_symlink() for f in frames)
+
+
+def test_exposures_only_is_idempotent(sr, eb, tmp_path, nircam_field,
+                                      monkeypatch):
+    """Re-running must not accumulate duplicate manifest rows for one file."""
+    field_dir = _staged_release(sr, eb, tmp_path, nircam_field)
+    monkeypatch.setattr(sr, 'GLOBUS_COLLECTION_ROOT', tmp_path / 'releases')
+    monkeypatch.setattr(sr, 'field_release_dir',
+                        lambda field, version, root: field_dir)
+    monkeypatch.setitem(sr.FIELDS, 'f', {'data_dir': nircam_field['root']})
+    sr.stage_exposures_only('f', 'v9-test', tmp_path / 'releases')
+    sr.stage_exposures_only('f', 'v9-test', tmp_path / 'releases')
+    after = json.loads((field_dir / 'MANIFEST.json').read_text())
+    dests = [f['dest'] for f in after['files']]
+    assert len(dests) == len(set(dests)) == 3      # 1 mosaic + 2 frames
+
+
+def test_add_to_release_needs_search_root_because_the_asn_is_not_beside_the_copy(
+        sr, eb, tmp_path, nircam_field):
+    """The association stays in the pipeline directory the mosaic was drizzled
+    in, so it is NEVER beside the staged copy.  `search_root` is a fallback on
+    the normal staging path and a REQUIREMENT on this one; without it every
+    mosaic reports its ASNTABLE as not found and the field silently gains no
+    frames at all."""
+    field_dir = _staged_release(sr, eb, tmp_path, nircam_field)
+    problems = []
+    exposures, _ = eb.add_to_release(
+        field_dir, lambda it: sr.assign_dest(it, 'f'),
+        tmp_path / 'releases', sr.GLOBUS_HTTPS_BASE, problems=problems)
+    assert exposures == []
+    assert len(problems) == 1 and 'not found on disk' in problems[0]
