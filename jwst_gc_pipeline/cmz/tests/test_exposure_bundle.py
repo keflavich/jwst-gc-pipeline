@@ -851,3 +851,73 @@ def test_association_search_prefers_the_mosaics_own_filter(eb, tmp_path):
     # must not silently return F200W's.  Either it finds nothing, or it finds
     # LW frames; it must never offer the SW ones.
     assert all('nrca1' not in os.path.basename(f) for f in frames), frames
+
+
+# ---- astrometry provenance ----
+#
+# The module shipped with zero test references. Its load-bearing rule is which
+# reference leg a reader should quote, and the first version of that rule was a
+# one-field generalisation that told readers to cite a 19-ARCSECOND offset.
+
+@pytest.fixture(scope='module')
+def ap():
+    return _load('astrometry_provenance',
+                 os.path.join(_REL, 'astrometry_provenance.py'))
+
+
+def test_low_contrast_leg_is_never_the_one_to_quote(ap):
+    """sgrc F115W, real values. The sparse leg reads 18968 mas at contrast 9
+    while the dense leg reads 4.44 mas at contrast 325. Fixed text saying
+    "quote the sparse number" published the 19-arcsecond one."""
+    leg, why = ap.preferred_leg({'sparse_mas': 18968.11, 'sparse_contrast': 9.0,
+                                 'dense_mas': 4.44, 'dense_contrast': 325.0})
+    assert leg == 'dense', why
+
+
+def test_sparse_is_chosen_where_sparse_is_the_solid_leg(ap):
+    """arches F212N: the case the fixed rule was generalised from. It must still
+    come out sparse -- the fix is choosing per filter, not flipping the default."""
+    leg, _ = ap.preferred_leg({'sparse_mas': 1.22, 'sparse_contrast': 51.0,
+                               'dense_mas': 9.27, 'dense_contrast': 41.0})
+    assert leg == 'sparse'
+
+
+def test_no_leg_is_quoted_when_none_reaches_the_floor(ap):
+    """sgrc F182M: sparse 9801 mas at contrast 4.7, dense 11.68 at 10.8. Neither
+    is a measurement, so neither is published."""
+    leg, why = ap.preferred_leg({'sparse_mas': 9801.45, 'sparse_contrast': 4.67,
+                                 'dense_mas': 11.68, 'dense_contrast': 10.83})
+    assert leg is None
+    assert 'contrast' in why
+
+
+def test_a_leg_with_no_contrast_recorded_is_not_quoted(ap):
+    """Absent contrast cannot clear a contrast floor. Treating it as passing
+    would reinstate exactly the unguarded case."""
+    assert ap.preferred_leg({'sparse_mas': 1.0})[0] is None
+
+
+def test_summary_names_the_three_registration_states(ap, tmp_path):
+    for state, expect in (("unregistered", "not registered"),
+                          ("no-table", "no offsets table"),
+                          ("table", "Pointing corrections")):
+        rec = {"state": state, "ties": {},
+               "table": {"name": "t.csv", "exists": True, "size_bytes": 10,
+                         "modified": "2026-08-17T00:00:00", "sha256": "ab"}}
+        assert expect in "\n".join(ap.summary_lines(rec)), state
+
+
+def test_unregistered_summary_warns_rather_than_implying_a_tie(ap):
+    text = "\n".join(ap.summary_lines({"state": "unregistered", "ties": {}}))
+    assert "raw" in text and "assign_wcs" in text
+    assert "Do not assume" in text
+
+
+def test_highest_contrast_wins_when_both_legs_clear_the_floor(ap):
+    """arches F323N: sparse contrast 58, dense 107, both above the floor. Taking
+    the first usable leg rather than the strongest returns sparse here and
+    passes every other case in this file, so it needs its own."""
+    leg, why = ap.preferred_leg({'sparse_mas': 2.10, 'sparse_contrast': 58.0,
+                                 'dense_mas': 9.33, 'dense_contrast': 107.0})
+    assert leg == 'dense', why
+    assert '107' in why

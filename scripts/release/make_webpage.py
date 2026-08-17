@@ -1093,10 +1093,20 @@ def render_astrometry(field, files, base):
     by omission that they are tied; proposal 1939's mosaics were ~14.8" off
     while saying exactly nothing.
     """
+    entry = next((f for f in files
+                  if f.get("category") == astrometry_provenance.ASTROMETRY_CATEGORY),
+                 None)
     try:
         record = astrometry_provenance.collect(field, FIELDS[field])
     except (KeyError, OSError, ValueError):
         return ""
+    # The TABLE half is described from the manifest entry this version actually
+    # ships, never from the table on disk now. Reading live disk made a page for
+    # a June release quote the sha256 of a table modified today and call it
+    # frozen; five of sixteen fields have a table whose mtime postdates the
+    # release it would attach to. A version that shipped no table says so.
+    if record.get("state") == "table" and entry is None:
+        record = dict(record, state="table-not-shipped")
     out = ["<h2>Astrometric provenance</h2>"]
     state = record.get("state")
     if state == "unregistered":
@@ -1110,11 +1120,13 @@ def render_astrometry(field, files, base):
     elif state == "no-table":
         out.append("<p class=muted>This field is registered but uses no offsets "
                    "table, so there is no per-exposure correction to preserve.</p>")
+    elif state == "table-not-shipped":
+        out.append("<p class=muted>This release version does not ship a "
+                   "pointing-correction table. The field has one, but it was not "
+                   "staged with this version, so nothing here describes the "
+                   "solution these products were built on.</p>")
     else:
         table = record.get("table") or {}
-        entry = next((f for f in files
-                      if f.get("category") == astrometry_provenance.ASTROMETRY_CATEGORY),
-                     None)
         link = (f"<a href='{html.escape(entry['url'])}'>{html.escape(table.get('name',''))}</a>"
                 if entry and entry.get("url") else
                 f"<code>{html.escape(table.get('name') or '?')}</code>")
@@ -1135,23 +1147,38 @@ def render_astrometry(field, files, base):
     ties = record.get("ties") or {}
     if ties:
         out.append("<table><tr><th>Filter</th><th>vs Gaia (sparse)</th>"
-                   "<th>vs VIRAC2 (dense)</th><th>Measured</th></tr>")
+                   "<th>vs VIRAC2 (dense)</th><th>Quote</th><th>Measured</th></tr>")
         for filt in sorted(ties):
             tie = ties[filt]
-            def _mas(key):
-                return (f"{tie[key]:.2f} mas" if key in tie else "&mdash;")
-            out.append(f"<tr><td><b>{html.escape(filt)}</b></td>"
-                       f"<td>{_mas('sparse_mas')}</td><td>{_mas('dense_mas')}</td>"
-                       f"<td class=muted>{html.escape(str(tie.get('date') or '')[:10])}"
-                       f"</td></tr>")
+
+            def _cell(off_key, con_key, chosen):
+                if off_key not in tie:
+                    return "&mdash;"
+                con = tie.get(con_key)
+                mark = "<b>" if chosen else ""
+                end = "</b>" if chosen else ""
+                return (f"{mark}{tie[off_key]:.2f} mas{end}"
+                        + (f" <span class=muted>(contrast {con:.0f})</span>"
+                           if con is not None else ""))
+
+            leg, why = astrometry_provenance.preferred_leg(tie)
+            out.append(
+                f"<tr><td><b>{html.escape(filt)}</b></td>"
+                f"<td>{_cell('sparse_mas', 'sparse_contrast', leg == 'sparse')}</td>"
+                f"<td>{_cell('dense_mas', 'dense_contrast', leg == 'dense')}</td>"
+                f"<td>{html.escape(leg or 'neither')} "
+                f"<span class=muted>{html.escape(why)}</span></td>"
+                f"<td class=muted>{html.escape(str(tie.get('date') or '')[:10])}"
+                f"</td></tr>")
         out.append("</table>")
         out.append(
-            "<p class=muted><b>Quote the sparse number.</b> Against a dense reference "
-            "the offset-histogram peak is pulled by several mas &mdash; two catalogs "
-            "tracing the same clustered field make a correlated wrong-pair background "
-            "&mdash; so the dense column is shown only so the discrepancy is not "
-            "rediscovered as a defect. Neither column is a per-star error bar; both "
-            "are bulk ties from the m2 checkpoint.</p>")
+            "<p class=muted>The two references disagree, and which one to believe "
+            "is decided per filter by the <b>contrast</b> of the measurement, not "
+            "by a fixed preference &mdash; a sparse reference can have too few "
+            "stars to place a peak at all. The bolded value is the one to quote; "
+            "&ldquo;neither&rdquo; means no measurement here reaches the contrast "
+            "floor and none should be cited. Neither column is a per-star error "
+            "bar; both are bulk offsets.</p>")
     else:
         out.append("<p class=muted>No reference-tie measurement is recorded for this "
                    "field, so no astrometric accuracy is claimed here.</p>")

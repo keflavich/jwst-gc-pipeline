@@ -12,15 +12,15 @@ a WCS would be an enormous cost for a few changed bytes.
 But it means a release cannot, by itself, say what solution its frames carry.
 The recoverable part is small: the per-exposure pointing corrections live in one
 CSV of a few kB (``Offsets_JWST_Brick<prop>_{consensus,VIRAC2locked}.csv``), and
-that table -- not the FITS -- is what has to be frozen per version.  With it, any
+that table is what has to be frozen per version.  With it, any
 version's astrometry is reconstructible; without it, "the frames as they were in
 v1.2" is unrecoverable the moment the pipeline re-headers them.
 
 So the table is staged as a COPY and checksummed, exactly like a mosaic, while
 the frames stay symlinks.  Cost: kilobytes per release.
 
-WHICH TABLE, AND THE THREE HONEST ANSWERS
-=========================================
+WHICH TABLE, AND THE THREE ANSWERS
+==================================
 
 ``alignment_config.offsets_table_path`` is the single authority, and it has three
 outcomes, all of which a reader needs told apart:
@@ -39,22 +39,34 @@ so every sgra mosaic sat ~14.8" off VIRAC2 and Gaia while its own m2 offsets
 table went unread.  A release that ships frames from such a field and says
 nothing is asserting, by omission, that they are tied.
 
-WHAT THE ACCURACY NUMBER IS AND IS NOT
-======================================
+WHICH LEG TO QUOTE IS DECIDED BY CONTRAST, NOT BY A FIXED RULE
+==============================================================
 
-The m2 checkpoint records a reference tie per filter.  It is reported here
-against BOTH references, because in the Galactic Center they disagree for a known
-reason and quoting one alone misleads:
+The m2 checkpoint records a reference tie per filter against two references, and
+both are reported because they disagree for reasons that vary by field:
 
-    vs_sparse   the Gaia-only subset.  Sparse, so noisier per-star, but the
-                offset-histogram peak against it is unbiased.
+    vs_sparse   the Gaia-only subset.  Few stars, so the histogram peak can be
+                built on very little.
     vs_full     the full VIRAC2 catalog.  Dense, and two catalogs tracing the
                 same clustered field make a correlated wrong-pair background
-                that pulls the histogram peak by several mas -- arches reads
-                1.2 mas vs sparse and 9.3 mas vs dense on the same frames.
+                that can pull the peak by several mas.
 
-The dense number is quoted so nobody rediscovers it as a defect, labelled as the
-artifact it is.  Neither is a per-star error bar: they are bulk ties.
+An earlier version of this module told readers, in fixed text, to quote the
+sparse number.  That was measured on arches -- sparse 1.22 mas against dense
+9.27 -- and generalised.  Swept over every field it is false in 10 of 59 cases,
+and the failure is not a near miss:
+
+    sgrc F115W   sparse 18968.11 mas (contrast 9.0)   dense 4.44 mas (contrast 325.0)
+
+so the page instructed anyone reading it to cite a 19-ARCSECOND offset as that
+field's astrometry.  Eight of 59 filter-ties exceed 100 mas on the sparse leg.
+
+The discriminator was already being collected and then dropped: each leg carries
+its own peak CONTRAST, and F115W's sparse leg sits at 9.0 against the dense
+leg's 325.  So the leg to quote is chosen per filter by contrast, a leg below
+``MIN_TIE_CONTRAST`` is not quoted at all, and both legs are always shown with
+their contrast so the choice is visible rather than asserted.  Both legs are bulk ties, and a
+per-star error bar is a separate quantity.
 """
 import datetime
 import glob
@@ -62,6 +74,13 @@ import hashlib
 import json
 import os
 from pathlib import Path
+
+#: A histogram peak below this contrast is noise, not a tie.  sgrc F115W's
+#: sparse leg reads 9.0 while its dense leg reads 325; arches' sparse legs sit
+#: at 58-112.  The floor separates those without needing to know which
+#: reference is "better", which is the assumption that produced the 19-arcsecond
+#: recommendation.
+MIN_TIE_CONTRAST = 15.0
 
 #: Manifest category for the frozen pointing-correction table.
 ASTROMETRY_CATEGORY = "astrometry"
@@ -158,6 +177,27 @@ def reference_ties(field_cfg):
     return out
 
 
+def preferred_leg(tie):
+    """``("sparse"|"dense"|None, why)`` -- which leg of a tie to quote.
+
+    Highest contrast wins among legs that clear ``MIN_TIE_CONTRAST``; when none
+    does, nothing is quoted and the reason says so.  Deciding this per filter is
+    the point: no fixed preference survives the whole survey.
+    """
+    legs = []
+    for name, off_key, con_key in (("sparse", "sparse_mas", "sparse_contrast"),
+                                   ("dense", "dense_mas", "dense_contrast")):
+        if off_key in tie and tie.get(con_key) is not None:
+            legs.append((name, float(tie[con_key]), tie[off_key]))
+    usable = [leg for leg in legs if leg[1] >= MIN_TIE_CONTRAST]
+    if not usable:
+        best = max(legs, key=lambda l: l[1], default=None)
+        return None, (f"no leg reaches contrast {MIN_TIE_CONTRAST:.0f}"
+                      + (f" (best {best[0]} at {best[1]:.0f})" if best else ""))
+    name, contrast, _off = max(usable, key=lambda l: l[1])
+    return name, f"highest-contrast leg ({contrast:.0f})"
+
+
 def collect(field, field_cfg):
     """The full provenance record for one field."""
     path, state = offsets_table(field_cfg)
@@ -235,21 +275,24 @@ def summary_lines(record):
         lines += ["", "Measured reference tie (m2 checkpoint, bulk offset):"]
         for filt in sorted(ties):
             tie = ties[filt]
+            leg, why = preferred_leg(tie)
             bits = []
-            if "sparse_mas" in tie:
-                bits.append(f"{tie['sparse_mas']} mas vs Gaia(sparse)")
-            if "dense_mas" in tie:
-                bits.append(f"{tie['dense_mas']} mas vs VIRAC2(dense)")
-            if bits:
-                lines.append(f"- {filt}: " + ", ".join(bits)
-                             + (f"  [{tie['date'][:10]}]" if tie.get("date") else ""))
+            for name, off_key, con_key in (("Gaia(sparse)", "sparse_mas", "sparse_contrast"),
+                                           ("VIRAC2(dense)", "dense_mas", "dense_contrast")):
+                if off_key in tie:
+                    con = tie.get(con_key)
+                    bits.append(f"{tie[off_key]} mas vs {name}"
+                                + (f" [contrast {con:.0f}]" if con is not None else ""))
+            lines.append(f"- {filt}: " + ", ".join(bits)
+                         + f"  -> quote {leg or 'NEITHER'} ({why})")
         lines += [
             "",
-            "Quote the SPARSE number. Against a DENSE reference the offset-histogram",
-            "peak is pulled by several mas: two catalogs tracing the same clustered",
-            "field make a correlated wrong-pair background. The dense value is listed",
-            "so the discrepancy is not rediscovered as a defect. Neither is a",
-            "per-star error bar; both are bulk ties.",
+            "Which reference to believe is decided per filter by the CONTRAST of the",
+            "measurement, not by a fixed preference: a sparse reference can have too",
+            "few stars to place a peak at all, and a dense one can be pulled by the",
+            "correlated wrong-pair background. `quote NEITHER` means nothing here",
+            f"reaches contrast {MIN_TIE_CONTRAST:.0f} and no value should be cited.",
+            "Neither number is a per-star error bar; both are bulk ties.",
         ]
     else:
         lines += ["", "No m2 reference-tie record was found for this field, so no "

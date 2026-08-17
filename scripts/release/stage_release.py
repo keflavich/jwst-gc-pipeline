@@ -1501,6 +1501,24 @@ def prune_exposure_orphans(field_dir, keep_dests):
     return removed, unexpected
 
 
+def refuse_older_version(version, release_root, allow_older):
+    """``True`` when writing into ``version`` should be refused.
+
+    A published version is frozen: people cite its checksums. This was a block
+    inside ``main`` placed AFTER the ``--exposures-only`` branch returned, so
+    that path wrote into published versions without it ever running -- and did,
+    into v1.1, v1.2 and v1.3 on 2026-08-17, adding trees to four published field
+    directories and rewriting three citable manifests and checksum files.
+    Nothing was corrupted, but the guard whose entire purpose is to make
+    re-cutting a published release deliberate never fired. It is a function now
+    so that every path calls the same one.
+    """
+    root = Path(release_root)
+    existing = sorted(p.name for p in root.iterdir()
+                      if p.is_dir() and p.name.startswith("v")) if root.is_dir() else []
+    return bool(existing) and version < max(existing) and not allow_older
+
+
 def stage_exposures_only(field, version, release_root, from_disk=False):
     """Add the detector-frame exposures to an ALREADY-STAGED release.
 
@@ -1709,9 +1727,10 @@ def write_readme(field_dir, field, version, items, mode):
             f"{len(exposures)} individual exposures ({human_size(exp_total)}) -- the",
             "frames each mosaic above was drizzled from, in the ORIGINAL DETECTOR",
             "FRAME, with the full GWCS distortion chain and this pipeline's",
-            "astrometric solution. Laid out to mirror `images/`, and read from each",
-            "mosaic's own `ASNTABLE` association, so `exposures/<...>/<FILTER>/`",
-            "holds exactly the frames behind `images/<...>/<FILTER>/`.",
+            "astrometric solution. Laid out to mirror `images/`, and taken from the",
+            "record each mosaic carries of what went into it, so",
+            "`exposures/<...>/<FILTER>/` holds exactly the frames behind",
+            "`images/<...>/<FILTER>/`.",
             "",
             "Products present here: "
             + ", ".join(f"`*_{s}.fits` ({n})" for s, n in sorted(suffixes.items()))
@@ -1725,7 +1744,7 @@ def write_readme(field_dir, field, version, items, mode):
             "Unlike everything else in this release they are not checksummed and are",
             "not covered by `CHECKSUMS.sha256`: a re-reduction rewrites their headers",
             "(WCS, DQ) in place, and following the link gets the current frame. Cite",
-            "the mosaics and catalogs, which are frozen; treat the exposures as a",
+            "the mosaics and catalogs, which are frozen; the exposures are a working",
             "convenience for re-drizzling and per-exposure work.",
             "",
         ]
@@ -1895,6 +1914,18 @@ def main(argv=None):
     # mosaic, so the listed-source gate refuses the field while its published
     # v1.2 tree sits there gated and frozen).
     if args.exposures_only:
+        # The frozen-version guard runs HERE too, not only on the full staging
+        # path below. Adding an exposures/ tree and an astrometry/ table to a
+        # published version is still writing into it: it rewrites MANIFEST.json,
+        # README.md and CHECKSUMS.sha256 of a release whose checksums are cited.
+        if refuse_older_version(args.version, args.release_root,
+                                args.allow_older_version):
+            print(f"\nREFUSING: '{args.version}' is older than the newest release "
+                  f"on disk, and a published version is frozen -- adding exposures "
+                  f"still rewrites its MANIFEST.json, README.md and "
+                  f"CHECKSUMS.sha256. Pass --allow-older-version if that is "
+                  f"intended.", file=sys.stderr)
+            return 2
         field_dir, n = stage_exposures_only(args.field, args.version,
                                             args.release_root,
                                             from_disk=args.exposures_from_disk)
@@ -2000,7 +2031,7 @@ def main(argv=None):
     root = Path(args.release_root)
     existing = sorted(p.name for p in root.iterdir()
                       if p.is_dir() and p.name.startswith("v")) if root.is_dir() else []
-    if existing and args.version < max(existing) and not args.allow_older_version:
+    if refuse_older_version(args.version, args.release_root, args.allow_older_version):
         print(f"\nREFUSING TO STAGE into '{args.version}': it is older than the newest "
               f"release on disk ('{max(existing)}'), and a published version is frozen "
               f"-- its checksums are cited. Stage into '{max(existing)}' or a new "
