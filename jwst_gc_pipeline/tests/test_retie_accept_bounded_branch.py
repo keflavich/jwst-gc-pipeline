@@ -316,10 +316,20 @@ def test_the_check_is_told_which_filters_to_expect():
         'refusal can never fire')
 
 
-def test_the_expected_filters_are_not_hardcoded_in_the_loop():
-    """It has to be the run's own filter list, not a literal -- the declaration
-    is scoped to the observation being scanned, and a literal would be wrong for
-    every field but the one it was written for."""
+def test_the_expected_filters_are_the_runs_own_list_verbatim():
+    """It has to be the run's own filter list, verbatim.
+
+    An earlier version of this test read a 60-character window after the flag
+    and asserted a ``$`` appeared somewhere in it.  The flag is 16 characters,
+    so the window ran past the end of the line into ``|| fp_rc=$?`` and any
+    literal shorter than about eleven characters passed: ``"F200W"`` froze an
+    under-declaration into production and ``""`` turned the coverage gate off
+    outright, both with the suite green.  Assert the ARGUMENT, not the
+    neighbourhood."""
+    import re as _re
     inv = _invocation()
-    seg = inv[inv.index('--expect-filters'):inv.index('--expect-filters') + 60]
-    assert '$' in seg, f'--expect-filters takes a literal, not a variable: {seg}'
+    m = _re.search(r'--expect-filters\s+("[^"]*"|\S+)', inv)
+    assert m, f'--expect-filters is absent from the invocation: {inv}'
+    assert m.group(1) == '"$FILTERS"', (
+        f"--expect-filters must take the run's own filter list verbatim, "
+        f"got {m.group(1)}")

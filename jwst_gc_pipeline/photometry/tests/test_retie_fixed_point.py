@@ -605,3 +605,85 @@ def test_expect_filters_does_nothing_when_acceptance_is_off(tmp_path):
     d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],
                  filt='F162M', token='o012')
     assert _cli(d, '--obs-token', 'o012', '--expect-filters', 'F162M F480M') == 3
+
+
+# ---------------------------------------------------------------------------
+# what the coverage refusal PRINTS, and what the declaration does not cover
+# (PR #388 re-review: neither of the previous commit's code changes had a test)
+# ---------------------------------------------------------------------------
+
+def test_the_coverage_refusal_reports_the_measured_residual_first(tmp_path,
+                                                                  capsys):
+    """The refusal and the NOT-BOUNDED branch share a return code, so printing
+    the number before returning costs no safety -- and returning first threw
+    away the only thing that identifies the problem.  Live: gc2211/o023 printed
+    the coverage refusal and lost `9340.44 mas at ('1',4,'nrcb1','F200W',...)`.
+    """
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],
+                 filt='F162M', token='o012')
+    _cli(d, '--accept-below-mas', '15', '--obs-token', 'o012',
+         '--expect-filters', 'F162M F480M')
+    out = capsys.readouterr().out
+    assert 'largest measured residual in scope' in out, out
+    lines = out.splitlines()
+    resid = next(i for i, ln in enumerate(lines)
+                 if 'largest measured residual in scope' in ln)
+    refusal = next(i for i, ln in enumerate(lines) if ln.startswith('NOT ACCEPTED'))
+    assert resid < refusal, 'the residual must be readable above the refusal'
+
+
+def test_the_residual_line_says_it_excludes_the_unscanned_filters(tmp_path,
+                                                                  capsys):
+    """It measures the SCANNED scope, which by construction excludes exactly
+    the filters the refusal below it names.  Without the caveat a small number
+    sits directly above a refusal whose real subject may be far larger."""
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],
+                 filt='F162M', token='o012')
+    _cli(d, '--accept-below-mas', '15', '--obs-token', 'o012',
+         '--expect-filters', 'F162M F480M')
+    line = next(ln for ln in capsys.readouterr().out.splitlines()
+                if 'largest measured residual in scope' in ln)
+    assert 'NOT scanned' in line, line
+
+
+def test_a_filter_the_scan_saw_but_the_operator_did_not_declare_is_named(
+        tmp_path, capsys):
+    """`unscanned` catches OVER-declaration.  Its mirror -- declaring FEWER
+    filters than the run catalogs -- is what reopens the hole, because the
+    correction floor reaches every filter of the run while the declaration
+    reaches only what was named.  Nothing inside the scan can tell which the
+    operator meant, so this is reported rather than refused."""
+    d = _multi_history(tmp_path, {
+        'F162M': [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],
+        'F480M': [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN]})
+    rc = _cli(d, '--accept-below-mas', '15', '--expect-filters', 'F162M')
+    out = capsys.readouterr().out
+    assert 'F480M' in out, out
+    assert 'did not declare' in out, out
+    assert rc == 4, 'reported, not refused'
+
+
+def test_a_whitespace_only_declaration_is_an_error_not_a_silent_no_op(tmp_path):
+    """`--expect-filters ""` and `--expect-filters " "` used to split to `[]`
+    and turn the coverage gate off -- the exact regression the flag exists to
+    stop, spelled as an empty string."""
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],
+                 filt='F162M', token='o012')
+    for empty in ('', '   ', '\t'):
+        with pytest.raises(SystemExit) as ex:
+            _cli(d, '--accept-below-mas', '15', '--obs-token', 'o012',
+                 '--expect-filters', empty)
+        assert ex.value.code == 2
+
+
+def test_a_comma_separated_declaration_is_one_filter_name(tmp_path):
+    """The loop splits the SAME string with `read -r -a`, and the reduce it
+    submits reads `FILTERS="F115W,F162M"` as one filter (NF=1).  Splitting on
+    commas here would have the gate see two declared filters while the loop
+    submits a one-task reduce array -- two parsers, one string, different
+    answers.  So a comma-joined declaration refuses, loudly, rather than
+    quietly meaning something the rest of the run does not."""
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],
+                 filt='F162M', token='o012')
+    assert _cli(d, '--accept-below-mas', '15', '--obs-token', 'o012',
+                '--expect-filters', 'F162M,F480M') == 3

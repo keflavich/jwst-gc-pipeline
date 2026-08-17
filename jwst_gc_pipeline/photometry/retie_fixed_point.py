@@ -383,8 +383,10 @@ def main(argv=None):
                          " the retie loop passes its own start time so an"
                          " earlier campaign's passes are not counted as this"
                          " loop's")
-    ap.add_argument("--expect-filters", default="",
-                    help="comma- or space-separated filters THIS OBSERVATION "
+    # `None` (omitted) and `""` (given, empty) have to stay distinguishable:
+    # an explicit empty declaration silently disabled the coverage gate.
+    ap.add_argument("--expect-filters", default=None,
+                    help="space-separated filters THIS OBSERVATION "
                          "is running -- an operator declaration scoped to the "
                          "scan, not the field's filter list.  gc2211 o046 "
                          "images F200W and F277W but not F150W, so passing the "
@@ -399,12 +401,20 @@ def main(argv=None):
                          " correction floor that lets the frozen stages run."
                          " 0 (default) disables it: every fixed point stops.")
     args = ap.parse_args(argv)
-    # `[,\s]`: docs/HIPERGATOR.md:118 documents the COMMA form for the
-    # reduction FILTERS variable, and `--expect-filters "F200W,F277W"`
-    # otherwise refuses with the whole string as one filter name.
-    args.expect_filters = [f for f in re.split(r'[,\s]+',
-                                              str(args.expect_filters or ''))
-                           if f]
+    # WHITESPACE only, which is what `run_field_retie_loop.sh:138` does with
+    # the same string (`read -r -a`).  An earlier revision also split on commas,
+    # citing docs/HIPERGATOR.md:118 -- that line documents a comma as a MODE
+    # SWITCH for the cataloging monolith, on a different script, and the reduce
+    # this loop submits reads `FILTERS="F115W,F162M"` as ONE filter (NF=1).
+    # Accepting the comma here would have the gate see three declared filters
+    # while the loop submits a one-task reduce array from the same string.
+    _declared = args.expect_filters
+    args.expect_filters = str(_declared or '').split()
+    if _declared is not None and not args.expect_filters:
+        ap.error("--expect-filters was given but contains no filter names "
+                 "(whitespace only).  An empty declaration silently disables "
+                 "the coverage check, which is the regression it exists to "
+                 "stop; omit the flag to run without it.")
     if args.accept_below_mas and not math.isfinite(args.accept_below_mas):
         ap.error(f"--accept-below-mas {args.accept_below_mas} is not a finite "
                  f"number of milliarcseconds")
@@ -431,6 +441,18 @@ def main(argv=None):
     unscanned = sorted(
         f for f in (args.expect_filters or [])
         if f.upper() not in {g[0].upper() for g in (stuck | moving | unjudged)})
+    # The other half of the declaration contract.  `unscanned` catches
+    # OVER-declaration (a filter named that the scan cannot see).  Its mirror is
+    # UNDER-declaration -- naming fewer filters than the run catalogs -- which
+    # is what actually reopens the hole, because the correction floor reaches
+    # every filter of the run while the declaration reaches only what was named.
+    # Nothing can tell from inside the scan which of the two the operator meant,
+    # so this one is REPORTED rather than refused: the scan says what it saw and
+    # the operator did not declare, and the number that goes with it.
+    undeclared = sorted(
+        {g[0] for g in (stuck | moving | unjudged)}
+        - {f.upper() for f in (args.expect_filters or [])}) \
+        if args.expect_filters else []
     if not stuck:
         return 0
     print("\nFIXED POINT: applying these corrections does not change what "
@@ -440,6 +462,13 @@ def main(argv=None):
           "running more iterations.")
     if args.accept_below_mas <= 0:
         return 3
+    if undeclared:
+        print(f"\nNOTE: this scan also holds records for "
+              f"{', '.join(undeclared)}, which --expect-filters did not declare."
+              f"  The correction floor reaches every filter this run catalogs,"
+              f" so a filter left out of the declaration is floored without its"
+              f" coverage ever being checked.  Declare every filter the run"
+              f" catalogs, or run them in separate scopes.")
     if unscanned:
         # Report the measured residual BEFORE returning.  This branch and the
         # NOT-BOUNDED one below share a return code, so ordering them this way
@@ -452,7 +481,8 @@ def main(argv=None):
             obs_token=args.obs_token, since=args.since)
         if _key is not None:
             print(f"\nlargest measured residual in scope: {_worst:.2f} mas at "
-                  f"{_key} [{_label}]")
+                  f"{_key} [{_label}] (the filters named below were NOT "
+                  f"scanned and are not in this number)")
         print(f"\nNOT ACCEPTED: {', '.join(unscanned)} produced no checkpoint "
               f"record this scan could see.  --expect-filters is an OPERATOR "
               f"DECLARATION scoped to the observation being scanned, not the "

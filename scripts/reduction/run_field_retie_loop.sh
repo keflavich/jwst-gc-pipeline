@@ -54,6 +54,16 @@ PROPOSAL=${PROPOSAL:?set PROPOSAL}
 FIELD=${FIELD:?set FIELD}
 TARGET=${TARGET:?set TARGET}
 FILTERS=${FILTERS:?set FILTERS}
+# `${FILTERS:?}` rejects "" and passes " ".  FILTERS is not only the reduce
+# list -- it is also the coverage DECLARATION handed to `--expect-filters`, and
+# a whitespace-only value declares nothing while looking set.
+read -r -a _FILTERS_CHECK <<< "$FILTERS"
+if [ "${#_FILTERS_CHECK[@]}" -eq 0 ]; then
+    echo "FILTERS is set but holds no filter names (whitespace only)." >&2
+    echo "It is both the reduce list and the acceptance coverage declaration;" >&2
+    echo "an empty one disables the coverage check without saying so." >&2
+    exit 1
+fi
 MODULES=${MODULES:-nrcb}
 EACH_SUFFIX=${EACH_SUFFIX:-destreak_o${FIELD}_crf}
 MAX_GROUP_SIZE=${MAX_GROUP_SIZE:-unlimited}
