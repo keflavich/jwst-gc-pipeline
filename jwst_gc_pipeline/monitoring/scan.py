@@ -873,7 +873,12 @@ def scan_observation(target, proposal, obsid, instrument='nircam',
         use = list(filters or on_disk)
     else:
         use = list(filters or registered or on_disk)
-    multi_obs = len(observations(target, instrument)) > 1
+    # A wildcard field registers ONE entry -- the literal '*' -- for every
+    # observation of its proposal, so counting rows reads a 139-observation
+    # campaign as single-observation and suppresses the untagged-product
+    # ambiguity warning (checks.py `scope == 'ambiguous' and multi_obs`).
+    multi_obs = (len(observations(target, instrument)) > 1
+                 or _fields.claims_every_observation(target, instrument))
     ambiguous_filters = shared_filters(target, instrument)
 
     per_filter = {}

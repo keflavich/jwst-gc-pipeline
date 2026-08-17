@@ -282,11 +282,11 @@ def test_gc2211_is_tied():
 
 
 def test_the_treasury_is_tied_before_its_first_delivery():
-    """Program 10678 (gc-treasury, #413) is registered ahead of first light:
-    without an entry the first delivery would reduce at the raw assign_wcs
-    frame while m2's corrections landed in a table nothing reads -- the
-    1939/sgra failure class.  Proposal-wide, because its 139 observation
-    numbers land as the campaign executes."""
+    """Program 10678 (gc-treasury, #413) is registered ahead of its first
+    delivery: without an entry the first delivery would reduce at the raw
+    assign_wcs frame while m2's corrections landed in a table nothing reads --
+    the 1939/sgra failure class.  Proposal-wide, because all 139 of its
+    observations are one field."""
     for field in ('001', '037', '139'):
         cfg = ac.resolve('10678', field)
         assert cfg is not None, f"gc-treasury o{field} has no alignment source"

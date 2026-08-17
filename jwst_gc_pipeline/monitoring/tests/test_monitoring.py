@@ -10,7 +10,7 @@ import re
 
 import pytest
 
-from jwst_gc_pipeline.monitoring import checks, jobs, render, scan
+from jwst_gc_pipeline.monitoring import checks, jobs, probe, render, scan
 
 
 # --------------------------------------------------------------------------
@@ -1122,6 +1122,35 @@ def test_unglobbed_observation_cannot_make_a_filter_ambiguous():
     # the genuinely shared cases still fire
     assert scan.shared_filters('ngc6334') == {'F200W', 'F470N'}
     assert scan.shared_filters('gc2211') == {'F150W', 'F200W', 'F277W'}
+
+
+def test_a_wildcard_field_is_reported_as_multi_observation():
+    """``observations()`` returns ONE row for a wildcard field -- the literal
+    ``'*'`` standing for all 139 of 10678's observations -- so counting rows
+    read gc-treasury as single-observation.  ``multi_obs`` gates the warning
+    that an untagged cross-band product cannot be attributed to one
+    observation (``checks.py`` ``scope == 'ambiguous' and multi_obs``), so
+    the largest programme in the registry was the one field where that
+    warning could not fire.
+    """
+    got = scan.scan_observation('gc-treasury', '10678', '*', 'nircam',
+                                with_headers=False)
+    assert got['multi_obs'] is True
+    # a genuinely single-observation field is unchanged
+    assert scan.scan_observation('sgrc', '4147', '012', 'nircam',
+                                 with_headers=False)['multi_obs'] is False
+
+
+def test_a_wildcard_field_says_why_it_cannot_be_probed():
+    """``plan_probe`` fed the wildcard to ``resolve``, which zero-pads it to
+    ``'00*'`` -- a key no registry lookup answers.  The error that came back
+    told the operator to register ``nircam: ['00*']``, which fields.yaml does
+    not accept, about a field that is already registered.
+    """
+    got = probe.plan_probe('gc-treasury')
+    assert 'error' in got, got
+    assert 'claims every observation' in got['error'], got['error']
+    assert '00*' not in got['error'], got['error']
 
 
 def test_unpinned_provenance_is_marked_ambiguous_not_asserted_as_fail():

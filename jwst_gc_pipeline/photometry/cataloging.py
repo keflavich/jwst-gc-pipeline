@@ -3627,9 +3627,9 @@ def _resolved_obsid(options):
                    | {str(j) for j in obs.joint_obsids.get(instrument, ())})
         if _freg.WILDCARD_OBSID in allowed:
             # This field claims EVERY observation of the proposal (10678, the
-            # GC Treasury: the observation numbers land as the campaign
-            # executes, so no list can be written ahead of time).  There is no
-            # membership list to check `--field` against, only its SHAPE.
+            # GC Treasury: all 139 of its observations belong to gc-treasury,
+            # so fields.yaml declares the ownership and not the list).  There
+            # is no membership list to check `--field` against, only its SHAPE.
             # Testing membership anyway rejects every real obsid --
             # `'042' not in {'*'}` -- and hands the checkpoint None on every
             # run, which is the "keep them all" path: one tile's per-frame

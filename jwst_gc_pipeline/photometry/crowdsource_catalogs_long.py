@@ -4344,9 +4344,11 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     default=None,
                     help="Explicit field (e.g. '023' for proposal 2211 obs 023). "
                     "Required when a target maps to multiple fields under one "
-                    "proposal (e.g. gc2211 has fields 023/028/046/049/050); "
+                    "proposal (e.g. gc2211 has fields 023/028/046/049/050), "
+                    "and when the target claims every observation of its "
+                    "proposal with the fields.yaml wildcard (gc-treasury); "
                     "otherwise the field is derived from --target via "
-                    "reg_to_field_mapping.", metavar="field")
+                    "fields.field_token_for_run.", metavar="field")
     parser.add_option("--group", dest="group",
                       default=False,
                       action='store_true')
@@ -4701,16 +4703,17 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
     # mapping is per-instrument.
     instrument = ('miri' if 'mirimage' in [str(m).lower() for m in modules]
                   else 'nircam')
-    field_to_reg_mapping = field_registry.field_to_reg_mapping(proposal_id, instrument)
-    reg_to_field_mapping = {v: k for k, v in field_to_reg_mapping.items()}
     # When multiple fields share a target (e.g. proposal 2211 / gc2211 has
     # 5 GC pointings 023/028/046/049/050), the inverted mapping collapses to
     # one entry, so prefer the explicit --field value when it's available.
+    # `field_token_for_run` supplies the rest, and refuses to hand back the
+    # registry's '*' wildcard: `field` is interpolated into ~40 product-name
+    # f-strings as `-o{field}`, so a wildcard-owning proposal (10678) would
+    # WRITE `-o*` into every mosaic, catalog and smoothed-background filename.
     if getattr(options, 'field', None):
         field = str(options.field)
     else:
-        field = (field_registry.default_field_token(target, proposal_id, instrument)
-                 or reg_to_field_mapping[target])
+        field = field_registry.field_token_for_run(target, proposal_id, instrument)
 
     # Module restrictions per proposal/field/filter for single-module datasets
     # Sickle is NRCB-only (SUB640 subarray) but detectors differ by wavelength:

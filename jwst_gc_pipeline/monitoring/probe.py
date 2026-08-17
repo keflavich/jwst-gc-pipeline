@@ -185,6 +185,7 @@ def plan_probe(target, instrument='nircam', size_arcsec=DEFAULT_PROBE_ARCSEC,
     output (``omegacen`` has no delivered data at all), so it is returned as a
     row rather than aborting the whole matrix.
     """
+    from .. import fields as _fields
     from ..run_pipeline import resolve
     from . import scan
 
@@ -198,6 +199,18 @@ def plan_probe(target, instrument='nircam', size_arcsec=DEFAULT_PROBE_ARCSEC,
     base = scan.basepath(target)
     errors = []
     for proposal, obsid in obs:
+        if obsid == _fields.WILDCARD_OBSID:
+            # A wildcard registration names no observation number, and
+            # `resolve` zero-pads what it is given -- '*' becomes '00*',
+            # which no registry lookup answers.  The message that came back
+            # from there told the operator to register `nircam: ['00*']`,
+            # which is not a thing fields.yaml accepts.
+            errors.append(
+                f"{proposal}: {target} claims every observation of the "
+                f"proposal (fields.yaml obsids: '*'), so there is no "
+                f"observation number to build a probe cutout from; probe one "
+                f"by name instead.")
+            continue
         try:
             plan = resolve(proposal, obsid, instrument)
             each_suffix = plan['each_suffix']

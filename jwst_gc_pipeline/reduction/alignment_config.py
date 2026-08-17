@@ -239,21 +239,23 @@ ALIGNMENT_CONFIG = (
         proposal='10678', fields=None,
         reference_frame=VIRAC2, source=TABLE_CONSENSUS,
         reference_filter='F212N',
-        notes=('gc-treasury (GC Treasury, 139 visits over ~1668 planned '
-               'observations, first observed 2026-08-16; #413).  Registered '
-               'BEFORE first light: a field absent here reduces '
+        notes=('gc-treasury (GC Treasury, 139 planned observations over '
+               '~1668 exposure-level MAST rows, none executed yet; #413).  '
+               'Registered BEFORE any delivery: a field absent here reduces '
                '"successfully" at the raw assign_wcs frame while the m2 '
-               'checkpoint writes corrections into a table nothing reads -- '
-               'the 1939/sgra failure class, ~14.8" off. '
-               'Proposal-wide (fields=None) because the observation '
-               'numbers land as the campaign executes; fields.yaml claims them '
-               'with a wildcard for the same reason.  Gaia defines the '
-               'absolute frame and VIRAC2 is the reference catalog, per the GC '
-               'rule.  Every visit observes F212N+F480M (+MIRI F770W in '
-               'parallel); F212N is what consensus_catalog.reference_filter '
-               'ranks first for that list.  No table exists yet -- the m2 '
-               'checkpoint seeds and upserts Offsets_JWST_Brick10678_'
-               'consensus.csv on the first reduce.'),
+               'checkpoint -- the second merge iteration, where every '
+               'exposure is re-measured against its visit consensus -- writes '
+               'corrections into a table nothing reads (the 1939/sgra failure '
+               'class, ~14.8" off).  Proposal-wide (fields=None) because all '
+               '139 observations are one field; fields.yaml claims them with '
+               'a wildcard for the same reason.  Gaia defines the absolute '
+               'frame and VIRAC2 is the reference catalog, per the GC rule.  '
+               'Every visit observes F212N+F480M (+MIRI F770W in parallel); '
+               'F212N is what consensus_catalog.reference_filter ranks first '
+               'for that list.  The table of per-exposure consensus '
+               'coordinates, offsets/Offsets_JWST_Brick10678_consensus.csv, '
+               'does not exist yet: the m2 checkpoint creates it and updates '
+               'it in place on the first reduce.'),
     ),
     FieldAlignment(
         proposal='5365', fields=None,

@@ -451,10 +451,10 @@ def test_the_offsets_table_follows_the_basepath_the_caller_is_using():
 # --------------------------------------------------------------------------
 # The obsid wildcard (program 10678, the GC Treasury; issue #413).
 # --------------------------------------------------------------------------
-# 10678 lands its observations (139 visits, ~1668 planned observations) as the
-# campaign executes, so fields.yaml cannot enumerate them ahead of time; its
-# block claims them with `obsids: '*'` and every lookup resolves a concrete
-# obsid through that wildcard.
+# All 139 of 10678's observations (001..139, over ~1668 planned exposure-level
+# MAST rows) belong to the one gc-treasury field, so its block claims them with
+# `obsids: '*'` instead of a list that every replan would re-issue, and every
+# lookup resolves a concrete obsid through that wildcard.
 
 def test_the_treasury_field_is_registered():
     """The name must match data-qa's ``mast_monitor.TREASURY_FIELD``, which
@@ -497,6 +497,26 @@ def test_an_explicit_obsid_wins_over_the_wildcard(monkeypatch):
     mapping = F.field_to_reg_mapping('10678', 'nircam')
     assert mapping['042'] == 'special'
     assert mapping['043'] == 'gc-treasury'
+
+
+def test_two_wildcard_owners_are_refused_when_the_REGISTRY_LOADS(tmp_path):
+    """docs/FIELDS.md states one-owner as a property of the registry, so the
+    file has to be refused when it loads.
+
+    Checked only inside ``field_to_reg_mapping``, it is a property of one
+    lookup: a file with two wildcard owners imports clean, every instrument
+    nobody asked about stays quiet, and the contradiction surfaces on
+    whichever run happens to query the clashing instrument first.
+    """
+    raw = {'roots': {'blue': '/b'},
+           'fields': {'a': {'root': 'blue',
+                            'observations': {'10678': {
+                                'obsids': {'miri': '*'}}}},
+                      'b': {'root': 'blue',
+                            'observations': {'10678': {
+                                'obsids': {'miri': '*'}}}}}}
+    with pytest.raises(F.FieldRegistryError, match='two wildcard'):
+        _reload_from(tmp_path, raw)
 
 
 def test_two_fields_cannot_both_hold_the_wildcard(monkeypatch):
@@ -552,6 +572,51 @@ def test_a_wildcard_filter_counts_as_more_than_one_observation():
     assert F.filter_observation_count('gc2211', 'F200W') == 5
     assert F.filter_observation_count('ngc6334', 'F090W') == 1
     assert F.filter_observation_count('sgrb2', 'F770W') == 3
+
+
+def test_the_wildcard_is_never_handed_out_as_an_observation_number():
+    """``default_field_token`` picks the --field value a run names its
+    products with, and the catalog driver interpolates it as ``-o{field}``
+    into ~40 product-name f-strings.
+
+    ``obsids[0]`` for a wildcard field is the literal ``'*'``, so a run
+    without ``--field`` WROTE names like
+    ``jw010678-o*_t001_nircam_clear-f212n-nrca_..._i2d.fits`` -- a file no
+    reader globs back.  A wildcard field has no default, and says so.
+    """
+    assert F.default_field_token('gc-treasury', '10678', 'nircam') is None
+    assert F.default_field_token('gc-treasury', '10678', 'miri') is None
+    # ... and no registered field yields the wildcard from this function.
+    for field in F.FIELDS:
+        for obs in field.observations:
+            for instrument in F.INSTRUMENTS:
+                got = F.default_field_token(field.name, obs.proposal, instrument)
+                assert got != F.WILDCARD_OBSID, (field.name, obs.proposal,
+                                                 instrument)
+
+
+def test_field_token_for_run_refuses_a_wildcard_field_and_answers_the_rest():
+    """The driver's fallback chain in one place: registry default, then the
+    inverted obsid map with the ``'*'`` key removed, then a raise naming
+    ``--field``.  Yielding ``'*'`` here is how it reached the product names.
+    """
+    assert F.field_token_for_run('gc2211', '2211', 'nircam') == '023'
+    assert F.field_token_for_run('brick', '2221', 'nircam') == '001'
+    assert F.field_token_for_run('sgrb2', '5365', 'miri') == '002-998'
+    for instrument in ('nircam', 'miri'):
+        with pytest.raises(F.FieldRegistryError, match='--field'):
+            F.field_token_for_run('gc-treasury', '10678', instrument)
+
+
+def test_a_wildcard_field_reports_that_it_claims_every_observation():
+    """Callers that enumerate ``obsids`` to ask "several observations?" see
+    ONE entry -- the literal ``'*'`` -- and read it as a single observation.
+    That is the answer that switches ambiguity handling off."""
+    assert F.claims_every_observation('gc-treasury') is True
+    assert F.claims_every_observation('gc-treasury', 'miri') is True
+    assert F.claims_every_observation('gc2211') is False
+    assert F.claims_every_observation('brick') is False
+    assert F.claims_every_observation('not-a-field') is False
 
 
 def test_a_scalar_obsid_list_is_refused(tmp_path):
