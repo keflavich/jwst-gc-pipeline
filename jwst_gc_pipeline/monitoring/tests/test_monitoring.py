@@ -1141,6 +1141,24 @@ def test_a_wildcard_field_is_reported_as_multi_observation():
                                  with_headers=False)['multi_obs'] is False
 
 
+def test_every_filter_of_a_wildcard_field_is_ambiguous():
+    """``shared_filters`` marks the filters a per-filter catalog name cannot
+    attribute to one observation.  A wildcard field contributes ONE token,
+    ``('10678', '*')``, so no filter of it ever collided with a second token
+    and none was marked -- while all 139 observations write F212N catalogs
+    into one ``<basepath>/F212N/`` tree under one name, which is exactly the
+    condition the mark exists for.
+    """
+    assert scan.shared_filters('gc-treasury') == {'F212N', 'F480M'}
+    assert scan.shared_filters('gc-treasury', 'miri') == {'F770W'}
+    # every other field reports what it did before
+    assert scan.shared_filters('wd1') == set()
+    assert scan.shared_filters('brick') == set()
+    assert scan.shared_filters('gc2211') == {'F150W', 'F200W', 'F277W'}
+    assert scan.shared_filters('cloudef') == {'F162M', 'F210M', 'F360M',
+                                              'F480M'}
+
+
 def test_a_wildcard_field_says_why_it_cannot_be_probed():
     """``plan_probe`` fed the wildcard to ``resolve``, which zero-pads it to
     ``'00*'`` -- a key no registry lookup answers.  The error that came back

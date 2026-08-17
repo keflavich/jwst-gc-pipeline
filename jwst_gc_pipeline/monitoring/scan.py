@@ -209,6 +209,14 @@ def shared_filters(target, instrument='nircam'):
             # and ngc6334.
             if not is_globbed(target, obs.proposal, obsid, instrument):
                 continue
+            if obsid == _fields.WILDCARD_OBSID:
+                # This entry claims EVERY observation of the proposal, so each
+                # of its filters is written by many observations into one
+                # <basepath>/<FILTER>/ tree under one name -- ambiguous by
+                # definition.  Counted as a single token it matched nothing and
+                # no gc-treasury filter was ever marked.
+                shared |= {f.upper() for f in obs.filters if _belongs(f)}
+                continue
             token = (obs.proposal, obsid)
             for filt in obs.filters:
                 if not _belongs(filt):
