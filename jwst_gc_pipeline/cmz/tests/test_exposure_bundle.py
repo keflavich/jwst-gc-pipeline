@@ -711,3 +711,143 @@ def test_index_drops_a_field_whose_page_is_gone(mw, tmp_path):
     index = mw.render_index([roster[f] for f in sorted(roster)])
     assert 'arches.html' in index
     assert 'retired.html' not in index
+
+
+# ---- HDRTAB: what resample actually consumed ----
+#
+# The earlier rule read the association and then preferred a
+# `<stem>_<asn_id>_crf.fits` twin if one existed on disk.  It named the wrong
+# file for 25 of the 170 live staged mosaics.  Each shape below is one of those.
+
+def _mosaic_with_hdrtab(path, inputs, **cards):
+    from astropy.io import fits
+    import numpy as np
+    col = fits.Column(name='FILENAME', format='A80',
+                      array=np.array(inputs, dtype='U80'))
+    hdu = fits.PrimaryHDU()
+    for key, value in cards.items():
+        hdu.header[key] = value
+    tab = fits.BinTableHDU.from_columns([col], name='HDRTAB')
+    fits.HDUList([hdu, tab]).writeto(path, overwrite=True)
+    return str(path)
+
+
+def test_hdrtab_wins_over_the_association(eb, tmp_path):
+    """Both are present and they disagree; HDRTAB is resample's own record."""
+    pipe = tmp_path / 'pipeline'
+    pipe.mkdir()
+    for tail in ('destreak', 'destreak_o001_crf'):
+        _fits(pipe / f'jw01234001001_02101_00001_nrca1_{tail}.fits')
+    _asn(pipe / 'a.json', 'o001', ['jw01234001001_02101_00001_nrca1_destreak.fits'])
+    mosaic = _mosaic_with_hdrtab(
+        pipe / 'm_i2d.fits',
+        ['jw01234001001_02101_00001_nrca1_destreak.fits'],
+        ASNTABLE='a.json', S_OUTLIR='SKIPPED')
+    frames, problem = eb.exposures_for_mosaic(mosaic)
+    assert [os.path.basename(f) for f in frames] == \
+        ['jw01234001001_02101_00001_nrca1_destreak.fits']
+    assert problem is None
+
+
+def test_crf_that_replaces_the_cal_suffix_is_found(eb, tmp_path):
+    """wd1 F150W.  The pipeline REPLACES `_cal` when it writes the Stage-3
+    frame; the twin rule APPENDED, looked for `..._nrca1_cal_o001_crf.fits`,
+    missed, and fell back to `_cal` -- shipping 96 frames with no outlier/CR
+    flags while 96 correct ones sat in the same directory."""
+    pipe = tmp_path / 'pipeline'
+    pipe.mkdir()
+    _fits(pipe / 'jw01905001001_02101_00001_nrca1_cal.fits')
+    _fits(pipe / 'jw01905001001_02101_00001_nrca1_o001_crf.fits')
+    mosaic = _mosaic_with_hdrtab(
+        pipe / 'm_i2d.fits', ['jw01905001001_02101_00001_nrca1_o001_crf.fits'],
+        S_OUTLIR='COMPLETE')
+    frames, _ = eb.exposures_for_mosaic(mosaic)
+    assert [os.path.basename(f) for f in frames] == \
+        ['jw01905001001_02101_00001_nrca1_o001_crf.fits']
+
+
+def test_outlier_skipped_mosaic_is_not_given_a_crf(eb, tmp_path):
+    """arches F323N, quintuplet F212N/F323N, four sickle bands.  A `_crf` for
+    that exposure exists, but it belongs to the MERGED association while the
+    shipped product is the per-module one."""
+    pipe = tmp_path / 'pipeline'
+    pipe.mkdir()
+    _fits(pipe / 'jw02045001001_02101_00001_nrcalong_destreak.fits')
+    _fits(pipe / 'jw02045001001_02101_00001_nrcalong_destreak_o001_crf.fits')
+    mosaic = _mosaic_with_hdrtab(
+        pipe / 'm-f323n-nrca_i2d.fits',
+        ['jw02045001001_02101_00001_nrcalong_destreak.fits'],
+        S_OUTLIR='SKIPPED')
+    frames, _ = eb.exposures_for_mosaic(mosaic)
+    assert [os.path.basename(f) for f in frames] == \
+        ['jw02045001001_02101_00001_nrcalong_destreak.fits']
+
+
+def test_skymatch_inputs_are_offered_as_the_frames(eb, tmp_path):
+    """sickle: 96 distinct `*_<n>_skymatch.fits`, one per exposure.  Not the
+    per-exposure names they look nothing like, but they ARE what resample was
+    handed and what that field's mosaic came from."""
+    pipe = tmp_path / 'pipeline'
+    pipe.mkdir()
+    names = [f'jw03958-o007_t001_nircam_clear-f187n-nrcb_{i}_skymatch.fits'
+             for i in range(3)]
+    for n in names:
+        _fits(pipe / n)
+    mosaic = _mosaic_with_hdrtab(pipe / 'm-f187n-nrcb_i2d.fits', names)
+    frames, problem = eb.exposures_for_mosaic(mosaic)
+    assert sorted(os.path.basename(f) for f in frames) == sorted(names)
+    assert problem is None
+
+
+def test_partial_hdrtab_list_says_partial(eb, tmp_path):
+    """sgrb2 F2550W had 10 of 20 inputs elsewhere.  The old message said the
+    frames were NOT offered while staging every frame it did find."""
+    pipe = tmp_path / 'pipeline'
+    pipe.mkdir()
+    _fits(pipe / 'a_o002_crf.fits')
+    mosaic = _mosaic_with_hdrtab(pipe / 'm_i2d.fits',
+                                 ['a_o002_crf.fits', 'b_o002_crf.fits'])
+    frames, problem = eb.exposures_for_mosaic(mosaic)
+    assert len(frames) == 1
+    assert problem.count('PARTIAL') == 1 and '1 of 2' in problem
+
+
+def test_a_quarantined_copy_is_never_offered(eb, tmp_path):
+    """A backup directory holds a file of the RIGHT name and the WRONG
+    generation -- sgrb2 keeps one under `stale_oldcrf_2026-07-11/` -- and
+    `sorted` reaches it before the live tree."""
+    live = tmp_path / 'NB' / 'F2550W' / 'pipeline'
+    stale = tmp_path / 'F2550W' / 'pipeline' / 'stale_oldcrf_2026-07-11'
+    live.mkdir(parents=True)
+    stale.mkdir(parents=True)
+    name = 'jw05365002001_02105_00001_mirimage_o002_crf.fits'
+    _fits(live / name)
+    _fits(stale / name)
+    images = tmp_path / 'images'
+    images.mkdir()
+    mosaic = _mosaic_with_hdrtab(images / 'm_i2d.fits', [name])
+    frames, problem = eb.exposures_for_mosaic(mosaic, search_root=tmp_path)
+    assert len(frames) == 1 and problem is None
+    assert 'stale' not in str(frames[0])
+
+
+def test_association_search_prefers_the_mosaics_own_filter(eb, tmp_path):
+    """Association filenames collide across filter directories.  An
+    unconstrained `*/pipeline/` glob returns whichever sorts first, which handed
+    gc2211's F277W mosaic the F200W association: 32 SW frames for 8 LW ones."""
+    for filt, det, n in (('F200W', 'nrca1', 2), ('F277W', 'nrcalong', 1)):
+        pipe = tmp_path / filt / 'pipeline'
+        pipe.mkdir(parents=True)
+        names = [f'jw02211023001_02201_{i:05d}_{det}_destreak_o023_crf.fits'
+                 for i in range(n)]
+        for nm in names:
+            _fits(pipe / nm)
+        _asn(pipe / 'shared_asn.json', 'o023', names)
+    mosaic = _fits(tmp_path / 'F277W' / 'pipeline' / 'x-f277w-merged_i2d.fits',
+                   ASNTABLE='shared_asn.json')
+    os.remove(tmp_path / 'F277W' / 'pipeline' / 'shared_asn.json')
+    frames, _ = eb.exposures_for_mosaic(mosaic, search_root=tmp_path)
+    # F277W's own directory has no association left, so the fallback runs -- and
+    # must not silently return F200W's.  Either it finds nothing, or it finds
+    # LW frames; it must never offer the SW ones.
+    assert all('nrca1' not in os.path.basename(f) for f in frames), frames

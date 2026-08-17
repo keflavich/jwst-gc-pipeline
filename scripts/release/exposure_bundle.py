@@ -6,42 +6,46 @@ frames in the ORIGINAL DETECTOR FRAME instead -- the last product before
 ``resample``, carrying the full GWCS distortion chain and this pipeline's
 astrometric solution baked in.
 
-WHICH FILE THAT IS DEPENDS ON THE FIELD, AND IS NOT GUESSED HERE
-================================================================
+WHICH FILE THAT IS, THE MOSAIC ALREADY RECORDED
+===============================================
 
-The reduction writes several detector-frame products per exposure::
+The reduction writes several detector-frame products per exposure -- ``_cal``,
+``_destreak``/``_align``, ``_<obs>_crf``, and on some fields ``_<n>_skymatch`` --
+and which one a given mosaic was built from is field-, filter- and run-dependent.
+It is not reconstructible from policy, and the attempt is what makes a release
+offer frames that are not the ones behind its own mosaic.
 
-    *_cal.fits                 Stage-2 output, raw ``assign_wcs`` frame
-    *_destreak.fits            + 1/f destreak, + this pipeline's WCS correction
-    *_align.fits               same, on fields where destreaking is off
-    *_<obs>_crf.fits           + Stage-3 outlier/CR flags   <- normally the last
+``resample`` writes one ``HDRTAB`` row per input, carrying its ``FILENAME``. That
+is the drizzle's own record of what it consumed, it is present in 170 of 170 live
+staged science mosaics, and it is what this module reads. Nothing is derived from
+a suffix rule.
 
-so "the final detector-frame version" is field- and filter-dependent:
-``destreak_policy`` alone decides destreak-vs-align, MIRI runs a different
-Stage-3, and at least one shipped band (wd1 F150W) was drizzled straight from
-``_cal.fits`` with no ``_crf`` ever written.
+An earlier version of this module DID derive it: read the association, then
+prefer a ``<stem>_<asn_id>_crf.fits`` twin if one existed on disk. That named the
+wrong file for 25 of the 170, in three distinct ways --
 
-Rather than reconstruct that from policy -- which is how a release ends up
-offering frames that are not the ones behind its own mosaic -- this module reads
-it out of the mosaic itself.  Every drizzled product records the association it
-was built from in its ``ASNTABLE`` header keyword, and that association lists its
-members by name.  So the input list is PROVENANCE, not inference: the frames
-offered for a mosaic are, by construction, the frames that mosaic came from.
+* the pipeline REPLACES the ``_cal`` suffix when it writes the Stage-3 frame
+  (``..._nrca1_o001_crf.fits``); the twin construction APPENDED to it
+  (``..._nrca1_cal_o001_crf.fits``), a name that has never existed. wd1 F150W
+  therefore fell back to ``_cal`` and would have shipped 96 Stage-2 frames with
+  no outlier/CR flags -- under a documented claim that no ``_crf`` was ever
+  written for that band, while 96 of them sat in the directory.
+* where ``S_OUTLIR`` is ``SKIPPED`` no ``_crf`` belongs to the mosaic at all, and
+  the twin that does exist belongs to a DIFFERENT association -- the merged
+  product, not the per-module one being shipped. arches F323N, quintuplet
+  F212N/F323N and four sickle bands were each offered another association's
+  frames.
+* a MIRI mosaic pooling two observations (``o002-998``) drew frames from one.
 
-Measured over every live science mosaic in v1.1/v1.2 (77 mosaics, 13 fields) the
-``ASNTABLE`` resolved beside the mosaic in 77 of 77 cases, and the member forms
-were exactly three:
+The lesson is narrower than "read the header": the twin rule was checked against
+one field, generalised, and then written into the docstring, the README, the page
+copy and a test, none of which made it true. ``HDRTAB`` needed no generalising.
 
-    NIRCam   ``*_destreak.fits`` / ``*_align.fits`` / ``*_cal.fits``, asn_id
-             ``oNNN``, with the Stage-3 twin ``<stem>_<asn_id>_crf.fits`` present
-             for all but wd1 F150W
-    MIRI     members that are ALREADY ``*_<obs>_crf.fits`` (absolute paths),
-             asn_id ``a3001``, with no twin to look for
-
-Hence the rule in ``final_detector_frame``: a member that is already a ``_crf``
-IS the final frame; otherwise prefer its ``_crf`` twin; otherwise the member
-itself.  Every branch is a file that exists on disk -- nothing is emitted for a
-name that was merely computed.
+The names are not always what they look like. sickle's are 96 distinct
+``*_<n>_skymatch.fits``, one per exposure, which IS that field's last
+detector-frame product. Whatever ``resample`` was handed is what the mosaic came
+from, so that is what gets offered. The association is still read, but only for a
+mosaic carrying no ``HDRTAB`` at all.
 
 NOT FROZEN, DELIBERATELY
 ========================
@@ -115,11 +119,134 @@ def asn_for_mosaic(mosaic, search_root=None):
     if beside.is_file():
         return beside
     if search_root is not None:
-        for pattern in (f"*/pipeline/{name}", f"pipeline/{name}"):
+        # The mosaic's OWN filter directory first. Association filenames collide
+        # across filter directories -- the same `..._image3_00001_merged_asn.json`
+        # exists under several -- so an unconstrained glob returns whichever
+        # sorts first and can hand a LW mosaic the SW filter's association:
+        # gc2211 F277W o023 resolved to F200W's, offering 32 SW frames for 8 LW.
+        # When the mosaic sits under a filter directory, that directory is the
+        # ONLY place its association may come from. Falling through to a broad
+        # glob when the local one is absent is what produced the cross-filter
+        # mix-up: a name that collides 743 times across five fields resolves to
+        # whichever directory sorts first. No association is better than another
+        # filter's, and with HDRTAB now the primary path this branch is reached
+        # only by a mosaic carrying no HDRTAB at all (0 of 170 live).
+        filt = _filter_dir_of(mosaic)
+        patterns = ([f"{filt}/pipeline/{name}"] if filt else
+                    [f"*/pipeline/{name}", f"pipeline/{name}",
+                     f"*/*/pipeline/{name}"])
+        for pattern in patterns:
             for hit in sorted(Path(search_root).glob(pattern)):
+                if _is_quarantined_path(hit, search_root):
+                    continue
                 if hit.is_file():
                     return hit
     return None
+
+
+def _filter_dir_of(mosaic):
+    """The ``F###[WMN]`` directory a mosaic sits under, or ``None``."""
+    for part in Path(mosaic).parts:
+        if re.fullmatch(r"F\d{3,4}[WMN]2?", part):
+            return part
+    return None
+
+
+#: Directory-name markers for a superseded/quarantined copy of a product.
+QUARANTINE_DIR_MARKERS = ("stale", "badastrom", "old", "backup", "quarantine")
+
+
+def _is_quarantined_path(path, root=None):
+    """Is any directory component BELOW ``root`` a quarantine/backup directory?
+
+    Relative to ``root``, never over the absolute path: the components above a
+    search root belong to whoever mounted the tree and say nothing about the
+    product. Scanning them matched a pytest temp directory named after the test
+    that was checking for quarantine dirs, and rejected the live file.
+    """
+    parts = Path(path).parts[:-1]
+    if root is not None:
+        try:
+            parts = Path(path).relative_to(root).parts[:-1]
+        except ValueError:
+            pass
+    return any(any(marker in part.lower() for marker in QUARANTINE_DIR_MARKERS)
+               for part in parts)
+
+
+def _locate_frame(name, beside, search_root=None):
+    """Find one HDRTAB-named frame, or ``None``.
+
+    Beside the mosaic first.  ``search_root`` adds the same bounded fallback the
+    association lookup uses, and it is needed for the same reason: a mosaic that
+    was moved out of the directory it was drizzled in leaves its inputs behind.
+    brick's MIRI F2550W sits in ``brick/images/`` with all 48 of its frames in a
+    ``*/pipeline/`` dir, and sgrb2's ``o002-998`` mosaic pools two observations
+    whose frames live under different filter directories -- both read as "none
+    of them on disk" without this.
+    """
+    direct = Path(beside) / name
+    if direct.is_file():
+        return direct
+    if search_root is not None:
+        for pattern in (f"*/pipeline/{name}", f"pipeline/{name}",
+                        f"*/*/pipeline/{name}"):
+            for hit in sorted(Path(search_root).glob(pattern)):
+                # A quarantine/backup directory holds a file of the RIGHT name
+                # and the WRONG generation -- sgrb2 keeps one under
+                # `stale_oldcrf_2026-07-11/` beside the live tree, and `sorted`
+                # would reach it first. Offering it is the same defect as the
+                # `_crf` twin guess: a plausible name that is not this mosaic's
+                # input.
+                if _is_quarantined_path(hit, search_root):
+                    continue
+                if hit.is_file():
+                    return hit
+    return None
+
+
+def hdrtab_inputs(mosaic):
+    """The frames ``resample`` actually consumed, from the mosaic's ``HDRTAB``.
+
+    ``resample`` writes one ``HDRTAB`` row per input with its ``FILENAME``, so
+    this is the drizzle's own record of its inputs rather than a reconstruction
+    of them.  Present in 170 of 170 live staged science mosaics.
+
+    This REPLACED an earlier rule that read the association and then preferred a
+    ``<stem>_<asn_id>_crf.fits`` twin if one happened to exist on disk.  That
+    rule named the wrong file for 25 of those 170:
+
+    * the pipeline REPLACES the ``_cal`` suffix when it writes the Stage-3
+      frame (``..._nrca1_o001_crf.fits``), while the twin construction APPENDED
+      to it (``..._nrca1_cal_o001_crf.fits``) -- a name that has never existed.
+      So wd1 F150W fell back to ``_cal`` and would have shipped 96 Stage-2
+      frames with no outlier/CR flags, under a claim that no ``_crf`` was ever
+      written for that band.  96 of them sit in that directory.
+    * where ``S_OUTLIR`` is ``SKIPPED`` no ``_crf`` belongs to the mosaic at
+      all, and the twin that exists belongs to a DIFFERENT association -- the
+      merged one, not the per-module product being shipped.  arches F323N,
+      quintuplet F212N/F323N and four sickle bands were each offered another
+      association's frames.
+    * a multi-observation MIRI mosaic (``o002-998``) drew frames from one
+      observation when its inputs span two.
+
+    Names are resolved in the mosaic's own directory.  They are not always the
+    per-exposure reduction products they look like: sickle's are 96 distinct
+    ``*_<n>_skymatch.fits``, one per exposure, which IS that field's last
+    detector-frame product.  Whatever resample was handed is what the mosaic
+    came from, so it is what gets offered.
+    """
+    from astropy.io import fits
+    try:
+        with fits.open(str(mosaic)) as hdul:
+            if "HDRTAB" not in hdul:
+                return None
+            table = hdul["HDRTAB"].data
+            if table is None or "FILENAME" not in table.names:
+                return None
+            return sorted({str(name) for name in table["FILENAME"] if str(name)})
+    except (OSError, ValueError, KeyError):
+        return None
 
 
 def final_detector_frame(expname, asn_dir, asn_id):
@@ -150,16 +277,37 @@ def final_detector_frame(expname, asn_dir, asn_id):
 def exposures_for_mosaic(mosaic, search_root=None):
     """``(frames, problem)`` for one science mosaic.
 
-    ``frames`` is the de-duplicated, sorted list of existing detector-frame
-    products behind it; ``problem`` is a one-line description when the input
-    list could not be established, in which case ``frames`` is empty.
+    ``frames`` is the sorted list of existing detector-frame products behind it;
+    ``problem`` is a one-line description when the input list is incomplete or
+    could not be established.
 
-    An unresolvable association is REPORTED, never guessed around.  Globbing the
-    pipeline directory for plausible-looking frames would happily offer another
-    observation's exposures for a multi-pointing field -- they share the
-    directory -- and a wrong input list is worse than a missing one.
+    ``HDRTAB`` first -- resample's own record of what it consumed (see
+    ``hdrtab_inputs``) -- and the association only when a mosaic carries no
+    ``HDRTAB``.  Neither is guessed around: globbing the pipeline directory for
+    plausible-looking frames would offer another observation's exposures for a
+    multi-pointing field, since they share the directory.
     """
     mosaic = Path(mosaic)
+    names = hdrtab_inputs(mosaic)
+    if names:
+        frames, absent = [], []
+        for name in names:
+            path = _locate_frame(Path(name).name, mosaic.parent, search_root)
+            (frames if path is not None else absent).append(
+                path if path is not None else mosaic.parent / Path(name).name)
+        if frames:
+            problem = None
+            if absent:
+                # A shipped mosaic some of whose inputs have been removed since
+                # it was drizzled is a fact about the release, not a detail to
+                # swallow: what is offered is a PARTIAL input list.
+                problem = (f"{mosaic.name}: PARTIAL -- {len(frames)} of "
+                           f"{len(names)} input frame(s) on disk, "
+                           f"{len(absent)} missing (e.g. {absent[0].name})")
+            return sorted(frames), problem
+        return [], (f"{mosaic.name}: HDRTAB lists {len(names)} input(s), none of "
+                    f"them on disk (e.g. {Path(names[0]).name})")
+
     asn_path = asn_for_mosaic(mosaic, search_root=search_root)
     if asn_path is None:
         # Three distinguishable states, and saying the wrong one sends someone
@@ -169,7 +317,8 @@ def exposures_for_mosaic(mosaic, search_root=None):
         if not mosaic.is_file():
             return [], f"{mosaic.name}: mosaic not readable at {mosaic}"
         name = _asn_name(mosaic)
-        detail = f"ASNTABLE={name!r} not found on disk" if name else "no ASNTABLE header"
+        detail = (f"no HDRTAB, and ASNTABLE={name!r} not found on disk" if name
+                  else "no HDRTAB and no ASNTABLE header")
         return [], f"{mosaic.name}: {detail}"
     try:
         asn = json.loads(asn_path.read_text())
@@ -194,11 +343,8 @@ def exposures_for_mosaic(mosaic, search_root=None):
                     f"{absent} member(s), none of them on disk")
     problem = None
     if absent:
-        # A partial input list is a fact about the release, not a detail to
-        # swallow: it means some frames behind a shipped mosaic have been
-        # removed or renamed since it was drizzled.
-        problem = (f"{mosaic.name}: {absent} of {absent + len(frames)} "
-                   f"association member(s) are not on disk")
+        problem = (f"{mosaic.name}: PARTIAL -- {len(frames)} of "
+                   f"{absent + len(frames)} association member(s) on disk")
     return [frames[k] for k in sorted(frames)], problem
 
 

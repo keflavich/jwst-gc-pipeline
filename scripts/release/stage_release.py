@@ -1410,6 +1410,17 @@ def stage(items, field, version, release_root, mode, do_checksum,
     if do_checksum:
         (field_dir / "CHECKSUMS.sha256").write_text("\n".join(checksum_lines) + "\n")
 
+    exposure_dests = [it["dest"] for it in items
+                      if it["category"] == exposure_bundle.EXPOSURE_CATEGORY]
+    if exposure_dests:
+        orphans, unexpected = prune_exposure_orphans(field_dir, exposure_dests)
+        if orphans:
+            print(f"  removed {orphans} stale exposure link(s) this release no "
+                  f"longer claims")
+        for rel in unexpected:
+            print(f"  WARNING: {rel} under exposures/ is a real file, not a "
+                  f"link -- left in place")
+
     write_readme(field_dir, field, version, items, mode)
 
     # world-readable
@@ -1453,6 +1464,41 @@ def _exposures_from_disk(field, version, field_dir):
         it["globus_path"] = "/" + str(rel)
         it["url"] = GLOBUS_HTTPS_BASE + it["globus_path"]
     return items
+
+
+def prune_exposure_orphans(field_dir, keep_dests):
+    """Remove staged exposure links this release no longer claims.
+
+    Re-staging with a CHANGED frame list -- which is exactly what correcting the
+    input-list rule does -- leaves the previous links in place, so the directory
+    accumulates: 240 links on disk against 120 manifest entries. That matters
+    beyond tidiness, because the bulk-download button transfers the FOLDER, not
+    the manifest, so an orphan is a file the release still hands out while
+    claiming not to.
+
+    Only ever removes symlinks under ``exposures/``; a real file there is left
+    alone and reported, since nothing in this design should have written one.
+    """
+    exposures_dir = Path(field_dir) / "exposures"
+    if not exposures_dir.is_dir():
+        return 0, []
+    keep = {str(d) for d in keep_dests}
+    removed, unexpected = 0, []
+    for path in sorted(exposures_dir.rglob("*")):
+        if path.is_dir():
+            continue
+        rel = path.relative_to(field_dir).as_posix()
+        if rel in keep:
+            continue
+        if path.is_symlink():
+            path.unlink()
+            removed += 1
+        else:
+            unexpected.append(rel)
+    for directory in sorted(exposures_dir.rglob("*"), reverse=True):
+        if directory.is_dir() and not any(directory.iterdir()):
+            directory.rmdir()
+    return removed, unexpected
 
 
 def stage_exposures_only(field, version, release_root, from_disk=False):
@@ -1520,6 +1566,14 @@ def stage_exposures_only(field, version, release_root, from_disk=False):
         return field_dir, 0
 
     print_manifest(exposures)
+    orphans, unexpected = prune_exposure_orphans(
+        field_dir, [it["dest"] for it in exposures])
+    if orphans:
+        print(f"  removed {orphans} stale exposure link(s) this release no "
+              f"longer claims")
+    for rel in unexpected:
+        print(f"  WARNING: {rel} under exposures/ is a real file, not a link -- "
+              f"left in place")
     for it in exposures:
         dest = field_dir / it["dest"]
         dest.parent.mkdir(parents=True, exist_ok=True)
