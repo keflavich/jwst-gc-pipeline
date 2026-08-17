@@ -74,6 +74,7 @@ what couples the two; without it the page would pull a mosaic down for bad
 astrometry while still offering the frames that produced it.
 """
 import json
+import re
 import os
 from pathlib import Path
 
@@ -266,6 +267,128 @@ def link_parents(items):
             if parent:
                 it["parent_dest"] = parent
     return items
+
+
+#: ``jw<proposal:5><observation:3><visit:3>_<exposure>_<n>_<detector>_...``
+EXPOSURE_NAME_RE = re.compile(r"^jw(?P<prop>\d{5})(?P<obs>\d{3})(?P<visit>\d{3})_")
+
+#: The detector-frame products, in the order the LAST one wins.  Matches the
+#: fallback order in ``final_detector_frame``: Stage-3 flags where they were
+#: written, otherwise the frame the mosaic would have been drizzled from.
+DETECTOR_FRAME_SUFFIXES = ("cal", "align", "destreak", "align_crf", "destreak_crf")
+
+
+def field_observation_keys(field_cfg):
+    """``{(proposal, observation)}`` this field's release covers.
+
+    Read from ``proposal_prefix`` (``jw02045-o001_t001_...``, possibly a list)
+    plus ``observations`` (``jw02211`` + ``["o023", ...]``), which are the two
+    shapes the registry uses.  These are what scope a pipeline-directory scan to
+    THIS release: a multi-pointing field keeps every observation's frames in one
+    directory, so an unscoped glob would hand o023's release o046's exposures.
+    """
+    prefixes = field_cfg.get("proposal_prefix") or []
+    if isinstance(prefixes, str):
+        prefixes = [prefixes]
+    observations = field_cfg.get("observations")
+    keys = set()
+    for prefix in prefixes:
+        match = re.match(r"^jw(?P<prop>\d{5})(?:-o?(?P<obs>\d{3}))?", str(prefix))
+        if match is None:
+            continue
+        prop = match.group("prop")
+        if observations:
+            for obs in observations:
+                keys.add((prop, str(obs).lstrip("o").zfill(3)))
+        elif match.group("obs"):
+            keys.add((prop, match.group("obs")))
+    return keys
+
+
+def enumerate_field_exposures(field_cfg, target, filters=None, requested=True):
+    """Detector frames for a field found WITHOUT reading any mosaic.
+
+    ``{(observation, FILTER): [Path, ...]}``, with ``observation`` ``None`` for a
+    single-pointing field and ``oNNN`` where the registry lists observations --
+    the same key the mosaic path produces, so the frames land in
+    ``exposures/<obs>/<FILTER>/`` beside ``images/<obs>/<FILTER>/`` either way.
+    Splitting by observation is not cosmetic: gc2211 keeps 352 F200W frames from
+    o023 AND o049 in one pipeline directory, and pooling them would put one
+    pointing's exposures under the other's heading.
+
+    The normal path derives frames from a mosaic's
+    ``ASNTABLE``, which is exact but requires the mosaic to exist.  Detector
+    frames are a DEPENDENCY of the mosaic -- they are produced first -- so they
+    can and should be releasable before it: a field mid-reduction, or one whose
+    band is in an m2 correct-and-requarantine cycle with no live mosaic at all,
+    still has its ``_cal``/``_destreak``/``_crf`` frames sitting on disk and
+    there is nothing about them to wait for.
+
+    Two things keep this from being the loose glob that the ASN path exists to
+    avoid:
+
+    * the frames are SCOPED to this release's (proposal, observation) pairs,
+      parsed out of the exposure filename itself.  A multi-pointing field keeps
+      every observation's frames in one pipeline directory, so this is what stops
+      o023's release being handed o046's exposures.
+    * within a filter, ONE product is chosen for the whole set -- the most
+      processed one present, per ``destreak_policy`` -- rather than mixing a
+      ``_crf`` for one exposure with a ``_cal`` for another.
+
+    It remains less exact than the association: it answers "which frames belong
+    to this field/observation/filter", not "which frames went into that mosaic".
+    Prefer ``exposures_for_mosaic`` whenever a mosaic exists.
+    """
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from jwst_gc_pipeline.reduction import destreak_policy
+
+    data_dir = Path(field_cfg["data_dir"])
+    keys = field_observation_keys(field_cfg)
+    out = {}
+    if not data_dir.is_dir():
+        return out
+    for filter_dir in sorted(data_dir.iterdir()):
+        if not re.fullmatch(r"F\d{3,4}[WMN]2?", filter_dir.name):
+            continue
+        if filters and filter_dir.name.upper() not in {f.upper() for f in filters}:
+            continue
+        pipeline = filter_dir / "pipeline"
+        if not pipeline.is_dir():
+            continue
+        # `destreak_policy` is the single authority on destreak-vs-align, and it
+        # is per (field, filter) -- sickle destreaks its short filters and not
+        # its long ones -- so it is asked per filter rather than per field.
+        token = "destreak" if destreak_policy.destreaks(
+            target, filter_dir.name, requested) else "align"
+        multi = bool(field_cfg.get("observations"))
+        by_product = {}
+        for path in pipeline.glob("jw*.fits"):
+            match = EXPOSURE_NAME_RE.match(path.name)
+            if match is None:
+                continue
+            if keys and (match.group("prop"), match.group("obs")) not in keys:
+                continue
+            stem = path.name[:-len(".fits")]
+            tail = "_".join(stem.split("_")[4:])
+            if tail == "cal":
+                product = "cal"
+            elif tail == token:
+                product = token
+            elif re.fullmatch(rf"{token}_o\d+_crf", tail) or re.fullmatch(r"o\d+_crf", tail):
+                product = f"{token}_crf"
+            else:
+                continue
+            obs = f"o{match.group('obs')}" if multi else None
+            by_product.setdefault(product, {}).setdefault(obs, []).append(path)
+        # One product for the whole filter, most-processed first, rather than a
+        # `_crf` for one exposure and a `_cal` for another.
+        for product in reversed(DETECTOR_FRAME_SUFFIXES):
+            if product in by_product:
+                for obs, paths in by_product[product].items():
+                    out[(obs, filter_dir.name.upper())] = sorted(paths)
+                break
+    return out
 
 
 def add_to_release(field_dir, assign_dest, collection_root, https_base,

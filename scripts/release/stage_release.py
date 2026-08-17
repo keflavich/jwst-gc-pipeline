@@ -1407,7 +1407,45 @@ def stage(items, field, version, release_root, mode, do_checksum,
     return field_dir
 
 
-def stage_exposures_only(field, version, release_root):
+def _exposures_from_disk(field, version, field_dir):
+    """Exposure items enumerated from the pipeline directories, no mosaic needed.
+
+    Detector frames are a DEPENDENCY of the mosaic -- Stage 2/3 write them first
+    -- so a field can release them before anything is drizzled, and should: a
+    two-filter program mid-reduction has its ``_cal``/``_destreak`` frames on
+    disk and nothing about them is waiting on a drizzle.
+
+    Behind an explicit flag rather than used as a silent fallback.  The
+    association path answers "which frames went INTO this mosaic"; this one
+    answers "which frames belong to this field/observation/filter", which is a
+    weaker claim, and the difference is real -- on wd1 F150W the two disagree,
+    because that mosaic was drizzled from ``_cal`` members while a separate
+    ``_o001_crf`` family also sits in the same directory.  Choosing between them
+    by accident is the guesswork ``exposures_for_mosaic`` exists to refuse.
+    """
+    found = exposure_bundle.enumerate_field_exposures(FIELDS[field], field)
+    items = []
+    for (obs, filt), paths in sorted(found.items(),
+                                     key=lambda kv: (kv[0][0] or "", kv[0][1])):
+        for path in paths:
+            items.append({
+                "category": exposure_bundle.EXPOSURE_CATEGORY,
+                "kind": exposure_bundle.EXPOSURE_KIND,
+                "filter": filt, "iteration": None, "observation": obs,
+                "instrument": "MIRI" if "mirimage" in path.name else "NIRCam",
+                "src": str(path), "version": version,
+            })
+    for it in items:
+        it["dest"] = str(assign_dest(it, field))
+        src = Path(it["src"])
+        it["size_bytes"] = src.stat().st_size if src.is_file() else None
+        rel = (field_dir / it["dest"]).relative_to(GLOBUS_COLLECTION_ROOT)
+        it["globus_path"] = "/" + str(rel)
+        it["url"] = GLOBUS_HTTPS_BASE + it["globus_path"]
+    return items
+
+
+def stage_exposures_only(field, version, release_root, from_disk=False):
     """Add the detector-frame exposures to an ALREADY-STAGED release.
 
     Stages nothing but symlinks, and rewrites ``MANIFEST.json`` and ``README.md``
@@ -1416,21 +1454,50 @@ def stage_exposures_only(field, version, release_root):
     ``exposure_bundle.add_to_release`` for why that is sound and for the
     ``built`` trap it avoids.
 
-    Returns ``(field_dir, n_exposures)``, or ``(None, 0)`` when the field has no
-    staged release to add to.
+    ``from_disk`` enumerates the frames from the pipeline directories instead of
+    from the staged mosaics, which is what lets a field release them BEFORE it
+    has any mosaic at all -- and it will create the release directory if there
+    is none yet.
+
+    Returns ``(field_dir, n_exposures)``, or ``(None, 0)`` when there is nothing
+    to add to and no way to enumerate.
     """
     field_dir = field_release_dir(field, version, release_root)
-    if not (field_dir / "MANIFEST.json").is_file():
+    have_manifest = (field_dir / "MANIFEST.json").is_file()
+    if not have_manifest and not from_disk:
         print(f"\nNo staged release at {field_dir} -- --exposures-only adds "
-              f"frames to an EXISTING release; stage the field first.",
-              file=sys.stderr)
+              f"frames to an EXISTING release; stage the field first, or pass "
+              f"--exposures-from-disk to release the detector frames on their "
+              f"own (they do not need a mosaic).", file=sys.stderr)
         return None, 0
 
     problems = []
-    exposures, manifest = exposure_bundle.add_to_release(
-        field_dir, lambda it: assign_dest(it, field),
-        GLOBUS_COLLECTION_ROOT, GLOBUS_HTTPS_BASE,
-        search_root=FIELDS[field]["data_dir"], problems=problems)
+    if from_disk:
+        field_dir.mkdir(parents=True, exist_ok=True)
+        exposures = _exposures_from_disk(field, version, field_dir)
+        manifest = (json.loads((field_dir / "MANIFEST.json").read_text())
+                    if have_manifest else {
+            "field": field, "version": version,
+            "group": FIELDS.get(field, {}).get("group"),
+            "release_path": "/" + str(field_dir.relative_to(GLOBUS_COLLECTION_ROOT)),
+            # A release that has never held a mosaic has no prior staging time to
+            # preserve, so stamping `built` here is correct -- unlike the
+            # add-to-existing path, where moving it would re-publish quarantined
+            # mosaics (see exposure_bundle.add_to_release).
+            "built": datetime.datetime.now().astimezone().isoformat(),
+            "mode": "symlink", "continuity_gate": "not_applicable(exposures-only)",
+            "globus_collection_id": GLOBUS_COLLECTION_ID,
+            "globus_https_base": GLOBUS_HTTPS_BASE, "files": []})
+        # No parent mosaic to inherit withholding from. Say so rather than let
+        # the absence of `parent_dest` read as "checked and fine".
+        print("  enumerated from the pipeline directories: these frames are not "
+              "tied to a staged mosaic, so none of them is withheld by a "
+              "mosaic's astrometry verdict.")
+    else:
+        exposures, manifest = exposure_bundle.add_to_release(
+            field_dir, lambda it: assign_dest(it, field),
+            GLOBUS_COLLECTION_ROOT, GLOBUS_HTTPS_BASE,
+            search_root=FIELDS[field]["data_dir"], problems=problems)
     if problems:
         print(f"\nEXPOSURE PROVENANCE: could not establish the detector-frame "
               f"input list for {len(problems)} staged mosaic(s); their frames "
@@ -1676,6 +1743,16 @@ def main(argv=None):
                              "not re-running the mosaic gates (it cannot change which "
                              "mosaics ship). Use when a field's frames should go out "
                              "but a band has no live mosaic to re-stage.")
+    parser.add_argument("--exposures-from-disk", action="store_true",
+                        help="with --exposures-only: enumerate the frames from the "
+                             "pipeline directories instead of from staged mosaics, "
+                             "and create the release directory if there is none. "
+                             "Detector frames are a DEPENDENCY of the mosaic, so a "
+                             "field can release them before anything is drizzled. "
+                             "Weaker provenance than the association path -- it "
+                             "answers 'which frames belong to this field/obs/filter', "
+                             "not 'which frames went into that mosaic' -- so it is "
+                             "opt-in, never a silent fallback.")
     parser.add_argument("--images-only", action="store_true",
                         help="ship mosaics only, no catalogs (e.g. images are internally "
                              "consistent but the catalog/absolute frame is not yet certified)")
@@ -1707,7 +1784,8 @@ def main(argv=None):
     # v1.2 tree sits there gated and frozen).
     if args.exposures_only:
         field_dir, n = stage_exposures_only(args.field, args.version,
-                                            args.release_root)
+                                            args.release_root,
+                                            from_disk=args.exposures_from_disk)
         if field_dir is None:
             return 2
         if not n:

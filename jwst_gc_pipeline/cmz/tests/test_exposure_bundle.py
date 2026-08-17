@@ -576,3 +576,91 @@ def test_add_to_release_needs_search_root_because_the_asn_is_not_beside_the_copy
         tmp_path / 'releases', sr.GLOBUS_HTTPS_BASE, problems=problems)
     assert exposures == []
     assert len(problems) == 1 and 'not found on disk' in problems[0]
+
+
+# ---- enumeration with no mosaic at all ----
+#
+# Detector frames are a DEPENDENCY of the mosaic -- Stage 2/3 write them first --
+# so a field can release them before anything is drizzled, and should: a
+# two-filter program mid-reduction has its frames on disk and nothing about them
+# is waiting on a drizzle.  Two-filter programs are the norm (JWST 10678).
+
+def _disk_field(tmp_path, prop='02045', obs='001', filters=('F212N', 'F323N'),
+                product='destreak_o{obs}_crf', n=2):
+    for filt in filters:
+        pipe = tmp_path / filt / 'pipeline'
+        pipe.mkdir(parents=True, exist_ok=True)
+        for i in range(1, n + 1):
+            tail = product.format(obs=obs)
+            _fits(pipe / f'jw{prop}{obs}001_02101_{i:05d}_nrca1_{tail}.fits')
+    return {'data_dir': tmp_path,
+            'proposal_prefix': f'jw{prop}-o{obs}_t001_nircam_clear'}
+
+
+def test_enumerates_frames_with_no_mosaic_present(eb, tmp_path):
+    cfg = _disk_field(tmp_path)
+    found = eb.enumerate_field_exposures(cfg, 'arches')
+    assert sorted(found) == [(None, 'F212N'), (None, 'F323N')]
+    assert all(len(v) == 2 for v in found.values())
+
+
+def test_enumeration_is_scoped_to_this_release_observations(eb, tmp_path):
+    """A multi-pointing field keeps every observation's frames in ONE pipeline
+    directory.  An unscoped glob hands o023's release o046's exposures, and the
+    two are different sky."""
+    pipe = tmp_path / 'F200W' / 'pipeline'
+    pipe.mkdir(parents=True)
+    for obs in ('023', '046', '099'):
+        _fits(pipe / f'jw02211{obs}001_02201_00001_nrca1_destreak_o{obs}_crf.fits')
+    cfg = {'data_dir': tmp_path, 'proposal_prefix': 'jw02211',
+           'observations': ['o023', 'o046']}
+    found = eb.enumerate_field_exposures(cfg, 'gc2211')
+    # split per observation, and o099 -- not in this release -- is not there
+    assert sorted(found) == [('o023', 'F200W'), ('o046', 'F200W')]
+    assert all(len(v) == 1 for v in found.values())
+
+
+def test_enumeration_picks_one_product_per_filter(eb, tmp_path):
+    """Never a `_crf` for one exposure and a `_cal` for another: the most
+    processed product present wins for the whole filter."""
+    pipe = tmp_path / 'F212N' / 'pipeline'
+    pipe.mkdir(parents=True)
+    for tail in ('cal', 'destreak', 'destreak_o001_crf'):
+        _fits(pipe / f'jw02045001001_02101_00001_nrca1_{tail}.fits')
+    _fits(pipe / 'jw02045001001_02101_00002_nrca1_cal.fits')   # crf-less exposure
+    cfg = {'data_dir': tmp_path,
+           'proposal_prefix': 'jw02045-o001_t001_nircam_clear'}
+    found = eb.enumerate_field_exposures(cfg, 'arches')
+    names = [p.name for p in found[(None, 'F212N')]]
+    assert names == ['jw02045001001_02101_00001_nrca1_destreak_o001_crf.fits']
+
+
+def test_enumeration_falls_back_to_cal_when_that_is_all_there_is(eb, tmp_path):
+    """Mid-reduction: Stage 2 has run, Stage 3 has not.  This is the state a
+    field is in when its frames should already be releasable."""
+    cfg = _disk_field(tmp_path, product='cal')
+    found = eb.enumerate_field_exposures(cfg, 'arches')
+    assert sorted(found) == [(None, 'F212N'), (None, 'F323N')]
+    assert all(p.name.endswith('_cal.fits') for v in found.values() for p in v)
+
+
+def test_enumeration_honours_the_destreak_policy_token(eb, tmp_path):
+    """w51 does not destreak, so its frames are `_align_*`, not `_destreak_*`.
+    Hard-coding either token would find nothing on half the survey."""
+    cfg = _disk_field(tmp_path, filters=('F212N',), product='align_o{obs}_crf')
+    found = eb.enumerate_field_exposures(cfg, 'w51')       # in EXTENDED_EMISSION_FIELDS
+    assert len(found[(None, 'F212N')]) == 2
+    # ...and the same files are NOT claimed for a field that DOES destreak
+    assert not eb.enumerate_field_exposures(cfg, 'arches')
+
+
+def test_observation_keys_read_both_registry_shapes(eb):
+    assert eb.field_observation_keys(
+        {'proposal_prefix': 'jw02045-o001_t001_nircam_clear'}) == {('02045', '001')}
+    assert eb.field_observation_keys(
+        {'proposal_prefix': 'jw02211', 'observations': ['o023', 'o046']}) == \
+        {('02211', '023'), ('02211', '046')}
+    assert eb.field_observation_keys(
+        {'proposal_prefix': ['jw01182-o004_t001_nircam_clear',
+                             'jw02221-o001_t001_nircam_clear']}) == \
+        {('01182', '004'), ('02221', '001')}
