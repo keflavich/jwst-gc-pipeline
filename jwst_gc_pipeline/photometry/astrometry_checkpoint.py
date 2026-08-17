@@ -65,6 +65,13 @@ from .visit_consensus import (
     build_visit_consensus,
     catalog_coords, detect_module_antisymmetry, load_reference_catalog,
     measure_reference_tie, pick_reference_anchor_filter, select_reliable_stars,
+    # The same-star SELECTION the #285 restriction uses: mutual nearest
+    # partners within a radius, returning a boolean MASK and no offset.
+    # Imported rather than re-written here so the nearest-neighbour pairing
+    # lives in exactly one reviewed place (see
+    # tests/test_no_adhoc_nn_median_astrometry.py) and so the survivor set is
+    # found the same way the restriction that created it was.
+    _mutual_match_mask,
 )
 from .astrometry_offsets import measure_offset, local_residual_map
 from .consensus_catalog import (pool_visit_consensi,
@@ -2591,12 +2598,13 @@ def _survivor_baseline_tie(m2_coords, m2_mag, stage_coords, refcat,
                           f"need {SURVIVOR_MIN_STARS})")
         return None, info
     # SELECTION, not measurement: which m2 stars this stage still carries.  The
-    # offsets themselves are never averaged here -- the tie below is the
+    # offsets themselves are never reduced here -- the tie below is the
     # sanctioned histogram+same-star estimator (CLAUDE.md astrometry rule #1).
-    # Pairing is safe at this radius because the stage consensus is already
-    # restricted to the m2 list, so each survivor's nearest m2 star IS its own.
-    _idx, sep, _d3 = m2_coords.match_to_catalog_sky(stage_coords)
-    survived = sep.to(u.mas).value <= SURVIVOR_MATCH_TOL_MAS
+    # MUTUAL partners, via the same helper the #285 restriction uses: in a
+    # crowded field a one-way match lets several stage stars claim one m2 star,
+    # which would put the same m2 star in the survivor set for the wrong reason.
+    survived = _mutual_match_mask(m2_coords, stage_coords,
+                                  SURVIVOR_MATCH_TOL_MAS * u.mas)
     info["n_survivors"] = int(survived.sum())
     if info["n_survivors"] < SURVIVOR_MIN_STARS:
         info["reason"] = (f"only {info['n_survivors']} of {info['n_m2']} m2 stars "
