@@ -1029,3 +1029,116 @@ def test_identical_legs_are_reported_as_agreement(ap):
                                  'dense_mas': 4.0, 'dense_contrast': 143.0})
     assert leg == 'sparse'
     assert 'same value' in why
+
+
+# ---- tie suppression ----
+#
+# This fix shipped in the same commit whose message said of the guard "IT HAD
+# ZERO TESTS ... the same shape as the defect", and reproduced that exactly:
+# four deletions of it left the suite green.
+
+def _manifest_with_tie_page(sr, eb, nircam_field, built, ships_table=True):
+    mosaic = _science(nircam_field['mosaic'])
+    mosaic['dest'] = str(sr.assign_dest(mosaic, 'f'))
+    mosaic['size_bytes'] = 1
+    mosaic['url'] = sr.GLOBUS_HTTPS_BASE + '/x/' + mosaic['dest']
+    files = [mosaic]
+    if ships_table:
+        files.append({'category': 'astrometry', 'kind': 'offsets_table',
+                      'filter': None, 'iteration': None, 'observation': None,
+                      'dest': 'astrometry/t.csv', 'size_bytes': 10,
+                      'url': sr.GLOBUS_HTTPS_BASE + '/x/astrometry/t.csv'})
+    return {'field': 'f', 'version': 'v9', 'group': None,
+            'release_path': '/releases/v9/f', 'built': built, 'mode': 'copy',
+            'globus_collection_id': sr.GLOBUS_COLLECTION_ID,
+            'globus_https_base': sr.GLOBUS_HTTPS_BASE, 'files': files}
+
+
+def test_a_tie_measured_after_the_release_is_not_shown(mw, sr, eb, ap,
+                                                       nircam_field, monkeypatch):
+    """A v1.0-2026.06 page printed eight accuracy rows for its shipped solution,
+    two of them measured two months after that version was cut."""
+    monkeypatch.setitem(mw.FIELDS, 'f', {'data_dir': nircam_field['root']})
+    monkeypatch.setattr(mw.astrometry_provenance, 'collect', lambda *a, **k: {
+        'field': 'f', 'state': 'table',
+        'table': {'name': 't.csv', 'exists': True, 'size_bytes': 10,
+                  'modified': '2026-06-01T00:00:00', 'sha256': 'ab'},
+        'ties': {'F212N': {'date': '2026-08-17T00:00:00Z', 'sparse_mas': 1.0,
+                           'sparse_contrast': 90.0}}})
+    man = _manifest_with_tie_page(sr, eb, nircam_field, '2026-06-01T00:00:00')
+    html_out = mw.render_astrometry('f', man['files'], '/releases/v9/f',
+                                    manifest_built=man['built'])
+    assert 'F212N' not in html_out
+    # ...and the same tie IS shown for a release built after it
+    later = mw.render_astrometry('f', man['files'], '/releases/v9/f',
+                                 manifest_built='2026-09-01T00:00:00')
+    assert 'F212N' in later
+
+
+def test_a_version_shipping_no_table_shows_no_ties(mw, sr, eb, ap, nircam_field,
+                                                   monkeypatch):
+    monkeypatch.setitem(mw.FIELDS, 'f', {'data_dir': nircam_field['root']})
+    monkeypatch.setattr(mw.astrometry_provenance, 'collect', lambda *a, **k: {
+        'field': 'f', 'state': 'table',
+        'table': {'name': 't.csv', 'exists': True},
+        'ties': {'F212N': {'date': '2026-01-01T00:00:00Z', 'sparse_mas': 1.0,
+                           'sparse_contrast': 90.0}}})
+    man = _manifest_with_tie_page(sr, eb, nircam_field, '2026-06-01T00:00:00',
+                                  ships_table=False)
+    html_out = mw.render_astrometry('f', man['files'], '/releases/v9/f',
+                                    manifest_built=man['built'])
+    assert 'does not ship a pointing-correction table' in html_out
+    assert 'F212N' not in html_out
+
+
+def test_suppressed_ties_are_not_reported_as_absent(mw, sr, eb, ap, nircam_field,
+                                                    monkeypatch):
+    """Suppressed is not absent. Falling through to "no reference-tie
+    measurement is recorded for this field" put a false sentence on 20 live
+    pages -- sgrc has 8 on record and its page said none did."""
+    monkeypatch.setitem(mw.FIELDS, 'f', {'data_dir': nircam_field['root']})
+    monkeypatch.setattr(mw.astrometry_provenance, 'collect', lambda *a, **k: {
+        'field': 'f', 'state': 'table', 'table': {'name': 't.csv', 'exists': True},
+        'ties': {'F212N': {'date': '2026-08-17T00:00:00Z', 'sparse_mas': 1.0,
+                           'sparse_contrast': 90.0}}})
+    man = _manifest_with_tie_page(sr, eb, nircam_field, '2026-06-01T00:00:00',
+                                  ships_table=False)
+    html_out = mw.render_astrometry('f', man['files'], '/releases/v9/f',
+                                    manifest_built=man['built'])
+    assert 'No reference-tie measurement is recorded' not in html_out
+    assert 'measurement(s) exist for this field' in html_out
+    # a field with genuinely none still says so
+    monkeypatch.setattr(mw.astrometry_provenance, 'collect', lambda *a, **k: {
+        'field': 'f', 'state': 'unregistered', 'table': None, 'ties': {}})
+    none_out = mw.render_astrometry('f', man['files'], '/releases/v9/f',
+                                    manifest_built=man['built'])
+    assert 'No reference-tie measurement is recorded' in none_out
+
+
+def test_readme_suppresses_the_same_ties_the_page_does(ap):
+    """The README is the frozen, in-tarball surface and never got the webpage's
+    treatment: it claimed a shipped frozen table for a field that ships none."""
+    text = "\n".join(ap.summary_lines(
+        {'state': 'table-not-shipped', 'table': {'name': 't.csv'}, 'ties': {}},
+        n_on_record=8))
+    assert 'does not ship a pointing-correction table' in text
+    assert '8 reference-tie measurement(s) exist' in text
+    assert 'frozen' not in text
+
+
+def test_the_guard_creates_nothing_when_it_refuses(sr, eb, tmp_path,
+                                                   nircam_field, monkeypatch):
+    """A refusal that has already created the directory is not a refusal.
+    Moving `assert_writable` after `field_dir.mkdir` survived every guard test,
+    which asserted only that it raised."""
+    field_dir = _staged_release(sr, eb, tmp_path, nircam_field)
+    monkeypatch.setattr(sr, 'GLOBUS_COLLECTION_ROOT', tmp_path / 'releases')
+    monkeypatch.setitem(sr.FIELDS, 'f', {'data_dir': nircam_field['root']})
+    fresh = tmp_path / 'releases' / 'v9-test' / 'brand-new'
+    monkeypatch.setattr(sr, 'field_release_dir',
+                        lambda field, version, root: fresh)
+    (tmp_path / 'releases' / 'v9-test' / 'f').mkdir(parents=True, exist_ok=True)
+    (tmp_path / 'releases' / 'v9-test' / 'f' / 'MANIFEST.json').write_text('{}')
+    with pytest.raises(sr.FrozenReleaseError):
+        sr.stage_exposures_only('f', 'v9-test', tmp_path / 'releases')
+    assert not fresh.exists(), "refusal created the release directory anyway"

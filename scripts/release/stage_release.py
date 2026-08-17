@@ -1422,7 +1422,8 @@ def stage(items, field, version, release_root, mode, do_checksum,
             print(f"  WARNING: {rel} under exposures/ is a real file, not a "
                   f"link -- left in place")
 
-    write_readme(field_dir, field, version, items, mode)
+    write_readme(field_dir, field, version, items, mode,
+                 built_at=manifest["built"])
 
     # world-readable
     subprocess.run(["chmod", "-R", "a+rX", str(field_dir)], check=True)
@@ -1534,15 +1535,15 @@ def refuse_older_version(version, release_root, allow_older, field=None):
             manifest = manifest / cfg["group"]
         manifest = manifest / field / "MANIFEST.json"
         if manifest.is_file():
-            return True, (f"'{version}' already holds a staged {field} release "
+            return True, (f"'{version}', which already holds a staged {field} release "
                           f"({manifest}); re-cutting it rewrites a MANIFEST, "
                           f"README and CHECKSUMS whose checksums are cited")
     root = Path(release_root)
     existing = sorted(p.name for p in root.iterdir()
                       if p.is_dir() and p.name.startswith("v")) if root.is_dir() else []
     if existing and version < max(existing):
-        return True, (f"'{version}' is older than the newest release on disk "
-                      f"('{max(existing)}')")
+        return True, (f"'{version}', which is older than the newest release on "
+                      f"disk ('{max(existing)}')")
     return False, ""
 
 
@@ -1685,12 +1686,13 @@ def stage_exposures_only(field, version, release_root, from_disk=False,
     manifest["exposures_added"] = datetime.datetime.now().astimezone().isoformat()
     (field_dir / "MANIFEST.json").write_text(json.dumps(manifest, indent=2))
     write_readme(field_dir, field, manifest.get("version", version),
-                 manifest["files"], manifest.get("mode", "copy"))
+                 manifest["files"], manifest.get("mode", "copy"),
+                 built_at=manifest.get("built"))
     subprocess.run(["chmod", "-R", "a+rX", str(field_dir)], check=True)
     return field_dir, len(exposures)
 
 
-def write_readme(field_dir, field, version, items, mode):
+def write_readme(field_dir, field, version, items, mode, built_at=None):
     images = [it for it in items if it["category"] == "image"]
     catalogs = [it for it in items if it["category"] == "catalog"]
     # describe the mosaics ACTUALLY staged: a module-split field (arches,
@@ -1808,8 +1810,25 @@ def write_readme(field_dir, field, version, items, mode):
             f"`{field}` is not in the release registry, so no astrometric "
             f"provenance could be determined for it.")
     else:
+        _record = astrometry_provenance.collect(field, _cfg)
+        # The README is the FROZEN, in-tarball surface and never got the
+        # webpage's treatment: it claimed a shipped frozen table for a field
+        # that ships none, and an --allow-older-version re-cut wrote today's
+        # ties and today's sha256 under a June `built` timestamp. Same
+        # corrections, same two inputs.
+        _ships_table = any(
+            it.get("category") == astrometry_provenance.ASTROMETRY_CATEGORY
+            for it in items)
+        if _record.get("state") == "table" and not _ships_table:
+            _record = dict(_record, state="table-not-shipped")
+        _built = str(built_at or "")
+        _on_record = _record.get("ties") or {}
+        _record = dict(_record, ties={
+            f: t for f, t in _on_record.items()
+            if _record.get("state") != "table-not-shipped"
+            and not (_built and str(t.get("date") or "") > _built)})
         provenance_lines += astrometry_provenance.summary_lines(
-            astrometry_provenance.collect(field, _cfg))
+            _record, n_on_record=len(_on_record))
     provenance_lines.append("")
 
     lines = [
@@ -2070,16 +2089,20 @@ def main(argv=None):
     # rewrites files under a fresh `built` timestamp with no record that it
     # happened.  Refuse to target anything older than the newest version on disk
     # unless that is explicitly what is wanted.
-    root = Path(args.release_root)
-    existing = sorted(p.name for p in root.iterdir()
-                      if p.is_dir() and p.name.startswith("v")) if root.is_dir() else []
+    # `why` is what the guard actually decided; printing hardcoded ordering text
+    # instead told the operator the wrong reason -- refusing v1.3 on the
+    # field-manifest branch read "it is older than the newest release on disk
+    # ('v1.3-2026.08')", i.e. older than itself. And `max(existing)` was left in
+    # a branch that no longer implies `existing` is non-empty: the
+    # field-manifest leg can refuse with no `v*` directory present at all, which
+    # raises `ValueError: max() iterable argument is empty`. Both go away by
+    # using the reason the guard returned.
     refuse, why = refuse_older_version(args.version, args.release_root,
                                        args.allow_older_version, args.field)
     if refuse:
-        print(f"\nREFUSING TO STAGE into '{args.version}': it is older than the newest "
-              f"release on disk ('{max(existing)}'), and a published version is frozen "
-              f"-- its checksums are cited. Stage into '{max(existing)}' or a new "
-              f"version, or pass --allow-older-version if re-cutting it is intended.",
+        print(f"\nREFUSING TO STAGE into {why}, and a published version is frozen "
+              f"-- its checksums are cited. Stage into a new version, or pass "
+              f"--allow-older-version if re-cutting it is intended.",
               file=sys.stderr)
         return 2
 

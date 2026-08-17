@@ -1116,10 +1116,17 @@ def render_astrometry(field, files, base, manifest_built=None):
     # to; and a tie measured after the release was built describes a later
     # solution, not this one.
     built = str(manifest_built or "")
-    ties = {f: t for f, t in (record.get("ties") or {}).items()
+    on_record = record.get("ties") or {}
+    ties = {f: t for f, t in on_record.items()
             if not (built and str(t.get("date") or "") > built)}
     if record.get("state") == "table-not-shipped":
         ties = {}
+    # Suppressed is not the same as absent. Falling through to "no reference-tie
+    # measurement is recorded for this field" put a false sentence on 20 live
+    # pages -- sgrc has 8 on record and its page said none did. Round 4's
+    # complaint was a page saying something untrue about ties; substituting a
+    # different untrue sentence is not a fix, so the two cases get two messages.
+    suppressed = bool(on_record) and not ties
     record = dict(record, ties=ties)
     out = ["<h2>Astrometric provenance</h2>"]
     state = record.get("state")
@@ -1194,6 +1201,14 @@ def render_astrometry(field, files, base, manifest_built=None):
             "too weak to cite or too large to be an accuracy figure, and the "
             "reason says which. Both columns are bulk offsets; a per-star error "
             "bar is a separate quantity.</p>")
+    elif suppressed:
+        out.append(
+            f"<p class=muted>{len(on_record)} reference-tie measurement(s) exist "
+            f"for this field, and none is shown here: they are not attached to "
+            f"what this version ships &mdash; either the version carries no "
+            f"pointing-correction table, or the measurements postdate the "
+            f"release. A later version's page carries the ties that describe "
+            f"it.</p>")
     else:
         out.append("<p class=muted>No reference-tie measurement is recorded for this "
                    "field, so no astrometric accuracy is claimed here.</p>")

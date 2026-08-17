@@ -263,7 +263,7 @@ def stage_item(field, field_cfg, version, assign_dest_name="astrometry"):
     }
 
 
-def summary_lines(record):
+def summary_lines(record, n_on_record=None):
     """Plain-text provenance, for the README.  One list of short lines."""
     state = record.get("state")
     lines = []
@@ -274,6 +274,12 @@ def summary_lines(record):
             "`assign_wcs` astrometry. Proposal 1939 sat in exactly this state and",
             "its mosaics were ~14.8\" off Gaia/VIRAC2. Do not assume these frames",
             "are tied to any reference frame.",
+        ]
+    elif state == "table-not-shipped":
+        lines += [
+            "This release version does not ship a pointing-correction table. The",
+            "field has one, but it was not staged with this version, so nothing",
+            "here describes the solution these products were built on.",
         ]
     elif state == "no-table":
         lines += [
@@ -323,6 +329,11 @@ def summary_lines(record):
             f"reaches contrast {MIN_TIE_CONTRAST:.0f} and no value should be cited.",
             "Neither number is a per-star error bar; both are bulk ties.",
         ]
+    elif n_on_record:
+        lines += ["", f"{n_on_record} reference-tie measurement(s) exist for this "
+                  f"field and none is shown here: they are not attached to what "
+                  f"this version ships -- either it carries no pointing-correction "
+                  f"table, or they postdate the release."]
     else:
         lines += ["", "No m2 reference-tie record was found for this field, so no "
                   "measured accuracy is claimed here."]
