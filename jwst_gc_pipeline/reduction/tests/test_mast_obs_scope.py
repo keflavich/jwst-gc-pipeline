@@ -3,8 +3,17 @@
 All 139 gc-treasury tiles share ``FILTERS='F212N;F480M'``, so the reduction's
 filter-only mask over the program obs table selects EVERY released observation
 and each fresh tile reduction downloads the whole program's asn products.  The
-mask must narrow the obs table to the observation under reduction while a
-single-obs field passes trivially (unchanged behavior).
+mask narrows the obs table to the observation under reduction.
+
+The obs table is queried per PROPOSAL, so this narrows the two-field proposals
+as well (2221 = brick + cloudc, 3958 = brick + sickle, 2045 = arches +
+quintuplet): the reduce stops pulling the other field's association products
+into this field's ``output_dir``.  What each field then reads is unchanged --
+the consumer glob is already ``-o{field}``-scoped.
+
+The reduction's own wiring of this mask is exercised in
+``test_mast_download_obs_scope.py``, which drives ``main`` with an injected
+``Observations`` and reads the table the download is handed.
 """
 import numpy as np
 
@@ -27,12 +36,49 @@ def test_treasury_tile_keeps_only_its_own_observation():
     assert mask.tolist() == [True, False, False]
 
 
-def test_single_obs_field_passes_trivially():
-    """Every row of a single-obs field already spells this observation, so the
-    mask is all-True and current behavior is preserved."""
+def test_a_fields_own_rows_are_all_kept():
+    """Every row spelling this observation survives, whatever else is in the
+    proposal's table."""
     obs_ids = ['jw02221-o001_t001_nircam_clear-f405n-nrcalong',
                'jw02221-o001_t001_nircam_clear-f410m-nrcalong']
     assert observation_scope_mask(obs_ids, '2221', '001').all()
+
+
+def test_a_proposal_spanning_two_fields_is_narrowed_to_this_one():
+    """2221 covers brick (nircam o001) and cloudc (o002), and the obs table is
+    queried per proposal, so a brick reduce previously downloaded cloudc's
+    association products into brick's output_dir."""
+    obs_ids = ['jw02221-o001_t001_nircam_clear-f182m',
+               'jw02221-o002_t001_nircam_clear-f182m',
+               'jw02221-o003_t001_nircam_clear-f182m']
+    assert observation_scope_mask(obs_ids, '2221', '001').tolist() == [
+        True, False, False]
+
+
+def test_an_unpadded_field_selects_the_observation_it_names():
+    """``startswith('jw10678-o1')`` accepts o100 and o139 while REJECTING tile
+    1, and the mask is non-empty, so the "kept 0" report cannot catch it.  An
+    unpadded --field is one slip across 139 array-job tiles."""
+    obs_ids = ['jw10678-o001_t001_nircam_clear-f212n',
+               'jw10678-o010_t010_nircam_clear-f212n',
+               'jw10678-o100_t100_nircam_clear-f212n',
+               'jw10678-o139_t139_nircam_clear-f212n']
+    assert observation_scope_mask(obs_ids, '10678', '1').tolist() == [
+        True, False, False, False]
+    assert observation_scope_mask(obs_ids, '10678', '01').tolist() == [
+        True, False, False, False]
+    assert observation_scope_mask(obs_ids, '10678', '010').tolist() == [
+        False, True, False, False]
+    assert obs_id_prefix('10678', '1') == 'jw10678-o001'
+
+
+def test_the_prefix_match_stops_at_the_observation_number():
+    """Even correctly padded, a bare ``startswith`` accepts a longer number
+    (o001 vs o0011); MAST always writes a separator after the token."""
+    obs_ids = ['jw10678-o001_t001_nircam_clear-f212n',
+               'jw10678-o0011_t011_nircam_clear-f212n']
+    assert observation_scope_mask(obs_ids, '10678', '001').tolist() == [
+        True, False]
 
 
 def test_rows_without_an_observation_token_are_kept():
@@ -79,22 +125,7 @@ def test_keeping_nothing_says_so(capsys):
     assert 'kept 0 of 1' in out and 'jw10678-o001' in out, out
 
 
-def test_the_reduction_ANDs_the_mask_onto_its_filter_mask():
-    """Source guard on the one production wiring.
-
-    Every test above calls the helper directly, so deleting the line that
-    composes it into the reduction's mask leaves them all passing while the
-    obs-blind download returns.  Astroquery's MAST call cannot be exercised
-    here, so pin the composition and its position ahead of the product list.
-    """
-    import os
-    import jwst_gc_pipeline.reduction as _red
-    src = open(os.path.join(os.path.dirname(_red.__file__),
-                            'PipelineRerunNIRCAM-LONG.py')).read()
-    assert 'from jwst_gc_pipeline.reduction.mast_obs_scope import (' in src \
-        or 'mast_obs_scope import observation_scope_mask' in src, \
-        'the reduction no longer imports observation_scope_mask'
-    i = src.find('msk &= observation_scope_mask(')
-    assert i > 0, 'the obs-scope mask is no longer ANDed onto the filter mask'
-    j = src.find('Observations.get_product_list(obs_table[msk])')
-    assert j > i, 'the mask must be composed BEFORE the product list is built'
+# The production wiring is exercised behaviourally in
+# test_mast_download_obs_scope.py: a source-text guard on the ``msk &= ...``
+# line survives both regressions that matter (masking the wrong column, and
+# swapping proposal_id/field), because neither changes that line's text.

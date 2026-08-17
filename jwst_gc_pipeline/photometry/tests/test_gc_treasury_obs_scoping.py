@@ -19,6 +19,7 @@ from astropy.coordinates import SkyCoord
 from astropy.table import Table
 import astropy.units as u
 
+from jwst_gc_pipeline import fields as _fields
 from jwst_gc_pipeline.photometry import merge_catalogs as MC
 from jwst_gc_pipeline.photometry import naming
 from jwst_gc_pipeline.photometry.crowdsource_catalogs_long import (
@@ -408,9 +409,18 @@ def _two_tile_perframe_names(exp=1):
             f'_m2_daophot_basic.fits' for obs in ('001', '002')]
 
 
+#: What ``fields.filter_observation_count`` contributes for a wildcard obsid
+#: list.  #424 introduces the constant so a wildcard reads as "several"; until
+#: it lands the same registration counts as one observation, and the drop below
+#: has to hold at every value the registry can produce.
+_WILDCARD_N = getattr(_fields, 'WILDCARD_OBSERVATION_COUNT', 1)
+
+
 @pytest.mark.parametrize('n_obs, why', [
     (0, 'unregistered gc-treasury (fields.filter_observation_count -> 0)'),
     (1, "wildcard obsids {'nircam': '*'} -> len(('*',)) == 1"),
+    (_WILDCARD_N, 'the wildcard count once #424 registers gc-treasury'),
+    (5, 'a genuinely shared filter (the gc2211 branch)'),
 ])
 def test_m2_keeps_only_this_tiles_per_frame_catalogs(tmp_path, monkeypatch,
                                                      n_obs, why):
@@ -418,12 +428,18 @@ def test_m2_keeps_only_this_tiles_per_frame_catalogs(tmp_path, monkeypatch,
 
     ``_drop_foreign_obs_duplicates`` picks its branch from
     ``filter_observation_count``, which answers 0 for an unregistered field and
-    1 for a wildcard obsid list -- both of which gc-treasury gives -- so a
-    139-tile program lands in the single-observation branch.  That branch
-    strips the token before comparing identities, so tile 001's and tile 002's
-    copies of one ``(visit, vgroup, exp)`` collapsed onto one key and
-    ``sorted(group)[0]`` kept tile 001's.  m2 is the CORRECTING stage, so the
-    consequence is tile 002's visit consensus built from tile 001's exposures.
+    1 for a wildcard obsid list read as one element -- both of which
+    gc-treasury gives -- so a 139-tile program lands in the single-observation
+    branch.  That branch strips the token before comparing identities, so tile
+    001's and tile 002's copies of one ``(visit, vgroup, exp)`` collapsed onto
+    one key and ``sorted(group)[0]`` kept tile 001's.  m2 is the CORRECTING
+    stage, so the consequence is tile 002's visit consensus built from tile
+    001's exposures.
+
+    Parametrized over every count the registry can answer, including the
+    shared-branch values: #424 makes a wildcard count as ``2``, which moves
+    gc-treasury into the OTHER branch, and the tile must be kept out of its
+    neighbour's consensus on both trees.
     """
     from jwst_gc_pipeline.photometry.cataloging import (
         _drop_foreign_obs_duplicates)
@@ -628,3 +644,192 @@ def test_frozen_stage_discriminator_spells_ngc6334s_j_token(tmp_path):
      'f090w_nrcb_j6778_indivexp_merged_resbgsub_m5_dao_basic.fits').touch()
     with pytest.raises(AstrometryRegressionError, match='(?i)silently disabled'):
         _run('6778')
+
+
+# ---------------------------------------------------------------------------
+# the field must NAME an observation before a token is built from it
+# ---------------------------------------------------------------------------
+
+def test_a_wildcard_field_is_refused_rather_than_written_into_a_name():
+    """``--field`` omitted on a wildcard-registered program resolves to ``'*'``.
+
+    ``fields.default_field_token`` returns the registered obsid, and a program
+    whose observations land as the campaign executes is registered
+    ``obsids: {'nircam': '*'}``.  ``f'_o{field}'`` then wrote a literal ``*``
+    into every catalog name that run produced, where every ``_o*`` glob in the
+    tree matches it -- the pooling this PR exists to prevent, spelled by the
+    writer itself.
+    """
+    for bad in ('*', '', 'o001', 'nrcb', '00a'):
+        if bad == '':
+            assert obs_token('10678', bad) == ''      # no field -> no token
+            continue
+        with pytest.raises(naming.ObservationFieldError):
+            obs_token('10678', bad)
+        with pytest.raises(naming.ObservationFieldError):
+            naming.merged_catalog_obs_token('10678', bad)
+
+
+def test_an_unpadded_field_is_normalised_to_the_spelling_readers_expect():
+    """``naming.OBS_TOKEN_PATTERN`` is ``o\\d{3}``; ``_o1`` is skipped by every
+    reader of the token, so the writer must not produce it."""
+    assert obs_token('10678', '1') == '_o001'
+    assert obs_token('2211', '23') == '_o023'
+    assert naming.merged_catalog_obs_token('10678', '42') == '_o042'
+    assert naming.observation_field_token('002-998') == '002-998'
+    # the registered spellings are unchanged
+    assert obs_token('2211', '023') == '_o023'
+    assert obs_token('10678', '139') == '_o139'
+
+
+# ---------------------------------------------------------------------------
+# the naming rules the manual pipeline reads its own products back with
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize('proposal, field, filt, module, expected', [
+    # 10678: the module slot carries the token, so the END slot must not
+    ('10678', '001', 'f212n', 'nrcblong', ('', '')),
+    # gc2211: vetted AND combined are per-pointing
+    ('2211', '023', 'f200w', 'nrcb', ('_o023', '_o023')),
+    # MIRI multi-obs (cloudef): vetted per obs, combined pooled
+    ('2092', '005', 'f770w', 'mirimage', ('_o005', '')),
+    # single-obs NIRCam: neither
+    ('2221', '001', 'f182m', 'nrca', ('', '')),
+    ('1182', '004', 'f200w', 'merged', ('', '')),
+])
+def test_vetted_and_combined_obs_tokens(proposal, field, filt, module,
+                                        expected):
+    """The end-slot tokens on the vetted/combined names.
+
+    A doubled token (module slot AND end slot) names a file the merge never
+    wrote, so the m7 seed reader finds no confirmed m6 and ``merge_daophot``
+    finds no basic catalogs.
+    """
+    assert naming.vetted_obs_tokens(proposal, field, filtername=filt,
+                                    module=module) == expected
+
+
+def test_merge_field_is_passed_only_for_per_obs_merged_proposals():
+    """gc2211 pools its five pointings into one merged catalog by design; a
+    field would scope that away."""
+    assert naming.merge_field_for_proposal('10678', '001') == '001'
+    assert naming.merge_field_for_proposal('2211', '023') is None
+    assert naming.merge_field_for_proposal('2221', '001') is None
+    assert naming.merge_field_for_proposal('10678', None) is None
+
+
+@pytest.mark.parametrize('proposal, field, module_slot', [
+    ('10678', '001', 'nrcblong_o001'),
+    ('10678', '139', 'nrcblong_o139'),
+    ('7213', '001', 'nrcblong_j7213'),
+    ('6778', '001', 'nrcblong_j6778'),
+    ('2211', '023', 'nrcblong'),
+    ('2221', '001', 'nrcblong'),
+])
+def test_merged_catalog_path_spells_the_module_slot_token(proposal, field,
+                                                          module_slot):
+    """What the manual pipeline reads back at every phase.
+
+    ``merge_individual_frames`` writes this name; a reader that drops the token
+    reads a file the writer never wrote (FileNotFoundError at best, another
+    tile's catalog at worst).
+    """
+    from jwst_gc_pipeline.photometry.cataloging import merged_catalog_path
+    path = merged_catalog_path('/bp', 'm5', 'nrcblong', 'F212N',
+                               proposal, field, resbgsub=True)
+    assert path == (f'/bp/catalogs/f212n_{module_slot}_indivexp_merged'
+                    f'_resbgsub_m5_dao_basic.fits')
+
+
+def test_merged_catalog_path_matches_what_the_merge_writes(tmp_path,
+                                                           monkeypatch):
+    """Reader and writer on one tile, through the real merge.
+
+    The two spellings are built by different modules; this is the assertion
+    that keeps them one contract.
+    """
+    from jwst_gc_pipeline.photometry.cataloging import merged_catalog_path
+    (tmp_path / 'catalogs').mkdir()
+    _write_perframe(tmp_path, '001')
+    monkeypatch.setattr(MC, 'combine_singleframe', _stub_combine([]))
+    MC.merge_individual_frames(module='nrcblong', filtername='f480m',
+                               progid='10678', method='dao', suffix='_basic',
+                               target='gc-treasury', basepath=str(tmp_path),
+                               iteration_label='m2', field='001',
+                               do_replace_saturated=False)
+    assert os.path.exists(merged_catalog_path(
+        str(tmp_path), 'm2', 'nrcblong', 'f480m', '10678', '001'))
+
+
+# ---------------------------------------------------------------------------
+# production wiring: the call sites that decide which observation is used
+# ---------------------------------------------------------------------------
+
+def _call_kwarg(module_path, func_name, kwarg, inside=None):
+    """The AST node passed as ``kwarg`` to the single ``func_name`` call."""
+    import ast
+    tree = ast.parse(open(module_path).read())
+    scope = tree
+    if inside is not None:
+        scope = next(n for n in ast.walk(tree)
+                     if isinstance(n, ast.FunctionDef) and n.name == inside)
+    calls = [n for n in ast.walk(scope)
+             if isinstance(n, ast.Call)
+             and getattr(n.func, 'attr', getattr(n.func, 'id', None))
+             == func_name]
+    assert len(calls) == 1, f'{func_name}: {len(calls)} call sites'
+    for kw in calls[0].keywords:
+        if kw.arg == kwarg:
+            return kw.value
+    raise AssertionError(f'{func_name}(...) passes no {kwarg}=')
+
+
+def _is_call_to(node, name):
+    import ast
+    return (isinstance(node, ast.Call)
+            and getattr(node.func, 'attr', getattr(node.func, 'id', None))
+            == name)
+
+
+def test_the_manual_merge_is_called_with_this_runs_observation():
+    """The merge decides the merged catalog's name from ``field``.
+
+    With ``field=None`` a 10678 merge is refused outright, and every reader
+    downstream spells a token nothing wrote; the refusal is loud but nothing
+    else pins the call site, so pin it here.
+    """
+    import jwst_gc_pipeline.photometry.cataloging as C
+    node = _call_kwarg(C.__file__, 'merge_individual_frames', 'field',
+                       inside='run_manual_pipeline')
+    assert _is_call_to(node, 'merge_field_for_proposal'), (
+        'the manual merge no longer takes its field from '
+        'naming.merge_field_for_proposal')
+
+
+def test_the_cutout_merge_is_called_with_the_RESOLVED_field():
+    """``options.field`` is None whenever ``--field`` was omitted, and the
+    cutout merge sits inside a print-and-continue except, so the refusal that
+    field-lessness triggers degrades to one printed line."""
+    import ast
+    import jwst_gc_pipeline.photometry.crowdsource_catalogs_long as L
+    tree = ast.parse(open(L.__file__).read())
+    assigns = [n for n in ast.walk(tree)
+               if isinstance(n, ast.Assign)
+               and any(getattr(t, 'id', None) == '_merge_field'
+                       for t in n.targets)]
+    assert len(assigns) == 1, assigns
+    value = assigns[0].value
+    assert _is_call_to(value, 'merge_field_for_proposal'), ast.dump(value)
+    assert [getattr(a, 'id', None) for a in value.args][-1] == 'field', (
+        'the cutout merge reads options.field (the raw CLI value) rather than '
+        'the resolved field')
+
+
+def test_merge_daophot_is_called_with_the_running_proposal():
+    """``merge_daophot`` derives the per-obs merged token from ``progid``;
+    without it the token comes from the field registry, which hands 10678's
+    convention to whatever proposal the target registers first."""
+    import jwst_gc_pipeline.photometry.cataloging as C
+    node = _call_kwarg(C.__file__, 'merge_daophot', 'progid')
+    assert getattr(node, 'id', None) == 'proposal_id', (
+        'merge_daophot is no longer told which proposal is running')

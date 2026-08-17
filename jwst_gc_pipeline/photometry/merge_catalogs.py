@@ -2114,6 +2114,13 @@ def load_satstar_catalog(filtername, target='brick',
     # phantoms, ~2600 rows each) -- which ballooned the consolidated satstar
     # catalog ~40x (38764 vs ~150 real) and corrupted the daophot merge via
     # near-sat flagging.  See project_miri_partialsat_divot.
+    # TODO(#416): NOT obs-scoped.  All of a program's observations share this
+    # one {FILTER}/pipeline directory, so an obs-scoped merged catalog still
+    # takes every observation's saturated stars through here, and the
+    # consolidated cache below is written under one name per filter.  The
+    # per-exposure names DO carry the token (`..._o{obs}_crf_..._m<N>_
+    # satstar_catalog.fits`), so this is scopable once the #416 layout decision
+    # says whether tiles share a tree at all.
     _all_sat = sorted(glob.glob(f'{basepath}/{filtername.upper()}/pipeline/*satstar_catalog.fits'))
     _tok = re.compile(r'_m\d+_satstar_catalog\.fits$')
     fallback = [f for f in _all_sat if _tok.search(os.path.basename(f))]

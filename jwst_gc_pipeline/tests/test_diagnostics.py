@@ -425,11 +425,71 @@ def test_perfilter_regex_matches_proposal_tokened_module():
 
 def test_perfilter_regex_matches_obs_tokened_module():
     """A per-obs-merged proposal (10678) tags the module slot with _o<field>;
-    without it the inventory cannot see a gc-treasury tile's merged catalog."""
+    without it the inventory cannot see a gc-treasury tile's merged catalog.
+
+    The observation is captured on its own: it names a mosaic TILE, and a tile
+    modelled as a module makes 139 of them look like 139 detector modules.
+    """
     m = inv_mod._PERFILTER_RE.match(
         'f212n_nrcblong_o042_indivexp_merged_resbgsub_m6_dao_basic.fits')
     assert m is not None
-    assert m.group('module') == 'nrcblong_o042'
+    assert m.group('module') == 'nrcblong'
+    assert m.group('obs') == '042'
+
+
+def test_tiles_of_one_module_are_not_reported_as_missing_modules(catdir):
+    """gc-treasury's 139 tiles share one tree and one module.
+
+    With the observation folded into the module group, every other tile reads
+    as a module the write-up did not combine: three tiles produced a "covers
+    part of the field only" note naming the other two.
+    """
+    for obs in ('001', '002', '042'):
+        _touch(os.path.join(
+            catdir,
+            f'f212n_nrcblong_o{obs}_indivexp_merged_resbgsub_m6_dao_basic.fits'))
+    assert inv_mod._module_siblings(catdir, 'f212n', 'nrcblong') == set()
+
+
+def test_crossband_regex_matches_an_observation_scoped_catalog():
+    """``merge_daophot`` appends ``_o<obs>`` after the stage (gc2211's
+    per-pointing m7, brick's per-proposal m8 copies).  Without the optional
+    group 18 of the 61 cross-band catalogs on disk are invisible."""
+    for name, obs in (
+            ('basic_merged_indivexp_photometry_tables_merged_resbgsub_m7_o023'
+             '.fits', '023'),
+            ('basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_dedup'
+             '_o004.fits', '004'),
+            ('basic_merged_indivexp_photometry_tables_merged_resbgsub_m7.fits',
+             None)):
+        m = inv_mod._CROSSBAND_RE.match(name)
+        assert m is not None, name
+        assert m.group('obs') == obs, name
+
+
+def test_crossband_prefers_the_all_observation_product(catdir):
+    """The write-up describes the FIELD, so one tile's catalogue must not win
+    on mtime over the pooled product beside it."""
+    pooled = 'basic_merged_indivexp_photometry_tables_merged_resbgsub_m7.fits'
+    _touch(os.path.join(catdir, pooled))
+    for obs in ('023', '049'):
+        _touch(os.path.join(
+            catdir,
+            f'basic_merged_indivexp_photometry_tables_merged_resbgsub_m7_o'
+            f'{obs}.fits'))
+    path, _match = inv_mod._best(catdir, inv_mod._CROSSBAND_RE)
+    assert os.path.basename(path) == pooled
+
+
+def test_an_observation_scoped_catalog_is_still_found_when_it_is_all_there_is(
+        catdir):
+    """A gc-treasury tile writes no pooled sibling at all."""
+    name = ('basic_merged_indivexp_photometry_tables_merged_resbgsub_m7_o042'
+            '.fits')
+    _touch(os.path.join(catdir, name))
+    path, match = inv_mod._best(catdir, inv_mod._CROSSBAND_RE)
+    assert os.path.basename(path) == name
+    assert int(match.group('stage')) == 7
 
 
 def test_module_siblings_flags_partial_field_coverage(catdir):

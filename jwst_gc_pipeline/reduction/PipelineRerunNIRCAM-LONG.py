@@ -409,8 +409,12 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
         # Restrict to the observation under reduction (issue #416): all 139
         # gc-treasury tiles share FILTERS='F212N;F480M', so the filter mask
         # alone selects every released observation and each fresh tile would
-        # download the whole program's asn products.  Single-obs fields pass
-        # trivially (every row already spells this observation).
+        # download the whole program's asn products.  The table is queried per
+        # PROPOSAL, so this narrows the two-field proposals as well (2221 =
+        # brick o001 + cloudc o002, 3958 = brick + sickle, 2045 = arches +
+        # quintuplet): a brick reduce stops pulling the other field's asn
+        # products into brick's output_dir.  The asn glob below is already
+        # -o{field}-scoped, so the narrowing removes download volume.
         msk &= observation_scope_mask(np.array(obs_table['obs_id']),
                                       proposal_id, field)
         data_products_by_obs = Observations.get_product_list(obs_table[msk])

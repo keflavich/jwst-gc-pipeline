@@ -17,7 +17,8 @@ mosaic
 Higher merge stage wins, then ``resbgsub`` over the plain token, then the
 ``merged`` module over a single-module product, then a per-proposal
 ``_j<proposal>`` collision-fix variant over the un-tokenized collision
-product, then mtime.  Files matching ``_DERIVATIVE_RE`` (``_qualcuts``,
+product, then an all-observation product over one scoped to a single
+observation (``_o<obs>``), then mtime.  Files matching ``_DERIVATIVE_RE`` (``_qualcuts``,
 ``_vetted``, ``_allcols``, ``_i2dseed``, ...) are post-hoc derivatives and
 are skipped.  ``_dedup`` is *not* in that list: it is a merge-stage product,
 matched by ``_CROSSBAND_RE`` and *preferred* at m8 (the m8 de-duplication is
@@ -35,19 +36,33 @@ _DERIVATIVE_RE = re.compile(
     r'_(qualcuts|vetted|allcols|i2dseed|nirspeccand|filtered|seshat|partial'
     r'|abfix|ok\d|backup)', re.IGNORECASE)
 
+# The cross-band name can END with an observation token: ``merge_daophot``
+# appends ``_o<obs>`` (gc2211's per-pointing m7, brick's per-proposal m8 copies)
+# after the stage and any ``_dedup``.  Without the optional group those files do
+# not match at all -- 18 of the 61 cross-band catalogs on disk today, including
+# every gc2211 per-observation m7 -- so the reader silently picks the pooled
+# product beside them, or nothing.
 _CROSSBAND_RE = re.compile(
     r'^basic_(?P<module>[a-z0-9-]+)_indivexp_photometry_tables_merged'
-    r'(?P<resbg>_resbgsub)?(?:_m(?P<stage>\d+))?(?P<dedup>_dedup)?\.fits$')
+    r'(?P<resbg>_resbgsub)?(?:_m(?P<stage>\d+))?(?P<dedup>_dedup)?'
+    r'(?:_o(?P<obs>[0-9-]+))?\.fits$')
 
 # The module token can carry a per-proposal ``_j<proposal>`` suffix (e.g.
-# ``nrca_j7213``), the products written by the shared-filter-collision fix, or
-# a per-observation ``_o<field>`` one (``nrcblong_o042``), written by the
-# per-obs-merged proposals (10678/gc-treasury; naming.PER_OBS_MERGED_PROPOSALS).
-# Without those optional groups the module group ``[a-z0-9-]+`` cannot match
-# the underscore and those products are invisible, leaving only the
-# un-tokenized collision product on disk to be picked.
+# ``nrca_j7213``), the products written by the shared-filter-collision fix.
+# Without that optional group the module group ``[a-z0-9-]+`` cannot match the
+# underscore and those products are invisible, leaving only the un-tokenized
+# collision product on disk to be picked.
+#
+# The per-observation ``_o<field>`` token the per-obs-merged proposals write
+# (10678/gc-treasury; naming.PER_OBS_MERGED_PROPOSALS) sits in the same slot but
+# is captured SEPARATELY: it names a mosaic TILE, not a detector module, and
+# folding it into the module group makes 139 tiles look like 139 modules --
+# ``_module_siblings`` would then report tile 002's catalog as covering "part of
+# the field only", listing the other 138 tiles as modules that were not
+# combined.
 _PERFILTER_RE = re.compile(
-    r'^(?P<filt>f\d{3}[a-z]\d?)_(?P<module>[a-z0-9-]+(?:_j\d+|_o\d{3})?)_indivexp_merged'
+    r'^(?P<filt>f\d{3}[a-z]\d?)_(?P<module>[a-z0-9-]+(?:_j\d+)?)'
+    r'(?:_o(?P<obs>\d{3}))?_indivexp_merged'
     r'(?P<resbg>_resbgsub)?_m(?P<stage>\d+)_dao_basic\.fits$')
 
 
@@ -61,7 +76,12 @@ def _rank(match, path):
     # Prefer a per-proposal collision-fix variant over the un-tokenized
     # collision product it was written to replace.
     jtok = 1 if '_j' in (module or '') else 0
-    return (stage, dedup, resbg, merged, jtok, os.path.getmtime(path))
+    # An observation-scoped product covers ONE observation; the un-tokenized
+    # sibling beside it pools them all and is what a field write-up describes.
+    # Without this term the pick falls through to mtime, so re-running one tile
+    # would make that tile the whole field's catalogue.
+    pooled = 0 if match.groupdict().get('obs') else 1
+    return (stage, dedup, resbg, merged, jtok, pooled, os.path.getmtime(path))
 
 
 def _module_siblings(catdir, filt, chosen_module):

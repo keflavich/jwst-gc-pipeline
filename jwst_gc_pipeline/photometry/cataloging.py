@@ -39,6 +39,7 @@ from astropy.modeling.fitting import LevMarLSQFitter
 from jwst_gc_pipeline.photometry.naming import (
     _iteration_token, _bgsub_token,
     MULTIOBS_PROPOSALS, merged_catalog_obs_token,
+    merge_field_for_proposal, vetted_obs_tokens,
     residual_to_smoothed_bg_i2d, smoothed_bg_to_detection_i2d, vetted_to_i2dseed)
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS, mopt
 # Lives in atomic_io with the rest of the shared-file tools; imported here
@@ -3208,7 +3209,16 @@ def _satstar_reconciled_path(cut_bp, module, filt):
     """On-disk persistence for m12's cross-frame-reconciled out-of-FOV satstar
     fluxes (``satstar_overrides``) + drops (``satstar_drops``).  In a monolithic
     run these live only in memory and are forwarded to m3..m7; persisting them
-    lets a per-frame m3..m7 fan-out worker (a fresh process) reconstruct them."""
+    lets a per-frame m3..m7 fan-out worker (a fresh process) reconstruct them.
+
+    TODO(#416): NOT obs-scoped.  Every observation under one basepath writes
+    this one name, so two tiles of a per-obs-merged program running together
+    overwrite each other's sidecar and a fresh m3..m7 worker reconstructs
+    whichever tile wrote last -- another tile's out-of-FOV satstar flux
+    overrides applied to this tile's stars.  Left shared with the rest of the
+    per-run scratch pending the #416 layout decision (Option A gives each tile
+    its own tree and the question disappears).
+    """
     return (f'{cut_bp}/catalogs/{filt.lower()}_{module}_'
             f'satstar_reconciled_m12.fits')
 
@@ -3694,11 +3704,15 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
       from nrcb alone and PASS, which is worse than the duplicate it avoids.
       A catalog that SPELLS a different observation is still dropped here: the
       registry's count is what this branch cannot trust (0 for an unregistered
-      field, 1 for a wildcard obsid list -- both of which program 10678's
+      field, and 1 for a wildcard obsid list wherever ``fields.py`` still reads
+      ``('*',)`` as one observation -- both of which program 10678's
       gc-treasury returns while 139 tiles share one tree), and stripping the
       token to compare identities would collapse tile 001's and tile 002's
       copies of the same ``(visit, vgroup, exp)`` onto one key and keep tile
-      001's.  Only applied when this run writes a token of its own.
+      001's.  Only applied when this run writes a token of its own.  The
+      shared branch above drops a differing token too, so a registry that
+      counts the wildcard as several (``fields.WILDCARD_OBSERVATION_COUNT``)
+      reaches the same outcome by the other route.
 
     This narrows the checkpoint's input to one observation, which is what the
     visit consensus is defined over.  A field deliberately pooling two
@@ -3713,9 +3727,10 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
     # spellings risks a DuplicateExposureError, which is loud and recoverable,
     # while dropping them risks a consensus quietly built from half the
     # detectors.  A name that SPELLS a foreign observation is dropped either
-    # way -- see the single-observation branch, which the registry cannot be
-    # trusted to keep 10678's 139 tiles out of (0 unregistered, 1 for a
-    # wildcard obsid list).
+    # way -- both branches do it, which is what keeps 10678's 139 tiles apart
+    # whatever the registry answers (0 unregistered, 1 where a wildcard obsid
+    # list reads as one observation, several where it reads as
+    # `fields.WILDCARD_OBSERVATION_COUNT`).
     shared = n_obs > 1
     drop = []
     foreign_token = []
@@ -3861,15 +3876,18 @@ def _drop_foreign_obs_duplicates(fns, obs_token, filt, merge_label, module,
         # A name that SPELLS a different observation is foreign whatever the
         # registry's count says -- and the count is exactly what cannot be
         # trusted here.  `filter_observation_count` returns 0 for an
-        # unregistered field and 1 for a field whose obsids are a wildcard
-        # (`{'nircam': '*'}` loads as a one-element tuple), so program 10678's
+        # unregistered field, and 1 for a field whose obsids are a wildcard
+        # wherever `('*',)` still reads as one observation, so program 10678's
         # gc-treasury lands in THIS branch with 139 tiles in one tree.  The
         # identity above strips the token, so tile 001's and tile 002's
         # `_o001`/`_o002` copies of `visit001_vgroup10678001_exp00001` collapse
         # onto one identity and `sorted(group)[0]` keeps o001 -- tile 002's m2
         # visit consensus built from tile 001's exposures, at the CORRECTING
-        # stage (rewrites the offsets table, stale-tags im0, stops the run), so
-        # the tile is "corrected" by the inter-tile separation.
+        # stage: m2 rewrites the per-proposal table of per-frame astrometric
+        # offsets, renames the mosaics those offsets were measured on to
+        # `*_im0_badastrom.fits` so nothing downstream reads them, and stops
+        # the run for regeneration.  So the tile is "corrected" by the
+        # inter-tile separation.
         #
         # Drop the differing tokens FIRST, and only when this run writes a
         # token of its own: with `token == ''` there is nothing to compare
@@ -4569,6 +4587,35 @@ def select_resumable_frames(frame_args, marker_dir, filt, phase, merge):
     return todo, resumed_ok, resumed_nooverlap
 
 
+def merged_catalog_path(cut_bp, label, module, filt, proposal_id, field,
+                        desat=False, bgsub=False, resbgsub=False, blur=False):
+    """The per-filter merged catalog name for one phase, as the merge WRITES it.
+
+    The manual pipeline reads its own merge back at every phase (the m3..m6
+    seeds, the vetting step, the frozen-stage discriminator), so this spelling
+    and ``merge_individual_frames``' output name are one contract.  Two tokens
+    can sit in the module slot:
+
+    * ``_j{proposal}`` -- ngc6334 shares one target directory between proposals
+      7213 and 6778 with shared filters (F200W/F470N), so the merge writes
+      per-proposal merged catalogs;
+    * ``_o{field}`` -- ``naming.merged_catalog_obs_token``, the per-obs-merged
+      proposals (10678/gc-treasury), whose 139 tiles share one tree.
+
+    Every other target gets both empty and the unchanged untokened name.  At
+    module level (rather than inside ``run_manual_pipeline``) so a test can call
+    it: these tokens decide which file each phase reads, and a reader spelling a
+    name the writer never wrote finds nothing.
+    """
+    _jtok = f'_j{proposal_id}' if str(proposal_id) in ('7213', '6778') else ''
+    _otok = merged_catalog_obs_token(proposal_id, field)
+    _desat = '_unsatstar' if desat else ''
+    _bgsub = ('_bgsub' if bgsub else '') + ('_resbgsub' if resbgsub else '')
+    _blur = '_blur' if blur else ''
+    return (f'{cut_bp}/catalogs/{filt.lower()}_{module}{_jtok}{_otok}'
+            f'_indivexp_merged{_desat}{_bgsub}{_blur}_{label}_dao_basic.fits')
+
+
 def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         target, field, basepath, crowdsource_default_kwargs,
                         bg_boxsizes):
@@ -4635,27 +4682,14 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
               f"(override with --manual-struct-noise-x/-y).", flush=True)
 
     # 10678/gc-treasury: 139 tiles share this tree, so the per-filter MERGED
-    # catalogs are per-observation -- the merge is called with the field passed
-    # through and bakes ``_o{field}`` after the module
-    # (naming.merged_catalog_obs_token).  '' for every other proposal.
-    _merged_otok = merged_catalog_obs_token(proposal_id, field)
-
+    # catalogs are per-observation.  The spelling (both module-slot tokens)
+    # lives in the module-level ``merged_catalog_path`` so a test can call it.
     def _merged_path(label, module, filt, resbgsub):
-        desat = '_unsatstar' if options.desaturated else ''
-        bgsub = ('_bgsub' if options.bgsub else '') + ('_resbgsub' if resbgsub else '')
-        blur_ = '_blur' if options.blur else ''
-        # ngc6334 shares its target dir between proposals 7213+6778 with shared
-        # filters (F200W/F470N), so merge_individual_frames writes PER-PROPOSAL
-        # merged catalogs tagged ``_j{proposal}`` (see merge_catalogs.py).  Match
-        # that token here so the manual pipeline reads back the file it wrote;
-        # every other target uses the empty token (unchanged).  Per-obs-MERGED
-        # proposals (10678/gc-treasury) tag the same slot ``_o{field}``: the
-        # merge is called with the field passed through, so its ``out_obs_``
-        # bakes the obs into the merged name (_merged_otok, computed once
-        # below the phase setup).
-        _jtok = f'_j{proposal_id}' if str(proposal_id) in ('7213', '6778') else ''
-        return (f'{cut_bp}/catalogs/{filt.lower()}_{module}{_jtok}{_merged_otok}_indivexp_merged'
-                f'{desat}{bgsub}{blur_}_{label}_dao_basic.fits')
+        return merged_catalog_path(cut_bp, label, module, filt,
+                                   proposal_id, field,
+                                   desat=options.desaturated,
+                                   bgsub=options.bgsub, resbgsub=resbgsub,
+                                   blur=options.blur)
 
     def _data_i2d_path(module, filt):
         return (f'{cut_bp}/{filt}/pipeline/jw0{proposal_id}-o{field}_t001_'
@@ -4986,32 +5020,15 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
             for filt in filternames:
                 prev_seed = None
                 resbg_path = None
-                # Vetted catalog is PER-OBS tokened (_o{field}) -- each obs vetted
-                # vs its own data_i2d, then combined into the un-tokened all-obs
-                # catalog (see the vet + combine block below).  Enabled for:
-                #   - MIRI multi-obs targets (cloudef obs2+5), and
-                #   - gc2211 (prop 2211): 5 NIRCam pointings share ONE basepath and
-                #     reuse visit/vgroup/exp tuples; without per-obs vetting the
-                #     all-obs merge would pool every obs and a single vetting pass
-                #     would carry sources outside each obs's footprint.  Pairs with
-                #     the _o{field} per-frame catalog token + the _o* all-obs merge
-                #     glob in merge_catalogs (see obs_token()).
-                # Single-obs NIRCam targets keep _vtok='' (unchanged behavior).
-                _miri_field = (module == 'mirimage'
-                               or _L._instrument_from_filter(filt) == 'MIRI')
-                _multiobs = str(proposal_id) in MULTIOBS_PROPOSALS
-                _vtok = f'_o{field}' if (_miri_field or _multiobs) else ''
-                # gc2211: the COMBINED (post-vet) catalog is also per-obs (no cross-
-                # obs vstack).  MIRI: combined stays un-tokened (all-obs).
-                _combsuf = f'_o{field}' if _multiobs else ''
-                # Per-obs-MERGED proposals (10678): the merged name already
-                # carries ``_o{field}`` after the module (_merged_otok), so an
-                # end-slot token would double it.  The vetted/combined names
-                # inherit the module-slot token instead; the m7 seed reader and
-                # merge_daophot's input glob spell them the same way.
-                if _merged_otok:
-                    _vtok = ''
-                    _combsuf = ''
+                # End-slot observation tokens on the vetted (_vtok) and
+                # combined (_combsuf) catalog names: MIRI multi-obs targets and
+                # gc2211 vet per observation, the per-obs-MERGED proposals
+                # (10678) inherit the module-slot token instead, and everything
+                # else gets ''.  The rule lives in naming.vetted_obs_tokens so a
+                # test can call it; its docstring carries each case.
+                _vtok, _combsuf = vetted_obs_tokens(proposal_id, field,
+                                                    filtername=filt,
+                                                    module=module)
                 # m3..m6 seed = vetted previous catalog UNION daofind on a
                 # progressively cleaner i2d (per PSFPhotometryPlan2026-06-09):
                 #   iter3(m3): raw i2d                        fit RAW frames
@@ -5417,7 +5434,7 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                     # other proposal keeps field=None: gc2211's all-obs pooling
                     # (_o* glob, untokened output) and the single-obs targets'
                     # untokened names are unchanged.
-                    field=(field if _merged_otok else None),
+                    field=merge_field_for_proposal(proposal_id, field),
                     fwhm_basepath=basepath,
                     # parallelize the otherwise-serial dense-field merge: pass the
                     # worker count so combine auto-spatial-chunks when the source
@@ -5585,7 +5602,8 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                 if _vtok:
                     _combine_per_obs_vetted(
                         vetted_path, merged_path, combined_vetted_path,
-                        this_obs_only=('-' in str(field) or _multiobs),
+                        this_obs_only=('-' in str(field)
+                                       or str(proposal_id) in MULTIOBS_PROPOSALS),
                         label=f'manual [{phase}]')
 
                 # build vetted mergedcat residual i2d, smooth -> bg for next phase

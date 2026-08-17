@@ -200,7 +200,7 @@ class CappedSourceGrouper:
 from jwst_gc_pipeline.photometry.naming import (
     _CHUNK_TOKEN_RE, _chunk_token, _strip_chunk, _iteration_token, _bgsub_token,
     MIRI_FILTERS, MULTIOBS_PROPOSALS,
-    PER_OBS_MERGED_PROPOSALS as _PER_OBS_MERGED_PROPOSALS,
+    observation_field_token, merge_field_for_proposal,
     _instrument_from_filter, _inst_token, _instrument_override,
     residual_to_smoothed_bg_i2d, residual_to_model_i2d, residual_to_infilled_i2d,
 )
@@ -1030,9 +1030,15 @@ def obs_token(proposal_id, field):
     ``{filter}/pipeline/`` already carry ``-o{field}`` and are unaffected.
     Other proposals are single-obs-per-basepath and get the empty token, so
     their filenames and existing products are unchanged.
+
+    ``field`` goes through ``naming.observation_field_token``, which normalises
+    ``'1'`` to the ``'001'`` spelling every reader of the token expects and
+    refuses a field that does not name an observation -- a program registered
+    with the wildcard obsid and run without ``--field`` stops here rather than
+    writing a literal ``_o*`` into every catalog name it produces.
     """
     if str(proposal_id) in MULTIOBS_PROPOSALS and field not in (None, ''):
-        return f'_o{field}'
+        return f'_o{observation_field_token(field)}'
     # ngc6334's two proposals (7213, 6778) share a target dir, filters, obs
     # number AND (visit, vgroup, exp) tuples, so their per-frame catalog names
     # collide and the second run overwrites the first.  Tag by proposal id.
@@ -5061,9 +5067,12 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                     # merged catalog.  Passed only for those proposals: gc2211
                     # pools every observation into one untokened cutout merged
                     # catalog by design, and a field would scope that away.
-                    _merge_field = (getattr(options, 'field', None)
-                                    if str(proposal_id) in _PER_OBS_MERGED_PROPOSALS
-                                    else None)
+                    #
+                    # `field` is the RESOLVED value (the registry default when
+                    # --field was omitted), not `options.field`: with --field
+                    # omitted the raw option is None, which is the field-less
+                    # call this pass-through exists to prevent.
+                    _merge_field = merge_field_for_proposal(proposal_id, field)
                     for _mname, _msuffix in _merge_methods:
                         try:
                             _merge_catalogs.merge_individual_frames(
