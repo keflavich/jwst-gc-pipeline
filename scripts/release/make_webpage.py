@@ -980,7 +980,8 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
     out.append("</table>")
 
     out.append(render_exposures(field, exposures, base, app_link, multi))
-    out.append(render_astrometry(field, files, base))
+    out.append(render_astrometry(field, files, base,
+                                 manifest_built=manifest.get('built')))
 
     out.append("</main>")
     out.append(footer())
@@ -1035,11 +1036,12 @@ def render_exposures(field, exposures, base, app_link, multi):
     out.append(
         f"<p class=muted>The <b>{len(exposures)} individual exposures</b> "
         f"({human_size(total)}) the mosaics above were drizzled from, in the "
-        f"original detector frame -- full GWCS distortion chain, this pipeline's "
-        f"astrometric solution, before resampling. Each group holds exactly the "
-        f"frames behind the matching mosaic: the list is read from that mosaic's "
-        f"own association, not reconstructed. Use these to re-drizzle, re-fit, or "
-        f"chase a per-exposure systematic.</p>")
+        f"original detector frame, carrying the full distortion solution and this "
+        f"pipeline's astrometry as it stood before the images were resampled onto "
+        f"a sky grid. Each group holds exactly the frames behind the matching "
+        f"mosaic, taken from the record that mosaic itself carries of what went "
+        f"into it. Use these to re-drizzle, re-fit, or chase a per-exposure "
+        f"systematic.</p>")
     out.append(
         "<p class=muted>The last detector-frame product differs by field and "
         "filter: <code>_crf</code> is the Stage-3 outlier/CR-flagged frame where "
@@ -1085,7 +1087,7 @@ def render_exposures(field, exposures, base, app_link, multi):
     return "\n".join(out)
 
 
-def render_astrometry(field, files, base):
+def render_astrometry(field, files, base, manifest_built=None):
     """What solution these products are on, and the frozen table that defines it.
 
     Rendered for EVERY field, including the ones with nothing to report. A page
@@ -1107,6 +1109,18 @@ def render_astrometry(field, files, base):
     # release it would attach to. A version that shipped no table says so.
     if record.get("state") == "table" and entry is None:
         record = dict(record, state="table-not-shipped")
+    # The TIE half was still read live and unconditionally, so a v1.0-2026.06
+    # page said it described nothing about the shipped solution and then printed
+    # eight rows of accuracy for it, two of them measured two months after that
+    # version was cut. A version that ships no table has nothing to attach ties
+    # to; and a tie measured after the release was built describes a later
+    # solution, not this one.
+    built = str(manifest_built or "")
+    ties = {f: t for f, t in (record.get("ties") or {}).items()
+            if not (built and str(t.get("date") or "") > built)}
+    if record.get("state") == "table-not-shipped":
+        ties = {}
+    record = dict(record, ties=ties)
     out = ["<h2>Astrometric provenance</h2>"]
     state = record.get("state")
     if state == "unregistered":
@@ -1172,13 +1186,14 @@ def render_astrometry(field, files, base):
                 f"</td></tr>")
         out.append("</table>")
         out.append(
-            "<p class=muted>The two references disagree, and which one to believe "
-            "is decided per filter by the <b>contrast</b> of the measurement, not "
-            "by a fixed preference &mdash; a sparse reference can have too few "
-            "stars to place a peak at all. The bolded value is the one to quote; "
-            "&ldquo;neither&rdquo; means no measurement here reaches the contrast "
-            "floor and none should be cited. Neither column is a per-star error "
-            "bar; both are bulk offsets.</p>")
+            "<p class=muted>Where the two references differ, which one to believe "
+            "is decided per filter by the <b>contrast</b> of the measurement "
+            "rather than by a fixed preference &mdash; a sparse reference can "
+            "have too few stars to place a peak at all. The bolded value is the "
+            "one to quote. &ldquo;neither&rdquo; means the measurement is either "
+            "too weak to cite or too large to be an accuracy figure, and the "
+            "reason says which. Both columns are bulk offsets; a per-star error "
+            "bar is a separate quantity.</p>")
     else:
         out.append("<p class=muted>No reference-tie measurement is recorded for this "
                    "field, so no astrometric accuracy is claimed here.</p>")

@@ -82,6 +82,15 @@ from pathlib import Path
 #: recommendation.
 MIN_TIE_CONTRAST = 15.0
 
+#: A bulk tie this far off is a finding, not an accuracy figure.  The contrast
+#: floor filters CONFIDENCE and says nothing about MAGNITUDE, so a confident
+#: measurement of a large offset passed straight through as the value to quote:
+#: sgrb2 F300M publishes 127.96 mas at high contrast, with seven more sgrb2
+#: bands at 48-50 and two sgra bands near 45.  This repo refuses to stage a
+#: catalog more than `FRAME_TOL_MAS` = 15 mas off the Gaia-tied refcat, so
+#: recommending 128 mas without remark contradicts the project's own gate by 8x.
+MAX_QUOTABLE_TIE_MAS = 15.0
+
 #: Manifest category for the frozen pointing-correction table.
 ASTROMETRY_CATEGORY = "astrometry"
 
@@ -189,13 +198,33 @@ def preferred_leg(tie):
                                    ("dense", "dense_mas", "dense_contrast")):
         if off_key in tie and tie.get(con_key) is not None:
             legs.append((name, float(tie[con_key]), tie[off_key]))
+    # Identical legs are not two measurements. w51 records byte-identical
+    # `vs_sparse` and `vs_full` objects in all 11 filters -- same off, same
+    # contrast 143, same npairs -- and the page captioned them "the two
+    # references disagree", which is false for that entire field, while the
+    # choice fell to list order.
+    if len(legs) == 2 and legs[0][1] == legs[1][1] and legs[0][2] == legs[1][2]:
+        name, contrast, off = legs[0]
+        if contrast < MIN_TIE_CONTRAST:
+            return None, f"both references report the same measurement, below contrast {MIN_TIE_CONTRAST:.0f}"
+        if abs(off) > MAX_QUOTABLE_TIE_MAS:
+            return None, (f"both references report the same {off:.0f} mas offset, "
+                          f"beyond the {MAX_QUOTABLE_TIE_MAS:.0f} mas the project "
+                          f"accepts")
+        return name, f"both references report the same value (contrast {contrast:.0f})"
     usable = [leg for leg in legs if leg[1] >= MIN_TIE_CONTRAST]
     if not usable:
         best = max(legs, key=lambda l: l[1], default=None)
         return None, (f"no leg reaches contrast {MIN_TIE_CONTRAST:.0f}"
                       + (f" (best {best[0]} at {best[1]:.0f})" if best else ""))
-    name, contrast, _off = max(usable, key=lambda l: l[1])
-    return name, f"highest-contrast leg ({contrast:.0f})"
+    plausible = [leg for leg in usable if abs(leg[2]) <= MAX_QUOTABLE_TIE_MAS]
+    if not plausible:
+        closest = min(usable, key=lambda l: abs(l[2]))
+        return None, (f"every confident leg exceeds {MAX_QUOTABLE_TIE_MAS:.0f} mas "
+                      f"(closest {closest[0]} at {closest[2]:.0f} mas) -- a "
+                      f"finding, not an accuracy figure")
+    name, contrast, _off = max(plausible, key=lambda l: l[1])
+    return name, f"highest-contrast leg within tolerance (contrast {contrast:.0f})"
 
 
 def collect(field, field_cfg):

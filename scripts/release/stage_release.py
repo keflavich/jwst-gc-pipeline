@@ -1318,7 +1318,8 @@ def print_manifest(items):
 
 
 def stage(items, field, version, release_root, mode, do_checksum,
-          continuity_gate=None):
+          continuity_gate=None, allow_older=False):
+    assert_writable(version, release_root, allow_older, field)
     field_dir = field_release_dir(field, version, release_root)
     field_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1501,25 +1502,68 @@ def prune_exposure_orphans(field_dir, keep_dests):
     return removed, unexpected
 
 
-def refuse_older_version(version, release_root, allow_older):
-    """``True`` when writing into ``version`` should be refused.
+class FrozenReleaseError(RuntimeError):
+    """Writing into a release directory that already exists, without saying so."""
 
-    A published version is frozen: people cite its checksums. This was a block
-    inside ``main`` placed AFTER the ``--exposures-only`` branch returned, so
-    that path wrote into published versions without it ever running -- and did,
-    into v1.1, v1.2 and v1.3 on 2026-08-17, adding trees to four published field
-    directories and rewriting three citable manifests and checksum files.
-    Nothing was corrupted, but the guard whose entire purpose is to make
-    re-cutting a published release deliberate never fired. It is a function now
-    so that every path calls the same one.
+
+def refuse_older_version(version, release_root, allow_older, field=None):
+    """``(refuse, why)`` for writing into ``version``.
+
+    Keyed on whether THIS FIELD'S directory already exists, not on version
+    ordering.  Ordering had two holes, both real:
+
+    * ``version < max(existing)`` leaves the NEWEST published version writable
+      with no flag.  Of the four field directories written on 2026-08-17 it
+      would have stopped three; ``v1.3-2026.08/arches`` was already
+      ``max(existing)`` and stayed open, and still is.
+    * the comparison is lexicographic, so it inverts at the first two-digit
+      minor: with ``v1.9`` and ``v1.10`` on disk, ``v1.9`` (frozen) is writable
+      and ``v1.10`` (newest) is refused.
+
+    A directory holding a ``MANIFEST.json`` has been staged before, whatever its
+    version string sorts as, so re-cutting it is the deliberate act the flag is
+    for.  ``field=None`` falls back to the ordering check for callers that have
+    no field yet.
     """
+    if allow_older:
+        return False, ""
+    if field is not None:
+        manifest = Path(release_root) / version
+        cfg = FIELDS.get(field, {})
+        if cfg.get("group"):
+            manifest = manifest / cfg["group"]
+        manifest = manifest / field / "MANIFEST.json"
+        if manifest.is_file():
+            return True, (f"'{version}' already holds a staged {field} release "
+                          f"({manifest}); re-cutting it rewrites a MANIFEST, "
+                          f"README and CHECKSUMS whose checksums are cited")
     root = Path(release_root)
     existing = sorted(p.name for p in root.iterdir()
                       if p.is_dir() and p.name.startswith("v")) if root.is_dir() else []
-    return bool(existing) and version < max(existing) and not allow_older
+    if existing and version < max(existing):
+        return True, (f"'{version}' is older than the newest release on disk "
+                      f"('{max(existing)}')")
+    return False, ""
 
 
-def stage_exposures_only(field, version, release_root, from_disk=False):
+def assert_writable(version, release_root, allow_older, field=None):
+    """Raise ``FrozenReleaseError`` unless this release directory may be written.
+
+    Called by the functions that DO the writing rather than only from ``main``.
+    The guard used to live in two ``main()`` branches, so any other caller --
+    including this repo's own tests, which call ``stage_exposures_only``
+    directly -- bypassed it entirely while the docstring claimed every path went
+    through one check.
+    """
+    refuse, why = refuse_older_version(version, release_root, allow_older, field)
+    if refuse:
+        raise FrozenReleaseError(
+            f"REFUSING to write into {why}. Pass --allow-older-version if "
+            f"re-cutting it is intended.")
+
+
+def stage_exposures_only(field, version, release_root, from_disk=False,
+                         allow_older=False):
     """Add the detector-frame exposures to an ALREADY-STAGED release.
 
     Stages nothing but symlinks, and rewrites ``MANIFEST.json`` and ``README.md``
@@ -1536,6 +1580,7 @@ def stage_exposures_only(field, version, release_root, from_disk=False):
     Returns ``(field_dir, n_exposures)``, or ``(None, 0)`` when there is nothing
     to add to and no way to enumerate.
     """
+    assert_writable(version, release_root, allow_older, field)
     field_dir = field_release_dir(field, version, release_root)
     have_manifest = (field_dir / "MANIFEST.json").is_file()
     if not have_manifest and not from_disk:
@@ -1918,17 +1963,14 @@ def main(argv=None):
         # path below. Adding an exposures/ tree and an astrometry/ table to a
         # published version is still writing into it: it rewrites MANIFEST.json,
         # README.md and CHECKSUMS.sha256 of a release whose checksums are cited.
-        if refuse_older_version(args.version, args.release_root,
-                                args.allow_older_version):
-            print(f"\nREFUSING: '{args.version}' is older than the newest release "
-                  f"on disk, and a published version is frozen -- adding exposures "
-                  f"still rewrites its MANIFEST.json, README.md and "
-                  f"CHECKSUMS.sha256. Pass --allow-older-version if that is "
-                  f"intended.", file=sys.stderr)
+        try:
+            field_dir, n = stage_exposures_only(
+                args.field, args.version, args.release_root,
+                from_disk=args.exposures_from_disk,
+                allow_older=args.allow_older_version)
+        except FrozenReleaseError as err:
+            print(f"\n{err}", file=sys.stderr)
             return 2
-        field_dir, n = stage_exposures_only(args.field, args.version,
-                                            args.release_root,
-                                            from_disk=args.exposures_from_disk)
         if field_dir is None:
             return 2
         if not n:
@@ -2031,7 +2073,9 @@ def main(argv=None):
     root = Path(args.release_root)
     existing = sorted(p.name for p in root.iterdir()
                       if p.is_dir() and p.name.startswith("v")) if root.is_dir() else []
-    if refuse_older_version(args.version, args.release_root, args.allow_older_version):
+    refuse, why = refuse_older_version(args.version, args.release_root,
+                                       args.allow_older_version, args.field)
+    if refuse:
         print(f"\nREFUSING TO STAGE into '{args.version}': it is older than the newest "
               f"release on disk ('{max(existing)}'), and a published version is frozen "
               f"-- its checksums are cited. Stage into '{max(existing)}' or a new "
@@ -2206,7 +2250,8 @@ def main(argv=None):
 
     mode = "copy" if args.copy else "symlink"
     field_dir = stage(items, args.field, args.version, args.release_root,
-                      mode, not args.no_checksum, continuity_gate=continuity_gate)
+                      mode, not args.no_checksum, continuity_gate=continuity_gate,
+                      allow_older=args.allow_older_version)
     # Broken out rather than reported as one total: "222 files (mode: copy)"
     # reads as 222 frozen copies when 216 of them are symlinks that --copy did
     # not apply to, which is the one thing about this tree an operator must not

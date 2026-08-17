@@ -81,10 +81,13 @@ def test_prefers_the_crf_twin_over_the_association_member(eb, nircam_field):
 
 
 def test_falls_back_to_the_member_when_no_crf_was_written(eb, tmp_path):
-    """wd1 F150W: drizzled straight from `_cal`, no `_crf` ever produced.
+    """A mosaic with no HDRTAB whose association members have no `_crf` twin.
 
-    A rule that only ever emits `_crf` frames would ship nothing for that band
-    while its mosaic sits on the page.
+    The wd1 F150W attribution this test used to carry was wrong -- that band has
+    96 `_o001_crf` frames and its mosaic names them; the twin rule missed them
+    because the pipeline REPLACES the `_cal` suffix while the rule appended to
+    it. Kept as the association-fallback case it actually is, with no field
+    named, since the shape is real and the attribution was not.
     """
     pipe = tmp_path / 'pipeline'
     pipe.mkdir()
@@ -530,7 +533,12 @@ def test_exposures_only_preserves_built_and_the_frozen_deliverables(
     monkeypatch.setattr(sr, 'field_release_dir',
                         lambda field, version, root: field_dir)
     monkeypatch.setitem(sr.FIELDS, 'f', {'data_dir': nircam_field['root']})
-    out_dir, n = sr.stage_exposures_only('f', 'v9-test', tmp_path / 'releases')
+    # allow_older: this fixture deliberately re-cuts a staged release.  It used
+    # to pass without saying so, because the guard lived in `main()` while these
+    # tests call the writer directly -- which is how a suite ends up exercising
+    # only the unguarded path.
+    out_dir, n = sr.stage_exposures_only('f', 'v9-test', tmp_path / 'releases',
+                                         allow_older=True)
 
     assert out_dir == field_dir and n == 2
     after = json.loads((field_dir / 'MANIFEST.json').read_text())
@@ -555,8 +563,10 @@ def test_exposures_only_is_idempotent(sr, eb, tmp_path, nircam_field,
     monkeypatch.setattr(sr, 'field_release_dir',
                         lambda field, version, root: field_dir)
     monkeypatch.setitem(sr.FIELDS, 'f', {'data_dir': nircam_field['root']})
-    sr.stage_exposures_only('f', 'v9-test', tmp_path / 'releases')
-    sr.stage_exposures_only('f', 'v9-test', tmp_path / 'releases')
+    sr.stage_exposures_only('f', 'v9-test', tmp_path / 'releases',
+                            allow_older=True)
+    sr.stage_exposures_only('f', 'v9-test', tmp_path / 'releases',
+                            allow_older=True)
     after = json.loads((field_dir / 'MANIFEST.json').read_text())
     dests = [f['dest'] for f in after['files']]
     assert len(dests) == len(set(dests)) == 3      # 1 mosaic + 2 frames
@@ -921,3 +931,101 @@ def test_highest_contrast_wins_when_both_legs_clear_the_floor(ap):
                                  'dense_mas': 9.33, 'dense_contrast': 107.0})
     assert leg == 'dense', why
     assert '107' in why
+
+
+# ---- the frozen-version guard ----
+#
+# It had zero test references, and four independent deletions left the suite
+# green -- including replacing the call with `if False:`, which literally
+# reinstates the bug it was written to close.  Same shape as the defect itself:
+# one path guarded, nothing stopping the next from being added unguarded.
+
+def _release_root(tmp_path, versions=('v1.0-2026.06', 'v1.9-2026.12')):
+    root = tmp_path / 'releases'
+    for version in versions:
+        (root / version).mkdir(parents=True)
+    return root
+
+
+def _staged_field(root, version, field='f'):
+    field_dir = root / version / field
+    field_dir.mkdir(parents=True, exist_ok=True)
+    (field_dir / 'MANIFEST.json').write_text('{}')
+    return field_dir
+
+
+def test_guard_refuses_a_version_that_already_holds_this_field(sr, tmp_path):
+    """Keyed on the FIELD DIRECTORY existing, not on version ordering.  The
+    ordering check left the NEWEST published version writable with no flag:
+    v1.3-2026.08/arches was `max(existing)` when it was written, so the guard
+    added in the previous round would not have stopped it."""
+    root = _release_root(tmp_path)
+    _staged_field(root, 'v1.9-2026.12')
+    refuse, why = sr.refuse_older_version('v1.9-2026.12', root, False, 'f')
+    assert refuse and 'already holds a staged f release' in why
+    # a version with no staged copy of THIS field stays writable
+    assert not sr.refuse_older_version('v1.9-2026.12', root, False, 'other')[0]
+
+
+def test_guard_survives_a_two_digit_minor(sr, tmp_path):
+    """Lexicographic ordering inverts at the first two-digit minor: with v1.9
+    and v1.10 on disk, frozen v1.9 was writable and current v1.10 was refused."""
+    root = _release_root(tmp_path, ('v1.9-2026.08', 'v1.10-2026.12'))
+    for version in ('v1.9-2026.08', 'v1.10-2026.12'):
+        _staged_field(root, version)
+    assert sr.refuse_older_version('v1.9-2026.08', root, False, 'f')[0]
+    assert sr.refuse_older_version('v1.10-2026.12', root, False, 'f')[0]
+
+
+def test_allow_older_version_is_what_permits_a_recut(sr, tmp_path):
+    root = _release_root(tmp_path)
+    _staged_field(root, 'v1.0-2026.06')
+    assert sr.refuse_older_version('v1.0-2026.06', root, False, 'f')[0]
+    assert not sr.refuse_older_version('v1.0-2026.06', root, True, 'f')[0]
+
+
+def test_the_writers_enforce_the_guard_not_only_main(sr, eb, tmp_path,
+                                                     nircam_field, monkeypatch):
+    """The guard lived in two `main()` branches while these functions did the
+    writing, so every non-CLI caller bypassed it -- including this suite, whose
+    two `stage_exposures_only` tests were re-cutting a staged release with no
+    flag and no complaint."""
+    field_dir = _staged_release(sr, eb, tmp_path, nircam_field)
+    monkeypatch.setattr(sr, 'GLOBUS_COLLECTION_ROOT', tmp_path / 'releases')
+    monkeypatch.setattr(sr, 'field_release_dir',
+                        lambda field, version, root: field_dir)
+    monkeypatch.setitem(sr.FIELDS, 'f', {'data_dir': nircam_field['root']})
+    with pytest.raises(sr.FrozenReleaseError):
+        sr.stage_exposures_only('f', 'v9-test', tmp_path / 'releases')
+    with pytest.raises(sr.FrozenReleaseError):
+        sr.stage([], 'f', 'v9-test', tmp_path / 'releases', 'copy', False)
+
+
+def test_a_confident_but_large_offset_is_not_an_accuracy_figure(ap):
+    """sgrb2 F300M: 127.96 mas at high contrast. The contrast floor filters
+    CONFIDENCE and says nothing about MAGNITUDE, so a confident measurement of a
+    large offset passed straight through as the value to quote -- 8x this
+    repo's own FRAME_TOL_MAS, which refuses to stage a catalog that far off."""
+    leg, why = ap.preferred_leg({'sparse_mas': 127.96, 'sparse_contrast': 900.0,
+                                 'dense_mas': 131.0, 'dense_contrast': 800.0})
+    assert leg is None
+    assert 'finding' in why and '15 mas' in why
+
+
+def test_equal_contrast_does_not_fall_back_to_list_order(ap):
+    """`max()` returns the first maximum and sparse is first in the iteration
+    tuple, so equal contrast reinstated exactly the case the contrast rule was
+    written to stop."""
+    leg, _ = ap.preferred_leg({'sparse_mas': 18968.11, 'sparse_contrast': 325.0,
+                               'dense_mas': 4.44, 'dense_contrast': 325.0})
+    assert leg == 'dense'
+
+
+def test_identical_legs_are_reported_as_agreement(ap):
+    """w51 records byte-identical vs_sparse and vs_full in all 11 filters. The
+    page captioned them "the two references disagree", which is false for that
+    whole field, and the choice fell to list order."""
+    leg, why = ap.preferred_leg({'sparse_mas': 4.0, 'sparse_contrast': 143.0,
+                                 'dense_mas': 4.0, 'dense_contrast': 143.0})
+    assert leg == 'sparse'
+    assert 'same value' in why
