@@ -32,7 +32,7 @@ import field_overview
 import release_freshness
 import make_preview_rgb
 import preview_plan
-from stage_release import field_release_dir
+from stage_release import FIELDS, field_release_dir
 
 # Display label per group folder (None = Galactic Center, the default survey).
 GROUP_LABEL = {
@@ -1487,12 +1487,76 @@ def main(argv=None):
     # field whose mosaics cannot be read is simply left off the map, and if no
     # field yields geometry the panel is omitted entirely and the index is
     # exactly what it was before.
+    # ---- the index covers every field the SITE has, not just this run's -------
+    # `--fields <subset>` is the obvious way to refresh one field after
+    # re-staging it, and it used to rewrite index.html from that subset alone:
+    # a one-field rebuild silently reduced the front page from fifteen cards to
+    # one, with every other field's page still sitting there unreachable. The
+    # per-field pages are written independently, so only the index had this
+    # coupling -- and nothing about the output said so.
+    #
+    # So the index is assembled from a small sidecar that accumulates: this
+    # run's entries overwrite their own fields and every other field's entry is
+    # carried forward. A full run is unchanged (it overwrites all of them);
+    # a subset run now updates exactly what it rebuilt.
+    roster_path = out_dir / "_fields_index.json"
+    roster = {}
+    if roster_path.is_file():
+        try:
+            for entry in json.loads(roster_path.read_text()):
+                roster[entry["field"]] = entry
+        except (OSError, ValueError, KeyError, TypeError):
+            roster = {}          # unreadable sidecar: rebuilt from disk below
+    # The sidecar is a CACHE, not the source of truth, and must not be the only
+    # thing standing between a subset build and a truncated index: it does not
+    # exist yet on any site built before this change, so keying solely off it
+    # would let the very first partial build after deployment truncate exactly
+    # as before. The authority is which `<field>.html` pages are on disk; the
+    # sidecar only supplies their card metadata, and anything it is missing is
+    # re-read from that field's staged manifest.
+    rebuilt = {fi["field"] for fi in fields_info}
+    for page in sorted(out_dir.glob("*.html")):
+        name = page.stem
+        if ("." in name or name in rebuilt or name in roster
+                or name not in FIELDS):
+            continue             # version pages, help pages, non-fields
+        found = discover_versions(name)
+        if not found:
+            continue
+        try:
+            man = json.loads((field_release_dir(name, found[0], args.release_root)
+                              / "MANIFEST.json").read_text())
+        except (OSError, ValueError):
+            continue
+        thumb = f"assets/{name}.jpg"
+        roster[name] = {
+            "field": name, "version": man.get("version", found[0]),
+            "group": man.get("group"),
+            "preview": thumb if (out_dir / thumb).is_file() else None,
+            "n_images": sum(1 for f in man.get("files", [])
+                            if f.get("category") == "image"),
+            "n_catalogs": sum(1 for f in man.get("files", [])
+                              if f.get("category") == "catalog"),
+        }
+    carried = sorted(set(roster) - rebuilt)
+    for info in fields_info:
+        roster[info["field"]] = info
+    # A field whose page is gone (dropped from the release) must not keep a card
+    # pointing at a 404.
+    roster = {f: e for f, e in roster.items() if (out_dir / f"{f}.html").is_file()}
+    roster_path.write_text(json.dumps(list(roster.values()), indent=1,
+                                      sort_keys=True))
+    if carried:
+        print(f"index: carrying forward {len(carried)} field(s) not rebuilt this "
+              f"run ({', '.join(carried)})")
+    index_fields = [roster[f] for f in sorted(roster)]
+
     overview_geoms = field_overview.collect(overview_entries)
     if overview_entries and not overview_geoms:
         print("note: no footprints readable -- on-sky overview omitted")
     overview_html = field_overview.section(overview_geoms)
 
-    index_html = render_index(fields_info, overview_html=overview_html)
+    index_html = render_index(index_fields, overview_html=overview_html)
     if cmz_explorer_link:
         # surface the explorer at the top of the index (additive; no-op otherwise)
         index_html = index_html.replace(
@@ -1505,7 +1569,8 @@ def main(argv=None):
     # .txt extension so the web server serves it as text (a .py 500s under CGI)
     (out_dir / "get_globus_token_helper.txt").write_text(TOKEN_HELPER)
     print(f"wrote index.html + download_help.html + get_globus_token_helper.txt "
-          f"({len(fields_info)} fields) into {out_dir}")
+          f"({len(fields_info)} field(s) rebuilt, {len(index_fields)} on the "
+          f"index) into {out_dir}")
 
 
 if __name__ == "__main__":

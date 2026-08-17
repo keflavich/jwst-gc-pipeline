@@ -664,3 +664,50 @@ def test_observation_keys_read_both_registry_shapes(eb):
         {'proposal_prefix': ['jw01182-o004_t001_nircam_clear',
                              'jw02221-o001_t001_nircam_clear']}) == \
         {('01182', '004'), ('02221', '001')}
+
+
+# ---- a partial --fields build must not truncate the index ----
+
+def test_partial_field_build_carries_the_rest_of_the_index(mw, tmp_path):
+    """`--fields <subset>` is the obvious way to refresh one field after
+    re-staging it, and it rewrote index.html from that subset alone: a one-field
+    rebuild reduced the front page from fifteen cards to one, with every other
+    field's page still on disk and unreachable from it.  The per-field pages are
+    written independently, so only the index had this coupling, and nothing in
+    the output said so."""
+    out = tmp_path / 'site'
+    out.mkdir()
+    for field in ('arches', 'm92', 'quintuplet'):
+        (out / f'{field}.html').write_text('<html></html>')
+    (out / '_fields_index.json').write_text(json.dumps([
+        {'field': f, 'version': 'v1', 'group': None, 'preview': None,
+         'n_images': 4, 'n_catalogs': 0}
+        for f in ('arches', 'm92', 'quintuplet')]))
+
+    # a run that rebuilt ONLY arches
+    roster = {e['field']: e for e in
+              json.loads((out / '_fields_index.json').read_text())}
+    rebuilt = [{'field': 'arches', 'version': 'v2', 'group': None,
+                'preview': None, 'n_images': 4, 'n_catalogs': 0}]
+    for info in rebuilt:
+        roster[info['field']] = info
+    roster = {f: e for f, e in roster.items() if (out / f'{f}.html').is_file()}
+    index = mw.render_index([roster[f] for f in sorted(roster)])
+    for field in ('arches', 'm92', 'quintuplet'):
+        assert f"{field}.html" in index, field
+    assert 'v2' in index          # ...and the rebuilt field's new version shows
+
+
+def test_index_drops_a_field_whose_page_is_gone(mw, tmp_path):
+    """Carrying entries forward must not resurrect a field dropped from the
+    release: a card pointing at a 404 is worse than no card."""
+    out = tmp_path / 'site'
+    out.mkdir()
+    (out / 'arches.html').write_text('<html></html>')
+    roster = {f: {'field': f, 'version': 'v1', 'group': None, 'preview': None,
+                  'n_images': 1, 'n_catalogs': 0}
+              for f in ('arches', 'retired')}
+    roster = {f: e for f, e in roster.items() if (out / f'{f}.html').is_file()}
+    index = mw.render_index([roster[f] for f in sorted(roster)])
+    assert 'arches.html' in index
+    assert 'retired.html' not in index
