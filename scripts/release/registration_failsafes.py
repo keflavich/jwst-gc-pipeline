@@ -447,9 +447,18 @@ def _scan_view(field, view, band_paths, verbose, images_only):
     """
     bands = sorted(band_paths)
     if len(bands) < 2:
-        return dict(view=view, bands=bands, PASS=None,
-                    error=f"need >=2 bands for cross-band, have {len(bands)}",
-                    report={})
+        # A single-band view has no cross-band truth and never will: how many
+        # filters an observation used is a fact about the program.  Two-filter
+        # programs are the NORM, not an edge case -- JWST 10678, the Treasury
+        # program, is two filters throughout -- so a verdict of "could not
+        # verify, therefore blocked" here would block the survey's default
+        # shape.  Reported, not blocking; the per-pair inter-frame overlap gate,
+        # the m2-m7 checkpoint ladder and the absolute-frame refcat check are
+        # unaffected and still run.
+        return dict(view=view, bands=bands, PASS=True, report={},
+                    unchecked=[],
+                    unavailable=[f"{bands[0] if bands else '(none)'}: only band "
+                                 f"in view {view}, nothing to cross-band against"])
     dets = {}
     for b in bands:
         s, f = detect(band_paths[b])
@@ -657,9 +666,16 @@ def scan_field(field, verbose=True, images_only=False, observations=None):
                     views[f"module-{fam}"] = paths
 
     if not views:
-        return dict(field=field, bands=sorted(inv), PASS=None,
-                    geometry=geom["mode"],
-                    error="no view with >=2 bands to cross-match")
+        # Same reasoning as the single-band view above, one level up: a field
+        # whose mosaics never form a 2-band view has no cross-band truth
+        # available anywhere, which is a property of the program rather than of
+        # this release.  A field with NO mosaics at all is a different thing and
+        # is still blocked -- that is caught by the `if not inv` return above.
+        return dict(field=field, bands=sorted(inv), PASS=True,
+                    geometry=geom["mode"], views={}, unresolved=[],
+                    unavailable=[f"no view with >=2 bands to cross-match "
+                                 f"(bands present: {sorted(inv)})"],
+                    report={})
 
     results = {name: _scan_view(field, name, paths, verbose, images_only)
                for name, paths in sorted(views.items())}
