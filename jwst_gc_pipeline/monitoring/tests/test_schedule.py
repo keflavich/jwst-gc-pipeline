@@ -569,3 +569,184 @@ def test_the_cache_write_uses_a_UNIQUE_temp_name(tmp_path):
     assert 'mkstemp' in src, (
         "a fixed `path + '.tmp'` is shared by concurrent writers")
     assert "f'{path}.tmp'" not in src
+
+
+# ---------------------------------------------------------------------------
+# truncation detection, round 3: a ROW COUNT cannot detect truncation
+# ---------------------------------------------------------------------------
+
+def _big_report(n=60):
+    """A report with n 10678 visits, above MIN_PLAUSIBLE_ROWS, ending in \\n --
+    the shape of a real weekly file."""
+    head = REPORT.split('\n')[:4]
+    rows = []
+    for i in range(1, n + 1):
+        rows.append(
+            f'10678:{i}:1      FINEGUIDE   PRIME TARGETED FIXED           '
+            f'2026-08-17T{i % 24:02d}:10:36Z  00/00:39:27  NIRCam Imaging'
+            f'                                      GC_{i}'
+            + ' ' * max(1, 33 - len(f'GC_{i}'))
+            + 'Unidentified                    Infrared sources')
+    return '\n'.join(head + rows) + '\n'
+
+
+def _staged(tmp_path, body, generated='20260814'):
+    cache = tmp_path / S.CACHE_SUBDIR
+    cache.mkdir(exist_ok=True)
+    (cache / 'index.html').write_text(
+        f'<a href="/d/_documents/20260817_report_{generated}.txt">x</a>')
+    (cache / f'20260817_report_{generated}.txt').write_text(body)
+    return cache
+
+
+def test_a_report_cut_mid_line_is_refused_at_the_PRODUCTION_default(
+        tmp_path, monkeypatch):
+    """The row floor stopped firing at 17.6% of the real file, so 20%, 50% and
+    90% truncations all published confident undercounts at the production
+    default.  A truncation lands mid-line; the discriminator is the final
+    newline, which all eight live reports have."""
+    full = _big_report()
+    for frac in (0.2, 0.5, 0.9):
+        cut = full[:int(len(full) * frac)]
+        assert not cut.endswith('\n'), 'fixture must model a mid-line cut'
+        _staged(tmp_path, cut)
+        monkeypatch.setattr(S, '_get', lambda url, timeout=30: '')
+        out = S.load(str(tmp_path), program='10678')
+        assert out['stale'] is True, (frac, out)
+        assert 'does not end in a newline' in (out['note'] or ''), out['note']
+
+
+def test_a_full_report_is_clean_at_the_PRODUCTION_default(tmp_path, monkeypatch):
+    """Both floor tests passed `min_rows=` explicitly, so setting
+    MIN_PLAUSIBLE_ROWS = 0 restored the pre-fix behaviour with the suite green.
+    This one runs `load()` the way `report.py:169` does."""
+    _staged(tmp_path, _big_report())
+    monkeypatch.setattr(S, '_get', lambda url, timeout=30: '')
+    out = S.load(str(tmp_path), program='10678')
+    assert out['stale'] is False, out
+    assert not out['note'], out['note']
+    assert len(out['visits']) == 60
+
+
+def test_a_SHORT_cached_report_is_re_fetched_and_self_heals(tmp_path, monkeypatch):
+    """The unparseable-cache branch re-fetches; a cache that parses cleanly but
+    SHORT did not, and the cache filename is keyed on week+generation, so the
+    only escape was STScI reissuing the week.  Every hour after one killed write
+    the public page repeated the same wrong number."""
+    full = _big_report()
+    _staged(tmp_path, full[:int(len(full) * 0.5)])
+    monkeypatch.setattr(S, '_get', lambda url, timeout=30: full)
+    out = S.load(str(tmp_path), program='10678')
+    assert out['stale'] is False, out
+    assert len(out['visits']) == 60, 'the re-fetch must replace the short body'
+
+
+def test_a_short_cached_report_is_NOT_re_fetched_offline(tmp_path, monkeypatch):
+    """Offline is a promise not to touch the network, and it outranks the
+    repair."""
+    full = _big_report()
+    _staged(tmp_path, full[:int(len(full) * 0.5)])
+    calls = []
+    monkeypatch.setattr(S, '_get',
+                        lambda url, timeout=30: calls.append(url) or full)
+    out = S.load(str(tmp_path), program='10678', offline=True)
+    assert calls == [], 'offline must not fetch'
+    assert out['stale'] is True, out
+
+
+def test_the_cache_write_uses_a_different_temp_name_every_time(tmp_path,
+                                                              monkeypatch):
+    """Behavioural, not textual.  The previous pin read `inspect.getsource` and
+    matched the leading COMMENT, so replacing the whole body with
+    `open(path, 'w')` while keeping the comment left the suite green."""
+    seen = []
+    real_replace = os.replace
+
+    def _spy(src, dst):
+        seen.append(src)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, 'replace', _spy)
+    target = str(tmp_path / 'x.txt')
+    assert S._write_cache(target, 'a')
+    assert S._write_cache(target, 'b')
+    assert len(seen) == 2, 'the write must go through a temp file and os.replace'
+    assert seen[0] != seen[1], 'a FIXED temp name races a second writer'
+    assert target + '.tmp' not in seen
+    with open(target) as fh:
+        assert fh.read() == 'b'
+
+
+# ---------------------------------------------------------------------------
+# the mutations that survived round 2 and were still surviving at round 3
+# ---------------------------------------------------------------------------
+
+def test_visits_sort_NUMERICALLY_within_a_start_time(tmp_path, monkeypatch):
+    """Lexicographic on the visit id puts 10678:10:1 before 10678:2:1, so the
+    upcoming list reads out of order for any program past nine observations --
+    10678 plans 1668.  Exercised through `load()`, which is what orders them."""
+    def _row(obs, start):
+        name = f'GC_{obs}'
+        return (f'10678:{obs}:1'.ljust(15) + 'FINEGUIDE   PRIME TARGETED FIXED'
+                + ' ' * 11 + f'{start}  00/00:39:27  NIRCam Imaging'
+                + ' ' * 38 + name + ' ' * max(1, 33 - len(name))
+                + 'Unidentified                    Infrared sources')
+    same = '2026-08-17T08:10:36Z'
+    head = REPORT.split('\n')[:4]
+    body = '\n'.join(head + [_row(o, same) for o in (20, 2, 10, 1)]
+                     + [_row(o, '2026-08-18T08:10:36Z')
+                        for o in range(30, 30 + 60)]) + '\n'
+    _staged(tmp_path, body)
+    monkeypatch.setattr(S, '_get', lambda url, timeout=30: '')
+    out = S.load(str(tmp_path), program='10678')
+    tied = [v['visit_id'] for v in out['visits'] if v['start'] == same]
+    assert tied == ['10678:1:1', '10678:2:1', '10678:10:1', '10678:20:1'], tied
+
+
+def test_a_continuation_line_that_is_not_a_PARALLEL_is_not_one(tmp_path):
+    """A blank-visit-id continuation can also be a second TARGET for the same
+    visit (line 61 of the 2026-08-17 report, TA_RJ0018 under 12782:2:1).
+    Dropping the visit-type check puts a second instrument on a pointing that
+    has one."""
+    body = (REPORT.rstrip('\n') + '\n'
+            + '                           SECOND TARGET                    '
+              '                          NIRCam Imaging'
+              '                                      TA_RJ0018\n')
+    gc20 = [v for v in S.parse_report(body) if v['visit_id'] == '10678:20:1'][0]
+    assert [p['instrument'] for p in gc20['parallels']] == ['MIRI Imaging'], (
+        'a non-PARALLEL continuation must not become a parallel')
+
+
+def test_the_unparseable_cached_report_is_re_fetched(tmp_path, monkeypatch):
+    """A cached report that no longer parses is the killed-write case, and the
+    cache is authoritative forever.  Without the re-fetch one bad write loses a
+    week permanently."""
+    full = _big_report()
+    _staged(tmp_path, 'this is not a schedule report at all\n')
+    calls = []
+
+    def _fake(url, timeout=30):
+        calls.append(url)
+        return full
+
+    monkeypatch.setattr(S, '_get', _fake)
+    out = S.load(str(tmp_path), program='10678')
+    assert calls, 'an unparseable cached report must be re-fetched'
+    assert out['stale'] is False, out
+    assert len(out['visits']) == 60
+
+
+def test_a_degraded_note_never_carries_a_LOCAL_PATH_or_a_raw_exception(
+        tmp_path, monkeypatch):
+    """The note is published on a public page.  A filesystem path or a raw
+    exception repr leaks the layout of the machine and reads as a fault in the
+    schedule rather than in our read of it."""
+    cache = tmp_path / S.CACHE_SUBDIR
+    cache.mkdir()
+    (cache / 'index.html').write_text(
+        '<a href="/d/_documents/20260817_report_20260814.txt">x</a>')
+    (cache / '20260817_report_20260814.txt').write_text('not a report\n')
+    monkeypatch.setattr(S, '_get', lambda url, timeout=30: '')
+    note = S.load(str(tmp_path), program='10678')['note'] or ''
+    assert str(tmp_path) not in note, note
+    assert 'Error' not in note and 'Traceback' not in note, note

@@ -84,6 +84,17 @@ INDEX_MAX_AGE_S = 1800
 #: Fewest visits a real published weekly report can carry.  Below this the body
 #: was almost certainly truncated: the live 20260817 report has 100+ rows, and a
 #: 2% truncation still parses to 1 row without raising.
+#: A row-count floor cannot detect truncation, because the true row count is
+#: unknown: the real reports carry 61-119 rows, so any floor low enough not to
+#: reject a genuinely quiet week is also low enough to accept a report truncated
+#: to a fifth of itself.  Measured on the real 20260817 report, a floor of 20
+#: stopped firing at 17.6% of the file and let 20%, 50% and 90% truncations
+#: publish confident undercounts.
+#:
+#: What DOES discriminate is the final newline.  All eight live reports end with
+#: one, and a byte truncation at an arbitrary offset essentially never lands on
+#: a newline.  The row floor is kept as a second, weaker signal for a body that
+#: happens to end on a line boundary.
 MIN_PLAUSIBLE_ROWS = 20
 
 #: What a failed fetch can raise.  ``http.client.HTTPException`` is in the list
@@ -288,6 +299,26 @@ def report_urls(index_html, base='https://www.stsci.edu'):
     return [best[w] for w in sorted(best, reverse=True)]
 
 
+def _looks_truncated(text, parsed, min_rows):
+    """A reason string when this report body looks cut short, else ``''``.
+
+    A body truncated in transit PARSES CLEANLY -- the ruler and the leading rows
+    are intact -- and publishes a confident undercount with ``stale=False``.
+
+    The final newline is the discriminator: all eight live reports end with one,
+    and a byte truncation at an arbitrary offset essentially never lands on a
+    line boundary.  The row floor is a weaker second signal for the truncation
+    that happens to.
+    """
+    if text and not text.endswith('\n'):
+        return ('the report body does not end in a newline, so it was cut '
+                'short in transit -- what parsed is a prefix, not the week')
+    if len(parsed) < min_rows:
+        return (f'the report parsed to only {len(parsed)} visit(s), below the '
+                f'{min_rows}-row plausibility floor -- probably a short read')
+    return ''
+
+
 def load(outdir, program=DEFAULT_PROGRAM, weeks=8, offline=False, min_rows=MIN_PLAUSIBLE_ROWS):
     """Scheduled visits for ``program``, newest weeks first, with provenance.
 
@@ -415,17 +446,28 @@ def load(outdir, program=DEFAULT_PROGRAM, weeks=8, offline=False, min_rows=MIN_P
                 note = note or f'{week}: {exc}'
                 stale = True
                 continue
-        if len(parsed) < min_rows:
-            # A plausibility FLOOR, not a zero check.  A body truncated in
-            # transit parses cleanly -- the ruler and the leading rows are
-            # intact -- and publishes a confident undercount with stale=False:
-            # measured on the real 20260817 report, 20% of it gives 23 rows and
-            # "5 visits, 3.3 h", 90% gives "30 visits, 19.7 h", both silent.
-            # A real JWST week schedules far more than a handful of visits, so
-            # anything under the floor is a short read rather than a quiet week.
-            note = note or (f'{week}: the report parsed to only {len(parsed)} '
-                            f'visit(s), below the {min_rows}-row '
-                            f'plausibility floor -- probably a truncated read')
+        short = _looks_truncated(text, parsed, min_rows)
+        if short and from_cache and not offline:
+            # A short CACHED report is the killed-write case, and the cache is
+            # authoritative forever, so one bad write loses a week permanently:
+            # every hour after it the public page repeats the same wrong number.
+            # The repair is one GET.  (The unparseable branch above already does
+            # this; a report that parses cleanly but SHORT is the same fault
+            # with a quieter symptom, and was the one left permanent.)
+            try:
+                refetched = _get(url)
+            except FETCH_ERRORS:
+                refetched = ''
+            if refetched and _write_cache(path, refetched):
+                try:
+                    reparsed = parse_report(refetched)
+                except ScheduleFormatError:
+                    reparsed = None
+                if reparsed is not None:
+                    text, parsed = refetched, reparsed
+                    short = _looks_truncated(text, parsed, min_rows)
+        if short:
+            note = note or f'{week}: {short}'
             stale = True
         mine = [v for v in parsed if v['program'] == str(program)]
         weeks_seen.append({'week': week, 'generated': generated, 'url': url,
