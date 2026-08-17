@@ -33,6 +33,7 @@ import release_freshness
 import make_preview_rgb
 import preview_plan
 from stage_release import FIELDS, field_release_dir
+import astrometry_provenance
 
 # Display label per group folder (None = Galactic Center, the default survey).
 GROUP_LABEL = {
@@ -979,6 +980,7 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
     out.append("</table>")
 
     out.append(render_exposures(field, exposures, base, app_link, multi))
+    out.append(render_astrometry(field, files, base))
 
     out.append("</main>")
     out.append(footer())
@@ -1080,6 +1082,79 @@ def render_exposures(field, exposures, base, app_link, multi):
                 f"<details class=frames><summary>{len(rows)} individual frames"
                 f"</summary><div class=names>{links}</div></details></td></tr>")
     out.append("</table>")
+    return "\n".join(out)
+
+
+def render_astrometry(field, files, base):
+    """What solution these products are on, and the frozen table that defines it.
+
+    Rendered for EVERY field, including the ones with nothing to report. A page
+    that offers detector frames and says nothing about their astrometry asserts
+    by omission that they are tied; proposal 1939's mosaics were ~14.8" off
+    while saying exactly nothing.
+    """
+    try:
+        record = astrometry_provenance.collect(field, FIELDS[field])
+    except (KeyError, OSError, ValueError):
+        return ""
+    out = ["<h2>Astrometric provenance</h2>"]
+    state = record.get("state")
+    if state == "unregistered":
+        out.append(
+            "<p style='border:1px solid #b58900;padding:.6rem 1rem;border-radius:6px'>"
+            "<b>This field has no registered pointing correction.</b> It is absent "
+            "from the pipeline's alignment registry, so no per-exposure correction "
+            "was applied and these products carry the raw <code>assign_wcs</code> "
+            "astrometry. Do not assume they are tied to Gaia or VIRAC2. (A field in "
+            "this state shipped mosaics ~14.8&Prime; off before it was noticed.)</p>")
+    elif state == "no-table":
+        out.append("<p class=muted>This field is registered but uses no offsets "
+                   "table, so there is no per-exposure correction to preserve.</p>")
+    else:
+        table = record.get("table") or {}
+        entry = next((f for f in files
+                      if f.get("category") == astrometry_provenance.ASTROMETRY_CATEGORY),
+                     None)
+        link = (f"<a href='{html.escape(entry['url'])}'>{html.escape(table.get('name',''))}</a>"
+                if entry and entry.get("url") else
+                f"<code>{html.escape(table.get('name') or '?')}</code>")
+        out.append(
+            f"<p>Pointing corrections: {link}"
+            + (f" <span class=muted>({human_size(table.get('size_bytes'))}, "
+               f"modified {html.escape(str(table.get('modified'))[:19])})</span>"
+               if table.get("exists") else
+               " <span class=muted>(not on disk)</span>")
+            + "</p>")
+        if table.get("sha256"):
+            out.append(f"<p class=checksum>sha256 {html.escape(table['sha256'])}</p>")
+        out.append(
+            "<p class=muted>The table ships as a <b>frozen, checksummed copy</b>; the "
+            "detector frames do not, because a re-reduction rewrites their headers in "
+            "place. This table, not the FITS, is what makes this version's astrometry "
+            "reconstructible after the frames have moved on.</p>")
+    ties = record.get("ties") or {}
+    if ties:
+        out.append("<table><tr><th>Filter</th><th>vs Gaia (sparse)</th>"
+                   "<th>vs VIRAC2 (dense)</th><th>Measured</th></tr>")
+        for filt in sorted(ties):
+            tie = ties[filt]
+            def _mas(key):
+                return (f"{tie[key]:.2f} mas" if key in tie else "&mdash;")
+            out.append(f"<tr><td><b>{html.escape(filt)}</b></td>"
+                       f"<td>{_mas('sparse_mas')}</td><td>{_mas('dense_mas')}</td>"
+                       f"<td class=muted>{html.escape(str(tie.get('date') or '')[:10])}"
+                       f"</td></tr>")
+        out.append("</table>")
+        out.append(
+            "<p class=muted><b>Quote the sparse number.</b> Against a dense reference "
+            "the offset-histogram peak is pulled by several mas &mdash; two catalogs "
+            "tracing the same clustered field make a correlated wrong-pair background "
+            "&mdash; so the dense column is shown only so the discrepancy is not "
+            "rediscovered as a defect. Neither column is a per-star error bar; both "
+            "are bulk ties from the m2 checkpoint.</p>")
+    else:
+        out.append("<p class=muted>No reference-tie measurement is recorded for this "
+                   "field, so no astrometric accuracy is claimed here.</p>")
     return "\n".join(out)
 
 

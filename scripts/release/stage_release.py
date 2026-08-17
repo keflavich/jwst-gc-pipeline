@@ -50,6 +50,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import release_freshness            # noqa: E402  (needs the path above)
 import exposure_bundle              # noqa: E402  (same reason)
+import astrometry_provenance        # noqa: E402  (same reason)
 
 # --- Globus collection constants ---------------------------------------------
 GLOBUS_COLLECTION_ID = "d9873d5e-0fbd-4980-aedf-4ca56f65a045"
@@ -1147,9 +1148,18 @@ def build_manifest(field, version, images_only=False, missing=None,
             [it for it in items
              if it.get("category") == "image" and it.get("kind") == "science"],
             search_root=field_cfg["data_dir"], problems=exposure_problems)
+    # The pointing-correction table: kilobytes, COPIED and checksummed like a
+    # mosaic. The frames are symlinks whose headers a re-reduction rewrites, so
+    # this table -- not the FITS -- is what makes this version's astrometry
+    # reconstructible afterwards.
+    table = astrometry_provenance.stage_item(field, field_cfg, version)
+    if table is not None:
+        items.append(table)
     for item in items:
         src = Path(item["src"])
-        item["dest"] = str(assign_dest(item, field))
+        # `stage_item` already knows where the table goes; everything else is
+        # placed by category.
+        item.setdefault("dest", str(assign_dest(item, field)))
         item["size_bytes"] = src.stat().st_size if src.is_file() else None
         # per-file version: defaults to the field release version so every file carries
         # an explicit version on the download page. A file bumped independently (e.g. a
@@ -1517,9 +1527,26 @@ def stage_exposures_only(field, version, release_root, from_disk=False):
             dest.unlink()
         dest.symlink_to(Path(it["src"]).resolve())
 
+    # A frames-only release must still carry the table those frames are on --
+    # that is the whole point of preserving it, and the frames are the products
+    # whose own bytes are not frozen.
+    table = astrometry_provenance.stage_item(field, FIELDS[field],
+                                             manifest.get("version", version))
+    if table is not None:
+        dest = field_dir / table["dest"]
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(table["src"], dest)
+        table["size_bytes"] = os.path.getsize(table["src"])
+        table["sha256"] = sha256sum(table["src"])
+        rel = dest.relative_to(GLOBUS_COLLECTION_ROOT)
+        table["globus_path"] = "/" + str(rel)
+        table["url"] = GLOBUS_HTTPS_BASE + table["globus_path"]
+        print(f"  + offsets table {Path(table['src']).name} "
+              f"({table['size_bytes']} bytes, frozen copy)")
     kept = [f for f in manifest.get("files", [])
-            if f.get("category") != exposure_bundle.EXPOSURE_CATEGORY]
-    manifest["files"] = kept + exposures
+            if f.get("category") not in (exposure_bundle.EXPOSURE_CATEGORY,
+                                         astrometry_provenance.ASTROMETRY_CATEGORY)]
+    manifest["files"] = kept + exposures + ([table] if table else [])
     manifest["exposure_mode"] = "symlink"
     # `built` is NOT touched -- release_freshness reads it as the staging time
     # and would re-publish this field's quarantined mosaics if it moved.  The
@@ -1636,6 +1663,24 @@ def write_readme(field_dir, field, version, items, mode):
             "",
         ]
 
+    # Astrometry provenance. Present for EVERY field, including -- especially --
+    # the ones with nothing to report: a release that ships detector frames and
+    # says nothing about what frame they are on is asserting by omission that
+    # they are tied. Proposal 1939 was ~14.8" off while saying nothing.
+    provenance_lines = ["## Astrometric provenance (READ BEFORE USING THE FRAMES)", ""]
+    _cfg = FIELDS.get(field)
+    if _cfg is None:
+        # `write_readme` must stay total: an unregistered field name is a reason
+        # to say the provenance is unknown, never to abort the staging that has
+        # already copied the files.
+        provenance_lines.append(
+            f"`{field}` is not in the release registry, so no astrometric "
+            f"provenance could be determined for it.")
+    else:
+        provenance_lines += astrometry_provenance.summary_lines(
+            astrometry_provenance.collect(field, _cfg))
+    provenance_lines.append("")
+
     lines = [
         f"# JWST Galactic Center survey -- {field} -- release {version}",
         "",
@@ -1669,7 +1714,7 @@ def write_readme(field_dir, field, version, items, mode):
         "are current, but the photometry catalogs for this field are not yet",
         "certified. They will follow in a later release.",
         "",
-    ]) + exposure_lines + limitation_lines + [
+    ]) + exposure_lines + provenance_lines + limitation_lines + [
         "## Astrometric frame and epoch (READ BEFORE TARGETING)",
         "",
         "- **Reference frame:** Gaia DR3 (via the Gaia+VIRAC2 per-field reference",
