@@ -138,6 +138,10 @@ FIELD=${FIELD:-012}
 MODULES=${MODULES:-nrca,nrcb,merged}
 # Reuse existing *_cal.fits by default (-s / skip_step1and2). Set SKIP=0 to
 # re-download + re-fit ramps from MAST (much slower; overwrites all products).
+# SKIP=0 re-fits every exposure whatever is on disk; each exposure is processed
+# once per run, shared across the module passes (#417).  Set STAGE12_RESUME=1 to
+# also skip exposures whose _cal/_ramp are newer than their _uncal, which
+# resumes a killed SKIP=0 job (leave it unset for a forcing re-reduce).
 SKIP=${SKIP:-1}
 # Full Sgr C filter set. Override with --export=ALL,FILTERS="F405N F470N".
 FILTERS=${FILTERS:-"F115W F162M F182M F212N F360M F405N F470N F480M"}
