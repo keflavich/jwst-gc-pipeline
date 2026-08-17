@@ -1541,8 +1541,21 @@ def stage_exposures_only(field, version, release_root, from_disk=False):
         rel = dest.relative_to(GLOBUS_COLLECTION_ROOT)
         table["globus_path"] = "/" + str(rel)
         table["url"] = GLOBUS_HTTPS_BASE + table["globus_path"]
+        # ...and it goes into CHECKSUMS.sha256, which this path otherwise does
+        # not touch. The no-touch promise exists so the FROZEN MOSAIC hashes are
+        # never disturbed; appending a line for a newly added frozen deliverable
+        # completes that record rather than disturbing it. Omitting it would
+        # leave the README and the page claiming a checksum that is only in
+        # MANIFEST.json -- a checksum file that does not list something the
+        # release ships frozen is simply wrong.
+        checksums = field_dir / "CHECKSUMS.sha256"
+        existing = [ln for ln in (checksums.read_text().splitlines()
+                                  if checksums.is_file() else [])
+                    if ln.strip() and not ln.endswith(f"  {table['dest']}")]
+        checksums.write_text("\n".join(existing
+                                       + [f"{table['sha256']}  {table['dest']}"]) + "\n")
         print(f"  + offsets table {Path(table['src']).name} "
-              f"({table['size_bytes']} bytes, frozen copy)")
+              f"({table['size_bytes']} bytes, frozen copy, checksummed)")
     kept = [f for f in manifest.get("files", [])
             if f.get("category") not in (exposure_bundle.EXPOSURE_CATEGORY,
                                          astrometry_provenance.ASTROMETRY_CATEGORY)]
@@ -1836,7 +1849,7 @@ def main(argv=None):
         if not n:
             return 1
         print(f"Added {n} detector-frame exposures (symlinked, not checksummed) "
-              f"to {field_dir}. Mosaics, catalogs and CHECKSUMS.sha256 unchanged.")
+              f"to {field_dir}. Mosaics and catalogs unchanged.")
         return 0
 
     missing = []
