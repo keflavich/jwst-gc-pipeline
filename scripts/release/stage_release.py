@@ -1704,6 +1704,33 @@ def stage_exposures_only(field, version, release_root, from_disk=False,
     return field_dir, len(exposures)
 
 
+def latest_staged_version(field, release_root):
+    """Newest version directory that actually holds a staged `field`, or ``None``.
+
+    Ordered by the release date embedded in the version string rather than
+    lexicographically, which inverts at the first two-digit minor: with
+    ``v1.9-2026.09`` and ``v1.10-2026.10`` on disk, a string sort calls
+    ``v1.9`` the newer one.  Read-only: nothing here decides what may be
+    written, only which staged tree to audit.
+    """
+    root = Path(release_root)
+    if not root.is_dir():
+        return None
+    staged = [p.name for p in root.iterdir()
+              if p.is_dir() and p.name.startswith("v")
+              and (field_release_dir(field, p.name, release_root)
+                   / "MANIFEST.json").is_file()]
+    if not staged:
+        return None
+
+    def key(name):
+        version = name.split("-", 1)[0].lstrip("v")
+        parts = tuple(int(p) if p.isdigit() else 0
+                      for p in version.split("."))
+        return (parts, name)
+    return max(staged, key=key)
+
+
 def check_exposures(field, version, release_root):
     """Audit a staged release's detector frames.  Returns a process exit code.
 
@@ -1984,11 +2011,18 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--field", default="sgrb2", choices=sorted(FIELDS))
-    # No safe default exists: v1.0-2026.06 is a FROZEN release, and `stage()`
-    # unlinks-and-copies without a frozen-version guard, so a forgotten
-    # `--version` used to write into the oldest published tree.  Require it.
-    parser.add_argument("--version", required=True,
-                        help="release version directory, e.g. v1.2-2026.08")
+    # No safe default exists for anything that WRITES: v1.0-2026.06 is a FROZEN
+    # release, and `stage()` unlinks-and-copies, so a forgotten `--version` used
+    # to write into the oldest published tree.  Required below for every writing
+    # path.  `--check-exposures` writes nothing -- it reads a staged manifest and
+    # reports -- and requiring it there made the invocation this script prints in
+    # every shipped README (`--check-exposures --field <field>`) exit 2 without
+    # doing anything: a documented command that does not run, which is the same
+    # defect as a documented check with no implementation.
+    parser.add_argument("--version", default=None,
+                        help="release version directory, e.g. v1.2-2026.08. "
+                             "Required except with --check-exposures, which "
+                             "defaults to the newest version holding the field.")
     parser.add_argument("--allow-older-version", action="store_true",
                         help="permit staging into a version older than the newest "
                              "one present under --release-root (re-cutting a frozen "
@@ -2047,6 +2081,17 @@ def main(argv=None):
                              "CRDS_CTX, within an instrument (default: report only)")
     args = parser.parse_args(argv)
 
+    if args.check_exposures:
+        version = args.version or latest_staged_version(args.field,
+                                                        args.release_root)
+        if version is None:
+            print(f"No staged release of '{args.field}' under "
+                  f"{args.release_root}", file=sys.stderr)
+            return 2
+        return check_exposures(args.field, version, args.release_root)
+    if args.version is None:
+        parser.error("--version is required for every path that writes")
+
     # ---- LISTED-SOURCE GATE ---------------------------------------------------------
     # `nircam`/`miri` entries are curated by hand, so an absent one means the config is
     # stale -- most often because the m2 astrometry checkpoint quarantined the product
@@ -2081,9 +2126,6 @@ def main(argv=None):
         print(f"Added {n} detector-frame exposures (linked, not checksummed) "
               f"to {field_dir}. Mosaics and catalogs unchanged.")
         return 0
-
-    if args.check_exposures:
-        return check_exposures(args.field, args.version, args.release_root)
 
     missing = []
     exposure_problems = []

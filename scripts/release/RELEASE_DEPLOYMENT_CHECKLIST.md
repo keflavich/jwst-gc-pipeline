@@ -180,10 +180,23 @@ a plain dry run (no `--stage` needed).
     dangling link under `images/` is a real defect, because that tree must be
     `--copy`. Audit both with
     `find <field> -type l ! -exec test -e {} \; -print`.
-  - `EXPOSURE PROVENANCE:` lines at staging name mosaics whose `ASNTABLE`
-    association could not be read, so their frames are not offered. The mosaic
-    still ships — the line exists so a field quietly offering frames for 9 of
-    its 10 bands is visible at staging time rather than from the page.
+  - `EXPOSURE PROVENANCE:` lines at staging name mosaics whose input list
+    could not be established, so their frames are not offered. The list is read
+    from the mosaic's own `HDRTAB.FILENAME` — `resample` writes one row per
+    input, which is the drizzle's own record of what it consumed; the
+    `ASNTABLE` association is a fallback for a mosaic with no `HDRTAB`.
+    (Inferring the inputs from the association plus a `_crf` twin was wrong for
+    25 of 170 staged mosaics, because the pipeline REPLACES the `_cal` suffix
+    where that construction appended to it.) The mosaic still ships — the line
+    exists so a field quietly offering frames for 9 of its 10 bands is visible
+    at staging time rather than from the page.
+  - `link mode symlink` in `MANIFEST.json` or at staging means the field's data
+    are on a different filesystem from the release root, where a hardlink is
+    impossible (brick and cloudc: `/blue` vs `/orange`). Those frames are
+    Globus-transfer-only — the HTTPS data plane will not serve a symlink
+    pointing out of the release tree — and the page and README say so. Audit a
+    staged field with `stage_release.py --check-exposures --field <field>`,
+    which also reports frames whose source has been rewritten since staging.
 
 ## 6. Publishing the site (do not hand-write the rsync)
 - Deploy with `scripts/release/deploy_site.sh` (`--dry-run` first). The docroot

@@ -1247,6 +1247,12 @@ def test_a_field_without_curated_still_shows_its_preview(mw):
 
 # ---- the manifest must not ASSERT a link mode the entries contradict ----
 
+def _no_hardlinks(src, dest):
+    """`os.link` across filesystems -- brick's and cloudc's actual case."""
+    raise OSError(18, 'Invalid cross-device link')
+
+
+
 def test_exposure_mode_is_derived_from_the_entries(eb):
     """brick published 1200 entries each correctly recording
     `link_mode: "symlink"` -- its data are on a different filesystem from the
@@ -1272,6 +1278,28 @@ def test_full_staging_reports_the_symlink_fallback(eb, capsys):
     assert 'WARNING' in out and '1 frame' in out and 'HTTPS' in out
 
 
+def test_stage_itself_reports_the_fallback_not_just_the_helper(sr, eb,
+                                                               tmp_path,
+                                                               monkeypatch,
+                                                               capsys):
+    """The helper being pinned is not the property: what went wrong was that
+    `stage()` never CALLED it, so a full staging of a cross-filesystem field
+    placed 1200 unservable links in silence. Deleting the call must fail."""
+    src = tmp_path / 'src' / 'jw01182001001_01101_00001_nrca1_cal.fits'
+    src.parent.mkdir(parents=True)
+    _fits(src)
+    items = [{'category': eb.EXPOSURE_CATEGORY, 'kind': eb.EXPOSURE_KIND,
+              'src': str(src), 'dest': 'exposures/F212N/' + src.name,
+              'filter': 'F212N', 'observation': None, 'iteration': None,
+              'size_bytes': src.stat().st_size}]
+    root = tmp_path / 'releases'
+    monkeypatch.setattr(sr, 'GLOBUS_COLLECTION_ROOT', root)
+    monkeypatch.setattr(eb.os, 'link', _no_hardlinks)
+    sr.stage(items, 'brick', 'v9', root, 'copy', False)
+    out = capsys.readouterr().out
+    assert 'WARNING' in out and 'symlink' in out and 'HTTPS' in out
+
+
 def test_no_warning_when_every_frame_is_hardlinked(eb, capsys):
     eb.report_symlink_fallbacks([{'dest': 'x', 'link_mode': 'hardlink'}])
     assert capsys.readouterr().out == ''
@@ -1293,9 +1321,7 @@ def test_stage_writes_the_derived_mode_not_a_hardcoded_one(sr, eb, tmp_path,
 
     # brick's case: the release root and the field's data are on different
     # filesystems, so `os.link` cannot work and every frame falls back.
-    def no_hardlinks(src, dest):
-        raise OSError(18, 'Invalid cross-device link')
-    monkeypatch.setattr(eb.os, 'link', no_hardlinks)
+    monkeypatch.setattr(eb.os, 'link', _no_hardlinks)
 
     field_dir = sr.stage(items, 'brick', 'v9', root, 'copy', False)
     manifest = json.loads((field_dir / 'MANIFEST.json').read_text())
@@ -1380,6 +1406,43 @@ def test_stage_refuses_before_it_writes_anything(sr, tmp_path, monkeypatch):
         sr.stage(items, 'brick', 'v9', root, 'copy', False)
     assert not (field_dir / 'images').exists()
     assert json.loads((field_dir / 'MANIFEST.json').read_text()) == {'files': []}
+
+
+def test_the_guard_runs_before_the_release_directory_is_created(sr, tmp_path,
+                                                                monkeypatch):
+    """The ORDERING leg is where placement can be observed: the field directory
+    does not exist yet, so a guard called after `field_dir.mkdir()` refuses
+    while leaving a directory behind in a version it just refused to write."""
+    root = tmp_path / 'releases'
+    (root / 'v1.4-2026.09').mkdir(parents=True)      # a newer release on disk
+    src = tmp_path / 'a_i2d.fits'
+    _fits(src)
+    items = [{'category': 'image', 'kind': 'science', 'src': str(src),
+              'dest': 'images/F212N/a_i2d.fits', 'filter': 'F212N',
+              'observation': None, 'iteration': None,
+              'size_bytes': src.stat().st_size}]
+    monkeypatch.setattr(sr, 'GLOBUS_COLLECTION_ROOT', root)
+    with pytest.raises(sr.FrozenReleaseError):
+        sr.stage(items, 'brick', 'v1.0-2026.06', root, 'copy', False)
+    assert not (root / 'v1.0-2026.06' / 'brick').exists()
+
+
+def test_check_exposures_defaults_to_the_newest_staged_version(sr, eb, tmp_path,
+                                                               monkeypatch):
+    """The README this PR writes into every release prints
+    `--check-exposures --field <field>` with no version. That invocation used to
+    exit 2 on a missing required argument -- a documented command that does not
+    run. Newest is by release number, not string order: 'v1.10' > 'v1.9'."""
+    root = tmp_path / 'releases'
+    for version in ('v1.9-2026.09', 'v1.10-2026.10'):
+        field_dir = root / version / 'brick'
+        field_dir.mkdir(parents=True)
+        (field_dir / 'MANIFEST.json').write_text(json.dumps(
+            {'field': 'brick', 'version': version, 'files': []}))
+    assert sr.latest_staged_version('brick', root) == 'v1.10-2026.10'
+    assert sr.latest_staged_version('wd1', root) is None
+    assert sr.main(['--check-exposures', '--field', 'brick',
+                    '--release-root', str(root)]) == 0
 
 
 def test_the_page_passes_the_release_build_time_to_the_tie_section(mw,
