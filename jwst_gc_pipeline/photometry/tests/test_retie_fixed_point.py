@@ -646,21 +646,35 @@ def test_the_residual_line_says_it_excludes_the_unscanned_filters(tmp_path,
     assert 'NOT scanned' in line, line
 
 
-def test_a_filter_the_scan_saw_but_the_operator_did_not_declare_is_named(
-        tmp_path, capsys):
-    """`unscanned` catches OVER-declaration.  Its mirror -- declaring FEWER
-    filters than the run catalogs -- is what reopens the hole, because the
-    correction floor reaches every filter of the run while the declaration
-    reaches only what was named.  Nothing inside the scan can tell which the
-    operator meant, so this is reported rather than refused."""
-    d = _multi_history(tmp_path, {
-        'F162M': [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],
-        'F480M': [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN]})
-    rc = _cli(d, '--accept-below-mas', '15', '--expect-filters', 'F162M')
+def test_a_filter_OUTSIDE_the_scan_and_undeclared_is_named(tmp_path, capsys):
+    """The dangerous under-declaration is a filter whose records lie outside the
+    SCAN -- untokened while a tokened sibling exists, or older than `--since` --
+    and which is not declared either.  It is in no group, so the moving and
+    unjudged refusals and `largest_measured_residual` are all blind to it, and
+    the correction floor still reaches it.
+
+    Live shape: F162M/o012 stuck beside an untokened F200W history carrying
+    8602 mas, accepted at rc=4 with F200W named nowhere.
+    """
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],
+                 filt='F162M', token='o012')
+    _history(tmp_path, [BIG, BIG_AGAIN], filt='F200W', token='')
+    rc = _cli(d, '--accept-below-mas', '15', '--obs-token', 'o012',
+              '--expect-filters', 'F162M')
     out = capsys.readouterr().out
-    assert 'F480M' in out, out
+    assert 'F200W' in out, out
     assert 'did not declare' in out, out
-    assert rc == 4, 'reported, not refused'
+    assert rc == 4, 'reported, not refused -- a narrowed scope is legitimate'
+
+
+def test_the_undeclared_note_is_case_insensitive(tmp_path, capsys):
+    """It compared a raw record filter against an upper-cased declaration, so a
+    lowercase record with an uppercase declaration raised a spurious note."""
+    d = _history(tmp_path, [SMALL, SMALL_AGAIN, SMALL, SMALL_AGAIN],
+                 filt='f162m', token='o012')
+    _cli(d, '--accept-below-mas', '15', '--obs-token', 'o012',
+         '--expect-filters', 'F162M')
+    assert 'did not declare' not in capsys.readouterr().out
 
 
 def test_a_whitespace_only_declaration_is_an_error_not_a_silent_no_op(tmp_path):

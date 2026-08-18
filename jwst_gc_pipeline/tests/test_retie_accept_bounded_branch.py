@@ -25,10 +25,12 @@ The same `set -e` trap that hid the reduce guard applies to the check itself:
 its nonzero exit codes ARE its output, so a bare `fp_out=$(...)` would exit the
 script one line before the branch that reads them.
 """
+import os
 import pathlib
 import re
 import shlex
 import subprocess
+import tempfile
 
 import pytest
 
@@ -333,3 +335,91 @@ def test_the_expected_filters_are_the_runs_own_list_verbatim():
     assert m.group(1) == '"$FILTERS"', (
         f"--expect-filters must take the run's own filter list verbatim, "
         f"got {m.group(1)}")
+
+
+def test_EXECUTED_the_check_receives_the_runs_own_filter_list():
+    """Run the real invocation with a stub `python` on PATH and read the argv it
+    receives.
+
+    The source-text pin above cannot see two runtime-breaking mutants that leave
+    every retie test green: reassigning `FILTERS="F999W"` just before the check,
+    and `if false && [ "${RETIE_FIXED_POINT_CHECK:-1}" = "1" ]`, which makes the
+    whole check unreachable.  Executing it is the only way to pin what the
+    process is actually handed."""
+    # From the ENCLOSING guard, not from `fp_rc=0`: a mutant that reassigns
+    # FILTERS just above the call, or wraps the guard in `if false &&`, lives
+    # outside the narrower slice and would go unseen.
+    src = _src()
+    start = src.index('    if [ "${RETIE_FIXED_POINT_CHECK:-1}" = "1" ]')
+    end = src.index('        echo "$fp_out"\n', start)
+    body = src[start:end] + '    fi\n'
+    # `set -e` + the `case` refusal are part of what is being executed; give the
+    # loop variables the branch reads.
+    body = body.replace('exit 2 ;;', 'echo REFUSED >&2; exit 2 ;;')
+
+    with tempfile.TemporaryDirectory() as d:
+        argv_log = os.path.join(d, 'argv.txt')
+        stub = os.path.join(d, 'python')
+        with open(stub, 'w') as fh:
+            fh.write('#!/bin/sh\nprintf "%s\\n" "$@" > ' + shlex.quote(argv_log)
+                     + '\nexit 0\n')
+        os.chmod(stub, 0o755)
+        script = (
+            'set -euo pipefail\n'
+            f'PATH={shlex.quote(d)}:$PATH\n'
+            # FIELD deliberately not 012: with the fixture and the assertion
+            # agreeing on the same literal, an --obs-token hardcoded to
+            # "o012" is indistinguishable from the interpolation.
+            'BASE=/tmp/base\nFIELD=007\nFILTERS="F162M F480M"\nit=2\n'
+            'RETIE_RUN_START=20260818T000000Z\n'
+            'RETIE_ACCEPT_RESIDUAL_MAS=15\nPIPE_ROOT=/tmp/pipe\n'
+            + body)
+        r = subprocess.run(['bash', '-c', script], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        assert os.path.exists(argv_log), (
+            'the fixed-point check never ran -- the guard around it is '
+            'unreachable')
+        with open(argv_log) as fh:
+            argv = [ln.rstrip('\n') for ln in fh]
+
+    assert '--expect-filters' in argv, argv
+    assert argv[argv.index('--expect-filters') + 1] == 'F162M F480M', argv
+    assert argv[argv.index('--obs-token') + 1] == 'o007', argv
+    assert argv[argv.index('--accept-below-mas') + 1] == '15', argv
+
+
+def test_the_acceptance_ceiling_cap_IS_the_gate_it_is_derived_from():
+    """The cap was unpinned across a 600x range -- 15, 50 and 9999 all left the
+    suite green, and only 1e5 and 1e9 were caught, by two hardcoded values.
+
+    It is now derived: the quantity being waived is a PER-EXPOSURE residual, and
+    the nearest downstream gate that sees one is the m7 local-cell gate.  A cap
+    above it admits floors that spend a whole m3-m7 chain and then fail at m7 on
+    the same number.  Pin the identity, not a literal, so the two move together.
+    """
+    from jwst_gc_pipeline.photometry.retie_fixed_point import (
+        MAX_ACCEPT_CEILING_MAS)
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+        LOCAL_CELL_TOL_MAS)
+    assert MAX_ACCEPT_CEILING_MAS == float(LOCAL_CELL_TOL_MAS), (
+        f'the acceptance cap ({MAX_ACCEPT_CEILING_MAS}) has drifted from the '
+        f'm7 local-cell gate ({LOCAL_CELL_TOL_MAS}) it is derived from')
+
+
+def test_EXECUTED_a_whitespace_only_FILTERS_stops_before_the_reduce():
+    """`${FILTERS:?}` rejects "" and passes " ".  FILTERS is both the reduce
+    list and the coverage declaration, so a whitespace-only value declares
+    nothing while looking set -- and the Python side only sees it at `it >= 2`,
+    which is one full ~7 h reduce pass later."""
+    src = _src()
+    start = src.index('FILTERS=${FILTERS:?set FILTERS}')
+    end = src.index('MODULES=${MODULES:-nrcb}', start)
+    body = src[start:end]
+    r = subprocess.run(['bash', '-c', 'set -euo pipefail\nFILTERS="   "\n' + body],
+                       capture_output=True, text=True)
+    assert r.returncode != 0, 'a whitespace-only FILTERS must stop the run'
+    assert 'whitespace only' in r.stderr, r.stderr
+    ok = subprocess.run(
+        ['bash', '-c', 'set -euo pipefail\nFILTERS="F162M F480M"\n' + body],
+        capture_output=True, text=True)
+    assert ok.returncode == 0, ok.stderr

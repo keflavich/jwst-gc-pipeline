@@ -47,6 +47,10 @@ import math
 import os
 import re
 
+# The one cross-module import in this file.  It is here rather than inlined so
+# MAX_ACCEPT_CEILING_MAS cannot drift from the gate it is derived from.
+from .astrometry_checkpoint import LOCAL_CELL_TOL_MAS
+
 #: Two iterations agree when every shared correction agrees to better than this.
 #: Well under the 2 mas checkpoint tolerance -- the question is not "is the
 #: frame aligned" (it is not, or there would be no correction) but "is applying
@@ -68,12 +72,27 @@ DEFAULT_TOL_MAS = 0.5
 #: which is the conservative direction.  A plain REPEAT is caught at three.
 DEFAULT_REPEATS = 3
 
-#: Hardest ceiling `--accept-below-mas` may be given.  Well below the ~100 mas
-#: gross reference-tie gate, so a ceiling can never reach the class of error that
-#: gate exists to catch.  Without it, `inf`, `nan` and 1e9 all reached the
-#: acceptance branch -- caught only by a character class in the shell wrapper,
-#: which let 100000 and 999999.9 through.
-MAX_ACCEPT_CEILING_MAS = 50.0
+#: Hardest ceiling `--accept-below-mas` may be given.
+#:
+#: DERIVED, not chosen.  The quantity being waived is a PER-EXPOSURE residual,
+#: and the nearest downstream gate that sees one is the m7 local-cell gate
+#: (`LOCAL_CELL_TOL_MAS`).  A ceiling above it admits floors that spend a whole
+#: m3-m7 chain and then fail at m7 on the same number, which is the worst of
+#: both: the compute is spent and the field is still blocked.  So the hardest
+#: ceiling IS that gate, imported rather than copied so the two move together.
+#:
+#: An earlier revision set 50.0 and justified it against
+#: `REFERENCE_CROSSCHECK_GROSS_MAS` (~100).  That gate bounds the WHOLE-VISIT
+#: consensus-vs-reference separation -- which this module explicitly exempts
+#: from the floor via `_is_whole_consensus_shift` -- so it never bounded the
+#: quantity in hand.  At 50 the tool accepted sgra/o001 at a 19.73 mas residual
+#: and printed a floor of 20.3, while this module's own docstring calls
+#: "twenty-five mas that will not close" a defect.
+#:
+#: Without any cap, `inf`, `nan` and 1e9 all reached the acceptance branch,
+#: caught only by a character class in the shell wrapper that let 100000 and
+#: 999999.9 through.
+MAX_ACCEPT_CEILING_MAS = float(LOCAL_CELL_TOL_MAS)
 
 
 def measurements(rec):
@@ -441,18 +460,30 @@ def main(argv=None):
     unscanned = sorted(
         f for f in (args.expect_filters or [])
         if f.upper() not in {g[0].upper() for g in (stuck | moving | unjudged)})
-    # The other half of the declaration contract.  `unscanned` catches
-    # OVER-declaration (a filter named that the scan cannot see).  Its mirror is
-    # UNDER-declaration -- naming fewer filters than the run catalogs -- which
-    # is what actually reopens the hole, because the correction floor reaches
-    # every filter of the run while the declaration reaches only what was named.
-    # Nothing can tell from inside the scan which of the two the operator meant,
-    # so this one is REPORTED rather than refused: the scan says what it saw and
-    # the operator did not declare, and the number that goes with it.
-    undeclared = sorted(
-        {g[0] for g in (stuck | moving | unjudged)}
-        - {f.upper() for f in (args.expect_filters or [])}) \
-        if args.expect_filters else []
+    # The other half of the declaration contract, and the half that matters.
+    #
+    # `unscanned` catches OVER-declaration -- a filter named that the scan
+    # cannot see.  Its mirror is UNDER-declaration, and the dangerous case is
+    # NOT a filter the scan judged and the operator forgot to name: that one is
+    # already covered by the moving refusal, the unjudged refusal and
+    # `largest_measured_residual`.  It is a filter whose records lie OUTSIDE
+    # this scan -- untokened while a tokened sibling exists, or older than
+    # `--since` -- and which is not declared either.  That filter is in no
+    # group, so nothing above sees it, and the correction floor still reaches
+    # it.  Measured: F162M/o012 stuck beside an untokened F200W history at
+    # 8602 mas accepted at rc=4 without F200W being named anywhere.
+    #
+    # So the comparison is against an UNSCOPED read of the record directory --
+    # every filter with a record at this stage, regardless of token or date --
+    # which is exactly the population the floor reaches.  Reported rather than
+    # refused: an operator narrowing the scope deliberately is legitimate, and
+    # nothing here can tell that from a forgotten filter.
+    declared = {f.upper() for f in (args.expect_filters or [])}
+    undeclared = []
+    if declared:
+        every = {str(f).upper() for f, _tok in _group_by_filter_token(
+            load_records(args.record_dir, stage=args.stage))}
+        undeclared = sorted(every - declared)
     if not stuck:
         return 0
     print("\nFIXED POINT: applying these corrections does not change what "
