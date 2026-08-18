@@ -1357,3 +1357,53 @@ def test_check_exposures_reports_a_rewritten_source(sr, eb, tmp_path, capsys):
     _fits(src, EXTRA=1)
     assert sr.check_exposures('brick', 'v9', tmp_path / 'releases') == 1
     assert 'diverged' in capsys.readouterr().out
+
+
+# ---- the two remaining unpinned wiring lines ----
+
+def test_stage_refuses_before_it_writes_anything(sr, tmp_path, monkeypatch):
+    """The frozen-release guard is called INSIDE stage(), not only from main().
+    Placement is the whole property: a guard that runs after the first copy has
+    already written into a published version."""
+    root = tmp_path / 'releases'
+    field_dir = root / 'v9' / 'brick'
+    field_dir.mkdir(parents=True)
+    (field_dir / 'MANIFEST.json').write_text('{"files": []}')
+    src = tmp_path / 'a_i2d.fits'
+    _fits(src)
+    items = [{'category': 'image', 'kind': 'science', 'src': str(src),
+              'dest': 'images/F212N/a_i2d.fits', 'filter': 'F212N',
+              'observation': None, 'iteration': None,
+              'size_bytes': src.stat().st_size}]
+    monkeypatch.setattr(sr, 'GLOBUS_COLLECTION_ROOT', root)
+    with pytest.raises(sr.FrozenReleaseError):
+        sr.stage(items, 'brick', 'v9', root, 'copy', False)
+    assert not (field_dir / 'images').exists()
+    assert json.loads((field_dir / 'MANIFEST.json').read_text()) == {'files': []}
+
+
+def test_the_page_passes_the_release_build_time_to_the_tie_section(mw,
+                                                                  monkeypatch):
+    """A tie measured AFTER the release was cut describes a later solution.
+    render_astrometry filters on that, but only if render_field_page hands it
+    the manifest's `built` -- a v1.0-2026.06 page printed eight rows of accuracy
+    for its solution, two of them measured two months after it was cut."""
+    monkeypatch.setitem(mw.FIELDS, 'zz_test', {})
+    monkeypatch.setattr(mw.astrometry_provenance, 'collect', lambda f, cfg: {
+        'state': 'table', 'table': {'name': 't.csv', 'exists': True,
+                                    'size_bytes': 10, 'modified': 'x'},
+        'ties': {'F212N': {'date': '2026-08-30T00:00:00', 'dense_mas': 3.0,
+                           'dense_contrast': 99.0}}})
+    table_entry = {'category': mw.astrometry_provenance.ASTROMETRY_CATEGORY,
+                   'kind': 'offsets_table', 'dest': 'astrometry/t.csv',
+                   'url': 'https://example.invalid/t.csv', 'filter': None,
+                   'observation': None, 'iteration': None, 'size_bytes': 10}
+    manifest = {'field': 'zz_test', 'version': 'v1', 'group': None,
+                'release_path': '/releases/v1/zz_test', 'mode': 'copy',
+                'built': '2026-08-01T00:00:00', 'globus_collection_id': 'x',
+                'globus_https_base': 'https://example.invalid',
+                'files': [table_entry]}
+    page = mw.render_field_page('zz_test', manifest, None)
+    assert 'F212N' not in page                     # measured after this release
+    manifest_later = dict(manifest, built='2026-09-01T00:00:00')
+    assert 'F212N' in mw.render_field_page('zz_test', manifest_later, None)
