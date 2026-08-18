@@ -1305,7 +1305,7 @@ def print_manifest(items):
     if exposures:
         summary = exposure_bundle.summarize(exposures)
         exp_total = sum(it["size_bytes"] or 0 for it in exposures)
-        print(f"\nDETECTOR-FRAME EXPOSURES (hardlinked, not frozen): "
+        print(f"\nDETECTOR-FRAME EXPOSURES (linked, not frozen): "
               f"{len(exposures)} frames, total {human_size(exp_total)}")
         for (obs, filt) in sorted(summary):
             count, size = summary[(obs, filt)]
@@ -1376,6 +1376,10 @@ def stage(items, field, version, release_root, mode, do_checksum,
             it["sha256"] = digest
             checksum_lines.append(f"{digest}  {it['dest']}")
 
+    exposure_bundle.report_symlink_fallbacks(
+        [it for it in items
+         if it.get("category") == exposure_bundle.EXPOSURE_CATEGORY])
+
     # release-relative globus path and URL for each item
     for it in items:
         rel_to_collection = (field_dir / it["dest"]).relative_to(GLOBUS_COLLECTION_ROOT)
@@ -1394,9 +1398,12 @@ def stage(items, field, version, release_root, mode, do_checksum,
         "built": datetime.datetime.now().astimezone().isoformat(),
         "mode": mode,
         # `mode` describes the deliverables. Detector-frame exposures are
-        # always symlinks and always unchecksummed, so state that separately
+        # always links and always unchecksummed, so state that separately
         # rather than let "mode": "copy" imply a frozen copy of every entry.
-        "exposure_mode": "hardlink",
+        # DERIVED from the entries, never asserted: see link_mode_summary.
+        "exposure_mode": exposure_bundle.link_mode_summary(
+            [it for it in items
+             if it.get("category") == exposure_bundle.EXPOSURE_CATEGORY]),
         # Positive outcome of the photometric-continuity gate for this staging:
         # "passed" (all clean), "waived" (a documented known limit was recorded --
         # see per-file continuity_waivers), "skipped(override)", or a
@@ -1648,11 +1655,7 @@ def stage_exposures_only(field, version, release_root, from_disk=False,
         dest.parent.mkdir(parents=True, exist_ok=True)
         it["link_mode"] = exposure_bundle.link_frame(Path(it["src"]).resolve(), dest)
         it["source_identity"] = exposure_bundle.source_identity(it["src"])
-    fallbacks = [it["dest"] for it in exposures
-                 if it.get("link_mode") == "symlink"]
-    if fallbacks:
-        print(f"  WARNING: {len(fallbacks)} frame(s) fell back to a symlink "
-              f"(different filesystem); those are NOT servable over HTTPS")
+    exposure_bundle.report_symlink_fallbacks(exposures)
 
     # A frames-only release must still carry the table those frames are on --
     # that is the whole point of preserving it, and the frames are the products
@@ -1687,7 +1690,7 @@ def stage_exposures_only(field, version, release_root, from_disk=False,
             if f.get("category") not in (exposure_bundle.EXPOSURE_CATEGORY,
                                          astrometry_provenance.ASTROMETRY_CATEGORY)]
     manifest["files"] = kept + exposures + ([table] if table else [])
-    manifest["exposure_mode"] = "hardlink"
+    manifest["exposure_mode"] = exposure_bundle.link_mode_summary(exposures)
     # `built` is NOT touched -- release_freshness reads it as the staging time
     # and would re-publish this field's quarantined mosaics if it moved.  The
     # separate key records when the frames were added without claiming the
@@ -1699,6 +1702,52 @@ def stage_exposures_only(field, version, release_root, from_disk=False,
                  built_at=manifest.get("built"))
     subprocess.run(["chmod", "-R", "a+rX", str(field_dir)], check=True)
     return field_dir, len(exposures)
+
+
+def check_exposures(field, version, release_root):
+    """Audit a staged release's detector frames.  Returns a process exit code.
+
+    ``diverged_frames`` existed with no caller outside the tests while the
+    README told readers the release "reports any that have diverged" -- a claim
+    with nothing behind it.  This is what performs it.  Divergence is expected
+    over time and is not a staging failure: the release still serves real,
+    readable bytes, just an older generation than the pipeline now holds, which
+    is the property a symlink would have hidden by following along silently.
+    """
+    field_dir = field_release_dir(field, version, release_root)
+    manifest_path = field_dir / "MANIFEST.json"
+    if not manifest_path.is_file():
+        print(f"No staged release at {manifest_path}", file=sys.stderr)
+        return 2
+    manifest = json.loads(manifest_path.read_text())
+    exposures = [f for f in manifest.get("files", [])
+                 if f.get("category") == exposure_bundle.EXPOSURE_CATEGORY]
+    if not exposures:
+        print(f"{field} {version}: release ships no detector-frame exposures.")
+        return 0
+    recorded = manifest.get("exposure_mode")
+    derived = exposure_bundle.link_mode_summary(exposures)
+    print(f"{field} {version}: {len(exposures)} detector-frame exposures, "
+          f"link mode {derived}"
+          + (f" (MANIFEST says {recorded!r})" if recorded != derived else ""))
+    fallbacks = exposure_bundle.report_symlink_fallbacks(exposures)
+    diverged = exposure_bundle.diverged_frames(manifest)
+    if diverged:
+        print(f"  {len(diverged)} frame(s) have diverged from their source:")
+        for dest, why in diverged[:20]:
+            print(f"    - {dest}: {why}")
+        if len(diverged) > 20:
+            print(f"    ... and {len(diverged) - 20} more")
+    else:
+        print("  no frame has diverged from its source")
+    return 1 if (diverged or recorded != derived) else 0
+
+
+def _link_mode_phrase(exposures):
+    """How the frames were placed, in README prose -- derived, never asserted."""
+    return {"hardlink": "HARDLINKS", "symlink": "SYMLINKS",
+            "mixed": "LINKS (some hard, some symbolic)"}.get(
+                exposure_bundle.link_mode_summary(exposures), "LINKS")
 
 
 def write_readme(field_dir, field, version, items, mode, built_at=None):
@@ -1796,17 +1845,33 @@ def write_readme(field_dir, field, version, items, mode, built_at=None):
             "the `_destreak`/`_align`/`_cal` frame the mosaic was drizzled from",
             "directly.",
             "",
-            "**These are HARDLINKS to the pipeline's own frames, not frozen copies.**",
-            "They cost no additional storage -- one inode, shared -- and unlike",
+            f"**These are {_link_mode_phrase(exposures)} to the pipeline's own "
+            f"frames, not frozen copies.**",
+            "They cost no additional storage and unlike",
             "everything else in this release they are not checksummed and are not",
             "covered by `CHECKSUMS.sha256`. A re-reduction writes a NEW file rather",
             "than rewriting these bytes, so a frame here can become an older",
             "generation than the pipeline currently holds; the release records each",
-            "source's identity and reports any that have diverged. Cite the mosaics",
+            "source's identity, which",
+            "`stage_release.py --check-exposures --field <field>` compares against",
+            "the sources now to report the frames that have diverged. Cite the mosaics",
             "and catalogs, which are frozen; the exposures are a working convenience",
             "for re-drizzling and per-exposure work.",
             "",
         ]
+        if exposure_bundle.symlink_fallbacks(exposures):
+            n_sym = len(exposure_bundle.symlink_fallbacks(exposures))
+            exposure_lines[-1:] = [
+                f"**{n_sym} of these frames are SYMLINKS and can only be taken by",
+                "Globus transfer.** This field's data are on a different filesystem",
+                "from the release tree, where a hardlink is impossible. The Globus",
+                "HTTPS data plane refuses a symlink pointing out of the release tree",
+                "(404); the transfer API follows it. Use",
+                "`globus transfer --recursive` (or the bundle buttons on the web",
+                "page), not `wget` on a per-frame URL. Mosaics, catalogs and tables",
+                "are real files and are unaffected.",
+                "",
+            ]
 
     # Astrometry provenance. Present for EVERY field, including -- especially --
     # the ones with nothing to report: a release that ships detector frames and
@@ -1960,6 +2025,13 @@ def main(argv=None):
                              "answers 'which frames belong to this field/obs/filter', "
                              "not 'which frames went into that mosaic' -- so it is "
                              "opt-in, never a silent fallback.")
+    parser.add_argument("--check-exposures", action="store_true",
+                        help="audit a STAGED release's detector frames instead of "
+                             "staging: report the frames whose source has been "
+                             "rewritten or removed since they were linked, and the "
+                             "ones that fell back to a symlink (not HTTPS-servable). "
+                             "Exits 1 when anything has diverged. This is the check "
+                             "the README tells readers the release performs.")
     parser.add_argument("--images-only", action="store_true",
                         help="ship mosaics only, no catalogs (e.g. images are internally "
                              "consistent but the catalog/absolute frame is not yet certified)")
@@ -2006,9 +2078,12 @@ def main(argv=None):
             return 2
         if not n:
             return 1
-        print(f"Added {n} detector-frame exposures (hardlinked, not checksummed) "
+        print(f"Added {n} detector-frame exposures (linked, not checksummed) "
               f"to {field_dir}. Mosaics and catalogs unchanged.")
         return 0
+
+    if args.check_exposures:
+        return check_exposures(args.field, args.version, args.release_root)
 
     missing = []
     exposure_problems = []
@@ -2291,12 +2366,14 @@ def main(argv=None):
     # reads as 222 frozen copies when 216 of them are symlinks that --copy did
     # not apply to, which is the one thing about this tree an operator must not
     # misread.
-    n_exposures = sum(1 for it in items
-                      if it["category"] == exposure_bundle.EXPOSURE_CATEGORY)
+    staged_exposures = [it for it in items
+                        if it["category"] == exposure_bundle.EXPOSURE_CATEGORY]
+    n_exposures = len(staged_exposures)
+    exp_mode = exposure_bundle.link_mode_summary(staged_exposures)
     print(f"Staged {len(items) - n_exposures} deliverables into {field_dir} "
           f"(mode: {mode})"
           + (f", plus {n_exposures} detector-frame exposures "
-             f"(hardlinked, not checksummed)." if n_exposures else "."))
+             f"({exp_mode} links, not checksummed)." if n_exposures else "."))
 
     if args.set_acl:
         set_acl(args.field, args.version, args.release_root)

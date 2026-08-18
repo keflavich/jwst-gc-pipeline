@@ -381,7 +381,7 @@ def test_page_states_the_product_and_that_they_are_not_frozen(mw, sr, eb,
                                                               nircam_field):
     page = mw.render_field_page('f', _manifest(sr, eb, nircam_field), None)
     assert 'destreak_o001_crf' in page
-    assert "hardlinks to the pipeline's own frames" in page
+    assert "links to the pipeline's own frames" in page
     assert 'CHECKSUMS.sha256' in page
 
 
@@ -1243,3 +1243,117 @@ def test_a_field_without_curated_still_shows_its_preview(mw):
     page = mw.render_field_page('f', manifest, 'assets/f.jpg',
                                 preview_from_curated=False)
     assert "src='assets/f.jpg'" in page
+
+
+# ---- the manifest must not ASSERT a link mode the entries contradict ----
+
+def test_exposure_mode_is_derived_from_the_entries(eb):
+    """brick published 1200 entries each correctly recording
+    `link_mode: "symlink"` -- its data are on a different filesystem from the
+    release root, where `os.link` cannot work -- underneath a hardcoded
+    `exposure_mode: "hardlink"`. The one key a consumer reads to learn how the
+    frames were placed was the one key that could not disagree with reality."""
+    assert eb.link_mode_summary([{'link_mode': 'hardlink'}] * 3) == 'hardlink'
+    assert eb.link_mode_summary([{'link_mode': 'symlink'}] * 3) == 'symlink'
+    assert eb.link_mode_summary(
+        [{'link_mode': 'hardlink'}, {'link_mode': 'symlink'}]) == 'mixed'
+    assert eb.link_mode_summary([]) is None
+
+
+def test_full_staging_reports_the_symlink_fallback(eb, capsys):
+    """The warning lived only on the `--exposures-only` path, so a full
+    `stage()` of a cross-filesystem field placed 1200 unservable links and said
+    nothing -- which is why the commit message read "1200 frames hardlinked"."""
+    eb.report_symlink_fallbacks([{'dest': 'exposures/F212N/a.fits',
+                                  'link_mode': 'symlink'},
+                                 {'dest': 'exposures/F212N/b.fits',
+                                  'link_mode': 'hardlink'}])
+    out = capsys.readouterr().out
+    assert 'WARNING' in out and '1 frame' in out and 'HTTPS' in out
+
+
+def test_no_warning_when_every_frame_is_hardlinked(eb, capsys):
+    eb.report_symlink_fallbacks([{'dest': 'x', 'link_mode': 'hardlink'}])
+    assert capsys.readouterr().out == ''
+
+
+def test_stage_writes_the_derived_mode_not_a_hardcoded_one(sr, eb, tmp_path,
+                                                           monkeypatch):
+    """End to end: the manifest `stage()` writes reports what actually happened
+    to the frames."""
+    src = tmp_path / 'src' / 'jw01182001001_01101_00001_nrca1_cal.fits'
+    src.parent.mkdir(parents=True)
+    _fits(src)
+    items = [{'category': eb.EXPOSURE_CATEGORY, 'kind': eb.EXPOSURE_KIND,
+              'src': str(src), 'dest': 'exposures/F212N/' + src.name,
+              'filter': 'F212N', 'observation': None, 'iteration': None,
+              'size_bytes': src.stat().st_size}]
+    root = tmp_path / 'releases'
+    monkeypatch.setattr(sr, 'GLOBUS_COLLECTION_ROOT', root)
+
+    # brick's case: the release root and the field's data are on different
+    # filesystems, so `os.link` cannot work and every frame falls back.
+    def no_hardlinks(src, dest):
+        raise OSError(18, 'Invalid cross-device link')
+    monkeypatch.setattr(eb.os, 'link', no_hardlinks)
+
+    field_dir = sr.stage(items, 'brick', 'v9', root, 'copy', False)
+    manifest = json.loads((field_dir / 'MANIFEST.json').read_text())
+    entry_modes = {f.get('link_mode') for f in manifest['files']
+                   if f['category'] == eb.EXPOSURE_CATEGORY}
+    assert entry_modes == {'symlink'}
+    assert manifest['exposure_mode'] == 'symlink'
+    readme = (field_dir / 'README.md').read_text()
+    assert 'SYMLINKS' in readme and 'Globus transfer' in readme
+    # ...and the headline sentence does not still call them hardlinks
+    assert 'HARDLINKS' not in readme
+
+
+def test_symlinked_frames_are_not_offered_as_per_file_links(mw):
+    """A symlink pointing out of the release tree 404s over the Globus HTTPS
+    data plane while the transfer API follows it, so a per-frame anchor for one
+    is a link that cannot work. The name is still listed; the bundle button,
+    which transfers, is still offered."""
+    exposures = [{'category': 'exposure', 'dest': 'exposures/F212N/a.fits',
+                  'filter': 'F212N', 'observation': None, 'size_bytes': 10,
+                  'url': 'https://example.invalid/a.fits',
+                  'link_mode': 'symlink'}]
+    page = mw.render_exposures('brick', exposures, '/releases/v9/brick',
+                               lambda sub, label, cls='btn': f'<a>{label}</a>',
+                               False)
+    assert "href='https://example.invalid/a.fits'" not in page
+    assert 'a.fits' in page and 'bundle' in page
+    assert 'Globus transfer only' in page
+
+
+def test_hardlinked_frames_keep_their_per_file_links(mw):
+    exposures = [{'category': 'exposure', 'dest': 'exposures/F212N/a.fits',
+                  'filter': 'F212N', 'observation': None, 'size_bytes': 10,
+                  'url': 'https://example.invalid/a.fits',
+                  'link_mode': 'hardlink'}]
+    page = mw.render_exposures('brick', exposures, '/releases/v9/brick',
+                               lambda sub, label, cls='btn': f'<a>{label}</a>',
+                               False)
+    assert "href='https://example.invalid/a.fits'" in page
+    assert 'Globus transfer only' not in page
+
+
+def test_check_exposures_reports_a_rewritten_source(sr, eb, tmp_path, capsys):
+    """`diverged_frames` had no caller outside the tests while the README told
+    readers the release "reports any that have diverged"."""
+    src = tmp_path / 'src.fits'
+    _fits(src)
+    field_dir = tmp_path / 'releases' / 'v9' / 'brick'
+    (field_dir / 'exposures').mkdir(parents=True)
+    dest = field_dir / 'exposures' / 'a.fits'
+    os.link(src, dest)
+    manifest = {'field': 'brick', 'version': 'v9', 'exposure_mode': 'hardlink',
+                'files': [{'category': eb.EXPOSURE_CATEGORY, 'src': str(src),
+                           'dest': 'exposures/a.fits', 'link_mode': 'hardlink',
+                           'source_identity': eb.source_identity(src)}]}
+    (field_dir / 'MANIFEST.json').write_text(json.dumps(manifest))
+    assert sr.check_exposures('brick', 'v9', tmp_path / 'releases') == 0
+    src.unlink()                       # the pipeline's write pattern: new inode
+    _fits(src, EXTRA=1)
+    assert sr.check_exposures('brick', 'v9', tmp_path / 'releases') == 1
+    assert 'diverged' in capsys.readouterr().out

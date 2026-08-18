@@ -134,6 +134,65 @@ def source_identity(path):
             "size": stat.st_size}
 
 
+def link_mode_summary(exposures):
+    """``"hardlink"``/``"symlink"``/``"mixed"``, DERIVED from the entries.
+
+    The manifest's ``exposure_mode`` used to be the literal string
+    ``"hardlink"`` at both staging call sites, which made it a statement of
+    intent rather than of fact: brick staged 1200 entries each correctly
+    recording ``link_mode: "symlink"`` (its data live on a different filesystem
+    from the release root, so ``os.link`` cannot work) underneath an
+    ``exposure_mode`` that read ``"hardlink"``.  The one key a consumer reads to
+    know how the frames were placed was the one key that could not disagree with
+    reality.  Derive it, so it cannot.
+
+    ``None`` when there are no exposures -- distinct from a mode.
+    """
+    modes = {it.get("link_mode") for it in exposures
+             if it.get("category", EXPOSURE_CATEGORY) == EXPOSURE_CATEGORY}
+    modes.discard(None)
+    if not modes:
+        return None
+    if len(modes) == 1:
+        return modes.pop()
+    return "mixed"
+
+
+def symlink_fallbacks(exposures):
+    """Staged exposures that fell back to a symlink, hence are not HTTPS-servable."""
+    return [it["dest"] for it in exposures if it.get("link_mode") == "symlink"]
+
+
+def report_symlink_fallbacks(exposures, out=print):
+    """Warn about the symlink fallbacks.  Returns the list it warned about.
+
+    Shared by both staging paths: the warning existed only on the
+    ``--exposures-only`` path, so a full ``stage()`` of a cross-filesystem field
+    placed 1200 unservable links and said nothing.
+    """
+    fallbacks = symlink_fallbacks(exposures)
+    if fallbacks:
+        out(f"  WARNING: {len(fallbacks)} frame(s) fell back to a symlink "
+            f"(different filesystem than the release root); those are NOT "
+            f"servable over HTTPS -- they can only be taken by Globus transfer")
+    return fallbacks
+
+
+def same_filesystem(a, b):
+    """Whether a hardlink from `a` to `b` is possible at all (same ``st_dev``).
+
+    Checked against the nearest existing ancestor, so it answers before the
+    release directory is created.
+    """
+    def dev(path):
+        path = Path(path).resolve()
+        while not path.exists() and path != path.parent:
+            path = path.parent
+        return path.stat().st_dev if path.exists() else None
+    da, db = dev(a), dev(b)
+    return da is not None and da == db
+
+
 def diverged_frames(manifest):
     """Staged exposures whose source is no longer the file they were linked to.
 

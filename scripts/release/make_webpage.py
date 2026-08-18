@@ -129,6 +129,8 @@ code { background:#0b0f14; padding:.1rem .35rem; border-radius:4px; font-size:.8
        border:1px solid var(--border); border-radius:999px; padding:.05rem .55rem;
        font-size:.78rem; }
 .checksum { font-family:monospace; color:var(--muted); font-size:.78rem; }
+.warn { background:#2b2011; border:1px solid #7c5e10; border-radius:8px;
+        padding:.7rem 1rem; font-size:.9rem; }
 .bulk { background:var(--panel); border:1px solid var(--border); border-radius:8px;
         padding:1rem 1.2rem; margin:1rem 0; }
 .btn { display:inline-block; background:var(--accent); color:#0d1117;
@@ -904,22 +906,26 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
     if have_images and have_catalogs:
         buttons.append(app_link(base, "Everything"))
     if have_images:
-        buttons.append(app_link(base + "/images", "Images only"))
+        buttons.append(app_link(base + "/images",
+                                "Mosaic images only (resampled onto a sky grid)"))
     if have_catalogs:
         buttons.append(app_link(base + "/catalogs", "Catalogs only"))
     if exposures:
         exp_bytes = sum(f.get("size_bytes") or 0 for f in exposures)
         buttons.append(app_link(
             base + "/exposures",
-            f"All exposures ({len(exposures)}, {human_size(exp_bytes)})"))
+            f"All detector-frame exposures, reduced "
+            f"({len(exposures)}, {human_size(exp_bytes)})"))
     txt_links = [
         f"<a href='{html.escape(field)}_files.txt'>all</a>"]
     if have_images:
-        txt_links.append(f"<a href='{html.escape(field)}_images.txt'>images</a>")
+        txt_links.append(
+            f"<a href='{html.escape(field)}_images.txt'>mosaic images</a>")
     if have_catalogs:
         txt_links.append(f"<a href='{html.escape(field)}_catalogs.txt'>catalogs</a>")
     if exposures:
-        txt_links.append(f"<a href='{html.escape(field)}_exposures.txt'>exposures</a>")
+        txt_links.append(
+            f"<a href='{html.escape(field)}_exposures.txt'>detector-frame exposures</a>")
 
     out.append(
         "<div class=bulk><b>Bulk download</b>"
@@ -944,7 +950,7 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
         return html.escape(str(f.get("version") or manifest["version"]))
 
     # images table grouped by (observation, filter)
-    out.append("<h2>Images</h2>")
+    out.append("<h2>Mosaic images <span class=muted>(resampled onto a sky grid)</span></h2>")
     out.append(f"<table><tr>{obs_col}<th>Filter</th><th>Type</th><th>Iteration</th>"
                "<th>Version</th><th>Size</th><th>Download</th></tr>")
     groups = {}
@@ -1061,12 +1067,25 @@ def render_exposures(field, exposures, base, app_link, multi):
         "filter: <code>_crf</code> is the Stage-3 outlier/CR-flagged frame where "
         "one was written, otherwise the <code>_destreak</code> / "
         "<code>_align</code> / <code>_cal</code> frame the mosaic was drizzled "
-        "from directly. <b>These are hardlinks to the pipeline's own frames, not "
+        "from directly. <b>These are links to the pipeline's own frames, not "
         "frozen copies</b> -- they cost no extra storage, and they are not in "
         "<code>CHECKSUMS.sha256</code>. A re-reduction writes a new file rather "
         "than rewriting these bytes, so a frame here can become an older "
         "generation than the pipeline now holds. Cite the mosaics and catalogs; "
         "treat these as a working convenience.</p>")
+
+    symlinked = [f for f in exposures if f.get("link_mode") == "symlink"]
+    if symlinked:
+        out.append(
+            f"<p class=warn><b>Globus transfer only for "
+            f"{'these' if len(symlinked) == len(exposures) else str(len(symlinked))} "
+            f"frames.</b> This field's data sit on a different filesystem from the "
+            f"release tree, so the frames are symlinked rather than hardlinked, and "
+            f"the Globus HTTPS data plane will not serve a symlink that points out "
+            f"of the release tree. Use the <b>bundle</b> button or "
+            f"<code>globus transfer --recursive</code>, which follow them; a browser "
+            f"or <code>wget</code> on a single frame URL returns 404. The mosaics, "
+            f"catalogs and tables above are unaffected.</p>")
 
     groups = {}
     for f in exposures:
@@ -1084,10 +1103,17 @@ def render_exposures(field, exposures, base, app_link, multi):
         suffixes = sorted({_frame_product(f) for f in rows})
         subpath = Path(rows[0]["dest"]).parent.as_posix()
         obs_cell = f"<td><b>{html.escape(obs)}</b></td>" if multi else ""
+        # A symlinked frame has no working per-file URL: the Globus HTTPS data
+        # plane refuses a symlink pointing out of the release tree (404), while
+        # the transfer API follows it. Rendering the name without an anchor says
+        # "take this group with the bundle button", which is the only route that
+        # works for it -- an anchor there would be a link that 404s.
         links = "".join(
-            f"<a href='{html.escape(f['url'])}'>"
-            f"{html.escape(Path(f['dest']).name)}</a>"
-            for f in rows if f.get("url"))
+            (f"<a href='{html.escape(f['url'])}'>"
+             f"{html.escape(Path(f['dest']).name)}</a>"
+             if f.get("url") and f.get("link_mode") != "symlink"
+             else f"<span class=muted>{html.escape(Path(f['dest']).name)}</span>")
+            for f in rows)
         out.append(
             f"<tr>{obs_cell}<td><b>{html.escape(filt)}</b></td>"
             f"<td>{len(rows)}</td>"
@@ -1300,7 +1326,8 @@ def render_help():
     out.append("<p>Just click any <b>download</b> link on a field page. If you are not "
                "already signed in, Globus will prompt you to log in (your "
                "<b>ORCID</b> works), then the file downloads. The bulk "
-               "<b>⬇ Everything / Images / Catalogs</b> buttons open the folder in the "
+               "<b>⬇ Everything / Mosaic images / Catalogs / Detector-frame "
+               "exposures</b> buttons open the folder in the "
                "Globus file manager — press <b>Ctrl/Cmd-A</b> to select all and "
                "<b>Start</b> a transfer to your own collection. "
                "<b>No access token is required for browser downloads.</b></p>")
