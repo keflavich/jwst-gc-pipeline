@@ -164,10 +164,23 @@ def _emitted_sources():
         src = kw.get("source")
         if not isinstance(src, ast.JoinedStr):
             continue
-        # f"{stage} <literal>" -> take the literal tail
-        tail = "".join(v.value for v in src.values
-                       if isinstance(v, ast.Constant) and isinstance(v.value, str))
-        tail = tail.strip()
+        # f"{stage} <literal>" -> take the tail after the stage.
+        #
+        # A piece of that tail may be a module-level NAME rather than a literal
+        # (`f"{stage} {REFERENCE_TIE_SOURCE_SUFFIX}"`), because a source string
+        # that another module has to recognise should be written once.  Resolve
+        # those against the imported module: skipping them left the tail empty,
+        # so the producer became invisible to this guard and the assertion below
+        # failed as though the module had stopped emitting it.
+        parts = []
+        for v in src.values:
+            if isinstance(v, ast.Constant) and isinstance(v.value, str):
+                parts.append(v.value)
+            elif isinstance(v, ast.FormattedValue) and isinstance(v.value, ast.Name):
+                resolved = getattr(_ac, v.value.id, None)
+                if isinstance(resolved, str):
+                    parts.append(resolved)
+        tail = "".join(parts).strip()
         if not tail:
             continue
         is_bulk = all(

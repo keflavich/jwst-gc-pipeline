@@ -420,6 +420,32 @@ the same table rows.
 | `CATALOG_ALLOW_UNVETTED_FALLBACK=1` | allow the unvetted-catalog fallback |
 | `OFFSETS_TABLE_COLLAPSE_RAISE=1` | make the collapsed-visit guard raise instead of warn (`reduction/validate_offsets_table.py`) |
 | `FORCE_REALIGN_ON_DISAGREE=1` | hard-stop when a frame's baked `RAOFFSET` disagrees with the current table (`reduction/unified_alignment.py`) |
+| `ASTROM_M2_CORRECTION_FLOOR_MAS=<f>` | at m2, MEASURE and RECORD every residual as usual but only ACT on those at or above this magnitude (default 0 = act on all). See below. |
+| `ALLOW_UNVERIFIED_ASTROM_CHECKPOINT=1` | let a checkpoint that measured a shift and then refused to apply it count as a pass |
+
+### The m2 correction floor, and what it may not suppress
+
+`ASTROM_M2_CORRECTION_FLOOR_MAS` exists for ONE class of residual: a
+per-detector distortion term (instrument aperture model, velocity aberration)
+that the module-locked offsets table has no way to express. Applying its
+detector mean is what the previous cycle already did, so the re-tie loop never
+converges. That argument is about the SHAPE of the residual, not its size.
+
+Two consequences follow, and both are enforced in code:
+
+- **The consensus-to-reference tie is never floored.** It is one rigid shift of
+  a whole visit onto the reference catalog, which the table expresses exactly,
+  so the floor's rationale does not reach it. Flooring it would let an absolute
+  frame error up to the floor through with nothing downstream to catch it: a
+  common-mode shift moves every band equally, so the m7 cross-band gate sees
+  agreement, and the ~100 mas gross gate is two orders of magnitude away.
+  (`cataloging._is_whole_consensus_shift`.)
+- **The value in force is written into the record**, as
+  `tolerances.correction_floor_mas`. Without it, a pass that passed only
+  because the floor had been raised is indistinguishable from a clean one, and
+  the only trace is a line in a SLURM log. `run_field_retie_loop.sh` can now
+  raise the floor by itself (`RETIE_ACCEPT_RESIDUAL_MAS`), which makes that
+  distinction matter more, not less.
 
 Set an override to record a decision you have already justified by other
 means. A red gate stays red: the override is the record, not the justification (same policy as

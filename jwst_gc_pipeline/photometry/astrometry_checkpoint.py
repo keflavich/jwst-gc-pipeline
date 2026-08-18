@@ -80,6 +80,14 @@ CORRECTION_STAGES = ("m1", "m2", "m12")
 # im0 solution already agrees with the reference at the measurement floor).
 REFERENCE_APPLY_MIN_MAS = 2.0
 
+#: ``source`` written on the correction that ties a whole visit consensus onto
+#: the reference catalog.  The per-exposure corrections written alongside it say
+#: ``<stage> visit-consensus``.  Read by ``cataloging._is_whole_consensus_shift``
+#: to keep the reference tie out of the ASTROM_M2_CORRECTION_FLOOR_MAS filter --
+#: the floor is for per-detector terms the offsets table cannot express, and a
+#: rigid whole-visit shift is not one of those.
+REFERENCE_TIE_SOURCE_SUFFIX = 'consensus->reference'
+
 # Late-stage (m3+) stability tolerance: the astrometric solution must not move.
 STAGE_STABILITY_TOL_MAS = 2.0
 
@@ -2810,7 +2818,7 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                             dra_onsky_mas=ref_tie["dra_mas"],
                             ddec_onsky_mas=ref_tie["ddec_mas"],
                             dec_deg=dec_mid,
-                            source=f"{stage} consensus->reference"))
+                            source=f"{stage} {REFERENCE_TIE_SOURCE_SUFFIX}"))
                         print(f"ASTROM CHECKPOINT [{stage}] CORRECT: {vctx} "
                               f"consensus is {off:.2f} mas off VIRAC2 "
                               f"(coherent dense tie, per-tile clean, no gross "
@@ -3033,7 +3041,15 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                   tolerances=dict(
                       exposure_consensus_tol_mas=EXPOSURE_CONSENSUS_TOL_MAS,
                       reference_apply_min_mas=REFERENCE_APPLY_MIN_MAS,
-                      stage_stability_tol_mas=STAGE_STABILITY_TOL_MAS))
+                      stage_stability_tol_mas=STAGE_STABILITY_TOL_MAS,
+                      # The only tolerance here that something OUTSIDE this
+                      # module can move.  Without it in the record, a pass that
+                      # passed only because the correction floor had been
+                      # raised is indistinguishable from a clean one, and the
+                      # sole trace is one line in a SLURM log.  The re-tie loop
+                      # now raises it automatically, which makes that worse.
+                      correction_floor_mas=float(os.environ.get(
+                          'ASTROM_M2_CORRECTION_FLOOR_MAS', '0') or 0)))
     if record_dir:
         _write_record(record_dir, _record_name(stage, filtername, obs_token),
                       record)
