@@ -687,13 +687,33 @@ FRAME_REFCAT = {
 }
 
 
-def _frame_bulk_offset(sc, ref):
+def _frame_bulk_offset(sc, ref, detect_sc=None):
     """The catalog's bulk offset vs the reference, by the SANCTIONED method
     (CLAUDE.md): histogram-stack + SWEEP to DETECT the tie (density-immune,
     catches a gross >window shift like brick-1182 v001 ~700 mas), then refine
     the PRECISE bulk same-star via ``local_residual_map`` (a single giant cell)
     -- which itself REFUSES unless the verified global tie is already small, so
     pairs are unambiguous.  This is NOT an ad-hoc dense NN-median.
+
+    ``detect_sc`` supplies a DIFFERENT source list for the detection step only;
+    the refinement, and therefore the gated number, still comes from ``sc``.
+    The two steps want opposite populations and the caller cannot serve both
+    with one list:
+
+    * detection needs the sources the reference actually contains.  The GC
+      refcat is Gaia+VIRAC2, i.e. BRIGHT stars, and in a NIRCam short-wavelength
+      band most of those are saturated -- 3775 of brick F182M's 6322 matched
+      pairs.  Drop them and the histogram loses the majority of its TRUE pairs
+      while keeping every wrong one, so the peak walks off onto a spurious lag:
+      F182M read (+288, -466) mas at contrast 16 without them and (-4.9, +3.9)
+      mas at contrast 25 with them.  Same catalog, same reference, 1.4% of the
+      rows removed.
+    * refinement wants clean centroids.  A saturated star's centroid carries a
+      flux-dependent bias with nothing to do with the frame (worst in the narrow
+      Pa-alpha F187N, where it read a false 68 mas OFF-FRAME).
+
+    Detecting with the bright stars and refining without them gives both: brick
+    F182M then reads 1.10 mas over 4474 unsaturated same-star pairs.
 
     Returns ``(off_mas_or_None, source)``.  ``source`` is ``"same-star"`` for a
     refined fine tie, ``"histogram"`` when the tie is large/unverifiable (the
@@ -707,7 +727,8 @@ def _frame_bulk_offset(sc, ref):
     import astropy.units as u
     from jwst_gc_pipeline.photometry.astrometry_offsets import (
         measure_offset, local_residual_map, GlobalTieNotVerifiedError)
-    r = measure_offset(sc, ref, maxsep=3.0 * u.arcsec, sweep=True)
+    r = measure_offset(sc if detect_sc is None else detect_sc, ref,
+                       maxsep=3.0 * u.arcsec, sweep=True)
     if r is None:
         return None, "no-tie"
     off, source = r["off"], "histogram"
@@ -788,11 +809,18 @@ def check_catalog_on_frame(items, field, tol_mas=FRAME_TOL_MAS):
     frame (crowdsource/VVV/2MASS) and must not ship. Returns list of ((filter,obs), off_mas)
     failures, or [] if no refcat is mapped for the field (can't enforce -> caller warns).
 
-    Saturated / replaced-saturated sources are EXCLUDED from the measurement: their
-    centroids carry a strong flux-dependent bias (worst in the narrow Pa-alpha F187N,
-    where the brightest quartile pulls the raw bulk by tens of mas) that has nothing to
-    do with the frame.  Including them made F187N read 68 mas (a false OFF-FRAME) while
-    the clean same-star tie is ~1 mas.  An astrometric frame check uses good centroids."""
+    Saturated / replaced-saturated sources are EXCLUDED from the REFINEMENT, which is
+    the number this gates on: their centroids carry a strong flux-dependent bias (worst
+    in the narrow Pa-alpha F187N, where the brightest quartile pulls the raw bulk by
+    tens of mas) that has nothing to do with the frame.  Including them made F187N read
+    68 mas (a false OFF-FRAME) while the clean same-star tie is ~1 mas.
+
+    They are KEPT for the DETECTION step, because the reference is a bright-star catalog
+    and in a short-wavelength NIRCam band most of the stars it shares with the release
+    are saturated.  Excluding them from detection too made brick F182M read 547 mas --
+    a false OFF-FRAME that refused the whole field's catalogs -- while the same rows
+    tie at 1.10 mas once the peak is found with the bright stars present.  See
+    ``_frame_bulk_offset``."""
     refpath = FRAME_REFCAT.get(field)
     if not refpath or not os.path.exists(refpath):
         return None
@@ -818,7 +846,10 @@ def check_catalog_on_frame(items, field, tol_mas=FRAME_TOL_MAS):
                 sat |= np.asarray(t[satcol], dtype=bool)
         sc_all = SkyCoord(t[col])[finite]
         sc = SkyCoord(t[col])[finite & ~sat]
-        off, source = _frame_bulk_offset(sc, ref)
+        # Detect with every source (the bright ones carry the true pairs), refine
+        # on the unsaturated ones (clean centroids).  `detect_sc=sc_all` is a
+        # no-op when nothing is flagged.
+        off, source = _frame_bulk_offset(sc, ref, detect_sc=sc_all)
         ok = off is not None and off <= tol_mas
         # Report the saturated-INCLUDED offset alongside the (gating) clean one --
         # print only, never gates.  Saturated-star centroids carry a strong
