@@ -3,8 +3,11 @@
 #417: a fresh ``SKIP=0`` NIRCam reduction ran Detector1+Image2 three times per
 exposure, because ``__main__`` calls ``main()`` once per module
 (nrca, nrcb, merged) in ONE interpreter and the stage-1/2 block sits inside
-every pass.  #423 fixed it with per-pass module scoping plus an in-process memo
-of the uncals this interpreter has already calibrated.
+every pass.  (``SKIP`` is ``scripts/reduction/submit_reduction.sbatch``'s
+variable; it becomes the driver's ``-s``/``--skip_step1and2``, so ``SKIP=0``
+means the driver runs stage 1+2 rather than reusing the ``_cal`` files on
+disk.)  #423 fixed it with per-pass module scoping plus an in-process memo of
+the uncals this interpreter has already calibrated.
 
 ``test_stage12_selection.py`` pins that fix by ``ast.parse`` inspection: the
 calls exist, in the right order, with the right arguments.  Source assertions
@@ -16,24 +19,38 @@ running the loop.
 
 The loop needs neither MAST nor CRDS nor real ramps: ``ast.parse`` the driver,
 slice the ``if not skip_step1and2:`` block by ``lineno``/``end_lineno``,
-``textwrap.dedent`` it, and ``exec`` it against an in-memory asn with recording
-``Detector1Pipeline``/``Image2Pipeline`` stubs.  The block reads only names the
-harness supplies, so a driver edit that reaches for a name outside that set
-raises ``NameError`` here and says which name it was.
+``textwrap.dedent`` it, and ``exec`` it against an in-memory association (asn)
+with recording ``Detector1Pipeline``/``Image2Pipeline`` stubs.  The block reads
+only names the harness supplies, so a driver edit that reaches for a name
+outside that set raises ``NameError`` here and says which name it was.
 
-Counts asserted below over a 10678-shaped member list (8 SW + 2 LW detectors),
-matching what the same harness measures on the real brick F212N asn
-(192 NIRCam members, ``/orange/adamginsburg/jwst/brick/F212N/pipeline/``):
+Executing that block reaches only what is inside it.  An edit one scope up --
+``reset_stage12_processed()`` at the top of ``main()``, which ``__main__`` calls
+once per module -- restores half of #417 while every count here stays right,
+because the reset fires before the harness's first line.  That one is pinned by
+``test_the_driver_never_clears_the_memo``, an assertion that the driver holds no
+such call at all; the absence of a call has no runtime shape this harness can
+observe.
 
-===========================================  ==================  ============
-run                                          brick F212N (192)   here (10)
-===========================================  ==================  ============
-pre-#423 driver, nrca,nrcb,merged            576                 30
-shipped driver, nrca,nrcb,merged             192                 10
-shipped driver with the memo neutered        384                 20
-shipped driver, ``-m merged`` alone          192                 10
-shipped driver, ``-m nrca`` alone             96                  5
-===========================================  ==================  ============
+Counts over the fixture member list: 10 NIRCam members (8 SW + 2 LW detectors)
+of one 10678-shaped exposure, plus a NIRISS member in the tests that check
+non-NIRCam members are skipped.  The brick column is the same harness run
+against the real brick F212N asn (192 NIRCam members,
+``/orange/adamginsburg/jwst/brick/F212N/pipeline/``), reported in the PR:
+
+=======================================  =================  ==========  ==========================================
+run                                      brick F212N (192)  here (10)   asserted here by
+=======================================  =================  ==========  ==========================================
+shipped driver, nrca,nrcb,merged         192                10          ``test_each_exposure_is_ramp_fitted_once_per_run``
+shipped driver with the memo neutered    384                20          ``test_neutering_the_memo_is_visible_here``
+shipped driver, ``-m merged`` alone      192                10          ``test_merged_alone_produces_every_cal``
+shipped driver, ``-m nrca`` alone         96                 5          ``test_nrca_alone_produces_only_its_own_module``
+shipped driver, four ``nrcb`` passes      --                 5          ``test_a_repeated_module_family_fits_each_ramp_once``
+pre-#423 driver, nrca,nrcb,merged        576                30          measured in the PR by slicing ``5dd1fdb^1``
+=======================================  =================  ==========  ==========================================
+
+The pre-#423 row needs the old driver, which this branch does not carry, so it
+is a measurement rather than an assertion.
 """
 import ast
 import os
@@ -51,6 +68,16 @@ SRC = (pathlib.Path(__file__).resolve().parents[1]
 
 PROPOSAL_ID = '10678'
 FIELD = '001'
+#: The rootname shape the driver's provenance assert requires today:
+#: ``assert f'jw0{proposal_id}{field}' in member['expname']``
+#: (``PipelineRerunNIRCAM-LONG.py``, in the block this module executes).  For a
+#: 5-digit proposal that spells ``jw010678001``, while MAST pads the proposal
+#: number to five digits and writes ``jw10678001001_...`` -- the shape
+#: ``test_stage12_selection.py`` uses, and the shape the assert rejects.  The
+#: fixture takes the driver's shape so these tests exercise the assert as it
+#: ships; #426 (``jw_prefix()``) changes the driver, and this stem follows it
+#: then.  ``fields.yaml`` registers a second 5-digit NIRCam proposal
+#: (omegacen 12587), so the mismatch is live.
 STEM = f'jw0{PROPOSAL_ID}{FIELD}001_02101_00001'
 SW_A = [f'{STEM}_nrca{i}_cal.fits' for i in (1, 2, 3, 4)]
 SW_B = [f'{STEM}_nrcb{i}_cal.fits' for i in (1, 2, 3, 4)]
@@ -66,21 +93,49 @@ ALL_NIRCAM = A_MEMBERS + B_MEMBERS
 # harness
 # ---------------------------------------------------------------------------
 
+def driver_tree():
+    return ast.parse(SRC.read_text())
+
+
 def stage12_block_source():
     """The driver's whole ``if not skip_step1and2:`` block, dedented."""
     text = SRC.read_text()
     lines = text.splitlines()
-    for node in ast.walk(ast.parse(text)):
-        if (isinstance(node, ast.If)
-                and isinstance(node.test, ast.UnaryOp)
-                and isinstance(node.test.op, ast.Not)
-                and isinstance(node.test.operand, ast.Name)
-                and node.test.operand.id == 'skip_step1and2'):
-            block = '\n'.join(lines[node.lineno - 1:node.end_lineno])
-            return textwrap.dedent(block)
-    raise AssertionError(
-        f"no 'if not skip_step1and2:' block in {SRC}; the stage-1/2 loop moved "
-        "and this harness needs to follow it")
+    blocks = [node for node in ast.walk(ast.parse(text))
+              if (isinstance(node, ast.If)
+                  and isinstance(node.test, ast.UnaryOp)
+                  and isinstance(node.test.op, ast.Not)
+                  and isinstance(node.test.operand, ast.Name)
+                  and node.test.operand.id == 'skip_step1and2')]
+    if len(blocks) != 1:
+        raise AssertionError(
+            f"{SRC} has {len(blocks)} 'if not skip_step1and2:' blocks at line(s) "
+            f"{[node.lineno for node in blocks]}; this harness executes exactly "
+            "one, so it needs to be told which")
+    node = blocks[0]
+    return textwrap.dedent('\n'.join(lines[node.lineno - 1:node.end_lineno]))
+
+
+def driver_stage12_helper_names():
+    """The ``stage12_selection`` names the driver imports, read off its import.
+
+    The exec namespace carries exactly these, so removing an unrelated name
+    from ``stage12_selection`` leaves this harness alone and adding a helper to
+    the driver's import brings it along.
+    """
+    names = []
+    for node in ast.walk(driver_tree()):
+        if (isinstance(node, ast.ImportFrom)
+                and node.module == 'jwst_gc_pipeline.reduction.stage12_selection'):
+            names.extend(alias.asname or alias.name for alias in node.names)
+    assert names, (
+        f"{SRC} imports nothing from stage12_selection; the stage-1/2 "
+        "selection moved and this harness needs to follow it")
+    missing = [name for name in names if not hasattr(stage12_selection, name)]
+    assert not missing, (
+        f"the driver imports {missing} from stage12_selection, which does not "
+        "define them")
+    return names
 
 
 class LoopRun:
@@ -102,7 +157,7 @@ class LoopRun:
 
 def run_stage12(members, modules=('nrca', 'nrcb', 'merged'), source=None,
                 proposal_id=PROPOSAL_ID, field=FIELD, output_dir='.',
-                save_calibrated_ramp=True):
+                save_calibrated_ramp=True, extra_names=None):
     """Exec the driver's stage-1/2 block once per module, recording the calls.
 
     One ``LoopRun`` covers the whole module sequence, the way one interpreter
@@ -126,7 +181,7 @@ def run_stage12(members, modules=('nrca', 'nrcb', 'merged'), source=None,
 
     asn_data = {'products': [{'members': [{'expname': e} for e in members]}]}
     namespace = {name: getattr(stage12_selection, name)
-                 for name in dir(stage12_selection) if not name.startswith('_')}
+                 for name in driver_stage12_helper_names()}
     namespace.update({
         'skip_step1and2': False,
         'asn_data': asn_data,
@@ -139,6 +194,7 @@ def run_stage12(members, modules=('nrca', 'nrcb', 'merged'), source=None,
         'print': lambda *args, **kwargs: run.printed.append(
             ' '.join(str(a) for a in args)),
     })
+    namespace.update(extra_names or {})
     for module in modules:
         namespace['module'] = module
         try:
@@ -146,15 +202,23 @@ def run_stage12(members, modules=('nrca', 'nrcb', 'merged'), source=None,
         except NameError as exc:
             raise AssertionError(
                 f"the stage-1/2 block reads a name this harness does not "
-                f"supply ({exc}); add it to run_stage12's namespace") from exc
+                f"supply ({exc}); add it to run_stage12's namespace when the "
+                "driver legitimately needs a new local, and fix the driver "
+                "when the name is a typo") from exc
     return run
+
+
+#: ``reset_stage12_processed`` is not among the names the driver imports, so the
+#: neutered-memo runs hand it to the exec namespace themselves.
+NEUTERED_NAMES = {'reset_stage12_processed': reset_stage12_processed}
 
 
 def neutered_memo_source():
     """The block with the cross-pass memo defeated by a per-pass reset.
 
     The edit a maintainer could plausibly make ("clear stale state before the
-    loop") and the one the source-inspection tests cannot see.
+    loop") and the one the source-inspection tests cannot see.  Pair it with
+    ``extra_names=NEUTERED_NAMES``.
     """
     block = stage12_block_source()
     header, rest = block.split('\n', 1)
@@ -198,6 +262,40 @@ def test_block_source_is_the_shipped_loop():
     assert "for member in asn_data['products'][0]['members']" in block
 
 
+def test_the_driver_never_clears_the_memo():
+    """The one thing the runtime tests below cannot reach.
+
+    ``__main__`` calls ``main()`` once per module, so a
+    ``reset_stage12_processed()`` anywhere in the driver empties the memo on
+    every pass and the merged pass re-fits both module passes again -- half of
+    #417, with every count in this module still right, because the reset runs
+    outside the block the harness executes.  The driver has no call site for it
+    today, and this keeps it that way.
+    """
+    calls = []
+    for node in ast.walk(driver_tree()):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = (func.id if isinstance(func, ast.Name)
+                else func.attr if isinstance(func, ast.Attribute) else None)
+        if name == 'reset_stage12_processed':
+            calls.append(node.lineno)
+    assert calls == [], (
+        f"{SRC.name} calls reset_stage12_processed at line(s) {calls}; "
+        "__main__ runs main() once per module, so clearing the memo there "
+        "makes the merged pass redo the module passes (#417).  The memo is "
+        "per-process by design and the process exit is what clears it.")
+    imported = [alias.asname or alias.name
+                for node in ast.walk(driver_tree())
+                if isinstance(node, ast.ImportFrom)
+                for alias in node.names
+                if alias.name == 'reset_stage12_processed']
+    assert imported == [], (
+        f"{SRC.name} imports reset_stage12_processed; the driver has no use "
+        "for it, and importing it is the step before calling it")
+
+
 # ---------------------------------------------------------------------------
 # #417: one Detector1 per exposure per run
 # ---------------------------------------------------------------------------
@@ -233,7 +331,8 @@ def test_neutering_the_memo_is_visible_here():
     """Harness sensitivity check: with a ``reset_stage12_processed()`` at the
     top of the block -- which passes ``test_stage12_selection.py`` 35/35 -- the
     merged pass redoes both module passes, and these counts say so."""
-    run = run_stage12(ALL_NIRCAM, source=neutered_memo_source())
+    run = run_stage12(ALL_NIRCAM, source=neutered_memo_source(),
+                      extra_names=NEUTERED_NAMES)
     assert len(run.detector1) == 2 * len(ALL_NIRCAM)
     assert len(set(run.detector1_inputs)) == len(ALL_NIRCAM)
 
@@ -243,6 +342,23 @@ def test_module_order_does_not_change_the_count():
                     ('nrcb', 'merged', 'nrca')):
         run = run_stage12(ALL_NIRCAM, modules=modules)
         assert len(run.detector1) == len(ALL_NIRCAM), modules
+
+
+def test_a_repeated_module_family_fits_each_ramp_once():
+    """Sickle 3958/007 SW: ``MODULES_BY_PROPOSAL_FIELD_FILTER['3958']['007']``
+    lists F187N and F210M as ('nrcb1','nrcb2','nrcb3','nrcb4'), and
+    ``_module_group`` maps every one of those to 'nrcb', so ``__main__`` makes
+    FOUR nrcb-family passes over the same members in one interpreter.  That is
+    the largest amplification in the archive, and it is the memo alone that
+    holds it to one ramp fit per exposure -- module scoping claims the same
+    members on all four passes."""
+    run = run_stage12(ALL_NIRCAM, modules=('nrcb',) * 4)
+    assert sorted(run.detector1_inputs) == sorted(
+        e.replace('_cal.fits', '_uncal.fits') for e in B_MEMBERS)
+    neutered = run_stage12(ALL_NIRCAM, modules=('nrcb',) * 4,
+                           source=neutered_memo_source(),
+                           extra_names=NEUTERED_NAMES)
+    assert len(neutered.detector1) == 4 * len(B_MEMBERS)
 
 
 def test_non_nircam_members_are_never_processed():
@@ -350,16 +466,53 @@ def test_detector1_is_told_the_same_ramp_flag_the_skip_check_is():
 
 
 # ---------------------------------------------------------------------------
+# the step parameters each call carries
+# ---------------------------------------------------------------------------
+
+def test_every_ramp_is_fit_without_suppressing_the_first_group():
+    """The driver's stated intent, one line above the call: "re-calibrate all
+    uncal files -> cal files *without* suppressing first group".  With
+    ``suppress_one_group`` on, a 1-group ramp is dropped instead of fit, which
+    changes every ramp fit in the run and nothing counts the calls
+    differently."""
+    run = run_stage12(ALL_NIRCAM)
+    assert len(run.detector1) == len(ALL_NIRCAM)
+    for uncal_fn, kwargs in run.detector1:
+        steps = kwargs['steps']
+        assert steps['ramp_fit']['suppress_one_group'] is False, uncal_fn
+        assert steps['refpix']['use_side_ref_pixels'] is True, uncal_fn
+
+
+def test_both_stages_are_told_to_save_their_results_where_the_run_wants_them():
+    """A stage whose results are not written leaves the next stage reading
+    whatever the last run left on disk."""
+    run = run_stage12(ALL_NIRCAM, output_dir='/somewhere/F212N')
+    for _, kwargs in run.detector1:
+        assert kwargs['save_results'] is True
+        assert kwargs['output_dir'] == '/somewhere/F212N'
+        assert kwargs['steps']['ramp_fit']['save_results'] is True
+        assert kwargs['steps']['jump']['save_results'] is True
+    for _, kwargs in run.image2:
+        assert kwargs['save_results'] is True
+        assert kwargs['output_dir'] == '/somewhere/F212N'
+
+
+# ---------------------------------------------------------------------------
 # provenance + logging, at runtime
 # ---------------------------------------------------------------------------
 
-def test_a_foreign_member_trips_the_provenance_assert_on_every_pass():
-    """A mis-globbed member from another proposal or field stops the run in
-    the nrcb pass too, which is what a single-module-policy field (sickle,
-    nrcb only) gets."""
+@pytest.mark.parametrize('module', ['nrca', 'nrcb', 'merged'])
+def test_a_foreign_member_trips_the_provenance_assert_on_every_pass(module):
+    """A mis-globbed member from another proposal or field stops the run on
+    whichever pass reaches it, including the nrcb-only passes a
+    single-module-policy field (sickle) makes and the nrca pass that does not
+    claim an nrcb member.  The assert sits above the module scoping for exactly
+    that reason."""
     foreign = 'jw02221002001_02201_00002_nrcb1_cal.fits'
-    with pytest.raises(AssertionError):
-        run_stage12([foreign], modules=('nrcb',))
+    with pytest.raises(AssertionError) as excinfo:
+        run_stage12([foreign], modules=(module,))
+    # the driver's assert, not one of this harness's own
+    assert str(excinfo.traceback[-1].path) == str(SRC)
 
 
 def test_every_skip_announces_itself():
