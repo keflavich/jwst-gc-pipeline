@@ -809,7 +809,15 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
     # v1.0-2026.06 mosaics" about a PNG from neither release.  It is already
     # shown, correctly captioned, in the curated block above; showing it again
     # under someone else's provenance is worse than not showing it.
-    if preview_rel and not preview_from_curated:
+    # `preview_from_curated` must suppress ONLY the single headline re-render
+    # below, never the generated gallery: gating the whole block on it removed
+    # every automatically-generated preview from every field that has a curated
+    # image. brick went from 3 curated + 4 generated to 3, and arches,
+    # quintuplet, sgrb2, sickle, cloudc, gc2211 and wd2 all lost theirs the same
+    # way -- the curated renders were the only survivors, which is why the
+    # regression read as "the good images are gone" rather than "a duplicate
+    # stopped appearing".
+    if previews or (preview_rel and not preview_from_curated):
         # Attribute the preview's version whenever it is not this page's. The
         # fallback exists so a re-stage does not blank the card, but "the same
         # mosaics under a new version" is not always true: cloudc, sgrc and wd1
@@ -841,7 +849,7 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
                            f"<figcaption class=muted>{html.escape(cap)}</figcaption>"
                            f"</figure>")
             out.append("</div>")
-        else:
+        elif previews or not preview_from_curated:
             # `_preview_caption` rather than `preview_channels`: the latter drops
             # the pointing, so a one-preview multi-pointing field (gc2211, m4)
             # said "RGB preview (R=F277W ...)" with no hint WHICH of its
@@ -849,7 +857,13 @@ def render_field_page(field, manifest, preview_rel, preview_channels=None,
             cap = (_preview_caption(previews[0][1], field) if previews
                    else (f"R={preview_channels[0]}, G={preview_channels[1]}, "
                          f"B={preview_channels[2]}" if preview_channels else "Preview"))
-            out.append(f"<img class=preview src='{html.escape(preview_rel)}' "
+            # The GENERATED preview when there is one, never `preview_rel` --
+            # that is a byte copy of the curated render whenever a field has
+            # one, and emitting it here is what put the hand-made image on the
+            # page a second time under a generated caption naming bands it does
+            # not contain.
+            single = previews[0][0] if previews else preview_rel
+            out.append(f"<img class=preview src='{html.escape(single)}' "
                        f"alt='{html.escape(field)} preview'>")
             out.append(f"<div class=muted>RGB preview - {html.escape(cap)}."
                        f"{html.escape(provenance)} "

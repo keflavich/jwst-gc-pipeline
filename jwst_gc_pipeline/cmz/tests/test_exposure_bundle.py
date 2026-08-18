@@ -1208,3 +1208,38 @@ def test_pruning_leaves_a_sole_copy_alone(sr, tmp_path):
     removed, unexpected = sr.prune_exposure_orphans(field_dir, [])
     assert removed == 0
     assert unexpected == ['exposures/sole.fits'] and orphan.exists()
+
+
+# ---- curated images must not suppress the generated gallery ----
+
+def test_curated_images_do_not_suppress_the_generated_previews(mw):
+    """Stopping the curated render being re-emitted under a generated caption
+    gated the ENTIRE preview block on `preview_from_curated`, so every field
+    with a curated image lost all of its automatically-generated previews.
+    brick went 3 curated + 4 generated -> 3, and arches, quintuplet, sgrb2,
+    sickle, cloudc, gc2211 and wd2 lost theirs the same way. The curated
+    survivors are why it read as "the good images are gone"."""
+    manifest = {'field': 'f', 'version': 'v1', 'group': None,
+                'release_path': '/releases/v1/f', 'built': '2026-08-18T00:00:00',
+                'mode': 'copy', 'globus_collection_id': 'x',
+                'globus_https_base': 'https://example.invalid', 'files': []}
+    previews = [(f'assets/f_rgb_a_b_c.jpg', 'f_rgb_a_b_c'),
+                (f'assets/f_rgb_d_e_g.jpg', 'f_rgb_d_e_g')]
+    page = mw.render_field_page(
+        'f', manifest, 'assets/f.jpg', previews=previews,
+        curated=[('assets/curated_one.jpg', 'A curated render')],
+        preview_from_curated=True)
+    for rel, _ in previews:
+        assert rel in page, rel
+    # ...and the curated headline is NOT emitted a second time as a preview
+    assert page.count("src='assets/f.jpg'") == 0
+
+
+def test_a_field_without_curated_still_shows_its_preview(mw):
+    manifest = {'field': 'f', 'version': 'v1', 'group': None,
+                'release_path': '/releases/v1/f', 'built': '2026-08-18T00:00:00',
+                'mode': 'copy', 'globus_collection_id': 'x',
+                'globus_https_base': 'https://example.invalid', 'files': []}
+    page = mw.render_field_page('f', manifest, 'assets/f.jpg',
+                                preview_from_curated=False)
+    assert "src='assets/f.jpg'" in page
