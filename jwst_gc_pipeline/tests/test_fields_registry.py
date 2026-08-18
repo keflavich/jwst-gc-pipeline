@@ -608,6 +608,74 @@ def test_field_token_for_run_refuses_a_wildcard_field_and_answers_the_rest():
             F.field_token_for_run('gc-treasury', '10678', instrument)
 
 
+def test_the_no_default_raise_names_the_reason_it_actually_hit():
+    """The wildcard sentence fired for every no-default triple, and 40 of the
+    42 have no wildcard at all -- arches/2045 on MIRI was told "a field that
+    claims every observation of its proposal has no default" when arches
+    registers no MIRI observations and no wildcard.  On main those triples
+    raised ``KeyError`` from the inversion and said nothing at all."""
+    with pytest.raises(F.FieldRegistryError) as arches:
+        F.field_token_for_run('arches', '2045', 'miri')
+    assert 'registers no miri observation' in str(arches.value)
+    assert 'claims every observation' not in str(arches.value)
+
+    with pytest.raises(F.FieldRegistryError) as treasury:
+        F.field_token_for_run('gc-treasury', '10678', 'nircam')
+    assert 'claims every observation' in str(treasury.value)
+
+    # every raising triple is attributed by what is true of it
+    for field in F.FIELDS:
+        for obs in field.observations:
+            for instrument in F.INSTRUMENTS:
+                try:
+                    F.field_token_for_run(field.name, obs.proposal, instrument)
+                except F.FieldRegistryError as ex:
+                    wildcard = F.claims_every_observation(field.name, instrument)
+                    assert ('claims every observation' in str(ex)) is wildcard, (
+                        field.name, obs.proposal, instrument)
+
+
+def _driver_field_assignments():
+    """Every ``field = ...`` in the catalog driver's ``main``, as source text.
+
+    ``crowdsource_catalogs_long.main`` is a 1200-line entry point that no test
+    calls (``grep`` for a test importing it returns nothing), so the ONE line
+    that resolves ``field`` cannot be reached behaviourally.  Reading it from
+    the source is what can hold it.
+    """
+    import ast
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    path = os.path.join(root,
+                        'jwst_gc_pipeline/photometry/crowdsource_catalogs_long.py')
+    source = open(path).read()
+    tree = ast.parse(source)
+    main = next(node for node in ast.walk(tree)
+                if isinstance(node, ast.FunctionDef) and node.name == 'main')
+    out = []
+    for node in ast.walk(main):
+        if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == 'field' for t in node.targets):
+            out.append(ast.unparse(node.value))
+    return out
+
+
+def test_the_catalog_driver_resolves_field_through_field_token_for_run():
+    """The one call site of ``field_token_for_run``, pinned in the source.
+
+    ``field`` is interpolated into ~40 product-name f-strings as ``-o{field}``,
+    so the value has to be a real observation number.  The registry-side
+    function raises for a wildcard field and is well covered, and reverting
+    this line to ``default_field_token(...) or '*'`` restored
+    ``jw010678-o*_..._i2d.fits`` with the whole suite green.
+    """
+    assigned = _driver_field_assignments()
+    assert any('field_token_for_run' in expr for expr in assigned), assigned
+    for expr in assigned:
+        assert 'default_field_token' not in expr, expr
+        assert repr(F.WILDCARD_OBSID) not in expr, expr
+
+
 def test_a_wildcard_field_reports_that_it_claims_every_observation():
     """Callers that enumerate ``obsids`` to ask "several observations?" see
     ONE entry -- the literal ``'*'`` -- and read it as a single observation.

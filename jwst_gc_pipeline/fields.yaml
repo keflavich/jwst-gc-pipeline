@@ -136,8 +136,8 @@ fields:
     # repository's mast_monitor.TREASURY_FIELD routes every 10678 observation
     # to it, and the triggered reduce looks the field up under that name
     # (#413).
-    # root is blue: /orange is 98% full hosting the download staging, /blue has
-    # the headroom (#421).
+    # root is blue: /orange is 97% full hosting the download staging (804T of
+    # 834T, df 2026-08-18), /blue has 17T free (#421).
     root: blue
     observations:
       '10678':
@@ -149,7 +149,9 @@ fields:
         # The alignment SOURCE is alignment_config.py's 10678 entry
         # (TABLE_CONSENSUS), which names Offsets_JWST_Brick10678_consensus.csv
         # on its own; this token only supplies `refname` on the fallback path
-        # and the frame the realignment gate checks a refcat against.  Kept
+        # and the frame the realignment gate -- the pre-reduction check that a
+        # field's reference catalog is in the frame its offsets were measured
+        # in -- checks a refcat against.  Kept
         # for the same reason arches/quintuplet/sgrc keep theirs -- the tie IS
         # to VIRAC2 and a silent 'NONE' frame stamp is worse than a redundant
         # one.

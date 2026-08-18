@@ -3603,7 +3603,8 @@ def _resolved_obsid(options):
     (``fields.is_obsid``) and a run without ``--field`` resolves to None.  The
     wildcard itself is never returned: it is a registry token, not an
     observation number, and downstream it becomes the substring ``_o*_``,
-    which matches no crf on disk.
+    which matches no ``crf`` (the stage-3 per-exposure product cataloging
+    reads, ``..._o037_crf.fits``) on disk.
     """
     from jwst_gc_pipeline import fields as _freg
     target = getattr(options, 'target', None)
@@ -3656,8 +3657,9 @@ def _resolved_obsid(options):
         return str(joint[0]) if len(joint) == 1 else None
     # A wildcard is not an observation number.  Returning it would send the
     # literal '*' downstream, where `_drop_foreign_obs_duplicates` builds
-    # `want = {'_o*_'}` and tests it as a plain substring against crf
-    # basenames -- matching none of them and dropping every catalog, which is
+    # `want = {'_o*_'}` and tests it as a plain substring against the
+    # stage-3 per-exposure `..._o037_crf.fits` basenames -- matching none of
+    # them and dropping every catalog, which is
     # the sgrb2/sickle joint-token failure (F770W 60 -> 0) reached by another
     # door.  Unknown means None: keep everything.
     seen = tuple(o for o in obs.obsids.get(instrument, ())

@@ -284,7 +284,8 @@ def test_gc2211_is_tied():
 def test_the_treasury_is_tied_before_its_first_delivery():
     """Program 10678 (gc-treasury, #413) is registered ahead of its first
     delivery: without an entry the first delivery would reduce at the raw
-    assign_wcs frame while m2's corrections landed in a table nothing reads --
+    assign_wcs frame while m2's corrections landed in
+    offsets/Offsets_JWST_Brick10678_consensus.csv, which nothing would read --
     the 1939/sgra failure class.  Proposal-wide, because all 139 of its
     observations are one field."""
     for field in ('001', '037', '139'):

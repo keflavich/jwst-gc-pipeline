@@ -612,10 +612,13 @@ def field_token_for_run(target, proposal, instrument='nircam'):
     the historical fallback, with the ``'*'`` key removed so a wildcard-owning
     proposal cannot supply it.
 
-    Raises ``FieldRegistryError`` when neither answers.  A field that claims
-    every observation of its proposal has no default by construction, and the
-    value it used to yield was the literal ``'*'``: names like
-    ``jw010678-o*_t001_nircam_..._i2d.fits`` written to disk.
+    Raises ``FieldRegistryError`` when neither answers.  Two cases reach that
+    raise and it says which one it is: a field that claims every observation of
+    its proposal has no default by construction (the value it used to yield was
+    the literal ``'*'``, so ``jw010678-o*_t001_nircam_..._i2d.fits`` names went
+    to disk), and a (field, proposal, instrument) triple the registry lists no
+    observations for at all -- arches/2045 on MIRI, and 39 more, which raised
+    ``KeyError`` from the inversion before this function existed.
     """
     token = default_field_token(target, proposal, instrument)
     if token:
@@ -625,11 +628,15 @@ def field_token_for_run(target, proposal, instrument='nircam'):
     token = inverted.get(target)
     if token:
         return str(token)
+    why = ("A field that claims every observation of its proposal "
+           "(fields.yaml obsids: '*') has no default"
+           if claims_every_observation(target, instrument) else
+           f'fields.yaml registers no {instrument} observation for this '
+           f'field and proposal')
     raise FieldRegistryError(
         f'{target}/{proposal} ({instrument}) does not name one observation to '
-        f'work on, so --field is required.  A field that claims every '
-        f"observation of its proposal (fields.yaml obsids: '*') has no "
-        f'default: pass --field <obsid>, e.g. --field 042.')
+        f'work on, so --field is required.  {why}: pass --field <obsid>, '
+        f'e.g. --field 042.')
 
 
 def reference_frame(proposal):
@@ -663,7 +670,7 @@ def reference_catalog_candidates(proposal, obsid, filtername=None,
     registers one.  An exact ``reference_catalog`` key for the obsid wins;
     ``default_reference_catalog`` answers for any observation without one,
     which is how a wildcard-obsid proposal registers a catalog for observations
-    whose numbers were unknown when the registry was written.
+    whose numbers the registry does not list one by one.
     """
     obsid = str(obsid)
     if target is None:
