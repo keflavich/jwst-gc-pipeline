@@ -293,18 +293,21 @@ def _stage(sr, eb, tmp_path, nircam_field, mode='copy'):
     return field_dir, json.loads((field_dir / 'MANIFEST.json').read_text())
 
 
-def test_exposures_stay_symlinks_under_copy(sr, eb, tmp_path, nircam_field):
+def test_exposures_stay_links_under_copy(sr, eb, tmp_path, nircam_field):
     """--copy exists to make a release survive its sources being regenerated.
-    Applying it to exposures would grow the frozen tree ~40x (a field-filter is
-    ~20 GB of frames against ~500 MB of mosaics) for data whose whole point is
-    that following the link gets the current frame."""
+    Applying it to exposures would grow the frozen tree many-fold for data that
+    costs nothing as a link. HARDLINKS, not symlinks: the Globus HTTPS data
+    plane will not serve a symlink whose target is outside the release tree, so
+    every per-file exposure URL returned 404 while the transfer API followed
+    them happily -- which is what hid it."""
     field_dir, manifest = _stage(sr, eb, tmp_path, nircam_field)
-    assert manifest['mode'] == 'copy' and manifest['exposure_mode'] == 'symlink'
+    assert manifest['mode'] == 'copy' and manifest['exposure_mode'] == 'hardlink'
     for entry in manifest['files']:
         path = field_dir / entry['dest']
         if entry['category'] == eb.EXPOSURE_CATEGORY:
-            assert path.is_symlink(), entry['dest']
-            assert os.path.realpath(path) == os.path.realpath(entry['src'])
+            assert not path.is_symlink(), entry['dest']
+            assert path.stat().st_ino == os.stat(entry['src']).st_ino
+            assert path.stat().st_nlink > 1        # shared, not copied
         else:
             assert not path.is_symlink(), entry['dest']
 
@@ -330,8 +333,9 @@ def test_readme_states_the_exposures_are_not_frozen(sr, eb, tmp_path, nircam_fie
     field_dir, _ = _stage(sr, eb, tmp_path, nircam_field)
     readme = (field_dir / 'README.md').read_text()
     assert '## Detector-frame exposures' in readme
-    assert 'SYMLINKS' in readme
-    assert 'not covered by `CHECKSUMS.sha256`' in readme
+    assert 'HARDLINKS' in readme
+    assert 'covered by `CHECKSUMS.sha256`' in readme
+    assert 'no additional storage' in readme
 
 
 # ---- the page ----
@@ -377,7 +381,7 @@ def test_page_states_the_product_and_that_they_are_not_frozen(mw, sr, eb,
                                                               nircam_field):
     page = mw.render_field_page('f', _manifest(sr, eb, nircam_field), None)
     assert 'destreak_o001_crf' in page
-    assert 'symlinks into the live pipeline tree' in page
+    assert "hardlinks to the pipeline's own frames" in page
     assert 'CHECKSUMS.sha256' in page
 
 
@@ -544,7 +548,7 @@ def test_exposures_only_preserves_built_and_the_frozen_deliverables(
     after = json.loads((field_dir / 'MANIFEST.json').read_text())
     assert after['built'] == before['built']
     assert after['exposures_added']            # recorded separately
-    assert after['exposure_mode'] == 'symlink'
+    assert after['exposure_mode'] == 'hardlink'
     # the frozen deliverables are untouched, byte for byte and inode for inode
     assert (field_dir / 'CHECKSUMS.sha256').read_text() == checksums_before
     assert os.stat(field_dir / before['files'][0]['dest']).st_ino == mosaic_ino
@@ -552,7 +556,7 @@ def test_exposures_only_preserves_built_and_the_frozen_deliverables(
         before['files']
     frames = [f for f in after['files'] if f['category'] == eb.EXPOSURE_CATEGORY]
     assert len(frames) == 2
-    assert all((field_dir / f['dest']).is_symlink() for f in frames)
+    assert all((field_dir / f['dest']).stat().st_nlink > 1 for f in frames)
 
 
 def test_exposures_only_is_idempotent(sr, eb, tmp_path, nircam_field,
@@ -1142,3 +1146,65 @@ def test_the_guard_creates_nothing_when_it_refuses(sr, eb, tmp_path,
     with pytest.raises(sr.FrozenReleaseError):
         sr.stage_exposures_only('f', 'v9-test', tmp_path / 'releases')
     assert not fresh.exists(), "refusal created the release directory anyway"
+
+
+def test_a_rewritten_source_is_detected_as_diverged(eb, tmp_path):
+    """The property hardlinks give up. Neither `astropy.writeto(overwrite=True)`
+    nor `datamodel.save()` rewrites in place -- both allocate a NEW inode -- so
+    a re-reduction leaves the release holding the older generation with nothing
+    to show for it. A symlink would have followed along silently; a hardlink
+    cannot, so the divergence is recorded and reported instead of assumed away.
+    """
+    src = tmp_path / 'frame.fits'
+    _fits(src)
+    manifest = {'files': [{'category': eb.EXPOSURE_CATEGORY, 'dest': 'e/f.fits',
+                           'src': str(src),
+                           'source_identity': eb.source_identity(src)}]}
+    assert eb.diverged_frames(manifest) == []
+    # the pipeline's write pattern -- delete and write anew. The inode number
+    # is often REUSED immediately, which is why identity is not inode alone.
+    os.remove(src)
+    _fits(src, EXTRA=1)
+    os.utime(src, (0, 0))
+    diverged = eb.diverged_frames(manifest)
+    assert len(diverged) == 1 and 'rewritten' in diverged[0][1]
+
+
+def test_a_vanished_source_is_reported_too(eb, tmp_path):
+    src = tmp_path / 'frame.fits'
+    _fits(src)
+    manifest = {'files': [{'category': eb.EXPOSURE_CATEGORY, 'dest': 'e/f.fits',
+                           'src': str(src),
+                           'source_identity': eb.source_identity(src)}]}
+    os.remove(src)
+    assert eb.diverged_frames(manifest) == [('e/f.fits', 'source is gone')]
+
+
+def test_pruning_removes_hardlinked_orphans(sr, tmp_path):
+    """Before the switch the pruner tested `is_symlink()`, which after it would
+    have matched nothing and silently pruned no orphan at all -- while the bulk
+    button still transfers the folder."""
+    field_dir = tmp_path / 'field'
+    (field_dir / 'exposures' / 'F212N').mkdir(parents=True)
+    source = tmp_path / 'src.fits'
+    _fits(source)
+    keep = field_dir / 'exposures' / 'F212N' / 'keep.fits'
+    drop = field_dir / 'exposures' / 'F212N' / 'drop.fits'
+    os.link(source, keep)
+    os.link(source, drop)
+    removed, unexpected = sr.prune_exposure_orphans(
+        field_dir, ['exposures/F212N/keep.fits'])
+    assert removed == 1 and not unexpected
+    assert keep.exists() and not drop.exists()
+
+
+def test_pruning_leaves_a_sole_copy_alone(sr, tmp_path):
+    """A frame with link count 1 is the release's ONLY copy of those bytes.
+    Deleting it destroys data rather than unpublishing it."""
+    field_dir = tmp_path / 'field'
+    (field_dir / 'exposures').mkdir(parents=True)
+    orphan = field_dir / 'exposures' / 'sole.fits'
+    _fits(orphan)
+    removed, unexpected = sr.prune_exposure_orphans(field_dir, [])
+    assert removed == 0
+    assert unexpected == ['exposures/sole.fits'] and orphan.exists()

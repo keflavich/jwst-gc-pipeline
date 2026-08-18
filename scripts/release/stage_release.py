@@ -1305,7 +1305,7 @@ def print_manifest(items):
     if exposures:
         summary = exposure_bundle.summarize(exposures)
         exp_total = sum(it["size_bytes"] or 0 for it in exposures)
-        print(f"\nDETECTOR-FRAME EXPOSURES (symlinked, not frozen): "
+        print(f"\nDETECTOR-FRAME EXPOSURES (hardlinked, not frozen): "
               f"{len(exposures)} frames, total {human_size(exp_total)}")
         for (obs, filt) in sorted(summary):
             count, size = summary[(obs, filt)]
@@ -1341,7 +1341,7 @@ def stage(items, field, version, release_root, mode, do_checksum,
         # target is expected to change is not the frozen-copy integrity claim
         # that CHECKSUMS.sha256 makes.  See exposure_bundle's module docstring.
         is_exposure = it.get("category") == exposure_bundle.EXPOSURE_CATEGORY
-        item_mode = "symlink" if is_exposure else mode
+        item_mode = "hardlink" if is_exposure else mode
         src = Path(it["src"]).resolve()
         dest = field_dir / it["dest"]
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -1359,12 +1359,13 @@ def stage(items, field, version, release_root, mode, do_checksum,
                      and dest_stat.st_size == src_size
                      and abs(dest_stat.st_mtime - src_stat.st_mtime) < 1e-3)
         if not unchanged:
-            if dest.exists() or dest.is_symlink():
-                dest.unlink()
             if item_mode == "copy":
+                if dest.exists() or dest.is_symlink():
+                    dest.unlink()
                 shutil.copy2(src, dest)
             else:
-                dest.symlink_to(src)
+                it["link_mode"] = exposure_bundle.link_frame(src, dest)
+                it["source_identity"] = exposure_bundle.source_identity(src)
 
         if do_checksum and not is_exposure:
             cached = prior.get(it["dest"])
@@ -1395,7 +1396,7 @@ def stage(items, field, version, release_root, mode, do_checksum,
         # `mode` describes the deliverables. Detector-frame exposures are
         # always symlinks and always unchecksummed, so state that separately
         # rather than let "mode": "copy" imply a frozen copy of every entry.
-        "exposure_mode": "symlink",
+        "exposure_mode": "hardlink",
         # Positive outcome of the photometric-continuity gate for this staging:
         # "passed" (all clean), "waived" (a documented known limit was recorded --
         # see per-file continuity_waivers), "skipped(override)", or a
@@ -1478,8 +1479,12 @@ def prune_exposure_orphans(field_dir, keep_dests):
     the manifest, so an orphan is a file the release still hands out while
     claiming not to.
 
-    Only ever removes symlinks under ``exposures/``; a real file there is left
-    alone and reported, since nothing in this design should have written one.
+    Removes only links -- a symlink, or a hardlink sharing its inode with a file
+    outside the release tree.  A frame with a link count of 1 is the release's
+    ONLY copy of those bytes and is left alone and reported: deleting it would
+    destroy data rather than unpublish it, and nothing in this design writes
+    one.  (Before hardlinks this checked ``is_symlink()``, which after the
+    switch would have matched nothing and silently pruned no orphan at all.)
     """
     exposures_dir = Path(field_dir) / "exposures"
     if not exposures_dir.is_dir():
@@ -1492,7 +1497,7 @@ def prune_exposure_orphans(field_dir, keep_dests):
         rel = path.relative_to(field_dir).as_posix()
         if rel in keep:
             continue
-        if path.is_symlink():
+        if path.is_symlink() or path.stat().st_nlink > 1:
             path.unlink()
             removed += 1
         else:
@@ -1641,9 +1646,13 @@ def stage_exposures_only(field, version, release_root, from_disk=False,
     for it in exposures:
         dest = field_dir / it["dest"]
         dest.parent.mkdir(parents=True, exist_ok=True)
-        if dest.exists() or dest.is_symlink():
-            dest.unlink()
-        dest.symlink_to(Path(it["src"]).resolve())
+        it["link_mode"] = exposure_bundle.link_frame(Path(it["src"]).resolve(), dest)
+        it["source_identity"] = exposure_bundle.source_identity(it["src"])
+    fallbacks = [it["dest"] for it in exposures
+                 if it.get("link_mode") == "symlink"]
+    if fallbacks:
+        print(f"  WARNING: {len(fallbacks)} frame(s) fell back to a symlink "
+              f"(different filesystem); those are NOT servable over HTTPS")
 
     # A frames-only release must still carry the table those frames are on --
     # that is the whole point of preserving it, and the frames are the products
@@ -1678,7 +1687,7 @@ def stage_exposures_only(field, version, release_root, from_disk=False,
             if f.get("category") not in (exposure_bundle.EXPOSURE_CATEGORY,
                                          astrometry_provenance.ASTROMETRY_CATEGORY)]
     manifest["files"] = kept + exposures + ([table] if table else [])
-    manifest["exposure_mode"] = "symlink"
+    manifest["exposure_mode"] = "hardlink"
     # `built` is NOT touched -- release_freshness reads it as the staging time
     # and would re-publish this field's quarantined mosaics if it moved.  The
     # separate key records when the frames were added without claiming the
@@ -1787,12 +1796,15 @@ def write_readme(field_dir, field, version, items, mode, built_at=None):
             "the `_destreak`/`_align`/`_cal` frame the mosaic was drizzled from",
             "directly.",
             "",
-            "**These are SYMLINKS into the live pipeline tree, not frozen copies.**",
-            "Unlike everything else in this release they are not checksummed and are",
-            "not covered by `CHECKSUMS.sha256`: a re-reduction rewrites their headers",
-            "(WCS, DQ) in place, and following the link gets the current frame. Cite",
-            "the mosaics and catalogs, which are frozen; the exposures are a working",
-            "convenience for re-drizzling and per-exposure work.",
+            "**These are HARDLINKS to the pipeline's own frames, not frozen copies.**",
+            "They cost no additional storage -- one inode, shared -- and unlike",
+            "everything else in this release they are not checksummed and are not",
+            "covered by `CHECKSUMS.sha256`. A re-reduction writes a NEW file rather",
+            "than rewriting these bytes, so a frame here can become an older",
+            "generation than the pipeline currently holds; the release records each",
+            "source's identity and reports any that have diverged. Cite the mosaics",
+            "and catalogs, which are frozen; the exposures are a working convenience",
+            "for re-drizzling and per-exposure work.",
             "",
         ]
 
@@ -1994,7 +2006,7 @@ def main(argv=None):
             return 2
         if not n:
             return 1
-        print(f"Added {n} detector-frame exposures (symlinked, not checksummed) "
+        print(f"Added {n} detector-frame exposures (hardlinked, not checksummed) "
               f"to {field_dir}. Mosaics and catalogs unchanged.")
         return 0
 
@@ -2284,7 +2296,7 @@ def main(argv=None):
     print(f"Staged {len(items) - n_exposures} deliverables into {field_dir} "
           f"(mode: {mode})"
           + (f", plus {n_exposures} detector-frame exposures "
-             f"(symlinked, not checksummed)." if n_exposures else "."))
+             f"(hardlinked, not checksummed)." if n_exposures else "."))
 
     if args.set_acl:
         set_acl(args.field, args.version, args.release_root)

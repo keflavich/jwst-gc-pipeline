@@ -85,6 +85,88 @@ from pathlib import Path
 #: Header keyword every drizzled JWST product carries, naming its association.
 ASN_KEYWORD = "ASNTABLE"
 
+def link_frame(src, dest):
+    """Place one frame in the release tree.  Returns ``"hardlink"``/``"symlink"``.
+
+    HARDLINK, not symlink.  Both cost zero bytes on the same filesystem, but the
+    Globus HTTPS data plane will not serve a symlink whose target lies outside
+    the release tree -- every per-file exposure URL returned 404, with or
+    without an anonymous grant on either end.  Measured against the collection:
+
+        real file inside a granted path        200
+        symlink inside a granted path          200
+        symlink out to <field>/<FILT>/pipeline 404   <- every exposure
+        hardlink to that same pipeline file    206
+
+    The transfer API follows those symlinks (``globus ls`` lists them), which is
+    what hid this: the bulk-download button worked while every per-frame link
+    did not.
+
+    Falls back to a symlink across filesystems, where a hardlink is impossible;
+    such a frame is unservable over HTTPS and the caller reports it.
+    """
+    src, dest = Path(src), Path(dest)
+    if dest.exists() or dest.is_symlink():
+        dest.unlink()
+    try:
+        os.link(src, dest)
+        return "hardlink"
+    except OSError:
+        dest.symlink_to(src)
+        return "symlink"
+
+
+def source_identity(path):
+    """``(inode, mtime, size)`` of a frame's SOURCE, or ``None``.
+
+    A hardlink pins an inode, and the reduction does NOT rewrite these files in
+    place: both ``astropy.writeto(overwrite=True)`` and ``datamodel.save()``
+    allocate a new inode, so a re-reduction leaves the release holding the OLD
+    bytes with nothing to show for it.  That is the one property symlinks had
+    and hardlinks do not, so it is recorded at staging and compared later rather
+    than assumed away.
+    """
+    try:
+        stat = Path(path).stat()
+    except OSError:
+        return None
+    return {"inode": stat.st_ino, "mtime": round(stat.st_mtime, 3),
+            "size": stat.st_size}
+
+
+def diverged_frames(manifest):
+    """Staged exposures whose source is no longer the file they were linked to.
+
+    ``[(dest, why)]``.  The release still serves real, readable bytes -- they
+    are simply an older generation than the pipeline now holds, which is exactly
+    what a symlink would have hidden by silently following along.
+    """
+    out = []
+    for entry in manifest.get("files", []):
+        if entry.get("category") != EXPOSURE_CATEGORY:
+            continue
+        staged = entry.get("source_identity")
+        if not staged:
+            continue
+        now = source_identity(entry.get("src"))
+        if now is None:
+            out.append((entry.get("dest"), "source is gone"))
+            continue
+        # inode, mtime AND size, because the inode alone is not enough: the
+        # filesystem reuses a number as soon as the old one is released, so a
+        # delete-and-rewrite -- which is exactly the pipeline's write pattern --
+        # can land on the same inode and read as unchanged. Any of the three
+        # differing means the release's bytes are no longer the source's.
+        changed = [k for k in ("inode", "mtime", "size")
+                   if staged.get(k) is not None and now[k] != staged[k]]
+        if changed:
+            out.append((entry.get("dest"),
+                        "source was rewritten (" + ", ".join(
+                            f"{k} {staged.get(k)} -> {now[k]}" for k in changed)
+                        + ")"))
+    return out
+
+
 #: Manifest category for a detector-frame exposure.  Distinct from ``image`` so
 #: that every existing gate, freshness audit and page table -- all of which
 #: select on ``category == "image"`` -- keeps seeing mosaics only.

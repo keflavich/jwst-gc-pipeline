@@ -1047,10 +1047,12 @@ def render_exposures(field, exposures, base, app_link, multi):
         "filter: <code>_crf</code> is the Stage-3 outlier/CR-flagged frame where "
         "one was written, otherwise the <code>_destreak</code> / "
         "<code>_align</code> / <code>_cal</code> frame the mosaic was drizzled "
-        "from directly. <b>These are symlinks into the live pipeline tree, not "
-        "frozen copies</b> -- they are not in <code>CHECKSUMS.sha256</code>, and a "
-        "re-reduction rewrites their headers in place. Cite the mosaics and "
-        "catalogs; treat these as a working convenience.</p>")
+        "from directly. <b>These are hardlinks to the pipeline's own frames, not "
+        "frozen copies</b> -- they cost no extra storage, and they are not in "
+        "<code>CHECKSUMS.sha256</code>. A re-reduction writes a new file rather "
+        "than rewriting these bytes, so a frame here can become an older "
+        "generation than the pipeline now holds. Cite the mosaics and catalogs; "
+        "treat these as a working convenience.</p>")
 
     groups = {}
     for f in exposures:
