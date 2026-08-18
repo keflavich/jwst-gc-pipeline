@@ -172,8 +172,12 @@ def main(argv=None):
             failed.append((path, info, rec))
 
     n_frozen = len(current) + len(stale)
+    # Summary FIRST.  It goes to stdout and the verdict goes to stderr, so on a
+    # terminal the two interleave by order of printing -- and a verdict that
+    # cites counts printed after it reads backwards.
     print(f"{args.field}: {len(found)} checkpoint record(s), {n_frozen} at a "
           f"frozen stage ({len(stale)} superseded), {len(failed)} FAILED")
+    sys.stdout.flush()
     for path, info, rec, older_than in stale:
         who = "/".join(x for x in (info["stage"], info["filt"],
                                    (f"o{info['obs']}" if info["obs"] else None))
@@ -192,12 +196,27 @@ def main(argv=None):
         for line in (rec.get("unverified_blocking") or []):
             print(f"    [measured and refused] {line}")
     if not failed and not current:
-        print(f"\nREFUSING TO STAGE '{args.field}': the frozen stages have no "
-              f"verdict on the CURRENT products -- all {len(stale)} frozen "
-              f"record(s) predate the field's newest m2, so they describe "
-              f"products that have since been re-reduced.  That is not a pass "
-              f"and it is not a failure either: re-run m3..m7 so the checkpoint "
-              f"judges what is actually on disk.", file=sys.stderr)
+        # rc 3 covers two states and the remedy is the same for both, but they
+        # are different situations for whoever picks the field up, so they get
+        # different sentences.  Saying "all 0 frozen record(s) predate the
+        # field's newest m2" to a field that has never run a frozen stage --
+        # sgrb2, 33 m2 records and no m3 -- states two things that are not true
+        # of it.
+        if stale:
+            print(f"\nREFUSING TO STAGE '{args.field}': the frozen stages have "
+                  f"no verdict on the CURRENT products -- all {len(stale)} "
+                  f"frozen record(s) predate the field's newest m2, so they "
+                  f"describe products that have since been re-reduced.  That is "
+                  f"not a pass and it is not a failure either: re-run m3..m7 so "
+                  f"the checkpoint judges what is actually on disk.",
+                  file=sys.stderr)
+        else:
+            print(f"\nREFUSING TO STAGE '{args.field}': the frozen stages have "
+                  f"NEVER RUN for this field/observation set -- "
+                  f"{len(found)} checkpoint record(s) on disk and not one of "
+                  f"them is m3 or later.  A field whose frozen stages have not "
+                  f"run is unverified, not verified: run the cataloging chain "
+                  f"past m2.", file=sys.stderr)
         return 3
     if failed:
         print(f"\nREFUSING TO STAGE '{args.field}': {len(failed)} frozen-stage "

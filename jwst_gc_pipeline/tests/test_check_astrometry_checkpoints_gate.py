@@ -222,3 +222,74 @@ def test_the_crossfilter_record_is_judged_against_the_fields_newest_m2(
     _dated(tmp_path, 'checkpoint_m7_crossfilter_o001_latest.json', False,
            '2026-08-02T00:00:00Z', failures=['F212N vs F405N: 21.4 mas'])
     assert gate.main(['--field', 'fld']) == 3
+
+
+def test_a_field_that_NEVER_ran_a_frozen_stage_says_so(gate, tmp_path, capsys):
+    """rc 3 covers two states, and they are different situations for whoever
+    picks the field up.
+
+    sgrb2 has 33 m2 records and no frozen record at all.  Telling it that "all 0
+    frozen record(s) predate the field's newest m2, so they describe products
+    that have since been re-reduced" states two things that are not true of it:
+    nothing predates anything and nothing describes anything."""
+    _write(tmp_path, 'checkpoint_m2_F212N_o001_latest.json', True)
+    assert gate.main(['--field', 'fld']) == 3
+    err = capsys.readouterr().err
+    assert 'NEVER RUN' in err, err
+    assert 'predate' not in err, err
+
+
+def test_SUPERSEDED_records_get_the_supersession_message_not_the_other_one(
+        gate, tmp_path, capsys):
+    _dated(tmp_path, 'checkpoint_m2_F212N_o001_latest.json', True,
+           '2026-08-16T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m3_F212N_latest.json', True,
+           '2026-08-02T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 3
+    err = capsys.readouterr().err
+    assert 'predate' in err, err
+    assert 'NEVER RUN' not in err, err
+
+
+def test_a_superseded_record_does_not_condemn_a_field_whose_CURRENT_ones_pass(
+        gate, tmp_path):
+    """The positive case the supersession rule exists for, and the combination
+    the other tests miss: a stale record sitting beside current ones that pass.
+
+    Live: quintuplet (12 frozen, 1 superseded) and sgra (12 frozen, 4
+    superseded) both pass today.  Refusing on the presence of a stale record
+    would flip both to REFUSE, which is the failure this rule was written to
+    prevent rather than to cause."""
+    _dated(tmp_path, 'checkpoint_m2_F212N_o001_latest.json', True,
+           '2026-08-10T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m3_F212N_latest.json', False,
+           '2026-08-02T00:00:00Z', failures=['superseded, and it FAILED'])
+    _dated(tmp_path, 'checkpoint_m5_F212N_o001_latest.json', True,
+           '2026-08-12T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 0
+
+
+def test_the_summary_is_printed_before_the_verdict_that_cites_it(tmp_path):
+    """stdout and stderr interleave by order of printing on a terminal, so a
+    verdict quoting counts printed after it reads backwards.
+
+    Run as a SUBPROCESS with the two streams MERGED (`stderr=STDOUT`).  capsys
+    keeps them apart and `capture_output=True` gives them separate pipes, so
+    neither can see the ordering this is about -- and without the explicit
+    flush, stdout is block-buffered down a pipe and lands after stderr.
+    """
+    import subprocess
+    import sys as _sys
+    _dated(tmp_path, 'checkpoint_m2_F212N_o001_latest.json', True,
+           '2026-08-16T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m3_F212N_latest.json', True,
+           '2026-08-02T00:00:00Z')
+    env = dict(os.environ, GC_BASEPATH_OVERRIDE=str(tmp_path))
+    r = subprocess.run([_sys.executable, str(_GATE), '--field', 'fld'],
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                       text=True, env=env, stdin=subprocess.DEVNULL)
+    assert 'superseded)' in r.stdout, r.stdout
+    assert 'REFUSING' in r.stdout, r.stdout
+    assert r.stdout.index('superseded)') < r.stdout.index('REFUSING'), (
+        f'the counts must be readable above the verdict that cites them:\n'
+        f'{r.stdout}')
