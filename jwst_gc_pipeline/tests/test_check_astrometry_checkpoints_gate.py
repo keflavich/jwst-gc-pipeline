@@ -131,3 +131,94 @@ def test_precedence_is_per_FILTER_not_per_field(gate, tmp_path):
     _write(tmp_path, 'checkpoint_m3_F405N_latest.json', False,
            failures=['a different filter, no tokenised sibling'])
     assert gate.main(['--field', 'fld']) == 1
+
+
+# ---------------------------------------------------------------------------
+# a verdict on products that no longer exist is not a verdict on these ones
+# ---------------------------------------------------------------------------
+
+def _dated(tmp_path, name, passed, date, failures=()):
+    p = _write(tmp_path, name, passed, failures=failures)
+    rec = json.loads(p.read_text())
+    rec['date'] = date
+    p.write_text(json.dumps(rec))
+    return p
+
+
+def test_a_frozen_record_older_than_the_current_m2_is_SUPERSEDED(gate, tmp_path,
+                                                                 capsys):
+    """m2 rewrites the offsets table and the field is re-reduced from it, so a
+    frozen verdict older than the newest m2 was measured on products that no
+    longer exist.
+
+    Live: arches's only frozen record is an m3/F212N from 2026-08-02 saying an
+    exposure is 11.94 mas off consensus, while its m2 for the same filter last
+    ran 2026-08-16 -- fourteen days and many re-reductions later.  Reading that
+    as "this field FAILS" asserts a defect in products it never saw.
+    """
+    _dated(tmp_path, 'checkpoint_m2_F212N_o001_latest.json', True,
+           '2026-08-16T08:38:49Z')
+    _dated(tmp_path, 'checkpoint_m3_F212N_latest.json', False,
+           '2026-08-02T07:00:25Z', failures=['11.94 mas off the visit consensus'])
+    assert gate.main(['--field', 'fld']) == 3
+    both = capsys.readouterr()
+    assert 'SUPERSEDED' in both.out, both.out
+    assert 'not a statement about what is on disk now' in both.out, both.out
+    assert 'no verdict on the CURRENT products' in both.err, both.err
+
+
+def test_a_superseded_record_does_not_become_a_PASS(gate, tmp_path):
+    """The whole point of rc 3: superseded is not clean.  A field whose frozen
+    stages have not run since its last m2 is unverified, and unverified does not
+    ship."""
+    _dated(tmp_path, 'checkpoint_m2_F212N_o001_latest.json', True,
+           '2026-08-16T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m3_F212N_latest.json', True,
+           '2026-08-02T00:00:00Z')
+    assert gate.main(['--field', 'fld']) == 3
+
+
+def test_a_CURRENT_failure_outranks_a_superseded_one(gate, tmp_path):
+    """rc 1 beats rc 3: a real failure on the current products is the more
+    specific verdict, and burying it under "unverified" would understate it."""
+    _dated(tmp_path, 'checkpoint_m2_F212N_o001_latest.json', True,
+           '2026-08-10T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m3_F212N_o001_latest.json', False,
+           '2026-08-02T00:00:00Z', failures=['superseded'])
+    _dated(tmp_path, 'checkpoint_m5_F405N_o001_latest.json', False,
+           '2026-08-12T00:00:00Z', failures=['measured on the current products'])
+    assert gate.main(['--field', 'fld']) == 1
+
+
+def test_a_frozen_record_NEWER_than_its_m2_is_current(gate, tmp_path):
+    """The ordinary case, and the one that must not be swept into 'superseded':
+    brick's m5/F200W is a day newer than the newest m2 for that filter, so its
+    2.3 mas is a live verdict and the field is refused on it."""
+    _dated(tmp_path, 'checkpoint_m2_F200W_latest.json', True,
+           '2026-07-22T13:16:17Z')
+    _dated(tmp_path, 'checkpoint_m5_F200W_latest.json', False,
+           '2026-07-23T20:14:42Z', failures=['MOVED 2.30 mas since the m2 freeze'])
+    assert gate.main(['--field', 'fld']) == 1
+
+
+def test_staleness_is_judged_per_FILTER_not_per_field(gate, tmp_path):
+    """One filter's m2 re-running must not supersede another filter's frozen
+    verdict -- the filters are reduced and cataloged independently."""
+    _dated(tmp_path, 'checkpoint_m2_F115W_o004_latest.json', True,
+           '2026-08-16T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m2_F200W_latest.json', True,
+           '2026-07-22T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m5_F200W_latest.json', False,
+           '2026-07-23T00:00:00Z', failures=['still current for F200W'])
+    assert gate.main(['--field', 'fld']) == 1
+
+
+def test_the_crossfilter_record_is_judged_against_the_fields_newest_m2(
+        gate, tmp_path):
+    """It has no filter of its own, so it has no per-filter baseline; the
+    field's newest m2 is the only thing that can supersede it."""
+    _dated(tmp_path, 'checkpoint_m2_F212N_o001_latest.json', True,
+           '2026-08-16T00:00:00Z')
+    _dated(tmp_path, 'checkpoint_m7_crossfilter_o001_latest.json', False,
+           '2026-08-02T00:00:00Z', failures=['F212N vs F405N: 21.4 mas'])
+    assert gate.main(['--field', 'fld']) == 3
