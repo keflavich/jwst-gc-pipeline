@@ -55,6 +55,14 @@ def _invocation():
     Scoped deliberately: the flag names also appear in the header comment, so
     an assertion over the whole file stays green after the flag is deleted from
     the call.
+
+    `src.index` here LOCATES the block; it is not the assertion.  A grep-shaped
+    test that silently passes when the thing it greps for moves is the pattern
+    this repo has been removing, and this is the other one: if the line moves,
+    `index` raises `ValueError` and every test using it fails loudly.  What is
+    asserted about the block is in the tests below, and the strongest of them
+    executes it (`test_EXECUTED_the_check_receives_the_runs_own_filter_list`)
+    rather than reading it.
     """
     src = _src()
     start = src.index('fp_out=$(PYTHONPATH=')
