@@ -8,8 +8,12 @@ The panel answers three questions in that order, because that is the order they
 get asked:
 
 1. **when is the next visit** -- the headline.  For months the monitor's answer
-   about 10678 was "nothing delivered yet", which is true and useless; the
-   schedule says 2026-08-17T08:10:36Z, GC_1.
+   about 10678 was "nothing delivered yet", which is true and useless.  The
+   schedule answers it when there is an answer, and says so when there is not:
+   the 20260817 week was REISSUED on 2026-08-17 with 10678 replanned out of it,
+   so the panel currently reads "no visits for program 10678 in the weekly
+   schedules read" -- a statement about the published plan, from the published
+   plan.
 2. **what is coming this week** -- the timeline, one row per visit.
 3. **did the ones that have passed actually arrive** -- each past visit is
    marked against the observations the monitor already scanned, so a planned

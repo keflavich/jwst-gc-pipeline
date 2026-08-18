@@ -218,8 +218,15 @@ copy on the web host is a *copy*: it is only as fresh as the last
 The page also reads the **published STScI weekly observing schedule** and shows
 program 10678's scheduled visits (`jwst_gc_pipeline/monitoring/schedule.py`).
 This is what lets the monitor answer *when does the Treasury start* rather than
-only *what is on disk*; the first 10678 visit is `10678:1:1` / `GC_1` at
-2026-08-17T08:10:36Z.
+only *what is on disk*.
+
+The plan moves. The 20260817 week originally carried 34 10678 visits
+(generation `20260814`); it was **reissued** on 2026-08-17 with 10678 replanned
+out, and the superseded generation is now a 404. The reissue-dedup keeps the
+newest generation per week, so the panel follows the plan rather than a
+snapshot of it -- and at the time of writing that means it reads "no visits for
+program 10678 in the weekly schedules read". That is the correct reading of the
+published schedule, not a fault in the read.
 
 ```bash
 # default: program 10678, live fetch, cached under <outdir>/schedule/

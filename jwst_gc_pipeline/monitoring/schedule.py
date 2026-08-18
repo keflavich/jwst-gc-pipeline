@@ -81,20 +81,19 @@ USER_AGENT = 'jwst-gc-pipeline monitor (schedule reader)'
 #: ``stale``.
 INDEX_MAX_AGE_S = 1800
 
-#: Fewest visits a real published weekly report can carry.  Below this the body
-#: was almost certainly truncated: the live 20260817 report has 100+ rows, and a
-#: 2% truncation still parses to 1 row without raising.
-#: A row-count floor cannot detect truncation, because the true row count is
-#: unknown: the real reports carry 61-119 rows, so any floor low enough not to
-#: reject a genuinely quiet week is also low enough to accept a report truncated
-#: to a fifth of itself.  Measured on the real 20260817 report, a floor of 20
-#: stopped firing at 17.6% of the file and let 20%, 50% and 90% truncations
-#: publish confident undercounts.
+#: Second, weaker truncation signal.  A row count CANNOT detect truncation on
+#: its own -- the true count is unknown, and the eight-week window carries
+#: 49, 61, 62, 66, 71, 74, 90 and 119 rows, so any floor low enough not to
+#: reject the quiet weeks also accepts a report cut to a fifth of itself.  The
+#: final newline (`_looks_truncated`) is the discriminator that works; this
+#: catches the LINE-ALIGNED cut the newline check cannot see, but only when
+#: the cut goes below 20 rows.
 #:
-#: What DOES discriminate is the final newline.  All eight live reports end with
-#: one, and a byte truncation at an arbitrary offset essentially never lands on
-#: a newline.  The row floor is kept as a second, weaker signal for a body that
-#: happens to end on a line boundary.
+#: Residual hole, stated rather than papered over: a line-aligned cut leaving
+#: 23-43 rows (52-89% of the real file), or a middle splice keeping the header
+#: and the tail, passes both checks.  Closing it needs a per-week expected
+#: count -- the previous cached row count for that week -- which is a bigger
+#: change than this PR.
 MIN_PLAUSIBLE_ROWS = 20
 
 #: What a failed fetch can raise.  ``http.client.HTTPException`` is in the list
@@ -130,10 +129,16 @@ def _write_cache(path, text):
     # still holds a descriptor on it and its remaining bytes land INSIDE the
     # published file -- measured: a 100000-byte cache reading BBBBB...GGGGG,
     # permanently cached, with the loser also raising FileNotFoundError.
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or '.',
-                               prefix=os.path.basename(path) + '.',
-                               suffix='.tmp')
+    # mkstemp goes INSIDE the try.  Outside it, an OSError from mkstemp itself
+    # -- a read-only or full cache directory -- escaped _write_cache, escaped
+    # load(), and killed write_report, shipping a stale page under an exit code
+    # refresh_monitor.sh ignores.  That is not hypothetical: the index read
+    # below narrates a real production PermissionError on the same directory.
+    tmp = None
     try:
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or '.',
+                                   prefix=os.path.basename(path) + '.',
+                                   suffix='.tmp')
         with os.fdopen(fd, 'w') as fh:
             fh.write(text)
             fh.flush()
@@ -141,10 +146,11 @@ def _write_cache(path, text):
         os.replace(tmp, path)
         return True
     except OSError:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
         return False
 
 
@@ -458,14 +464,25 @@ def load(outdir, program=DEFAULT_PROGRAM, weeks=8, offline=False, min_rows=MIN_P
                 refetched = _get(url)
             except FETCH_ERRORS:
                 refetched = ''
-            if refetched and _write_cache(path, refetched):
+            reparsed = None
+            if refetched:
                 try:
                     reparsed = parse_report(refetched)
                 except ScheduleFormatError:
                     reparsed = None
-                if reparsed is not None:
-                    text, parsed = refetched, reparsed
-                    short = _looks_truncated(text, parsed, min_rows)
+            # VALIDATE, then compare, then write.  Writing first destroyed a
+            # good cache with a bad remote body: a complete report whose only
+            # defect was a missing trailing newline healed into
+            # `<html>maintenance</html>`, and that week then contributed zero
+            # for as long as STScI served it.  And a heal that shrinks the week
+            # is not a heal -- a 17-row cache must not be replaced by a 3-row
+            # remote.
+            if reparsed is not None and len(reparsed) >= len(parsed):
+                text, parsed = refetched, reparsed
+                short = _looks_truncated(text, parsed, min_rows)
+                # Persist it, or the same GET runs every hour forever and the
+                # durability this repair exists for is not there.
+                _write_cache(path, refetched)
         if short:
             note = note or f'{week}: {short}'
             stale = True

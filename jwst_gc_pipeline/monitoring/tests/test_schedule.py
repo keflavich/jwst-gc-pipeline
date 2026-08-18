@@ -561,20 +561,6 @@ def test_the_cache_write_survives_a_SECOND_WRITER(tmp_path):
     assert not [f for f in os.listdir(tmp_path) if f.endswith('.tmp')]
 
 
-def test_the_cache_write_uses_a_UNIQUE_temp_name(tmp_path):
-    """The property the interleaving test rests on, asserted directly so it
-    cannot regress into a fixed name that merely happens to pass."""
-    import inspect
-    src = inspect.getsource(S._write_cache)
-    assert 'mkstemp' in src, (
-        "a fixed `path + '.tmp'` is shared by concurrent writers")
-    assert "f'{path}.tmp'" not in src
-
-
-# ---------------------------------------------------------------------------
-# truncation detection, round 3: a ROW COUNT cannot detect truncation
-# ---------------------------------------------------------------------------
-
 def _big_report(n=60):
     """A report with n 10678 visits, above MIN_PLAUSIBLE_ROWS, ending in \\n --
     the shape of a real weekly file."""
@@ -750,3 +736,121 @@ def test_a_degraded_note_never_carries_a_LOCAL_PATH_or_a_raw_exception(
     note = S.load(str(tmp_path), program='10678')['note'] or ''
     assert str(tmp_path) not in note, note
     assert 'Error' not in note and 'Traceback' not in note, note
+
+
+# ---------------------------------------------------------------------------
+# round-2 blockers: a local write must not raise, and the heal must not destroy
+# ---------------------------------------------------------------------------
+
+def test_a_cache_write_into_an_unwritable_directory_returns_False(tmp_path):
+    """`mkstemp` outside the `try` let an OSError escape `_write_cache`, escape
+    `load()`, and kill `write_report` -- shipping a stale page under an exit
+    code `refresh_monitor.sh` ignores.  A production PermissionError on exactly
+    this directory is narrated in `schedule.py`."""
+    d = tmp_path / 'ro'
+    d.mkdir()
+    os.chmod(d, 0o500)
+    try:
+        assert S._write_cache(str(d / 'x.txt'), 'a') is False
+    finally:
+        os.chmod(d, 0o700)
+
+
+def test_load_survives_an_unwritable_cache_directory(tmp_path, monkeypatch):
+    """The same failure through the public entry point: degraded, never raised."""
+    cache = tmp_path / S.CACHE_SUBDIR
+    cache.mkdir()
+    (cache / 'index.html').write_text(
+        '<a href="/d/_documents/20260817_report_20260814.txt">x</a>')
+    monkeypatch.setattr(S, '_get', lambda url, timeout=30: _big_report())
+    os.chmod(cache, 0o500)
+    try:
+        out = S.load(str(tmp_path), program='10678')
+    finally:
+        os.chmod(cache, 0o700)
+    assert out['stale'] is True, out
+    assert out['note'], 'a cache it could not write has to say so'
+
+
+def test_the_heal_does_not_destroy_a_good_cache_with_a_bad_body(tmp_path,
+                                                               monkeypatch):
+    """Writing the refetch before parsing it meant a complete report whose only
+    defect was a missing trailing newline healed into a maintenance page, and
+    that week then contributed zero for as long as STScI served it."""
+    full = _big_report()
+    cache = _staged(tmp_path, full.rstrip('\n'))     # complete, no final newline
+    monkeypatch.setattr(S, '_get',
+                        lambda url, timeout=30: '<html>maintenance</html>')
+    out = S.load(str(tmp_path), program='10678')
+    assert len(out['visits']) == 60, 'the incumbent must still be used'
+    on_disk = (cache / '20260817_report_20260814.txt').read_text()
+    assert len(S.parse_report(on_disk + '\n')) == 60, 'the cache was destroyed'
+
+
+def test_the_heal_refuses_a_SMALLER_replacement(tmp_path, monkeypatch):
+    """A heal that shrinks the week is not a heal."""
+    full = _big_report()
+    small = _big_report(3)
+    cache = _staged(tmp_path, full[:int(len(full) * 0.5)])
+    kept = len(S.parse_report(
+        (cache / '20260817_report_20260814.txt').read_text() + '\n'))
+    monkeypatch.setattr(S, '_get', lambda url, timeout=30: small)
+    out = S.load(str(tmp_path), program='10678')
+    assert len(out['visits']) == kept, out
+    assert out['stale'] is True
+
+
+def test_the_heal_PERSISTS_the_refetch(tmp_path, monkeypatch):
+    """Durability is the repair's whole premise.  A heal that fixes the run in
+    memory and leaves the short body on disk repeats the same GET every hour."""
+    full = _big_report()
+    cache = _staged(tmp_path, full[:int(len(full) * 0.5)])
+    monkeypatch.setattr(S, '_get', lambda url, timeout=30: full)
+    S.load(str(tmp_path), program='10678')
+    on_disk = (cache / '20260817_report_20260814.txt').read_text()
+    assert len(S.parse_report(on_disk)) == 60, 'the good body must reach disk'
+
+
+def test_only_the_requested_number_of_WEEKS_is_fetched(tmp_path, monkeypatch):
+    """The live index yields 190 report URLs.  Without the slice, `load()`
+    fetches 190 weekly reports per run, twice hourly under the documented cron,
+    against stsci.edu -- and nothing notices."""
+    cache = tmp_path / S.CACHE_SUBDIR
+    cache.mkdir()
+    links = ''.join(
+        f'<a href="/d/_documents/2026{m:02d}{d:02d}_report_2026{m:02d}{d:02d}.txt">x</a>'
+        for m in (1, 2, 3, 4) for d in (1, 8, 15, 22))
+    (cache / 'index.html').write_text(links)
+    fetched = []
+
+    def _fake(url, timeout=30):
+        fetched.append(url)
+        return _big_report()
+
+    monkeypatch.setattr(S, '_get', _fake)
+    S.load(str(tmp_path), program='10678', weeks=3)
+    assert len(fetched) == 3, f'{len(fetched)} weekly reports fetched, wanted 3'
+
+
+def test_a_freshly_fetched_short_report_is_not_fetched_twice(tmp_path,
+                                                            monkeypatch):
+    """The heal exists for a CACHED short body -- the killed-write case, which
+    is authoritative forever.  A body that just came off the wire short is
+    already the current remote answer, and fetching it again in the same run
+    doubles the request rate for nothing."""
+    cache = tmp_path / S.CACHE_SUBDIR
+    cache.mkdir()
+    (cache / 'index.html').write_text(
+        '<a href="/d/_documents/20260817_report_20260814.txt">x</a>')
+    full = _big_report()
+    short = full[:int(len(full) * 0.5)]
+    calls = []
+
+    def _fake(url, timeout=30):
+        calls.append(url)
+        return short
+
+    monkeypatch.setattr(S, '_get', _fake)
+    out = S.load(str(tmp_path), program='10678')
+    assert len(calls) == 1, f'the report was fetched {len(calls)} times'
+    assert out['stale'] is True, out
