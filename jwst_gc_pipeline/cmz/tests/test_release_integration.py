@@ -1968,3 +1968,109 @@ def test_the_caller_actually_sets_preview_from_curated():
     assert 'preview_from_curated = True' in block, block
     call = src.split('page = render_field_page(')[1][:400]
     assert 'preview_from_curated=preview_from_curated' in call, call
+
+
+# ---- frame gate: detect with the bright stars, refine without them ----
+
+def _stage_release():
+    return _load('stage_release', os.path.join(_REL, 'stage_release.py'))
+
+
+class _FakeOffsets:
+    """Records which source list each step of the tie was handed."""
+
+    def __init__(self):
+        self.detections = []
+        self.refinements = []
+
+    @property
+    def detected_with(self):
+        return self.detections[0]
+
+    @property
+    def refined_with(self):
+        return self.refinements[0]
+
+    def measure_offset(self, sc, ref, **kwargs):
+        self.detections.append(sc)
+        return {'off': 5.0, 'dra': 3.0, 'ddec': 4.0, 'ok': True, 'swept': False}
+
+    def local_residual_map(self, sc, ref, r, **kwargs):
+        self.refinements.append(sc)
+        return {'cells': [{'n': 500, 'dra_mas': -3.0, 'ddec_mas': -4.0}]}
+
+
+@pytest.fixture
+def fake_offsets(monkeypatch):
+    import jwst_gc_pipeline.photometry.astrometry_offsets as ao
+    fake = _FakeOffsets()
+    monkeypatch.setattr(ao, 'measure_offset', fake.measure_offset)
+    monkeypatch.setattr(ao, 'local_residual_map', fake.local_residual_map)
+    return fake
+
+
+def test_the_tie_is_detected_with_one_list_and_refined_with_another(fake_offsets):
+    """The two steps want opposite populations. Detection needs the stars the
+    reference actually contains -- the GC refcat is Gaia+VIRAC2, so in a NIRCam
+    SW band most of them are saturated (3775 of brick F182M's 6322 matched
+    pairs). Refinement needs unsaturated centroids. Detecting on the clean list
+    lost the majority of the true pairs and walked the histogram peak onto a
+    spurious lag: brick F182M read 547 mas and refused every catalog in the
+    field, where the same rows tie at 1.10 mas."""
+    import numpy as np
+    import astropy.units as u
+    from astropy.coordinates import SkyCoord
+    sr = _stage_release()
+    clean = SkyCoord(np.arange(10) * u.deg, np.zeros(10) * u.deg)
+    bright = SkyCoord(np.arange(30) * u.deg, np.zeros(30) * u.deg)
+    ref = SkyCoord(np.arange(5) * u.deg, np.zeros(5) * u.deg)
+
+    off, source = sr._frame_bulk_offset(clean, ref, detect_sc=bright)
+
+    assert source == 'same-star' and off == pytest.approx(0.0, abs=1e-6)
+    assert len(fake_offsets.detected_with) == 30      # bright: detection
+    assert len(fake_offsets.refined_with) == 10       # clean: the gated number
+
+
+def test_detection_falls_back_to_the_gated_list(fake_offsets):
+    """No `detect_sc` (and the no-flags case) must behave exactly as before."""
+    import numpy as np
+    import astropy.units as u
+    from astropy.coordinates import SkyCoord
+    sr = _stage_release()
+    clean = SkyCoord(np.arange(10) * u.deg, np.zeros(10) * u.deg)
+    ref = SkyCoord(np.arange(5) * u.deg, np.zeros(5) * u.deg)
+    sr._frame_bulk_offset(clean, ref)
+    assert len(fake_offsets.detected_with) == 10
+
+
+def test_the_gate_hands_the_saturated_sources_to_the_detection_step(
+        fake_offsets, tmp_path, monkeypatch):
+    """The call site, not just the helper: `check_catalog_on_frame` must pass
+    the full list as `detect_sc` while gating on the unsaturated subset."""
+    import numpy as np
+    from astropy.table import Table
+    sr = _stage_release()
+    n_clean, n_sat = 40, 12
+    ra = np.arange(n_clean + n_sat, dtype=float) * 1e-3
+    table = Table({'ra': ra, 'dec': np.zeros_like(ra),
+                   'is_saturated': np.array([False] * n_clean + [True] * n_sat)})
+    table['skycoord'] = __import__('astropy.coordinates',
+                                   fromlist=['SkyCoord']).SkyCoord(
+        ra * __import__('astropy.units', fromlist=['deg']).deg,
+        np.zeros_like(ra) * __import__('astropy.units', fromlist=['deg']).deg)
+    cat = tmp_path / 'f182m_vetted.fits'
+    table.write(cat)
+    refcat = tmp_path / 'refcat.fits'
+    Table({'ra': ra[:10], 'dec': np.zeros(10)}).write(refcat)
+    monkeypatch.setitem(sr.FRAME_REFCAT, 'brick', str(refcat))
+
+    fails = sr.check_catalog_on_frame(
+        [{'kind': 'catalog_per_filter_vetted', 'filter': 'F182M',
+          'src': str(cat), 'observation': None}], 'brick')
+
+    assert fails == []
+    # first call pair is the GATED measurement; the second is the with-saturated
+    # diagnostic the log prints beside it
+    assert len(fake_offsets.detected_with) == n_clean + n_sat
+    assert len(fake_offsets.refined_with) == n_clean
