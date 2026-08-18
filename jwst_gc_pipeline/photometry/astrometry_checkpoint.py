@@ -157,6 +157,74 @@ def _env_flag(name):
 #: proceed on a field the checkpoint could not verify, not a default.
 ALLOW_UNVERIFIED_ENV = "ALLOW_UNVERIFIED_ASTROM_CHECKPOINT"
 
+#: WHERE a FROZEN-stage failure stops the pipeline.  ``"stage"`` raises inside
+#: the stage that measured it; ``"release"`` records it, says so loudly, and
+#: lets the chain finish -- the release gate then refuses to stage the field.
+#:
+#: Default ``"release"``, and the reasoning is specific to the FROZEN stages.
+#: m3 and later cannot change the astrometry -- the solution is frozen, which is
+#: what makes a shift there a defect -- so the check is a MEASUREMENT wired up
+#: as a CONTROL.  Raising in the stage buys one thing, not spending compute on a
+#: run that will be refused, and costs three:
+#:
+#:   * the chain is `afterok`, so one filter's raise discards every other
+#:     filter's finished stages.  cloudef 002 spent ten re-tie iterations
+#:     reaching m2 and lost all of it at m3 (2026-08-18);
+#:   * the products that would let someone DIAGNOSE the shift are never made,
+#:     so every investigation starts by re-running the chain to get them;
+#:   * every frozen-stage failure diagnosed so far has been a comparison
+#:     artefact rather than movement -- the one-sided star restriction (#285),
+#:     the full-set-vs-shared baseline (#430: sickle F335M read 2.23 mas of
+#:     "movement" and 0.637 on the stars both stages carry), the refused-m2-tie
+#:     inversion (w51 F140M), the absolute-vs-delta per-exposure gate (brick
+#:     F115W).  Each cost a release-blocking stop and a PR.
+#:
+#: Nothing is waived: the failure is still measured, still written to the
+#: checkpoint record with ``passed: false``, still printed, and
+#: ``scripts/release/check_astrometry_checkpoints.py`` refuses to stage a field
+#: carrying one.  What moves is WHERE the stop happens, from the middle of a
+#: chain to the gate in front of the release.
+#:
+#: The m2 (CORRECTING) checkpoint is untouched by this and still raises in
+#: place.  m2 is the only stage where the astrometry can still change, so its
+#: stop is a control rather than a report -- it exists to send the field back
+#: for regeneration, and there is nothing later that can do that for it.
+CHECKPOINT_ENFORCE_ENV = "ASTROM_CHECKPOINT_ENFORCE"
+ENFORCE_AT_STAGE = "stage"
+ENFORCE_AT_RELEASE = "release"
+DEFAULT_ENFORCEMENT = ENFORCE_AT_RELEASE
+
+
+def checkpoint_enforcement():
+    """``"stage"`` or ``"release"`` -- where a frozen-stage failure stops.
+
+    An unrecognised value is a typo, and a typo must not silently choose the
+    permissive branch: anything that is not exactly ``"release"`` enforces at
+    the stage, which is the stricter of the two.
+    """
+    raw = os.environ.get(CHECKPOINT_ENFORCE_ENV, "").strip().lower()
+    if not raw:
+        return DEFAULT_ENFORCEMENT
+    return ENFORCE_AT_RELEASE if raw == ENFORCE_AT_RELEASE else ENFORCE_AT_STAGE
+
+
+def _defer_to_release(msg, what, env_override):
+    """Print the deferral and return True, or return False to raise here."""
+    if _env_flag(env_override):
+        print(f"WARNING (override {env_override}=1): {msg}", flush=True)
+        return True
+    if checkpoint_enforcement() != ENFORCE_AT_RELEASE:
+        return False
+    print(f"\n{msg}\n\nASTROM CHECKPOINT: {what} FAILED and is recorded with "
+          f"passed=false.  {CHECKPOINT_ENFORCE_ENV}="
+          f"{ENFORCE_AT_RELEASE} (the default), so the chain CONTINUES and the "
+          f"release gate refuses this field: run\n"
+          f"    python scripts/release/check_astrometry_checkpoints.py --field <f>\n"
+          f"Nothing here is waived -- the failure is measured, recorded and "
+          f"blocking at the gate.  Set {CHECKPOINT_ENFORCE_ENV}="
+          f"{ENFORCE_AT_STAGE} to stop inside the stage instead.", flush=True)
+    return True
+
 
 def _checkpoint_passed(failures, unverified_blocking):
     """``passed`` for a checkpoint record.
@@ -2991,10 +3059,8 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
     if failures and not correcting:
         msg = (f"ASTROMETRY REGRESSION at stage {stage}: the solution moved after "
                f"it was frozen --\n  " + "\n  ".join(failures))
-        if _env_flag("ALLOW_LATE_STAGE_ASTROM_SHIFT"):
-            print(f"WARNING (override ALLOW_LATE_STAGE_ASTROM_SHIFT=1): {msg}",
-                  flush=True)
-        else:
+        if not _defer_to_release(msg, f"the frozen-stage check at {stage}",
+                                 "ALLOW_LATE_STAGE_ASTROM_SHIFT"):
             raise AstrometryRegressionError(msg)
     return record
 
@@ -3230,10 +3296,8 @@ def run_crossfilter_checkpoint(catalogs_by_filter, refcat=None, basepath=None,
               flush=True)
     if failures:
         msg = ("CROSS-FILTER ASTROMETRY FAILURE --\n  " + "\n  ".join(failures))
-        if _env_flag("ALLOW_CROSSFILTER_ASTROM_FAIL"):
-            print(f"WARNING (override ALLOW_CROSSFILTER_ASTROM_FAIL=1): {msg}",
-                  flush=True)
-        else:
+        if not _defer_to_release(msg, "the m7 cross-filter check",
+                                 "ALLOW_CROSSFILTER_ASTROM_FAIL"):
             raise CrossFilterAstrometryError(msg)
     return record
 

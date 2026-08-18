@@ -2361,6 +2361,39 @@ def main(argv=None):
                   file=sys.stderr)
             return 2
 
+        # ---- FROZEN-STAGE ASTROMETRY CHECKPOINT GATE ----------------------------------
+        # The frozen stages (m3+) and the m7 cross-filter check now RECORD a
+        # failure instead of raising inside the chain
+        # (ASTROM_CHECKPOINT_ENFORCE=release, the default).  That is only
+        # defensible because the stop moved HERE rather than disappearing: this
+        # refuses any field carrying a checkpoint record with passed=false, and
+        # it fails closed on records it cannot read and on a field that has none.
+        ckpt_gate = Path(__file__).with_name("check_astrometry_checkpoints.py")
+        ckpt_cmd = [sys.executable, str(ckpt_gate), "--field", args.field, "--scan"]
+        if rel_obs:
+            ckpt_cmd += ["--observations", ",".join(sorted(rel_obs))]
+        rc = subprocess.run(ckpt_cmd).returncode
+        if rc == 1:
+            print(f"\nREFUSING TO STAGE '{args.field}': a frozen-stage astrometry "
+                  f"checkpoint FAILED (see above). The chain was allowed to finish so "
+                  f"the products exist to diagnose from; the field still does not ship. "
+                  f"Fix the astrometry and re-run the affected stages, or override with "
+                  f"--allow-registration-fail AND ALLOW_REGISTRATION_FAIL=1 (dangerous).",
+                  file=sys.stderr)
+            return 2
+        if rc == 3:
+            print(f"\nREFUSING TO STAGE '{args.field}': no astrometry checkpoint records "
+                  f"for this field/observation set. A field that never ran the checkpoint "
+                  f"is unverified, not verified. Run the cataloging chain, or override "
+                  f"with --allow-registration-fail AND ALLOW_REGISTRATION_FAIL=1.",
+                  file=sys.stderr)
+            return 2
+        if rc != 0:
+            print(f"\nREFUSING TO STAGE '{args.field}': the astrometry checkpoint gate "
+                  f"could not run (rc={rc}); cannot confirm the frozen-stage astrometry.",
+                  file=sys.stderr)
+            return 2
+
         # ---- SAME-RUN GATE: image <-> catalog provenance -------------------------------
         # When a release ships BOTH images and per-filter catalogs, they MUST come from
         # the same pipeline/cataloging run. We enforce it directly: each shipped science

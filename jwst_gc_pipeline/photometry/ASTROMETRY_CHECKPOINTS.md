@@ -61,6 +61,52 @@ the m4–m8 chain over a defect m2 had already handled.  The exposure's own data
 quality is the thing to investigate; a frozen-solution regression is not what
 happened.
 
+## WHERE a frozen-stage failure stops the pipeline
+
+`ASTROM_CHECKPOINT_ENFORCE` — `release` (default) or `stage`.
+
+At `release`, a failure at m3–m6 or at the m7 cross-filter check is **measured,
+recorded with `passed: false`, and printed**, and the chain continues. The field
+is then refused by
+
+```bash
+python scripts/release/check_astrometry_checkpoints.py --field <f>
+```
+
+which `stage_release.py` runs before staging. At `stage`, the failure raises
+inside the stage that measured it, which is what it did before.
+
+**Why the default moved.** m3 and later cannot change the astrometry — the
+solution is frozen, which is what makes a shift there a defect — so the check is
+a *measurement* wired up as a *control*. Raising inside the stage bought one
+thing, not spending compute on a run that would be refused, and cost three:
+
+* the chain is `afterok`, so one filter's raise discarded every other filter's
+  finished stages. cloudef 002 spent ten re-tie iterations reaching m2 and lost
+  all of it at m3 (2026-08-18);
+* the products an investigator needs were never made, so every diagnosis began
+  by re-running the chain to get them back;
+* every frozen-stage failure diagnosed so far has been a *comparison artefact*
+  rather than movement — the one-sided star restriction (#285), the
+  full-set-vs-shared baseline (#430: sickle F335M read 2.23 mas of "movement"
+  and 0.637 on the stars both stages carry), the refused-m2-tie inversion (w51
+  F140M), the absolute-vs-delta per-exposure gate (brick F115W).
+
+**Nothing is waived.** The stop moved; it did not disappear. The gate fails
+closed on a record it cannot read (rc 2) and on a field with no records at all
+(rc 3) — a field that never ran the checkpoint is unverified, not verified.
+`ALLOW_LATE_STAGE_ASTROM_SHIFT` and `ALLOW_CROSSFILTER_ASTROM_FAIL` still work
+as before and are still the only way to make a failure non-blocking.
+
+**m2 is untouched.** It is the one stage where the astrometry can still change:
+its response to a measured offset is to correct the offsets table, stale-tag the
+mosaics, and have its caller stop the run for regeneration. That is a control
+action no later gate can perform, so the deferral does not apply to it.
+
+A typo in the variable enforces at the **stage** — anything that is not exactly
+`release` is read as `stage`, so a misspelling costs a stopped chain rather than
+a shipped misalignment.
+
 The **consensus→reference** tie is gated the same way, with the same distinction:
 
 | m2 state | frozen-stage verdict |
