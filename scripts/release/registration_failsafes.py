@@ -448,13 +448,20 @@ def _scan_view(field, view, band_paths, verbose, images_only):
     bands = sorted(band_paths)
     if len(bands) < 2:
         # A single-band view has no cross-band truth and never will: how many
-        # filters an observation used is a fact about the program.  Two-filter
-        # programs are the NORM, not an edge case -- JWST 10678, the Treasury
-        # program, is two filters throughout -- so a verdict of "could not
-        # verify, therefore blocked" here would block the survey's default
-        # shape.  Reported, not blocking; the per-pair inter-frame overlap gate,
-        # the m2-m7 checkpoint ladder and the absolute-frame refcat check are
-        # unaffected and still run.
+        # filters an observation used is a fact about the program.  A verdict of
+        # "could not verify, therefore blocked" here would block a field for
+        # having been observed the way it was observed.  Reported, not blocking;
+        # the per-pair inter-frame overlap gate, the m2-m7 checkpoint ladder and
+        # the absolute-frame refcat check are unaffected and still run.
+        #
+        # NOT the arches/quintuplet case, despite the resemblance: those fields
+        # have TWO bands, so this branch is never taken for them.  Their bands
+        # are one SW and one LW, and `_channel` refuses to cross-match across
+        # that boundary, which leaves each band the sole member of its channel
+        # and reaches the `if not graded` exemption further down instead.  Two-
+        # filter programs are the NORM -- JWST 10678, the Treasury program, is
+        # two filters throughout -- and that is the branch which keeps them from
+        # being blocked for it.
         return dict(view=view, bands=bands, PASS=True, report={},
                     unchecked=[], n_graded=0,
                     unavailable=[f"{bands[0] if bands else '(none)'}: only band "
