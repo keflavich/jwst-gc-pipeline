@@ -456,7 +456,7 @@ def _scan_view(field, view, band_paths, verbose, images_only):
         # the m2-m7 checkpoint ladder and the absolute-frame refcat check are
         # unaffected and still run.
         return dict(view=view, bands=bands, PASS=True, report={},
-                    unchecked=[],
+                    unchecked=[], n_graded=0,
                     unavailable=[f"{bands[0] if bands else '(none)'}: only band "
                                  f"in view {view}, nothing to cross-band against"])
     dets = {}
@@ -468,6 +468,7 @@ def _scan_view(field, view, band_paths, verbose, images_only):
                   flush=True)
 
     report, any_fail, unchecked, unavailable = {}, False, [], []
+    n_graded = 0
     for b in bands:
         d, fl = dets[b]
         if d is None:
@@ -537,6 +538,7 @@ def _scan_view(field, view, band_paths, verbose, images_only):
                       f"(sole {_channel(b)} band"
                       f"{', no own-catalog' if images_only else ''})")
             (unavailable if not siblings else unchecked).append(reason)
+        n_graded += len(graded)
         bad = any((not c.get("PASS", True)) for c in graded.values())
         report[b] = checks
         any_fail = any_fail or bad
@@ -549,7 +551,16 @@ def _scan_view(field, view, band_paths, verbose, images_only):
             print(f"  {field} [{view}] {b}: {'FAIL' if bad else 'ok'}  {tags}",
                   flush=True)
     return dict(view=view, bands=bands, PASS=bool(not any_fail), report=report,
-                unchecked=unchecked, unavailable=unavailable)
+                unchecked=unchecked, unavailable=unavailable,
+                # How many checks were actually GRADED. `PASS: True` with
+                # `n_graded: 0` is a pass on no evidence -- nothing was wrong
+                # because nothing was measured -- and a caller could not tell
+                # that from a pass backed by own-catalog and cross-band checks.
+                # It is the `--images-only` verdict for a one-SW-one-LW field:
+                # cross-band is impossible by construction and own-catalog is
+                # switched off, so every band lands in `unavailable`. Still not
+                # blocking (that is the point of this PR), but distinguishable.
+                n_graded=n_graded)
 
 
 def scan_field(field, verbose=True, images_only=False, observations=None):
@@ -675,7 +686,7 @@ def scan_field(field, verbose=True, images_only=False, observations=None):
                     geometry=geom["mode"], views={}, unresolved=[],
                     unavailable=[f"no view with >=2 bands to cross-match "
                                  f"(bands present: {sorted(inv)})"],
-                    report={})
+                    n_graded=0, evidence="none", report={})
 
     results = {name: _scan_view(field, name, paths, verbose, images_only)
                for name, paths in sorted(views.items())}
@@ -706,11 +717,25 @@ def scan_field(field, verbose=True, images_only=False, observations=None):
     if verbose and unavailable:
         for u in unavailable:
             print(f"  {field} NO-PARTNER (not blocking): {u}", flush=True)
+    n_graded = sum(r.get("n_graded", 0) for r in results.values())
+    # A pass and the evidence behind it are two different facts. `PASS: True`
+    # with nothing graded says "no check found a problem" only in the sense that
+    # no check ran -- the `--images-only` verdict for a one-SW-one-LW field,
+    # where cross-band cannot exist and own-catalog is switched off. It stays a
+    # pass (a gate a correct field can never satisfy teaches people to reach for
+    # the override), and `evidence` lets a caller, a log reader or a later gate
+    # tell it apart from a pass backed by graded checks.
+    evidence = "graded" if n_graded else "none"
+    if verbose and passed and not n_graded:
+        print(f"  {field} PASS ON NO EVIDENCE: no check was graded "
+              f"({len(unavailable)} unavailable). Registration for this field "
+              f"rests on the inter-frame overlap gate and the astrometry "
+              f"checkpoints, not on this one.", flush=True)
     return dict(field=field, bands=sorted(inv), geometry=geom["mode"],
                 module_families=geom["families"],
                 overlap_evidence=geom.get("evidence", {}),
                 views=results, PASS=passed, unresolved=unresolved,
-                unavailable=unavailable,
+                unavailable=unavailable, n_graded=n_graded, evidence=evidence,
                 # flattened single-view report, for callers that read `report`
                 report=(results.get("merged") or
                         list(results.values())[0]).get("report", {}))
@@ -747,7 +772,12 @@ def main(argv=None):
                           # bands with no same-channel partner to cross-check
                           # against; reported so the summary line never implies
                           # a check ran that could not have
-                          "unavailable": res.get("unavailable")}, default=str))
+                          "unavailable": res.get("unavailable"),
+                          # "graded"/"none": whether the PASS above rests on
+                          # checks that actually ran. A pass on no evidence is
+                          # still a pass, and is not the same thing.
+                          "evidence": res.get("evidence"),
+                          "n_graded": res.get("n_graded")}, default=str))
         # PASS is tri-state and only True is a pass.  `None` (could not verify:
         # no mosaics, <2 bands, a band with no merged mosaic in an overlapping-
         # module field) used to return 0 and let staging proceed -- a gate that

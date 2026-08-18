@@ -497,3 +497,68 @@ def test_two_bands_per_channel_needs_no_exemption(tmp_path, monkeypatch):
     assert res["PASS"] is True, res
     assert not res["unavailable"], res["unavailable"]
     assert not res["unresolved"], res["unresolved"]
+
+
+def test_a_pass_records_whether_anything_was_actually_graded(tmp_path,
+                                                             monkeypatch):
+    """`PASS: True` on an empty report and `PASS: True` on graded checks are
+    different facts, and a caller could not tell them apart from the return
+    value.  The one-SW-one-LW field under `--images-only` is the first: no
+    cross-band partner can exist and the own-catalog leg is switched off, so
+    every band lands in `unavailable` and nothing is measured.  It stays a pass
+    -- a gate a correct field can never satisfy is a standing instruction to
+    reach for the override -- but it says so."""
+    monkeypatch.setattr(rf, "BASE", str(tmp_path))
+    _two_channel_field(tmp_path)
+    _stub_checks(monkeypatch, passing=True)
+    from astropy.coordinates import SkyCoord
+    import astropy.units as u
+
+    res = rf.scan_field("quintuplet", verbose=False, images_only=True)
+    assert res["PASS"] is True and res["n_graded"] == 0
+    assert res["evidence"] == "none", res
+
+    # ...and the same field on the full path, where own-catalog supplies the
+    # evidence, is a pass of the other kind.
+    monkeypatch.setattr(rf, "catalog_sc", lambda field, filt: SkyCoord(
+        np.linspace(266.0, 266.01, 20) * u.deg,
+        np.linspace(-28.0, -27.99, 20) * u.deg))
+    res = rf.scan_field("quintuplet", verbose=False, images_only=False)
+    assert res["PASS"] is True and res["n_graded"] > 0
+    assert res["evidence"] == "graded", res
+
+
+def test_the_no_view_shortcut_reports_no_evidence_too(tmp_path, monkeypatch):
+    """The other PASS-with-nothing-graded exit -- a field whose mosaics never
+    form a 2-band view -- must not read as a checked pass either."""
+    monkeypatch.setattr(rf, "BASE", str(tmp_path))
+    _two_channel_field(tmp_path, filters=("F212N",))
+    _stub_checks(monkeypatch, passing=True)
+    res = rf.scan_field("quintuplet", verbose=False, images_only=True)
+    assert res["PASS"] is True
+    assert res["evidence"] == "none" and res["n_graded"] == 0, res
+
+
+def test_a_check_that_errored_is_not_counted_as_graded(tmp_path, monkeypatch):
+    """`n_graded` counts checks that produced a VERDICT. A check that returned
+    `dict(error=...)` -- too few pairs, missing detections -- is the silent-pass
+    hole this script exists to close, so counting it as evidence would put the
+    hole back one level up: the field would report evidence for a pass that
+    nothing graded."""
+    monkeypatch.setattr(rf, "BASE", str(tmp_path))
+    _two_channel_field(tmp_path, filters=("F212N", "F187N"))
+    from astropy.coordinates import SkyCoord
+    import astropy.units as u
+
+    def _detect(path, thr=30.0):
+        n = 20
+        return (SkyCoord(np.linspace(266.0, 266.01, n) * u.deg,
+                         np.linspace(-28.0, -27.99, n) * u.deg), np.ones(n))
+
+    monkeypatch.setattr(rf, "detect", _detect)
+    monkeypatch.setattr(rf, "per_cell",
+                        lambda *a, **k: dict(label="x", error="too few pairs"))
+    monkeypatch.setattr(rf, "catalog_sc", lambda field, filt: None)
+    res = rf.scan_field("quintuplet", verbose=False, images_only=True)
+    assert res["n_graded"] == 0 and res["evidence"] == "none", res
+    assert res["unresolved"], res          # errored checks still block
