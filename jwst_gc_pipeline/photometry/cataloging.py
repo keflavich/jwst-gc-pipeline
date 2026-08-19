@@ -3468,8 +3468,11 @@ def _astrom_find_offsets_table(basepath, proposal_id, field=None):
 
     ``field`` is required to distinguish observations of one proposal that are
     aligned differently (2045: arches is consensus-driven, quintuplet locked).
-    Falls back to the legacy globs only for a field with no config entry, which
-    the caller reports separately.
+
+    Returns ``None`` when the declared table is absent, and there is NO glob
+    fallback: the legacy globs also matched the VVV/GNS-era tables still on disk
+    and would substitute a different frame silently.  The caller raises with the
+    expected filename instead.
     """
     channel = _astrom_offsets_channel(proposal_id, field)
     if channel == 'consensus':
@@ -4429,6 +4432,28 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
             print(f"astrom checkpoint [{merge_label}] {filt}/{module}: "
                   f"{'SEEDED' if seeded else 'UPSERTED'} consensus offsets table "
                   f"({len(corrections)} corrections) -> {offsets_path}", flush=True)
+        elif offsets_path is None:
+            # A LOCKED field whose table is missing.  This used to substitute
+            # whatever `_*_average.csv` sorted first, which on brick/1182 is a
+            # table tied to a different frame; the substitution is gone, and
+            # without this branch the None fell through to
+            # `update_offsets_table` -> `Table.read(None)` and an astropy
+            # IORegistryError naming no field, no proposal and no filename.  A
+            # silent wrong answer traded for an unattributable crash is not a
+            # fix, so say which table is missing and where it goes -- the same
+            # treatment the `_channel == 'none'` case above gets.
+            from ..reduction.alignment_config import offsets_table_path
+            raise RuntimeError(
+                f"astrom checkpoint [{merge_label}] {filt}/{module}: measured "
+                f"{len(corrections)} real correction(s) for proposal "
+                f"{proposal_id} observation {_field}, but its LOCKED offsets "
+                f"table does not exist:\n"
+                f"    {offsets_table_path(cut_bp, str(proposal_id), str(_field))}\n"
+                f"  A locked field's corrections belong in that file and "
+                f"nowhere else.  Build it (scripts/reduction/"
+                f"build_virac2_offsets.py --region <r> --per-module), or change "
+                f"the field's source in alignment_config if it should not be "
+                f"locked.  Nothing was written.")
         else:
             update_offsets_table(offsets_path, corrections, merge_label)
         renames = mark_i2d_stale(

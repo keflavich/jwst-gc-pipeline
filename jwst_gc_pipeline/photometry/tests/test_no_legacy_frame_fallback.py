@@ -109,11 +109,17 @@ def test_the_legacy_alignment_fallback_is_named_from_the_declared_frame():
     the field's own frame token, so it cannot name a frame the field is not tied
     to.  Every GC proposal's token is VIRAC2; only the non-GC ones are Gaia."""
     from jwst_gc_pipeline import fields
+    # 2221 included: brick/001 and cloudc/002 are both GC fields on it.  Its
+    # `reference_frame` is None (the token is only used to NAME a legacy table
+    # and 2221 has none), which is the fail-closed value -- `unified_alignment`
+    # raises rather than guessing.
     gc = ('1182', '2092', '2211', '2045', '3958', '4147', '5365', '1939', '10678')
     for prop in gc:
         assert fields.reference_frame(prop) == 'VIRAC2', prop
     for prop in ('6151', '1334', '1979'):
         assert fields.reference_frame(prop) == 'Gaia', prop
+    # 2221 has no token, so the fallback cannot build a name for it at all.
+    assert fields.reference_frame('2221') is None
 
 
 def test_no_proposal_declares_a_VVV_or_GNS_frame():
@@ -128,3 +134,43 @@ def test_no_proposal_declares_a_VVV_or_GNS_frame():
         if tok:
             seen.add(tok)
     assert seen <= {'VIRAC2', 'Gaia'}, seen
+
+
+# ---------------------------------------------------------------------------
+# what happens when the declared table is genuinely absent
+# ---------------------------------------------------------------------------
+
+def test_a_locked_field_with_no_table_names_the_file_it_wants(tmp_path,
+                                                              monkeypatch):
+    """`None` has to reach a message, not `Table.read(None)`.
+
+    Removing the substitution moved every locked field with a missing table onto
+    the `update_offsets_table` call, where astropy raises
+    `IORegistryError: Format could not be identified...` -- naming no field, no
+    proposal and no filename.  Trading a silent wrong answer for an
+    unattributable crash is not a fix.
+    """
+    from jwst_gc_pipeline.reduction.alignment_config import offsets_table_path
+    want = offsets_table_path(str(tmp_path), '1182', '004')
+    assert want.endswith('Offsets_JWST_Brick1182_VIRAC2locked.csv'), want
+
+    import inspect
+    src = inspect.getsource(_cat._run_astrometry_stage_checkpoint)
+    _, _, tail = src.partition('elif offsets_path is None:')
+    assert tail, 'the missing-table branch is gone; None falls through to Table.read'
+    head = tail.split('else:')[0]
+    for token in ('offsets_table_path', 'proposal', 'observation',
+                  'Nothing was written'):
+        assert token in head, f'the message must carry {token!r}'
+
+
+def test_every_locked_field_has_a_computable_expected_filename():
+    """The message names the file rather than spelling a pattern, so it stays
+    right for all ten locked entries."""
+    from jwst_gc_pipeline.reduction.alignment_config import offsets_table_path
+    for prop, field in (('1182','004'),('2221','001'),('2221','002'),
+                        ('2211','023'),('4147','012'),('5365','001'),
+                        ('1939','001'),('3958','007'),('2045','003'),
+                        ('2092','005')):
+        p = offsets_table_path('/base', prop, field)
+        assert p.endswith(f'Offsets_JWST_Brick{prop}_VIRAC2locked.csv'), (prop, field, p)
