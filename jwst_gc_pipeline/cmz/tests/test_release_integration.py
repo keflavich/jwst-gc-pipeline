@@ -2097,9 +2097,9 @@ def test_release_matches_any_fields_qualcuts_token():
     m = sr.COMBINED_RE.match(f'{base}.fits')
     assert m is not None and m.group('qc') is None
     # and the per-pointing form carries both the obs and the token
-    m = sr.PERPOINT_RE.match(f'{base}_o023_qualcuts_oksep2211.fits')
+    m = sr.PERPOINT_RE.match(f'{base}_o023_qualcuts_oksep2211.fits')  # noqa: qualcuts-token
     assert m is not None and m.group('obs') == 'o023'
-    assert m.group('qc') == '_qualcuts_oksep2211'
+    assert m.group('qc') == '_qualcuts_oksep2211'  # noqa: qualcuts-token
 
 
 def test_release_readme_does_not_promise_2221_to_every_field():

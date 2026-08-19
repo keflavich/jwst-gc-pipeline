@@ -49,13 +49,21 @@ def test_crossband_prefers_dedup_at_m8(catdir):
     assert path.endswith('_m8_dedup.fits')
 
 
-def test_derivatives_are_never_canonical(catdir):
+@pytest.mark.parametrize('token', ['2221', '1905', '6151', '10678'])
+def test_derivatives_are_never_canonical(catdir, token):
+    """A post-hoc filtered product at a HIGHER stage must still lose.
+
+    Parametrized over the token because the quality-cut suffix carries each
+    field's OWN proposal (wd1 writes ``_qualcuts_oksep1905``, w51  # noqa: qualcuts-token
+    ``_qualcuts_oksep6151``); a test spelling only the Brick's 2221 would pass  # noqa: qualcuts-token
+    while the rule silently held for one program.
+    """
     _touch(os.path.join(
         catdir, 'basic_merged_indivexp_photometry_tables_merged_resbgsub_m7.fits'))
-    # A post-hoc filtered product at a HIGHER stage must still lose.
     _touch(os.path.join(
         catdir,
-        'basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_qualcuts_oksep2221.fits'))
+        'basic_merged_indivexp_photometry_tables_merged_resbgsub_m8'
+        f'_qualcuts_oksep{token}.fits'))
     path, _match = inv_mod._best(catdir, inv_mod._CROSSBAND_RE)
     assert path.endswith('_m7.fits')
 

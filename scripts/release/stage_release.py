@@ -501,11 +501,11 @@ def discover_images(field_cfg):
 
 
 CAT_BASE = "basic_merged_indivexp_photometry_tables_merged"
-# The oksep quality-cut suffix carries the target's OWN proposal token(s) --
+# The oksep quality-cut suffix carries the target's OWN proposal token(s):
 # merge_catalogs._qualcuts_oksep_suffix() builds it from the field's registered
-# proposals ('_qualcuts_oksep1905' for wd1, '_qualcuts_oksep6151' for w51,
-# '2221' only for the fields that really are program 2221, brick and cloudc).
-# Matching the literal "2221" here silently skipped every other field's
+# proposals, so wd1 and w51 write their own program numbers and only the fields
+# that really are program 2221 (brick, cloudc) write that one.  Matching a
+# single program's token here silently skipped every other field's
 # quality-filtered table: the loops below `continue` on a non-match, so wd1's
 # and w51's tables sat on disk and never reached a release.
 QUALCUTS_RE = r"_qualcuts_oksep[0-9A-Za-z-]+"
