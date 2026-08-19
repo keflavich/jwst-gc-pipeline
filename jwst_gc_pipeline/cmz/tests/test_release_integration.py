@@ -2074,3 +2074,120 @@ def test_the_gate_hands_the_saturated_sources_to_the_detection_step(
     # diagnostic the log prints beside it
     assert len(fake_offsets.detected_with) == n_clean + n_sat
     assert len(fake_offsets.refined_with) == n_clean
+
+
+# ---- oksep quality-cut token: every field's own proposal, not brick's ----
+
+def test_release_matches_any_fields_qualcuts_token():
+    """The quality-cut suffix carries the field's OWN proposal token.
+
+    "oksep" is a program-2221 label, and the release regexes spelled ``2221``
+    literally, so a field whose token is its own proposal fell through the
+    ``if m is None: continue`` in ``_catalog_items`` and its quality-filtered
+    table was left out of the release without a word.  Both files below are on
+    disk today (w51, wd1).
+    """
+    sr = _stage_release()
+    base = 'basic_merged_indivexp_photometry_tables_merged_resbgsub_m7'
+    for token in ('2221', '6151', '1905', '2045', '1182-2221'):
+        name = f'{base}_qualcuts_oksep{token}.fits'
+        m = sr.COMBINED_RE.match(name)
+        assert m is not None and m.group('qc') == f'_qualcuts_oksep{token}', name
+    # the unfiltered table still reads as the full table, not a quality cut
+    m = sr.COMBINED_RE.match(f'{base}.fits')
+    assert m is not None and m.group('qc') is None
+    # and the per-pointing form carries both the obs and the token
+    m = sr.PERPOINT_RE.match(f'{base}_o023_qualcuts_oksep2211.fits')  # noqa: qualcuts-token
+    assert m is not None and m.group('obs') == 'o023'
+    assert m.group('qc') == '_qualcuts_oksep2211'  # noqa: qualcuts-token
+
+
+def test_release_readme_does_not_promise_2221_to_every_field():
+    """The README told every field its quality subset was named after 2221."""
+    src = open(os.path.join(_REL, 'stage_release.py')).read()
+    body = src[src.index('## Catalogs (`catalogs/`)'):]
+    assert 'oksep2221' not in body[:600], body[:600]
+
+
+def test_qualcuts_token_group_stops_at_the_suffix():
+    """The character class is what keeps the group from swallowing more.
+
+    ``_qualcuts_oksep.*`` would match too, anchored by the extension, so the
+    class was untested until this: a greedy ``.*`` lets the qc group absorb an
+    unrelated trailing suffix, and the file then reads as a plain quality cut
+    of the wrong product.
+    """
+    sr = _stage_release()
+    base = 'basic_merged_indivexp_photometry_tables_merged_resbgsub_m7'
+    bad = f'{base}_qualcuts_oksep6151_partial_F140M.fits'  # noqa: qualcuts-token
+    m = sr.COMBINED_RE.match(bad)
+    if m is not None:                       # a greedy pattern matches here
+        assert '_partial_F140M' not in m.group('qc'), (
+            "the qc group swallowed a trailing suffix: "
+            f"{m.group('qc')!r} -- restore the character class in QUALCUTS_RE")
+
+
+def test_the_fields_own_token_wins_when_both_are_on_disk(tmp_path):
+    """Eleven fields hold a mislabelled 2221 table beside their own.
+
+    Both match the pattern, and the loops assign ``entry["qualcuts"] = path``,
+    so the winner is whichever the iteration yields LAST.  wd1 is the
+    discriminating case: its own token (1905) sorts BEFORE the stale 2221, so
+    plain alphabetical order ships the wrong catalog and only ordering on the
+    registry's answer ships the right one.  (w51 hides the bug -- 2221 < 6151,
+    so alphabetical order happens to land on the correct file.)
+    """
+    sr = _stage_release()
+    base = 'basic_merged_indivexp_photometry_tables_merged_resbgsub_m7'
+
+    def staged(field, tokens, where):
+        cat = where / 'catalogs'
+        cat.mkdir(parents=True)
+        (cat / f'{base}.fits').touch()
+        for token in tokens:
+            (cat / f'{base}_qualcuts_oksep{token}.fits').touch()
+        items = sr.discover_catalogs({'data_dir': where}, field)
+        return [i['src'] for i in items if i['kind'] == 'catalog_qualcut']
+
+    own = staged('wd1', ('1905', '2221'), tmp_path / 'wd1')   # noqa: qualcuts-token
+    assert len(own) == 1, own
+    assert own[0].endswith('_qualcuts_oksep1905.fits'), own   # noqa: qualcuts-token
+
+    other = staged('w51', ('2221', '6151'), tmp_path / 'w51')  # noqa: qualcuts-token
+    assert len(other) == 1, other
+    assert other[0].endswith('_qualcuts_oksep6151.fits'), other  # noqa: qualcuts-token
+
+
+def test_both_catalog_loops_iterate_in_sorted_order():
+    """Removing the sort cannot be caught by running the code.
+
+    An unsorted ``glob`` returns whatever order the filesystem gives, which on
+    a fresh tmpdir is usually the order the files were created -- so a test
+    that stages two tables and checks the winner passes with the sort deleted
+    and fails only on some other machine, some other day.  The wiring is
+    asserted structurally instead: every ``cat_dir.glob`` in
+    ``discover_catalogs`` is wrapped in ``sorted(..., key=_qualcuts_sort_key)``.
+    """
+    import ast
+    src = open(os.path.join(_REL, 'stage_release.py')).read()
+    fn = next(n for n in ast.walk(ast.parse(src))
+              if isinstance(n, ast.FunctionDef) and n.name == 'discover_catalogs')
+    # only the CAT_BASE globs matter; the per-filter vetted glob is separate
+    globs = [n for n in ast.walk(fn)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+             and n.func.attr == 'glob'
+             and any(isinstance(sub, ast.Name) and sub.id == 'CAT_BASE'
+                     for sub in ast.walk(n))]
+    assert len(globs) == 2, (
+        f'{len(globs)} CAT_BASE globs in discover_catalogs; update this test')
+    sorted_keys = [n for n in ast.walk(fn)
+                   if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                   and n.func.id == 'sorted'
+                   and any(kw.arg == 'key'
+                           and isinstance(kw.value, ast.Call)
+                           and getattr(kw.value.func, 'id', None) == '_qualcuts_sort_key'
+                           for kw in n.keywords)]
+    assert len(sorted_keys) == 2, (
+        f'{len(sorted_keys)} of the 2 catalog globs are sorted on the field\'s '
+        'own token; an unsorted one ships whichever table the filesystem '
+        'happens to list last')

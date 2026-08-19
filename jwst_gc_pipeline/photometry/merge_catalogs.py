@@ -1110,11 +1110,18 @@ def _oksep_sep_cols(colnames):
 def _qualcuts_oksep_suffix(target):
     """Filename suffix for the oksep quality-cut table.
 
-    The historical literal ``_qualcuts_oksep2221`` is kept for targets that
-    include proposal 2221 (brick, cloudc): ``scripts/release/stage_release.py``
-    and ``jwst_gc_pipeline/plotting/make_all_cmds_m7.py`` glob that exact
-    name.  Every other target gets its own proposal token(s) instead of the
-    misleading hardcoded "2221" the old code stamped on every target.
+    "oksep" is a hand-written label from program 2221 meaning the separations
+    between a source's detections in different exposures are small enough to
+    call it one real star.  The old code stamped the literal ``2221`` on every
+    target's file, which is why 11 fields that have nothing to do with that
+    program carry ``_qualcuts_oksep2221`` catalogs on disk today.
+
+    Targets that include proposal 2221 keep the literal, for filename
+    stability rather than for any reader's sake: brick registers 1182+2221 and
+    cloudc 2221+2526, so the generic token would rename their existing
+    catalogs to ``_qualcuts_oksep1182-2221`` / ``_qualcuts_oksep2221-2526``.
+    Consumers read whatever token a field carries -- ``stage_release.py``
+    matches ``QUALCUTS_RE`` and ``make_all_cmds_m7.py`` asks this function.
     """
     props = sorted(obs_filters.get(target, {}).keys())
     if '2221' in props:

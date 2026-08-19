@@ -168,6 +168,29 @@ a plain dry run (no `--stage` needed).
   (`best_dao_basic()` — the catalog-selection helper in **brick-jwst-2221**, absent from this repo — can
   return a stale LOCKED file that is ~1.9″/21″ off).
 
+### The `oksep` quality-cut table carries the field's own proposal number
+
+`oksep` is a hand-written label from program **2221**: a source's detections in
+different exposures sit close enough together to call it one real star.  The
+filtered table it names is written per field, and its suffix carries that
+field's own registered proposal(s) --
+`merge_catalogs._qualcuts_oksep_suffix()` builds `_qualcuts_oksep1905` for wd1 <!-- noqa: qualcuts-token -->
+and `_qualcuts_oksep6151` for w51.  Fields that include program 2221 (brick, <!-- noqa: qualcuts-token -->
+cloudc) keep the bare `2221` token so their existing catalogs are not renamed.
+
+Two consequences for a release:
+
+- Never match one program's token literally.  `stage_release.py` matches
+  `QUALCUTS_RE`, and its catalog loops `continue` on a non-match, so a literal
+  drops another field's quality-filtered table from the release **silently**.
+  A grep-guard test (`jwst_gc_pipeline/tests/test_no_hardcoded_qualcuts_token.py`)
+  fails CI on a new literal.
+- 11 fields with no connection to program 2221 (arches, cloudef, gc2211,
+  quintuplet, sgra, sgrb2, sgrc, sickle, w51, ...) still hold
+  `_qualcuts_oksep2221` catalogs written before the suffix was per-field.  They <!-- noqa: qualcuts-token -->
+  are mislabelled, not corrupt.  Check which token a field's staged table
+  carries before quoting the program in release notes.
+
 ## 5. Versioning & provenance
 - MANIFEST per-file version bumped; webpage version column updated.
 - `exposures/` (the detector frames behind each mosaic; on by default,

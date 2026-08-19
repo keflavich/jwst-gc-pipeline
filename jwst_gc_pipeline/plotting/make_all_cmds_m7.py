@@ -34,6 +34,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from astropy.table import Table
 
+from jwst_gc_pipeline.photometry.merge_catalogs import _qualcuts_oksep_suffix
 from jwst_gc_pipeline.plotting.plot_tools import (
     cmd, ccd, cmds, ccds, compute_band_limits, band_detected, band_nondetected,
 )
@@ -82,12 +83,23 @@ CCD_PAIRS = [
 ]
 
 
-def catalog_path(base, vetting):
+def catalog_path(base, vetting, field=None):
+    """The m7 table to plot; the qualcuts variant when one exists.
+
+    The quality-cut suffix carries the field's own proposal token, so it is
+    read from the registry rather than spelled here: brick and cloudc are
+    program 2221, and a literal "2221" is what stamped that token onto every
+    other field's catalogs before merge_catalogs grew
+    ``_qualcuts_oksep_suffix``.
+    """
     stem = 'basic_merged_indivexp_photometry_tables_merged_resbgsub_m7'
     if vetting == 'qualcuts':
-        fn = f'{base}/catalogs/{stem}_qualcuts_oksep2221.fits'
-        if os.path.exists(fn):
-            return fn
+        suffixes = ([_qualcuts_oksep_suffix(field)] if field is not None
+                    else sorted(set(_qualcuts_oksep_suffix(f) for f in FIELDS)))
+        for suffix in suffixes:
+            fn = f'{base}/catalogs/{stem}{suffix}.fits'
+            if os.path.exists(fn):
+                return fn
     return f'{base}/catalogs/{stem}.fits'
 
 
@@ -154,7 +166,7 @@ def make_field(field, magsystem='vega', vetting='qualcuts', do_limits=True,
     base = FIELDS[field]
     magprefix = f'mag_{magsystem}'
     errprefix = 'emag_ab'
-    path = catalog_path(base, vetting)
+    path = catalog_path(base, vetting, field=field)
     print(f'\n=== {field}: {os.path.basename(path)} ({magsystem}) ===')
     tbl = Table.read(path)
     rf = real_filters(tbl)
