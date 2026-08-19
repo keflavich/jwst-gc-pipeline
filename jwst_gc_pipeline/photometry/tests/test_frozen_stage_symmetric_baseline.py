@@ -59,6 +59,24 @@ DROPOUT_DDEC = -18.58
 POS_JITTER_MAS = 20.0
 
 
+@pytest.fixture(autouse=True)
+def _enforce_at_the_stage(monkeypatch):
+    """These tests ask what the frozen-stage comparison MEASURES, and each says
+    so with `pytest.raises(AstrometryRegressionError)`.
+
+    #442 moved WHERE the stop happens: `ASTROM_CHECKPOINT_ENFORCE` now defaults
+    to `release`, so a frozen-stage failure is recorded with `passed=false` and
+    the chain continues, leaving the refusal to the release gate.  The detection
+    is unchanged and is the whole subject of this file, so these run under
+    `stage` enforcement and keep asserting on the exception -- the same fixture
+    `test_astrometry_checkpoint.py` uses for the same reason.
+
+    WHERE the stop happens is pinned in `test_checkpoint_enforcement.py`, not
+    here.
+    """
+    monkeypatch.setenv('ASTROM_CHECKPOINT_ENFORCE', 'stage')
+
+
 def _zero_mean_jitter(n):
     """+/-POS_JITTER_MAS alternating, in degrees; exactly zero mean for even n."""
     sign = np.where(np.arange(n) % 2 == 0, 1.0, -1.0)
