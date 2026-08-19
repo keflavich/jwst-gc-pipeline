@@ -2813,7 +2813,11 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
     # removes the population change from the comparison and leaves the
     # movement.  At a CORRECTING stage there is nothing to freeze against and
     # the full star set is the right one.
-    m2_stars, m2_star_mags, m2_stars_source = (None, None, None)
+    # All FOUR, because the unpack below is inside `if not correcting and
+    # basepath:` and the frozen-stage branch reads m2_n_visits unconditionally.
+    # Leaving it out of the initializer raised UnboundLocalError on every
+    # correcting-stage run -- m1/m2/m12, i.e. the live path.
+    m2_stars, m2_star_mags, m2_stars_source, m2_n_visits = (None,) * 4
     if not correcting and basepath:
         # ONE read.  cloudc F182M's pooled consensus is 123,362 rows and an
         # earlier revision opened it twice per filter, once for the star list

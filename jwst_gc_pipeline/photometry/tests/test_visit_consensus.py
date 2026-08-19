@@ -766,8 +766,8 @@ def test_missing_m2_consensus_falls_back_open_not_closed(tmp_path, capsys):
     """A missing baseline is not evidence the solution moved."""
     from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
         _m2_consensus_catalog)
-    stars, mag, path = _m2_consensus_catalog(str(tmp_path), str(tmp_path),
-                                             "F212N", "")
+    stars, mag, path, n_visits = _m2_consensus_catalog(
+        str(tmp_path), str(tmp_path), "F212N", "")
     assert stars is None                       # falls back, does not raise
     assert mag is None
 
@@ -979,7 +979,7 @@ def test_the_record_says_applied_only_when_every_exposure_restricted(tmp_path, m
     full = build_visit_consensus(tables, context="m2")["coords"]
     m2 = full[:len(full) // 2]
     monkeypatch.setattr(ac, "_m2_consensus_catalog",
-                        lambda *a, **k: (m2, None, "/x/m2.fits"))
+                        lambda *a, **k: (m2, None, "/x/m2.fits", 1))
     rec = _record_for(tmp_path, m2, tables)
     cons = rec["visits"][0]["consensus"]
     assert cons["same_star_gate"] == "applied", cons
@@ -1024,7 +1024,7 @@ def test_one_refusal_does_not_cascade_but_does_not_pollute_either(tmp_path, monk
 
     monkeypatch.setattr(vc, "_restrict_to_same_stars", _one_refusal)
     monkeypatch.setattr(ac, "_m2_consensus_catalog",
-                        lambda *a, **k: (m2, None, "/x/m2.fits"))
+                        lambda *a, **k: (m2, None, "/x/m2.fits", 1))
     rec = _record_for(tmp_path, m2, tables)
     cons = rec["visits"][0]["consensus"]
 
@@ -1057,7 +1057,7 @@ def test_the_record_carries_the_star_list_footprint_coverage(tmp_path, monkeypat
     tables = [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)]
     m2 = build_visit_consensus(tables, context="m2")["coords"]
     monkeypatch.setattr(ac, "_m2_consensus_catalog",
-                        lambda *a, **k: (m2, None, "/x/m2.fits"))
+                        lambda *a, **k: (m2, None, "/x/m2.fits", 1))
     cons = _record_for(tmp_path, m2, tables)["visits"][0]["consensus"]
     assert cons["restrict_list_coverage"] is not None, cons
     assert cons["restrict_list_coverage"] > 0.9, cons["restrict_list_coverage"]
@@ -1070,7 +1070,7 @@ def test_the_record_says_unavailable_when_there_is_no_star_list(tmp_path, monkey
     ra, dec = _field(n=400)
     tables = [_exposure_table(ra, dec, exposure=e) for e in range(1, 5)]
     monkeypatch.setattr(ac, "_m2_consensus_catalog",
-                        lambda *a, **k: (None, None, None))
+                        lambda *a, **k: (None, None, None, None))
     from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
         run_visit_checkpoint)
     rec = run_visit_checkpoint(tables, "m6", filtername="F212N",
@@ -1095,7 +1095,7 @@ def test_a_correcting_stage_does_not_restrict(tmp_path, monkeypatch):
 
     def _spy(*a, **k):
         called["n"] += 1
-        return full[:len(full) // 2], None, "/x/m2.fits"
+        return full[:len(full) // 2], None, "/x/m2.fits", 1
 
     monkeypatch.setattr(ac, "_m2_consensus_catalog", _spy)
     rec = run_visit_checkpoint(tables, "m2", filtername="F212N",

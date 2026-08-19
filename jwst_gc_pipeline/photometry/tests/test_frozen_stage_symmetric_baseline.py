@@ -595,3 +595,24 @@ def test_the_shared_FRACTION_is_of_the_LARGER_catalog(tmp_path, monkeypatch):
     # 60 clears SURVIVOR_MIN_STARS=50 and 50% of the SMALLER catalog (30);
     # it does not clear 50% of the larger (200).
     assert "below the floor of 200" in msg, msg
+
+
+def test_a_frozen_stage_with_NO_basepath_still_runs(tmp_path, monkeypatch):
+    """`m2_n_visits` is bound inside `if not correcting and basepath:` and read
+    unconditionally by the frozen-stage branch, so a frozen stage called WITHOUT
+    a basepath raised `UnboundLocalError` before it could raise anything about
+    astrometry.
+
+    That is the combination the callers in `cataloging.py` avoid but every
+    direct caller of `run_visit_checkpoint` can reach -- including the CLI
+    `run_astrometry_checkpoint.py` -- and the failure is an interpreter error,
+    not a checkpoint verdict.
+    """
+    _m2_baseline_only = _write_m2_record(str(tmp_path), 0.0, 0.0, None)
+    coords = _m2_star_grid()
+    keep = np.ones(N_M2_STARS, dtype=bool)
+    _install_fakes(monkeypatch, coords, np.full(N_M2_STARS, 40.0), coords[keep])
+    with pytest.raises(AstrometryRegressionError):
+        run_visit_checkpoint([_tiny_visit_table()], "m3", refcat=_DUMMY_REFCAT,
+                             filtername="F212N", record_dir=str(tmp_path),
+                             context="test")     # no basepath
