@@ -53,12 +53,14 @@ The pre-#423 row needs the old driver, which this branch does not carry, so it
 is a measurement rather than an assertion.
 """
 import ast
+import importlib
 import os
 import pathlib
 import textwrap
 
 import pytest
 
+from jwst_gc_pipeline.mast_names import jw_prefix
 from jwst_gc_pipeline.reduction import stage12_selection
 from jwst_gc_pipeline.reduction.stage12_selection import (
     STAGE12_RESUME_ENV, reset_stage12_processed)
@@ -68,17 +70,14 @@ SRC = (pathlib.Path(__file__).resolve().parents[1]
 
 PROPOSAL_ID = '10678'
 FIELD = '001'
-#: The rootname shape the driver's provenance assert requires today:
-#: ``assert f'jw0{proposal_id}{field}' in member['expname']``
-#: (``PipelineRerunNIRCAM-LONG.py``, in the block this module executes).  For a
-#: 5-digit proposal that spells ``jw010678001``, while MAST pads the proposal
-#: number to five digits and writes ``jw10678001001_...`` -- the shape
-#: ``test_stage12_selection.py`` uses, and the shape the assert rejects.  The
-#: fixture takes the driver's shape so these tests exercise the assert as it
-#: ships; #426 (``jw_prefix()``) changes the driver, and this stem follows it
-#: then.  ``fields.yaml`` registers a second 5-digit NIRCam proposal
-#: (omegacen 12587), so the mismatch is live.
-STEM = f'jw0{PROPOSAL_ID}{FIELD}001_02101_00001'
+#: The rootname shape the driver's provenance assert requires:
+#: ``assert f'{jw_prefix(proposal_id)}{field}' in member['expname']``
+#: (``PipelineRerunNIRCAM-LONG.py``, in the block this module executes).  #426
+#: landed ``jw_prefix()`` and respelled that assert, so the stem follows it here
+#: as this module's original note said it would: ``jw_prefix('10678')`` is
+#: ``jw10678``, which is what MAST writes.  Building the stem through the helper
+#: rather than a literal keeps the two in step if the spelling moves again.
+STEM = f'{jw_prefix(PROPOSAL_ID)}{FIELD}001_02101_00001'
 SW_A = [f'{STEM}_nrca{i}_cal.fits' for i in (1, 2, 3, 4)]
 SW_B = [f'{STEM}_nrcb{i}_cal.fits' for i in (1, 2, 3, 4)]
 LW_A = [f'{STEM}_nrcalong_cal.fits']
@@ -114,6 +113,40 @@ def stage12_block_source():
             "one, so it needs to be told which")
     node = blocks[0]
     return textwrap.dedent('\n'.join(lines[node.lineno - 1:node.end_lineno]))
+
+
+def driver_imported_names_used_by_the_block():
+    """Pipeline helpers the stage-1/2 block calls, resolved off the driver's imports.
+
+    The block reads names the driver imported at module scope, and which of
+    them it reads changes as the driver changes: #426 respelled the provenance
+    assert to ``jw_prefix(proposal_id)``, and this harness -- which supplies the
+    namespace by hand -- then raised ``NameError`` on every test that executes
+    the block.  Reading the driver's own ``from jwst_gc_pipeline... import``
+    statements keeps the two in step, so the next helper the block reaches for
+    arrives with it.
+
+    Only the names the block actually references are imported, so the heavy
+    modules the driver imports for other stages stay out of the test run.
+    """
+    imported = {}
+    for node in ast.walk(driver_tree()):
+        if isinstance(node, ast.ImportFrom) and (node.module or '').startswith(
+                'jwst_gc_pipeline'):
+            for alias in node.names:
+                imported[alias.asname or alias.name] = (node.module, alias.name)
+    block = ast.parse(stage12_block_source())
+    wanted = {node.id for node in ast.walk(block)
+              if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)}
+    resolved = {}
+    for name in sorted(wanted & set(imported)):
+        module_name, attr = imported[name]
+        module = importlib.import_module(module_name)
+        assert hasattr(module, attr), (
+            f"the driver imports {attr} from {module_name}, which does not "
+            "define it")
+        resolved[name] = getattr(module, attr)
+    return resolved
 
 
 def driver_stage12_helper_names():
@@ -182,6 +215,7 @@ def run_stage12(members, modules=('nrca', 'nrcb', 'merged'), source=None,
     asn_data = {'products': [{'members': [{'expname': e} for e in members]}]}
     namespace = {name: getattr(stage12_selection, name)
                  for name in driver_stage12_helper_names()}
+    namespace.update(driver_imported_names_used_by_the_block())
     namespace.update({
         'skip_step1and2': False,
         'asn_data': asn_data,
