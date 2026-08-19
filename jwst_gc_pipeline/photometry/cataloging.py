@@ -3386,10 +3386,19 @@ def _record_pooling(record, pooled, n_before, offsets_path):
                'filtername': c.get('filtername'),
                # `visit` is the key a reader needs to match a pooled group back
                # to its exposures, and it was the one field the correction
-               # carried that this dict did not write.  Without it every
-               # consumer's visit match short-circuits: cloudc is the only
-               # two-visit field and 42.7% of the population, and the
-               # reconstruction dropped all 137 of its groups silently.
+               # carried that this dict did not write.  Without it a reader's
+               # visit match short-circuits and pools across visits.
+               #
+               # The value written here is the correction's own visit, which
+               # `resolve_full_visit_id` has upgraded to jwPPPPPOOOVVV, while
+               # the exposure key carries the frame's bare VISIT metadatum
+               # ('1', '2').  A reader comparing the two as strings gets
+               # `'1' == 'jw02221001001'` and matches nothing, so filling this
+               # field turns a working candidate sweep into an empty member
+               # list.  `_same_visit` in reports/measure_pooling_population.py
+               # normalises both sides through `visit_obs_key`; measured
+               # 2026-08-19, 1758 of 1758 groups reconstruct with that
+               # normalisation and 0 of 1758 with a string compare.
                'visit': c.get('visit'),
                'exposure': c.get('exposure'),
                'vgroup': c.get('vgroup'),

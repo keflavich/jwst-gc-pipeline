@@ -66,6 +66,30 @@ def _records(root):
 MAX_MEMBERS = 4
 
 
+def _same_visit(key_visit, want):
+    """Whether an exposure key's visit and a group's visit are the same visit.
+
+    The two halves spell it differently and always have.  The exposure key
+    carries the frame's VISIT metadatum, a bare number (``'1'``, ``'2'``); the
+    group carries what ``resolve_full_visit_id`` produced, the full
+    ``jwPPPPPOOOVVV``.  Comparing them as strings is ``'1' == 'jw02221001001'``,
+    false for every group ever written, so filling the field in the writer
+    turned a working candidate sweep into an empty member list and discarded
+    all 1758 groups.
+
+    Both sides go through ``visit_obs_key``, and the observation is compared
+    only when BOTH carry one -- the same loose rule ``_match_rows`` applies to
+    a table whose rows mix the two forms.  Narrowing on an observation the
+    exposure key cannot express would discard every group instead.
+    """
+    from jwst_gc_pipeline.photometry.astrometry_checkpoint import visit_obs_key
+    k_obs, k_vis = visit_obs_key(key_visit)
+    w_obs, w_vis = visit_obs_key(want)
+    if k_vis != w_vis:
+        return False
+    return k_obs is None or w_obs is None or k_obs == w_obs
+
+
 def _members_of(by_key, group, mods):
     """The per-exposure measurements this pooled group was built from, or None.
 
@@ -79,22 +103,29 @@ def _members_of(by_key, group, mods):
     The live records were written with the median, so a correct reconstruction
     reproduces it exactly; one that does not is discarded rather than counted.
     """
-    # `visit` is written into the group dict as of this change.  Records
-    # already on disk predate it -- all 1649 of them -- so the escape hatch
-    # below short-circuited to "any visit" and the member match was byte-
-    # equivalent to the unfixed version, silently discarding cloudc's 137
-    # groups (42.7% of the population, and the only two-visit field).
+    # `visit` is written into the group dict as of this change, and every
+    # record on disk predates it (1758 groups over 1184 records, 2026-08-19 --
+    # this population grows as pipelines run, so treat the figure as a scale
+    # rather than a constant).  The escape hatch below short-circuited to "any
+    # visit" for those, which made the member match byte-equivalent to the
+    # unfixed version and pooled across visits wherever a field has more than
+    # one -- cloudc, 101 of the 366 deduped groups.
     #
     # For those records, RESOLVE the visit instead of ignoring it: try each
     # candidate and keep the one whose members reproduce the recorded pooled
     # value.  Ambiguous or unresolvable groups return None and are counted as
     # discards rather than silently pooled across visits.
+    #
+    # For records written from here on, the group carries the visit and the
+    # sweep is skipped -- which is why `_same_visit` and not a string compare:
+    # the two halves spell the visit differently, and a string compare
+    # reconstructs 0 of 1758.
     def _members_for(visit):
         got = [by_key[k] for k in by_key
                if k[2] in mods
                and k[1] == group.get('exposure')
                and str(k[4]) == str(group.get('vgroup'))
-               and (visit is None or str(k[0]) == str(visit))]
+               and (visit is None or _same_visit(k[0], visit))]
         return got
 
     want_visit = group.get('visit')
