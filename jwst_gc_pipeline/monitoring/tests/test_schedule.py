@@ -757,7 +757,7 @@ def test_a_cache_write_into_an_unwritable_directory_returns_False(tmp_path):
 
 
 def test_load_survives_an_unwritable_cache_directory(tmp_path, monkeypatch):
-    """The same failure through the public entry point: degraded, never raised."""
+    """The write-into-an-existing-directory half: degraded, never raised."""
     cache = tmp_path / S.CACHE_SUBDIR
     cache.mkdir()
     (cache / 'index.html').write_text(
@@ -770,6 +770,29 @@ def test_load_survives_an_unwritable_cache_directory(tmp_path, monkeypatch):
         os.chmod(cache, 0o700)
     assert out['stale'] is True, out
     assert out['note'], 'a cache it could not write has to say so'
+
+
+def test_load_survives_an_uncreatable_cache_directory(tmp_path, monkeypatch):
+    """The CREATE half, which the test above cannot reach.
+
+    That one calls `cache.mkdir()` first, so `os.makedirs(..., exist_ok=True)`
+    succeeds and only the write inside an existing directory is exercised.  The
+    raise needs the cache directory ABSENT under an unwritable parent -- a fresh
+    deploy target, or a restore that recreated the monitor directory without its
+    `schedule/` child.
+    """
+    root = tmp_path / 'ro'
+    root.mkdir()
+    assert not (root / S.CACHE_SUBDIR).exists()
+    monkeypatch.setattr(S, '_get', lambda url, timeout=30: _big_report())
+    os.chmod(root, 0o500)
+    try:
+        out = S.load(str(root), program='10678')
+    finally:
+        os.chmod(root, 0o700)
+    assert out['stale'] is True, out
+    assert out['note'], 'a cache directory it could not create has to say so'
+    assert out['visits'] == []
 
 
 def test_the_heal_does_not_destroy_a_good_cache_with_a_bad_body(tmp_path,

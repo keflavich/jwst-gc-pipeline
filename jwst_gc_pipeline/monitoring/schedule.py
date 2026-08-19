@@ -334,8 +334,19 @@ def load(outdir, program=DEFAULT_PROGRAM, weeks=8, offline=False, min_rows=MIN_P
     teaches people to distrust the parts that are still right.
     """
     cache = os.path.join(outdir, CACHE_SUBDIR)
-    os.makedirs(cache, exist_ok=True)
     note, stale = '', False
+    # The OTHER half of the local-write promise.  `_write_cache` returns False
+    # rather than raising, but creating the cache directory sat outside any
+    # try, so an unwritable PARENT -- a fresh deploy target, or a restore that
+    # recreated the monitor directory without its `schedule/` child -- escaped
+    # `load()`, killed `write_report`, and shipped a stale page under an exit
+    # code `refresh_monitor.sh` does not fail on.
+    try:
+        os.makedirs(cache, exist_ok=True)
+    except OSError as ex:
+        note = (f'could not create the schedule cache directory '
+                f'({type(ex).__name__})')
+        stale = True
 
     index_path = os.path.join(cache, 'index.html')
     index_html = ''
