@@ -51,14 +51,35 @@ def test_other_observations_are_not_missing_products(monkeypatch, capsys):
     assert "02526-021" in out and "02221-002" in out
 
 
-def test_an_out_of_scope_band_neither_passes_nor_fails_the_scan(monkeypatch):
-    """It must not block, and it must not be counted as a verified pass either:
-    the gate has nothing to say about a band this release does not ship."""
+def test_a_scan_that_measured_nothing_is_not_a_pass(monkeypatch, capsys):
+    """Skipping a band must not become a way to pass the gate having verified
+    NOTHING. `stage_release` refuses only on rc != 0, so rc 0 from an all-skipped
+    scan stages the field -- the same false agreement the fail-closed rule
+    exists to prevent, reached from the other side: a wrong
+    `_release_observations` derivation used to REFUSE a good field, and would
+    then have PASSED one."""
     _derives(monkeypatch, {"02526-021"})
     monkeypatch.setattr(cio, "field_filters", lambda field: ["F770W"])
     rc = cio.main(["--field", "cloudc", "--scan",
                    "--observations", "02221-002"])
-    assert rc == 0
+    assert rc == 2
+    assert "every band was skipped" in capsys.readouterr().out
+
+
+def test_one_real_band_beside_a_skipped_one_still_passes(monkeypatch):
+    """The skip must not poison a scan that DID measure something."""
+    derived = {"F770W": {"02526-021"}, "F182M": {"02221-002"}}
+    monkeypatch.setattr(cio, "_field_observations",
+                        lambda field, filt: derived[filt])
+    monkeypatch.setattr(cio, "field_filters", lambda field: ["F182M", "F770W"])
+    monkeypatch.setattr(cio, "check_filter",
+                        lambda field, filt, **kw: (
+                            {"field": field, "filt": filt, "PASS": None,
+                             "not_in_release": True}
+                            if filt == "F770W" else
+                            {"field": field, "filt": filt, "PASS": True}))
+    assert cio.main(["--field", "cloudc", "--scan",
+                     "--observations", "02221-002"]) == 0
 
 
 def test_a_derivation_that_yields_nothing_still_fails_closed(monkeypatch,

@@ -1344,12 +1344,22 @@ def main(argv=None):
         return 2
     any_fail = False
     any_noverify = False
+    # How many bands this scan actually MEASURED.  Skipping out-of-release bands
+    # without counting them let a scan whose every band was skipped fall through
+    # to `return 0` -- eight "NOT IN THIS RELEASE" lines and a pass, which
+    # `stage_release` (refusing only on rc != 0) reads as the gate having run.
+    # That is the same false-agreement this file's own could-not-verify message
+    # argues against, arrived at from the other side: a wrong
+    # `_release_observations` derivation used to REFUSE a good field, and would
+    # then have PASSED one.
+    checked = 0
     for f in filts:
         r = check_filter(args.field, f, refcat=args.refcat,
                          observations=(set(args.observations.split(","))
                                        if args.observations else None))
         if r.get("not_in_release"):
             continue          # not this release's band; neither passed nor failed
+        checked += 1
         if r.get("could_not_verify"):
             any_noverify = True
         elif not r.get("PASS"):
@@ -1359,6 +1369,12 @@ def main(argv=None):
               f"(> {TOL_MAS:.0f} mas). Do NOT stage; re-examine per-visit alignment.",
               flush=True)
         return 1
+    if filts and not checked:
+        print(f"\nOVERLAP GATE: COULD NOT VERIFY {args.field} -- every band was "
+              f"skipped as belonging to other observations, so nothing was "
+              f"measured. A scope that excludes the whole field is a wrong scope, "
+              f"not a passing gate.", flush=True)
+        return 2
     if any_noverify:
         # exit 2 = could-not-verify: distinct from a measured FAIL, but still
         # refused by stage_release (its rc != 0 branch) -- fail closed, never
