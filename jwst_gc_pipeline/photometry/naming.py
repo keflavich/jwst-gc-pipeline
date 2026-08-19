@@ -176,7 +176,71 @@ def vetted_to_i2dseed(vetted_path):
 # (139 tiles sharing the gc-treasury tree; issue #416).  Lives here (a
 # heavy-import-free module) so merge_catalogs.py can consult it without a
 # circular import of crowdsource_catalogs_long.
+#: What the registry writes for "every observation of this proposal".
+WILDCARD_OBSID = '*'
+
 MULTIOBS_PROPOSALS = ('2211', '10678')
+
+
+def proposal_is_multiobs(proposal_id):
+    """Does this proposal put more than one observation under ONE basepath?
+
+    DERIVED from the field registry, with ``MULTIOBS_PROPOSALS`` as a floor.
+    The hand-maintained tuple listed 2211 and 10678 because those are the two
+    someone noticed; the registry says EIGHT more proposals register several
+    obsids against a single field, and every one of them writes per-frame
+    catalogs whose names carry visit, vgroup, exposure and detector but not the
+    observation:
+
+        2092 cloudef   002 004 005 006 008
+        5365 sgrb2     001 002 998
+        3958 sickle    001 002 007
+        6151 w51       001 002        1905 wd1   001 003
+        3523 wd2       003 005        1979 m4    002 003
+        2221           001 002   (brick and cloudc, separate basepaths)
+
+    cloudef is the proven case and the cost is data loss, not a nuisance:
+    obs 002 and obs 005 both use visit 001 / vgroup 02101, so the later run
+    overwrote the earlier one.  Of ~64 obs-005 m2 catalogs per short-wavelength
+    filter, 8 survive; F480M has none, and its offsets table cannot be rebuilt
+    at all because `build_virac2_offsets` refuses to relabel obs 002's catalogs
+    as obs 005's.
+
+    "Multi-obs" is narrower than "multi-pointing".  1182 is ONE observation
+    (004) with two visits -- separate pointings on different dates, the pair
+    behind the brick-1182 v001 ~20" offset -- and it needs no token because the
+    per-frame name already carries `visit001` / `visit002`.  What cloudef hit is
+    two OBSERVATIONS that both restart at visit 001 and vgroup 02101, so the
+    visit field does not separate them and nothing else in the name does either.
+
+    Keeping the tuple as a floor means a proposal that is multi-obs in practice
+    but not yet in the registry keeps its token.
+
+    The registry import is deferred: this module is deliberately import-light so
+    `merge_catalogs` can consult it without pulling in
+    `crowdsource_catalogs_long`.
+    """
+    prop = str(proposal_id)
+    if prop in MULTIOBS_PROPOSALS:
+        return True
+    try:
+        from jwst_gc_pipeline import fields as _fields
+    except ImportError:
+        return False
+    for fld in getattr(_fields, 'FIELDS', ()):
+        for obs in getattr(fld, 'observations', ()):
+            if str(getattr(obs, 'proposal', '')) != prop:
+                continue
+            seen = set()
+            for ids in (getattr(obs, 'obsids', None) or {}).values():
+                seen |= {str(i) for i in ids}
+            for ids in (getattr(obs, 'glob_obsids', None) or {}).values():
+                seen |= {str(i) for i in ids}
+            # A wildcard entry claims every observation of the proposal, which
+            # is the multi-obs case by construction.
+            if WILDCARD_OBSID in seen or len(seen - {WILDCARD_OBSID}) > 1:
+                return True
+    return False
 
 #: The subset whose MERGED catalogs are per-observation too.  gc2211 is multi-
 #: obs at the per-frame level but pools all five pointings into one untokened
@@ -264,7 +328,7 @@ def vetted_obs_tokens(proposal_id, field, filtername=None, module=None):
     if merged_catalog_obs_token(proposal_id, field):
         return '', ''
     token = f'_o{observation_field_token(field)}'
-    multiobs = str(proposal_id) in MULTIOBS_PROPOSALS
+    multiobs = proposal_is_multiobs(proposal_id)
     miri = (str(module).lower() == 'mirimage'
             or _instrument_from_filter(filtername) == 'MIRI')
     return (token if (miri or multiobs) else ''), (token if multiobs else '')

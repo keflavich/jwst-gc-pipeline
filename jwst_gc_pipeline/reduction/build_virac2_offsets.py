@@ -275,7 +275,16 @@ REGION = {
     'cloudef2': dict(proposal='2092', field='002', basepath='/orange/adamginsburg/jwst/cloudef',
                      filts={'f162m': ('F162M', 2023.21, '_m3'), 'f210m': ('F210M', 2023.21, '_m3'),
                             'f360m': ('F360M', 2023.21, '_m3'), 'f480m': ('F480M', 2023.21, '_m3')}),
-    'cloudef5': dict(proposal='2092', field='005', basepath='/orange/adamginsburg/jwst/cloudef',
+    # otag=True as of 2026-08-19: obs 002 and obs 005 share this tree and both
+    # restart at visit 001 / vgroup 02101, so the untokened per-frame catalog
+    # name is identical between them and obs 002's run OVERWROTE obs 005's --
+    # 8 of ~64 obs-005 m2 catalogs survive per SW filter, F480M none.  The
+    # builder then refuses (`WrongObservationError`) rather than relabelling
+    # obs 002's as obs 005's, which is the guard working and the data still
+    # gone.  With `naming.proposal_is_multiobs` deriving 2092 as multi-obs the
+    # catalogs are written `_o005_`, and this glob has to ask for them.
+    'cloudef5': dict(proposal='2092', field='005', otag=True,
+                     basepath='/orange/adamginsburg/jwst/cloudef',
                      filts={'f162m': ('F162M', 2023.21, '_m2'), 'f210m': ('F210M', 2023.21, '_m2'),
                             'f360m': ('F360M', 2023.21, '_m2'), 'f480m': ('F480M', 2023.21, '_m2')}),
     # sgrc (4147/012).  The VIRAC2locked table was previously authored without a

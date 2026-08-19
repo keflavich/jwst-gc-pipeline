@@ -45,6 +45,8 @@ def test_merged_catalog_token_is_per_obs_for_treasury_only():
     assert naming.merged_catalog_obs_token('10678', '001') == '_o001'
     assert naming.merged_catalog_obs_token('10678', '002') == '_o002'
     assert naming.merged_catalog_obs_token('2211', '023') == ''
+    # 2221 is multi-obs at the per-frame level but its MERGED catalogs stay
+    # pooled -- only 10678 scopes those per observation.
     assert naming.merged_catalog_obs_token('2221', '001') == ''
     assert naming.merged_catalog_obs_token('10678', None) == ''
     assert naming.merged_catalog_obs_token('10678', '') == ''
@@ -691,10 +693,20 @@ def test_an_unpadded_field_is_normalised_to_the_spelling_readers_expect():
     ('10678', '001', 'f212n', 'nrcblong', ('', '')),
     # gc2211: vetted AND combined are per-pointing
     ('2211', '023', 'f200w', 'nrcb', ('_o023', '_o023')),
-    # MIRI multi-obs (cloudef): vetted per obs, combined pooled
-    ('2092', '005', 'f770w', 'mirimage', ('_o005', '')),
-    # single-obs NIRCam: neither
-    ('2221', '001', 'f182m', 'nrca', ('', '')),
+    # cloudef: multi-obs at the per-frame level, so BOTH slots carry the
+    # token now.  It used to get ('_o005', '') -- the token only because MIRI
+    # always gets one -- because MULTIOBS_PROPOSALS was a hand-maintained tuple
+    # of 2211 and 10678 and 2092 was not on it.  Observations 002 and 005 share
+    # a basepath and both use visit 001 / vgroup 02101, so its NIRCam per-frame
+    # catalogs overwrote each other: 8 of ~64 obs-005 m2 catalogs survive per
+    # SW filter and F480M has none.
+    ('2092', '005', 'f770w', 'mirimage', ('_o005', '_o005')),
+    # 2221 is brick/001 and cloudc/002 -- two observations, and the registry
+    # says so, so it is multi-obs too.  They live in different basepaths, so no
+    # collision has happened; the token is what keeps that true if they ever
+    # share one.
+    ('2221', '001', 'f182m', 'nrca', ('_o001', '_o001')),
+    # genuinely single-obs: neither slot.
     ('1182', '004', 'f200w', 'merged', ('', '')),
 ])
 def test_vetted_and_combined_obs_tokens(proposal, field, filt, module,
