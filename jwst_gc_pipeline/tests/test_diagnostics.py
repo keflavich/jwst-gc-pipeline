@@ -492,6 +492,61 @@ def test_an_observation_scoped_catalog_is_still_found_when_it_is_all_there_is(
     assert int(match.group('stage')) == 7
 
 
+def test_perfilter_regex_matches_a_joint_observation():
+    """Joint registrations are real: sgrb2's MIRI is ``002-998`` and sickle's
+    ``001-002``, and ``naming.observation_field_token`` normalises that
+    spelling part by part.  The cross-band regex has always matched it; this
+    one used to stop at three digits, so the same product would be visible in
+    one reader and invisible in the other."""
+    m = inv_mod._PERFILTER_RE.match(
+        'f770w_mirimage_o002-998_indivexp_merged_m6_dao_basic.fits')
+    assert m is not None
+    assert m.group('module') == 'mirimage'
+    assert m.group('obs') == '002-998'
+
+
+def _registered_field(monkeypatch, tmp_path, name='sgrc'):
+    """A REAL registry entry, re-rooted under *tmp_path*.
+
+    The entry carries more than the inventory reads (the reference catalogs it
+    resolves per observation, for one), so a stand-in namespace stops standing
+    in as soon as the inventory grows; this borrows a registered field and
+    moves the root its basepath is built from.  Returns ``(name, catalogs
+    dir)``.
+    """
+    import dataclasses
+    entry = inv_mod._fields.BY_NAME[name]
+    moved = dataclasses.replace(entry, roots={entry.root: str(tmp_path)})
+    monkeypatch.setitem(inv_mod._fields.BY_NAME, name, moved)
+    return name, os.path.join(moved.basepath, 'catalogs')
+
+
+def test_inventory_says_when_its_crossband_catalog_is_one_observation(
+        tmp_path, monkeypatch):
+    """The rank's ``pooled`` term ties at 0 when every candidate is
+    observation-scoped -- gc-treasury's shape, 139 tiles and no pooled sibling
+    -- so mtime picks a tile and nothing else in the inventory names an
+    observation.  The write-up would then describe one tile as the field."""
+    name, catalogs = _registered_field(monkeypatch, tmp_path)
+    _touch(os.path.join(catalogs,
+                        'basic_merged_indivexp_photometry_tables_merged'
+                        '_resbgsub_m7_o042.fits'))
+    inv = inv_mod.inventory(name)
+    assert inv.crossband_stage == 7
+    assert any('observation 042 only' in n for n in inv.notes), inv.notes
+
+
+def test_inventory_says_nothing_extra_about_a_pooled_crossband_catalog(
+        tmp_path, monkeypatch):
+    name, catalogs = _registered_field(monkeypatch, tmp_path)
+    _touch(os.path.join(catalogs,
+                        'basic_merged_indivexp_photometry_tables_merged'
+                        '_resbgsub_m7.fits'))
+    inv = inv_mod.inventory(name)
+    assert inv.crossband_stage == 7
+    assert not any('observation' in n for n in inv.notes), inv.notes
+
+
 def test_module_siblings_flags_partial_field_coverage(catdir):
     """Finding 5: a single-module pick with other modules on disk is flagged."""
     _touch(os.path.join(catdir, 'f200w_nrca_indivexp_merged_m6_dao_basic.fits'))

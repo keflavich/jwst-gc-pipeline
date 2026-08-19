@@ -444,6 +444,11 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
     if mast_needed and not skip_step1and2:
         products_fits = Observations.filter_products(data_products_by_obs, extension="fits")
         print("products_fits length:", len(products_fits))
+        # TODO(#438): `field` is used RAW here while the obs mask above pads it
+        # through `observation_number`, so `--field 1` narrows the obs table to
+        # jw10678-o001 correctly and then this substring test looks for
+        # `jw106781` and keeps nothing.  #438 normalises --field once, at the
+        # driver's entry, for this site and the asn glob below.
         uncal_mask = np.array([
             uri.endswith('_uncal.fits')
             and f'jw0{proposal_id}{field}' in uri
@@ -470,6 +475,11 @@ def main(filtername, module, Observations=None, regionname='brick', do_destreak=
 
 
     # all cases, except if you're just doing a merger?
+    #
+    # TODO(#438): the association glob below uses `field` RAW, while the obs
+    # mask above pads it through `observation_number`: `--field 1` downloads
+    # jw10678-o001's association and then globs `-o1*`, which matches nothing.
+    # #438 normalises --field once, at the driver's entry, for both sites.
     if module in ('nrca', 'nrcb', 'merged'):
         print(f"Working on module {module}: running initial pipeline setup steps (skip_step1and2={skip_step1and2})")
         print(f"Searching for {os.path.join(output_dir, f'jw0{proposal_id}-o{field}*_image3_*0[0-9][0-9]_asn.json')}")

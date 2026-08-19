@@ -38,9 +38,10 @@ from astropy.modeling.fitting import LevMarLSQFitter
 
 from jwst_gc_pipeline.photometry.naming import (
     _iteration_token, _bgsub_token,
-    MULTIOBS_PROPOSALS, merged_catalog_obs_token,
-    merge_field_for_proposal, vetted_obs_tokens,
+    MULTIOBS_PROPOSALS, merged_catalog_obs_token, vetted_obs_tokens,
     residual_to_smoothed_bg_i2d, smoothed_bg_to_detection_i2d, vetted_to_i2dseed)
+from jwst_gc_pipeline.photometry.observation_merge import (
+    merge_frames_for_observation)
 from jwst_gc_pipeline.photometry.manual_defaults import MANUAL_DEFAULTS, mopt
 # Lives in atomic_io with the rest of the shared-file tools; imported here
 # because every call site in this module and its tests names it.
@@ -5422,19 +5423,25 @@ def run_manual_pipeline(options, modules, filternames, nvisits, proposal_id,
                         print(f"manual [m12]: persisting reconciled satstars failed "
                               f"for {filt}/{module}: {_pex}", flush=True)
 
-                # merge per-frame catalogs (BASIC only)
-                _merge_catalogs.merge_individual_frames(
-                    module=module, filtername=filt.lower(), progid=proposal_id,
+                # merge per-frame catalogs (BASIC only).
+                #
+                # Which observation the merged catalog covers is decided in
+                # observation_merge.merge_frames_for_observation, which passes
+                # progid=proposal_id and the field
+                # naming.merge_field_for_proposal allows: THIS observation for a
+                # per-obs-merged proposal (10678; glob + output both carry
+                # _o{field}), None for every other, which keeps gc2211's all-obs
+                # pooling (_o* glob, untokened output) and the single-obs
+                # targets' untokened names unchanged.  Tests call that helper
+                # with a recording merge; this call site is 3000 lines inside
+                # run_manual_pipeline and no test drives it.
+                merge_frames_for_observation(
+                    proposal_id, field,
+                    module=module, filtername=filt.lower(),
                     method='dao', suffix='_basic', target=target, basepath=cut_bp,
                     iteration_label=merge_label, bgsub=options.bgsub,
                     desat=options.desaturated, epsf=options.epsf, blur=options.blur,
                     resbgsub=resbgsub, group=getattr(options, 'group', False),
-                    # Per-obs-merged proposals (10678): scope the merge to THIS
-                    # observation -- glob + output both carry _o{field}.  Every
-                    # other proposal keeps field=None: gc2211's all-obs pooling
-                    # (_o* glob, untokened output) and the single-obs targets'
-                    # untokened names are unchanged.
-                    field=merge_field_for_proposal(proposal_id, field),
                     fwhm_basepath=basepath,
                     # parallelize the otherwise-serial dense-field merge: pass the
                     # worker count so combine auto-spatial-chunks when the source

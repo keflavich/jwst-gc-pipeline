@@ -715,7 +715,11 @@ def test_merge_field_is_passed_only_for_per_obs_merged_proposals():
     assert naming.merge_field_for_proposal('10678', '001') == '001'
     assert naming.merge_field_for_proposal('2211', '023') is None
     assert naming.merge_field_for_proposal('2221', '001') is None
-    assert naming.merge_field_for_proposal('10678', None) is None
+    # a field-less call on a per-obs-merged proposal names no observation, and
+    # is refused where the observation is decided rather than inside the merge
+    with pytest.raises(naming.ObservationFieldError):
+        naming.merge_field_for_proposal('10678', None)
+    assert naming.merge_field_for_proposal('2211', None) is None
 
 
 @pytest.mark.parametrize('proposal, field, module_slot', [
@@ -791,38 +795,156 @@ def _is_call_to(node, name):
             == name)
 
 
-def test_the_manual_merge_is_called_with_this_runs_observation():
-    """The merge decides the merged catalog's name from ``field``.
+class _RecordingMerge:
+    """Stands in for ``merge_individual_frames`` and keeps its keywords."""
 
-    With ``field=None`` a 10678 merge is refused outright, and every reader
-    downstream spells a token nothing wrote; the refusal is loud but nothing
-    else pins the call site, so pin it here.
+    def __init__(self, fail_on=()):
+        self.calls = []
+        self.fail_on = set(fail_on)
+
+    def __call__(self, **kwargs):
+        self.calls.append(kwargs)
+        if kwargs.get('method') in self.fail_on:
+            raise OSError(f"no per-frame catalogs for {kwargs.get('method')}")
+
+    @property
+    def fields(self):
+        return [c.get('field') for c in self.calls]
+
+
+def _cutout_options(basic_only=False, field=None):
+    """The options the cutout merge reads.
+
+    ``field=None`` is what ``--field`` omitted leaves on the options object;
+    the RESOLVED field is a separate argument, and mixing them up is the
+    regression these tests exist for.
     """
-    import jwst_gc_pipeline.photometry.cataloging as C
-    node = _call_kwarg(C.__file__, 'merge_individual_frames', 'field',
-                       inside='run_manual_pipeline')
-    assert _is_call_to(node, 'merge_field_for_proposal'), (
-        'the manual merge no longer takes its field from '
-        'naming.merge_field_for_proposal')
+    return types.SimpleNamespace(
+        basic_only=basic_only, iteration_label=None, bgsub=False,
+        desaturated=False, epsf=False, blur=False,
+        use_iter3_residual_bg=False, field=field, daophot=True)
 
 
-def test_the_cutout_merge_is_called_with_the_RESOLVED_field():
-    """``options.field`` is None whenever ``--field`` was omitted, and the
-    cutout merge sits inside a print-and-continue except, so the refusal that
-    field-lessness triggers degrades to one printed line."""
+def _run_cutout_merge(merge, *, proposal_id='10678', field='001',
+                      basic_only=False, options_field=None):
+    from jwst_gc_pipeline.photometry.observation_merge import (
+        merge_cutout_catalogs)
+    merge_cutout_catalogs(
+        proposal_id=proposal_id, field=field, target='gc-treasury',
+        module='nrcblong', filtername='F212N', basepath='/cut',
+        fwhm_basepath='/bp',
+        options=_cutout_options(basic_only=basic_only, field=options_field),
+        merge=merge)
+
+
+def test_the_manual_merge_hands_the_merge_this_runs_observation():
+    """The merged catalog's name comes from the ``field`` the merge is given.
+
+    Driven rather than read: the production call sits ~3000 lines inside
+    ``run_manual_pipeline``, so a dropped or swapped argument used to pass
+    every test.  Here the merge is a recorder and the assertion is the value
+    that reached it.
+    """
+    from jwst_gc_pipeline.photometry.observation_merge import (
+        merge_frames_for_observation)
+    rec = _RecordingMerge()
+    merge_frames_for_observation('10678', '001', merge=rec,
+                                 module='nrcblong', filtername='f212n',
+                                 method='dao', suffix='_basic')
+    assert rec.fields == ['001']
+    assert rec.calls[0]['progid'] == '10678'
+    # every other proposal keeps its merged names: gc2211 pools its five
+    # pointings, and a field would scope that away
+    rec = _RecordingMerge()
+    merge_frames_for_observation('2211', '023', merge=rec, module='nrcb')
+    assert rec.fields == [None]
+    assert rec.calls[0]['progid'] == '2211'
+
+
+def test_a_treasury_merge_with_no_field_raises_before_it_reaches_the_merge():
+    """A field-less 10678 merge names no observation.
+
+    ``merge_individual_frames`` refuses such a call too, but the cutout runs it
+    inside a print-and-continue handler, so the refusal has to arrive at the
+    decision -- before any handler -- to stop the run.
+    """
+    from jwst_gc_pipeline.photometry.observation_merge import (
+        merge_frames_for_observation)
+    rec = _RecordingMerge()
+    with pytest.raises(naming.ObservationFieldError):
+        merge_frames_for_observation('10678', None, merge=rec, module='nrcblong')
+    assert rec.calls == []
+
+
+def test_the_cutout_merge_passes_the_resolved_field_to_every_method():
+    """Both dao methods merge THIS tile.
+
+    ``options.field`` is None whenever ``--field`` was omitted; reading it here
+    instead of the resolved field is the mutation this pins.
+    """
+    rec = _RecordingMerge()
+    _run_cutout_merge(rec)
+    assert [c['method'] for c in rec.calls] == ['dao', 'daoiterative']
+    assert rec.fields == ['001', '001']
+    assert {c['progid'] for c in rec.calls} == {'10678'}
+    assert {c['basepath'] for c in rec.calls} == {'/cut'}
+    assert {c['fwhm_basepath'] for c in rec.calls} == {'/bp'}
+    # --basic-only runs the one method
+    rec = _RecordingMerge()
+    _run_cutout_merge(rec, basic_only=True)
+    assert [c['method'] for c in rec.calls] == ['dao']
+
+
+def test_the_cutout_merge_keeps_every_other_proposals_pooled_names():
+    rec = _RecordingMerge()
+    _run_cutout_merge(rec, proposal_id='2211', field='023')
+    assert rec.fields == [None, None]
+
+
+def test_the_cutout_merge_refusal_is_not_swallowed_by_its_own_handler():
+    """The failure the pass-through exists to prevent.
+
+    With no field, a 10678 cutout merge used to raise INSIDE the per-method
+    handler: one printed line, the run continuing, and a cutout tree with no
+    merged catalog.
+    """
+    rec = _RecordingMerge()
+    with pytest.raises(naming.ObservationFieldError):
+        _run_cutout_merge(rec, field=None)
+    assert rec.calls == []
+
+
+def test_one_cutout_method_failing_still_runs_the_other(capsys):
+    """The handler still does its job: a merge that cannot read its inputs
+    prints and the next method runs."""
+    rec = _RecordingMerge(fail_on={'dao'})
+    _run_cutout_merge(rec)
+    assert [c['method'] for c in rec.calls] == ['dao', 'daoiterative']
+    out = capsys.readouterr().out
+    assert 'merge_individual_frames(dao) failed' in out
+    assert 'wrote merged daoiterative catalog' in out
+
+
+def test_the_production_call_sites_use_the_driven_helpers():
+    """Where the decision lives.
+
+    The values above are pinned by running the helpers; this keeps the two
+    production branches -- both unreachable from a test -- calling them, so the
+    decision cannot migrate back inline where nothing drives it.
+    """
     import ast
+    import jwst_gc_pipeline.photometry.cataloging as C
     import jwst_gc_pipeline.photometry.crowdsource_catalogs_long as L
-    tree = ast.parse(open(L.__file__).read())
-    assigns = [n for n in ast.walk(tree)
-               if isinstance(n, ast.Assign)
-               and any(getattr(t, 'id', None) == '_merge_field'
-                       for t in n.targets)]
-    assert len(assigns) == 1, assigns
-    value = assigns[0].value
-    assert _is_call_to(value, 'merge_field_for_proposal'), ast.dump(value)
-    assert [getattr(a, 'id', None) for a in value.args][-1] == 'field', (
-        'the cutout merge reads options.field (the raw CLI value) rather than '
-        'the resolved field')
+    for module, helper in ((C, 'merge_frames_for_observation'),
+                           (L, 'merge_cutout_catalogs')):
+        tree = ast.parse(open(module.__file__).read())
+        called = {getattr(n.func, 'attr', getattr(n.func, 'id', None))
+                  for n in ast.walk(tree) if isinstance(n, ast.Call)}
+        assert helper in called, f'{module.__name__} no longer calls {helper}'
+        assert 'merge_individual_frames' not in called, (
+            f'{module.__name__} calls merge_individual_frames directly again; '
+            f'the observation it merges is then decided where no test can '
+            f'drive it')
 
 
 def test_merge_daophot_is_called_with_the_running_proposal():

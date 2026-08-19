@@ -200,10 +200,11 @@ class CappedSourceGrouper:
 from jwst_gc_pipeline.photometry.naming import (
     _CHUNK_TOKEN_RE, _chunk_token, _strip_chunk, _iteration_token, _bgsub_token,
     MIRI_FILTERS, MULTIOBS_PROPOSALS,
-    observation_field_token, merge_field_for_proposal,
+    observation_field_token,
     _instrument_from_filter, _inst_token, _instrument_override,
     residual_to_smoothed_bg_i2d, residual_to_model_i2d, residual_to_infilled_i2d,
 )
+from jwst_gc_pipeline.photometry.observation_merge import merge_cutout_catalogs
 from jwst_gc_pipeline.photometry.psf_paths import (
     resolve_merged_psf_grid_path, central_psf_dir,
 )
@@ -5054,42 +5055,24 @@ def main(smoothing_scales={'f182m': 0.25, 'f187n':0.25, 'f212n':0.55,
                 # tree doesn't contain it.
                 if (_cutout_run and os.getenv('SLURM_ARRAY_TASK_ID') is None
                         and options.daophot):
-                    from jwst_gc_pipeline.photometry import merge_catalogs as _merge_catalogs
                     _cut_bp = _cutout_out_basepath(basepath, options)
                     os.makedirs(os.path.join(_cut_bp, 'catalogs'), exist_ok=True)
-                    _merge_methods = [('dao', '_basic')]
-                    if not options.basic_only:
-                        _merge_methods.append(('daoiterative', '_iterative'))
-                    # A per-obs-merged proposal (10678) REFUSES a field-less
-                    # merge, and this call sits inside a print-and-continue
-                    # except -- so without the field the refusal would degrade
-                    # to one line and the cutout run would quietly have no
-                    # merged catalog.  Passed only for those proposals: gc2211
-                    # pools every observation into one untokened cutout merged
-                    # catalog by design, and a field would scope that away.
+                    # The merge methods, the per-method handler and the
+                    # observation this merge covers all live in
+                    # `observation_merge.merge_cutout_catalogs`, which tests
+                    # call directly -- this branch is a thousand lines inside
+                    # main() and nothing drove it, so a dropped `field` was
+                    # pinned only by reading the source.
                     #
                     # `field` is the RESOLVED value (the registry default when
                     # --field was omitted), not `options.field`: with --field
-                    # omitted the raw option is None, which is the field-less
-                    # call this pass-through exists to prevent.
-                    _merge_field = merge_field_for_proposal(proposal_id, field)
-                    for _mname, _msuffix in _merge_methods:
-                        try:
-                            _merge_catalogs.merge_individual_frames(
-                                module=module, filtername=filtername.lower(),
-                                progid=proposal_id, method=_mname, suffix=_msuffix,
-                                target=target, basepath=_cut_bp,
-                                iteration_label=options.iteration_label or None,
-                                bgsub=options.bgsub, desat=options.desaturated,
-                                epsf=options.epsf, blur=options.blur,
-                                resbgsub=getattr(options, 'use_iter3_residual_bg', False),
-                                field=_merge_field,
-                                fwhm_basepath=basepath)
-                            print(f"cutout: wrote merged {_mname} catalog under "
-                                  f"{_cut_bp}/catalogs/", flush=True)
-                        except Exception as ex:
-                            print(f"cutout: merge_individual_frames({_mname}) "
-                                  f"failed: {ex}", flush=True)
+                    # omitted the raw option is None, and a field-less merge on
+                    # a per-obs-merged proposal (10678) is refused.
+                    merge_cutout_catalogs(
+                        proposal_id=proposal_id, field=field, target=target,
+                        module=module, filtername=filtername,
+                        basepath=_cut_bp, fwhm_basepath=basepath,
+                        options=options)
             else:
                 # Mosaic-mode photometry deprecated 2026-05-25 (see main()
                 # deprecation guard).  Unreachable in normal CLI use, but

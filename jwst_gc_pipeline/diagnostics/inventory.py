@@ -60,9 +60,16 @@ _CROSSBAND_RE = re.compile(
 # ``_module_siblings`` would then report tile 002's catalog as covering "part of
 # the field only", listing the other 138 tiles as modules that were not
 # combined.
+#
+# The observation itself can be JOINT -- sgrb2's MIRI is registered ``002-998``
+# and sickle's ``001-002``, and ``naming.observation_field_token`` normalises
+# that spelling part by part -- so the group matches a run of three-digit
+# numbers, as the cross-band group does.  No per-obs-merged proposal has a
+# joint observation today; the two regexes agreeing costs one alternation and
+# keeps a joint tile from being invisible here while visible there.
 _PERFILTER_RE = re.compile(
     r'^(?P<filt>f\d{3}[a-z]\d?)_(?P<module>[a-z0-9-]+(?:_j\d+)?)'
-    r'(?:_o(?P<obs>\d{3}))?_indivexp_merged'
+    r'(?:_o(?P<obs>\d{3}(?:-\d{3})*))?_indivexp_merged'
     r'(?P<resbg>_resbgsub)?_m(?P<stage>\d+)_dao_basic\.fits$')
 
 
@@ -218,6 +225,18 @@ def inventory(fieldname):
         inv.crossband_catalog, match = hit
         inv.crossband_stage = int(match.group('stage') or 0) or None
         inv.crossband_resbgsub = bool(match.group('resbg'))
+        # The ``pooled`` rank term ties at 0 when every candidate is
+        # observation-scoped -- gc-treasury's shape, where each of the 139
+        # tiles writes its own cross-band catalogue and no pooled sibling
+        # exists -- so mtime picks one tile and nothing else in the inventory
+        # names an observation.  Say which one, rather than leaving the
+        # write-up to describe one tile as the field.
+        if match.group('obs'):
+            inv.notes.append(
+                f'The cross-band catalogue found covers observation '
+                f'{match.group("obs")} only ('
+                f'{os.path.basename(inv.crossband_catalog)}); no catalogue '
+                f'pooling this field\'s observations is on disk.')
     else:
         inv.notes.append(
             'No cross-band merged catalogue: colour-colour and '

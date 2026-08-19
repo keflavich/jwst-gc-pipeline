@@ -225,9 +225,21 @@ def merge_field_for_proposal(proposal_id, field):
     Per-obs-merged proposals scope the merge to one observation (glob and
     output both carry ``_o{field}``); every other proposal passes ``None``, so
     gc2211's all-obs pooling (``_o*`` glob, untokened output) and the
-    single-obs targets' untokened names are unchanged.  A field-less call on a
-    per-obs-merged proposal is refused by the merge itself.
+    single-obs targets' untokened names are unchanged.
+
+    A field-less call on a per-obs-merged proposal raises HERE, at the point
+    the observation is decided.  ``merge_individual_frames`` refuses such a
+    call too, but that refusal arrives inside the cutout run's
+    print-and-continue handler, where it becomes one printed line and a cutout
+    tree with no merged catalog.  Raising at the decision keeps the two callers
+    that resolve the field before entering a handler (``observation_merge``)
+    loud.
     """
+    if str(proposal_id) in PER_OBS_MERGED_PROPOSALS and field in (None, ''):
+        raise ObservationFieldError(
+            f'proposal {proposal_id} merges per observation, and this run has '
+            f'no field to name one, so the merge would pool tiles or write a '
+            f'name no reader spells.  Pass --field <NNN>.')
     return field if merged_catalog_obs_token(proposal_id, field) else None
 
 

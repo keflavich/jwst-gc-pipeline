@@ -145,6 +145,44 @@ def test_crf_and_reduced_are_counted_separately(tmp_path):
     assert rows['reduced']['n'] == 0
 
 
+def test_crossband_row_prefers_this_observations_own_catalog(tmp_path):
+    """A multi-observation field's m7/m8 carry ``_o<obs>``.
+
+    ``merge_daophot`` appends the token for gc2211's per-pointing m7 and
+    brick's per-proposal m8, and 10678's 139 tiles each write their own.  A
+    monitor that globs only the untokened name reports the tile's own
+    catalogue as ``ambiguous`` -- 'a catalogue exists, but not one attributable
+    to this observation' -- on every field where one does exist.
+    """
+    d = tmp_path / 'catalogs'
+    _touch(str(d / 'basic_merged_indivexp_photometry_tables_merged_resbgsub_m7_o023.fits'))
+    _touch(str(d / 'basic_merged_indivexp_photometry_tables_merged_resbgsub_m8_dedup_o023.fits'))
+    scan.clear_cache()
+    rows = scan._crossband_stages(str(tmp_path), '2211', '023')
+    assert (rows['m7']['n'], rows['m7']['scope']) == (1, 'obs')
+    assert (rows['m8']['n'], rows['m8']['scope']) == (1, 'obs')
+
+
+def test_crossband_row_falls_back_to_the_pooled_catalog_as_ambiguous(tmp_path):
+    """Single-observation fields write the untokened name; it is counted, and
+    reported as attributable to no one observation."""
+    d = tmp_path / 'catalogs'
+    _touch(str(d / 'basic_merged_indivexp_photometry_tables_merged_resbgsub_m7.fits'))
+    scan.clear_cache()
+    rows = scan._crossband_stages(str(tmp_path), '2221', '001')
+    assert (rows['m7']['n'], rows['m7']['scope']) == (1, 'ambiguous')
+    assert (rows['m8']['n'], rows['m8']['scope']) == (0, 'none')
+
+
+def test_crossband_row_does_not_borrow_another_observations_catalog(tmp_path):
+    """Tile 023's catalogue is not tile 042's m7."""
+    d = tmp_path / 'catalogs'
+    _touch(str(d / 'basic_merged_indivexp_photometry_tables_merged_resbgsub_m7_o023.fits'))
+    scan.clear_cache()
+    rows = scan._crossband_stages(str(tmp_path), '2211', '042')
+    assert (rows['m7']['n'], rows['m7']['scope']) == (0, 'none')
+
+
 def test_i2d_row_excludes_per_exposure_outlier_products(tmp_path):
     d = tmp_path / 'F212N' / 'pipeline'
     _touch(str(d / 'jw02221-o001_t001_nircam_clear-f212n-merged_i2d.fits'))

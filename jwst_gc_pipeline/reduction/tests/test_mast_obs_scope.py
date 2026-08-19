@@ -16,6 +16,7 @@ The reduction's own wiring of this mask is exercised in
 ``Observations`` and reads the table the download is handed.
 """
 import numpy as np
+import pytest
 
 from jwst_gc_pipeline.reduction.mast_obs_scope import (
     obs_id_prefix, observation_scope_mask)
@@ -23,9 +24,25 @@ from jwst_gc_pipeline.reduction.mast_obs_scope import (
 
 def test_prefix_is_five_digit_zero_padded():
     # jw + 5-digit program: 4-digit proposals pad (jw02221), 5-digit ones
-    # spell as-is (jw10678) -- the #414 spelling, not jw0{proposal}.
+    # spell as-is (jw10678) -- the #414 spelling.  The literal that gets this
+    # wrong glues the proposal onto a fixed 3-character prefix, which pads a
+    # 5-digit program to six digits and matches nothing.
     assert obs_id_prefix('2221', '001') == 'jw02221-o001'
     assert obs_id_prefix('10678', '042') == 'jw10678-o042'
+
+
+@pytest.mark.parametrize('bad', ['100000', '', '-2221', '2_221', ' 2221',
+                                 '0', 'brick'])
+def test_a_value_that_is_not_a_proposal_number_is_refused(bad):
+    """The prefix is what a MAST query is filtered on.
+
+    A proposal wider than five digits, or carrying a sign or a separator,
+    formats into a prefix that matches no product: the obs table comes back
+    empty and reads as "nothing released yet".  ``jw_prefix`` refuses it
+    instead, and this module takes its prefix from that helper.
+    """
+    with pytest.raises(ValueError):
+        obs_id_prefix(bad, '001')
 
 
 def test_treasury_tile_keeps_only_its_own_observation():

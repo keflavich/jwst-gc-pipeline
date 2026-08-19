@@ -16,6 +16,29 @@ import re
 
 import numpy as np
 
+#: The five-digit proposal spelling MAST uses (``jw02221``, ``jw10678``).
+#: ``mast_names.jw_prefix`` is the shared helper for it and arrives with PR
+#: #426; until then this module carries the same rule, with the same validation,
+#: so the two agree on every proposal and on what is not a proposal.  Once #426
+#: is in, delete ``_jw_prefix`` and import ``jw_prefix`` unconditionally.
+try:
+    from jwst_gc_pipeline.mast_names import jw_prefix
+except ImportError:
+    #: One to five decimal digits, leading zeros allowed; the shapes ``int()``
+    #: would have accepted and normalised silently (a sign, an underscore digit
+    #: group, surrounding whitespace, a non-ASCII digit) are refused, and so is
+    #: a number wider than the five digits every JWST product name assumes.
+    _PROPOSAL_RE = re.compile(r'\A[0-9]{1,5}\Z')
+
+    def jw_prefix(proposal_id):
+        """``'jw02221'`` / ``'jw10678'`` -- a proposal's MAST filename prefix."""
+        text = proposal_id if isinstance(proposal_id, str) else str(proposal_id)
+        if _PROPOSAL_RE.match(text) is None or int(text) == 0:
+            raise ValueError(
+                f'proposal_id {proposal_id!r} is not a JWST proposal number: '
+                f'expected one to five decimal digits')
+        return 'jw' + format(int(text), '05d')
+
 
 def observation_number(field):
     """``field`` as MAST spells an observation number: three digits.
@@ -37,8 +60,14 @@ def obs_id_prefix(proposal_id, field):
     JWST programs are zero-padded to five digits in product names and
     observations to three, so proposal 2221/obs 1 -> ``jw02221-o001`` and
     proposal 10678/obs 42 -> ``jw10678-o042``.
+
+    The prefix comes from ``jw_prefix``, which REFUSES a value that is not a
+    proposal number rather than formatting it: this string is what a MAST query
+    is filtered on, so a proposal wider than five digits or carrying a sign
+    would otherwise become a prefix that matches nothing and silently empties
+    the obs table.
     """
-    return f'jw{int(proposal_id):05d}-o{observation_number(field)}'
+    return f'{jw_prefix(proposal_id)}-o{observation_number(field)}'
 
 
 def observation_scope_mask(obs_ids, proposal_id, field):
