@@ -501,16 +501,24 @@ def discover_images(field_cfg):
 
 
 CAT_BASE = "basic_merged_indivexp_photometry_tables_merged"
+# The oksep quality-cut suffix carries the target's OWN proposal token(s) --
+# merge_catalogs._qualcuts_oksep_suffix() builds it from the field's registered
+# proposals ('_qualcuts_oksep1905' for wd1, '_qualcuts_oksep6151' for w51,
+# '2221' only for the fields that really are program 2221, brick and cloudc).
+# Matching the literal "2221" here silently skipped every other field's
+# quality-filtered table: the loops below `continue` on a non-match, so wd1's
+# and w51's tables sat on disk and never reached a release.
+QUALCUTS_RE = r"_qualcuts_oksep[0-9A-Za-z-]+"
 # combined (all-pointings) merged table; the (?!_o\d) guard keeps per-pointing
 # "..._m7_o023.fits" variants OUT of the combined match.
 COMBINED_RE = re.compile(
     rf"^{re.escape(CAT_BASE)}_(?P<iter>(?:resbgsub_)?m\d+)"
-    rf"(?P<qc>_qualcuts_oksep2221)?\.(?P<ext>fits|ecsv)$"
+    rf"(?P<qc>{QUALCUTS_RE})?\.(?P<ext>fits|ecsv)$"
 )
 # per-pointing merged table: "..._m7_o023.fits", "..._m7_o023_qualcuts...fits"
 PERPOINT_RE = re.compile(
     rf"^{re.escape(CAT_BASE)}_(?P<iter>(?:resbgsub_)?m\d+)_(?P<obs>o\d+)"
-    rf"(?P<qc>_qualcuts_oksep2221)?\.(?P<ext>fits|ecsv)$"
+    rf"(?P<qc>{QUALCUTS_RE})?\.(?P<ext>fits|ecsv)$"
 )
 # per-filter vetted, optionally per-pointing (excludes *_vetted_carta.fits)
 VETTED_RE = re.compile(
@@ -2022,7 +2030,8 @@ def write_readme(field_dir, field, version, items, mode, built_at=None):
         "## Catalogs (`catalogs/`)",
         "",
         "- `basic_merged_indivexp_photometry_tables_merged_*` : final merged photometry",
-        "  table (`.fits` + `.ecsv`); `_qualcuts_oksep2221` is the quality-filtered subset.",
+        "  table (`.fits` + `.ecsv`); the `_qualcuts_oksep<proposal>` variant is the",
+        "  quality-filtered subset.",
         "- `*_dao_basic_vetted.fits` : per-filter vetted catalogs.",
         "- `seed_union_iter3_*.fits` : seed source list.",
         "",
