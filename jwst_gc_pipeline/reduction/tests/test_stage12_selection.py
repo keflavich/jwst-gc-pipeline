@@ -12,15 +12,21 @@ runs ``main()`` once per module (nrca, nrcb, merged) with the same
   members whose products are already on disk (only ``STAGE12_RESUME=1`` keeps
   them);
 * the driver wiring -- source inspection of ``PipelineRerunNIRCAM-LONG.py``
-  (the repo idiom for this driver, as in ``test_crf_source_branch_order.py``:
-  driving ``main()`` needs MAST, CRDS and real ramps), asserting the stage-1/2
-  loop scopes on the pass's own ``module``, consults the skip reason
-  positively before ``Detector1Pipeline.call``, and records each processed
-  member afterwards.
+  (the repo idiom for this driver, as in ``test_crf_source_branch_order.py``),
+  asserting the stage-1/2 loop scopes on the pass's own ``module``, consults
+  the skip reason positively before ``Detector1Pipeline.call``, and records
+  each processed member afterwards.
 
 Reverting the module scoping or the skip check in the driver fails a wiring
 test, as does hardcoding the scoping module or inverting the skip test;
 reverting either predicate's semantics fails a table test.
+
+Source inspection sees the calls and their arguments; whether the memo survives
+from one module pass to the next is invisible to it, and that is the mechanism
+removing the last third of #417.  ``test_stage12_loop_behavior.py`` covers it by
+running the loop with recording ``Detector1Pipeline``/``Image2Pipeline`` stubs
+and counting the calls -- no MAST, no CRDS, no real ramps.  The two suites
+belong together.
 """
 import ast
 import os
