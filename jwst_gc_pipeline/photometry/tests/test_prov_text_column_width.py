@@ -10,12 +10,12 @@ thousands, and nothing downstream can tell a truncated value from a short one --
 which is the part that matters.
 
 The string the m2 checkpoint writes when it pools several detectors' corrections
-into one is 58 characters:
+into one is 59 characters:
 
-    'm2 visit-consensus [median of 2, ptp 1.51mas: nrcb3,nrcb4]'
+    'm2 visit-consensus [mean of 2, max_pair_sep 1.51mas: nrcb3,nrcb4]'
 
-Stored in a ``<U23`` column that becomes ``'m2 visit-consensus [med'`` -- the
-detector list, the part that says which measurements the median came from, is
+Stored in a ``<U23`` column that becomes ``'m2 visit-consensus [mea'`` -- the
+detector list, the part that says which measurements the pooled value came from, is
 exactly what is cut.  Six of the thirteen live offsets tables (arches, both
 cloudef tables, quintuplet, sgra, sgrb2) are ``<U23`` today; the three that
 already carry the long form (cloudc, sgrc, sickle) are wide enough only because
@@ -34,14 +34,16 @@ from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
     PROV_TEXT_COLUMNS, PROV_TEXT_MAX_CHARS, PROV_TEXT_MIN_CHARS,
     _widen_prov_text_columns, update_offsets_table)
 
-#: What m2 writes for a median pooled over two detectors -- 58 characters, and
-#: the form six live tables cannot hold.
-POOLED_SOURCE = "m2 visit-consensus [median of 2, ptp 1.51mas: nrcb3,nrcb4]"
+#: What m2 writes for a value pooled over two detectors: 59 characters, and a
+#: form six live tables cannot hold.  (It was 58 when the statistic was the
+#: median -- "mean" is two characters shorter, and "maxsep" three longer than
+#: the "ptp" it replaced, so the string grew by one.)
+POOLED_SOURCE = "m2 visit-consensus [mean of 2, max_pair_sep 1.51mas: nrcb3,nrcb4]"
 
-#: The same for FOUR detectors -- 70 characters.  Four is the number the pooler
+#: The same for FOUR detectors -- 71 characters.  Four is the number the pooler
 #: is built for (one module's detectors), so this is the ordinary case, not the
 #: extreme one, and a live example already sits truncated in cloudc's table.
-POOLED_SOURCE_4 = ("m2 visit-consensus [median of 4, ptp 3.42mas: "
+POOLED_SOURCE_4 = ("m2 visit-consensus [mean of 4, max_pair_sep 3.42mas: "
                    "nrcb1,nrcb2,nrcb3,nrcb4]")
 
 #: The longest source string the pipeline can emit, BUILT rather than quoted.
@@ -49,18 +51,18 @@ POOLED_SOURCE_4 = ("m2 visit-consensus [median of 4, ptp 3.42mas: "
 #: FOUR literal maxima have been wrong in this file's history, each for its own
 #: reason, so this one is assembled from the code that decides its parts:
 #:
-#:   102  said "median of 4" while listing only two detectors.
+#:   102  said "mean of 4" while listing only two detectors.
 #:   138  listed eight detectors across both modules.  `_assert_poolable`
 #:        refuses any group spanning module families --
 #:            _assert_poolable(8 corrections, ['nrca1'..'nrcb4'], ...)
 #:              -> OffsetsTableUpdateError: corrections spanning module families
-#:   114  put a four-detector pooled median on w51's 62-character base,
+#:   114  put a four-detector pooled value on w51's 62-character base,
 #:        'm2 consensus->reference (cross-band tied-F210M, contrast>2900)'.
 #:        That base is REAL -- three rows of w51's live table carry it -- but no
 #:        code at this head writes it (the only sources emitted are
 #:        f"{stage} visit-consensus" and f"{stage} consensus->reference"), and it
 #:        is a per-visit BULK correction, which the pooler passes through without
-#:        pooling.  So it can never take a "[median of N ...]" suffix.
+#:        pooling.  So it can never take a "[mean of N ...]" suffix.
 #:   70/71 fixed the stage token at "m2" and missed "m12", which is in
 #:        `CORRECTION_STAGES` and fully wired (cataloging.py passes merge_label
 #:        as stage; versioning/rerun.py seeds it).
@@ -230,7 +232,7 @@ def test_the_fixture_really_is_too_narrow(tmp_path):
 
 
 def test_a_pooled_source_string_survives_a_narrow_column(tmp_path):
-    """The defect: 58 characters in, 58 characters out."""
+    """The defect: 59 characters in, 59 characters out."""
     p = _narrow_table(tmp_path)
     update_offsets_table(p, [_corr(2, POOLED_SOURCE)], stage="m2")
     t = Table.read(p, format="ascii.csv")
@@ -241,7 +243,7 @@ def test_the_detector_list_is_what_truncation_removes(tmp_path):
     """Stated as the consequence, so a partial fix cannot pass.
 
     A regression that widened to, say, 32 characters would keep
-    ``'m2 visit-consensus [median of 2,'`` -- still a plausible-looking
+    ``'m2 visit-consensus [mean of 2,'`` -- still a plausible-looking
     provenance string, and still missing the detectors.
     """
     p = _narrow_table(tmp_path)
@@ -262,8 +264,8 @@ def test_the_other_rows_keep_their_own_provenance(tmp_path):
 def test_the_four_detector_pooling_survives(tmp_path):
     """The case a fixed 64-character cap still cut, and it is the ORDINARY one.
 
-    A module has four detectors, so a median pooled over four is what the pooler
-    is built for; its source string is 70 characters.  The first version of this
+    A module has four detectors, so a value pooled over four is what the pooler
+    is built for; its source string is 71 characters.  The first version of this
     fix capped at 64 and would have gone on dropping the last detector and the
     closing bracket -- and cloudc's live table already carries exactly that,
     stored as `'...nrcb1,nrcb2,'`.
@@ -303,7 +305,7 @@ def test_the_fixture_is_a_string_the_pooler_can_actually_emit(tmp_path):
     (2) is what the 114-character fixture failed: its base was real -- it is on
     disk in w51's table -- but nothing at this head emits it, and it belongs to a
     bulk correction, which is passed through unpooled and so never takes a
-    "[median of N ...]" suffix at all.
+    "[mean of N ...]" suffix at all.
     """
     import inspect
     import re
@@ -315,20 +317,20 @@ def test_the_fixture_is_a_string_the_pooler_can_actually_emit(tmp_path):
     mods = ["nrcb1", "nrcb2", "nrcb3", "nrcb4"]
     for m in mods:                      # every detector named must appear
         assert m in POOLED_SOURCE_MAX
-    assert f"median of {len(mods)}" in POOLED_SOURCE_MAX
+    assert f"mean of {len(mods)}" in POOLED_SOURCE_MAX
     _assert_poolable([{}] * len(mods), mods, "row", _T(), "t.csv")   # allowed
     with pytest.raises(OffsetsTableUpdateError, match="module families"):
         _assert_poolable([{}] * 8, ["nrca1", "nrca2", "nrca3", "nrca4"] + mods,
                          "row", _T(), "t.csv")
 
-    # (2): the part before " [median of" must be a source the module emits.
+    # (2): the part before " [mean of" must be a source the module emits.
     #
     # An `any()` over hardcoded literals is not enough: renaming one producer
     # leaves the other satisfying it while the fixture goes stale.  So compare
     # the SET -- and find it by walking the AST rather than by matching source
     # TEXT, because a text match is defeated by a quote character, which is the
     # exact defect this guard's predecessor was replaced for.
-    base = POOLED_SOURCE_MAX.split(" [median of")[0]
+    base = POOLED_SOURCE_MAX.split(" [mean of")[0]
     emitted = {src for src, _bulk in _emitted_sources()}
     assert emitted == {"visit-consensus", "consensus->reference"}, (
         f"the module's source-string producers are now {sorted(emitted)}; "
@@ -343,7 +345,10 @@ def test_the_fixture_is_a_string_the_pooler_can_actually_emit(tmp_path):
         f"measurement went wrong by fixing it at 'm2'")
     assert stage == max(ac.CORRECTION_STAGES, key=len)
     # ...and the spread must be one the pooler would admit.
-    spread = float(POOLED_SOURCE_MAX.split("ptp ")[1].split("mas")[0])
+    # `maxsep`, not `ptp`: the dispersion is the largest separation between
+    # any two members as VECTORS, not a peak-to-peak of their magnitudes,
+    # and the emitted token was renamed with it.
+    spread = float(POOLED_SOURCE_MAX.split("max_pair_sep ")[1].split("mas")[0])
     assert spread <= ac.MAX_POOL_SPREAD_MAS
 
 
@@ -602,7 +607,7 @@ def test_a_bulk_correction_is_never_given_a_pooled_suffix():
     """Why the longer of the two bases can never reach the pooled form.
 
     `consensus->reference` is five characters longer than `visit-consensus`, so
-    a pooled median written on top of it would be the longest string in the
+    a pooled value written on top of it would be the longest string in the
     file -- which is exactly the reasoning that produced the retracted 114.
 
     It cannot happen, but NOT because the pooler inspects the text.  It pools on
@@ -610,7 +615,7 @@ def test_a_bulk_correction_is_never_given_a_pooled_suffix():
     module", and the `consensus->reference` string is only ever written on such
     a correction (`astrometry_checkpoint.py`, the per-visit reference tie).
     Bulk corrections are passed through untouched, so they never acquire a
-    `[median of N ...]` suffix.
+    `[mean of N ...]` suffix.
 
     Pinned here directly, because the fixture guard cannot see it: hand the
     pooler that same string on PER-DETECTOR corrections and it pools it happily.
@@ -631,11 +636,11 @@ def test_a_bulk_correction_is_never_given_a_pooled_suffix():
         [bulk], "Offsets_JWST_Brick1939_VIRAC2locked.csv", tbl=tbl)
     assert len(out) == 1
     assert out[0]["source"] == base, "a bulk correction was pooled"
-    assert "[median of" not in out[0]["source"]
+    assert "[mean of" not in out[0]["source"]
 
     # and the shape is what decides it, not the text: the same string on
     # per-detector corrections DOES pool.  This is the trap 114 fell into.
-    assert "[median of" in _pool_synthetic(base)
+    assert "[mean of" in _pool_synthetic(base)
 
     # THE INVARIANT, PINNED WHERE IT LIVES.  The two assertions above are about
     # a dict built here; neither says anything about how the module writes that
@@ -645,7 +650,7 @@ def test_a_bulk_correction_is_never_given_a_pooled_suffix():
     # off the call sites: every source longer than the one the fixture uses must
     # be written on a bulk correction, and the fixture's own base must not be.
     by_src = dict(_emitted_sources())
-    fixture_base = POOLED_SOURCE_MAX.split(" [median of")[0].partition(" ")[2]
+    fixture_base = POOLED_SOURCE_MAX.split(" [mean of")[0].partition(" ")[2]
     assert by_src[fixture_base] is False, (
         f"{fixture_base!r} is now written on a bulk correction, which the "
         f"pooler passes through -- the fixture can no longer be pooled")

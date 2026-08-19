@@ -596,15 +596,76 @@ def _assert_one_correction_per_row(corrections, tbl, offsets_path):
 
 
 def pool_corrections_to_table_granularity(corrections, offsets_path,
-                                          tbl=None, stat="median"):
-    """Collapse corrections that share a table row into one, robustly.
+                                          tbl=None, stat="mean"):
+    """Collapse corrections that share a table row into one.
 
     A module-FAMILY offsets row cannot express a per-DETECTOR shift: the four
     detectors of a NIRCam module sit at fixed SIAF positions within it, so their
     individual residuals are a distortion/DVA-class systematic the row has no
-    freedom to remove.  What the row CAN express is the part they share.  Take
-    the median (not the sum, and not the mean -- one bad detector should not
-    move it) of every correction that lands on the same row.
+    freedom to remove.  What the row CAN express is the part they share, so
+    every correction landing on one row is combined into one.
+
+    **The MEAN, not the median** (and never the sum).  A robust statistic earns
+    its cost when the population it protects against exists, and at these group
+    sizes it mostly does not.  The protection comes INSTEAD from the spread
+    refusal below, which rejects a group whose members disagree by more than
+    ``MAX_POOL_SPREAD_MAS`` rather than quietly averaging it.  A median INSIDE
+    that limit silently down-weights a member the refusal has already judged
+    acceptable.
+
+    Two things to be clear about, because earlier versions of this docstring
+    were not:
+
+    * **For half the groups this changes nothing.**  Group size, counted
+      straight from ``pooled_from`` in the records (2026-08-15, 1052 records,
+      285 unique groups): **N=2 51.6%**, N=3 27.7%, N=4 20.7%.  At N=2 the
+      median IS the mean.  So the change reaches the ~48% at N>=3, where the
+      median keeps one of three, or averages the middle two of four and
+      discards the outer pair.
+    * **A member is not always the consensus of thousands of stars.**  Over the
+      per-detector measurements in the live records the median is ~4700 matched
+      stars, but 20% are under 1000 and the 1st percentile is ~100.  The group
+      this function now refuses (gc2211 F200W exposure 4) has members built from
+      54-69 stars.  So "no blunders to protect against" is not true by
+      construction; it is true because the spread refusal catches the case a
+      median would otherwise dilute.
+
+    Over the groups this function actually pools -- after ``_assert_poolable``
+    and the spread refusal have removed the ones it refuses, the only population
+    where the choice of statistic has any effect -- the two statistics differ by
+    more than 0.5 mas in **19%** of groups, and the largest single difference is
+    **2.7 mas**.  At N=3 the typical difference is 0.63 mas against a typical
+    pooled correction of 2.42 mas, i.e. ~26% of the correction, and against a
+    2.0 mas exposure-consensus tolerance.
+
+    **Where the mean is bounded rather than protected.**  Inside the refusal's
+    limit the mean does move where a median would not: with the other members at
+    zero and one at the limit ``L``, the pooled value shifts by ``L/3`` at N=3
+    and ``L/4`` at N=4 -- so at the current ``MAX_POOL_SPREAD_MAS = 50`` that is
+    16.6 and 12.5 mas, several times the 2.0 mas exposure-consensus tolerance.
+    Those are the true maxima, not examples.  The bound is
+    ``(N-1)/N * MAX_POOL_SPREAD_MAS`` in the worst case, and tightening the
+    limit tightens it proportionally: the largest separation among groups
+    actually pooled today is 16.4 mas (99th percentile 11.4), so a limit of
+    20 mas would refuse nothing currently pooled and cap the shift at 6.7 mas.
+    That is a gate change and is left as a decision rather than taken here;
+    weighting each member by its own measured precision removes the question
+    entirely and is issue #386.
+
+    Regenerate every figure above with ``reports/measure_pooling_population.py``,
+    which reports the size distribution directly from the records and the
+    difference figures from a reconstruction it validates against each record's
+    own pooled value (discarding the ~35% it cannot verify, rather than counting
+    them).
+    An earlier version of this docstring said 14.6 mas; that group is gc2211
+    F200W exposure 4, whose members sit 76 mas apart, and the spread refusal
+    below now rejects it -- so that figure cannot occur under this code.
+
+    A better answer than either exists and is deliberately NOT taken here: each
+    member already reports its own measured precision (``dra_err``/``ddec_err``,
+    spanning 0.011-6.02 mas in the records), and weighting by it needs neither
+    statistic's assumption.  It is a wider change -- those errors are dropped at
+    three hops before they reach this function -- and is issue #386.
 
     Returns a NEW list; corrections that own their row are passed through
     unchanged.  Pooled entries carry the member modules and count in ``source``
@@ -643,8 +704,9 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
                 f"{offsets_path} has no Visit column ({tbl.colnames}) -- a "
                 f"correction cannot be matched to a row without one")
     corrections = list(corrections)
-    # Magnitude ceiling BEFORE the median.  Pooling cannot inflate a correction
-    # past the ceiling (median <= max), so the risk runs the other way: a
+    # Magnitude ceiling BEFORE the members are combined.  Pooling cannot inflate a correction
+    # past the ceiling (a mean cannot exceed its largest member), so the risk
+    # runs the other way: a
     # detector whose measurement blew up is averaged out of existence and the
     # operator never learns the measurement failed.  Check the MEMBERS.
     _assert_correction_magnitudes(corrections, offsets_path)
@@ -679,9 +741,10 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
             seen[i] = key
 
     if stat not in _POOL_STATS:
-        # `agg = np.median if stat == "median" else np.mean` silently degraded a
-        # typo to the LESS robust statistic, and the statistic is the whole
-        # point: members 1,1,1,100 give 1.0 as "median" and 25.75 as "medain".
+        # `agg = np.median if stat == "median" else np.mean` silently degraded
+        # a typo to whichever statistic the `else` named, and the statistic is
+        # the whole point: members 1,1,1,100 give 1.0 under one and 25.75 under
+        # the other.  A typo must not choose between them.
         raise ValueError(f"pool stat must be one of {sorted(_POOL_STATS)}, "
                          f"got {stat!r}")
     agg = _POOL_STATS[stat]
@@ -697,13 +760,47 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
         dra = float(agg([float(c["dra_onsky_mas"]) for c in members]))
         ddec = float(agg([float(c["ddec_onsky_mas"]) for c in members]))
         # Dispersion, so a bimodal group is visible rather than pooling to a
-        # meaningless middle with no trace.  Peak-to-peak of the 2-D residual
-        # magnitudes; carried in `source` AND returned on the dict for the
-        # checkpoint record (`source` is bounded at PROV_TEXT_MAX_CHARS on
-        # write, and the column is sized to fit whatever is written).
-        mags = [float(np.hypot(c["dra_onsky_mas"], c["ddec_onsky_mas"]))
-                for c in members]
-        spread = float(np.ptp(mags))
+        # meaningless middle with no trace.  Carried in `source` AND returned on
+        # the dict for the checkpoint record (`source` is bounded at
+        # PROV_TEXT_MAX_CHARS on write, and the column is sized to fit whatever
+        # is written).
+        #
+        # The LARGEST SEPARATION BETWEEN ANY TWO MEMBERS, as vectors.  It was
+        # the peak-to-peak of their MAGNITUDES, which cannot see direction:
+        # members (+30,0) (+30,0) (+30,0) (-30,0) all have magnitude 30, so a
+        # 60 mas disagreement reported `ptp 0.00mas` and the provenance
+        # positively asserted perfect agreement.
+        #
+        # Measured on the live checkpoint records, TEN real groups across TWO
+        # fields exceed the 50 mas refusal limit by vector separation, and the
+        # magnitude form caught none of them:
+        #
+        #   gc2211 F200W o049   2 groups   76-77 mas   read as 8.5 / 13.8
+        #   cloudef F360M       8 groups   52-58 mas   read as 0.7 - 4.8
+        #
+        # both in `correcting: True` records.  The cloudef case is the more
+        # striking: each group pairs an `nrcb` correction at dra ~ +27 with an
+        # `nrcblong` one at dra ~ -26.5 -- equal size, opposite sign, so their
+        # magnitudes are nearly identical and the old metric read ~0.  The
+        # "synthetic worst case" this fix was written against is not synthetic;
+        # it is live in cloudef, eight times over.
+        #
+        # BLAST RADIUS, measured through the guard that runs FIRST.  Of the 285
+        # pooled groups in the live checkpoint records, `_assert_poolable`
+        # ALREADY refuses 11 -- 8 cloudef F360M and 3 F480M, all on the bare-vs-
+        # `long` spelling of one module (issue #298) -- and one more is refused
+        # under either metric.  What this change NEWLY refuses is TWO groups,
+        # both gc2211 F200W exposure 4 vgroup 04201:
+        #
+        #     nrca1,nrca2,nrca3        59.0 mas apart   (old metric read 14.9)
+        #     nrca1,nrca2,nrca3,nrca4  76.2 mas apart   (old metric read  8.5)
+        #
+        # One field, one filter, one exposure.  An earlier version of this
+        # comment said cloudef F360M stops here too.  It does not: it stops one
+        # guard earlier, already, on main.  Counting groups whose vector spread
+        # exceeds the limit WITHOUT applying `_assert_poolable` first overstates
+        # this change's effect by 5x.
+        spread = _max_pairwise_separation(members)
         _assert_pool_spread(spread, members, mods, offsets_path)
         pooled = dict(members[0])
         pooled["dra_onsky_mas"] = dra
@@ -712,27 +809,49 @@ def pool_corrections_to_table_granularity(corrections, offsets_path,
         pooled["module"] = _pooled_module_label(mods, tbl, key)
         pooled["pooled_from"] = mods
         pooled["pooled_n"] = len(members)
+        pooled["pooled_max_pair_sep_mas"] = spread
+        # Written under the old key too, for one release, so a reader of a
+        # mixed set of checkpoint records is not silently comparing two
+        # different quantities: before this change `spread_mas` held a
+        # peak-to-peak of magnitudes, and it now holds a maximum pairwise
+        # vector separation.  The new key is the one to read.
         pooled["pooled_spread_mas"] = spread
         pooled["pooled_stat"] = stat
         pooled["source"] = (f"{members[0].get('source', 'astrometry_checkpoint')}"
-                            f" [{stat} of {len(members)}, ptp {spread:.2f}mas: "
+                            f" [{stat} of {len(members)}, max_pair_sep {spread:.2f}mas: "
                             f"{','.join(mods)}]")
         out.append(pooled)
     return out
 
 
-# dra and ddec are aggregated INDEPENDENTLY, which is the component-wise median
-# and not the geometric (2-D) median.  For the N<=4 groups this pooler is built
-# for the two differ negligibly, and the component-wise form has the property
-# that matters here -- it cannot exceed the component-wise max, so it can never
-# sum.  Revisit if groups ever get large.
+# dra and ddec are aggregated INDEPENDENTLY.  For the mean that is exact -- the
+# mean of a set of vectors is the vector of component means -- so unlike the
+# component-wise median it is not an approximation to anything.  Either way the
+# result cannot exceed the component-wise maximum, so pooling can never sum.
 _POOL_STATS = {"median": np.median, "mean": np.mean}
 
-# Refuse a group whose members disagree by more than this; they are not one
-# shift seen four times, and their middle means nothing.  Generous by default:
-# real per-detector SIAF/DVA spread is a few mas, and the sgrb2 groups measured
-# on 2026-08-01 ran 1.7-3.4 mas peak-to-peak.
+# Refuse a group whose members disagree by more than this -- measured as the
+# largest separation between any two of them AS VECTORS.  Beyond it they are not
+# one shift seen four times, and their middle means nothing.  Generous by
+# default: real per-detector SIAF/DVA spread is a few mas, and the sgrb2 groups
+# measured on 2026-08-01 ran 1.7-3.4 mas.
 MAX_POOL_SPREAD_MAS = 50.0
+
+
+def _max_pairwise_separation(members):
+    """The largest separation between any two corrections in a group, in mas.
+
+    A dispersion measure for a set of 2-D shifts has to be computed on the
+    VECTORS.  Reducing each to its magnitude first discards direction, and
+    direction is exactly what distinguishes "four detectors measuring one
+    shift" from "one detector disagreeing with three".
+    """
+    vec = np.array([[float(c["dra_onsky_mas"]), float(c["ddec_onsky_mas"])]
+                    for c in members], dtype=float)
+    if len(vec) < 2:
+        return 0.0
+    diff = vec[:, None, :] - vec[None, :, :]
+    return float(np.hypot(diff[..., 0], diff[..., 1]).max())
 
 
 def _assert_poolable(members, mods, row_key, tbl, offsets_path):
@@ -785,8 +904,8 @@ def _assert_pool_spread(spread, members, mods, offsets_path):
         return
     raise OffsetsTableUpdateError(
         f"cannot pool corrections for {os.path.basename(offsets_path)}: "
-        f"{len(members)} corrections for modules {mods} disagree by "
-        f"{spread:.1f} mas peak-to-peak (limit {limit} mas, "
+        f"{len(members)} corrections for modules {mods} disagree -- they are "
+        f"{spread:.1f} mas apart at their furthest (limit {limit} mas, "
         f"ASTROM_MAX_POOL_SPREAD_MAS).  That is not one shift measured several "
         f"times, so their middle is not a measurement of anything -- one "
         f"detector's tie has probably failed.  Inspect the checkpoint record.")
@@ -1185,7 +1304,7 @@ PROV_TEXT_MIN_CHARS = 64
 #: no longer states a figure.  What the longest string is MADE OF, which is
 #: checkable and does not go stale:
 #:
-#:     <stage> <base> [median of <k>, ptp <spread>mas: <detectors>]
+#:     <stage> <base> [mean of <k>, max_pair_sep <spread>mas: <detectors>]
 #:
 #:   stage      one of ``CORRECTION_STAGES`` -- currently m1, m2, m12, so up to
 #:              three characters.  (Assuming "m2" is what produced the 70/71.)
@@ -1205,10 +1324,10 @@ PROV_TEXT_MIN_CHARS = 64
 #: The retracted figures, kept because each was retracted for a different reason
 #: and the pattern is the point:
 #:
-#:   102  claimed "median of 4" while listing two detectors.
+#:   102  claimed "mean of 4" while listing two detectors.
 #:   138  listed eight detectors across both modules -- refused by
 #:        `_assert_poolable`.
-#:   114  put a pooled median on top of w51's 62-character
+#:   114  put a pooled value on top of w51's 62-character
 #:        `m2 consensus->reference (cross-band tied-F210M, contrast>2900)`.
 #:        That base is real, and sits in three rows of w51's live table, but no
 #:        code at this head writes the parenthetical, and it belongs to the
@@ -1268,10 +1387,10 @@ def _widen_prov_text_columns(tbl, chars=PROV_TEXT_MIN_CHARS):
     ``StringTruncateWarning``, but it is one line in a log that carries
     thousands, and nothing downstream can tell a truncated value from a short
     one.  ``prov_source`` is the column this bites -- the source string the m2
-    checkpoint writes when it pools four detectors' corrections into one is 70
+    checkpoint writes when it pools four detectors' corrections into one is 71
     characters --
 
-        'm2 visit-consensus [median of 4, ptp 3.42mas: nrcb1,nrcb2,nrcb3,nrcb4]'
+        'm2 visit-consensus [mean of 4, max_pair_sep 3.42mas: nrcb1,nrcb2,nrcb3,nrcb4]'
 
     -- while six of the thirteen live offsets tables carry ``prov_source`` as
     ``<U23``, because no row written into them so far has been longer than that.
