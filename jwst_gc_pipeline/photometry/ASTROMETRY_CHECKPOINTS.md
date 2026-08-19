@@ -141,6 +141,11 @@ m5 over its      2644 stars    (+0.457, +2.194) mas    raw delta 2.230
 both over the shared 2642      (-0.013, +1.764) mas -> delta 0.637  PASS
 ```
 
+Those are the numbers the on-disk records carry, measured before the *stage*
+side was restricted as well. With both sides restricted the same two cases read
+0.651 and 2.536 — same verdicts, slightly larger numbers, because the stage side
+now drops the one or two stars m2 does not carry.
+
 `STAGE_STABILITY_TOL_MAS` is unchanged at 2.0; what changes is which two
 numbers it is applied to.  The re-measure runs **only** when the raw comparison
 is over tolerance, so a passing stage never pays for it.
@@ -150,7 +155,10 @@ raise, when
 
 * m2's pooled consensus catalog is missing or unreadable;
 * either consensus holds fewer than `SURVIVOR_MIN_STARS` (50);
-* the shared set is below `max(50, SURVIVOR_MIN_FRACTION × min(n_m2, n_stage))`
+* the m2 consensus catalog pools more than one visit — its positions are
+  visit-averaged while the stage measures one visit, and on brick F115W that
+  substitution alone is 1.7–1.9 mas against a 2.0 mas budget;
+* the shared set is below `max(50, SURVIVOR_MIN_FRACTION × max(n_m2, n_stage))`
   — two 90,000-star catalogs sharing 0.07% of their stars clear any absolute
   floor while saying nothing about each other;
 * either re-measure returns a non-finite tie, sets `apply_ok: false`, or had to
@@ -169,7 +177,9 @@ The record grows `visits[].symmetric_baseline`: both ties on the shared stars,
 refusal `reason`, and `mag_split` — the median magnitude of the kept and dropped
 stars. The intersection is a **biased sample** and the direction is not fixed:
 sickle's F335M drop-outs are ~1.1 mag fainter than its survivors, its F187N
-drop-outs ~2.2 mag brighter. Displacement confined to the stars a later stage
+drop-outs ~1.9 mag brighter (1.86 as `mag_split` records it). It characterises
+the **m2 side only**, so the stars the later stage carries and m2 does not are
+not described. Displacement confined to the stars a later stage
 drops is not visible to this comparison; that is a real reduction in coverage,
 and `mag_split` is what makes the skew visible to whoever reads the pass.
 
@@ -178,7 +188,8 @@ passed, or the stage is a correcting one, or there is no reference catalog, or
 the offset is under `REFERENCE_APPLY_MIN_MAS`, or m2 refused its own tie.
 
 The check removes a *baseline artefact*; it does not soften the gate. sickle
-F187N m3 fails either way — 2.342 mas raw, 2.463 mas on the 1824 shared stars —
+F187N m3 fails either way — 2.342 mas raw, 2.536 mas on the shared stars at
+this head —
 because there the drop-outs are brighter than the survivors and carry no
 artefact to remove.
 

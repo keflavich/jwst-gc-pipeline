@@ -105,9 +105,10 @@ STAGE_STABILITY_TOL_MAS = 2.0
 #
 # This MIRRORS `build_visit_consensus(restrict_radius=0.15")`, which is what
 # produced the stage consensus in the first place: pairing at a wider radius
-# here would re-admit stars the restriction itself refused.  It is NOT chosen
-# against the reference catalog's spacing -- the match is JWST consensus
-# against JWST consensus, and those are far denser than VIRAC2.  Measured
+# here would re-admit stars the restriction itself refused.  It is keyed to that
+# radius rather than to the reference catalog's spacing -- the match is JWST
+# consensus against JWST consensus, and those are far denser than VIRAC2.
+# Measured
 # nearest-neighbour separations in the catalogs this code actually pairs:
 #
 #     sickle f335m_o007   n=  2964   median 707 mas   5th pct 234
@@ -2541,25 +2542,33 @@ def _m2_consensus_catalog(record_dir, basepath, filtername, obs_token=""):
     if not path and basepath:
         path = consensus_path(basepath, filtername, obs_token=obs_token)
     if not (filtername and path and os.path.exists(path)):
-        return None, None, path
+        return None, None, path, None
     try:
         tbl = Table.read(path)
     except (OSError, ValueError) as ex:
         print(f"astrom checkpoint: m2 consensus catalog {path} unreadable "
               f"({type(ex).__name__}: {ex}); same-star gate disabled", flush=True)
-        return None, None, path
+        return None, None, path, None
     if not len(tbl):
-        return None, None, path
+        return None, None, path, None
     coords = catalog_coords(tbl)
     finite = np.isfinite(coords.ra.deg) & np.isfinite(coords.dec.deg)
     if not finite.any():
-        return None, None, path
+        return None, None, path, None
     mag = None
     for col in ("refmag", "mag"):
         if col in tbl.colnames:
             mag = np.asarray(tbl[col], dtype=float)[finite]
             break
-    return coords[finite], mag, path
+    # How many visits were POOLED into these positions.  The pooled catalog
+    # averages each star's direction over its visits, so on a multi-visit field
+    # its coordinates are not any one visit's -- see _survivor_baseline_tie.
+    n_visits = tbl.meta.get("NVISITS")
+    try:
+        n_visits = int(n_visits) if n_visits is not None else None
+    except (TypeError, ValueError):
+        n_visits = None
+    return coords[finite], mag, path, n_visits
 
 
 def _tie_signed_off(tie, label, info):
@@ -2608,7 +2617,7 @@ def _survivor_mag_split(mag, keep):
 
 
 def _survivor_baseline_tie(m2_coords, m2_mag, stage_coords, stage_mag, refcat,
-                           filtername=None, context=""):
+                           filtername=None, context="", m2_n_visits=None):
     """Re-measure BOTH stages' consensus->reference ties over only the stars the
     two consensi have in common.
 
@@ -2625,7 +2634,9 @@ def _survivor_baseline_tie(m2_coords, m2_mag, stage_coords, stage_mag, refcat,
         both over the shared 2642      (-0.013, +1.764) mas -> delta 0.637
 
     so 1.75 mas of that 2.23 is the m2 baseline being dragged by 322 drop-outs
-    rather than the solution moving.
+    rather than the solution moving.  Those are the numbers the ON-DISK records
+    carry, and they were measured before the stage side was restricted too;
+    with both sides restricted the same case reads 0.651.
 
     Restricting BOTH sides -- not only re-measuring m2 -- is what makes the
     comparison symmetric.  The stage's own tie is measured over its whole
@@ -2643,7 +2654,27 @@ def _survivor_baseline_tie(m2_coords, m2_mag, stage_coords, stage_mag, refcat,
     info = dict(n_m2=n_m2, n_stage=n_stage, n_survivors=0,
                 match_tol_mas=SURVIVOR_MATCH_TOL_MAS,
                 min_stars=SURVIVOR_MIN_STARS,
-                min_fraction=SURVIVOR_MIN_FRACTION, reason=None)
+                min_fraction=SURVIVOR_MIN_FRACTION,
+                m2_n_visits=m2_n_visits, reason=None)
+    if m2_n_visits is not None and m2_n_visits > 1:
+        # The m2 side is the POOLED per-filter catalog, whose positions are each
+        # star's direction AVERAGED over its visits; the stage side is ONE
+        # visit's consensus.  Restricting to shared stars does not remove that,
+        # because one side stays averaged -- and on a two-visit field the
+        # substitution alone is most of the 2 mas budget with no real movement:
+        # brick f115w_o004 pools to 1.678 mas from visit 1 and 1.911 from
+        # visit 2; cloudc f187n_o002 to 1.444 and 1.793.  A 1.9 mas artefact
+        # plus anything real crosses the line, and a -1.9 mas real shift is
+        # cancelled.  Refuse rather than compare two different quantities; the
+        # raw comparison then stands.  Fixing this needs m2 to record its
+        # PER-VISIT consensus, which is a bigger change than this one.
+        info["reason"] = (
+            f"the m2 consensus catalog pools {m2_n_visits} visits, so its "
+            f"positions are visit-averaged while this stage measures one "
+            f"visit; differencing the two would report the pooling as "
+            f"movement (brick F115W: 1.7-1.9 mas of it against a "
+            f"{STAGE_STABILITY_TOL_MAS} mas budget)")
+        return None, info
     if m2_coords is None or stage_coords is None:
         info["reason"] = "no m2 consensus catalog or no stage consensus"
         return None, info
@@ -2662,8 +2693,11 @@ def _survivor_baseline_tie(m2_coords, m2_mag, stage_coords, stage_mag, refcat,
     stage_keep = _mutual_match_mask(stage_coords, m2_coords, radius)
     n_shared = int(min(m2_keep.sum(), stage_keep.sum()))
     info["n_survivors"] = n_shared
+    # max, not min.  With min, n_m2=90000 / n_stage=60 / n_shared=55 is
+    # ACCEPTED -- a 55-star tie standing in for 0.06% of the m2 catalog, which
+    # is the very case this floor's own comment cites.
     floor = max(SURVIVOR_MIN_STARS,
-                int(SURVIVOR_MIN_FRACTION * min(n_m2, n_stage)))
+                int(SURVIVOR_MIN_FRACTION * max(n_m2, n_stage)))
     info["survivor_floor"] = floor
     if n_shared < floor:
         info["reason"] = (
@@ -2676,8 +2710,11 @@ def _survivor_baseline_tie(m2_coords, m2_mag, stage_coords, stage_mag, refcat,
     # The magnitude distribution of what is kept against what is dropped.  The
     # intersection is a BIASED sample and the direction is not fixed: on sickle
     # the F335M drop-outs are ~1.1 mag fainter than the survivors and the F187N
-    # drop-outs ~2.2 mag BRIGHTER.  Recorded, never gated -- an operator reading
-    # a pass needs to see which population produced it.
+    # drop-outs ~1.9 mag BRIGHTER (1.86 as this records it; an earlier note said
+    # 2.2, measured a different way).  Recorded, never gated -- an operator
+    # reading a pass needs to see which population produced it.  It characterises
+    # the m2 SIDE only, so the stars the STAGE carries and m2 does not are not
+    # described here.
     info["mag_split"] = _survivor_mag_split(m2_mag, m2_keep)
     ties = {}
     for label, coords, mag, keep in (
@@ -2781,7 +2818,8 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
         # ONE read.  cloudc F182M's pooled consensus is 123,362 rows and an
         # earlier revision opened it twice per filter, once for the star list
         # and once for the magnitudes.
-        m2_stars, m2_star_mags, m2_stars_source = _m2_consensus_catalog(
+        (m2_stars, m2_star_mags, m2_stars_source,
+         m2_n_visits) = _m2_consensus_catalog(
             record_dir, basepath, filtername, obs_token)
         if m2_stars is None:
             print(f"astrom checkpoint [{stage}] {filtername}: no m2 consensus "
@@ -3078,7 +3116,8 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
                                 sym, sym_info = _survivor_baseline_tie(
                                     m2_stars, m2_star_mags,
                                     cons["coords"], cons.get("mag"),
-                                    refcat, filtername=filt, context=vctx)
+                                    refcat, filtername=filt, context=vctx,
+                                    m2_n_visits=m2_n_visits)
                                 sym_delta = None
                                 if sym is not None:
                                     sym_m2, sym_stage = sym
@@ -3261,10 +3300,12 @@ def run_visit_checkpoint(exposure_tables, stage, refcat=None, filtername=None,
             exposures=exp_records,
             reference_tie=_jsonable(ref_tie),
             # Present only when the raw frozen-stage delta exceeded tolerance:
-            # the m2 tie re-measured over the stars this stage still carries,
-            # with the counts that decide whether the raw delta was a
-            # population change.  Absent means the raw comparison passed and
-            # nothing needed re-measuring.
+            # both ties re-measured over the stars the two consensi share, with
+            # the counts that decide whether the raw delta was a population
+            # change.  Absent means the re-measure never ran -- the raw
+            # comparison passed, OR this is a correcting stage, OR there is no
+            # reference catalog, OR the offset is under REFERENCE_APPLY_MIN_MAS,
+            # OR m2 refused its own tie.
             symmetric_baseline=_jsonable(symmetric_baseline)))
 
     # Persist the filter's consensus.  build_visit_consensus measures one

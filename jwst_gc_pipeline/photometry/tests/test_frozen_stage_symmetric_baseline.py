@@ -138,6 +138,13 @@ def _install_fakes(monkeypatch, m2_coords, per_star_ddec, stage_coords,
         population = float(np.mean(vals[idx]))
         rigid = float(np.mean(dec - base_dec[idx])) * 3.6e6
         ddec = population + rigid
+        # RA is measured the same way and is NOT pinned to zero.  With
+        # `dra_mas=0` everywhere, `hypot(ddra, dddec)` -> `abs(dddec)` is
+        # unobservable -- and on the real sickle F187N case that mutation turns
+        # a fail into a pass (dra -1.664, ddec -1.914: hypot 2.536 raises,
+        # |ddec| 1.914 does not).
+        dra = (float(np.mean(ra - base_ra[idx])) * 3.6e6
+               * float(np.cos(np.radians(DEC0))))
         src = bulk_source
         if stage_bulk_source is not None and "stage re-measured" in context:
             src = stage_bulk_source
@@ -151,12 +158,12 @@ def _install_fakes(monkeypatch, m2_coords, per_star_ddec, stage_coords,
                 ok = remeasure_apply_ok
             if remeasure_swept is not None:
                 swp = remeasure_swept
-        return dict(off_mas=float(abs(ddec)), apply_ok=ok,
-                    dra_mas=0.0, ddec_mas=ddec, bulk_source=src,
+        return dict(off_mas=float(np.hypot(dra, ddec)), apply_ok=ok,
+                    dra_mas=dra, ddec_mas=ddec, bulk_source=src,
                     cross_reference={"agree": True, "sep_mas": 0.0},
                     cross_reference_gross_ok=True, per_tile={"clean": True},
                     swept=swp, window_arcsec=3.0, reference_dense=True,
-                    vs_full={"dra": 0.0, "ddec": ddec})
+                    vs_full={"dra": dra, "ddec": ddec})
 
     monkeypatch.setattr(_ac, "build_visit_consensus", _fake_consensus)
     monkeypatch.setattr(_ac, "measure_reference_tie", _fake_tie)
@@ -295,11 +302,14 @@ def test_movement_message_reports_the_raw_delta_too(tmp_path, monkeypatch):
 def test_the_stage_side_is_restricted_too(tmp_path, monkeypatch):
     """The stage consensus equals m2's star list only while
     ``_restrict_to_same_stars`` succeeds on every exposure; it legitimately
-    refuses, after which the stage set holds stars m2 never had.  Here the stage
-    carries 80 extra stars at -18.58 mas that m2 has no counterpart for.  With
-    both sides restricted the extras leave both ties and the stage passes; an
-    implementation that re-measures only m2 differences its restricted baseline
-    against a stage tie those extras have dragged, and raises."""
+    refuses, after which the stage set holds stars m2 never had.
+
+    The extras must resolve to the DROP-OUT offset for this to test anything.
+    An earlier version placed them at ``ra + 1 degree``, where the fake tie's
+    nearest-base lookup mapped every one of them to the LAST base star -- a
+    survivor carrying SHARED_DDEC -- so the restricted and unrestricted stage
+    ties were identical to 0.0 mas and reverting the restriction passed.
+    """
     coords = _m2_star_grid()
     keep = np.ones(N_M2_STARS, dtype=bool)
     keep[:N_DROPOUTS] = False
@@ -307,19 +317,28 @@ def test_the_stage_side_is_restricted_too(tmp_path, monkeypatch):
     m2_full_mean = float(np.mean(per_star))
 
     surv = coords[keep]
-    # 80 stars a degree away: mutually unmatched, so they are stage-only.
-    extra_ra = coords.ra.deg[:80] + 1.0
+    # Extras placed ON the drop-out stars' RA (offset by half their spacing, so
+    # they are their own objects and cannot mutually match m2) -- the nearest
+    # base star for each is a DROP-OUT, so an unrestricted stage tie is dragged
+    # toward DROPOUT_DDEC exactly as a real refusal would drag it.
+    extra_ra = coords.ra.deg[:N_DROPOUTS] + 0.5 / 3600.0
     stage = SkyCoord(
         ra=np.concatenate([surv.ra.deg, extra_ra]) * u.deg,
         dec=np.concatenate([surv.dec.deg + _zero_mean_jitter(len(surv)),
-                            np.full(80, DEC0)]) * u.deg, frame="icrs")
+                            np.full(len(extra_ra), DEC0)]) * u.deg,
+        frame="icrs")
 
     basepath = str(tmp_path)
     cat = _write_m2_consensus_catalog(basepath, coords)
     _write_m2_record(basepath, 0.0, m2_full_mean, cat)
-    # The extras sit at the drop-out offset: nearest-base lookup gives them
-    # DROPOUT_DDEC, so an unrestricted stage tie is dragged by them.
     _install_fakes(monkeypatch, coords, per_star, stage)
+
+    # The premise: an UNRESTRICTED stage tie is dragged past tolerance by the
+    # extras, so restricting the stage side is what makes this pass.
+    unrestricted = ((len(surv) * SHARED_DDEC + len(extra_ra) * DROPOUT_DDEC)
+                    / (len(surv) + len(extra_ra)))
+    assert abs(unrestricted - SHARED_DDEC) > _ac.STAGE_STABILITY_TOL_MAS, (
+        'the fixture must place the extras where they actually move the tie')
 
     rec = _run(basepath)
     assert rec["passed"], rec["failures"]
@@ -327,6 +346,38 @@ def test_the_stage_side_is_restricted_too(tmp_path, monkeypatch):
     assert sym["n_stage"] == len(stage)
     assert sym["n_survivors"] == N_M2_STARS - N_DROPOUTS
     assert sym["stage_ddec_mas"] == pytest.approx(SHARED_DDEC, abs=1e-3)
+
+
+def test_a_purely_RA_shift_is_movement_too(tmp_path, monkeypatch):
+    """The comparison is a separation, not a declination difference.
+
+    With the fixture's shift confined to Dec, `hypot(ddra, dddec)` and
+    `abs(dddec)` are the same function.  On the real sickle F187N case they are
+    not: dra -1.664, ddec -1.914, so the separation is 2.536 and raises while
+    |ddec| is 1.914 and passes -- the gate this exists to keep failing is one
+    uncaught edit from passing.
+    """
+    coords = _m2_star_grid()
+    keep = np.ones(N_M2_STARS, dtype=bool)
+    keep[:N_DROPOUTS] = False
+    per_star = np.where(keep, SHARED_DDEC, DROPOUT_DDEC)
+    m2_full_mean = float(np.mean(per_star))
+    surv = coords[keep]
+    # 30 mas of RA and nothing in Dec.
+    moved_ra_deg = 30.0 / 3.6e6 / float(np.cos(np.radians(DEC0)))
+    stage = SkyCoord(
+        ra=(surv.ra.deg + moved_ra_deg) * u.deg,
+        dec=(surv.dec.deg + _zero_mean_jitter(len(surv))) * u.deg, frame="icrs")
+    basepath = str(tmp_path)
+    cat = _write_m2_consensus_catalog(basepath, coords)
+    _write_m2_record(basepath, 0.0, m2_full_mean, cat)
+    _install_fakes(monkeypatch, coords, per_star, stage)
+
+    with pytest.raises(AstrometryRegressionError) as ex:
+        _run(basepath)
+    msg = str(ex.value)
+    assert "the two consensi share" in msg, msg
+    assert "30.0" in msg or "29.9" in msg or "30.1" in msg, msg
 
 
 def test_survivor_matching_is_by_sky_position_not_row_order(tmp_path, monkeypatch):
@@ -485,3 +536,62 @@ def test_the_magnitude_split_of_the_shared_sample_is_recorded(
     assert split["kept_median"] == pytest.approx(16.0)
     assert split["dropped_median"] == pytest.approx(13.8)
     assert split["dropped_minus_kept"] == pytest.approx(-2.2, abs=1e-6)
+
+
+def test_a_POOLED_multi_visit_m2_catalog_refuses(tmp_path, monkeypatch):
+    """The m2 side is the pooled per-filter catalog, whose positions are each
+    star's direction averaged over its visits; the stage side is ONE visit.
+    Restricting to shared stars does not remove that, because one side stays
+    averaged, and on a two-visit field the substitution alone is most of the
+    2 mas budget with no real movement -- brick f115w_o004 pools to 1.678 mas
+    from visit 1 and 1.911 from visit 2.  Refuse rather than difference two
+    different quantities."""
+    basepath, _m, _c, _p, _k = _sickle_case(tmp_path, monkeypatch)
+    from jwst_gc_pipeline.photometry.consensus_catalog import consensus_path
+    path = consensus_path(basepath, "F212N", obs_token="")
+    tbl = Table.read(path)
+    tbl.meta["NVISITS"] = 2
+    tbl.write(path, overwrite=True)
+    with pytest.raises(AstrometryRegressionError) as ex:
+        _run(basepath)
+    msg = str(ex.value)
+    assert "pools 2 visits" in msg, msg
+    assert "visit-averaged" in msg, msg
+
+
+def test_a_SINGLE_visit_pooled_catalog_is_fine(tmp_path, monkeypatch):
+    """The refusal must not become "no multi-exposure field may be checked":
+    sickle is single-visit, which is why it is the case this branch verified."""
+    basepath, _m, _c, _p, _k = _sickle_case(tmp_path, monkeypatch)
+    from jwst_gc_pipeline.photometry.consensus_catalog import consensus_path
+    path = consensus_path(basepath, "F212N", obs_token="")
+    tbl = Table.read(path)
+    tbl.meta["NVISITS"] = 1
+    tbl.write(path, overwrite=True)
+    rec = _run(basepath)
+    assert rec["passed"], rec["failures"]
+    assert _sym(rec)["m2_n_visits"] == 1
+
+
+def test_the_shared_FRACTION_is_of_the_LARGER_catalog(tmp_path, monkeypatch):
+    """`min(n_m2, n_stage)` leaves the asymmetric case its own comment cites:
+    90,000 m2 stars, 60 stage stars, 55 shared is accepted -- a 55-star tie
+    standing in for 0.06% of the m2 catalog.  The larger catalog decides."""
+    coords = _m2_star_grid()
+    keep = np.zeros(N_M2_STARS, dtype=bool)
+    keep[-60:] = True                       # 60 of 400 re-detected
+    per_star = np.where(keep, SHARED_DDEC, DROPOUT_DDEC)
+    basepath = str(tmp_path)
+    cat = _write_m2_consensus_catalog(basepath, coords)
+    _write_m2_record(basepath, 0.0, float(np.mean(per_star)), cat)
+    surv = coords[keep]
+    stage = SkyCoord(ra=surv.ra.deg * u.deg,
+                     dec=(surv.dec.deg + _zero_mean_jitter(len(surv))) * u.deg,
+                     frame="icrs")
+    _install_fakes(monkeypatch, coords, per_star, stage)
+    with pytest.raises(AstrometryRegressionError) as ex:
+        _run(basepath)
+    msg = str(ex.value)
+    # 60 clears SURVIVOR_MIN_STARS=50 and 50% of the SMALLER catalog (30);
+    # it does not clear 50% of the larger (200).
+    assert "below the floor of 200" in msg, msg
