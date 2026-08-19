@@ -53,6 +53,7 @@ from astropy.wcs import WCS
 from photutils.detection import find_peaks
 
 from jwst_gc_pipeline import fields
+from jwst_gc_pipeline.photometry.naming import MIRI_FILTERS
 from jwst_gc_pipeline.frame_wcs import frame_wcs
 from jwst_gc_pipeline.photometry.interframe_overlap import (
     overlap_offset_grid, pairwise_overlap_offsets, DEFAULT_OVERLAP_TOL_MAS)
@@ -1328,6 +1329,12 @@ def main(argv=None):
     ap.add_argument("--field", required=True)
     ap.add_argument("--filter", default=None)
     ap.add_argument("--scan", action="store_true", help="every filter of the field")
+    ap.add_argument("--instrument", default=None, choices=["nircam", "miri"],
+                    help="restrict --scan to one instrument's bands. NIRCam and "
+                         "MIRI are independent observations of the same sky: a "
+                         "MIRI band that cannot be verified says nothing about "
+                         "the NIRCam mosaics, so the caller gates them "
+                         "separately and withholds only what failed.")
     ap.add_argument("--refcat", default=None,
                     help="optional external refcat for the fine-grid absolute cross-check")
     ap.add_argument("--observations", default=None,
@@ -1339,6 +1346,14 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     filts = field_filters(args.field) if args.scan else [args.filter]
+    if args.instrument and args.scan:
+        want_miri = args.instrument == "miri"
+        filts = [f for f in filts
+                 if (str(f).lower() in MIRI_FILTERS) == want_miri]
+        if not filts:
+            print(f"  {args.field}: no {args.instrument} bands to check",
+                  flush=True)
+            return 0
     if not filts or filts == [None]:
         print("ERROR: give --filter or --scan", file=sys.stderr)
         return 2
