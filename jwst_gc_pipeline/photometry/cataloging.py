@@ -4276,12 +4276,30 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
                + "\n".join(f"  {f}" for f in _failures[:8])
                + ("\n  ..." if len(_failures) > 8 else "")
                + f"\n  record: {record.get('record_path')}")
+        # The SECOND enforcement point.  `run_visit_checkpoint` already decided
+        # whether a frozen-stage failure stops here or at the release
+        # (ASTROM_CHECKPOINT_ENFORCE, #442) -- and then this re-raised on the
+        # same `failures` list regardless, so the deferral had no effect on the
+        # chain: sickle m3 and cloudef m3 both printed "the release gate refuses
+        # this field" and then died anyway (2026-08-19).  Honour the same
+        # policy here, for the same stages.
+        #
+        # A CORRECTING stage still raises: m2's stop is what sends the field
+        # back for regeneration, and nothing downstream can do that for it.
+        from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+            AstrometryCheckpointFailedError, CHECKPOINT_ENFORCE_ENV,
+            ENFORCE_AT_RELEASE, ENFORCE_AT_STAGE, frozen_failure_is_deferred)
         if warn_only:
             print(msg + "  (ASTROM_CHECKPOINT_WARN_ONLY=1 -- continuing)",
                   flush=True)
+        elif frozen_failure_is_deferred(merge_label):
+            print(msg + f"\n  {CHECKPOINT_ENFORCE_ENV}={ENFORCE_AT_RELEASE} "
+                        f"(the default): recorded with passed=false, the chain "
+                        f"CONTINUES, and the release gate refuses this field "
+                        f"(scripts/release/check_astrometry_checkpoints.py).  "
+                        f"Set {CHECKPOINT_ENFORCE_ENV}={ENFORCE_AT_STAGE} to "
+                        f"stop here instead.", flush=True)
         else:
-            from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
-                AstrometryCheckpointFailedError)
             raise AstrometryCheckpointFailedError(msg)
     elif record.get('passed') is False and _blocking:
         print(f"astrom checkpoint [{merge_label}] {filt}/{module}: NOT A PASS "
@@ -4298,12 +4316,19 @@ def _run_astrometry_stage_checkpoint(merge_label, module, filt, cut_bp, basepath
                f"the record reports passed=False with no failures and no "
                f"blocking items, so it cannot say what was checked.\n"
                f"  record: {record.get('record_path')}")
+        from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
+            AstrometryCheckpointFailedError, CHECKPOINT_ENFORCE_ENV,
+            ENFORCE_AT_RELEASE, frozen_failure_is_deferred)
         if warn_only:
             print(msg + "  (ASTROM_CHECKPOINT_WARN_ONLY=1 -- continuing)",
                   flush=True)
+        elif frozen_failure_is_deferred(merge_label):
+            # Same policy as above: a record that cannot say what happened is
+            # still a passed=false record, and the release gate reads it.
+            print(msg + f"\n  {CHECKPOINT_ENFORCE_ENV}={ENFORCE_AT_RELEASE} "
+                        f"(the default): the chain CONTINUES and the release "
+                        f"gate refuses this field.", flush=True)
         else:
-            from jwst_gc_pipeline.photometry.astrometry_checkpoint import (
-                AstrometryCheckpointFailedError)
             raise AstrometryCheckpointFailedError(msg)
 
     corrections = record.get('corrections') or []

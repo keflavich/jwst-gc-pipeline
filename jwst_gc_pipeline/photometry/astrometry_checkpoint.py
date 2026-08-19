@@ -254,6 +254,24 @@ def checkpoint_enforcement():
     return ENFORCE_AT_RELEASE if raw == ENFORCE_AT_RELEASE else ENFORCE_AT_STAGE
 
 
+def frozen_failure_is_deferred(merge_label):
+    """True when a failure at ``merge_label`` is RECORDED for the release gate
+    rather than raised where it was measured.
+
+    One place states the policy, because there are TWO enforcement points and
+    they disagreed: `run_visit_checkpoint` deferred while
+    `cataloging._run_astrometry_stage_checkpoint` re-raised on the same
+    ``failures`` list, so the deferral had no effect on whether a chain
+    survived.  sickle m3 and cloudef m3 both printed "the release gate refuses
+    this field" and then died (2026-08-19).
+
+    A CORRECTING stage is never deferred: m2's stop is what sends the field back
+    for regeneration, and nothing downstream can do that for it.
+    """
+    return (str(merge_label) not in CORRECTION_STAGES
+            and checkpoint_enforcement() == ENFORCE_AT_RELEASE)
+
+
 def _defer_to_release(msg, what, env_override):
     """Print the deferral and return True, or return False to raise here."""
     if _env_flag(env_override):
