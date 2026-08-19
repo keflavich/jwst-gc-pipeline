@@ -79,9 +79,38 @@ FIELDS = {
              "src": "/orange/adamginsburg/jwst/sgrb2/F2550W/pipeline/jw05365-o002-998_t001_miri_clear-f2550w-mirimage_data_i2d.fits"},
         ],
     },
+    # cloudc: NIRCam from JWST 2221 o002, and MIRI from TWO SEPARATE PROGRAMS
+    # imaging NON-OVERLAPPING pointings of the same cloud -- 2221 o001 (F2550W)
+    # and 2526 o021 (F770W).  Both are cloudc and both belong in its release;
+    # neither is discoverable from `proposal_prefix`, which names one NIRCam
+    # program.
+    #
+    # The MIRI observation numbering is INVERTED with respect to NIRCam within
+    # 2221, and that trap is why these are spelled out rather than derived:
+    #
+    #     cloudc  NIRCam 2221-o002    cloudc  MIRI 2221-o001  (F2550W)
+    #     brick   NIRCam 2221-o001    brick   MIRI 2221-o002  (F2550W)
+    #
+    # Verified by field centre rather than by name, since the names invite
+    # exactly the wrong pairing:
+    #
+    #     cloudc NIRCam F405N   266.5872 -28.5902
+    #     cloudc MIRI  F2550W   266.5695 -28.5918   <- 2221-o001, ~1' away: cloudc
+    #     cloudc MIRI  F770W    266.5823 -28.6271   <- 2526-o021, ~2' S: cloudc,
+    #                                                  and disjoint from F2550W
+    #     brick  NIRCam F405N   266.5356 -28.7128
+    #     brick  MIRI  F2550W   266.5372 -28.7066   <- 2221-o002, brick's own
     "cloudc": {
         "data_dir": Path("/orange/adamginsburg/jwst/cloudc"),
         "proposal_prefix": "jw02221-o002_t001_nircam_clear",
+        "miri": [
+            {"filter": "F770W",
+             "src": "/orange/adamginsburg/jwst/cloudc/F770W/pipeline/"
+                    "jw02526-o021_t001_miri_clear-f770w-mirimage_data_i2d.fits"},
+            {"filter": "F2550W",
+             "src": "/orange/adamginsburg/jwst/cloudc/F2550W/pipeline/"
+                    "jw02221-o001_t001_miri_clear-f2550w-mirimage_data_i2d.fits"},
+        ],
     },
     "sgrc": {
         "data_dir": Path("/orange/adamginsburg/jwst/sgrc"),
